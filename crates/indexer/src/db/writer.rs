@@ -567,14 +567,14 @@ impl BatchWriter {
     }
 
     /// Consume cells by marking them as spent.
-    /// When `skip_live_cells_delete` is true (bulk sync mode), skips the DELETE from live_cells
-    /// since that table is empty during Phase 1 anyway.
+    /// When `bulk_sync_mode` is true, skips both the UPDATE to cells.status and the
+    /// DELETE from live_cells. Cell status will be computed in Phase 2 rebuild.
     pub async fn consume_cells_batch(
         &self,
         consumptions: &[(&[u8], i16, i64, &[u8], i64, i16)],
-        skip_live_cells_delete: bool,
+        bulk_sync_mode: bool,
     ) -> Result<()> {
-        if consumptions.is_empty() {
+        if consumptions.is_empty() || bulk_sync_mode {
             return Ok(());
         }
 
@@ -633,31 +633,27 @@ impl BatchWriter {
             update_futures.push(fut);
         }
 
-        // Execute updates
         for fut in update_futures {
             fut.await?;
         }
 
-        // Skip live_cells deletion in bulk sync mode (table is empty anyway)
-        if !skip_live_cells_delete {
-            let all_tx_hashes: Vec<&[u8]> =
-                consumptions.iter().map(|(h, _, _, _, _, _)| *h).collect();
-            let all_output_indices: Vec<i16> =
-                consumptions.iter().map(|(_, i, _, _, _, _)| *i).collect();
+        let all_tx_hashes: Vec<&[u8]> =
+            consumptions.iter().map(|(h, _, _, _, _, _)| *h).collect();
+        let all_output_indices: Vec<i16> =
+            consumptions.iter().map(|(_, i, _, _, _, _)| *i).collect();
 
-            sqlx::query(
-                r#"
-                DELETE FROM live_cells
-                WHERE (tx_hash, output_index) IN (
-                    SELECT * FROM UNNEST($1::bytea[], $2::smallint[])
-                )
-                "#,
+        sqlx::query(
+            r#"
+            DELETE FROM live_cells
+            WHERE (tx_hash, output_index) IN (
+                SELECT * FROM UNNEST($1::bytea[], $2::smallint[])
             )
-            .bind(&all_tx_hashes)
-            .bind(&all_output_indices)
-            .execute(&self.pool)
-            .await?;
-        }
+            "#,
+        )
+        .bind(&all_tx_hashes)
+        .bind(&all_output_indices)
+        .execute(&self.pool)
+        .await?;
 
         Ok(())
     }

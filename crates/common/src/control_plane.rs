@@ -3,7 +3,8 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::postgres::PgPool;
+use sqlx::postgres::{PgPool, PgPoolOptions};
+use std::time::Duration;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -54,12 +55,18 @@ pub enum SyncPhase {
     #[default]
     Pending,
     CoreSync,
+    // Phase 2 rebuild tasks - names must match format!("rebuild_{}", RebuildTask.name())
+    RebuildCellStatus,
     RebuildLiveCells,
-    RebuildBalances,
-    RebuildScriptUsage,
-    RebuildStatistics,
+    RebuildAddressBalances,
+    RebuildScriptUsageStats,
+    RebuildDaoDeposits,
+    RebuildUdtCells,
+    RebuildDailyStatistics,
+    RebuildHourlyStatistics,
+    RebuildEpochStatistics,
+    RebuildMinerStatistics,
     RebuildIndexes,
-    RebuildAddressTx,
     Completed,
 }
 
@@ -68,12 +75,17 @@ impl From<&str> for SyncPhase {
         match s {
             "pending" => Self::Pending,
             "core_sync" => Self::CoreSync,
+            "rebuild_cell_status" => Self::RebuildCellStatus,
             "rebuild_live_cells" => Self::RebuildLiveCells,
-            "rebuild_balances" => Self::RebuildBalances,
-            "rebuild_script_usage" => Self::RebuildScriptUsage,
-            "rebuild_statistics" => Self::RebuildStatistics,
+            "rebuild_address_balances" => Self::RebuildAddressBalances,
+            "rebuild_script_usage_stats" => Self::RebuildScriptUsageStats,
+            "rebuild_dao_deposits" => Self::RebuildDaoDeposits,
+            "rebuild_udt_cells" => Self::RebuildUdtCells,
+            "rebuild_daily_statistics" => Self::RebuildDailyStatistics,
+            "rebuild_hourly_statistics" => Self::RebuildHourlyStatistics,
+            "rebuild_epoch_statistics" => Self::RebuildEpochStatistics,
+            "rebuild_miner_statistics" => Self::RebuildMinerStatistics,
             "rebuild_indexes" => Self::RebuildIndexes,
-            "rebuild_address_tx" => Self::RebuildAddressTx,
             "completed" => Self::Completed,
             _ => Self::Pending,
         }
@@ -85,12 +97,17 @@ impl SyncPhase {
         match self {
             Self::Pending => "pending",
             Self::CoreSync => "core_sync",
+            Self::RebuildCellStatus => "rebuild_cell_status",
             Self::RebuildLiveCells => "rebuild_live_cells",
-            Self::RebuildBalances => "rebuild_balances",
-            Self::RebuildScriptUsage => "rebuild_script_usage",
-            Self::RebuildStatistics => "rebuild_statistics",
+            Self::RebuildAddressBalances => "rebuild_address_balances",
+            Self::RebuildScriptUsageStats => "rebuild_script_usage_stats",
+            Self::RebuildDaoDeposits => "rebuild_dao_deposits",
+            Self::RebuildUdtCells => "rebuild_udt_cells",
+            Self::RebuildDailyStatistics => "rebuild_daily_statistics",
+            Self::RebuildHourlyStatistics => "rebuild_hourly_statistics",
+            Self::RebuildEpochStatistics => "rebuild_epoch_statistics",
+            Self::RebuildMinerStatistics => "rebuild_miner_statistics",
             Self::RebuildIndexes => "rebuild_indexes",
-            Self::RebuildAddressTx => "rebuild_address_tx",
             Self::Completed => "completed",
         }
     }
@@ -98,13 +115,18 @@ impl SyncPhase {
     pub fn next(&self) -> Option<SyncPhase> {
         match self {
             Self::Pending => Some(Self::CoreSync),
-            Self::CoreSync => Some(Self::RebuildLiveCells),
-            Self::RebuildLiveCells => Some(Self::RebuildBalances),
-            Self::RebuildBalances => Some(Self::RebuildScriptUsage),
-            Self::RebuildScriptUsage => Some(Self::RebuildStatistics),
-            Self::RebuildStatistics => Some(Self::RebuildIndexes),
-            Self::RebuildIndexes => Some(Self::RebuildAddressTx),
-            Self::RebuildAddressTx => Some(Self::Completed),
+            Self::CoreSync => Some(Self::RebuildCellStatus),
+            Self::RebuildCellStatus => Some(Self::RebuildLiveCells),
+            Self::RebuildLiveCells => Some(Self::RebuildAddressBalances),
+            Self::RebuildAddressBalances => Some(Self::RebuildScriptUsageStats),
+            Self::RebuildScriptUsageStats => Some(Self::RebuildDaoDeposits),
+            Self::RebuildDaoDeposits => Some(Self::RebuildUdtCells),
+            Self::RebuildUdtCells => Some(Self::RebuildDailyStatistics),
+            Self::RebuildDailyStatistics => Some(Self::RebuildHourlyStatistics),
+            Self::RebuildHourlyStatistics => Some(Self::RebuildEpochStatistics),
+            Self::RebuildEpochStatistics => Some(Self::RebuildMinerStatistics),
+            Self::RebuildMinerStatistics => Some(Self::RebuildIndexes),
+            Self::RebuildIndexes => Some(Self::Completed),
             Self::Completed => None,
         }
     }
@@ -186,7 +208,15 @@ pub struct ControlPlane {
 
 impl ControlPlane {
     pub async fn connect(database_url: &str) -> Result<Self> {
-        let pool = PgPool::connect(database_url).await?;
+        Self::connect_with_timeout(database_url, Duration::from_secs(5)).await
+    }
+
+    pub async fn connect_with_timeout(database_url: &str, timeout: Duration) -> Result<Self> {
+        let pool = PgPoolOptions::new()
+            .max_connections(5)
+            .acquire_timeout(timeout)
+            .connect(database_url)
+            .await?;
         Ok(Self { pool })
     }
 
@@ -814,14 +844,18 @@ mod tests {
     fn test_sync_phase_from_str() {
         assert_eq!(SyncPhase::from("pending"), SyncPhase::Pending);
         assert_eq!(SyncPhase::from("core_sync"), SyncPhase::CoreSync);
+        assert_eq!(SyncPhase::from("rebuild_cell_status"), SyncPhase::RebuildCellStatus);
         assert_eq!(SyncPhase::from("rebuild_live_cells"), SyncPhase::RebuildLiveCells);
-        assert_eq!(SyncPhase::from("rebuild_balances"), SyncPhase::RebuildBalances);
-        assert_eq!(SyncPhase::from("rebuild_script_usage"), SyncPhase::RebuildScriptUsage);
-        assert_eq!(SyncPhase::from("rebuild_statistics"), SyncPhase::RebuildStatistics);
+        assert_eq!(SyncPhase::from("rebuild_address_balances"), SyncPhase::RebuildAddressBalances);
+        assert_eq!(SyncPhase::from("rebuild_script_usage_stats"), SyncPhase::RebuildScriptUsageStats);
+        assert_eq!(SyncPhase::from("rebuild_dao_deposits"), SyncPhase::RebuildDaoDeposits);
+        assert_eq!(SyncPhase::from("rebuild_udt_cells"), SyncPhase::RebuildUdtCells);
+        assert_eq!(SyncPhase::from("rebuild_daily_statistics"), SyncPhase::RebuildDailyStatistics);
+        assert_eq!(SyncPhase::from("rebuild_hourly_statistics"), SyncPhase::RebuildHourlyStatistics);
+        assert_eq!(SyncPhase::from("rebuild_epoch_statistics"), SyncPhase::RebuildEpochStatistics);
+        assert_eq!(SyncPhase::from("rebuild_miner_statistics"), SyncPhase::RebuildMinerStatistics);
         assert_eq!(SyncPhase::from("rebuild_indexes"), SyncPhase::RebuildIndexes);
-        assert_eq!(SyncPhase::from("rebuild_address_tx"), SyncPhase::RebuildAddressTx);
         assert_eq!(SyncPhase::from("completed"), SyncPhase::Completed);
-        // Unknown values default to Pending
         assert_eq!(SyncPhase::from("unknown"), SyncPhase::Pending);
         assert_eq!(SyncPhase::from(""), SyncPhase::Pending);
     }
@@ -830,12 +864,17 @@ mod tests {
     fn test_sync_phase_as_str() {
         assert_eq!(SyncPhase::Pending.as_str(), "pending");
         assert_eq!(SyncPhase::CoreSync.as_str(), "core_sync");
+        assert_eq!(SyncPhase::RebuildCellStatus.as_str(), "rebuild_cell_status");
         assert_eq!(SyncPhase::RebuildLiveCells.as_str(), "rebuild_live_cells");
-        assert_eq!(SyncPhase::RebuildBalances.as_str(), "rebuild_balances");
-        assert_eq!(SyncPhase::RebuildScriptUsage.as_str(), "rebuild_script_usage");
-        assert_eq!(SyncPhase::RebuildStatistics.as_str(), "rebuild_statistics");
+        assert_eq!(SyncPhase::RebuildAddressBalances.as_str(), "rebuild_address_balances");
+        assert_eq!(SyncPhase::RebuildScriptUsageStats.as_str(), "rebuild_script_usage_stats");
+        assert_eq!(SyncPhase::RebuildDaoDeposits.as_str(), "rebuild_dao_deposits");
+        assert_eq!(SyncPhase::RebuildUdtCells.as_str(), "rebuild_udt_cells");
+        assert_eq!(SyncPhase::RebuildDailyStatistics.as_str(), "rebuild_daily_statistics");
+        assert_eq!(SyncPhase::RebuildHourlyStatistics.as_str(), "rebuild_hourly_statistics");
+        assert_eq!(SyncPhase::RebuildEpochStatistics.as_str(), "rebuild_epoch_statistics");
+        assert_eq!(SyncPhase::RebuildMinerStatistics.as_str(), "rebuild_miner_statistics");
         assert_eq!(SyncPhase::RebuildIndexes.as_str(), "rebuild_indexes");
-        assert_eq!(SyncPhase::RebuildAddressTx.as_str(), "rebuild_address_tx");
         assert_eq!(SyncPhase::Completed.as_str(), "completed");
     }
 
@@ -844,12 +883,17 @@ mod tests {
         let phases = [
             SyncPhase::Pending,
             SyncPhase::CoreSync,
+            SyncPhase::RebuildCellStatus,
             SyncPhase::RebuildLiveCells,
-            SyncPhase::RebuildBalances,
-            SyncPhase::RebuildScriptUsage,
-            SyncPhase::RebuildStatistics,
+            SyncPhase::RebuildAddressBalances,
+            SyncPhase::RebuildScriptUsageStats,
+            SyncPhase::RebuildDaoDeposits,
+            SyncPhase::RebuildUdtCells,
+            SyncPhase::RebuildDailyStatistics,
+            SyncPhase::RebuildHourlyStatistics,
+            SyncPhase::RebuildEpochStatistics,
+            SyncPhase::RebuildMinerStatistics,
             SyncPhase::RebuildIndexes,
-            SyncPhase::RebuildAddressTx,
             SyncPhase::Completed,
         ];
         for phase in phases {
@@ -861,13 +905,18 @@ mod tests {
     #[test]
     fn test_sync_phase_next() {
         assert_eq!(SyncPhase::Pending.next(), Some(SyncPhase::CoreSync));
-        assert_eq!(SyncPhase::CoreSync.next(), Some(SyncPhase::RebuildLiveCells));
-        assert_eq!(SyncPhase::RebuildLiveCells.next(), Some(SyncPhase::RebuildBalances));
-        assert_eq!(SyncPhase::RebuildBalances.next(), Some(SyncPhase::RebuildScriptUsage));
-        assert_eq!(SyncPhase::RebuildScriptUsage.next(), Some(SyncPhase::RebuildStatistics));
-        assert_eq!(SyncPhase::RebuildStatistics.next(), Some(SyncPhase::RebuildIndexes));
-        assert_eq!(SyncPhase::RebuildIndexes.next(), Some(SyncPhase::RebuildAddressTx));
-        assert_eq!(SyncPhase::RebuildAddressTx.next(), Some(SyncPhase::Completed));
+        assert_eq!(SyncPhase::CoreSync.next(), Some(SyncPhase::RebuildCellStatus));
+        assert_eq!(SyncPhase::RebuildCellStatus.next(), Some(SyncPhase::RebuildLiveCells));
+        assert_eq!(SyncPhase::RebuildLiveCells.next(), Some(SyncPhase::RebuildAddressBalances));
+        assert_eq!(SyncPhase::RebuildAddressBalances.next(), Some(SyncPhase::RebuildScriptUsageStats));
+        assert_eq!(SyncPhase::RebuildScriptUsageStats.next(), Some(SyncPhase::RebuildDaoDeposits));
+        assert_eq!(SyncPhase::RebuildDaoDeposits.next(), Some(SyncPhase::RebuildUdtCells));
+        assert_eq!(SyncPhase::RebuildUdtCells.next(), Some(SyncPhase::RebuildDailyStatistics));
+        assert_eq!(SyncPhase::RebuildDailyStatistics.next(), Some(SyncPhase::RebuildHourlyStatistics));
+        assert_eq!(SyncPhase::RebuildHourlyStatistics.next(), Some(SyncPhase::RebuildEpochStatistics));
+        assert_eq!(SyncPhase::RebuildEpochStatistics.next(), Some(SyncPhase::RebuildMinerStatistics));
+        assert_eq!(SyncPhase::RebuildMinerStatistics.next(), Some(SyncPhase::RebuildIndexes));
+        assert_eq!(SyncPhase::RebuildIndexes.next(), Some(SyncPhase::Completed));
         assert_eq!(SyncPhase::Completed.next(), None);
     }
 
@@ -876,12 +925,17 @@ mod tests {
         let mut phase = SyncPhase::Pending;
         let expected = [
             SyncPhase::CoreSync,
+            SyncPhase::RebuildCellStatus,
             SyncPhase::RebuildLiveCells,
-            SyncPhase::RebuildBalances,
-            SyncPhase::RebuildScriptUsage,
-            SyncPhase::RebuildStatistics,
+            SyncPhase::RebuildAddressBalances,
+            SyncPhase::RebuildScriptUsageStats,
+            SyncPhase::RebuildDaoDeposits,
+            SyncPhase::RebuildUdtCells,
+            SyncPhase::RebuildDailyStatistics,
+            SyncPhase::RebuildHourlyStatistics,
+            SyncPhase::RebuildEpochStatistics,
+            SyncPhase::RebuildMinerStatistics,
             SyncPhase::RebuildIndexes,
-            SyncPhase::RebuildAddressTx,
             SyncPhase::Completed,
         ];
         

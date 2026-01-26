@@ -10,9 +10,12 @@ const PARTITION_SIZE: i64 = 1_000_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RebuildTask {
+    CellStatus,
     LiveCells,
     AddressBalances,
     ScriptUsageStats,
+    DaoDeposits,
+    UdtCells,
     DailyStatistics,
     HourlyStatistics,
     EpochStatistics,
@@ -24,9 +27,12 @@ pub enum RebuildTask {
 impl RebuildTask {
     pub fn name(&self) -> &'static str {
         match self {
+            Self::CellStatus => "cell_status",
             Self::LiveCells => "live_cells",
             Self::AddressBalances => "address_balances",
             Self::ScriptUsageStats => "script_usage_stats",
+            Self::DaoDeposits => "dao_deposits",
+            Self::UdtCells => "udt_cells",
             Self::DailyStatistics => "daily_statistics",
             Self::HourlyStatistics => "hourly_statistics",
             Self::EpochStatistics => "epoch_statistics",
@@ -38,9 +44,12 @@ impl RebuildTask {
 
     pub fn all_ordered() -> Vec<Self> {
         vec![
+            Self::CellStatus,
             Self::LiveCells,
             Self::AddressBalances,
             Self::ScriptUsageStats,
+            Self::DaoDeposits,
+            Self::UdtCells,
             Self::DailyStatistics,
             Self::HourlyStatistics,
             Self::EpochStatistics,
@@ -94,9 +103,12 @@ impl RebuildRunner {
 
         let start = Instant::now();
         let result = match task {
+            RebuildTask::CellStatus => self.rebuild_cell_status().await,
             RebuildTask::LiveCells => self.rebuild_live_cells().await,
             RebuildTask::AddressBalances => self.rebuild_address_balances().await,
             RebuildTask::ScriptUsageStats => self.rebuild_script_usage_stats().await,
+            RebuildTask::DaoDeposits => self.rebuild_dao_deposits().await,
+            RebuildTask::UdtCells => self.rebuild_udt_cells().await,
             RebuildTask::DailyStatistics => self.rebuild_daily_statistics().await,
             RebuildTask::HourlyStatistics => self.rebuild_hourly_statistics().await,
             RebuildTask::EpochStatistics => self.rebuild_epoch_statistics().await,
@@ -128,10 +140,72 @@ impl RebuildRunner {
         }
     }
 
-    async fn rebuild_live_cells(&self) -> Result<i64> {
-        let max_block: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(created_at_block), 0) FROM cells")
-            .fetch_one(&self.pool)
+    async fn rebuild_cell_status(&self) -> Result<i64> {
+        let max_block: i64 =
+            sqlx::query_scalar("SELECT COALESCE(MAX(created_at_block), 0) FROM cells")
+                .fetch_one(&self.pool)
+                .await?;
+
+        if max_block == 0 {
+            return Ok(0);
+        }
+
+        let total_partitions = ((max_block / PARTITION_SIZE) + 1) as i32;
+        self.update_progress("cell_status", "running", 0, None, Some(0), None)
             .await?;
+
+        let mut total_rows = 0i64;
+        let start = Instant::now();
+
+        for partition in 0..total_partitions {
+            let partition_start = (partition as i64) * PARTITION_SIZE;
+            let partition_end = partition_start + PARTITION_SIZE;
+
+            let rows: i64 =
+                sqlx::query_scalar("SELECT rebuild_cell_status_partition($1, $2)")
+                    .bind(partition_start)
+                    .bind(partition_end)
+                    .fetch_one(&self.pool)
+                    .await?;
+
+            total_rows += rows;
+
+            let elapsed = start.elapsed().as_secs_f64();
+            let rows_per_sec = if elapsed > 0.0 {
+                total_rows as f64 / elapsed
+            } else {
+                0.0
+            };
+
+            self.update_progress(
+                "cell_status",
+                "running",
+                total_rows,
+                None,
+                Some(partition + 1),
+                Some(rows_per_sec),
+            )
+            .await?;
+
+            if (partition + 1) % 5 == 0 {
+                info!(
+                    "cell_status rebuild: partition {}/{}, {} rows total, {:.0} rows/s",
+                    partition + 1,
+                    total_partitions,
+                    total_rows,
+                    rows_per_sec
+                );
+            }
+        }
+
+        Ok(total_rows)
+    }
+
+    async fn rebuild_live_cells(&self) -> Result<i64> {
+        let max_block: i64 =
+            sqlx::query_scalar("SELECT COALESCE(MAX(created_at_block), 0) FROM cells")
+                .fetch_one(&self.pool)
+                .await?;
 
         if max_block == 0 {
             return Ok(0);
@@ -152,13 +226,11 @@ impl RebuildRunner {
             let partition_start = (partition as i64) * PARTITION_SIZE;
             let partition_end = partition_start + PARTITION_SIZE;
 
-            let rows: i64 = sqlx::query_scalar(
-                "SELECT rebuild_live_cells_partition($1, $2)",
-            )
-            .bind(partition_start)
-            .bind(partition_end)
-            .fetch_one(&self.pool)
-            .await?;
+            let rows: i64 = sqlx::query_scalar("SELECT rebuild_live_cells_partition($1, $2)")
+                .bind(partition_start)
+                .bind(partition_end)
+                .fetch_one(&self.pool)
+                .await?;
 
             total_rows += rows;
 
@@ -202,6 +274,20 @@ impl RebuildRunner {
 
     async fn rebuild_script_usage_stats(&self) -> Result<i64> {
         let rows: i64 = sqlx::query_scalar("SELECT rebuild_script_usage_stats()")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(rows)
+    }
+
+    async fn rebuild_dao_deposits(&self) -> Result<i64> {
+        let rows: i64 = sqlx::query_scalar("SELECT rebuild_dao_deposits()")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(rows)
+    }
+
+    async fn rebuild_udt_cells(&self) -> Result<i64> {
+        let rows: i64 = sqlx::query_scalar("SELECT rebuild_udt_cells()")
             .fetch_one(&self.pool)
             .await?;
         Ok(rows)
@@ -468,31 +554,40 @@ mod tests {
 
     #[test]
     fn test_rebuild_task_name() {
+        assert_eq!(RebuildTask::CellStatus.name(), "cell_status");
         assert_eq!(RebuildTask::LiveCells.name(), "live_cells");
         assert_eq!(RebuildTask::AddressBalances.name(), "address_balances");
         assert_eq!(RebuildTask::ScriptUsageStats.name(), "script_usage_stats");
+        assert_eq!(RebuildTask::DaoDeposits.name(), "dao_deposits");
+        assert_eq!(RebuildTask::UdtCells.name(), "udt_cells");
         assert_eq!(RebuildTask::DailyStatistics.name(), "daily_statistics");
         assert_eq!(RebuildTask::HourlyStatistics.name(), "hourly_statistics");
         assert_eq!(RebuildTask::EpochStatistics.name(), "epoch_statistics");
         assert_eq!(RebuildTask::MinerStatistics.name(), "miner_statistics");
         assert_eq!(RebuildTask::Indexes.name(), "indexes");
-        assert_eq!(RebuildTask::AddressTransactions.name(), "address_transactions");
+        assert_eq!(
+            RebuildTask::AddressTransactions.name(),
+            "address_transactions"
+        );
     }
 
     #[test]
     fn test_rebuild_task_all_ordered() {
         let tasks = RebuildTask::all_ordered();
-        
-        assert_eq!(tasks.len(), 8);
-        
-        assert_eq!(tasks[0], RebuildTask::LiveCells);
-        assert_eq!(tasks[1], RebuildTask::AddressBalances);
-        assert_eq!(tasks[2], RebuildTask::ScriptUsageStats);
-        assert_eq!(tasks[3], RebuildTask::DailyStatistics);
-        assert_eq!(tasks[4], RebuildTask::HourlyStatistics);
-        assert_eq!(tasks[5], RebuildTask::EpochStatistics);
-        assert_eq!(tasks[6], RebuildTask::MinerStatistics);
-        assert_eq!(tasks[7], RebuildTask::Indexes);
+
+        assert_eq!(tasks.len(), 11);
+
+        assert_eq!(tasks[0], RebuildTask::CellStatus);
+        assert_eq!(tasks[1], RebuildTask::LiveCells);
+        assert_eq!(tasks[2], RebuildTask::AddressBalances);
+        assert_eq!(tasks[3], RebuildTask::ScriptUsageStats);
+        assert_eq!(tasks[4], RebuildTask::DaoDeposits);
+        assert_eq!(tasks[5], RebuildTask::UdtCells);
+        assert_eq!(tasks[6], RebuildTask::DailyStatistics);
+        assert_eq!(tasks[7], RebuildTask::HourlyStatistics);
+        assert_eq!(tasks[8], RebuildTask::EpochStatistics);
+        assert_eq!(tasks[9], RebuildTask::MinerStatistics);
+        assert_eq!(tasks[10], RebuildTask::Indexes);
     }
 
     #[test]
@@ -504,11 +599,25 @@ mod tests {
     #[test]
     fn test_rebuild_task_order_reflects_dependencies() {
         let tasks = RebuildTask::all_ordered();
-        
-        let live_cells_pos = tasks.iter().position(|t| *t == RebuildTask::LiveCells).unwrap();
-        let address_balances_pos = tasks.iter().position(|t| *t == RebuildTask::AddressBalances).unwrap();
-        let indexes_pos = tasks.iter().position(|t| *t == RebuildTask::Indexes).unwrap();
-        
+
+        let cell_status_pos = tasks
+            .iter()
+            .position(|t| *t == RebuildTask::CellStatus)
+            .unwrap();
+        let live_cells_pos = tasks
+            .iter()
+            .position(|t| *t == RebuildTask::LiveCells)
+            .unwrap();
+        let address_balances_pos = tasks
+            .iter()
+            .position(|t| *t == RebuildTask::AddressBalances)
+            .unwrap();
+        let indexes_pos = tasks
+            .iter()
+            .position(|t| *t == RebuildTask::Indexes)
+            .unwrap();
+
+        assert!(cell_status_pos < live_cells_pos);
         assert!(live_cells_pos < address_balances_pos);
         assert!(indexes_pos == tasks.len() - 1);
     }
@@ -529,5 +638,83 @@ mod tests {
     #[test]
     fn test_partition_size_constant() {
         assert_eq!(PARTITION_SIZE, 1_000_000);
+    }
+
+    /// CRITICAL: Verifies that RebuildTask names align with SyncPhase enum values.
+    /// 
+    /// The control plane uses `format!("rebuild_{}", task.name())` to generate phase names,
+    /// so SyncPhase must have matching variants with identical string representations.
+    /// 
+    /// If this test fails, update SyncPhase in crates/common/src/control_plane.rs to match.
+    #[test]
+    fn test_rebuild_task_aligns_with_sync_phase() {
+        use ckbadger_common::control_plane::SyncPhase;
+
+        for task in RebuildTask::all_ordered() {
+            let expected_phase_str = format!("rebuild_{}", task.name());
+            
+            // Verify SyncPhase can parse this string
+            let phase = SyncPhase::from(expected_phase_str.as_str());
+            
+            // If SyncPhase::from returns Pending for an unknown string, the alignment is broken
+            assert_ne!(
+                phase,
+                SyncPhase::Pending,
+                "RebuildTask::{:?} with name '{}' has no matching SyncPhase variant. \
+                Expected SyncPhase to parse '{}' but got Pending (unknown). \
+                Add a matching variant to SyncPhase in crates/common/src/control_plane.rs",
+                task,
+                task.name(),
+                expected_phase_str
+            );
+            
+            // Verify round-trip: SyncPhase.as_str() should equal the expected string
+            assert_eq!(
+                phase.as_str(),
+                expected_phase_str,
+                "SyncPhase string mismatch for RebuildTask::{:?}. \
+                Expected '{}' but got '{}'",
+                task,
+                expected_phase_str,
+                phase.as_str()
+            );
+        }
+    }
+
+    /// Verifies that RebuildTask::all_ordered() matches the rebuild phase progression in SyncPhase.
+    #[test]
+    fn test_rebuild_task_order_matches_sync_phase_progression() {
+        use ckbadger_common::control_plane::SyncPhase;
+
+        let tasks = RebuildTask::all_ordered();
+        let mut current_phase = SyncPhase::CoreSync; // Start from CoreSync, which transitions to first rebuild
+
+        for task in tasks {
+            // Advance to next phase
+            current_phase = current_phase.next().expect(
+                &format!("SyncPhase progression ended before RebuildTask::{:?}", task)
+            );
+            
+            let expected_phase_str = format!("rebuild_{}", task.name());
+            assert_eq!(
+                current_phase.as_str(),
+                expected_phase_str,
+                "SyncPhase progression mismatch at RebuildTask::{:?}. \
+                SyncPhase is at '{}' but expected '{}'. \
+                RebuildTask::all_ordered() and SyncPhase::next() must have identical ordering.",
+                task,
+                current_phase.as_str(),
+                expected_phase_str
+            );
+        }
+
+        // After all rebuild tasks, next phase should be Completed
+        let final_phase = current_phase.next().expect("Should have Completed phase after all rebuilds");
+        assert_eq!(
+            final_phase,
+            SyncPhase::Completed,
+            "Expected Completed phase after all rebuild tasks, but got {:?}",
+            final_phase
+        );
     }
 }

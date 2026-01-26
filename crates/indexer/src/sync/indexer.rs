@@ -328,7 +328,7 @@ impl Indexer {
             info!("Phase 1 (Core Sync) completed. Starting Phase 2 (Rebuild)...");
 
             if let Some(ref cp) = self.control_plane {
-                cp.set_status("rebuilding", Some("rebuild_live_cells")).await;
+                cp.set_status("rebuilding", Some("rebuild_cell_status")).await;
             }
 
             let pool = self.writer.pool().clone();
@@ -337,35 +337,15 @@ impl Indexer {
             tokio::spawn(async move {
                 let runner = RebuildRunner::new(pool);
 
-                let phases = [
-                    ("rebuild_live_cells", "LiveCells"),
-                    ("rebuild_address_balances", "AddressBalances"),
-                    ("rebuild_script_usage", "ScriptUsageStats"),
-                    ("rebuild_daily_stats", "DailyStatistics"),
-                    ("rebuild_hourly_stats", "HourlyStatistics"),
-                    ("rebuild_epoch_stats", "EpochStatistics"),
-                    ("rebuild_miner_stats", "MinerStatistics"),
-                    ("rebuild_indexes", "Indexes"),
-                ];
+                for task in crate::rebuild::RebuildTask::all_ordered() {
+                    let task_name = task.name();
+                    let phase_name = format!("rebuild_{}", task_name);
 
-                for (phase_name, task_name) in phases {
                     if let Some(ref cp) = control_plane {
-                        cp.set_status("rebuilding", Some(phase_name)).await;
+                        cp.set_status("rebuilding", Some(&phase_name)).await;
                     }
 
                     info!("Starting rebuild phase: {}", task_name);
-
-                    let task = match task_name {
-                        "LiveCells" => crate::rebuild::RebuildTask::LiveCells,
-                        "AddressBalances" => crate::rebuild::RebuildTask::AddressBalances,
-                        "ScriptUsageStats" => crate::rebuild::RebuildTask::ScriptUsageStats,
-                        "DailyStatistics" => crate::rebuild::RebuildTask::DailyStatistics,
-                        "HourlyStatistics" => crate::rebuild::RebuildTask::HourlyStatistics,
-                        "EpochStatistics" => crate::rebuild::RebuildTask::EpochStatistics,
-                        "MinerStatistics" => crate::rebuild::RebuildTask::MinerStatistics,
-                        "Indexes" => crate::rebuild::RebuildTask::Indexes,
-                        _ => continue,
-                    };
 
                     if let Err(e) = runner.run_task(task).await {
                         error!("Rebuild phase {} failed: {}", task_name, e);
@@ -1720,76 +1700,79 @@ impl Indexer {
             batch_stats.dao_snapshot_dates.insert(block_date);
         }
 
-        let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
-        let mut block_tx_idx = 0usize;
-        for parsed in &all_parsed_blocks {
-            let tx_count_for_block = parsed.transactions_count as usize;
-            let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
-            block_tx_idx += tx_count_for_block;
+        // Skip DAO, UDT, and NFT processing during bulk sync (will be rebuilt in Phase 2)
+        if !bulk_sync_active {
+            let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
+            let mut block_tx_idx = 0usize;
+            for parsed in &all_parsed_blocks {
+                let tx_count_for_block = parsed.transactions_count as usize;
+                let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
+                block_tx_idx += tx_count_for_block;
 
-            for tx_data in tx_slice {
-                let dao_deposits =
-                    DaoParser::parse_deposits_from_cells(&tx_data.hash, &tx_data.cells);
-                for deposit in &dao_deposits {
-                    let ar = DaoParser::extract_ar_from_dao_field(&parsed.dao).unwrap_or(0) as i64;
-                    self.writer
-                        .insert_dao_deposit(deposit, parsed.number, parsed.timestamp, ar)
+                for tx_data in tx_slice {
+                    let dao_deposits =
+                        DaoParser::parse_deposits_from_cells(&tx_data.hash, &tx_data.cells);
+                    for deposit in &dao_deposits {
+                        let ar =
+                            DaoParser::extract_ar_from_dao_field(&parsed.dao).unwrap_or(0) as i64;
+                        self.writer
+                            .insert_dao_deposit(deposit, parsed.number, parsed.timestamp, ar)
+                            .await?;
+                    }
+                }
+
+                for tx_data in tx_slice {
+                    if tx_data.is_cellbase || tx_data.inputs.is_empty() {
+                        continue;
+                    }
+
+                    let input_outpoints: Vec<(&[u8], i32)> = tx_data
+                        .inputs
+                        .iter()
+                        .map(|i| (i.previous_tx_hash.as_slice(), i.previous_output_index))
+                        .collect();
+
+                    let consumed_dao = self
+                        .writer
+                        .find_consumed_dao_deposits(&input_outpoints)
                         .await?;
-                }
-            }
+                    if consumed_dao.is_empty() {
+                        continue;
+                    }
 
-            for tx_data in tx_slice {
-                if tx_data.is_cellbase || tx_data.inputs.is_empty() {
-                    continue;
-                }
-
-                let input_outpoints: Vec<(&[u8], i32)> = tx_data
-                    .inputs
-                    .iter()
-                    .map(|i| (i.previous_tx_hash.as_slice(), i.previous_output_index))
-                    .collect();
-
-                let consumed_dao = self
-                    .writer
-                    .find_consumed_dao_deposits(&input_outpoints)
-                    .await?;
-                if consumed_dao.is_empty() {
-                    continue;
-                }
-
-                let mut new_dao_outputs: Vec<(Vec<u8>, i16, Vec<u8>, i64, u64)> = Vec::new();
-                for (idx, cell) in tx_data.cells.iter().enumerate() {
-                    if let Some(ref type_code_hash) = cell.type_code_hash {
-                        if type_code_hash == &dao_code_hash && cell.data_size == 8 {
-                            if let Some(data) = tx_data.outputs_data.get(idx) {
-                                let data_bytes = crate::rpc::parse_hex_to_bytes(data);
-                                if let Some(deposit_block) =
-                                    DaoParser::parse_deposit_block_number(&data_bytes)
-                                {
-                                    new_dao_outputs.push((
-                                        tx_data.hash.clone(),
-                                        idx as i16,
-                                        cell.lock_script_hash.clone(),
-                                        cell.capacity,
-                                        deposit_block,
-                                    ));
+                    let mut new_dao_outputs: Vec<(Vec<u8>, i16, Vec<u8>, i64, u64)> = Vec::new();
+                    for (idx, cell) in tx_data.cells.iter().enumerate() {
+                        if let Some(ref type_code_hash) = cell.type_code_hash {
+                            if type_code_hash == &dao_code_hash && cell.data_size == 8 {
+                                if let Some(data) = tx_data.outputs_data.get(idx) {
+                                    let data_bytes = crate::rpc::parse_hex_to_bytes(data);
+                                    if let Some(deposit_block) =
+                                        DaoParser::parse_deposit_block_number(&data_bytes)
+                                    {
+                                        new_dao_outputs.push((
+                                            tx_data.hash.clone(),
+                                            idx as i16,
+                                            cell.lock_script_hash.clone(),
+                                            cell.capacity,
+                                            deposit_block,
+                                        ));
+                                    }
                                 }
                             }
                         }
                     }
-                }
 
-                self.writer
-                    .process_dao_withdrawals(
-                        &consumed_dao,
-                        &new_dao_outputs,
-                        parsed.number,
-                        &tx_data.hash,
-                        parsed.timestamp,
-                    )
-                    .await?;
+                    self.writer
+                        .process_dao_withdrawals(
+                            &consumed_dao,
+                            &new_dao_outputs,
+                            parsed.number,
+                            &tx_data.hash,
+                            parsed.timestamp,
+                        )
+                        .await?;
+                }
             }
-        }
 
         struct UdtTxContext {
             tx_hash: Vec<u8>,
@@ -2562,6 +2545,7 @@ impl Indexer {
                 .insert_address_asset_transfers_batch(&nft_address_records)
                 .await?;
         }
+        } // end of if !bulk_sync_active (DAO, UDT, NFT processing)
 
         self.flush_batch_stats(&batch_stats).await?;
 
@@ -3132,76 +3116,78 @@ impl Indexer {
             batch_stats.dao_snapshot_dates.insert(block_date);
         }
 
-        let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
-        let mut block_tx_idx = 0usize;
-        for parsed in all_parsed_blocks {
-            let tx_count_for_block = parsed.transactions_count as usize;
-            let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
-            block_tx_idx += tx_count_for_block;
+        if !bulk_sync_active {
+            let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
+            let mut block_tx_idx = 0usize;
+            for parsed in all_parsed_blocks {
+                let tx_count_for_block = parsed.transactions_count as usize;
+                let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
+                block_tx_idx += tx_count_for_block;
 
-            for tx_data in tx_slice {
-                let dao_deposits =
-                    DaoParser::parse_deposits_from_cells(&tx_data.hash, &tx_data.cells);
-                for deposit in &dao_deposits {
-                    let ar = DaoParser::extract_ar_from_dao_field(&parsed.dao).unwrap_or(0) as i64;
-                    self.writer
-                        .insert_dao_deposit(deposit, parsed.number, parsed.timestamp, ar)
+                for tx_data in tx_slice {
+                    let dao_deposits =
+                        DaoParser::parse_deposits_from_cells(&tx_data.hash, &tx_data.cells);
+                    for deposit in &dao_deposits {
+                        let ar =
+                            DaoParser::extract_ar_from_dao_field(&parsed.dao).unwrap_or(0) as i64;
+                        self.writer
+                            .insert_dao_deposit(deposit, parsed.number, parsed.timestamp, ar)
+                            .await?;
+                    }
+                }
+
+                for tx_data in tx_slice {
+                    if tx_data.is_cellbase || tx_data.inputs.is_empty() {
+                        continue;
+                    }
+
+                    let input_outpoints: Vec<(&[u8], i32)> = tx_data
+                        .inputs
+                        .iter()
+                        .map(|i| (i.previous_tx_hash.as_slice(), i.previous_output_index))
+                        .collect();
+
+                    let consumed_dao = self
+                        .writer
+                        .find_consumed_dao_deposits(&input_outpoints)
                         .await?;
-                }
-            }
+                    if consumed_dao.is_empty() {
+                        continue;
+                    }
 
-            for tx_data in tx_slice {
-                if tx_data.is_cellbase || tx_data.inputs.is_empty() {
-                    continue;
-                }
-
-                let input_outpoints: Vec<(&[u8], i32)> = tx_data
-                    .inputs
-                    .iter()
-                    .map(|i| (i.previous_tx_hash.as_slice(), i.previous_output_index))
-                    .collect();
-
-                let consumed_dao = self
-                    .writer
-                    .find_consumed_dao_deposits(&input_outpoints)
-                    .await?;
-                if consumed_dao.is_empty() {
-                    continue;
-                }
-
-                let mut new_dao_outputs: Vec<(Vec<u8>, i16, Vec<u8>, i64, u64)> = Vec::new();
-                for (idx, cell) in tx_data.cells.iter().enumerate() {
-                    if let Some(ref type_code_hash) = cell.type_code_hash {
-                        if type_code_hash == &dao_code_hash && cell.data_size == 8 {
-                            if let Some(data) = tx_data.outputs_data.get(idx) {
-                                let data_bytes = crate::rpc::parse_hex_to_bytes(data);
-                                if let Some(deposit_block) =
-                                    DaoParser::parse_deposit_block_number(&data_bytes)
-                                {
-                                    new_dao_outputs.push((
-                                        tx_data.hash.clone(),
-                                        idx as i16,
-                                        cell.lock_script_hash.clone(),
-                                        cell.capacity,
-                                        deposit_block,
-                                    ));
+                    let mut new_dao_outputs: Vec<(Vec<u8>, i16, Vec<u8>, i64, u64)> = Vec::new();
+                    for (idx, cell) in tx_data.cells.iter().enumerate() {
+                        if let Some(ref type_code_hash) = cell.type_code_hash {
+                            if type_code_hash == &dao_code_hash && cell.data_size == 8 {
+                                if let Some(data) = tx_data.outputs_data.get(idx) {
+                                    let data_bytes = crate::rpc::parse_hex_to_bytes(data);
+                                    if let Some(deposit_block) =
+                                        DaoParser::parse_deposit_block_number(&data_bytes)
+                                    {
+                                        new_dao_outputs.push((
+                                            tx_data.hash.clone(),
+                                            idx as i16,
+                                            cell.lock_script_hash.clone(),
+                                            cell.capacity,
+                                            deposit_block,
+                                        ));
+                                    }
                                 }
                             }
                         }
                     }
-                }
 
-                self.writer
-                    .process_dao_withdrawals(
-                        &consumed_dao,
-                        &new_dao_outputs,
-                        parsed.number,
-                        &tx_data.hash,
-                        parsed.timestamp,
-                    )
-                    .await?;
+                    self.writer
+                        .process_dao_withdrawals(
+                            &consumed_dao,
+                            &new_dao_outputs,
+                            parsed.number,
+                            &tx_data.hash,
+                            parsed.timestamp,
+                        )
+                        .await?;
+                }
             }
-        }
 
         struct UdtTxContext {
             tx_hash: Vec<u8>,
@@ -3217,7 +3203,6 @@ impl Indexer {
         let mut batch_udt_cells: HashMap<(Vec<u8>, i16), crate::parser::ParsedUdtCell> =
             HashMap::new();
 
-        // Temp storage: we filter txs later based on whether they have UDT inputs
         struct TxInfoForUdt {
             tx_hash: Vec<u8>,
             block_number: i64,
@@ -3969,6 +3954,7 @@ impl Indexer {
             self.writer
                 .insert_address_asset_transfers_batch(&nft_address_records)
                 .await?;
+        }
         }
 
         self.flush_batch_stats(&batch_stats).await?;

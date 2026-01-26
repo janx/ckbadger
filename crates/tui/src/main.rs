@@ -67,6 +67,7 @@ struct App {
     should_quit: bool,
     last_refresh: std::time::Instant,
     status_message: Option<(String, Color)>,
+    db_connected: bool,
 }
 
 impl App {
@@ -105,6 +106,7 @@ impl App {
             should_quit: false,
             last_refresh: std::time::Instant::now(),
             status_message: None,
+            db_connected: true,
         })
     }
 
@@ -480,12 +482,17 @@ fn render_instances_table(frame: &mut Frame, area: Rect, app: &mut App) {
             let phase_str = match instance.sync_phase {
                 SyncPhase::Pending => "Pending",
                 SyncPhase::CoreSync => "Core Sync",
+                SyncPhase::RebuildCellStatus => "Rebuild: cell_status",
                 SyncPhase::RebuildLiveCells => "Rebuild: live_cells",
-                SyncPhase::RebuildBalances => "Rebuild: balances",
-                SyncPhase::RebuildScriptUsage => "Rebuild: scripts",
-                SyncPhase::RebuildStatistics => "Rebuild: stats",
+                SyncPhase::RebuildAddressBalances => "Rebuild: balances",
+                SyncPhase::RebuildScriptUsageStats => "Rebuild: scripts",
+                SyncPhase::RebuildDaoDeposits => "Rebuild: dao",
+                SyncPhase::RebuildUdtCells => "Rebuild: udt",
+                SyncPhase::RebuildDailyStatistics => "Rebuild: daily",
+                SyncPhase::RebuildHourlyStatistics => "Rebuild: hourly",
+                SyncPhase::RebuildEpochStatistics => "Rebuild: epoch",
+                SyncPhase::RebuildMinerStatistics => "Rebuild: miner",
                 SyncPhase::RebuildIndexes => "Rebuild: indexes",
-                SyncPhase::RebuildAddressTx => "Rebuild: addr_tx",
                 SyncPhase::Completed => "Completed",
             };
 
@@ -810,12 +817,17 @@ fn render_config(frame: &mut Frame, area: Rect, app: &App) {
         let phase_str = match &instance.sync_phase {
             SyncPhase::Pending => "Pending".to_string(),
             SyncPhase::CoreSync => "Core Sync".to_string(),
+            SyncPhase::RebuildCellStatus => "Rebuild: cell_status".to_string(),
             SyncPhase::RebuildLiveCells => "Rebuild: live_cells".to_string(),
-            SyncPhase::RebuildBalances => "Rebuild: balances".to_string(),
-            SyncPhase::RebuildScriptUsage => "Rebuild: scripts".to_string(),
-            SyncPhase::RebuildStatistics => "Rebuild: stats".to_string(),
+            SyncPhase::RebuildAddressBalances => "Rebuild: balances".to_string(),
+            SyncPhase::RebuildScriptUsageStats => "Rebuild: scripts".to_string(),
+            SyncPhase::RebuildDaoDeposits => "Rebuild: dao".to_string(),
+            SyncPhase::RebuildUdtCells => "Rebuild: udt".to_string(),
+            SyncPhase::RebuildDailyStatistics => "Rebuild: daily".to_string(),
+            SyncPhase::RebuildHourlyStatistics => "Rebuild: hourly".to_string(),
+            SyncPhase::RebuildEpochStatistics => "Rebuild: epoch".to_string(),
+            SyncPhase::RebuildMinerStatistics => "Rebuild: miner".to_string(),
             SyncPhase::RebuildIndexes => "Rebuild: indexes".to_string(),
-            SyncPhase::RebuildAddressTx => "Rebuild: addr_tx".to_string(),
             SyncPhase::Completed => "Completed".to_string(),
         };
 
@@ -893,17 +905,27 @@ fn render_config(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_status(frame: &mut Frame, area: Rect, app: &App) {
-    let elapsed = app.last_refresh.elapsed();
-    let refresh_text = format!("Last refresh: {:.0}s ago", elapsed.as_secs_f64());
+    let elapsed_ms = app.last_refresh.elapsed().as_millis();
+    let refresh_text = format!("Last refresh: {}ms ago", elapsed_ms);
+
+    let db_status = if app.db_connected {
+        Span::styled(" ● DB", Style::new().fg(Color::Green))
+    } else {
+        Span::styled(" ○ DB", Style::new().fg(Color::Red))
+    };
 
     let status = if let Some((msg, color)) = &app.status_message {
         Line::from(vec![
             Span::styled(msg.as_str(), Style::new().fg(*color)),
             Span::raw(" | "),
             Span::raw(refresh_text),
+            db_status,
         ])
     } else {
-        Line::from(refresh_text)
+        Line::from(vec![
+            Span::raw(refresh_text),
+            db_status,
+        ])
     };
 
     frame.render_widget(Paragraph::new(status), area);
@@ -920,6 +942,15 @@ fn render_help(frame: &mut Frame, area: Rect, app: &App) {
 
     let help = Paragraph::new(help_text).style(Style::new().fg(Color::DarkGray));
     frame.render_widget(help, area);
+}
+
+fn truncate_error(e: &anyhow::Error) -> String {
+    let s = e.to_string();
+    if s.len() > 50 {
+        format!("{}...", &s[..50])
+    } else {
+        s
+    }
 }
 
 fn format_number(n: i64) -> String {
@@ -991,12 +1022,17 @@ fn calculate_job_eta(job: &SyncJob) -> String {
 fn find_job_for_phase<'a>(jobs: &'a [SyncJob], instance_id: &uuid::Uuid, phase: &SyncPhase) -> Option<&'a SyncJob> {
     let job_type = match phase {
         SyncPhase::CoreSync => "core_sync",
+        SyncPhase::RebuildCellStatus => "rebuild_cell_status",
         SyncPhase::RebuildLiveCells => "rebuild_live_cells",
-        SyncPhase::RebuildBalances => "rebuild_balances",
-        SyncPhase::RebuildScriptUsage => "rebuild_script_usage",
-        SyncPhase::RebuildStatistics => "rebuild_statistics",
+        SyncPhase::RebuildAddressBalances => "rebuild_address_balances",
+        SyncPhase::RebuildScriptUsageStats => "rebuild_script_usage_stats",
+        SyncPhase::RebuildDaoDeposits => "rebuild_dao_deposits",
+        SyncPhase::RebuildUdtCells => "rebuild_udt_cells",
+        SyncPhase::RebuildDailyStatistics => "rebuild_daily_statistics",
+        SyncPhase::RebuildHourlyStatistics => "rebuild_hourly_statistics",
+        SyncPhase::RebuildEpochStatistics => "rebuild_epoch_statistics",
+        SyncPhase::RebuildMinerStatistics => "rebuild_miner_statistics",
         SyncPhase::RebuildIndexes => "rebuild_indexes",
-        SyncPhase::RebuildAddressTx => "rebuild_address_tx",
         _ => return None,
     };
     jobs.iter().find(|j| &j.instance_id == instance_id && j.job_type == job_type)
@@ -1093,8 +1129,24 @@ async fn main() -> Result<()> {
             }
         }
 
-        if app.last_refresh.elapsed() > Duration::from_secs(5) {
-            let _ = app.refresh().await;
+        if app.last_refresh.elapsed() > Duration::from_secs(1) {
+            match tokio::time::timeout(Duration::from_secs(3), app.refresh()).await {
+                Ok(Ok(())) => {
+                    app.db_connected = true;
+                }
+                Ok(Err(e)) => {
+                    app.db_connected = false;
+                    app.status_message =
+                        Some((format!("DB error: {}", truncate_error(&e)), Color::Red));
+                    app.last_refresh = std::time::Instant::now();
+                }
+                Err(_) => {
+                    app.db_connected = false;
+                    app.status_message =
+                        Some(("DB connection timeout".to_string(), Color::Red));
+                    app.last_refresh = std::time::Instant::now();
+                }
+            }
         }
     }
 

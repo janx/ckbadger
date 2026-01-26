@@ -28,15 +28,21 @@ CREATE TABLE instances (
     -- archived: no longer in use
     
     -- Sync Phase (detailed phase within syncing/rebuilding)
-    sync_phase VARCHAR(30) NOT NULL DEFAULT 'pending',
+    -- Phase names are generated as format!("rebuild_{}", RebuildTask.name())
+    sync_phase VARCHAR(50) NOT NULL DEFAULT 'pending',
     -- pending: waiting to start
     -- core_sync: syncing core blockchain data
+    -- rebuild_cell_status: marking consumed cells
     -- rebuild_live_cells: rebuilding live_cells table
-    -- rebuild_balances: rebuilding address_balances
-    -- rebuild_script_usage: rebuilding script_usage_stats
-    -- rebuild_statistics: rebuilding daily/hourly/epoch stats
+    -- rebuild_address_balances: rebuilding address_balances
+    -- rebuild_script_usage_stats: rebuilding script_usage_stats
+    -- rebuild_dao_deposits: rebuilding DAO deposits from cells
+    -- rebuild_udt_cells: rebuilding UDT cells from cells
+    -- rebuild_daily_statistics: rebuilding daily_statistics
+    -- rebuild_hourly_statistics: rebuilding hourly_statistics
+    -- rebuild_epoch_statistics: rebuilding epoch_statistics
+    -- rebuild_miner_statistics: rebuilding miner_statistics
     -- rebuild_indexes: creating indexes
-    -- rebuild_address_tx: background address_transactions fill
     -- completed: all phases done
     
     -- Progress
@@ -380,11 +386,11 @@ $$ LANGUAGE plpgsql;
 -- Function to transition instance phase
 CREATE OR REPLACE FUNCTION transition_instance_phase(
     p_instance_id UUID,
-    p_new_phase VARCHAR(30),
+    p_new_phase VARCHAR(50),
     p_new_status VARCHAR(20) DEFAULT NULL
 ) RETURNS VOID AS $$
 DECLARE
-    v_old_phase VARCHAR(30);
+    v_old_phase VARCHAR(50);
     v_old_status VARCHAR(20);
 BEGIN
     SELECT sync_phase, status INTO v_old_phase, v_old_status 
@@ -397,7 +403,7 @@ BEGIN
         -- Set timestamps based on phase
         sync_started_at = CASE WHEN p_new_phase = 'core_sync' AND sync_started_at IS NULL THEN NOW() ELSE sync_started_at END,
         sync_completed_at = CASE WHEN p_new_phase LIKE 'rebuild_%' AND sync_completed_at IS NULL THEN NOW() ELSE sync_completed_at END,
-        rebuild_started_at = CASE WHEN p_new_phase = 'rebuild_live_cells' AND rebuild_started_at IS NULL THEN NOW() ELSE rebuild_started_at END,
+        rebuild_started_at = CASE WHEN p_new_phase = 'rebuild_cell_status' AND rebuild_started_at IS NULL THEN NOW() ELSE rebuild_started_at END,
         rebuild_completed_at = CASE WHEN p_new_phase = 'completed' THEN NOW() ELSE rebuild_completed_at END
     WHERE id = p_instance_id;
     

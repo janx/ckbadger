@@ -23,27 +23,29 @@ The two-phase approach separates **core data ingestion** from **derived data com
 ┌─────────────────────────────────────────────┐     ┌─────────────────────────────────────────────┐
 │                  WRITES                      │     │                  REBUILDS                   │
 │                                             │     │                                             │
-│  blocks ─────────────────── ✓               │     │  live_cells ◄──────── rebuild_live_cells    │
+│  blocks ─────────────────── ✓               │     │  cell_status ◄─────── rebuild_cell_status   │
 │  transactions ──────────── ✓               │     │                       (partition-parallel)  │
-│  cells ─────────────────── ✓               │     │                                             │
-│  transaction_inputs ────── ✓               │     │  address_balances ◄── rebuild_address_balances
+│  cells (status=0 only) ─── ✓               │     │                                             │
+│  transaction_inputs ────── ✓               │     │  live_cells ◄──────── rebuild_live_cells    │
 │  transaction_cell_deps ─── ✓               │     │                                             │
-│  dao_deposits ──────────── ✓               │     │  script_usage_stats ◄ rebuild_script_usage  │
-│  udt_cells ─────────────── ✓               │     │                                             │
-│  epoch_statistics ──────── ✓               │     │  daily_statistics ◄── rebuild_daily_stats   │
-│  sync_status ───────────── ✓               │     │  hourly_statistics ◄─ rebuild_hourly_stats  │
-│                                             │     │  epoch_statistics ◄── rebuild_epoch_stats   │
-│                  SKIPS                      │     │  miner_statistics ◄── rebuild_miner_stats   │
-│                                             │     │                                             │
-│  live_cells ───────────── ✗                │     │  indexes ◄─────────── recreate_sync_indexes │
-│  address_balances ─────── ✗                │     │                       (concurrent)          │
-│  address_transactions ─── ✗                │     │                                             │
-│  script_usage_stats ───── ✗                │     │  address_transactions (background,optional) │
-│  hourly_statistics ────── ✗                │     │                                             │
-│  daily_statistics ─────── ✗                │     └─────────────────────────────────────────────┘
-│  miner_statistics ─────── ✗                │
-│  dao_daily_snapshots ──── ✗                │
-│  block_time_distribution ─ ✗               │
+│  epoch_statistics ──────── ✓               │     │  address_balances ◄── rebuild_address_balances
+│  sync_status ───────────── ✓               │     │                                             │
+│                                             │     │  script_usage_stats ◄ rebuild_script_usage  │
+│                  SKIPS                      │     │                                             │
+│                                             │     │  dao_deposits ◄────── rebuild_dao_deposits  │
+│  cells.status UPDATE ──── ✗                │     │  udt_cells ◄───────── rebuild_udt_cells     │
+│  live_cells ───────────── ✗                │     │                                             │
+│  dao_deposits ─────────── ✗                │     │  daily_statistics ◄── rebuild_daily_stats   │
+│  udt_cells ─────────────── ✗                │     │  hourly_statistics ◄─ rebuild_hourly_stats  │
+│  address_balances ─────── ✗                │     │  epoch_statistics ◄── rebuild_epoch_stats   │
+│  address_transactions ─── ✗                │     │  miner_statistics ◄── rebuild_miner_stats   │
+│  script_usage_stats ───── ✗                │     │                                             │
+│  hourly_statistics ────── ✗                │     │  indexes ◄─────────── recreate_sync_indexes │
+│  daily_statistics ─────── ✗                │     │                       (concurrent)          │
+│  miner_statistics ─────── ✗                │     │                                             │
+│  spore/nft processing ─── ✗                │     │  address_transactions (background,optional) │
+│  dao_daily_snapshots ──── ✗                │     │                                             │
+│  block_time_distribution ─ ✗               │     └─────────────────────────────────────────────┘
 │                                             │
 └─────────────────────────────────────────────┘
 ```
@@ -56,27 +58,29 @@ The two-phase approach separates **core data ingestion** from **derived data com
 | ----------------------- | -------------------------- | ------------------------ |
 | `blocks`                | Block headers and metadata | Primary data             |
 | `transactions`          | Transaction records        | Primary data             |
-| `cells`                 | All cells (inputs/outputs) | Primary data             |
+| `cells`                 | All cells (status=0 only)  | Primary data             |
 | `transaction_inputs`    | Input references           | Primary data             |
 | `transaction_cell_deps` | Cell dependencies          | Primary data             |
-| `dao_deposits`          | DAO deposit tracking       | Primary data             |
-| `udt_cells`             | UDT/xUDT token cells       | Primary data             |
 | `epoch_statistics`      | Epoch-level metrics        | Needed for sync progress |
 | `sync_status`           | Indexer sync state         | Critical for operation   |
 
 ### What Gets Skipped
 
-| Table                     | Purpose                         | Why Skipped          |
-| ------------------------- | ------------------------------- | -------------------- |
-| `live_cells`              | Currently unspent cells         | Expensive random I/O |
-| `address_balances`        | Per-address balance totals      | Frequent updates     |
-| `address_transactions`    | Transaction history per address | Many rows per tx     |
-| `script_usage_stats`      | Script deployment counts        | Aggregate updates    |
-| `hourly_statistics`       | Hourly network metrics          | Aggregate updates    |
-| `daily_statistics`        | Daily network metrics           | Aggregate updates    |
-| `miner_statistics`        | Per-miner block counts          | Aggregate updates    |
-| `dao_daily_snapshots`     | DAO state over time             | Daily aggregates     |
-| `block_time_distribution` | Block time histograms           | Statistical updates  |
+| Table/Operation           | Purpose                         | Why Skipped              |
+| ------------------------- | ------------------------------- | ------------------------ |
+| `cells.status` UPDATE     | Mark cells as consumed          | Computed in Phase 2      |
+| `live_cells`              | Currently unspent cells         | Expensive random I/O     |
+| `dao_deposits`            | DAO deposit tracking            | Per-tx queries expensive |
+| `udt_cells`               | UDT/xUDT token cells            | Per-tx queries expensive |
+| `spore_*/mnft_*/dotbit_*` | NFT tables                      | Per-tx queries expensive |
+| `address_balances`        | Per-address balance totals      | Frequent updates         |
+| `address_transactions`    | Transaction history per address | Many rows per tx         |
+| `script_usage_stats`      | Script deployment counts        | Aggregate updates        |
+| `hourly_statistics`       | Hourly network metrics          | Aggregate updates        |
+| `daily_statistics`        | Daily network metrics           | Aggregate updates        |
+| `miner_statistics`        | Per-miner block counts          | Aggregate updates        |
+| `dao_daily_snapshots`     | DAO state over time             | Daily aggregates         |
+| `block_time_distribution` | Block time histograms           | Statistical updates      |
 
 ### Enabling Bulk Sync Mode
 
@@ -96,7 +100,11 @@ Config {
 
 When `bulk_sync_mode` is enabled and blocks remaining > threshold, the indexer automatically:
 
+- Skips `cells.status` UPDATE (consumed cells marked in Phase 2)
 - Skips `live_cells` inserts/deletes
+- Skips `dao_deposits` processing (rebuilt in Phase 2)
+- Skips `udt_cells` processing (rebuilt in Phase 2)
+- Skips all Spore/NFT/dotbit processing (TODO: rebuild in Phase 2)
 - Skips `address_balances`, `address_transactions`, `script_usage_stats` updates
 - Skips hourly/daily/miner statistics writes
 - Drops non-essential indexes at startup
@@ -121,15 +129,18 @@ After Phase 1 completes (all blocks synced), Phase 2 rebuilds derived tables usi
 The rebuild runs tasks in dependency order:
 
 ```
-1. LiveCells          - Foundation for balance calculation
-2. AddressBalances    - Depends on live_cells
-3. ScriptUsageStats   - Independent
-4. DailyStatistics    - Depends on all blocks
-5. HourlyStatistics   - Depends on all blocks
-6. EpochStatistics    - May update existing records
-7. MinerStatistics    - Depends on all blocks
-8. Indexes            - After all data written
-9. AddressTransactions - Background (optional, can run while API active)
+1.  CellStatus         - Mark consumed cells (status=1) from transaction_inputs
+2.  LiveCells          - Foundation for balance calculation (depends on cell_status)
+3.  AddressBalances    - Depends on cells.status
+4.  ScriptUsageStats   - Depends on cells.status
+5.  DaoDeposits        - Rebuild DAO deposits from cells with DAO type script
+6.  UdtCells           - Rebuild UDT cells from cells with sUDT/xUDT type script
+7.  DailyStatistics    - Depends on all blocks
+8.  HourlyStatistics   - Depends on all blocks
+9.  EpochStatistics    - May update existing records
+10. MinerStatistics    - Depends on all blocks
+11. Indexes            - After all data written
+12. AddressTransactions - Background (optional, can run while API active)
 ```
 
 ### Partition-Based Parallelism
@@ -154,17 +165,20 @@ Benefits:
 
 Located in `migrations/postgres/001_init.sql`:
 
-| Function                                   | Description                        |
-| ------------------------------------------ | ---------------------------------- |
-| `rebuild_live_cells_partition(start, end)` | Rebuild live_cells for block range |
-| `rebuild_address_balances()`               | Full rebuild from live_cells       |
-| `rebuild_script_usage_stats()`             | Count script deployments           |
-| `rebuild_daily_statistics()`               | Aggregate daily metrics            |
-| `rebuild_hourly_statistics()`              | Aggregate hourly metrics           |
-| `rebuild_epoch_statistics()`               | Update epoch-level metrics         |
-| `rebuild_miner_statistics()`               | Count blocks per miner             |
-| `drop_sync_indexes()`                      | Drop indexes for fast writes       |
-| `recreate_sync_indexes()`                  | Recreate indexes concurrently      |
+| Function                                    | Description                                 |
+| ------------------------------------------- | ------------------------------------------- |
+| `rebuild_cell_status_partition(start, end)` | Mark consumed cells from transaction_inputs |
+| `rebuild_live_cells_partition(start, end)`  | Rebuild live_cells for block range          |
+| `rebuild_address_balances()`                | Full rebuild from cells                     |
+| `rebuild_script_usage_stats()`              | Count script deployments                    |
+| `rebuild_dao_deposits()`                    | Rebuild DAO deposits from cells             |
+| `rebuild_udt_cells()`                       | Rebuild UDT cells from cells                |
+| `rebuild_daily_statistics()`                | Aggregate daily metrics                     |
+| `rebuild_hourly_statistics()`               | Aggregate hourly metrics                    |
+| `rebuild_epoch_statistics()`                | Update epoch-level metrics                  |
+| `rebuild_miner_statistics()`                | Count blocks per miner                      |
+| `drop_sync_indexes()`                       | Drop indexes for fast writes                |
+| `recreate_sync_indexes()`                   | Recreate indexes concurrently               |
 
 ## Control Plane
 
@@ -213,12 +227,14 @@ CREATE TABLE sync_events (
 
 ### Sync Phases
 
-The indexer tracks progress through the two-phase sync via the `sync_phase` column:
+The indexer tracks progress through the two-phase sync via the `sync_phase` column.
+Phase names are generated dynamically as `format!("rebuild_{}", RebuildTask.name())`:
 
 ```
-core_sync → rebuild_live_cells → rebuild_address_balances →
-rebuild_script_usage → rebuild_daily_stats → rebuild_hourly_stats →
-rebuild_epoch_stats → rebuild_miner_stats → rebuild_indexes → completed
+core_sync → rebuild_cell_status → rebuild_live_cells → rebuild_address_balances →
+rebuild_script_usage_stats → rebuild_dao_deposits → rebuild_udt_cells →
+rebuild_daily_statistics → rebuild_hourly_statistics → rebuild_epoch_statistics →
+rebuild_miner_statistics → rebuild_indexes → completed
 ```
 
 Phase transitions are automatic:

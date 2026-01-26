@@ -1634,3 +1634,113 @@ BEGIN
     RETURN v_count;
 END;
 $$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION rebuild_cell_status_partition(
+    p_partition_start BIGINT,
+    p_partition_end BIGINT
+) RETURNS BIGINT AS $$
+DECLARE
+    v_count BIGINT;
+BEGIN
+    UPDATE cells c SET
+        status = 1,
+        consumed_at_block = ti.tx_block_number,
+        consumed_by_tx = ti.tx_hash,
+        consumed_at_index = ti.input_index
+    FROM transaction_inputs ti
+    WHERE c.tx_hash = ti.previous_tx_hash
+      AND c.output_index = ti.previous_output_index
+      AND c.status = 0
+      AND c.created_at_block >= p_partition_start
+      AND c.created_at_block < p_partition_end;
+
+    GET DIAGNOSTICS v_count = ROW_COUNT;
+    RETURN v_count;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION rebuild_dao_deposits() RETURNS BIGINT AS $$
+DECLARE
+    v_count BIGINT;
+    v_dao_code_hash BYTEA := '\x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e';
+BEGIN
+    TRUNCATE dao_deposits;
+    TRUNCATE dao_statistics;
+    
+    INSERT INTO dao_statistics (id, total_deposited, total_withdrawn, total_compensation, active_deposits)
+    VALUES (1, 0, 0, 0, 0);
+
+    INSERT INTO dao_deposits (
+        tx_hash, output_index, lock_script_hash, capacity,
+        deposit_block_number, deposit_tx_hash, deposit_timestamp, deposit_ar, status
+    )
+    SELECT 
+        c.tx_hash,
+        c.output_index,
+        c.lock_script_hash,
+        c.capacity::bigint,
+        c.created_at_block,
+        c.tx_hash,
+        b.timestamp,
+        ('x' || encode(reverse(substring(b.dao from 9 for 8)), 'hex'))::bit(64)::bigint,
+        CASE WHEN c.status = 1 THEN 2 ELSE 0 END
+    FROM cells c
+    JOIN blocks b ON c.created_at_block = b.number
+    WHERE c.type_code_hash = v_dao_code_hash
+      AND c.data_size = 8;
+
+    GET DIAGNOSTICS v_count = ROW_COUNT;
+
+    UPDATE dao_statistics SET
+        total_deposited = (SELECT COALESCE(SUM(capacity), 0) FROM dao_deposits),
+        active_deposits = (SELECT COUNT(*) FROM dao_deposits WHERE status = 0);
+
+    RETURN v_count;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION rebuild_udt_cells() RETURNS BIGINT AS $$
+DECLARE
+    v_count BIGINT;
+    v_sudt_code_hash BYTEA := '\x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5';
+    v_xudt_code_hash BYTEA := '\x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95';
+BEGIN
+    TRUNCATE udt_cells;
+
+    INSERT INTO udt_cells (
+        tx_hash, output_index, type_script_hash, type_code_hash, type_hash_type, type_args,
+        lock_script_hash, amount, standard, created_at_block, is_live,
+        consumed_at_block, consumed_by_tx
+    )
+    SELECT 
+        c.tx_hash,
+        c.output_index,
+        c.type_script_hash,
+        c.type_code_hash,
+        c.type_hash_type,
+        c.type_args,
+        c.lock_script_hash,
+        CASE 
+            WHEN c.data_size >= 16 THEN 
+                (('x' || encode(reverse(substring(c.data from 9 for 8)), 'hex'))::bit(64)::bigint::numeric * 
+                 '18446744073709551616'::numeric) +
+                ('x' || encode(reverse(substring(c.data from 1 for 8)), 'hex'))::bit(64)::bigint::numeric
+            ELSE 0
+        END,
+        CASE 
+            WHEN c.type_code_hash = v_sudt_code_hash THEN 'sUDT'
+            WHEN c.type_code_hash = v_xudt_code_hash THEN 'xUDT'
+            ELSE 'unknown'
+        END,
+        c.created_at_block,
+        c.status = 0,
+        c.consumed_at_block,
+        c.consumed_by_tx
+    FROM cells c
+    WHERE c.type_code_hash IN (v_sudt_code_hash, v_xudt_code_hash)
+      AND c.data_size >= 16;
+
+    GET DIAGNOSTICS v_count = ROW_COUNT;
+    RETURN v_count;
+END;
+$$ LANGUAGE plpgsql;
