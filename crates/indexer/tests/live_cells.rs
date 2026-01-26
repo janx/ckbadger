@@ -113,7 +113,7 @@ async fn test_consume_cells_removes_from_live_cells(pool: PgPool) {
     assert_eq!(get_live_cells_count(&pool).await, 1);
 
     writer
-        .consume_cells_batch(&[(&tx_hash, 0, 1000, &consuming_tx, 1001, 0)])
+        .consume_cells_batch(&[(&tx_hash, 0, 1000, &consuming_tx, 1001, 0)], false)
         .await
         .unwrap();
 
@@ -155,7 +155,7 @@ async fn test_get_cells_info_batch_returns_empty_for_consumed(pool: PgPool) {
         .unwrap();
 
     writer
-        .consume_cells_batch(&[(&tx_hash, 0, 1000, &consuming_tx, 1001, 0)])
+        .consume_cells_batch(&[(&tx_hash, 0, 1000, &consuming_tx, 1001, 0)], false)
         .await
         .unwrap();
 
@@ -275,11 +275,14 @@ async fn test_consume_cells_across_partitions(pool: PgPool) {
     assert_eq!(get_live_cells_count(&pool).await, 3);
 
     writer
-        .consume_cells_batch(&[
-            (&tx_p0, 0, 1_000_000, &consuming_tx, 13_000_000, 0),
-            (&tx_p1, 0, 6_000_000, &consuming_tx, 13_000_000, 1),
-            (&tx_p2, 0, 11_000_000, &consuming_tx, 13_000_000, 2),
-        ])
+        .consume_cells_batch(
+            &[
+                (&tx_p0, 0, 1_000_000, &consuming_tx, 13_000_000, 0),
+                (&tx_p1, 0, 6_000_000, &consuming_tx, 13_000_000, 1),
+                (&tx_p2, 0, 11_000_000, &consuming_tx, 13_000_000, 2),
+            ],
+            false,
+        )
         .await
         .unwrap();
 

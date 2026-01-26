@@ -69,3 +69,110 @@ impl SyncProgress {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sync_progress_new() {
+        let progress = SyncProgress::new(100, 1000);
+        assert_eq!(progress.current(), 100);
+        assert_eq!(progress.target(), 1000);
+    }
+
+    #[test]
+    fn test_sync_progress_blocks_remaining() {
+        let progress = SyncProgress::new(100, 1000);
+        assert_eq!(progress.blocks_remaining(), 900);
+    }
+
+    #[test]
+    fn test_sync_progress_blocks_remaining_at_tip() {
+        let progress = SyncProgress::new(1000, 1000);
+        assert_eq!(progress.blocks_remaining(), 0);
+    }
+
+    #[test]
+    fn test_sync_progress_blocks_remaining_ahead_of_tip() {
+        // Edge case: current > target (shouldn't happen, but test saturating_sub)
+        let progress = SyncProgress::new(1100, 1000);
+        assert_eq!(progress.blocks_remaining(), 0);
+    }
+
+    #[test]
+    fn test_sync_progress_is_synced() {
+        let progress = SyncProgress::new(999, 1000);
+        assert!(!progress.is_synced());
+
+        let progress = SyncProgress::new(1000, 1000);
+        assert!(progress.is_synced());
+
+        let progress = SyncProgress::new(1001, 1000);
+        assert!(progress.is_synced());
+    }
+
+    #[test]
+    fn test_sync_progress_update_current() {
+        let progress = SyncProgress::new(0, 1000);
+        progress.update_current(500);
+        assert_eq!(progress.current(), 500);
+        assert_eq!(progress.blocks_remaining(), 500);
+    }
+
+    #[test]
+    fn test_sync_progress_update_current_batch() {
+        let progress = SyncProgress::new(0, 1000);
+        progress.update_current_batch(100, 100);
+        assert_eq!(progress.current(), 100);
+        assert_eq!(progress.blocks_remaining(), 900);
+    }
+
+    #[test]
+    fn test_sync_progress_update_target() {
+        let progress = SyncProgress::new(100, 1000);
+        progress.update_target(2000);
+        assert_eq!(progress.target(), 2000);
+        assert_eq!(progress.blocks_remaining(), 1900);
+    }
+
+    #[test]
+    fn test_sync_progress_percentage_zero_target() {
+        let progress = SyncProgress::new(0, 0);
+        assert_eq!(progress.progress_percentage(), 100.0);
+    }
+
+    #[test]
+    fn test_sync_progress_percentage_partial() {
+        let progress = SyncProgress::new(500, 1000);
+        assert!((progress.progress_percentage() - 50.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_sync_progress_percentage_complete() {
+        let progress = SyncProgress::new(1000, 1000);
+        assert!((progress.progress_percentage() - 100.0).abs() < 0.001);
+    }
+
+    /// Test that simulates bulk sync threshold check logic
+    #[test]
+    fn test_bulk_sync_threshold_logic() {
+        let threshold = 1000u64;
+
+        // Far behind - bulk sync should be active
+        let progress = SyncProgress::new(0, 10_000_000);
+        assert!(progress.blocks_remaining() > threshold);
+
+        // Just above threshold
+        let progress = SyncProgress::new(9_998_999, 10_000_000);
+        assert!(progress.blocks_remaining() > threshold);
+
+        // At threshold - bulk sync should NOT be active
+        let progress = SyncProgress::new(9_999_000, 10_000_000);
+        assert!(progress.blocks_remaining() == threshold);
+
+        // Below threshold - bulk sync should NOT be active
+        let progress = SyncProgress::new(9_999_500, 10_000_000);
+        assert!(progress.blocks_remaining() < threshold);
+    }
+}

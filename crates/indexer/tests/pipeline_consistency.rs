@@ -183,7 +183,7 @@ async fn test_same_batch_cell_consumption(pool: PgPool) {
         .unwrap();
 
     writer
-        .consume_cells_batch(&[(&creating_tx, 0, 1000, &consuming_tx, 1000, 0)])
+        .consume_cells_batch(&[(&creating_tx, 0, 1000, &consuming_tx, 1000, 0)], false)
         .await
         .unwrap();
 
@@ -398,7 +398,7 @@ async fn test_consumed_cell_not_in_info_batch(pool: PgPool) {
         .await
         .unwrap();
     writer
-        .consume_cells_batch(&[(&tx_hash, 0, 1000, &consuming_tx, 2000, 0)])
+        .consume_cells_batch(&[(&tx_hash, 0, 1000, &consuming_tx, 2000, 0)], false)
         .await
         .unwrap();
 
