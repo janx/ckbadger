@@ -1,0 +1,20 @@
+services:
+  ckbadger:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.minimal
+    container_name: ckbadger-minimal
+    environment:
+      DATABASE_URL: sqlite:///data/ckbadger.db
+      CKB_RPC_URL: http://host.docker.internal:8114
+      RUST_LOG: info
+    volumes:
+      - ckbadger-data:/data
+    ports:
+      - '3000:3000'
+      - '3001:3001'
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+
+volumes:
+  ckbadger-data:

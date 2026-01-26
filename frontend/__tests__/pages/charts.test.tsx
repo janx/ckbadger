@@ -1,0 +1,164 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { screen, waitFor } from '@testing-library/react';
+import { render } from '../utils/test-utils';
+import ChartsPage from '@/app/charts/page';
+import { api } from '@/lib/api';
+
+vi.mock('@/lib/api', () => ({
+  api: {
+    getNetworkStats: vi.fn(),
+    getDaoTotalDepositChart: vi.fn(),
+    getDaoDailyDepositChart: vi.fn(),
+    getDaoCirculationRatioChart: vi.fn(),
+    getTransactionCountChart: vi.fn(),
+    getCellCountChart: vi.fn(),
+    getKnowledgeSizeChart: vi.fn(),
+    getBlockTimeDistributionChart: vi.fn(),
+    getEpochTimeDistributionChart: vi.fn(),
+    getAverageBlockTimeChart: vi.fn(),
+    getEpochTimeLengthChart: vi.fn(),
+    getHashRateChart: vi.fn(),
+    getDifficultyChart: vi.fn(),
+    getUncleRateChart: vi.fn(),
+    getMinerAddressDistributionChart: vi.fn(),
+    getTotalSupplyChart: vi.fn(),
+    getNominalApcChart: vi.fn(),
+    getSecondaryIssuanceChart: vi.fn(),
+    getInflationRateChart: vi.fn(),
+  },
+}));
+
+vi.mock('@/components/layout/header', () => ({
+  Header: () => <div data-testid="header">Header</div>,
+}));
+
+const mockNetworkStatsComplete = {
+  latestBlock: 1000000,
+  avgBlockTime: '8.5',
+  hashRate: '1.5 PH/s',
+  difficulty: '0x1000000000',
+  epoch: '100/50/1000',
+  tps: '2.5',
+  estimatedEpochTime: '4h 30m',
+  transactionsPerMinute: '150',
+  transactionsPerDay: '216000',
+  syncStatus: {
+    isSyncing: false,
+    syncedBlock: 1000000,
+    tipBlock: 1000000,
+    progress: 100,
+    estimatedTime: null,
+    chartDataMayBeIncomplete: false,
+  },
+  deepForkStatus: {
+    detected: false,
+    detectedAt: null,
+    depth: null,
+    dbTip: null,
+    chainTip: null,
+    forkPoint: null,
+  },
+};
+
+const mockNetworkStatsSyncing = {
+  ...mockNetworkStatsComplete,
+  syncStatus: {
+    isSyncing: true,
+    syncedBlock: 500000,
+    tipBlock: 1000000,
+    progress: 50,
+    estimatedTime: '2h 30m',
+    chartDataMayBeIncomplete: true,
+  },
+};
+
+const mockChartResponse = {
+  title: 'Test Chart',
+  data: [{ date: '2024-01-01', value: '100' }],
+  yAxisLabel: 'Value',
+};
+
+const mockMinerDistributionResponse = {
+  title: 'Miner Distribution',
+  data: [{ address: 'ckb1...', minerName: 'Pool', blocksMined: 100, percentage: '50' }],
+  totalBlocks: 200,
+};
+
+const mockStackedAreaResponse = {
+  title: 'Total Supply',
+  data: [{ date: '2024-01-01', values: { primary: '100', secondary: '50', dao: '25' } }],
+  series: [
+    { key: 'primary', label: 'Primary', color: '#4ade80' },
+    { key: 'secondary', label: 'Secondary', color: '#818cf8' },
+    { key: 'dao', label: 'DAO', color: '#f472b6' },
+  ],
+};
+
+describe('ChartsPage', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.getDaoTotalDepositChart).mockResolvedValue(mockChartResponse);
+    vi.mocked(api.getDaoDailyDepositChart).mockResolvedValue(mockChartResponse);
+    vi.mocked(api.getDaoCirculationRatioChart).mockResolvedValue(mockChartResponse);
+    vi.mocked(api.getTransactionCountChart).mockResolvedValue(mockChartResponse);
+    vi.mocked(api.getCellCountChart).mockResolvedValue(mockChartResponse);
+    vi.mocked(api.getKnowledgeSizeChart).mockResolvedValue(mockChartResponse);
+    vi.mocked(api.getBlockTimeDistributionChart).mockResolvedValue(mockChartResponse);
+    vi.mocked(api.getEpochTimeDistributionChart).mockResolvedValue(mockChartResponse);
+    vi.mocked(api.getAverageBlockTimeChart).mockResolvedValue(mockChartResponse);
+    vi.mocked(api.getEpochTimeLengthChart).mockResolvedValue(mockChartResponse);
+    vi.mocked(api.getHashRateChart).mockResolvedValue(mockChartResponse);
+    vi.mocked(api.getDifficultyChart).mockResolvedValue(mockChartResponse);
+    vi.mocked(api.getUncleRateChart).mockResolvedValue(mockChartResponse);
+    vi.mocked(api.getMinerAddressDistributionChart).mockResolvedValue(
+      mockMinerDistributionResponse
+    );
+    vi.mocked(api.getTotalSupplyChart).mockResolvedValue(mockStackedAreaResponse);
+    vi.mocked(api.getNominalApcChart).mockResolvedValue(mockChartResponse);
+    vi.mocked(api.getSecondaryIssuanceChart).mockResolvedValue(mockStackedAreaResponse);
+    vi.mocked(api.getInflationRateChart).mockResolvedValue(mockChartResponse);
+  });
+
+  it('renders the page with header and title', async () => {
+    vi.mocked(api.getNetworkStats).mockResolvedValue(mockNetworkStatsComplete);
+
+    render(<ChartsPage />);
+
+    expect(screen.getByTestId('header')).toBeInTheDocument();
+    expect(screen.getByText('Charts')).toBeInTheDocument();
+  });
+
+  it('does NOT show warning when chartDataMayBeIncomplete is false', async () => {
+    vi.mocked(api.getNetworkStats).mockResolvedValue(mockNetworkStatsComplete);
+
+    render(<ChartsPage />);
+
+    await waitFor(() => {
+      expect(api.getNetworkStats).toHaveBeenCalled();
+    });
+
+    expect(screen.queryByText(/Chart data may be incomplete/i)).not.toBeInTheDocument();
+  });
+
+  it('shows warning when chartDataMayBeIncomplete is true', async () => {
+    vi.mocked(api.getNetworkStats).mockResolvedValue(mockNetworkStatsSyncing);
+
+    render(<ChartsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Chart data may be incomplete/i)).toBeInTheDocument();
+    });
+  });
+
+  it('renders chart sections', async () => {
+    vi.mocked(api.getNetworkStats).mockResolvedValue(mockNetworkStatsComplete);
+
+    render(<ChartsPage />);
+
+    expect(screen.getByText('Proof of Work')).toBeInTheDocument();
+    expect(screen.getByText('Nervos DAO')).toBeInTheDocument();
+    expect(screen.getByText('Block')).toBeInTheDocument();
+    expect(screen.getByText('Activities')).toBeInTheDocument();
+    expect(screen.getByText('Economics')).toBeInTheDocument();
+  });
+});

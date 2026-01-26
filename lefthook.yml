@@ -1,0 +1,43 @@
+# Lefthook configuration for ckbadger
+# Install: pnpm add -D lefthook && pnpm lefthook install
+
+pre-commit:
+  parallel: true
+  commands:
+    rust-fmt:
+      glob: '*.rs'
+      run: cargo fmt --all -- --check
+      stage_fixed: true
+
+    rust-clippy:
+      glob: '*.rs'
+      run: cargo clippy --all-targets -- -D warnings
+
+    frontend-lint:
+      root: frontend/
+      glob: '*.{js,jsx,ts,tsx}'
+      run: pnpm lint --fix
+      stage_fixed: true
+
+    frontend-typecheck:
+      root: frontend/
+      glob: '*.{ts,tsx}'
+      run: pnpm type-check
+
+    prettier:
+      glob: '*.{js,jsx,ts,tsx,json,md,yml,yaml,css}'
+      run: pnpm prettier --write {staged_files}
+      stage_fixed: true
+
+pre-push:
+  parallel: true
+  commands:
+    rust-test:
+      run: cargo test --lib
+
+    frontend-test:
+      root: frontend/
+      run: npx vitest run
+
+# Skip hooks with: git commit --no-verify / git push --no-verify
+# Or set: LEFTHOOK=0 git commit

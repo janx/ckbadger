@@ -1,0 +1,347 @@
+# Indexer Three-Stage Pipeline Architecture
+
+The CKB indexer uses a three-stage pipeline architecture to maximize sync throughput by parallelizing RPC I/O, CPU parsing, and database writes.
+
+## Overview
+
+```
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│     FETCHER     │────▶│     PARSER      │────▶│     WRITER      │
+│   (Async I/O)   │     │  (CPU + Prefetch)│     │    (DB I/O)     │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+        │                       │                       │
+   RPC requests           Rayon parallel          Batch INSERTs
+   to CKB node            block parsing           and UPDATEs
+```
+
+### Design Goals
+
+1. **Decouple I/O from computation** - RPC fetching doesn't block parsing; parsing doesn't block DB writes
+2. **Maximize parallelism** - Each stage can work on different batches simultaneously
+3. **Maintain consistency** - Pipeline mode produces identical data to sequential mode
+4. **Handle failures gracefully** - Stale batches are drained on errors; periodic db_tip resync prevents drift
+
+## Pipeline Stages
+
+### Stage 1: Fetcher (Async I/O)
+
+**Location**: `run_pipeline()` fetcher task
+
+**Responsibilities**:
+
+- Query chain tip from CKB RPC
+- Fetch blocks in parallel batches (`parallel_fetch_size` concurrent requests)
+- Send raw blocks to parser channel
+
+**Key behaviors**:
+
+- Tracks `next_block` locally to avoid re-querying db_tip (prevents race condition - see POSTMORTEM IDX-004)
+- Resets `next_block` to `None` every 1000 blocks to resync with writer
+- On fetch error, waits 5s and resets `next_block` for recovery
+
+```rust
+type FetchedBatch = (u64, u64, Vec<BlockResponseWithCycles>);
+//                  start  end   raw blocks with cycles data
+```
+
+### Stage 2: Parser (CPU + DB Prefetch)
+
+**Location**: `run_pipeline()` parser task + `parse_blocks_parallel()`
+
+**Responsibilities**:
+
+1. **Parallel parsing** via Rayon:
+   - Block headers, transactions, cells
+   - Collect all input outpoints for later consumption lookup
+
+2. **Cell info prefetch**:
+   - Check LRU cache for input cell info (capacity, lock_script_hash, data_size)
+   - Batch-fetch missing cell info from DB (`get_cells_info_batch`)
+   - Fetch code_hashes for consumed cells from previous batches (`get_cells_code_hashes_batch`)
+
+**Output structure**:
+
+```rust
+type ParsedBatch = (
+    u64,                                                // start_block
+    u64,                                                // end_block
+    Vec<BlockResponseWithCycles>,                       // raw blocks (needed for UDT parsing)
+    Vec<ParsedBlock>,                                   // parsed block headers
+    Vec<TxData>,                                        // parsed transactions with cells
+    HashMap<(Vec<u8>, i16), (i64, i64, Vec<u8>, i32)>,  // input_cell_info: (capacity, created_at_block, lock_hash, data_size)
+    HashMap<(Vec<u8>, i16), (Vec<u8>, Option<Vec<u8>>)> // consumed_code_hashes: (lock_code_hash, type_code_hash)
+);
+```
+
+### Stage 3: Writer (DB I/O)
+
+**Location**: `run_pipeline()` main loop + `write_parsed_batch()`
+
+**Responsibilities**:
+
+1. Validate batch sequence (expected start_block matches db_tip + 1)
+2. Check for chain reorgs before processing
+3. Write all data to database:
+   - Blocks, transactions, cells
+   - Cell consumptions with script usage tracking
+   - DAO deposits/withdrawals
+   - Token transfers (UDT, NFT, DOB)
+   - Statistics (hourly, daily, epoch)
+4. Update sync_status LAST (crash recovery guarantee)
+5. Trigger periodic DAO statistics recalculation
+
+## Data Flow
+
+```
+Block N arrives
+       │
+       ▼
+┌──────────────────────────────────────────────────────────────┐
+│ PARSER                                                        │
+│  1. parse_blocks_parallel() - extract all structured data     │
+│  2. Collect input outpoints: [(tx_hash, output_index), ...]   │
+│  3. Cache lookup for cell info                                │
+│  4. DB batch fetch for cache misses                           │
+│  5. DB fetch for consumed code_hashes (script usage tracking) │
+└──────────────────────────────────────────────────────────────┘
+       │
+       ▼ ParsedBatch
+       │
+┌──────────────────────────────────────────────────────────────┐
+│ WRITER                                                        │
+│  1. Validate batch sequence                                   │
+│  2. Check for reorg                                           │
+│  3. Insert blocks, txs, cells                                 │
+│  4. Consume cells (update status, delete from live_cells)     │
+│  5. Track script usage (using prefetched code_hashes)         │
+│  6. Process DAO deposits/withdrawals                          │
+│  7. Process token transfers                                   │
+│  8. Flush batch statistics                                    │
+│  9. Update sync_status (LAST - crash recovery)                │
+└──────────────────────────────────────────────────────────────┘
+```
+
+## Configuration
+
+| Parameter             | Default | Description                                      |
+| --------------------- | ------- | ------------------------------------------------ |
+| `pipeline_enabled`    | `true`  | Enable three-stage pipeline (vs sequential sync) |
+| `pipeline_buffer`     | `6`     | Channel capacity between stages                  |
+| `batch_size`          | `1000`  | Blocks per batch                                 |
+| `parallel_fetch_size` | `32`    | Concurrent RPC requests                          |
+| `bulk_sync_mode`      | `false` | Enable bulk sync mode for faster initial sync    |
+| `bulk_sync_threshold` | `1000`  | Blocks behind tip to exit bulk sync mode         |
+
+### Environment Variables
+
+```bash
+PIPELINE_ENABLED=true
+PIPELINE_BUFFER=6
+BATCH_SIZE=1000
+PARALLEL_FETCH_SIZE=32
+BULK_SYNC_MODE=false
+BULK_SYNC_THRESHOLD=1000
+```
+
+### CLI Arguments
+
+```bash
+cargo run -p ckbadger-indexer -- \
+  --pipeline-enabled \
+  --pipeline-buffer 6 \
+  --batch-size 1000 \
+  --parallel-fetch-size 32 \
+  --bulk-sync-mode \
+  --bulk-sync-threshold 1000
+```
+
+## Error Handling
+
+### Batch Mismatch
+
+When writer receives a batch with unexpected start_block:
+
+```
+WARN Pipeline batch mismatch: expected 4086800, got 4086700. Draining stale batches.
+```
+
+**Recovery**: Drain all pending batches from channel, fetcher will resync on next db_tip read.
+
+### Write Failure
+
+If `write_parsed_batch()` fails:
+
+1. Log error
+2. Drain pending batches
+3. Sleep 5 seconds
+4. Fetcher resyncs via periodic db_tip refresh
+
+### Reorg Detection
+
+Before processing each batch:
+
+1. Fetch current db_tip and hash
+2. Compare with chain's block at that height
+3. If mismatch: handle reorg, drain stale batches
+
+### Deep Fork
+
+If reorg depth exceeds `REORG_LIMIT` (36 blocks):
+
+1. Flag `has_unresolved_deep_fork` in database
+2. Pause sync with 30s sleep loop
+3. Require manual intervention
+
+## Consistency Guarantees
+
+### Pipeline vs Sequential Mode
+
+Both modes MUST produce identical database state. This is enforced by:
+
+1. **Same parsing logic**: `parse_blocks_parallel()` used by both
+2. **Same write logic**: `write_parsed_batch()` mirrors `sync_blocks_batch()`
+3. **Same features**:
+   - DAO deposit/withdrawal tracking
+   - Token transfers (UDT mint/transfer/burn)
+   - NFT transfers (Spore, MNFT, Dotbit)
+   - DOB transfers
+   - Script usage statistics
+   - All hourly/daily/epoch statistics
+
+### Verified Consistency Points
+
+| Feature                      | Sequential | Pipeline |
+| ---------------------------- | ---------- | -------- |
+| `insert_cells_batch()`       | Yes        | Yes      |
+| `consume_cells_batch()`      | Yes        | Yes      |
+| `insert_dao_deposits()`      | Yes        | Yes      |
+| `complete_dao_withdrawals()` | Yes        | Yes      |
+| `insert_udt_cells_batch()`   | Yes        | Yes      |
+| `insert_token_transfer()`    | Yes        | Yes      |
+| `insert_nft_transfer()`      | Yes        | Yes      |
+| `insert_dob_transfer()`      | Yes        | Yes      |
+| `update_script_usage()`      | Yes        | Yes      |
+| `flush_batch_stats()`        | Yes        | Yes      |
+
+## Performance Characteristics
+
+### Throughput
+
+With default settings on typical hardware:
+
+| Mode                | Blocks/sec | Bottleneck |
+| ------------------- | ---------- | ---------- |
+| Sequential          | ~150-200   | DB writes  |
+| Pipeline (buffer=2) | ~250-300   | DB writes  |
+| Pipeline (buffer=8) | ~280-320   | DB writes  |
+
+### Memory Usage
+
+Pipeline mode uses more memory due to buffered batches:
+
+```
+Memory ≈ pipeline_buffer × batch_size × (block_size + parsed_data)
+       ≈ 8 × 500 × (~100KB per block)
+       ≈ 400MB additional
+```
+
+### Channel Backpressure
+
+When writer is slower than fetcher+parser:
+
+- Channels fill to capacity (`pipeline_buffer`)
+- Fetcher blocks on send, naturally throttling RPC calls
+- No unbounded memory growth
+
+## Monitoring
+
+### Log Messages
+
+```
+# Normal operation
+INFO Syncing blocks 1000 to 1499 (498501 remaining, 285.32 blocks/sec)
+PERF[500blks] RPC=125.3ms DB=1450.2ms
+
+# Batch mismatch (recoverable)
+WARN Pipeline batch mismatch: expected 2000, got 1500. Draining stale batches.
+INFO Drained 3 stale batches from pipeline
+
+# Write error (recoverable)
+ERROR Sync error: database connection failed
+INFO Drained 2 stale batches from pipeline
+
+# Deep fork (requires intervention)
+WARN Deep fork detected, sync paused
+WARN Deep fork unresolved, sync paused. Waiting for manual intervention...
+```
+
+### Metrics
+
+Key metrics to monitor:
+
+- `blocks/sec` - overall sync speed
+- `RPC time` - fetcher stage latency
+- `DB time` - writer stage latency
+- `stale batches drained` - indicates mismatch frequency
+
+## Comparison: Pipeline vs Sequential
+
+| Aspect         | Sequential (`sync_blocks_batch`) | Pipeline (`run_pipeline`) |
+| -------------- | -------------------------------- | ------------------------- |
+| Architecture   | Single loop                      | 3 async tasks + channels  |
+| Parallelism    | Within batch only                | Across stages             |
+| Memory         | Lower                            | Higher (buffered batches) |
+| Complexity     | Simpler                          | More complex              |
+| Error recovery | Simpler                          | Drain + resync            |
+| Best for       | Small syncs, debugging           | Initial sync, production  |
+
+## Implementation Notes
+
+### Why Raw Blocks in ParsedBatch?
+
+The parsed batch includes raw `BlockResponseWithCycles` because:
+
+1. UDT parsing needs access to witness data (not in `TxData`)
+2. Some script detection requires original transaction structure
+
+### Cell Cache Strategy
+
+Two-level lookup for consumed cell info:
+
+1. **LRU Cache** (200k entries): Same-batch and recent block consumptions
+2. **DB Batch Query**: Cache misses fetched in single query per batch
+
+### Script Usage Tracking
+
+To track which scripts are used in consumed cells:
+
+1. Parser identifies cells consumed from **previous batches** (not same-batch)
+2. Fetches their `lock_code_hash` and `type_code_hash` from DB
+3. Writer uses this to update `script_usage` table
+
+Same-batch consumptions get code_hashes from the creating transaction directly.
+
+## Troubleshooting
+
+### Sync Stuck / No Progress
+
+1. Check logs for errors
+2. Verify CKB node is synced and responsive
+3. Check for `has_unresolved_deep_fork` flag
+4. Try restarting indexer
+
+### Data Inconsistency
+
+1. Compare with sequential mode output
+2. Check `write_parsed_batch()` vs `sync_blocks_batch()` for divergence
+3. Verify all insert/update calls match
+
+### High Memory Usage
+
+1. Reduce `pipeline_buffer` (e.g., to 2-4)
+2. Reduce `batch_size`
+3. Monitor for memory leaks in channel handling
+
+---
+
+_Last updated: 2026-01-26_

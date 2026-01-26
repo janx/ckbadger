@@ -1,0 +1,72 @@
+version: '3.8'
+
+services:
+  postgres-test:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: test
+      POSTGRES_PASSWORD: test
+      POSTGRES_DB: ckbadger_test
+    ports:
+      - '5433:5432'
+    command:
+      - postgres
+      - -c
+      - max_locks_per_transaction=512
+      - -c
+      - max_connections=200
+      - -c
+      - shared_buffers=256MB
+    shm_size: 512mb
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U test']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    tmpfs:
+      - /var/lib/postgresql/data
+
+  redis-test:
+    image: redis:7-alpine
+    ports:
+      - '6380:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api-test:
+    build:
+      context: .
+      dockerfile: docker/api/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://test:test@postgres-test:5432/ckbadger_test
+      REDIS_URL: redis://redis-test:6379
+      CKB_RPC_URL: ${CKB_RPC_URL:-https://mainnet.ckbapp.dev}
+      CKB_NETWORK: mainnet
+      API_PORT: 3001
+    ports:
+      - '3001:3001'
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:3001/api/v1/status/health']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  frontend-test:
+    build:
+      context: ./frontend
+      dockerfile: ../docker/frontend/Dockerfile
+    environment:
+      NEXT_PUBLIC_API_URL: http://api-test:3001/api/v1
+    ports:
+      - '3000:3000'
+    depends_on:
+      api-test:
+        condition: service_healthy

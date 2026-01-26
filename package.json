@@ -1,0 +1,41 @@
+{
+  "name": "ckbadger",
+  "version": "0.1.0",
+  "private": true,
+  "description": "High-performance blockchain explorer for Nervos CKB",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nervosnetwork/ckbadger.git"
+  },
+  "license": "MIT",
+  "scripts": {
+    "dev": "pnpm --filter frontend dev",
+    "build": "pnpm --filter frontend build",
+    "lint": "pnpm --filter frontend lint",
+    "test:e2e": "npx playwright test",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "prepare": "lefthook install",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f",
+    "fuzz": "npx tsx fuzzing/src/index.ts",
+    "fuzz:api": "npx tsx fuzzing/src/index.ts --mode=api",
+    "fuzz:page": "npx tsx fuzzing/src/index.ts --mode=page",
+    "fuzz:quick": "npx tsx fuzzing/src/index.ts -b 5 -t 5 -a 3",
+    "fuzz:visual": "npx playwright test --config=fuzzing/playwright/playwright.config.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.1",
+    "@types/node": "^22.10.2",
+    "lefthook": "^1.10.10",
+    "prettier": "^3.4.2",
+    "tsx": "^4.21.0",
+    "typescript": "^5.7.2"
+  },
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  }
+}

@@ -1,0 +1,507 @@
+use crate::rpc::{parse_hex_to_bytes, CellOutput, TransactionView};
+
+use super::script::ScriptParser;
+
+pub const SUDT_CODE_HASH: &str =
+    "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5";
+
+pub const XUDT_CODE_HASH_DATA1: &str =
+    "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95";
+
+pub const XUDT_CODE_HASH_TYPE: &str =
+    "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb";
+
+#[derive(Debug, Clone)]
+pub enum UdtStandard {
+    Sudt,
+    Xudt,
+}
+
+impl UdtStandard {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            UdtStandard::Sudt => "sudt",
+            UdtStandard::Xudt => "xudt",
+        }
+    }
+
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "xudt" => UdtStandard::Xudt,
+            _ => UdtStandard::Sudt,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ParsedUdtCell {
+    pub type_script_hash: Vec<u8>,
+    pub type_code_hash: Vec<u8>,
+    pub type_hash_type: i16,
+    pub type_args: Vec<u8>,
+    pub lock_script_hash: Vec<u8>,
+    pub amount: u128,
+    pub standard: UdtStandard,
+}
+
+#[derive(Debug, Clone)]
+pub struct ParsedUdtTransfer {
+    pub type_script_hash: Vec<u8>,
+    pub type_code_hash: Vec<u8>,
+    pub type_hash_type: i16,
+    pub type_args: Vec<u8>,
+    pub from_lock_hash: Option<Vec<u8>>,
+    pub to_lock_hash: Vec<u8>,
+    pub amount: u128,
+    pub standard: UdtStandard,
+    pub is_mint: bool,
+    pub is_burn: bool,
+}
+
+pub struct UdtParser;
+
+impl UdtParser {
+    pub fn is_udt_type_script(code_hash_hex: &str, hash_type: &str) -> Option<UdtStandard> {
+        let code_hash = code_hash_hex.to_lowercase();
+
+        if code_hash == SUDT_CODE_HASH && hash_type == "type" {
+            return Some(UdtStandard::Sudt);
+        }
+
+        if (code_hash == XUDT_CODE_HASH_DATA1 && hash_type == "data1")
+            || (code_hash == XUDT_CODE_HASH_TYPE && hash_type == "type")
+        {
+            return Some(UdtStandard::Xudt);
+        }
+
+        None
+    }
+
+    pub fn is_udt_code_hash_bytes(code_hash: &[u8], hash_type: i16) -> Option<UdtStandard> {
+        let sudt_hash = crate::rpc::parse_hex_to_bytes(SUDT_CODE_HASH);
+        let xudt_data1_hash = crate::rpc::parse_hex_to_bytes(XUDT_CODE_HASH_DATA1);
+        let xudt_type_hash = crate::rpc::parse_hex_to_bytes(XUDT_CODE_HASH_TYPE);
+
+        if code_hash == sudt_hash && hash_type == 1 {
+            return Some(UdtStandard::Sudt);
+        }
+
+        if (code_hash == xudt_data1_hash && hash_type == 2)
+            || (code_hash == xudt_type_hash && hash_type == 1)
+        {
+            return Some(UdtStandard::Xudt);
+        }
+
+        None
+    }
+
+    pub fn parse_amount(data: &[u8]) -> Option<u128> {
+        if data.len() < 16 {
+            return None;
+        }
+        let bytes: [u8; 16] = data[..16].try_into().ok()?;
+        Some(u128::from_le_bytes(bytes))
+    }
+
+    pub fn parse_udt_cells(tx: &TransactionView) -> Vec<ParsedUdtCell> {
+        tx.outputs
+            .iter()
+            .zip(tx.outputs_data.iter())
+            .filter_map(|(output, data_hex)| Self::parse_udt_cell(output, data_hex))
+            .collect()
+    }
+
+    pub fn parse_udt_cell(output: &CellOutput, data_hex: &str) -> Option<ParsedUdtCell> {
+        let type_script = output.type_.as_ref()?;
+
+        let standard = Self::is_udt_type_script(&type_script.code_hash, &type_script.hash_type)?;
+
+        let data = parse_hex_to_bytes(data_hex);
+        let amount = Self::parse_amount(&data)?;
+
+        let type_script_hash = ScriptParser::compute_script_hash(type_script);
+        let lock_script_hash = ScriptParser::compute_script_hash(&output.lock);
+
+        Some(ParsedUdtCell {
+            type_script_hash,
+            type_code_hash: parse_hex_to_bytes(&type_script.code_hash),
+            type_hash_type: ScriptParser::hash_type_to_i16(&type_script.hash_type),
+            type_args: parse_hex_to_bytes(&type_script.args),
+            lock_script_hash,
+            amount,
+            standard,
+        })
+    }
+
+    pub fn parse_transfers(
+        tx: &TransactionView,
+        input_cells: &[(CellOutput, String)],
+    ) -> Vec<ParsedUdtTransfer> {
+        let output_udts = Self::parse_udt_cells(tx);
+
+        let input_udts: Vec<ParsedUdtCell> = input_cells
+            .iter()
+            .filter_map(|(output, data_hex)| Self::parse_udt_cell(output, data_hex))
+            .collect();
+
+        let mut transfers = Vec::new();
+
+        for out_udt in &output_udts {
+            let matching_input = input_udts
+                .iter()
+                .find(|inp| inp.type_script_hash == out_udt.type_script_hash);
+
+            let is_mint = matching_input.is_none();
+            let from_lock_hash = matching_input.map(|inp| inp.lock_script_hash.clone());
+
+            transfers.push(ParsedUdtTransfer {
+                type_script_hash: out_udt.type_script_hash.clone(),
+                type_code_hash: out_udt.type_code_hash.clone(),
+                type_hash_type: out_udt.type_hash_type,
+                type_args: out_udt.type_args.clone(),
+                from_lock_hash,
+                to_lock_hash: out_udt.lock_script_hash.clone(),
+                amount: out_udt.amount,
+                standard: out_udt.standard.clone(),
+                is_mint,
+                is_burn: false,
+            });
+        }
+
+        for inp_udt in &input_udts {
+            let has_matching_output = output_udts
+                .iter()
+                .any(|out| out.type_script_hash == inp_udt.type_script_hash);
+
+            if !has_matching_output {
+                transfers.push(ParsedUdtTransfer {
+                    type_script_hash: inp_udt.type_script_hash.clone(),
+                    type_code_hash: inp_udt.type_code_hash.clone(),
+                    type_hash_type: inp_udt.type_hash_type,
+                    type_args: inp_udt.type_args.clone(),
+                    from_lock_hash: Some(inp_udt.lock_script_hash.clone()),
+                    to_lock_hash: Vec::new(),
+                    amount: inp_udt.amount,
+                    standard: inp_udt.standard.clone(),
+                    is_mint: false,
+                    is_burn: true,
+                });
+            }
+        }
+
+        transfers
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rpc::{CellOutput, Script};
+
+    fn create_sudt_type_script() -> Script {
+        Script {
+            code_hash: SUDT_CODE_HASH.to_string(),
+            hash_type: "type".to_string(),
+            args: "0x927f3e74dceb87c81ba65a19da4f098b4de75a0d".to_string(),
+        }
+    }
+
+    fn create_xudt_type_script() -> Script {
+        Script {
+            code_hash: XUDT_CODE_HASH_TYPE.to_string(),
+            hash_type: "type".to_string(),
+            args: "0x927f3e74dceb87c81ba65a19da4f098b4de75a0d".to_string(),
+        }
+    }
+
+    fn create_lock_script() -> Script {
+        Script {
+            code_hash: "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
+                .to_string(),
+            hash_type: "type".to_string(),
+            args: "0x927f3e74dceb87c81ba65a19da4f098b4de75a0d".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_is_udt_type_script_sudt() {
+        let result = UdtParser::is_udt_type_script(SUDT_CODE_HASH, "type");
+        assert!(result.is_some());
+        assert!(matches!(result.unwrap(), UdtStandard::Sudt));
+    }
+
+    #[test]
+    fn test_is_udt_type_script_xudt_type() {
+        let result = UdtParser::is_udt_type_script(XUDT_CODE_HASH_TYPE, "type");
+        assert!(result.is_some());
+        assert!(matches!(result.unwrap(), UdtStandard::Xudt));
+    }
+
+    #[test]
+    fn test_is_udt_type_script_xudt_data1() {
+        let result = UdtParser::is_udt_type_script(XUDT_CODE_HASH_DATA1, "data1");
+        assert!(result.is_some());
+        assert!(matches!(result.unwrap(), UdtStandard::Xudt));
+    }
+
+    #[test]
+    fn test_is_udt_type_script_wrong_hash_type() {
+        let result = UdtParser::is_udt_type_script(SUDT_CODE_HASH, "data");
+        assert!(result.is_none());
+
+        let result = UdtParser::is_udt_type_script(XUDT_CODE_HASH_DATA1, "type");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_is_udt_type_script_unknown() {
+        let result = UdtParser::is_udt_type_script(
+            "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "type",
+        );
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_is_udt_type_script_case_insensitive() {
+        let upper = SUDT_CODE_HASH.to_uppercase();
+        let result = UdtParser::is_udt_type_script(&upper, "type");
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_is_udt_code_hash_bytes_sudt() {
+        let code_hash = parse_hex_to_bytes(SUDT_CODE_HASH);
+        let result = UdtParser::is_udt_code_hash_bytes(&code_hash, 1);
+        assert!(result.is_some());
+        assert!(matches!(result.unwrap(), UdtStandard::Sudt));
+    }
+
+    #[test]
+    fn test_is_udt_code_hash_bytes_xudt() {
+        let code_hash = parse_hex_to_bytes(XUDT_CODE_HASH_TYPE);
+        let result = UdtParser::is_udt_code_hash_bytes(&code_hash, 1);
+        assert!(result.is_some());
+        assert!(matches!(result.unwrap(), UdtStandard::Xudt));
+
+        let code_hash = parse_hex_to_bytes(XUDT_CODE_HASH_DATA1);
+        let result = UdtParser::is_udt_code_hash_bytes(&code_hash, 2);
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_parse_amount_valid() {
+        let data = 1000u128.to_le_bytes();
+        let result = UdtParser::parse_amount(&data);
+        assert_eq!(result, Some(1000));
+    }
+
+    #[test]
+    fn test_parse_amount_large_value() {
+        let max = u128::MAX;
+        let data = max.to_le_bytes();
+        let result = UdtParser::parse_amount(&data);
+        assert_eq!(result, Some(u128::MAX));
+    }
+
+    #[test]
+    fn test_parse_amount_too_short() {
+        let data = [0u8; 8];
+        let result = UdtParser::parse_amount(&data);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_amount_with_extra_data() {
+        let mut data = vec![0u8; 32];
+        data[..16].copy_from_slice(&500u128.to_le_bytes());
+        let result = UdtParser::parse_amount(&data);
+        assert_eq!(result, Some(500));
+    }
+
+    #[test]
+    fn test_parse_udt_cell_sudt() {
+        let output = CellOutput {
+            capacity: "0x174876e800".to_string(),
+            lock: create_lock_script(),
+            type_: Some(create_sudt_type_script()),
+        };
+        let amount = 1_000_000u128;
+        let data = amount.to_le_bytes().to_vec();
+        let data_hex = format!("0x{}", hex::encode(&data));
+
+        let result = UdtParser::parse_udt_cell(&output, &data_hex);
+        assert!(result.is_some());
+
+        let parsed = result.unwrap();
+        assert_eq!(parsed.amount, amount);
+        assert!(matches!(parsed.standard, UdtStandard::Sudt));
+        assert_eq!(parsed.type_script_hash.len(), 32);
+        assert_eq!(parsed.lock_script_hash.len(), 32);
+    }
+
+    #[test]
+    fn test_parse_udt_cell_xudt() {
+        let output = CellOutput {
+            capacity: "0x174876e800".to_string(),
+            lock: create_lock_script(),
+            type_: Some(create_xudt_type_script()),
+        };
+        let amount = 5_000_000u128;
+        let data = amount.to_le_bytes().to_vec();
+        let data_hex = format!("0x{}", hex::encode(&data));
+
+        let result = UdtParser::parse_udt_cell(&output, &data_hex);
+        assert!(result.is_some());
+        assert!(matches!(result.unwrap().standard, UdtStandard::Xudt));
+    }
+
+    #[test]
+    fn test_parse_udt_cell_no_type_script() {
+        let output = CellOutput {
+            capacity: "0x174876e800".to_string(),
+            lock: create_lock_script(),
+            type_: None,
+        };
+
+        let result = UdtParser::parse_udt_cell(&output, "0x");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_udt_cell_non_udt_type() {
+        let output = CellOutput {
+            capacity: "0x174876e800".to_string(),
+            lock: create_lock_script(),
+            type_: Some(Script {
+                code_hash: "0x0000000000000000000000000000000000000000000000000000000000000000"
+                    .to_string(),
+                hash_type: "type".to_string(),
+                args: "0x".to_string(),
+            }),
+        };
+
+        let result = UdtParser::parse_udt_cell(&output, "0x");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_udt_cell_invalid_data() {
+        let output = CellOutput {
+            capacity: "0x174876e800".to_string(),
+            lock: create_lock_script(),
+            type_: Some(create_sudt_type_script()),
+        };
+
+        let result = UdtParser::parse_udt_cell(&output, "0x1234");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_udt_standard_as_str() {
+        assert_eq!(UdtStandard::Sudt.as_str(), "sudt");
+        assert_eq!(UdtStandard::Xudt.as_str(), "xudt");
+    }
+
+    #[test]
+    fn test_udt_standard_parse() {
+        assert!(matches!(UdtStandard::parse("sudt"), UdtStandard::Sudt));
+        assert!(matches!(UdtStandard::parse("xudt"), UdtStandard::Xudt));
+        assert!(matches!(UdtStandard::parse("unknown"), UdtStandard::Sudt));
+        assert!(matches!(UdtStandard::parse(""), UdtStandard::Sudt));
+    }
+
+    #[test]
+    fn test_parse_transfers_burn_no_output() {
+        use crate::rpc::TransactionView;
+
+        let tx = TransactionView {
+            hash: "0x1234".to_string(),
+            version: "0x0".to_string(),
+            cell_deps: vec![],
+            header_deps: vec![],
+            inputs: vec![],
+            outputs: vec![CellOutput {
+                capacity: "0x174876e800".to_string(),
+                lock: create_lock_script(),
+                type_: None,
+            }],
+            outputs_data: vec!["0x".to_string()],
+            witnesses: vec![],
+        };
+
+        let input_amount = 1_000_000u128;
+        let input_data = input_amount.to_le_bytes().to_vec();
+        let input_data_hex = format!("0x{}", hex::encode(&input_data));
+
+        let input_cells = vec![(
+            CellOutput {
+                capacity: "0x174876e800".to_string(),
+                lock: create_lock_script(),
+                type_: Some(create_sudt_type_script()),
+            },
+            input_data_hex,
+        )];
+
+        let transfers = UdtParser::parse_transfers(&tx, &input_cells);
+
+        assert_eq!(transfers.len(), 1);
+        let burn = &transfers[0];
+        assert!(burn.is_burn);
+        assert!(!burn.is_mint);
+        assert_eq!(burn.amount, input_amount);
+        assert!(burn.from_lock_hash.is_some());
+        assert!(burn.to_lock_hash.is_empty());
+    }
+
+    #[test]
+    fn test_parse_transfers_to_different_address() {
+        use crate::rpc::TransactionView;
+
+        let sender_lock = create_lock_script();
+        let receiver_lock = Script {
+            code_hash: "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
+                .to_string(),
+            hash_type: "type".to_string(),
+            args: "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef".to_string(),
+        };
+
+        let amount = 5_000_000u128;
+        let data = amount.to_le_bytes().to_vec();
+        let data_hex = format!("0x{}", hex::encode(&data));
+
+        let tx = TransactionView {
+            hash: "0x5678".to_string(),
+            version: "0x0".to_string(),
+            cell_deps: vec![],
+            header_deps: vec![],
+            inputs: vec![],
+            outputs: vec![CellOutput {
+                capacity: "0x174876e800".to_string(),
+                lock: receiver_lock,
+                type_: Some(create_sudt_type_script()),
+            }],
+            outputs_data: vec![data_hex.clone()],
+            witnesses: vec![],
+        };
+
+        let input_cells = vec![(
+            CellOutput {
+                capacity: "0x174876e800".to_string(),
+                lock: sender_lock,
+                type_: Some(create_sudt_type_script()),
+            },
+            data_hex,
+        )];
+
+        let transfers = UdtParser::parse_transfers(&tx, &input_cells);
+
+        assert_eq!(transfers.len(), 1);
+        let transfer = &transfers[0];
+        assert!(!transfer.is_burn);
+        assert!(!transfer.is_mint);
+        assert_eq!(transfer.amount, amount);
+        assert!(transfer.from_lock_hash.is_some());
+        assert!(!transfer.to_lock_hash.is_empty());
+    }
+}

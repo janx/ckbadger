@@ -1,0 +1,80 @@
+[package]
+name = "ckbadger-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ckbadger-api"
+path = "src/main.rs"
+
+[dependencies]
+ckbadger-common = { path = "../common" }
+
+# Async runtime
+tokio = { workspace = true }
+
+# Web framework
+axum = { workspace = true, features = ["ws"] }
+tower = { workspace = true }
+tower-http = { workspace = true }
+
+# WebSocket
+tokio-tungstenite = "0.24"
+futures = "0.3"
+
+# Database
+sqlx = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Utilities
+chrono = { workspace = true }
+hex = { workspace = true }
+uuid = { workspace = true }
+rust_decimal = { workspace = true }
+
+# Configuration
+config = { workspace = true }
+dotenvy = { workspace = true }
+
+# CLI
+clap = { workspace = true }
+
+# Redis cache (optional)
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager"], optional = true }
+
+# Rate limiting
+governor = { version = "0.8", features = ["dashmap"] }
+dashmap = "6.1"
+
+# HTTP client for CKB RPC
+reqwest = { workspace = true }
+
+# CKB address encoding (Bech32m)
+bech32 = "0.11"
+
+# CKB hashing
+ckb-hash = { workspace = true }
+
+
+
+[features]
+default = []
+redis-cache = ["redis"]
+
+[dev-dependencies]
+tokio-test = { workspace = true }
+wiremock = { workspace = true }
+http-body-util = { workspace = true }
+fake = { workspace = true }

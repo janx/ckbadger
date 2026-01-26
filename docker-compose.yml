@@ -1,0 +1,116 @@
+# CKB Node Mode Configuration:
+# - CKB_NODE_MODE=internal (default): Runs CKB node inside Docker
+# - CKB_NODE_MODE=external: Uses host machine's CKB node
+#
+# For external mode, set in .env:
+#   CKB_NODE_MODE=external
+#   CKB_RPC_URL=http://host.docker.internal:8114  (macOS/Windows)
+#   CKB_RPC_URL=http://172.17.0.1:8114            (Linux)
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ckbadger-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ckbadger}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-ckbadger}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+    command: postgres -c config_file=/etc/postgresql/postgresql.conf
+    ports:
+      - '5432:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ckbadger']
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    shm_size: 4gb
+
+  redis:
+    image: redis:7-alpine
+    container_name: ckbadger-redis
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  ckb-node:
+    image: nervos/ckb:latest
+    container_name: ckbadger-ckb-node
+    profiles:
+      - internal
+    volumes:
+      - ckb-data:/var/lib/ckb
+    ports:
+      - '8114:8114'
+      - '8115:8115'
+    command: run --indexer
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:8114']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  indexer:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.indexer
+    container_name: ckbadger-indexer
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-ckbadger}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-ckbadger}
+      CKB_RPC_URL: ${CKB_RPC_URL:-http://ckb-node:8114}
+      TOKEN_LABELS_PATH: /app/token-labels
+      RUST_LOG: info
+    volumes:
+      - ./docs/token-labels:/app/token-labels:ro
+      - ./docs/script-name-overrides.json:/app/script-name-overrides.json:ro
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    container_name: ckbadger-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-ckbadger}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-ckbadger}
+      REDIS_URL: redis://redis:6379
+      CKB_RPC_URL: ${CKB_RPC_URL:-http://ckb-node:8114}
+      RUST_LOG: info
+    ports:
+      - '3001:3001'
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+    container_name: ckbadger-frontend
+    depends_on:
+      - api
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:3001/api/v1
+    ports:
+      - '3000:3000'
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data:
+  ckb-data:

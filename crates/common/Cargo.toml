@@ -1,0 +1,23 @@
+[package]
+name = "ckbadger-common"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+sqlx = { workspace = true }
+rust_decimal = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+hex = { workspace = true }
+blake2b-rs = { workspace = true }
+ckb-types = { workspace = true }
+ckb-jsonrpc-types = { workspace = true }
+ckb-hash = { workspace = true }
+tracing = { workspace = true }
+reqwest = { workspace = true }
+tokio = { workspace = true }
+uuid = { workspace = true }

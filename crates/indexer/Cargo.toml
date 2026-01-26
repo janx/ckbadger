@@ -1,0 +1,75 @@
+[package]
+name = "ckbadger-indexer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ckbadger-indexer"
+path = "src/main.rs"
+
+[[bin]]
+name = "backfill-cycles"
+path = "src/bin/backfill_cycles.rs"
+
+[[bin]]
+name = "import-labels"
+path = "src/bin/import_labels.rs"
+
+[dependencies]
+ckbadger-common = { path = "../common" }
+
+# Async runtime
+tokio = { workspace = true }
+
+# Database
+sqlx = { workspace = true }
+
+# HTTP client (for CKB RPC)
+reqwest = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Utilities
+chrono = { workspace = true }
+hex = { workspace = true }
+futures = { workspace = true }
+lru = { workspace = true }
+rayon = { workspace = true }
+
+# Configuration
+config = { workspace = true }
+dotenvy = { workspace = true }
+
+# CLI
+clap = { workspace = true }
+
+# CKB types
+ckb-types = { workspace = true }
+ckb-jsonrpc-types = { workspace = true }
+ckb-hash = { workspace = true }
+
+# Redis (optional, for cache invalidation)
+redis = { workspace = true, optional = true }
+
+[features]
+default = []
+redis-cache = ["redis"]
+
+[dev-dependencies]
+tokio-test = { workspace = true }
+mockall = { workspace = true }
+proptest = { workspace = true }
+wiremock = { workspace = true }
+async-trait = { workspace = true }
+tempfile = { workspace = true }

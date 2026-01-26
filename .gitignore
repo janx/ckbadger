@@ -1,0 +1,61 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+dist/
+build/
+.next/
+out/
+
+# Rust
+target/
+Cargo.lock
+
+# Environment
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Testing
+coverage/
+fuzzing/reports/
+playwright-report/
+test-results/
+
+# Docker data volumes
+docker-data/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Generated files
+.sqlx/
+*.generated.*
+
+# Secrets (never commit)
+*.pem
+*.key
+credentials.json
+frontend/next-env.d.ts
+frontend/tsconfig.tsbuildinfo

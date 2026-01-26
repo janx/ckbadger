@@ -1,0 +1,32 @@
+FROM rust:1.85-slim-bookworm AS builder
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+COPY migrations ./migrations
+
+RUN cargo update home --precise 0.5.9 || true && \
+    cargo build --release --bin ckbadger-indexer
+
+FROM debian:bookworm-slim
+
+ARG CKB_DEBUGGER_VERSION=1.0.0
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libssl3 \
+    curl \
+    && curl -sSL "https://github.com/nervosnetwork/ckb-standalone-debugger/releases/download/v${CKB_DEBUGGER_VERSION}/ckb-debugger_v${CKB_DEBUGGER_VERSION}_x86_64-unknown-linux-gnu.tar.gz" \
+       | tar -xz -C /usr/local/bin/ \
+    && chmod +x /usr/local/bin/ckb-debugger \
+    && apt-get remove -y curl && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /app/target/release/ckbadger-indexer /usr/local/bin/
+
+ENTRYPOINT ["ckbadger-indexer"]

@@ -1,0 +1,18 @@
+{
+  "_comment": "Override script names (by name) and mark deprecated scripts (by code_hash). Applied during label import.",
+  "overrides": {
+    "DAS Lock": ".bit Lock",
+    "DID Account": ".bit Account",
+    "DID Cell": ".bit Cell",
+    "Web5 DID": "did:ckb",
+    "SECP256K1/blake160": "Default Lock",
+    "SECP256k1/Multisig": "Default Multisig"
+  },
+  "deprecated": [
+    "0x24b04faf80ded836efc05247778eec4ec02548dab6e2012c0107374aa3f68b81",
+    "0xd51e6eaf48124c601f41abe173f1da550b4cbca9c6a166781906a287abbb3d9a",
+    "0x2b24f0d644ccbdd77bbf86b27c8cca02efa0ad051e447c212636d9ee7acaaec9",
+    "0x1122a4fb54697cf2e6e3a96c9d80fd398a936559b90954c6e88eb7ba0cf652df",
+    "0x90ca618be6c15f5857d3cbd09f9f24ca6770af047ba9ee70989ec3b229419ac7"
+  ]
+}
