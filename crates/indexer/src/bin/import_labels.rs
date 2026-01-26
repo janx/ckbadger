@@ -4,7 +4,7 @@ use sqlx::postgres::PgPoolOptions;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use ckbadger_indexer::integrity::{DataIntegrityService, IntegrityCheck};
+use ckbadger_indexer::jobs::{ScriptLabelsTask, UdtLabelsTask};
 
 #[derive(Parser, Debug)]
 #[command(name = "import-labels")]
@@ -54,27 +54,25 @@ async fn main() -> Result<()> {
 
     info!("Importing labels from: {}", args.token_labels_path);
 
-    let (service, handle) =
-        DataIntegrityService::new(pool, String::new(), Some(args.token_labels_path));
-
-    let service_handle = tokio::spawn(async move {
-        service.run().await;
-    });
-
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
     if args.scripts_only {
-        handle.trigger(IntegrityCheck::ScriptInfoUpdate).await;
+        info!("Importing script labels only");
+        ScriptLabelsTask::new(pool, Some(args.token_labels_path))
+            .run_standalone()
+            .await?;
     } else if args.udt_only {
-        handle.trigger(IntegrityCheck::UdtInfoUpdate).await;
+        info!("Importing UDT labels only");
+        UdtLabelsTask::new(pool, Some(args.token_labels_path))
+            .run_standalone()
+            .await?;
     } else {
-        handle.trigger(IntegrityCheck::AllLabelsUpdate).await;
+        info!("Importing all labels (script + UDT)");
+        let script_task = ScriptLabelsTask::new(pool.clone(), Some(args.token_labels_path.clone()));
+        let udt_task = UdtLabelsTask::new(pool, Some(args.token_labels_path));
+
+        script_task.run_standalone().await?;
+        udt_task.run_standalone().await?;
     }
 
-    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-
     info!("Import completed");
-    service_handle.abort();
-
     Ok(())
 }

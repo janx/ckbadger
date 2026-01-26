@@ -10,7 +10,6 @@ const navLinks = [
   { href: '/assets', label: 'Assets' },
   { href: '/scripts', label: 'Scripts' },
   { href: '/charts', label: 'Charts' },
-  { href: '/status', label: 'Status' },
 ];
 
 export function Header() {

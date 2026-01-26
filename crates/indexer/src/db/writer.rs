@@ -87,6 +87,15 @@ impl BatchWriter {
         Ok(result.rows_affected())
     }
 
+    /// Drop non-essential indexes for faster bulk sync writes.
+    /// Returns the number of indexes dropped.
+    pub async fn drop_sync_indexes(&self) -> Result<i32> {
+        let dropped: i32 = sqlx::query_scalar("SELECT drop_sync_indexes()")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(dropped)
+    }
+
     pub async fn insert_block(&self, block: &ParsedBlock, total_difficulty: i64) -> Result<()> {
         sqlx::query(
             r#"
@@ -557,9 +566,13 @@ impl BatchWriter {
         Ok(())
     }
 
+    /// Consume cells by marking them as spent.
+    /// When `skip_live_cells_delete` is true (bulk sync mode), skips the DELETE from live_cells
+    /// since that table is empty during Phase 1 anyway.
     pub async fn consume_cells_batch(
         &self,
         consumptions: &[(&[u8], i16, i64, &[u8], i64, i16)],
+        skip_live_cells_delete: bool,
     ) -> Result<()> {
         if consumptions.is_empty() {
             return Ok(());
@@ -620,37 +633,31 @@ impl BatchWriter {
             update_futures.push(fut);
         }
 
-        let all_tx_hashes: Vec<&[u8]> = consumptions.iter().map(|(h, _, _, _, _, _)| *h).collect();
-        let all_output_indices: Vec<i16> =
-            consumptions.iter().map(|(_, i, _, _, _, _)| *i).collect();
-
-        let delete_live_cells_fut = sqlx::query(
-            r#"
-            DELETE FROM live_cells
-            WHERE (tx_hash, output_index) IN (
-                SELECT * FROM UNNEST($1::bytea[], $2::smallint[])
-            )
-            "#,
-        )
-        .bind(&all_tx_hashes)
-        .bind(&all_output_indices)
-        .execute(&self.pool);
-
-        let (update_results, delete_result) = tokio::join!(
-            async {
-                let mut results = Vec::with_capacity(update_futures.len());
-                for fut in update_futures {
-                    results.push(fut.await);
-                }
-                results
-            },
-            delete_live_cells_fut
-        );
-
-        for result in update_results {
-            result?;
+        // Execute updates
+        for fut in update_futures {
+            fut.await?;
         }
-        delete_result?;
+
+        // Skip live_cells deletion in bulk sync mode (table is empty anyway)
+        if !skip_live_cells_delete {
+            let all_tx_hashes: Vec<&[u8]> =
+                consumptions.iter().map(|(h, _, _, _, _, _)| *h).collect();
+            let all_output_indices: Vec<i16> =
+                consumptions.iter().map(|(_, i, _, _, _, _)| *i).collect();
+
+            sqlx::query(
+                r#"
+                DELETE FROM live_cells
+                WHERE (tx_hash, output_index) IN (
+                    SELECT * FROM UNNEST($1::bytea[], $2::smallint[])
+                )
+                "#,
+            )
+            .bind(&all_tx_hashes)
+            .bind(&all_output_indices)
+            .execute(&self.pool)
+            .await?;
+        }
 
         Ok(())
     }
@@ -1020,6 +1027,21 @@ impl BatchWriter {
         &self,
         outpoints: &[(&[u8], i16)],
     ) -> Result<HashMap<(Vec<u8>, i16), (i64, i64, Vec<u8>, i32)>> {
+        self.get_cells_info_batch_impl(outpoints, false).await
+    }
+
+    pub async fn get_cells_info_batch_from_cells(
+        &self,
+        outpoints: &[(&[u8], i16)],
+    ) -> Result<HashMap<(Vec<u8>, i16), (i64, i64, Vec<u8>, i32)>> {
+        self.get_cells_info_batch_impl(outpoints, true).await
+    }
+
+    async fn get_cells_info_batch_impl(
+        &self,
+        outpoints: &[(&[u8], i16)],
+        use_cells_table: bool,
+    ) -> Result<HashMap<(Vec<u8>, i16), (i64, i64, Vec<u8>, i32)>> {
         if outpoints.is_empty() {
             return Ok(HashMap::new());
         }
@@ -1027,18 +1049,34 @@ impl BatchWriter {
         let tx_hashes: Vec<&[u8]> = outpoints.iter().map(|(h, _)| *h).collect();
         let indices: Vec<i16> = outpoints.iter().map(|(_, i)| *i).collect();
 
-        let rows = sqlx::query_as::<_, (Vec<u8>, i16, i64, i64, Vec<u8>, i32)>(
-            r#"
-            SELECT lc.tx_hash, lc.output_index, lc.capacity, lc.created_at_block, lc.lock_script_hash, lc.data_size
-            FROM live_cells lc
-            JOIN UNNEST($1::bytea[], $2::smallint[]) AS t(tx_hash, output_index)
-              ON lc.tx_hash = t.tx_hash AND lc.output_index = t.output_index
-            "#,
-        )
-        .bind(&tx_hashes)
-        .bind(&indices)
-        .fetch_all(&self.pool)
-        .await?;
+        let rows = if use_cells_table {
+            sqlx::query_as::<_, (Vec<u8>, i16, i64, i64, Vec<u8>, i32)>(
+                r#"
+                SELECT c.tx_hash, c.output_index, c.capacity::bigint, c.created_at_block, c.lock_script_hash, c.data_size
+                FROM cells c
+                JOIN UNNEST($1::bytea[], $2::smallint[]) AS t(tx_hash, output_index)
+                  ON c.tx_hash = t.tx_hash AND c.output_index = t.output_index
+                WHERE c.status = 0
+                "#,
+            )
+            .bind(&tx_hashes)
+            .bind(&indices)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query_as::<_, (Vec<u8>, i16, i64, i64, Vec<u8>, i32)>(
+                r#"
+                SELECT lc.tx_hash, lc.output_index, lc.capacity, lc.created_at_block, lc.lock_script_hash, lc.data_size
+                FROM live_cells lc
+                JOIN UNNEST($1::bytea[], $2::smallint[]) AS t(tx_hash, output_index)
+                  ON lc.tx_hash = t.tx_hash AND lc.output_index = t.output_index
+                "#,
+            )
+            .bind(&tx_hashes)
+            .bind(&indices)
+            .fetch_all(&self.pool)
+            .await?
+        };
 
         let mut result = HashMap::with_capacity(rows.len());
         for (tx_hash, idx, cap, block, lock_hash, data_size) in rows {
@@ -1052,6 +1090,21 @@ impl BatchWriter {
         &self,
         outpoints: &[(&[u8], i16)],
     ) -> Result<HashMap<(Vec<u8>, i16), (Vec<u8>, Option<Vec<u8>>)>> {
+        self.get_cells_code_hashes_batch_impl(outpoints, false).await
+    }
+
+    pub async fn get_cells_code_hashes_batch_from_cells(
+        &self,
+        outpoints: &[(&[u8], i16)],
+    ) -> Result<HashMap<(Vec<u8>, i16), (Vec<u8>, Option<Vec<u8>>)>> {
+        self.get_cells_code_hashes_batch_impl(outpoints, true).await
+    }
+
+    async fn get_cells_code_hashes_batch_impl(
+        &self,
+        outpoints: &[(&[u8], i16)],
+        use_cells_table: bool,
+    ) -> Result<HashMap<(Vec<u8>, i16), (Vec<u8>, Option<Vec<u8>>)>> {
         if outpoints.is_empty() {
             return Ok(HashMap::new());
         }
@@ -1059,18 +1112,34 @@ impl BatchWriter {
         let tx_hashes: Vec<&[u8]> = outpoints.iter().map(|(h, _)| *h).collect();
         let indices: Vec<i16> = outpoints.iter().map(|(_, i)| *i).collect();
 
-        let rows = sqlx::query_as::<_, (Vec<u8>, i16, Vec<u8>, Option<Vec<u8>>)>(
-            r#"
-            SELECT lc.tx_hash, lc.output_index, lc.lock_code_hash, lc.type_code_hash
-            FROM live_cells lc
-            JOIN UNNEST($1::bytea[], $2::smallint[]) AS t(tx_hash, output_index)
-              ON lc.tx_hash = t.tx_hash AND lc.output_index = t.output_index
-            "#,
-        )
-        .bind(&tx_hashes)
-        .bind(&indices)
-        .fetch_all(&self.pool)
-        .await?;
+        let rows = if use_cells_table {
+            sqlx::query_as::<_, (Vec<u8>, i16, Vec<u8>, Option<Vec<u8>>)>(
+                r#"
+                SELECT c.tx_hash, c.output_index, c.lock_code_hash, c.type_code_hash
+                FROM cells c
+                JOIN UNNEST($1::bytea[], $2::smallint[]) AS t(tx_hash, output_index)
+                  ON c.tx_hash = t.tx_hash AND c.output_index = t.output_index
+                WHERE c.status = 0
+                "#,
+            )
+            .bind(&tx_hashes)
+            .bind(&indices)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query_as::<_, (Vec<u8>, i16, Vec<u8>, Option<Vec<u8>>)>(
+                r#"
+                SELECT lc.tx_hash, lc.output_index, lc.lock_code_hash, lc.type_code_hash
+                FROM live_cells lc
+                JOIN UNNEST($1::bytea[], $2::smallint[]) AS t(tx_hash, output_index)
+                  ON lc.tx_hash = t.tx_hash AND lc.output_index = t.output_index
+                "#,
+            )
+            .bind(&tx_hashes)
+            .bind(&indices)
+            .fetch_all(&self.pool)
+            .await?
+        };
 
         let mut result = HashMap::with_capacity(rows.len());
         for (tx_hash, idx, lock_code_hash, type_code_hash) in rows {

@@ -6,7 +6,7 @@ use sqlx::postgres::PgPoolOptions;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use ckbadger_indexer::{integrity::DataIntegrityService, sync::Indexer, Config, ControlPlaneClient};
+use ckbadger_indexer::{sync::Indexer, Config, ControlPlaneClient, JobExecutor};
 
 #[derive(Parser, Debug)]
 #[command(name = "ckbadger-indexer")]
@@ -134,14 +134,22 @@ async fn main() -> Result<()> {
         .token_labels_path
         .or_else(|| std::env::var("TOKEN_LABELS_PATH").ok());
 
-    let (integrity_service, integrity_handle) =
-        DataIntegrityService::new(pool.clone(), config.ckb_rpc_url.clone(), token_labels_path);
+    if let Some(ref cp) = control_plane {
+        info!("Starting JobExecutor for Control Plane jobs");
+        let executor = JobExecutor::new(
+            pool.clone(),
+            Arc::clone(cp),
+            config.ckb_rpc_url.clone(),
+            token_labels_path.clone(),
+        );
+        tokio::spawn(async move {
+            executor.run().await;
+        });
+    } else {
+        info!("No Control Plane configured - integrity jobs must be triggered via TUI");
+    }
 
-    tokio::spawn(async move {
-        integrity_service.run().await;
-    });
-
-    let indexer = Indexer::new(config, pool, Some(integrity_handle)).await?;
+    let indexer = Indexer::new(config, pool, control_plane.clone()).await?;
 
     let progress = indexer.progress();
     let control_plane_reporter = control_plane.clone();

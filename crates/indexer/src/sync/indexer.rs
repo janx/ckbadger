@@ -17,12 +17,13 @@ use tracing::{error, info, warn};
 
 use crate::cache::CacheInvalidator;
 use crate::config::Config;
+use crate::control_plane::ControlPlaneClient;
 use crate::db::{BatchWriter, ReorgResult, Repository, SecondaryIssuanceBreakdown};
-use crate::integrity::IntegrityServiceHandle;
 use crate::parser::{
     BlockParser, CellParser, DaoParser, DotbitParser, MnftParser, SporeParser, TransactionParser,
     UdtParser,
 };
+use crate::rebuild::RebuildRunner;
 use crate::rpc::{BlockResponseWithCycles, CkbRpcClient, DaoField};
 
 use super::SyncProgress;
@@ -260,16 +261,17 @@ pub struct Indexer {
     progress: Arc<SyncProgress>,
     cell_cache: Arc<tokio::sync::Mutex<LruCache<(Vec<u8>, i32), CachedCellInfo>>>,
     perf: PerfStats,
-    integrity_handle: Option<IntegrityServiceHandle>,
     cache_invalidator: CacheInvalidator,
     last_cache_invalidation: tokio::sync::Mutex<u64>,
+    control_plane: Option<Arc<ControlPlaneClient>>,
+    bulk_sync_was_active: std::sync::atomic::AtomicBool,
 }
 
 impl Indexer {
     pub async fn new(
         config: Config,
         pool: PgPool,
-        integrity_handle: Option<IntegrityServiceHandle>,
+        control_plane: Option<Arc<ControlPlaneClient>>,
     ) -> Result<Self> {
         let rpc = CkbRpcClient::new(&config.ckb_rpc_url);
         let repo = Repository::new(pool.clone());
@@ -285,6 +287,9 @@ impl Indexer {
             NonZeroUsize::new(CELL_CACHE_CAPACITY).unwrap(),
         )));
 
+        let bulk_sync_initially_active = config.bulk_sync_mode
+            && (chain_tip - tip_number as u64) > config.bulk_sync_threshold;
+
         Ok(Self {
             config,
             rpc,
@@ -293,9 +298,10 @@ impl Indexer {
             progress,
             cell_cache,
             perf: PerfStats::default(),
-            integrity_handle,
             cache_invalidator,
             last_cache_invalidation: tokio::sync::Mutex::new(0),
+            control_plane,
+            bulk_sync_was_active: std::sync::atomic::AtomicBool::new(bulk_sync_initially_active),
         })
     }
 
@@ -308,6 +314,75 @@ impl Indexer {
     fn is_bulk_sync_active(&self) -> bool {
         self.config.bulk_sync_mode
             && self.progress.blocks_remaining() > self.config.bulk_sync_threshold
+    }
+
+    async fn check_and_trigger_phase2_rebuild(&self) {
+        use std::sync::atomic::Ordering;
+
+        let was_active = self.bulk_sync_was_active.load(Ordering::SeqCst);
+        let is_active = self.is_bulk_sync_active();
+
+        if was_active && !is_active {
+            self.bulk_sync_was_active.store(false, Ordering::SeqCst);
+
+            info!("Phase 1 (Core Sync) completed. Starting Phase 2 (Rebuild)...");
+
+            if let Some(ref cp) = self.control_plane {
+                cp.set_status("rebuilding", Some("rebuild_live_cells")).await;
+            }
+
+            let pool = self.writer.pool().clone();
+            let control_plane = self.control_plane.clone();
+
+            tokio::spawn(async move {
+                let runner = RebuildRunner::new(pool);
+
+                let phases = [
+                    ("rebuild_live_cells", "LiveCells"),
+                    ("rebuild_address_balances", "AddressBalances"),
+                    ("rebuild_script_usage", "ScriptUsageStats"),
+                    ("rebuild_daily_stats", "DailyStatistics"),
+                    ("rebuild_hourly_stats", "HourlyStatistics"),
+                    ("rebuild_epoch_stats", "EpochStatistics"),
+                    ("rebuild_miner_stats", "MinerStatistics"),
+                    ("rebuild_indexes", "Indexes"),
+                ];
+
+                for (phase_name, task_name) in phases {
+                    if let Some(ref cp) = control_plane {
+                        cp.set_status("rebuilding", Some(phase_name)).await;
+                    }
+
+                    info!("Starting rebuild phase: {}", task_name);
+
+                    let task = match task_name {
+                        "LiveCells" => crate::rebuild::RebuildTask::LiveCells,
+                        "AddressBalances" => crate::rebuild::RebuildTask::AddressBalances,
+                        "ScriptUsageStats" => crate::rebuild::RebuildTask::ScriptUsageStats,
+                        "DailyStatistics" => crate::rebuild::RebuildTask::DailyStatistics,
+                        "HourlyStatistics" => crate::rebuild::RebuildTask::HourlyStatistics,
+                        "EpochStatistics" => crate::rebuild::RebuildTask::EpochStatistics,
+                        "MinerStatistics" => crate::rebuild::RebuildTask::MinerStatistics,
+                        "Indexes" => crate::rebuild::RebuildTask::Indexes,
+                        _ => continue,
+                    };
+
+                    if let Err(e) = runner.run_task(task).await {
+                        error!("Rebuild phase {} failed: {}", task_name, e);
+                        if let Some(ref cp) = control_plane {
+                            cp.set_error(&format!("Rebuild {} failed: {}", task_name, e)).await;
+                        }
+                        return;
+                    }
+                }
+
+                info!("Phase 2 (Rebuild) completed successfully!");
+
+                if let Some(ref cp) = control_plane {
+                    cp.set_status("ready", Some("completed")).await;
+                }
+            });
+        }
     }
 
     pub async fn run(&self) -> Result<()> {
@@ -323,6 +398,19 @@ impl Indexer {
                     "Bulk sync active: {} blocks behind (threshold: {}). Some statistics will be skipped.",
                     blocks_behind, self.config.bulk_sync_threshold
                 );
+
+                if let Some(ref cp) = self.control_plane {
+                    cp.set_status("syncing", Some("core_sync")).await;
+                }
+
+                match self.writer.drop_sync_indexes().await {
+                    Ok(count) => {
+                        info!("Dropped {} non-essential indexes for faster bulk sync", count);
+                    }
+                    Err(e) => {
+                        warn!("Failed to drop sync indexes (may already be dropped): {}", e);
+                    }
+                }
             }
         }
 
@@ -359,10 +447,12 @@ impl Indexer {
 
             match self.sync_batch().await {
                 Ok(SyncAction::CaughtUp) => {
-                    self.trigger_missing_cycles_fix_when_idle().await;
+                    self.check_and_trigger_phase2_rebuild().await;
                     sleep(Duration::from_millis(self.config.poll_interval_ms)).await;
                 }
-                Ok(SyncAction::Continue) => {}
+                Ok(SyncAction::Continue) => {
+                    self.check_and_trigger_phase2_rebuild().await;
+                }
                 Ok(SyncAction::ReorgHandled) => {
                     info!("Reorg handled, continuing sync from fork point");
                 }
@@ -477,6 +567,8 @@ impl Indexer {
 
         let writer_for_parser = self.writer.clone();
         let cell_cache_for_parser = Arc::clone(&self.cell_cache);
+        let config_for_parser = self.config.clone();
+        let progress_for_parser = Arc::clone(&self.progress);
 
         let parser = tokio::spawn(async move {
             while let Some((start_block, end_block, blocks)) = fetch_rx.recv().await {
@@ -516,6 +608,10 @@ impl Indexer {
                     .cloned()
                     .collect();
 
+                let use_cells_table = config_for_parser.bulk_sync_mode
+                    && progress_for_parser.blocks_remaining()
+                        > config_for_parser.bulk_sync_threshold;
+
                 if !missing_outpoints.is_empty() {
                     let unique_missing: Vec<(Vec<u8>, i16)> = {
                         let mut seen = HashSet::new();
@@ -528,7 +624,14 @@ impl Indexer {
                         .iter()
                         .map(|(h, i)| (h.as_slice(), *i))
                         .collect();
-                    match writer_for_parser.get_cells_info_batch(&missing_refs).await {
+                    let db_result = if use_cells_table {
+                        writer_for_parser
+                            .get_cells_info_batch_from_cells(&missing_refs)
+                            .await
+                    } else {
+                        writer_for_parser.get_cells_info_batch(&missing_refs).await
+                    };
+                    match db_result {
                         Ok(db_info) => {
                             for ((tx_hash, idx), (cap, block, lock_hash, data_size)) in db_info {
                                 input_cell_info
@@ -568,7 +671,14 @@ impl Indexer {
                         .iter()
                         .map(|(h, i)| (h.as_slice(), *i))
                         .collect();
-                    match writer_for_parser.get_cells_code_hashes_batch(&refs).await {
+                    let db_result = if use_cells_table {
+                        writer_for_parser
+                            .get_cells_code_hashes_batch_from_cells(&refs)
+                            .await
+                    } else {
+                        writer_for_parser.get_cells_code_hashes_batch(&refs).await
+                    };
+                    match db_result {
                         Ok(hashes) => hashes,
                         Err(e) => {
                             error!("Parser: Failed to fetch code hashes from DB: {}", e);
@@ -737,6 +847,8 @@ impl Indexer {
                         .blocks_count
                         .fetch_add(all_parsed_blocks.len() as u64, Ordering::Relaxed);
                     self.perf.report_and_reset();
+
+                    self.check_and_trigger_phase2_rebuild().await;
                 }
                 Ok(None) => {
                     fetcher.abort();
@@ -744,8 +856,7 @@ impl Indexer {
                     return Err(anyhow::anyhow!("Pipeline channel closed"));
                 }
                 Err(_timeout) => {
-                    // No batch received within timeout - we're likely caught up
-                    self.trigger_missing_cycles_fix_when_idle().await;
+                    self.check_and_trigger_phase2_rebuild().await;
                 }
             }
         }
@@ -952,16 +1063,6 @@ impl Indexer {
         Ok(SyncAction::Continue)
     }
 
-    async fn trigger_missing_cycles_fix_when_idle(&self) {
-        if let Some(ref handle) = self.integrity_handle {
-            if !handle.is_running().await {
-                handle
-                    .trigger(crate::integrity::IntegrityCheck::AllMissingCycles)
-                    .await;
-            }
-        }
-    }
-
     async fn fetch_blocks_parallel(
         &self,
         start: u64,
@@ -1006,6 +1107,8 @@ impl Indexer {
             .cloned()
             .collect();
 
+        let bulk_sync_active = self.is_bulk_sync_active();
+
         if !missing_outpoints.is_empty() {
             let unique_missing: Vec<(Vec<u8>, i16)> = {
                 let mut seen = HashSet::new();
@@ -1018,7 +1121,13 @@ impl Indexer {
                 .iter()
                 .map(|(h, i)| (h.as_slice(), *i))
                 .collect();
-            let db_info = self.writer.get_cells_info_batch(&missing_refs).await?;
+            let db_info = if bulk_sync_active {
+                self.writer
+                    .get_cells_info_batch_from_cells(&missing_refs)
+                    .await?
+            } else {
+                self.writer.get_cells_info_batch(&missing_refs).await?
+            };
             for ((tx_hash, idx), (cap, block, lock_hash, data_size)) in db_info {
                 input_cell_info.insert((tx_hash, idx), (cap, block, lock_hash, data_size));
             }
@@ -1221,7 +1330,9 @@ impl Indexer {
             }
         }
         if !all_consumptions.is_empty() {
-            self.writer.consume_cells_batch(&all_consumptions).await?;
+            self.writer
+                .consume_cells_batch(&all_consumptions, bulk_sync_active)
+                .await?;
         }
 
         let mut address_balance_changes: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, Vec<u8>)> =
@@ -1352,7 +1463,13 @@ impl Indexer {
                 .iter()
                 .map(|(h, i)| (h.as_slice(), *i))
                 .collect();
-            self.writer.get_cells_code_hashes_batch(&refs).await?
+            if bulk_sync_active {
+                self.writer
+                    .get_cells_code_hashes_batch_from_cells(&refs)
+                    .await?
+            } else {
+                self.writer.get_cells_code_hashes_batch(&refs).await?
+            }
         } else {
             HashMap::new()
         };
@@ -2658,7 +2775,9 @@ impl Indexer {
             }
         }
         if !all_consumptions.is_empty() {
-            self.writer.consume_cells_batch(&all_consumptions).await?;
+            self.writer
+                .consume_cells_batch(&all_consumptions, bulk_sync_active)
+                .await?;
         }
 
         let mut address_balance_changes: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, Vec<u8>)> =
@@ -4137,7 +4256,9 @@ impl Indexer {
             }
         }
         if !all_consumptions.is_empty() {
-            self.writer.consume_cells_batch(&all_consumptions).await?;
+            self.writer
+                .consume_cells_batch(&all_consumptions, bulk_sync_active)
+                .await?;
         }
 
         let mut address_balance_changes: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8])> =
@@ -4216,10 +4337,9 @@ impl Indexer {
                 ));
             }
         }
-
-        if !address_balance_changes.is_empty() {
+        if !all_cells.is_empty() {
             self.writer
-                .update_address_balances_batch(&address_balance_changes)
+                .insert_cells_batch(&all_cells, bulk_sync_active)
                 .await?;
         }
 

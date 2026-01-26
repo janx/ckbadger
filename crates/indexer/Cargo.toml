@@ -62,6 +62,7 @@ ckb-hash = { workspace = true }
 
 # Redis (optional, for cache invalidation)
 redis = { workspace = true, optional = true }
+gethostname = "1.1.0"
 
 [features]
 default = []

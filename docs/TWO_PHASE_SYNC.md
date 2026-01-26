@@ -83,26 +83,34 @@ The two-phase approach separates **core data ingestion** from **derived data com
 Bulk sync mode is controlled by the `bulk_sync_mode` configuration:
 
 ```rust
-// In SyncConfig
-SyncConfig {
-    bulk_sync_mode: true,      // Enable two-phase sync
-    skip_live_cells: true,     // Phase 1: skip live_cells
-    skip_address_transactions: true,
-    skip_statistics: true,
-    batch_size: 3000,          // Larger batches for throughput
-    parallel_fetch_size: 64,   // More concurrent RPC calls
+// In Config (crates/indexer/src/config.rs)
+Config {
+    bulk_sync_mode: true,       // Enable two-phase sync
+    bulk_sync_threshold: 1000,  // Blocks behind tip to trigger bulk sync
+    batch_size: 3000,           // Larger batches for throughput
+    parallel_fetch_size: 64,    // More concurrent RPC calls
     pipeline_buffer: 4,
+    // ... other fields
 }
 ```
+
+When `bulk_sync_mode` is enabled and blocks remaining > threshold, the indexer automatically:
+
+- Skips `live_cells` inserts/deletes
+- Skips `address_balances`, `address_transactions`, `script_usage_stats` updates
+- Skips hourly/daily/miner statistics writes
+- Drops non-essential indexes at startup
 
 **Automatic detection**: The indexer checks if the current block is far behind tip:
 
 ```rust
 fn is_bulk_sync_active(&self) -> bool {
-    let behind = self.tip_block - self.current_block;
-    behind > self.config.bulk_sync_threshold // default: 1000 blocks
+    self.config.bulk_sync_mode
+        && self.progress.blocks_remaining() > self.config.bulk_sync_threshold
 }
 ```
+
+**Automatic Phase 2 trigger**: When `is_bulk_sync_active()` transitions from `true` to `false`, the indexer automatically starts the rebuild process in the background.
 
 ## Phase 2: Rebuild
 
@@ -144,7 +152,7 @@ Benefits:
 
 ### Rebuild Functions
 
-Located in `migrations/postgres/002_two_phase_sync.sql`:
+Located in `migrations/postgres/001_init.sql`:
 
 | Function                                   | Description                        |
 | ------------------------------------------ | ---------------------------------- |
@@ -205,13 +213,19 @@ CREATE TABLE sync_events (
 
 ### Sync Phases
 
-The `SyncPhase` enum tracks progress through the two-phase sync:
+The indexer tracks progress through the two-phase sync via the `sync_phase` column:
 
 ```
-Pending → CoreSync → RebuildLiveCells → RebuildBalances →
-RebuildScriptUsage → RebuildStatistics → RebuildIndexes →
-RebuildAddressTx → Completed
+core_sync → rebuild_live_cells → rebuild_address_balances →
+rebuild_script_usage → rebuild_daily_stats → rebuild_hourly_stats →
+rebuild_epoch_stats → rebuild_miner_stats → rebuild_indexes → completed
 ```
+
+Phase transitions are automatic:
+
+- When the indexer starts with `bulk_sync_mode=true` and is far behind, it sets phase to `core_sync`
+- When caught up (blocks_remaining ≤ threshold), it automatically triggers rebuild and updates phases
+- After all rebuild tasks complete, phase becomes `completed` and status becomes `ready`
 
 ## TUI Dashboard
 

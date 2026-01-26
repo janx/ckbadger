@@ -26,17 +26,19 @@ enum Tab {
     Instances,
     Jobs,
     Events,
+    Integrity,
     Config,
 }
 
 impl Tab {
-    const ALL: [Tab; 4] = [Tab::Instances, Tab::Jobs, Tab::Events, Tab::Config];
+    const ALL: [Tab; 5] = [Tab::Instances, Tab::Jobs, Tab::Events, Tab::Integrity, Tab::Config];
 
     fn title(&self) -> &'static str {
         match self {
             Tab::Instances => "Instances",
             Tab::Jobs => "Jobs",
             Tab::Events => "Events",
+            Tab::Integrity => "Integrity",
             Tab::Config => "Config",
         }
     }
@@ -46,7 +48,8 @@ impl Tab {
             Tab::Instances => 0,
             Tab::Jobs => 1,
             Tab::Events => 2,
-            Tab::Config => 3,
+            Tab::Integrity => 3,
+            Tab::Config => 4,
         }
     }
 }
@@ -60,6 +63,7 @@ struct App {
     active_instance_id: Option<uuid::Uuid>,
     instance_table_state: TableState,
     job_table_state: TableState,
+    integrity_table_state: TableState,
     should_quit: bool,
     last_refresh: std::time::Instant,
     status_message: Option<(String, Color)>,
@@ -83,6 +87,11 @@ impl App {
             job_table_state.select(Some(0));
         }
 
+        let mut integrity_table_state = TableState::default();
+        if !instances.is_empty() {
+            integrity_table_state.select(Some(0));
+        }
+
         Ok(Self {
             control_plane,
             current_tab: Tab::Instances,
@@ -92,6 +101,7 @@ impl App {
             active_instance_id,
             instance_table_state,
             job_table_state,
+            integrity_table_state,
             should_quit: false,
             last_refresh: std::time::Instant::now(),
             status_message: None,
@@ -139,6 +149,14 @@ impl App {
                 self.job_table_state
                     .select(Some((i + 1) % self.jobs.len()));
             }
+            Tab::Integrity => {
+                if self.instances.is_empty() {
+                    return;
+                }
+                let i = self.integrity_table_state.selected().unwrap_or(0);
+                self.integrity_table_state
+                    .select(Some((i + 1) % self.instances.len()));
+            }
             _ => {}
         }
     }
@@ -164,6 +182,18 @@ impl App {
                 let i = self.job_table_state.selected().unwrap_or(0);
                 let prev = if i == 0 { self.jobs.len() - 1 } else { i - 1 };
                 self.job_table_state.select(Some(prev));
+            }
+            Tab::Integrity => {
+                if self.instances.is_empty() {
+                    return;
+                }
+                let i = self.integrity_table_state.selected().unwrap_or(0);
+                let prev = if i == 0 {
+                    self.instances.len() - 1
+                } else {
+                    i - 1
+                };
+                self.integrity_table_state.select(Some(prev));
             }
             _ => {}
         }
@@ -211,6 +241,42 @@ impl App {
         Ok(())
     }
 
+    fn get_selected_integrity_instance(&self) -> Option<&Instance> {
+        self.integrity_table_state
+            .selected()
+            .and_then(|idx| self.instances.get(idx))
+    }
+
+    async fn trigger_integrity_job(&mut self, job_type: &str) -> Result<()> {
+        let Some(instance) = self.get_selected_integrity_instance() else {
+            self.status_message = Some((
+                "No instance selected".to_string(),
+                Color::Red,
+            ));
+            return Ok(());
+        };
+
+        let instance_id = instance.id;
+        let instance_name = instance.name.clone();
+
+        let job_id = self
+            .control_plane
+            .create_job(&instance_id, job_type, None)
+            .await?;
+
+        self.status_message = Some((
+            format!(
+                "Created job: {} on {} ({})",
+                job_type,
+                instance_name,
+                &job_id.to_string()[..8]
+            ),
+            Color::Green,
+        ));
+        self.refresh().await?;
+        Ok(())
+    }
+
     fn handle_key(&mut self, key: event::KeyEvent) -> Option<AsyncAction> {
         if key.kind != KeyEventKind::Press {
             return None;
@@ -242,6 +308,15 @@ impl App {
             }
             KeyCode::Char('c') if self.current_tab == Tab::Jobs => Some(AsyncAction::CancelJob),
             KeyCode::Char('r') => Some(AsyncAction::Refresh),
+            KeyCode::Char('1') if self.current_tab == Tab::Integrity => {
+                Some(AsyncAction::TriggerCyclesFix)
+            }
+            KeyCode::Char('2') if self.current_tab == Tab::Integrity => {
+                Some(AsyncAction::TriggerUdtLabels)
+            }
+            KeyCode::Char('3') if self.current_tab == Tab::Integrity => {
+                Some(AsyncAction::TriggerScriptLabels)
+            }
             _ => None,
         }
     }
@@ -257,6 +332,9 @@ enum AsyncAction {
     ActivateInstance,
     CancelJob,
     Refresh,
+    TriggerCyclesFix,
+    TriggerUdtLabels,
+    TriggerScriptLabels,
 }
 
 fn render(frame: &mut Frame, app: &mut App) {
@@ -280,13 +358,29 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
     let active_info = if let Some(instance) = app.get_active_instance() {
         let phase_str = match &instance.sync_phase {
             SyncPhase::Completed => "Ready".to_string(),
-            SyncPhase::CoreSync => format!("Syncing: {} blocks", instance.current_block),
+            SyncPhase::CoreSync => {
+                let progress = if let Some(target) = instance.target_block {
+                    format!("{}/{}", format_number(instance.current_block), format_number(target))
+                } else {
+                    format_number(instance.current_block)
+                };
+                format!("Syncing: {}", progress)
+            }
             other => format!("{:?}", other),
         };
+        let speed_str = instance
+            .sync_speed
+            .map(|s| format!("{:.0}/s", s))
+            .unwrap_or_default();
+        let eta = calculate_phase_eta(instance, &app.jobs);
+        let eta_str = if eta != "-" {
+            format!(" | ETA: {}", eta)
+        } else {
+            String::new()
+        };
         format!(
-            "Active: {} ({}) | {} | {}",
-            instance.name, instance.network, phase_str,
-            instance.sync_speed.map(|s| format!("{:.0} blk/s", s)).unwrap_or_default()
+            "Active: {} ({}) | {} | {}{}",
+            instance.name, instance.network, phase_str, speed_str, eta_str
         )
     } else {
         "No active instance".to_string()
@@ -323,6 +417,7 @@ fn render_content(frame: &mut Frame, area: Rect, app: &mut App) {
         Tab::Instances => render_instances_table(frame, area, app),
         Tab::Jobs => render_jobs_table(frame, area, app),
         Tab::Events => render_events(frame, area, app),
+        Tab::Integrity => render_integrity(frame, area, app),
         Tab::Config => render_config(frame, area, app),
     }
 }
@@ -335,6 +430,7 @@ fn render_instances_table(frame: &mut Frame, area: Rect, app: &mut App) {
         Cell::from("Phase"),
         Cell::from("Block"),
         Cell::from("Speed"),
+        Cell::from("ETA"),
         Cell::from("Network"),
     ])
     .style(
@@ -393,6 +489,8 @@ fn render_instances_table(frame: &mut Frame, area: Rect, app: &mut App) {
                 SyncPhase::Completed => "Completed",
             };
 
+            let eta = calculate_phase_eta(instance, &app.jobs);
+
             Row::new(vec![
                 Cell::from(active_marker).style(Style::new().fg(Color::Green)),
                 Cell::from(instance.name.clone()),
@@ -400,6 +498,7 @@ fn render_instances_table(frame: &mut Frame, area: Rect, app: &mut App) {
                 Cell::from(phase_str),
                 Cell::from(progress),
                 Cell::from(speed),
+                Cell::from(eta),
                 Cell::from(instance.network.clone()),
             ])
         })
@@ -407,12 +506,13 @@ fn render_instances_table(frame: &mut Frame, area: Rect, app: &mut App) {
 
     let widths = [
         Constraint::Length(1),
-        Constraint::Percentage(18),
-        Constraint::Percentage(12),
-        Constraint::Percentage(16),
-        Constraint::Percentage(23),
-        Constraint::Percentage(12),
-        Constraint::Percentage(12),
+        Constraint::Percentage(15),
+        Constraint::Percentage(10),
+        Constraint::Percentage(14),
+        Constraint::Percentage(20),
+        Constraint::Percentage(10),
+        Constraint::Percentage(10),
+        Constraint::Percentage(10),
     ];
 
     let table = Table::new(rows, widths)
@@ -444,6 +544,7 @@ fn render_jobs_table(frame: &mut Frame, area: Rect, app: &mut App) {
         Cell::from("Status"),
         Cell::from("Progress"),
         Cell::from("Speed"),
+        Cell::from("ETA"),
     ])
     .style(
         Style::new()
@@ -473,6 +574,8 @@ fn render_jobs_table(frame: &mut Frame, area: Rect, app: &mut App) {
                 .map(|s| format!("{:.0}/s", s))
                 .unwrap_or_else(|| "-".to_string());
 
+            let eta = calculate_job_eta(job);
+
             let status_style = match job.status.as_str() {
                 "running" => Style::new().fg(Color::Green),
                 "pending" | "queued" => Style::new().fg(Color::Yellow),
@@ -486,16 +589,18 @@ fn render_jobs_table(frame: &mut Frame, area: Rect, app: &mut App) {
                 Cell::from(job.status.clone()).style(status_style),
                 Cell::from(progress),
                 Cell::from(speed),
+                Cell::from(eta),
             ])
         })
         .collect();
 
     let widths = [
-        Constraint::Percentage(25),
-        Constraint::Percentage(25),
-        Constraint::Percentage(15),
         Constraint::Percentage(20),
+        Constraint::Percentage(20),
+        Constraint::Percentage(12),
         Constraint::Percentage(15),
+        Constraint::Percentage(13),
+        Constraint::Percentage(13),
     ];
 
     let table = Table::new(rows, widths)
@@ -544,8 +649,115 @@ fn render_events(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(list, area);
 }
 
+fn render_integrity(frame: &mut Frame, area: Rect, app: &mut App) {
+    let [instance_area, jobs_area, help_area] = Layout::vertical([
+        Constraint::Fill(1),
+        Constraint::Length(7),
+        Constraint::Length(4),
+    ])
+    .areas(area);
+
+    let header = Row::new(vec![
+        Cell::from(""),
+        Cell::from("Name"),
+        Cell::from("Network"),
+        Cell::from("Status"),
+        Cell::from("Block"),
+    ])
+    .style(
+        Style::new()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    )
+    .bottom_margin(1);
+
+    let rows: Vec<Row> = app
+        .instances
+        .iter()
+        .map(|instance| {
+            let is_active = app.active_instance_id.as_ref() == Some(&instance.id);
+            let active_marker = if is_active { "*" } else { " " };
+
+            let status_style = match instance.status {
+                InstanceStatus::Active => Style::new().fg(Color::Green),
+                InstanceStatus::Ready => Style::new().fg(Color::Cyan),
+                InstanceStatus::Syncing | InstanceStatus::Rebuilding => {
+                    Style::new().fg(Color::Yellow)
+                }
+                InstanceStatus::Failed => Style::new().fg(Color::Red),
+                _ => Style::new(),
+            };
+
+            Row::new(vec![
+                Cell::from(active_marker).style(Style::new().fg(Color::Green)),
+                Cell::from(instance.name.clone()),
+                Cell::from(instance.network.clone()),
+                Cell::from(format!("{:?}", instance.status)).style(status_style),
+                Cell::from(format_number(instance.current_block)),
+            ])
+        })
+        .collect();
+
+    let widths = [
+        Constraint::Length(1),
+        Constraint::Percentage(30),
+        Constraint::Percentage(15),
+        Constraint::Percentage(15),
+        Constraint::Percentage(20),
+    ];
+
+    let table = Table::new(rows, widths)
+        .header(header)
+        .block(Block::bordered().title("Select Instance for Job (* = active)"))
+        .row_highlight_style(
+            Style::new()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("> ");
+
+    frame.render_stateful_widget(table, instance_area, &mut app.integrity_table_state);
+
+    // Available jobs section
+    let job_items = vec![
+        ListItem::new(Line::from(vec![
+            Span::styled("[1] ", Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled("Fix Missing Cycles", Style::new().fg(Color::White)),
+            Span::raw(" - Requires indexer running on this instance"),
+        ])),
+        ListItem::new(Line::from(vec![
+            Span::styled("[2] ", Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled("Update UDT Labels", Style::new().fg(Color::White)),
+            Span::raw(" - Works on any instance"),
+        ])),
+        ListItem::new(Line::from(vec![
+            Span::styled("[3] ", Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled("Update Script Labels", Style::new().fg(Color::White)),
+            Span::raw(" - Works on any instance"),
+        ])),
+    ];
+
+    let jobs_list =
+        List::new(job_items).block(Block::bordered().title("Available Jobs (press number to run)"));
+    frame.render_widget(jobs_list, jobs_area);
+
+    // Help section
+    let help_line = Line::from(vec![
+        Span::styled("j/k: ", Style::new().fg(Color::Cyan)),
+        Span::raw("navigate  "),
+        Span::styled("1-3: ", Style::new().fg(Color::Cyan)),
+        Span::raw("trigger job  "),
+        Span::styled("r: ", Style::new().fg(Color::Cyan)),
+        Span::raw("refresh"),
+    ]);
+
+    let help_para = Paragraph::new(help_line).block(Block::bordered().title("Controls"));
+    frame.render_widget(help_para, help_area);
+}
+
 fn render_config(frame: &mut Frame, area: Rect, app: &App) {
-    let [info_area, help_area] = Layout::vertical([
+    let [config_area, progress_area, help_area] = Layout::vertical([
+        Constraint::Length(14),
         Constraint::Fill(1),
         Constraint::Length(5),
     ])
@@ -574,16 +786,6 @@ fn render_config(frame: &mut Frame, area: Rect, app: &App) {
         ]),
         Line::from(""),
         Line::from(vec![
-            Span::styled("Tables skipped during bulk sync:", Style::new().fg(Color::Yellow)),
-        ]),
-        Line::from("  - live_cells"),
-        Line::from("  - address_balances"),
-        Line::from("  - address_transactions"),
-        Line::from("  - script_usage_stats"),
-        Line::from("  - hourly_statistics, daily_statistics"),
-        Line::from("  - miner_statistics"),
-        Line::from(""),
-        Line::from(vec![
             Span::styled("Instances: ", Style::new().fg(Color::Cyan)),
             Span::raw(format!("{}", app.instances.len())),
         ]),
@@ -595,7 +797,86 @@ fn render_config(frame: &mut Frame, area: Rect, app: &App) {
 
     let config_para = Paragraph::new(config_text)
         .block(Block::bordered().title("Configuration"));
-    frame.render_widget(config_para, info_area);
+    frame.render_widget(config_para, config_area);
+
+    let mut progress_lines = vec![
+        Line::from(vec![
+            Span::styled("Active Instance Progress", Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(""),
+    ];
+
+    if let Some(instance) = app.get_active_instance() {
+        let phase_str = match &instance.sync_phase {
+            SyncPhase::Pending => "Pending".to_string(),
+            SyncPhase::CoreSync => "Core Sync".to_string(),
+            SyncPhase::RebuildLiveCells => "Rebuild: live_cells".to_string(),
+            SyncPhase::RebuildBalances => "Rebuild: balances".to_string(),
+            SyncPhase::RebuildScriptUsage => "Rebuild: scripts".to_string(),
+            SyncPhase::RebuildStatistics => "Rebuild: stats".to_string(),
+            SyncPhase::RebuildIndexes => "Rebuild: indexes".to_string(),
+            SyncPhase::RebuildAddressTx => "Rebuild: addr_tx".to_string(),
+            SyncPhase::Completed => "Completed".to_string(),
+        };
+
+        progress_lines.push(Line::from(vec![
+            Span::styled("Instance: ", Style::new().fg(Color::Cyan)),
+            Span::raw(format!("{} ({})", instance.name, instance.network)),
+        ]));
+        progress_lines.push(Line::from(vec![
+            Span::styled("Current Phase: ", Style::new().fg(Color::Cyan)),
+            Span::raw(phase_str),
+        ]));
+
+        if instance.sync_phase != SyncPhase::Completed {
+            let current_eta = calculate_phase_eta(instance, &app.jobs);
+            progress_lines.push(Line::from(vec![
+                Span::styled("Current Phase ETA: ", Style::new().fg(Color::Cyan)),
+                Span::styled(
+                    current_eta,
+                    Style::new().fg(Color::Green).add_modifier(Modifier::BOLD),
+                ),
+            ]));
+
+            if let Some(total_secs) = calculate_total_eta(instance, &app.jobs) {
+                progress_lines.push(Line::from(vec![
+                    Span::styled("Estimated Completion: ", Style::new().fg(Color::Cyan)),
+                    Span::styled(
+                        format_duration(total_secs),
+                        Style::new().fg(Color::Green).add_modifier(Modifier::BOLD),
+                    ),
+                ]));
+            }
+        }
+
+        progress_lines.push(Line::from(""));
+
+        let instance_jobs: Vec<_> = app.jobs.iter().filter(|j| j.instance_id == instance.id).collect();
+        if !instance_jobs.is_empty() {
+            progress_lines.push(Line::from(vec![
+                Span::styled("Running Jobs:", Style::new().fg(Color::Yellow)),
+            ]));
+            for job in instance_jobs {
+                let job_eta = calculate_job_eta(job);
+                let progress_str = job
+                    .progress_percent
+                    .map(|p| format!("{:.1}%", p))
+                    .unwrap_or_else(|| "-".to_string());
+                progress_lines.push(Line::from(format!(
+                    "  - {} ({}): {} | ETA: {}",
+                    job.job_type, job.status, progress_str, job_eta
+                )));
+            }
+        }
+    } else {
+        progress_lines.push(Line::from(vec![
+            Span::styled("No active instance", Style::new().fg(Color::DarkGray)),
+        ]));
+    }
+
+    let progress_para = Paragraph::new(progress_lines)
+        .block(Block::bordered().title("Progress & ETA"));
+    frame.render_widget(progress_para, progress_area);
 
     let help_text = vec![
         Line::from(vec![
@@ -633,6 +914,7 @@ fn render_help(frame: &mut Frame, area: Rect, app: &App) {
         Tab::Instances => "q:Quit  Tab/←→:Switch tabs  j/k/↑↓:Navigate  a:Activate  r:Refresh",
         Tab::Jobs => "q:Quit  Tab/←→:Switch tabs  j/k/↑↓:Navigate  c:Cancel job  r:Refresh",
         Tab::Events => "q:Quit  Tab/←→:Switch tabs  r:Refresh",
+        Tab::Integrity => "q:Quit  Tab:Switch  j/k:Select instance  1:Fix Cycles  2:UDT Labels  3:Script Labels  r:Refresh",
         Tab::Config => "q:Quit  Tab/←→:Switch tabs  r:Refresh",
     };
 
@@ -647,6 +929,120 @@ fn format_number(n: i64) -> String {
         format!("{:.1}K", n as f64 / 1_000.0)
     } else {
         n.to_string()
+    }
+}
+
+fn format_eta(remaining: i64, speed: Option<f64>) -> String {
+    match speed {
+        Some(s) if s > 0.0 && remaining > 0 => {
+            let secs = remaining as f64 / s;
+            format_duration(secs)
+        }
+        _ if remaining <= 0 => "-".to_string(),
+        _ => "-".to_string(),
+    }
+}
+
+fn format_duration(secs: f64) -> String {
+    if secs < 60.0 {
+        format!("{:.0}s", secs)
+    } else if secs < 3600.0 {
+        let mins = secs / 60.0;
+        format!("{:.0}m", mins)
+    } else if secs < 86400.0 {
+        let hours = (secs / 3600.0) as u64;
+        let mins = ((secs % 3600.0) / 60.0) as u64;
+        if mins > 0 {
+            format!("{}h {}m", hours, mins)
+        } else {
+            format!("{}h", hours)
+        }
+    } else {
+        let days = (secs / 86400.0) as u64;
+        let hours = ((secs % 86400.0) / 3600.0) as u64;
+        if hours > 0 {
+            format!("{}d {}h", days, hours)
+        } else {
+            format!("{}d", days)
+        }
+    }
+}
+
+fn calculate_instance_eta(instance: &Instance) -> String {
+    match (instance.target_block, instance.sync_speed) {
+        (Some(target), Some(speed)) if speed > 0.0 && target > instance.current_block => {
+            let remaining = target - instance.current_block;
+            format_eta(remaining, Some(speed))
+        }
+        _ => "-".to_string(),
+    }
+}
+
+fn calculate_job_eta(job: &SyncJob) -> String {
+    match (job.progress_total, job.rows_per_second) {
+        (Some(total), Some(speed)) if speed > 0.0 && total > job.progress_current => {
+            let remaining = total - job.progress_current;
+            format_eta(remaining, Some(speed))
+        }
+        _ => "-".to_string(),
+    }
+}
+
+fn find_job_for_phase<'a>(jobs: &'a [SyncJob], instance_id: &uuid::Uuid, phase: &SyncPhase) -> Option<&'a SyncJob> {
+    let job_type = match phase {
+        SyncPhase::CoreSync => "core_sync",
+        SyncPhase::RebuildLiveCells => "rebuild_live_cells",
+        SyncPhase::RebuildBalances => "rebuild_balances",
+        SyncPhase::RebuildScriptUsage => "rebuild_script_usage",
+        SyncPhase::RebuildStatistics => "rebuild_statistics",
+        SyncPhase::RebuildIndexes => "rebuild_indexes",
+        SyncPhase::RebuildAddressTx => "rebuild_address_tx",
+        _ => return None,
+    };
+    jobs.iter().find(|j| &j.instance_id == instance_id && j.job_type == job_type)
+}
+
+fn calculate_phase_eta(instance: &Instance, jobs: &[SyncJob]) -> String {
+    match instance.sync_phase {
+        SyncPhase::CoreSync => calculate_instance_eta(instance),
+        SyncPhase::Completed | SyncPhase::Pending => "-".to_string(),
+        _ => {
+            if let Some(job) = find_job_for_phase(jobs, &instance.id, &instance.sync_phase) {
+                calculate_job_eta(job)
+            } else {
+                "-".to_string()
+            }
+        }
+    }
+}
+
+fn calculate_total_eta(instance: &Instance, jobs: &[SyncJob]) -> Option<f64> {
+    let mut total_secs = 0.0;
+    
+    match instance.sync_phase {
+        SyncPhase::Completed => return None,
+        SyncPhase::CoreSync => {
+            if let (Some(target), Some(speed)) = (instance.target_block, instance.sync_speed) {
+                if speed > 0.0 && target > instance.current_block {
+                    total_secs += (target - instance.current_block) as f64 / speed;
+                }
+            }
+        }
+        _ => {
+            if let Some(job) = find_job_for_phase(jobs, &instance.id, &instance.sync_phase) {
+                if let (Some(total), Some(speed)) = (job.progress_total, job.rows_per_second) {
+                    if speed > 0.0 && total > job.progress_current {
+                        total_secs += (total - job.progress_current) as f64 / speed;
+                    }
+                }
+            }
+        }
+    }
+    
+    if total_secs > 0.0 {
+        Some(total_secs)
+    } else {
+        None
     }
 }
 
@@ -678,6 +1074,15 @@ async fn main() -> Result<()> {
                             app.refresh().await.map(|_| {
                                 app.status_message = Some(("Refreshed".to_string(), Color::Green));
                             })
+                        }
+                        AsyncAction::TriggerCyclesFix => {
+                            app.trigger_integrity_job("fix_missing_cycles").await
+                        }
+                        AsyncAction::TriggerUdtLabels => {
+                            app.trigger_integrity_job("update_udt_labels").await
+                        }
+                        AsyncAction::TriggerScriptLabels => {
+                            app.trigger_integrity_job("update_script_labels").await
                         }
                     };
 

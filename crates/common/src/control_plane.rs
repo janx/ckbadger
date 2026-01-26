@@ -597,6 +597,30 @@ impl ControlPlane {
         Ok(row.0)
     }
 
+    pub async fn create_job_with_checkpoint(
+        &self,
+        instance_id: &Uuid,
+        job_type: &str,
+        progress_total: Option<i64>,
+        checkpoint: &serde_json::Value,
+    ) -> Result<Uuid> {
+        let row = sqlx::query_as::<_, (Uuid,)>(
+            r#"
+            INSERT INTO sync_jobs (instance_id, job_type, progress_total, checkpoint, status)
+            VALUES ($1, $2, $3, $4, 'pending')
+            RETURNING id
+            "#,
+        )
+        .bind(instance_id)
+        .bind(job_type)
+        .bind(progress_total)
+        .bind(checkpoint)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(row.0)
+    }
+
     pub async fn start_job(&self, job_id: &Uuid, worker_id: &str) -> Result<()> {
         sqlx::query(
             r#"

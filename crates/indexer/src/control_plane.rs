@@ -1,12 +1,26 @@
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use tracing::{info, warn};
 use uuid::Uuid;
 
+#[derive(Debug, Clone)]
+pub struct Job {
+    pub id: Uuid,
+    pub instance_id: Uuid,
+    pub job_type: String,
+    pub status: String,
+    pub progress_current: i64,
+    pub progress_total: Option<i64>,
+    pub checkpoint: Option<serde_json::Value>,
+    pub created_at: DateTime<Utc>,
+}
+
 pub struct ControlPlaneClient {
     pool: PgPool,
     instance_id: Uuid,
+    worker_id: String,
 }
 
 impl ControlPlaneClient {
@@ -24,9 +38,22 @@ impl ControlPlaneClient {
         let instance_id =
             Self::register_or_find_instance(&pool, instance_db_url, ckb_rpc_url, network).await?;
 
-        info!("Control plane connected, instance_id: {}", instance_id);
+        let worker_id = format!(
+            "indexer-{}-{}",
+            gethostname::gethostname().to_string_lossy(),
+            std::process::id()
+        );
 
-        Ok(Self { pool, instance_id })
+        info!(
+            "Control plane connected, instance_id: {}, worker_id: {}",
+            instance_id, worker_id
+        );
+
+        Ok(Self {
+            pool,
+            instance_id,
+            worker_id,
+        })
     }
 
     async fn register_or_find_instance(
@@ -148,6 +175,136 @@ impl ControlPlaneClient {
 
     pub fn instance_id(&self) -> Uuid {
         self.instance_id
+    }
+
+    pub async fn claim_next_job(&self) -> Option<Job> {
+        let result = sqlx::query_as::<
+            _,
+            (
+                Uuid,
+                Uuid,
+                String,
+                String,
+                i64,
+                Option<i64>,
+                Option<serde_json::Value>,
+                DateTime<Utc>,
+            ),
+        >(
+            r#"
+            UPDATE sync_jobs SET 
+                status = 'running',
+                started_at = NOW(),
+                worker_id = $2,
+                updated_at = NOW()
+            WHERE id = (
+                SELECT id FROM sync_jobs 
+                WHERE instance_id = $1 
+                  AND status = 'pending'
+                ORDER BY created_at
+                LIMIT 1
+                FOR UPDATE SKIP LOCKED
+            )
+            RETURNING id, instance_id, job_type, status, progress_current, 
+                      progress_total, checkpoint, created_at
+            "#,
+        )
+        .bind(self.instance_id)
+        .bind(&self.worker_id)
+        .fetch_optional(&self.pool)
+        .await;
+
+        match result {
+            Ok(Some(row)) => Some(Job {
+                id: row.0,
+                instance_id: row.1,
+                job_type: row.2,
+                status: row.3,
+                progress_current: row.4,
+                progress_total: row.5,
+                checkpoint: row.6,
+                created_at: row.7,
+            }),
+            Ok(None) => None,
+            Err(e) => {
+                warn!("Failed to claim job: {}", e);
+                None
+            }
+        }
+    }
+
+    pub async fn update_job_progress(
+        &self,
+        job_id: &Uuid,
+        current: i64,
+        total: Option<i64>,
+        rows_per_second: Option<f64>,
+    ) {
+        let result = sqlx::query(
+            r#"
+            UPDATE sync_jobs SET
+                progress_current = $2,
+                progress_total = COALESCE($3, progress_total),
+                rows_per_second = $4,
+                updated_at = NOW()
+            WHERE id = $1
+            "#,
+        )
+        .bind(job_id)
+        .bind(current)
+        .bind(total)
+        .bind(rows_per_second)
+        .execute(&self.pool)
+        .await;
+
+        if let Err(e) = result {
+            warn!("Failed to update job progress: {}", e);
+        }
+    }
+
+    pub async fn complete_job(&self, job_id: &Uuid) {
+        let result = sqlx::query(
+            "UPDATE sync_jobs SET status = 'completed', completed_at = NOW(), updated_at = NOW() WHERE id = $1",
+        )
+        .bind(job_id)
+        .execute(&self.pool)
+        .await;
+
+        if let Err(e) = result {
+            warn!("Failed to complete job: {}", e);
+        }
+    }
+
+    pub async fn fail_job(&self, job_id: &Uuid, error: &str) {
+        let result = sqlx::query(
+            r#"
+            UPDATE sync_jobs SET 
+                status = 'failed', 
+                error_message = $2,
+                updated_at = NOW()
+            WHERE id = $1
+            "#,
+        )
+        .bind(job_id)
+        .bind(error)
+        .execute(&self.pool)
+        .await;
+
+        if let Err(e) = result {
+            warn!("Failed to mark job as failed: {}", e);
+        }
+    }
+
+    pub async fn is_job_cancelled(&self, job_id: &Uuid) -> bool {
+        let result: Option<(String,)> =
+            sqlx::query_as("SELECT status FROM sync_jobs WHERE id = $1")
+                .bind(job_id)
+                .fetch_optional(&self.pool)
+                .await
+                .ok()
+                .flatten();
+
+        matches!(result, Some((status,)) if status == "cancelled")
     }
 }
 
