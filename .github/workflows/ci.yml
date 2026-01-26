@@ -10,9 +10,38 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
+# Detect which parts of the codebase changed
 jobs:
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      e2e: ${{ steps.filter.outputs.e2e }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            rust:
+              - 'crates/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'migrations/**'
+            frontend:
+              - 'frontend/**'
+            e2e:
+              - 'e2e/**'
+              - 'playwright.config.ts'
+              - 'crates/api/**'
+              - 'frontend/**'
+
   rust-check:
     name: Rust Check & Lint
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -44,6 +73,8 @@ jobs:
 
   rust-test:
     name: Rust Tests
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -87,6 +118,8 @@ jobs:
 
   frontend-check:
     name: Frontend Check & Lint
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -125,6 +158,8 @@ jobs:
 
   frontend-test:
     name: Frontend Tests
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -161,7 +196,12 @@ jobs:
   e2e-test:
     name: E2E Tests
     runs-on: ubuntu-latest
-    needs: [rust-check, frontend-check]
+    needs: [changes, rust-check, frontend-check]
+    if: |
+      always() &&
+      needs.changes.outputs.e2e == 'true' &&
+      (needs.rust-check.result == 'success' || needs.rust-check.result == 'skipped') &&
+      (needs.frontend-check.result == 'success' || needs.frontend-check.result == 'skipped')
     services:
       postgres:
         image: postgres:16-alpine
