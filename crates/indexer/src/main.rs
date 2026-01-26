@@ -1,10 +1,12 @@
+use std::sync::Arc;
+
 use anyhow::Result;
 use clap::Parser;
 use sqlx::postgres::PgPoolOptions;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use ckbadger_indexer::{integrity::DataIntegrityService, sync::Indexer, Config};
+use ckbadger_indexer::{integrity::DataIntegrityService, sync::Indexer, Config, ControlPlaneClient};
 
 #[derive(Parser, Debug)]
 #[command(name = "ckbadger-indexer")]
@@ -18,6 +20,12 @@ struct Args {
 
     #[arg(long, env = "REDIS_URL")]
     redis_url: Option<String>,
+
+    #[arg(long, env = "CONTROL_DATABASE_URL")]
+    control_database_url: Option<String>,
+
+    #[arg(long, env = "CKB_NETWORK", default_value = "mainnet")]
+    network: String,
 
     #[arg(long, env = "TOKEN_LABELS_PATH")]
     token_labels_path: Option<String>,
@@ -99,6 +107,29 @@ async fn main() -> Result<()> {
 
     info!("Connecting to CKB node: {}", config.ckb_rpc_url);
 
+    let control_plane = if let Some(control_url) = args
+        .control_database_url
+        .or_else(|| std::env::var("CONTROL_DATABASE_URL").ok())
+    {
+        info!("Connecting to control plane: {}", control_url);
+        match ControlPlaneClient::connect(
+            &control_url,
+            &config.database_url,
+            &config.ckb_rpc_url,
+            &args.network,
+        )
+        .await
+        {
+            Ok(client) => Some(Arc::new(client)),
+            Err(e) => {
+                tracing::warn!("Failed to connect to control plane: {}. Continuing without it.", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let token_labels_path = args
         .token_labels_path
         .or_else(|| std::env::var("TOKEN_LABELS_PATH").ok());
@@ -113,16 +144,25 @@ async fn main() -> Result<()> {
     let indexer = Indexer::new(config, pool, Some(integrity_handle)).await?;
 
     let progress = indexer.progress();
+    let control_plane_reporter = control_plane.clone();
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+            let current = progress.current();
+            let target = progress.target();
+            let bps = progress.blocks_per_second();
+
             info!(
                 "Progress: {:.2}% ({}/{}) - {:.2} blocks/sec",
                 progress.progress_percentage(),
-                progress.current(),
-                progress.target(),
-                progress.blocks_per_second()
+                current,
+                target,
+                bps
             );
+
+            if let Some(ref cp) = control_plane_reporter {
+                cp.update_progress(current, target, bps).await;
+            }
         }
     });
 

@@ -286,7 +286,11 @@ impl BatchWriter {
         Ok(())
     }
 
-    pub async fn insert_cells_batch(&self, cells: &[(&[u8], i16, &ParsedCell, i64)]) -> Result<()> {
+    pub async fn insert_cells_batch(
+        &self,
+        cells: &[(&[u8], i16, &ParsedCell, i64)],
+        skip_live_cells: bool,
+    ) -> Result<()> {
         if cells.is_empty() {
             return Ok(());
         }
@@ -404,33 +408,35 @@ impl BatchWriter {
             .await?;
         }
 
-        sqlx::query(
-            r#"
-            INSERT INTO live_cells (
-                tx_hash, output_index, created_at_block, capacity,
-                lock_script_hash, lock_code_hash, lock_args,
-                type_script_hash, type_code_hash, data_size
+        if !skip_live_cells {
+            sqlx::query(
+                r#"
+                INSERT INTO live_cells (
+                    tx_hash, output_index, created_at_block, capacity,
+                    lock_script_hash, lock_code_hash, lock_args,
+                    type_script_hash, type_code_hash, data_size
+                )
+                SELECT * FROM UNNEST(
+                    $1::bytea[], $2::smallint[], $3::bigint[], $4::bigint[],
+                    $5::bytea[], $6::bytea[], $7::bytea[],
+                    $8::bytea[], $9::bytea[], $10::int[]
+                )
+                ON CONFLICT (tx_hash, output_index) DO NOTHING
+                "#,
             )
-            SELECT * FROM UNNEST(
-                $1::bytea[], $2::smallint[], $3::bigint[], $4::bigint[],
-                $5::bytea[], $6::bytea[], $7::bytea[],
-                $8::bytea[], $9::bytea[], $10::int[]
-            )
-            ON CONFLICT (tx_hash, output_index) DO NOTHING
-            "#,
-        )
-        .bind(&tx_hashes)
-        .bind(&output_indices)
-        .bind(&created_at_blocks)
-        .bind(&capacities)
-        .bind(&lock_script_hashes)
-        .bind(&lock_code_hashes)
-        .bind(&lock_args)
-        .bind(&type_script_hashes)
-        .bind(&type_code_hashes)
-        .bind(&data_sizes)
-        .execute(&self.pool)
-        .await?;
+            .bind(&tx_hashes)
+            .bind(&output_indices)
+            .bind(&created_at_blocks)
+            .bind(&capacities)
+            .bind(&lock_script_hashes)
+            .bind(&lock_code_hashes)
+            .bind(&lock_args)
+            .bind(&type_script_hashes)
+            .bind(&type_code_hashes)
+            .bind(&data_sizes)
+            .execute(&self.pool)
+            .await?;
+        }
 
         Ok(())
     }

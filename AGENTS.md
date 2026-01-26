@@ -36,7 +36,7 @@ cargo check                              # Type check all crates
 cargo build -p ckbadger-api              # Build specific crate
 cargo clippy                             # Lint
 
-# Rust Testing (130 indexer tests)
+# Rust Testing (150+ tests across crates)
 cargo test                               # Run all tests
 cargo test --lib                         # Unit tests only (fast)
 cargo test test_name                     # Single test (partial match)
@@ -46,6 +46,10 @@ cargo test -- --nocapture                # With stdout
 # Indexer with Redis cache invalidation (optional feature)
 cargo build -p ckbadger-indexer --features redis-cache  # Enable cache feature
 REDIS_URL=redis://localhost:6379 cargo run -p ckbadger-indexer --features redis-cache
+
+# Management TUI
+cargo run -p ckbadger-tui                # Run TUI (requires CONTROL_DATABASE_URL)
+cargo build -p ckbadger-tui --release    # Build release binary
 
 # Frontend (from root OR frontend/)
 pnpm dev                                 # Dev server (:3000)
@@ -74,11 +78,17 @@ pnpm format                              # Prettier (all files)
 crates/
   api/        # Axum REST/WebSocket server (port 3001)
   indexer/    # Blockchain sync daemon (three-stage pipeline)
-  common/     # Shared types (block, cell, tx, script, error)
+  common/     # Shared types (block, cell, tx, script, error, control_plane)
+  tui/        # Management TUI for database instances (ratatui)
 frontend/     # Next.js 15 App Router + React 19
-migrations/postgres/001_init.sql  # Single consolidated schema
-docs/POSTMORTEM.md                # Historical bugs - READ BEFORE CKB/DAO WORK
-docs/INDEXER_PIPELINE.md          # Pipeline architecture documentation
+migrations/
+  postgres/001_init.sql    # Instance database schema (consolidated)
+  control/001_init.sql     # Control plane schema (instance management)
+docs/
+  TWO_PHASE_SYNC.md        # Two-phase sync architecture
+  INDEXER_PIPELINE.md      # Pipeline architecture documentation
+  DAO_CALCULATIONS.md      # DAO formula documentation
+  POSTMORTEM.md            # Historical bugs - READ BEFORE CKB/DAO WORK
 ```
 
 ## Indexer Pipeline Configuration
@@ -196,6 +206,23 @@ const { data, isLoading } = useQuery({
 1. Edit `migrations/postgres/001_init.sql` directly (single consolidated schema)
 2. Update `crates/indexer/src/parser/` and `db/writer.rs`
 3. Update API queries in `crates/api/src/routes/`
+
+### Two-Phase Sync (Bulk Sync Mode)
+
+For initial sync, the indexer uses two-phase sync for 10x+ faster performance:
+
+**Phase 1 (Core Sync)**: Writes blocks, transactions, cells - skips derived tables
+**Phase 2 (Rebuild)**: Batch rebuilds live_cells, balances, statistics, indexes
+
+```bash
+# Start bulk sync
+BULK_SYNC_MODE=true cargo run -p ckbadger-indexer -- --batch-size 3000
+
+# Monitor via TUI
+CONTROL_DATABASE_URL=postgres://localhost/ckbadger_control cargo run -p ckbadger-tui
+```
+
+See `docs/TWO_PHASE_SYNC.md` for architecture details.
 
 ## Testing Requirements (MANDATORY)
 
@@ -359,9 +386,14 @@ const DAO_OCCUPIED_CAPACITY: u64 = 102_00000000; // 102 CKB
 | RPC client      | `crates/indexer/src/rpc/client.rs`      |
 | Parsers         | `crates/indexer/src/parser/*.rs`        |
 | DB writes       | `crates/indexer/src/db/writer.rs`       |
+| Rebuild runner  | `crates/indexer/src/rebuild.rs`         |
+| Control plane   | `crates/common/src/control_plane.rs`    |
+| TUI             | `crates/tui/src/main.rs`                |
 | Frontend API    | `frontend/lib/api.ts`                   |
 | UI components   | `frontend/components/ui/`               |
 | Pages           | `frontend/app/`                         |
+| Instance schema | `migrations/postgres/001_init.sql`      |
+| Control schema  | `migrations/control/001_init.sql`       |
 | Rust tests      | Inline `#[cfg(test)]` in parser files   |
 | API integration | `crates/api/tests/api_integration.rs`   |
 | Frontend tests  | `frontend/__tests__/**/*.test.{ts,tsx}` |

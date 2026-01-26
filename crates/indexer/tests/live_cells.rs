@@ -47,7 +47,7 @@ async fn test_insert_cells_creates_live_cells(pool: PgPool) {
     let cell = make_parsed_cell(100_00000000);
 
     writer
-        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)])
+        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], false)
         .await
         .unwrap();
 
@@ -65,7 +65,7 @@ async fn test_live_cells_stores_lock_args(pool: PgPool) {
     let cell = make_parsed_cell(100_00000000);
 
     writer
-        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)])
+        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], false)
         .await
         .unwrap();
 
@@ -91,7 +91,7 @@ async fn test_insert_multiple_cells(pool: PgPool) {
     let cell2 = make_parsed_cell(200_00000000);
 
     writer
-        .insert_cells_batch(&[(&tx_hash1, 0, &cell1, 1000), (&tx_hash2, 0, &cell2, 1001)])
+        .insert_cells_batch(&[(&tx_hash1, 0, &cell1, 1000), (&tx_hash2, 0, &cell2, 1001)], false)
         .await
         .unwrap();
 
@@ -106,7 +106,7 @@ async fn test_consume_cells_removes_from_live_cells(pool: PgPool) {
     let cell = make_parsed_cell(100_00000000);
 
     writer
-        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)])
+        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], false)
         .await
         .unwrap();
 
@@ -128,7 +128,7 @@ async fn test_get_cells_info_batch_queries_live_cells(pool: PgPool) {
     let cell = make_parsed_cell(100_00000000);
 
     writer
-        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)])
+        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], false)
         .await
         .unwrap();
 
@@ -150,7 +150,7 @@ async fn test_get_cells_info_batch_returns_empty_for_consumed(pool: PgPool) {
     let cell = make_parsed_cell(100_00000000);
 
     writer
-        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)])
+        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], false)
         .await
         .unwrap();
 
@@ -261,11 +261,14 @@ async fn test_consume_cells_across_partitions(pool: PgPool) {
     let cell = make_parsed_cell(100_00000000);
 
     writer
-        .insert_cells_batch(&[
-            (&tx_p0, 0, &cell, 1_000_000),
-            (&tx_p1, 0, &cell, 6_000_000),
-            (&tx_p2, 0, &cell, 11_000_000),
-        ])
+        .insert_cells_batch(
+            &[
+                (&tx_p0, 0, &cell, 1_000_000),
+                (&tx_p1, 0, &cell, 6_000_000),
+                (&tx_p2, 0, &cell, 11_000_000),
+            ],
+            false,
+        )
         .await
         .unwrap();
 

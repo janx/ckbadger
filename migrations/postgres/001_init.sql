@@ -48,6 +48,12 @@ CREATE TABLE sync_status (
     -- Last reorg tracking
     last_reorg_at TIMESTAMPTZ,
     last_reorg_depth INT,
+    
+    -- Two-phase sync tracking
+    sync_phase VARCHAR(30) DEFAULT 'live',
+    phase_started_at TIMESTAMPTZ,
+    core_sync_completed_at TIMESTAMPTZ,
+    rebuild_completed_at TIMESTAMPTZ,
 
     CONSTRAINT single_row CHECK (id = 1)
 );
@@ -1352,3 +1358,279 @@ CREATE INDEX idx_tx_list_covering ON transactions(block_number DESC, tx_index DE
 CREATE INDEX idx_cells_list_covering ON cells(lock_script_hash, created_at_block DESC)
     INCLUDE (tx_hash, output_index, capacity, type_script_hash, data_size)
     WHERE status = 0;
+
+-- ===========================================
+-- 12. Two-Phase Sync Support
+-- ===========================================
+
+-- Rebuild task progress tracking
+CREATE TABLE rebuild_progress (
+    task_name VARCHAR(50) PRIMARY KEY,
+    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    progress_current BIGINT NOT NULL DEFAULT 0,
+    progress_total BIGINT,
+    partition_current INTEGER,
+    partition_total INTEGER,
+    rows_per_second FLOAT,
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    error_message TEXT,
+    checkpoint JSONB
+);
+
+-- Index configuration for bulk sync (tracks which indexes to drop/recreate)
+CREATE TABLE index_config (
+    index_name VARCHAR(200) PRIMARY KEY,
+    table_name VARCHAR(100) NOT NULL,
+    index_def TEXT NOT NULL,
+    is_essential BOOLEAN NOT NULL DEFAULT FALSE,
+    drop_during_sync BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Pre-populate index configuration
+INSERT INTO index_config (index_name, table_name, index_def, is_essential, drop_during_sync) VALUES
+('idx_cells_lock_script_hash', 'cells', 'CREATE INDEX idx_cells_lock_script_hash ON cells(lock_script_hash)', FALSE, TRUE),
+('idx_cells_type_script_hash', 'cells', 'CREATE INDEX idx_cells_type_script_hash ON cells(type_script_hash) WHERE type_script_hash IS NOT NULL', FALSE, TRUE),
+('idx_transactions_hash', 'transactions', 'CREATE INDEX idx_transactions_hash ON transactions(hash)', FALSE, TRUE),
+('idx_live_cells_lock', 'live_cells', 'CREATE INDEX idx_live_cells_lock ON live_cells(lock_script_hash)', FALSE, TRUE),
+('idx_live_cells_type', 'live_cells', 'CREATE INDEX idx_live_cells_type ON live_cells(type_script_hash) WHERE type_script_hash IS NOT NULL', FALSE, TRUE),
+('idx_address_balances_balance', 'address_balances', 'CREATE INDEX idx_address_balances_balance ON address_balances(balance DESC) WHERE balance > 0', FALSE, TRUE),
+('idx_address_transactions_block', 'address_transactions', 'CREATE INDEX idx_address_transactions_block ON address_transactions(block_number DESC)', FALSE, TRUE)
+ON CONFLICT (index_name) DO NOTHING;
+
+-- Helper function: drop non-essential indexes for bulk sync
+CREATE OR REPLACE FUNCTION drop_sync_indexes() RETURNS INTEGER AS $$
+DECLARE
+    v_count INTEGER := 0;
+    v_index RECORD;
+BEGIN
+    FOR v_index IN 
+        SELECT index_name FROM index_config WHERE drop_during_sync = TRUE AND is_essential = FALSE
+    LOOP
+        BEGIN
+            EXECUTE 'DROP INDEX IF EXISTS ' || v_index.index_name;
+            v_count := v_count + 1;
+        EXCEPTION WHEN OTHERS THEN
+            RAISE NOTICE 'Could not drop index %: %', v_index.index_name, SQLERRM;
+        END;
+    END LOOP;
+    RETURN v_count;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Helper function: recreate indexes after sync (CONCURRENTLY to avoid locks)
+CREATE OR REPLACE FUNCTION recreate_sync_indexes() RETURNS INTEGER AS $$
+DECLARE
+    v_count INTEGER := 0;
+    v_index RECORD;
+BEGIN
+    FOR v_index IN 
+        SELECT index_name, index_def FROM index_config WHERE drop_during_sync = TRUE
+    LOOP
+        BEGIN
+            EXECUTE v_index.index_def || ' CONCURRENTLY';
+            v_count := v_count + 1;
+        EXCEPTION WHEN OTHERS THEN
+            RAISE NOTICE 'Could not create index %: %', v_index.index_name, SQLERRM;
+            EXECUTE v_index.index_def;
+            v_count := v_count + 1;
+        END;
+    END LOOP;
+    RETURN v_count;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Rebuild live_cells from cells table (parallel-safe, by partition)
+CREATE OR REPLACE FUNCTION rebuild_live_cells_partition(
+    p_partition_start BIGINT,
+    p_partition_end BIGINT
+) RETURNS BIGINT AS $$
+DECLARE
+    v_count BIGINT;
+BEGIN
+    INSERT INTO live_cells (
+        tx_hash, output_index, created_at_block, capacity,
+        lock_script_hash, lock_code_hash, lock_args,
+        type_script_hash, type_code_hash, data_size
+    )
+    SELECT 
+        tx_hash, output_index, created_at_block, capacity::bigint,
+        lock_script_hash, lock_code_hash, lock_args,
+        type_script_hash, type_code_hash, data_size
+    FROM cells
+    WHERE status = 0 
+      AND created_at_block >= p_partition_start 
+      AND created_at_block < p_partition_end
+    ON CONFLICT (tx_hash, output_index) DO NOTHING;
+    
+    GET DIAGNOSTICS v_count = ROW_COUNT;
+    RETURN v_count;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Rebuild address_balances from cells
+CREATE OR REPLACE FUNCTION rebuild_address_balances() RETURNS BIGINT AS $$
+DECLARE
+    v_count BIGINT;
+BEGIN
+    TRUNCATE address_balances;
+    
+    INSERT INTO address_balances (
+        lock_script_hash, balance, live_cells_count, total_cells_count,
+        transactions_count, first_seen_block, last_activity_block
+    )
+    SELECT 
+        lock_script_hash,
+        SUM(CASE WHEN status = 0 THEN capacity ELSE 0 END) as balance,
+        COUNT(*) FILTER (WHERE status = 0) as live_cells_count,
+        COUNT(*) as total_cells_count,
+        COUNT(DISTINCT tx_hash) as transactions_count,
+        MIN(created_at_block) as first_seen_block,
+        MAX(GREATEST(created_at_block, COALESCE(consumed_at_block, 0))) as last_activity_block
+    FROM cells
+    GROUP BY lock_script_hash;
+    
+    GET DIAGNOSTICS v_count = ROW_COUNT;
+    RETURN v_count;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Rebuild script_usage_stats from cells
+CREATE OR REPLACE FUNCTION rebuild_script_usage_stats() RETURNS BIGINT AS $$
+DECLARE
+    v_count BIGINT;
+BEGIN
+    TRUNCATE script_usage_stats;
+    
+    INSERT INTO script_usage_stats (
+        code_hash, script_kind, cells_count, live_cells_count, 
+        capacity_sum, live_capacity_sum
+    )
+    SELECT 
+        lock_code_hash as code_hash,
+        'lock' as script_kind,
+        COUNT(*) as cells_count,
+        COUNT(*) FILTER (WHERE status = 0) as live_cells_count,
+        SUM(capacity) as capacity_sum,
+        SUM(capacity) FILTER (WHERE status = 0) as live_capacity_sum
+    FROM cells
+    GROUP BY lock_code_hash
+    UNION ALL
+    SELECT 
+        type_code_hash,
+        'type',
+        COUNT(*),
+        COUNT(*) FILTER (WHERE status = 0),
+        SUM(capacity),
+        SUM(capacity) FILTER (WHERE status = 0)
+    FROM cells
+    WHERE type_code_hash IS NOT NULL
+    GROUP BY type_code_hash;
+    
+    GET DIAGNOSTICS v_count = ROW_COUNT;
+    RETURN v_count;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Rebuild daily_statistics from blocks
+CREATE OR REPLACE FUNCTION rebuild_daily_statistics() RETURNS BIGINT AS $$
+DECLARE
+    v_count BIGINT;
+BEGIN
+    TRUNCATE daily_statistics;
+    
+    INSERT INTO daily_statistics (
+        date, blocks_count, transactions_count, 
+        total_blocks, total_transactions
+    )
+    SELECT 
+        DATE(timestamp) as date,
+        COUNT(*) as blocks_count,
+        SUM(transactions_count) as transactions_count,
+        SUM(COUNT(*)) OVER (ORDER BY DATE(timestamp)) as total_blocks,
+        SUM(SUM(transactions_count)) OVER (ORDER BY DATE(timestamp)) as total_transactions
+    FROM blocks
+    GROUP BY DATE(timestamp)
+    ORDER BY date;
+    
+    GET DIAGNOSTICS v_count = ROW_COUNT;
+    RETURN v_count;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Rebuild hourly_statistics from blocks  
+CREATE OR REPLACE FUNCTION rebuild_hourly_statistics() RETURNS BIGINT AS $$
+DECLARE
+    v_count BIGINT;
+BEGIN
+    TRUNCATE hourly_statistics;
+    
+    INSERT INTO hourly_statistics (
+        hour, blocks_count, transactions_count
+    )
+    SELECT 
+        date_trunc('hour', timestamp) as hour,
+        COUNT(*) as blocks_count,
+        SUM(transactions_count) as transactions_count
+    FROM blocks
+    GROUP BY date_trunc('hour', timestamp)
+    ORDER BY hour;
+    
+    GET DIAGNOSTICS v_count = ROW_COUNT;
+    RETURN v_count;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Rebuild epoch_statistics from blocks
+CREATE OR REPLACE FUNCTION rebuild_epoch_statistics() RETURNS BIGINT AS $$
+DECLARE
+    v_count BIGINT;
+BEGIN
+    TRUNCATE epoch_statistics;
+    
+    INSERT INTO epoch_statistics (
+        epoch_number, start_block, end_block, blocks_count, length,
+        start_timestamp, end_timestamp, transactions_count
+    )
+    SELECT 
+        epoch_number,
+        MIN(number) as start_block,
+        MAX(number) as end_block,
+        COUNT(*) as blocks_count,
+        MAX(epoch_length) as length,
+        MIN(timestamp) as start_timestamp,
+        MAX(timestamp) as end_timestamp,
+        SUM(transactions_count) as transactions_count
+    FROM blocks
+    GROUP BY epoch_number
+    ORDER BY epoch_number;
+    
+    GET DIAGNOSTICS v_count = ROW_COUNT;
+    RETURN v_count;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Rebuild miner_statistics from blocks
+CREATE OR REPLACE FUNCTION rebuild_miner_statistics() RETURNS BIGINT AS $$
+DECLARE
+    v_count BIGINT;
+BEGIN
+    TRUNCATE miner_statistics;
+    
+    INSERT INTO miner_statistics (
+        date, miner_lock_hash, blocks_count, last_block_number
+    )
+    SELECT 
+        DATE(timestamp) as date,
+        miner_lock_hash,
+        COUNT(*) as blocks_count,
+        MAX(number) as last_block_number
+    FROM blocks
+    WHERE miner_lock_hash IS NOT NULL
+    GROUP BY DATE(timestamp), miner_lock_hash;
+    
+    GET DIAGNOSTICS v_count = ROW_COUNT;
+    RETURN v_count;
+END;
+$$ LANGUAGE plpgsql;

@@ -35,7 +35,7 @@ async fn test_cell_info_lookup_returns_all_fields(pool: PgPool) {
     let cell = make_cell(100_00000000, 256, 0xAA);
 
     writer
-        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)])
+        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], false)
         .await
         .unwrap();
 
@@ -64,11 +64,14 @@ async fn test_cell_info_batch_lookup_multiple_cells(pool: PgPool) {
     let cell3 = make_cell(300_00000000, 300, 0xCC);
 
     writer
-        .insert_cells_batch(&[
-            (&tx1, 0, &cell1, 1000),
-            (&tx2, 0, &cell2, 2000),
-            (&tx3, 0, &cell3, 3000),
-        ])
+        .insert_cells_batch(
+            &[
+                (&tx1, 0, &cell1, 1000),
+                (&tx2, 0, &cell2, 2000),
+                (&tx3, 0, &cell3, 3000),
+            ],
+            false,
+        )
         .await
         .unwrap();
 
@@ -115,7 +118,7 @@ async fn test_code_hash_lookup_returns_lock_and_type(pool: PgPool) {
     };
 
     writer
-        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)])
+        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], false)
         .await
         .unwrap();
 
@@ -151,7 +154,7 @@ async fn test_code_hash_lookup_no_type_script(pool: PgPool) {
     };
 
     writer
-        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)])
+        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], false)
         .await
         .unwrap();
 
@@ -175,7 +178,7 @@ async fn test_same_batch_cell_consumption(pool: PgPool) {
     let cell = make_cell(100_00000000, 100, 0xAA);
 
     writer
-        .insert_cells_batch(&[(&creating_tx, 0, &cell, 1000)])
+        .insert_cells_batch(&[(&creating_tx, 0, &cell, 1000)], false)
         .await
         .unwrap();
 
@@ -355,11 +358,14 @@ async fn test_multiple_outputs_same_tx(pool: PgPool) {
     let cell2 = make_cell(300_00000000, 300, 0xCC);
 
     writer
-        .insert_cells_batch(&[
-            (&tx_hash, 0, &cell0, 1000),
-            (&tx_hash, 1, &cell1, 1000),
-            (&tx_hash, 2, &cell2, 1000),
-        ])
+        .insert_cells_batch(
+            &[
+                (&tx_hash, 0, &cell0, 1000),
+                (&tx_hash, 1, &cell1, 1000),
+                (&tx_hash, 2, &cell2, 1000),
+            ],
+            false,
+        )
         .await
         .unwrap();
 
@@ -388,7 +394,7 @@ async fn test_consumed_cell_not_in_info_batch(pool: PgPool) {
     let cell = make_cell(100_00000000, 100, 0xAA);
 
     writer
-        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)])
+        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], false)
         .await
         .unwrap();
     writer
@@ -408,7 +414,10 @@ async fn test_cross_partition_cell_lookup(pool: PgPool) {
     let cell = make_cell(100_00000000, 100, 0xAA);
 
     writer
-        .insert_cells_batch(&[(&tx_p0, 0, &cell, 1_000_000), (&tx_p1, 0, &cell, 6_000_000)])
+        .insert_cells_batch(
+            &[(&tx_p0, 0, &cell, 1_000_000), (&tx_p1, 0, &cell, 6_000_000)],
+            false,
+        )
         .await
         .unwrap();
 

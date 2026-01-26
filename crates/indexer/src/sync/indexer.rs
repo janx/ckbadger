@@ -707,8 +707,8 @@ impl Indexer {
                         if crossed_50 {
                             if let Err(e) = self
                                 .update_secondary_issuance(
-                                    &hex::encode(&last_block.hash),
-                                    &hex::encode(&last_block.dao),
+                                    &format!("0x{}", hex::encode(&last_block.hash)),
+                                    &format!("0x{}", hex::encode(&last_block.dao)),
                                     last_block.number,
                                     last_block.timestamp,
                                 )
@@ -1128,8 +1128,11 @@ impl Indexer {
                 ));
             }
         }
+        let bulk_sync_active = self.is_bulk_sync_active();
         if !all_cells.is_empty() {
-            self.writer.insert_cells_batch(&all_cells).await?;
+            self.writer
+                .insert_cells_batch(&all_cells, bulk_sync_active)
+                .await?;
         }
 
         let mut all_inputs: Vec<(&[u8], i64, i16, &crate::parser::transaction::ParsedInput)> =
@@ -1409,35 +1412,38 @@ impl Indexer {
         }
 
         // Parallel writes: address balances, address txs, script usage are independent
-        tokio::try_join!(
-            async {
-                if !changes_ref.is_empty() {
-                    self.writer
-                        .update_address_balances_batch(&changes_ref)
-                        .await
-                } else {
-                    Ok(())
+        // Skip during bulk sync for faster initial sync
+        if !bulk_sync_active {
+            tokio::try_join!(
+                async {
+                    if !changes_ref.is_empty() {
+                        self.writer
+                            .update_address_balances_batch(&changes_ref)
+                            .await
+                    } else {
+                        Ok(())
+                    }
+                },
+                async {
+                    if !address_tx_records.is_empty() {
+                        self.writer
+                            .insert_address_transactions_batch(&address_tx_records)
+                            .await
+                    } else {
+                        Ok(())
+                    }
+                },
+                async {
+                    if !script_usage_changes.is_empty() {
+                        self.writer
+                            .update_script_usage_batch(&script_usage_changes)
+                            .await
+                    } else {
+                        Ok(())
+                    }
                 }
-            },
-            async {
-                if !address_tx_records.is_empty() {
-                    self.writer
-                        .insert_address_transactions_batch(&address_tx_records)
-                        .await
-                } else {
-                    Ok(())
-                }
-            },
-            async {
-                if !script_usage_changes.is_empty() {
-                    self.writer
-                        .update_script_usage_batch(&script_usage_changes)
-                        .await
-                } else {
-                    Ok(())
-                }
-            }
-        )?;
+            )?;
+        }
 
         let mut batch_stats = BatchStats::default();
         let mut prev_timestamp: Option<chrono::DateTime<Utc>> =
@@ -2560,8 +2566,11 @@ impl Indexer {
                 ));
             }
         }
+        let bulk_sync_active = self.is_bulk_sync_active();
         if !all_cells.is_empty() {
-            self.writer.insert_cells_batch(&all_cells).await?;
+            self.writer
+                .insert_cells_batch(&all_cells, bulk_sync_active)
+                .await?;
         }
 
         let mut all_inputs: Vec<(&[u8], i64, i16, &crate::parser::transaction::ParsedInput)> =
@@ -2814,35 +2823,37 @@ impl Indexer {
             }
         }
 
-        tokio::try_join!(
-            async {
-                if !changes_ref.is_empty() {
-                    self.writer
-                        .update_address_balances_batch(&changes_ref)
-                        .await
-                } else {
-                    Ok(())
+        if !bulk_sync_active {
+            tokio::try_join!(
+                async {
+                    if !changes_ref.is_empty() {
+                        self.writer
+                            .update_address_balances_batch(&changes_ref)
+                            .await
+                    } else {
+                        Ok(())
+                    }
+                },
+                async {
+                    if !address_tx_records.is_empty() {
+                        self.writer
+                            .insert_address_transactions_batch(&address_tx_records)
+                            .await
+                    } else {
+                        Ok(())
+                    }
+                },
+                async {
+                    if !script_usage_changes.is_empty() {
+                        self.writer
+                            .update_script_usage_batch(&script_usage_changes)
+                            .await
+                    } else {
+                        Ok(())
+                    }
                 }
-            },
-            async {
-                if !address_tx_records.is_empty() {
-                    self.writer
-                        .insert_address_transactions_batch(&address_tx_records)
-                        .await
-                } else {
-                    Ok(())
-                }
-            },
-            async {
-                if !script_usage_changes.is_empty() {
-                    self.writer
-                        .update_script_usage_batch(&script_usage_changes)
-                        .await
-                } else {
-                    Ok(())
-                }
-            }
-        )?;
+            )?;
+        }
 
         let mut batch_stats = BatchStats::default();
         let mut prev_timestamp: Option<chrono::DateTime<Utc>> =
@@ -4068,8 +4079,11 @@ impl Indexer {
                 ));
             }
         }
+        let bulk_sync_active = self.is_bulk_sync_active();
         if !all_cells.is_empty() {
-            self.writer.insert_cells_batch(&all_cells).await?;
+            self.writer
+                .insert_cells_batch(&all_cells, bulk_sync_active)
+                .await?;
         }
 
         let mut all_inputs: Vec<(&[u8], i64, i16, &crate::parser::transaction::ParsedInput)> =
@@ -4437,37 +4451,6 @@ impl Indexer {
                 .await?;
         }
 
-        // Core statistics - always written
-        for (
-            date,
-            (blocks, txs, created, consumed, capacity, data_size_added, data_size_consumed),
-        ) in &stats.daily_stats
-        {
-            self.writer
-                .update_daily_statistics(
-                    *date,
-                    *blocks,
-                    *txs,
-                    *created,
-                    *consumed,
-                    *capacity,
-                    *data_size_added,
-                    *data_size_consumed,
-                )
-                .await?;
-        }
-
-        for (date, (sum_target, count, uncles)) in &stats.daily_block_stats {
-            let avg_target = if *count > 0 {
-                (*sum_target / *count as i128) as i64
-            } else {
-                0
-            };
-            self.writer
-                .update_daily_block_stats_batch(*date, avg_target, *count, *uncles)
-                .await?;
-        }
-
         for (epoch_number, accum) in &stats.epoch_stats {
             self.writer
                 .upsert_epoch_statistics_batch(
@@ -4483,17 +4466,46 @@ impl Indexer {
                 .await?;
         }
 
-        for (date, (sum_ms, count)) in &stats.daily_block_times {
-            if *count > 0 {
-                let avg_ms = sum_ms / *count as i64;
+        if !bulk_sync_active {
+            for (
+                date,
+                (blocks, txs, created, consumed, capacity, data_size_added, data_size_consumed),
+            ) in &stats.daily_stats
+            {
                 self.writer
-                    .update_daily_avg_block_time_batch(*date, avg_ms, *count)
+                    .update_daily_statistics(
+                        *date,
+                        *blocks,
+                        *txs,
+                        *created,
+                        *consumed,
+                        *capacity,
+                        *data_size_added,
+                        *data_size_consumed,
+                    )
                     .await?;
             }
-        }
 
-        // Non-critical statistics - skipped during bulk sync (can be recalculated)
-        if !bulk_sync_active {
+            for (date, (sum_target, count, uncles)) in &stats.daily_block_stats {
+                let avg_target = if *count > 0 {
+                    (*sum_target / *count as i128) as i64
+                } else {
+                    0
+                };
+                self.writer
+                    .update_daily_block_stats_batch(*date, avg_target, *count, *uncles)
+                    .await?;
+            }
+
+            for (date, (sum_ms, count)) in &stats.daily_block_times {
+                if *count > 0 {
+                    let avg_ms = sum_ms / *count as i64;
+                    self.writer
+                        .update_daily_avg_block_time_batch(*date, avg_ms, *count)
+                        .await?;
+                }
+            }
+
             for (hour, (blocks, txs, created, consumed, capacity)) in &stats.hourly_stats {
                 self.writer
                     .update_hourly_statistics(*hour, *blocks, *txs, *created, *consumed, *capacity)
@@ -4517,12 +4529,12 @@ impl Indexer {
                     .update_epoch_time_distribution_batch(*bucket, *count)
                     .await?;
             }
-        }
 
-        let mut snapshot_dates: Vec<_> = stats.dao_snapshot_dates.iter().collect();
-        snapshot_dates.sort();
-        for date in snapshot_dates {
-            self.writer.update_dao_daily_snapshot(*date).await?;
+            let mut snapshot_dates: Vec<_> = stats.dao_snapshot_dates.iter().collect();
+            snapshot_dates.sort();
+            for date in snapshot_dates {
+                self.writer.update_dao_daily_snapshot(*date).await?;
+            }
         }
 
         Ok(())

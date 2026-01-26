@@ -1,0 +1,27 @@
+[package]
+name = "ckbadger-tui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+# Workspace dependencies
+tokio.workspace = true
+sqlx.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+clap.workspace = true
+dotenvy.workspace = true
+
+# TUI framework
+ratatui = "0.29"
+crossterm = "0.28"
+
+# Shared types
+ckbadger-common = { path = "../common" }

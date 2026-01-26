@@ -8,6 +8,24 @@
 #   CKB_RPC_URL=http://172.17.0.1:8114            (Linux)
 
 services:
+  control-db:
+    image: postgres:16-alpine
+    container_name: ckbadger-control-db
+    environment:
+      POSTGRES_USER: ${CONTROL_POSTGRES_USER:-ckbadger}
+      POSTGRES_PASSWORD: ${CONTROL_POSTGRES_PASSWORD:-ckbadger}
+      POSTGRES_DB: ${CONTROL_POSTGRES_DB:-ckbadger_control}
+    volumes:
+      - control-db-data:/var/lib/postgresql/data
+      - ./migrations/control:/docker-entrypoint-initdb.d:ro
+    ports:
+      - '5433:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ckbadger -d ckbadger_control']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   postgres:
     image: postgres:16-alpine
     container_name: ckbadger-postgres
@@ -66,10 +84,13 @@ services:
       dockerfile: docker/Dockerfile.indexer
     container_name: ckbadger-indexer
     depends_on:
+      control-db:
+        condition: service_healthy
       postgres:
         condition: service_healthy
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-ckbadger}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-ckbadger}
+      CONTROL_DATABASE_URL: postgres://${CONTROL_POSTGRES_USER:-ckbadger}:${CONTROL_POSTGRES_PASSWORD:-ckbadger}@control-db:5432/${CONTROL_POSTGRES_DB:-ckbadger_control}
       CKB_RPC_URL: ${CKB_RPC_URL:-http://ckb-node:8114}
       TOKEN_LABELS_PATH: /app/token-labels
       RUST_LOG: info
@@ -111,6 +132,7 @@ services:
     restart: unless-stopped
 
 volumes:
+  control-db-data:
   postgres-data:
   redis-data:
   ckb-data:

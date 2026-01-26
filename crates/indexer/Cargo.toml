@@ -46,6 +46,7 @@ hex = { workspace = true }
 futures = { workspace = true }
 lru = { workspace = true }
 rayon = { workspace = true }
+uuid = { workspace = true }
 
 # Configuration
 config = { workspace = true }

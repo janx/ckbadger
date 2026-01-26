@@ -26,7 +26,7 @@
 
 - **Nervos DAO Tracker** - Deposit/withdrawal lifecycle, compensation calculator
 - **sUDT/xUDT Support** - Token listings, holder rankings, transfer history
-- **Spore NFT Support** - NFT collections, metadata rendering, ownership tracking
+- **DOBs Support** - DOB collections, metadata rendering, ownership tracking
 
 ### Data & Analytics
 
@@ -81,6 +81,7 @@
 | **Database**      | PostgreSQL                          | Primary data store              |
 | **Cache**         | Redis                               | Hot data, real-time state       |
 | **Analytics**     | ClickHouse                          | Historical queries (optional)   |
+| **Management**    | Rust TUI (ratatui)                  | Database instance management    |
 
 ## Quick Start
 
@@ -139,27 +140,20 @@ docker compose -f docker-compose.minimal.yml up -d
 ### Environment Variables
 
 ```bash
-# .env.example
-
-# CKB Node Configuration
-# For built-in node (--profile internal): uses http://ckb-node:8114 automatically
-# For external node: set your host's CKB RPC URL
-CKB_RPC_URL=http://host.docker.internal:8114  # macOS/Windows
-# CKB_RPC_URL=http://172.17.0.1:8114          # Linux
-CKB_NETWORK=mainnet  # mainnet | testnet | devnet
-
 # Database
-DATABASE_URL=__SET_DATABASE_URL__
+DATABASE_URL=postgres://ckbadger:changeme@localhost:5432/ckbadger
+CONTROL_DATABASE_URL=postgres://ckbadger:ckbadger@localhost:5433/ckbadger_control
 
-# Redis (optional)
+# CKB Node
+CKB_RPC_URL=http://localhost:8114   # or http://172.17.0.1:8114 for Docker on Linux
+CKB_NETWORK=mainnet                 # mainnet | testnet | devnet
+
+# Services
 REDIS_URL=redis://localhost:6379
-
-# API Server
 API_PORT=3001
-API_RATE_LIMIT=100  # requests per minute
 
 # Frontend
-NEXT_PUBLIC_API_URL=http://localhost:3001
+NEXT_PUBLIC_API_URL=http://localhost:3001/api/v1
 NEXT_PUBLIC_WS_URL=ws://localhost:3001/ws
 ```
 
@@ -325,10 +319,11 @@ ckbadger/
 │   │       ├── parser/     # Block, cell, script parsers
 │   │       ├── db/         # Database operations
 │   │       └── sync/       # Synchronization logic
-│   └── api/                # REST API server
-│       └── src/
-│           ├── routes/     # HTTP handlers (blocks, tx, cells, graph)
-│           └── ws/         # WebSocket handlers
+│   ├── api/                # REST API server
+│   │   └── src/
+│   │       ├── routes/     # HTTP handlers (blocks, tx, cells, graph)
+│   │       └── ws/         # WebSocket handlers
+│   └── tui/                # Management TUI (ratatui)
 ├── frontend/               # Next.js application
 │   ├── app/                # App router pages
 │   ├── components/         # React components
@@ -336,13 +331,16 @@ ckbadger/
 │   │   └── cell-graph.tsx  # Force-directed graph visualization
 │   ├── hooks/              # Custom hooks (WebSocket, etc.)
 │   └── lib/                # API client, utilities
-├── migrations/             # Database schema
-│   └── postgres/
-│       └── 001_init.sql    # Single consolidated schema
+├── migrations/
+│   ├── postgres/           # Instance database schema
+│   │   └── 001_init.sql    # Single consolidated schema
+│   └── control/            # Control plane schema
+│       └── 001_init.sql    # Instance management tables
 ├── docs/                   # Documentation & references
 │   ├── rfcs/               # [submodule] CKB RFCs - protocol specs
 │   ├── docs.nervos.org/    # [submodule] Official Nervos docs
 │   ├── token-labels/       # [submodule] Known token metadata
+│   ├── TWO_PHASE_SYNC.md   # Two-phase sync architecture
 │   ├── POSTMORTEM.md       # Historical bugs & lessons learned
 │   └── DAO_CALCULATIONS.md # DAO formula documentation
 ├── docker/                 # Dockerfiles
@@ -361,8 +359,8 @@ cd ckbadger
 # Or initialize submodules after clone
 git submodule update --init --recursive
 
-# Start dependencies
-docker compose up -d postgres redis ckb-node
+# Start dependencies (control-db on :5433, postgres on :5432, redis on :6379)
+docker compose up -d control-db postgres redis
 
 # Run indexer (from project root)
 cargo run -p ckbadger-indexer --release
@@ -377,7 +375,7 @@ cd frontend && pnpm install && pnpm dev
 ### Running Tests
 
 ```bash
-# Rust tests (83 tests)
+# Rust tests (150+ tests)
 cargo test                               # All tests
 cargo test --lib                         # Unit tests only
 cargo test -p ckbadger-indexer           # Specific crate
@@ -397,13 +395,14 @@ pnpm test:e2e                            # Playwright tests
 
 ### Test Coverage
 
-| Area                    | Tests | Coverage                                  |
-| ----------------------- | ----- | ----------------------------------------- |
-| **Rust Parsers**        | 83    | block, cell, transaction, dao, udt, spore |
-| **Frontend Components** | 90    | Hash, Capacity, Address, Pagination       |
-| **Frontend Hooks**      | 12    | useCursorPagination                       |
-| **API Client**          | 17    | Query building, error handling            |
-| **E2E**                 | 7     | Homepage, block detail, navigation        |
+| Area                    | Tests | Coverage                               |
+| ----------------------- | ----- | -------------------------------------- |
+| **Rust Indexer**        | 129   | parsers, rebuild, pipeline, live_cells |
+| **Rust Common**         | 22    | control_plane, dao, cycles             |
+| **Frontend Components** | 90    | Hash, Capacity, Address, Pagination    |
+| **Frontend Hooks**      | 12    | useCursorPagination                    |
+| **API Client**          | 17    | Query building, error handling         |
+| **E2E**                 | 7     | Homepage, block detail, navigation     |
 
 ### CI/CD
 
@@ -412,6 +411,55 @@ GitHub Actions workflow runs on every push:
 - Rust: fmt check, clippy, unit tests, coverage (Codecov)
 - Frontend: type-check, lint, Vitest, coverage
 - E2E: Playwright with test database
+
+## Management TUI
+
+Terminal-based dashboard for monitoring and managing multiple indexer instances.
+
+### Quick Start
+
+```bash
+# Control plane database is included in docker-compose.yml (port 5433)
+docker compose up -d control-db
+
+# Run TUI (reads CONTROL_DATABASE_URL from .env)
+cargo run -p ckbadger-tui
+```
+
+### Interface
+
+```
+┌─ CKBadger Control Plane ──────────────────────────────────────────┐
+│ Active: mainnet-prod (mainnet) | Syncing: 15.2M blocks | 1,234/s  │
+├───────────────────────────────────────────────────────────────────┤
+│ [Instances] [Jobs] [Events] [Config]                              │
+├───────────────────────────────────────────────────────────────────┤
+│   Name          Status     Phase            Block          Speed  │
+│ ─────────────────────────────────────────────────────────────────│
+│ * mainnet-prod  Syncing    Core Sync        15.2M / 16.0M  1,234  │
+│   mainnet-new   Created    Pending          0              -      │
+│   testnet       Ready      Completed        8.8M           -      │
+└───────────────────────────────────────────────────────────────────┘
+```
+
+| Key          | Action                     |
+| ------------ | -------------------------- |
+| `Tab` / `←→` | Switch tabs                |
+| `↑↓` / `jk`  | Navigate list              |
+| `a`          | Activate selected instance |
+| `r`          | Refresh data               |
+| `q`          | Quit                       |
+
+### Register Instance
+
+```sql
+psql $CONTROL_DATABASE_URL -c "
+INSERT INTO instances (name, database_url, ckb_rpc_url, network)
+VALUES ('mainnet', 'postgres://ckbadger:ckbadger@postgres:5432/ckbadger', 'http://ckb-node:8114', 'mainnet');
+"
+```
+
+For two-phase sync architecture and detailed TUI usage, see [docs/TWO_PHASE_SYNC.md](./docs/TWO_PHASE_SYNC.md).
 
 ## Comparison
 
