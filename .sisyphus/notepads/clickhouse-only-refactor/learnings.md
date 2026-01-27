@@ -281,3 +281,23 @@ All follow same pattern: remove hybrid if/else, inline ClickHouse, convert helpe
 - `row_to_response_with_code_cell`: Changed signature from `Option<Vec<u8>>` to `Option<String>` for tx_hash and `Option<i32>` for output_index to match ClickHouse string returns
 
 **Status:** ✅ Complete - No sqlx references, no hybrid patterns, all handlers use state.clickhouse directly
+
+## Task 7: graph.rs Refactoring
+
+**Pattern Applied:**
+- Removed 3 hybrid if/else patterns (get_cell_graph, get_tx_graph, get_proposal_graph)
+- Deleted 6 PostgreSQL functions (_postgres variants)
+- Inlined ClickHouse logic directly into main handlers
+- Updated all state references: state.clickhouse_client → state.clickhouse
+
+**Key Changes:**
+1. get_cell_graph: Inlined get_cell_graph_clickhouse, removed get_cell_graph_postgres
+2. get_tx_graph: Inlined get_tx_graph_clickhouse, removed get_tx_graph_postgres  
+3. get_proposal_graph: Inlined get_proposal_graph_clickhouse, removed get_proposal_graph_postgres
+
+**Verification:**
+- grep confirms 0 sqlx/PgPool references in graph.rs
+- All 9 state.clickhouse references use correct pattern
+- File structure: 3 main handlers + 1 helper function (parse_capacity)
+
+**Status:** ✅ Complete - graph.rs is now ClickHouse-only
