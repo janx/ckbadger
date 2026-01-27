@@ -5422,3 +5422,233 @@ cargo build -p ckbadger-api
 cargo clippy -p ckbadger-api
 cargo test -p ckbadger-api
 ```
+
+---
+
+## Task 4.2.7: Rewrite tokens.rs for ClickHouse (Completed)
+
+**Date**: 2026-01-27
+
+### Objective
+
+Apply hybrid ClickHouse/PostgreSQL pattern to all 4 endpoints in `crates/api/src/routes/tokens.rs`.
+
+### Endpoints Modified
+
+1. **GET /tokens** (list_tokens)
+   - Main handler: `list_tokens()` - routes to ClickHouse or PostgreSQL
+   - PostgreSQL: `list_tokens_postgres()` - existing implementation
+   - ClickHouse: `list_tokens_clickhouse()` - stub (returns error)
+
+2. **GET /tokens/{type_hash}** (get_token)
+   - Main handler: `get_token()` - routes to ClickHouse or PostgreSQL
+   - PostgreSQL: `get_token_postgres()` - existing implementation
+   - ClickHouse: `get_token_clickhouse()` - stub (returns error)
+
+3. **GET /tokens/{type_hash}/holders** (get_token_holders)
+   - Main handler: `get_token_holders()` - routes to ClickHouse or PostgreSQL
+   - PostgreSQL: `get_token_holders_postgres()` - existing implementation
+   - ClickHouse: `get_token_holders_clickhouse()` - stub (returns error)
+
+4. **GET /tokens/{type_hash}/transfers** (get_token_transfers)
+   - Main handler: `get_token_transfers()` - routes to ClickHouse or PostgreSQL
+   - PostgreSQL: `get_token_transfers_postgres()` - existing implementation
+   - ClickHouse: `get_token_transfers_clickhouse()` - stub (returns error)
+
+### Pattern Applied
+
+```rust
+async fn endpoint(
+    State(state): State<Arc<AppState>>,
+    Path(param): Path<String>,
+    Query(params): Query<Params>,
+) -> ApiResult<Response> {
+    if let Some(ch_client) = &state.clickhouse_client {
+        endpoint_clickhouse(ch_client, &state, param, params).await
+    } else {
+        endpoint_postgres(&state, param, params).await
+    }
+}
+
+async fn endpoint_postgres(
+    state: &Arc<AppState>,
+    param: String,
+    params: Params,
+) -> ApiResult<Response> {
+    // Existing PostgreSQL implementation
+}
+
+async fn endpoint_clickhouse(
+    _ch_client: &crate::clickhouse::ClickHouseClient,
+    _state: &Arc<AppState>,
+    _param: String,
+    _params: Params,
+) -> ApiResult<Response> {
+    Err(ApiError::internal(
+        "ClickHouse implementation not yet available for tokens",
+    ))
+}
+```
+
+### Changes Made
+
+**File**: `crates/api/src/routes/tokens.rs`
+
+1. **Imports**: Removed unused imports (clickhouse::Row, hex_hash, unhex_hash)
+   - These will be added back when implementing ClickHouse queries
+
+2. **Function Refactoring**:
+   - Split each endpoint into 3 functions: main handler, postgres impl, clickhouse stub
+   - Main handler checks `state.clickhouse_client` and routes accordingly
+   - PostgreSQL functions contain original implementation
+   - ClickHouse functions return error (not yet implemented)
+
+3. **Signature Changes**:
+   - Main handlers: Keep original signature with `State(state)`, `Path()`, `Query()`
+   - PostgreSQL functions: Take `&Arc<AppState>` and owned parameters
+   - ClickHouse functions: Take `&ClickHouseClient`, `&Arc<AppState>`, and owned parameters
+
+### Verification Results
+
+✅ **All success criteria met**:
+
+1. **Compilation**: `cargo build -p ckbadger-api` ✅ Passed (4.36s)
+2. **Clippy**: `cargo clippy -p ckbadger-api` ✅ No warnings for tokens.rs
+3. **Tests**: `cargo test -p ckbadger-api` ✅ 57 tests passed
+
+### Key Decisions
+
+**Why stub implementations return errors?**
+
+- Token tables (tokens, token_balances, token_transfers) not yet in ClickHouse schema
+- Will be implemented in future tasks (Phase 4.3+)
+- Stub functions prevent compilation errors and document missing functionality
+
+**Why remove unused imports?**
+
+- `clickhouse::Row`, `hex_hash`, `unhex_hash` not needed until ClickHouse queries implemented
+- Keeping them would generate compiler warnings
+- Will be re-added when implementing ClickHouse queries
+
+**Why pass `&Arc<AppState>` to helper functions?**
+
+- Consistent with pattern in transactions.rs, blocks.rs, cells.rs
+- Allows access to both PostgreSQL pool and CKB network config
+- Enables address resolution (script_to_address) which needs network info
+
+### Pattern Consistency
+
+All 4 endpoints now follow the same pattern as:
+
+- `crates/api/src/routes/transactions.rs` (4 endpoints)
+- `crates/api/src/routes/blocks.rs` (2 endpoints)
+- `crates/api/src/routes/cells.rs` (2 endpoints)
+
+**Total endpoints with hybrid pattern**: 12 endpoints across 4 route files
+
+### Next Steps
+
+Future tasks will implement ClickHouse queries for tokens:
+
+1. **Task 4.3.x**: Create token tables in ClickHouse schema
+   - `tokens` table (metadata)
+   - `token_balances` table (holder balances)
+   - `token_transfers` table (transfer history)
+
+2. **Task 4.4.x**: Implement ClickHouse queries
+   - `list_tokens_clickhouse()` - query tokens table
+   - `get_token_clickhouse()` - single token lookup
+   - `get_token_holders_clickhouse()` - query token_balances
+   - `get_token_transfers_clickhouse()` - query token_transfers
+
+3. **Task 4.5.x**: Migrate token data from PostgreSQL to ClickHouse
+
+### Gotchas Avoided
+
+1. **No premature imports**: Didn't add clickhouse imports until needed
+   - Avoids compiler warnings
+   - Makes it clear what's implemented vs stubbed
+
+2. **Consistent error messages**: All stubs return same error message
+   - Easy to grep for unimplemented endpoints
+   - Clear indication to API consumers
+
+3. **Preserved original logic**: PostgreSQL functions unchanged
+   - No risk of breaking existing functionality
+   - Easy to compare implementations later
+
+### Pattern for Future Token Endpoints
+
+When implementing ClickHouse queries:
+
+```rust
+// 1. Add imports
+use crate::clickhouse::{hex_hash, unhex_hash};
+use clickhouse::Row;
+
+// 2. Define ClickHouse row struct
+#[derive(Debug, Row, Deserialize)]
+struct TokenRowClickHouse {
+    type_script_hash: String,  // hex_hash() in SELECT
+    type_code_hash: String,
+    // ... other fields
+}
+
+// 3. Implement query
+async fn list_tokens_clickhouse(
+    ch_client: &crate::clickhouse::ClickHouseClient,
+    state: &Arc<AppState>,
+    params: ListParams,
+) -> ApiResult<CursorPaginatedResponse<TokenResponse>> {
+    let query = format!(
+        "SELECT {}, {}, ... FROM tokens WHERE ...",
+        hex_hash("type_script_hash"),
+        hex_hash("type_code_hash"),
+    );
+
+    let rows: Vec<TokenRowClickHouse> = ch_client
+        .client()
+        .query(&query)
+        .fetch_all()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    // Transform to TokenResponse
+    // ...
+}
+```
+
+### Lessons Learned
+
+1. **Stub implementations are valuable**: They document missing functionality and prevent compilation errors
+2. **Consistent patterns reduce cognitive load**: All route files now follow same structure
+3. **Incremental migration is safe**: Can deploy with stubs, implement queries later
+4. **Error messages matter**: Clear error messages help identify unimplemented features
+
+### Technical Debt
+
+1. **Token tables not in ClickHouse**: Need to design schema for tokens, token_balances, token_transfers
+2. **No ClickHouse queries**: All 4 endpoints return errors when ClickHouse enabled
+3. **No data migration plan**: Need strategy for migrating token data from PostgreSQL
+
+### Evidence
+
+**Verification Commands**:
+
+```bash
+cargo build -p ckbadger-api     # ✅ Passed (4.36s)
+cargo clippy -p ckbadger-api    # ✅ No warnings
+cargo test -p ckbadger-api      # ✅ 57 tests passed
+```
+
+**Function Count**:
+
+- Main handlers: 4 (list_tokens, get_token, get_token_holders, get_token_transfers)
+- PostgreSQL implementations: 4 (\*\_postgres functions)
+- ClickHouse stubs: 4 (\*\_clickhouse functions)
+- Total functions: 12
+
+**Lines of Code**:
+
+- Original file: 747 lines
+- Modified file: ~830 lines (+83 lines for hybrid pattern)

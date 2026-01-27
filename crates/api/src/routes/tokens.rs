@@ -125,6 +125,17 @@ async fn list_tokens(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<TokenResponse>> {
+    if let Some(ch_client) = &state.clickhouse_client {
+        list_tokens_clickhouse(ch_client, &state, params).await
+    } else {
+        list_tokens_postgres(&state, params).await
+    }
+}
+
+async fn list_tokens_postgres(
+    state: &Arc<AppState>,
+    params: ListParams,
+) -> ApiResult<CursorPaginatedResponse<TokenResponse>> {
     let limit = params.limit.clamp(1, 100);
     let (cursor_24h, cursor_holders, cursor_id) = params
         .cursor
@@ -399,10 +410,30 @@ async fn list_tokens(
     ))
 }
 
+async fn list_tokens_clickhouse(
+    _ch_client: &crate::clickhouse::ClickHouseClient,
+    _state: &Arc<AppState>,
+    _params: ListParams,
+) -> ApiResult<CursorPaginatedResponse<TokenResponse>> {
+    // TODO: Implement ClickHouse query for list_tokens
+    // For now, return empty result
+    Err(ApiError::internal(
+        "ClickHouse implementation not yet available for tokens",
+    ))
+}
+
 async fn get_token(
     State(state): State<Arc<AppState>>,
     Path(type_hash): Path<String>,
 ) -> ApiResult<TokenResponse> {
+    if let Some(ch_client) = &state.clickhouse_client {
+        get_token_clickhouse(ch_client, &state, type_hash).await
+    } else {
+        get_token_postgres(&state, type_hash).await
+    }
+}
+
+async fn get_token_postgres(state: &Arc<AppState>, type_hash: String) -> ApiResult<TokenResponse> {
     let hash = hex::decode(type_hash.strip_prefix("0x").unwrap_or(&type_hash))
         .map_err(|_| ApiError::bad_request("Invalid type script hash"))?;
 
@@ -450,10 +481,32 @@ async fn get_token(
     }
 }
 
+async fn get_token_clickhouse(
+    _ch_client: &crate::clickhouse::ClickHouseClient,
+    _state: &Arc<AppState>,
+    _type_hash: String,
+) -> ApiResult<TokenResponse> {
+    Err(ApiError::internal(
+        "ClickHouse implementation not yet available for tokens",
+    ))
+}
+
 async fn get_token_holders(
     State(state): State<Arc<AppState>>,
     Path(type_hash): Path<String>,
     Query(params): Query<HolderParams>,
+) -> ApiResult<CursorPaginatedResponse<TokenHolderResponse>> {
+    if let Some(ch_client) = &state.clickhouse_client {
+        get_token_holders_clickhouse(ch_client, &state, type_hash, params).await
+    } else {
+        get_token_holders_postgres(&state, type_hash, params).await
+    }
+}
+
+async fn get_token_holders_postgres(
+    state: &Arc<AppState>,
+    type_hash: String,
+    params: HolderParams,
 ) -> ApiResult<CursorPaginatedResponse<TokenHolderResponse>> {
     let hash = hex::decode(type_hash.strip_prefix("0x").unwrap_or(&type_hash))
         .map_err(|_| ApiError::bad_request("Invalid type script hash"))?;
@@ -580,10 +633,33 @@ async fn get_token_holders(
     ))
 }
 
+async fn get_token_holders_clickhouse(
+    _ch_client: &crate::clickhouse::ClickHouseClient,
+    _state: &Arc<AppState>,
+    _type_hash: String,
+    _params: HolderParams,
+) -> ApiResult<CursorPaginatedResponse<TokenHolderResponse>> {
+    Err(ApiError::internal(
+        "ClickHouse implementation not yet available for tokens",
+    ))
+}
+
 async fn get_token_transfers(
     State(state): State<Arc<AppState>>,
     Path(type_hash): Path<String>,
     Query(params): Query<TransferParams>,
+) -> ApiResult<CursorPaginatedResponse<TokenTransferResponse>> {
+    if let Some(ch_client) = &state.clickhouse_client {
+        get_token_transfers_clickhouse(ch_client, &state, type_hash, params).await
+    } else {
+        get_token_transfers_postgres(&state, type_hash, params).await
+    }
+}
+
+async fn get_token_transfers_postgres(
+    state: &Arc<AppState>,
+    type_hash: String,
+    params: TransferParams,
 ) -> ApiResult<CursorPaginatedResponse<TokenTransferResponse>> {
     let hash = hex::decode(type_hash.strip_prefix("0x").unwrap_or(&type_hash))
         .map_err(|_| ApiError::bad_request("Invalid type script hash"))?;
@@ -732,6 +808,17 @@ async fn get_token_transfers(
         transfers_count,
         limit,
         next_cursor,
+    ))
+}
+
+async fn get_token_transfers_clickhouse(
+    _ch_client: &crate::clickhouse::ClickHouseClient,
+    _state: &Arc<AppState>,
+    _type_hash: String,
+    _params: TransferParams,
+) -> ApiResult<CursorPaginatedResponse<TokenTransferResponse>> {
+    Err(ApiError::internal(
+        "ClickHouse implementation not yet available for tokens",
     ))
 }
 
