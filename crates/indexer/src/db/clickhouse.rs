@@ -111,13 +111,13 @@ mod tests {
 
     #[test]
     fn test_client_creation() {
-        let result = ClickHouseClient::new("http://localhost:8123/default");
+        let result = ClickHouseClient::new("http://localhost:8123", "default", "", "default");
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_client_with_credentials() {
-        let result = ClickHouseClient::new("http://user:pass@localhost:8123/mydb");
+        let result = ClickHouseClient::new("http://localhost:8123", "user", "pass", "mydb");
         assert!(result.is_ok());
     }
 

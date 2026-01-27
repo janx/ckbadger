@@ -229,7 +229,9 @@ async fn fetch_assets(
                 "SELECT COUNT(*) as count FROM tokens WHERE lower(name) LIKE '{}' OR lower(symbol) LIKE '{}'",
                 pattern, pattern
             );
-            let count_row = state.clickhouse.client()
+            let count_row = state
+                .clickhouse
+                .client()
                 .query(&query)
                 .fetch_one::<CountRow>()
                 .await
@@ -237,7 +239,9 @@ async fn fetch_assets(
             (count_row.count,)
         }
         _ => {
-            let count_row = state.clickhouse.client()
+            let count_row = state
+                .clickhouse
+                .client()
                 .query("SELECT COUNT(*) as count FROM tokens")
                 .fetch_one::<CountRow>()
                 .await
@@ -253,7 +257,9 @@ async fn fetch_assets(
                 "SELECT COUNT(*) as count FROM spore_clusters WHERE lower(name) LIKE '{}'",
                 pattern
             );
-            let count_row = state.clickhouse.client()
+            let count_row = state
+                .clickhouse
+                .client()
                 .query(&query)
                 .fetch_one::<CountRow>()
                 .await
@@ -261,7 +267,9 @@ async fn fetch_assets(
             (count_row.count,)
         }
         _ => {
-            let count_row = state.clickhouse.client()
+            let count_row = state
+                .clickhouse
+                .client()
                 .query("SELECT COUNT(*) as count FROM spore_clusters")
                 .fetch_one::<CountRow>()
                 .await
@@ -277,7 +285,9 @@ async fn fetch_assets(
                 "SELECT COUNT(*) as count FROM mnft_classes WHERE lower(name) LIKE '{}'",
                 pattern
             );
-            let count_row = state.clickhouse.client()
+            let count_row = state
+                .clickhouse
+                .client()
                 .query(&query)
                 .fetch_one::<CountRow>()
                 .await
@@ -285,7 +295,9 @@ async fn fetch_assets(
             (count_row.count,)
         }
         _ => {
-            let count_row = state.clickhouse.client()
+            let count_row = state
+                .clickhouse
+                .client()
                 .query("SELECT COUNT(*) as count FROM mnft_classes")
                 .fetch_one::<CountRow>()
                 .await
@@ -308,9 +320,16 @@ async fn fetch_assets(
              AND (lower(name) LIKE '{}' OR lower(symbol) LIKE '{}') \
              ORDER BY transfers_24h DESC, holders_count DESC, id DESC \
              LIMIT {}",
-            cursor_24h, cursor_holders, cursor_id, pattern, pattern, limit + 1
+            cursor_24h,
+            cursor_holders,
+            cursor_id,
+            pattern,
+            pattern,
+            limit + 1
         );
-        state.clickhouse.client()
+        state
+            .clickhouse
+            .client()
             .query(&query)
             .fetch_all::<TokenRowData>()
             .await
@@ -324,9 +343,14 @@ async fn fetch_assets(
              WHERE (transfers_24h, holders_count, id) < ({}, {}, {}) \
              ORDER BY transfers_24h DESC, holders_count DESC, id DESC \
              LIMIT {}",
-            cursor_24h, cursor_holders, cursor_id, limit + 1
+            cursor_24h,
+            cursor_holders,
+            cursor_id,
+            limit + 1
         );
-        state.clickhouse.client()
+        state
+            .clickhouse
+            .client()
             .query(&query)
             .fetch_all::<TokenRowData>()
             .await
@@ -361,7 +385,9 @@ async fn fetch_assets(
              LIMIT {}",
             cursor_id, pattern, limit + 1
         );
-        state.clickhouse.client()
+        state
+            .clickhouse
+            .client()
             .query(&query)
             .fetch_all::<ClusterRowData>()
             .await
@@ -392,14 +418,17 @@ async fn fetch_assets(
              LIMIT {}",
             cursor_id, limit + 1
         );
-        state.clickhouse.client()
+        state
+            .clickhouse
+            .client()
             .query(&query)
             .fetch_all::<ClusterRowData>()
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?
     };
 
-    let mnft_classes: Vec<MnftClassRowData> = if matches!(filter_type, Some("token") | Some("dob")) {
+    let mnft_classes: Vec<MnftClassRowData> = if matches!(filter_type, Some("token") | Some("dob"))
+    {
         vec![]
     } else if let Some(pattern) = search_pattern {
         let query = format!(
@@ -428,7 +457,9 @@ async fn fetch_assets(
              LIMIT {}",
             cursor_id, pattern, limit + 1
         );
-        state.clickhouse.client()
+        state
+            .clickhouse
+            .client()
             .query(&query)
             .fetch_all::<MnftClassRowData>()
             .await
@@ -460,7 +491,9 @@ async fn fetch_assets(
              LIMIT {}",
             cursor_id, limit + 1
         );
-        state.clickhouse.client()
+        state
+            .clickhouse
+            .client()
             .query(&query)
             .fetch_all::<MnftClassRowData>()
             .await

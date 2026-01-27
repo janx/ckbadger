@@ -79,15 +79,16 @@ pub async fn create_router(config: AppConfig) -> Router {
         }
     };
 
-    let clickhouse_user = std::env::var("CLICKHOUSE_USER").unwrap_or_else(|_| "default".to_string());
+    let clickhouse_user =
+        std::env::var("CLICKHOUSE_USER").unwrap_or_else(|_| "default".to_string());
     let clickhouse_password = std::env::var("CLICKHOUSE_PASSWORD").unwrap_or_default();
     let clickhouse_db = std::env::var("CLICKHOUSE_DB").unwrap_or_else(|_| "default".to_string());
-    
+
     let clickhouse_client = match ClickHouseClient::new(
         &config.clickhouse_url,
         &clickhouse_user,
         &clickhouse_password,
-        &clickhouse_db
+        &clickhouse_db,
     ) {
         Ok(client) => {
             tracing::info!("ClickHouse client initialized");

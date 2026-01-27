@@ -1786,7 +1786,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_has_unresolved_deep_fork_stub() {
-        let client = ClickHouseClient::new("http://localhost:8123/default").unwrap();
+        let client =
+            ClickHouseClient::new("http://localhost:8123", "default", "", "default").unwrap();
         let writer = ClickHouseWriter::new(client);
 
         let result = writer.has_unresolved_deep_fork().await;
