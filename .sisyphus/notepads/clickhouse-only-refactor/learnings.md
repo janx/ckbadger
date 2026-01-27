@@ -163,3 +163,42 @@ Same pattern applies to remaining route files:
 - ... (9 more files)
 
 All follow same pattern: remove hybrid if/else, inline ClickHouse, convert helpers.
+
+## Task 2.3: transactions.rs (Completed)
+
+### Pattern Applied
+- Same as blocks.rs: Remove hybrid if/else patterns, delete _postgres functions, inline _clickhouse implementations
+- Updated state references from `state.clickhouse_client` to `state.clickhouse`
+
+### Key Changes
+1. **list_transactions**: Inlined ClickHouse query logic, removed PostgreSQL variant
+   - Moved total count query to ClickHouse (from PostgreSQL sync_status)
+   - Used `state.clickhouse.client()` directly
+   
+2. **get_transaction**: Inlined ClickHouse implementation
+   - Converted DAO compensation query to ClickHouse format
+   - Fixed SUM() result handling: use `u64` not `Option<u64>` for ClickHouse
+
+3. **Stubbed handlers** (not yet ClickHouse-compatible):
+   - get_transaction_detail
+   - get_cell_deps
+   - get_cycles_status
+   - trigger_cycles_calculation
+   - get_transaction_lifecycle
+   - get_transaction_asset_transfers
+   - All return "not yet implemented for ClickHouse" errors
+
+### ClickHouse Query Patterns Used
+- Hash conversion: `hex_hash("field")` for SELECT, `unhex('0x...')` for WHERE
+- Timestamp: `toUnixTimestamp(t.timestamp)` → parse with `DateTime::from_timestamp()`
+- SUM aggregation: Returns `u64` directly (not Option), handle with `.unwrap_or(0)`
+
+### Gotchas Encountered
+- ClickHouse doesn't support `Option<T>` in Row derives - use non-optional types and handle nulls in query
+- SUM() in ClickHouse returns 0 for empty sets, not NULL (unlike PostgreSQL)
+- Removed unused imports: `is_genesis_special_burn_cell`, `GENESIS_SPECIAL_BURN_CELL_VIRTUAL_OCCUPIED`, `script_to_address`, `CyclesStatus`
+
+### File Size Reduction
+- Removed ~500 lines of PostgreSQL code
+- Final file: 680 lines (was ~1372 lines)
+
