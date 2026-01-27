@@ -434,7 +434,7 @@ Simplify architecture by removing PostgreSQL, making ClickHouse the only databas
 
 ### PHASE 5: Cleanup & Documentation
 
-- [ ] 5.1. Remove unused PostgreSQL files
+- [x] 5.1. Remove unused PostgreSQL files
 
   **What to do**:
   - Keep `migrations/postgres/` as reference (DO NOT DELETE)
@@ -446,7 +446,7 @@ Simplify architecture by removing PostgreSQL, making ClickHouse the only databas
 
 ---
 
-- [ ] 5.2. Update AGENTS.md
+- [x] 5.2. Update AGENTS.md
 
   **What to do**:
   - Remove PostgreSQL commands section

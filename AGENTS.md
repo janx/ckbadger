@@ -16,13 +16,13 @@ When solving problems or designing features:
 
 1. **Prefer optimal schema design** over backward compatibility
 2. **Feel free to restructure tables** if it produces a cleaner solution
-3. **Breaking changes are acceptable** — just update `migrations/postgres/001_init.sql`
+3. **Breaking changes are acceptable** — just update `migrations/clickhouse/*.sql`
 4. **If a bug fix requires schema change**, do it properly rather than working around bad structure
 5. **Re-sync is always an option** — don't let existing data constrain the right solution
 
 ```bash
 # Typical workflow after schema changes:
-# 1. Edit migrations/postgres/001_init.sql
+# 1. Edit migrations/clickhouse/*.sql
 # 2. Update indexer parser/writer code
 # 3. Drop and recreate database
 # 4. Re-run indexer to sync from genesis
@@ -47,18 +47,17 @@ cargo test -- --nocapture                # With stdout
 cargo build -p ckbadger-indexer --features redis-cache  # Enable cache feature
 REDIS_URL=redis://localhost:6379 cargo run -p ckbadger-indexer --features redis-cache
 
-# ClickHouse Backend (optional, PostgreSQL is default)
-# Start ClickHouse service
-docker compose --profile benchmark up -d clickhouse
+# Development
+docker compose up -d                    # Start all services
+docker compose logs -f                  # View logs
+docker compose down -v                  # Stop and remove volumes
 
-# Run indexer with ClickHouse backend
-CLICKHOUSE_URL=http://localhost:8123 DATABASE_BACKEND=clickhouse cargo run -p ckbadger-indexer
-
-# Run API with ClickHouse backend
-CLICKHOUSE_URL=http://localhost:8123 cargo run -p ckbadger-api
-
-# ClickHouse client access
+# ClickHouse CLI
 docker compose exec clickhouse clickhouse-client
+
+# Run tests
+docker compose -f docker-compose.test.yml up -d
+cargo test
 
 # Frontend (from root OR frontend/)
 pnpm dev                                 # Dev server (:3000)
@@ -89,7 +88,7 @@ crates/
   indexer/    # Blockchain sync daemon (three-stage pipeline)
   common/     # Shared types (block, cell, tx, script, error)
 frontend/     # Next.js 15 App Router + React 19
-migrations/postgres/001_init.sql  # Single consolidated schema
+migrations/clickhouse/            # ClickHouse schema migrations
 docs/POSTMORTEM.md                # Historical bugs - READ BEFORE CKB/DAO WORK
 docs/INDEXER_PIPELINE.md          # Pipeline architecture documentation
 ```
@@ -145,9 +144,11 @@ async fn get_block(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> ApiResult<BlockResponse> {
-    let row = sqlx::query_as::<_, (i64, Vec<u8>, ...)>("SELECT ...")
-        .bind(&id)
-        .fetch_optional(&state.pool)
+    let row = state.clickhouse
+        .client()
+        .query("SELECT ... FROM blocks WHERE hash = unhex(?)")
+        .bind(hash)
+        .fetch_optional::<BlockRow>()
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
     match row {
@@ -206,7 +207,7 @@ const { data, isLoading } = useQuery({
 
 ### Database Changes
 
-1. Edit `migrations/postgres/001_init.sql` directly (single consolidated schema)
+1. Edit `migrations/clickhouse/*.sql` files
 2. Update `crates/indexer/src/parser/` and `db/writer.rs`
 3. Update API queries in `crates/api/src/routes/`
 
@@ -246,8 +247,9 @@ mod tests {
 **API Integration** (`crates/api/tests/`):
 
 ```rust
-#[sqlx::test]
-async fn test_get_block_by_hash(pool: PgPool) {
+#[tokio::test]
+async fn test_get_block_by_hash() {
+    // Setup ClickHouse test client
     // Setup test data
     // Call endpoint
     // Assert response
@@ -360,7 +362,7 @@ const DAO_OCCUPIED_CAPACITY: u64 = 102_00000000; // 102 CKB
 | Docker + host CKB             | Use `network_mode: host`                                          |
 | Vitest globals                | Add `vitest/globals` to tsconfig types                            |
 | MSW handlers                  | Must start server in setup.ts `beforeAll`                         |
-| sqlx::test                    | Requires `MIGRATOR` constant in lib.rs                            |
+| ClickHouse tests              | Use docker-compose.test.yml for test database                     |
 
 ## File Locations
 
@@ -384,5 +386,5 @@ const DAO_OCCUPIED_CAPACITY: u64 = 102_00000000; // 102 CKB
 
 ## Dependencies
 
-**Rust**: axum 0.8, sqlx 0.8, tokio 1.42, serde, ckb-types/ckb-hash 0.119, anyhow/thiserror
+**Rust**: axum 0.8, clickhouse 0.13, tokio 1.42, serde, ckb-types/ckb-hash 0.119, anyhow/thiserror
 **Frontend**: next 15.1, react 19, @tanstack/react-query 5, zustand 5, tailwindcss 3.4
