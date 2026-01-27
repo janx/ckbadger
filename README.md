@@ -52,20 +52,14 @@
               ┌─────────────────┼─────────────────┐
               ▼                 ▼                 ▼
         ┌──────────┐     ┌───────────┐     ┌───────────┐
-        │  Redis   │     │ PostgreSQL│     │ClickHouse │
-        │  (Hot)   │     │  (Warm)   │     │  (Cold)   │
+        │  Redis   │     │ClickHouse │     │ CKB Node  │
+        │  (Cache) │     │ (Primary) │     │   (RPC)   │
         └──────────┘     └───────────┘     └───────────┘
                                 │
                                 ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                       Rust Indexer                               │
 │     Block Fetcher → Cell Parser → Script Decoder → DB Writer     │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                        CKB Node                                  │
-│                      RPC + ckb-indexer                           │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -78,9 +72,8 @@
 | **Visualization** | react-force-graph-2d, D3.js         | Cell relationship graphs        |
 | **API**           | Rust (Axum)                         | High-performance REST/WebSocket |
 | **Indexer**       | Rust                                | Block parsing, cell tracking    |
-| **Database**      | PostgreSQL                          | Primary data store              |
+| **Database**      | ClickHouse                          | Primary data store              |
 | **Cache**         | Redis                               | Hot data, real-time state       |
-| **Analytics**     | ClickHouse                          | Historical queries (optional)   |
 
 ## Quick Start
 
@@ -148,8 +141,11 @@ CKB_RPC_URL=http://host.docker.internal:8114  # macOS/Windows
 # CKB_RPC_URL=http://172.17.0.1:8114          # Linux
 CKB_NETWORK=mainnet  # mainnet | testnet | devnet
 
-# Database
-DATABASE_URL=__SET_DATABASE_URL__
+# ClickHouse Configuration
+CLICKHOUSE_URL=http://localhost:8123
+CLICKHOUSE_USER=ckbadger
+CLICKHOUSE_PASSWORD=changeme
+CLICKHOUSE_DB=ckbadger
 
 # Redis (optional)
 REDIS_URL=redis://localhost:6379
@@ -336,9 +332,7 @@ ckbadger/
 │   │   └── cell-graph.tsx  # Force-directed graph visualization
 │   ├── hooks/              # Custom hooks (WebSocket, etc.)
 │   └── lib/                # API client, utilities
-├── migrations/             # Database schema
-│   └── postgres/
-│       └── 001_init.sql    # Single consolidated schema
+├── migrations/clickhouse/            # ClickHouse schema migrations
 ├── docs/                   # Documentation & references
 │   ├── rfcs/               # [submodule] CKB RFCs - protocol specs
 │   ├── docs.nervos.org/    # [submodule] Official Nervos docs
@@ -362,7 +356,7 @@ cd ckbadger
 git submodule update --init --recursive
 
 # Start dependencies
-docker compose up -d postgres redis ckb-node
+docker compose up -d clickhouse redis ckb-node
 
 # Run indexer (from project root)
 cargo run -p ckbadger-indexer --release

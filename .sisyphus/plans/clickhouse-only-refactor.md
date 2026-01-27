@@ -473,7 +473,7 @@ Simplify architecture by removing PostgreSQL, making ClickHouse the only databas
 
 ---
 
-- [ ] 5.3. Update README.md
+- [x] 5.3. Update README.md
 
   **What to do**:
   - Update architecture diagram to show ClickHouse only (no PG)
