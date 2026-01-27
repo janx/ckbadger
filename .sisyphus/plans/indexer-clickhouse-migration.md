@@ -922,7 +922,7 @@
 
 ---
 
-- [ ] 6.3. 部署配置完善
+- [x] 6.3. 部署配置完善
 
   **What to do**:
   - 更新docker-compose.yml
