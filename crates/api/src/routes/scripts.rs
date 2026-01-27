@@ -5,11 +5,13 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use clickhouse::Row;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::clickhouse::hex_hash;
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
 use crate::AppState;
 
@@ -127,6 +129,26 @@ pub struct ScriptLookupInfo {
 async fn lookup_scripts(
     State(state): State<Arc<AppState>>,
     Json(request): Json<LookupScriptsRequest>,
+) -> ApiResult<HashMap<String, ScriptLookupInfo>> {
+    if let Some(ch_client) = &state.clickhouse_client {
+        lookup_scripts_clickhouse(ch_client, &state, request).await
+    } else {
+        lookup_scripts_postgres(&state, request).await
+    }
+}
+
+async fn lookup_scripts_clickhouse(
+    _ch_client: &crate::clickhouse::ClickHouseClient,
+    state: &Arc<AppState>,
+    request: LookupScriptsRequest,
+) -> ApiResult<HashMap<String, ScriptLookupInfo>> {
+    // ClickHouse doesn't have known_scripts table yet - fallback to PostgreSQL
+    lookup_scripts_postgres(state, request).await
+}
+
+async fn lookup_scripts_postgres(
+    state: &Arc<AppState>,
+    request: LookupScriptsRequest,
 ) -> ApiResult<HashMap<String, ScriptLookupInfo>> {
     if request.code_hashes.is_empty() {
         return ok(HashMap::new());
@@ -289,6 +311,70 @@ async fn get_code_cell(
     State(state): State<Arc<AppState>>,
     Query(params): Query<CodeCellQuery>,
 ) -> ApiResult<CodeCellResponse> {
+    if let Some(ch_client) = &state.clickhouse_client {
+        get_code_cell_clickhouse(ch_client, &state, params).await
+    } else {
+        get_code_cell_postgres(&state, params).await
+    }
+}
+
+async fn get_code_cell_clickhouse(
+    ch_client: &crate::clickhouse::ClickHouseClient,
+    _state: &Arc<AppState>,
+    params: CodeCellQuery,
+) -> ApiResult<CodeCellResponse> {
+    let code_hash_hex = params
+        .code_hash
+        .strip_prefix("0x")
+        .unwrap_or(&params.code_hash);
+
+    let hash_type = params.hash_type.as_str();
+
+    let query = if hash_type == "type" {
+        format!(
+            "SELECT {} as tx_hash, output_index
+            FROM cells
+            WHERE type_script_hash = unhex('{}')
+            ORDER BY created_at_block DESC
+            LIMIT 1",
+            hex_hash("tx_hash"),
+            code_hash_hex
+        )
+    } else {
+        format!(
+            "SELECT {} as tx_hash, output_index
+            FROM cells
+            WHERE data_hash = unhex('{}')
+            ORDER BY created_at_block DESC
+            LIMIT 1",
+            hex_hash("tx_hash"),
+            code_hash_hex
+        )
+    };
+
+    #[derive(Row, Deserialize)]
+    struct CodeCellRow {
+        tx_hash: String,
+        output_index: u16,
+    }
+
+    let result: Option<CodeCellRow> = ch_client
+        .client()
+        .query(&query)
+        .fetch_optional::<CodeCellRow>()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    ok(CodeCellResponse {
+        tx_hash: result.as_ref().map(|r| r.tx_hash.clone()),
+        output_index: result.map(|r| r.output_index as i32),
+    })
+}
+
+async fn get_code_cell_postgres(
+    state: &Arc<AppState>,
+    params: CodeCellQuery,
+) -> ApiResult<CodeCellResponse> {
     let code_hash_bytes = hex::decode(
         params
             .code_hash
@@ -370,6 +456,26 @@ fn row_to_response_with_code_cell(
 async fn list_scripts(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListParams>,
+) -> ApiResult<CursorPaginatedResponse<ScriptResponse>> {
+    if let Some(ch_client) = &state.clickhouse_client {
+        list_scripts_clickhouse(ch_client, &state, params).await
+    } else {
+        list_scripts_postgres(&state, params).await
+    }
+}
+
+async fn list_scripts_clickhouse(
+    _ch_client: &crate::clickhouse::ClickHouseClient,
+    state: &Arc<AppState>,
+    params: ListParams,
+) -> ApiResult<CursorPaginatedResponse<ScriptResponse>> {
+    // ClickHouse doesn't have known_scripts table yet - fallback to PostgreSQL
+    list_scripts_postgres(state, params).await
+}
+
+async fn list_scripts_postgres(
+    state: &Arc<AppState>,
+    params: ListParams,
 ) -> ApiResult<CursorPaginatedResponse<ScriptResponse>> {
     let _limit = params.limit.clamp(1, 100);
     let _cursor_id = params
@@ -502,6 +608,26 @@ async fn get_script(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> ApiResult<Vec<ScriptResponse>> {
+    if let Some(ch_client) = &state.clickhouse_client {
+        get_script_clickhouse(ch_client, &state, name).await
+    } else {
+        get_script_postgres(&state, name).await
+    }
+}
+
+async fn get_script_clickhouse(
+    _ch_client: &crate::clickhouse::ClickHouseClient,
+    state: &Arc<AppState>,
+    name: String,
+) -> ApiResult<Vec<ScriptResponse>> {
+    // ClickHouse doesn't have known_scripts table yet - fallback to PostgreSQL
+    get_script_postgres(state, name).await
+}
+
+async fn get_script_postgres(
+    state: &Arc<AppState>,
+    name: String,
+) -> ApiResult<Vec<ScriptResponse>> {
     // Use JOIN with script_usage_stats instead of slow EXISTS subqueries on cells table
     let rows = sqlx::query_as::<_, ScriptRow>(
         r#"
@@ -597,6 +723,26 @@ async fn get_script(
 async fn get_script_usage(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
+) -> ApiResult<ScriptUsageResponse> {
+    if let Some(ch_client) = &state.clickhouse_client {
+        get_script_usage_clickhouse(ch_client, &state, name).await
+    } else {
+        get_script_usage_postgres(&state, name).await
+    }
+}
+
+async fn get_script_usage_clickhouse(
+    _ch_client: &crate::clickhouse::ClickHouseClient,
+    state: &Arc<AppState>,
+    name: String,
+) -> ApiResult<ScriptUsageResponse> {
+    // ClickHouse doesn't have known_scripts table yet - fallback to PostgreSQL
+    get_script_usage_postgres(state, name).await
+}
+
+async fn get_script_usage_postgres(
+    state: &Arc<AppState>,
+    name: String,
 ) -> ApiResult<ScriptUsageResponse> {
     let code_hashes: Vec<(Vec<u8>,)> = sqlx::query_as(
         "SELECT DISTINCT code_hash FROM known_scripts WHERE name = $1 AND network = $2",

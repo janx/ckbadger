@@ -4671,3 +4671,215 @@ async fn search_postgres(
 ### Next Steps
 
 Task 4.2.5 will rewrite another endpoint (e.g., addresses, statistics) using the same pattern.
+
+---
+
+## Task 4.2.5: Rewrite scripts.rs for ClickHouse (Completed)
+
+**Date**: 2026-01-27
+
+### Objective
+
+Apply hybrid ClickHouse/PostgreSQL pattern to all endpoints in `crates/api/src/routes/scripts.rs`. Since ClickHouse doesn't have `known_scripts` or `script_usage_stats` tables yet, most endpoints fall back to PostgreSQL.
+
+### Endpoints Rewritten
+
+1. **list_scripts** - Lists all known scripts with filtering
+   - ClickHouse: Fallback to PostgreSQL (no known_scripts table)
+   - PostgreSQL: Original implementation
+
+2. **lookup_scripts** - Bulk lookup of scripts by code_hash
+   - ClickHouse: Fallback to PostgreSQL (no known_scripts table)
+   - PostgreSQL: Original implementation
+
+3. **get_code_cell** - Find cell containing script code
+   - ClickHouse: ✅ **Implemented** - queries cells table by data_hash or type_script_hash
+   - PostgreSQL: Original implementation
+
+4. **get_script** - Get script details by name
+   - ClickHouse: Fallback to PostgreSQL (no known_scripts table)
+   - PostgreSQL: Original implementation
+
+5. **get_script_usage** - Get usage statistics for a script
+   - ClickHouse: Fallback to PostgreSQL (no script_usage_stats table)
+   - PostgreSQL: Original implementation
+
+### Implementation Details
+
+**Hybrid Pattern Applied**:
+
+```rust
+async fn endpoint(
+    State(state): State<Arc<AppState>>,
+    params: Params,
+) -> ApiResult<Response> {
+    if let Some(ch_client) = &state.clickhouse_client {
+        endpoint_clickhouse(ch_client, &state, params).await
+    } else {
+        endpoint_postgres(&state, params).await
+    }
+}
+
+async fn endpoint_clickhouse(
+    ch_client: &crate::clickhouse::ClickHouseClient,
+    state: &Arc<AppState>,
+    params: Params,
+) -> ApiResult<Response> {
+    // ClickHouse implementation or fallback
+}
+
+async fn endpoint_postgres(
+    state: &Arc<AppState>,
+    params: Params,
+) -> ApiResult<Response> {
+    // Original PostgreSQL implementation
+}
+```
+
+**get_code_cell ClickHouse Implementation**:
+
+```rust
+let query = if hash_type == "type" {
+    format!(
+        "SELECT {} as tx_hash, output_index
+        FROM cells
+        WHERE type_script_hash = unhex('{}')
+        ORDER BY created_at_block DESC
+        LIMIT 1",
+        hex_hash("tx_hash"),
+        code_hash_hex
+    )
+} else {
+    format!(
+        "SELECT {} as tx_hash, output_index
+        FROM cells
+        WHERE data_hash = unhex('{}')
+        ORDER BY created_at_block DESC
+        LIMIT 1",
+        hex_hash("tx_hash"),
+        code_hash_hex
+    )
+};
+
+#[derive(Row, Deserialize)]
+struct CodeCellRow {
+    tx_hash: String,
+    output_index: u16,
+}
+
+let result: Option<CodeCellRow> = ch_client
+    .client()
+    .query(&query)
+    .fetch_optional::<CodeCellRow>()
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?;
+```
+
+### Key Patterns
+
+1. **ClickHouseClient Type**: Use `&crate::clickhouse::ClickHouseClient`, not `&clickhouse::Client`
+2. **Access Underlying Client**: Use `ch_client.client()` to get `&clickhouse::Client`
+3. **hex_hash() Helper**: Use `hex_hash("field_name")` for SELECT to convert FixedString(32) to hex
+4. **unhex() Function**: Use `unhex('hex_string')` in WHERE clause to convert hex to FixedString(32)
+5. **Row Struct**: Define inline `#[derive(Row, Deserialize)]` struct for query results
+6. **Fallback Comments**: Add comment explaining why fallback to PostgreSQL (missing tables)
+
+### Verification Results
+
+✅ **All success criteria met**:
+
+1. **Compilation**: `cargo build -p ckbadger-api` ✅ Passed
+2. **Clippy**: `cargo clippy -p ckbadger-api` ✅ No warnings
+3. **Tests**: `cargo test -p ckbadger-api` ✅ 57 tests passed
+
+### Gotchas Encountered
+
+1. **Type Mismatch**: Initially used `&clickhouse::Client` instead of `&crate::clickhouse::ClickHouseClient`
+   - Error: "expected `&Client`, found `&ClickHouseClient`"
+   - Solution: Use `&crate::clickhouse::ClickHouseClient` in function signatures
+
+2. **Unused Imports**: Added `clickhouse::Row` and `unhex_hash` but only needed `hex_hash`
+   - Solution: Removed unused imports to avoid warnings
+
+3. **Missing Tables**: ClickHouse doesn't have `known_scripts` or `script_usage_stats` tables yet
+   - Solution: Fallback to PostgreSQL with explanatory comment
+
+### Response Format Compatibility
+
+All endpoints maintain exact response format compatibility:
+
+- `ScriptResponse` - Script metadata with code_hash, name, description, etc.
+- `ScriptLookupInfo` - Lightweight script info for bulk lookup
+- `CodeCellResponse` - Cell location (tx_hash, output_index)
+- `ScriptUsageResponse` - Usage statistics with per-deployment breakdown
+- `DeploymentUsage` - Per-deployment usage metrics
+
+### Future Work
+
+When `known_scripts` and `script_usage_stats` tables are added to ClickHouse:
+
+1. Implement `list_scripts_clickhouse()` - query known_scripts table
+2. Implement `lookup_scripts_clickhouse()` - bulk lookup with JOIN to script_usage
+3. Implement `get_script_clickhouse()` - query by name with code cell lookup
+4. Implement `get_script_usage_clickhouse()` - aggregate from script_usage_stats
+
+### Pattern for Future Endpoints
+
+```rust
+// ✅ Correct: Hybrid pattern with ClickHouseClient wrapper
+async fn endpoint_clickhouse(
+    ch_client: &crate::clickhouse::ClickHouseClient,
+    state: &Arc<AppState>,
+    params: Params,
+) -> ApiResult<Response> {
+    let query = format!(
+        "SELECT {} as hash_field, other_field
+        FROM table
+        WHERE hash_field = unhex('{}')
+        LIMIT 1",
+        hex_hash("hash_field"),
+        hex_param
+    );
+
+    #[derive(Row, Deserialize)]
+    struct ResultRow {
+        hash_field: String,
+        other_field: u64,
+    }
+
+    let result = ch_client
+        .client()
+        .query(&query)
+        .fetch_optional::<ResultRow>()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    ok(Response { ... })
+}
+
+// ❌ Wrong: Using raw clickhouse::Client
+async fn endpoint_clickhouse(
+    ch_client: &clickhouse::Client,  // Wrong type
+    ...
+) -> ApiResult<Response> {
+    ch_client.query(&query)  // Missing .client() call
+        .fetch_optional::<ResultRow>()
+        .await?;
+}
+```
+
+### Lessons Learned
+
+1. **Wrapper Types**: Always use the wrapper type (`ClickHouseClient`) in function signatures
+2. **Access Pattern**: Use `.client()` method to access underlying client for queries
+3. **Fallback Strategy**: Graceful fallback to PostgreSQL when ClickHouse tables don't exist
+4. **Comments**: Explain fallback behavior with comments (necessary for understanding)
+5. **Response Compatibility**: Maintain exact response format for frontend compatibility
+
+### Files Modified
+
+- `crates/api/src/routes/scripts.rs` - All 5 endpoints rewritten with hybrid pattern
+
+### Next Steps
+
+Task 4.2.6 will rewrite other route modules (statistics.rs, search.rs, graph.rs) with the same pattern.
