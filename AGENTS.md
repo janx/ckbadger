@@ -47,6 +47,19 @@ cargo test -- --nocapture                # With stdout
 cargo build -p ckbadger-indexer --features redis-cache  # Enable cache feature
 REDIS_URL=redis://localhost:6379 cargo run -p ckbadger-indexer --features redis-cache
 
+# ClickHouse Backend (optional, PostgreSQL is default)
+# Start ClickHouse service
+docker compose --profile benchmark up -d clickhouse
+
+# Run indexer with ClickHouse backend
+CLICKHOUSE_URL=http://localhost:8123 DATABASE_BACKEND=clickhouse cargo run -p ckbadger-indexer
+
+# Run API with ClickHouse backend
+CLICKHOUSE_URL=http://localhost:8123 cargo run -p ckbadger-api
+
+# ClickHouse client access
+docker compose exec clickhouse clickhouse-client
+
 # Frontend (from root OR frontend/)
 pnpm dev                                 # Dev server (:3000)
 pnpm build                               # Production build
