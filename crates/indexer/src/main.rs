@@ -2,9 +2,9 @@ use anyhow::Result;
 use clap::Parser;
 use tracing::info;
 
-use sqlx::PgPool;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+use ckbadger_indexer::db::{ClickHouseClient, ClickHouseWriter};
 use ckbadger_indexer::Config;
 
 #[derive(Parser, Debug)]
@@ -22,9 +22,6 @@ struct Args {
 
     #[arg(long, env = "CLICKHOUSE_URL")]
     clickhouse_url: Option<String>,
-
-    #[arg(long, env = "DATABASE_URL")]
-    database_url: Option<String>,
 
     #[arg(long, default_value = "1000")]
     batch_size: usize,
@@ -90,18 +87,13 @@ async fn main() -> Result<()> {
         bulk_sync_threshold: args.bulk_sync_threshold,
     };
 
-    let database_url = args
-        .database_url
-        .or_else(|| std::env::var("DATABASE_URL").ok())
-        .expect("DATABASE_URL is required");
-
-    info!("Postgres backend selected");
-    info!("Connecting to Postgres: {}", database_url);
+    info!("ClickHouse backend selected");
+    info!("Connecting to ClickHouse: {}", config.clickhouse_url);
     info!("Connecting to CKB node: {}", config.ckb_rpc_url);
 
-    let pool = PgPool::connect(&database_url).await?;
-    let writer = ckbadger_indexer::db::BatchWriter::new(pool);
-    info!("Postgres writer created");
+    let clickhouse_client = ClickHouseClient::new(&config.clickhouse_url)?;
+    let writer = ClickHouseWriter::new(clickhouse_client);
+    info!("ClickHouse writer created");
 
     // Initialize indexer with ClickHouse backend
     let indexer = ckbadger_indexer::sync::Indexer::new(config.clone(), writer, None).await?;

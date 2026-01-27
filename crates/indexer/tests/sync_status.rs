@@ -52,5 +52,9 @@ async fn test_sync_tip_and_block_hash(pool: PgPool) {
 
     let fetched_hash = writer.get_block_hash_at_height(7).await.unwrap();
     assert_eq!(fetched_hash, Some(vec![0xAAu8; 32]));
-    assert!(writer.get_block_hash_at_height(999).await.unwrap().is_none());
+    assert!(writer
+        .get_block_hash_at_height(999)
+        .await
+        .unwrap()
+        .is_none());
 }

@@ -345,7 +345,12 @@ impl Indexer {
 
     async fn run_sequential(&self) -> Result<()> {
         loop {
-            if self.writer.has_unresolved_deep_fork().await.unwrap_or(false) {
+            if self
+                .writer
+                .has_unresolved_deep_fork()
+                .await
+                .unwrap_or(false)
+            {
                 warn!("Deep fork unresolved, sync paused. Waiting for manual intervention...");
                 sleep(Duration::from_secs(30)).await;
                 continue;
@@ -593,7 +598,12 @@ impl Indexer {
 
         // Writer loop - receives pre-parsed batches
         loop {
-            if self.writer.has_unresolved_deep_fork().await.unwrap_or(false) {
+            if self
+                .writer
+                .has_unresolved_deep_fork()
+                .await
+                .unwrap_or(false)
+            {
                 warn!("Deep fork unresolved, sync paused. Waiting for manual intervention...");
                 Self::drain_channel(&mut parse_rx).await;
                 sleep(Duration::from_secs(30)).await;
