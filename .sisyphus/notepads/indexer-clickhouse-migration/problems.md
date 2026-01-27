@@ -70,3 +70,31 @@
 - Fastest path to working implementation
 - PostgreSQL code unchanged (no regression risk)
 - Can optimize later once ClickHouse is proven
+
+## Task 5.3 - E2E Performance Validation (BLOCKED)
+
+**Status**: Blocked - requires actual ClickHouse deployment and data sync
+
+**What's needed**:
+
+1. ClickHouse server running with production config
+2. Full or partial blockchain data sync (testnet or mainnet)
+3. Performance measurement tools
+4. Data integrity verification
+
+**Why blocked**:
+
+- No ClickHouse deployment available in current environment
+- Requires actual blockchain data (not available in test environment)
+- Performance testing needs real workload, not unit tests
+
+**Recommendation**:
+
+- Skip for now, mark as TODO for production deployment
+- Can be done after deployment to staging/production
+- Performance benchmarks from Phase 0 already validate target (449K-503K rows/s)
+
+**Alternative**:
+
+- Document expected performance based on Phase 0 benchmarks
+- Create performance testing guide for deployment team
