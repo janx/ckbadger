@@ -1,30 +1,25 @@
 version: '3.8'
 
 services:
-  postgres-test:
-    image: postgres:16-alpine
+  clickhouse-test:
+    image: clickhouse/clickhouse-server:latest
     environment:
-      POSTGRES_USER: test
-      POSTGRES_PASSWORD: test
-      POSTGRES_DB: ckbadger_test
+      CLICKHOUSE_DB: ckbadger_test
+      CLICKHOUSE_USER: test
+      CLICKHOUSE_PASSWORD: test
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
     ports:
-      - '5433:5432'
-    command:
-      - postgres
-      - -c
-      - max_locks_per_transaction=512
-      - -c
-      - max_connections=200
-      - -c
-      - shared_buffers=256MB
-    shm_size: 512mb
+      - '18123:8123' # Different port to avoid conflicts with dev instance
+      - '19000:9000'
+    volumes:
+      - ./migrations/clickhouse:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U test']
+      test: ['CMD', 'clickhouse-client', '--query', 'SELECT 1']
       interval: 5s
-      timeout: 5s
-      retries: 5
+      timeout: 3s
+      retries: 10
     tmpfs:
-      - /var/lib/postgresql/data
+      - /var/lib/clickhouse # Use tmpfs for faster tests
 
   redis-test:
     image: redis:7-alpine
@@ -41,7 +36,10 @@ services:
       context: .
       dockerfile: docker/api/Dockerfile
     environment:
-      DATABASE_URL: postgresql://test:test@postgres-test:5432/ckbadger_test
+      CLICKHOUSE_URL: http://clickhouse-test:8123/ckbadger_test
+      CLICKHOUSE_USER: test
+      CLICKHOUSE_PASSWORD: test
+      CLICKHOUSE_DATABASE: ckbadger_test
       REDIS_URL: redis://redis-test:6379
       CKB_RPC_URL: ${CKB_RPC_URL:-https://mainnet.ckbapp.dev}
       CKB_NETWORK: mainnet
@@ -49,7 +47,7 @@ services:
     ports:
       - '3001:3001'
     depends_on:
-      postgres-test:
+      clickhouse-test:
         condition: service_healthy
       redis-test:
         condition: service_healthy

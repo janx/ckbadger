@@ -363,7 +363,7 @@ Simplify architecture by removing PostgreSQL, making ClickHouse the only databas
 
 ### PHASE 4: Update Tests
 
-- [ ] 4.1. Create Docker test infrastructure
+- [x] 4.1. Create Docker test infrastructure
 
   **What to do**:
   - Create `docker-compose.test.yml`:
