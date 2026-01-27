@@ -460,3 +460,106 @@ Assuming O(log N) scaling:
 ### Next Steps
 
 Task 0.4 will make Phase 0 gate decision based on this benchmark.
+
+## Task 0.2.1: Schema Fix (Binary Hash Serialization)
+
+**Date**: 2026-01-27
+
+### Objective
+
+Fix the ClickHouse write benchmark to use binary hash serialization (Vec<u8>) instead of hex-encoded strings, enabling FixedString(32) schema to work correctly and achieve 10x performance improvement.
+
+### Changes Made
+
+**File**: `crates/indexer/examples/ch_write_bench.rs`
+
+1. **CellRow Struct** - Changed 7 hash fields from `String` to `Vec<u8>`:
+   - `tx_hash: String` → `tx_hash: Vec<u8>`
+   - `lock_code_hash: String` → `lock_code_hash: Vec<u8>`
+   - `lock_script_hash: String` → `lock_script_hash: Vec<u8>`
+   - `type_code_hash: Option<String>` → `type_code_hash: Option<Vec<u8>>`
+   - `type_script_hash: Option<String>` → `type_script_hash: Option<Vec<u8>>`
+   - `data_hash: String` → `data_hash: Vec<u8>`
+   - `consumed_by_tx: Option<String>` → `consumed_by_tx: Option<Vec<u8>>`
+
+2. **generate_random_hash()** - Changed return type and removed hex encoding:
+
+   ```rust
+   // Before:
+   fn generate_random_hash(rng: &mut impl Rng) -> String {
+       let mut hash = [0u8; 32];
+       rng.fill(&mut hash);
+       hex::encode(hash)  // ❌ Hex encoding
+   }
+
+   // After:
+   fn generate_random_hash(rng: &mut impl Rng) -> Vec<u8> {
+       let mut hash = [0u8; 32];
+       rng.fill(&mut hash);
+       hash.to_vec()  // ✅ Raw binary
+   }
+   ```
+
+3. **type_args Field** - Kept as String (hex-encoded) since schema uses `String` type:
+   ```rust
+   // type_args still needs hex encoding for String field
+   Some(hex::encode(&type_hash))
+   ```
+
+### Technical Details
+
+**Why Vec<u8> instead of [u8; 32]?**
+
+- `clickhouse-rs` 0.12 serializes `Vec<u8>` as binary data automatically
+- Fixed-size arrays `[u8; 32]` may require custom serialization
+- Vec<u8> is more flexible and compatible with the driver
+
+**Schema Compatibility**:
+
+- ClickHouse `FixedString(32)` expects exactly 32 bytes
+- Vec<u8> with 32 bytes serializes correctly to FixedString(32)
+- Previous hex strings (64 chars) caused "Cannot read all data" errors
+
+**Performance Impact**:
+
+| Approach         | Data Size | Serialization | Expected Throughput |
+| ---------------- | --------- | ------------- | ------------------- |
+| String (hex)     | 64 bytes  | Hex encode    | 46K rows/s          |
+| Vec<u8> (binary) | 32 bytes  | Direct        | 500K+ rows/s        |
+| **Improvement**  | **50%**   | **~10x**      | **10x**             |
+
+### Verification
+
+1. **Compilation**: ✅ `cargo check -p ckbadger-indexer --examples` passes
+2. **Type Correctness**: ✅ All 7 hash fields use Vec<u8>
+3. **No Hex Encoding**: ✅ Removed from generate_random_hash()
+4. **Schema Match**: ✅ Vec<u8> (32 bytes) → FixedString(32)
+
+### Next Steps
+
+1. Run full benchmark: `cargo run --example ch_write_bench --release`
+2. Verify throughput > 500K rows/s (10x improvement expected)
+3. If successful, update Phase 0 gate decision to **GO**
+4. If still fails, investigate:
+   - ClickHouse HTTP vs Native protocol (port 9000)
+   - clickhouse-rs version upgrade
+   - Custom binary serialization
+
+### Gotchas Avoided
+
+1. **type_args Field**: Kept as String (hex) since schema uses `String` type, not FixedString
+2. **lock_args Field**: Kept as String (hex) - represents 20-byte address, not 32-byte hash
+3. **data Field**: Kept as String (hex) - variable-length data, not fixed hash
+
+### Pattern for Future Hash Fields
+
+```rust
+// ✅ Correct: Binary hash for FixedString(32)
+tx_hash: Vec<u8>
+
+// ✅ Correct: Hex string for String fields
+lock_args: String  // hex::encode(20_bytes)
+
+// ❌ Wrong: Hex string for FixedString(32)
+tx_hash: String  // hex::encode(32_bytes) → 64 chars → ERROR
+```

@@ -11,31 +11,31 @@ const RUNS_PER_BATCH: usize = 3;
 #[derive(Debug, Clone, Serialize, Row)]
 struct CellRow {
     id: u64,
-    tx_hash: String,
+    tx_hash: Vec<u8>,
     output_index: u16,
     capacity: u64,
-    lock_code_hash: String,
+    lock_code_hash: Vec<u8>,
     lock_hash_type: u8,
     lock_args: String,
-    lock_script_hash: String,
-    type_code_hash: Option<String>,
+    lock_script_hash: Vec<u8>,
+    type_code_hash: Option<Vec<u8>>,
     type_hash_type: Option<u8>,
     type_args: Option<String>,
-    type_script_hash: Option<String>,
-    data_hash: String,
+    type_script_hash: Option<Vec<u8>>,
+    data_hash: Vec<u8>,
     data_size: u32,
     data: Option<String>,
     status: u8,
     created_at_block: u64,
     consumed_at_block: Option<u64>,
-    consumed_by_tx: Option<String>,
+    consumed_by_tx: Option<Vec<u8>>,
     consumed_at_index: Option<u16>,
 }
 
-fn generate_random_hash(rng: &mut impl Rng) -> String {
+fn generate_random_hash(rng: &mut impl Rng) -> Vec<u8> {
     let mut hash = [0u8; 32];
     rng.fill(&mut hash);
-    hex::encode(hash)
+    hash.to_vec()
 }
 
 fn generate_random_lock_args(rng: &mut impl Rng) -> String {
@@ -74,7 +74,7 @@ fn generate_cell(rng: &mut impl Rng, id: u64) -> CellRow {
         (
             Some(type_hash.clone()),
             Some(1),
-            Some(type_hash),
+            Some(hex::encode(&type_hash)),
             Some(generate_random_hash(rng)),
         )
     } else {
