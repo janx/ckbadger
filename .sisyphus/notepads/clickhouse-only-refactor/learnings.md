@@ -732,3 +732,54 @@ When re-enabling code that was previously commented out:
 ### Status
 
 ✅ Task 5.1 COMPLETE - API crate cleanup finished, Phase 2 (12/12 tasks) verified complete
+
+## Task 3.1: Remove DatabaseBackend Enum from Indexer Config (2026-01-27)
+
+### Changes Made
+
+1. **config.rs**:
+   - Removed `DatabaseBackend` enum entirely (lines 3-9 deleted)
+   - Removed `database_url: String` field from Config struct
+   - Removed `database_backend: DatabaseBackend` field from Config struct
+   - Changed `clickhouse_url: Option<String>` → `clickhouse_url: String` (now required)
+   - File reduced from 80 to 68 lines
+
+2. **main.rs**:
+   - Removed imports: `sqlx::postgres::PgPoolOptions`, `DataIntegrityService`, `sync::Indexer`
+   - Removed CLI arguments:
+     - `--database-url` / `DATABASE_URL` env var
+     - `--database` / `DATABASE_BACKEND` env var (was: "postgresql" | "clickhouse")
+   - Removed database backend selection logic (match statement on `args.database`)
+   - Removed PostgreSQL connection code (PgPoolOptions, migrations)
+   - Removed PostgreSQL-specific DataIntegrityService initialization
+   - Simplified main function to ClickHouse-only path
+   - Config construction now directly uses ClickHouse URL (required, not Optional)
+
+### Verification
+
+- ✅ `cargo check -p ckbadger-indexer` passes with 0 errors
+- ✅ LSP diagnostics clean (no errors/warnings)
+- ✅ No `DatabaseBackend` references remaining in indexer crate
+- ✅ No `database_url` references remaining in indexer crate
+- ✅ `clickhouse_url` is now required (not Optional)
+
+### Key Pattern
+
+When removing a database backend from a multi-backend architecture:
+
+1. Remove the enum that represents backend choices
+2. Remove all fields related to the removed backend
+3. Make the remaining backend's configuration required (not Optional)
+4. Remove all conditional logic that selected between backends
+5. Simplify main() to directly use the single backend
+
+### Status
+
+✅ Task 3.1 COMPLETE - Indexer config is now ClickHouse-only
+
+### Next Steps
+
+- Task 3.2: Update Indexer::new() to accept ClickHouseClient instead of PgPool
+- Task 3.3: Update parser module to use ClickHouse types
+- Task 3.4: Update writer module to use ClickHouse mutations
+- Task 3.5: Update sync pipeline to use ClickHouse writer

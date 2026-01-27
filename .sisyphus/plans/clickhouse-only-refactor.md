@@ -295,7 +295,7 @@ Simplify architecture by removing PostgreSQL, making ClickHouse the only databas
 
 ### PHASE 3: Remove PostgreSQL from Indexer
 
-- [ ] 3.1. Simplify indexer config (remove DATABASE_BACKEND)
+- [x] 3.1. Simplify indexer config (remove DATABASE_BACKEND)
 
   **What to do**:
   - Remove `DatabaseBackend` enum from `crates/indexer/src/config.rs`

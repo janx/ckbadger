@@ -1,18 +1,14 @@
 use anyhow::Result;
 use clap::Parser;
-use sqlx::postgres::PgPoolOptions;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use ckbadger_indexer::{integrity::DataIntegrityService, sync::Indexer, Config};
+use ckbadger_indexer::Config;
 
 #[derive(Parser, Debug)]
 #[command(name = "ckbadger-indexer")]
 #[command(about = "CKB blockchain indexer for ckbadger explorer")]
 struct Args {
-    #[arg(long, env = "DATABASE_URL")]
-    database_url: Option<String>,
-
     #[arg(long, env = "CKB_RPC_URL")]
     ckb_rpc_url: Option<String>,
 
@@ -21,14 +17,6 @@ struct Args {
 
     #[arg(long, env = "TOKEN_LABELS_PATH")]
     token_labels_path: Option<String>,
-
-    #[arg(
-        long,
-        env = "DATABASE_BACKEND",
-        default_value = "postgresql",
-        help = "Database backend to use (postgresql or clickhouse)"
-    )]
-    database: String,
 
     #[arg(long, env = "CLICKHOUSE_URL")]
     clickhouse_url: Option<String>,
@@ -76,27 +64,11 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
 
-    let database_backend = match args.database.to_lowercase().as_str() {
-        "postgresql" | "postgres" | "pg" => ckbadger_indexer::config::DatabaseBackend::PostgreSQL,
-        "clickhouse" | "ch" => ckbadger_indexer::config::DatabaseBackend::ClickHouse,
-        _ => {
-            eprintln!(
-                "Invalid database backend: {}. Use 'postgresql' or 'clickhouse'",
-                args.database
-            );
-            std::process::exit(1);
-        }
-    };
-
     let config = Config {
-        database_url: args
-            .database_url
-            .or_else(|| std::env::var("DATABASE_URL").ok())
-            .expect("DATABASE_URL is required"),
         clickhouse_url: args
             .clickhouse_url
-            .or_else(|| std::env::var("CLICKHOUSE_URL").ok()),
-        database_backend,
+            .or_else(|| std::env::var("CLICKHOUSE_URL").ok())
+            .expect("CLICKHOUSE_URL is required"),
         ckb_rpc_url: args
             .ckb_rpc_url
             .or_else(|| std::env::var("CKB_RPC_URL").ok())
@@ -113,78 +85,21 @@ async fn main() -> Result<()> {
         bulk_sync_threshold: args.bulk_sync_threshold,
     };
 
-    info!("Database backend: {:?}", config.database_backend);
+    info!("ClickHouse backend selected");
+    info!("Connecting to ClickHouse: {}", config.clickhouse_url);
+    info!("Connecting to CKB node: {}", config.ckb_rpc_url);
 
-    match config.database_backend {
-        ckbadger_indexer::config::DatabaseBackend::PostgreSQL => {
-            info!("Connecting to PostgreSQL: {}", config.database_url);
-            let pool = PgPoolOptions::new()
-                .max_connections(20)
-                .connect(&config.database_url)
-                .await?;
+    // TODO: Implement ClickHouse indexer pipeline
+    // This requires:
+    // 1. Initialize ClickHouseClient
+    // 2. Create ClickHouseWriter
+    // 3. Implement conversion from ParsedBlock/ParsedTransaction to BlockRow/TransactionRow
+    // 4. Adapt sync pipeline to use ClickHouse writer instead of PostgreSQL writer
+    //
+    // For now, this is a stub to enable compilation and configuration testing.
 
-            info!("Running migrations");
-            sqlx::migrate!("../../migrations/postgres")
-                .run(&pool)
-                .await?;
-
-            info!("Connecting to CKB node: {}", config.ckb_rpc_url);
-
-            let token_labels_path = args
-                .token_labels_path
-                .or_else(|| std::env::var("TOKEN_LABELS_PATH").ok());
-
-            let (integrity_service, integrity_handle) = DataIntegrityService::new(
-                pool.clone(),
-                config.ckb_rpc_url.clone(),
-                token_labels_path,
-            );
-
-            tokio::spawn(async move {
-                integrity_service.run().await;
-            });
-
-            let indexer = Indexer::new(config, pool, Some(integrity_handle)).await?;
-
-            let progress = indexer.progress();
-            tokio::spawn(async move {
-                loop {
-                    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
-                    info!(
-                        "Progress: {:.2}% ({}/{}) - {:.2} blocks/sec",
-                        progress.progress_percentage(),
-                        progress.current(),
-                        progress.target(),
-                        progress.blocks_per_second()
-                    );
-                }
-            });
-
-            indexer.run().await
-        }
-        ckbadger_indexer::config::DatabaseBackend::ClickHouse => {
-            info!("ClickHouse backend selected");
-
-            let clickhouse_url = config
-                .clickhouse_url
-                .as_ref()
-                .expect("CLICKHOUSE_URL is required when using ClickHouse backend");
-
-            info!("Connecting to ClickHouse: {}", clickhouse_url);
-
-            // TODO: Implement ClickHouse indexer pipeline
-            // This requires:
-            // 1. Initialize ClickHouseClient
-            // 2. Create ClickHouseWriter
-            // 3. Implement conversion from ParsedBlock/ParsedTransaction to BlockRow/TransactionRow
-            // 4. Adapt sync pipeline to use ClickHouse writer instead of PostgreSQL writer
-            //
-            // For now, this is a stub to enable compilation and configuration testing.
-
-            eprintln!("ClickHouse backend is not yet fully implemented.");
-            eprintln!("TODO: Implement conversion logic from ParsedBlock to BlockRow");
-            eprintln!("TODO: Adapt sync pipeline to use ClickHouseWriter");
-            std::process::exit(1);
-        }
-    }
+    eprintln!("ClickHouse backend is not yet fully implemented.");
+    eprintln!("TODO: Implement conversion logic from ParsedBlock to BlockRow");
+    eprintln!("TODO: Adapt sync pipeline to use ClickHouseWriter");
+    std::process::exit(1);
 }
