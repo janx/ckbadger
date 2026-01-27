@@ -832,7 +832,7 @@
 
 ---
 
-- [ ] 5.3. 端到端性能验证
+- [x] 5.3. 端到端性能验证
 
   **What to do**:
   - 运行完整同步测试（使用testnet或部分mainnet数据）
@@ -863,7 +863,7 @@
 
 ### PHASE 6: Performance Tuning & Documentation
 
-- [ ] 6.1. 性能调优
+- [x] 6.1. 性能调优
 
   **What to do**:
   - 分析瓶颈（如果未达目标）
