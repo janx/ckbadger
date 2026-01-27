@@ -701,7 +701,7 @@
 
 ---
 
-- [ ] 4.2. 核心API Endpoints重写
+- [x] 4.2. 核心API Endpoints重写
 
   **What to do**:
   - 重写blocks endpoints
