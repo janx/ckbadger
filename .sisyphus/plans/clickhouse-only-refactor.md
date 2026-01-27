@@ -111,7 +111,7 @@ Simplify architecture by removing PostgreSQL, making ClickHouse the only databas
 
 ---
 
-- [ ] 1.2. Create initialization script for ClickHouse
+- [x] 1.2. Create initialization script for ClickHouse
 
   **What to do**:
   - Create init script that runs all migrations

@@ -32,6 +32,7 @@ services:
       - ./migrations/clickhouse:/docker-entrypoint-initdb.d:ro
       - ./docker/clickhouse/config.xml:/etc/clickhouse-server/config.d/ckbadger.xml:ro
       - ./docker/clickhouse/users.xml:/etc/clickhouse-server/users.d/ckbadger.xml:ro
+      - ./docker/clickhouse/init.sh:/docker-entrypoint-initdb.d/000_init.sh:ro
     environment:
       CLICKHOUSE_DB: ckbadger
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-ckbadger}
