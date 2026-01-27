@@ -1,7 +1,6 @@
 use chrono::{DateTime, Utc};
 use clickhouse::Row;
 use serde::Deserialize;
-use sqlx::PgPool;
 use std::sync::Arc;
 use tokio::time::{interval, Duration};
 use tracing::{debug, error, info};
@@ -52,8 +51,7 @@ pub(crate) fn determine_sync_mode(synced_block: i64, tip_block: i64) -> SyncMode
 }
 
 pub async fn start_block_broadcaster(
-    pool: PgPool,
-    clickhouse_client: Option<ClickHouseClient>,
+    clickhouse_client: ClickHouseClient,
     ws_manager: Arc<WsManager>,
     ckb_rpc_url: String,
 ) {
@@ -65,60 +63,37 @@ pub async fn start_block_broadcaster(
 
         let tip_block = fetch_tip_block(&ckb_rpc_url).await.unwrap_or(0) as i64;
 
-        let latest_result = if let Some(ch_client) = &clickhouse_client {
-            // Query ClickHouse
-            let query = format!(
-                "SELECT number, {}, timestamp, transactions_count, epoch_number, epoch_index, epoch_length 
-                 FROM blocks ORDER BY number DESC LIMIT 1",
-                hex_hash("hash")
-            );
+        let query = format!(
+            "SELECT number, {}, timestamp, transactions_count, epoch_number, epoch_index, epoch_length 
+             FROM blocks ORDER BY number DESC LIMIT 1",
+            hex_hash("hash")
+        );
 
-            match ch_client
-                .client()
-                .query(&query)
-                .fetch_optional::<BlockRow>()
-                .await
-            {
-                Ok(Some(row)) => {
-                    // Convert hex string to bytes for compatibility
-                    let hash = hex::decode(row.hash.strip_prefix("0x").unwrap_or(&row.hash))
-                        .unwrap_or_default();
-                    Ok(Some((
-                        row.number,
-                        hash,
-                        row.timestamp,
-                        row.transactions_count as i32,
-                        row.epoch_number,
-                        row.epoch_index as i32,
-                        row.epoch_length as i32,
-                    )))
-                }
-                Ok(None) => Ok(None),
-                Err(e) => {
-                    error!("Failed to query latest block from ClickHouse: {}", e);
-                    Err(())
-                }
-            }
-        } else {
-            // Query PostgreSQL
-            sqlx::query_as::<
-                _,
-                (
-                    i64,
-                    Vec<u8>,
-                    chrono::DateTime<chrono::Utc>,
-                    i32,
-                    i64,
-                    i32,
-                    i32,
-                ),
-            >(
-                "SELECT number, hash, timestamp, transactions_count, epoch_number, epoch_index, epoch_length 
-                 FROM blocks ORDER BY number DESC LIMIT 1",
-            )
-            .fetch_optional(&pool)
+        let latest_result = match clickhouse_client
+            .client()
+            .query(&query)
+            .fetch_optional::<BlockRow>()
             .await
-            .map_err(|_| ())
+        {
+            Ok(Some(row)) => {
+                // Convert hex string to bytes for compatibility
+                let hash = hex::decode(row.hash.strip_prefix("0x").unwrap_or(&row.hash))
+                    .unwrap_or_default();
+                Ok(Some((
+                    row.number,
+                    hash,
+                    row.timestamp,
+                    row.transactions_count as i32,
+                    row.epoch_number,
+                    row.epoch_index as i32,
+                    row.epoch_length as i32,
+                )))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => {
+                error!("Failed to query latest block from ClickHouse: {}", e);
+                Err(())
+            }
         };
 
         let latest_block = match latest_result {
@@ -145,10 +120,9 @@ pub async fn start_block_broadcaster(
         let sync_mode = determine_sync_mode(number, tip_block);
 
         if sync_mode == SyncMode::FastSync {
-            let sync_status = build_sync_status(&pool, &clickhouse_client, tip_block).await;
+            let sync_status = build_sync_status(&clickhouse_client, tip_block).await;
             let (avg_block_time, estimated_epoch_time) =
-                calculate_epoch_stats(&pool, &clickhouse_client, number, epoch_index, epoch_length)
-                    .await;
+                calculate_epoch_stats(&clickhouse_client, number, epoch_index, epoch_length).await;
 
             let msg = BroadcastMessage::NewBlock {
                 number,
@@ -172,86 +146,60 @@ pub async fn start_block_broadcaster(
         } else {
             let last = last_block_number.unwrap();
 
-            let new_blocks_result = if let Some(ch_client) = &clickhouse_client {
-                // Query ClickHouse
-                let query = format!(
-                    "SELECT number, {}, timestamp, transactions_count, epoch_number, epoch_index, epoch_length 
-                     FROM blocks WHERE number > {} ORDER BY number ASC LIMIT 20",
-                    hex_hash("hash"),
-                    last
-                );
+            let query = format!(
+                "SELECT number, {}, timestamp, transactions_count, epoch_number, epoch_index, epoch_length 
+                 FROM blocks WHERE number > {} ORDER BY number ASC LIMIT 20",
+                hex_hash("hash"),
+                last
+            );
 
-                match ch_client
-                    .client()
-                    .query(&query)
-                    .fetch_all::<BlockRow>()
-                    .await
-                {
-                    Ok(rows) => {
-                        #[allow(clippy::type_complexity)]
-                        let blocks: Vec<(
-                            i64,
-                            Vec<u8>,
-                            DateTime<Utc>,
-                            i32,
-                            i64,
-                            i32,
-                            i32,
-                        )> = rows
-                            .into_iter()
-                            .map(|row| {
-                                let hash =
-                                    hex::decode(row.hash.strip_prefix("0x").unwrap_or(&row.hash))
-                                        .unwrap_or_default();
-                                (
-                                    row.number,
-                                    hash,
-                                    row.timestamp,
-                                    row.transactions_count as i32,
-                                    row.epoch_number,
-                                    row.epoch_index as i32,
-                                    row.epoch_length as i32,
-                                )
-                            })
-                            .collect();
-                        Ok(blocks)
-                    }
-                    Err(e) => {
-                        error!("Failed to query new blocks from ClickHouse: {}", e);
-                        Err(())
-                    }
-                }
-            } else {
-                // Query PostgreSQL
-                sqlx::query_as::<
-                    _,
-                    (
+            let new_blocks_result = match clickhouse_client
+                .client()
+                .query(&query)
+                .fetch_all::<BlockRow>()
+                .await
+            {
+                Ok(rows) => {
+                    #[allow(clippy::type_complexity)]
+                    let blocks: Vec<(
                         i64,
                         Vec<u8>,
-                        chrono::DateTime<chrono::Utc>,
+                        DateTime<Utc>,
                         i32,
                         i64,
                         i32,
                         i32,
-                    ),
-                >(
-                    "SELECT number, hash, timestamp, transactions_count, epoch_number, epoch_index, epoch_length 
-                     FROM blocks WHERE number > $1 ORDER BY number ASC LIMIT 20",
-                )
-                .bind(last)
-                .fetch_all(&pool)
-                .await
-                .map_err(|_| ())
+                    )> = rows
+                        .into_iter()
+                        .map(|row| {
+                            let hash =
+                                hex::decode(row.hash.strip_prefix("0x").unwrap_or(&row.hash))
+                                    .unwrap_or_default();
+                            (
+                                row.number,
+                                hash,
+                                row.timestamp,
+                                row.transactions_count as i32,
+                                row.epoch_number,
+                                row.epoch_index as i32,
+                                row.epoch_length as i32,
+                            )
+                        })
+                        .collect();
+                    Ok(blocks)
+                }
+                Err(e) => {
+                    error!("Failed to query new blocks from ClickHouse: {}", e);
+                    Err(())
+                }
             };
 
             match new_blocks_result {
                 Ok(blocks) => {
                     for (num, h, ts, txc, ep_num, ep_idx, ep_len) in blocks {
-                        let sync_status =
-                            build_sync_status(&pool, &clickhouse_client, tip_block).await;
+                        let sync_status = build_sync_status(&clickhouse_client, tip_block).await;
                         let (avg_block_time, estimated_epoch_time) =
-                            calculate_epoch_stats(&pool, &clickhouse_client, num, ep_idx, ep_len)
-                                .await;
+                            calculate_epoch_stats(&clickhouse_client, num, ep_idx, ep_len).await;
 
                         let msg = BroadcastMessage::NewBlock {
                             number: num,
@@ -268,8 +216,7 @@ pub async fn start_block_broadcaster(
                         info!("Broadcasting new block: {}", num);
                         ws_manager.broadcast_block(msg);
 
-                        broadcast_block_transactions(&pool, &clickhouse_client, &ws_manager, num)
-                            .await;
+                        broadcast_block_transactions(&clickhouse_client, &ws_manager, num).await;
                         last_block_number = Some(num);
                     }
                 }
@@ -282,65 +229,47 @@ pub async fn start_block_broadcaster(
 }
 
 async fn broadcast_block_transactions(
-    pool: &PgPool,
-    clickhouse_client: &Option<ClickHouseClient>,
+    clickhouse_client: &ClickHouseClient,
     ws_manager: &Arc<WsManager>,
     block_number: i64,
 ) {
-    let txs_result = if let Some(ch_client) = clickhouse_client {
-        // Query ClickHouse
-        let query = format!(
-            "SELECT {}, inputs_count, outputs_count, fee, timestamp
-             FROM transactions 
-             WHERE block_number = {} AND is_cellbase = 0
-             ORDER BY tx_index",
-            hex_hash("hash"),
-            block_number
-        );
+    let query = format!(
+        "SELECT {}, inputs_count, outputs_count, fee, timestamp
+         FROM transactions 
+         WHERE block_number = {} AND is_cellbase = 0
+         ORDER BY tx_index",
+        hex_hash("hash"),
+        block_number
+    );
 
-        match ch_client
-            .client()
-            .query(&query)
-            .fetch_all::<TransactionRow>()
-            .await
-        {
-            Ok(rows) => {
-                #[allow(clippy::type_complexity)]
-                let transactions: Vec<(Vec<u8>, i32, i32, String, DateTime<Utc>)> = rows
-                    .into_iter()
-                    .map(|row| {
-                        let hash = hex::decode(row.hash.strip_prefix("0x").unwrap_or(&row.hash))
-                            .unwrap_or_default();
-                        (
-                            hash,
-                            row.inputs_count as i32,
-                            row.outputs_count as i32,
-                            row.fee,
-                            row.timestamp,
-                        )
-                    })
-                    .collect();
-                Ok(transactions)
-            }
-            Err(e) => {
-                error!("Failed to query block transactions from ClickHouse: {}", e);
-                Err(())
-            }
-        }
-    } else {
-        // Query PostgreSQL
-        sqlx::query_as::<_, (Vec<u8>, i32, i32, String, chrono::DateTime<chrono::Utc>)>(
-            r#"
-            SELECT hash, inputs_count::int4, outputs_count::int4, fee::text, timestamp
-            FROM transactions 
-            WHERE block_number = $1 AND is_cellbase = false
-            ORDER BY tx_index
-            "#,
-        )
-        .bind(block_number)
-        .fetch_all(pool)
+    let txs_result = match clickhouse_client
+        .client()
+        .query(&query)
+        .fetch_all::<TransactionRow>()
         .await
-        .map_err(|_| ())
+    {
+        Ok(rows) => {
+            #[allow(clippy::type_complexity)]
+            let transactions: Vec<(Vec<u8>, i32, i32, String, DateTime<Utc>)> = rows
+                .into_iter()
+                .map(|row| {
+                    let hash = hex::decode(row.hash.strip_prefix("0x").unwrap_or(&row.hash))
+                        .unwrap_or_default();
+                    (
+                        hash,
+                        row.inputs_count as i32,
+                        row.outputs_count as i32,
+                        row.fee,
+                        row.timestamp,
+                    )
+                })
+                .collect();
+            Ok(transactions)
+        }
+        Err(e) => {
+            error!("Failed to query block transactions from ClickHouse: {}", e);
+            Err(())
+        }
     };
 
     match txs_result {
@@ -365,55 +294,38 @@ async fn broadcast_block_transactions(
 }
 
 async fn calculate_epoch_stats(
-    pool: &PgPool,
-    clickhouse_client: &Option<ClickHouseClient>,
+    clickhouse_client: &ClickHouseClient,
     latest_block: i64,
     epoch_index: i32,
     epoch_length: i32,
 ) -> (String, String) {
-    let blocks_result = if let Some(ch_client) = clickhouse_client {
-        // Query ClickHouse
-        let query = format!(
-            "SELECT timestamp FROM blocks
-             WHERE number >= {} AND number <= {}
-             ORDER BY number ASC",
-            latest_block - 1,
-            latest_block
-        );
+    let query = format!(
+        "SELECT timestamp FROM blocks
+         WHERE number >= {} AND number <= {}
+         ORDER BY number ASC",
+        latest_block - 1,
+        latest_block
+    );
 
-        match ch_client
-            .client()
-            .query(&query)
-            .fetch_all::<TimestampRow>()
-            .await
-        {
-            Ok(rows) => Ok(rows.into_iter().map(|r| (r.timestamp,)).collect()),
-            Err(e) => {
-                error!(
-                    "Failed to query blocks for epoch stats from ClickHouse: {}",
-                    e
-                );
-                Err(())
-            }
-        }
-    } else {
-        // Query PostgreSQL
-        sqlx::query_as::<_, (DateTime<Utc>,)>(
-            r#"
-            SELECT timestamp FROM blocks
-            WHERE number >= $1 - 1 AND number <= $1
-            ORDER BY number ASC
-            "#,
-        )
-        .bind(latest_block)
-        .fetch_all(pool)
+    let blocks_result = match clickhouse_client
+        .client()
+        .query(&query)
+        .fetch_all::<TimestampRow>()
         .await
-        .map_err(|_| ())
+    {
+        Ok(rows) => Ok(rows.into_iter().map(|r| (r.timestamp,)).collect()),
+        Err(e) => {
+            error!(
+                "Failed to query blocks for epoch stats from ClickHouse: {}",
+                e
+            );
+            Err(())
+        }
     };
 
     let avg_time = blocks_result
         .ok()
-        .and_then(|blocks| {
+        .and_then(|blocks: Vec<(DateTime<Utc>,)>| {
             if blocks.len() == 2 {
                 let duration = blocks[1].0.signed_duration_since(blocks[0].0).num_seconds() as f64;
                 Some(duration.max(1.0))
@@ -432,18 +344,31 @@ async fn calculate_epoch_stats(
     (avg_block_time, estimated_epoch_time)
 }
 
-async fn build_sync_status(
-    pool: &PgPool,
-    _clickhouse_client: &Option<ClickHouseClient>,
-    tip_block: i64,
-) -> SyncStatus {
-    let sync_row: Option<(i64, Option<DateTime<Utc>>, i64)> = sqlx::query_as(
-        "SELECT tip_block_number, sync_started_at, COALESCE(sync_started_block, 0) FROM sync_status WHERE id = 1",
-    )
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
+async fn build_sync_status(clickhouse_client: &ClickHouseClient, tip_block: i64) -> SyncStatus {
+    let query = "SELECT tip_block_number, sync_started_at, COALESCE(sync_started_block, 0) FROM sync_status WHERE id = 1";
+
+    #[derive(Row, Deserialize)]
+    struct SyncStatusRow {
+        tip_block_number: i64,
+        sync_started_at: Option<DateTime<Utc>>,
+        #[serde(rename = "COALESCE(sync_started_block, 0)")]
+        sync_started_block: i64,
+    }
+
+    let sync_row: Option<(i64, Option<DateTime<Utc>>, i64)> = clickhouse_client
+        .client()
+        .query(query)
+        .fetch_optional::<SyncStatusRow>()
+        .await
+        .ok()
+        .flatten()
+        .map(|row| {
+            (
+                row.tip_block_number,
+                row.sync_started_at,
+                row.sync_started_block,
+            )
+        });
 
     let (synced_block, sync_started_at, sync_started_block) = sync_row.unwrap_or((0, None, 0));
 
@@ -542,120 +467,6 @@ async fn fetch_tip_block(ckb_rpc_url: &str) -> Result<u64, String> {
     let hex = response.result.ok_or("Empty RPC response")?;
     let hex = hex.strip_prefix("0x").unwrap_or(&hex);
     u64::from_str_radix(hex, 16).map_err(|e| e.to_string())
-}
-
-pub async fn start_reorg_broadcaster(pool: PgPool, ws_manager: Arc<WsManager>) {
-    let mut last_reorg_id: Option<i64> = None;
-    let mut last_deep_fork_state: Option<bool> = None;
-    let mut ticker = interval(Duration::from_secs(5));
-
-    loop {
-        ticker.tick().await;
-
-        let reorg_result =
-            sqlx::query_as::<_, (i64, String, i32, i64, i64, i64, i32, i32, DateTime<Utc>)>(
-                r#"
-            SELECT id, event_type, depth, old_tip_number, new_tip_number, fork_point_number,
-                   orphaned_blocks_count, orphaned_transactions_count, detected_at
-            FROM reorg_events
-            WHERE ($1::bigint IS NULL OR id > $1)
-            ORDER BY id DESC
-            LIMIT 1
-            "#,
-            )
-            .bind(last_reorg_id)
-            .fetch_optional(&pool)
-            .await;
-
-        if let Ok(Some((
-            id,
-            event_type,
-            depth,
-            old_tip,
-            new_tip,
-            fork_point,
-            orphaned_blocks,
-            orphaned_txs,
-            detected_at,
-        ))) = reorg_result
-        {
-            last_reorg_id = Some(id);
-
-            if event_type == "deep" {
-                let msg = BroadcastMessage::DeepFork {
-                    detected: true,
-                    depth,
-                    db_tip: old_tip,
-                    chain_tip: new_tip,
-                    fork_point,
-                    timestamp: detected_at.to_rfc3339(),
-                };
-                info!("Broadcasting deep fork event: depth={}", depth);
-                ws_manager.broadcast_reorg(msg);
-            } else {
-                let msg = BroadcastMessage::Reorg {
-                    depth,
-                    old_tip,
-                    new_tip,
-                    fork_point,
-                    orphaned_blocks,
-                    orphaned_txs,
-                    timestamp: detected_at.to_rfc3339(),
-                };
-                info!(
-                    "Broadcasting reorg event: depth={}, old_tip={}, new_tip={}",
-                    depth, old_tip, new_tip
-                );
-                ws_manager.broadcast_reorg(msg);
-            }
-        }
-
-        let deep_fork_result = sqlx::query_as::<
-            _,
-            (
-                bool,
-                Option<i32>,
-                Option<i64>,
-                Option<i64>,
-                Option<i64>,
-                Option<DateTime<Utc>>,
-            ),
-        >(
-            r#"
-            SELECT COALESCE(deep_fork_detected, FALSE), deep_fork_depth, deep_fork_db_tip, 
-                   deep_fork_chain_tip, deep_fork_fork_point, deep_fork_at
-            FROM sync_status WHERE id = 1
-            "#,
-        )
-        .fetch_optional(&pool)
-        .await;
-
-        if let Ok(Some((detected, depth, db_tip, chain_tip, fork_point, detected_at))) =
-            deep_fork_result
-        {
-            let should_broadcast = match last_deep_fork_state {
-                None => detected,
-                Some(prev) => prev != detected,
-            };
-
-            if should_broadcast {
-                last_deep_fork_state = Some(detected);
-                let msg = BroadcastMessage::DeepFork {
-                    detected,
-                    depth: depth.unwrap_or(0),
-                    db_tip: db_tip.unwrap_or(0),
-                    chain_tip: chain_tip.unwrap_or(0),
-                    fork_point: fork_point.unwrap_or(0),
-                    timestamp: detected_at.map(|t| t.to_rfc3339()).unwrap_or_default(),
-                };
-                info!(
-                    "Broadcasting deep fork status change: detected={}",
-                    detected
-                );
-                ws_manager.broadcast_reorg(msg);
-            }
-        }
-    }
 }
 
 #[cfg(test)]

@@ -425,3 +425,66 @@ Successfully refactored `crates/api/src/routes/tokens.rs` to ClickHouse-only fol
 - `crates/api/src/routes/statistics.rs` (2013 → ~1600 lines, removed ~400 lines of PostgreSQL code)
 
 **Status**: ✅ Complete - statistics.rs is now ClickHouse-only
+
+## Task 11: broadcaster.rs Refactoring (2026-01-27)
+
+**Pattern Applied:**
+- Removed `use sqlx::PgPool;` import
+- Removed all PostgreSQL code and hybrid if/else patterns
+- Deleted `start_reorg_broadcaster()` function entirely (uses PostgreSQL)
+- Updated function signatures to use ClickHouseClient directly (not Optional)
+
+**Key Changes:**
+1. **start_block_broadcaster**: 
+   - Removed `pool: PgPool` parameter
+   - Changed `clickhouse_client: Option<ClickHouseClient>` → `clickhouse_client: ClickHouseClient`
+   - Removed hybrid if/else patterns for latest block query
+   - Removed hybrid if/else patterns for new blocks query
+   - Updated all function calls to pass `&clickhouse_client` instead of `&pool, &clickhouse_client`
+
+2. **broadcast_block_transactions**:
+   - Removed `pool: &PgPool` parameter
+   - Changed `clickhouse_client: &Option<ClickHouseClient>` → `clickhouse_client: &ClickHouseClient`
+   - Removed hybrid if/else pattern
+   - Inlined ClickHouse query directly
+
+3. **calculate_epoch_stats**:
+   - Removed `pool: &PgPool` parameter
+   - Changed `clickhouse_client: &Option<ClickHouseClient>` → `clickhouse_client: &ClickHouseClient`
+   - Removed hybrid if/else pattern
+   - Inlined ClickHouse query directly
+
+4. **build_sync_status**:
+   - Removed `pool: &PgPool` parameter
+   - Changed `_clickhouse_client: &Option<ClickHouseClient>` → `clickhouse_client: &ClickHouseClient`
+   - Converted PostgreSQL sqlx query to ClickHouse query
+   - Created `SyncStatusRow` struct with Row derive for ClickHouse compatibility
+   - Fixed type inference issue in `calculate_epoch_stats` with explicit type annotation
+
+5. **Deleted start_reorg_broadcaster**:
+   - Entire function removed (113 lines)
+   - Uses PostgreSQL-only tables (reorg_events, sync_status with deep_fork fields)
+   - No ClickHouse equivalent needed for this task
+
+6. **Updated ws/mod.rs**:
+   - Removed `start_reorg_broadcaster` from public exports
+
+**Technical Details:**
+- **SyncStatusRow struct**: Created to handle ClickHouse Row deserialization with COALESCE() function
+- **Type annotation**: Added explicit `Vec<(DateTime<Utc>,)>` type in `and_then()` closure to fix type inference
+- **Function signatures**: All now require ClickHouseClient directly (not Optional), matching AppState changes from task 2.1
+
+**Verification:**
+- ✅ No sqlx references in broadcaster.rs
+- ✅ No PgPool references in broadcaster.rs
+- ✅ No start_reorg_broadcaster references in codebase
+- ✅ No hybrid if/else patterns
+- ✅ All handlers use state.clickhouse directly
+- ✅ File reduced from 659 to 527 lines (132 lines removed)
+- ✅ No broadcaster.rs-specific compilation errors
+
+**Files Modified:**
+- `crates/api/src/ws/broadcaster.rs` (659 → 527 lines)
+- `crates/api/src/ws/mod.rs` (removed start_reorg_broadcaster export)
+
+**Status**: ✅ Complete - broadcaster.rs is now ClickHouse-only

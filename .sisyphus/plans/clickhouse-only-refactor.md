@@ -270,7 +270,7 @@ Simplify architecture by removing PostgreSQL, making ClickHouse the only databas
 
 ---
 
-- [ ] 2.11. Simplify WebSocket broadcaster.rs
+- [x] 2.11. Simplify WebSocket broadcaster.rs
 
   **What to do**:
   - Remove `PgPool` parameter from `start_block_broadcaster()`
