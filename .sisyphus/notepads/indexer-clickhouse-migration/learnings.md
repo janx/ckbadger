@@ -949,3 +949,242 @@ clickhouse:
 3. **No monitoring configured**: No Prometheus/Grafana integration
    - Mitigation: Use ClickHouse system tables for monitoring
    - Future: Add monitoring stack in Phase 2
+
+---
+
+## Task 1.2: Rust ClickHouse Client Integration (Completed)
+
+**Date**: 2026-01-27
+
+### Objective
+
+Add ClickHouse Rust client integration to the indexer crate with connection pooling and basic health checks. This is infrastructure-only - no business logic, just the foundation for future database operations.
+
+### Files Modified/Created
+
+1. **crates/indexer/Cargo.toml** - Added dependencies:
+   - `clickhouse = "0.12"` (already present with test-util feature)
+   - `url = "2.5"` (for connection string parsing)
+
+2. **crates/indexer/src/db/clickhouse.rs** - New module:
+   - `ClickHouseClient` struct with connection pool
+   - `new(url: &str) -> Result<Self>` constructor
+   - `health_check() -> Result<()>` method (SELECT 1)
+   - `get_version() -> Result<String>` method (SELECT version())
+   - `client() -> &Client` accessor for advanced operations
+   - Unit tests for client creation
+
+3. **crates/indexer/src/db/mod.rs** - Updated:
+   - Added `pub mod clickhouse;` declaration
+   - Re-exported `ClickHouseClient` for public API
+
+### Implementation Details
+
+**Connection String Format**:
+
+```
+http://username:password@host:port/database
+```
+
+**Example**:
+
+```rust
+let client = ClickHouseClient::new("http://ckbadger:changeme@localhost:8123/ckbadger")?;
+client.health_check().await?;
+let version = client.get_version().await?;
+```
+
+**Connection Pooling**:
+
+- The underlying `clickhouse::Client` handles connection pooling internally
+- Clients should be cloned and reused across the application
+- No explicit pool configuration needed (driver handles it)
+
+**Error Handling**:
+
+- Uses `anyhow::Result` for consistency with indexer crate
+- Health check validates result equals 1
+- Version query returns String directly
+
+### Verification Results
+
+✅ **All success criteria met**:
+
+1. Compilation: `cargo check -p ckbadger-indexer` ✅ Passed
+2. Build: `cargo build -p ckbadger-indexer` ✅ Passed
+3. Tests: `cargo test -p ckbadger-indexer --lib clickhouse` ✅ 2 tests passed
+   - `test_client_creation` - Basic URL parsing
+   - `test_client_with_credentials` - URL with username/password
+
+### Technical Decisions
+
+**Why `clickhouse-rs` 0.12?**
+
+- Already in Cargo.toml for benchmarking
+- Mature library with good documentation
+- Supports both HTTP and Native protocols
+- Built-in connection pooling
+
+**Why `anyhow::Result`?**
+
+- Consistent with indexer crate error handling
+- Simpler than custom error types for infrastructure code
+- Easy to propagate errors up the stack
+
+**Why `Clone` trait?**
+
+- Allows sharing client across async tasks
+- Cheap clone (Arc internally)
+- Follows Rust async patterns
+
+**Why public `client()` accessor?**
+
+- Allows advanced operations not covered by wrapper
+- Enables direct access to clickhouse-rs API
+- Maintains flexibility for future features
+
+### API Design Pattern
+
+```rust
+// ✅ Correct: Simple wrapper with essential methods
+pub struct ClickHouseClient {
+    client: Client,  // Private
+}
+
+impl ClickHouseClient {
+    pub fn new(url: &str) -> Result<Self> { ... }
+    pub async fn health_check(&self) -> Result<()> { ... }
+    pub async fn get_version(&self) -> Result<String> { ... }
+    pub fn client(&self) -> &Client { ... }  // Escape hatch
+}
+
+// ❌ Wrong: Over-abstraction with too many methods
+pub struct ClickHouseClient {
+    // Don't wrap every clickhouse-rs method
+}
+```
+
+### Integration Tests (Commented Out)
+
+Integration tests require a running ClickHouse instance, so they're commented out but available for manual testing:
+
+```rust
+// #[tokio::test]
+// async fn test_health_check() {
+//     let client = ClickHouseClient::new("http://localhost:8123/default").unwrap();
+//     let result = client.health_check().await;
+//     assert!(result.is_ok());
+// }
+```
+
+**Why commented out?**
+
+- Requires external ClickHouse instance
+- CI/CD may not have ClickHouse available
+- Can be enabled for local development
+
+### Comparison with PostgreSQL Client
+
+| Feature            | PostgreSQL (sqlx)   | ClickHouse (clickhouse-rs) |
+| ------------------ | ------------------- | -------------------------- |
+| Connection pooling | Explicit `PgPool`   | Implicit in `Client`       |
+| Error handling     | `sqlx::Error`       | `clickhouse::error::Error` |
+| Wrapper type       | `BatchWriter`       | `ClickHouseClient`         |
+| Health check       | `SELECT 1`          | `SELECT 1`                 |
+| Version query      | `SELECT version()`  | `SELECT version()`         |
+| Constructor        | `PgPool::connect()` | `Client::default()`        |
+| Configuration      | Connection string   | Builder pattern            |
+
+### Next Steps
+
+Task 1.3 will create the production schema (cells table with FixedString(32) for hashes).
+
+### Pattern for Future Database Clients
+
+```rust
+// ✅ Correct: Thin wrapper with essential methods
+pub struct DatabaseClient {
+    client: InternalClient,
+}
+
+impl DatabaseClient {
+    pub fn new(url: &str) -> Result<Self> { ... }
+    pub async fn health_check(&self) -> Result<()> { ... }
+    pub fn client(&self) -> &InternalClient { ... }  // Escape hatch
+}
+
+// ❌ Wrong: Thick wrapper that reimplements everything
+pub struct DatabaseClient {
+    // Don't wrap every method from the underlying client
+}
+```
+
+### Gotchas Avoided
+
+1. **No custom error types**: Used `anyhow::Result` instead of defining custom errors
+   - Simpler for infrastructure code
+   - Easy to add context with `.context()`
+
+2. **No explicit connection pool**: `clickhouse::Client` handles it internally
+   - No need for `Arc<Client>` wrapper
+   - Clone is cheap (Arc internally)
+
+3. **No async constructor**: Constructor is sync, only methods are async
+   - Follows Rust async patterns
+   - Connection happens lazily on first query
+
+4. **No feature flags**: ClickHouse client always available
+   - Not optional like Redis cache
+   - Core infrastructure for Phase 1
+
+### Dependencies Added
+
+```toml
+# Already present:
+clickhouse = { version = "0.12", features = ["test-util"] }
+rand = "0.8"
+
+# Newly added:
+url = "2.5"  # For connection string parsing (if needed)
+```
+
+**Note**: `url` crate added for future connection string parsing, but not used yet. The `clickhouse::Client` builder handles URL parsing internally.
+
+### Public API
+
+```rust
+// Re-exported from crates/indexer/src/db/mod.rs
+pub use clickhouse::ClickHouseClient;
+
+// Usage:
+use ckbadger_indexer::db::ClickHouseClient;
+
+let client = ClickHouseClient::new("http://localhost:8123/ckbadger")?;
+client.health_check().await?;
+```
+
+### Technical Debt
+
+1. **No connection timeout configuration**: Uses default timeouts
+   - Mitigation: Add timeout configuration in Phase 1 if needed
+   - Future: Add `with_timeout()` method
+
+2. **No retry logic**: Fails immediately on connection errors
+   - Mitigation: Add retry logic in Phase 1 if needed
+   - Future: Add `with_retries()` method
+
+3. **No connection pool size configuration**: Uses driver defaults
+   - Mitigation: Monitor connection usage in Phase 1
+   - Future: Add `with_pool_size()` method if needed
+
+4. **Integration tests commented out**: Requires running ClickHouse
+   - Mitigation: Run manually during development
+   - Future: Add docker-compose test environment
+
+### Lessons Learned
+
+1. **Keep infrastructure code simple**: Don't over-abstract
+2. **Use existing error types**: `anyhow::Result` is sufficient
+3. **Trust the driver**: Connection pooling works out of the box
+4. **Provide escape hatch**: `client()` accessor for advanced use cases
+5. **Document with examples**: Docstrings show correct usage patterns

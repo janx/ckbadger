@@ -337,7 +337,7 @@
 
 ---
 
-- [ ] 1.2. Rust ClickHouse客户端集成
+- [x] 1.2. Rust ClickHouse客户端集成
 
   **What to do**:
   - 添加clickhouse-rs依赖到Cargo.toml
