@@ -3265,3 +3265,309 @@ cargo run -p ckbadger-indexer -- \
 3. **CLI aliases**: Accept multiple variants (pg/postgres/postgresql) for better UX
 4. **Stub with clear TODOs**: Better than incomplete implementation that silently fails
 5. **Match in main vs trait abstraction**: Sometimes simpler to have separate code paths
+
+## Task 4.1: ClickHouse Query Layer Foundation (Completed)
+
+**Date**: 2026-01-27
+
+### Objective
+
+Create the ClickHouse query layer infrastructure for the API crate, including connection pooling, basic query helpers, and cursor pagination support. This is pure infrastructure work - no API endpoint changes, just the foundation for future query operations.
+
+### Files Created
+
+1. **crates/api/src/clickhouse/mod.rs** - Module exports and documentation
+   - Public API: `ClickHouseClient`, cursor functions, query helpers
+   - Module-level documentation with usage examples
+   - Re-exports from submodules
+
+2. **crates/api/src/clickhouse/connection.rs** - Connection pool wrapper
+   - `ClickHouseClient` struct (Clone-able)
+   - `new(url: &str) -> Result<Self>` - Constructor from connection URL
+   - `health_check() -> Result<()>` - SELECT 1 validation
+   - `get_version() -> Result<String>` - Version query
+   - `client() -> &Client` - Escape hatch for advanced operations
+   - Unit tests for client creation
+
+3. **crates/api/src/clickhouse/pagination.rs** - Cursor encoding/decoding
+   - `encode_cursor(block_number, index) -> String` - Format: "block:index"
+   - `decode_cursor(cursor) -> Option<(i64, i32)>` - Parse cursor string
+   - `encode_cursor_single(id) -> String` - Format: "id"
+   - `decode_cursor_single(cursor) -> Option<i64>` - Parse single ID
+   - **Compatible with existing API cursor format** (from response.rs)
+   - Unit tests: valid/invalid formats, edge cases (0, i64::MAX)
+
+4. **crates/api/src/clickhouse/query.rs** - Query building helpers
+   - `hex_hash(field) -> String` - Generate `lower(hex(field))` for SELECT
+   - `unhex_hash(hex_str) -> Result<Vec<u8>>` - Parse hex string to binary (32 bytes)
+   - `build_where_hash(field, hash) -> Result<String>` - Generate `field = unhex('...')`
+   - `build_where_block_range(start, end) -> String` - Generate block range WHERE clause
+   - Unit tests: hex conversion, roundtrip, invalid inputs, WHERE clause generation
+
+### Dependencies Added
+
+```toml
+# crates/api/Cargo.toml
+clickhouse = "0.12"
+```
+
+**Why clickhouse-rs 0.12?**
+
+- Same version as indexer crate (consistency)
+- Mature library with good documentation
+- Built-in connection pooling (no explicit pool needed)
+- Supports both HTTP and Native protocols
+
+### Implementation Patterns
+
+**Connection Client Pattern** (from indexer crate):
+
+```rust
+#[derive(Clone)]
+pub struct ClickHouseClient {
+    client: Client,  // clickhouse::Client handles pooling internally
+}
+
+impl ClickHouseClient {
+    pub fn new(url: &str) -> Result<Self> {
+        let client = Client::default().with_url(url);
+        Ok(Self { client })
+    }
+
+    pub fn client(&self) -> &Client {
+        &self.client  // Escape hatch for advanced operations
+    }
+}
+```
+
+**Cursor Pagination Pattern** (compatible with existing API):
+
+```rust
+// Existing API format (from response.rs):
+// - "block:index" for transactions/cells
+// - "id" for simple tables
+
+// ClickHouse module uses same format:
+encode_cursor(12345, 67) => "12345:67"
+decode_cursor("12345:67") => Some((12345, 67))
+```
+
+**Hash Conversion Pattern** (FixedString(32) ↔ hex string):
+
+```rust
+// SELECT query: Convert FixedString(32) to hex string
+let query = format!("SELECT {} FROM blocks", hex_hash("hash"));
+// => "SELECT lower(hex(hash)) FROM blocks"
+
+// WHERE query: Convert hex string to FixedString(32)
+let where_clause = build_where_hash("tx_hash", "0x1234...")?;
+// => "tx_hash = unhex('1234...')"
+
+// Rust-side: Parse hex string to Vec<u8>
+let bytes = unhex_hash("0x1234...")?;  // Vec<u8> with 32 bytes
+```
+
+### Verification Results
+
+✅ **All success criteria met**:
+
+1. **Module structure created**: 4 files (mod.rs, connection.rs, pagination.rs, query.rs)
+2. **Compilation**: `cargo build -p ckbadger-api` ✅ Passed (8.60s)
+3. **Linting**: `cargo clippy -p ckbadger-api` ✅ Passed (no warnings after fix)
+4. **Unit tests**: `cargo test -p ckbadger-api --lib` ✅ 26 tests passed (15 new tests)
+   - 2 connection tests (client creation)
+   - 5 pagination tests (encode/decode, edge cases)
+   - 8 query tests (hex conversion, WHERE builders)
+5. **Module declared**: Added `pub mod clickhouse;` to lib.rs
+6. **No API changes**: No modifications to existing routes or response formats
+
+**Test Coverage**:
+
+- Connection: Client creation with/without credentials
+- Pagination: Valid/invalid cursor formats, edge cases (0, i64::MAX)
+- Query: Hex conversion (valid/invalid), roundtrip, WHERE clause generation
+
+### Technical Decisions
+
+**1. Why thin wrapper instead of thick abstraction?**
+
+- Provides essential methods (health_check, version)
+- Exposes `client()` for advanced operations
+- Avoids over-abstraction (don't wrap every clickhouse-rs method)
+- Follows Rust async patterns (Clone-able, cheap to share)
+
+**2. Why reuse existing cursor format?**
+
+- Maintains API compatibility during migration
+- Frontend code doesn't need changes
+- Simple format: "block:index" or "id"
+- No base64 encoding needed (unlike some implementations)
+
+**3. Why separate query helpers?**
+
+- ClickHouse uses FixedString(32) for hashes (binary storage)
+- API responses need hex strings (64 chars)
+- Conversion logic centralized in query module
+- Prevents "Cannot read all data" errors (from Phase 0)
+
+**4. Why anyhow::Result instead of custom errors?**
+
+- Consistent with indexer crate error handling
+- Simpler for infrastructure code
+- Easy to propagate errors up the stack
+- Can add context with `.context()`
+
+### Gotchas Encountered
+
+**1. Clippy Warning: empty_line_after_doc_comments**
+
+- Error: Empty line between doc comment and module declaration
+- Cause: `/// ``` \n\n pub mod connection;`
+- Solution: Remove empty line: `/// ``` \npub mod connection;`
+
+**2. Module Declaration Order**
+
+- Must declare `pub mod clickhouse;` in lib.rs before using
+- Alphabetical order maintained (after cache, before cycles)
+
+**3. Cursor Format Compatibility**
+
+- Existing API uses simple "block:index" format (not base64 JSON)
+- Must match exactly for frontend compatibility
+- Verified by reading response.rs encode/decode functions
+
+### Comparison with Existing API Patterns
+
+| Aspect              | PostgreSQL API (existing) | ClickHouse Module (new)             |
+| ------------------- | ------------------------- | ----------------------------------- |
+| **Cursor format**   | "block:index" or "id"     | Same format (compatible)            |
+| **Hash storage**    | BYTEA (binary)            | FixedString(32) (binary)            |
+| **Hash in queries** | Direct binary comparison  | unhex() for WHERE, hex() for SELECT |
+| **Connection pool** | PgPool (explicit)         | Client (implicit pooling)           |
+| **Error handling**  | ApiError with StatusCode  | Same (query.rs uses ApiError)       |
+| **Module location** | N/A (no separate module)  | crates/api/src/clickhouse/          |
+
+### API Design Pattern
+
+```rust
+// ✅ Correct: Thin wrapper with essential methods
+pub struct ClickHouseClient {
+    client: Client,  // Private
+}
+
+impl ClickHouseClient {
+    pub fn new(url: &str) -> Result<Self> { ... }
+    pub async fn health_check(&self) -> Result<()> { ... }
+    pub fn client(&self) -> &Client { ... }  // Escape hatch
+}
+
+// ❌ Wrong: Over-abstraction with too many methods
+pub struct ClickHouseClient {
+    // Don't wrap every clickhouse-rs method
+}
+```
+
+### Next Steps (Task 4.2)
+
+Ready for API endpoint rewrite:
+
+- Use `ClickHouseClient` for database connections
+- Use `encode_cursor`/`decode_cursor` for pagination
+- Use `hex_hash` in SELECT queries
+- Use `unhex_hash` for hash parameters
+- Use `build_where_hash` for hash WHERE clauses
+- Use `build_where_block_range` for block range filters
+
+### Pattern for Future Query Implementation
+
+```rust
+use crate::clickhouse::{ClickHouseClient, encode_cursor, decode_cursor, hex_hash, build_where_hash};
+
+async fn get_blocks(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<BlocksQuery>,
+) -> ApiResult<CursorPaginatedResponse<BlockResponse>> {
+    let client = ClickHouseClient::new(&state.clickhouse_url)?;
+
+    let cursor_block = params.cursor
+        .as_ref()
+        .and_then(|c| decode_cursor_single(c))
+        .unwrap_or(i64::MAX);
+
+    let query = format!(
+        "SELECT {}, number, timestamp FROM blocks
+         WHERE number < {}
+         ORDER BY number DESC
+         LIMIT {}",
+        hex_hash("hash"),
+        cursor_block,
+        params.limit + 1
+    );
+
+    let rows = client.client()
+        .query(&query)
+        .fetch_all::<(String, i64, i64)>()
+        .await?;
+
+    let has_more = rows.len() > params.limit as usize;
+    let next_cursor = if has_more {
+        rows.last().map(|(_, number, _)| encode_cursor_single(*number))
+    } else {
+        None
+    };
+
+    ok(CursorPaginatedResponse::new(blocks, total, limit, next_cursor))
+}
+```
+
+### Technical Debt
+
+1. **No connection timeout configuration**: Uses default timeouts
+   - Mitigation: Add timeout configuration in Task 4.2 if needed
+   - Future: Add `with_timeout()` method
+
+2. **No retry logic**: Fails immediately on connection errors
+   - Mitigation: Add retry logic in Task 4.2 if needed
+   - Future: Add `with_retries()` method
+
+3. **No connection pool size configuration**: Uses driver defaults
+   - Mitigation: Monitor connection usage in Task 4.2
+   - Future: Add `with_pool_size()` method if needed
+
+4. **Integration tests commented out**: Requires running ClickHouse
+   - Mitigation: Run manually during development
+   - Future: Add docker-compose test environment
+
+### Lessons Learned
+
+1. **Keep infrastructure code simple**: Don't over-abstract, provide escape hatch
+2. **Reuse existing patterns**: Cursor format compatibility prevents frontend changes
+3. **Centralize conversion logic**: Hash conversion in one place prevents errors
+4. **Trust the driver**: Connection pooling works out of the box
+5. **Document with examples**: Module-level docs show correct usage patterns
+6. **Test edge cases**: 0, i64::MAX, invalid formats, roundtrip conversions
+
+### Evidence
+
+**Files Created**:
+
+- `crates/api/src/clickhouse/mod.rs` (40 lines)
+- `crates/api/src/clickhouse/connection.rs` (49 lines)
+- `crates/api/src/clickhouse/pagination.rs` (64 lines)
+- `crates/api/src/clickhouse/query.rs` (113 lines)
+
+**Tests Added**: 15 unit tests (all passing)
+
+- 2 connection tests
+- 5 pagination tests
+- 8 query tests
+
+**Verification**:
+
+- Build: ✅ 8.60s
+- Clippy: ✅ No warnings
+- Tests: ✅ 26 passed (15 new)
+
+**Dependencies**: clickhouse = "0.12" (added to Cargo.toml)
+
+---

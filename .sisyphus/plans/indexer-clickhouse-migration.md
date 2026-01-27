@@ -670,7 +670,7 @@
 
 ### PHASE 4: API Rewrite
 
-- [ ] 4.1. ClickHouse查询层基础
+- [x] 4.1. ClickHouse查询层基础
 
   **What to do**:
   - 创建`crates/api/src/clickhouse/`模块

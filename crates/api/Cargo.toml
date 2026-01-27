@@ -25,6 +25,7 @@ futures = "0.3"
 
 # Database
 sqlx = { workspace = true }
+clickhouse = "0.12"
 
 # Serialization
 serde = { workspace = true }
