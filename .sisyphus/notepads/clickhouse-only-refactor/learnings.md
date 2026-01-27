@@ -228,3 +228,29 @@ All follow same pattern: remove hybrid if/else, inline ClickHouse, convert helpe
 - The hybrid pattern removal is straightforward, but inlining functions requires careful handling
 - State reference updates (clickhouse_client -> clickhouse) are simple but need to be done consistently
 
+
+## search.rs Refactoring (Completed)
+
+**Pattern Applied**: Removed all PostgreSQL code and hybrid patterns from search.rs
+
+**Changes Made**:
+1. Removed `ApiError` import (not used in ClickHouse-only version)
+2. Removed hybrid `search()` wrapper function
+3. Inlined `search_clickhouse()` logic directly into main `search()` handler
+4. Updated all state references: `state.clickhouse_client` → `state.clickhouse`
+5. Deleted entire `search_postgres()` function (130+ lines)
+6. Deleted `parse_capacity_str()` helper (only needed for PostgreSQL string parsing)
+7. Kept `parse_capacity()` for ClickHouse u64 capacity values
+
+**Result**:
+- File reduced from 408 to 256 lines
+- No sqlx imports
+- No state.pool references
+- No hybrid if/else patterns
+- All handlers use state.clickhouse directly
+- Compiles without search.rs-specific errors
+
+**Key Pattern**:
+- ClickHouse handlers use `state.clickhouse.client().query()` directly
+- All Row structs use `#[derive(Row, Deserialize)]` from clickhouse crate
+- Error handling via `if let Ok(rows) = ...` pattern (no ApiError wrapping needed for ClickHouse queries)

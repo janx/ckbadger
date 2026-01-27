@@ -222,7 +222,7 @@ Simplify architecture by removing PostgreSQL, making ClickHouse the only databas
 
 ---
 
-- [ ] 2.5. Simplify search.rs
+- [x] 2.5. Simplify search.rs
 
   **Pattern**: Same as above
 
