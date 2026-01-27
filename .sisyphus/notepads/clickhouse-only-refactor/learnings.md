@@ -783,3 +783,37 @@ When removing a database backend from a multi-backend architecture:
 - Task 3.3: Update parser module to use ClickHouse types
 - Task 3.4: Update writer module to use ClickHouse mutations
 - Task 3.5: Update sync pipeline to use ClickHouse writer
+
+## ClickHouseWriter Foundation Types Added (2026-01-27)
+
+### Task: Add Missing Types and Helper Functions
+
+**Changes Made:**
+
+- Added SecondaryIssuanceBreakdown struct (matches PostgreSQL writer)
+- Added ReorgResult struct (for reorg operations)
+- Added BatchWriter type alias (ClickHouseWriter = BatchWriter for compatibility)
+- Added helper functions: extract_ar_from_dao, extract_total_issuance_from_dao, looks_like_dep_group
+- Added DAO_OCCUPIED_CAPACITY constant
+- Added client() accessor method to ClickHouseWriter
+
+**Verification:**
+
+- ✅ cargo check -p ckbadger-indexer passes
+- ✅ lsp_diagnostics clean (no errors)
+- ✅ All types now available for sync/indexer.rs
+
+**Pattern:**
+When adding foundation types to match an existing interface:
+
+1. Add imports for parser types (ParsedBlock, ParsedCell, etc.)
+2. Add struct definitions with same field names and types
+3. Add helper functions that will be used by conversion methods
+4. Use #[allow(dead_code)] to suppress warnings until methods are implemented
+
+**Next Steps:**
+
+- Implement conversion methods (ParsedBlock → BlockRow, etc.)
+- Implement high-level insert methods (insert_block, insert_transaction, etc.)
+- Implement statistics update methods
+- Implement query methods

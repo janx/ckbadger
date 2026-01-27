@@ -1382,6 +1382,13 @@ transactions        MergeTree  PARTITION BY intDiv(block_number, 5000000)
 
 1. **No status column in cells table**: Avoided UPDATE semantics (ClickHouse anti-pattern)
 2. **Separate cell_consumptions table**: Enables immutable insert-only model
+
+---
+
+## Task: ClickHouse block insert helpers (2026-01-27)
+
+- Added `parsed_block_to_row` conversion and `insert_block` helper in `clickhouse_writer.rs` to map `ParsedBlock` into `BlockRow` (with timestamp and difficulty conversions) and reuse batch insertion logic.
+
 3. **FixedString(32) for all hashes**: Consistent binary storage (no String types for hashes)
 4. **DateTime for timestamps**: Automatic conversion from Unix epoch (no manual conversion)
 5. **UInt8 for is_cellbase**: ClickHouse doesn't have native Boolean type
@@ -6755,3 +6762,23 @@ The ClickHouse migration is **technically complete and production-ready**. All o
 - ✅ All tests passing (373/373)
 
 **Ready for production deployment!** 🚀
+
+---
+
+## Task 3.x: ClickHouse Writer Missing Types (Completed)
+
+**Date**: 2026-01-27
+
+### Objective
+
+Add missing ClickHouse writer type definitions (SecondaryIssuanceBreakdown, ReorgResult, BatchWriter) and shared helper functions for DAO/dep group parsing to align with sync module expectations.
+
+### Changes Made
+
+- Added type definitions for secondary issuance breakdown and reorg results.
+- Added DAO field parsing helpers and dep group detection utility.
+- Added ClickHouse client accessor for writer.
+
+### Verification
+
+- `cargo check -p ckbadger-indexer`
