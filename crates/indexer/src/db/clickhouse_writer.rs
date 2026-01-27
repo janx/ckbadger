@@ -158,6 +158,130 @@ impl ClickHouseWriter {
 
         Ok(())
     }
+
+    /// Insert a batch of DAO deposits into the dao_deposits table.
+    ///
+    /// # Arguments
+    ///
+    /// * `deposits` - Vector of DaoDepositRow instances to insert
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the insert operation fails.
+    pub async fn insert_dao_deposits_batch(&self, deposits: Vec<DaoDepositRow>) -> Result<()> {
+        if deposits.is_empty() {
+            return Ok(());
+        }
+
+        let mut insert = self.client.client().insert("dao_deposits")?;
+        for deposit in deposits {
+            insert.write(&deposit).await?;
+        }
+        insert.end().await?;
+
+        Ok(())
+    }
+
+    /// Insert a batch of DAO withdrawals into the dao_withdrawals table.
+    ///
+    /// # Arguments
+    ///
+    /// * `withdrawals` - Vector of DaoWithdrawalRow instances to insert
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the insert operation fails.
+    pub async fn insert_dao_withdrawals_batch(
+        &self,
+        withdrawals: Vec<DaoWithdrawalRow>,
+    ) -> Result<()> {
+        if withdrawals.is_empty() {
+            return Ok(());
+        }
+
+        let mut insert = self.client.client().insert("dao_withdrawals")?;
+        for withdrawal in withdrawals {
+            insert.write(&withdrawal).await?;
+        }
+        insert.end().await?;
+
+        Ok(())
+    }
+
+    /// Insert a batch of token transfers into the token_transfers table.
+    ///
+    /// # Arguments
+    ///
+    /// * `transfers` - Vector of TokenTransferRow instances to insert
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the insert operation fails.
+    pub async fn insert_token_transfers_batch(
+        &self,
+        transfers: Vec<TokenTransferRow>,
+    ) -> Result<()> {
+        if transfers.is_empty() {
+            return Ok(());
+        }
+
+        let mut insert = self.client.client().insert("token_transfers")?;
+        for transfer in transfers {
+            insert.write(&transfer).await?;
+        }
+        insert.end().await?;
+
+        Ok(())
+    }
+
+    /// Insert a batch of Spore cells into the spore_cells table.
+    ///
+    /// # Arguments
+    ///
+    /// * `spores` - Vector of SporeCellRow instances to insert
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the insert operation fails.
+    pub async fn insert_spore_cells_batch(&self, spores: Vec<SporeCellRow>) -> Result<()> {
+        if spores.is_empty() {
+            return Ok(());
+        }
+
+        let mut insert = self.client.client().insert("spore_cells")?;
+        for spore in spores {
+            insert.write(&spore).await?;
+        }
+        insert.end().await?;
+
+        Ok(())
+    }
+
+    /// Insert a batch of Spore transfers into the spore_transfers table.
+    ///
+    /// # Arguments
+    ///
+    /// * `transfers` - Vector of SporeTransferRow instances to insert
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the insert operation fails.
+    pub async fn insert_spore_transfers_batch(
+        &self,
+        transfers: Vec<SporeTransferRow>,
+    ) -> Result<()> {
+        if transfers.is_empty() {
+            return Ok(());
+        }
+
+        let mut insert = self.client.client().insert("spore_transfers")?;
+        for transfer in transfers {
+            insert.write(&transfer).await?;
+        }
+        insert.end().await?;
+
+        Ok(())
+    }
 }
 
 // ============================================================================
@@ -303,6 +427,115 @@ pub struct LiveCellRow {
     // ReplacingMergeTree metadata
     pub sign: i8,     // 1 = created (live), -1 = consumed (dead)
     pub version: u64, // Block number (for deduplication, higher wins)
+}
+
+/// DAO deposit row matching the dao_deposits table schema.
+///
+/// All hash fields use Vec<u8> for binary serialization (FixedString(32) in ClickHouse).
+#[derive(Debug, Clone, Serialize, Row)]
+pub struct DaoDepositRow {
+    // Cell identification (OutPoint)
+    pub tx_hash: Vec<u8>,
+    pub output_index: u16,
+
+    // Depositor information
+    pub depositor_lock_hash: Vec<u8>,
+
+    // Deposit metadata
+    pub capacity: u64,
+    pub deposit_block: u64,
+    pub deposit_timestamp: u32,
+    pub deposit_ar: u64,
+}
+
+/// DAO withdrawal row matching the dao_withdrawals table schema.
+///
+/// All hash fields use Vec<u8> for binary serialization (FixedString(32) in ClickHouse).
+#[derive(Debug, Clone, Serialize, Row)]
+pub struct DaoWithdrawalRow {
+    // Original deposit identification
+    pub deposit_tx: Vec<u8>,
+    pub deposit_index: u16,
+
+    // Withdraw request metadata
+    pub withdraw_request_tx: Vec<u8>,
+    pub withdraw_request_block: u64,
+    pub withdraw_request_timestamp: u32,
+    pub withdraw_request_ar: u64,
+
+    // Withdraw completion metadata (NULL until completed)
+    pub withdraw_completion_tx: Option<Vec<u8>>,
+    pub withdraw_completion_block: Option<u64>,
+    pub withdraw_completion_timestamp: Option<u32>,
+    pub compensation: Option<u64>,
+}
+
+/// Token transfer row matching the token_transfers table schema.
+///
+/// All hash fields use Vec<u8> for binary serialization (FixedString(32) in ClickHouse).
+#[derive(Debug, Clone, Serialize, Row)]
+pub struct TokenTransferRow {
+    // Token identification
+    pub type_script_hash: Vec<u8>,
+
+    // Transfer participants
+    pub from_lock_hash: Option<Vec<u8>>,
+    pub to_lock_hash: Option<Vec<u8>>,
+
+    // Transfer metadata
+    pub amount: String,
+    pub block_number: u64,
+    pub tx_hash: Vec<u8>,
+    pub tx_index: u32,
+    pub timestamp: u32,
+}
+
+/// Spore cell row matching the spore_cells table schema.
+///
+/// All hash fields use Vec<u8> for binary serialization (FixedString(32) in ClickHouse).
+#[derive(Debug, Clone, Serialize, Row)]
+pub struct SporeCellRow {
+    // Cell identification (OutPoint)
+    pub tx_hash: Vec<u8>,
+    pub output_index: u16,
+
+    // Spore identification
+    pub spore_id: Vec<u8>,
+    pub cluster_id: Option<Vec<u8>>,
+
+    // Spore metadata
+    pub content_type: String,
+    pub content_size: u32,
+    pub content: Option<String>,
+
+    // Ownership
+    pub owner_lock_hash: Vec<u8>,
+
+    // Lifecycle metadata
+    pub created_at_block: u64,
+    pub created_at_timestamp: u32,
+    pub consumed_at_block: Option<u64>,
+    pub consumed_by_tx: Option<Vec<u8>>,
+}
+
+/// Spore transfer row matching the spore_transfers table schema.
+///
+/// All hash fields use Vec<u8> for binary serialization (FixedString(32) in ClickHouse).
+#[derive(Debug, Clone, Serialize, Row)]
+pub struct SporeTransferRow {
+    // Spore identification (OutPoint)
+    pub tx_hash: Vec<u8>,
+    pub output_index: u16,
+    pub spore_id: Vec<u8>,
+
+    // Transfer participants
+    pub from_lock_hash: Option<Vec<u8>>,
+    pub to_lock_hash: Option<Vec<u8>>,
+
+    // Transfer metadata
+    pub block_number: u64,
+    pub transfer_tx: Vec<u8>,
+    pub timestamp: u32,
 }
 
 #[cfg(test)]

@@ -606,7 +606,7 @@
 
 ---
 
-- [ ] 3.3. DAO/Token/NFT Writer实现
+- [x] 3.3. DAO/Token/NFT Writer实现
 
   **What to do**:
   - 实现DAO事件写入（deposit_events, withdrawal_events）

@@ -2853,3 +2853,310 @@ pub fn compute_expensive(key: &K) -> V {
 5. **Keep API unchanged**: Global cache avoids breaking changes
 
 ---
+
+---
+
+## Task 3.3: Asset-Specific Batch Writers (Completed)
+
+**Date**: 2026-01-27
+
+### Objective
+
+Extend ClickHouseWriter with batch insert methods for DAO deposits/withdrawals, token transfers, and NFT events. Use event-sourcing pattern (immutable inserts only, no UPDATE).
+
+### Files Modified
+
+**crates/indexer/src/db/clickhouse_writer.rs** - Added:
+
+1. **5 Row Structs** (lines 309-437):
+   - `DaoDepositRow` (7 fields)
+   - `DaoWithdrawalRow` (10 fields)
+   - `TokenTransferRow` (8 fields)
+   - `SporeCellRow` (12 fields)
+   - `SporeTransferRow` (8 fields)
+
+2. **5 Batch Insert Methods** (lines 163-289):
+   - `insert_dao_deposits_batch(&self, deposits: Vec<DaoDepositRow>) -> Result<()>`
+   - `insert_dao_withdrawals_batch(&self, withdrawals: Vec<DaoWithdrawalRow>) -> Result<()>`
+   - `insert_token_transfers_batch(&self, transfers: Vec<TokenTransferRow>) -> Result<()>`
+   - `insert_spore_cells_batch(&self, spores: Vec<SporeCellRow>) -> Result<()>`
+   - `insert_spore_transfers_batch(&self, transfers: Vec<SporeTransferRow>) -> Result<()>`
+
+### Implementation Details
+
+**Row Struct Design Pattern**:
+
+```rust
+#[derive(Debug, Clone, Serialize, Row)]
+pub struct DaoDepositRow {
+    // Cell identification (OutPoint)
+    pub tx_hash: Vec<u8>,           // FixedString(32)
+    pub output_index: u16,          // UInt16
+
+    // Depositor information
+    pub depositor_lock_hash: Vec<u8>, // FixedString(32)
+
+    // Deposit metadata
+    pub capacity: u64,              // UInt64
+    pub deposit_block: u64,         // UInt64
+    pub deposit_timestamp: u32,     // DateTime (Unix timestamp)
+    pub deposit_ar: u64,            // UInt64
+}
+```
+
+**Batch Insert Pattern**:
+
+```rust
+pub async fn insert_dao_deposits_batch(&self, deposits: Vec<DaoDepositRow>) -> Result<()> {
+    if deposits.is_empty() {
+        return Ok(());
+    }
+    let mut insert = self.client.client().insert("dao_deposits")?;
+    for deposit in deposits {
+        insert.write(&deposit).await?;
+    }
+    insert.end().await?;
+    Ok(())
+}
+```
+
+### Schema Alignment
+
+**DAO Deposits** (7 fields):
+
+- tx_hash: Vec<u8> → FixedString(32)
+- output_index: u16 → UInt16
+- depositor_lock_hash: Vec<u8> → FixedString(32)
+- capacity: u64 → UInt64
+- deposit_block: u64 → UInt64
+- deposit_timestamp: u32 → DateTime
+- deposit_ar: u64 → UInt64
+
+**DAO Withdrawals** (10 fields):
+
+- deposit_tx: Vec<u8> → FixedString(32)
+- deposit_index: u16 → UInt16
+- withdraw_request_tx: Vec<u8> → FixedString(32)
+- withdraw_request_block: u64 → UInt64
+- withdraw_request_timestamp: u32 → DateTime
+- withdraw_request_ar: u64 → UInt64
+- withdraw_completion_tx: Option<Vec<u8>> → Nullable(FixedString(32))
+- withdraw_completion_block: Option<u64> → Nullable(UInt64)
+- withdraw_completion_timestamp: Option<u32> → Nullable(DateTime)
+- compensation: Option<u64> → Nullable(UInt64)
+
+**Token Transfers** (8 fields):
+
+- type_script_hash: Vec<u8> → FixedString(32)
+- from_lock_hash: Option<Vec<u8>> → Nullable(FixedString(32))
+- to_lock_hash: Option<Vec<u8>> → Nullable(FixedString(32))
+- amount: String → String (UInt128 as string)
+- block_number: u64 → UInt64
+- tx_hash: Vec<u8> → FixedString(32)
+- tx_index: u32 → UInt32
+- timestamp: u32 → DateTime
+
+**Spore Cells** (12 fields):
+
+- tx_hash: Vec<u8> → FixedString(32)
+- output_index: u16 → UInt16
+- spore_id: Vec<u8> → FixedString(32)
+- cluster_id: Option<Vec<u8>> → Nullable(FixedString(32))
+- content_type: String → String
+- content_size: u32 → UInt32
+- content: Option<String> → Nullable(String)
+- owner_lock_hash: Vec<u8> → FixedString(32)
+- created_at_block: u64 → UInt64
+- created_at_timestamp: u32 → DateTime
+- consumed_at_block: Option<u64> → Nullable(UInt64)
+- consumed_by_tx: Option<Vec<u8>> → Nullable(FixedString(32))
+
+**Spore Transfers** (8 fields):
+
+- tx_hash: Vec<u8> → FixedString(32)
+- output_index: u16 → UInt16
+- spore_id: Vec<u8> → FixedString(32)
+- from_lock_hash: Option<Vec<u8>> → Nullable(FixedString(32))
+- to_lock_hash: Option<Vec<u8>> → Nullable(FixedString(32))
+- block_number: u64 → UInt64
+- transfer_tx: Vec<u8> → FixedString(32)
+- timestamp: u32 → DateTime
+
+### Verification Results
+
+✅ **All success criteria met**:
+
+1. **File modified**: `crates/indexer/src/db/clickhouse_writer.rs`
+2. **5 Row structs added**: DaoDepositRow, DaoWithdrawalRow, TokenTransferRow, SporeCellRow, SporeTransferRow
+3. **5 batch insert methods added**: All follow same pattern as core table writers
+4. **Binary hash serialization**: All hash fields use Vec<u8>
+5. **Compilation**: `cargo check -p ckbadger-indexer` ✅ Passed
+
+### Technical Decisions
+
+**Why Vec<u8> for hash fields?**
+
+- ClickHouse FixedString(32) expects binary data (32 bytes)
+- Vec<u8> serializes correctly to FixedString(32) via clickhouse-rs
+- Hex strings (64 chars) would cause "Cannot read all data" errors
+- Consistent with core table Row structs (BlockRow, TransactionRow, etc.)
+
+**Why String for token amount?**
+
+- Token amounts are UInt128 (may exceed UInt64 range)
+- ClickHouse String type stores large numbers as strings
+- Rust u128 → String conversion: `amount.to_string()`
+- Query-time conversion: `toUInt128OrZero(amount)`
+
+**Why Option<T> for nullable fields?**
+
+- ClickHouse Nullable(Type) maps to Rust Option<Type>
+- clickhouse-rs handles None → NULL serialization automatically
+- Examples: withdraw_completion_tx, from_lock_hash, cluster_id
+
+**Why u32 for timestamps?**
+
+- ClickHouse DateTime stores Unix timestamps (seconds since epoch)
+- Rust u32 (0 to 4,294,967,295) covers years 1970-2106
+- Smaller than u64, sufficient for blockchain timestamps
+- Consistent with core table Row structs
+
+### Comparison with Core Table Writers
+
+| Aspect              | Core Tables (Task 3.1)    | Asset Tables (Task 3.3)   |
+| ------------------- | ------------------------- | ------------------------- |
+| **Row structs**     | 5 (Block, Tx, Cell, etc.) | 5 (DAO, Token, Spore)     |
+| **Insert methods**  | 5 batch methods           | 5 batch methods           |
+| **Hash fields**     | Vec<u8> (binary)          | Vec<u8> (binary)          |
+| **Nullable fields** | Option<T>                 | Option<T>                 |
+| **Timestamp type**  | u32 (DateTime)            | u32 (DateTime)            |
+| **Pattern**         | Empty check + insert loop | Empty check + insert loop |
+| **Error handling**  | anyhow::Result            | anyhow::Result            |
+
+### Pattern for Future Asset Writers
+
+```rust
+// ✅ Correct: Binary hash serialization
+#[derive(Debug, Clone, Serialize, Row)]
+pub struct AssetRow {
+    pub tx_hash: Vec<u8>,           // FixedString(32)
+    pub lock_hash: Vec<u8>,         // FixedString(32)
+    pub optional_hash: Option<Vec<u8>>, // Nullable(FixedString(32))
+    pub amount: String,             // String (for UInt128)
+    pub timestamp: u32,             // DateTime
+}
+
+// ✅ Correct: Batch insert with empty check
+pub async fn insert_assets_batch(&self, assets: Vec<AssetRow>) -> Result<()> {
+    if assets.is_empty() {
+        return Ok(());
+    }
+    let mut insert = self.client.client().insert("assets")?;
+    for asset in assets {
+        insert.write(&asset).await?;
+    }
+    insert.end().await?;
+    Ok(())
+}
+
+// ❌ Wrong: Hex string for hash fields
+pub struct AssetRow {
+    pub tx_hash: String,  // 64 hex chars → ERROR
+}
+
+// ❌ Wrong: No empty check
+pub async fn insert_assets_batch(&self, assets: Vec<AssetRow>) -> Result<()> {
+    let mut insert = self.client.client().insert("assets")?;
+    // Will fail if assets is empty
+}
+```
+
+### Gotchas Avoided
+
+1. **Hex string serialization**: Used Vec<u8> instead of String for hash fields
+   - Avoids "Cannot read all data" errors
+   - 50% storage savings (32 bytes vs 64 chars)
+
+2. **Empty batch handling**: Added `if deposits.is_empty() { return Ok(()); }`
+   - Prevents unnecessary ClickHouse insert operations
+   - Consistent with core table writers
+
+3. **Nullable field handling**: Used Option<T> for all nullable fields
+   - Automatic None → NULL serialization
+   - Type-safe at compile time
+
+4. **Large number handling**: Used String for token amounts
+   - Avoids UInt64 overflow for UInt128 values
+   - Query-time conversion with toUInt128OrZero()
+
+### Next Steps
+
+Task 3.4 will optimize parser layer to generate these Row structs directly from parsed data, avoiding intermediate allocations.
+
+### Dependencies
+
+No new dependencies added - all functionality uses existing:
+
+- `clickhouse = "0.12"` (Row derive macro)
+- `serde = "1.0"` (Serialize derive macro)
+- `anyhow = "1.0"` (Result type)
+
+### Public API
+
+```rust
+// Re-exported from crates/indexer/src/db/mod.rs
+pub use clickhouse_writer::{
+    ClickHouseWriter,
+    DaoDepositRow,
+    DaoWithdrawalRow,
+    TokenTransferRow,
+    SporeCellRow,
+    SporeTransferRow,
+};
+
+// Usage:
+use ckbadger_indexer::db::{ClickHouseWriter, DaoDepositRow};
+
+let writer = ClickHouseWriter::new(client);
+let deposits = vec![DaoDepositRow { ... }];
+writer.insert_dao_deposits_batch(deposits).await?;
+```
+
+### Technical Debt
+
+1. **No batch size limit**: Methods accept unbounded Vec<T>
+   - Mitigation: Caller should batch in chunks (50K-100K rows)
+   - Future: Add max_batch_size parameter
+
+2. **No retry logic**: Fails immediately on insert errors
+   - Mitigation: Caller should implement retry logic
+   - Future: Add retry_on_error parameter
+
+3. **No progress reporting**: Silent batch inserts
+   - Mitigation: Use logging in caller
+   - Future: Add progress callback parameter
+
+4. **No validation**: Assumes valid data from parser
+   - Mitigation: Parser layer validates data
+   - Future: Add optional validation mode
+
+### Lessons Learned
+
+1. **Consistency is key**: Follow existing patterns for Row structs and insert methods
+2. **Binary serialization**: Vec<u8> for FixedString(32), not hex strings
+3. **Empty check**: Always check for empty batches before insert
+4. **Option<T> for nullable**: Type-safe nullable field handling
+5. **String for large numbers**: Use String for UInt128 values
+
+### Performance Expectations
+
+Based on Phase 0 benchmarks (Task 0.2.2):
+
+| Batch Size | Expected Throughput | Latency (P95) |
+| ---------- | ------------------- | ------------- |
+| 1,000      | 16K rows/s          | 75ms          |
+| 10,000     | 135K rows/s         | 128ms         |
+| 50,000     | 437K rows/s         | 216ms         |
+| 100,000    | 449K rows/s         | 589ms         |
+
+**Recommendation**: Use 50K batch size for optimal throughput/latency balance.
