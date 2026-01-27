@@ -63,7 +63,7 @@ fn extract_total_issuance_from_dao(dao: &[u8]) -> Option<u64> {
 #[allow(dead_code)]
 fn looks_like_dep_group(data: &[u8]) -> bool {
     let size = data.len();
-    if !(40..=10000).contains(&size) || (size - 4) % 36 != 0 {
+    if !(40..=10000).contains(&size) || !(size - 4).is_multiple_of(36) {
         return false;
     }
     let count = u32::from_le_bytes(data[0..4].try_into().unwrap_or([0; 4])) as usize;
@@ -72,6 +72,26 @@ fn looks_like_dep_group(data: &[u8]) -> bool {
 
 fn decode_sync_tip_hash(hash: &str) -> Option<Vec<u8>> {
     hex::decode(hash).ok()
+}
+
+/// Convert Vec<u8> to [u8; 32] for FixedString(32) columns
+fn vec_to_hash32(v: &[u8]) -> [u8; 32] {
+    v.try_into().expect("hash must be 32 bytes")
+}
+
+/// Convert Option<Vec<u8>> to Option<[u8; 32]> for nullable FixedString(32) columns
+fn opt_vec_to_hash32(v: Option<&[u8]>) -> Option<[u8; 32]> {
+    v.map(|bytes| bytes.try_into().expect("hash must be 32 bytes"))
+}
+
+/// Convert Vec<u8> to [u8; 16] for FixedString(16) columns (nonce)
+fn vec_to_hash16(v: &[u8]) -> [u8; 16] {
+    v.try_into().expect("nonce must be 16 bytes")
+}
+
+/// Convert Vec<u8> to [u8; 10] for FixedString(10) columns (ProposalShortId)
+fn vec_to_proposal_id(v: &[u8]) -> [u8; 10] {
+    v.try_into().expect("proposal_id must be 10 bytes")
 }
 
 #[allow(dead_code)]
@@ -192,8 +212,10 @@ impl ClickHouseWriter {
         _cells_consumed: i64,
         _new_addresses: i64,
     ) -> Result<()> {
+        // ReplacingMergeTree deduplicates by version column (updated_at)
+        // INSERT new row instead of UPDATE - ClickHouse keeps latest version
         let query = format!(
-            "ALTER TABLE sync_status UPDATE tip_block_number = {}, updated_at = now() WHERE id = 1",
+            "INSERT INTO sync_status (id, tip_block_number, updated_at) VALUES (1, {}, now())",
             block_number
         );
         self.client.client().query(&query).execute().await?;
@@ -232,12 +254,17 @@ impl ClickHouseWriter {
             return Ok(());
         }
 
+        let start = std::time::Instant::now();
         let mut insert = self.client.client().insert("blocks")?;
         for parsed_block in blocks {
             let row = Self::parsed_block_to_row(parsed_block, "0".to_string());
             insert.write(&row).await?;
         }
         insert.end().await?;
+        let elapsed = start.elapsed();
+        if elapsed.as_millis() > 100 {
+            tracing::debug!("insert_blocks_batch: {} rows in {:.1}ms", blocks.len(), elapsed.as_secs_f64() * 1000.0);
+        }
 
         Ok(())
     }
@@ -268,6 +295,7 @@ impl ClickHouseWriter {
             return Ok(());
         }
 
+        let start = std::time::Instant::now();
         let mut insert = self.client.client().insert("transactions")?;
         for (
             hash,
@@ -289,7 +317,7 @@ impl ClickHouseWriter {
         ) in txs
         {
             let row = TransactionRow {
-                hash: hash.to_vec(),
+                hash: vec_to_hash32(hash),
                 block_number: *block_number as u64,
                 tx_index: *tx_index as u32,
                 timestamp: timestamp.timestamp() as u32,
@@ -309,6 +337,10 @@ impl ClickHouseWriter {
             insert.write(&row).await?;
         }
         insert.end().await?;
+        let elapsed = start.elapsed();
+        if elapsed.as_millis() > 100 {
+            tracing::debug!("insert_transactions_batch: {} rows in {:.1}ms", txs.len(), elapsed.as_secs_f64() * 1000.0);
+        }
 
         Ok(())
     }
@@ -319,22 +351,23 @@ impl ClickHouseWriter {
             return Ok(());
         }
 
+        let start = std::time::Instant::now();
         let mut insert = self.client.client().insert("cells")?;
         for (tx_hash, output_index, cell, created_at_block) in cells {
             let row = CellRow {
-                tx_hash: tx_hash.to_vec(),
+                tx_hash: vec_to_hash32(tx_hash),
                 output_index: *output_index as u16,
                 created_at_block: *created_at_block as u64,
                 capacity: cell.capacity as u64,
-                lock_code_hash: cell.lock_code_hash.clone(),
+                lock_code_hash: vec_to_hash32(&cell.lock_code_hash),
                 lock_hash_type: cell.lock_hash_type as u8,
                 lock_args: hex::encode(&cell.lock_args),
-                lock_script_hash: cell.lock_script_hash.clone(),
-                type_code_hash: cell.type_code_hash.clone(),
+                lock_script_hash: vec_to_hash32(&cell.lock_script_hash),
+                type_code_hash: opt_vec_to_hash32(cell.type_code_hash.as_deref()),
                 type_hash_type: cell.type_hash_type.map(|t| t as u8),
-                type_args: cell.type_args.as_ref().map(|a| hex::encode(a)),
-                type_script_hash: cell.type_script_hash.clone(),
-                data_hash: cell.data_hash.clone(),
+                type_args: cell.type_args.as_ref().map(hex::encode),
+                type_script_hash: opt_vec_to_hash32(cell.type_script_hash.as_deref()),
+                data_hash: vec_to_hash32(&cell.data_hash),
                 data_size: cell.data_size as u32,
                 data: if cell.data.is_empty() {
                     None
@@ -345,6 +378,10 @@ impl ClickHouseWriter {
             insert.write(&row).await?;
         }
         insert.end().await?;
+        let elapsed = start.elapsed();
+        if elapsed.as_millis() > 100 {
+            tracing::debug!("insert_cells_batch: {} rows in {:.1}ms", cells.len(), elapsed.as_secs_f64() * 1000.0);
+        }
 
         Ok(())
     }
@@ -366,11 +403,17 @@ impl ClickHouseWriter {
             return Ok(());
         }
 
+        let start = std::time::Instant::now();
+        let len = consumptions.len();
         let mut insert = self.client.client().insert("cell_consumptions")?;
         for consumption in consumptions {
             insert.write(&consumption).await?;
         }
         insert.end().await?;
+        let elapsed = start.elapsed();
+        if elapsed.as_millis() > 100 {
+            tracing::debug!("insert_cell_consumptions_batch: {} rows in {:.1}ms", len, elapsed.as_secs_f64() * 1000.0);
+        }
 
         Ok(())
     }
@@ -526,20 +569,20 @@ impl ClickHouseWriter {
     fn parsed_block_to_row(parsed: &ParsedBlock, total_difficulty: String) -> BlockRow {
         BlockRow {
             number: parsed.number as u64,
-            hash: parsed.hash.clone(),
-            parent_hash: parsed.parent_hash.clone(),
+            hash: vec_to_hash32(&parsed.hash),
+            parent_hash: vec_to_hash32(&parsed.parent_hash),
             timestamp: parsed.timestamp.timestamp() as u32,
             version: parsed.version as u32,
             compact_target: parsed.compact_target as u64,
-            nonce: parsed.nonce.clone(),
-            transactions_root: parsed.transactions_root.clone(),
-            proposals_hash: parsed.proposals_hash.clone(),
-            extra_hash: parsed.extra_hash.clone(),
-            uncles_hash: parsed.uncles_hash.clone(),
+            nonce: vec_to_hash16(&parsed.nonce),
+            transactions_root: vec_to_hash32(&parsed.transactions_root),
+            proposals_hash: vec_to_hash32(&parsed.proposals_hash),
+            extra_hash: vec_to_hash32(&parsed.extra_hash),
+            uncles_hash: vec_to_hash32(&parsed.uncles_hash),
             epoch_number: parsed.epoch_number as u64,
             epoch_index: parsed.epoch_index as u32,
             epoch_length: parsed.epoch_length as u32,
-            dao: parsed.dao.clone(),
+            dao: vec_to_hash32(&parsed.dao),
             transactions_count: parsed.transactions_count as u32,
             proposals_count: parsed.proposals_count as u32,
             uncles_count: parsed.uncles_count as u32,
@@ -586,10 +629,10 @@ impl ClickHouseWriter {
                     consumed_at_index,
                 )| {
                     CellConsumptionRow {
-                        tx_hash: tx_hash.to_vec(),
+                        tx_hash: vec_to_hash32(tx_hash),
                         output_index: *output_index as u16,
                         consumed_at_block: *consumed_at_block as u64,
-                        consumed_by_tx: consumed_by_tx.to_vec(),
+                        consumed_by_tx: vec_to_hash32(consumed_by_tx),
                         consumed_at_index: *consumed_at_index as u16,
                     }
                 },
@@ -610,10 +653,10 @@ impl ClickHouseWriter {
                     consumed_at_block,
                     _consumed_at_index,
                 )| LiveCellRow {
-                    tx_hash: tx_hash.to_vec(),
+                    tx_hash: vec_to_hash32(tx_hash),
                     output_index: *output_index as u16,
                     capacity: 0,
-                    lock_script_hash: vec![],
+                    lock_script_hash: [0u8; 32],
                     type_script_hash: None,
                     created_at_block: 0,
                     sign: -1,
@@ -635,23 +678,21 @@ impl ClickHouseWriter {
             return Ok(HashMap::new());
         }
 
-        // Build query with IN clause
-        let conditions: Vec<String> = outpoints
+        let start = std::time::Instant::now();
+
+        // Use tuple IN clause for better ClickHouse performance
+        let tuples: Vec<String> = outpoints
             .iter()
             .map(|(tx_hash, idx)| {
-                format!(
-                    "(tx_hash = unhex('{}') AND output_index = {})",
-                    hex::encode(tx_hash),
-                    idx
-                )
+                format!("(unhex('{}'), {})", hex::encode(tx_hash), idx)
             })
             .collect();
 
         let query = format!(
             "SELECT hex(tx_hash) as tx_hash, output_index, capacity, created_at_block, hex(lock_script_hash) as lock_script_hash, data_size 
              FROM cells 
-             WHERE {}",
-            conditions.join(" OR ")
+             WHERE (tx_hash, output_index) IN ({})",
+            tuples.join(", ")
         );
 
         #[derive(Row, serde::Deserialize)]
@@ -670,6 +711,11 @@ impl ClickHouseWriter {
             .query(&query)
             .fetch_all::<CellInfoRow>()
             .await?;
+
+        let elapsed = start.elapsed();
+        if elapsed.as_millis() > 100 {
+            tracing::debug!("get_cells_info_batch: {} outpoints, {} rows in {:.1}ms", outpoints.len(), rows.len(), elapsed.as_secs_f64() * 1000.0);
+        }
 
         let mut result = HashMap::new();
         for row in rows {
@@ -698,22 +744,17 @@ impl ClickHouseWriter {
             return Ok(HashMap::new());
         }
 
-        let conditions: Vec<String> = outpoints
+        // Use tuple IN clause for efficient batch lookup (vs OR conditions)
+        let tuples: Vec<String> = outpoints
             .iter()
-            .map(|(tx_hash, idx)| {
-                format!(
-                    "(tx_hash = unhex('{}') AND output_index = {})",
-                    hex::encode(tx_hash),
-                    idx
-                )
-            })
+            .map(|(tx_hash, idx)| format!("(unhex('{}'), {})", hex::encode(tx_hash), idx))
             .collect();
 
         let query = format!(
             "SELECT hex(tx_hash) as tx_hash, output_index, hex(lock_code_hash) as lock_code_hash, hex(type_code_hash) as type_code_hash 
              FROM cells 
-             WHERE {}",
-            conditions.join(" OR ")
+             WHERE (tx_hash, output_index) IN ({})",
+            tuples.join(", ")
         );
 
         #[derive(Row, serde::Deserialize)]
@@ -805,7 +846,7 @@ impl ClickHouseWriter {
             let row = BlockProposalRow {
                 block_number: block_number as u64,
                 proposal_index: idx as u16,
-                proposal_hash: proposal_hash.clone(),
+                proposal_hash: vec_to_proposal_id(proposal_hash),
             };
             insert.write(&row).await?;
         }
@@ -825,10 +866,10 @@ impl ClickHouseWriter {
         let mut insert = self.client.client().insert("transaction_inputs")?;
         for (tx_hash, block_number, input_index, input) in inputs {
             let row = TransactionInputRow {
-                tx_hash: tx_hash.to_vec(),
+                tx_hash: vec_to_hash32(tx_hash),
                 tx_block_number: *block_number as u64,
                 input_index: *input_index as u16,
-                previous_tx_hash: input.previous_tx_hash.clone(),
+                previous_tx_hash: vec_to_hash32(&input.previous_tx_hash),
                 previous_output_index: input.previous_output_index as u16,
                 since: input.since as u64,
             };
@@ -850,10 +891,10 @@ impl ClickHouseWriter {
         let mut insert = self.client.client().insert("transaction_cell_deps")?;
         for (tx_hash, block_number, dep_index, cell_dep) in cell_deps {
             let row = TransactionCellDepRow {
-                tx_hash: tx_hash.to_vec(),
+                tx_hash: vec_to_hash32(tx_hash),
                 tx_block_number: *block_number as u64,
                 dep_index: *dep_index as u16,
-                dep_tx_hash: cell_dep.out_point_tx_hash.clone(),
+                dep_tx_hash: vec_to_hash32(&cell_dep.out_point_tx_hash),
                 dep_output_index: cell_dep.out_point_index as u16,
                 dep_type: if cell_dep.dep_type == 0 {
                     "code".to_string()
@@ -890,8 +931,8 @@ impl ClickHouseWriter {
         let mut insert = self.client.client().insert("address_transactions")?;
         for (lock_hash, tx_hash, block_number, tx_type, balance_change, timestamp) in records {
             let row = AddressTransactionRow {
-                lock_hash: lock_hash.clone(),
-                tx_hash: tx_hash.clone(),
+                lock_hash: vec_to_hash32(lock_hash),
+                tx_hash: vec_to_hash32(tx_hash),
                 block_number: *block_number as u64,
                 tx_type: *tx_type as i8,
                 balance_change: *balance_change,
@@ -945,9 +986,9 @@ impl ClickHouseWriter {
         ar: i64,
     ) -> Result<()> {
         let row = DaoDepositRow {
-            tx_hash: deposit.tx_hash.clone(),
+            tx_hash: vec_to_hash32(&deposit.tx_hash),
             output_index: deposit.output_index as u16,
-            depositor_lock_hash: deposit.lock_script_hash.clone(),
+            depositor_lock_hash: vec_to_hash32(&deposit.lock_script_hash),
             capacity: deposit.capacity as u64,
             deposit_block: block_number as u64,
             deposit_timestamp: timestamp.timestamp() as u32,
@@ -965,22 +1006,16 @@ impl ClickHouseWriter {
             return Ok(vec![]);
         }
 
-        let conditions: Vec<String> = consumed_cells
+        let tuples: Vec<String> = consumed_cells
             .iter()
-            .map(|(tx_hash, idx)| {
-                format!(
-                    "(tx_hash = unhex('{}') AND output_index = {})",
-                    hex::encode(tx_hash),
-                    idx
-                )
-            })
+            .map(|(tx_hash, idx)| format!("(unhex('{}'), {})", hex::encode(tx_hash), idx))
             .collect();
 
         let query = format!(
             "SELECT hex(tx_hash) as tx_hash, output_index, capacity, deposit_ar 
              FROM dao_deposits 
-             WHERE {}",
-            conditions.join(" OR ")
+             WHERE (tx_hash, output_index) IN ({})",
+            tuples.join(", ")
         );
 
         #[derive(Row, serde::Deserialize)]
@@ -1385,25 +1420,25 @@ impl ClickHouseWriter {
 
 /// Block row matching the blocks table schema.
 ///
-/// All hash fields use Vec<u8> for binary serialization (FixedString(32) in ClickHouse).
+/// All hash fields use [u8; 32] for binary serialization (FixedString(32) in ClickHouse).
 #[derive(Debug, Clone, Serialize, Row)]
 pub struct BlockRow {
     // Block identification
     pub number: u64,
-    pub hash: Vec<u8>,
-    pub parent_hash: Vec<u8>,
+    pub hash: [u8; 32],
+    pub parent_hash: [u8; 32],
     pub timestamp: u32, // DateTime in ClickHouse (Unix timestamp)
 
     // Block header fields
     pub version: u32,
     pub compact_target: u64,
-    pub nonce: Vec<u8>,
+    pub nonce: [u8; 16],
 
     // Merkle roots
-    pub transactions_root: Vec<u8>,
-    pub proposals_hash: Vec<u8>,
-    pub extra_hash: Vec<u8>,
-    pub uncles_hash: Vec<u8>,
+    pub transactions_root: [u8; 32],
+    pub proposals_hash: [u8; 32],
+    pub extra_hash: [u8; 32],
+    pub uncles_hash: [u8; 32],
 
     // Epoch information
     pub epoch_number: u64,
@@ -1411,7 +1446,7 @@ pub struct BlockRow {
     pub epoch_length: u32,
 
     // DAO field
-    pub dao: Vec<u8>,
+    pub dao: [u8; 32],
 
     // Block statistics
     pub transactions_count: u32,
@@ -1420,7 +1455,7 @@ pub struct BlockRow {
 
     // Optional fields
     pub extension: Option<String>,
-    pub miner_lock_hash: Option<Vec<u8>>,
+    pub miner_lock_hash: Option<[u8; 32]>,
     pub miner_message: Option<String>,
 
     // Difficulty tracking
@@ -1429,11 +1464,11 @@ pub struct BlockRow {
 
 /// Transaction row matching the transactions table schema.
 ///
-/// All hash fields use Vec<u8> for binary serialization (FixedString(32) in ClickHouse).
+/// All hash fields use [u8; 32] for binary serialization (FixedString(32) in ClickHouse).
 #[derive(Debug, Clone, Serialize, Row)]
 pub struct TransactionRow {
     // Transaction identification
-    pub hash: Vec<u8>,
+    pub hash: [u8; 32],
     pub block_number: u64,
     pub tx_index: u32,
     pub timestamp: u32, // DateTime in ClickHouse (Unix timestamp)
@@ -1459,11 +1494,11 @@ pub struct TransactionRow {
 
 /// Cell row matching the cells table schema.
 ///
-/// All hash fields use Vec<u8> for binary serialization (FixedString(32) in ClickHouse).
+/// All hash fields use [u8; 32] for binary serialization (FixedString(32) in ClickHouse).
 #[derive(Debug, Clone, Serialize, Row)]
 pub struct CellRow {
     // Cell identification (OutPoint)
-    pub tx_hash: Vec<u8>,
+    pub tx_hash: [u8; 32],
     pub output_index: u16,
     pub created_at_block: u64,
 
@@ -1471,52 +1506,52 @@ pub struct CellRow {
     pub capacity: u64,
 
     // Lock script (required)
-    pub lock_code_hash: Vec<u8>,
+    pub lock_code_hash: [u8; 32],
     pub lock_hash_type: u8,
     pub lock_args: String,
-    pub lock_script_hash: Vec<u8>,
+    pub lock_script_hash: [u8; 32],
 
     // Type script (optional)
-    pub type_code_hash: Option<Vec<u8>>,
+    pub type_code_hash: Option<[u8; 32]>,
     pub type_hash_type: Option<u8>,
     pub type_args: Option<String>,
-    pub type_script_hash: Option<Vec<u8>>,
+    pub type_script_hash: Option<[u8; 32]>,
 
     // Cell data
-    pub data_hash: Vec<u8>,
+    pub data_hash: [u8; 32],
     pub data_size: u32,
     pub data: Option<String>,
 }
 
 /// Cell consumption row matching the cell_consumptions table schema.
 ///
-/// All hash fields use Vec<u8> for binary serialization (FixedString(32) in ClickHouse).
+/// All hash fields use [u8; 32] for binary serialization (FixedString(32) in ClickHouse).
 #[derive(Debug, Clone, Serialize, Row)]
 pub struct CellConsumptionRow {
     // Cell identification (OutPoint being consumed)
-    pub tx_hash: Vec<u8>,
+    pub tx_hash: [u8; 32],
     pub output_index: u16,
 
     // Consumption metadata
     pub consumed_at_block: u64,
-    pub consumed_by_tx: Vec<u8>,
+    pub consumed_by_tx: [u8; 32],
     pub consumed_at_index: u16,
 }
 
 /// Live cell row matching the live_cells table schema.
 ///
-/// All hash fields use Vec<u8> for binary serialization (FixedString(32) in ClickHouse).
+/// All hash fields use [u8; 32] for binary serialization (FixedString(32) in ClickHouse).
 /// Uses ReplacingMergeTree with sign column for efficient live cell queries.
 #[derive(Debug, Clone, Serialize, Row)]
 pub struct LiveCellRow {
     // OutPoint (PRIMARY KEY)
-    pub tx_hash: Vec<u8>,
+    pub tx_hash: [u8; 32],
     pub output_index: u16,
 
     // Essential cell data
     pub capacity: u64,
-    pub lock_script_hash: Vec<u8>,
-    pub type_script_hash: Option<Vec<u8>>,
+    pub lock_script_hash: [u8; 32],
+    pub type_script_hash: Option<[u8; 32]>,
     pub created_at_block: u64,
 
     // ReplacingMergeTree metadata
@@ -1526,15 +1561,15 @@ pub struct LiveCellRow {
 
 /// DAO deposit row matching the dao_deposits table schema.
 ///
-/// All hash fields use Vec<u8> for binary serialization (FixedString(32) in ClickHouse).
+/// All hash fields use [u8; 32] for binary serialization (FixedString(32) in ClickHouse).
 #[derive(Debug, Clone, Serialize, Row)]
 pub struct DaoDepositRow {
     // Cell identification (OutPoint)
-    pub tx_hash: Vec<u8>,
+    pub tx_hash: [u8; 32],
     pub output_index: u16,
 
     // Depositor information
-    pub depositor_lock_hash: Vec<u8>,
+    pub depositor_lock_hash: [u8; 32],
 
     // Deposit metadata
     pub capacity: u64,
@@ -1545,21 +1580,21 @@ pub struct DaoDepositRow {
 
 /// DAO withdrawal row matching the dao_withdrawals table schema.
 ///
-/// All hash fields use Vec<u8> for binary serialization (FixedString(32) in ClickHouse).
+/// All hash fields use [u8; 32] for binary serialization (FixedString(32) in ClickHouse).
 #[derive(Debug, Clone, Serialize, Row)]
 pub struct DaoWithdrawalRow {
     // Original deposit identification
-    pub deposit_tx: Vec<u8>,
+    pub deposit_tx: [u8; 32],
     pub deposit_index: u16,
 
     // Withdraw request metadata
-    pub withdraw_request_tx: Vec<u8>,
+    pub withdraw_request_tx: [u8; 32],
     pub withdraw_request_block: u64,
     pub withdraw_request_timestamp: u32,
     pub withdraw_request_ar: u64,
 
     // Withdraw completion metadata (NULL until completed)
-    pub withdraw_completion_tx: Option<Vec<u8>>,
+    pub withdraw_completion_tx: Option<[u8; 32]>,
     pub withdraw_completion_block: Option<u64>,
     pub withdraw_completion_timestamp: Option<u32>,
     pub compensation: Option<u64>,
@@ -1567,36 +1602,36 @@ pub struct DaoWithdrawalRow {
 
 /// Token transfer row matching the token_transfers table schema.
 ///
-/// All hash fields use Vec<u8> for binary serialization (FixedString(32) in ClickHouse).
+/// All hash fields use [u8; 32] for binary serialization (FixedString(32) in ClickHouse).
 #[derive(Debug, Clone, Serialize, Row)]
 pub struct TokenTransferRow {
     // Token identification
-    pub type_script_hash: Vec<u8>,
+    pub type_script_hash: [u8; 32],
 
     // Transfer participants
-    pub from_lock_hash: Option<Vec<u8>>,
-    pub to_lock_hash: Option<Vec<u8>>,
+    pub from_lock_hash: Option<[u8; 32]>,
+    pub to_lock_hash: Option<[u8; 32]>,
 
     // Transfer metadata
     pub amount: String,
     pub block_number: u64,
-    pub tx_hash: Vec<u8>,
+    pub tx_hash: [u8; 32],
     pub tx_index: u32,
     pub timestamp: u32,
 }
 
 /// Spore cell row matching the spore_cells table schema.
 ///
-/// All hash fields use Vec<u8> for binary serialization (FixedString(32) in ClickHouse).
+/// All hash fields use [u8; 32] for binary serialization (FixedString(32) in ClickHouse).
 #[derive(Debug, Clone, Serialize, Row)]
 pub struct SporeCellRow {
     // Cell identification (OutPoint)
-    pub tx_hash: Vec<u8>,
+    pub tx_hash: [u8; 32],
     pub output_index: u16,
 
     // Spore identification
-    pub spore_id: Vec<u8>,
-    pub cluster_id: Option<Vec<u8>>,
+    pub spore_id: [u8; 32],
+    pub cluster_id: Option<[u8; 32]>,
 
     // Spore metadata
     pub content_type: String,
@@ -1604,32 +1639,32 @@ pub struct SporeCellRow {
     pub content: Option<String>,
 
     // Ownership
-    pub owner_lock_hash: Vec<u8>,
+    pub owner_lock_hash: [u8; 32],
 
     // Lifecycle metadata
     pub created_at_block: u64,
     pub created_at_timestamp: u32,
     pub consumed_at_block: Option<u64>,
-    pub consumed_by_tx: Option<Vec<u8>>,
+    pub consumed_by_tx: Option<[u8; 32]>,
 }
 
 /// Spore transfer row matching the spore_transfers table schema.
 ///
-/// All hash fields use Vec<u8> for binary serialization (FixedString(32) in ClickHouse).
+/// All hash fields use [u8; 32] for binary serialization (FixedString(32) in ClickHouse).
 #[derive(Debug, Clone, Serialize, Row)]
 pub struct SporeTransferRow {
     // Spore identification (OutPoint)
-    pub tx_hash: Vec<u8>,
+    pub tx_hash: [u8; 32],
     pub output_index: u16,
-    pub spore_id: Vec<u8>,
+    pub spore_id: [u8; 32],
 
     // Transfer participants
-    pub from_lock_hash: Option<Vec<u8>>,
-    pub to_lock_hash: Option<Vec<u8>>,
+    pub from_lock_hash: Option<[u8; 32]>,
+    pub to_lock_hash: Option<[u8; 32]>,
 
     // Transfer metadata
     pub block_number: u64,
-    pub transfer_tx: Vec<u8>,
+    pub transfer_tx: [u8; 32],
     pub timestamp: u32,
 }
 
@@ -1638,16 +1673,16 @@ pub struct SporeTransferRow {
 pub struct BlockProposalRow {
     pub block_number: u64,
     pub proposal_index: u16,
-    pub proposal_hash: Vec<u8>,
+    pub proposal_hash: [u8; 10],
 }
 
 /// Transaction input row matching the transaction_inputs table schema.
 #[derive(Debug, Clone, Serialize, Row)]
 pub struct TransactionInputRow {
-    pub tx_hash: Vec<u8>,
+    pub tx_hash: [u8; 32],
     pub tx_block_number: u64,
     pub input_index: u16,
-    pub previous_tx_hash: Vec<u8>,
+    pub previous_tx_hash: [u8; 32],
     pub previous_output_index: u16,
     pub since: u64,
 }
@@ -1655,10 +1690,10 @@ pub struct TransactionInputRow {
 /// Transaction cell dep row matching the transaction_cell_deps table schema.
 #[derive(Debug, Clone, Serialize, Row)]
 pub struct TransactionCellDepRow {
-    pub tx_hash: Vec<u8>,
+    pub tx_hash: [u8; 32],
     pub tx_block_number: u64,
     pub dep_index: u16,
-    pub dep_tx_hash: Vec<u8>,
+    pub dep_tx_hash: [u8; 32],
     pub dep_output_index: u16,
     pub dep_type: String,
 }
@@ -1666,8 +1701,8 @@ pub struct TransactionCellDepRow {
 /// Address transaction row matching the address_transactions table schema.
 #[derive(Debug, Clone, Serialize, Row)]
 pub struct AddressTransactionRow {
-    pub lock_hash: Vec<u8>,
-    pub tx_hash: Vec<u8>,
+    pub lock_hash: [u8; 32],
+    pub tx_hash: [u8; 32],
     pub block_number: u64,
     pub tx_type: i8,
     pub balance_change: i64,
@@ -1682,20 +1717,20 @@ mod tests {
     fn test_block_row_creation() {
         let block = BlockRow {
             number: 12345,
-            hash: vec![0u8; 32],
-            parent_hash: vec![1u8; 32],
+            hash: [0u8; 32],
+            parent_hash: [1u8; 32],
             timestamp: 1704067200,
             version: 0,
             compact_target: 0x1a08a97e,
-            nonce: vec![0x78, 0x56, 0x34, 0x12],
-            transactions_root: vec![2u8; 32],
-            proposals_hash: vec![3u8; 32],
-            extra_hash: vec![4u8; 32],
-            uncles_hash: vec![5u8; 32],
+            nonce: [0x78, 0x56, 0x34, 0x12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            transactions_root: [2u8; 32],
+            proposals_hash: [3u8; 32],
+            extra_hash: [4u8; 32],
+            uncles_hash: [5u8; 32],
             epoch_number: 40,
             epoch_index: 6,
             epoch_length: 1800,
-            dao: vec![6u8; 32],
+            dao: [6u8; 32],
             transactions_count: 5,
             proposals_count: 2,
             uncles_count: 0,
@@ -1713,7 +1748,7 @@ mod tests {
     #[test]
     fn test_transaction_row_creation() {
         let tx = TransactionRow {
-            hash: vec![0u8; 32],
+            hash: [0u8; 32],
             block_number: 12345,
             tx_index: 0,
             timestamp: 1704067200,
@@ -1740,19 +1775,19 @@ mod tests {
     #[test]
     fn test_cell_row_creation() {
         let cell = CellRow {
-            tx_hash: vec![0u8; 32],
+            tx_hash: [0u8; 32],
             output_index: 0,
             created_at_block: 12345,
             capacity: 10000000000,
-            lock_code_hash: vec![1u8; 32],
+            lock_code_hash: [1u8; 32],
             lock_hash_type: 1,
             lock_args: "0x1234".to_string(),
-            lock_script_hash: vec![2u8; 32],
-            type_code_hash: Some(vec![3u8; 32]),
+            lock_script_hash: [2u8; 32],
+            type_code_hash: Some([3u8; 32]),
             type_hash_type: Some(1),
             type_args: Some("0x5678".to_string()),
-            type_script_hash: Some(vec![4u8; 32]),
-            data_hash: vec![5u8; 32],
+            type_script_hash: Some([4u8; 32]),
+            data_hash: [5u8; 32],
             data_size: 128,
             data: Some("0xabcd".to_string()),
         };
@@ -1766,10 +1801,10 @@ mod tests {
     #[test]
     fn test_cell_consumption_row_creation() {
         let consumption = CellConsumptionRow {
-            tx_hash: vec![0u8; 32],
+            tx_hash: [0u8; 32],
             output_index: 0,
             consumed_at_block: 12346,
-            consumed_by_tx: vec![1u8; 32],
+            consumed_by_tx: [1u8; 32],
             consumed_at_index: 1,
         };
 
@@ -1798,11 +1833,11 @@ mod tests {
     #[test]
     fn test_live_cell_row_creation() {
         let live_cell = LiveCellRow {
-            tx_hash: vec![0u8; 32],
+            tx_hash: [0u8; 32],
             output_index: 0,
             capacity: 10000000000,
-            lock_script_hash: vec![1u8; 32],
-            type_script_hash: Some(vec![2u8; 32]),
+            lock_script_hash: [1u8; 32],
+            type_script_hash: Some([2u8; 32]),
             created_at_block: 12345,
             sign: 1,
             version: 12345,
@@ -1816,11 +1851,11 @@ mod tests {
     #[test]
     fn test_live_cell_consumption() {
         let consumption = LiveCellRow {
-            tx_hash: vec![0u8; 32],
+            tx_hash: [0u8; 32],
             output_index: 0,
             capacity: 10000000000,
-            lock_script_hash: vec![1u8; 32],
-            type_script_hash: Some(vec![2u8; 32]),
+            lock_script_hash: [1u8; 32],
+            type_script_hash: Some([2u8; 32]),
             created_at_block: 12345,
             sign: -1, // Consumed
             version: 12346,
