@@ -7,7 +7,6 @@ use axum::{
 };
 use clickhouse::Row;
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -38,7 +37,7 @@ fn default_limit() -> i64 {
     20
 }
 
-#[derive(Debug, FromRow)]
+#[derive(Debug, Clone, Row, Deserialize)]
 struct ScriptRow {
     #[allow(dead_code)]
     id: i64,
@@ -130,26 +129,6 @@ async fn lookup_scripts(
     State(state): State<Arc<AppState>>,
     Json(request): Json<LookupScriptsRequest>,
 ) -> ApiResult<HashMap<String, ScriptLookupInfo>> {
-    if let Some(ch_client) = &state.clickhouse_client {
-        lookup_scripts_clickhouse(ch_client, &state, request).await
-    } else {
-        lookup_scripts_postgres(&state, request).await
-    }
-}
-
-async fn lookup_scripts_clickhouse(
-    _ch_client: &crate::clickhouse::ClickHouseClient,
-    state: &Arc<AppState>,
-    request: LookupScriptsRequest,
-) -> ApiResult<HashMap<String, ScriptLookupInfo>> {
-    // ClickHouse doesn't have known_scripts table yet - fallback to PostgreSQL
-    lookup_scripts_postgres(state, request).await
-}
-
-async fn lookup_scripts_postgres(
-    state: &Arc<AppState>,
-    request: LookupScriptsRequest,
-) -> ApiResult<HashMap<String, ScriptLookupInfo>> {
     if request.code_hashes.is_empty() {
         return ok(HashMap::new());
     }
@@ -160,135 +139,168 @@ async fn lookup_scripts_postgres(
         ));
     }
 
-    let code_hash_bytes: Result<Vec<Vec<u8>>, _> = request
+    let code_hashes_hex: Vec<String> = request
         .code_hashes
         .iter()
-        .map(|h| hex::decode(h.strip_prefix("0x").unwrap_or(h)))
+        .map(|h| h.strip_prefix("0x").unwrap_or(h).to_string())
         .collect();
 
-    let code_hash_bytes =
-        code_hash_bytes.map_err(|_| ApiError::bad_request("Invalid hex in code_hashes"))?;
+    let placeholders = code_hashes_hex
+        .iter()
+        .map(|hash| format!("unhex('{}')", hash))
+        .collect::<Vec<_>>()
+        .join(",");
 
-    let rows: Vec<(
-        Vec<u8>,
-        String,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        i64,
-        String,
-    )> = sqlx::query_as(
-        r#"
-        SELECT DISTINCT ON (ks.code_hash) 
-            ks.code_hash, 
-            ks.name, 
-            sus.script_kind, 
-            ks.decoder_type, 
-            ks.hash_type,
-            COALESCE(SUM(sus.live_cells_count) OVER (PARTITION BY ks.code_hash), 0)::BIGINT as live_cells_count,
-            COALESCE(SUM(sus.live_capacity_sum) OVER (PARTITION BY ks.code_hash), 0)::TEXT as live_capacity_sum
-        FROM known_scripts ks
-        LEFT JOIN script_usage_stats sus ON sus.code_hash = ks.code_hash
-        WHERE ks.code_hash = ANY($1) AND ks.network = $2
-        ORDER BY ks.code_hash, ks.deprecated ASC, ks.is_system DESC
-        "#,
-    )
-    .bind(&code_hash_bytes)
-    .bind(&state.ckb_network)
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let query = format!(
+        "SELECT {} as code_hash, name, script_kind, decoder_type, hash_type, live_cells_count, live_capacity_sum
+         FROM known_scripts
+         WHERE code_hash IN ({})
+         AND network = '{}'",
+        hex_hash("code_hash"),
+        placeholders,
+        state.ckb_network
+    );
+
+    #[derive(Row, Deserialize)]
+    struct ScriptLookupRow {
+        code_hash: String,
+        name: String,
+        script_kind: Option<String>,
+        decoder_type: Option<String>,
+        hash_type: Option<String>,
+        live_cells_count: i64,
+        live_capacity_sum: String,
+    }
+
+    let rows: Vec<ScriptLookupRow> = state
+        .clickhouse
+        .client()
+        .query(&query)
+        .fetch_all::<ScriptLookupRow>()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     if rows.is_empty() {
         return ok(HashMap::new());
     }
 
-    let mut code_cell_map: std::collections::HashMap<Vec<u8>, (Vec<u8>, i16)> =
+    let mut code_cell_map: std::collections::HashMap<String, (String, i32)> =
         std::collections::HashMap::new();
 
-    let data_hashes: Vec<Vec<u8>> = rows
+    let data_hashes: Vec<String> = rows
         .iter()
-        .filter(|r| r.4.as_deref() != Some("type"))
-        .map(|r| r.0.clone())
+        .filter(|r| r.hash_type.as_deref() != Some("type"))
+        .map(|r| r.code_hash.clone())
         .collect();
 
     if !data_hashes.is_empty() {
-        let cells: Vec<(Vec<u8>, Vec<u8>, i16)> = sqlx::query_as(
-            r#"
-            SELECT DISTINCT ON (data_hash) data_hash, tx_hash, output_index
-            FROM cells
-            WHERE data_hash = ANY($1)
-            ORDER BY data_hash, status ASC, created_at_block DESC
-            "#,
-        )
-        .bind(&data_hashes)
-        .fetch_all(&state.pool)
-        .await
-        .unwrap_or_default();
+        let data_placeholders = data_hashes
+            .iter()
+            .map(|hash| format!("unhex('{}')", hash))
+            .collect::<Vec<_>>()
+            .join(",");
 
-        for (hash, tx, idx) in cells {
-            code_cell_map.insert(hash, (tx, idx));
+        let data_query = format!(
+            "SELECT {} as data_hash, {} as tx_hash, output_index
+             FROM cells
+             WHERE data_hash IN ({})
+             ORDER BY created_at_block DESC
+             LIMIT 1 BY data_hash",
+            hex_hash("data_hash"),
+            hex_hash("tx_hash"),
+            data_placeholders
+        );
+
+        #[derive(Row, Deserialize)]
+        struct CodeCellRow {
+            data_hash: String,
+            tx_hash: String,
+            output_index: u16,
+        }
+
+        let cells: Vec<CodeCellRow> = state
+            .clickhouse
+            .client()
+            .query(&data_query)
+            .fetch_all::<CodeCellRow>()
+            .await
+            .unwrap_or_default();
+
+        for cell in cells {
+            code_cell_map.insert(cell.data_hash, (cell.tx_hash, cell.output_index as i32));
         }
     }
 
-    let type_hashes: Vec<Vec<u8>> = rows
+    let type_hashes: Vec<String> = rows
         .iter()
-        .filter(|r| r.4.as_deref() == Some("type"))
-        .map(|r| r.0.clone())
+        .filter(|r| r.hash_type.as_deref() == Some("type"))
+        .map(|r| r.code_hash.clone())
         .collect();
 
     if !type_hashes.is_empty() {
-        let cells: Vec<(Vec<u8>, Vec<u8>, i16)> = sqlx::query_as(
-            r#"
-            SELECT DISTINCT ON (type_script_hash) type_script_hash, tx_hash, output_index
-            FROM cells
-            WHERE type_script_hash = ANY($1) AND status = 0
-            ORDER BY type_script_hash, created_at_block DESC
-            "#,
-        )
-        .bind(&type_hashes)
-        .fetch_all(&state.pool)
-        .await
-        .unwrap_or_default();
+        let type_placeholders = type_hashes
+            .iter()
+            .map(|hash| format!("unhex('{}')", hash))
+            .collect::<Vec<_>>()
+            .join(",");
 
-        for (hash, tx, idx) in cells {
-            code_cell_map.insert(hash, (tx, idx));
+        let type_query = format!(
+            "SELECT {} as type_script_hash, {} as tx_hash, output_index
+             FROM cells
+             WHERE type_script_hash IN ({})
+             AND status = 0
+             ORDER BY created_at_block DESC
+             LIMIT 1 BY type_script_hash",
+            hex_hash("type_script_hash"),
+            hex_hash("tx_hash"),
+            type_placeholders
+        );
+
+        #[derive(Row, Deserialize)]
+        struct TypeCellRow {
+            type_script_hash: String,
+            tx_hash: String,
+            output_index: u16,
+        }
+
+        let cells: Vec<TypeCellRow> = state
+            .clickhouse
+            .client()
+            .query(&type_query)
+            .fetch_all::<TypeCellRow>()
+            .await
+            .unwrap_or_default();
+
+        for cell in cells {
+            code_cell_map.insert(
+                cell.type_script_hash,
+                (cell.tx_hash, cell.output_index as i32),
+            );
         }
     }
 
     let result: HashMap<String, ScriptLookupInfo> = rows
         .into_iter()
-        .map(
-            |(
-                code_hash,
-                name,
-                script_kind,
-                decoder_type,
-                hash_type,
-                live_cells_count,
-                live_capacity_sum,
-            )| {
-                let code_hash_hex = format!("0x{}", hex::encode(&code_hash));
-                let (tx_hash, output_index) = code_cell_map
-                    .get(&code_hash)
-                    .map(|(tx, idx)| (Some(format!("0x{}", hex::encode(tx))), Some(*idx as i32)))
-                    .unwrap_or((None, None));
-                (
-                    code_hash_hex.clone(),
-                    ScriptLookupInfo {
-                        code_hash: code_hash_hex,
-                        name,
-                        script_kind,
-                        decoder_type,
-                        hash_type,
-                        code_cell_tx_hash: tx_hash,
-                        code_cell_output_index: output_index,
-                        live_cells_count,
-                        live_capacity_sum,
-                    },
-                )
-            },
-        )
+        .map(|row| {
+            let (tx_hash, output_index) = code_cell_map
+                .get(&row.code_hash)
+                .map(|(tx, idx)| (Some(tx.clone()), Some(*idx)))
+                .unwrap_or((None, None));
+            (
+                row.code_hash.clone(),
+                ScriptLookupInfo {
+                    code_hash: row.code_hash,
+                    name: row.name,
+                    script_kind: row.script_kind,
+                    decoder_type: row.decoder_type,
+                    hash_type: row.hash_type,
+                    code_cell_tx_hash: tx_hash,
+                    code_cell_output_index: output_index,
+                    live_cells_count: row.live_cells_count,
+                    live_capacity_sum: row.live_capacity_sum,
+                },
+            )
+        })
         .collect();
 
     ok(result)
@@ -311,18 +323,6 @@ async fn get_code_cell(
     State(state): State<Arc<AppState>>,
     Query(params): Query<CodeCellQuery>,
 ) -> ApiResult<CodeCellResponse> {
-    if let Some(ch_client) = &state.clickhouse_client {
-        get_code_cell_clickhouse(ch_client, &state, params).await
-    } else {
-        get_code_cell_postgres(&state, params).await
-    }
-}
-
-async fn get_code_cell_clickhouse(
-    ch_client: &crate::clickhouse::ClickHouseClient,
-    _state: &Arc<AppState>,
-    params: CodeCellQuery,
-) -> ApiResult<CodeCellResponse> {
     let code_hash_hex = params
         .code_hash
         .strip_prefix("0x")
@@ -335,6 +335,7 @@ async fn get_code_cell_clickhouse(
             "SELECT {} as tx_hash, output_index
             FROM cells
             WHERE type_script_hash = unhex('{}')
+            AND status = 0
             ORDER BY created_at_block DESC
             LIMIT 1",
             hex_hash("tx_hash"),
@@ -358,7 +359,8 @@ async fn get_code_cell_clickhouse(
         output_index: u16,
     }
 
-    let result: Option<CodeCellRow> = ch_client
+    let result: Option<CodeCellRow> = state
+        .clickhouse
         .client()
         .query(&query)
         .fetch_optional::<CodeCellRow>()
@@ -371,66 +373,14 @@ async fn get_code_cell_clickhouse(
     })
 }
 
-async fn get_code_cell_postgres(
-    state: &Arc<AppState>,
-    params: CodeCellQuery,
-) -> ApiResult<CodeCellResponse> {
-    let code_hash_bytes = hex::decode(
-        params
-            .code_hash
-            .strip_prefix("0x")
-            .unwrap_or(&params.code_hash),
-    )
-    .map_err(|_| ApiError::bad_request("Invalid code_hash hex"))?;
-
-    let hash_type = params.hash_type.as_str();
-
-    let result: Option<(Vec<u8>, i16)> = if hash_type == "type" {
-        sqlx::query_as(
-            r#"
-            SELECT tx_hash, output_index
-            FROM cells
-            WHERE type_script_hash = $1 AND status = 0
-            ORDER BY created_at_block DESC
-            LIMIT 1
-            "#,
-        )
-        .bind(&code_hash_bytes)
-        .fetch_optional(&state.pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-    } else {
-        sqlx::query_as(
-            r#"
-            SELECT tx_hash, output_index
-            FROM cells
-            WHERE data_hash = $1
-            ORDER BY status ASC, created_at_block DESC
-            LIMIT 1
-            "#,
-        )
-        .bind(&code_hash_bytes)
-        .fetch_optional(&state.pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-    };
-
-    ok(CodeCellResponse {
-        tx_hash: result
-            .as_ref()
-            .map(|(tx, _)| format!("0x{}", hex::encode(tx))),
-        output_index: result.map(|(_, idx)| idx as i32),
-    })
-}
-
 fn row_to_response(r: ScriptRow) -> ScriptResponse {
     row_to_response_with_code_cell(r, None, None)
 }
 
 fn row_to_response_with_code_cell(
     r: ScriptRow,
-    tx_hash: Option<Vec<u8>>,
-    output_index: Option<i16>,
+    tx_hash: Option<String>,
+    output_index: Option<i32>,
 ) -> ScriptResponse {
     ScriptResponse {
         code_hash: format!("0x{}", hex::encode(&r.code_hash)),
@@ -448,8 +398,8 @@ fn row_to_response_with_code_cell(
         tag: r.tag,
         deprecated: r.deprecated,
         is_system: r.is_system,
-        code_cell_tx_hash: tx_hash.map(|h| format!("0x{}", hex::encode(&h))),
-        code_cell_output_index: output_index.map(|i| i as i32),
+        code_cell_tx_hash: tx_hash,
+        code_cell_output_index: output_index,
     }
 }
 
@@ -457,141 +407,63 @@ async fn list_scripts(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<ScriptResponse>> {
-    if let Some(ch_client) = &state.clickhouse_client {
-        list_scripts_clickhouse(ch_client, &state, params).await
-    } else {
-        list_scripts_postgres(&state, params).await
-    }
-}
-
-async fn list_scripts_clickhouse(
-    _ch_client: &crate::clickhouse::ClickHouseClient,
-    state: &Arc<AppState>,
-    params: ListParams,
-) -> ApiResult<CursorPaginatedResponse<ScriptResponse>> {
-    // ClickHouse doesn't have known_scripts table yet - fallback to PostgreSQL
-    list_scripts_postgres(state, params).await
-}
-
-async fn list_scripts_postgres(
-    state: &Arc<AppState>,
-    params: ListParams,
-) -> ApiResult<CursorPaginatedResponse<ScriptResponse>> {
-    let _limit = params.limit.clamp(1, 100);
-    let _cursor_id = params
-        .cursor
-        .as_ref()
-        .and_then(|c| c.parse::<i64>().ok())
-        .unwrap_or(i64::MAX);
-
+    let limit = params.limit.clamp(1, 100);
     let network = params.network.as_deref().unwrap_or(&state.ckb_network);
-    let search_pattern = params
-        .search
-        .as_ref()
-        .map(|s| format!("%{}%", s.to_lowercase()));
 
-    // Use LEFT JOIN with script_usage_stats for script_kind instead of slow EXISTS subqueries
-    let base_query = r#"
-        SELECT DISTINCT ON (ks.name) ks.id, ks.code_hash, ks.name, ks.description, ks.rfc, ks.website, ks.source_url,
-               ks.decoder_type, ks.network, ks.hash_type, ks.data_hash, ks.type_hash, ks.tag, ks.deprecated, ks.is_system,
-               sus.script_kind
-        FROM known_scripts ks
-        LEFT JOIN script_usage_stats sus ON sus.code_hash = ks.code_hash
-    "#;
+    let mut where_clauses = vec![format!("network = '{}'", network)];
 
-    let (total, rows): (i64, Vec<ScriptRow>) = match (&params.decoder_type, &search_pattern) {
-        (Some(decoder), Some(pattern)) => {
-            let total: (i64,) = sqlx::query_as(
-                "SELECT COUNT(DISTINCT name) FROM known_scripts WHERE network = $1 AND decoder_type = $2 AND LOWER(name) LIKE $3",
-            )
-            .bind(network)
-            .bind(decoder)
-            .bind(pattern)
-            .fetch_one(&state.pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+    if let Some(decoder) = &params.decoder_type {
+        where_clauses.push(format!("decoder_type = '{}'", decoder));
+    }
 
-            let query = format!(
-                "{} WHERE ks.network = $1 AND ks.decoder_type = $2 AND LOWER(ks.name) LIKE $3 ORDER BY ks.name ASC, ks.is_system DESC, ks.deprecated ASC, ks.id DESC",
-                base_query
-            );
-            let rows = sqlx::query_as::<_, ScriptRow>(&query)
-                .bind(network)
-                .bind(decoder)
-                .bind(pattern)
-                .fetch_all(&state.pool)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?;
+    if let Some(search) = &params.search {
+        let search_lower = search.to_lowercase();
+        where_clauses.push(format!("lower(name) LIKE '%{}%'", search_lower));
+    }
 
-            (total.0, rows)
-        }
-        (Some(decoder), None) => {
-            let total: (i64,) = sqlx::query_as(
-                "SELECT COUNT(DISTINCT name) FROM known_scripts WHERE network = $1 AND decoder_type = $2",
-            )
-            .bind(network)
-            .bind(decoder)
-            .fetch_one(&state.pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+    let where_clause = where_clauses.join(" AND ");
 
-            let query = format!(
-                "{} WHERE ks.network = $1 AND ks.decoder_type = $2 ORDER BY ks.name ASC, ks.is_system DESC, ks.deprecated ASC, ks.id DESC",
-                base_query
-            );
-            let rows = sqlx::query_as::<_, ScriptRow>(&query)
-                .bind(network)
-                .bind(decoder)
-                .fetch_all(&state.pool)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?;
+    let count_query = format!(
+        "SELECT COUNT(DISTINCT name) as cnt FROM known_scripts WHERE {}",
+        where_clause
+    );
 
-            (total.0, rows)
-        }
-        (None, Some(pattern)) => {
-            let total: (i64,) = sqlx::query_as(
-                "SELECT COUNT(DISTINCT name) FROM known_scripts WHERE network = $1 AND LOWER(name) LIKE $2",
-            )
-            .bind(network)
-            .bind(pattern)
-            .fetch_one(&state.pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+    #[derive(Row, Deserialize)]
+    struct CountRow {
+        cnt: i64,
+    }
 
-            let query = format!(
-                "{} WHERE ks.network = $1 AND LOWER(ks.name) LIKE $2 ORDER BY ks.name ASC, ks.is_system DESC, ks.deprecated ASC, ks.id DESC",
-                base_query
-            );
-            let rows = sqlx::query_as::<_, ScriptRow>(&query)
-                .bind(network)
-                .bind(pattern)
-                .fetch_all(&state.pool)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?;
+    let count_result: Vec<CountRow> = state
+        .clickhouse
+        .client()
+        .query(&count_query)
+        .fetch_all::<CountRow>()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
-            (total.0, rows)
-        }
-        (None, None) => {
-            let total: (i64,) =
-                sqlx::query_as("SELECT COUNT(DISTINCT name) FROM known_scripts WHERE network = $1")
-                    .bind(network)
-                    .fetch_one(&state.pool)
-                    .await
-                    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let total = count_result.first().map(|r| r.cnt).unwrap_or(0);
 
-            let query = format!(
-                "{} WHERE ks.network = $1 ORDER BY ks.name ASC, ks.is_system DESC, ks.deprecated ASC, ks.id DESC",
-                base_query
-            );
-            let rows = sqlx::query_as::<_, ScriptRow>(&query)
-                .bind(network)
-                .fetch_all(&state.pool)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?;
+    let query = format!(
+        "SELECT id, {} as code_hash, name, description, rfc, website, source_url, decoder_type, network, hash_type, 
+                {} as data_hash, {} as type_hash, tag, deprecated, is_system, script_kind
+         FROM known_scripts
+         WHERE {}
+         ORDER BY name ASC, is_system DESC, deprecated ASC, id DESC
+         LIMIT {}",
+        hex_hash("code_hash"),
+        hex_hash("data_hash"),
+        hex_hash("type_hash"),
+        where_clause,
+        limit
+    );
 
-            (total.0, rows)
-        }
-    };
+    let rows: Vec<ScriptRow> = state
+        .clickhouse
+        .client()
+        .query(&query)
+        .fetch_all::<ScriptRow>()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let total_rows = rows.len() as i64;
     let scripts: Vec<ScriptResponse> = rows.into_iter().map(row_to_response).collect();
@@ -608,108 +480,140 @@ async fn get_script(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> ApiResult<Vec<ScriptResponse>> {
-    if let Some(ch_client) = &state.clickhouse_client {
-        get_script_clickhouse(ch_client, &state, name).await
-    } else {
-        get_script_postgres(&state, name).await
-    }
-}
+    let query = format!(
+        "SELECT id, {} as code_hash, name, description, rfc, website, source_url, decoder_type, network, hash_type,
+                {} as data_hash, {} as type_hash, tag, deprecated, is_system, script_kind
+         FROM known_scripts
+         WHERE name = '{}' AND network = '{}'
+         ORDER BY deprecated ASC, tag DESC",
+        hex_hash("code_hash"),
+        hex_hash("data_hash"),
+        hex_hash("type_hash"),
+        name,
+        state.ckb_network
+    );
 
-async fn get_script_clickhouse(
-    _ch_client: &crate::clickhouse::ClickHouseClient,
-    state: &Arc<AppState>,
-    name: String,
-) -> ApiResult<Vec<ScriptResponse>> {
-    // ClickHouse doesn't have known_scripts table yet - fallback to PostgreSQL
-    get_script_postgres(state, name).await
-}
-
-async fn get_script_postgres(
-    state: &Arc<AppState>,
-    name: String,
-) -> ApiResult<Vec<ScriptResponse>> {
-    // Use JOIN with script_usage_stats instead of slow EXISTS subqueries on cells table
-    let rows = sqlx::query_as::<_, ScriptRow>(
-        r#"
-        SELECT ks.id, ks.code_hash, ks.name, ks.description, ks.rfc, ks.website, ks.source_url,
-               ks.decoder_type, ks.network, ks.hash_type, ks.data_hash, ks.type_hash, ks.tag, ks.deprecated, ks.is_system,
-               sus.script_kind
-        FROM known_scripts ks
-        LEFT JOIN script_usage_stats sus ON sus.code_hash = ks.code_hash
-        WHERE ks.name = $1 AND ks.network = $2
-        ORDER BY ks.deprecated ASC, ks.tag DESC
-        "#,
-    )
-    .bind(&name)
-    .bind(&state.ckb_network)
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let rows: Vec<ScriptRow> = state
+        .clickhouse
+        .client()
+        .query(&query)
+        .fetch_all::<ScriptRow>()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     if rows.is_empty() {
         return Err(ApiError::not_found("Script not found"));
     }
 
-    let mut code_cell_map: std::collections::HashMap<Vec<u8>, (Vec<u8>, i16)> =
+    let mut code_cell_map: std::collections::HashMap<String, (String, i32)> =
         std::collections::HashMap::new();
 
     // hash_type = data/data1/data2: code_hash matches cells.data_hash
-    let data_hashes: Vec<Vec<u8>> = rows
+    let data_hashes: Vec<String> = rows
         .iter()
         .filter(|r| r.hash_type.as_deref() != Some("type"))
-        .map(|r| r.code_hash.clone())
+        .map(|r| format!("0x{}", hex::encode(&r.code_hash)))
         .collect();
 
     if !data_hashes.is_empty() {
-        let cells: Vec<(Vec<u8>, Vec<u8>, i16)> = sqlx::query_as(
-            r#"
-            SELECT DISTINCT ON (data_hash) data_hash, tx_hash, output_index
-            FROM cells
-            WHERE data_hash = ANY($1)
-            ORDER BY data_hash, status ASC, created_at_block DESC
-            "#,
-        )
-        .bind(&data_hashes)
-        .fetch_all(&state.pool)
-        .await
-        .unwrap_or_default();
+        let data_placeholders = data_hashes
+            .iter()
+            .map(|hash| {
+                let hash_clean = hash.strip_prefix("0x").unwrap_or(hash);
+                format!("unhex('{}')", hash_clean)
+            })
+            .collect::<Vec<_>>()
+            .join(",");
 
-        for (hash, tx, idx) in cells {
-            code_cell_map.insert(hash, (tx, idx));
+        let data_query = format!(
+            "SELECT {} as data_hash, {} as tx_hash, output_index
+             FROM cells
+             WHERE data_hash IN ({})
+             ORDER BY created_at_block DESC
+             LIMIT 1 BY data_hash",
+            hex_hash("data_hash"),
+            hex_hash("tx_hash"),
+            data_placeholders
+        );
+
+        #[derive(Row, Deserialize)]
+        struct DataCellRow {
+            data_hash: String,
+            tx_hash: String,
+            output_index: u16,
+        }
+
+        let cells: Vec<DataCellRow> = state
+            .clickhouse
+            .client()
+            .query(&data_query)
+            .fetch_all::<DataCellRow>()
+            .await
+            .unwrap_or_default();
+
+        for cell in cells {
+            code_cell_map.insert(cell.data_hash, (cell.tx_hash, cell.output_index as i32));
         }
     }
 
     // hash_type = type: code_hash matches cells.type_script_hash
-    let type_hashes: Vec<Vec<u8>> = rows
+    let type_hashes: Vec<String> = rows
         .iter()
         .filter(|r| r.hash_type.as_deref() == Some("type"))
-        .map(|r| r.code_hash.clone())
+        .map(|r| format!("0x{}", hex::encode(&r.code_hash)))
         .collect();
 
     if !type_hashes.is_empty() {
-        let cells: Vec<(Vec<u8>, Vec<u8>, i16)> = sqlx::query_as(
-            r#"
-            SELECT DISTINCT ON (type_script_hash) type_script_hash, tx_hash, output_index
-            FROM cells
-            WHERE type_script_hash = ANY($1) AND status = 0
-            ORDER BY type_script_hash, created_at_block DESC
-            "#,
-        )
-        .bind(&type_hashes)
-        .fetch_all(&state.pool)
-        .await
-        .unwrap_or_default();
+        let type_placeholders = type_hashes
+            .iter()
+            .map(|hash| {
+                let hash_clean = hash.strip_prefix("0x").unwrap_or(hash);
+                format!("unhex('{}')", hash_clean)
+            })
+            .collect::<Vec<_>>()
+            .join(",");
 
-        for (hash, tx, idx) in cells {
-            code_cell_map.insert(hash, (tx, idx));
+        let type_query = format!(
+            "SELECT {} as type_script_hash, {} as tx_hash, output_index
+             FROM cells
+             WHERE type_script_hash IN ({})
+             AND status = 0
+             ORDER BY created_at_block DESC
+             LIMIT 1 BY type_script_hash",
+            hex_hash("type_script_hash"),
+            hex_hash("tx_hash"),
+            type_placeholders
+        );
+
+        #[derive(Row, Deserialize)]
+        struct TypeCellRow {
+            type_script_hash: String,
+            tx_hash: String,
+            output_index: u16,
+        }
+
+        let cells: Vec<TypeCellRow> = state
+            .clickhouse
+            .client()
+            .query(&type_query)
+            .fetch_all::<TypeCellRow>()
+            .await
+            .unwrap_or_default();
+
+        for cell in cells {
+            code_cell_map.insert(
+                cell.type_script_hash,
+                (cell.tx_hash, cell.output_index as i32),
+            );
         }
     }
 
     let scripts: Vec<ScriptResponse> = rows
         .into_iter()
         .map(|row| {
+            let code_hash_hex = format!("0x{}", hex::encode(&row.code_hash));
             let (tx_hash, output_index) = code_cell_map
-                .get(&row.code_hash)
+                .get(&code_hash_hex)
                 .map(|(tx, idx)| (Some(tx.clone()), Some(*idx)))
                 .unwrap_or((None, None));
 
@@ -724,34 +628,25 @@ async fn get_script_usage(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> ApiResult<ScriptUsageResponse> {
-    if let Some(ch_client) = &state.clickhouse_client {
-        get_script_usage_clickhouse(ch_client, &state, name).await
-    } else {
-        get_script_usage_postgres(&state, name).await
+    let code_hashes_query = format!(
+        "SELECT DISTINCT {} as code_hash FROM known_scripts WHERE name = '{}' AND network = '{}'",
+        hex_hash("code_hash"),
+        name,
+        state.ckb_network
+    );
+
+    #[derive(Row, Deserialize)]
+    struct CodeHashRow {
+        code_hash: String,
     }
-}
 
-async fn get_script_usage_clickhouse(
-    _ch_client: &crate::clickhouse::ClickHouseClient,
-    state: &Arc<AppState>,
-    name: String,
-) -> ApiResult<ScriptUsageResponse> {
-    // ClickHouse doesn't have known_scripts table yet - fallback to PostgreSQL
-    get_script_usage_postgres(state, name).await
-}
-
-async fn get_script_usage_postgres(
-    state: &Arc<AppState>,
-    name: String,
-) -> ApiResult<ScriptUsageResponse> {
-    let code_hashes: Vec<(Vec<u8>,)> = sqlx::query_as(
-        "SELECT DISTINCT code_hash FROM known_scripts WHERE name = $1 AND network = $2",
-    )
-    .bind(&name)
-    .bind(&state.ckb_network)
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let code_hashes: Vec<CodeHashRow> = state
+        .clickhouse
+        .client()
+        .query(&code_hashes_query)
+        .fetch_all::<CodeHashRow>()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     if code_hashes.is_empty() {
         return ok(ScriptUsageResponse {
@@ -764,25 +659,41 @@ async fn get_script_usage_postgres(
         });
     }
 
-    let hashes: Vec<Vec<u8>> = code_hashes.into_iter().map(|(h,)| h).collect();
+    let hashes_hex: Vec<String> = code_hashes.iter().map(|r| r.code_hash.clone()).collect();
+    let placeholders = hashes_hex
+        .iter()
+        .map(|hash| {
+            let hash_clean = hash.strip_prefix("0x").unwrap_or(hash);
+            format!("unhex('{}')", hash_clean)
+        })
+        .collect::<Vec<_>>()
+        .join(",");
 
-    let per_deployment: Vec<(Vec<u8>, String, i64, i64, String, String)> = sqlx::query_as(
-        r#"
-        SELECT 
-            code_hash,
-            script_kind,
-            cells_count,
-            live_cells_count,
-            capacity_sum::text,
-            live_capacity_sum::text
-        FROM script_usage_stats
-        WHERE code_hash = ANY($1)
-        "#,
-    )
-    .bind(&hashes)
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let per_deployment_query = format!(
+        "SELECT {} as code_hash, script_kind, cells_count, live_cells_count, toString(capacity_sum) as capacity_sum, toString(live_capacity_sum) as live_capacity_sum
+         FROM script_usage_stats
+         WHERE code_hash IN ({})",
+        hex_hash("code_hash"),
+        placeholders
+    );
+
+    #[derive(Row, Deserialize)]
+    struct DeploymentRow {
+        code_hash: String,
+        script_kind: String,
+        cells_count: i64,
+        live_cells_count: i64,
+        capacity_sum: String,
+        live_capacity_sum: String,
+    }
+
+    let per_deployment: Vec<DeploymentRow> = state
+        .clickhouse
+        .client()
+        .query(&per_deployment_query)
+        .fetch_all::<DeploymentRow>()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let mut total_cells: i64 = 0;
     let mut total_live: i64 = 0;
@@ -791,30 +702,21 @@ async fn get_script_usage_postgres(
 
     let by_deployment: Vec<DeploymentUsage> = per_deployment
         .into_iter()
-        .map(
-            |(
-                code_hash,
-                script_kind,
-                cells_count,
-                live_cells_count,
-                capacity_sum,
-                live_capacity_sum,
-            )| {
-                total_cells += cells_count;
-                total_live += live_cells_count;
-                total_cap += capacity_sum.parse::<u128>().unwrap_or(0);
-                total_live_cap += live_capacity_sum.parse::<u128>().unwrap_or(0);
+        .map(|row| {
+            total_cells += row.cells_count;
+            total_live += row.live_cells_count;
+            total_cap += row.capacity_sum.parse::<u128>().unwrap_or(0);
+            total_live_cap += row.live_capacity_sum.parse::<u128>().unwrap_or(0);
 
-                DeploymentUsage {
-                    code_hash: format!("0x{}", hex::encode(&code_hash)),
-                    script_kind: Some(script_kind),
-                    cells_count,
-                    live_cells_count,
-                    capacity_sum,
-                    live_capacity_sum,
-                }
-            },
-        )
+            DeploymentUsage {
+                code_hash: row.code_hash,
+                script_kind: Some(row.script_kind),
+                cells_count: row.cells_count,
+                live_cells_count: row.live_cells_count,
+                capacity_sum: row.capacity_sum,
+                live_capacity_sum: row.live_capacity_sum,
+            }
+        })
         .collect();
 
     ok(ScriptUsageResponse {

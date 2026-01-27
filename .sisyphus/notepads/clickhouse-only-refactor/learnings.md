@@ -254,3 +254,30 @@ All follow same pattern: remove hybrid if/else, inline ClickHouse, convert helpe
 - ClickHouse handlers use `state.clickhouse.client().query()` directly
 - All Row structs use `#[derive(Row, Deserialize)]` from clickhouse crate
 - Error handling via `if let Ok(rows) = ...` pattern (no ApiError wrapping needed for ClickHouse queries)
+
+## scripts.rs Refactoring (Task 6)
+
+**Pattern Applied:**
+- Removed `use sqlx::FromRow;` import
+- Changed `ScriptRow` from `#[derive(Debug, FromRow)]` to `#[derive(Debug, Clone, Row, Deserialize)]`
+- Removed all hybrid if/else patterns checking `state.clickhouse_client`
+- Deleted all `_postgres` functions
+- Inlined all `_clickhouse` functions
+- Updated state references from `state.clickhouse_client` to `state.clickhouse`
+
+**Key Changes:**
+1. `lookup_scripts`: Removed hybrid pattern, now uses ClickHouse directly with hex_hash() for code_hash conversion
+2. `get_code_cell`: Simplified to single ClickHouse implementation
+3. `list_scripts`: Removed hybrid pattern, builds WHERE clauses dynamically for filters
+4. `get_script`: Removed hybrid pattern, uses ClickHouse with hex_hash() for all hash fields
+5. `get_script_usage`: Removed hybrid pattern, uses ClickHouse with hex_hash() for code_hash
+
+**Query Building Pattern:**
+- For IN clauses with multiple values: Build placeholders directly with `format!("unhex('{}')", hash)` instead of placeholder replacement
+- Avoids the complex `enumerate().map(|(i, _)| format!("unhex('{{}}')", i))` pattern that caused format string errors
+- Direct string interpolation is cleaner and avoids double-brace escaping issues
+
+**Helper Functions Updated:**
+- `row_to_response_with_code_cell`: Changed signature from `Option<Vec<u8>>` to `Option<String>` for tx_hash and `Option<i32>` for output_index to match ClickHouse string returns
+
+**Status:** ✅ Complete - No sqlx references, no hybrid patterns, all handlers use state.clickhouse directly

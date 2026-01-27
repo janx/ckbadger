@@ -230,7 +230,7 @@ Simplify architecture by removing PostgreSQL, making ClickHouse the only databas
 
 ---
 
-- [ ] 2.6. Simplify scripts.rs
+- [x] 2.6. Simplify scripts.rs
 
   **Pattern**: Same as above
 
