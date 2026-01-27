@@ -5066,3 +5066,359 @@ The ClickHouse migration foundation is **solid and production-ready**. The hybri
 **Progress: 20/37 tasks (54.1%)**
 **Token usage: 108K/200K (54%)**
 **Status: On track, pattern proven, ready for continuation**
+
+---
+
+## Task 4.2.6: Graph.rs Hybrid ClickHouse/PostgreSQL Pattern (Completed)
+
+**Date**: 2026-01-27
+
+### Objective
+
+Apply hybrid ClickHouse/PostgreSQL pattern to all endpoints in `crates/api/src/routes/graph.rs`. This enables the API to work with both database backends, with ClickHouse providing better performance for cell relationship traversal queries.
+
+### Files Modified
+
+**crates/api/src/routes/graph.rs** - Rewritten with hybrid pattern:
+
+1. **get_cell_graph** - Cell relationship graph with depth traversal
+   - Split into: `get_cell_graph_clickhouse()` and `get_cell_graph_postgres()`
+   - Queries: cells, cell_consumptions, transaction_inputs
+   - Depth parameter: 1-5 (clamped)
+
+2. **get_tx_graph** - Transaction input/output graph
+   - Split into: `get_tx_graph_clickhouse()` and `get_tx_graph_postgres()`
+   - Queries: transactions, transaction_inputs, cells, cell_consumptions
+   - Handles cellbase transactions (no inputs)
+
+3. **get_proposal_graph** - Block proposal commitment graph
+   - Split into: `get_proposal_graph_clickhouse()` and `get_proposal_graph_postgres()`
+   - Queries: blocks, block_proposals, transactions
+   - NC-Max consensus: w_close=2, w_far=10
+
+### Implementation Details
+
+**Hybrid Pattern Applied**:
+
+```rust
+async fn endpoint(...) -> ApiResult<Response> {
+    if let Some(ch_client) = &state.clickhouse_client {
+        endpoint_clickhouse(ch_client, &state, ...).await
+    } else {
+        endpoint_postgres(&state, ...).await
+    }
+}
+```
+
+**ClickHouse Query Patterns**:
+
+1. **Hash field selection**: Use `hex_hash()` helper
+
+   ```rust
+   format!("SELECT {} as tx_hash FROM cells", hex_hash("tx_hash"))
+   ```
+
+2. **Hash field filtering**: Use `build_where_hash()` helper
+
+   ```rust
+   let where_clause = build_where_hash("tx_hash", &hash)?;
+   format!("SELECT * FROM cells WHERE {}", where_clause)
+   ```
+
+3. **Cell consumption check**: Subquery to cell_consumptions
+
+   ```rust
+   "(SELECT 1 FROM cell_consumptions cc
+     WHERE cc.tx_hash = c.tx_hash AND cc.output_index = c.output_index LIMIT 1) as is_consumed"
+   ```
+
+4. **Batch OutPoint lookup**: IN clause with unhex()
+   ```rust
+   let outpoints = inputs.iter()
+       .map(|i| format!("(unhex('{}'), {})", i.tx_hash, i.output_index))
+       .collect::<Vec<_>>()
+       .join(", ");
+   format!("WHERE (tx_hash, output_index) IN ({})", outpoints)
+   ```
+
+### Key Differences: ClickHouse vs PostgreSQL
+
+| Aspect                  | PostgreSQL                                 | ClickHouse                                                    |
+| ----------------------- | ------------------------------------------ | ------------------------------------------------------------- |
+| **Hash storage**        | BYTEA (binary)                             | FixedString(32) (binary)                                      |
+| **Hash in SELECT**      | Direct (returns binary)                    | `hex_hash()` → `lower(hex(field))`                            |
+| **Hash in WHERE**       | `WHERE hash = $1` (bind binary)            | `WHERE hash = unhex('...')` (inline hex)                      |
+| **Cell status**         | `status` column (0=live, 1=dead)           | Subquery to `cell_consumptions` table                         |
+| **Capacity type**       | NUMERIC(20,0) → `capacity::TEXT`           | UInt64 → `capacity` (native)                                  |
+| **Boolean type**        | BOOLEAN → `is_cellbase`                    | UInt8 → `is_cellbase` (0 or 1)                                |
+| **Batch lookup**        | `UNNEST($1::bytea[], $2::smallint[])`      | `IN ((unhex('...'), 0), (unhex('...'), 1))`                   |
+| **Partition pruning**   | JOIN with transactions for `block_number`  | Not needed (ClickHouse handles automatically)                 |
+| **Row struct**          | `sqlx::query_as::<_, (Type1, Type2, ...)>` | `#[derive(clickhouse::Row, Deserialize)] struct Row { ... }`  |
+| **Fetch method**        | `.fetch_optional(&pool)`                   | `.fetch_optional::<Row>()` (type annotation on method)        |
+| **Query building**      | Static SQL with `$1, $2` placeholders      | Dynamic SQL with `format!()` (no parameterized queries)       |
+| **Error handling**      | `sqlx::Error`                              | `clickhouse::error::Error`                                    |
+| **Hex encoding output** | Manual `hex::encode(&bytes)`               | Automatic via `hex_hash()` (returns `0x...` string)           |
+| **Hex decoding input**  | Manual `hex::decode()`                     | Automatic via `unhex()` in SQL                                |
+| **Type casting**        | `capacity::TEXT` (explicit cast)           | `capacity` (no cast needed, native type)                      |
+| **Block number type**   | i64 (signed)                               | u64 (unsigned) → cast to i64 for response                     |
+| **Output index type**   | i16 (signed)                               | u16 (unsigned)                                                |
+| **Fee type**            | NUMERIC → `fee::TEXT`                      | UInt64 → `fee` (native) → `.to_string()` for response         |
+| **Proposals count**     | i32 (signed)                               | u32 (unsigned) → cast to i32 for response                     |
+| **Consumed check**      | `consumed_by_tx IS NOT NULL`               | `is_consumed = 0` (from subquery)                             |
+| **Status field**        | `status` (0 or 1)                          | `is_consumed` (0 or 1) → invert for status (0=live, 1=dead)   |
+| **Consumed by tx**      | `consumed_by_tx` (BYTEA)                   | Subquery: `SELECT hex(consumed_by_tx) FROM cell_consumptions` |
+| **Consumed at block**   | `consumed_at_block` (i64)                  | Subquery: `SELECT consumed_at_block FROM cell_consumptions`   |
+
+### Graph-Specific Query Patterns
+
+**1. Cell Relationship Traversal** (get_cell_graph):
+
+```rust
+// ClickHouse: Query cell with consumption status
+let query = format!(
+    "SELECT
+        {} as tx_hash,
+        output_index,
+        capacity,
+        created_at_block,
+        (SELECT 1 FROM cell_consumptions cc
+         WHERE cc.tx_hash = c.tx_hash AND cc.output_index = c.output_index LIMIT 1) as is_consumed,
+        (SELECT {} FROM cell_consumptions cc
+         WHERE cc.tx_hash = c.tx_hash AND cc.output_index = c.output_index LIMIT 1) as consumed_by_tx
+    FROM cells c
+    WHERE {} AND c.output_index = {}",
+    hex_hash("c.tx_hash"),
+    hex_hash("cc.consumed_by_tx"),
+    tx_hash_where,
+    output_index
+);
+```
+
+**2. Transaction Input Traversal** (depth > 1):
+
+```rust
+// ClickHouse: Query transaction inputs
+let inputs_query = format!(
+    "SELECT
+        {} as previous_tx_hash,
+        previous_output_index
+    FROM transaction_inputs
+    WHERE {}",
+    hex_hash("previous_tx_hash"),
+    tx_hash_where
+);
+
+// Then batch lookup previous cells
+let prev_outpoints: Vec<String> = inputs
+    .iter()
+    .map(|i| format!(
+        "(unhex('{}'), {})",
+        i.previous_tx_hash.strip_prefix("0x").unwrap_or(&i.previous_tx_hash),
+        i.previous_output_index
+    ))
+    .collect();
+
+let prev_cells_query = format!(
+    "SELECT
+        {} as tx_hash,
+        output_index,
+        capacity
+    FROM cells
+    WHERE (tx_hash, output_index) IN ({})",
+    hex_hash("tx_hash"),
+    prev_outpoints.join(", ")
+);
+```
+
+**3. Transaction Output Query** (get_tx_graph):
+
+```rust
+// ClickHouse: Query outputs with consumption status
+let outputs_query = format!(
+    "SELECT
+        output_index,
+        capacity,
+        (SELECT 1 FROM cell_consumptions cc
+         WHERE cc.tx_hash = c.tx_hash AND cc.output_index = c.output_index LIMIT 1) as is_consumed
+    FROM cells c
+    WHERE {}",
+    tx_hash_where
+);
+```
+
+**4. Proposal Commitment Graph** (get_proposal_graph):
+
+```rust
+// ClickHouse: Query block proposals with committed transactions
+let proposals_query = format!(
+    "SELECT
+        {} as proposal_id,
+        {} as tx_hash,
+        t.block_number as commit_block
+    FROM block_proposals bp
+    INNER JOIN transactions t ON t.short_hash = bp.proposal_id
+        AND t.block_number BETWEEN {} AND {}
+    WHERE bp.block_number = {}
+    ORDER BY t.block_number, bp.proposal_index",
+    hex_hash("bp.proposal_id"),
+    hex_hash("t.hash"),
+    block_number + 2,
+    block_number + 10,
+    block_number
+);
+```
+
+### Gotchas Encountered
+
+**1. Unused struct fields warning**:
+
+- Issue: `tx_hash` and `output_index` fields in `CellRow` struct not used (already in path params)
+- Solution: Added `#[allow(dead_code)]` attribute to suppress warnings
+- Rationale: Fields returned by query but not needed in code (already have from path)
+
+**2. Hash field type mismatch**:
+
+- Issue: PostgreSQL returns `Vec<u8>`, ClickHouse returns `String` (hex-encoded)
+- Solution: Use different struct types for ClickHouse vs PostgreSQL
+- Pattern: ClickHouse structs use `String` for hash fields, PostgreSQL uses `Vec<u8>`
+
+**3. Type casting for response**:
+
+- Issue: ClickHouse uses unsigned types (u64, u32, u16), response expects signed (i64, i32)
+- Solution: Cast in code: `block_number as i64`, `proposals_count as i32`
+- Rationale: Response types match PostgreSQL (signed integers)
+
+**4. Capacity formatting**:
+
+- Issue: PostgreSQL returns `capacity::TEXT`, ClickHouse returns `u64`
+- Solution: Call `.to_string()` on ClickHouse capacity values
+- Pattern: `parse_capacity(&capacity.to_string())`
+
+**5. Status field inversion**:
+
+- Issue: PostgreSQL has `status` (0=live, 1=dead), ClickHouse has `is_consumed` (0=live, 1=consumed)
+- Solution: Invert ClickHouse value: `let status = if is_consumed == 0 { 0 } else { 1 };`
+- Rationale: Maintain consistent response format
+
+**6. Consumed by tx subquery**:
+
+- Issue: PostgreSQL has `consumed_by_tx` column, ClickHouse needs subquery to `cell_consumptions`
+- Solution: Use subquery with `hex()` to return hex-encoded hash
+- Pattern: `(SELECT hex(consumed_by_tx) FROM cell_consumptions cc WHERE ...)`
+
+**7. Batch OutPoint lookup**:
+
+- Issue: PostgreSQL uses `UNNEST()` for array parameters, ClickHouse uses `IN` clause
+- Solution: Build IN clause dynamically with `unhex()` for each OutPoint
+- Pattern: `WHERE (tx_hash, output_index) IN ((unhex('...'), 0), (unhex('...'), 1))`
+
+### Verification Results
+
+✅ **All success criteria met**:
+
+1. **Compilation**: `cargo build -p ckbadger-api` ✅ Passed (no errors)
+2. **Linting**: `cargo clippy -p ckbadger-api` ✅ Passed (no warnings)
+3. **Tests**: `cargo test -p ckbadger-api` ✅ Passed (57 tests, 0 failures)
+4. **Response format**: Maintained exact response format for all endpoints
+5. **Hybrid pattern**: All 3 endpoints use hybrid ClickHouse/PostgreSQL pattern
+
+### Performance Expectations
+
+Based on Phase 0 benchmarks and schema design:
+
+| Query Type                      | PostgreSQL (Expected) | ClickHouse (Expected) | Improvement |
+| ------------------------------- | --------------------- | --------------------- | ----------- |
+| Single cell lookup              | ~5ms                  | ~8ms (with subquery)  | 1.6x slower |
+| Batch cell lookup (50 cells)    | ~50ms                 | ~50ms                 | Similar     |
+| Transaction inputs (10 inputs)  | ~20ms                 | ~15ms                 | 1.3x faster |
+| Transaction outputs (5 outputs) | ~10ms                 | ~8ms                  | 1.2x faster |
+| Proposal graph (20 proposals)   | ~30ms                 | ~25ms                 | 1.2x faster |
+
+**Analysis**:
+
+- ClickHouse slightly slower for single cell lookup (subquery overhead)
+- ClickHouse faster for batch operations and JOINs (columnar storage)
+- ClickHouse scales better with data volume (compression, partitioning)
+
+### Pattern for Future Graph Endpoints
+
+```rust
+// ✅ Correct: Hybrid pattern with separate ClickHouse/PostgreSQL implementations
+async fn endpoint(...) -> ApiResult<Response> {
+    if let Some(ch_client) = &state.clickhouse_client {
+        endpoint_clickhouse(ch_client, &state, ...).await
+    } else {
+        endpoint_postgres(&state, ...).await
+    }
+}
+
+async fn endpoint_clickhouse(
+    ch_client: &crate::clickhouse::ClickHouseClient,
+    _state: &Arc<AppState>,
+    ...
+) -> ApiResult<Response> {
+    // Use hex_hash() for SELECT
+    // Use build_where_hash() for WHERE
+    // Use unhex() for IN clause
+    // Use subquery for cell consumption status
+    // Cast unsigned types to signed for response
+}
+
+async fn endpoint_postgres(
+    state: &Arc<AppState>,
+    ...
+) -> ApiResult<Response> {
+    // Use BYTEA for hash fields
+    // Use $1, $2 placeholders
+    // Use UNNEST() for batch lookup
+    // Use status column directly
+}
+```
+
+### Lessons Learned
+
+1. **Subquery pattern for cell consumption**: ClickHouse requires subquery to `cell_consumptions` table instead of direct column access
+2. **Type casting discipline**: Always cast ClickHouse unsigned types to signed for response consistency
+3. **Hash field handling**: Use `hex_hash()` for SELECT, `build_where_hash()` for WHERE, `unhex()` for IN clause
+4. **Batch lookup pattern**: Build IN clause dynamically with `unhex()` for each OutPoint
+5. **Response format consistency**: Maintain exact response format regardless of database backend
+6. **Struct field warnings**: Use `#[allow(dead_code)]` for fields returned by query but not used in code
+7. **Graph traversal**: Cell relationship queries benefit from ClickHouse's columnar storage for batch operations
+
+### Next Steps
+
+Task 4.2.7 will apply the same hybrid pattern to remaining API routes (if any).
+
+### Technical Debt
+
+1. **No integration tests for ClickHouse**: Tests only run against PostgreSQL
+   - Mitigation: Manual testing with ClickHouse backend
+   - Future: Add integration tests with ClickHouse test database
+
+2. **Dynamic SQL without parameterization**: ClickHouse queries use `format!()` instead of parameterized queries
+   - Mitigation: Use `build_where_hash()` helper for validation
+   - Impact: Potential SQL injection risk if not careful with input validation
+
+3. **Subquery overhead for cell consumption**: ClickHouse requires subquery for each cell
+   - Mitigation: Acceptable for graph queries (small result sets)
+   - Future: Consider materialized view for live_cells if performance becomes issue
+
+### Evidence
+
+**Files Modified**: `crates/api/src/routes/graph.rs` (963 lines → 1100+ lines)
+
+**Key Metrics**:
+
+- 3 endpoints rewritten with hybrid pattern
+- 6 new functions added (3 ClickHouse, 3 PostgreSQL)
+- 0 compilation errors
+- 0 clippy warnings
+- 57 tests passed (0 failures)
+
+**Verification Commands**:
+
+```bash
+cargo build -p ckbadger-api
+cargo clippy -p ckbadger-api
+cargo test -p ckbadger-api
+```
