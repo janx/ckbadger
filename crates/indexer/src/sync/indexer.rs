@@ -297,28 +297,11 @@ impl Indexer {
         Arc::clone(&self.progress)
     }
 
-    /// Check if bulk sync mode is active (for skipping non-critical statistics).
-    /// Active when: bulk_sync_mode enabled AND blocks_remaining > bulk_sync_threshold
-    fn is_bulk_sync_active(&self) -> bool {
-        self.config.bulk_sync_mode
-            && self.progress.blocks_remaining() > self.config.bulk_sync_threshold
-    }
-
     pub async fn run(&self) -> Result<()> {
         info!(
-            "Starting indexer (pipeline_enabled={}, bulk_sync_mode={})",
-            self.config.pipeline_enabled, self.config.bulk_sync_mode
+            "Starting indexer (pipeline_enabled={})",
+            self.config.pipeline_enabled
         );
-
-        if self.config.bulk_sync_mode {
-            let blocks_behind = self.progress.blocks_remaining();
-            if blocks_behind > self.config.bulk_sync_threshold {
-                info!(
-                    "Bulk sync active: {} blocks behind (threshold: {}). Some statistics will be skipped.",
-                    blocks_behind, self.config.bulk_sync_threshold
-                );
-            }
-        }
 
         let (start_block, _) = self.writer.get_sync_tip().await?;
         self.writer.init_sync_start(start_block).await?;
@@ -664,23 +647,13 @@ impl Indexer {
                         }
                     }
 
-                    if self.is_bulk_sync_active() {
-                        info!(
-                            "Syncing blocks {} to {} ({} remaining, {:.2} blocks/sec) [BULK SYNC]",
-                            start_block,
-                            end_block,
-                            self.progress.blocks_remaining(),
-                            self.progress.blocks_per_second()
-                        );
-                    } else {
-                        info!(
-                            "Syncing blocks {} to {} ({} remaining, {:.2} blocks/sec)",
-                            start_block,
-                            end_block,
-                            self.progress.blocks_remaining(),
-                            self.progress.blocks_per_second()
-                        );
-                    }
+                    info!(
+                        "Syncing blocks {} to {} ({} remaining, {:.2} blocks/sec)",
+                        start_block,
+                        end_block,
+                        self.progress.blocks_remaining(),
+                        self.progress.blocks_per_second()
+                    );
 
                     let db_start = Instant::now();
                     if let Err(e) = self
@@ -711,8 +684,8 @@ impl Indexer {
                         if crossed_50 {
                             if let Err(e) = self
                                 .update_secondary_issuance(
-                                    &hex::encode(&last_block.hash),
-                                    &hex::encode(&last_block.dao),
+                                    &format!("0x{}", hex::encode(&last_block.hash)),
+                                    &format!("0x{}", hex::encode(&last_block.dao)),
                                     last_block.number,
                                     last_block.timestamp,
                                 )
@@ -4425,8 +4398,6 @@ impl Indexer {
     }
 
     async fn flush_batch_stats(&self, stats: &BatchStats) -> Result<()> {
-        let bulk_sync_active = self.is_bulk_sync_active();
-
         // Critical: sync_status must always be updated (crash recovery)
         if let Some((block_number, ref block_hash)) = stats.last_block {
             self.writer
@@ -4496,31 +4467,29 @@ impl Indexer {
             }
         }
 
-        // Non-critical statistics - skipped during bulk sync (can be recalculated)
-        if !bulk_sync_active {
-            for (hour, (blocks, txs, created, consumed, capacity)) in &stats.hourly_stats {
-                self.writer
-                    .update_hourly_statistics(*hour, *blocks, *txs, *created, *consumed, *capacity)
-                    .await?;
-            }
+        // Non-critical statistics (stubs - not yet implemented)
+        for (hour, (blocks, txs, created, consumed, capacity)) in &stats.hourly_stats {
+            self.writer
+                .update_hourly_statistics(*hour, *blocks, *txs, *created, *consumed, *capacity)
+                .await?;
+        }
 
-            for ((date, miner_hash), (blocks_count, last_block)) in &stats.miner_stats {
-                self.writer
-                    .update_miner_statistics_batch(miner_hash, *last_block, *date, *blocks_count)
-                    .await?;
-            }
+        for ((date, miner_hash), (blocks_count, last_block)) in &stats.miner_stats {
+            self.writer
+                .update_miner_statistics_batch(miner_hash, *last_block, *date, *blocks_count)
+                .await?;
+        }
 
-            for (bucket, count) in &stats.block_time_dist {
-                self.writer
-                    .update_block_time_distribution_batch(*bucket, *count)
-                    .await?;
-            }
+        for (bucket, count) in &stats.block_time_dist {
+            self.writer
+                .update_block_time_distribution_batch(*bucket, *count)
+                .await?;
+        }
 
-            for (bucket, count) in &stats.epoch_time_dist {
-                self.writer
-                    .update_epoch_time_distribution_batch(*bucket, *count)
-                    .await?;
-            }
+        for (bucket, count) in &stats.epoch_time_dist {
+            self.writer
+                .update_epoch_time_distribution_batch(*bucket, *count)
+                .await?;
         }
 
         let mut snapshot_dates: Vec<_> = stats.dao_snapshot_dates.iter().collect();

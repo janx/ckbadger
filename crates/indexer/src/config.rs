@@ -20,10 +20,6 @@ pub struct Config {
     pub pipeline_buffer: usize,
     #[serde(default)]
     pub redis_url: Option<String>,
-    #[serde(default)]
-    pub bulk_sync_mode: bool,
-    #[serde(default = "default_bulk_sync_threshold")]
-    pub bulk_sync_threshold: u64,
 }
 
 fn default_batch_size() -> usize {
@@ -48,10 +44,6 @@ fn default_pipeline_enabled() -> bool {
 
 fn default_pipeline_buffer() -> usize {
     6
-}
-
-fn default_bulk_sync_threshold() -> u64 {
-    1000
 }
 
 impl Config {
