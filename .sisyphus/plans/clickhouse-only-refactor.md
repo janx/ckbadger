@@ -492,7 +492,7 @@ Simplify architecture by removing PostgreSQL, making ClickHouse the only databas
 
 ---
 
-- [ ] 5.4. Simplify docs/MIGRATION_CLICKHOUSE.md
+- [x] 5.4. Simplify docs/MIGRATION_CLICKHOUSE.md
 
   **What to do**:
   - Rename to `docs/CLICKHOUSE.md`
@@ -505,7 +505,7 @@ Simplify architecture by removing PostgreSQL, making ClickHouse the only databas
 
 ---
 
-- [ ] 5.5. Create .env.example
+- [x] 5.5. Create .env.example
 
   **What to do**:
   - Create `.env.example` with default values:
