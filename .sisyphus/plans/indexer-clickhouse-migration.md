@@ -542,7 +542,7 @@
 
 ### PHASE 3: Indexer Rewrite
 
-- [ ] 3.1. ClickHouse Writer基础实现
+- [x] 3.1. ClickHouse Writer基础实现
 
   **What to do**:
   - 创建`ClickHouseWriter` struct

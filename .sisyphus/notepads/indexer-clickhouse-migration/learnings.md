@@ -2472,3 +2472,128 @@ Phase 2 (Schema Design) is now complete. All 4 schema files created:
 **Conclusion**: Phase 2 (Schema Design) complete. Statistics schema designed with focus on essential views, preferring real-time queries where performance is acceptable.
 
 ---
+
+## Task 3.1: ClickHouse Writer Implementation
+
+**Date**: 2026-01-27
+
+### Implementation Summary
+
+Created `crates/indexer/src/db/clickhouse_writer.rs` with batch insert methods for all 5 core tables:
+
+- `insert_blocks_batch()` - blocks table
+- `insert_transactions_batch()` - transactions table
+- `insert_cells_batch()` - cells table
+- `insert_cell_consumptions_batch()` - cell_consumptions table
+- `insert_live_cells_batch()` - live_cells table (ReplacingMergeTree with sign column)
+
+### Key Design Decisions
+
+1. **Binary Hash Serialization**
+   - All hash fields use `Vec<u8>` (not hex strings)
+   - Maps to ClickHouse `FixedString(32)` type
+   - 9.8x performance improvement vs hex strings (from Phase 0 benchmarks)
+   - 50% storage savings (32 bytes vs 64 chars)
+
+2. **Row Struct Pattern**
+   - Used `#[derive(Row, Serialize)]` from clickhouse crate
+   - Struct field order matches ClickHouse schema exactly
+   - All structs are `Debug + Clone` for flexibility
+
+3. **Batch Insert Pattern**
+
+   ```rust
+   let mut insert = self.client.client().insert("table_name")?;
+   for row in rows {
+       insert.write(&row).await?;
+   }
+   insert.end().await?;
+   ```
+
+   - Empty batch early return (no-op)
+   - Async/await throughout
+   - Single transaction per batch
+
+4. **Data Type Mappings**
+   - `u64` → `UInt64` (block numbers, capacity)
+   - `u32` → `UInt32` (timestamps as Unix epoch, counts)
+   - `u16` → `UInt16` (output_index, input_index)
+   - `u8` → `UInt8` (hash_type, is_cellbase)
+   - `i8` → `Int8` (sign column in live_cells)
+   - `Vec<u8>` → `FixedString(32)` (all hash fields)
+   - `String` → `String` (hex-encoded variable-length data)
+   - `Option<T>` → `Nullable(T)` (optional fields)
+
+5. **LiveCellRow Sign Column**
+   - `sign = 1`: Cell created (live)
+   - `sign = -1`: Cell consumed (dead)
+   - `version`: Block number for ReplacingMergeTree deduplication
+   - Enables efficient live cell queries without JOINs
+
+### Struct Field Counts
+
+- `BlockRow`: 22 fields (matches schema exactly)
+- `TransactionRow`: 13 fields (matches schema exactly)
+- `CellRow`: 15 fields (matches schema exactly)
+- `CellConsumptionRow`: 5 fields (matches schema exactly)
+- `LiveCellRow`: 8 fields (matches schema exactly)
+
+### Testing
+
+Added unit tests for all Row struct creation:
+
+- `test_block_row_creation()`
+- `test_transaction_row_creation()`
+- `test_cell_row_creation()`
+- `test_cell_consumption_row_creation()`
+- `test_live_cell_row_creation()`
+- `test_live_cell_consumption()`
+
+All tests verify:
+
+- Struct instantiation
+- Field types and sizes
+- Hash field length (32 bytes)
+- Optional field handling
+
+### Compilation
+
+✅ `cargo check -p ckbadger-indexer` passes cleanly
+
+### Module Integration
+
+Updated `crates/indexer/src/db/mod.rs`:
+
+- Added `pub mod clickhouse_writer;`
+- Re-exported `pub use clickhouse_writer::ClickHouseWriter;`
+
+### Performance Expectations
+
+Based on Phase 0 benchmarks:
+
+- Target throughput: 500K+ rows/s sustained
+- Optimal batch size: 100K rows
+- Binary hash serialization: 9.8x faster than hex strings
+- Expected write latency: < 2ms per batch (100K rows)
+
+### Next Steps (Task 3.2)
+
+Need to implement conversion logic from `ParsedBlock` → `BlockRow`, `ParsedCell` → `CellRow`, etc.
+This will bridge the parser output to the ClickHouse writer input.
+
+### Gotchas Avoided
+
+1. **Timestamp Conversion**: Used `u32` for DateTime fields (Unix timestamp), not `DateTime<Utc>`
+2. **Nonce Field**: Stored as `Vec<u8>` (16 bytes), not `u128` or hex string
+3. **DAO Field**: Stored as `Vec<u8>` (32 bytes), not parsed into components
+4. **Total Difficulty**: Stored as `String` (large number), not `u64` (would overflow)
+5. **Empty Batch Handling**: Early return prevents unnecessary ClickHouse calls
+
+### Code Quality
+
+- All public methods have docstrings
+- Performance characteristics documented
+- Usage examples provided
+- Error handling via `anyhow::Result`
+- Async/await throughout
+- No unwrap() calls in production code
