@@ -144,9 +144,15 @@ pub async fn create_router(config: AppConfig) -> Router {
         });
 
         let broadcaster_ws = state.ws_manager.clone();
+        let broadcaster_ch = state.clickhouse_client.clone();
         tokio::spawn(async move {
-            ws::start_block_broadcaster(broadcaster_pool, broadcaster_ws, broadcaster_rpc_url)
-                .await;
+            ws::start_block_broadcaster(
+                broadcaster_pool,
+                broadcaster_ch,
+                broadcaster_ws,
+                broadcaster_rpc_url,
+            )
+            .await;
         });
 
         let reorg_broadcaster_pool = state.pool.clone();

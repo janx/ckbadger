@@ -1,10 +1,38 @@
 use chrono::{DateTime, Utc};
+use clickhouse::Row;
+use serde::Deserialize;
 use sqlx::PgPool;
 use std::sync::Arc;
 use tokio::time::{interval, Duration};
 use tracing::{debug, error, info};
 
 use super::manager::{BroadcastMessage, SyncStatus, WsManager};
+use crate::clickhouse::{hex_hash, ClickHouseClient};
+
+#[derive(Row, Deserialize)]
+struct BlockRow {
+    number: i64,
+    hash: String,
+    timestamp: DateTime<Utc>,
+    transactions_count: u32,
+    epoch_number: i64,
+    epoch_index: u32,
+    epoch_length: u32,
+}
+
+#[derive(Row, Deserialize)]
+struct TransactionRow {
+    hash: String,
+    inputs_count: u32,
+    outputs_count: u32,
+    fee: String,
+    timestamp: DateTime<Utc>,
+}
+
+#[derive(Row, Deserialize)]
+struct TimestampRow {
+    timestamp: DateTime<Utc>,
+}
 
 pub(crate) const FAST_SYNC_THRESHOLD: i64 = 100;
 
@@ -25,6 +53,7 @@ pub(crate) fn determine_sync_mode(synced_block: i64, tip_block: i64) -> SyncMode
 
 pub async fn start_block_broadcaster(
     pool: PgPool,
+    clickhouse_client: Option<ClickHouseClient>,
     ws_manager: Arc<WsManager>,
     ckb_rpc_url: String,
 ) {
@@ -36,29 +65,67 @@ pub async fn start_block_broadcaster(
 
         let tip_block = fetch_tip_block(&ckb_rpc_url).await.unwrap_or(0) as i64;
 
-        let latest_result = sqlx::query_as::<
-            _,
-            (
-                i64,
-                Vec<u8>,
-                chrono::DateTime<chrono::Utc>,
-                i32,
-                i64,
-                i32,
-                i32,
-            ),
-        >(
-            "SELECT number, hash, timestamp, transactions_count, epoch_number, epoch_index, epoch_length 
-             FROM blocks ORDER BY number DESC LIMIT 1",
-        )
-        .fetch_optional(&pool)
-        .await;
+        let latest_result = if let Some(ch_client) = &clickhouse_client {
+            // Query ClickHouse
+            let query = format!(
+                "SELECT number, {}, timestamp, transactions_count, epoch_number, epoch_index, epoch_length 
+                 FROM blocks ORDER BY number DESC LIMIT 1",
+                hex_hash("hash")
+            );
+
+            match ch_client
+                .client()
+                .query(&query)
+                .fetch_optional::<BlockRow>()
+                .await
+            {
+                Ok(Some(row)) => {
+                    // Convert hex string to bytes for compatibility
+                    let hash = hex::decode(row.hash.strip_prefix("0x").unwrap_or(&row.hash))
+                        .unwrap_or_default();
+                    Ok(Some((
+                        row.number,
+                        hash,
+                        row.timestamp,
+                        row.transactions_count as i32,
+                        row.epoch_number,
+                        row.epoch_index as i32,
+                        row.epoch_length as i32,
+                    )))
+                }
+                Ok(None) => Ok(None),
+                Err(e) => {
+                    error!("Failed to query latest block from ClickHouse: {}", e);
+                    Err(())
+                }
+            }
+        } else {
+            // Query PostgreSQL
+            sqlx::query_as::<
+                _,
+                (
+                    i64,
+                    Vec<u8>,
+                    chrono::DateTime<chrono::Utc>,
+                    i32,
+                    i64,
+                    i32,
+                    i32,
+                ),
+            >(
+                "SELECT number, hash, timestamp, transactions_count, epoch_number, epoch_index, epoch_length 
+                 FROM blocks ORDER BY number DESC LIMIT 1",
+            )
+            .fetch_optional(&pool)
+            .await
+            .map_err(|_| ())
+        };
 
         let latest_block = match latest_result {
             Ok(Some(block)) => block,
             Ok(None) => continue,
-            Err(e) => {
-                error!("Failed to query latest block: {}", e);
+            Err(_) => {
+                error!("Failed to query latest block");
                 continue;
             }
         };
@@ -78,9 +145,10 @@ pub async fn start_block_broadcaster(
         let sync_mode = determine_sync_mode(number, tip_block);
 
         if sync_mode == SyncMode::FastSync {
-            let sync_status = build_sync_status(&pool, tip_block).await;
+            let sync_status = build_sync_status(&pool, &clickhouse_client, tip_block).await;
             let (avg_block_time, estimated_epoch_time) =
-                calculate_epoch_stats(&pool, number, epoch_index, epoch_length).await;
+                calculate_epoch_stats(&pool, &clickhouse_client, number, epoch_index, epoch_length)
+                    .await;
 
             let msg = BroadcastMessage::NewBlock {
                 number,
@@ -103,31 +171,87 @@ pub async fn start_block_broadcaster(
             last_block_number = Some(number);
         } else {
             let last = last_block_number.unwrap();
-            let new_blocks = sqlx::query_as::<
-                _,
-                (
-                    i64,
-                    Vec<u8>,
-                    chrono::DateTime<chrono::Utc>,
-                    i32,
-                    i64,
-                    i32,
-                    i32,
-                ),
-            >(
-                "SELECT number, hash, timestamp, transactions_count, epoch_number, epoch_index, epoch_length 
-                 FROM blocks WHERE number > $1 ORDER BY number ASC LIMIT 20",
-            )
-            .bind(last)
-            .fetch_all(&pool)
-            .await;
 
-            match new_blocks {
+            let new_blocks_result = if let Some(ch_client) = &clickhouse_client {
+                // Query ClickHouse
+                let query = format!(
+                    "SELECT number, {}, timestamp, transactions_count, epoch_number, epoch_index, epoch_length 
+                     FROM blocks WHERE number > {} ORDER BY number ASC LIMIT 20",
+                    hex_hash("hash"),
+                    last
+                );
+
+                match ch_client
+                    .client()
+                    .query(&query)
+                    .fetch_all::<BlockRow>()
+                    .await
+                {
+                    Ok(rows) => {
+                        #[allow(clippy::type_complexity)]
+                        let blocks: Vec<(
+                            i64,
+                            Vec<u8>,
+                            DateTime<Utc>,
+                            i32,
+                            i64,
+                            i32,
+                            i32,
+                        )> = rows
+                            .into_iter()
+                            .map(|row| {
+                                let hash =
+                                    hex::decode(row.hash.strip_prefix("0x").unwrap_or(&row.hash))
+                                        .unwrap_or_default();
+                                (
+                                    row.number,
+                                    hash,
+                                    row.timestamp,
+                                    row.transactions_count as i32,
+                                    row.epoch_number,
+                                    row.epoch_index as i32,
+                                    row.epoch_length as i32,
+                                )
+                            })
+                            .collect();
+                        Ok(blocks)
+                    }
+                    Err(e) => {
+                        error!("Failed to query new blocks from ClickHouse: {}", e);
+                        Err(())
+                    }
+                }
+            } else {
+                // Query PostgreSQL
+                sqlx::query_as::<
+                    _,
+                    (
+                        i64,
+                        Vec<u8>,
+                        chrono::DateTime<chrono::Utc>,
+                        i32,
+                        i64,
+                        i32,
+                        i32,
+                    ),
+                >(
+                    "SELECT number, hash, timestamp, transactions_count, epoch_number, epoch_index, epoch_length 
+                     FROM blocks WHERE number > $1 ORDER BY number ASC LIMIT 20",
+                )
+                .bind(last)
+                .fetch_all(&pool)
+                .await
+                .map_err(|_| ())
+            };
+
+            match new_blocks_result {
                 Ok(blocks) => {
                     for (num, h, ts, txc, ep_num, ep_idx, ep_len) in blocks {
-                        let sync_status = build_sync_status(&pool, tip_block).await;
+                        let sync_status =
+                            build_sync_status(&pool, &clickhouse_client, tip_block).await;
                         let (avg_block_time, estimated_epoch_time) =
-                            calculate_epoch_stats(&pool, num, ep_idx, ep_len).await;
+                            calculate_epoch_stats(&pool, &clickhouse_client, num, ep_idx, ep_len)
+                                .await;
 
                         let msg = BroadcastMessage::NewBlock {
                             number: num,
@@ -144,12 +268,13 @@ pub async fn start_block_broadcaster(
                         info!("Broadcasting new block: {}", num);
                         ws_manager.broadcast_block(msg);
 
-                        broadcast_block_transactions(&pool, &ws_manager, num).await;
+                        broadcast_block_transactions(&pool, &clickhouse_client, &ws_manager, num)
+                            .await;
                         last_block_number = Some(num);
                     }
                 }
-                Err(e) => {
-                    error!("Failed to query new blocks: {}", e);
+                Err(_) => {
+                    error!("Failed to query new blocks");
                 }
             }
         }
@@ -158,22 +283,67 @@ pub async fn start_block_broadcaster(
 
 async fn broadcast_block_transactions(
     pool: &PgPool,
+    clickhouse_client: &Option<ClickHouseClient>,
     ws_manager: &Arc<WsManager>,
     block_number: i64,
 ) {
-    let txs = sqlx::query_as::<_, (Vec<u8>, i32, i32, String, chrono::DateTime<chrono::Utc>)>(
-        r#"
-        SELECT hash, inputs_count::int4, outputs_count::int4, fee::text, timestamp
-        FROM transactions 
-        WHERE block_number = $1 AND is_cellbase = false
-        ORDER BY tx_index
-        "#,
-    )
-    .bind(block_number)
-    .fetch_all(pool)
-    .await;
+    let txs_result = if let Some(ch_client) = clickhouse_client {
+        // Query ClickHouse
+        let query = format!(
+            "SELECT {}, inputs_count, outputs_count, fee, timestamp
+             FROM transactions 
+             WHERE block_number = {} AND is_cellbase = 0
+             ORDER BY tx_index",
+            hex_hash("hash"),
+            block_number
+        );
 
-    match txs {
+        match ch_client
+            .client()
+            .query(&query)
+            .fetch_all::<TransactionRow>()
+            .await
+        {
+            Ok(rows) => {
+                #[allow(clippy::type_complexity)]
+                let transactions: Vec<(Vec<u8>, i32, i32, String, DateTime<Utc>)> = rows
+                    .into_iter()
+                    .map(|row| {
+                        let hash = hex::decode(row.hash.strip_prefix("0x").unwrap_or(&row.hash))
+                            .unwrap_or_default();
+                        (
+                            hash,
+                            row.inputs_count as i32,
+                            row.outputs_count as i32,
+                            row.fee,
+                            row.timestamp,
+                        )
+                    })
+                    .collect();
+                Ok(transactions)
+            }
+            Err(e) => {
+                error!("Failed to query block transactions from ClickHouse: {}", e);
+                Err(())
+            }
+        }
+    } else {
+        // Query PostgreSQL
+        sqlx::query_as::<_, (Vec<u8>, i32, i32, String, chrono::DateTime<chrono::Utc>)>(
+            r#"
+            SELECT hash, inputs_count::int4, outputs_count::int4, fee::text, timestamp
+            FROM transactions 
+            WHERE block_number = $1 AND is_cellbase = false
+            ORDER BY tx_index
+            "#,
+        )
+        .bind(block_number)
+        .fetch_all(pool)
+        .await
+        .map_err(|_| ())
+    };
+
+    match txs_result {
         Ok(transactions) => {
             for (hash, inputs_count, outputs_count, fee, timestamp) in transactions {
                 let msg = BroadcastMessage::NewTransaction {
@@ -188,29 +358,58 @@ async fn broadcast_block_transactions(
                 ws_manager.broadcast_transaction(msg);
             }
         }
-        Err(e) => {
-            error!("Failed to query block transactions: {}", e);
+        Err(_) => {
+            error!("Failed to query block transactions");
         }
     }
 }
 
 async fn calculate_epoch_stats(
     pool: &PgPool,
+    clickhouse_client: &Option<ClickHouseClient>,
     latest_block: i64,
     epoch_index: i32,
     epoch_length: i32,
 ) -> (String, String) {
-    // Use last 2 blocks for avg time calculation (avoids expensive self-join on 100 blocks)
-    let blocks_result = sqlx::query_as::<_, (DateTime<Utc>,)>(
-        r#"
-        SELECT timestamp FROM blocks
-        WHERE number >= $1 - 1 AND number <= $1
-        ORDER BY number ASC
-        "#,
-    )
-    .bind(latest_block)
-    .fetch_all(pool)
-    .await;
+    let blocks_result = if let Some(ch_client) = clickhouse_client {
+        // Query ClickHouse
+        let query = format!(
+            "SELECT timestamp FROM blocks
+             WHERE number >= {} AND number <= {}
+             ORDER BY number ASC",
+            latest_block - 1,
+            latest_block
+        );
+
+        match ch_client
+            .client()
+            .query(&query)
+            .fetch_all::<TimestampRow>()
+            .await
+        {
+            Ok(rows) => Ok(rows.into_iter().map(|r| (r.timestamp,)).collect()),
+            Err(e) => {
+                error!(
+                    "Failed to query blocks for epoch stats from ClickHouse: {}",
+                    e
+                );
+                Err(())
+            }
+        }
+    } else {
+        // Query PostgreSQL
+        sqlx::query_as::<_, (DateTime<Utc>,)>(
+            r#"
+            SELECT timestamp FROM blocks
+            WHERE number >= $1 - 1 AND number <= $1
+            ORDER BY number ASC
+            "#,
+        )
+        .bind(latest_block)
+        .fetch_all(pool)
+        .await
+        .map_err(|_| ())
+    };
 
     let avg_time = blocks_result
         .ok()
@@ -233,7 +432,11 @@ async fn calculate_epoch_stats(
     (avg_block_time, estimated_epoch_time)
 }
 
-async fn build_sync_status(pool: &PgPool, tip_block: i64) -> SyncStatus {
+async fn build_sync_status(
+    pool: &PgPool,
+    _clickhouse_client: &Option<ClickHouseClient>,
+    tip_block: i64,
+) -> SyncStatus {
     let sync_row: Option<(i64, Option<DateTime<Utc>>, i64)> = sqlx::query_as(
         "SELECT tip_block_number, sync_started_at, COALESCE(sync_started_block, 0) FROM sync_status WHERE id = 1",
     )

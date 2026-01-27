@@ -747,7 +747,7 @@
 
 ---
 
-- [ ] 4.3. WebSocket与Graph API重写
+- [x] 4.3. WebSocket与Graph API重写
 
   **What to do**:
   - 重写WebSocket查询（new_block, new_transaction）
