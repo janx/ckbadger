@@ -281,7 +281,7 @@ Simplify architecture by removing PostgreSQL, making ClickHouse the only databas
 
 ---
 
-- [ ] 2.12. Remove PostgreSQL from other modules
+- [x] 2.12. Remove PostgreSQL from other modules
 
   **What to do**:
   - Check `crates/api/src/db/` module - remove or update

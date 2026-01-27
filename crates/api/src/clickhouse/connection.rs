@@ -28,6 +28,10 @@ impl ClickHouseClient {
     pub fn client(&self) -> &Client {
         &self.client
     }
+
+    // Note: query_json and execute methods removed as they're not compatible
+    // with the ClickHouse client library API. Use client() method to access
+    // the underlying client for custom queries.
 }
 
 #[cfg(test)]

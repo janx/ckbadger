@@ -67,27 +67,9 @@ pub fn routes() -> Router<Arc<AppState>> {
 
 const HEARTBEAT_TIMEOUT_SECS: i64 = 30;
 
-#[derive(sqlx::FromRow)]
+#[derive(clickhouse::Row, serde::Deserialize)]
 struct SyncStatusRow {
-    tip_block_number: i64,
-    last_synced_at: Option<chrono::DateTime<chrono::Utc>>,
-    sync_started_at: Option<chrono::DateTime<chrono::Utc>>,
-    sync_started_block: i64,
-    integrity_heartbeat: Option<chrono::DateTime<chrono::Utc>>,
-    integrity_pending_count: i64,
-    integrity_total_count: i64,
-    integrity_processed_count: i64,
-    integrity_started_at: Option<chrono::DateTime<chrono::Utc>>,
-    udt_info_running: bool,
-    udt_info_total_count: i64,
-    udt_info_processed_count: i64,
-    udt_info_started_at: Option<chrono::DateTime<chrono::Utc>>,
-    udt_info_last_check_at: Option<chrono::DateTime<chrono::Utc>>,
-    script_info_running: bool,
-    script_info_total_count: i64,
-    script_info_processed_count: i64,
-    script_info_started_at: Option<chrono::DateTime<chrono::Utc>>,
-    script_info_last_check_at: Option<chrono::DateTime<chrono::Utc>>,
+    tip_block_number: u64,
 }
 
 async fn get_system_status(State(state): State<Arc<AppState>>) -> ApiResult<SystemStatus> {

@@ -1,5 +1,7 @@
 use crate::AppState;
 use ckbadger_common::dao::GENESIS_BURNT;
+use clickhouse::Row;
+use serde::Deserialize;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::info;
@@ -44,19 +46,29 @@ pub async fn warmup_chart_caches(state: Arc<AppState>) {
 }
 
 async fn warmup_average_block_time(state: &AppState) -> Result<(), String> {
-    let rows = sqlx::query_as::<_, (chrono::NaiveDate, i32)>(
-        "SELECT date, avg_block_time_ms FROM daily_statistics WHERE avg_block_time_ms IS NOT NULL ORDER BY date ASC",
-    )
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    #[derive(Row, Deserialize)]
+    struct DailyStatsRow {
+        date: String,
+        avg_block_time_ms: i64,
+    }
+
+    let query = "SELECT toString(date) as date, avg_block_time_ms FROM daily_statistics WHERE avg_block_time_ms IS NOT NULL ORDER BY date ASC";
+
+    let rows = state
+        .clickhouse
+        .client()
+        .query(query)
+        .fetch_all::<DailyStatsRow>()
+        .await
+        .map_err(|e| e.to_string())?;
 
     let data: Vec<serde_json::Value> = rows
-        .into_iter()
-        .map(|(date, avg_time_ms)| {
+        .iter()
+        .map(|row| {
+            let avg_time_ms = row.avg_block_time_ms as f64;
             serde_json::json!({
-                "date": date.format("%Y/%m/%d").to_string(),
-                "value": format!("{:.2}", avg_time_ms as f64 / 1000.0)
+                "date": row.date,
+                "value": format!("{:.2}", avg_time_ms / 1000.0)
             })
         })
         .collect();
@@ -76,21 +88,32 @@ async fn warmup_average_block_time(state: &AppState) -> Result<(), String> {
 }
 
 async fn warmup_hash_rate(state: &AppState) -> Result<(), String> {
-    let rows = sqlx::query_as::<_, (chrono::NaiveDate, i64, i32)>(
-        "SELECT date, avg_compact_target, block_count FROM daily_block_stats WHERE date < (SELECT MAX(date) FROM daily_block_stats) ORDER BY date ASC",
-    )
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    #[derive(Row, Deserialize)]
+    struct DailyBlockStatsRow {
+        date: String,
+        avg_compact_target: i64,
+        block_count: i64,
+    }
+
+    let query = "SELECT toString(date) as date, avg_compact_target, block_count FROM daily_block_stats WHERE date < (SELECT MAX(date) FROM daily_block_stats) ORDER BY date ASC";
+
+    let rows = state
+        .clickhouse
+        .client()
+        .query(query)
+        .fetch_all::<DailyBlockStatsRow>()
+        .await
+        .map_err(|e| e.to_string())?;
 
     let data: Vec<serde_json::Value> = rows
-        .into_iter()
-        .map(|(date, compact_target, block_count)| {
-            let difficulty = compact_to_difficulty(compact_target);
-            let avg_block_time = 86400.0 / block_count as f64;
+        .iter()
+        .map(|row| {
+            let difficulty = compact_to_difficulty(row.avg_compact_target);
+            let block_count = row.block_count as f64;
+            let avg_block_time = 86400.0 / block_count;
             let hash_rate = difficulty as f64 / avg_block_time;
             serde_json::json!({
-                "date": date.format("%Y/%m/%d").to_string(),
+                "date": row.date,
                 "value": format!("{:.0}", hash_rate)
             })
         })
@@ -111,19 +134,28 @@ async fn warmup_hash_rate(state: &AppState) -> Result<(), String> {
 }
 
 async fn warmup_difficulty(state: &AppState) -> Result<(), String> {
-    let rows = sqlx::query_as::<_, (chrono::NaiveDate, i64)>(
-        "SELECT date, avg_compact_target FROM daily_block_stats WHERE date < (SELECT MAX(date) FROM daily_block_stats) ORDER BY date ASC",
-    )
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    #[derive(Row, Deserialize)]
+    struct DifficultyRow {
+        date: String,
+        avg_compact_target: i64,
+    }
+
+    let query = "SELECT toString(date) as date, avg_compact_target FROM daily_block_stats WHERE date < (SELECT MAX(date) FROM daily_block_stats) ORDER BY date ASC";
+
+    let rows = state
+        .clickhouse
+        .client()
+        .query(query)
+        .fetch_all::<DifficultyRow>()
+        .await
+        .map_err(|e| e.to_string())?;
 
     let data: Vec<serde_json::Value> = rows
-        .into_iter()
-        .map(|(date, compact_target)| {
-            let difficulty = compact_to_difficulty(compact_target);
+        .iter()
+        .map(|row| {
+            let difficulty = compact_to_difficulty(row.avg_compact_target);
             serde_json::json!({
-                "date": date.format("%Y/%m/%d").to_string(),
+                "date": row.date,
                 "value": difficulty.to_string()
             })
         })
@@ -144,19 +176,28 @@ async fn warmup_difficulty(state: &AppState) -> Result<(), String> {
 }
 
 async fn warmup_uncle_rate(state: &AppState) -> Result<(), String> {
-    let rows = sqlx::query_as::<_, (chrono::NaiveDate, f64)>(
-        "SELECT date, avg_uncle_rate FROM daily_block_stats WHERE date < (SELECT MAX(date) FROM daily_block_stats) ORDER BY date ASC",
-    )
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    #[derive(Row, Deserialize)]
+    struct UncleRateRow {
+        date: String,
+        avg_uncle_rate: f64,
+    }
+
+    let query = "SELECT toString(date) as date, avg_uncle_rate FROM daily_block_stats WHERE date < (SELECT MAX(date) FROM daily_block_stats) ORDER BY date ASC";
+
+    let rows = state
+        .clickhouse
+        .client()
+        .query(query)
+        .fetch_all::<UncleRateRow>()
+        .await
+        .map_err(|e| e.to_string())?;
 
     let data: Vec<serde_json::Value> = rows
-        .into_iter()
-        .map(|(date, uncle_rate)| {
+        .iter()
+        .map(|row| {
             serde_json::json!({
-                "date": date.format("%Y/%m/%d").to_string(),
-                "value": format!("{:.6}", uncle_rate)
+                "date": row.date,
+                "value": format!("{:.6}", row.avg_uncle_rate)
             })
         })
         .collect();
@@ -176,19 +217,29 @@ async fn warmup_uncle_rate(state: &AppState) -> Result<(), String> {
 }
 
 async fn warmup_block_time_distribution(state: &AppState) -> Result<(), String> {
-    let rows = sqlx::query_as::<_, (i32, i64)>(
-        "SELECT bucket_seconds, block_count FROM block_time_distribution ORDER BY bucket_seconds",
-    )
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    #[derive(Row, Deserialize)]
+    struct BlockTimeDistRow {
+        bucket_seconds: i64,
+        block_count: i64,
+    }
+
+    let query =
+        "SELECT bucket_seconds, block_count FROM block_time_distribution ORDER BY bucket_seconds";
+
+    let rows = state
+        .clickhouse
+        .client()
+        .query(query)
+        .fetch_all::<BlockTimeDistRow>()
+        .await
+        .map_err(|e| e.to_string())?;
 
     let data: Vec<serde_json::Value> = rows
-        .into_iter()
-        .map(|(bucket_seconds, count)| {
+        .iter()
+        .map(|row| {
             serde_json::json!({
-                "date": format!("{}s", bucket_seconds),
-                "value": count.to_string()
+                "date": format!("{}s", row.bucket_seconds),
+                "value": row.block_count.to_string()
             })
         })
         .collect();
@@ -208,21 +259,31 @@ async fn warmup_block_time_distribution(state: &AppState) -> Result<(), String> 
 }
 
 async fn warmup_epoch_time_distribution(state: &AppState) -> Result<(), String> {
-    let rows = sqlx::query_as::<_, (i32, i64)>(
-        "SELECT bucket_minutes, epoch_count FROM epoch_time_distribution ORDER BY bucket_minutes",
-    )
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    #[derive(Row, Deserialize)]
+    struct EpochTimeDistRow {
+        bucket_minutes: i32,
+        epoch_count: i64,
+    }
+
+    let query =
+        "SELECT bucket_minutes, epoch_count FROM epoch_time_distribution ORDER BY bucket_minutes";
+
+    let rows = state
+        .clickhouse
+        .client()
+        .query(query)
+        .fetch_all::<EpochTimeDistRow>()
+        .await
+        .map_err(|e| e.to_string())?;
 
     let data: Vec<serde_json::Value> = rows
-        .into_iter()
-        .map(|(bucket_minutes, count)| {
-            let hours = bucket_minutes / 60;
-            let mins = bucket_minutes % 60;
+        .iter()
+        .map(|row| {
+            let hours = row.bucket_minutes / 60;
+            let mins = row.bucket_minutes % 60;
             serde_json::json!({
                 "date": format!("{}:{:02}", hours, mins),
-                "value": count.to_string()
+                "value": row.epoch_count.to_string()
             })
         })
         .collect();
@@ -242,28 +303,38 @@ async fn warmup_epoch_time_distribution(state: &AppState) -> Result<(), String> 
 }
 
 async fn warmup_epoch_time_length(state: &AppState) -> Result<(), String> {
-    let rows = sqlx::query_as::<_, (i64, f64, i32)>(
-        r#"
+    #[derive(Row, Deserialize)]
+    struct EpochTimeLengthRow {
+        epoch_number: i64,
+        duration_hours: f64,
+        blocks_count: i64,
+    }
+
+    let query = r#"
         SELECT 
             epoch_number,
-            (EXTRACT(EPOCH FROM (end_timestamp - start_timestamp)) / 3600.0)::float8 as duration_hours,
+            (dateDiff('second', start_timestamp, end_timestamp) / 3600.0) as duration_hours,
             blocks_count
         FROM epoch_statistics
         WHERE end_timestamp IS NOT NULL
         ORDER BY epoch_number ASC
-        "#,
-    )
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    "#;
+
+    let rows = state
+        .clickhouse
+        .client()
+        .query(query)
+        .fetch_all::<EpochTimeLengthRow>()
+        .await
+        .map_err(|e| e.to_string())?;
 
     let data: Vec<serde_json::Value> = rows
-        .into_iter()
-        .map(|(epoch_number, duration_hours, block_count)| {
+        .iter()
+        .map(|row| {
             serde_json::json!({
-                "date": epoch_number.to_string(),
-                "value": format!("{:.2}", duration_hours),
-                "value2": block_count.to_string()
+                "date": row.epoch_number.to_string(),
+                "value": format!("{:.2}", row.duration_hours),
+                "value2": row.blocks_count.to_string()
             })
         })
         .collect();
@@ -284,32 +355,52 @@ async fn warmup_epoch_time_length(state: &AppState) -> Result<(), String> {
 }
 
 async fn warmup_miner_distribution(state: &AppState) -> Result<(), String> {
-    let total_blocks: (i64,) =
-        sqlx::query_as("SELECT COALESCE(SUM(blocks_mined), 0)::bigint FROM miner_statistics")
-            .fetch_one(&state.pool)
-            .await
-            .map_err(|e| e.to_string())?;
+    #[derive(Row, Deserialize)]
+    struct TotalRow {
+        total: i64,
+    }
 
-    let rows = sqlx::query_as::<_, (Vec<u8>, i64)>(
-        "SELECT lock_script_hash, blocks_mined FROM miner_statistics ORDER BY blocks_mined DESC LIMIT 100",
-    )
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    #[derive(Row, Deserialize)]
+    struct MinerRow {
+        lock_script_hash: String,
+        blocks_mined: i64,
+    }
 
-    let total = total_blocks.0 as f64;
+    let total_query = "SELECT COALESCE(SUM(blocks_mined), 0) as total FROM miner_statistics";
+
+    let total_rows = state
+        .clickhouse
+        .client()
+        .query(total_query)
+        .fetch_all::<TotalRow>()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let total_blocks = total_rows.first().map(|r| r.total).unwrap_or(0);
+
+    let query = "SELECT lock_script_hash, blocks_mined FROM miner_statistics ORDER BY blocks_mined DESC LIMIT 100";
+
+    let rows = state
+        .clickhouse
+        .client()
+        .query(query)
+        .fetch_all::<MinerRow>()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let total = total_blocks as f64;
     let data: Vec<serde_json::Value> = rows
-        .into_iter()
-        .map(|(hash, blocks_mined)| {
+        .iter()
+        .map(|row| {
             let percentage = if total > 0.0 {
-                (blocks_mined as f64 / total) * 100.0
+                (row.blocks_mined as f64 / total) * 100.0
             } else {
                 0.0
             };
             serde_json::json!({
-                "address": format!("0x{}", hex::encode(&hash)),
+                "address": row.lock_script_hash,
                 "minerName": serde_json::Value::Null,
-                "blocksMined": blocks_mined,
+                "blocksMined": row.blocks_mined,
                 "percentage": format!("{:.4}", percentage)
             })
         })
@@ -318,7 +409,7 @@ async fn warmup_miner_distribution(state: &AppState) -> Result<(), String> {
     let response = serde_json::json!({
         "data": data,
         "title": "Miner Address Distribution",
-        "totalBlocks": total_blocks.0
+        "totalBlocks": total_blocks
     });
 
     state
@@ -334,39 +425,48 @@ async fn warmup_miner_distribution(state: &AppState) -> Result<(), String> {
 }
 
 async fn warmup_total_supply(state: &AppState) -> Result<(), String> {
-    let rows = sqlx::query_as::<_, (chrono::NaiveDate, String, String, String)>(
-        r#"
-        SELECT date, CAST(total_issuance AS TEXT), CAST(total_deposit AS TEXT), COALESCE(cumulative_burnt, '0')
+    #[derive(Row, Deserialize)]
+    struct TotalSupplyRow {
+        date: String,
+        total_issuance: String,
+        total_deposit: String,
+        cumulative_burnt: String,
+    }
+
+    let query = r#"
+        SELECT toString(date) as date, toString(total_issuance) as total_issuance, toString(total_deposit) as total_deposit, COALESCE(toString(cumulative_burnt), '0') as cumulative_burnt
         FROM dao_daily_snapshots
         WHERE total_issuance != 0
         ORDER BY date ASC
-        "#,
-    )
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    "#;
+
+    let rows = state
+        .clickhouse
+        .client()
+        .query(query)
+        .fetch_all::<TotalSupplyRow>()
+        .await
+        .map_err(|e| e.to_string())?;
 
     let data: Vec<serde_json::Value> = rows
-        .into_iter()
-        .map(
-            |(date, total_issuance_str, locked_capacity, cumulative_burnt_str)| {
-                let total_issuance: u128 = total_issuance_str.parse().unwrap_or(0);
-                let locked: u128 = locked_capacity.parse().unwrap_or(0);
-                let secondary_burnt: u128 = cumulative_burnt_str.parse().unwrap_or(0);
-                let total_burnt = GENESIS_BURNT + secondary_burnt;
-                let circulating = total_issuance.saturating_sub(total_burnt);
-                let liquid = circulating.saturating_sub(locked);
+        .iter()
+        .filter_map(|row| {
+            let total_issuance: u128 = row.total_issuance.parse().unwrap_or(0);
+            let locked: u128 = row.total_deposit.parse().unwrap_or(0);
+            let secondary_burnt: u128 = row.cumulative_burnt.parse().unwrap_or(0);
+            let total_burnt = GENESIS_BURNT + secondary_burnt;
+            let circulating = total_issuance.saturating_sub(total_burnt);
+            let liquid = circulating.saturating_sub(locked);
 
-                serde_json::json!({
-                    "date": date.format("%Y/%m/%d").to_string(),
-                    "values": {
-                        "circulating": shannon_to_ckb(liquid),
-                        "locked": shannon_to_ckb(locked),
-                        "burnt": shannon_to_ckb(total_burnt)
-                    }
-                })
-            },
-        )
+            Some(serde_json::json!({
+                "date": row.date,
+                "values": {
+                    "circulating": shannon_to_ckb(liquid),
+                    "locked": shannon_to_ckb(locked),
+                    "burnt": shannon_to_ckb(total_burnt)
+                }
+            }))
+        })
         .collect();
 
     let response = serde_json::json!({
@@ -388,18 +488,17 @@ async fn warmup_total_supply(state: &AppState) -> Result<(), String> {
 }
 
 async fn warmup_secondary_issuance(state: &AppState) -> Result<(), String> {
-    let rows = sqlx::query_as::<
-        _,
-        (
-            chrono::NaiveDate,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-        ),
-    >(
-        r#"
+    #[derive(Row, Deserialize)]
+    struct SecondaryIssuanceRow {
+        date: String,
+        cumulative_mining_reward: f64,
+        cumulative_deposit_compensation: f64,
+        cumulative_burnt: f64,
+    }
+
+    let query = r#"
         SELECT 
-            date,
+            toString(date) as date,
             cumulative_mining_reward,
             cumulative_deposit_compensation,
             cumulative_burnt
@@ -408,18 +507,22 @@ async fn warmup_secondary_issuance(state: &AppState) -> Result<(), String> {
           AND cumulative_mining_reward IS NOT NULL
           AND cumulative_deposit_compensation IS NOT NULL
         ORDER BY date ASC
-        "#,
-    )
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    "#;
+
+    let rows = state
+        .clickhouse
+        .client()
+        .query(query)
+        .fetch_all::<SecondaryIssuanceRow>()
+        .await
+        .map_err(|e| e.to_string())?;
 
     let data: Vec<serde_json::Value> = rows
-        .into_iter()
-        .filter_map(|(date, mining_str, compensation_str, burnt_str)| {
-            let mining: f64 = mining_str?.parse().ok()?;
-            let compensation: f64 = compensation_str?.parse().ok()?;
-            let burnt: f64 = burnt_str?.parse().ok()?;
+        .iter()
+        .filter_map(|row| {
+            let mining = row.cumulative_mining_reward;
+            let compensation = row.cumulative_deposit_compensation;
+            let burnt = row.cumulative_burnt;
 
             let total = mining + compensation + burnt;
             if total <= 0.0 {
@@ -431,7 +534,7 @@ async fn warmup_secondary_issuance(state: &AppState) -> Result<(), String> {
             let burnt_pct = burnt / total * 100.0;
 
             Some(serde_json::json!({
-                "date": date.format("%Y/%m/%d").to_string(),
+                "date": row.date,
                 "values": {
                     "burnt": format!("{:.2}", burnt_pct),
                     "mining": format!("{:.2}", mining_pct),

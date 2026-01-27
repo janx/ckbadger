@@ -1,5 +1,6 @@
-use serde::Serialize;
-use sqlx::PgPool;
+use crate::clickhouse::ClickHouseClient;
+use clickhouse::Row;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, RwLock};
@@ -31,7 +32,7 @@ pub struct CyclesCalculator {
 }
 
 impl CyclesCalculator {
-    pub fn new(pool: PgPool, ckb_rpc_url: String) -> Arc<Self> {
+    pub fn new(clickhouse: ClickHouseClient, ckb_rpc_url: String) -> Arc<Self> {
         let (request_tx, request_rx) = mpsc::channel::<String>(1000);
 
         let calculator = Arc::new(Self {
@@ -43,7 +44,7 @@ impl CyclesCalculator {
 
         let worker = CyclesWorker {
             calculator: Arc::clone(&calculator),
-            pool,
+            clickhouse,
             ckb_rpc_url,
             request_rx: Mutex::new(request_rx),
         };
@@ -147,7 +148,7 @@ impl CyclesCalculator {
 
 struct CyclesWorker {
     calculator: Arc<CyclesCalculator>,
-    pool: PgPool,
+    clickhouse: ClickHouseClient,
     ckb_rpc_url: String,
     request_rx: Mutex<mpsc::Receiver<String>>,
 }
@@ -167,56 +168,64 @@ impl CyclesWorker {
     async fn process_request(&self, tx_hash: &str) {
         debug!("Processing cycles calculation for {}", tx_hash);
 
-        let hash_bytes = match hex::decode(tx_hash.strip_prefix("0x").unwrap_or(tx_hash)) {
-            Ok(b) => b,
-            Err(e) => {
-                self.calculator
-                    .mark_failed(tx_hash, format!("Invalid hash: {}", e))
-                    .await;
-                return;
-            }
-        };
+        let hash_hex = tx_hash.strip_prefix("0x").unwrap_or(tx_hash).to_lowercase();
 
-        let current_cycles: Option<(Option<i64>,)> =
-            sqlx::query_as("SELECT cycles FROM transactions WHERE hash = $1")
-                .bind(&hash_bytes)
-                .fetch_optional(&self.pool)
-                .await
-                .ok()
-                .flatten();
+        // Check if transaction exists and get current cycles
+        #[derive(Row, Deserialize)]
+        struct TxRow {
+            cycles: Option<i64>,
+            is_cellbase: bool,
+        }
 
-        match current_cycles {
-            Some((Some(cycles),)) if cycles > 0 => {
-                debug!("Transaction {} already has cycles: {}", tx_hash, cycles);
-                self.calculator.mark_complete(tx_hash).await;
-                return;
+        let query = format!(
+            "SELECT cycles, is_cellbase FROM transactions WHERE hash = '{}' LIMIT 1",
+            hash_hex
+        );
+
+        match self
+            .clickhouse
+            .client()
+            .query(&query)
+            .fetch_optional::<TxRow>()
+            .await
+        {
+            Ok(Some(row)) => {
+                let cycles = row.cycles;
+                let is_cellbase = row.is_cellbase;
+
+                // If cycles already calculated and positive
+                if let Some(c) = cycles {
+                    if c > 0 {
+                        debug!("Transaction {} already has cycles: {}", tx_hash, c);
+                        self.calculator.mark_complete(tx_hash).await;
+                        return;
+                    } else if c == -1 {
+                        self.calculator
+                            .mark_failed(tx_hash, "Calculation previously failed".to_string())
+                            .await;
+                        return;
+                    }
+                }
+
+                // Skip cellbase transactions
+                if is_cellbase {
+                    self.calculator.mark_complete(tx_hash).await;
+                    return;
+                }
             }
-            Some((Some(-1),)) => {
-                self.calculator
-                    .mark_failed(tx_hash, "Calculation previously failed".to_string())
-                    .await;
-                return;
-            }
-            None => {
+            Ok(None) => {
                 self.calculator
                     .mark_failed(tx_hash, "Transaction not found".to_string())
                     .await;
                 return;
             }
-            _ => {}
-        }
-
-        let is_cellbase: Option<(bool,)> =
-            sqlx::query_as("SELECT is_cellbase FROM transactions WHERE hash = $1")
-                .bind(&hash_bytes)
-                .fetch_optional(&self.pool)
-                .await
-                .ok()
-                .flatten();
-
-        if let Some((true,)) = is_cellbase {
-            self.calculator.mark_complete(tx_hash).await;
-            return;
+            Err(e) => {
+                warn!("Failed to query transaction from ClickHouse: {}", e);
+                self.calculator
+                    .mark_failed(tx_hash, format!("Database error: {}", e))
+                    .await;
+                return;
+            }
         }
 
         self.calculator.mark_calculating(tx_hash).await;
@@ -229,22 +238,36 @@ impl CyclesWorker {
 
         match ckbadger_common::cycles::calculate_cycles(&self.ckb_rpc_url, &formatted_hash).await {
             Ok(cycles) => {
-                if let Err(e) = sqlx::query("UPDATE transactions SET cycles = $1 WHERE hash = $2")
-                    .bind(cycles)
-                    .bind(&hash_bytes)
-                    .execute(&self.pool)
+                let update_query = format!(
+                    "ALTER TABLE transactions UPDATE cycles = {} WHERE hash = unhex('{}')",
+                    cycles, hash_hex
+                );
+                if let Err(e) = self
+                    .clickhouse
+                    .client()
+                    .query(&update_query)
+                    .execute()
                     .await
                 {
-                    warn!("Failed to update cycles in DB for {}: {}", tx_hash, e);
+                    warn!(
+                        "Failed to update cycles in ClickHouse for {}: {}",
+                        tx_hash, e
+                    );
                 }
                 debug!("Calculated cycles for {}: {}", tx_hash, cycles);
                 self.calculator.mark_complete(tx_hash).await;
             }
             Err(e) => {
                 warn!("Failed to calculate cycles for {}: {}", tx_hash, e);
-                let _ = sqlx::query("UPDATE transactions SET cycles = -1 WHERE hash = $1")
-                    .bind(&hash_bytes)
-                    .execute(&self.pool)
+                let update_query = format!(
+                    "ALTER TABLE transactions UPDATE cycles = -1 WHERE hash = unhex('{}')",
+                    hash_hex
+                );
+                let _ = self
+                    .clickhouse
+                    .client()
+                    .query(&update_query)
+                    .execute()
                     .await;
                 self.calculator.mark_failed(tx_hash, e).await;
             }
