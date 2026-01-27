@@ -144,7 +144,7 @@ let row = state.clickhouse.client()
 
 ### Phase 3: Migrate forks.rs (20 errors)
 
-- [ ] 3.1. Migrate list_forks function
+- [x] 3.1. Migrate list_forks function
 
   **What to do**:
   - Convert total count query to ClickHouse
@@ -154,7 +154,7 @@ let row = state.clickhouse.client()
 
 ---
 
-- [ ] 3.2. Migrate get_fork function
+- [x] 3.2. Migrate get_fork function
 
   **What to do**:
   - Convert single reorg event lookup to ClickHouse
@@ -163,7 +163,7 @@ let row = state.clickhouse.client()
 
 ---
 
-- [ ] 3.3. Migrate get_orphaned_blocks function
+- [x] 3.3. Migrate get_orphaned_blocks function
 
   **What to do**:
   - Convert orphaned blocks query to ClickHouse
@@ -172,7 +172,7 @@ let row = state.clickhouse.client()
 
 ---
 
-- [ ] 3.4. Migrate get_fork_stats function
+- [x] 3.4. Migrate get_fork_stats function
 
   **What to do**:
   - Convert fork statistics query to ClickHouse
@@ -181,7 +181,7 @@ let row = state.clickhouse.client()
 
 ---
 
-- [ ] 3.5. Migrate get_recent_reorg function
+- [x] 3.5. Migrate get_recent_reorg function
 
   **What to do**:
   - Convert recent reorg lookup to ClickHouse
@@ -190,7 +190,7 @@ let row = state.clickhouse.client()
 
 ---
 
-- [ ] 3.6. Migrate resolve_deep_fork function
+- [x] 3.6. Migrate resolve_deep_fork function
 
   **What to do**:
   - Convert deep fork detection query to ClickHouse
