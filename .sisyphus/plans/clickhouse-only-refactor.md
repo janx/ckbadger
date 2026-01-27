@@ -214,7 +214,7 @@ Simplify architecture by removing PostgreSQL, making ClickHouse the only databas
 
 ---
 
-- [ ] 2.4. Simplify cells.rs
+- [x] 2.4. Simplify cells.rs
 
   **Pattern**: Same as above
 

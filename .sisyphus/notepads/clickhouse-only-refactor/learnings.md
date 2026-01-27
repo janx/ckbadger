@@ -202,3 +202,29 @@ All follow same pattern: remove hybrid if/else, inline ClickHouse, convert helpe
 - Removed ~500 lines of PostgreSQL code
 - Final file: 680 lines (was ~1372 lines)
 
+## Task 2.4: cells.rs (In Progress)
+
+### Completed
+- Removed sqlx::FromRow import
+- Removed hybrid patterns in list_live_cells and list_cells_by_script
+- Removed address-related handlers (except get_cell)
+- Removed address-related routes from routes() function
+- File reduced from 2500 to 1667 lines
+
+### Remaining Work
+- Delete _postgres functions (list_live_cells_postgres, list_cells_by_script_postgres, get_cell_postgres)
+- Inline _clickhouse functions into main handlers
+- Update state.clickhouse_client references to state.clickhouse
+- Replace remaining PostgreSQL queries with ClickHouse queries (for total count queries)
+
+### Challenges Encountered
+- Complex file structure with many handlers made refactoring error-prone
+- Regex-based deletion of functions was fragile and sometimes deleted unintended code
+- Need to be very careful about preserving get_cell function when removing address handlers
+- PostgreSQL queries for total counts need to be replaced with ClickHouse equivalents
+
+### Lessons Learned
+- For large refactorings, it's better to use targeted edits rather than broad regex replacements
+- The hybrid pattern removal is straightforward, but inlining functions requires careful handling
+- State reference updates (clickhouse_client -> clickhouse) are simple but need to be done consistently
+
