@@ -25,21 +25,28 @@ pub struct ClickHouseClient {
 }
 
 impl ClickHouseClient {
-    /// Create a new ClickHouse client from a connection URL.
+    /// Create a new ClickHouse client from connection parameters.
     ///
     /// # Arguments
     ///
-    /// * `url` - Connection string in format: `http://username:password@host:port/database`
+    /// * `url` - Base URL in format: `http://host:port`
+    /// * `user` - Username for authentication
+    /// * `password` - Password for authentication
+    /// * `database` - Database name
     ///
     /// # Example
     ///
     /// ```no_run
     /// # use ckbadger_indexer::db::ClickHouseClient;
-    /// let client = ClickHouseClient::new("http://ckbadger:changeme@localhost:8123/ckbadger")?;
+    /// let client = ClickHouseClient::new("http://localhost:8123", "ckbadger", "changeme", "ckbadger")?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    pub fn new(url: &str) -> Result<Self> {
-        let client = Client::default().with_url(url);
+    pub fn new(url: &str, user: &str, password: &str, database: &str) -> Result<Self> {
+        let client = Client::default()
+            .with_url(url)
+            .with_user(user)
+            .with_password(password)
+            .with_database(database);
         Ok(Self { client })
     }
 

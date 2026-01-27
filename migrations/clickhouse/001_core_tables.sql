@@ -277,6 +277,7 @@ COMMENT 'Cell consumption events (inputs) - immutable insert-only';
 CREATE TABLE IF NOT EXISTS sync_status (
     id UInt8,                           -- Always 1 (single row)
     tip_block_number UInt64,            -- Latest synced block number
+    tip_block_hash FixedString(32),     -- Latest synced block hash (binary)
     updated_at DateTime DEFAULT now()  -- Last update timestamp
 ) ENGINE = ReplacingMergeTree(updated_at)
 ORDER BY id

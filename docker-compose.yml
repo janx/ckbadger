@@ -32,7 +32,6 @@ services:
       - ./migrations/clickhouse:/docker-entrypoint-initdb.d:ro
       - ./docker/clickhouse/config.xml:/etc/clickhouse-server/config.d/ckbadger.xml:ro
       - ./docker/clickhouse/users.xml:/etc/clickhouse-server/users.d/ckbadger.xml:ro
-      - ./docker/clickhouse/init.sh:/docker-entrypoint-initdb.d/000_init.sh:ro
     environment:
       CLICKHOUSE_DB: ckbadger
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-ckbadger}
@@ -81,7 +80,7 @@ services:
       CLICKHOUSE_URL: http://clickhouse:8123
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-ckbadger}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-changeme}
-      CLICKHOUSE_DATABASE: ${CLICKHOUSE_DB:-ckbadger}
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-ckbadger}
       CKB_RPC_URL: ${CKB_RPC_URL:-http://ckb-node:8114}
       TOKEN_LABELS_PATH: /app/token-labels
       RUST_LOG: info
@@ -104,7 +103,7 @@ services:
       CLICKHOUSE_URL: http://clickhouse:8123
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-ckbadger}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-changeme}
-      CLICKHOUSE_DATABASE: ${CLICKHOUSE_DB:-ckbadger}
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-ckbadger}
       REDIS_URL: redis://redis:6379
       CKB_RPC_URL: ${CKB_RPC_URL:-http://ckb-node:8114}
       RUST_LOG: info

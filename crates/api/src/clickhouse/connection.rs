@@ -7,8 +7,12 @@ pub struct ClickHouseClient {
 }
 
 impl ClickHouseClient {
-    pub fn new(url: &str) -> Result<Self> {
-        let client = Client::default().with_url(url);
+    pub fn new(url: &str, user: &str, password: &str, database: &str) -> Result<Self> {
+        let client = Client::default()
+            .with_url(url)
+            .with_user(user)
+            .with_password(password)
+            .with_database(database);
         Ok(Self { client })
     }
 

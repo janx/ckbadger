@@ -91,7 +91,16 @@ async fn main() -> Result<()> {
     info!("Connecting to ClickHouse: {}", config.clickhouse_url);
     info!("Connecting to CKB node: {}", config.ckb_rpc_url);
 
-    let clickhouse_client = ClickHouseClient::new(&config.clickhouse_url)?;
+    let clickhouse_user = std::env::var("CLICKHOUSE_USER").unwrap_or_else(|_| "default".to_string());
+    let clickhouse_password = std::env::var("CLICKHOUSE_PASSWORD").unwrap_or_default();
+    let clickhouse_db = std::env::var("CLICKHOUSE_DB").unwrap_or_else(|_| "default".to_string());
+    
+    let clickhouse_client = ClickHouseClient::new(
+        &config.clickhouse_url,
+        &clickhouse_user,
+        &clickhouse_password,
+        &clickhouse_db
+    )?;
     let writer = ClickHouseWriter::new(clickhouse_client);
     info!("ClickHouse writer created");
 
