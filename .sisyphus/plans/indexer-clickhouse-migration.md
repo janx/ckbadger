@@ -236,7 +236,7 @@
 
 ---
 
-- [ ] 0.3. Live Cell查询性能验证
+- [x] 0.3. Live Cell查询性能验证 (PASS: 7.97ms < 10ms target)
 
   **What to do**:
   - 设计ClickHouse版live_cells等效方案（ReplacingMergeTree + sign列）
