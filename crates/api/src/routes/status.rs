@@ -70,11 +70,40 @@ const HEARTBEAT_TIMEOUT_SECS: i64 = 30;
 #[derive(clickhouse::Row, serde::Deserialize)]
 struct SyncStatusRow {
     tip_block_number: u64,
+    last_synced_at: Option<chrono::DateTime<chrono::Utc>>,
+    sync_started_at: Option<chrono::DateTime<chrono::Utc>>,
+    sync_started_block: u64,
+    integrity_heartbeat: Option<chrono::DateTime<chrono::Utc>>,
+    integrity_pending_count: i64,
+    integrity_total_count: i64,
+    integrity_processed_count: i64,
+    integrity_started_at: Option<chrono::DateTime<chrono::Utc>>,
+    udt_info_running: bool,
+    udt_info_total_count: i64,
+    udt_info_processed_count: i64,
+    udt_info_started_at: Option<chrono::DateTime<chrono::Utc>>,
+    udt_info_last_check_at: Option<chrono::DateTime<chrono::Utc>>,
+    script_info_running: bool,
+    script_info_total_count: i64,
+    script_info_processed_count: i64,
+    script_info_started_at: Option<chrono::DateTime<chrono::Utc>>,
+    script_info_last_check_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(clickhouse::Row, serde::Deserialize)]
+struct CountRow {
+    count: i64,
+}
+
+#[derive(clickhouse::Row, serde::Deserialize)]
+struct RecentFixRow {
+    tx_hash: Vec<u8>,
+    cycles: i64,
+    fixed_at: chrono::DateTime<chrono::Utc>,
 }
 
 async fn get_system_status(State(state): State<Arc<AppState>>) -> ApiResult<SystemStatus> {
-    let row = sqlx::query_as::<_, SyncStatusRow>(
-        r#"
+    let query = r#"
         SELECT 
             tip_block_number,
             last_synced_at,
@@ -96,13 +125,18 @@ async fn get_system_status(State(state): State<Arc<AppState>>) -> ApiResult<Syst
             script_info_started_at,
             script_info_last_check_at
         FROM sync_status WHERE id = 1
-        "#,
-    )
-    .fetch_one(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    "#;
 
-    let synced_block = row.tip_block_number;
+    let row = state
+        .clickhouse
+        .client()
+        .query(query)
+        .fetch_one::<SyncStatusRow>()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let synced_block = row.tip_block_number as i64;
+    let sync_started_block = row.sync_started_block as i64;
     let last_synced_at = row.last_synced_at;
     let integrity_heartbeat = row.integrity_heartbeat;
     let integrity_pending = row.integrity_pending_count;
@@ -147,7 +181,7 @@ async fn get_system_status(State(state): State<Arc<AppState>>) -> ApiResult<Syst
             let elapsed = chrono::Utc::now()
                 .signed_duration_since(started_at)
                 .num_seconds() as u64;
-            let blocks_synced = (synced_block - row.sync_started_block).max(0) as u64;
+            let blocks_synced = (synced_block - sync_started_block).max(0) as u64;
             if elapsed > 0 && blocks_synced > 0 {
                 let rate = blocks_synced as f64 / elapsed as f64;
                 let seconds_remaining = (blocks_behind as f64 / rate) as u64;
@@ -162,19 +196,24 @@ async fn get_system_status(State(state): State<Arc<AppState>>) -> ApiResult<Syst
         None
     };
 
-    let missing_cycles: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM transactions WHERE NOT is_cellbase AND (cycles IS NULL OR cycles = 0)",
-    )
-    .fetch_one(&state.pool)
-    .await
-    .unwrap_or((0,));
+    let missing_cycles_row = state.clickhouse.client()
+        .query("SELECT COUNT(*) as count FROM transactions WHERE NOT is_cellbase AND (cycles IS NULL OR cycles = 0)")
+        .fetch_one::<CountRow>()
+        .await
+        .unwrap_or(CountRow { count: 0 });
 
-    let recent_fixes: Vec<(Vec<u8>, i64, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
-        "SELECT tx_hash, cycles, fixed_at FROM integrity_recent_fixes ORDER BY fixed_at DESC LIMIT 10",
-    )
-    .fetch_all(&state.pool)
-    .await
-    .unwrap_or_default();
+    let missing_cycles = (missing_cycles_row.count,);
+
+    let recent_fixes_rows = state.clickhouse.client()
+        .query("SELECT tx_hash, cycles, fixed_at FROM integrity_recent_fixes ORDER BY fixed_at DESC LIMIT 10")
+        .fetch_all::<RecentFixRow>()
+        .await
+        .unwrap_or_default();
+
+    let recent_fixes: Vec<(Vec<u8>, i64, chrono::DateTime<chrono::Utc>)> = recent_fixes_rows
+        .into_iter()
+        .map(|r| (r.tx_hash, r.cycles, r.fixed_at))
+        .collect();
 
     let missing_count = missing_cycles.0;
     let total_for_progress = integrity_processed + missing_count;
