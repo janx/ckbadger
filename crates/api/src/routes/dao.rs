@@ -4,10 +4,12 @@ use axum::{
     Router,
 };
 use ckbadger_common::dao::{calculate_estimated_apc, GENESIS_BURNT};
+use clickhouse::Row;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::clickhouse::hex_hash;
 use crate::response::{
     decode_cursor_single, encode_cursor_single, ok, ApiError, ApiResult, CursorPaginatedResponse,
 };
@@ -121,9 +123,138 @@ pub struct CalculatorResponse {
     pub apc: String,
 }
 
+// ClickHouse row types
+#[derive(Debug, Row, Deserialize)]
+struct DaoDepositRowClickHouse {
+    tx_hash: String,
+    output_index: u16,
+    depositor_lock_hash: String,
+    lock_code_hash: Option<String>,
+    lock_hash_type: Option<u8>,
+    lock_args: Option<String>,
+    capacity: String,
+    deposit_block: u64,
+    deposit_timestamp: u32,
+    // Withdrawal info (from LEFT JOIN dao_withdrawals)
+    withdraw_request_block: Option<u64>,
+    withdraw_request_timestamp: Option<u32>,
+    withdraw_completion_block: Option<u64>,
+    withdraw_completion_timestamp: Option<u32>,
+    compensation: Option<String>,
+}
+
 async fn list_deposits(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListParams>,
+) -> ApiResult<CursorPaginatedResponse<DaoDepositResponse>> {
+    if let Some(ch_client) = &state.clickhouse_client {
+        list_deposits_clickhouse(ch_client, &state, params).await
+    } else {
+        list_deposits_postgres(&state, params).await
+    }
+}
+
+async fn list_deposits_clickhouse(
+    ch_client: &crate::clickhouse::ClickHouseClient,
+    state: &Arc<AppState>,
+    params: ListParams,
+) -> ApiResult<CursorPaginatedResponse<DaoDepositResponse>> {
+    let limit = params.limit.clamp(1, 100);
+    let cursor_block = params
+        .cursor
+        .as_ref()
+        .and_then(|c| decode_cursor_single(c))
+        .unwrap_or(i64::MAX);
+
+    let status_filter = match params.status {
+        Some(0) => "AND w.deposit_tx IS NULL",
+        Some(1) => "AND w.deposit_tx IS NOT NULL AND w.withdraw_completion_tx IS NULL",
+        Some(2) => "AND w.withdraw_completion_tx IS NOT NULL",
+        _ => "",
+    };
+
+    let total_query = if params.status.is_some() {
+        format!(
+            "SELECT count() FROM dao_deposits d 
+             LEFT JOIN dao_withdrawals w ON d.tx_hash = w.deposit_tx AND d.output_index = w.deposit_index
+             WHERE 1=1 {}",
+            status_filter
+        )
+    } else {
+        "SELECT count() FROM dao_deposits".to_string()
+    };
+
+    let total: u64 = ch_client
+        .client()
+        .query(&total_query)
+        .fetch_one::<u64>()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let query = format!(
+        "SELECT 
+            {} as tx_hash,
+            d.output_index,
+            {} as depositor_lock_hash,
+            {} as lock_code_hash,
+            c.lock_hash_type,
+            c.lock_args,
+            toString(d.capacity) as capacity,
+            d.deposit_block,
+            toUnixTimestamp(d.deposit_timestamp) as deposit_timestamp,
+            w.withdraw_request_block,
+            toUnixTimestamp(w.withdraw_request_timestamp) as withdraw_request_timestamp,
+            w.withdraw_completion_block,
+            toUnixTimestamp(w.withdraw_completion_timestamp) as withdraw_completion_timestamp,
+            toString(w.compensation) as compensation
+        FROM dao_deposits d
+        LEFT JOIN cells c ON d.tx_hash = c.tx_hash AND d.output_index = c.output_index
+        LEFT JOIN dao_withdrawals w ON d.tx_hash = w.deposit_tx AND d.output_index = w.deposit_index
+        WHERE d.deposit_block < {}
+        {}
+        ORDER BY d.deposit_block DESC
+        LIMIT {}",
+        hex_hash("d.tx_hash"),
+        hex_hash("d.depositor_lock_hash"),
+        hex_hash("c.lock_code_hash"),
+        cursor_block,
+        status_filter,
+        limit + 1
+    );
+
+    let rows = ch_client
+        .client()
+        .query(&query)
+        .fetch_all::<DaoDepositRowClickHouse>()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let has_more = rows.len() as i64 > limit;
+    let rows: Vec<_> = rows.into_iter().take(limit as usize).collect();
+
+    let next_cursor = if has_more {
+        rows.last().map(|r| r.deposit_block.to_string())
+    } else {
+        None
+    };
+
+    let network = &state.ckb_network;
+    let deposits: Vec<DaoDepositResponse> = rows
+        .into_iter()
+        .map(|row| clickhouse_row_to_dao_deposit_response(row, network))
+        .collect();
+
+    ok(CursorPaginatedResponse::new(
+        deposits,
+        total as i64,
+        limit,
+        next_cursor,
+    ))
+}
+
+async fn list_deposits_postgres(
+    state: &Arc<AppState>,
+    params: ListParams,
 ) -> ApiResult<CursorPaginatedResponse<DaoDepositResponse>> {
     let limit = params.limit.clamp(1, 100);
     let cursor_id = params
@@ -280,6 +411,105 @@ async fn get_deposits_by_address(
     Path(lock_hash): Path<String>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<DaoDepositResponse>> {
+    if let Some(ch_client) = &state.clickhouse_client {
+        get_deposits_by_address_clickhouse(ch_client, &state, lock_hash, params).await
+    } else {
+        get_deposits_by_address_postgres(&state, lock_hash, params).await
+    }
+}
+
+async fn get_deposits_by_address_clickhouse(
+    ch_client: &crate::clickhouse::ClickHouseClient,
+    state: &Arc<AppState>,
+    lock_hash: String,
+    params: ListParams,
+) -> ApiResult<CursorPaginatedResponse<DaoDepositResponse>> {
+    let limit = params.limit.clamp(1, 100);
+    let cursor_block = params
+        .cursor
+        .as_ref()
+        .and_then(|c| decode_cursor_single(c))
+        .unwrap_or(i64::MAX);
+
+    let lock_hash_clean = lock_hash.strip_prefix("0x").unwrap_or(&lock_hash);
+
+    let total_query = format!(
+        "SELECT count() FROM dao_deposits WHERE depositor_lock_hash = unhex('{}')",
+        lock_hash_clean
+    );
+
+    let total: u64 = ch_client
+        .client()
+        .query(&total_query)
+        .fetch_one::<u64>()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let query = format!(
+        "SELECT 
+            {} as tx_hash,
+            d.output_index,
+            {} as depositor_lock_hash,
+            {} as lock_code_hash,
+            c.lock_hash_type,
+            c.lock_args,
+            toString(d.capacity) as capacity,
+            d.deposit_block,
+            toUnixTimestamp(d.deposit_timestamp) as deposit_timestamp,
+            w.withdraw_request_block,
+            toUnixTimestamp(w.withdraw_request_timestamp) as withdraw_request_timestamp,
+            w.withdraw_completion_block,
+            toUnixTimestamp(w.withdraw_completion_timestamp) as withdraw_completion_timestamp,
+            toString(w.compensation) as compensation
+        FROM dao_deposits d
+        LEFT JOIN cells c ON d.tx_hash = c.tx_hash AND d.output_index = c.output_index
+        LEFT JOIN dao_withdrawals w ON d.tx_hash = w.deposit_tx AND d.output_index = w.deposit_index
+        WHERE d.depositor_lock_hash = unhex('{}') AND d.deposit_block < {}
+        ORDER BY d.deposit_block DESC
+        LIMIT {}",
+        hex_hash("d.tx_hash"),
+        hex_hash("d.depositor_lock_hash"),
+        hex_hash("c.lock_code_hash"),
+        lock_hash_clean,
+        cursor_block,
+        limit + 1
+    );
+
+    let rows = ch_client
+        .client()
+        .query(&query)
+        .fetch_all::<DaoDepositRowClickHouse>()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let has_more = rows.len() as i64 > limit;
+    let rows: Vec<_> = rows.into_iter().take(limit as usize).collect();
+
+    let next_cursor = if has_more {
+        rows.last().map(|r| r.deposit_block.to_string())
+    } else {
+        None
+    };
+
+    let network = &state.ckb_network;
+    let deposits: Vec<DaoDepositResponse> = rows
+        .into_iter()
+        .map(|row| clickhouse_row_to_dao_deposit_response(row, network))
+        .collect();
+
+    ok(CursorPaginatedResponse::new(
+        deposits,
+        total as i64,
+        limit,
+        next_cursor,
+    ))
+}
+
+async fn get_deposits_by_address_postgres(
+    state: &Arc<AppState>,
+    lock_hash: String,
+    params: ListParams,
+) -> ApiResult<CursorPaginatedResponse<DaoDepositResponse>> {
     type DaoRow = (
         i64,
         Vec<u8>,
@@ -409,6 +639,13 @@ async fn get_address_dao_summary(
     State(state): State<Arc<AppState>>,
     Path(lock_hash): Path<String>,
 ) -> ApiResult<AddressDaoSummaryResponse> {
+    get_address_dao_summary_postgres(&state, lock_hash).await
+}
+
+async fn get_address_dao_summary_postgres(
+    state: &Arc<AppState>,
+    lock_hash: String,
+) -> ApiResult<AddressDaoSummaryResponse> {
     let hash = hex::decode(lock_hash.strip_prefix("0x").unwrap_or(&lock_hash))
         .map_err(|_| ApiError::bad_request("Invalid lock script hash"))?;
 
@@ -531,6 +768,10 @@ async fn get_address_dao_summary(
 }
 
 async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStatisticsResponse> {
+    get_statistics_postgres(&state).await
+}
+
+async fn get_statistics_postgres(state: &Arc<AppState>) -> ApiResult<DaoStatisticsResponse> {
     let live_stats = sqlx::query_as::<_, (String, i64, i64)>(
         r#"SELECT 
             CAST(COALESCE(SUM(capacity), 0) AS TEXT) as total_deposited,
@@ -681,6 +922,13 @@ async fn calculate_compensation(
     State(state): State<Arc<AppState>>,
     Query(params): Query<CalculatorParams>,
 ) -> ApiResult<CalculatorResponse> {
+    calculate_compensation_postgres(&state, params).await
+}
+
+async fn calculate_compensation_postgres(
+    state: &Arc<AppState>,
+    params: CalculatorParams,
+) -> ApiResult<CalculatorResponse> {
     let capacity: u128 = params
         .capacity
         .parse()
@@ -745,6 +993,72 @@ async fn calculate_compensation(
         total_withdrawable_ckb: shannon_to_ckb(&total.to_string()),
         apc: format!("{:.2}%", apc),
     })
+}
+
+fn clickhouse_row_to_dao_deposit_response(
+    row: DaoDepositRowClickHouse,
+    network: &str,
+) -> DaoDepositResponse {
+    let address = row.lock_code_hash.as_ref().and_then(|code_hash_hex| {
+        let code_hash =
+            hex::decode(code_hash_hex.strip_prefix("0x").unwrap_or(code_hash_hex)).ok()?;
+        let hash_type = row.lock_hash_type.unwrap_or(0) as i16;
+        let args = row
+            .lock_args
+            .as_ref()
+            .and_then(|a| hex::decode(a.strip_prefix("0x").unwrap_or(a)).ok())
+            .unwrap_or_default();
+        script_to_address(&code_hash, hash_type, &args, network).ok()
+    });
+
+    let status = if row.withdraw_completion_block.is_some() {
+        "withdrawn"
+    } else if row.withdraw_request_block.is_some() {
+        "withdrawing"
+    } else {
+        "deposited"
+    };
+
+    DaoDepositResponse {
+        tx_hash: if row.tx_hash.starts_with("0x") {
+            row.tx_hash
+        } else {
+            format!("0x{}", row.tx_hash)
+        },
+        output_index: row.output_index as i32,
+        lock_script_hash: if row.depositor_lock_hash.starts_with("0x") {
+            row.depositor_lock_hash
+        } else {
+            format!("0x{}", row.depositor_lock_hash)
+        },
+        address,
+        lock_code_hash: row.lock_code_hash.map(|h| {
+            if h.starts_with("0x") {
+                h
+            } else {
+                format!("0x{}", h)
+            }
+        }),
+        capacity: row.capacity,
+        deposit_block_number: row.deposit_block as i64,
+        deposit_timestamp: chrono::DateTime::from_timestamp(row.deposit_timestamp as i64, 0)
+            .unwrap_or_default()
+            .to_rfc3339(),
+        status: status.to_string(),
+        withdraw_request_block: row.withdraw_request_block.map(|b| b as i64),
+        withdraw_request_timestamp: row.withdraw_request_timestamp.map(|t| {
+            chrono::DateTime::from_timestamp(t as i64, 0)
+                .unwrap_or_default()
+                .to_rfc3339()
+        }),
+        withdraw_block: row.withdraw_completion_block.map(|b| b as i64),
+        withdraw_timestamp: row.withdraw_completion_timestamp.map(|t| {
+            chrono::DateTime::from_timestamp(t as i64, 0)
+                .unwrap_or_default()
+                .to_rfc3339()
+        }),
+        compensation: row.compensation,
+    }
 }
 
 fn status_to_string(status: i16) -> String {
@@ -856,6 +1170,10 @@ pub struct ChartResponse {
 }
 
 async fn get_total_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
+    get_total_deposit_chart_postgres(&state).await
+}
+
+async fn get_total_deposit_chart_postgres(state: &Arc<AppState>) -> ApiResult<ChartResponse> {
     let cache_key = "chart:dao-total-deposit";
     if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
         return ok(cached);
@@ -895,6 +1213,10 @@ async fn get_total_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResul
 }
 
 async fn get_daily_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
+    get_daily_deposit_chart_postgres(&state).await
+}
+
+async fn get_daily_deposit_chart_postgres(state: &Arc<AppState>) -> ApiResult<ChartResponse> {
     let cache_key = "chart:dao-daily-deposit";
     if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
         return ok(cached);
@@ -938,6 +1260,10 @@ async fn get_daily_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResul
 async fn get_circulation_ratio_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<ChartResponse> {
+    get_circulation_ratio_chart_postgres(&state).await
+}
+
+async fn get_circulation_ratio_chart_postgres(state: &Arc<AppState>) -> ApiResult<ChartResponse> {
     let cache_key = "chart:dao-circulation-ratio";
     if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
         return ok(cached);
