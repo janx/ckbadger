@@ -232,7 +232,7 @@ let row = state.clickhouse.client()
 
 ### Phase 5: Verification
 
-- [ ] 5.1. Run cargo check on API crate
+- [x] 5.1. Run cargo check on API crate
 
   **What to do**:
 
@@ -244,7 +244,7 @@ let row = state.clickhouse.client()
 
 ---
 
-- [ ] 5.2. Run cargo check on full workspace
+- [x] 5.2. Run cargo check on full workspace
 
   **What to do**:
 
@@ -256,7 +256,7 @@ let row = state.clickhouse.client()
 
 ---
 
-- [ ] 5.3. Run API tests
+- [ ] 5.3. Run API tests (BLOCKED - tests need migration)
 
   **What to do**:
 
@@ -265,6 +265,8 @@ let row = state.clickhouse.client()
   ```
 
   **Expected**: All tests pass
+
+  **Status**: BLOCKED - Test file `api_integration.rs` (2700 lines) still uses `sqlx::PgPool` (65 references). 172 compilation errors. Test migration is a separate task not included in this plan.
 
 ---
 
@@ -295,11 +297,11 @@ cargo test -p ckbadger-api
 
 ### Final Checklist
 
-- [ ] All 71 compilation errors resolved
-- [ ] All 4 files migrated to ClickHouse
-- [ ] No sqlx imports remain in these files
-- [ ] All queries use state.clickhouse.client()
-- [ ] Tests pass
+- [x] All 71 compilation errors resolved
+- [x] All 4 files migrated to ClickHouse
+- [x] No sqlx imports remain in these files
+- [x] All queries use state.clickhouse.client()
+- [ ] Tests pass (BLOCKED - test file needs separate migration)
 
 ---
 
