@@ -25,6 +25,12 @@ tokio = { workspace = true }
 # Database
 sqlx = { workspace = true }
 
+# PostgreSQL COPY support
+tokio-postgres = { workspace = true }
+postgres-types = { workspace = true }
+deadpool-postgres = { workspace = true }
+byteorder = { workspace = true }
+
 # HTTP client (for CKB RPC)
 reqwest = { workspace = true }
 
