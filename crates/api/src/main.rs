@@ -3,20 +3,17 @@ use clap::Parser;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use ckbadger_api::{create_router, db::create_pool, AppConfig};
+use ckbadger_api::{create_router, AppConfig};
 
 #[derive(Parser, Debug)]
 #[command(name = "ckbadger-api")]
 #[command(about = "API server for ckbadger CKB explorer")]
 struct Args {
-    #[arg(long, env = "DATABASE_URL")]
-    database_url: Option<String>,
+    #[arg(long, env = "CLICKHOUSE_URL")]
+    clickhouse_url: String,
 
     #[arg(long, env = "REDIS_URL")]
     redis_url: Option<String>,
-
-    #[arg(long, env = "CLICKHOUSE_URL")]
-    clickhouse_url: Option<String>,
 
     #[arg(long, env = "CKB_RPC_URL", default_value = "http://127.0.0.1:8114")]
     ckb_rpc_url: String,
@@ -50,23 +47,11 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
 
-    let database_url = args
-        .database_url
-        .or_else(|| std::env::var("DATABASE_URL").ok())
-        .expect("DATABASE_URL is required");
-
-    info!("Connecting to database");
-    let pool = create_pool(&database_url).await?;
-
     let redis_url = args.redis_url.or_else(|| std::env::var("REDIS_URL").ok());
-    let clickhouse_url = args
-        .clickhouse_url
-        .or_else(|| std::env::var("CLICKHOUSE_URL").ok());
 
     let config = AppConfig {
-        pool,
+        clickhouse_url: args.clickhouse_url,
         redis_url,
-        clickhouse_url,
         ckb_rpc_url: args.ckb_rpc_url,
         ckb_network: args.ckb_network,
         rate_limit_per_second: Some(args.rate_limit),

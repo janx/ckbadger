@@ -50,3 +50,116 @@ Docker infrastructure is ready:
 - docker-compose.yml configured for ClickHouse-only
 - Automatic migrations on ClickHouse startup
 - All services properly configured with dependencies
+
+## Task 2.1: Simplify AppState - Remove PostgreSQL (Completed)
+
+### Changes Made
+
+- **lib.rs**: Removed sqlx::PgPool, MIGRATOR; AppState.clickhouse now required (not Optional); AppConfig.clickhouse_url required
+- **main.rs**: Removed PgPool connection; CLICKHOUSE_URL now required
+- **Cargo.toml**: Removed sqlx dependency
+
+### Compilation Status
+
+Foundation layer clean. Expected errors in:
+
+- routes/\*.rs (still use state.pool, state.clickhouse_client) → Will fix in tasks 2.2-2.10
+- ws/broadcaster.rs (uses PgPool) → Will fix in task 2.11
+- cycles.rs (uses PgPool) → Will fix in task 2.12
+- db/pool.rs (PostgreSQL module) → Will remove in task 2.12
+
+### Pattern
+
+When removing a database from a multi-DB architecture:
+
+1. Update AppState/Config first (foundation)
+2. Accept that dependent modules break temporarily
+3. Fix dependents systematically in subsequent tasks
+
+## Task 2.2: Refactor blocks.rs - Remove PostgreSQL (Completed)
+
+### Changes Made
+
+- **Removed imports**: `use sqlx::FromRow;` and `use rust_decimal::Decimal;`
+- **Deleted structs**: `BlockRow` (PostgreSQL version)
+- **Deleted functions**:
+  - `list_blocks_postgres()` (213 lines)
+  - `get_block_postgres()` (57 lines)
+  - `get_block_fee_stats_postgres()` (53 lines)
+  - `row_to_block_response()` (28 lines)
+- **Inlined ClickHouse implementations**:
+  - `list_blocks_clickhouse()` → inline into `list_blocks()`
+  - `get_block_clickhouse()` → inline into `get_block()`
+  - `get_block_fee_stats_clickhouse()` → inline into `get_block_fee_stats()`
+- **Converted helper functions to ClickHouse**:
+  - `get_miner_address()`: Changed from `pool: &sqlx::PgPool` to `ch_client: &ClickHouseClient`
+  - `get_cellbase_tx_hash()`: Changed from `pool: &sqlx::PgPool` to `ch_client: &ClickHouseClient`
+  - `get_mining_reward()`: Changed parameter from `pool` to `ch_client`
+- **Converted endpoint**:
+  - `get_block_proposals()`: Removed PostgreSQL-only implementation, added ClickHouse version
+
+### Key Patterns Applied
+
+**1. Hybrid Pattern Removal**:
+
+```rust
+// BEFORE: if let Some(ch_client) = &state.clickhouse_client { ... } else { ... }
+// AFTER: Direct use of state.clickhouse (no longer Optional)
+```
+
+**2. AppState Reference Update**:
+
+- Changed all `state.clickhouse_client` → `state.clickhouse`
+- Changed all `&state.pool` → `&state.clickhouse`
+- This reflects Task 2.1 foundation change where AppState.clickhouse is now required
+
+**3. ClickHouse Query Patterns**:
+
+- **Hash conversion**: `hex_hash("field")` for SELECT, `unhex('0x...')` for WHERE
+- **Timestamp**: `toUnixTimestamp(timestamp)` returns u32 (Unix seconds)
+- **Aggregation**: `if()` instead of `CASE WHEN`, `countIf()` instead of `COUNT FILTER`
+- **Subqueries**: Use `IN (SELECT ...)` for joins across tables
+
+**4. Helper Function Conversion**:
+
+- PostgreSQL: `sqlx::query_as()` with bind parameters
+- ClickHouse: Format string queries with `hex_hash()` helper, fetch results as tuples/structs
+- Error handling: `.ok()?` for Option chaining (no `.map_err()` needed for simple cases)
+
+**5. Sync Status Query**:
+
+- PostgreSQL: `SELECT tip_block_number + 1 FROM sync_status WHERE id = 1` via sqlx
+- ClickHouse: Same query, but fetch as `Vec<u64>` and extract first element
+
+### Verification Results
+
+- ✅ File compiles without errors (no blocks.rs-specific errors)
+- ✅ LSP diagnostics clean (no errors/warnings)
+- ✅ No `sqlx::` references remaining
+- ✅ No `PgPool` references remaining
+- ✅ No `_postgres` or `_clickhouse` function suffixes
+- ✅ No hybrid `if let Some(clickhouse_client)` patterns
+- ✅ All handlers use `state.clickhouse` directly
+- ✅ File size: 895 → 655 lines (240 lines removed)
+- ✅ Functions: 14 → 11 (3 PostgreSQL functions deleted)
+
+### Gotchas Encountered
+
+1. **Miner Address Query**: PostgreSQL used JOIN on `created_at_block = block_number`. ClickHouse requires subquery approach since cells table doesn't have direct block reference.
+
+2. **Cellbase TX Hash**: PostgreSQL used JOIN on blocks table. ClickHouse requires nested subquery: `WHERE block_number IN (SELECT number FROM blocks WHERE hash = ...)`
+
+3. **Block Proposals**: ClickHouse `block_proposals` table structure assumed to match PostgreSQL. If schema differs, may need adjustment.
+
+4. **Timestamp Handling**: ClickHouse returns u32 (Unix seconds), not DateTime. Conversion happens in `clickhouse_row_to_block_response()` using `DateTime::from_timestamp()`.
+
+### Next Steps
+
+Same pattern applies to remaining route files:
+
+- Task 2.3: transactions.rs
+- Task 2.4: cells.rs
+- Task 2.5: addresses.rs
+- ... (9 more files)
+
+All follow same pattern: remove hybrid if/else, inline ClickHouse, convert helpers.

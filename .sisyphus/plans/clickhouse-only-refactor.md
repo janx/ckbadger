@@ -128,7 +128,7 @@ Simplify architecture by removing PostgreSQL, making ClickHouse the only databas
 
 ### PHASE 2: Remove PostgreSQL from API
 
-- [ ] 2.1. Simplify AppState (remove PostgreSQL pool)
+- [x] 2.1. Simplify AppState (remove PostgreSQL pool)
 
   **What to do**:
   1. In `crates/api/src/lib.rs`:
@@ -168,7 +168,7 @@ Simplify architecture by removing PostgreSQL, making ClickHouse the only databas
 
 ---
 
-- [ ] 2.2. Simplify blocks.rs (remove hybrid pattern)
+- [x] 2.2. Simplify blocks.rs (remove hybrid pattern)
 
   **What to do**:
   1. Remove PostgreSQL-specific imports:

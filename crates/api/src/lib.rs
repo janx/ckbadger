@@ -10,7 +10,6 @@ pub mod warmup;
 pub mod ws;
 
 use axum::{routing::get, Router};
-use sqlx::PgPool;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
@@ -21,24 +20,19 @@ use cycles::CyclesCalculator;
 use middleware::IpRateLimitLayer;
 use ws::WsManager;
 
-/// Embedded database migrator for use with `#[sqlx::test]`
-pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations/postgres");
-
 #[derive(Clone)]
 pub struct AppState {
-    pub pool: PgPool,
+    pub clickhouse: ClickHouseClient,
     pub ws_manager: Arc<WsManager>,
     pub cache: CacheBackend,
     pub ckb_rpc_url: String,
     pub ckb_network: String,
     pub cycles_calculator: Arc<CyclesCalculator>,
-    pub clickhouse_client: Option<ClickHouseClient>,
 }
 
 pub struct AppConfig {
-    pub pool: PgPool,
+    pub clickhouse_url: String,
     pub redis_url: Option<String>,
-    pub clickhouse_url: Option<String>,
     pub ckb_rpc_url: String,
     pub ckb_network: String,
     pub rate_limit_per_second: Option<u32>,
@@ -49,9 +43,8 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            pool: PgPool::connect_lazy("postgres://localhost/ckbadger").unwrap(),
+            clickhouse_url: "http://localhost:8123".to_string(),
             redis_url: None,
-            clickhouse_url: None,
             ckb_rpc_url: "http://localhost:8114".to_string(),
             ckb_network: "mainnet".to_string(),
             rate_limit_per_second: Some(100),
@@ -87,39 +80,28 @@ pub async fn create_router(config: AppConfig) -> Router {
         }
     };
 
-    let broadcaster_pool = config.pool.clone();
     let broadcaster_rpc_url = config.ckb_rpc_url.clone();
 
-    let cycles_calculator = CyclesCalculator::new(config.pool.clone(), config.ckb_rpc_url.clone());
-
-    let clickhouse_client = match config.clickhouse_url {
-        Some(ref url) => match ClickHouseClient::new(url) {
-            Ok(client) => {
-                tracing::info!("ClickHouse client initialized");
-                Some(client)
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "Failed to initialize ClickHouse client: {}, using PostgreSQL fallback",
-                    e
-                );
-                None
-            }
-        },
-        None => {
-            tracing::info!("No ClickHouse URL configured, using PostgreSQL only");
-            None
+    let clickhouse_client = match ClickHouseClient::new(&config.clickhouse_url) {
+        Ok(client) => {
+            tracing::info!("ClickHouse client initialized");
+            client
+        }
+        Err(e) => {
+            panic!("Failed to initialize ClickHouse client: {}", e);
         }
     };
 
+    let cycles_calculator =
+        CyclesCalculator::new(clickhouse_client.clone(), config.ckb_rpc_url.clone());
+
     let state = Arc::new(AppState {
-        pool: config.pool,
+        clickhouse: clickhouse_client.clone(),
         ws_manager,
         cache,
         ckb_rpc_url: config.ckb_rpc_url,
         ckb_network: config.ckb_network,
         cycles_calculator,
-        clickhouse_client,
     });
 
     let cors = CorsLayer::new()
@@ -143,23 +125,17 @@ pub async fn create_router(config: AppConfig) -> Router {
             warmup::warmup_chart_caches(warmup_state).await;
         });
 
-        let broadcaster_ws = state.ws_manager.clone();
-        let broadcaster_ch = state.clickhouse_client.clone();
-        tokio::spawn(async move {
-            ws::start_block_broadcaster(
-                broadcaster_pool,
-                broadcaster_ch,
-                broadcaster_ws,
-                broadcaster_rpc_url,
-            )
-            .await;
-        });
-
-        let reorg_broadcaster_pool = state.pool.clone();
-        let reorg_broadcaster_ws = state.ws_manager.clone();
-        tokio::spawn(async move {
-            ws::start_reorg_broadcaster(reorg_broadcaster_pool, reorg_broadcaster_ws).await;
-        });
+        // TODO: Re-enable block broadcaster in task 2.11 after refactoring to remove PgPool
+        // let broadcaster_ws = state.ws_manager.clone();
+        // let broadcaster_ch = Some(state.clickhouse.clone());
+        // tokio::spawn(async move {
+        //     ws::start_block_broadcaster(
+        //         broadcaster_ch,
+        //         broadcaster_ws,
+        //         broadcaster_rpc_url,
+        //     )
+        //     .await;
+        // });
     }
 
     Router::new()
