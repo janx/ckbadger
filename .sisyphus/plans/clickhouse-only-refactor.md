@@ -67,7 +67,7 @@ Simplify architecture by removing PostgreSQL, making ClickHouse the only databas
 
 ### PHASE 1: Docker Infrastructure
 
-- [ ] 1.1. Update docker-compose.yml for local development
+- [x] 1.1. Update docker-compose.yml for local development
 
   **What to do**:
   - Remove PostgreSQL service entirely (lines 11-30)

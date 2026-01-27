@@ -1,6 +1,6 @@
 {
-  "active_plan": "/home/f0rk/projects/ckbadger/.sisyphus/plans/indexer-clickhouse-migration.md",
-  "started_at": "2026-01-27T01:26:25.517Z",
+  "active_plan": "/home/f0rk/projects/ckbadger/.sisyphus/plans/clickhouse-only-refactor.md",
+  "started_at": "2026-01-27T05:34:07.761Z",
   "session_ids": ["ses_4033c198fffeT5yYau5zRRqd9Z"],
-  "plan_name": "indexer-clickhouse-migration"
+  "plan_name": "clickhouse-only-refactor"
 }
