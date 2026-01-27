@@ -79,8 +79,6 @@ pub async fn create_router(config: AppConfig) -> Router {
         }
     };
 
-    let broadcaster_rpc_url = config.ckb_rpc_url.clone();
-
     let clickhouse_client = match ClickHouseClient::new(&config.clickhouse_url) {
         Ok(client) => {
             tracing::info!("ClickHouse client initialized");
@@ -93,6 +91,8 @@ pub async fn create_router(config: AppConfig) -> Router {
 
     let cycles_calculator =
         CyclesCalculator::new(clickhouse_client.clone(), config.ckb_rpc_url.clone());
+
+    let broadcaster_rpc_url = config.ckb_rpc_url.clone();
 
     let state = Arc::new(AppState {
         clickhouse: clickhouse_client.clone(),
@@ -124,17 +124,11 @@ pub async fn create_router(config: AppConfig) -> Router {
             warmup::warmup_chart_caches(warmup_state).await;
         });
 
-        // TODO: Re-enable block broadcaster in task 2.11 after refactoring to remove PgPool
-        // let broadcaster_ws = state.ws_manager.clone();
-        // let broadcaster_ch = Some(state.clickhouse.clone());
-        // tokio::spawn(async move {
-        //     ws::start_block_broadcaster(
-        //         broadcaster_ch,
-        //         broadcaster_ws,
-        //         broadcaster_rpc_url,
-        //     )
-        //     .await;
-        // });
+        let broadcaster_ws = state.ws_manager.clone();
+        let broadcaster_ch = state.clickhouse.clone();
+        tokio::spawn(async move {
+            ws::start_block_broadcaster(broadcaster_ch, broadcaster_ws, broadcaster_rpc_url).await;
+        });
     }
 
     Router::new()
