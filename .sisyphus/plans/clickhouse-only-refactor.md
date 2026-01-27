@@ -262,7 +262,7 @@ Simplify architecture by removing PostgreSQL, making ClickHouse the only databas
 
 ---
 
-- [ ] 2.10. Simplify statistics.rs
+- [x] 2.10. Simplify statistics.rs
 
   **Pattern**: Same as above. Note: This file has many endpoints (~15).
 

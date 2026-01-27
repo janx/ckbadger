@@ -359,3 +359,69 @@ Successfully refactored `crates/api/src/routes/tokens.rs` to ClickHouse-only fol
    - toUnixTimestamp() for timestamp conversion
 
 **File Status:** ✅ Compiles cleanly, no sqlx references, no hybrid patterns
+
+## Task 10: statistics.rs Refactoring (2026-01-27)
+
+**Pattern Applied:**
+- Removed all PostgreSQL imports and hybrid if/else patterns
+- Deleted 2 _postgres functions (fetch_network_stats_postgres, get_tx_stats_postgres)
+- Inlined ClickHouse logic directly into handler functions
+- Updated state.clickhouse_client → state.clickhouse
+
+**Key Changes:**
+1. **Imports**: Added `use crate::clickhouse::ClickHouseClient;`
+2. **Handlers**: Removed hybrid patterns from 15 endpoints:
+   - get_network_stats: Inlined fetch_network_stats_clickhouse
+   - get_tx_stats: Inlined get_tx_stats_clickhouse
+   - get_recent_blocks: Inlined get_recent_blocks_clickhouse
+   - get_transaction_count_chart: Inlined implementation
+   - get_cell_count_chart: Inlined implementation
+   - get_knowledge_size_chart: Inlined implementation
+   - get_block_time_distribution_chart: Inlined implementation
+   - get_epoch_time_distribution_chart: Inlined implementation
+   - get_epoch_time_length_chart: Inlined implementation
+   - get_average_block_time_chart: Inlined implementation
+   - get_hash_rate_chart: Inlined implementation
+   - get_difficulty_chart: Inlined implementation
+   - get_uncle_rate_chart: Inlined implementation
+   - get_miner_address_distribution_chart: Inlined implementation
+   - get_total_supply_chart: Inlined implementation
+   - get_secondary_issuance_chart: Inlined implementation
+   - get_nominal_apc_chart: Removed hybrid pattern
+   - get_inflation_rate_chart: Removed hybrid pattern
+
+3. **ClickHouse Query Patterns**:
+   - Used Row structs with `#[derive(Row, Deserialize)]` for all queries
+   - Converted PostgreSQL date/timestamp handling to ClickHouse equivalents
+   - Used `toString()` for date conversion in SELECT
+   - Used `toDate()` and `toDateTime()` for date/time filtering
+   - Used `subtractDays()` and `subtractHours()` for relative date calculations
+
+4. **Complex Conversions**:
+   - **fetch_network_stats_clickhouse**: Converted all sqlx queries to ClickHouse:
+     - epoch_statistics query with timestamp handling
+     - blocks query for recent block timestamps
+     - daily_statistics query for 24h transaction count
+     - sync_status query with proper type conversions
+   - **get_tx_stats_clickhouse**: Converted hourly/daily statistics queries
+   - **get_miner_address_distribution_chart**: Converted complex JOIN query to ClickHouse WITH clause
+
+**Technical Details**:
+- **Timestamp handling**: ClickHouse returns u32 (Unix seconds), converted to DateTime using `DateTime::from_timestamp()`
+- **Row structs**: All queries use Row derive macro for type safety
+- **String hashes**: ClickHouse returns hashes as hex strings, use `hex::decode()` for conversion
+- **Aggregation**: Used `COALESCE()` and `SUM()` with proper type casting
+
+**Verification**:
+- ✅ No sqlx references in statistics.rs
+- ✅ No state.pool references
+- ✅ No state.clickhouse_client references (all use state.clickhouse)
+- ✅ No hybrid if/else patterns
+- ✅ All handlers use state.clickhouse directly
+- ✅ LSP diagnostics clean (no errors)
+- ✅ File compiles without statistics.rs-specific errors
+
+**Files Modified**:
+- `crates/api/src/routes/statistics.rs` (2013 → ~1600 lines, removed ~400 lines of PostgreSQL code)
+
+**Status**: ✅ Complete - statistics.rs is now ClickHouse-only

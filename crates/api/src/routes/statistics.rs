@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::cache::{CacheKeys, CacheTtl};
+use crate::clickhouse::ClickHouseClient;
 use crate::response::{ok, ApiError, ApiResult};
 use crate::utils::script_to_address;
 use crate::AppState;
@@ -103,11 +104,7 @@ async fn get_network_stats(State(state): State<Arc<AppState>>) -> ApiResult<Netw
         return ok(cached);
     }
 
-    let stats = if let Some(ch_client) = &state.clickhouse_client {
-        fetch_network_stats_clickhouse(ch_client, &state).await?
-    } else {
-        fetch_network_stats_postgres(&state).await?
-    };
+    let stats = fetch_network_stats_clickhouse(&state.clickhouse, &state).await?;
 
     state
         .cache
@@ -123,15 +120,11 @@ async fn get_tx_stats(State(state): State<Arc<AppState>>) -> ApiResult<TxStatsRe
         return ok(cached);
     }
 
-    if let Some(ch_client) = &state.clickhouse_client {
-        get_tx_stats_clickhouse(ch_client, &state, cache_key).await
-    } else {
-        get_tx_stats_postgres(&state, cache_key).await
-    }
+    get_tx_stats_clickhouse(&state.clickhouse, &state, cache_key).await
 }
 
 async fn get_tx_stats_clickhouse(
-    ch_client: &crate::clickhouse::ClickHouseClient,
+    ch_client: &ClickHouseClient,
     state: &Arc<AppState>,
     cache_key: &str,
 ) -> ApiResult<TxStatsResponse> {
@@ -152,129 +145,74 @@ async fn get_tx_stats_clickhouse(
         .unwrap_or_else(Utc::now);
     let reference_date = reference_time.date_naive();
 
-    let hourly_rows = sqlx::query_as::<_, (DateTime<Utc>, i32)>(
-        r#"
-        SELECT hour, transactions_count
-        FROM hourly_statistics
-        WHERE hour > $1 - INTERVAL '24 hours' AND hour <= $1
-        ORDER BY hour DESC
-        LIMIT 24
-        "#,
-    )
-    .bind(reference_time)
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    #[derive(Row, Deserialize)]
+    struct HourlyStatsRow {
+        hour: String,
+        transactions_count: u32,
+    }
 
-    let daily_rows = sqlx::query_as::<_, (chrono::NaiveDate, i32)>(
-        r#"
-        SELECT date, transactions_count
-        FROM daily_statistics
-        WHERE date > $1 - INTERVAL '14 days' AND date <= $1
-        ORDER BY date DESC
-        LIMIT 14
-        "#,
-    )
-    .bind(reference_date)
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    #[derive(Row, Deserialize)]
+    struct DailyStatsRow {
+        date: String,
+        transactions_count: u32,
+    }
 
-    let txs_this_hour: i64 = hourly_rows.first().map(|(_, c)| *c as i64).unwrap_or(0);
-    let txs_in_24_hours: i64 = hourly_rows.iter().map(|(_, c)| *c as i64).sum();
+    let hourly_rows: Vec<HourlyStatsRow> = ch_client
+        .client()
+        .query(
+            r#"
+            SELECT toString(hour) as hour, transactions_count
+            FROM hourly_statistics
+            WHERE hour > subtractHours(toDateTime(?1), 24) AND hour <= toDateTime(?1)
+            ORDER BY hour DESC
+            LIMIT 24
+            "#,
+        )
+        .bind(reference_time.timestamp())
+        .fetch_all()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let daily_rows: Vec<DailyStatsRow> = ch_client
+        .client()
+        .query(
+            r#"
+            SELECT toString(date) as date, transactions_count
+            FROM daily_statistics
+            WHERE date > subtractDays(toDate(?1), 14) AND date <= toDate(?1)
+            ORDER BY date DESC
+            LIMIT 14
+            "#,
+        )
+        .bind(reference_date.to_string())
+        .fetch_all()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let txs_this_hour: i64 = hourly_rows
+        .first()
+        .map(|r| r.transactions_count as i64)
+        .unwrap_or(0);
+    let txs_in_24_hours: i64 = hourly_rows
+        .iter()
+        .map(|r| r.transactions_count as i64)
+        .sum();
 
     let hourly_data: Vec<TxStatsDataPoint> = hourly_rows
         .into_iter()
         .rev()
-        .map(|(hour, count)| TxStatsDataPoint {
-            label: hour.format("%H:00").to_string(),
-            value: count as i64,
+        .map(|row| TxStatsDataPoint {
+            label: row.hour.split(' ').next().unwrap_or("").to_string(),
+            value: row.transactions_count as i64,
         })
         .collect();
 
     let daily_data: Vec<TxStatsDataPoint> = daily_rows
         .into_iter()
         .rev()
-        .map(|(date, count)| TxStatsDataPoint {
-            label: date.format("%m/%d").to_string(),
-            value: count as i64,
-        })
-        .collect();
-
-    let response = TxStatsResponse {
-        current_hour: txs_this_hour,
-        current_day: txs_in_24_hours,
-        hourly_data,
-        daily_data,
-    };
-
-    state
-        .cache
-        .set(cache_key, &response, std::time::Duration::from_secs(60))
-        .await;
-
-    ok(response)
-}
-
-async fn get_tx_stats_postgres(
-    state: &Arc<AppState>,
-    cache_key: &str,
-) -> ApiResult<TxStatsResponse> {
-    let latest_ts: Option<(DateTime<Utc>,)> =
-        sqlx::query_as("SELECT timestamp FROM blocks ORDER BY number DESC LIMIT 1")
-            .fetch_optional(&state.pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let reference_time = latest_ts.map(|(ts,)| ts).unwrap_or_else(Utc::now);
-    let reference_date = reference_time.date_naive();
-
-    let hourly_rows = sqlx::query_as::<_, (DateTime<Utc>, i32)>(
-        r#"
-        SELECT hour, transactions_count
-        FROM hourly_statistics
-        WHERE hour > $1 - INTERVAL '24 hours' AND hour <= $1
-        ORDER BY hour DESC
-        LIMIT 24
-        "#,
-    )
-    .bind(reference_time)
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let daily_rows = sqlx::query_as::<_, (chrono::NaiveDate, i32)>(
-        r#"
-        SELECT date, transactions_count
-        FROM daily_statistics
-        WHERE date > $1 - INTERVAL '14 days' AND date <= $1
-        ORDER BY date DESC
-        LIMIT 14
-        "#,
-    )
-    .bind(reference_date)
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let txs_this_hour: i64 = hourly_rows.first().map(|(_, c)| *c as i64).unwrap_or(0);
-    let txs_in_24_hours: i64 = hourly_rows.iter().map(|(_, c)| *c as i64).sum();
-
-    let hourly_data: Vec<TxStatsDataPoint> = hourly_rows
-        .into_iter()
-        .rev()
-        .map(|(hour, count)| TxStatsDataPoint {
-            label: hour.format("%H:00").to_string(),
-            value: count as i64,
-        })
-        .collect();
-
-    let daily_data: Vec<TxStatsDataPoint> = daily_rows
-        .into_iter()
-        .rev()
-        .map(|(date, count)| TxStatsDataPoint {
-            label: date.format("%m/%d").to_string(),
-            value: count as i64,
+        .map(|row| TxStatsDataPoint {
+            label: row.date,
+            value: row.transactions_count as i64,
         })
         .collect();
 
@@ -312,15 +250,11 @@ async fn get_recent_blocks(State(state): State<Arc<AppState>>) -> ApiResult<Rece
         return ok(cached);
     }
 
-    if let Some(ch_client) = &state.clickhouse_client {
-        get_recent_blocks_clickhouse(ch_client, &state, cache_key).await
-    } else {
-        get_recent_blocks_postgres(&state, cache_key).await
-    }
+    get_recent_blocks_clickhouse(&state.clickhouse, &state, cache_key).await
 }
 
 async fn get_recent_blocks_clickhouse(
-    ch_client: &crate::clickhouse::ClickHouseClient,
+    ch_client: &ClickHouseClient,
     state: &Arc<AppState>,
     cache_key: &str,
 ) -> ApiResult<RecentBlocksResponse> {
@@ -365,49 +299,6 @@ async fn get_recent_blocks_clickhouse(
         .map(|row| RecentBlockItem {
             timestamp: (row.timestamp as i64) * 1000,
             transactions_count: row.transactions_count as i32,
-        })
-        .collect();
-
-    let response = RecentBlocksResponse { blocks };
-
-    state
-        .cache
-        .set(cache_key, &response, std::time::Duration::from_secs(10))
-        .await;
-
-    ok(response)
-}
-
-async fn get_recent_blocks_postgres(
-    state: &Arc<AppState>,
-    cache_key: &str,
-) -> ApiResult<RecentBlocksResponse> {
-    let latest_ts: Option<(DateTime<Utc>,)> =
-        sqlx::query_as("SELECT timestamp FROM blocks ORDER BY number DESC LIMIT 1")
-            .fetch_optional(&state.pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let reference_time = latest_ts.map(|(ts,)| ts).unwrap_or_else(Utc::now);
-
-    let rows = sqlx::query_as::<_, (DateTime<Utc>, i32)>(
-        r#"
-        SELECT timestamp, transactions_count
-        FROM blocks
-        WHERE timestamp > $1 - INTERVAL '24 hours'
-        ORDER BY number ASC
-        "#,
-    )
-    .bind(reference_time)
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let blocks: Vec<RecentBlockItem> = rows
-        .into_iter()
-        .map(|(ts, tx_count)| RecentBlockItem {
-            timestamp: ts.timestamp_millis(),
-            transactions_count: tx_count,
         })
         .collect();
 
@@ -552,59 +443,35 @@ pub struct StackedAreaChartResponse {
 async fn get_transaction_count_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<ChartResponse> {
-    if let Some(_ch_client) = &state.clickhouse_client {
-        get_transaction_count_chart_clickhouse(&state).await
-    } else {
-        get_transaction_count_chart_postgres(&state).await
+    get_transaction_count_chart_impl(&state).await
+}
+
+async fn get_transaction_count_chart_impl(state: &Arc<AppState>) -> ApiResult<ChartResponse> {
+    #[derive(Row, Deserialize)]
+    struct DailyStatsRow {
+        date: String,
+        transactions_count: u32,
     }
-}
 
-async fn get_transaction_count_chart_clickhouse(state: &Arc<AppState>) -> ApiResult<ChartResponse> {
-    let rows = sqlx::query_as::<_, (chrono::NaiveDate, i32)>(
-        r#"
-        SELECT date, transactions_count
-        FROM daily_statistics
-        ORDER BY date ASC
-        "#,
-    )
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let data: Vec<ChartDataPoint> = rows
-        .into_iter()
-        .map(|(date, tx_count)| ChartDataPoint {
-            date: date.format("%Y/%m/%d").to_string(),
-            value: tx_count.to_string(),
-            value2: None,
-        })
-        .collect();
-
-    ok(ChartResponse {
-        data,
-        title: "Transaction Count".to_string(),
-        y_axis_label: "Transactions".to_string(),
-        y2_axis_label: None,
-    })
-}
-
-async fn get_transaction_count_chart_postgres(state: &Arc<AppState>) -> ApiResult<ChartResponse> {
-    let rows = sqlx::query_as::<_, (chrono::NaiveDate, i32)>(
-        r#"
-        SELECT date, transactions_count
-        FROM daily_statistics
-        ORDER BY date ASC
-        "#,
-    )
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let rows: Vec<DailyStatsRow> = state
+        .clickhouse
+        .client()
+        .query(
+            r#"
+            SELECT toString(date) as date, transactions_count
+            FROM daily_statistics
+            ORDER BY date ASC
+            "#,
+        )
+        .fetch_all()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let data: Vec<ChartDataPoint> = rows
         .into_iter()
-        .map(|(date, tx_count)| ChartDataPoint {
-            date: date.format("%Y/%m/%d").to_string(),
-            value: tx_count.to_string(),
+        .map(|row| ChartDataPoint {
+            date: row.date,
+            value: row.transactions_count.to_string(),
             value2: None,
         })
         .collect();
@@ -618,31 +485,36 @@ async fn get_transaction_count_chart_postgres(state: &Arc<AppState>) -> ApiResul
 }
 
 async fn get_cell_count_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
-    if let Some(_ch_client) = &state.clickhouse_client {
-        get_cell_count_chart_impl(&state).await
-    } else {
-        get_cell_count_chart_impl(&state).await
-    }
+    get_cell_count_chart_impl(&state).await
 }
 
 async fn get_cell_count_chart_impl(state: &Arc<AppState>) -> ApiResult<ChartResponse> {
-    let rows = sqlx::query_as::<_, (chrono::NaiveDate, i64)>(
-        r#"
-        SELECT date, total_live_cells
-        FROM daily_statistics
-        WHERE total_live_cells IS NOT NULL
-        ORDER BY date ASC
-        "#,
-    )
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    #[derive(Row, Deserialize)]
+    struct CellCountRow {
+        date: String,
+        total_live_cells: u64,
+    }
+
+    let rows: Vec<CellCountRow> = state
+        .clickhouse
+        .client()
+        .query(
+            r#"
+            SELECT toString(date) as date, total_live_cells
+            FROM daily_statistics
+            WHERE total_live_cells IS NOT NULL
+            ORDER BY date ASC
+            "#,
+        )
+        .fetch_all()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let data: Vec<ChartDataPoint> = rows
         .into_iter()
-        .map(|(date, cumulative_cells)| ChartDataPoint {
-            date: date.format("%Y/%m/%d").to_string(),
-            value: cumulative_cells.to_string(),
+        .map(|row| ChartDataPoint {
+            date: row.date,
+            value: row.total_live_cells.to_string(),
             value2: None,
         })
         .collect();
@@ -656,31 +528,36 @@ async fn get_cell_count_chart_impl(state: &Arc<AppState>) -> ApiResult<ChartResp
 }
 
 async fn get_knowledge_size_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
-    if let Some(_ch_client) = &state.clickhouse_client {
-        get_knowledge_size_chart_impl(&state).await
-    } else {
-        get_knowledge_size_chart_impl(&state).await
-    }
+    get_knowledge_size_chart_impl(&state).await
 }
 
 async fn get_knowledge_size_chart_impl(state: &Arc<AppState>) -> ApiResult<ChartResponse> {
-    let rows = sqlx::query_as::<_, (chrono::NaiveDate, i64)>(
-        r#"
-        SELECT date, total_data_size
-        FROM daily_statistics
-        WHERE total_data_size IS NOT NULL
-        ORDER BY date ASC
-        "#,
-    )
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    #[derive(Row, Deserialize)]
+    struct KnowledgeSizeRow {
+        date: String,
+        total_data_size: u64,
+    }
+
+    let rows: Vec<KnowledgeSizeRow> = state
+        .clickhouse
+        .client()
+        .query(
+            r#"
+            SELECT toString(date) as date, total_data_size
+            FROM daily_statistics
+            WHERE total_data_size IS NOT NULL
+            ORDER BY date ASC
+            "#,
+        )
+        .fetch_all()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let data: Vec<ChartDataPoint> = rows
         .into_iter()
-        .map(|(date, cumulative_size)| ChartDataPoint {
-            date: date.format("%Y/%m/%d").to_string(),
-            value: cumulative_size.to_string(),
+        .map(|row| ChartDataPoint {
+            date: row.date,
+            value: row.total_data_size.to_string(),
             value2: None,
         })
         .collect();
@@ -701,33 +578,38 @@ async fn get_block_time_distribution_chart(
         return ok(cached);
     }
 
-    if let Some(_ch_client) = &state.clickhouse_client {
-        get_block_time_distribution_chart_impl(&state, cache_key).await
-    } else {
-        get_block_time_distribution_chart_impl(&state, cache_key).await
-    }
+    get_block_time_distribution_chart_impl(&state, cache_key).await
 }
 
 async fn get_block_time_distribution_chart_impl(
     state: &Arc<AppState>,
     cache_key: &str,
 ) -> ApiResult<ChartResponse> {
-    let rows = sqlx::query_as::<_, (i32, i64)>(
-        r#"
-        SELECT bucket_seconds, block_count
-        FROM block_time_distribution
-        ORDER BY bucket_seconds
-        "#,
-    )
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    #[derive(Row, Deserialize)]
+    struct BlockTimeDistRow {
+        bucket_seconds: u32,
+        block_count: u64,
+    }
+
+    let rows: Vec<BlockTimeDistRow> = state
+        .clickhouse
+        .client()
+        .query(
+            r#"
+            SELECT bucket_seconds, block_count
+            FROM block_time_distribution
+            ORDER BY bucket_seconds
+            "#,
+        )
+        .fetch_all()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let data: Vec<ChartDataPoint> = rows
         .into_iter()
-        .map(|(bucket_seconds, count)| ChartDataPoint {
-            date: format!("{}s", bucket_seconds),
-            value: count.to_string(),
+        .map(|row| ChartDataPoint {
+            date: format!("{}s", row.bucket_seconds),
+            value: row.block_count.to_string(),
             value2: None,
         })
         .collect();
@@ -755,36 +637,41 @@ async fn get_epoch_time_distribution_chart(
         return ok(cached);
     }
 
-    if let Some(_ch_client) = &state.clickhouse_client {
-        get_epoch_time_distribution_chart_impl(&state, cache_key).await
-    } else {
-        get_epoch_time_distribution_chart_impl(&state, cache_key).await
-    }
+    get_epoch_time_distribution_chart_impl(&state, cache_key).await
 }
 
 async fn get_epoch_time_distribution_chart_impl(
     state: &Arc<AppState>,
     cache_key: &str,
 ) -> ApiResult<ChartResponse> {
-    let rows = sqlx::query_as::<_, (i32, i64)>(
-        r#"
-        SELECT bucket_minutes, epoch_count
-        FROM epoch_time_distribution
-        ORDER BY bucket_minutes
-        "#,
-    )
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    #[derive(Row, Deserialize)]
+    struct EpochTimeDistRow {
+        bucket_minutes: u32,
+        epoch_count: u64,
+    }
+
+    let rows: Vec<EpochTimeDistRow> = state
+        .clickhouse
+        .client()
+        .query(
+            r#"
+            SELECT bucket_minutes, epoch_count
+            FROM epoch_time_distribution
+            ORDER BY bucket_minutes
+            "#,
+        )
+        .fetch_all()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let data: Vec<ChartDataPoint> = rows
         .into_iter()
-        .map(|(bucket_minutes, count)| {
-            let hours = bucket_minutes / 60;
-            let mins = bucket_minutes % 60;
+        .map(|row| {
+            let hours = row.bucket_minutes / 60;
+            let mins = row.bucket_minutes % 60;
             ChartDataPoint {
                 date: format!("{}:{:02}", hours, mins),
-                value: count.to_string(),
+                value: row.epoch_count.to_string(),
                 value2: None,
             }
         })
@@ -813,41 +700,45 @@ async fn get_epoch_time_length_chart(
         return ok(cached);
     }
 
-    if let Some(_ch_client) = &state.clickhouse_client {
-        get_epoch_time_length_chart_impl(&state, cache_key).await
-    } else {
-        get_epoch_time_length_chart_impl(&state, cache_key).await
-    }
+    get_epoch_time_length_chart_impl(&state, cache_key).await
 }
 
 async fn get_epoch_time_length_chart_impl(
     state: &Arc<AppState>,
     cache_key: &str,
 ) -> ApiResult<ChartResponse> {
-    let rows = sqlx::query_as::<_, (i64, f64, i32)>(
-        r#"
-        SELECT 
-            epoch_number,
-            (EXTRACT(EPOCH FROM (end_timestamp - start_timestamp)) / 3600.0)::float8 as duration_hours,
-            blocks_count
-        FROM epoch_statistics
-        WHERE end_timestamp IS NOT NULL
-        ORDER BY epoch_number ASC
-        "#,
-    )
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    #[derive(Row, Deserialize)]
+    struct EpochTimeLengthRow {
+        epoch_number: u64,
+        duration_hours: f64,
+        blocks_count: u32,
+    }
+
+    let rows: Vec<EpochTimeLengthRow> = state
+        .clickhouse
+        .client()
+        .query(
+            r#"
+            SELECT 
+                epoch_number,
+                (toUnixTimestamp(end_timestamp) - toUnixTimestamp(start_timestamp)) / 3600.0 as duration_hours,
+                blocks_count
+            FROM epoch_statistics
+            WHERE end_timestamp IS NOT NULL
+            ORDER BY epoch_number ASC
+            "#,
+        )
+        .fetch_all()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let data: Vec<ChartDataPoint> = rows
         .into_iter()
-        .map(
-            |(epoch_number, duration_hours, block_count)| ChartDataPoint {
-                date: epoch_number.to_string(),
-                value: format!("{:.2}", duration_hours),
-                value2: Some(block_count.to_string()),
-            },
-        )
+        .map(|row| ChartDataPoint {
+            date: row.epoch_number.to_string(),
+            value: format!("{:.2}", row.duration_hours),
+            value2: Some(row.blocks_count.to_string()),
+        })
         .collect();
 
     let response = ChartResponse {
@@ -873,34 +764,39 @@ async fn get_average_block_time_chart(
         return ok(cached);
     }
 
-    if let Some(_ch_client) = &state.clickhouse_client {
-        get_average_block_time_chart_impl(&state, cache_key).await
-    } else {
-        get_average_block_time_chart_impl(&state, cache_key).await
-    }
+    get_average_block_time_chart_impl(&state, cache_key).await
 }
 
 async fn get_average_block_time_chart_impl(
     state: &Arc<AppState>,
     cache_key: &str,
 ) -> ApiResult<ChartResponse> {
-    let rows = sqlx::query_as::<_, (chrono::NaiveDate, i32)>(
-        r#"
-        SELECT date, avg_block_time_ms
-        FROM daily_statistics
-        WHERE avg_block_time_ms IS NOT NULL
-        ORDER BY date ASC
-        "#,
-    )
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    #[derive(Row, Deserialize)]
+    struct AvgBlockTimeRow {
+        date: String,
+        avg_block_time_ms: u32,
+    }
+
+    let rows: Vec<AvgBlockTimeRow> = state
+        .clickhouse
+        .client()
+        .query(
+            r#"
+            SELECT toString(date) as date, avg_block_time_ms
+            FROM daily_statistics
+            WHERE avg_block_time_ms IS NOT NULL
+            ORDER BY date ASC
+            "#,
+        )
+        .fetch_all()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let data: Vec<ChartDataPoint> = rows
         .into_iter()
-        .map(|(date, avg_time_ms)| ChartDataPoint {
-            date: date.format("%Y/%m/%d").to_string(),
-            value: format!("{:.2}", avg_time_ms as f64 / 1000.0),
+        .map(|row| ChartDataPoint {
+            date: row.date,
+            value: format!("{:.2}", row.avg_block_time_ms as f64 / 1000.0),
             value2: None,
         })
         .collect();
@@ -982,7 +878,7 @@ fn format_duration(seconds: u64) -> String {
 }
 
 async fn fetch_network_stats_clickhouse(
-    ch_client: &crate::clickhouse::ClickHouseClient,
+    ch_client: &ClickHouseClient,
     state: &AppState,
 ) -> Result<
     NetworkStats,
@@ -1026,23 +922,52 @@ async fn fetch_network_stats_clickhouse(
     let today = latest_timestamp.date_naive();
     let yesterday = today - chrono::Duration::days(1);
 
-    // Get epoch avg time from epoch_statistics (PostgreSQL)
+    #[derive(Row, Deserialize)]
+    struct EpochStatsRow {
+        start_timestamp: Option<u32>,
+        end_timestamp: Option<u32>,
+        blocks_count: u32,
+    }
+
+    #[derive(Row, Deserialize)]
+    struct TimestampRow {
+        timestamp: u32,
+    }
+
+    #[derive(Row, Deserialize)]
+    struct TxCountRow {
+        total: u64,
+    }
+
+    #[derive(Row, Deserialize)]
+    struct SyncStatusRow {
+        tip_block_number: u64,
+        sync_started_at: Option<u32>,
+        sync_started_block: u64,
+        deep_fork_detected: bool,
+        deep_fork_at: Option<u32>,
+        deep_fork_db_tip: Option<u64>,
+        deep_fork_chain_tip: Option<u64>,
+        deep_fork_depth: Option<i32>,
+        deep_fork_fork_point: Option<u64>,
+    }
+
     let (epoch_avg_result, recent_blocks_result, tx_count_result, tip_block_result) = tokio::join!(
-        sqlx::query_as::<_, (Option<DateTime<Utc>>, Option<DateTime<Utc>>, i32)>(
-            r#"
-            SELECT start_timestamp, end_timestamp, blocks_count
-            FROM epoch_statistics
-            WHERE epoch_number = $1
-            "#,
-        )
-        .bind(epoch_number)
-        .fetch_optional(&state.pool),
-        // Get timestamps of last 2 blocks from ClickHouse
         async {
-            #[derive(Row, Deserialize)]
-            struct TimestampRow {
-                timestamp: u32,
-            }
+            ch_client
+                .client()
+                .query(
+                    r#"
+                    SELECT start_timestamp, end_timestamp, blocks_count
+                    FROM epoch_statistics
+                    WHERE epoch_number = ?1
+                    "#,
+                )
+                .bind(epoch_number)
+                .fetch_optional::<EpochStatsRow>()
+                .await
+        },
+        async {
             let query = format!(
                 "SELECT timestamp FROM blocks WHERE number >= {} - 1 AND number <= {} ORDER BY number ASC",
                 latest_block, latest_block
@@ -1053,16 +978,20 @@ async fn fetch_network_stats_clickhouse(
                 .fetch_all::<TimestampRow>()
                 .await
         },
-        // Get 24h transaction count from daily_statistics (PostgreSQL)
-        sqlx::query_as::<_, (i64,)>(
-            r#"
-            SELECT COALESCE(SUM(transactions_count), 0)
-            FROM daily_statistics
-            WHERE date >= $1
-            "#,
-        )
-        .bind(yesterday)
-        .fetch_one(&state.pool),
+        async {
+            ch_client
+                .client()
+                .query(
+                    r#"
+                    SELECT COALESCE(SUM(transactions_count), 0) as total
+                    FROM daily_statistics
+                    WHERE date >= toDate(?1)
+                    "#,
+                )
+                .bind(yesterday.to_string())
+                .fetch_optional::<TxCountRow>()
+                .await
+        },
         fetch_tip_block_from_ckb(&state.ckb_rpc_url)
     );
 
@@ -1070,13 +999,13 @@ async fn fetch_network_stats_clickhouse(
     let epoch_avg_time = epoch_avg_result
         .ok()
         .flatten()
-        .and_then(|(start, end, blocks_count)| {
-            if blocks_count > 1 {
-                if let (Some(s), Some(e)) = (start, end) {
-                    let duration = e.signed_duration_since(s).num_seconds() as f64;
-                    Some(duration / (blocks_count - 1) as f64)
-                } else if let Some(s) = start {
-                    let duration = latest_timestamp.signed_duration_since(s).num_seconds() as f64;
+        .and_then(|row| {
+            if row.blocks_count > 1 {
+                if let (Some(s), Some(e)) = (row.start_timestamp, row.end_timestamp) {
+                    let duration = (e as i64 - s as i64) as f64;
+                    Some(duration / (row.blocks_count - 1) as f64)
+                } else if let Some(s) = row.start_timestamp {
+                    let duration = (latest_timestamp.timestamp() - s as i64) as f64;
                     Some(duration / epoch_index.max(1) as f64)
                 } else {
                     None
@@ -1103,8 +1032,10 @@ async fn fetch_network_stats_clickhouse(
         .unwrap_or(10.0);
 
     let tx_count_24h = tx_count_result
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .0;
+        .ok()
+        .flatten()
+        .map(|r| r.total as i64)
+        .unwrap_or(0);
 
     let tip_block = tip_block_result.unwrap_or(latest_block as u64) as i64;
 
@@ -1114,45 +1045,51 @@ async fn fetch_network_stats_clickhouse(
     let tps = tx_count_24h as f64 / 86400.0;
     let tx_per_minute = tps * 60.0;
 
-    let sync_row: Option<(
-        i64,
-        Option<DateTime<Utc>>,
-        i64,
-        bool,
-        Option<DateTime<Utc>>,
-        Option<i64>,
-        Option<i64>,
-        Option<i32>,
-        Option<i64>,
-    )> = sqlx::query_as(
-        r#"SELECT 
-            tip_block_number, 
-            sync_started_at, 
-            COALESCE(sync_started_block, 0),
-            COALESCE(deep_fork_detected, FALSE),
-            deep_fork_at,
-            deep_fork_db_tip,
-            deep_fork_chain_tip,
-            deep_fork_depth,
-            deep_fork_fork_point
-        FROM sync_status WHERE id = 1"#,
-    )
-    .fetch_optional(&state.pool)
-    .await
-    .ok()
-    .flatten();
+    let sync_row: Option<SyncStatusRow> = ch_client
+        .client()
+        .query(
+            r#"SELECT 
+                tip_block_number, 
+                sync_started_at, 
+                COALESCE(sync_started_block, 0) as sync_started_block,
+                COALESCE(deep_fork_detected, false) as deep_fork_detected,
+                deep_fork_at,
+                deep_fork_db_tip,
+                deep_fork_chain_tip,
+                deep_fork_depth,
+                deep_fork_fork_point
+            FROM sync_status WHERE id = 1"#,
+        )
+        .fetch_optional()
+        .await
+        .ok()
+        .flatten();
 
     let (
         synced_block,
-        sync_started_at,
+        sync_started_at_ts,
         sync_started_block,
         deep_fork_detected,
-        deep_fork_at,
+        deep_fork_at_ts,
         deep_fork_db_tip,
         deep_fork_chain_tip,
         deep_fork_depth,
         deep_fork_fork_point,
-    ) = sync_row.unwrap_or((latest_block, None, 0, false, None, None, None, None, None));
+    ) = if let Some(row) = sync_row {
+        (
+            row.tip_block_number as i64,
+            row.sync_started_at,
+            row.sync_started_block as i64,
+            row.deep_fork_detected,
+            row.deep_fork_at,
+            row.deep_fork_db_tip.map(|v| v as i64),
+            row.deep_fork_chain_tip.map(|v| v as i64),
+            row.deep_fork_depth,
+            row.deep_fork_fork_point.map(|v| v as i64),
+        )
+    } else {
+        (latest_block, None, 0, false, None, None, None, None, None)
+    };
 
     let blocks_behind = tip_block - synced_block;
     let is_syncing = blocks_behind > 100;
@@ -1163,229 +1100,20 @@ async fn fetch_network_stats_clickhouse(
     };
 
     let estimated_time = if is_syncing && blocks_behind > 0 {
-        if let Some(started_at) = sync_started_at {
-            let elapsed = Utc::now().signed_duration_since(started_at).num_seconds() as u64;
-            let blocks_synced = (synced_block - sync_started_block).max(0) as u64;
-            if elapsed > 0 && blocks_synced > 0 {
-                let rate = blocks_synced as f64 / elapsed as f64;
-                let seconds_remaining = (blocks_behind as f64 / rate) as u64;
-                Some(format_duration(seconds_remaining))
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    let sync_status = SyncStatus {
-        is_syncing,
-        synced_block,
-        tip_block,
-        progress,
-        estimated_time,
-        chart_data_may_be_incomplete: blocks_behind > 1000,
-    };
-
-    let deep_fork_status = DeepForkStatus {
-        detected: deep_fork_detected,
-        detected_at: deep_fork_at,
-        depth: deep_fork_depth,
-        db_tip: deep_fork_db_tip,
-        chain_tip: deep_fork_chain_tip,
-        fork_point: deep_fork_fork_point,
-    };
-
-    let difficulty = compact_to_difficulty(compact_target);
-    let hash_rate = if avg_time > 0.0 {
-        difficulty as f64 / avg_time
-    } else {
-        0.0
-    };
-
-    Ok(NetworkStats {
-        latest_block,
-        avg_block_time: format!("{:.2}s", avg_time),
-        hash_rate: format_hash_rate(hash_rate),
-        difficulty: format_difficulty(difficulty),
-        epoch: format!("{}({}/{})", epoch_number, epoch_index, epoch_length),
-        tps: format!("{:.2}", tps),
-        estimated_epoch_time: format_duration(estimated_epoch_seconds as u64),
-        transactions_per_minute: format!("{:.1}", tx_per_minute),
-        transactions_per_day: tx_count_24h.to_string(),
-        sync_status,
-        deep_fork_status,
-    })
-}
-
-async fn fetch_network_stats_postgres(
-    state: &AppState,
-) -> Result<
-    NetworkStats,
-    (
-        axum::http::StatusCode,
-        axum::Json<crate::response::ApiError>,
-    ),
-> {
-    let latest: Option<(i64, i64, i32, i32, i64, DateTime<Utc>)> = sqlx::query_as(
-        "SELECT number, epoch_number, epoch_index, epoch_length, compact_target, timestamp FROM blocks ORDER BY number DESC LIMIT 1",
-    )
-    .fetch_optional(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let (latest_block, epoch_number, epoch_index, epoch_length, compact_target, latest_timestamp) =
-        latest.unwrap_or((0, 0, 0, 1800, 0, Utc::now()));
-
-    // Optimization: Use simpler queries to avoid expensive self-joins and full scans
-    // 1. For epoch avg time: calculate from epoch start block to latest (using timestamps from epoch stats)
-    // 2. For recent avg time: use last 2 blocks instead of self-join on 100 blocks
-    // 3. For 24h tx count: use daily_statistics sum instead of COUNT across partitions
-    let today = latest_timestamp.date_naive();
-    let yesterday = today - chrono::Duration::days(1);
-
-    let (epoch_avg_result, recent_blocks_result, tx_count_result, tip_block_result) = tokio::join!(
-        // Get epoch avg block time from epoch_statistics (pre-computed)
-        sqlx::query_as::<_, (Option<DateTime<Utc>>, Option<DateTime<Utc>>, i32)>(
-            r#"
-            SELECT start_timestamp, end_timestamp, blocks_count
-            FROM epoch_statistics
-            WHERE epoch_number = $1
-            "#,
-        )
-        .bind(epoch_number)
-        .fetch_optional(&state.pool),
-        // Get timestamps of last 2 blocks for recent avg (much faster than self-join)
-        sqlx::query_as::<_, (DateTime<Utc>,)>(
-            r#"
-            SELECT timestamp FROM blocks
-            WHERE number >= $1 - 1 AND number <= $1
-            ORDER BY number ASC
-            "#,
-        )
-        .bind(latest_block)
-        .fetch_all(&state.pool),
-        // Get 24h transaction count from daily_statistics (pre-computed)
-        sqlx::query_as::<_, (i64,)>(
-            r#"
-            SELECT COALESCE(SUM(transactions_count), 0)
-            FROM daily_statistics
-            WHERE date >= $1
-            "#,
-        )
-        .bind(yesterday)
-        .fetch_one(&state.pool),
-        fetch_tip_block_from_ckb(&state.ckb_rpc_url)
-    );
-
-    // Calculate epoch avg time from epoch statistics
-    let epoch_avg_time = epoch_avg_result
-        .ok()
-        .flatten()
-        .and_then(|(start, end, blocks_count)| {
-            if blocks_count > 1 {
-                if let (Some(s), Some(e)) = (start, end) {
-                    let duration = e.signed_duration_since(s).num_seconds() as f64;
-                    Some(duration / (blocks_count - 1) as f64)
-                } else if let Some(s) = start {
-                    // Epoch in progress: use time from start to latest block
-                    let duration = latest_timestamp.signed_duration_since(s).num_seconds() as f64;
-                    Some(duration / epoch_index.max(1) as f64)
+        if let Some(started_at_ts) = sync_started_at_ts {
+            if let Some(started_at) = DateTime::from_timestamp(started_at_ts as i64, 0) {
+                let elapsed = Utc::now().signed_duration_since(started_at).num_seconds() as u64;
+                let blocks_synced = (synced_block - sync_started_block).max(0) as u64;
+                if elapsed > 0 && blocks_synced > 0 {
+                    let rate = blocks_synced as f64 / elapsed as f64;
+                    let seconds_remaining = (blocks_behind as f64 / rate) as u64;
+                    Some(format_duration(seconds_remaining))
                 } else {
                     None
                 }
             } else {
                 None
             }
-        })
-        .unwrap_or(10.0);
-
-    // Calculate recent avg time from last 2 blocks
-    let avg_time = recent_blocks_result
-        .ok()
-        .and_then(|blocks| {
-            if blocks.len() == 2 {
-                let duration = blocks[1].0.signed_duration_since(blocks[0].0).num_seconds() as f64;
-                Some(duration.max(1.0))
-            } else {
-                None
-            }
-        })
-        .unwrap_or(10.0);
-
-    let tx_count_24h = tx_count_result
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .0;
-
-    let tip_block = tip_block_result.unwrap_or(latest_block as u64) as i64;
-
-    let remaining_blocks = epoch_length - epoch_index;
-    let estimated_epoch_seconds = (remaining_blocks as f64 * epoch_avg_time) as i64;
-
-    let tps = tx_count_24h as f64 / 86400.0;
-    let tx_per_minute = tps * 60.0;
-
-    let sync_row: Option<(
-        i64,
-        Option<DateTime<Utc>>,
-        i64,
-        bool,
-        Option<DateTime<Utc>>,
-        Option<i64>,
-        Option<i64>,
-        Option<i32>,
-        Option<i64>,
-    )> = sqlx::query_as(
-        r#"SELECT 
-            tip_block_number, 
-            sync_started_at, 
-            COALESCE(sync_started_block, 0),
-            COALESCE(deep_fork_detected, FALSE),
-            deep_fork_at,
-            deep_fork_db_tip,
-            deep_fork_chain_tip,
-            deep_fork_depth,
-            deep_fork_fork_point
-        FROM sync_status WHERE id = 1"#,
-    )
-    .fetch_optional(&state.pool)
-    .await
-    .ok()
-    .flatten();
-
-    let (
-        synced_block,
-        sync_started_at,
-        sync_started_block,
-        deep_fork_detected,
-        deep_fork_at,
-        deep_fork_db_tip,
-        deep_fork_chain_tip,
-        deep_fork_depth,
-        deep_fork_fork_point,
-    ) = sync_row.unwrap_or((latest_block, None, 0, false, None, None, None, None, None));
-
-    let blocks_behind = tip_block - synced_block;
-    let is_syncing = blocks_behind > 100;
-    let progress = if tip_block > 0 {
-        (synced_block as f64 / tip_block as f64 * 100.0).min(100.0)
-    } else {
-        0.0
-    };
-
-    let estimated_time = if is_syncing && blocks_behind > 0 {
-        if let Some(started_at) = sync_started_at {
-            let elapsed = Utc::now().signed_duration_since(started_at).num_seconds() as u64;
-            let blocks_synced = (synced_block - sync_started_block).max(0) as u64;
-            if elapsed > 0 && blocks_synced > 0 {
-                let rate = blocks_synced as f64 / elapsed as f64;
-                let seconds_remaining = (blocks_behind as f64 / rate) as u64;
-                Some(format_duration(seconds_remaining))
-            } else {
-                None
-            }
         } else {
             None
         }
@@ -1404,7 +1132,7 @@ async fn fetch_network_stats_postgres(
 
     let deep_fork_status = DeepForkStatus {
         detected: deep_fork_detected,
-        detected_at: deep_fork_at,
+        detected_at: deep_fork_at_ts.and_then(|ts| DateTime::from_timestamp(ts as i64, 0)),
         depth: deep_fork_depth,
         db_tip: deep_fork_db_tip,
         chain_tip: deep_fork_chain_tip,
@@ -1439,32 +1167,43 @@ async fn get_hash_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<Ch
         return ok(cached);
     }
 
-    if let Some(_ch_client) = &state.clickhouse_client {
-        get_hash_rate_chart_impl(&state, cache_key).await
-    } else {
-        get_hash_rate_chart_impl(&state, cache_key).await
-    }
+    get_hash_rate_chart_impl(&state, cache_key).await
 }
 
 async fn get_hash_rate_chart_impl(
     state: &Arc<AppState>,
     cache_key: &str,
 ) -> ApiResult<ChartResponse> {
-    let rows = sqlx::query_as::<_, (chrono::NaiveDate, i64, i32)>(
-        "SELECT date, COALESCE(avg_compact_target, 0), block_count FROM daily_block_stats WHERE avg_compact_target IS NOT NULL AND date < (SELECT MAX(date) FROM daily_block_stats) ORDER BY date ASC",
-    )
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    #[derive(Row, Deserialize)]
+    struct HashRateRow {
+        date: String,
+        avg_compact_target: u64,
+        block_count: u32,
+    }
+
+    let rows: Vec<HashRateRow> = state
+        .clickhouse
+        .client()
+        .query(
+            r#"
+            SELECT toString(date) as date, COALESCE(avg_compact_target, 0) as avg_compact_target, block_count
+            FROM daily_block_stats
+            WHERE avg_compact_target IS NOT NULL AND date < (SELECT MAX(date) FROM daily_block_stats)
+            ORDER BY date ASC
+            "#,
+        )
+        .fetch_all()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let data: Vec<ChartDataPoint> = rows
         .into_iter()
-        .map(|(date, compact_target, block_count)| {
-            let difficulty = compact_to_difficulty(compact_target);
-            let avg_block_time = 86400.0 / block_count as f64;
+        .map(|row| {
+            let difficulty = compact_to_difficulty(row.avg_compact_target as i64);
+            let avg_block_time = 86400.0 / row.block_count as f64;
             let hash_rate = difficulty as f64 / avg_block_time;
             ChartDataPoint {
-                date: date.format("%Y/%m/%d").to_string(),
+                date: row.date,
                 value: format!("{:.0}", hash_rate),
                 value2: None,
             }
@@ -1492,30 +1231,40 @@ async fn get_difficulty_chart(State(state): State<Arc<AppState>>) -> ApiResult<C
         return ok(cached);
     }
 
-    if let Some(_ch_client) = &state.clickhouse_client {
-        get_difficulty_chart_impl(&state, cache_key).await
-    } else {
-        get_difficulty_chart_impl(&state, cache_key).await
-    }
+    get_difficulty_chart_impl(&state, cache_key).await
 }
 
 async fn get_difficulty_chart_impl(
     state: &Arc<AppState>,
     cache_key: &str,
 ) -> ApiResult<ChartResponse> {
-    let rows = sqlx::query_as::<_, (chrono::NaiveDate, i64)>(
-        "SELECT date, COALESCE(avg_compact_target, 0) FROM daily_block_stats WHERE avg_compact_target IS NOT NULL AND date < (SELECT MAX(date) FROM daily_block_stats) ORDER BY date ASC",
-    )
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    #[derive(Row, Deserialize)]
+    struct DifficultyRow {
+        date: String,
+        avg_compact_target: u64,
+    }
+
+    let rows: Vec<DifficultyRow> = state
+        .clickhouse
+        .client()
+        .query(
+            r#"
+            SELECT toString(date) as date, COALESCE(avg_compact_target, 0) as avg_compact_target
+            FROM daily_block_stats
+            WHERE avg_compact_target IS NOT NULL AND date < (SELECT MAX(date) FROM daily_block_stats)
+            ORDER BY date ASC
+            "#,
+        )
+        .fetch_all()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let data: Vec<ChartDataPoint> = rows
         .into_iter()
-        .map(|(date, compact_target)| {
-            let difficulty = compact_to_difficulty(compact_target);
+        .map(|row| {
+            let difficulty = compact_to_difficulty(row.avg_compact_target as i64);
             ChartDataPoint {
-                date: date.format("%Y/%m/%d").to_string(),
+                date: row.date,
                 value: difficulty.to_string(),
                 value2: None,
             }
@@ -1543,29 +1292,39 @@ async fn get_uncle_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<C
         return ok(cached);
     }
 
-    if let Some(_ch_client) = &state.clickhouse_client {
-        get_uncle_rate_chart_impl(&state, cache_key).await
-    } else {
-        get_uncle_rate_chart_impl(&state, cache_key).await
-    }
+    get_uncle_rate_chart_impl(&state, cache_key).await
 }
 
 async fn get_uncle_rate_chart_impl(
     state: &Arc<AppState>,
     cache_key: &str,
 ) -> ApiResult<ChartResponse> {
-    let rows = sqlx::query_as::<_, (chrono::NaiveDate, f64)>(
-        "SELECT date, avg_uncle_rate FROM daily_block_stats WHERE date < (SELECT MAX(date) FROM daily_block_stats) ORDER BY date ASC",
-    )
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    #[derive(Row, Deserialize)]
+    struct UncleRateRow {
+        date: String,
+        avg_uncle_rate: f64,
+    }
+
+    let rows: Vec<UncleRateRow> = state
+        .clickhouse
+        .client()
+        .query(
+            r#"
+            SELECT toString(date) as date, avg_uncle_rate
+            FROM daily_block_stats
+            WHERE date < (SELECT MAX(date) FROM daily_block_stats)
+            ORDER BY date ASC
+            "#,
+        )
+        .fetch_all()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let data: Vec<ChartDataPoint> = rows
         .into_iter()
-        .map(|(date, uncle_rate)| ChartDataPoint {
-            date: date.format("%Y/%m/%d").to_string(),
-            value: format!("{:.6}", uncle_rate),
+        .map(|row| ChartDataPoint {
+            date: row.date,
+            value: format!("{:.6}", row.avg_uncle_rate),
             value2: None,
         })
         .collect();
@@ -1614,83 +1373,99 @@ async fn get_miner_address_distribution_chart(
         return ok(cached);
     }
 
-    if let Some(_ch_client) = &state.clickhouse_client {
-        get_miner_address_distribution_chart_impl(&state, cache_key).await
-    } else {
-        get_miner_address_distribution_chart_impl(&state, cache_key).await
-    }
+    get_miner_address_distribution_chart_impl(&state, cache_key).await
 }
 
 async fn get_miner_address_distribution_chart_impl(
     state: &Arc<AppState>,
     cache_key: &str,
 ) -> ApiResult<MinerDistributionResponse> {
-    let total_blocks: (i64,) =
-        sqlx::query_as("SELECT COALESCE(SUM(blocks_count), 0)::bigint FROM miner_statistics")
-            .fetch_one(&state.pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+    #[derive(Row, Deserialize)]
+    struct TotalBlocksRow {
+        total: u64,
+    }
 
-    type MinerRow = (Vec<u8>, Option<Vec<u8>>, Option<i16>, Option<Vec<u8>>, i64);
+    let total_row: Option<TotalBlocksRow> = state
+        .clickhouse
+        .client()
+        .query("SELECT COALESCE(SUM(blocks_count), 0) as total FROM miner_statistics")
+        .fetch_optional()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let rows = sqlx::query_as::<_, MinerRow>(
-        r#"
-        WITH miner_blocks AS (
-            SELECT miner_lock_hash, SUM(blocks_count)::bigint as blocks_mined
-            FROM miner_statistics
-            GROUP BY miner_lock_hash
-            ORDER BY blocks_mined DESC
-            LIMIT 100
-        ),
-        miner_scripts AS (
-            SELECT DISTINCT ON (lock_script_hash)
-                lock_script_hash, lock_code_hash, lock_hash_type, lock_args
-            FROM cells
-            WHERE lock_script_hash IN (SELECT miner_lock_hash FROM miner_blocks)
+    let total_blocks = total_row.map(|r| r.total).unwrap_or(0);
+
+    #[derive(Row, Deserialize)]
+    struct MinerRow {
+        miner_lock_hash: String,
+        lock_code_hash: Option<String>,
+        lock_hash_type: Option<i16>,
+        lock_args: Option<String>,
+        blocks_mined: u64,
+    }
+
+    let rows: Vec<MinerRow> = state
+        .clickhouse
+        .client()
+        .query(
+            r#"
+            WITH miner_blocks AS (
+                SELECT miner_lock_hash, SUM(blocks_count) as blocks_mined
+                FROM miner_statistics
+                GROUP BY miner_lock_hash
+                ORDER BY blocks_mined DESC
+                LIMIT 100
+            ),
+            miner_scripts AS (
+                SELECT DISTINCT ON (lock_script_hash)
+                    lock_script_hash, hex_hash(lock_code_hash) as lock_code_hash, lock_hash_type, hex_hash(lock_args) as lock_args
+                FROM cells
+                WHERE lock_script_hash IN (SELECT miner_lock_hash FROM miner_blocks)
+            )
+            SELECT mb.miner_lock_hash, ms.lock_code_hash, ms.lock_hash_type, ms.lock_args, mb.blocks_mined
+            FROM miner_blocks mb
+            LEFT JOIN miner_scripts ms ON mb.miner_lock_hash = ms.lock_script_hash
+            ORDER BY mb.blocks_mined DESC
+            "#,
         )
-        SELECT mb.miner_lock_hash, ms.lock_code_hash, ms.lock_hash_type, ms.lock_args, mb.blocks_mined
-        FROM miner_blocks mb
-        LEFT JOIN miner_scripts ms ON mb.miner_lock_hash = ms.lock_script_hash
-        ORDER BY mb.blocks_mined DESC
-        "#,
-    )
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+        .fetch_all()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let total = total_blocks.0 as f64;
+    let total = total_blocks as f64;
     let network = &state.ckb_network;
     let data: Vec<MinerDistributionDataPoint> = rows
         .into_iter()
-        .map(
-            |(hash, lock_code_hash, lock_hash_type, lock_args, blocks_mined)| {
-                let percentage = if total > 0.0 {
-                    (blocks_mined as f64 / total) * 100.0
-                } else {
-                    0.0
-                };
-                let address = lock_code_hash
-                    .as_ref()
-                    .and_then(|code_hash| {
-                        let hash_type = lock_hash_type.unwrap_or(0);
-                        let args = lock_args.as_deref().unwrap_or(&[]);
-                        script_to_address(code_hash, hash_type, args, network).ok()
-                    })
-                    .unwrap_or_else(|| format!("0x{}", hex::encode(&hash)));
-                MinerDistributionDataPoint {
-                    address,
-                    miner_name: None,
-                    blocks_mined,
-                    percentage: format!("{:.4}", percentage),
-                }
-            },
-        )
+        .map(|row| {
+            let percentage = if total > 0.0 {
+                (row.blocks_mined as f64 / total) * 100.0
+            } else {
+                0.0
+            };
+            let address = row
+                .lock_code_hash
+                .as_ref()
+                .and_then(|code_hash| {
+                    let hash_type = row.lock_hash_type.unwrap_or(0);
+                    let args = row.lock_args.as_deref().unwrap_or("");
+                    let code_hash_bytes = hex::decode(code_hash).ok()?;
+                    let args_bytes = hex::decode(args).ok()?;
+                    script_to_address(&code_hash_bytes, hash_type, &args_bytes, network).ok()
+                })
+                .unwrap_or_else(|| format!("0x{}", row.miner_lock_hash));
+            MinerDistributionDataPoint {
+                address,
+                miner_name: None,
+                blocks_mined: row.blocks_mined as i64,
+                percentage: format!("{:.4}", percentage),
+            }
+        })
         .collect();
 
     let response = MinerDistributionResponse {
         data,
         title: "Miner Address Distribution".to_string(),
-        total_blocks: total_blocks.0,
+        total_blocks: total_blocks as i64,
     };
 
     state
@@ -1722,57 +1497,62 @@ async fn get_total_supply_chart(
         return ok(cached);
     }
 
-    if let Some(_ch_client) = &state.clickhouse_client {
-        get_total_supply_chart_impl(&state, cache_key).await
-    } else {
-        get_total_supply_chart_impl(&state, cache_key).await
-    }
+    get_total_supply_chart_impl(&state, cache_key).await
 }
 
 async fn get_total_supply_chart_impl(
     state: &Arc<AppState>,
     cache_key: &str,
 ) -> ApiResult<StackedAreaChartResponse> {
-    let rows = sqlx::query_as::<_, (chrono::NaiveDate, String, String, String)>(
-        r#"
-        SELECT date, CAST(total_issuance AS TEXT), CAST(total_deposit AS TEXT), COALESCE(cumulative_burnt, '0')
-        FROM dao_daily_snapshots
-        WHERE total_issuance != 0
-        ORDER BY date ASC
-        "#,
-    )
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    #[derive(Row, Deserialize)]
+    struct DaoSnapshotRow {
+        date: String,
+        total_issuance: String,
+        total_deposit: String,
+        cumulative_burnt: String,
+    }
+
+    let rows: Vec<DaoSnapshotRow> = state
+        .clickhouse
+        .client()
+        .query(
+            r#"
+            SELECT toString(date) as date, toString(total_issuance) as total_issuance, toString(total_deposit) as total_deposit, COALESCE(toString(cumulative_burnt), '0') as cumulative_burnt
+            FROM dao_daily_snapshots
+            WHERE total_issuance != 0
+            ORDER BY date ASC
+            "#,
+        )
+        .fetch_all()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let data: Vec<StackedAreaDataPoint> = rows
         .into_iter()
-        .map(
-            |(date, total_issuance_str, locked_capacity, cumulative_burnt_str)| {
-                let total_issuance: u128 = total_issuance_str.parse().unwrap_or(0);
-                let locked: u128 = locked_capacity.parse().unwrap_or(0);
-                let secondary_burnt: u128 = cumulative_burnt_str.parse().unwrap_or(0);
-                let total_burnt = GENESIS_BURNT + secondary_burnt;
-                let circulating = total_issuance.saturating_sub(total_burnt);
-                let liquid = circulating.saturating_sub(locked);
+        .map(|row| {
+            let total_issuance: u128 = row.total_issuance.parse().unwrap_or(0);
+            let locked: u128 = row.total_deposit.parse().unwrap_or(0);
+            let secondary_burnt: u128 = row.cumulative_burnt.parse().unwrap_or(0);
+            let total_burnt = GENESIS_BURNT + secondary_burnt;
+            let circulating = total_issuance.saturating_sub(total_burnt);
+            let liquid = circulating.saturating_sub(locked);
 
-                let mut values = std::collections::HashMap::new();
-                values.insert(
-                    "circulating".to_string(),
-                    shannon_to_ckb(&liquid.to_string()),
-                );
-                values.insert("locked".to_string(), shannon_to_ckb(&locked.to_string()));
-                values.insert(
-                    "burnt".to_string(),
-                    shannon_to_ckb(&total_burnt.to_string()),
-                );
+            let mut values = std::collections::HashMap::new();
+            values.insert(
+                "circulating".to_string(),
+                shannon_to_ckb(&liquid.to_string()),
+            );
+            values.insert("locked".to_string(), shannon_to_ckb(&locked.to_string()));
+            values.insert(
+                "burnt".to_string(),
+                shannon_to_ckb(&total_burnt.to_string()),
+            );
 
-                StackedAreaDataPoint {
-                    date: date.format("%Y/%m/%d").to_string(),
-                    values,
-                }
-            },
-        )
+            StackedAreaDataPoint {
+                date: row.date,
+                values,
+            }
+        })
         .collect();
 
     let series = vec![
@@ -1807,12 +1587,8 @@ async fn get_total_supply_chart_impl(
     ok(response)
 }
 
-async fn get_nominal_apc_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
-    if let Some(_ch_client) = &state.clickhouse_client {
-        get_nominal_apc_chart_impl().await
-    } else {
-        get_nominal_apc_chart_impl().await
-    }
+async fn get_nominal_apc_chart(State(_state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
+    get_nominal_apc_chart_impl().await
 }
 
 async fn get_nominal_apc_chart_impl() -> ApiResult<ChartResponse> {
@@ -1867,49 +1643,48 @@ async fn get_secondary_issuance_chart(
         return ok(cached);
     }
 
-    if let Some(_ch_client) = &state.clickhouse_client {
-        get_secondary_issuance_chart_impl(&state, cache_key).await
-    } else {
-        get_secondary_issuance_chart_impl(&state, cache_key).await
-    }
+    get_secondary_issuance_chart_impl(&state, cache_key).await
 }
 
 async fn get_secondary_issuance_chart_impl(
     state: &Arc<AppState>,
     cache_key: &str,
 ) -> ApiResult<StackedAreaChartResponse> {
-    let rows = sqlx::query_as::<
-        _,
-        (
-            chrono::NaiveDate,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-        ),
-    >(
-        r#"
-        SELECT 
-            date,
-            cumulative_mining_reward,
-            cumulative_deposit_compensation,
-            cumulative_burnt
-        FROM dao_daily_snapshots
-        WHERE cumulative_burnt IS NOT NULL 
-          AND cumulative_mining_reward IS NOT NULL
-          AND cumulative_deposit_compensation IS NOT NULL
-        ORDER BY date ASC
-        "#,
-    )
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    #[derive(Row, Deserialize)]
+    struct SecondaryIssuanceRow {
+        date: String,
+        cumulative_mining_reward: Option<String>,
+        cumulative_deposit_compensation: Option<String>,
+        cumulative_burnt: Option<String>,
+    }
+
+    let rows: Vec<SecondaryIssuanceRow> = state
+        .clickhouse
+        .client()
+        .query(
+            r#"
+            SELECT 
+                toString(date) as date,
+                cumulative_mining_reward,
+                cumulative_deposit_compensation,
+                cumulative_burnt
+            FROM dao_daily_snapshots
+            WHERE cumulative_burnt IS NOT NULL 
+              AND cumulative_mining_reward IS NOT NULL
+              AND cumulative_deposit_compensation IS NOT NULL
+            ORDER BY date ASC
+            "#,
+        )
+        .fetch_all()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let data: Vec<StackedAreaDataPoint> = rows
         .into_iter()
-        .filter_map(|(date, mining_str, compensation_str, burnt_str)| {
-            let mining: f64 = mining_str?.parse().ok()?;
-            let compensation: f64 = compensation_str?.parse().ok()?;
-            let burnt: f64 = burnt_str?.parse().ok()?;
+        .filter_map(|row| {
+            let mining: f64 = row.cumulative_mining_reward?.parse().ok()?;
+            let compensation: f64 = row.cumulative_deposit_compensation?.parse().ok()?;
+            let burnt: f64 = row.cumulative_burnt?.parse().ok()?;
 
             let total = mining + compensation + burnt;
             if total <= 0.0 {
@@ -1929,7 +1704,7 @@ async fn get_secondary_issuance_chart_impl(
             );
 
             Some(StackedAreaDataPoint {
-                date: date.format("%Y/%m/%d").to_string(),
+                date: row.date,
                 values,
             })
         })
@@ -1967,12 +1742,8 @@ async fn get_secondary_issuance_chart_impl(
     ok(response)
 }
 
-async fn get_inflation_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
-    if let Some(_ch_client) = &state.clickhouse_client {
-        get_inflation_rate_chart_impl().await
-    } else {
-        get_inflation_rate_chart_impl().await
-    }
+async fn get_inflation_rate_chart(State(_state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
+    get_inflation_rate_chart_impl().await
 }
 
 async fn get_inflation_rate_chart_impl() -> ApiResult<ChartResponse> {
