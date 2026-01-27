@@ -450,7 +450,7 @@ async fn warmup_total_supply(state: &AppState) -> Result<(), String> {
 
     let data: Vec<serde_json::Value> = rows
         .iter()
-        .filter_map(|row| {
+        .map(|row| {
             let total_issuance: u128 = row.total_issuance.parse().unwrap_or(0);
             let locked: u128 = row.total_deposit.parse().unwrap_or(0);
             let secondary_burnt: u128 = row.cumulative_burnt.parse().unwrap_or(0);
@@ -458,14 +458,14 @@ async fn warmup_total_supply(state: &AppState) -> Result<(), String> {
             let circulating = total_issuance.saturating_sub(total_burnt);
             let liquid = circulating.saturating_sub(locked);
 
-            Some(serde_json::json!({
+            serde_json::json!({
                 "date": row.date,
                 "values": {
                     "circulating": shannon_to_ckb(liquid),
                     "locked": shannon_to_ckb(locked),
                     "burnt": shannon_to_ckb(total_burnt)
                 }
-            }))
+            })
         })
         .collect();
 

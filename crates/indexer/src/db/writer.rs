@@ -1,3 +1,5 @@
+#![allow(clippy::type_complexity, clippy::too_many_arguments)]
+
 use anyhow::Result;
 #[allow(unused_imports)]
 use chrono::{DateTime, NaiveDate, Utc};
@@ -60,10 +62,10 @@ fn extract_total_issuance_from_dao(dao: &[u8]) -> Option<u64> {
 }
 
 /// Check if cell data looks like a dep group (4-byte count + N × 36-byte OutPoints)
-#[allow(dead_code)]
+#[allow(dead_code, clippy::manual_is_multiple_of)]
 fn looks_like_dep_group(data: &[u8]) -> bool {
     let size = data.len();
-    if !(40..=10000).contains(&size) || !(size - 4).is_multiple_of(36) {
+    if !(40..=10000).contains(&size) || (size - 4) % 36 != 0 {
         return false;
     }
     let count = u32::from_le_bytes(data[0..4].try_into().unwrap_or([0; 4])) as usize;
@@ -263,7 +265,11 @@ impl ClickHouseWriter {
         insert.end().await?;
         let elapsed = start.elapsed();
         if elapsed.as_millis() > 100 {
-            tracing::debug!("insert_blocks_batch: {} rows in {:.1}ms", blocks.len(), elapsed.as_secs_f64() * 1000.0);
+            tracing::debug!(
+                "insert_blocks_batch: {} rows in {:.1}ms",
+                blocks.len(),
+                elapsed.as_secs_f64() * 1000.0
+            );
         }
 
         Ok(())
@@ -339,7 +345,11 @@ impl ClickHouseWriter {
         insert.end().await?;
         let elapsed = start.elapsed();
         if elapsed.as_millis() > 100 {
-            tracing::debug!("insert_transactions_batch: {} rows in {:.1}ms", txs.len(), elapsed.as_secs_f64() * 1000.0);
+            tracing::debug!(
+                "insert_transactions_batch: {} rows in {:.1}ms",
+                txs.len(),
+                elapsed.as_secs_f64() * 1000.0
+            );
         }
 
         Ok(())
@@ -380,7 +390,11 @@ impl ClickHouseWriter {
         insert.end().await?;
         let elapsed = start.elapsed();
         if elapsed.as_millis() > 100 {
-            tracing::debug!("insert_cells_batch: {} rows in {:.1}ms", cells.len(), elapsed.as_secs_f64() * 1000.0);
+            tracing::debug!(
+                "insert_cells_batch: {} rows in {:.1}ms",
+                cells.len(),
+                elapsed.as_secs_f64() * 1000.0
+            );
         }
 
         Ok(())
@@ -412,7 +426,11 @@ impl ClickHouseWriter {
         insert.end().await?;
         let elapsed = start.elapsed();
         if elapsed.as_millis() > 100 {
-            tracing::debug!("insert_cell_consumptions_batch: {} rows in {:.1}ms", len, elapsed.as_secs_f64() * 1000.0);
+            tracing::debug!(
+                "insert_cell_consumptions_batch: {} rows in {:.1}ms",
+                len,
+                elapsed.as_secs_f64() * 1000.0
+            );
         }
 
         Ok(())
@@ -683,9 +701,7 @@ impl ClickHouseWriter {
         // Use tuple IN clause for better ClickHouse performance
         let tuples: Vec<String> = outpoints
             .iter()
-            .map(|(tx_hash, idx)| {
-                format!("(unhex('{}'), {})", hex::encode(tx_hash), idx)
-            })
+            .map(|(tx_hash, idx)| format!("(unhex('{}'), {})", hex::encode(tx_hash), idx))
             .collect();
 
         let query = format!(
@@ -714,7 +730,12 @@ impl ClickHouseWriter {
 
         let elapsed = start.elapsed();
         if elapsed.as_millis() > 100 {
-            tracing::debug!("get_cells_info_batch: {} outpoints, {} rows in {:.1}ms", outpoints.len(), rows.len(), elapsed.as_secs_f64() * 1000.0);
+            tracing::debug!(
+                "get_cells_info_batch: {} outpoints, {} rows in {:.1}ms",
+                outpoints.len(),
+                rows.len(),
+                elapsed.as_secs_f64() * 1000.0
+            );
         }
 
         let mut result = HashMap::new();
@@ -1827,7 +1848,7 @@ mod tests {
 
         let result = writer.has_unresolved_deep_fork().await;
 
-        assert_eq!(result.unwrap(), false);
+        assert!(!result.unwrap());
     }
 
     #[test]

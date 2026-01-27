@@ -382,7 +382,9 @@ async fn build_sync_status(clickhouse_client: &ClickHouseClient, tip_block: i64)
         if let Some(started_at) = sync_started_at {
             let started_at_dt = Utc.timestamp_opt(started_at as i64, 0).single();
             if let Some(started_at_dt) = started_at_dt {
-                let elapsed = Utc::now().signed_duration_since(started_at_dt).num_seconds() as u64;
+                let elapsed = Utc::now()
+                    .signed_duration_since(started_at_dt)
+                    .num_seconds() as u64;
                 let blocks_synced = (synced_block - sync_started_block).max(0) as u64;
                 if elapsed > 0 && blocks_synced > 0 {
                     let rate = blocks_synced as f64 / elapsed as f64;
@@ -528,6 +530,9 @@ mod tests {
     #[test]
     fn test_timestamp_to_rfc3339() {
         assert_eq!(timestamp_to_rfc3339(0), "1970-01-01T00:00:00+00:00");
-        assert_eq!(timestamp_to_rfc3339(1573969227), "2019-11-17T05:20:27+00:00");
+        assert_eq!(
+            timestamp_to_rfc3339(1573969227),
+            "2019-11-17T05:20:27+00:00"
+        );
     }
 }

@@ -1,5 +1,6 @@
 #![allow(clippy::type_complexity)]
 #![allow(clippy::manual_is_multiple_of)]
+#![allow(dead_code)]
 
 use axum::{
     extract::{Query, State},
