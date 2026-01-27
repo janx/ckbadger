@@ -9,10 +9,12 @@ use axum::{
 use ckbadger_common::dao::{
     is_genesis_special_burn_cell, GENESIS_SPECIAL_BURN_CELL_VIRTUAL_OCCUPIED,
 };
+use clickhouse::Row;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use std::sync::Arc;
 
+use crate::clickhouse::{hex_hash, unhex_hash};
 use crate::response::{
     decode_cursor, encode_cursor, ok, ApiError, ApiResult, CursorPaginatedResponse,
 };
@@ -337,6 +339,224 @@ pub struct AddressTokenResponse {
 async fn list_live_cells(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListCellsParams>,
+) -> ApiResult<CursorPaginatedResponse<CellResponse>> {
+    if let Some(ch_client) = &state.clickhouse_client {
+        list_live_cells_clickhouse(ch_client, &state, params).await
+    } else {
+        list_live_cells_postgres(&state, params).await
+    }
+}
+
+async fn list_live_cells_clickhouse(
+    ch_client: &crate::clickhouse::ClickHouseClient,
+    state: &Arc<AppState>,
+    params: ListCellsParams,
+) -> ApiResult<CursorPaginatedResponse<CellResponse>> {
+    let limit = params.limit.clamp(1, 100);
+    let cursor = params.cursor.as_ref().and_then(|c| decode_cursor(c));
+    let (cursor_block, cursor_idx) = cursor.unwrap_or((i64::MAX, i32::MAX));
+
+    // Parse filter parameters
+    let lock_hash_hex = if let Some(ref lock_hash) = params.lock_script_hash {
+        Some(if is_ckb_address(lock_hash) {
+            let bytes = address_to_lock_script_hash(lock_hash)
+                .map_err(|e| ApiError::bad_request(format!("Invalid CKB address: {}", e)))?;
+            hex::encode(bytes)
+        } else {
+            lock_hash
+                .strip_prefix("0x")
+                .unwrap_or(lock_hash)
+                .to_string()
+        })
+    } else {
+        None
+    };
+
+    let type_hash_hex = params
+        .type_script_hash
+        .as_ref()
+        .map(|h| h.strip_prefix("0x").unwrap_or(h).to_string());
+
+    let type_code_hash_hex = params
+        .type_code_hash
+        .as_ref()
+        .map(|h| h.strip_prefix("0x").unwrap_or(h).to_string());
+
+    // Build WHERE clause for filters
+    let mut where_clauses = vec![format!(
+        "(c.created_at_block, c.output_index) < ({}, {})",
+        cursor_block, cursor_idx
+    )];
+
+    if let Some(ref lock_hex) = lock_hash_hex {
+        where_clauses.push(format!("c.lock_script_hash = unhex('{}')", lock_hex));
+    }
+
+    if let Some(ref type_hex) = type_hash_hex {
+        where_clauses.push(format!("c.type_script_hash = unhex('{}')", type_hex));
+    }
+
+    if let Some(ref code_hex) = type_code_hash_hex {
+        where_clauses.push(format!("c.type_code_hash = unhex('{}')", code_hex));
+    }
+
+    let where_clause = where_clauses.join(" AND ");
+
+    // Get total count from PostgreSQL (for now - could optimize later)
+    let total: i64 = if let Some(ref lock_hex) = lock_hash_hex {
+        let lock_bytes =
+            hex::decode(lock_hex).map_err(|_| ApiError::bad_request("Invalid lock script hash"))?;
+
+        if let Some(ref code_hex) = type_code_hash_hex {
+            let code_bytes = hex::decode(code_hex)
+                .map_err(|_| ApiError::bad_request("Invalid type code hash"))?;
+            let row: (i64,) = sqlx::query_as(
+                "SELECT COUNT(*) FROM live_cells WHERE lock_script_hash = $1 AND type_code_hash = $2"
+            )
+            .bind(&lock_bytes)
+            .bind(&code_bytes)
+            .fetch_one(&state.pool)
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+            row.0
+        } else if let Some(ref type_hex) = type_hash_hex {
+            let type_bytes = hex::decode(type_hex)
+                .map_err(|_| ApiError::bad_request("Invalid type script hash"))?;
+            let row: (i64,) = sqlx::query_as(
+                "SELECT COUNT(*) FROM live_cells WHERE lock_script_hash = $1 AND type_script_hash = $2"
+            )
+            .bind(&lock_bytes)
+            .bind(&type_bytes)
+            .fetch_one(&state.pool)
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+            row.0
+        } else {
+            let row: (i64,) =
+                sqlx::query_as("SELECT COUNT(*) FROM live_cells WHERE lock_script_hash = $1")
+                    .bind(&lock_bytes)
+                    .fetch_one(&state.pool)
+                    .await
+                    .map_err(|e| ApiError::internal(e.to_string()))?;
+            row.0
+        }
+    } else if let Some(ref type_hex) = type_hash_hex {
+        let type_bytes =
+            hex::decode(type_hex).map_err(|_| ApiError::bad_request("Invalid type script hash"))?;
+        let row: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM live_cells WHERE type_script_hash = $1")
+                .bind(&type_bytes)
+                .fetch_one(&state.pool)
+                .await
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+        row.0
+    } else {
+        let row: (i64,) = sqlx::query_as("SELECT total_live_cells FROM sync_status WHERE id = 1")
+            .fetch_one(&state.pool)
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        row.0
+    };
+
+    // Query ClickHouse for live cells using LEFT ANTI JOIN
+    let query = format!(
+        "SELECT 
+            {} as tx_hash,
+            c.output_index,
+            c.capacity,
+            {} as lock_script_hash,
+            {} as type_script_hash,
+            {} as type_code_hash,
+            c.data_size,
+            c.created_at_block,
+            {} as lock_args
+        FROM cells c
+        LEFT ANTI JOIN cell_consumptions cc 
+            ON c.tx_hash = cc.tx_hash AND c.output_index = cc.output_index
+        WHERE {}
+        ORDER BY c.created_at_block DESC, c.output_index DESC
+        LIMIT {}",
+        hex_hash("c.tx_hash"),
+        hex_hash("c.lock_script_hash"),
+        hex_hash("c.type_script_hash"),
+        hex_hash("c.type_code_hash"),
+        hex_hash("c.lock_args"),
+        where_clause,
+        limit + 1
+    );
+
+    #[derive(Row, Deserialize)]
+    struct LiveCellRowClickHouse {
+        tx_hash: String,
+        output_index: u16,
+        capacity: u64,
+        lock_script_hash: String,
+        type_script_hash: Option<String>,
+        type_code_hash: Option<String>,
+        data_size: u32,
+        created_at_block: u64,
+        lock_args: String,
+    }
+
+    let rows = ch_client
+        .client()
+        .query(&query)
+        .fetch_all::<LiveCellRowClickHouse>()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let has_more = rows.len() as i64 > limit;
+    let rows: Vec<_> = rows.into_iter().take(limit as usize).collect();
+
+    let next_cursor = if has_more {
+        rows.last()
+            .map(|r| encode_cursor(r.created_at_block as i64, r.output_index as i32))
+    } else {
+        None
+    };
+
+    let cells: Vec<CellResponse> = rows
+        .into_iter()
+        .map(|r| {
+            let lock_args_bytes = hex::decode(&r.lock_args).unwrap_or_default();
+            let is_special_burn =
+                is_genesis_special_burn_cell(&lock_args_bytes, r.created_at_block as i64);
+
+            CellResponse {
+                tx_hash: format!("0x{}", r.tx_hash),
+                output_index: r.output_index as i32,
+                capacity: r.capacity.to_string(),
+                lock_script_hash: format!("0x{}", r.lock_script_hash),
+                type_script_hash: r.type_script_hash.map(|h| format!("0x{}", h)),
+                type_code_hash: r.type_code_hash.map(|h| format!("0x{}", h)),
+                data_size: r.data_size as i32,
+                created_at_block: r.created_at_block as i64,
+                cell_type: if is_special_burn {
+                    Some("genesis_special_burn".to_string())
+                } else {
+                    None
+                },
+                virtual_occupied_capacity: if is_special_burn {
+                    Some(GENESIS_SPECIAL_BURN_CELL_VIRTUAL_OCCUPIED.to_string())
+                } else {
+                    None
+                },
+                udt_amount: None, // UDT amounts not in ClickHouse yet
+            }
+        })
+        .collect();
+
+    ok(CursorPaginatedResponse::new(
+        cells,
+        total,
+        limit,
+        next_cursor,
+    ))
+}
+
+async fn list_live_cells_postgres(
+    state: &Arc<AppState>,
+    params: ListCellsParams,
 ) -> ApiResult<CursorPaginatedResponse<CellResponse>> {
     let limit = params.limit.clamp(1, 100);
     let cursor = params.cursor.as_ref().and_then(|c| decode_cursor(c));
@@ -684,6 +904,229 @@ fn parse_hash_type(hash_type: &str) -> Option<i16> {
 async fn list_cells_by_script(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListCellsByScriptParams>,
+) -> ApiResult<CursorPaginatedResponse<CellResponse>> {
+    if let Some(ch_client) = &state.clickhouse_client {
+        list_cells_by_script_clickhouse(ch_client, &state, params).await
+    } else {
+        list_cells_by_script_postgres(&state, params).await
+    }
+}
+
+async fn list_cells_by_script_clickhouse(
+    ch_client: &crate::clickhouse::ClickHouseClient,
+    state: &Arc<AppState>,
+    params: ListCellsByScriptParams,
+) -> ApiResult<CursorPaginatedResponse<CellResponse>> {
+    let limit = params.limit.clamp(1, 100);
+    let cursor = params.cursor.as_ref().and_then(|c| decode_cursor(c));
+    let (cursor_block, cursor_idx) = cursor.unwrap_or((i64::MAX, i32::MAX));
+
+    let code_hash_hex = params
+        .code_hash
+        .strip_prefix("0x")
+        .unwrap_or(&params.code_hash)
+        .to_string();
+
+    let hash_type_num = parse_hash_type(&params.hash_type).ok_or_else(|| {
+        ApiError::bad_request("Invalid hash_type. Must be one of: data, type, data1, data2")
+    })?;
+
+    let script_kind = params.script_kind.as_str();
+
+    let code_hash_bytes =
+        hex::decode(&code_hash_hex).map_err(|_| ApiError::bad_request("Invalid code_hash hex"))?;
+
+    let total: i64 = match script_kind {
+        "lock" | "type" => {
+            let row: Option<(i64,)> = sqlx::query_as(
+                "SELECT live_cells_count FROM script_usage_stats WHERE code_hash = $1 AND script_kind = $2",
+            )
+            .bind(&code_hash_bytes)
+            .bind(script_kind)
+            .fetch_optional(&state.pool)
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+            row.map(|(c,)| c).unwrap_or(0)
+        }
+        _ => {
+            let row: (i64,) = sqlx::query_as(
+                "SELECT COALESCE(SUM(live_cells_count), 0) FROM script_usage_stats WHERE code_hash = $1",
+            )
+            .bind(&code_hash_bytes)
+            .fetch_one(&state.pool)
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+            row.0
+        }
+    };
+
+    let query = match script_kind {
+        "lock" => format!(
+            "SELECT 
+                {} as tx_hash,
+                c.output_index,
+                c.capacity,
+                {} as lock_script_hash,
+                {} as type_script_hash,
+                {} as type_code_hash,
+                c.data_size,
+                c.created_at_block,
+                {} as lock_args
+            FROM cells c
+            LEFT ANTI JOIN cell_consumptions cc 
+                ON c.tx_hash = cc.tx_hash AND c.output_index = cc.output_index
+            WHERE c.lock_code_hash = unhex('{}') 
+                AND c.lock_hash_type = {}
+                AND (c.created_at_block, c.output_index) < ({}, {})
+            ORDER BY c.created_at_block DESC, c.output_index DESC
+            LIMIT {}",
+            hex_hash("c.tx_hash"),
+            hex_hash("c.lock_script_hash"),
+            hex_hash("c.type_script_hash"),
+            hex_hash("c.type_code_hash"),
+            hex_hash("c.lock_args"),
+            code_hash_hex,
+            hash_type_num,
+            cursor_block,
+            cursor_idx,
+            limit + 1
+        ),
+        "type" => format!(
+            "SELECT 
+                {} as tx_hash,
+                c.output_index,
+                c.capacity,
+                {} as lock_script_hash,
+                {} as type_script_hash,
+                {} as type_code_hash,
+                c.data_size,
+                c.created_at_block,
+                {} as lock_args
+            FROM cells c
+            LEFT ANTI JOIN cell_consumptions cc 
+                ON c.tx_hash = cc.tx_hash AND c.output_index = cc.output_index
+            WHERE c.type_code_hash = unhex('{}') 
+                AND c.type_hash_type = {}
+                AND (c.created_at_block, c.output_index) < ({}, {})
+            ORDER BY c.created_at_block DESC, c.output_index DESC
+            LIMIT {}",
+            hex_hash("c.tx_hash"),
+            hex_hash("c.lock_script_hash"),
+            hex_hash("c.type_script_hash"),
+            hex_hash("c.type_code_hash"),
+            hex_hash("c.lock_args"),
+            code_hash_hex,
+            hash_type_num,
+            cursor_block,
+            cursor_idx,
+            limit + 1
+        ),
+        _ => format!(
+            "SELECT 
+                {} as tx_hash,
+                c.output_index,
+                c.capacity,
+                {} as lock_script_hash,
+                {} as type_script_hash,
+                {} as type_code_hash,
+                c.data_size,
+                c.created_at_block,
+                {} as lock_args
+            FROM cells c
+            LEFT ANTI JOIN cell_consumptions cc 
+                ON c.tx_hash = cc.tx_hash AND c.output_index = cc.output_index
+            WHERE ((c.lock_code_hash = unhex('{}') AND c.lock_hash_type = {}) 
+                   OR (c.type_code_hash = unhex('{}') AND c.type_hash_type = {}))
+                AND (c.created_at_block, c.output_index) < ({}, {})
+            ORDER BY c.created_at_block DESC, c.output_index DESC
+            LIMIT {}",
+            hex_hash("c.tx_hash"),
+            hex_hash("c.lock_script_hash"),
+            hex_hash("c.type_script_hash"),
+            hex_hash("c.type_code_hash"),
+            hex_hash("c.lock_args"),
+            code_hash_hex,
+            hash_type_num,
+            code_hash_hex,
+            hash_type_num,
+            cursor_block,
+            cursor_idx,
+            limit + 1
+        ),
+    };
+
+    #[derive(Row, Deserialize)]
+    struct CellByScriptRowClickHouse {
+        tx_hash: String,
+        output_index: u16,
+        capacity: u64,
+        lock_script_hash: String,
+        type_script_hash: Option<String>,
+        type_code_hash: Option<String>,
+        data_size: u32,
+        created_at_block: u64,
+        lock_args: String,
+    }
+
+    let rows = ch_client
+        .client()
+        .query(&query)
+        .fetch_all::<CellByScriptRowClickHouse>()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let has_more = rows.len() as i64 > limit;
+    let rows: Vec<_> = rows.into_iter().take(limit as usize).collect();
+
+    let next_cursor = if has_more {
+        rows.last()
+            .map(|r| encode_cursor(r.created_at_block as i64, r.output_index as i32))
+    } else {
+        None
+    };
+
+    let cells: Vec<CellResponse> = rows
+        .into_iter()
+        .map(|r| {
+            let lock_args_bytes = hex::decode(&r.lock_args).unwrap_or_default();
+            let is_special_burn =
+                is_genesis_special_burn_cell(&lock_args_bytes, r.created_at_block as i64);
+
+            CellResponse {
+                tx_hash: format!("0x{}", r.tx_hash),
+                output_index: r.output_index as i32,
+                capacity: r.capacity.to_string(),
+                lock_script_hash: format!("0x{}", r.lock_script_hash),
+                type_script_hash: r.type_script_hash.map(|h| format!("0x{}", h)),
+                type_code_hash: r.type_code_hash.map(|h| format!("0x{}", h)),
+                data_size: r.data_size as i32,
+                created_at_block: r.created_at_block as i64,
+                cell_type: if is_special_burn {
+                    Some("genesis_special_burn".to_string())
+                } else {
+                    None
+                },
+                virtual_occupied_capacity: if is_special_burn {
+                    Some(GENESIS_SPECIAL_BURN_CELL_VIRTUAL_OCCUPIED.to_string())
+                } else {
+                    None
+                },
+                udt_amount: None,
+            }
+        })
+        .collect();
+
+    ok(CursorPaginatedResponse::new(
+        cells,
+        total,
+        limit,
+        next_cursor,
+    ))
+}
+
+async fn list_cells_by_script_postgres(
+    state: &Arc<AppState>,
+    params: ListCellsByScriptParams,
 ) -> ApiResult<CursorPaginatedResponse<CellResponse>> {
     let limit = params.limit.clamp(1, 100);
     let cursor = params.cursor.as_ref().and_then(|c| decode_cursor(c));
@@ -1135,6 +1578,222 @@ async fn lookup_dao_info(
 async fn get_cell(
     State(state): State<Arc<AppState>>,
     axum::extract::Path((tx_hash, output_index)): axum::extract::Path<(String, i32)>,
+) -> ApiResult<CellDetailResponse> {
+    if let Some(ch_client) = &state.clickhouse_client {
+        get_cell_clickhouse(ch_client, &state, tx_hash, output_index).await
+    } else {
+        get_cell_postgres(&state, tx_hash, output_index).await
+    }
+}
+
+async fn get_cell_clickhouse(
+    ch_client: &crate::clickhouse::ClickHouseClient,
+    state: &Arc<AppState>,
+    tx_hash: String,
+    output_index: i32,
+) -> ApiResult<CellDetailResponse> {
+    let hash_hex = tx_hash.strip_prefix("0x").unwrap_or(&tx_hash);
+    let _hash_bytes = unhex_hash(&tx_hash)?;
+
+    let query = format!(
+        "SELECT 
+            {} as tx_hash,
+            c.output_index,
+            c.capacity,
+            {} as lock_code_hash,
+            c.lock_hash_type,
+            {} as lock_args,
+            {} as lock_script_hash,
+            {} as type_code_hash,
+            c.type_hash_type,
+            {} as type_args,
+            {} as type_script_hash,
+            {} as data_hash,
+            c.data_size,
+            c.created_at_block,
+            {} as data
+        FROM cells c
+        WHERE c.tx_hash = unhex('{}') AND c.output_index = {}
+        LIMIT 1",
+        hex_hash("c.tx_hash"),
+        hex_hash("c.lock_code_hash"),
+        hex_hash("c.lock_args"),
+        hex_hash("c.lock_script_hash"),
+        hex_hash("c.type_code_hash"),
+        hex_hash("c.type_args"),
+        hex_hash("c.type_script_hash"),
+        hex_hash("c.data_hash"),
+        hex_hash("c.data"),
+        hash_hex,
+        output_index
+    );
+
+    #[derive(Row, Deserialize)]
+    struct CellDetailRowClickHouse {
+        tx_hash: String,
+        output_index: u16,
+        capacity: u64,
+        lock_code_hash: String,
+        lock_hash_type: u8,
+        lock_args: String,
+        lock_script_hash: String,
+        type_code_hash: Option<String>,
+        type_hash_type: Option<u8>,
+        type_args: Option<String>,
+        type_script_hash: Option<String>,
+        data_hash: String,
+        data_size: u32,
+        created_at_block: u64,
+        data: Option<String>,
+    }
+
+    let row = ch_client
+        .client()
+        .query(&query)
+        .fetch_optional::<CellDetailRowClickHouse>()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let r = row.ok_or_else(|| ApiError::not_found("Cell not found"))?;
+
+    let consumption_query = format!(
+        "SELECT 
+            cc.consumed_at_block,
+            {} as consumed_by_tx
+        FROM cell_consumptions cc
+        WHERE cc.tx_hash = unhex('{}') AND cc.output_index = {}
+        LIMIT 1",
+        hex_hash("cc.consumed_by_tx"),
+        hash_hex,
+        output_index
+    );
+
+    #[derive(Row, Deserialize)]
+    struct ConsumptionRowClickHouse {
+        consumed_at_block: u64,
+        consumed_by_tx: String,
+    }
+
+    let consumption = ch_client
+        .client()
+        .query(&consumption_query)
+        .fetch_optional::<ConsumptionRowClickHouse>()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let (status, consumed_at_block, consumed_by_tx) = if let Some(c) = consumption {
+        (
+            "dead".to_string(),
+            Some(c.consumed_at_block as i64),
+            Some(format!("0x{}", c.consumed_by_tx)),
+        )
+    } else {
+        ("live".to_string(), None, None)
+    };
+
+    let hash_type_str = |ht: u8| match ht {
+        0 => "data",
+        1 => "type",
+        2 => "data1",
+        4 => "data2",
+        _ => "data",
+    };
+
+    let type_script = r.type_code_hash.as_ref().map(|code_hash| ScriptResponse {
+        code_hash: format!("0x{}", code_hash),
+        hash_type: hash_type_str(r.type_hash_type.unwrap_or(0)).to_string(),
+        args: format!("0x{}", r.type_args.as_ref().unwrap_or(&String::new())),
+    });
+
+    let lock_code_hash_bytes = hex::decode(&r.lock_code_hash).unwrap_or_default();
+    let lock_args_bytes = hex::decode(&r.lock_args).unwrap_or_default();
+
+    let address = script_to_address(
+        &lock_code_hash_bytes,
+        r.lock_hash_type as i16,
+        &lock_args_bytes,
+        &state.ckb_network,
+    )
+    .ok();
+
+    let cell_data = r.data.as_ref().map(|d| hex::decode(d).unwrap_or_default());
+    let dep_group_result = cell_data
+        .as_ref()
+        .map(|d| parse_dep_group(d, r.data_size as i32))
+        .unwrap_or(DepGroupParseResult {
+            is_dep_group: false,
+            items: None,
+        });
+
+    let data_hash_bytes = hex::decode(&r.data_hash).unwrap_or_default();
+    let type_script_hash_bytes = r
+        .type_script_hash
+        .as_ref()
+        .map(|h| hex::decode(h).unwrap_or_default());
+
+    let code_cell_of = lookup_code_cell_scripts(
+        &state.pool,
+        &state.ckb_network,
+        &data_hash_bytes,
+        type_script_hash_bytes.as_ref(),
+    )
+    .await;
+
+    let type_script_size: i64 = if r.type_code_hash.is_some() {
+        32 + 1 + r.type_args.as_ref().map(|a| a.len() / 2).unwrap_or(0) as i64
+    } else {
+        0
+    };
+    let occupied_capacity =
+        8 + 32 + 1 + (r.lock_args.len() / 2) as i64 + type_script_size + r.data_size as i64;
+
+    let is_satoshi = is_genesis_special_burn_cell(&lock_args_bytes, r.created_at_block as i64);
+    let (cell_type, virtual_occupied_capacity) = if is_satoshi {
+        (
+            Some("genesis_special_burn".to_string()),
+            Some(GENESIS_SPECIAL_BURN_CELL_VIRTUAL_OCCUPIED.to_string()),
+        )
+    } else {
+        (None, None)
+    };
+
+    let hash_bytes =
+        hex::decode(hash_hex).map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
+    let dao_info = lookup_dao_info(&state.pool, &hash_bytes, output_index as i16).await;
+
+    ok(CellDetailResponse {
+        tx_hash: format!("0x{}", r.tx_hash),
+        output_index: r.output_index as i32,
+        capacity: r.capacity.to_string(),
+        occupied_capacity,
+        virtual_occupied_capacity,
+        cell_type,
+        lock_script_hash: format!("0x{}", r.lock_script_hash),
+        address,
+        type_script_hash: r.type_script_hash.map(|h| format!("0x{}", h)),
+        data_size: r.data_size as i32,
+        created_at_block: r.created_at_block as i64,
+        status,
+        consumed_at_block,
+        consumed_by_tx,
+        lock: ScriptResponse {
+            code_hash: format!("0x{}", r.lock_code_hash),
+            hash_type: hash_type_str(r.lock_hash_type).to_string(),
+            args: format!("0x{}", r.lock_args),
+        },
+        type_script,
+        data: r.data.map(|d| format!("0x{}", d)),
+        is_dep_group: dep_group_result.is_dep_group,
+        dep_group_items: dep_group_result.items,
+        code_cell_of,
+        dao_info,
+    })
+}
+
+async fn get_cell_postgres(
+    state: &Arc<AppState>,
+    tx_hash: String,
+    output_index: i32,
 ) -> ApiResult<CellDetailResponse> {
     let hash_bytes = hex::decode(tx_hash.strip_prefix("0x").unwrap_or(&tx_hash))
         .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
