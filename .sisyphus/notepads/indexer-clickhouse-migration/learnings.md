@@ -1815,3 +1815,341 @@ Task 2.3 will implement the Rust code to write to live_cells table (insert on cr
 - COMMENT: 'Live cells view with sign column for efficient OutPoint lookups'
 
 **Documentation**: 225 lines total, 154 lines of comments (68% documentation)
+
+## Task 2.3: DAO/Token/NFT Tables Design (Completed)
+
+**Date**: 2026-01-27
+
+### Objective
+
+Design ClickHouse schema for asset-specific tables (DAO, sUDT/xUDT tokens, Spore NFTs) using event-sourcing pattern. This completes Phase 2 schema design after core tables (Task 2.1) and live_cells view (Task 2.2).
+
+### Files Created
+
+**migrations/clickhouse/003_assets.sql** - Asset tables schema with 6 tables:
+
+1. **dao_deposits** - DAO deposit events (7 fields)
+2. **dao_withdrawals** - DAO withdrawal events (10 fields)
+3. **tokens** - Token metadata (15 fields)
+4. **token_transfers** - Token transfer events (8 fields)
+5. **spore_cells** - Spore NFT metadata (12 fields)
+6. **spore_transfers** - Spore NFT transfer events (8 fields)
+
+### Schema Design Decisions
+
+**1. Event-Sourcing Pattern**
+
+- **DAO**: Separate tables for deposits and withdrawals (no status column)
+- **Tokens**: Separate tables for metadata and transfers
+- **NFTs**: Separate tables for cells and transfers
+- **Rationale**: Immutable insert-only model, derive state from event history
+
+**2. DAO Lifecycle Tracking**
+
+| Event               | Table           | Fields                                                                                      |
+| ------------------- | --------------- | ------------------------------------------------------------------------------------------- |
+| Deposit             | dao_deposits    | tx_hash, output_index, depositor_lock_hash, capacity, deposit_block, deposit_ar             |
+| Withdraw Request    | dao_withdrawals | deposit_tx, deposit_index, withdraw_request_tx, withdraw_request_block, withdraw_request_ar |
+| Withdraw Completion | dao_withdrawals | withdraw_completion_tx, withdraw_completion_block, compensation                             |
+
+**DAO Compensation Formula** (documented in schema):
+
+```
+compensation = (free_capacity * ar_withdraw / ar_deposit) - free_capacity
+free_capacity = capacity - 102_00000000  // 102 CKB occupied by DAO cell
+AR = block DAO field bytes 8-15 (u64 little-endian)
+```
+
+**3. Token Transfer Tracking**
+
+| Event    | from_lock_hash | to_lock_hash | Semantics         |
+| -------- | -------------- | ------------ | ----------------- |
+| Mint     | NULL           | recipient    | Token creation    |
+| Transfer | sender         | recipient    | Normal transfer   |
+| Burn     | sender         | NULL         | Token destruction |
+
+**Token Amount Storage**: String type (UInt128 may exceed UInt64 range)
+
+**4. NFT Transfer Tracking**
+
+| Table           | Purpose                                 | Key Fields                                                   |
+| --------------- | --------------------------------------- | ------------------------------------------------------------ |
+| spore_cells     | Spore metadata (creation + consumption) | spore_id, cluster_id, content_type, content, owner_lock_hash |
+| spore_transfers | Transfer events (mint/transfer/burn)    | spore_id, from_lock_hash, to_lock_hash, transfer_tx          |
+
+**Spore Protocol Fields**:
+
+- **spore_id**: type_script.args (32 bytes, unique identifier)
+- **cluster_id**: Optional collection identifier (32 bytes)
+- **content**: NFT data (hex-encoded, up to 512 bytes for preview)
+- **content_type**: MIME type (e.g., "image/png", "text/plain")
+
+**5. Partitioning Strategy**
+
+| Table           | Partition Key                           | Partition Size | Rationale                   |
+| --------------- | --------------------------------------- | -------------- | --------------------------- |
+| dao_deposits    | intDiv(deposit_block, 5000000)          | 5M blocks      | Time-series queries         |
+| dao_withdrawals | intDiv(withdraw_request_block, 5000000) | 5M blocks      | Time-series queries         |
+| tokens          | None                                    | N/A            | Small table (~1000s tokens) |
+| token_transfers | intDiv(block_number, 5000000)           | 5M blocks      | Time-series queries         |
+| spore_cells     | intDiv(created_at_block, 5000000)       | 5M blocks      | Time-series queries         |
+| spore_transfers | intDiv(block_number, 5000000)           | 5M blocks      | Time-series queries         |
+
+**6. Sort Keys (ORDER BY)**
+
+| Table           | Sort Key                                            | Rationale                     |
+| --------------- | --------------------------------------------------- | ----------------------------- |
+| dao_deposits    | (deposit_block, tx_hash, output_index)              | Time-series + OutPoint lookup |
+| dao_withdrawals | (withdraw_request_block, deposit_tx, deposit_index) | Time-series + deposit lookup  |
+| tokens          | (type_script_hash)                                  | Token lookup                  |
+| token_transfers | (block_number, type_script_hash, tx_hash)           | Time-series + token filtering |
+| spore_cells     | (created_at_block, tx_hash, output_index)           | Time-series + OutPoint lookup |
+| spore_transfers | (block_number, tx_hash, output_index)               | Time-series + spore filtering |
+
+**7. Data Type Mappings**
+
+| PostgreSQL Type  | ClickHouse Type  | Usage                                        |
+| ---------------- | ---------------- | -------------------------------------------- |
+| BYTEA (32 bytes) | FixedString(32)  | All hash fields (binary storage)             |
+| NUMERIC(20,0)    | UInt64           | Capacity, AR values                          |
+| NUMERIC(40,0)    | String           | Token amounts (UInt128 as string)            |
+| SMALLINT         | UInt16           | output_index, deposit_index                  |
+| INTEGER          | UInt32           | Counts, sizes (holders_count, content_size)  |
+| BIGINT           | UInt64           | Block numbers, transfers_count               |
+| TEXT             | String           | Variable-length data (name, symbol, content) |
+| BOOLEAN          | Nullable(UInt64) | is_live → consumed_at_block IS NULL          |
+
+### Query Patterns Documented
+
+**Active DAO Deposits** (not withdrawn):
+
+```sql
+SELECT d.*
+FROM dao_deposits d
+LEFT ANTI JOIN dao_withdrawals w
+  ON d.tx_hash = w.deposit_tx AND d.output_index = w.deposit_index
+WHERE d.depositor_lock_hash = unhex('...');
+```
+
+**Pending DAO Withdrawals** (not completed):
+
+```sql
+SELECT *
+FROM dao_withdrawals
+WHERE withdraw_completion_tx IS NULL;
+```
+
+**Token Balance** (sum of live cells):
+
+```sql
+SELECT sum(toUInt128OrZero(amount)) AS balance
+FROM token_transfers
+WHERE type_script_hash = unhex('...')
+  AND to_lock_hash = unhex('...')
+  AND (tx_hash, output_index) NOT IN (
+    SELECT tx_hash, output_index FROM token_transfers WHERE from_lock_hash = unhex('...')
+  );
+```
+
+**Live Spore NFTs** (not consumed):
+
+```sql
+SELECT *
+FROM spore_cells
+WHERE consumed_at_block IS NULL
+  AND owner_lock_hash = unhex('...');
+```
+
+### Verification Results
+
+✅ **All success criteria met**:
+
+1. **Schema file created**: `migrations/clickhouse/003_assets.sql` (388 lines)
+2. **Syntax validation**: Executed successfully via `clickhouse-client --multiquery`
+3. **Tables created**: All 6 asset tables created in `ckbadger` database
+4. **Partitioning verified**: 5M block partitions for time-series tables
+5. **Sort keys verified**: Correct ORDER BY for each table
+6. **Data types verified**: FixedString(32) for all hash fields
+
+**Table Creation Verification**:
+
+```
+dao_deposits        MergeTree  PARTITION BY intDiv(deposit_block, 5000000)
+dao_withdrawals     MergeTree  PARTITION BY intDiv(withdraw_request_block, 5000000)
+tokens              MergeTree  (no partitioning)
+token_transfers     MergeTree  PARTITION BY intDiv(block_number, 5000000)
+spore_cells         MergeTree  PARTITION BY intDiv(created_at_block, 5000000)
+spore_transfers     MergeTree  PARTITION BY intDiv(block_number, 5000000)
+```
+
+**Field Counts**:
+
+- dao_deposits: 7 fields
+- dao_withdrawals: 10 fields
+- tokens: 15 fields
+- token_transfers: 8 fields
+- spore_cells: 12 fields
+- spore_transfers: 8 fields
+
+**Hash Field Verification** (token_transfers example):
+
+- type_script_hash: FixedString(32)
+- from_lock_hash: Nullable(FixedString(32))
+- to_lock_hash: Nullable(FixedString(32))
+- tx_hash: FixedString(32)
+
+### Comparison with PostgreSQL Schema
+
+| Aspect                | PostgreSQL                      | ClickHouse                          |
+| --------------------- | ------------------------------- | ----------------------------------- |
+| **DAO lifecycle**     | Single table with status column | Two tables (deposits + withdrawals) |
+| **DAO status query**  | `WHERE status = 0`              | `LEFT ANTI JOIN dao_withdrawals`    |
+| **Token balances**    | Separate token_balances table   | Computed from token_transfers       |
+| **Spore live status** | is_live BOOLEAN column          | consumed_at_block IS NULL           |
+| **Token amount**      | NUMERIC(40,0)                   | String (UInt128 as string)          |
+| **Hash storage**      | BYTEA (binary)                  | FixedString(32) (binary)            |
+| **Partitioning**      | RANGE (explicit partitions)     | MergeTree (automatic partitions)    |
+
+### Schema Documentation
+
+**Comprehensive documentation included in SQL file**:
+
+1. **Design Principles** (lines 4-24): Event-sourcing, partitioning, lifecycle explanations
+2. **Table-level comments**: Access patterns, partition strategy, sort key rationale
+3. **Field-level comments**: Data types, domain semantics, encoding formats
+4. **Schema Design Notes** (lines 290-388):
+   - Event-sourcing pattern explanation
+   - DAO lifecycle tracking (deposit → withdraw request → withdraw completion)
+   - Token transfer tracking (mint/transfer/burn semantics)
+   - NFT transfer tracking (Spore protocol specifics)
+   - Partitioning strategy details
+   - Sort key optimization rationale
+   - Data type mappings
+   - Query pattern examples (4 SQL examples)
+   - Migration mapping from PostgreSQL
+   - Future enhancement roadmap
+
+### Gotchas Avoided
+
+1. **No status columns**: Avoided UPDATE semantics (ClickHouse anti-pattern)
+2. **Separate event tables**: DAO deposits/withdrawals separate (not single table with status)
+3. **Token amount as String**: UInt128 may exceed UInt64 range (340 undecillion max)
+4. **Nullable hash fields**: from_lock_hash, to_lock_hash nullable for mint/burn
+5. **No token_balances table**: Computed from token_transfers (avoid UPDATE semantics)
+6. **Spore consumed_at_block**: Nullable field instead of is_live boolean
+7. **tokens table not partitioned**: Small table (~1000s tokens), no time-series queries
+
+### Pattern for Event-Sourcing Tables
+
+```sql
+-- ✅ Correct: Separate tables for different event types
+CREATE TABLE dao_deposits (...) ENGINE = MergeTree() ...;
+CREATE TABLE dao_withdrawals (...) ENGINE = MergeTree() ...;
+
+-- Query active deposits: LEFT ANTI JOIN
+SELECT d.* FROM dao_deposits d
+LEFT ANTI JOIN dao_withdrawals w
+  ON d.tx_hash = w.deposit_tx AND d.output_index = w.deposit_index;
+
+-- ❌ Wrong: Single table with status column (requires UPDATE)
+CREATE TABLE dao_deposits (
+    ...,
+    status UInt8  -- 0=active, 1=requesting, 2=withdrawn
+);
+UPDATE dao_deposits SET status = 1 WHERE ...;  -- ClickHouse anti-pattern
+```
+
+### Pattern for Mint/Burn Semantics
+
+```sql
+-- ✅ Correct: Nullable hash fields for mint/burn
+CREATE TABLE token_transfers (
+    from_lock_hash Nullable(FixedString(32)),  -- NULL for mint
+    to_lock_hash Nullable(FixedString(32)),    -- NULL for burn
+    ...
+);
+
+-- Mint: INSERT (NULL, recipient, ...)
+-- Transfer: INSERT (sender, recipient, ...)
+-- Burn: INSERT (sender, NULL, ...)
+
+-- ❌ Wrong: Separate is_mint/is_burn boolean columns
+CREATE TABLE token_transfers (
+    from_lock_hash FixedString(32),
+    to_lock_hash FixedString(32),
+    is_mint UInt8,  -- Redundant
+    is_burn UInt8   -- Redundant
+);
+```
+
+### Comparison with Core Tables (Task 2.1)
+
+| Aspect              | Core Tables (001_core_tables.sql)                  | Asset Tables (003_assets.sql)                                                            |
+| ------------------- | -------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| **Tables**          | 4 (blocks, transactions, cells, cell_consumptions) | 6 (dao_deposits, dao_withdrawals, tokens, token_transfers, spore_cells, spore_transfers) |
+| **Partitioning**    | All tables partitioned (5M blocks)                 | 5 of 6 partitioned (tokens not partitioned)                                              |
+| **Event-sourcing**  | cells + cell_consumptions                          | dao_deposits + dao_withdrawals                                                           |
+| **Hash fields**     | FixedString(32)                                    | FixedString(32)                                                                          |
+| **Nullable hashes** | type_script fields                                 | from_lock_hash, to_lock_hash (mint/burn)                                                 |
+| **Large numbers**   | total_difficulty (String)                          | token amount (String)                                                                    |
+| **Documentation**   | 274 lines (extensive)                              | 388 lines (extensive)                                                                    |
+
+### Next Steps
+
+Task 2.4 will create the live_cells view for ClickHouse (equivalent to PostgreSQL materialized view).
+
+### Technical Debt
+
+1. **No token_balances table**: Computed from token_transfers (may be slow for large datasets)
+   - Mitigation: Add materialized view in Phase 3 if performance issues arise
+   - Future: Aggregating table for token balances
+
+2. **No DAO statistics table**: Computed from dao_deposits + dao_withdrawals
+   - Mitigation: Add materialized view in Phase 3 for dashboard queries
+   - Future: Aggregating table for DAO statistics
+
+3. **Spore consumed_at_block UPDATE**: Violates immutable model
+   - Mitigation: Acceptable for now (low frequency)
+   - Future: Use ReplacingMergeTree to avoid UPDATE
+
+4. **No secondary indexes**: Only primary key indexes
+   - Mitigation: Add in Phase 3 if query performance issues arise
+   - Future: Secondary indexes for lock_script_hash, type_script_hash
+
+### Lessons Learned
+
+1. **Event-sourcing requires separate tables**: Don't try to use status columns
+2. **Nullable hash fields for mint/burn**: Cleaner than boolean flags
+3. **Token amounts as String**: UInt128 exceeds UInt64 range
+4. **Small tables don't need partitioning**: tokens table (~1000s rows)
+5. **Documentation is essential**: SQL schema files need extensive comments
+6. **Query patterns in comments**: Show correct usage of event-sourcing queries
+7. **Migration mapping in comments**: Documents PostgreSQL → ClickHouse transformations
+
+### Evidence
+
+**Schema file**: `migrations/clickhouse/003_assets.sql` (388 lines)
+
+**Key Metrics**:
+
+- 6 asset tables created
+- 60 total fields across all tables
+- 5 tables partitioned (5M blocks per partition)
+- 1 table not partitioned (tokens)
+- 100% hash fields use FixedString(32)
+- 4 query pattern examples documented
+
+**Verification Commands**:
+
+```bash
+# Show all tables
+docker exec ckbadger-clickhouse clickhouse-client --query "SELECT name, engine, partition_key FROM system.tables WHERE database = 'ckbadger' ORDER BY name"
+
+# Verify hash fields
+docker exec ckbadger-clickhouse clickhouse-client --query "SELECT name, type FROM system.columns WHERE database = 'ckbadger' AND table = 'token_transfers' AND type LIKE '%FixedString%'"
+
+# Count fields per table
+docker exec ckbadger-clickhouse clickhouse-client --query "SELECT table, count(*) AS field_count FROM system.columns WHERE database = 'ckbadger' AND table IN ('dao_deposits', 'dao_withdrawals', 'tokens', 'token_transfers', 'spore_cells', 'spore_transfers') GROUP BY table ORDER BY table"
+```
+
+---

@@ -481,7 +481,7 @@
 
 ---
 
-- [ ] 2.3. DAO/Token/NFT表设计
+- [x] 2.3. DAO/Token/NFT表设计
 
   **What to do**:
   - 设计dao_deposits表 (事件溯源风格)
