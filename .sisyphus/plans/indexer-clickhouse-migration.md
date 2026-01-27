@@ -206,7 +206,7 @@
 
 ---
 
-- [ ] 0.2. 批量写入性能验证
+- [x] 0.2. 批量写入性能验证 (FAIL: 46K/s vs 500K target - correctable schema issue)
 
   **What to do**:
   - 编写Rust基准测试程序

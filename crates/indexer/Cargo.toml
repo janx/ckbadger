@@ -62,6 +62,10 @@ ckb-hash = { workspace = true }
 # Redis (optional, for cache invalidation)
 redis = { workspace = true, optional = true }
 
+# ClickHouse (for benchmarking and analytics)
+clickhouse = { version = "0.12", features = ["test-util"] }
+rand = "0.8"
+
 [features]
 default = []
 redis-cache = ["redis"]
