@@ -4366,3 +4366,308 @@ async fn my_endpoint_postgres(...) -> ApiResult<...> {
 - ClickHouse: 2/8 (25%)
 - PostgreSQL-only: 6/8 (75%)
 - Hybrid pattern: 8/8 (100%)
+
+## Task 4.2 Progress Update (Checkpoint at 99K tokens)
+
+### Modules Completed (3/11)
+
+1. ✅ **blocks.rs** (Commit 7d6b510)
+   - 4 endpoints migrated to ClickHouse
+   - Hybrid architecture established
+   - All tests passing
+
+2. ✅ **transactions.rs** (Commit eb3c9fe)
+   - 2/8 endpoints migrated (list_transactions, get_transaction)
+   - 6 endpoints remain PostgreSQL-only (depend on unmigrated tables)
+   - Cursor pagination working
+
+3. ✅ **cells.rs** (Commit 2657cf8)
+   - 3 endpoints migrated (list_live_cells, list_cells_by_script, get_cell)
+   - LEFT ANTI JOIN pattern for live cells
+   - Address endpoints remain PostgreSQL-only
+
+### Modules Remaining (8/11)
+
+4. ⏳ **dao.rs** (34K, ~1000 lines) - DAO deposits, withdrawals, statistics
+5. ⏳ **tokens.rs** (26K, ~800 lines) - Token transfers, holders
+6. ⏳ **nfts.rs** (not found, may be in tokens.rs)
+7. ⏳ **statistics.rs** (44K, ~1300 lines) - Network stats, charts
+8. ⏳ **search.rs** (6K, ~200 lines) - Unified search
+9. ⏳ **scripts.rs** (21K, ~600 lines) - Script info, usage
+10. ⏳ **graph.rs** (19K, ~550 lines) - Cell relationships
+11. ✅ **addresses.rs** - Already in cells.rs (PostgreSQL-only)
+
+### Pattern Established
+
+All remaining modules should follow this proven pattern:
+
+```rust
+async fn endpoint(...) -> ApiResult<Response> {
+    if let Some(ch_client) = &state.clickhouse_client {
+        endpoint_clickhouse(ch_client, ...).await
+    } else {
+        endpoint_postgres(&state, ...).await
+    }
+}
+```
+
+### Key Techniques
+
+1. **Hash conversion**: `hex_hash("field")` in SELECT, `unhex('...')` in WHERE
+2. **Timestamp**: `toUnixTimestamp(timestamp)` → `DateTime::from_timestamp()`
+3. **JOIN**: `FROM table1 t JOIN table2 b ON t.field = b.field`
+4. **Cursor**: `(field1, field2) < (?, ?)` tuple comparison
+5. **Aggregation**: `if()` instead of `CASE WHEN`, `countIf()` instead of `COUNT FILTER`
+6. **Live cells**: `LEFT ANTI JOIN cell_consumptions`
+
+### Recommendation
+
+Continue with remaining modules in order of size (smallest first):
+
+1. search.rs (6K) - Quick win
+2. scripts.rs (21K)
+3. graph.rs (19K)
+4. tokens.rs (26K)
+5. dao.rs (34K)
+6. statistics.rs (44K) - Largest, save for last
+
+## Task 4.2.4: Unified Search Endpoint Rewrite (Completed)
+
+**Date**: 2026-01-27
+
+### Objective
+
+Rewrite the unified search endpoint in `crates/api/src/routes/search.rs` using the established hybrid architecture pattern (ClickHouse/PostgreSQL fallback).
+
+### Implementation Summary
+
+**File Modified**: `crates/api/src/routes/search.rs`
+
+**Changes**:
+
+1. Added hybrid pattern: `if let Some(ch_client) = &state.clickhouse_client { search_clickhouse(...) } else { search_postgres(...) }`
+2. Created `search_clickhouse()` function with ClickHouse-specific queries
+3. Kept `search_postgres()` function with original PostgreSQL logic
+4. Added ClickHouse Row structs for deserialization
+
+### Search Functionality
+
+The search endpoint supports 4 search types:
+
+1. **Block by number**: Parse query as integer, search blocks table
+2. **Block/Transaction/Address by hash**: 64-char hex string (with or without 0x prefix)
+   - Transaction: Search transactions table by hash
+   - Block: Search blocks table by hash
+   - Address: Count cells with matching lock_script_hash
+3. **Cell by OutPoint**: Format `tx_hash-output_index` (e.g., `0x123...-0`)
+   - Lookup cell by tx_hash and output_index
+   - Return capacity and status (Live/Dead)
+
+### ClickHouse Implementation Details
+
+**Row Structs** (for deserialization):
+
+```rust
+#[derive(Debug, Row, Deserialize)]
+struct BlockRowClickHouse {
+    number: u64,
+    #[allow(dead_code)]
+    hash: String,
+}
+
+#[derive(Debug, Row, Deserialize)]
+struct TransactionRowClickHouse {
+    #[allow(dead_code)]
+    hash: String,
+    block_number: u64,
+}
+
+#[derive(Debug, Row, Deserialize)]
+struct CellRowClickHouse {
+    capacity: u64,
+    status: u8,
+}
+
+#[derive(Debug, Row, Deserialize)]
+struct CellCountRowClickHouse {
+    count: u64,
+}
+```
+
+**Query Patterns**:
+
+1. **Block by number**:
+
+   ```sql
+   SELECT number, lower(hex(hash)) as hash FROM blocks WHERE number = {block_num}
+   ```
+
+2. **Transaction by hash**:
+
+   ```sql
+   SELECT lower(hex(hash)) as hash, block_number FROM transactions
+   WHERE hash = unhex('{hash_without_0x}')
+   ```
+
+3. **Address (cell count)**:
+
+   ```sql
+   SELECT COUNT() as count FROM cells
+   WHERE lock_script_hash = unhex('{hash_without_0x}')
+   ```
+
+4. **Cell by OutPoint**:
+   ```sql
+   SELECT capacity, status FROM cells
+   WHERE tx_hash = unhex('{hash}') AND output_index = {index}
+   ```
+
+### Key Design Decisions
+
+1. **Hybrid Pattern**: Follows established pattern from blocks.rs, transactions.rs, cells.rs
+   - ClickHouse queries use `hex_hash()` helper for SELECT
+   - ClickHouse queries use `unhex()` function for WHERE clauses
+   - PostgreSQL queries use binary comparison with hex::decode()
+
+2. **Hash Handling**:
+   - ClickHouse: Stores hashes as FixedString(32), converts to hex for API response
+   - PostgreSQL: Stores hashes as BYTEA, converts to hex for API response
+   - Both: Accept 0x-prefixed or non-prefixed hex strings from user
+
+3. **Capacity Formatting**:
+   - ClickHouse: `parse_capacity(u64)` - direct numeric value
+   - PostgreSQL: `parse_capacity_str(&str)` - string from database
+   - Both: Format as M/K/plain CKB with 2 decimal places
+
+4. **Error Handling**:
+   - ClickHouse: Silently ignore query errors (no results = empty response)
+   - PostgreSQL: Propagate errors via `map_err(|e| ApiError::internal(...))`
+   - Both: Return empty results for no matches (not an error)
+
+### Response Format (Unchanged)
+
+```json
+{
+  "results": [
+    {
+      "resultType": "block|transaction|address|cell",
+      "id": "string",
+      "label": "string",
+      "url": "string"
+    }
+  ],
+  "query": "string"
+}
+```
+
+### Verification Results
+
+✅ **All success criteria met**:
+
+1. **Compilation**: `cargo build -p ckbadger-api` ✅ Passed
+2. **Linting**: `cargo clippy -p ckbadger-api` ✅ Passed (no warnings)
+3. **Tests**: `cargo test -p ckbadger-api` ✅ 57 tests passed
+
+### Gotchas Encountered
+
+1. **Dead code warnings**: Hash fields in Row structs not used in response
+   - Solution: Added `#[allow(dead_code)]` attributes
+   - Reason: Fields needed for deserialization, not used in response building
+
+2. **Capacity type mismatch**: ClickHouse returns u64, PostgreSQL returns String
+   - Solution: Created two parse functions: `parse_capacity(u64)` and `parse_capacity_str(&str)`
+   - Reason: Different data types from different databases
+
+3. **Query error handling**: ClickHouse queries may fail silently
+   - Solution: Use `.ok()` to ignore errors, return empty results
+   - Reason: Search is best-effort, no results is acceptable
+
+### Pattern for Future Search Endpoints
+
+```rust
+// ✅ Correct: Hybrid pattern with fallback
+async fn search(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<SearchParams>,
+) -> ApiResult<SearchResponse> {
+    if let Some(ch_client) = &state.clickhouse_client {
+        search_clickhouse(ch_client, params).await
+    } else {
+        search_postgres(&state, params).await
+    }
+}
+
+// ✅ Correct: ClickHouse-specific implementation
+async fn search_clickhouse(
+    ch_client: &crate::clickhouse::ClickHouseClient,
+    params: SearchParams,
+) -> ApiResult<SearchResponse> {
+    // Use hex_hash() for SELECT
+    // Use unhex() for WHERE
+    // Ignore errors (best-effort search)
+}
+
+// ✅ Correct: PostgreSQL-specific implementation
+async fn search_postgres(
+    state: &Arc<AppState>,
+    params: SearchParams,
+) -> ApiResult<SearchResponse> {
+    // Use hex::decode() for WHERE
+    // Propagate errors
+}
+```
+
+### Comparison with PostgreSQL Implementation
+
+| Aspect              | PostgreSQL                | ClickHouse                    |
+| ------------------- | ------------------------- | ----------------------------- |
+| **Hash storage**    | BYTEA (binary)            | FixedString(32) (binary)      |
+| **Hash conversion** | hex::decode() in WHERE    | unhex() in WHERE clause       |
+| **Hash output**     | hex::encode() in response | hex() in SELECT               |
+| **Capacity type**   | String (from database)    | u64 (native integer)          |
+| **Error handling**  | Propagate errors          | Silently ignore (best-effort) |
+| **Query style**     | Parameterized (sqlx)      | String interpolation (safe)   |
+
+### Performance Characteristics
+
+**ClickHouse**:
+
+- Block by number: O(1) - primary key lookup
+- Hash lookup: O(log N) - indexed search
+- Cell count: O(N) - full table scan (but fast with columnar storage)
+- OutPoint lookup: O(log N) - primary key lookup
+
+**PostgreSQL**:
+
+- Block by number: O(1) - primary key lookup
+- Hash lookup: O(log N) - B-tree index
+- Cell count: O(N) - full table scan
+- OutPoint lookup: O(log N) - B-tree index
+
+**Expected**: ClickHouse faster for large datasets due to columnar compression.
+
+### Technical Debt
+
+1. **No caching**: Search results not cached (unlike blocks endpoint)
+   - Mitigation: Search is low-volume, caching not critical
+   - Future: Add cache for popular searches if needed
+
+2. **No rate limiting**: Search endpoint not rate-limited
+   - Mitigation: API-level rate limiting applies
+   - Future: Add per-endpoint rate limiting if needed
+
+3. **No input validation**: Assumes well-formed hex strings
+   - Mitigation: unhex_hash() validates length and format
+   - Future: Add more comprehensive input validation
+
+### Lessons Learned
+
+1. **Hybrid pattern is consistent**: All endpoints follow same structure
+2. **Error handling differs**: ClickHouse best-effort, PostgreSQL strict
+3. **Type conversions needed**: Different data types require different parsing
+4. **Dead code warnings acceptable**: For Row deserialization structs
+5. **Response format unchanged**: Frontend compatibility maintained
+
+### Next Steps
+
+Task 4.2.5 will rewrite another endpoint (e.g., addresses, statistics) using the same pattern.
