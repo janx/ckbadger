@@ -1188,3 +1188,278 @@ client.health_check().await?;
 3. **Trust the driver**: Connection pooling works out of the box
 4. **Provide escape hatch**: `client()` accessor for advanced use cases
 5. **Document with examples**: Docstrings show correct usage patterns
+
+## Task 2.1: Core Tables Schema Design (Completed)
+
+**Date**: 2026-01-27
+
+### Objective
+
+Design ClickHouse schema for core tables (blocks, transactions, cells, cell_consumptions) using MergeTree engine with appropriate partitioning strategy. Schema design only - no data migration, no implementation code.
+
+### Files Created
+
+**migrations/clickhouse/001_core_tables.sql** - Production schema with 4 core tables:
+
+1. **blocks** - Blockchain block headers and metadata
+2. **transactions** - Transaction metadata and statistics
+3. **cells** - Cell creation events (outputs only)
+4. **cell_consumptions** - Cell consumption events (inputs only)
+
+### Schema Design Decisions
+
+**1. Immutable Insert-Only Model**
+
+- **cells table**: Only records creation events (no status column)
+- **cell_consumptions table**: Separate table for consumption events
+- **Live cells query**: LEFT ANTI JOIN or NOT IN subquery
+- **Rationale**: ClickHouse optimized for append-only workloads, no UPDATE semantics
+
+**2. FixedString(32) for All Hash Fields**
+
+- All hash fields use `FixedString(32)` for binary storage
+- Rust code must serialize as `Vec<u8>` (32 bytes), not hex strings
+- **Benefits**: 50% storage savings, 10x performance improvement (from Phase 0)
+- **Hash fields**: tx_hash, block_hash, parent_hash, lock_code_hash, lock_script_hash, type_code_hash, type_script_hash, data_hash, consumed_by_tx, nonce, dao, merkle roots
+
+**3. Partitioning Strategy**
+
+- **Partition key**: `intDiv(block_number, 5000000)` = 5M blocks per partition
+- **Current mainnet**: ~18M blocks = 4 partitions (0-5M, 5M-10M, 10M-15M, 15M-20M)
+- **Future growth**: ~1M blocks/year = new partition every 5 years
+- **Benefits**: Faster queries on recent data, easier partition management, automatic partition pruning
+
+**4. Sort Keys (ORDER BY)**
+
+| Table             | Sort Key                                     | Rationale                              |
+| ----------------- | -------------------------------------------- | -------------------------------------- |
+| blocks            | `(number)`                                   | Sequential block queries               |
+| transactions      | `(block_number, hash)`                       | Block queries + tx hash lookup         |
+| cells             | `(created_at_block, tx_hash, output_index)`  | OutPoint lookup + block range queries  |
+| cell_consumptions | `(consumed_at_block, tx_hash, output_index)` | OutPoint lookup + consumption tracking |
+
+**5. Data Type Mappings (PostgreSQL → ClickHouse)**
+
+| PostgreSQL Type  | ClickHouse Type | Usage                                     |
+| ---------------- | --------------- | ----------------------------------------- |
+| BIGSERIAL        | UInt64          | Block numbers, capacity, timestamps       |
+| BYTEA (32 bytes) | FixedString(32) | Hashes (binary storage)                   |
+| BYTEA (variable) | String          | Variable-length data (hex-encoded)        |
+| INTEGER          | UInt32          | Counts, sizes, indexes                    |
+| SMALLINT         | UInt16          | Small indexes (output_index, input_index) |
+| BOOLEAN          | UInt8           | Flags (is_cellbase: 0 or 1)               |
+| TIMESTAMP        | DateTime        | Block timestamps (Unix epoch)             |
+| NUMERIC(20,0)    | UInt64          | Capacity (shannon precision)              |
+| NUMERIC(40,0)    | String          | Total difficulty (large number)           |
+| NULL             | Nullable(Type)  | Optional fields (type_script, data)       |
+
+**6. Field-Level Design Choices**
+
+**blocks table**:
+
+- `timestamp`: DateTime (automatic conversion from Unix epoch)
+- `dao`: FixedString(32) (contains C, AR, S, U encoded as 32 bytes)
+- `nonce`: FixedString(32) (proof-of-work nonce, 32 bytes)
+- `total_difficulty`: String (large number, exceeds UInt64 range)
+- `extension`, `miner_message`: Nullable(String) (optional hex data)
+
+**transactions table**:
+
+- `is_cellbase`: UInt8 (0 or 1, not Boolean for ClickHouse compatibility)
+- `timestamp`: DateTime (denormalized from blocks for query convenience)
+- `tx_size`, `cycles`: Nullable (may not be available for all transactions)
+
+**cells table**:
+
+- `lock_hash_type`, `type_hash_type`: UInt8 (0=data, 1=type, 2=data1)
+- `lock_args`, `type_args`: String (hex-encoded, variable length)
+- `data`: Nullable(String) (hex-encoded, up to 512 bytes for preview)
+- `type_*` fields: All Nullable (type script is optional)
+
+**cell_consumptions table**:
+
+- Minimal schema (only 5 fields)
+- No denormalized data (keep it lean for fast writes)
+- Consumption metadata: block, tx, index
+
+### Live Cells Query Patterns
+
+**Option 1: LEFT ANTI JOIN** (recommended for large result sets)
+
+```sql
+SELECT c.*
+FROM cells c
+LEFT ANTI JOIN cell_consumptions cc
+  ON c.tx_hash = cc.tx_hash AND c.output_index = cc.output_index
+WHERE c.created_at_block >= 0;
+```
+
+**Option 2: NOT IN subquery** (recommended for small result sets)
+
+```sql
+SELECT *
+FROM cells
+WHERE (tx_hash, output_index) NOT IN (
+  SELECT tx_hash, output_index FROM cell_consumptions
+);
+```
+
+**Option 3: NOT EXISTS** (recommended for single OutPoint lookup)
+
+```sql
+SELECT *
+FROM cells c
+WHERE c.tx_hash = unhex('...')
+  AND c.output_index = 0
+  AND NOT EXISTS (
+    SELECT 1 FROM cell_consumptions cc
+    WHERE cc.tx_hash = c.tx_hash AND cc.output_index = c.output_index
+  );
+```
+
+### Verification Results
+
+✅ **All success criteria met**:
+
+1. **Schema file created**: `migrations/clickhouse/001_core_tables.sql`
+2. **Syntax validation**: Executed successfully via `clickhouse-client --multiquery`
+3. **Tables created**: All 4 tables created in `ckbadger` database
+4. **Partitioning verified**: `intDiv(block_number, 5000000)` for all tables
+5. **Sort keys verified**: Correct ORDER BY for each table
+6. **Data types verified**: FixedString(32) for all hash fields
+
+**Table Creation Verification**:
+
+```
+blocks              MergeTree  PARTITION BY intDiv(number, 5000000)
+cell_consumptions   MergeTree  PARTITION BY intDiv(consumed_at_block, 5000000)
+cells               MergeTree  PARTITION BY intDiv(created_at_block, 5000000)
+transactions        MergeTree  PARTITION BY intDiv(block_number, 5000000)
+```
+
+**cells table schema confirmed**:
+
+- 15 fields total
+- 7 hash fields as FixedString(32)
+- 4 Nullable fields (type_script, data)
+- PRIMARY KEY: (created_at_block, tx_hash, output_index)
+- COMMENT: 'Cell creation events (outputs) - immutable insert-only'
+
+### Comparison with PostgreSQL Schema
+
+| Aspect               | PostgreSQL                      | ClickHouse                             |
+| -------------------- | ------------------------------- | -------------------------------------- |
+| **Cell lifecycle**   | Single table with status column | Two tables (cells + cell_consumptions) |
+| **Live cells query** | `WHERE status = 0`              | `LEFT ANTI JOIN cell_consumptions`     |
+| **Cell consumption** | `UPDATE cells SET status = 1`   | `INSERT INTO cell_consumptions`        |
+| **Hash storage**     | BYTEA (binary)                  | FixedString(32) (binary)               |
+| **Partitioning**     | RANGE (explicit partitions)     | MergeTree (automatic partitions)       |
+| **Indexes**          | B-tree indexes on hash fields   | ORDER BY (primary index)               |
+| **Capacity type**    | NUMERIC(20,0)                   | UInt64 (native integer)                |
+| **Timestamp type**   | TIMESTAMPTZ                     | DateTime (UTC)                         |
+| **Auto-increment**   | BIGSERIAL (id column)           | None (not needed)                      |
+
+### Schema Documentation
+
+**Comprehensive documentation included in SQL file**:
+
+1. **Design Principles** (lines 4-21): Immutable model, partitioning, performance targets
+2. **Table-level comments**: Access patterns, partition strategy, sort key rationale
+3. **Field-level comments**: Data types, domain semantics, encoding formats
+4. **Schema Design Notes** (lines 186-273):
+   - Immutable insert-only model explanation
+   - FixedString(32) benefits and requirements
+   - Partitioning strategy details
+   - Sort key optimization rationale
+   - Data type mappings
+   - Live cells query patterns (3 options with SQL examples)
+   - Compression expectations
+   - Performance benchmarks (from Phase 0)
+   - Migration mapping from PostgreSQL
+   - Future enhancement roadmap
+
+### Gotchas Avoided
+
+1. **No status column in cells table**: Avoided UPDATE semantics (ClickHouse anti-pattern)
+2. **Separate cell_consumptions table**: Enables immutable insert-only model
+3. **FixedString(32) for all hashes**: Consistent binary storage (no String types for hashes)
+4. **DateTime for timestamps**: Automatic conversion from Unix epoch (no manual conversion)
+5. **UInt8 for is_cellbase**: ClickHouse doesn't have native Boolean type
+6. **String for total_difficulty**: Exceeds UInt64 range (max ~18 quintillion)
+7. **Nullable for optional fields**: Explicit NULL handling (type*script, data, miner*\*)
+
+### Performance Expectations (from Phase 0 Benchmarks)
+
+| Metric                          | Target       | Confidence |
+| ------------------------------- | ------------ | ---------- |
+| Write throughput                | 450K+ rows/s | High       |
+| Single OutPoint query           | < 10ms (P95) | High       |
+| Batch OutPoint query (50 cells) | < 500ms      | High       |
+| Address balance query           | < 10ms       | Medium     |
+| JOIN query (tx inputs → cells)  | < 200ms      | Medium     |
+| Compression ratio               | 5-10x        | High       |
+
+### Next Steps
+
+Task 2.2 will create live_cells view or secondary indexes for common query patterns.
+
+### Pattern for Future Schema Design
+
+```sql
+-- ✅ Correct: Immutable insert-only model
+CREATE TABLE events (
+    event_id UInt64,
+    event_type String,
+    created_at DateTime
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(created_at)
+ORDER BY (created_at, event_id);
+
+-- ❌ Wrong: Mutable model with status column
+CREATE TABLE events (
+    event_id UInt64,
+    status UInt8,  -- Requires UPDATE operations
+    updated_at DateTime
+) ENGINE = MergeTree()
+ORDER BY event_id;
+```
+
+### Lessons Learned
+
+1. **Immutable insert-only is key**: ClickHouse excels at append-only workloads
+2. **Separate tables for lifecycle events**: cells (creation) + cell_consumptions (consumption)
+3. **FixedString(32) for all hashes**: Consistent binary storage, 10x performance
+4. **Partitioning by block number**: Aligns with query patterns (recent data access)
+5. **Sort keys match access patterns**: OutPoint lookup, block range queries
+6. **Comprehensive documentation**: SQL schema files are documentation-first artifacts
+7. **No auto-increment needed**: ClickHouse doesn't need surrogate keys
+8. **DateTime for timestamps**: Automatic conversion, no manual epoch handling
+
+### Technical Debt
+
+1. **No secondary indexes yet**: Will add in Task 2.2 for lock_script_hash, type_script_hash
+2. **No materialized views yet**: Will add in Task 2.2 for live_cells, address_balances
+3. **No aggregating tables yet**: Will add in Phase 2 for statistics (daily_stats, token_holders)
+4. **No ReplacingMergeTree**: May add in Phase 2 if deduplication needed
+
+### Evidence
+
+**Schema file**: `migrations/clickhouse/001_core_tables.sql` (273 lines)
+
+**Verification commands**:
+
+```bash
+# Execute schema
+cat migrations/clickhouse/001_core_tables.sql | docker exec -i ckbadger-clickhouse clickhouse-client --multiquery
+
+# Verify tables
+docker exec ckbadger-clickhouse clickhouse-client --query "SELECT name, engine FROM system.tables WHERE database = 'ckbadger' ORDER BY name"
+
+# Verify partitioning
+docker exec ckbadger-clickhouse clickhouse-client --query "SELECT name, partition_key, sorting_key FROM system.tables WHERE database = 'ckbadger' ORDER BY name FORMAT Vertical"
+
+# Verify cells schema
+docker exec ckbadger-clickhouse clickhouse-client --query "SHOW CREATE TABLE ckbadger.cells FORMAT Vertical"
+```
+
+---

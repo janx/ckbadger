@@ -368,7 +368,7 @@
 
 ### PHASE 2: Schema Design
 
-- [ ] 2.1. 核心表Schema设计
+- [x] 2.1. 核心表Schema设计
 
   **What to do**:
   - 设计blocks表 (MergeTree, ORDER BY number)
