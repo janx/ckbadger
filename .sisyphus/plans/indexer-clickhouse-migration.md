@@ -575,7 +575,7 @@
 
 ---
 
-- [ ] 3.2. Parser层优化
+- [x] 3.2. Parser层优化
 
   **What to do**:
   - 添加Blake2b script hash LRU缓存

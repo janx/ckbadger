@@ -1,11 +1,25 @@
+use std::num::NonZeroUsize;
+use std::sync::{Mutex, OnceLock};
+
 use ckb_hash::new_blake2b;
+use lru::LruCache;
 
 use crate::rpc::{parse_hex_to_bytes, Script};
+
+static SCRIPT_HASH_CACHE: OnceLock<Mutex<LruCache<Vec<u8>, Vec<u8>>>> = OnceLock::new();
+
+fn get_script_hash_cache() -> &'static Mutex<LruCache<Vec<u8>, Vec<u8>>> {
+    SCRIPT_HASH_CACHE.get_or_init(|| {
+        Mutex::new(LruCache::new(
+            NonZeroUsize::new(10_000).expect("cache capacity must be non-zero"),
+        ))
+    })
+}
 
 pub struct ScriptParser;
 
 impl ScriptParser {
-    /// Compute script hash using Molecule serialization.
+    /// Compute script hash using Molecule serialization with LRU caching.
     ///
     /// Script structure (Molecule table):
     /// ```text
@@ -26,11 +40,26 @@ impl ScriptParser {
 
         let encoded = Self::molecule_encode_script(&code_hash, hash_type, &args);
 
+        {
+            let cache = get_script_hash_cache();
+            let mut cache_guard = cache.lock().unwrap();
+            if let Some(cached_hash) = cache_guard.get(&encoded) {
+                return cached_hash.clone();
+            }
+        }
+
         let mut hasher = new_blake2b();
         hasher.update(&encoded);
 
         let mut hash = vec![0u8; 32];
         hasher.finalize(&mut hash);
+
+        {
+            let cache = get_script_hash_cache();
+            let mut cache_guard = cache.lock().unwrap();
+            cache_guard.put(encoded, hash.clone());
+        }
+
         hash
     }
 
@@ -121,9 +150,43 @@ mod tests {
         let args = vec![0u8; 32];
         let encoded = ScriptParser::molecule_encode_script(&code_hash, 1, &args);
 
-        // Header: 4 (total) + 4*3 (offsets) = 16 bytes
-        // Body: 32 (code_hash) + 1 (hash_type) + 4 (args len) + 32 (args) = 69 bytes
-        // Total: 85 bytes
         assert_eq!(encoded.len(), 85);
+    }
+
+    #[test]
+    fn test_script_hash_cache_hit() {
+        let script = Script {
+            code_hash: "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
+                .to_string(),
+            hash_type: "type".to_string(),
+            args: "0x1234567890abcdef".to_string(),
+        };
+
+        let hash1 = ScriptParser::compute_script_hash(&script);
+        let hash2 = ScriptParser::compute_script_hash(&script);
+
+        assert_eq!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_script_hash_cache_different_scripts() {
+        let script1 = Script {
+            code_hash: "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
+                .to_string(),
+            hash_type: "type".to_string(),
+            args: "0x1234".to_string(),
+        };
+
+        let script2 = Script {
+            code_hash: "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
+                .to_string(),
+            hash_type: "type".to_string(),
+            args: "0x5678".to_string(),
+        };
+
+        let hash1 = ScriptParser::compute_script_hash(&script1);
+        let hash2 = ScriptParser::compute_script_hash(&script2);
+
+        assert_ne!(hash1, hash2);
     }
 }
