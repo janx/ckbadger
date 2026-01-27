@@ -6,9 +6,11 @@ use axum::{
 use ckbadger_common::dao::{
     is_genesis_special_burn_cell, GENESIS_SPECIAL_BURN_CELL_VIRTUAL_OCCUPIED,
 };
+use clickhouse::Row;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+use crate::clickhouse::{hex_hash, unhex_hash};
 use crate::cycles::{CyclesStatus, CyclesStatusResponse};
 use crate::response::{
     decode_cursor, encode_cursor, ok, ApiError, ApiResult, CursorPaginatedResponse,
@@ -65,9 +67,181 @@ pub struct TransactionResponse {
     pub timestamp: String,
 }
 
+#[derive(Debug, Row, Deserialize)]
+struct TransactionRowClickHouse {
+    hash: String,
+    block_number: u64,
+    block_hash: String,
+    tx_index: u32,
+    inputs_count: u16,
+    outputs_count: u16,
+    fee: u64,
+    tx_size: Option<u32>,
+    cycles: Option<u64>,
+    is_cellbase: u8,
+    timestamp: u32,
+}
+
 async fn list_transactions(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListParams>,
+) -> ApiResult<CursorPaginatedResponse<TransactionResponse>> {
+    if let Some(ch_client) = &state.clickhouse_client {
+        list_transactions_clickhouse(ch_client, &state, params).await
+    } else {
+        list_transactions_postgres(&state, params).await
+    }
+}
+
+async fn list_transactions_clickhouse(
+    ch_client: &crate::clickhouse::ClickHouseClient,
+    state: &Arc<AppState>,
+    params: ListParams,
+) -> ApiResult<CursorPaginatedResponse<TransactionResponse>> {
+    let limit = params.limit.clamp(1, 100);
+
+    // Get total count from PostgreSQL sync_status
+    let total: i64 = if let Some(block_number) = params.block_number {
+        let row: Option<(i32,)> =
+            sqlx::query_as("SELECT transactions_count FROM blocks WHERE number = $1")
+                .bind(block_number)
+                .fetch_optional(&state.pool)
+                .await
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+        row.map(|r| r.0 as i64).unwrap_or(0)
+    } else {
+        let row: (i64,) = sqlx::query_as("SELECT total_transactions FROM sync_status WHERE id = 1")
+            .fetch_one(&state.pool)
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        row.0
+    };
+
+    let query = if let Some(block_number) = params.block_number {
+        // Filter by block_number, order by tx_index ASC
+        let cursor = params.cursor.as_ref().and_then(|c| decode_cursor(c));
+        let (_cursor_block, cursor_index) = cursor.unwrap_or((i64::MAX, i32::MAX));
+
+        format!(
+            "SELECT 
+                {} as hash,
+                t.block_number,
+                {} as block_hash,
+                t.tx_index,
+                t.inputs_count,
+                t.outputs_count,
+                t.fee,
+                t.tx_size,
+                t.cycles,
+                t.is_cellbase,
+                toUnixTimestamp(t.timestamp) as timestamp
+            FROM transactions t
+            JOIN blocks b ON t.block_number = b.number
+            WHERE t.block_number = {} AND t.tx_index < {}
+            ORDER BY t.tx_index ASC
+            LIMIT {}",
+            hex_hash("t.hash"),
+            hex_hash("b.hash"),
+            block_number,
+            cursor_index,
+            limit + 1
+        )
+    } else if let Some(ref cursor_str) = params.cursor {
+        // Global list with cursor
+        let (cursor_block, cursor_index) = decode_cursor(cursor_str)
+            .ok_or_else(|| ApiError::bad_request("Invalid cursor format"))?;
+
+        format!(
+            "SELECT 
+                {} as hash,
+                t.block_number,
+                {} as block_hash,
+                t.tx_index,
+                t.inputs_count,
+                t.outputs_count,
+                t.fee,
+                t.tx_size,
+                t.cycles,
+                t.is_cellbase,
+                toUnixTimestamp(t.timestamp) as timestamp
+            FROM transactions t
+            JOIN blocks b ON t.block_number = b.number
+            WHERE (t.block_number, t.tx_index) < ({}, {})
+            ORDER BY t.block_number DESC, t.tx_index DESC
+            LIMIT {}",
+            hex_hash("t.hash"),
+            hex_hash("b.hash"),
+            cursor_block,
+            cursor_index,
+            limit + 1
+        )
+    } else {
+        // Global list without cursor
+        format!(
+            "SELECT 
+                {} as hash,
+                t.block_number,
+                {} as block_hash,
+                t.tx_index,
+                t.inputs_count,
+                t.outputs_count,
+                t.fee,
+                t.tx_size,
+                t.cycles,
+                t.is_cellbase,
+                toUnixTimestamp(t.timestamp) as timestamp
+            FROM transactions t
+            JOIN blocks b ON t.block_number = b.number
+            ORDER BY t.block_number DESC, t.tx_index DESC
+            LIMIT {}",
+            hex_hash("t.hash"),
+            hex_hash("b.hash"),
+            limit + 1
+        )
+    };
+
+    let rows = ch_client
+        .client()
+        .query(&query)
+        .fetch_all::<TransactionRowClickHouse>()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let has_more = rows.len() as i64 > limit;
+    let rows: Vec<_> = rows.into_iter().take(limit as usize).collect();
+
+    let next_cursor = if has_more {
+        rows.last()
+            .map(|r| encode_cursor(r.block_number as i64, r.tx_index as i32))
+    } else {
+        None
+    };
+
+    let txs: Vec<TransactionResponse> = rows
+        .into_iter()
+        .map(|r| TransactionResponse {
+            hash: format!("0x{}", r.hash),
+            block_number: r.block_number as i64,
+            block_hash: format!("0x{}", r.block_hash),
+            index: r.tx_index as i32,
+            inputs_count: r.inputs_count as i32,
+            outputs_count: r.outputs_count as i32,
+            fee: r.fee.to_string(),
+            tx_size: r.tx_size.map(|s| s as i32),
+            cycles: r.cycles.map(|c| c as i64),
+            is_cellbase: r.is_cellbase != 0,
+            timestamp: chrono::DateTime::from_timestamp(r.timestamp as i64, 0)
+                .unwrap_or_default()
+                .to_rfc3339(),
+        })
+        .collect();
+
+    ok(CursorPaginatedResponse::new(txs, total, limit, next_cursor))
+}
+
+async fn list_transactions_postgres(
+    state: &Arc<AppState>,
+    params: ListParams,
 ) -> ApiResult<CursorPaginatedResponse<TransactionResponse>> {
     let limit = params.limit.clamp(1, 100);
 
@@ -195,6 +369,120 @@ async fn list_transactions(
 async fn get_transaction(
     State(state): State<Arc<AppState>>,
     Path(hash): Path<String>,
+) -> ApiResult<TransactionResponse> {
+    if let Some(ch_client) = &state.clickhouse_client {
+        get_transaction_clickhouse(ch_client, &state, hash).await
+    } else {
+        get_transaction_postgres(&state, hash).await
+    }
+}
+
+#[derive(Debug, Row, Deserialize)]
+struct TransactionDetailRowClickHouse {
+    hash: String,
+    block_number: u64,
+    block_hash: String,
+    tx_index: u32,
+    inputs_count: u16,
+    outputs_count: u16,
+    total_input_capacity: u64,
+    total_output_capacity: u64,
+    tx_size: Option<u32>,
+    cycles: Option<u64>,
+    is_cellbase: u8,
+    timestamp: u32,
+}
+
+async fn get_transaction_clickhouse(
+    ch_client: &crate::clickhouse::ClickHouseClient,
+    state: &Arc<AppState>,
+    hash: String,
+) -> ApiResult<TransactionResponse> {
+    let _hash_bytes = unhex_hash(&hash)?;
+
+    let query = format!(
+        "SELECT 
+            {} as hash,
+            t.block_number,
+            {} as block_hash,
+            t.tx_index,
+            t.inputs_count,
+            t.outputs_count,
+            t.total_input_capacity,
+            t.total_output_capacity,
+            t.tx_size,
+            t.cycles,
+            t.is_cellbase,
+            toUnixTimestamp(t.timestamp) as timestamp
+        FROM transactions t
+        JOIN blocks b ON t.block_number = b.number
+        WHERE t.hash = unhex('{}')
+        LIMIT 1",
+        hex_hash("t.hash"),
+        hex_hash("b.hash"),
+        hash.strip_prefix("0x").unwrap_or(&hash)
+    );
+
+    let row = ch_client
+        .client()
+        .query(&query)
+        .fetch_optional::<TransactionDetailRowClickHouse>()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    match row {
+        Some(r) => {
+            let input: u128 = r.total_input_capacity as u128;
+            let output: u128 = r.total_output_capacity as u128;
+
+            let fee = if output > input {
+                let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap_or(&hash))
+                    .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
+
+                let dao_compensation: u128 = sqlx::query_as::<_, (Option<String>,)>(
+                    "SELECT SUM(compensation::numeric)::text FROM dao_deposits WHERE withdraw_tx = $1 AND status = 2",
+                )
+                .bind(&hash_bytes)
+                .fetch_one(&state.pool)
+                .await
+                .map_err(|e| ApiError::internal(e.to_string()))?
+                .0
+                .and_then(|s| s.parse::<u128>().ok())
+                .unwrap_or(0);
+
+                let effective_input = input + dao_compensation;
+                if effective_input >= output {
+                    (effective_input - output).to_string()
+                } else {
+                    "0".to_string()
+                }
+            } else {
+                (input - output).to_string()
+            };
+
+            ok(TransactionResponse {
+                hash: format!("0x{}", r.hash),
+                block_number: r.block_number as i64,
+                block_hash: format!("0x{}", r.block_hash),
+                index: r.tx_index as i32,
+                inputs_count: r.inputs_count as i32,
+                outputs_count: r.outputs_count as i32,
+                fee,
+                tx_size: r.tx_size.map(|s| s as i32),
+                cycles: r.cycles.map(|c| c as i64),
+                is_cellbase: r.is_cellbase != 0,
+                timestamp: chrono::DateTime::from_timestamp(r.timestamp as i64, 0)
+                    .unwrap_or_default()
+                    .to_rfc3339(),
+            })
+        }
+        None => Err(ApiError::not_found("Transaction not found")),
+    }
+}
+
+async fn get_transaction_postgres(
+    state: &Arc<AppState>,
+    hash: String,
 ) -> ApiResult<TransactionResponse> {
     let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap_or(&hash))
         .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
@@ -481,6 +769,13 @@ async fn fetch_tx_size_from_rpc(rpc_url: &str, tx_hash: &str) -> Option<i32> {
 async fn get_transaction_detail(
     State(state): State<Arc<AppState>>,
     Path(hash): Path<String>,
+) -> ApiResult<TransactionDetailResponse> {
+    get_transaction_detail_postgres(&state, hash).await
+}
+
+async fn get_transaction_detail_postgres(
+    state: &Arc<AppState>,
+    hash: String,
 ) -> ApiResult<TransactionDetailResponse> {
     let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap_or(&hash))
         .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
@@ -779,6 +1074,13 @@ async fn get_cell_deps(
     State(state): State<Arc<AppState>>,
     Path(hash): Path<String>,
 ) -> ApiResult<Vec<CellDepResponse>> {
+    get_cell_deps_postgres(&state, hash).await
+}
+
+async fn get_cell_deps_postgres(
+    state: &Arc<AppState>,
+    hash: String,
+) -> ApiResult<Vec<CellDepResponse>> {
     let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap_or(&hash))
         .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
 
@@ -815,6 +1117,13 @@ async fn get_cell_deps(
 async fn get_cycles_status(
     State(state): State<Arc<AppState>>,
     Path(hash): Path<String>,
+) -> ApiResult<CyclesStatusResponse> {
+    get_cycles_status_postgres(&state, hash).await
+}
+
+async fn get_cycles_status_postgres(
+    state: &Arc<AppState>,
+    hash: String,
 ) -> ApiResult<CyclesStatusResponse> {
     let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap_or(&hash))
         .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
@@ -886,6 +1195,13 @@ async fn get_cycles_status(
 async fn trigger_cycles_calculation(
     State(state): State<Arc<AppState>>,
     Path(hash): Path<String>,
+) -> ApiResult<CyclesStatusResponse> {
+    trigger_cycles_calculation_postgres(&state, hash).await
+}
+
+async fn trigger_cycles_calculation_postgres(
+    state: &Arc<AppState>,
+    hash: String,
 ) -> ApiResult<CyclesStatusResponse> {
     let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap_or(&hash))
         .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
@@ -983,6 +1299,13 @@ impl Default for CommitmentWindow {
 async fn get_transaction_lifecycle(
     State(state): State<Arc<AppState>>,
     Path(hash): Path<String>,
+) -> ApiResult<TransactionLifecycleResponse> {
+    get_transaction_lifecycle_postgres(&state, hash).await
+}
+
+async fn get_transaction_lifecycle_postgres(
+    state: &Arc<AppState>,
+    hash: String,
 ) -> ApiResult<TransactionLifecycleResponse> {
     let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap_or(&hash))
         .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
@@ -1137,6 +1460,13 @@ pub struct TxAssetTransferResponse {
 async fn get_transaction_asset_transfers(
     State(state): State<Arc<AppState>>,
     Path(hash): Path<String>,
+) -> ApiResult<Vec<TxAssetTransferResponse>> {
+    get_transaction_asset_transfers_postgres(&state, hash).await
+}
+
+async fn get_transaction_asset_transfers_postgres(
+    state: &Arc<AppState>,
+    hash: String,
 ) -> ApiResult<Vec<TxAssetTransferResponse>> {
     let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap_or(&hash))
         .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
