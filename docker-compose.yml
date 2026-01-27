@@ -42,6 +42,33 @@ services:
       timeout: 5s
       retries: 5
 
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: ckbadger-clickhouse
+    ports:
+      - '8123:8123' # HTTP interface
+      - '9000:9000' # Native protocol
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - ./migrations/clickhouse:/docker-entrypoint-initdb.d:ro
+    environment:
+      CLICKHOUSE_DB: ckbadger_test
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-ckbadger}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-changeme}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ['CMD', 'clickhouse-client', '--query', 'SELECT 1']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    profiles:
+      - benchmark
+
   ckb-node:
     image: nervos/ckb:latest
     container_name: ckbadger-ckb-node
@@ -113,4 +140,5 @@ services:
 volumes:
   postgres-data:
   redis-data:
+  clickhouse-data:
   ckb-data:
