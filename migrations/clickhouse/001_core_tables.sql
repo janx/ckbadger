@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS blocks (
     -- Block header fields
     version UInt32,                     -- Block version
     compact_target UInt64,              -- Difficulty target
-    nonce FixedString(32),              -- Proof-of-work nonce (32 bytes)
+    nonce FixedString(16),              -- Proof-of-work nonce (16 bytes / 128-bit)
     
     -- Merkle roots
     transactions_root FixedString(32),  -- Transactions merkle root
@@ -184,6 +184,54 @@ PRIMARY KEY (consumed_at_block, tx_hash, output_index)
 COMMENT 'Cell consumption events (inputs) - immutable insert-only';
 
 -- ============================================================================
+-- TRANSACTION_INPUTS TABLE
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS transaction_inputs (
+    tx_hash FixedString(32),
+    tx_block_number UInt64,
+    input_index UInt16,
+    previous_tx_hash FixedString(32),
+    previous_output_index UInt16,
+    since UInt64
+) ENGINE = MergeTree()
+PARTITION BY intDiv(tx_block_number, 5000000)
+ORDER BY (tx_block_number, tx_hash, input_index)
+PRIMARY KEY (tx_block_number, tx_hash, input_index)
+COMMENT 'Transaction inputs (previous OutPoints)';
+
+-- ============================================================================
+-- TRANSACTION_CELL_DEPS TABLE
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS transaction_cell_deps (
+    tx_hash FixedString(32),
+    tx_block_number UInt64,
+    dep_index UInt16,
+    dep_tx_hash FixedString(32),
+    dep_output_index UInt16,
+    dep_type String
+) ENGINE = MergeTree()
+PARTITION BY intDiv(tx_block_number, 5000000)
+ORDER BY (tx_block_number, tx_hash, dep_index)
+PRIMARY KEY (tx_block_number, tx_hash, dep_index)
+COMMENT 'Transaction cell dependencies';
+
+-- ============================================================================
+-- ADDRESS_TRANSACTIONS TABLE
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS address_transactions (
+    lock_hash FixedString(32),
+    tx_hash FixedString(32),
+    block_number UInt64,
+    tx_type Int8,
+    balance_change Int64,
+    timestamp UInt32
+) ENGINE = MergeTree()
+PARTITION BY intDiv(block_number, 5000000)
+ORDER BY (lock_hash, block_number, tx_hash)
+PRIMARY KEY (lock_hash, block_number, tx_hash)
+COMMENT 'Address transaction history';
+
+-- ============================================================================
 -- SCHEMA DESIGN NOTES
 -- ============================================================================
 --
@@ -278,7 +326,9 @@ CREATE TABLE IF NOT EXISTS sync_status (
     id UInt8,                           -- Always 1 (single row)
     tip_block_number UInt64,            -- Latest synced block number
     tip_block_hash FixedString(32),     -- Latest synced block hash (binary)
-    updated_at DateTime DEFAULT now()  -- Last update timestamp
+    sync_started_at Nullable(DateTime), -- When sync session started
+    sync_started_block Nullable(UInt64),-- Block number when sync started
+    updated_at DateTime DEFAULT now()   -- Last update timestamp
 ) ENGINE = ReplacingMergeTree(updated_at)
 ORDER BY id
 PRIMARY KEY (id)
@@ -293,7 +343,7 @@ COMMENT 'Indexer synchronization status';
 CREATE TABLE IF NOT EXISTS block_proposals (
     block_number UInt64,                -- Block height
     block_hash FixedString(32),         -- Block hash
-    proposal_hash FixedString(32),      -- Proposed transaction hash
+    proposal_hash FixedString(10),      -- ProposalShortId (10 bytes, not full tx hash)
     proposal_index UInt16               -- Index within proposals array
 ) ENGINE = MergeTree()
 PARTITION BY intDiv(block_number, 5000000)
