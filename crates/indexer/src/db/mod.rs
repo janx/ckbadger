@@ -1,3 +1,4 @@
+pub mod copy_pool;
 mod repository;
 mod writer;
 
