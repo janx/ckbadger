@@ -202,7 +202,7 @@ let row = state.clickhouse.client()
 
 ### Phase 4: Migrate assets.rs (24 errors - most complex)
 
-- [ ] 4.1. Migrate fetch_assets function - tokens query
+- [x] 4.1. Migrate fetch_assets function - tokens query
 
   **What to do**:
   - Convert tokens COUNT and listing queries to ClickHouse
@@ -212,7 +212,7 @@ let row = state.clickhouse.client()
 
 ---
 
-- [ ] 4.2. Migrate fetch_assets function - spore clusters query
+- [x] 4.2. Migrate fetch_assets function - spore clusters query
 
   **What to do**:
   - Convert spore_clusters COUNT and listing queries to ClickHouse
@@ -221,7 +221,7 @@ let row = state.clickhouse.client()
 
 ---
 
-- [ ] 4.3. Migrate fetch_assets function - mnft classes query
+- [x] 4.3. Migrate fetch_assets function - mnft classes query
 
   **What to do**:
   - Convert mnft_classes COUNT and listing queries to ClickHouse

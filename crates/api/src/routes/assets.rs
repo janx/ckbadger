@@ -162,6 +162,55 @@ struct AssetRow {
     cluster_name: Option<String>,
 }
 
+#[derive(clickhouse::Row, serde::Deserialize)]
+struct CountRow {
+    count: i64,
+}
+
+#[derive(clickhouse::Row, serde::Deserialize)]
+struct TokenRowData {
+    id: i64,
+    type_script_hash: Vec<u8>,
+    standard: String,
+    name: Option<String>,
+    symbol: Option<String>,
+    icon_url: Option<String>,
+    published: bool,
+    famous: bool,
+    tags: Option<Vec<String>>,
+    holders_count: i32,
+    transfers_count: i64,
+    transfers_24h: i64,
+    decimals: i16,
+    total_supply: String,
+}
+
+#[derive(clickhouse::Row, serde::Deserialize)]
+struct ClusterRowData {
+    id: i64,
+    cluster_id: Vec<u8>,
+    name: Option<String>,
+    description: Option<String>,
+    spores_count: i32,
+    holders_count: i64,
+    transfers_count: i64,
+    transfers_24h: i64,
+}
+
+#[derive(clickhouse::Row, serde::Deserialize)]
+struct MnftClassRowData {
+    id: i64,
+    class_id: Vec<u8>,
+    issuer_id: Vec<u8>,
+    name: Option<String>,
+    description: Option<String>,
+    total: i32,
+    issued: i32,
+    holders_count: i64,
+    transfers_count: i64,
+    transfers_24h: i64,
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn fetch_assets(
     state: &Arc<AppState>,
@@ -175,334 +224,267 @@ async fn fetch_assets(
 ) -> Result<(i64, Vec<AssetRow>), (StatusCode, Json<ApiError>)> {
     let token_count: (i64,) = match (filter_type, search_pattern) {
         (Some("nft") | Some("dob"), _) => (0,),
-        (_, Some(pattern)) => sqlx::query_as(
-            "SELECT COUNT(*) FROM tokens WHERE LOWER(name) LIKE $1 OR LOWER(symbol) LIKE $1",
-        )
-        .bind(pattern)
-        .fetch_one(&state.pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?,
-        _ => sqlx::query_as("SELECT COUNT(*) FROM tokens")
-            .fetch_one(&state.pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?,
+        (_, Some(pattern)) => {
+            let query = format!(
+                "SELECT COUNT(*) as count FROM tokens WHERE lower(name) LIKE '{}' OR lower(symbol) LIKE '{}'",
+                pattern, pattern
+            );
+            let count_row = state.clickhouse.client()
+                .query(&query)
+                .fetch_one::<CountRow>()
+                .await
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+            (count_row.count,)
+        }
+        _ => {
+            let count_row = state.clickhouse.client()
+                .query("SELECT COUNT(*) as count FROM tokens")
+                .fetch_one::<CountRow>()
+                .await
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+            (count_row.count,)
+        }
     };
 
     let dob_count: (i64,) = match (filter_type, search_pattern) {
         (Some("token") | Some("nft"), _) => (0,),
         (_, Some(pattern)) => {
-            sqlx::query_as(r#"SELECT COUNT(*) FROM spore_clusters WHERE LOWER(name) LIKE $1"#)
-                .bind(pattern)
-                .fetch_one(&state.pool)
+            let query = format!(
+                "SELECT COUNT(*) as count FROM spore_clusters WHERE lower(name) LIKE '{}'",
+                pattern
+            );
+            let count_row = state.clickhouse.client()
+                .query(&query)
+                .fetch_one::<CountRow>()
                 .await
-                .map_err(|e| ApiError::internal(e.to_string()))?
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+            (count_row.count,)
         }
-        _ => sqlx::query_as("SELECT COUNT(*) FROM spore_clusters")
-            .fetch_one(&state.pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?,
+        _ => {
+            let count_row = state.clickhouse.client()
+                .query("SELECT COUNT(*) as count FROM spore_clusters")
+                .fetch_one::<CountRow>()
+                .await
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+            (count_row.count,)
+        }
     };
 
     let nft_count: (i64,) = match (filter_type, search_pattern) {
         (Some("token") | Some("dob"), _) => (0,),
         (_, Some(pattern)) => {
-            sqlx::query_as(r#"SELECT COUNT(*) FROM mnft_classes WHERE LOWER(name) LIKE $1"#)
-                .bind(pattern)
-                .fetch_one(&state.pool)
+            let query = format!(
+                "SELECT COUNT(*) as count FROM mnft_classes WHERE lower(name) LIKE '{}'",
+                pattern
+            );
+            let count_row = state.clickhouse.client()
+                .query(&query)
+                .fetch_one::<CountRow>()
                 .await
-                .map_err(|e| ApiError::internal(e.to_string()))?
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+            (count_row.count,)
         }
-        _ => sqlx::query_as("SELECT COUNT(*) FROM mnft_classes")
-            .fetch_one(&state.pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?,
+        _ => {
+            let count_row = state.clickhouse.client()
+                .query("SELECT COUNT(*) as count FROM mnft_classes")
+                .fetch_one::<CountRow>()
+                .await
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+            (count_row.count,)
+        }
     };
 
     let total = token_count.0 + dob_count.0 + nft_count.0;
 
-    type TokenRow = (
-        i64,
-        Vec<u8>,
-        String,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        bool,
-        bool,
-        Option<Vec<String>>,
-        i32,
-        i64,
-        i64,
-        i16,
-        String,
-    );
-
-    let tokens: Vec<TokenRow> = if matches!(filter_type, Some("nft") | Some("dob")) {
+    let tokens: Vec<TokenRowData> = if matches!(filter_type, Some("nft") | Some("dob")) {
         vec![]
     } else if let Some(pattern) = search_pattern {
-        let query_str = r#"
-            SELECT id, type_script_hash, standard, name, symbol, icon_url,
-                   COALESCE(published, false) AS published, COALESCE(famous, false) AS famous,
-                   tags, holders_count, transfers_count, transfers_24h,
-                   decimals, total_supply::text
-            FROM tokens
-            WHERE (transfers_24h, holders_count, id) < ($1, $2, $3)
-              AND (LOWER(name) LIKE $4 OR LOWER(symbol) LIKE $4)
-            ORDER BY transfers_24h DESC, holders_count DESC, id DESC
-            LIMIT $5
-        "#;
-        sqlx::query_as::<_, TokenRow>(query_str)
-            .bind(cursor_24h)
-            .bind(cursor_holders)
-            .bind(cursor_id)
-            .bind(pattern)
-            .bind(limit + 1)
-            .fetch_all(&state.pool)
+        let query = format!(
+            "SELECT id, type_script_hash, standard, name, symbol, icon_url, \
+             published, famous, tags, holders_count, transfers_count, transfers_24h, \
+             decimals, total_supply \
+             FROM tokens \
+             WHERE (transfers_24h, holders_count, id) < ({}, {}, {}) \
+             AND (lower(name) LIKE '{}' OR lower(symbol) LIKE '{}') \
+             ORDER BY transfers_24h DESC, holders_count DESC, id DESC \
+             LIMIT {}",
+            cursor_24h, cursor_holders, cursor_id, pattern, pattern, limit + 1
+        );
+        state.clickhouse.client()
+            .query(&query)
+            .fetch_all::<TokenRowData>()
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?
     } else {
-        let query_str = r#"
-            SELECT id, type_script_hash, standard, name, symbol, icon_url,
-                   COALESCE(published, false) AS published, COALESCE(famous, false) AS famous,
-                   tags, holders_count, transfers_count, transfers_24h,
-                   decimals, total_supply::text
-            FROM tokens
-            WHERE (transfers_24h, holders_count, id) < ($1, $2, $3)
-            ORDER BY transfers_24h DESC, holders_count DESC, id DESC
-            LIMIT $4
-        "#;
-        sqlx::query_as::<_, TokenRow>(query_str)
-            .bind(cursor_24h)
-            .bind(cursor_holders)
-            .bind(cursor_id)
-            .bind(limit + 1)
-            .fetch_all(&state.pool)
+        let query = format!(
+            "SELECT id, type_script_hash, standard, name, symbol, icon_url, \
+             published, famous, tags, holders_count, transfers_count, transfers_24h, \
+             decimals, total_supply \
+             FROM tokens \
+             WHERE (transfers_24h, holders_count, id) < ({}, {}, {}) \
+             ORDER BY transfers_24h DESC, holders_count DESC, id DESC \
+             LIMIT {}",
+            cursor_24h, cursor_holders, cursor_id, limit + 1
+        );
+        state.clickhouse.client()
+            .query(&query)
+            .fetch_all::<TokenRowData>()
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?
     };
 
-    // ClusterRow: (id, cluster_id, name, description, spores_count, holders_count, transfers_count, transfers_24h)
-    type ClusterRow = (
-        i64,
-        Vec<u8>,
-        Option<String>,
-        Option<String>,
-        i32,
-        i64,
-        i64,
-        i64,
-    );
-
-    let clusters: Vec<ClusterRow> = if matches!(filter_type, Some("token") | Some("nft")) {
+    let clusters: Vec<ClusterRowData> = if matches!(filter_type, Some("token") | Some("nft")) {
         vec![]
     } else if let Some(pattern) = search_pattern {
-        let query_str = r#"
-            SELECT 
-                sc.id, 
-                sc.cluster_id, 
-                sc.name, 
-                sc.description, 
-                sc.spores_count,
-                COALESCE(h.holders_count, 0) AS holders_count,
-                COALESCE(t.transfers_count, 0) AS transfers_count,
-                COALESCE(t.transfers_24h, 0) AS transfers_24h
-            FROM spore_clusters sc
-            LEFT JOIN (
-                SELECT cluster_id, COUNT(DISTINCT owner_lock_hash) AS holders_count
-                FROM spore_cells
-                WHERE cluster_id IS NOT NULL AND is_live = TRUE
-                GROUP BY cluster_id
-            ) h ON h.cluster_id = sc.cluster_id
-            LEFT JOIN (
-                SELECT 
-                    cluster_id,
-                    COUNT(*) AS transfers_count,
-                    COUNT(*) FILTER (WHERE timestamp > NOW() - INTERVAL '24 hours') AS transfers_24h
-                FROM dob_transfers
-                WHERE cluster_id IS NOT NULL
-                GROUP BY cluster_id
-            ) t ON t.cluster_id = sc.cluster_id
-            WHERE sc.id < $1 AND LOWER(sc.name) LIKE $2
-            ORDER BY COALESCE(t.transfers_24h, 0) DESC, COALESCE(h.holders_count, 0) DESC, sc.id DESC
-            LIMIT $3
-        "#;
-        sqlx::query_as::<_, ClusterRow>(query_str)
-            .bind(cursor_id)
-            .bind(pattern)
-            .bind(limit + 1)
-            .fetch_all(&state.pool)
+        let query = format!(
+            "SELECT \
+             sc.id, sc.cluster_id, sc.name, sc.description, sc.spores_count, \
+             COALESCE(h.holders_count, 0) AS holders_count, \
+             COALESCE(t.transfers_count, 0) AS transfers_count, \
+             COALESCE(t.transfers_24h, 0) AS transfers_24h \
+             FROM spore_clusters sc \
+             LEFT JOIN ( \
+                 SELECT cluster_id, COUNT(DISTINCT owner_lock_hash) AS holders_count \
+                 FROM spore_cells \
+                 WHERE cluster_id IS NOT NULL AND is_live = true \
+                 GROUP BY cluster_id \
+             ) h ON h.cluster_id = sc.cluster_id \
+             LEFT JOIN ( \
+                 SELECT cluster_id, COUNT(*) AS transfers_count, \
+                 COUNT(IF(timestamp > now() - INTERVAL 24 HOUR, 1, NULL)) AS transfers_24h \
+                 FROM dob_transfers \
+                 WHERE cluster_id IS NOT NULL \
+                 GROUP BY cluster_id \
+             ) t ON t.cluster_id = sc.cluster_id \
+             WHERE sc.id < {} AND lower(sc.name) LIKE '{}' \
+             ORDER BY COALESCE(t.transfers_24h, 0) DESC, COALESCE(h.holders_count, 0) DESC, sc.id DESC \
+             LIMIT {}",
+            cursor_id, pattern, limit + 1
+        );
+        state.clickhouse.client()
+            .query(&query)
+            .fetch_all::<ClusterRowData>()
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?
     } else {
-        let query_str = r#"
-            SELECT 
-                sc.id, 
-                sc.cluster_id, 
-                sc.name, 
-                sc.description, 
-                sc.spores_count,
-                COALESCE(h.holders_count, 0) AS holders_count,
-                COALESCE(t.transfers_count, 0) AS transfers_count,
-                COALESCE(t.transfers_24h, 0) AS transfers_24h
-            FROM spore_clusters sc
-            LEFT JOIN (
-                SELECT cluster_id, COUNT(DISTINCT owner_lock_hash) AS holders_count
-                FROM spore_cells
-                WHERE cluster_id IS NOT NULL AND is_live = TRUE
-                GROUP BY cluster_id
-            ) h ON h.cluster_id = sc.cluster_id
-            LEFT JOIN (
-                SELECT 
-                    cluster_id,
-                    COUNT(*) AS transfers_count,
-                    COUNT(*) FILTER (WHERE timestamp > NOW() - INTERVAL '24 hours') AS transfers_24h
-                FROM dob_transfers
-                WHERE cluster_id IS NOT NULL
-                GROUP BY cluster_id
-            ) t ON t.cluster_id = sc.cluster_id
-            WHERE sc.id < $1
-            ORDER BY COALESCE(t.transfers_24h, 0) DESC, COALESCE(h.holders_count, 0) DESC, sc.id DESC
-            LIMIT $2
-        "#;
-        sqlx::query_as::<_, ClusterRow>(query_str)
-            .bind(cursor_id)
-            .bind(limit + 1)
-            .fetch_all(&state.pool)
+        let query = format!(
+            "SELECT \
+             sc.id, sc.cluster_id, sc.name, sc.description, sc.spores_count, \
+             COALESCE(h.holders_count, 0) AS holders_count, \
+             COALESCE(t.transfers_count, 0) AS transfers_count, \
+             COALESCE(t.transfers_24h, 0) AS transfers_24h \
+             FROM spore_clusters sc \
+             LEFT JOIN ( \
+                 SELECT cluster_id, COUNT(DISTINCT owner_lock_hash) AS holders_count \
+                 FROM spore_cells \
+                 WHERE cluster_id IS NOT NULL AND is_live = true \
+                 GROUP BY cluster_id \
+             ) h ON h.cluster_id = sc.cluster_id \
+             LEFT JOIN ( \
+                 SELECT cluster_id, COUNT(*) AS transfers_count, \
+                 COUNT(IF(timestamp > now() - INTERVAL 24 HOUR, 1, NULL)) AS transfers_24h \
+                 FROM dob_transfers \
+                 WHERE cluster_id IS NOT NULL \
+                 GROUP BY cluster_id \
+             ) t ON t.cluster_id = sc.cluster_id \
+             WHERE sc.id < {} \
+             ORDER BY COALESCE(t.transfers_24h, 0) DESC, COALESCE(h.holders_count, 0) DESC, sc.id DESC \
+             LIMIT {}",
+            cursor_id, limit + 1
+        );
+        state.clickhouse.client()
+            .query(&query)
+            .fetch_all::<ClusterRowData>()
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?
     };
 
-    // MnftClassRow: (id, class_id, issuer_id, name, description, total, issued, holders_count, transfers_count, transfers_24h)
-    type MnftClassRow = (
-        i64,
-        Vec<u8>,
-        Vec<u8>,
-        Option<String>,
-        Option<String>,
-        i32,
-        i32,
-        i64,
-        i64,
-        i64,
-    );
-
-    let mnft_classes: Vec<MnftClassRow> = if matches!(filter_type, Some("token") | Some("dob")) {
+    let mnft_classes: Vec<MnftClassRowData> = if matches!(filter_type, Some("token") | Some("dob")) {
         vec![]
     } else if let Some(pattern) = search_pattern {
-        let query_str = r#"
-            SELECT 
-                mc.id, 
-                mc.class_id, 
-                mc.issuer_id, 
-                mc.name, 
-                mc.description, 
-                mc.total, 
-                mc.issued,
-                COALESCE(h.holders_count, 0) AS holders_count,
-                COALESCE(t.transfers_count, 0) AS transfers_count,
-                COALESCE(t.transfers_24h, 0) AS transfers_24h
-            FROM mnft_classes mc
-            LEFT JOIN (
-                SELECT class_id, COUNT(DISTINCT to_lock_hash) AS holders_count
-                FROM nft_transfers
-                WHERE class_id IS NOT NULL AND event_type != 'burn'
-                GROUP BY class_id
-            ) h ON h.class_id = mc.class_id
-            LEFT JOIN (
-                SELECT 
-                    class_id,
-                    COUNT(*) AS transfers_count,
-                    COUNT(*) FILTER (WHERE timestamp > NOW() - INTERVAL '24 hours') AS transfers_24h
-                FROM nft_transfers
-                WHERE class_id IS NOT NULL
-                GROUP BY class_id
-            ) t ON t.class_id = mc.class_id
-            WHERE mc.id < $1 AND LOWER(mc.name) LIKE $2 AND mc.is_live = TRUE
-            ORDER BY COALESCE(t.transfers_24h, 0) DESC, COALESCE(h.holders_count, 0) DESC, mc.id DESC
-            LIMIT $3
-        "#;
-        sqlx::query_as::<_, MnftClassRow>(query_str)
-            .bind(cursor_id)
-            .bind(pattern)
-            .bind(limit + 1)
-            .fetch_all(&state.pool)
+        let query = format!(
+            "SELECT \
+             mc.id, mc.class_id, mc.issuer_id, mc.name, mc.description, \
+             mc.total, mc.issued, \
+             COALESCE(h.holders_count, 0) AS holders_count, \
+             COALESCE(t.transfers_count, 0) AS transfers_count, \
+             COALESCE(t.transfers_24h, 0) AS transfers_24h \
+             FROM mnft_classes mc \
+             LEFT JOIN ( \
+                 SELECT class_id, COUNT(DISTINCT to_lock_hash) AS holders_count \
+                 FROM nft_transfers \
+                 WHERE class_id IS NOT NULL AND event_type != 'burn' \
+                 GROUP BY class_id \
+             ) h ON h.class_id = mc.class_id \
+             LEFT JOIN ( \
+                 SELECT class_id, COUNT(*) AS transfers_count, \
+                 COUNT(IF(timestamp > now() - INTERVAL 24 HOUR, 1, NULL)) AS transfers_24h \
+                 FROM nft_transfers \
+                 WHERE class_id IS NOT NULL \
+                 GROUP BY class_id \
+             ) t ON t.class_id = mc.class_id \
+             WHERE mc.id < {} AND lower(mc.name) LIKE '{}' AND mc.is_live = true \
+             ORDER BY COALESCE(t.transfers_24h, 0) DESC, COALESCE(h.holders_count, 0) DESC, mc.id DESC \
+             LIMIT {}",
+            cursor_id, pattern, limit + 1
+        );
+        state.clickhouse.client()
+            .query(&query)
+            .fetch_all::<MnftClassRowData>()
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?
     } else {
-        let query_str = r#"
-            SELECT 
-                mc.id, 
-                mc.class_id, 
-                mc.issuer_id, 
-                mc.name, 
-                mc.description, 
-                mc.total, 
-                mc.issued,
-                COALESCE(h.holders_count, 0) AS holders_count,
-                COALESCE(t.transfers_count, 0) AS transfers_count,
-                COALESCE(t.transfers_24h, 0) AS transfers_24h
-            FROM mnft_classes mc
-            LEFT JOIN (
-                SELECT class_id, COUNT(DISTINCT to_lock_hash) AS holders_count
-                FROM nft_transfers
-                WHERE class_id IS NOT NULL AND event_type != 'burn'
-                GROUP BY class_id
-            ) h ON h.class_id = mc.class_id
-            LEFT JOIN (
-                SELECT 
-                    class_id,
-                    COUNT(*) AS transfers_count,
-                    COUNT(*) FILTER (WHERE timestamp > NOW() - INTERVAL '24 hours') AS transfers_24h
-                FROM nft_transfers
-                WHERE class_id IS NOT NULL
-                GROUP BY class_id
-            ) t ON t.class_id = mc.class_id
-            WHERE mc.id < $1 AND mc.is_live = TRUE
-            ORDER BY COALESCE(t.transfers_24h, 0) DESC, COALESCE(h.holders_count, 0) DESC, mc.id DESC
-            LIMIT $2
-        "#;
-        sqlx::query_as::<_, MnftClassRow>(query_str)
-            .bind(cursor_id)
-            .bind(limit + 1)
-            .fetch_all(&state.pool)
+        let query = format!(
+            "SELECT \
+             mc.id, mc.class_id, mc.issuer_id, mc.name, mc.description, \
+             mc.total, mc.issued, \
+             COALESCE(h.holders_count, 0) AS holders_count, \
+             COALESCE(t.transfers_count, 0) AS transfers_count, \
+             COALESCE(t.transfers_24h, 0) AS transfers_24h \
+             FROM mnft_classes mc \
+             LEFT JOIN ( \
+                 SELECT class_id, COUNT(DISTINCT to_lock_hash) AS holders_count \
+                 FROM nft_transfers \
+                 WHERE class_id IS NOT NULL AND event_type != 'burn' \
+                 GROUP BY class_id \
+             ) h ON h.class_id = mc.class_id \
+             LEFT JOIN ( \
+                 SELECT class_id, COUNT(*) AS transfers_count, \
+                 COUNT(IF(timestamp > now() - INTERVAL 24 HOUR, 1, NULL)) AS transfers_24h \
+                 FROM nft_transfers \
+                 WHERE class_id IS NOT NULL \
+                 GROUP BY class_id \
+             ) t ON t.class_id = mc.class_id \
+             WHERE mc.id < {} AND mc.is_live = true \
+             ORDER BY COALESCE(t.transfers_24h, 0) DESC, COALESCE(h.holders_count, 0) DESC, mc.id DESC \
+             LIMIT {}",
+            cursor_id, limit + 1
+        );
+        state.clickhouse.client()
+            .query(&query)
+            .fetch_all::<MnftClassRowData>()
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?
     };
 
     let mut assets: Vec<AssetRow> = Vec::new();
 
-    for (
-        _id,
-        hash,
-        standard,
-        name,
-        symbol,
-        icon_url,
-        published,
-        famous,
-        tags,
-        holders,
-        transfers,
-        transfers_24h,
-        decimals,
-        supply,
-    ) in tokens
-    {
+    for row in tokens {
         assets.push(AssetRow {
-            id: format!("0x{}", hex::encode(&hash)),
+            id: format!("0x{}", hex::encode(&row.type_script_hash)),
             asset_type: "token".to_string(),
-            standard,
-            name,
-            symbol,
-            icon_url,
-            published,
-            famous,
-            tags,
-            holders_count: holders as i64,
-            transfers_count: transfers,
-            transfers_24h,
-            decimals: Some(decimals),
-            total_supply: Some(supply),
+            standard: row.standard,
+            name: row.name,
+            symbol: row.symbol,
+            icon_url: row.icon_url,
+            published: row.published,
+            famous: row.famous,
+            tags: row.tags,
+            holders_count: row.holders_count as i64,
+            transfers_count: row.transfers_count,
+            transfers_24h: row.transfers_24h,
+            decimals: Some(row.decimals),
+            total_supply: Some(row.total_supply),
             content_type: None,
             content_size: None,
             cluster_id: None,
@@ -510,83 +492,61 @@ async fn fetch_assets(
         });
     }
 
-    for (
-        _id,
-        cluster_id,
-        name,
-        _description,
-        spores_count,
-        holders_count,
-        transfers_count,
-        transfers_24h,
-    ) in clusters
-    {
+    for row in clusters {
         assets.push(AssetRow {
-            id: format!("0x{}", hex::encode(&cluster_id)),
+            id: format!("0x{}", hex::encode(&row.cluster_id)),
             asset_type: "dob".to_string(),
             standard: "spore".to_string(),
-            name: name.clone(),
+            name: row.name.clone(),
             symbol: None,
             icon_url: None,
             published: false,
             famous: false,
             tags: None,
-            holders_count,
-            transfers_count,
-            transfers_24h,
+            holders_count: row.holders_count,
+            transfers_count: row.transfers_count,
+            transfers_24h: row.transfers_24h,
             decimals: None,
-            total_supply: Some(spores_count.to_string()),
+            total_supply: Some(row.spores_count.to_string()),
             content_type: None,
             content_size: None,
-            cluster_id: Some(format!("0x{}", hex::encode(&cluster_id))),
-            cluster_name: name,
+            cluster_id: Some(format!("0x{}", hex::encode(&row.cluster_id))),
+            cluster_name: row.name,
         });
     }
 
-    for (
-        _id,
-        class_id,
-        _issuer_id,
-        name,
-        _description,
-        total,
-        issued,
-        holders_count,
-        transfers_count,
-        transfers_24h,
-    ) in mnft_classes
-    {
+    for row in mnft_classes {
         assets.push(AssetRow {
-            id: format!("0x{}", hex::encode(&class_id)),
+            id: format!("0x{}", hex::encode(&row.class_id)),
             asset_type: "nft".to_string(),
             standard: "m-nft".to_string(),
-            name: name.clone(),
+            name: row.name.clone(),
             symbol: None,
             icon_url: None,
             published: false,
             famous: false,
             tags: None,
-            holders_count: if holders_count > 0 {
-                holders_count
+            holders_count: if row.holders_count > 0 {
+                row.holders_count
             } else {
-                issued as i64
+                row.issued as i64
             },
-            transfers_count: if transfers_count > 0 {
-                transfers_count
+            transfers_count: if row.transfers_count > 0 {
+                row.transfers_count
             } else {
-                issued as i64
+                row.issued as i64
             },
-            transfers_24h,
+            transfers_24h: row.transfers_24h,
             decimals: None,
-            total_supply: if total > 0 {
-                Some(total.to_string())
+            total_supply: if row.total > 0 {
+                Some(row.total.to_string())
             } else {
                 None
             },
             content_type: None,
             content_size: None,
-            cluster_id: Some(format!("0x{}", hex::encode(&class_id))),
-            cluster_name: name,
+            cluster_id: Some(format!("0x{}", hex::encode(&row.class_id))),
+            cluster_name: row.name,
         });
     }
 
