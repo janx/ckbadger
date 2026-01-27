@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clickhouse::Row;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 #[allow(unused_imports)]
 use chrono::{DateTime, NaiveDate, Utc};
 #[allow(unused_imports)]
@@ -70,6 +70,10 @@ fn looks_like_dep_group(data: &[u8]) -> bool {
     count > 0 && count <= 256 && count == (size - 4) / 36
 }
 
+fn decode_sync_tip_hash(hash: &str) -> Option<Vec<u8>> {
+    hex::decode(hash).ok()
+}
+
 #[allow(dead_code)]
 const DAO_OCCUPIED_CAPACITY: u64 = 102_00000000;
 
@@ -119,6 +123,96 @@ impl ClickHouseWriter {
     /// Get reference to the underlying ClickHouse client (alias for compatibility)
     pub fn pool(&self) -> &ClickHouseClient {
         &self.client
+    }
+
+    /// Get current sync tip (block number and hash)
+    pub async fn get_sync_tip(&self) -> Result<(i64, Option<Vec<u8>>)> {
+        #[derive(Row, Deserialize)]
+        struct SyncTipRow {
+            tip_block_number: i64,
+            tip_block_hash: String,
+        }
+
+        let row = self
+            .client
+            .client()
+            .query(
+                "SELECT tip_block_number, hex(tip_block_hash) as tip_block_hash FROM sync_status WHERE id = 1",
+            )
+            .fetch_optional::<SyncTipRow>()
+            .await?;
+
+        match row {
+            Some(r) => Ok((r.tip_block_number, decode_sync_tip_hash(&r.tip_block_hash))),
+            None => Ok((0, None)),
+        }
+    }
+
+    /// Get block hash by height
+    pub async fn get_block_hash_at_height(&self, height: i64) -> Result<Option<Vec<u8>>> {
+        #[derive(Row, Deserialize)]
+        struct BlockHashRow {
+            hash: String,
+        }
+
+        let query = format!("SELECT hex(hash) as hash FROM blocks WHERE number = {}", height);
+        let row = self
+            .client
+            .client()
+            .query(&query)
+            .fetch_optional::<BlockHashRow>()
+            .await?;
+
+        Ok(row.and_then(|r| decode_sync_tip_hash(&r.hash)))
+    }
+
+    /// Check if there's an unresolved deep fork
+    pub async fn has_unresolved_deep_fork(&self) -> Result<bool> {
+        // Stub for now - deep fork detection is complex
+        // TODO: Implement based on PostgreSQL Repository logic if needed
+        Ok(false)
+    }
+
+    /// Refresh 24h transfer stats for tokens
+    pub async fn refresh_token_24h_transfers(&self) -> Result<u64> {
+        // TODO: Implement ClickHouse equivalent once token transfer stats are modeled.
+        Ok(0)
+    }
+
+    /// Update sync status for the latest block
+    pub async fn update_sync_status(
+        &self,
+        block_number: i64,
+        _block_hash: &[u8],
+        _tx_count: i64,
+        _cells_created: i64,
+        _cells_consumed: i64,
+        _new_addresses: i64,
+    ) -> Result<()> {
+        let query = format!(
+            "ALTER TABLE sync_status UPDATE tip_block_number = {}, updated_at = now() WHERE id = 1",
+            block_number
+        );
+        self.client.client().query(&query).execute().await?;
+        Ok(())
+    }
+
+    /// Execute a chain reorganization rollback
+    pub async fn execute_reorg(
+        &self,
+        _fork_point: i64,
+        _fork_hash: &[u8],
+        _old_tip: i64,
+        _old_tip_hash: &[u8],
+        _new_tip: i64,
+        _new_tip_hash: &[u8],
+    ) -> Result<ReorgResult> {
+        // TODO: Implement ClickHouse reorg handling (archive/delete ranges as needed).
+        Ok(ReorgResult {
+            blocks_deleted: 0,
+            transactions_deleted: 0,
+            cells_deleted: 0,
+        })
     }
 
     /// Insert a batch of blocks into the blocks table.
@@ -1016,6 +1110,22 @@ mod tests {
         assert_eq!(consumption.tx_hash.len(), 32);
         assert_eq!(consumption.consumed_at_block, 12346);
         assert_eq!(consumption.consumed_by_tx.len(), 32);
+    }
+
+    #[test]
+    fn test_decode_sync_tip_hash() {
+        assert_eq!(decode_sync_tip_hash("00ff"), Some(vec![0x00, 0xff]));
+        assert!(decode_sync_tip_hash("not-hex").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_has_unresolved_deep_fork_stub() {
+        let client = ClickHouseClient::new("http://localhost:8123/default").unwrap();
+        let writer = ClickHouseWriter::new(client);
+
+        let result = writer.has_unresolved_deep_fork().await;
+
+        assert_eq!(result.unwrap(), false);
     }
 
     #[test]

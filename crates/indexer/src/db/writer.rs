@@ -68,6 +68,31 @@ impl BatchWriter {
         &self.pool
     }
 
+    pub async fn get_sync_tip(&self) -> Result<(i64, Option<Vec<u8>>)> {
+        let row = sqlx::query_as::<_, (i64, Option<Vec<u8>>)> (
+            "SELECT tip_block_number, tip_block_hash FROM sync_status WHERE id = 1",
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn has_unresolved_deep_fork(&self) -> Result<bool> {
+        let row =
+            sqlx::query_as::<_, (bool,)>("SELECT deep_fork_detected FROM sync_status WHERE id = 1")
+                .fetch_one(&self.pool)
+                .await?;
+        Ok(row.0)
+    }
+
+    pub async fn get_block_hash_at_height(&self, height: i64) -> Result<Option<Vec<u8>>> {
+        let row = sqlx::query_as::<_, (Vec<u8>,)>("SELECT hash FROM blocks WHERE number = $1")
+            .bind(height)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.map(|(hash,)| hash))
+    }
+
     pub async fn migrate_live_cells(&self) -> Result<u64> {
         let result = sqlx::query(
             r#"

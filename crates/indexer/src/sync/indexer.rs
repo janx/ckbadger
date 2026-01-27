@@ -270,7 +270,7 @@ impl Indexer {
         integrity_handle: Option<IntegrityServiceHandle>,
     ) -> Result<Self> {
         let rpc = CkbRpcClient::new(&config.ckb_rpc_url);
-        let tip_number = 0i64; // TODO: Get from ClickHouse sync_status
+        let (tip_number, _) = writer.get_sync_tip().await?;
         let chain_tip = rpc.get_tip_block_number().await?;
 
         let progress = Arc::new(SyncProgress::new(tip_number as u64, chain_tip));
@@ -320,7 +320,7 @@ impl Indexer {
             }
         }
 
-        let (start_block, _) = self.repo.get_sync_tip().await?;
+        let (start_block, _) = self.writer.get_sync_tip().await?;
         self.writer.init_sync_start(start_block).await?;
 
         let writer_for_task = self.writer.pool().clone();
@@ -345,7 +345,7 @@ impl Indexer {
 
     async fn run_sequential(&self) -> Result<()> {
         loop {
-            if self.repo.has_unresolved_deep_fork().await.unwrap_or(false) {
+            if self.writer.has_unresolved_deep_fork().await.unwrap_or(false) {
                 warn!("Deep fork unresolved, sync paused. Waiting for manual intervention...");
                 sleep(Duration::from_secs(30)).await;
                 continue;
@@ -392,7 +392,7 @@ impl Indexer {
         let rpc = self.rpc.clone();
         let config = self.config.clone();
         let progress = Arc::clone(&self.progress);
-        let repo = self.repo.clone();
+        let writer = self.writer.clone();
 
         let fetcher = tokio::spawn(async move {
             let mut next_block: Option<u64> = None;
@@ -411,7 +411,7 @@ impl Indexer {
                 let start_block = match next_block {
                     Some(nb) => nb,
                     None => {
-                        let (db_tip, db_tip_hash) = match repo.get_sync_tip().await {
+                        let (db_tip, db_tip_hash) = match writer.get_sync_tip().await {
                             Ok(tip) => tip,
                             Err(e) => {
                                 error!("Failed to get DB tip: {}", e);
@@ -593,7 +593,7 @@ impl Indexer {
 
         // Writer loop - receives pre-parsed batches
         loop {
-            if self.repo.has_unresolved_deep_fork().await.unwrap_or(false) {
+            if self.writer.has_unresolved_deep_fork().await.unwrap_or(false) {
                 warn!("Deep fork unresolved, sync paused. Waiting for manual intervention...");
                 Self::drain_channel(&mut parse_rx).await;
                 sleep(Duration::from_secs(30)).await;
@@ -613,7 +613,7 @@ impl Indexer {
                     input_cell_info,
                     consumed_code_hashes,
                 ))) => {
-                    let (db_tip, db_tip_hash) = self.repo.get_sync_tip().await?;
+                    let (db_tip, db_tip_hash) = self.writer.get_sync_tip().await?;
 
                     // Validate batch is still valid (no reorg happened)
                     let expected_start = if db_tip == 0 && db_tip_hash.is_none() {
@@ -850,7 +850,7 @@ impl Indexer {
         let chain_tip = self.rpc.get_tip_block_number().await?;
         self.progress.update_target(chain_tip);
 
-        let (db_tip, db_tip_hash) = self.repo.get_sync_tip().await?;
+        let (db_tip, db_tip_hash) = self.writer.get_sync_tip().await?;
         let start_block = if db_tip == 0 && db_tip_hash.is_none() {
             0
         } else {
@@ -4608,7 +4608,7 @@ impl Indexer {
 
         loop {
             let db_hash = self
-                .repo
+                .writer
                 .get_block_hash_at_height(height as i64)
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("Block {} not found in DB", height))?;

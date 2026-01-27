@@ -352,7 +352,7 @@ Simplify architecture by removing PostgreSQL, making ClickHouse the only databas
 
 ---
 
-- [ ] 3.5. Update sync module for ClickHouse-only
+- [x] 3.5. Update sync module for ClickHouse-only
 
   **What to do**:
   - Check `crates/indexer/src/sync/indexer.rs` for PgPool usage
@@ -360,6 +360,8 @@ Simplify architecture by removing PostgreSQL, making ClickHouse the only databas
   - Ensure `sync_status` table is read/written via ClickHouse
 
   **Files**: `crates/indexer/src/sync/indexer.rs`
+
+  **Status**: COMPLETE - Repository field removed, all 6 self.repo usages replaced with ClickHouseWriter methods
 
 ---
 
