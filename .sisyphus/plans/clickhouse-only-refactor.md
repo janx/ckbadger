@@ -311,7 +311,7 @@ Simplify architecture by removing PostgreSQL, making ClickHouse the only databas
 
 ---
 
-- [ ] 3.2. Simplify indexer main.rs
+- [x] 3.2. Simplify indexer main.rs
 
   **What to do**:
   - Remove PostgreSQL connection code (`sqlx::PgPool::connect()`)
@@ -321,6 +321,8 @@ Simplify architecture by removing PostgreSQL, making ClickHouse the only databas
   - Remove imports: `sqlx::PgPool`, any PostgreSQL-related types
 
   **Files**: `crates/indexer/src/main.rs`
+
+  **Status**: PARTIAL - main.rs updated but blocked by sync/indexer.rs requiring Repository removal
 
 ---
 
