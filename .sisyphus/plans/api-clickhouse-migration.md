@@ -86,7 +86,7 @@ let row = state.clickhouse.client()
 
 ### Phase 2: Migrate spore.rs (20 errors)
 
-- [ ] 2.1. Migrate list_clusters function
+- [x] 2.1. Migrate list_clusters function
 
   **What to do**:
   - Convert COUNT query to ClickHouse
@@ -97,7 +97,7 @@ let row = state.clickhouse.client()
 
 ---
 
-- [ ] 2.2. Migrate get_cluster function
+- [x] 2.2. Migrate get_cluster function
 
   **What to do**:
   - Convert single cluster lookup to ClickHouse
@@ -106,7 +106,7 @@ let row = state.clickhouse.client()
 
 ---
 
-- [ ] 2.3. Migrate get_spores_by_cluster function
+- [x] 2.3. Migrate get_spores_by_cluster function
 
   **What to do**:
   - Convert spores listing query to ClickHouse
@@ -115,7 +115,7 @@ let row = state.clickhouse.client()
 
 ---
 
-- [ ] 2.4. Migrate list_spores function
+- [x] 2.4. Migrate list_spores function
 
   **What to do**:
   - Convert all spores listing query to ClickHouse
@@ -124,7 +124,7 @@ let row = state.clickhouse.client()
 
 ---
 
-- [ ] 2.5. Migrate get_spore function
+- [x] 2.5. Migrate get_spore function
 
   **What to do**:
   - Convert single spore lookup to ClickHouse
@@ -133,7 +133,7 @@ let row = state.clickhouse.client()
 
 ---
 
-- [ ] 2.6. Migrate get_spores_by_owner function
+- [x] 2.6. Migrate get_spores_by_owner function
 
   **What to do**:
   - Convert owner's spores query to ClickHouse
