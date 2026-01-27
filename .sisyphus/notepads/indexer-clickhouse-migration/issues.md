@@ -12,3 +12,9 @@
 (Implementation-specific issues will be recorded here)
 
 ---
+
+## 2026-01-27
+
+- `cargo check -p ckbadger-indexer` fails after removing `Repository` from `Indexer`:
+  - Multiple `self.repo` references remain in `sync/indexer.rs` (lines ~323, 348, 395, 596, 616, 853, 4611).
+  - Follow-on E0277 errors for `Option<[u8]>` stem from the missing `repo.get_sync_tip()` return types.

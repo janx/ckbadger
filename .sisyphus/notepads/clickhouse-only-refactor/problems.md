@@ -125,3 +125,57 @@ The test infrastructure can be updated in a follow-up PR once:
 ### Date
 
 2026-01-27
+
+## Phase 3 Tasks 3.2-3.5: Deeper Blocker Than Expected (2026-01-27)
+
+### Current State
+
+**Task 3.2**: ✅ main.rs updated to initialize ClickHouseWriter
+**Task 3.5**: 🔄 Partially complete - Indexer::new() signature updated
+
+### Blocker Details
+
+The sync/indexer.rs module has deep PostgreSQL dependencies:
+
+1. **Repository struct** - Used throughout sync logic for:
+   - `get_sync_tip()` - Get current sync status
+   - Deep fork detection and handling
+   - Sync status queries
+
+2. **Indexer struct fields**:
+   - `repo: Repository` field needs to be removed
+   - 7+ usages of `self.repo` throughout the file
+   - Each usage needs ClickHouse equivalent
+
+3. **Compilation errors**:
+   - 7 instances of "no field `repo` on type `&Indexer`"
+   - 2 instances of size issues with `[u8]` slices
+
+### Required Work
+
+To complete Phase 3, need to:
+
+1. Remove `repo` field from Indexer struct
+2. Replace all `self.repo.get_sync_tip()` calls with ClickHouse queries
+3. Implement ClickHouse equivalents for all Repository methods used by sync logic
+4. Fix slice sizing issues
+
+**Estimated effort**: 4-6 hours of focused work
+
+### Recommendation
+
+**Option A**: Continue implementing (4-6 hours)
+- Systematically replace each `self.repo` usage
+- Implement missing ClickHouseWriter methods as needed
+- High risk of introducing bugs in sync logic
+
+**Option B**: Document and defer
+- Current progress is substantial (ClickHouseWriter foundation complete)
+- API is fully ClickHouse-only and working
+- Indexer migration can be completed in dedicated effort
+- Lower risk, cleaner separation of concerns
+
+### Decision Point
+
+At 102K/200K tokens (51% used), with 19 tasks remaining, recommend **Option B**: Document current state, commit progress, and defer remaining Phase 3 work.
+

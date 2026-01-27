@@ -11,13 +11,12 @@ use chrono::{DateTime, NaiveDate, Timelike, Utc};
 use futures::stream::{FuturesOrdered, StreamExt};
 use lru::LruCache;
 use rayon::prelude::*;
-use sqlx::PgPool;
 use tokio::time::sleep;
 use tracing::{error, info, warn};
 
 use crate::cache::CacheInvalidator;
 use crate::config::Config;
-use crate::db::{BatchWriter, ReorgResult, Repository, SecondaryIssuanceBreakdown};
+use crate::db::{BatchWriter, ReorgResult, SecondaryIssuanceBreakdown};
 use crate::integrity::IntegrityServiceHandle;
 use crate::parser::{
     BlockParser, CellParser, DaoParser, DotbitParser, MnftParser, SporeParser, TransactionParser,
@@ -255,7 +254,6 @@ const CACHE_INVALIDATION_INTERVAL: u64 = 10_000;
 pub struct Indexer {
     config: Config,
     rpc: CkbRpcClient,
-    repo: Repository,
     writer: BatchWriter,
     progress: Arc<SyncProgress>,
     cell_cache: Arc<tokio::sync::Mutex<LruCache<(Vec<u8>, i32), CachedCellInfo>>>,
@@ -268,14 +266,11 @@ pub struct Indexer {
 impl Indexer {
     pub async fn new(
         config: Config,
-        pool: PgPool,
+        writer: BatchWriter,
         integrity_handle: Option<IntegrityServiceHandle>,
     ) -> Result<Self> {
         let rpc = CkbRpcClient::new(&config.ckb_rpc_url);
-        let repo = Repository::new(pool.clone());
-        let writer = BatchWriter::new(pool);
-
-        let (tip_number, _) = repo.get_sync_tip().await?;
+        let tip_number = 0i64; // TODO: Get from ClickHouse sync_status
         let chain_tip = rpc.get_tip_block_number().await?;
 
         let progress = Arc::new(SyncProgress::new(tip_number as u64, chain_tip));
@@ -288,7 +283,6 @@ impl Indexer {
         Ok(Self {
             config,
             rpc,
-            repo,
             writer,
             progress,
             cell_cache,

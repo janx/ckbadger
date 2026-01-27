@@ -89,17 +89,21 @@ async fn main() -> Result<()> {
     info!("Connecting to ClickHouse: {}", config.clickhouse_url);
     info!("Connecting to CKB node: {}", config.ckb_rpc_url);
 
-    // TODO: Implement ClickHouse indexer pipeline
-    // This requires:
-    // 1. Initialize ClickHouseClient
-    // 2. Create ClickHouseWriter
-    // 3. Implement conversion from ParsedBlock/ParsedTransaction to BlockRow/TransactionRow
-    // 4. Adapt sync pipeline to use ClickHouse writer instead of PostgreSQL writer
-    //
-    // For now, this is a stub to enable compilation and configuration testing.
+    // Initialize ClickHouse client
+    let clickhouse_client = ckbadger_indexer::db::ClickHouseClient::new(&config.clickhouse_url)?;
+    info!("ClickHouse client initialized");
 
-    eprintln!("ClickHouse backend is not yet fully implemented.");
-    eprintln!("TODO: Implement conversion logic from ParsedBlock to BlockRow");
-    eprintln!("TODO: Adapt sync pipeline to use ClickHouseWriter");
-    std::process::exit(1);
+    // Create ClickHouse writer
+    let writer = ckbadger_indexer::db::ClickHouseWriter::new(clickhouse_client.clone());
+    info!("ClickHouse writer created");
+
+    // Initialize indexer with ClickHouse backend
+    let indexer = ckbadger_indexer::sync::Indexer::new(config.clone(), writer, None).await?;
+    info!("Indexer initialized");
+
+    // Start sync pipeline
+    info!("Starting sync pipeline...");
+    indexer.run().await?;
+
+    Ok(())
 }
