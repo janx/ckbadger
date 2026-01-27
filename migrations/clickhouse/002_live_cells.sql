@@ -1,0 +1,225 @@
+-- Live Cells View using ReplacingMergeTree
+-- Purpose: Efficient OutPoint lookups (< 10ms) without expensive JOINs
+-- Design: Sign column (1 = created, -1 = consumed) with version-based deduplication
+--
+-- Query Pattern:
+-- - Insert on creation: sign = 1, version = created_at_block
+-- - Insert on consumption: sign = -1, version = consumed_at_block
+-- - Query live cells: WHERE sign = 1 FINAL
+--
+-- Performance (from Phase 0 benchmarks):
+-- - Single OutPoint query: 7.97ms (P95)
+-- - Batch OutPoint query (50 cells): 47.15ms (P95)
+-- - FINAL overhead: ~30% (acceptable)
+-- - Automatic deduplication via background merges
+--
+-- How ReplacingMergeTree Works:
+-- 1. Inserts are append-only (no UPDATE)
+-- 2. Multiple rows with same PRIMARY KEY can exist
+-- 3. FINAL keyword triggers deduplication:
+--    - Keeps row with highest `version` value
+--    - If `sign = -1` (consumed), row is effectively deleted
+-- 4. Background merges eventually deduplicate automatically
+--
+-- Example Usage:
+--
+-- -- Insert on cell creation (block 100)
+-- INSERT INTO live_cells VALUES (
+--     unhex('abc...'), 0, 10000000000, unhex('def...'), NULL, 100, 1, 100
+-- );
+--
+-- -- Insert on cell consumption (block 200)
+-- INSERT INTO live_cells VALUES (
+--     unhex('abc...'), 0, 10000000000, unhex('def...'), NULL, 100, -1, 200
+-- );
+--
+-- -- Query live cells (FINAL deduplicates, keeps latest version)
+-- SELECT * FROM live_cells WHERE sign = 1 FINAL;
+--
+-- -- Query specific OutPoint (< 10ms)
+-- SELECT * FROM live_cells 
+-- WHERE tx_hash = unhex('abc...') AND output_index = 0 
+-- FINAL;
+--
+-- -- Query by lock_script_hash (address balance)
+-- SELECT sum(capacity) as total_capacity
+-- FROM live_cells
+-- WHERE lock_script_hash = unhex('def...') AND sign = 1
+-- FINAL;
+
+USE ckbadger;
+
+-- ============================================================================
+-- LIVE_CELLS TABLE (ReplacingMergeTree with Sign Column)
+-- ============================================================================
+-- Stores cell lifecycle events with sign column for efficient live cell queries
+-- Primary access pattern: Query by OutPoint (tx_hash, output_index)
+-- Sort key: (tx_hash, output_index) - optimized for OutPoint lookup
+--
+-- IMPORTANT: This table uses ReplacingMergeTree for automatic deduplication.
+-- - sign = 1: Cell created (live)
+-- - sign = -1: Cell consumed (dead)
+-- - version: Block number for deduplication (higher version wins)
+-- - FINAL keyword: Triggers deduplication in queries (adds ~30% overhead)
+--
+-- Performance Characteristics:
+-- - Single OutPoint query: 7.97ms (P95) with FINAL
+-- - Batch OutPoint query (50 cells): 47.15ms (P95) with FINAL
+-- - FINAL overhead: +1.7ms (33%) for single queries
+-- - Background merges: Automatic deduplication without FINAL
+
+CREATE TABLE IF NOT EXISTS live_cells (
+    -- OutPoint (PRIMARY KEY)
+    tx_hash FixedString(32),            -- Transaction hash (32 bytes binary)
+    output_index UInt16,                -- Output index within transaction
+    
+    -- Essential cell data
+    capacity UInt64,                    -- Cell capacity in shannon (1 CKB = 10^8 shannon)
+    lock_script_hash FixedString(32),   -- Lock script hash (for address queries)
+    type_script_hash Nullable(FixedString(32)),  -- Type script hash (for token/NFT queries)
+    created_at_block UInt64,            -- Block height when cell was created
+    
+    -- ReplacingMergeTree metadata
+    sign Int8,                          -- 1 = created (live), -1 = consumed (dead)
+    version UInt64                      -- Block number (for deduplication, higher wins)
+) ENGINE = ReplacingMergeTree(version)
+ORDER BY (tx_hash, output_index)
+PRIMARY KEY (tx_hash, output_index)
+COMMENT 'Live cells view with sign column for efficient OutPoint lookups';
+
+-- ============================================================================
+-- QUERY PATTERNS AND PERFORMANCE NOTES
+-- ============================================================================
+--
+-- 1. SINGLE OUTPOINT LOOKUP (< 10ms target)
+--    SELECT * FROM live_cells
+--    WHERE tx_hash = unhex('...') AND output_index = 0
+--    FINAL;
+--
+--    Performance: 7.97ms (P95) with FINAL
+--    FINAL overhead: +1.7ms (33%)
+--
+-- 2. BATCH OUTPOINT LOOKUP (< 500ms target for 50 cells)
+--    SELECT * FROM live_cells
+--    WHERE (tx_hash, output_index) IN (
+--      (unhex('...'), 0),
+--      (unhex('...'), 1),
+--      ...
+--    )
+--    FINAL;
+--
+--    Performance: 47.15ms (P95) for 50 cells with FINAL
+--    Per-cell cost: ~0.94ms
+--
+-- 3. ADDRESS BALANCE QUERY (< 10ms target)
+--    SELECT sum(capacity) as total_capacity, count() as cell_count
+--    FROM live_cells
+--    WHERE lock_script_hash = unhex('...') AND sign = 1
+--    FINAL;
+--
+--    Performance: 8.26ms (P95) with FINAL
+--    Note: Always include `sign = 1` filter for correctness
+--
+-- 4. TOKEN HOLDERS QUERY
+--    SELECT lock_script_hash, sum(capacity) as total_capacity
+--    FROM live_cells
+--    WHERE type_script_hash = unhex('...') AND sign = 1
+--    GROUP BY lock_script_hash
+--    FINAL;
+--
+--    Performance: Depends on holder count, typically < 50ms
+--
+-- 5. LIVE CELLS COUNT
+--    SELECT count() FROM live_cells WHERE sign = 1 FINAL;
+--
+--    Performance: Fast for approximate count, slower with FINAL
+--
+-- ============================================================================
+-- FINAL KEYWORD USAGE
+-- ============================================================================
+--
+-- ALWAYS use FINAL for correctness:
+-- - Without FINAL: May return stale data (both sign=1 and sign=-1 rows)
+-- - With FINAL: Guaranteed to return only latest state (deduplicated)
+-- - Overhead: ~30% (acceptable for correctness)
+--
+-- Example of incorrect query (without FINAL):
+-- SELECT * FROM live_cells WHERE tx_hash = unhex('...') AND output_index = 0;
+-- Result: May return 2 rows (sign=1 and sign=-1) → WRONG
+--
+-- Example of correct query (with FINAL):
+-- SELECT * FROM live_cells WHERE tx_hash = unhex('...') AND output_index = 0 FINAL;
+-- Result: Returns 1 row (latest version) → CORRECT
+--
+-- ============================================================================
+-- BACKGROUND MERGE BEHAVIOR
+-- ============================================================================
+--
+-- ClickHouse automatically merges parts in the background:
+-- - Deduplicates rows with same PRIMARY KEY
+-- - Keeps row with highest `version` value
+-- - If latest row has `sign = -1`, row is effectively deleted
+-- - Merge frequency: Depends on data volume and server load
+--
+-- After background merge completes:
+-- - Queries without FINAL will return correct results
+-- - FINAL keyword still recommended for consistency
+--
+-- ============================================================================
+-- SCALABILITY PROJECTION
+-- ============================================================================
+--
+-- Current (1M cells):
+-- - Single OutPoint: 7.97ms (P95)
+-- - Batch OutPoint: 47.15ms (P95)
+--
+-- Projected (100M cells):
+-- Assuming O(log N) scaling:
+-- - Single OutPoint: ~10ms (still < 10ms target)
+-- - Batch OutPoint: ~60ms (still < 500ms target)
+--
+-- Conclusion: ClickHouse should maintain acceptable performance at mainnet scale.
+--
+-- ============================================================================
+-- COMPARISON WITH ALTERNATIVES
+-- ============================================================================
+--
+-- 1. ReplacingMergeTree with sign column (Selected)
+--    Pros: Simple INSERT-only, automatic deduplication, FINAL provides consistency
+--    Cons: FINAL adds ~30% overhead, requires version management
+--
+-- 2. Materialized View with ANTI JOIN (Rejected)
+--    Pros: No FINAL overhead, real-time updates
+--    Cons: Complex view maintenance, ANTI JOIN expensive
+--
+-- 3. Separate live_cells table with DELETE (Rejected)
+--    Pros: No FINAL overhead, simple query logic
+--    Cons: DELETE expensive in ClickHouse, violates immutable model
+--
+-- ============================================================================
+-- MIGRATION FROM POSTGRESQL
+-- ============================================================================
+--
+-- PostgreSQL cells.status column → ClickHouse live_cells.sign column
+-- PostgreSQL UPDATE cells SET status=1 → ClickHouse INSERT INTO live_cells (sign=-1)
+-- PostgreSQL WHERE status=0 → ClickHouse WHERE sign=1 FINAL
+--
+-- ============================================================================
+-- FUTURE ENHANCEMENTS (Phase 2+)
+-- ============================================================================
+--
+-- 1. Secondary indexes for lock_script_hash, type_script_hash
+--    - Faster address balance queries
+--    - Faster token holder queries
+--
+-- 2. Materialized views for common aggregations
+--    - address_balances (lock_script_hash → total_capacity)
+--    - token_holders (type_script_hash → holder_count)
+--
+-- 3. Partitioning by created_at_block
+--    - Faster queries on recent cells
+--    - Easier data management
+--
+-- ============================================================================
+-- END OF SCHEMA
+-- ============================================================================

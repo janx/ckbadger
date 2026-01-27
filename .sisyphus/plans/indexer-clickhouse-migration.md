@@ -431,7 +431,7 @@
 
 ---
 
-- [ ] 2.2. Live Cell视图设计
+- [x] 2.2. Live Cell视图设计
 
   **What to do**:
   - 设计live_cells物化视图或表
