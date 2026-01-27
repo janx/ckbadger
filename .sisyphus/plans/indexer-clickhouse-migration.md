@@ -306,7 +306,7 @@
 
 ### PHASE 1: ClickHouse Infrastructure
 
-- [ ] 1.1. ClickHouse生产环境配置
+- [x] 1.1. ClickHouse生产环境配置
 
   **What to do**:
   - 配置ClickHouse for高吞吐写入

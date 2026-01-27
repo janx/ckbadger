@@ -1,0 +1,97 @@
+<?xml version="1.0"?>
+<clickhouse>
+    <profiles>
+        <!-- Default profile for production queries -->
+        <default>
+            <max_memory_usage>17179869184</max_memory_usage> <!-- 16GB per query -->
+            <max_bytes_before_external_group_by>8589934592</max_bytes_before_external_group_by> <!-- 8GB -->
+            <max_bytes_before_external_sort>8589934592</max_bytes_before_external_sort> <!-- 8GB -->
+            <max_execution_time>300</max_execution_time> <!-- 5 minutes -->
+            <max_rows_to_read>1000000000</max_rows_to_read> <!-- 1B rows -->
+            <max_bytes_to_read>107374182400</max_bytes_to_read> <!-- 100GB -->
+            <max_result_rows>1000000</max_result_rows> <!-- 1M rows -->
+            <max_result_bytes>1073741824</max_result_bytes> <!-- 1GB -->
+            <max_threads>16</max_threads>
+            <max_insert_threads>8</max_insert_threads>
+            <max_block_size>65536</max_block_size> <!-- 64K rows -->
+            <max_insert_block_size>1048576</max_insert_block_size> <!-- 1M rows -->
+            <min_insert_block_size_rows>1048576</min_insert_block_size_rows> <!-- 1M rows -->
+            <min_insert_block_size_bytes>268435456</min_insert_block_size_bytes> <!-- 256MB -->
+            <max_query_size>262144</max_query_size> <!-- 256KB -->
+            <readonly>0</readonly>
+        </default>
+
+        <!-- Read-only profile for analytics queries -->
+        <readonly>
+            <max_memory_usage>8589934592</max_memory_usage> <!-- 8GB per query -->
+            <max_bytes_before_external_group_by>4294967296</max_bytes_before_external_group_by> <!-- 4GB -->
+            <max_bytes_before_external_sort>4294967296</max_bytes_before_external_sort> <!-- 4GB -->
+            <max_execution_time>600</max_execution_time> <!-- 10 minutes -->
+            <max_rows_to_read>10000000000</max_rows_to_read> <!-- 10B rows -->
+            <max_bytes_to_read>1073741824000</max_bytes_to_read> <!-- 1TB -->
+            <max_result_rows>10000000</max_result_rows> <!-- 10M rows -->
+            <max_result_bytes>10737418240</max_result_bytes> <!-- 10GB -->
+            <max_threads>24</max_threads>
+            <max_block_size>65536</max_block_size> <!-- 64K rows -->
+            <max_query_size>262144</max_query_size> <!-- 256KB -->
+            <readonly>1</readonly>
+        </readonly>
+
+        <!-- Bulk insert profile for indexer -->
+        <bulk_insert>
+            <max_memory_usage>34359738368</max_memory_usage> <!-- 32GB per query -->
+            <max_bytes_before_external_group_by>17179869184</max_bytes_before_external_group_by> <!-- 16GB -->
+            <max_bytes_before_external_sort>17179869184</max_bytes_before_external_sort> <!-- 16GB -->
+            <max_execution_time>3600</max_execution_time> <!-- 1 hour -->
+            <max_insert_block_size>1048576</max_insert_block_size> <!-- 1M rows -->
+            <min_insert_block_size_rows>1048576</min_insert_block_size_rows> <!-- 1M rows -->
+            <max_insert_threads>16</max_insert_threads>
+            <max_threads>24</max_threads>
+            <max_block_size>1048576</max_block_size> <!-- 1M rows -->
+            <min_insert_block_size_bytes>268435456</min_insert_block_size_bytes> <!-- 256MB -->
+            <max_query_size>262144</max_query_size> <!-- 256KB -->
+            <readonly>0</readonly>
+        </bulk_insert>
+    </profiles>
+
+    <quotas>
+        <!-- Default quota: 100 queries per hour -->
+        <default>
+            <interval>
+                <duration>3600</duration>
+                <queries>100</queries>
+                <errors>10</errors>
+                <result_rows>1000000000</result_rows>
+                <read_rows>10000000000</read_rows>
+                <execution_time>3600</execution_time>
+            </interval>
+        </default>
+
+        <!-- Unlimited quota for indexer -->
+        <indexer>
+            <interval>
+                <duration>3600</duration>
+                <queries>0</queries> <!-- unlimited -->
+                <errors>0</errors> <!-- unlimited -->
+                <result_rows>0</result_rows> <!-- unlimited -->
+                <read_rows>0</read_rows> <!-- unlimited -->
+                <execution_time>0</execution_time> <!-- unlimited -->
+            </interval>
+        </indexer>
+    </quotas>
+
+    <users>
+        <!-- Default user (from environment variables) -->
+        <default>
+            <password_sha256_hex remove="1"/>
+            <access_management>1</access_management>
+            <profile>default</profile>
+            <quota>default</quota>
+            <networks>
+                <ip>::/0</ip>
+            </networks>
+        </default>
+
+        <!-- Additional users can be configured here if needed -->
+    </users>
+</clickhouse>

@@ -1,0 +1,73 @@
+<?xml version="1.0"?>
+<clickhouse>
+    <!-- Memory Settings (for 64GB system) -->
+    <max_server_memory_usage>34359738368</max_server_memory_usage> <!-- 32GB -->
+
+    <!-- Thread Pool Settings (for 24-core system) -->
+    <max_thread_pool_size>10000</max_thread_pool_size>
+    <thread_pool_queue_size>10000</thread_pool_queue_size>
+    <max_concurrent_queries>100</max_concurrent_queries>
+    <max_concurrent_insert_queries>50</max_concurrent_insert_queries>
+    <max_concurrent_select_queries>100</max_concurrent_select_queries>
+
+    <!-- Background Operations (optimized for high-throughput writes) -->
+    <background_pool_size>32</background_pool_size>
+    <background_merges_mutations_concurrency_ratio>4</background_merges_mutations_concurrency_ratio>
+    <background_schedule_pool_size>16</background_schedule_pool_size>
+    <background_fetches_pool_size>8</background_fetches_pool_size>
+    <background_move_pool_size>8</background_move_pool_size>
+    <background_common_pool_size>8</background_common_pool_size>
+
+    <!-- Network Settings -->
+    <max_connections>1024</max_connections>
+    <keep_alive_timeout>30</keep_alive_timeout>
+
+    <!-- Insert Settings (optimized for bulk writes) -->
+    <!-- User-level settings moved to users.xml -->
+
+    <!-- Merge Settings (balance write throughput and query performance) -->
+    <max_bytes_to_merge_at_max_space_in_pool>161061273600</max_bytes_to_merge_at_max_space_in_pool> <!-- 150GB -->
+    <merge_max_block_size>8192</merge_max_block_size>
+    <max_parts_in_total>10000</max_parts_in_total>
+
+    <!-- Query Settings -->
+    <!-- User-level settings moved to users.xml -->
+
+    <!-- Logging Configuration -->
+    <logger>
+        <level>information</level>
+        <log>/var/log/clickhouse-server/clickhouse-server.log</log>
+        <errorlog>/var/log/clickhouse-server/clickhouse-server.err.log</errorlog>
+        <size>1000M</size>
+        <count>10</count>
+        <console>false</console>
+    </logger>
+
+    <!-- Compression Settings -->
+    <compression>
+        <case>
+            <method>lz4</method>
+        </case>
+    </compression>
+
+    <!-- Query Log (for monitoring) -->
+    <query_log>
+        <database>system</database>
+        <table>query_log</table>
+        <partition_by>toYYYYMM(event_date)</partition_by>
+        <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+    </query_log>
+
+    <!-- Distributed DDL -->
+    <distributed_ddl>
+        <path>/clickhouse/task_queue/ddl</path>
+    </distributed_ddl>
+
+    <!-- Performance Settings -->
+    <mark_cache_size>5368709120</mark_cache_size> <!-- 5GB -->
+    <uncompressed_cache_size>8589934592</uncompressed_cache_size> <!-- 8GB -->
+    <compiled_expression_cache_size>134217728</compiled_expression_cache_size> <!-- 128MB -->
+
+    <!-- Timezone -->
+    <timezone>UTC</timezone>
+</clickhouse>
