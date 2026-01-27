@@ -202,7 +202,7 @@ Simplify architecture by removing PostgreSQL, making ClickHouse the only databas
 
 ---
 
-- [ ] 2.3. Simplify transactions.rs
+- [x] 2.3. Simplify transactions.rs
 
   **Pattern**: Same as blocks.rs
   - Remove `_postgres` variants
