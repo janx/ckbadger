@@ -254,7 +254,7 @@ Simplify architecture by removing PostgreSQL, making ClickHouse the only databas
 
 ---
 
-- [ ] 2.9. Simplify dao.rs
+- [x] 2.9. Simplify dao.rs
 
   **Pattern**: Same as above
 

@@ -333,3 +333,29 @@ Successfully refactored `crates/api/src/routes/tokens.rs` to ClickHouse-only fol
 ### Files Modified
 - `crates/api/src/routes/tokens.rs` (834 → ~700 lines, removed ~134 lines of PostgreSQL code)
 
+
+## Task 9: dao.rs Refactoring
+
+**Pattern Applied:**
+- Removed all PostgreSQL imports and hybrid if/else patterns
+- Deleted 8 _postgres functions (list_deposits_postgres, get_deposits_by_address_postgres, get_address_dao_summary_postgres, get_statistics_postgres, calculate_compensation_postgres, get_total_deposit_chart_postgres, get_daily_deposit_chart_postgres, get_circulation_ratio_chart_postgres)
+- Inlined ClickHouse logic directly into handler functions
+- Updated state.clickhouse_client → state.clickhouse
+
+**Key Changes:**
+1. Created Row structs for ClickHouse queries:
+   - BlockDaoRow: (number, dao)
+   - CapacityDaoRow: (capacity, dao)
+   
+2. Fixed ClickHouse query type issues:
+   - Use explicit type parameters: fetch_optional::<Type>()
+   - Use Row derive macro for complex types
+   - Avoid tuple types directly with ClickHouse client
+
+3. Updated all queries to use ClickHouse syntax:
+   - unhex() for hex string conversion
+   - toString() for type casting
+   - countIf() for conditional aggregates
+   - toUnixTimestamp() for timestamp conversion
+
+**File Status:** ✅ Compiles cleanly, no sqlx references, no hybrid patterns
