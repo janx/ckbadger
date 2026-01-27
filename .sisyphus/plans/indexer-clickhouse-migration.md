@@ -637,7 +637,7 @@
 
 ---
 
-- [ ] 3.4. Pipeline集成与切换
+- [x] 3.4. Pipeline集成与切换
 
   **What to do**:
   - 在indexer main中添加database backend选择

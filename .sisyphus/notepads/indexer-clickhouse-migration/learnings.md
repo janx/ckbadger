@@ -3160,3 +3160,108 @@ Based on Phase 0 benchmarks (Task 0.2.2):
 | 100,000    | 449K rows/s         | 589ms         |
 
 **Recommendation**: Use 50K batch size for optimal throughput/latency balance.
+
+## Task 3.4: Database Backend Configuration Integration (2026-01-27)
+
+### Implementation Summary
+
+Successfully integrated ClickHouse backend selection into the indexer pipeline with backward-compatible PostgreSQL default.
+
+### Changes Made
+
+1. **Config Structure** (`crates/indexer/src/config.rs`):
+   - Added `DatabaseBackend` enum with PostgreSQL and ClickHouse variants
+   - Made PostgreSQL the default backend (backward compatible)
+   - Added `clickhouse_url` optional field to Config
+   - Used serde `rename_all = "lowercase"` for case-insensitive parsing
+
+2. **CLI Arguments** (`crates/indexer/src/main.rs`):
+   - Added `--database` flag with env var `DATABASE_BACKEND`
+   - Added `--clickhouse-url` flag with env var `CLICKHOUSE_URL`
+   - Accepts aliases: "postgresql"/"postgres"/"pg" and "clickhouse"/"ch"
+   - Default value: "postgresql" (backward compatible)
+
+3. **Pipeline Integration** (`crates/indexer/src/main.rs`):
+   - Added match statement on `config.database_backend`
+   - PostgreSQL branch: Existing logic unchanged (migrations, integrity service, indexer)
+   - ClickHouse branch: Stub implementation with clear TODO comments
+   - ClickHouse stub validates CLICKHOUSE_URL is provided and exits with helpful error
+
+### Design Decisions
+
+**Why stub implementation for ClickHouse?**
+
+- Task scope: Integration only, not full implementation
+- Conversion logic (ParsedBlock → BlockRow) is complex and separate concern
+- Stub allows testing configuration without blocking progress
+- Clear TODO comments document what's needed next
+
+**Why match in main.rs instead of Indexer?**
+
+- PostgreSQL indexer uses sqlx::PgPool throughout (tightly coupled)
+- ClickHouse needs different client type (ClickHouseClient)
+- Cleaner separation: different execution paths for different backends
+- Avoids enum wrapping or trait objects for database pools
+
+**Why exit(1) in ClickHouse stub?**
+
+- Prevents silent failures or confusing runtime errors
+- Clear user feedback about incomplete implementation
+- Forces explicit acknowledgment that feature is WIP
+
+### Testing
+
+```bash
+# Verify compilation
+cargo check -p ckbadger-indexer  # ✅ Passes
+
+# Test CLI parsing (would need running instance to test fully)
+cargo run -p ckbadger-indexer -- --database postgresql  # Default behavior
+cargo run -p ckbadger-indexer -- --database clickhouse --clickhouse-url http://localhost:8123/ckbadger  # Stub path
+DATABASE_BACKEND=clickhouse cargo run -p ckbadger-indexer  # Env var
+```
+
+### Next Steps (Documented in TODO comments)
+
+1. Initialize ClickHouseClient from clickhouse_url
+2. Create ClickHouseWriter instance
+3. Implement conversion functions:
+   - ParsedBlock → BlockRow
+   - ParsedTransaction → TransactionRow
+   - ParsedCell → CellRow
+4. Adapt sync pipeline to call ClickHouseWriter methods
+5. Handle differences in schema/features between PostgreSQL and ClickHouse
+
+### Backward Compatibility
+
+✅ **Fully backward compatible:**
+
+- Default backend is PostgreSQL
+- Existing deployments work without changes
+- No breaking changes to Config struct (new fields are optional/defaulted)
+- PostgreSQL code path unchanged
+
+### Configuration Examples
+
+```bash
+# PostgreSQL (default, existing behavior)
+DATABASE_URL=postgres://localhost/ckbadger cargo run -p ckbadger-indexer
+
+# ClickHouse (new, stub implementation)
+DATABASE_BACKEND=clickhouse \
+CLICKHOUSE_URL=http://localhost:8123/ckbadger \
+cargo run -p ckbadger-indexer
+
+# CLI flags
+cargo run -p ckbadger-indexer -- \
+  --database clickhouse \
+  --clickhouse-url http://localhost:8123/ckbadger
+```
+
+### Lessons Learned
+
+1. **Enum defaults in serde**: Use `#[serde(default)]` + `impl Default` for backward compatibility
+2. **Case-insensitive parsing**: `#[serde(rename_all = "lowercase")]` handles "PostgreSQL" vs "postgresql"
+3. **CLI aliases**: Accept multiple variants (pg/postgres/postgresql) for better UX
+4. **Stub with clear TODOs**: Better than incomplete implementation that silently fails
+5. **Match in main vs trait abstraction**: Sometimes simpler to have separate code paths

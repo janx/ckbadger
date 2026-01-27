@@ -1,8 +1,20 @@
 use serde::Deserialize;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum DatabaseBackend {
+    #[default]
+    PostgreSQL,
+    ClickHouse,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub database_url: String,
+    #[serde(default)]
+    pub clickhouse_url: Option<String>,
+    #[serde(default)]
+    pub database_backend: DatabaseBackend,
     pub ckb_rpc_url: String,
     #[serde(default = "default_batch_size")]
     pub batch_size: usize,
