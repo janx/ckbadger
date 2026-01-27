@@ -777,7 +777,7 @@
 
 ### PHASE 5: Testing & Validation
 
-- [ ] 5.1. Indexer测试重写
+- [x] 5.1. Indexer测试重写
 
   **What to do**:
   - 将现有130个测试适配新架构
@@ -805,7 +805,7 @@
 
 ---
 
-- [ ] 5.2. API集成测试重写
+- [x] 5.2. API集成测试重写
 
   **What to do**:
   - 重写API集成测试
