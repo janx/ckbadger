@@ -17,7 +17,9 @@
             <max_insert_block_size>1048576</max_insert_block_size> <!-- 1M rows -->
             <min_insert_block_size_rows>1048576</min_insert_block_size_rows> <!-- 1M rows -->
             <min_insert_block_size_bytes>268435456</min_insert_block_size_bytes> <!-- 256MB -->
-            <max_query_size>262144</max_query_size> <!-- 256KB -->
+            <max_query_size>67108864</max_query_size> <!-- 64MB -->
+            <max_ast_elements>500000</max_ast_elements> <!-- 500K AST nodes -->
+            <max_expanded_ast_elements>500000</max_expanded_ast_elements>
             <readonly>0</readonly>
         </default>
 
@@ -33,7 +35,7 @@
             <max_result_bytes>10737418240</max_result_bytes> <!-- 10GB -->
             <max_threads>24</max_threads>
             <max_block_size>65536</max_block_size> <!-- 64K rows -->
-            <max_query_size>262144</max_query_size> <!-- 256KB -->
+            <max_query_size>67108864</max_query_size> <!-- 64MB -->
             <readonly>1</readonly>
         </readonly>
 
@@ -49,26 +51,16 @@
             <max_threads>24</max_threads>
             <max_block_size>1048576</max_block_size> <!-- 1M rows -->
             <min_insert_block_size_bytes>268435456</min_insert_block_size_bytes> <!-- 256MB -->
-            <max_query_size>262144</max_query_size> <!-- 256KB -->
+            <max_query_size>67108864</max_query_size> <!-- 64MB -->
+            <max_ast_elements>500000</max_ast_elements> <!-- 500K AST nodes -->
+            <max_expanded_ast_elements>500000</max_expanded_ast_elements>
             <readonly>0</readonly>
         </bulk_insert>
     </profiles>
 
     <quotas>
-        <!-- Default quota: 100 queries per hour -->
+        <!-- Default quota: unlimited for development -->
         <default>
-            <interval>
-                <duration>3600</duration>
-                <queries>100</queries>
-                <errors>10</errors>
-                <result_rows>1000000000</result_rows>
-                <read_rows>10000000000</read_rows>
-                <execution_time>3600</execution_time>
-            </interval>
-        </default>
-
-        <!-- Unlimited quota for indexer -->
-        <indexer>
             <interval>
                 <duration>3600</duration>
                 <queries>0</queries> <!-- unlimited -->
@@ -77,21 +69,28 @@
                 <read_rows>0</read_rows> <!-- unlimited -->
                 <execution_time>0</execution_time> <!-- unlimited -->
             </interval>
-        </indexer>
+        </default>
     </quotas>
 
     <users>
-        <!-- Default user (from environment variables) -->
+        <!-- Default user -->
         <default>
             <password_sha256_hex remove="1"/>
             <access_management>1</access_management>
             <profile>default</profile>
-            <quota>default</quota>
+            <quota>indexer</quota>
             <networks>
                 <ip>::/0</ip>
             </networks>
         </default>
 
-        <!-- Additional users can be configured here if needed -->
+        <!-- ckbadger user (created by Docker entrypoint from CLICKHOUSE_USER env) -->
+        <ckbadger>
+            <profile>default</profile>
+            <quota>indexer</quota>
+            <networks>
+                <ip>::/0</ip>
+            </networks>
+        </ckbadger>
     </users>
 </clickhouse>

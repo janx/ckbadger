@@ -347,7 +347,113 @@ GROUP BY type_script_hash;
 -- - Token holder rankings (if sUDT/xUDT queries are slow)
 -- - Address transaction history (if JOIN queries are slow)
 -- - Cell relationship graph (if graph queries are slow)
---
+
+-- ============================================================================
+-- EPOCH STATISTICS TABLE
+-- ============================================================================
+-- Tracks epoch-level metrics for epoch duration charts
+
+CREATE TABLE IF NOT EXISTS epoch_statistics (
+    epoch_number UInt64,
+    start_block UInt64,
+    end_block Nullable(UInt64),
+    blocks_count UInt32 DEFAULT 0,
+    length UInt32,
+    start_timestamp DateTime,
+    end_timestamp Nullable(DateTime),
+    difficulty String DEFAULT '0',
+    hash_rate Nullable(String),
+    transactions_count UInt32 DEFAULT 0,
+    created_at DateTime DEFAULT now(),
+    updated_at DateTime DEFAULT now()
+) ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY (epoch_number)
+PRIMARY KEY (epoch_number);
+
+-- ============================================================================
+-- EPOCH TIME DISTRIBUTION TABLE
+-- ============================================================================
+-- Histogram of epoch durations for distribution charts
+
+CREATE TABLE IF NOT EXISTS epoch_time_distribution (
+    bucket_minutes Int32,
+    epoch_count UInt64 DEFAULT 0,
+    updated_at DateTime DEFAULT now()
+) ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY (bucket_minutes)
+PRIMARY KEY (bucket_minutes);
+
+-- ============================================================================
+-- MINER STATISTICS TABLE
+-- ============================================================================
+-- Aggregated miner statistics for mining distribution charts
+
+CREATE TABLE IF NOT EXISTS miner_statistics (
+    lock_script_hash String,
+    blocks_mined UInt64 DEFAULT 0,
+    total_reward String DEFAULT '0',
+    last_block_number Nullable(UInt64),
+    updated_at DateTime DEFAULT now()
+) ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY (lock_script_hash)
+PRIMARY KEY (lock_script_hash);
+
+-- ============================================================================
+-- DAO DAILY SNAPSHOTS TABLE
+-- ============================================================================
+-- Daily DAO statistics for supply/issuance charts
+
+CREATE TABLE IF NOT EXISTS dao_daily_snapshots (
+    date Date,
+    total_deposit String DEFAULT '0',
+    depositors_count UInt32 DEFAULT 0,
+    daily_deposit String DEFAULT '0',
+    daily_deposit_count UInt32 DEFAULT 0,
+    total_issuance String DEFAULT '0',
+    dao_data Nullable(String),
+    secondary_issuance String DEFAULT '0',
+    burnt String DEFAULT '0',
+    cumulative_burnt Nullable(String),
+    cumulative_mining_reward Nullable(Float64),
+    cumulative_deposit_compensation Nullable(Float64),
+    created_at DateTime DEFAULT now()
+) ENGINE = ReplacingMergeTree(created_at)
+ORDER BY (date)
+PRIMARY KEY (date);
+
+-- ============================================================================
+-- DAILY BLOCK STATS TABLE
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS daily_block_stats (
+    date Date,
+    min_block_time_ms Nullable(Int32),
+    max_block_time_ms Nullable(Int32),
+    median_block_time_ms Nullable(Int32),
+    p95_block_time_ms Nullable(Int32),
+    avg_block_time_ms Nullable(Int32),
+    avg_compact_target Nullable(Int64),
+    avg_uncle_rate Float64 DEFAULT 0,
+    block_count Int32 DEFAULT 0,
+    total_uncles Int32 DEFAULT 0,
+    created_at DateTime DEFAULT now(),
+    updated_at DateTime DEFAULT now()
+) ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY (date)
+PRIMARY KEY (date);
+
+-- ============================================================================
+-- BLOCK TIME DISTRIBUTION TABLE
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS block_time_distribution (
+    bucket_seconds Int32,
+    block_count UInt64 DEFAULT 0,
+    updated_at DateTime DEFAULT now()
+) ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY (bucket_seconds)
+PRIMARY KEY (bucket_seconds);
+
 -- ============================================================================
 -- END OF SCHEMA
 -- ============================================================================

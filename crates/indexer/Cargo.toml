@@ -63,7 +63,7 @@ ckb-hash = { workspace = true }
 redis = { workspace = true, optional = true }
 
 # ClickHouse (for benchmarking and analytics)
-clickhouse = { version = "0.12", features = ["test-util"] }
+clickhouse = { version = "0.13", features = ["test-util"] }
 rand = "0.8"
 url = "2.5"
 

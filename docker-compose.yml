@@ -83,6 +83,8 @@ services:
       CLICKHOUSE_DB: ${CLICKHOUSE_DB:-ckbadger}
       CKB_RPC_URL: ${CKB_RPC_URL:-http://ckb-node:8114}
       TOKEN_LABELS_PATH: /app/token-labels
+      BATCH_SIZE: ${BATCH_SIZE:-500}
+      BULK_SYNC_MODE: ${BULK_SYNC_MODE:-true}
       RUST_LOG: info
     volumes:
       - ./docs/token-labels:/app/token-labels:ro

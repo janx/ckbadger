@@ -996,7 +996,7 @@ async fn get_circulation_ratio_chart(
         return ok(cached);
     }
 
-    let query = "SELECT date, toString(total_deposit), toString(total_issuance), cumulative_burnt FROM dao_daily_snapshots WHERE total_issuance != 0 ORDER BY date ASC";
+    let query = "SELECT date, toString(total_deposit), toString(total_issuance), cumulative_burnt FROM dao_daily_snapshots WHERE total_issuance != '0' ORDER BY date ASC";
 
     let rows: Vec<(String, String, String, String)> = state
         .clickhouse

@@ -436,7 +436,7 @@ async fn warmup_total_supply(state: &AppState) -> Result<(), String> {
     let query = r#"
         SELECT toString(date) as date, toString(total_issuance) as total_issuance, toString(total_deposit) as total_deposit, COALESCE(toString(cumulative_burnt), '0') as cumulative_burnt
         FROM dao_daily_snapshots
-        WHERE total_issuance != 0
+        WHERE total_issuance != '0'
         ORDER BY date ASC
     "#;
 

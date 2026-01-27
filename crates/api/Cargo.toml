@@ -24,7 +24,7 @@ tokio-tungstenite = "0.24"
 futures = "0.3"
 
 # Database
-clickhouse = "0.12"
+clickhouse = "0.13"
 
 # Serialization
 serde = { workspace = true }

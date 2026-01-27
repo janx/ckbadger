@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::{TimeZone, Utc};
 use clickhouse::Row;
 use serde::Deserialize;
 use std::sync::Arc;
@@ -10,11 +10,11 @@ use crate::clickhouse::{hex_hash, ClickHouseClient};
 
 #[derive(Row, Deserialize)]
 struct BlockRow {
-    number: i64,
+    number: u64,
     hash: String,
-    timestamp: DateTime<Utc>,
+    timestamp: u32,
     transactions_count: u32,
-    epoch_number: i64,
+    epoch_number: u64,
     epoch_index: u32,
     epoch_length: u32,
 }
@@ -25,12 +25,19 @@ struct TransactionRow {
     inputs_count: u32,
     outputs_count: u32,
     fee: String,
-    timestamp: DateTime<Utc>,
+    timestamp: u32,
 }
 
 #[derive(Row, Deserialize)]
 struct TimestampRow {
-    timestamp: DateTime<Utc>,
+    timestamp: u32,
+}
+
+fn timestamp_to_rfc3339(ts: u32) -> String {
+    Utc.timestamp_opt(ts as i64, 0)
+        .single()
+        .map(|dt| dt.to_rfc3339())
+        .unwrap_or_else(|| "1970-01-01T00:00:00Z".to_string())
 }
 
 pub(crate) const FAST_SYNC_THRESHOLD: i64 = 100;
@@ -76,15 +83,14 @@ pub async fn start_block_broadcaster(
             .await
         {
             Ok(Some(row)) => {
-                // Convert hex string to bytes for compatibility
                 let hash = hex::decode(row.hash.strip_prefix("0x").unwrap_or(&row.hash))
                     .unwrap_or_default();
                 Ok(Some((
-                    row.number,
+                    row.number as i64,
                     hash,
                     row.timestamp,
                     row.transactions_count as i32,
-                    row.epoch_number,
+                    row.epoch_number as i64,
                     row.epoch_index as i32,
                     row.epoch_length as i32,
                 )))
@@ -127,7 +133,7 @@ pub async fn start_block_broadcaster(
             let msg = BroadcastMessage::NewBlock {
                 number,
                 hash: format!("0x{}", hex::encode(&hash)),
-                timestamp: timestamp.to_rfc3339(),
+                timestamp: timestamp_to_rfc3339(timestamp),
                 transactions_count: tx_count,
                 epoch_number,
                 epoch_index,
@@ -161,26 +167,18 @@ pub async fn start_block_broadcaster(
             {
                 Ok(rows) => {
                     #[allow(clippy::type_complexity)]
-                    let blocks: Vec<(
-                        i64,
-                        Vec<u8>,
-                        DateTime<Utc>,
-                        i32,
-                        i64,
-                        i32,
-                        i32,
-                    )> = rows
+                    let blocks: Vec<(i64, Vec<u8>, u32, i32, i64, i32, i32)> = rows
                         .into_iter()
                         .map(|row| {
                             let hash =
                                 hex::decode(row.hash.strip_prefix("0x").unwrap_or(&row.hash))
                                     .unwrap_or_default();
                             (
-                                row.number,
+                                row.number as i64,
                                 hash,
                                 row.timestamp,
                                 row.transactions_count as i32,
-                                row.epoch_number,
+                                row.epoch_number as i64,
                                 row.epoch_index as i32,
                                 row.epoch_length as i32,
                             )
@@ -204,7 +202,7 @@ pub async fn start_block_broadcaster(
                         let msg = BroadcastMessage::NewBlock {
                             number: num,
                             hash: format!("0x{}", hex::encode(&h)),
-                            timestamp: ts.to_rfc3339(),
+                            timestamp: timestamp_to_rfc3339(ts),
                             transactions_count: txc,
                             epoch_number: ep_num,
                             epoch_index: ep_idx,
@@ -250,7 +248,7 @@ async fn broadcast_block_transactions(
     {
         Ok(rows) => {
             #[allow(clippy::type_complexity)]
-            let transactions: Vec<(Vec<u8>, i32, i32, String, DateTime<Utc>)> = rows
+            let transactions: Vec<(Vec<u8>, i32, i32, String, u32)> = rows
                 .into_iter()
                 .map(|row| {
                     let hash = hex::decode(row.hash.strip_prefix("0x").unwrap_or(&row.hash))
@@ -281,7 +279,7 @@ async fn broadcast_block_transactions(
                     inputs_count,
                     outputs_count,
                     fee,
-                    timestamp: timestamp.to_rfc3339(),
+                    timestamp: timestamp_to_rfc3339(timestamp),
                 };
                 debug!("Broadcasting new transaction: {}", hex::encode(&hash));
                 ws_manager.broadcast_transaction(msg);
@@ -313,7 +311,7 @@ async fn calculate_epoch_stats(
         .fetch_all::<TimestampRow>()
         .await
     {
-        Ok(rows) => Ok(rows.into_iter().map(|r| (r.timestamp,)).collect()),
+        Ok(rows) => Ok(rows.into_iter().map(|r| r.timestamp).collect()),
         Err(e) => {
             error!(
                 "Failed to query blocks for epoch stats from ClickHouse: {}",
@@ -325,10 +323,10 @@ async fn calculate_epoch_stats(
 
     let avg_time = blocks_result
         .ok()
-        .and_then(|blocks: Vec<(DateTime<Utc>,)>| {
+        .and_then(|blocks: Vec<u32>| {
             if blocks.len() == 2 {
-                let duration = blocks[1].0.signed_duration_since(blocks[0].0).num_seconds() as f64;
-                Some(duration.max(1.0))
+                let duration = (blocks[1] as i64 - blocks[0] as i64) as f64;
+                Some(duration.abs().max(1.0))
             } else {
                 None
             }
@@ -349,13 +347,13 @@ async fn build_sync_status(clickhouse_client: &ClickHouseClient, tip_block: i64)
 
     #[derive(Row, Deserialize)]
     struct SyncStatusRow {
-        tip_block_number: i64,
-        sync_started_at: Option<DateTime<Utc>>,
+        tip_block_number: u64,
+        sync_started_at: Option<u32>,
         #[serde(rename = "COALESCE(sync_started_block, 0)")]
-        sync_started_block: i64,
+        sync_started_block: u64,
     }
 
-    let sync_row: Option<(i64, Option<DateTime<Utc>>, i64)> = clickhouse_client
+    let sync_row: Option<(i64, Option<u32>, i64)> = clickhouse_client
         .client()
         .query(query)
         .fetch_optional::<SyncStatusRow>()
@@ -364,9 +362,9 @@ async fn build_sync_status(clickhouse_client: &ClickHouseClient, tip_block: i64)
         .flatten()
         .map(|row| {
             (
-                row.tip_block_number,
+                row.tip_block_number as i64,
                 row.sync_started_at,
-                row.sync_started_block,
+                row.sync_started_block as i64,
             )
         });
 
@@ -382,12 +380,17 @@ async fn build_sync_status(clickhouse_client: &ClickHouseClient, tip_block: i64)
 
     let estimated_time = if is_syncing && blocks_behind > 0 {
         if let Some(started_at) = sync_started_at {
-            let elapsed = Utc::now().signed_duration_since(started_at).num_seconds() as u64;
-            let blocks_synced = (synced_block - sync_started_block).max(0) as u64;
-            if elapsed > 0 && blocks_synced > 0 {
-                let rate = blocks_synced as f64 / elapsed as f64;
-                let seconds_remaining = (blocks_behind as f64 / rate) as u64;
-                Some(format_duration(seconds_remaining))
+            let started_at_dt = Utc.timestamp_opt(started_at as i64, 0).single();
+            if let Some(started_at_dt) = started_at_dt {
+                let elapsed = Utc::now().signed_duration_since(started_at_dt).num_seconds() as u64;
+                let blocks_synced = (synced_block - sync_started_block).max(0) as u64;
+                if elapsed > 0 && blocks_synced > 0 {
+                    let rate = blocks_synced as f64 / elapsed as f64;
+                    let seconds_remaining = (blocks_behind as f64 / rate) as u64;
+                    Some(format_duration(seconds_remaining))
+                } else {
+                    None
+                }
             } else {
                 None
             }
@@ -520,5 +523,11 @@ mod tests {
         assert_eq!(format_duration(90000), "1d 1h");
         assert_eq!(format_duration(172800), "2d");
         assert_eq!(format_duration(259200), "3d");
+    }
+
+    #[test]
+    fn test_timestamp_to_rfc3339() {
+        assert_eq!(timestamp_to_rfc3339(0), "1970-01-01T00:00:00+00:00");
+        assert_eq!(timestamp_to_rfc3339(1573969227), "2019-11-17T05:20:27+00:00");
     }
 }
