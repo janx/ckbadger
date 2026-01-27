@@ -989,3 +989,26 @@ This work was completed using Boulder mode (continuous work until complete):
 **Duration**: 2 days  
 **Final commit**: fc4b7a3  
 **Status**: ✅ COMPLETE - READY FOR PRODUCTION
+
+## .env File Update (2026-01-27)
+
+User requested .env update. File was updated locally but is gitignored (as expected).
+
+**Changes made to local .env**:
+
+- Removed `DATABASE_URL` (PostgreSQL)
+- Removed `CONTROL_DATABASE_URL` (PostgreSQL)
+- Added `CLICKHOUSE_URL=http://localhost:8123`
+- Added `CLICKHOUSE_USER=ckbadger`
+- Added `CLICKHOUSE_PASSWORD=changeme`
+- Added `CLICKHOUSE_DATABASE=ckbadger`
+
+**Note**: .env.example already has correct ClickHouse configuration (created in Phase 5.5).
+
+Users should copy .env.example to .env:
+
+```bash
+cp .env.example .env
+```
+
+This was the final requested change. All work complete.
