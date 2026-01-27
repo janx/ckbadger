@@ -246,7 +246,7 @@ Simplify architecture by removing PostgreSQL, making ClickHouse the only databas
 
 ---
 
-- [ ] 2.8. Simplify tokens.rs
+- [x] 2.8. Simplify tokens.rs
 
   **Pattern**: Same as above
 

@@ -301,3 +301,35 @@ All follow same pattern: remove hybrid if/else, inline ClickHouse, convert helpe
 - File structure: 3 main handlers + 1 helper function (parse_capacity)
 
 **Status:** ✅ Complete - graph.rs is now ClickHouse-only
+
+## Task 8: Refactor tokens.rs (2026-01-27)
+
+### Pattern Applied
+Successfully refactored `crates/api/src/routes/tokens.rs` to ClickHouse-only following established pattern from previous 7 tasks.
+
+### Key Changes
+1. **Imports**: Replaced `sqlx::FromRow` with `clickhouse::Row` and `Deserialize`
+2. **Struct**: Changed `TokenRow` → `TokenRowClickHouse` with String fields for hashes (ClickHouse returns hex strings)
+3. **Handlers**: Removed hybrid if/else patterns:
+   - `list_tokens()`: Inlined ClickHouse logic, removed `_postgres` and `_clickhouse` variants
+   - `get_token()`: Direct ClickHouse query
+   - `get_token_holders()`: Direct ClickHouse query with address resolution
+   - `get_token_transfers()`: Direct ClickHouse query with address resolution
+4. **State**: Changed `state.clickhouse_client` → `state.clickhouse.client()`
+5. **SQL**: Used ClickHouse `unhex()` function in queries instead of converting bytes
+
+### Technical Details
+- **Hash handling**: Use `unhex_hash()` for validation, then use `unhex('hex_string')` in SQL
+- **Row structs**: Must derive both `Row` and `Deserialize` for ClickHouse client
+- **Client access**: Use `.client()` method to get underlying `clickhouse::Client`
+- **String hashes**: ClickHouse returns hashes as hex strings, not bytes
+
+### Verification
+- ✅ No sqlx references in tokens.rs
+- ✅ No hybrid patterns (all _postgres and _clickhouse functions removed)
+- ✅ All handlers use state.clickhouse directly
+- ✅ File compiles without errors
+
+### Files Modified
+- `crates/api/src/routes/tokens.rs` (834 → ~700 lines, removed ~134 lines of PostgreSQL code)
+
