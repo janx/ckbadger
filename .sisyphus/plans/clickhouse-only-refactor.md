@@ -535,7 +535,7 @@ Simplify architecture by removing PostgreSQL, making ClickHouse the only databas
 
 ### PHASE 6: Critical Data Migration
 
-- [ ] 6.1. Ensure sync_status table in ClickHouse
+- [x] 6.1. Ensure sync_status table in ClickHouse
 
   **What to do**:
   - Verify `sync_status` table exists in ClickHouse schema
@@ -555,7 +555,7 @@ Simplify architecture by removing PostgreSQL, making ClickHouse the only databas
 
 ---
 
-- [ ] 6.2. Ensure block_proposals table in ClickHouse
+- [x] 6.2. Ensure block_proposals table in ClickHouse
 
   **What to do**:
   - The `get_block_proposals()` endpoint uses PostgreSQL-only

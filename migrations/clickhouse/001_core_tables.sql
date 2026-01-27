@@ -267,7 +267,38 @@ COMMENT 'Cell consumption events (inputs) - immutable insert-only';
 --     - Materialized views for live_cells, address_balances
 --     - Aggregating tables for statistics (daily_stats, token_holders)
 --     - ReplacingMergeTree for deduplication (if needed)
---
+
+-- ============================================================================
+-- SYNC STATUS TABLE
+-- ============================================================================
+-- Tracks indexer synchronization progress
+-- Single row table (id = 1) updated by indexer
+
+CREATE TABLE IF NOT EXISTS sync_status (
+    id UInt8,                           -- Always 1 (single row)
+    tip_block_number UInt64,            -- Latest synced block number
+    updated_at DateTime DEFAULT now()  -- Last update timestamp
+) ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY id
+PRIMARY KEY (id)
+COMMENT 'Indexer synchronization status';
+
+-- ============================================================================
+-- BLOCK PROPOSALS TABLE
+-- ============================================================================
+-- Stores transaction proposals in blocks
+-- Proposals are transactions suggested for inclusion in future blocks
+
+CREATE TABLE IF NOT EXISTS block_proposals (
+    block_number UInt64,                -- Block height
+    block_hash FixedString(32),         -- Block hash
+    proposal_hash FixedString(32),      -- Proposed transaction hash
+    proposal_index UInt16               -- Index within proposals array
+) ENGINE = MergeTree()
+PARTITION BY intDiv(block_number, 5000000)
+ORDER BY (block_number, proposal_index)
+COMMENT 'Transaction proposals in blocks';
+
 -- ============================================================================
 -- END OF SCHEMA
 -- ============================================================================
