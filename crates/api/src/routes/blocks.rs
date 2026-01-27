@@ -5,12 +5,14 @@ use axum::{
     routing::get,
     Router,
 };
+use clickhouse::Row;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use std::sync::Arc;
 
 use crate::cache::{CacheKeys, CacheTtl};
+use crate::clickhouse::{hex_hash, unhex_hash};
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
 use crate::utils::script_to_address;
 use crate::AppState;
@@ -81,6 +83,27 @@ struct BlockRow {
     version: i32,
 }
 
+#[derive(Debug, Row, Deserialize)]
+struct BlockRowClickHouse {
+    number: u64,
+    hash: String,
+    parent_hash: String,
+    timestamp: u32,
+    transactions_count: u32,
+    proposals_count: u32,
+    uncles_count: u32,
+    epoch_number: u64,
+    epoch_index: u32,
+    epoch_length: u32,
+    nonce: String,
+    transactions_root: String,
+    #[allow(dead_code)]
+    miner_lock_hash: Option<String>,
+    miner_message: Option<String>,
+    compact_target: u64,
+    version: u32,
+}
+
 async fn list_blocks(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListParams>,
@@ -99,6 +122,101 @@ async fn list_blocks(
         }
     }
 
+    if let Some(ch_client) = &state.clickhouse_client {
+        list_blocks_clickhouse(ch_client, &state, params, limit, is_first_page, cache_key).await
+    } else {
+        list_blocks_postgres(&state, params, limit, is_first_page, cache_key).await
+    }
+}
+
+async fn list_blocks_clickhouse(
+    ch_client: &crate::clickhouse::ClickHouseClient,
+    state: &Arc<AppState>,
+    params: ListParams,
+    limit: i64,
+    is_first_page: bool,
+    cache_key: String,
+) -> ApiResult<CursorPaginatedResponse<BlockResponse>> {
+    let cursor_number = params.cursor.unwrap_or(i64::MAX);
+
+    // Get total count from sync_status (PostgreSQL)
+    let total: (i64,) = sqlx::query_as("SELECT tip_block_number + 1 FROM sync_status WHERE id = 1")
+        .fetch_one(&state.pool)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    // Query ClickHouse
+    let query = format!(
+        "SELECT 
+            number,
+            {} as hash,
+            {} as parent_hash,
+            toUnixTimestamp(timestamp) as timestamp,
+            transactions_count,
+            proposals_count,
+            uncles_count,
+            epoch_number,
+            epoch_index,
+            epoch_length,
+            {} as nonce,
+            {} as transactions_root,
+            {} as miner_lock_hash,
+            miner_message,
+            compact_target,
+            version
+        FROM blocks
+        WHERE number < {}
+        ORDER BY number DESC
+        LIMIT {}",
+        hex_hash("hash"),
+        hex_hash("parent_hash"),
+        hex_hash("nonce"),
+        hex_hash("transactions_root"),
+        hex_hash("miner_lock_hash"),
+        cursor_number,
+        limit + 1
+    );
+
+    let rows = ch_client
+        .client()
+        .query(&query)
+        .fetch_all::<BlockRowClickHouse>()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let has_more = rows.len() as i64 > limit;
+    let rows: Vec<_> = rows.into_iter().take(limit as usize).collect();
+
+    let next_cursor = if has_more {
+        rows.last().map(|r| r.number.to_string())
+    } else {
+        None
+    };
+
+    let blocks: Vec<BlockResponse> = rows
+        .into_iter()
+        .map(clickhouse_row_to_block_response)
+        .collect();
+
+    let response = CursorPaginatedResponse::new(blocks, total.0, limit, next_cursor);
+
+    if is_first_page {
+        state
+            .cache
+            .set(&cache_key, &response, CacheTtl::LATEST_BLOCKS)
+            .await;
+    }
+
+    ok(response)
+}
+
+async fn list_blocks_postgres(
+    state: &Arc<AppState>,
+    params: ListParams,
+    limit: i64,
+    is_first_page: bool,
+    cache_key: String,
+) -> ApiResult<CursorPaginatedResponse<BlockResponse>> {
     let total: (i64,) = sqlx::query_as("SELECT tip_block_number + 1 FROM sync_status WHERE id = 1")
         .fetch_one(&state.pool)
         .await
@@ -243,10 +361,147 @@ fn row_to_block_response(row: BlockRow, extra: BlockExtra) -> BlockResponse {
     }
 }
 
+fn clickhouse_row_to_block_response(row: BlockRowClickHouse) -> BlockResponse {
+    let difficulty = compact_target_to_difficulty(row.compact_target as u32);
+    let timestamp = chrono::DateTime::from_timestamp(row.timestamp as i64, 0)
+        .unwrap_or_default()
+        .to_rfc3339();
+
+    BlockResponse {
+        number: row.number as i64,
+        hash: format!("0x{}", row.hash),
+        parent_hash: format!("0x{}", row.parent_hash),
+        timestamp,
+        transactions_count: row.transactions_count as i32,
+        proposals_count: row.proposals_count as i32,
+        uncles_count: row.uncles_count as i32,
+        epoch: format!("{}/{}", row.epoch_index, row.epoch_length),
+        epoch_number: row.epoch_number as i64,
+        epoch_index: row.epoch_index as i32,
+        epoch_length: row.epoch_length as i32,
+        difficulty,
+        nonce: format!("0x{}", row.nonce),
+        transactions_root: format!("0x{}", row.transactions_root),
+        miner_address: None,
+        miner_message: row.miner_message.map(|m| format!("0x{}", m)),
+        mining_reward: None,
+        mining_reward_tx_hash: None,
+        compact_target: format!("0x{:x}", row.compact_target),
+        version: row.version as i32,
+    }
+}
+
 async fn get_block(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> ApiResult<BlockResponse> {
+    if let Some(ch_client) = &state.clickhouse_client {
+        get_block_clickhouse(ch_client, &state, id).await
+    } else {
+        get_block_postgres(&state, id).await
+    }
+}
+
+async fn get_block_clickhouse(
+    ch_client: &crate::clickhouse::ClickHouseClient,
+    state: &Arc<AppState>,
+    id: String,
+) -> ApiResult<BlockResponse> {
+    let query = if id.starts_with("0x") {
+        let _hash_bytes = unhex_hash(&id)?;
+        format!(
+            "SELECT 
+                number,
+                {} as hash,
+                {} as parent_hash,
+                toUnixTimestamp(timestamp) as timestamp,
+                transactions_count,
+                proposals_count,
+                uncles_count,
+                epoch_number,
+                epoch_index,
+                epoch_length,
+                {} as nonce,
+                {} as transactions_root,
+                {} as miner_lock_hash,
+                miner_message,
+                compact_target,
+                version
+            FROM blocks
+            WHERE hash = unhex('{}')
+            LIMIT 1",
+            hex_hash("hash"),
+            hex_hash("parent_hash"),
+            hex_hash("nonce"),
+            hex_hash("transactions_root"),
+            hex_hash("miner_lock_hash"),
+            id.strip_prefix("0x").unwrap_or(&id)
+        )
+    } else {
+        let number: i64 = id
+            .parse()
+            .map_err(|_| ApiError::bad_request("Invalid block number"))?;
+        format!(
+            "SELECT 
+                number,
+                {} as hash,
+                {} as parent_hash,
+                toUnixTimestamp(timestamp) as timestamp,
+                transactions_count,
+                proposals_count,
+                uncles_count,
+                epoch_number,
+                epoch_index,
+                epoch_length,
+                {} as nonce,
+                {} as transactions_root,
+                {} as miner_lock_hash,
+                miner_message,
+                compact_target,
+                version
+            FROM blocks
+            WHERE number = {}
+            LIMIT 1",
+            hex_hash("hash"),
+            hex_hash("parent_hash"),
+            hex_hash("nonce"),
+            hex_hash("transactions_root"),
+            hex_hash("miner_lock_hash"),
+            number
+        )
+    };
+
+    let rows = ch_client
+        .client()
+        .query(&query)
+        .fetch_all::<BlockRowClickHouse>()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    match rows.into_iter().next() {
+        Some(r) => {
+            let block_hash = format!("0x{}", r.hash);
+            let block_number = r.number as i64;
+            let miner_address =
+                get_miner_address(&state.pool, block_number, &state.ckb_network).await;
+            let reward_info = get_mining_reward(&state.ckb_rpc_url, &block_hash, &state.pool).await;
+            let (mining_reward, mining_reward_tx_hash) = match reward_info {
+                Some(info) => (Some(info.reward), info.cellbase_tx_hash),
+                None => (None, None),
+            };
+
+            let mut response = clickhouse_row_to_block_response(r);
+            response.miner_address = miner_address;
+            response.mining_reward = mining_reward;
+            response.mining_reward_tx_hash = mining_reward_tx_hash;
+
+            ok(response)
+        }
+        None => Err(ApiError::not_found("Block not found")),
+    }
+}
+
+async fn get_block_postgres(state: &Arc<AppState>, id: String) -> ApiResult<BlockResponse> {
     let row: Option<BlockRow> = if id.starts_with("0x") {
         let hash = hex::decode(id.strip_prefix("0x").unwrap_or(&id))
             .map_err(|_| ApiError::bad_request("Invalid block hash"))?;
@@ -434,6 +689,88 @@ async fn get_block_fee_stats(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> ApiResult<BlockFeeStatsResponse> {
+    if let Some(ch_client) = &state.clickhouse_client {
+        get_block_fee_stats_clickhouse(ch_client, &state, id).await
+    } else {
+        get_block_fee_stats_postgres(&state, id).await
+    }
+}
+
+async fn get_block_fee_stats_clickhouse(
+    ch_client: &crate::clickhouse::ClickHouseClient,
+    _state: &Arc<AppState>,
+    id: String,
+) -> ApiResult<BlockFeeStatsResponse> {
+    let block_number: i64 = if id.starts_with("0x") {
+        let _hash_bytes = unhex_hash(&id)?;
+        let query = format!(
+            "SELECT number FROM blocks WHERE hash = unhex('{}') LIMIT 1",
+            id.strip_prefix("0x").unwrap_or(&id)
+        );
+
+        let rows = ch_client
+            .client()
+            .query(&query)
+            .fetch_all::<u64>()
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+
+        rows.into_iter()
+            .next()
+            .ok_or_else(|| ApiError::not_found("Block not found"))? as i64
+    } else {
+        id.parse()
+            .map_err(|_| ApiError::bad_request("Invalid block number"))?
+    };
+
+    let query = format!(
+        "SELECT
+            sum(tx_size) as total_size,
+            sum(cycles) as total_cycles,
+            avg(if(is_cellbase = 0 AND tx_size > 0, fee / tx_size, NULL)) as avg_fee_rate,
+            min(if(is_cellbase = 0 AND tx_size > 0, fee / tx_size, NULL)) as min_fee_rate,
+            max(if(is_cellbase = 0 AND tx_size > 0, fee / tx_size, NULL)) as max_fee_rate,
+            countIf(is_cellbase = 0) as tx_count
+        FROM transactions
+        WHERE block_number = {}",
+        block_number
+    );
+
+    #[derive(Row, Deserialize)]
+    struct FeeStatsRow {
+        total_size: u64,
+        total_cycles: u64,
+        avg_fee_rate: f64,
+        min_fee_rate: f64,
+        max_fee_rate: f64,
+        tx_count: u64,
+    }
+
+    let rows = ch_client
+        .client()
+        .query(&query)
+        .fetch_all::<FeeStatsRow>()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    match rows.into_iter().next() {
+        Some(stats) => ok(BlockFeeStatsResponse {
+            block_number,
+            total_size: stats.total_size as i64,
+            total_cycles: stats.total_cycles as i64,
+            avg_fee_rate: stats.avg_fee_rate,
+            min_fee_rate: stats.min_fee_rate,
+            max_fee_rate: stats.max_fee_rate,
+            transaction_count: stats.tx_count as i32,
+        }),
+        None => Err(ApiError::not_found("Block not found")),
+    }
+}
+
+async fn get_block_fee_stats_postgres(
+    state: &Arc<AppState>,
+    id: String,
+) -> ApiResult<BlockFeeStatsResponse> {
     let block_number: i64 = if id.starts_with("0x") {
         let hash = hex::decode(id.strip_prefix("0x").unwrap_or(&id))
             .map_err(|_| ApiError::bad_request("Invalid block hash"))?;
@@ -450,7 +787,6 @@ async fn get_block_fee_stats(
             .map_err(|_| ApiError::bad_request("Invalid block number"))?
     };
 
-    // total_size includes all txs; fee_rate only from non-cellbase txs
     let stats: Option<(i64, i64, Option<f64>, Option<f64>, Option<f64>, i64)> = sqlx::query_as(
         r#"
         SELECT
@@ -497,6 +833,13 @@ pub struct BlockProposal {
 async fn get_block_proposals(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+) -> ApiResult<Vec<BlockProposal>> {
+    get_block_proposals_postgres(&state, id).await
+}
+
+async fn get_block_proposals_postgres(
+    state: &Arc<AppState>,
+    id: String,
 ) -> ApiResult<Vec<BlockProposal>> {
     let block_number: i64 = if id.starts_with("0x") {
         let hash = hex::decode(id.strip_prefix("0x").unwrap_or(&id))

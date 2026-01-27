@@ -9,10 +9,11 @@ fn test_config(pool: sqlx::PgPool) -> AppConfig {
     AppConfig {
         pool,
         redis_url: None,
+        clickhouse_url: None,
         ckb_rpc_url: "http://localhost:8114".to_string(),
         ckb_network: "mainnet".to_string(),
-        rate_limit_per_second: Some(1000),
-        rate_limit_burst: Some(2000),
+        rate_limit_per_second: Some(100),
+        rate_limit_burst: Some(200),
         start_background_tasks: false,
     }
 }

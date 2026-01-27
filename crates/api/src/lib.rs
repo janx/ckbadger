@@ -16,6 +16,7 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
 use cache::CacheBackend;
+use clickhouse::ClickHouseClient;
 use cycles::CyclesCalculator;
 use middleware::IpRateLimitLayer;
 use ws::WsManager;
@@ -31,11 +32,13 @@ pub struct AppState {
     pub ckb_rpc_url: String,
     pub ckb_network: String,
     pub cycles_calculator: Arc<CyclesCalculator>,
+    pub clickhouse_client: Option<ClickHouseClient>,
 }
 
 pub struct AppConfig {
     pub pool: PgPool,
     pub redis_url: Option<String>,
+    pub clickhouse_url: Option<String>,
     pub ckb_rpc_url: String,
     pub ckb_network: String,
     pub rate_limit_per_second: Option<u32>,
@@ -48,6 +51,7 @@ impl Default for AppConfig {
         Self {
             pool: PgPool::connect_lazy("postgres://localhost/ckbadger").unwrap(),
             redis_url: None,
+            clickhouse_url: None,
             ckb_rpc_url: "http://localhost:8114".to_string(),
             ckb_network: "mainnet".to_string(),
             rate_limit_per_second: Some(100),
@@ -88,6 +92,26 @@ pub async fn create_router(config: AppConfig) -> Router {
 
     let cycles_calculator = CyclesCalculator::new(config.pool.clone(), config.ckb_rpc_url.clone());
 
+    let clickhouse_client = match config.clickhouse_url {
+        Some(ref url) => match ClickHouseClient::new(url) {
+            Ok(client) => {
+                tracing::info!("ClickHouse client initialized");
+                Some(client)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to initialize ClickHouse client: {}, using PostgreSQL fallback",
+                    e
+                );
+                None
+            }
+        },
+        None => {
+            tracing::info!("No ClickHouse URL configured, using PostgreSQL only");
+            None
+        }
+    };
+
     let state = Arc::new(AppState {
         pool: config.pool,
         ws_manager,
@@ -95,6 +119,7 @@ pub async fn create_router(config: AppConfig) -> Router {
         ckb_rpc_url: config.ckb_rpc_url,
         ckb_network: config.ckb_network,
         cycles_calculator,
+        clickhouse_client,
     });
 
     let cors = CorsLayer::new()
