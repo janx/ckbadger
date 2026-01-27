@@ -268,7 +268,7 @@
 
 ---
 
-- [ ] 0.4. Phase 0 Gate Decision
+- [x] 0.4. Phase 0 Gate Decision (CONDITIONAL GO)
 
   **What to do**:
   - 汇总所有benchmark结果
