@@ -358,6 +358,54 @@ Same-batch consumptions get code_hashes from the creating transaction directly.
 2. Reduce `batch_size`
 3. Monitor for memory leaks in channel handling
 
+## Bulk Sync Statistics Optimization
+
+During bulk sync (when `blocks_remaining > bulk_sync_threshold`), the indexer skips non-critical statistics updates to reduce DB write time by ~15%.
+
+### Skipped Statistics (during bulk sync)
+
+| Table                     | Rebuilt After | Description                    |
+| ------------------------- | ------------- | ------------------------------ |
+| `daily_statistics`        | Yes           | Daily block/tx/cell counts     |
+| `daily_block_stats`       | Yes           | Daily difficulty/uncle stats   |
+| `hourly_statistics`       | Yes           | Hourly activity metrics        |
+| `miner_statistics`        | Yes           | Per-miner block counts         |
+| `block_time_distribution` | Yes           | Block time histogram           |
+| `epoch_time_distribution` | Yes           | Epoch duration histogram       |
+| `dao_daily_snapshots`     | Yes           | DAO deposit/issuance snapshots |
+
+### Always Updated (even during bulk sync)
+
+| Table              | Reason                                          |
+| ------------------ | ----------------------------------------------- |
+| `sync_status`      | Critical for crash recovery                     |
+| `epoch_statistics` | Contains epoch metadata (start/end block, etc.) |
+
+### Automatic Rebuild
+
+When bulk sync completes (transitions from `blocks_remaining > threshold` to `<= threshold`):
+
+1. Indexer detects state transition via `was_bulk_sync_active` flag
+2. Triggers `rebuild_all_statistics()` which:
+   - Truncates each statistics table
+   - Rebuilds from raw data (blocks, cells, transactions)
+3. Logs progress for each table
+
+```
+INFO Bulk sync completed, rebuilding skipped statistics...
+INFO Rebuilding daily_statistics...
+INFO daily_statistics rebuild completed
+INFO Rebuilding daily_block_stats...
+...
+INFO All statistics rebuild completed
+```
+
+### Implementation Details
+
+- State tracking: `was_bulk_sync_active: AtomicBool` in Indexer struct
+- Detection: `check_bulk_sync_completion()` called after each batch
+- Rebuild entry point: `BatchWriter::rebuild_all_statistics()`
+
 ## Binary COPY Infrastructure
 
 The indexer uses PostgreSQL Binary COPY for high-performance bulk data loading during initial sync.

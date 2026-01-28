@@ -267,6 +267,8 @@ pub struct Indexer {
     integrity_handle: Option<IntegrityServiceHandle>,
     cache_invalidator: CacheInvalidator,
     last_cache_invalidation: tokio::sync::Mutex<u64>,
+    /// Track previous bulk sync state to detect transition from bulk -> live sync
+    was_bulk_sync_active: std::sync::atomic::AtomicBool,
 }
 
 impl Indexer {
@@ -314,6 +316,7 @@ impl Indexer {
             None
         };
 
+        let was_bulk = progress.blocks_remaining() > config.bulk_sync_threshold;
         Ok(Self {
             config,
             rpc,
@@ -326,6 +329,7 @@ impl Indexer {
             integrity_handle,
             cache_invalidator,
             last_cache_invalidation: tokio::sync::Mutex::new(0),
+            was_bulk_sync_active: std::sync::atomic::AtomicBool::new(was_bulk),
         })
     }
 
@@ -778,6 +782,7 @@ impl Indexer {
                         }
 
                         self.maybe_invalidate_chart_caches(end_block).await;
+                        self.check_bulk_sync_completion().await;
                     }
 
                     self.perf
@@ -791,7 +796,6 @@ impl Indexer {
                     return Err(anyhow::anyhow!("Pipeline channel closed"));
                 }
                 Err(_timeout) => {
-                    // No batch received within timeout - we're likely caught up
                     self.trigger_missing_cycles_fix_when_idle().await;
                 }
             }
@@ -996,7 +1000,26 @@ impl Indexer {
             self.maybe_invalidate_chart_caches(end_block).await;
         }
 
+        self.check_bulk_sync_completion().await;
+
         Ok(SyncAction::Continue)
+    }
+
+    async fn check_bulk_sync_completion(&self) {
+        use std::sync::atomic::Ordering;
+
+        let currently_bulk = self.is_bulk_sync_active();
+        let was_bulk = self.was_bulk_sync_active.load(Ordering::SeqCst);
+
+        if was_bulk && !currently_bulk {
+            info!("Bulk sync completed, rebuilding skipped statistics...");
+            if let Err(e) = self.writer.rebuild_all_statistics().await {
+                warn!("Failed to rebuild statistics after bulk sync: {}", e);
+            }
+        }
+
+        self.was_bulk_sync_active
+            .store(currently_bulk, Ordering::SeqCst);
     }
 
     async fn trigger_missing_cycles_fix_when_idle(&self) {
@@ -4584,37 +4607,7 @@ impl Indexer {
                 .await?;
         }
 
-        // Core statistics - always written
-        for (
-            date,
-            (blocks, txs, created, consumed, capacity, data_size_added, data_size_consumed),
-        ) in &stats.daily_stats
-        {
-            self.writer
-                .update_daily_statistics(
-                    *date,
-                    *blocks,
-                    *txs,
-                    *created,
-                    *consumed,
-                    *capacity,
-                    *data_size_added,
-                    *data_size_consumed,
-                )
-                .await?;
-        }
-
-        for (date, (sum_target, count, uncles)) in &stats.daily_block_stats {
-            let avg_target = if *count > 0 {
-                (*sum_target / *count as i128) as i64
-            } else {
-                0
-            };
-            self.writer
-                .update_daily_block_stats_batch(*date, avg_target, *count, *uncles)
-                .await?;
-        }
-
+        // Epoch statistics - always written (contains epoch metadata needed for queries)
         for (epoch_number, accum) in &stats.epoch_stats {
             self.writer
                 .upsert_epoch_statistics_batch(
@@ -4630,17 +4623,47 @@ impl Indexer {
                 .await?;
         }
 
-        for (date, (sum_ms, count)) in &stats.daily_block_times {
-            if *count > 0 {
-                let avg_ms = sum_ms / *count as i64;
+        // Non-critical statistics - skipped during bulk sync (rebuilt when bulk sync completes)
+        if !bulk_sync_active {
+            for (
+                date,
+                (blocks, txs, created, consumed, capacity, data_size_added, data_size_consumed),
+            ) in &stats.daily_stats
+            {
                 self.writer
-                    .update_daily_avg_block_time_batch(*date, avg_ms, *count)
+                    .update_daily_statistics(
+                        *date,
+                        *blocks,
+                        *txs,
+                        *created,
+                        *consumed,
+                        *capacity,
+                        *data_size_added,
+                        *data_size_consumed,
+                    )
                     .await?;
             }
-        }
 
-        // Non-critical statistics - skipped during bulk sync (can be recalculated)
-        if !bulk_sync_active {
+            for (date, (sum_target, count, uncles)) in &stats.daily_block_stats {
+                let avg_target = if *count > 0 {
+                    (*sum_target / *count as i128) as i64
+                } else {
+                    0
+                };
+                self.writer
+                    .update_daily_block_stats_batch(*date, avg_target, *count, *uncles)
+                    .await?;
+            }
+
+            for (date, (sum_ms, count)) in &stats.daily_block_times {
+                if *count > 0 {
+                    let avg_ms = sum_ms / *count as i64;
+                    self.writer
+                        .update_daily_avg_block_time_batch(*date, avg_ms, *count)
+                        .await?;
+                }
+            }
+
             for (hour, (blocks, txs, created, consumed, capacity)) in &stats.hourly_stats {
                 self.writer
                     .update_hourly_statistics(*hour, *blocks, *txs, *created, *consumed, *capacity)
@@ -4664,12 +4687,12 @@ impl Indexer {
                     .update_epoch_time_distribution_batch(*bucket, *count)
                     .await?;
             }
-        }
 
-        let mut snapshot_dates: Vec<_> = stats.dao_snapshot_dates.iter().collect();
-        snapshot_dates.sort();
-        for date in snapshot_dates {
-            self.writer.update_dao_daily_snapshot(*date).await?;
+            let mut snapshot_dates: Vec<_> = stats.dao_snapshot_dates.iter().collect();
+            snapshot_dates.sort();
+            for date in snapshot_dates {
+                self.writer.update_dao_daily_snapshot(*date).await?;
+            }
         }
 
         Ok(())

@@ -3956,6 +3956,272 @@ impl BatchWriter {
 
         Ok(result.map(|(hash,)| hash))
     }
+
+    pub async fn rebuild_all_statistics(&self) -> Result<()> {
+        info!("Rebuilding all statistics after bulk sync completion...");
+
+        self.rebuild_daily_statistics().await?;
+        self.rebuild_daily_block_stats().await?;
+        self.rebuild_hourly_statistics().await?;
+        self.rebuild_miner_statistics().await?;
+        self.rebuild_block_time_distribution().await?;
+        self.rebuild_epoch_time_distribution().await?;
+        self.rebuild_dao_daily_snapshots().await?;
+
+        info!("All statistics rebuild completed");
+        Ok(())
+    }
+
+    async fn rebuild_daily_statistics(&self) -> Result<()> {
+        info!("Rebuilding daily_statistics...");
+        sqlx::query("TRUNCATE TABLE daily_statistics")
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO daily_statistics (
+                date, blocks_count, transactions_count, cells_created, cells_consumed,
+                capacity_transferred, total_live_cells, total_data_size
+            )
+            WITH daily_blocks AS (
+                SELECT 
+                    timestamp::date as date,
+                    COUNT(*) as blocks_count,
+                    SUM(transactions_count) as transactions_count
+                FROM blocks
+                GROUP BY timestamp::date
+            ),
+            daily_cells AS (
+                SELECT 
+                    b.timestamp::date as date,
+                    SUM(CASE WHEN c.created_at_block = b.number THEN 1 ELSE 0 END) as cells_created,
+                    SUM(CASE WHEN c.consumed_at_block = b.number THEN 1 ELSE 0 END) as cells_consumed,
+                    SUM(CASE WHEN c.created_at_block = b.number THEN c.capacity ELSE 0 END) as capacity_transferred,
+                    SUM(CASE WHEN c.created_at_block = b.number THEN c.data_size ELSE 0 END) as data_size_added,
+                    SUM(CASE WHEN c.consumed_at_block = b.number THEN c.data_size ELSE 0 END) as data_size_consumed
+                FROM blocks b
+                LEFT JOIN cells c ON c.created_at_block = b.number OR c.consumed_at_block = b.number
+                GROUP BY b.timestamp::date
+            )
+            SELECT 
+                db.date,
+                db.blocks_count::int,
+                db.transactions_count::int,
+                COALESCE(dc.cells_created, 0)::int,
+                COALESCE(dc.cells_consumed, 0)::int,
+                COALESCE(dc.capacity_transferred, 0),
+                SUM(COALESCE(dc.cells_created, 0) - COALESCE(dc.cells_consumed, 0)) 
+                    OVER (ORDER BY db.date) as total_live_cells,
+                SUM(COALESCE(dc.data_size_added, 0) - COALESCE(dc.data_size_consumed, 0)) 
+                    OVER (ORDER BY db.date) as total_data_size
+            FROM daily_blocks db
+            LEFT JOIN daily_cells dc ON db.date = dc.date
+            ORDER BY db.date
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+        info!("daily_statistics rebuild completed");
+        Ok(())
+    }
+
+    async fn rebuild_daily_block_stats(&self) -> Result<()> {
+        info!("Rebuilding daily_block_stats...");
+        sqlx::query("TRUNCATE TABLE daily_block_stats")
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO daily_block_stats (
+                date, avg_compact_target, block_count, total_uncles, avg_uncle_rate, avg_block_time_ms
+            )
+            WITH block_times AS (
+                SELECT 
+                    number,
+                    timestamp,
+                    timestamp::date as date,
+                    compact_target,
+                    uncles_count,
+                    EXTRACT(EPOCH FROM (timestamp - LAG(timestamp) OVER (ORDER BY number))) * 1000 as block_time_ms
+                FROM blocks
+            )
+            SELECT 
+                date,
+                AVG(compact_target)::bigint as avg_compact_target,
+                COUNT(*)::int as block_count,
+                SUM(uncles_count)::int as total_uncles,
+                SUM(uncles_count)::float / NULLIF(COUNT(*), 0)::float as avg_uncle_rate,
+                AVG(block_time_ms)::int as avg_block_time_ms
+            FROM block_times
+            GROUP BY date
+            ORDER BY date
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+        info!("daily_block_stats rebuild completed");
+        Ok(())
+    }
+
+    async fn rebuild_hourly_statistics(&self) -> Result<()> {
+        info!("Rebuilding hourly_statistics...");
+        sqlx::query("TRUNCATE TABLE hourly_statistics")
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO hourly_statistics (
+                hour, blocks_count, transactions_count, cells_created, cells_consumed, capacity_transferred
+            )
+            WITH hourly_blocks AS (
+                SELECT 
+                    date_trunc('hour', timestamp) as hour,
+                    COUNT(*) as blocks_count,
+                    SUM(transactions_count) as transactions_count
+                FROM blocks
+                GROUP BY date_trunc('hour', timestamp)
+            ),
+            hourly_cells AS (
+                SELECT 
+                    date_trunc('hour', b.timestamp) as hour,
+                    SUM(CASE WHEN c.created_at_block = b.number THEN 1 ELSE 0 END) as cells_created,
+                    SUM(CASE WHEN c.consumed_at_block = b.number THEN 1 ELSE 0 END) as cells_consumed,
+                    SUM(CASE WHEN c.created_at_block = b.number THEN c.capacity ELSE 0 END) as capacity_transferred
+                FROM blocks b
+                LEFT JOIN cells c ON c.created_at_block = b.number OR c.consumed_at_block = b.number
+                GROUP BY date_trunc('hour', b.timestamp)
+            )
+            SELECT 
+                hb.hour,
+                hb.blocks_count::int,
+                hb.transactions_count::int,
+                COALESCE(hc.cells_created, 0)::int,
+                COALESCE(hc.cells_consumed, 0)::int,
+                COALESCE(hc.capacity_transferred, 0)
+            FROM hourly_blocks hb
+            LEFT JOIN hourly_cells hc ON hb.hour = hc.hour
+            ORDER BY hb.hour
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+        info!("hourly_statistics rebuild completed");
+        Ok(())
+    }
+
+    async fn rebuild_miner_statistics(&self) -> Result<()> {
+        info!("Rebuilding miner_statistics...");
+        sqlx::query("TRUNCATE TABLE miner_statistics")
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO miner_statistics (date, miner_lock_hash, blocks_count, last_block_number)
+            SELECT 
+                b.timestamp::date as date,
+                c.lock_script_hash as miner_lock_hash,
+                COUNT(*)::int as blocks_count,
+                MAX(b.number) as last_block_number
+            FROM blocks b
+            JOIN transactions t ON t.block_number = b.number AND t.tx_index = 0
+            JOIN cells c ON c.tx_hash = t.hash AND c.output_index = 0
+            GROUP BY b.timestamp::date, c.lock_script_hash
+            ORDER BY date, blocks_count DESC
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+        info!("miner_statistics rebuild completed");
+        Ok(())
+    }
+
+    async fn rebuild_block_time_distribution(&self) -> Result<()> {
+        info!("Rebuilding block_time_distribution...");
+        sqlx::query("TRUNCATE TABLE block_time_distribution")
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO block_time_distribution (bucket_seconds, block_count)
+            SELECT 
+                CASE 
+                    WHEN block_time_sec < 1 THEN 0
+                    WHEN block_time_sec < 30 THEN FLOOR(block_time_sec)::int
+                    ELSE 30
+                END as bucket_seconds,
+                COUNT(*) as block_count
+            FROM (
+                SELECT 
+                    EXTRACT(EPOCH FROM (timestamp - LAG(timestamp) OVER (ORDER BY number))) as block_time_sec
+                FROM blocks
+                WHERE number > 0
+            ) block_times
+            WHERE block_time_sec IS NOT NULL AND block_time_sec >= 0
+            GROUP BY bucket_seconds
+            ORDER BY bucket_seconds
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+        info!("block_time_distribution rebuild completed");
+        Ok(())
+    }
+
+    async fn rebuild_epoch_time_distribution(&self) -> Result<()> {
+        info!("Rebuilding epoch_time_distribution...");
+        sqlx::query("TRUNCATE TABLE epoch_time_distribution")
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO epoch_time_distribution (bucket_minutes, epoch_count)
+            SELECT 
+                CASE 
+                    WHEN epoch_minutes < 180 THEN 180
+                    WHEN epoch_minutes > 300 THEN 300
+                    ELSE (FLOOR(epoch_minutes / 5) * 5)::int
+                END as bucket_minutes,
+                COUNT(*) as epoch_count
+            FROM (
+                SELECT 
+                    EXTRACT(EPOCH FROM (end_timestamp - start_timestamp)) / 60 as epoch_minutes
+                FROM epoch_statistics
+                WHERE end_timestamp IS NOT NULL
+            ) epoch_times
+            GROUP BY bucket_minutes
+            ORDER BY bucket_minutes
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+        info!("epoch_time_distribution rebuild completed");
+        Ok(())
+    }
+
+    async fn rebuild_dao_daily_snapshots(&self) -> Result<()> {
+        info!("Rebuilding dao_daily_snapshots...");
+        sqlx::query("TRUNCATE TABLE dao_daily_snapshots")
+            .execute(&self.pool)
+            .await?;
+
+        let dates: Vec<(NaiveDate,)> =
+            sqlx::query_as("SELECT DISTINCT timestamp::date as date FROM blocks ORDER BY date")
+                .fetch_all(&self.pool)
+                .await?;
+
+        for (date,) in dates {
+            self.update_dao_daily_snapshot(date).await?;
+        }
+
+        info!("dao_daily_snapshots rebuild completed");
+        Ok(())
+    }
 }
 
 pub struct ReorgResult {
