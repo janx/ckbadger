@@ -279,7 +279,16 @@ impl Indexer {
     ) -> Result<Self> {
         let rpc = CkbRpcClient::new(&config.ckb_rpc_url);
         let repo = Repository::new(pool.clone());
-        let writer = BatchWriter::with_fast_sync_mode(pool, config.fast_sync_mode);
+
+        let live_cell_store =
+            Arc::new(crate::db::LiveCellStore::new(config.live_cell_memory_limit));
+        info!(
+            "Initialized LiveCellStore with {}GB memory limit",
+            config.live_cell_memory_limit / (1024 * 1024 * 1024)
+        );
+
+        let writer =
+            BatchWriter::with_live_cell_store(pool.clone(), config.fast_sync_mode, live_cell_store);
 
         let (tip_number, _) = repo.get_sync_tip().await?;
         let chain_tip = rpc.get_tip_block_number().await?;

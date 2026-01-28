@@ -6,6 +6,7 @@ use anyhow::Result;
 use chrono::{DateTime, NaiveDate, Utc};
 use sqlx::{PgPool, Postgres, Transaction};
 use std::collections::HashMap;
+use std::sync::Arc;
 use tracing::{info, warn};
 
 use ckbadger_common::dao::calculate_estimated_apc;
@@ -58,6 +59,7 @@ pub struct SecondaryIssuanceBreakdown {
 pub struct BatchWriter {
     pool: PgPool,
     fast_sync_mode: bool,
+    live_cell_store: Option<Arc<super::LiveCellStore>>,
 }
 
 impl BatchWriter {
@@ -65,6 +67,7 @@ impl BatchWriter {
         Self {
             pool,
             fast_sync_mode: true,
+            live_cell_store: None,
         }
     }
 
@@ -72,6 +75,19 @@ impl BatchWriter {
         Self {
             pool,
             fast_sync_mode,
+            live_cell_store: None,
+        }
+    }
+
+    pub fn with_live_cell_store(
+        pool: PgPool,
+        fast_sync_mode: bool,
+        live_cell_store: Arc<super::LiveCellStore>,
+    ) -> Self {
+        Self {
+            pool,
+            fast_sync_mode,
+            live_cell_store: Some(live_cell_store),
         }
     }
 
@@ -452,6 +468,23 @@ impl BatchWriter {
         .bind(&data_sizes)
         .execute(&self.pool)
         .await?;
+
+        // Also insert into in-memory store if present
+        if let Some(store) = &self.live_cell_store {
+            for (tx_hash, output_index, cell, created_at_block) in cells {
+                let info = super::LiveCellInfo {
+                    capacity: cell.capacity,
+                    created_at_block: *created_at_block,
+                    lock_script_hash: cell.lock_script_hash.clone(),
+                    lock_code_hash: cell.lock_code_hash.clone(),
+                    lock_args: cell.lock_args.clone(),
+                    type_script_hash: cell.type_script_hash.clone(),
+                    type_code_hash: cell.type_code_hash.clone(),
+                    data_size: cell.data_size,
+                };
+                store.insert(tx_hash.to_vec(), *output_index, info);
+            }
+        }
 
         Ok(())
     }
@@ -1084,25 +1117,58 @@ impl BatchWriter {
             return Ok(HashMap::new());
         }
 
-        let tx_hashes: Vec<&[u8]> = outpoints.iter().map(|(h, _)| *h).collect();
-        let indices: Vec<i16> = outpoints.iter().map(|(_, i)| *i).collect();
+        let mut result = HashMap::with_capacity(outpoints.len());
+        let mut missing = Vec::new();
 
-        let rows = sqlx::query_as::<_, (Vec<u8>, i16, i64, i64, Vec<u8>, i32)>(
-            r#"
-            SELECT lc.tx_hash, lc.output_index, lc.capacity, lc.created_at_block, lc.lock_script_hash, lc.data_size
-            FROM live_cells lc
-            JOIN UNNEST($1::bytea[], $2::smallint[]) AS t(tx_hash, output_index)
-              ON lc.tx_hash = t.tx_hash AND lc.output_index = t.output_index
-            "#,
-        )
-        .bind(&tx_hashes)
-        .bind(&indices)
-        .fetch_all(&self.pool)
-        .await?;
+        if let Some(store) = &self.live_cell_store {
+            let cached = store.get_batch(outpoints);
+            for (key, info) in cached {
+                result.insert(
+                    key,
+                    (
+                        info.capacity,
+                        info.created_at_block,
+                        info.lock_script_hash,
+                        info.data_size,
+                    ),
+                );
+            }
+            for op in outpoints {
+                if !result.contains_key(&(op.0.to_vec(), op.1)) {
+                    missing.push(*op);
+                }
+            }
+            if !missing.is_empty() {
+                tracing::debug!(
+                    "LiveCellStore cache miss: {}/{} cells",
+                    missing.len(),
+                    outpoints.len()
+                );
+            }
+        } else {
+            missing.extend(outpoints.iter().copied());
+        }
 
-        let mut result = HashMap::with_capacity(rows.len());
-        for (tx_hash, idx, cap, block, lock_hash, data_size) in rows {
-            result.insert((tx_hash, idx), (cap, block, lock_hash, data_size));
+        if !missing.is_empty() {
+            let tx_hashes: Vec<&[u8]> = missing.iter().map(|(h, _)| *h).collect();
+            let indices: Vec<i16> = missing.iter().map(|(_, i)| *i).collect();
+
+            let rows = sqlx::query_as::<_, (Vec<u8>, i16, i64, i64, Vec<u8>, i32)>(
+                r#"
+                SELECT lc.tx_hash, lc.output_index, lc.capacity, lc.created_at_block, lc.lock_script_hash, lc.data_size
+                FROM live_cells lc
+                JOIN UNNEST($1::bytea[], $2::smallint[]) AS t(tx_hash, output_index)
+                  ON lc.tx_hash = t.tx_hash AND lc.output_index = t.output_index
+                "#,
+            )
+            .bind(&tx_hashes)
+            .bind(&indices)
+            .fetch_all(&self.pool)
+            .await?;
+
+            for (tx_hash, idx, cap, block, lock_hash, data_size) in rows {
+                result.insert((tx_hash, idx), (cap, block, lock_hash, data_size));
+            }
         }
 
         Ok(result)
@@ -1116,25 +1182,50 @@ impl BatchWriter {
             return Ok(HashMap::new());
         }
 
-        let tx_hashes: Vec<&[u8]> = outpoints.iter().map(|(h, _)| *h).collect();
-        let indices: Vec<i16> = outpoints.iter().map(|(_, i)| *i).collect();
+        let mut result = HashMap::with_capacity(outpoints.len());
+        let mut missing = Vec::new();
 
-        let rows = sqlx::query_as::<_, (Vec<u8>, i16, Vec<u8>, Option<Vec<u8>>)>(
-            r#"
-            SELECT lc.tx_hash, lc.output_index, lc.lock_code_hash, lc.type_code_hash
-            FROM live_cells lc
-            JOIN UNNEST($1::bytea[], $2::smallint[]) AS t(tx_hash, output_index)
-              ON lc.tx_hash = t.tx_hash AND lc.output_index = t.output_index
-            "#,
-        )
-        .bind(&tx_hashes)
-        .bind(&indices)
-        .fetch_all(&self.pool)
-        .await?;
+        if let Some(store) = &self.live_cell_store {
+            let cached = store.get_batch(outpoints);
+            for (key, info) in cached {
+                result.insert(key, (info.lock_code_hash, info.type_code_hash));
+            }
+            for op in outpoints {
+                if !result.contains_key(&(op.0.to_vec(), op.1)) {
+                    missing.push(*op);
+                }
+            }
+            if !missing.is_empty() {
+                tracing::debug!(
+                    "LiveCellStore cache miss: {}/{} cells",
+                    missing.len(),
+                    outpoints.len()
+                );
+            }
+        } else {
+            missing.extend(outpoints.iter().copied());
+        }
 
-        let mut result = HashMap::with_capacity(rows.len());
-        for (tx_hash, idx, lock_code_hash, type_code_hash) in rows {
-            result.insert((tx_hash, idx), (lock_code_hash, type_code_hash));
+        if !missing.is_empty() {
+            let tx_hashes: Vec<&[u8]> = missing.iter().map(|(h, _)| *h).collect();
+            let indices: Vec<i16> = missing.iter().map(|(_, i)| *i).collect();
+
+            let rows = sqlx::query_as::<_, (Vec<u8>, i16, Vec<u8>, Option<Vec<u8>>)>(
+                r#"
+                SELECT lc.tx_hash, lc.output_index, lc.lock_code_hash, lc.type_code_hash
+                FROM live_cells lc
+                JOIN UNNEST($1::bytea[], $2::smallint[]) AS t(tx_hash, output_index)
+                  ON lc.tx_hash = t.tx_hash AND lc.output_index = t.output_index
+                "#,
+            )
+            .bind(&tx_hashes)
+            .bind(&indices)
+            .fetch_all(&self.pool)
+            .await?;
+
+            for (tx_hash, idx, lock_code_hash, type_code_hash) in rows {
+                result.insert((tx_hash, idx), (lock_code_hash, type_code_hash));
+            }
         }
 
         Ok(result)
