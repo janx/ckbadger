@@ -97,6 +97,13 @@ struct Args {
         help = "Apply PostgreSQL session-level tuning for bulk sync optimization"
     )]
     apply_pg_tuning: bool,
+
+    #[arg(
+        long,
+        default_value = "8589934592",
+        help = "Maximum memory limit for LiveCellStore in bytes (default 8GB = 8589934592)"
+    )]
+    live_cell_memory_limit: usize,
 }
 
 #[tokio::main]
@@ -137,6 +144,7 @@ async fn main() -> Result<()> {
         rebuild_indexes_only: args.rebuild_indexes_only,
         index_rebuild_parallel: args.index_rebuild_parallel,
         apply_pg_tuning: args.apply_pg_tuning,
+        live_cell_memory_limit: args.live_cell_memory_limit,
     };
 
     info!("Connecting to database: {}", config.database_url);

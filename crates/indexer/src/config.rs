@@ -42,6 +42,9 @@ pub struct Config {
     /// Apply PostgreSQL tuning for bulk sync optimization
     #[serde(default)]
     pub apply_pg_tuning: bool,
+    /// Maximum memory limit for LiveCellStore in bytes (default 8GB)
+    #[serde(default = "default_live_cell_memory_limit")]
+    pub live_cell_memory_limit: usize,
 }
 
 fn default_batch_size() -> usize {
@@ -92,6 +95,10 @@ fn default_copy_pool_size() -> usize {
 
 fn default_index_rebuild_parallel() -> usize {
     10
+}
+
+fn default_live_cell_memory_limit() -> usize {
+    8 * 1024 * 1024 * 1024
 }
 
 impl Config {
