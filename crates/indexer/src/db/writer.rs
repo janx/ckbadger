@@ -849,6 +849,47 @@ impl BatchWriter {
     }
 
     pub async fn init_sync_start(&self, start_block: i64) -> Result<()> {
+        let next_block = start_block + 1;
+        info!(
+            "Cleaning up any partial data from block {} onwards before sync start",
+            next_block
+        );
+
+        sqlx::query("DELETE FROM transaction_inputs WHERE tx_block_number >= $1")
+            .bind(next_block)
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query("DELETE FROM transaction_cell_deps WHERE tx_block_number >= $1")
+            .bind(next_block)
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query("DELETE FROM live_cells WHERE created_at_block >= $1")
+            .bind(next_block)
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query("DELETE FROM cells WHERE created_at_block >= $1")
+            .bind(next_block)
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query("DELETE FROM transactions WHERE block_number >= $1")
+            .bind(next_block)
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query("DELETE FROM block_proposals WHERE block_number >= $1")
+            .bind(next_block)
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query("DELETE FROM blocks WHERE number >= $1")
+            .bind(next_block)
+            .execute(&self.pool)
+            .await?;
+
         sqlx::query(
             r#"
             UPDATE sync_status SET
@@ -861,6 +902,10 @@ impl BatchWriter {
         .execute(&self.pool)
         .await?;
 
+        info!(
+            "Partial data cleanup complete, starting sync from block {}",
+            next_block
+        );
         Ok(())
     }
 
