@@ -6,15 +6,29 @@ This guide covers performance optimization strategies for the ckbadger indexer a
 
 ### 1. PostgreSQL Configuration
 
-The `docker/postgres/postgresql.conf` is pre-optimized for write-heavy blockchain indexing:
+The `docker/postgres/postgresql.conf` is pre-optimized for write-heavy blockchain indexing (93GB RAM, NVMe SSD, 24-core CPU):
 
-| Parameter            | Value | Purpose                                      |
-| -------------------- | ----- | -------------------------------------------- |
-| `shared_buffers`     | 4GB   | 25% of RAM for buffer cache                  |
-| `work_mem`           | 256MB | Per-operation memory                         |
-| `synchronous_commit` | off   | 2-3x write speed (safe for re-syncable data) |
-| `commit_delay`       | 10000 | Batch commits in 10ms window                 |
-| `max_wal_size`       | 16GB  | Reduce checkpoint frequency                  |
+**Memory Settings:**
+
+| Parameter              | Value | Purpose                                     |
+| ---------------------- | ----- | ------------------------------------------- |
+| `shared_buffers`       | 24GB  | 25% of RAM for buffer cache                 |
+| `work_mem`             | 512MB | Per-operation memory for complex queries    |
+| `maintenance_work_mem` | 4GB   | Memory for VACUUM, CREATE INDEX             |
+| `effective_cache_size` | 70GB  | Query planner's estimate of available cache |
+
+**WAL & Checkpoint Settings (Critical for Bulk Sync):**
+
+| Parameter                      | Value | Purpose                                      |
+| ------------------------------ | ----- | -------------------------------------------- |
+| `synchronous_commit`           | off   | 2-3x write speed (safe for re-syncable data) |
+| `commit_delay`                 | 10000 | Batch commits in 10ms window                 |
+| `max_wal_size`                 | 64GB  | Reduce WAL-triggered checkpoint frequency    |
+| `min_wal_size`                 | 8GB   | Keep more WAL segments cached                |
+| `checkpoint_timeout`           | 60min | Reduce time-triggered checkpoint frequency   |
+| `checkpoint_completion_target` | 0.9   | Spread checkpoint I/O over time              |
+
+> **Note:** Checkpoint optimization is critical for sustained write performance. During bulk sync, PostgreSQL can write 17+ GB of WAL between checkpoints. If checkpoints occur too frequently, they cause 15-20 second write stalls.
 
 ### 2. Indexer Parameters
 
@@ -132,6 +146,34 @@ FROM pg_stat_user_indexes
 ORDER BY idx_scan DESC;
 ```
 
+### Checkpoint Monitoring
+
+Checkpoints are the #1 cause of periodic DB write stalls during bulk sync.
+
+```bash
+# Check current checkpoint settings
+docker exec ckbadger-postgres psql -U ckbadger -d ckbadger -c \
+  "SHOW checkpoint_timeout; SHOW max_wal_size;"
+
+# Check checkpoint statistics
+docker exec ckbadger-postgres psql -U ckbadger -d ckbadger -c \
+  "SELECT checkpoints_timed, checkpoints_req,
+          checkpoint_write_time/1000 as write_sec,
+          checkpoint_sync_time/1000 as sync_sec,
+          buffers_checkpoint
+   FROM pg_stat_bgwriter;"
+
+# View recent checkpoint events (with timing)
+docker exec ckbadger-postgres grep -i "checkpoint" \
+  /var/lib/postgresql/data/log/postgresql-$(date +%Y-%m-%d).log | tail -10
+```
+
+**Healthy checkpoint indicators:**
+
+- `checkpoints_req` (WAL-triggered) should be low relative to `checkpoints_timed`
+- Checkpoint write time should be < 5 minutes
+- No correlation between checkpoint times and PERF DB spikes
+
 ## Scaling Beyond Single Node
 
 For extreme scale (100M+ blocks), consider:
@@ -149,6 +191,32 @@ For extreme scale (100M+ blocks), consider:
 2. Verify PostgreSQL config is loaded: `SHOW synchronous_commit;`
 3. Check for lock contention: `SELECT * FROM pg_stat_activity WHERE wait_event IS NOT NULL;`
 4. Increase `batch_size` if DB time is low
+
+### Periodic DB Write Spikes (15-25 seconds)
+
+**Symptom:** `PERF` logs show DB time jumping from ~3s to 15-25s periodically.
+
+**Cause:** PostgreSQL checkpoint in progress.
+
+**Diagnosis:**
+
+```bash
+# Check if checkpoint correlates with slow PERF
+docker logs ckbadger-indexer 2>&1 | grep -E "PERF|slow statement" | tail -20
+docker exec ckbadger-postgres grep "checkpoint" \
+  /var/lib/postgresql/data/log/postgresql-$(date +%Y-%m-%d).log | tail -5
+```
+
+**Solution:** Increase checkpoint interval:
+
+```sql
+-- Apply without restart
+ALTER SYSTEM SET checkpoint_timeout = '60min';
+ALTER SYSTEM SET max_wal_size = '64GB';
+SELECT pg_reload_conf();
+```
+
+Or update `docker/postgres/postgresql.conf` for persistence.
 
 ### High Memory Usage
 
