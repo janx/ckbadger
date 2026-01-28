@@ -608,8 +608,28 @@ impl BatchWriter {
     pub async fn consume_cells_batch(
         &self,
         consumptions: &[(&[u8], i16, i64, &[u8], i64, i16)],
+        bulk_sync_mode: bool,
     ) -> Result<()> {
         if consumptions.is_empty() {
+            return Ok(());
+        }
+
+        // Update in-memory store if present
+        if let Some(store) = &self.live_cell_store {
+            for (tx_hash, output_index, _, _, consumed_at_block, _) in consumptions {
+                if let Some(info) = store.remove(tx_hash, *output_index) {
+                    store.record_consumption(
+                        tx_hash.to_vec(),
+                        *output_index,
+                        info,
+                        *consumed_at_block,
+                    );
+                }
+            }
+        }
+
+        // Skip DB operations in bulk sync mode
+        if bulk_sync_mode {
             return Ok(());
         }
 

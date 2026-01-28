@@ -443,10 +443,11 @@ impl Indexer {
     async fn run_pipeline(&self) -> Result<()> {
         use tokio::sync::mpsc;
 
-        type FetchedBatch = (u64, u64, Vec<BlockResponseWithCycles>);
+        type FetchedBatch = (u64, u64, u64, Vec<BlockResponseWithCycles>);
         type ParsedBatch = (
             u64,                                                 // start_block
             u64,                                                 // end_block
+            u64,                                                 // chain_tip
             Vec<BlockResponseWithCycles>,                        // raw blocks (for UDT parsing)
             Vec<crate::parser::block::ParsedBlock>,              // parsed blocks
             Vec<TxData>,                                         // parsed transactions
@@ -521,7 +522,7 @@ impl Indexer {
                 };
 
                 if fetch_tx
-                    .send((start_block, end_block, blocks))
+                    .send((start_block, end_block, chain_tip, blocks))
                     .await
                     .is_err()
                 {
@@ -541,7 +542,7 @@ impl Indexer {
         let cell_cache_for_parser = Arc::clone(&self.cell_cache);
 
         let parser = tokio::spawn(async move {
-            while let Some((start_block, end_block, blocks)) = fetch_rx.recv().await {
+            while let Some((start_block, end_block, chain_tip, blocks)) = fetch_rx.recv().await {
                 let blocks_clone = blocks.clone();
                 let (all_parsed_blocks, all_tx_data, all_input_outpoints) =
                     tokio::task::spawn_blocking(move || parse_blocks_parallel(&blocks_clone))
@@ -645,6 +646,7 @@ impl Indexer {
                     .send((
                         start_block,
                         end_block,
+                        chain_tip,
                         blocks,
                         all_parsed_blocks,
                         all_tx_data,
@@ -675,6 +677,7 @@ impl Indexer {
                 Ok(Some((
                     start_block,
                     end_block,
+                    chain_tip,
                     blocks,
                     all_parsed_blocks,
                     all_tx_data,
@@ -746,6 +749,7 @@ impl Indexer {
                             all_tx_data,
                             input_cell_info,
                             consumed_code_hashes,
+                            chain_tip,
                         )
                         .await
                     {
@@ -960,7 +964,7 @@ impl Indexer {
             .add(&self.perf.rpc_fetch_us, fetch_start.elapsed());
 
         let db_start = Instant::now();
-        self.sync_blocks_batch(&blocks).await?;
+        self.sync_blocks_batch(&blocks, chain_tip).await?;
         self.perf.add(&self.perf.db_write_us, db_start.elapsed());
 
         if let Some(last_block_response) = blocks.last() {
@@ -1053,7 +1057,11 @@ impl Indexer {
         Self::fetch_blocks_with_config(&self.rpc, start, end, self.config.parallel_fetch_size).await
     }
 
-    async fn sync_blocks_batch(&self, blocks: &[BlockResponseWithCycles]) -> Result<()> {
+    async fn sync_blocks_batch(
+        &self,
+        blocks: &[BlockResponseWithCycles],
+        chain_tip: u64,
+    ) -> Result<()> {
         if blocks.is_empty() {
             return Ok(());
         }
@@ -1062,6 +1070,11 @@ impl Indexer {
         let blocks_clone: Vec<BlockResponseWithCycles> = blocks.to_vec();
         let (all_parsed_blocks, mut all_tx_data, all_input_outpoints) =
             tokio::task::spawn_blocking(move || parse_blocks_parallel(&blocks_clone)).await?;
+
+        let end_block = all_parsed_blocks
+            .last()
+            .map(|b| b.number as u64)
+            .unwrap_or(0);
 
         // (capacity, created_at_block, lock_script_hash, data_size)
         let mut input_cell_info: HashMap<(Vec<u8>, i16), (i64, i64, Vec<u8>, i32)> = HashMap::new();
@@ -1319,7 +1332,10 @@ impl Indexer {
             }
         }
         if !all_consumptions.is_empty() {
-            self.writer.consume_cells_batch(&all_consumptions).await?;
+            let bulk_sync_mode = chain_tip.saturating_sub(end_block) > 1000;
+            self.writer
+                .consume_cells_batch(&all_consumptions, bulk_sync_mode)
+                .await?;
         }
 
         let mut address_balance_changes: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, Vec<u8>)> =
@@ -2562,10 +2578,16 @@ impl Indexer {
         mut all_tx_data: Vec<TxData>,
         input_cell_info: HashMap<(Vec<u8>, i16), (i64, i64, Vec<u8>, i32)>,
         consumed_code_hashes: HashMap<(Vec<u8>, i16), (Vec<u8>, Option<Vec<u8>>)>,
+        chain_tip: u64,
     ) -> Result<()> {
         if all_parsed_blocks.is_empty() {
             return Ok(());
         }
+
+        let end_block = all_parsed_blocks
+            .last()
+            .map(|b| b.number as u64)
+            .unwrap_or(0);
 
         let mut batch_cells: HashMap<(Vec<u8>, i16), (i64, i64, Vec<u8>, i32)> = HashMap::new();
         for tx_data in &all_tx_data {
@@ -2815,7 +2837,10 @@ impl Indexer {
             }
         }
         if !all_consumptions.is_empty() {
-            self.writer.consume_cells_batch(&all_consumptions).await?;
+            let bulk_sync_mode = chain_tip.saturating_sub(end_block) > 1000;
+            self.writer
+                .consume_cells_batch(&all_consumptions, bulk_sync_mode)
+                .await?;
         }
 
         let mut address_balance_changes: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, Vec<u8>)> =
@@ -4032,10 +4057,12 @@ impl Indexer {
         batch_stats: &mut BatchStats,
         prev_timestamp: &mut Option<chrono::DateTime<Utc>>,
         prev_epoch: &mut Option<(i64, chrono::DateTime<Utc>, f64)>,
+        chain_tip: u64,
     ) -> Result<()> {
         let block = &block_response.block;
         let parsed = BlockParser::parse(block);
         let db_start = Instant::now();
+        let end_block = parsed.number as u64;
 
         self.writer.insert_block(&parsed, 0).await?;
 
@@ -4302,7 +4329,10 @@ impl Indexer {
             }
         }
         if !all_consumptions.is_empty() {
-            self.writer.consume_cells_batch(&all_consumptions).await?;
+            let bulk_sync_mode = chain_tip.saturating_sub(end_block) > 1000;
+            self.writer
+                .consume_cells_batch(&all_consumptions, bulk_sync_mode)
+                .await?;
         }
 
         let mut address_balance_changes: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8])> =
