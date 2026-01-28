@@ -129,8 +129,9 @@ Block N arrives
 | `pipeline_buffer`     | `16`    | Channel capacity between stages                  |
 | `batch_size`          | `2000`  | Blocks per batch                                 |
 | `parallel_fetch_size` | `32`    | Concurrent RPC requests                          |
-| `bulk_sync_mode`      | `false` | Enable bulk sync mode for faster initial sync    |
-| `bulk_sync_threshold` | `1000`  | Blocks behind tip to exit bulk sync mode         |
+| `bulk_sync_threshold` | `1000`  | Blocks behind tip to auto-enable bulk sync       |
+| `use_copy_bulk_sync`  | `true`  | Use PostgreSQL COPY for bulk sync (5-10x faster) |
+| `copy_pool_size`      | `8`     | Number of COPY connection pool connections       |
 | `fast_sync_mode`      | `true`  | Enable synchronous_commit=off for faster writes  |
 
 ### Environment Variables
@@ -140,8 +141,9 @@ PIPELINE_ENABLED=true
 PIPELINE_BUFFER=16
 BATCH_SIZE=2000
 PARALLEL_FETCH_SIZE=32
-BULK_SYNC_MODE=false
 BULK_SYNC_THRESHOLD=1000
+USE_COPY_BULK_SYNC=true
+COPY_POOL_SIZE=8
 FAST_SYNC_MODE=true
 ```
 
@@ -153,8 +155,9 @@ cargo run -p ckbadger-indexer -- \
   --pipeline-buffer 16 \
   --batch-size 2000 \
   --parallel-fetch-size 32 \
-  --bulk-sync-mode \
-  --bulk-sync-threshold 1000
+  --bulk-sync-threshold 1000 \
+  --use-copy-bulk-sync \
+  --copy-pool-size 8
 ```
 
 ## Error Handling
@@ -237,7 +240,7 @@ With default settings on typical hardware:
 | Pipeline (buffer=8)  | ~280-320   | DB writes  |
 | Pipeline (buffer=16) | ~400-500   | DB writes  |
 
-**Optimization Note**: The indexer includes PostgreSQL Binary COPY infrastructure for bulk data loading (4-6x faster than UNNEST inserts). The COPY modules are available in `crates/indexer/src/db/copy_*.rs` for future integration.
+**Optimization**: When bulk sync is active (blocks_remaining > threshold), the indexer automatically uses PostgreSQL Binary COPY for 5-10x faster writes. See [Binary COPY Infrastructure](#binary-copy-infrastructure) for details.
 
 ### Memory Usage
 
@@ -348,38 +351,53 @@ Same-batch consumptions get code_hashes from the creating transaction directly.
 
 ## Binary COPY Infrastructure
 
-The indexer includes PostgreSQL Binary COPY modules for high-performance bulk data loading:
+The indexer uses PostgreSQL Binary COPY for high-performance bulk data loading during initial sync.
 
-| Module                 | Table                 | Columns                   | Performance             |
-| ---------------------- | --------------------- | ------------------------- | ----------------------- |
-| `copy_format.rs`       | -                     | Core binary serialization | Foundation              |
-| `copy_cells.rs`        | cells                 | 16                        | 4-6x faster than UNNEST |
-| `copy_transactions.rs` | transactions          | 16                        | 4-6x faster than UNNEST |
-| `copy_inputs.rs`       | transaction_inputs    | 6                         | 4-6x faster than UNNEST |
-| `copy_inputs.rs`       | transaction_cell_deps | 6                         | 4-6x faster than UNNEST |
-| `copy_live_cells.rs`   | live_cells            | 10                        | 4-6x faster than UNNEST |
-| `parallel_copy.rs`     | -                     | Partition-aware routing   | 2x on top               |
+### Auto-Enabled Behavior
+
+COPY is **automatically enabled** when:
+
+- `blocks_remaining > bulk_sync_threshold` (default: 1000 blocks behind)
+- `use_copy_bulk_sync = true` (default)
+
+When the indexer catches up to the chain tip, it automatically switches back to UNNEST inserts (which support conflict resolution for reorgs).
+
+### COPY Modules
+
+| Module                 | Table                 | Columns | Performance               |
+| ---------------------- | --------------------- | ------- | ------------------------- |
+| `copy_format.rs`       | -                     | -       | Core binary serialization |
+| `copy_cells.rs`        | cells                 | 16      | 5-10x faster than UNNEST  |
+| `copy_transactions.rs` | transactions          | 16      | 5-10x faster than UNNEST  |
+| `copy_inputs.rs`       | transaction_inputs    | 6       | 5-10x faster than UNNEST  |
+| `copy_inputs.rs`       | transaction_cell_deps | 6       | 5-10x faster than UNNEST  |
+| `copy_live_cells.rs`   | live_cells            | 10      | 5-10x faster than UNNEST  |
+| `parallel_copy.rs`     | -                     | -       | Partition-aware routing   |
 
 ### COPY Pool Configuration
 
-The COPY operations use a dedicated `tokio-postgres` connection pool (separate from sqlx):
+COPY operations use a dedicated `tokio-postgres` connection pool (separate from sqlx):
 
 ```rust
 CopyConfig {
-    max_copy_connections: 8,  // 8 parallel COPY streams
+    max_copy_connections: 8,  // --copy-pool-size
     copy_batch_size: 50_000,
     copy_enabled: true,
 }
 ```
 
-### Future Integration
+### Log Messages
 
-The COPY modules are ready for integration into the write pipeline. To enable:
+```
+# COPY mode active
+INFO Starting indexer (pipeline=true, copy=true, 6000000 blocks behind, threshold=1000)
+INFO Bulk sync auto-enabled: 6000000 blocks behind > 1000 threshold, using COPY
+INFO Syncing blocks 0 to 999 (5999001 remaining, 450.00 blocks/sec) [COPY]
 
-1. Initialize `CopyPoolManager` in indexer startup
-2. Replace UNNEST calls with COPY functions in `write_parsed_batch()`
-3. Use `ParallelCopyRouter` for partition-aware parallel writes
+# Switched to UNNEST (caught up)
+INFO Syncing blocks 5999000 to 5999500 (500 remaining, 320.00 blocks/sec)
+```
 
 ---
 
-_Last updated: 2026-01-27_
+_Last updated: 2026-01-28_

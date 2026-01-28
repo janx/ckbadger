@@ -24,21 +24,26 @@ Optimized defaults for high throughput:
 cargo run -p ckbadger-indexer -- \
   --batch-size 1000 \
   --parallel-fetch-size 32 \
-  --pipeline-buffer 6 \
-  --bulk-sync-mode
+  --pipeline-buffer 6
 ```
 
-| Parameter             | Default | Tuning Range | Notes                                              |
-| --------------------- | ------- | ------------ | -------------------------------------------------- |
-| `batch_size`          | 1000    | 500-2000     | Higher = more work per DB round-trip               |
-| `parallel_fetch_size` | 32      | 16-64        | RPC is fast, prefetch more                         |
-| `pipeline_buffer`     | 6       | 4-8          | DB is bottleneck, reduce memory                    |
-| `bulk_sync_mode`      | false   | true/false   | Skip non-critical writes during initial sync       |
-| `bulk_sync_threshold` | 1000    | 500-10000    | Blocks behind chain tip to activate bulk sync mode |
+| Parameter             | Default | Tuning Range | Notes                                               |
+| --------------------- | ------- | ------------ | --------------------------------------------------- |
+| `batch_size`          | 1000    | 500-2000     | Higher = more work per DB round-trip                |
+| `parallel_fetch_size` | 32      | 16-64        | RPC is fast, prefetch more                          |
+| `pipeline_buffer`     | 6       | 4-8          | DB is bottleneck, reduce memory                     |
+| `bulk_sync_threshold` | 1000    | 500-10000    | Blocks behind chain tip to auto-enable bulk sync    |
+| `use_copy_bulk_sync`  | true    | true/false   | Use PostgreSQL COPY during bulk sync (5-10x faster) |
+| `copy_pool_size`      | 8       | 4-16         | Number of COPY connection pool connections          |
 
-### 3. Bulk Sync Mode
+### 3. Bulk Sync Mode (Auto-Enabled)
 
-Enable `--bulk-sync-mode` for faster initial sync. When active (more than `bulk_sync_threshold` blocks behind):
+Bulk sync is **automatically enabled** when more than `bulk_sync_threshold` blocks behind the chain tip. No manual configuration needed.
+
+**When active (blocks_remaining > threshold):**
+
+- Uses PostgreSQL Binary COPY for 5-10x faster writes
+- Skips non-critical chart statistics
 
 **Skipped writes (chart data only):**
 
@@ -60,13 +65,17 @@ Enable `--bulk-sync-mode` for faster initial sync. When active (more than `bulk_
 - Address pages work normally (balance, transaction history)
 - Some chart pages show incomplete data until sync catches up
 
-**Expected speedup:** 10-15% faster initial sync
+**Expected speedup:** 5-10x faster initial sync with COPY
 
 ```bash
-# Enable bulk sync for initial sync
-cargo run -p ckbadger-indexer -- --bulk-sync-mode --bulk-sync-threshold 5000
+# Default: auto-enables bulk sync + COPY when far from tip
+cargo run -p ckbadger-indexer
 
-# Automatically disables when within 5000 blocks of chain tip
+# Custom threshold (enter normal mode when within 5000 blocks)
+cargo run -p ckbadger-indexer -- --bulk-sync-threshold 5000
+
+# Disable COPY (use UNNEST only)
+cargo run -p ckbadger-indexer -- --use-copy-bulk-sync false
 ```
 
 ## Architecture Optimizations

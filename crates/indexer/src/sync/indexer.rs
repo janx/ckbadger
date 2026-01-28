@@ -17,7 +17,10 @@ use tracing::{debug, error, info, warn};
 
 use crate::cache::CacheInvalidator;
 use crate::config::Config;
-use crate::db::{BatchWriter, ReorgResult, Repository, SecondaryIssuanceBreakdown};
+use crate::db::{
+    BatchWriter, CopyConfig, CopyPoolManager, ParallelCopyRouter, ReorgResult, Repository,
+    SecondaryIssuanceBreakdown,
+};
 use crate::integrity::IntegrityServiceHandle;
 use crate::parser::{
     BlockParser, CellParser, DaoParser, DotbitParser, MnftParser, SporeParser, TransactionParser,
@@ -257,6 +260,7 @@ pub struct Indexer {
     rpc: CkbRpcClient,
     repo: Repository,
     writer: BatchWriter,
+    copy_router: Option<ParallelCopyRouter>,
     progress: Arc<SyncProgress>,
     cell_cache: Arc<tokio::sync::Mutex<LruCache<(Vec<u8>, i32), CachedCellInfo>>>,
     perf: PerfStats,
@@ -285,11 +289,37 @@ impl Indexer {
             NonZeroUsize::new(CELL_CACHE_CAPACITY).unwrap(),
         )));
 
+        let copy_router = if config.use_copy_bulk_sync {
+            match CopyPoolManager::new(
+                &config.database_url,
+                CopyConfig {
+                    max_copy_connections: config.copy_pool_size,
+                    copy_batch_size: 50_000,
+                    copy_enabled: true,
+                },
+            ) {
+                Ok(pool_manager) => {
+                    info!(
+                        "COPY bulk sync enabled with {} connections",
+                        config.copy_pool_size
+                    );
+                    Some(ParallelCopyRouter::new(pool_manager))
+                }
+                Err(e) => {
+                    warn!("Failed to create COPY pool, falling back to UNNEST: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         Ok(Self {
             config,
             rpc,
             repo,
             writer,
+            copy_router,
             progress,
             cell_cache,
             perf: PerfStats::default(),
@@ -304,26 +334,33 @@ impl Indexer {
     }
 
     /// Check if bulk sync mode is active (for skipping non-critical statistics).
-    /// Active when: bulk_sync_mode enabled AND blocks_remaining > bulk_sync_threshold
+    /// Auto-enabled when blocks_remaining > bulk_sync_threshold (no manual config needed)
     fn is_bulk_sync_active(&self) -> bool {
-        self.config.bulk_sync_mode
-            && self.progress.blocks_remaining() > self.config.bulk_sync_threshold
+        self.progress.blocks_remaining() > self.config.bulk_sync_threshold
+    }
+
+    fn should_use_copy(&self) -> bool {
+        self.is_bulk_sync_active() && self.copy_router.is_some()
     }
 
     pub async fn run(&self) -> Result<()> {
+        let blocks_behind = self.progress.blocks_remaining();
+        let copy_enabled = self.copy_router.is_some();
         info!(
-            "Starting indexer (pipeline_enabled={}, bulk_sync_mode={})",
-            self.config.pipeline_enabled, self.config.bulk_sync_mode
+            "Starting indexer (pipeline={}, copy={}, {} blocks behind, threshold={})",
+            self.config.pipeline_enabled,
+            copy_enabled,
+            blocks_behind,
+            self.config.bulk_sync_threshold
         );
 
-        if self.config.bulk_sync_mode {
-            let blocks_behind = self.progress.blocks_remaining();
-            if blocks_behind > self.config.bulk_sync_threshold {
-                info!(
-                    "Bulk sync active: {} blocks behind (threshold: {}). Some statistics will be skipped.",
-                    blocks_behind, self.config.bulk_sync_threshold
-                );
-            }
+        if blocks_behind > self.config.bulk_sync_threshold {
+            info!(
+                "Bulk sync auto-enabled: {} blocks behind > {} threshold{}",
+                blocks_behind,
+                self.config.bulk_sync_threshold,
+                if copy_enabled { ", using COPY" } else { "" }
+            );
         }
 
         let (start_block, _) = self.repo.get_sync_tip().await?;
@@ -672,23 +709,21 @@ impl Indexer {
                         }
                     }
 
-                    if self.is_bulk_sync_active() {
-                        info!(
-                            "Syncing blocks {} to {} ({} remaining, {:.2} blocks/sec) [BULK SYNC]",
-                            start_block,
-                            end_block,
-                            self.progress.blocks_remaining(),
-                            self.progress.blocks_per_second()
-                        );
+                    let mode = if self.should_use_copy() {
+                        "[COPY]"
+                    } else if self.is_bulk_sync_active() {
+                        "[BULK]"
                     } else {
-                        info!(
-                            "Syncing blocks {} to {} ({} remaining, {:.2} blocks/sec)",
-                            start_block,
-                            end_block,
-                            self.progress.blocks_remaining(),
-                            self.progress.blocks_per_second()
-                        );
-                    }
+                        ""
+                    };
+                    info!(
+                        "Syncing blocks {} to {} ({} remaining, {:.2} blocks/sec) {}",
+                        start_block,
+                        end_block,
+                        self.progress.blocks_remaining(),
+                        self.progress.blocks_per_second(),
+                        mode
+                    );
 
                     let db_start = Instant::now();
                     if let Err(e) = self
@@ -2568,11 +2603,6 @@ impl Indexer {
                 )
             })
             .collect();
-        if !txs_for_batch.is_empty() {
-            self.writer
-                .insert_transactions_batch(&txs_for_batch)
-                .await?;
-        }
 
         let mut all_cells: Vec<(&[u8], i16, &crate::parser::cell::ParsedCell, i64)> = Vec::new();
         for tx_data in &all_tx_data {
@@ -2584,9 +2614,6 @@ impl Indexer {
                     tx_data.block_number,
                 ));
             }
-        }
-        if !all_cells.is_empty() {
-            self.writer.insert_cells_batch(&all_cells).await?;
         }
 
         let mut all_inputs: Vec<(&[u8], i64, i16, &crate::parser::transaction::ParsedInput)> =
@@ -2617,26 +2644,86 @@ impl Indexer {
             }
         }
 
-        tokio::try_join!(
-            async {
-                if !all_inputs.is_empty() {
-                    self.writer
-                        .insert_transaction_inputs_batch(&all_inputs)
-                        .await
-                } else {
-                    Ok(())
+        if self.should_use_copy() {
+            let copy_router = self.copy_router.as_ref().unwrap();
+            tokio::try_join!(
+                async {
+                    if !txs_for_batch.is_empty() {
+                        copy_router
+                            .copy_transactions_parallel(&txs_for_batch)
+                            .await
+                            .map(|_| ())
+                    } else {
+                        Ok(())
+                    }
+                },
+                async {
+                    if !all_cells.is_empty() {
+                        copy_router
+                            .copy_cells_parallel(&all_cells)
+                            .await
+                            .map(|_| ())?;
+                        copy_router
+                            .copy_live_cells_parallel(&all_cells)
+                            .await
+                            .map(|_| ())
+                    } else {
+                        Ok(())
+                    }
+                },
+                async {
+                    if !all_inputs.is_empty() {
+                        copy_router
+                            .copy_inputs_parallel(&all_inputs)
+                            .await
+                            .map(|_| ())
+                    } else {
+                        Ok(())
+                    }
+                },
+                async {
+                    if !all_cell_deps.is_empty() {
+                        copy_router
+                            .copy_cell_deps_parallel(&all_cell_deps)
+                            .await
+                            .map(|_| ())
+                    } else {
+                        Ok(())
+                    }
                 }
-            },
-            async {
-                if !all_cell_deps.is_empty() {
-                    self.writer
-                        .insert_transaction_cell_deps_batch(&all_cell_deps)
-                        .await
-                } else {
-                    Ok(())
-                }
+            )?;
+        } else {
+            if !txs_for_batch.is_empty() {
+                self.writer
+                    .insert_transactions_batch(&txs_for_batch)
+                    .await?;
             }
-        )?;
+
+            if !all_cells.is_empty() {
+                self.writer.insert_cells_batch(&all_cells).await?;
+            }
+
+            tokio::try_join!(
+                async {
+                    if !all_inputs.is_empty() {
+                        self.writer
+                            .insert_transaction_inputs_batch(&all_inputs)
+                            .await
+                    } else {
+                        Ok(())
+                    }
+                },
+                async {
+                    if !all_cell_deps.is_empty() {
+                        self.writer
+                            .insert_transaction_cell_deps_batch(&all_cell_deps)
+                            .await
+                    } else {
+                        Ok(())
+                    }
+                }
+            )?;
+        }
 
         let mut all_consumptions: Vec<(&[u8], i16, i64, &[u8], i64, i16)> = Vec::new();
         for tx_data in &all_tx_data {

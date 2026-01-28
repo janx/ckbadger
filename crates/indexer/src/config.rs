@@ -20,12 +20,16 @@ pub struct Config {
     pub pipeline_buffer: usize,
     #[serde(default)]
     pub redis_url: Option<String>,
-    #[serde(default)]
-    pub bulk_sync_mode: bool,
     #[serde(default = "default_bulk_sync_threshold")]
     pub bulk_sync_threshold: u64,
     #[serde(default = "default_fast_sync_mode")]
     pub fast_sync_mode: bool,
+    /// Enable PostgreSQL COPY for bulk sync (faster initial sync)
+    #[serde(default = "default_use_copy_bulk_sync")]
+    pub use_copy_bulk_sync: bool,
+    /// Number of connections in the COPY connection pool
+    #[serde(default = "default_copy_pool_size")]
+    pub copy_pool_size: usize,
 }
 
 fn default_batch_size() -> usize {
@@ -65,6 +69,14 @@ fn default_bulk_sync_threshold() -> u64 {
 
 fn default_fast_sync_mode() -> bool {
     true
+}
+
+fn default_use_copy_bulk_sync() -> bool {
+    true
+}
+
+fn default_copy_pool_size() -> usize {
+    8
 }
 
 impl Config {

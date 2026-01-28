@@ -39,17 +39,24 @@ struct Args {
 
     #[arg(
         long,
-        default_value = "false",
-        help = "Enable bulk sync mode for faster initial sync"
-    )]
-    bulk_sync_mode: bool,
-
-    #[arg(
-        long,
         default_value = "1000",
         help = "Blocks behind tip to exit bulk sync mode"
     )]
     bulk_sync_threshold: u64,
+
+    #[arg(
+        long,
+        default_value = "true",
+        help = "Use PostgreSQL COPY for bulk sync (5-10x faster)"
+    )]
+    use_copy_bulk_sync: bool,
+
+    #[arg(
+        long,
+        default_value = "8",
+        help = "Number of connections in the COPY connection pool"
+    )]
+    copy_pool_size: usize,
 }
 
 #[tokio::main]
@@ -82,9 +89,10 @@ async fn main() -> Result<()> {
         pipeline_enabled: args.pipeline_enabled,
         pipeline_buffer: args.pipeline_buffer,
         redis_url: args.redis_url.or_else(|| std::env::var("REDIS_URL").ok()),
-        bulk_sync_mode: args.bulk_sync_mode,
         bulk_sync_threshold: args.bulk_sync_threshold,
         fast_sync_mode: true,
+        use_copy_bulk_sync: args.use_copy_bulk_sync,
+        copy_pool_size: args.copy_pool_size,
     };
 
     info!("Connecting to database: {}", config.database_url);

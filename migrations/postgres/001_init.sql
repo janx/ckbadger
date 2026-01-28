@@ -198,9 +198,9 @@ CREATE TABLE transactions (
     witnesses_count SMALLINT NOT NULL DEFAULT 0,
     cell_deps_count SMALLINT NOT NULL DEFAULT 0,
     header_deps_count SMALLINT NOT NULL DEFAULT 0,
-    total_input_capacity NUMERIC(20,0) NOT NULL DEFAULT 0,
-    total_output_capacity NUMERIC(20,0) NOT NULL DEFAULT 0,
-    fee NUMERIC(20,0) NOT NULL DEFAULT 0,
+    total_input_capacity BIGINT NOT NULL DEFAULT 0,
+    total_output_capacity BIGINT NOT NULL DEFAULT 0,
+    fee BIGINT NOT NULL DEFAULT 0,
     tx_size INTEGER,
     cycles BIGINT,
     is_cellbase BOOLEAN NOT NULL DEFAULT FALSE,
@@ -225,7 +225,7 @@ CREATE TABLE cells (
     id BIGINT GENERATED ALWAYS AS IDENTITY,
     tx_hash BYTEA NOT NULL,
     output_index SMALLINT NOT NULL,
-    capacity NUMERIC(20,0) NOT NULL,  -- shannon, max ~10^18
+    capacity BIGINT NOT NULL,  -- shannon, max ~10^18 (fits in i64)
 
     -- Lock Script (required)
     lock_code_hash BYTEA NOT NULL,
@@ -298,7 +298,7 @@ CREATE TABLE transaction_inputs (
     input_index SMALLINT NOT NULL,
     previous_tx_hash BYTEA NOT NULL,
     previous_output_index SMALLINT NOT NULL,
-    since NUMERIC(20,0) NOT NULL DEFAULT 0,
+    since BIGINT NOT NULL DEFAULT 0,
 
     PRIMARY KEY (tx_block_number, id),
     UNIQUE (tx_block_number, tx_hash, input_index)

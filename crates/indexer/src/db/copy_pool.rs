@@ -16,7 +16,7 @@ pub struct CopyConfig {
 impl Default for CopyConfig {
     fn default() -> Self {
         Self {
-            max_copy_connections: 4,
+            max_copy_connections: 8,
             copy_batch_size: 50_000,
             copy_enabled: true,
         }
@@ -131,7 +131,7 @@ mod tests {
     #[test]
     fn test_config_defaults() {
         let config = CopyConfig::default();
-        assert_eq!(config.max_copy_connections, 4);
+        assert_eq!(config.max_copy_connections, 8);
         assert_eq!(config.copy_batch_size, 50_000);
         assert!(config.copy_enabled);
     }
