@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::RwLock;
 use std::time::Instant;
 
@@ -66,6 +66,10 @@ pub struct LiveCellStore {
     consumed_history: RwLock<VecDeque<ConsumedCellRecord>>,
     max_memory_bytes: usize,
     max_history_blocks: i64,
+    /// Cells inserted since last flush (for durability)
+    dirty_inserts: RwLock<HashMap<(Vec<u8>, i16), LiveCellInfo>>,
+    /// Cells removed since last flush (for durability)
+    dirty_removals: RwLock<HashSet<(Vec<u8>, i16)>>,
 }
 
 impl LiveCellStore {
@@ -73,11 +77,15 @@ impl LiveCellStore {
     pub fn new(max_memory_bytes: usize) -> Self {
         let cells = RwLock::new(HashMap::with_capacity(50_000_000));
         let consumed_history = RwLock::new(VecDeque::new());
+        let dirty_inserts = RwLock::new(HashMap::new());
+        let dirty_removals = RwLock::new(HashSet::new());
         Self {
             cells,
             consumed_history,
             max_memory_bytes,
             max_history_blocks: 36,
+            dirty_inserts,
+            dirty_removals,
         }
     }
 
@@ -88,8 +96,15 @@ impl LiveCellStore {
 
     /// Insert a live cell into the store
     pub fn insert(&self, tx_hash: Vec<u8>, output_index: i16, info: LiveCellInfo) {
-        let mut cells = self.cells.write().unwrap();
-        cells.insert((tx_hash, output_index), info);
+        let key = (tx_hash.clone(), output_index);
+        {
+            let mut cells = self.cells.write().unwrap();
+            cells.insert(key.clone(), info.clone());
+        }
+        {
+            let mut dirty_inserts = self.dirty_inserts.write().unwrap();
+            dirty_inserts.insert(key, info);
+        }
     }
 
     /// Get a live cell from the store
@@ -100,8 +115,19 @@ impl LiveCellStore {
 
     /// Remove a live cell from the store (when consumed)
     pub fn remove(&self, tx_hash: &[u8], output_index: i16) -> Option<LiveCellInfo> {
-        let mut cells = self.cells.write().unwrap();
-        cells.remove(&(tx_hash.to_vec(), output_index))
+        let key = (tx_hash.to_vec(), output_index);
+        let result = {
+            let mut cells = self.cells.write().unwrap();
+            cells.remove(&key)
+        };
+        if result.is_some() {
+            let mut dirty_inserts = self.dirty_inserts.write().unwrap();
+            dirty_inserts.remove(&key);
+
+            let mut dirty_removals = self.dirty_removals.write().unwrap();
+            dirty_removals.insert(key);
+        }
+        result
     }
 
     /// Record a cell consumption for potential rollback
@@ -278,6 +304,80 @@ impl LiveCellStore {
             .filter(|(_, info)| info.created_at_block > block_number)
             .map(|((tx_hash, output_index), info)| (tx_hash.clone(), *output_index, info.clone()))
             .collect()
+    }
+
+    /// Flush dirty cells to database for durability
+    ///
+    /// Returns (insert_count, removal_count)
+    pub async fn flush_to_db(&self, pool: &PgPool) -> anyhow::Result<(usize, usize)> {
+        let (inserts, removals) = {
+            let mut dirty_inserts = self.dirty_inserts.write().unwrap();
+            let mut dirty_removals = self.dirty_removals.write().unwrap();
+            let inserts = std::mem::take(&mut *dirty_inserts);
+            let removals = std::mem::take(&mut *dirty_removals);
+            (inserts, removals)
+        };
+
+        let insert_count = inserts.len();
+        let removal_count = removals.len();
+
+        if insert_count == 0 && removal_count == 0 {
+            return Ok((0, 0));
+        }
+
+        if insert_count > 0 {
+            let mut query_builder = sqlx::QueryBuilder::new(
+                "INSERT INTO live_cells (tx_hash, output_index, created_at_block, capacity, lock_script_hash, lock_code_hash, lock_args, type_script_hash, type_code_hash, data_size) "
+            );
+
+            query_builder.push_values(inserts.iter(), |mut b, ((tx_hash, output_index), info)| {
+                b.push_bind(tx_hash)
+                    .push_bind(output_index)
+                    .push_bind(info.created_at_block)
+                    .push_bind(info.capacity)
+                    .push_bind(&info.lock_script_hash)
+                    .push_bind(&info.lock_code_hash)
+                    .push_bind(&info.lock_args)
+                    .push_bind(&info.type_script_hash)
+                    .push_bind(&info.type_code_hash)
+                    .push_bind(info.data_size);
+            });
+
+            query_builder.push(" ON CONFLICT (tx_hash, output_index) DO NOTHING");
+            query_builder.build().execute(pool).await?;
+        }
+
+        if removal_count > 0 {
+            let batch_size = 1000;
+            let removal_vec: Vec<_> = removals.into_iter().collect();
+
+            for chunk in removal_vec.chunks(batch_size) {
+                let mut query_builder = sqlx::QueryBuilder::new("DELETE FROM live_cells WHERE ");
+
+                let mut first = true;
+                for (tx_hash, output_index) in chunk {
+                    if !first {
+                        query_builder.push(" OR ");
+                    }
+                    first = false;
+                    query_builder.push("(tx_hash = ");
+                    query_builder.push_bind(tx_hash);
+                    query_builder.push(" AND output_index = ");
+                    query_builder.push_bind(output_index);
+                    query_builder.push(")");
+                }
+
+                query_builder.build().execute(pool).await?;
+            }
+        }
+
+        tracing::info!(
+            "LiveCellStore flush: {} inserts, {} removals",
+            insert_count,
+            removal_count
+        );
+
+        Ok((insert_count, removal_count))
     }
 
     /// Rebuild the store from the database during startup recovery

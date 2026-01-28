@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
 use sqlx::postgres::PgPoolOptions;
+use std::sync::Arc;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -104,6 +105,13 @@ struct Args {
         help = "Maximum memory limit for LiveCellStore in bytes (default 8GB = 8589934592)"
     )]
     live_cell_memory_limit: usize,
+
+    #[arg(
+        long,
+        default_value = "100",
+        help = "Flush LiveCellStore to database every N batches (default 100)"
+    )]
+    live_cell_flush_interval: u64,
 }
 
 #[tokio::main]
@@ -145,6 +153,7 @@ async fn main() -> Result<()> {
         index_rebuild_parallel: args.index_rebuild_parallel,
         apply_pg_tuning: args.apply_pg_tuning,
         live_cell_memory_limit: args.live_cell_memory_limit,
+        live_cell_flush_interval: args.live_cell_flush_interval,
     };
 
     info!("Connecting to database: {}", config.database_url);
@@ -225,6 +234,7 @@ async fn main() -> Result<()> {
     });
 
     let indexer = Indexer::new(config.clone(), pool.clone(), Some(integrity_handle)).await?;
+    let indexer = Arc::new(indexer);
 
     let progress = indexer.progress();
     let progress_clone = progress.clone();
@@ -280,6 +290,35 @@ async fn main() -> Result<()> {
             }
         });
     }
+
+    let indexer_for_shutdown = Arc::clone(&indexer);
+    tokio::spawn(async move {
+        match tokio::signal::ctrl_c().await {
+            Ok(()) => {
+                info!("Received shutdown signal, flushing LiveCellStore...");
+                if let Some(store) = indexer_for_shutdown.writer().live_cell_store() {
+                    match store
+                        .flush_to_db(indexer_for_shutdown.writer().pool())
+                        .await
+                    {
+                        Ok((inserts, removals)) => {
+                            info!(
+                                "Shutdown flush completed: {} inserts, {} removals",
+                                inserts, removals
+                            );
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to flush on shutdown: {}", e);
+                        }
+                    }
+                }
+                std::process::exit(0);
+            }
+            Err(e) => {
+                tracing::error!("Failed to listen for shutdown signal: {}", e);
+            }
+        }
+    });
 
     indexer.run().await
 }

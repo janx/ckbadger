@@ -95,6 +95,10 @@ impl BatchWriter {
         &self.pool
     }
 
+    pub fn live_cell_store(&self) -> Option<&Arc<super::LiveCellStore>> {
+        self.live_cell_store.as_ref()
+    }
+
     pub async fn begin_transaction(&self) -> Result<Transaction<'_, Postgres>> {
         let mut tx = self.pool.begin().await?;
         if self.fast_sync_mode {

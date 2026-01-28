@@ -45,6 +45,9 @@ pub struct Config {
     /// Maximum memory limit for LiveCellStore in bytes (default 8GB)
     #[serde(default = "default_live_cell_memory_limit")]
     pub live_cell_memory_limit: usize,
+    /// Flush LiveCellStore to DB every N batches (default 100)
+    #[serde(default = "default_live_cell_flush_interval")]
+    pub live_cell_flush_interval: u64,
 }
 
 fn default_batch_size() -> usize {
@@ -99,6 +102,10 @@ fn default_index_rebuild_parallel() -> usize {
 
 fn default_live_cell_memory_limit() -> usize {
     8 * 1024 * 1024 * 1024
+}
+
+fn default_live_cell_flush_interval() -> u64 {
+    100
 }
 
 impl Config {

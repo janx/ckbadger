@@ -269,6 +269,8 @@ pub struct Indexer {
     last_cache_invalidation: tokio::sync::Mutex<u64>,
     /// Track previous bulk sync state to detect transition from bulk -> live sync
     was_bulk_sync_active: std::sync::atomic::AtomicBool,
+    /// Track batches processed since last LiveCellStore flush
+    batches_since_flush: std::sync::atomic::AtomicU64,
 }
 
 impl Indexer {
@@ -339,11 +341,16 @@ impl Indexer {
             cache_invalidator,
             last_cache_invalidation: tokio::sync::Mutex::new(0),
             was_bulk_sync_active: std::sync::atomic::AtomicBool::new(was_bulk),
+            batches_since_flush: std::sync::atomic::AtomicU64::new(0),
         })
     }
 
     pub fn progress(&self) -> Arc<SyncProgress> {
         Arc::clone(&self.progress)
+    }
+
+    pub fn writer(&self) -> &BatchWriter {
+        &self.writer
     }
 
     /// Check if bulk sync mode is active (for skipping non-critical statistics).
@@ -802,6 +809,8 @@ impl Indexer {
                         .blocks_count
                         .fetch_add(all_parsed_blocks.len() as u64, Ordering::Relaxed);
                     self.perf.report_and_reset();
+
+                    self.maybe_flush_live_cell_store().await;
                 }
                 Ok(None) => {
                     fetcher.abort();
@@ -1014,6 +1023,7 @@ impl Indexer {
         }
 
         self.check_bulk_sync_completion().await;
+        self.maybe_flush_live_cell_store().await;
 
         Ok(SyncAction::Continue)
     }
@@ -1033,6 +1043,31 @@ impl Indexer {
 
         self.was_bulk_sync_active
             .store(currently_bulk, Ordering::SeqCst);
+    }
+
+    async fn maybe_flush_live_cell_store(&self) {
+        use std::sync::atomic::Ordering;
+
+        let batches = self.batches_since_flush.fetch_add(1, Ordering::Relaxed) + 1;
+
+        if batches >= self.config.live_cell_flush_interval {
+            if let Some(store) = self.writer.live_cell_store() {
+                match store.flush_to_db(self.writer.pool()).await {
+                    Ok((inserts, removals)) => {
+                        if inserts > 0 || removals > 0 {
+                            info!(
+                                "LiveCellStore flushed: {} inserts, {} removals",
+                                inserts, removals
+                            );
+                        }
+                        self.batches_since_flush.store(0, Ordering::Relaxed);
+                    }
+                    Err(e) => {
+                        warn!("Failed to flush LiveCellStore: {}", e);
+                    }
+                }
+            }
+        }
     }
 
     async fn trigger_missing_cycles_fix_when_idle(&self) {
