@@ -36,7 +36,7 @@ cargo check                              # Type check all crates
 cargo build -p ckbadger-api              # Build specific crate
 cargo clippy                             # Lint
 
-# Rust Testing (180 indexer tests)
+# Rust Testing (213 indexer tests)
 cargo test                               # Run all tests
 cargo test --lib                         # Unit tests only (fast)
 cargo test test_name                     # Single test (partial match)
@@ -143,6 +143,38 @@ cargo run -p ckbadger-indexer -- --rebuild-indexes-only
 
 # Check status
 psql -c "SELECT indexes_deferred, indexes_dropped_at FROM sync_status;"
+```
+
+## In-Memory Live Cell Store
+
+The LiveCellStore provides O(1) cell lookups during blockchain synchronization by maintaining an in-memory cache of live cells. This significantly improves performance during bulk sync operations.
+
+| Parameter                    | Default      | Description                                        |
+| ---------------------------- | ------------ | -------------------------------------------------- |
+| `--live-cell-memory-limit`   | `8589934592` | Maximum memory for in-memory live cell store (8GB) |
+| `--live-cell-flush-interval` | `100`        | Flush dirty cells to database every N batches      |
+
+**Behavior:**
+
+- **Bulk Sync Mode** (>1000 blocks behind tip): Skips database UPDATE operations for live cells, writing only to the in-memory store for maximum throughput
+- **Periodic Flushing**: Dirty cells are flushed to the `live_cells` table every N batches (default 100)
+- **Graceful Shutdown**: All pending cells are flushed to database on shutdown
+- **Crash Recovery**: On restart, the indexer rebuilds the in-memory store from the `live_cells` table, ensuring no data loss
+
+**Example Usage:**
+
+```bash
+# Default: 8GB memory limit, flush every 100 batches
+cargo run -p ckbadger-indexer
+
+# Custom memory limit (16GB) and flush interval (50 batches)
+cargo run -p ckbadger-indexer -- \
+  --live-cell-memory-limit 17179869184 \
+  --live-cell-flush-interval 50
+
+# Environment variables
+LIVE_CELL_MEMORY_LIMIT=17179869184
+LIVE_CELL_FLUSH_INTERVAL=50
 ```
 
 ## Rust Style
