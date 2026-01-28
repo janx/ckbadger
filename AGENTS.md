@@ -361,6 +361,7 @@ cd frontend && pnpm test               # All frontend tests
 
 | Topic            | Document                          | Must Read Before                   |
 | ---------------- | --------------------------------- | ---------------------------------- |
+| **Worldview**    | `docs/WORLD_VIEW.md`              | **Any design or implementation**   |
 | DAO, APC, Supply | `docs/DAO_CALCULATIONS.md`        | Any DAO/supply/circulation changes |
 | Historical bugs  | `docs/POSTMORTEM.md`              | Any CKB domain changes             |
 | CKB protocol     | `docs/rfcs/`                      | Understanding CKB internals        |
