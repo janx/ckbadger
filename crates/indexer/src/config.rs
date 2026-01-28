@@ -35,8 +35,8 @@ pub struct Config {
 fn default_batch_size() -> usize {
     // Batch size for bulk operations: larger batches reduce per-batch overhead
     // and improve throughput, but increase memory usage (~100KB per block).
-    // 2000 blocks ≈ 200MB per batch. Can be overridden via BATCH_SIZE env var.
-    2000
+    // 10000 blocks ≈ 1GB per batch. Can be overridden via BATCH_SIZE env var.
+    10000
 }
 
 fn default_poll_interval_ms() -> u64 {
@@ -48,7 +48,7 @@ fn default_confirmations() -> u64 {
 }
 
 fn default_parallel_fetch_size() -> usize {
-    32
+    64
 }
 
 fn default_pipeline_enabled() -> bool {
@@ -57,8 +57,7 @@ fn default_pipeline_enabled() -> bool {
 
 fn default_pipeline_buffer() -> usize {
     // Pipeline buffer: number of batches that can be queued between stages.
-    // With batch_size=2000, each buffer slot uses ~200MB. 16 slots = ~3.2GB max.
-    // Larger buffers allow better pipelining when writer is temporarily slow.
+    // With batch_size=10000, each buffer slot uses ~1GB. 16 slots = ~16GB max.
     // Can be overridden via PIPELINE_BUFFER env var.
     16
 }
@@ -76,7 +75,9 @@ fn default_use_copy_bulk_sync() -> bool {
 }
 
 fn default_copy_pool_size() -> usize {
-    8
+    // Number of parallel COPY connections for bulk insert.
+    // More connections allow higher parallelism during bulk sync.
+    24
 }
 
 impl Config {
@@ -88,5 +89,42 @@ impl Config {
             .set_default("confirmations", default_confirmations() as i64)?
             .build()?
             .try_deserialize()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_batch_size() {
+        assert_eq!(default_batch_size(), 10000);
+    }
+
+    #[test]
+    fn test_default_pipeline_buffer() {
+        assert_eq!(default_pipeline_buffer(), 16);
+    }
+
+    #[test]
+    fn test_default_copy_pool_size() {
+        assert_eq!(default_copy_pool_size(), 24);
+    }
+
+    #[test]
+    fn test_default_parallel_fetch_size() {
+        assert_eq!(default_parallel_fetch_size(), 64);
+    }
+
+    #[test]
+    fn test_pipeline_memory_budget() {
+        let batch_size = default_batch_size();
+        let buffer = default_pipeline_buffer();
+        let bytes_per_block = 100 * 1024; // ~100KB
+        let max_memory_gb = (batch_size * buffer * bytes_per_block) / (1024 * 1024 * 1024);
+        assert!(
+            max_memory_gb <= 20,
+            "Pipeline memory budget should be <= 20GB, got {max_memory_gb}GB"
+        );
     }
 }

@@ -22,19 +22,19 @@ struct Args {
     #[arg(long, env = "TOKEN_LABELS_PATH")]
     token_labels_path: Option<String>,
 
-    #[arg(long, default_value = "1000")]
+    #[arg(long, default_value = "10000")]
     batch_size: usize,
 
     #[arg(long, default_value = "1000")]
     poll_interval_ms: u64,
 
-    #[arg(long, default_value = "32")]
+    #[arg(long, default_value = "64")]
     parallel_fetch_size: usize,
 
     #[arg(long, default_value = "true")]
     pipeline_enabled: bool,
 
-    #[arg(long, default_value = "6")]
+    #[arg(long, default_value = "16")]
     pipeline_buffer: usize,
 
     #[arg(
@@ -53,7 +53,7 @@ struct Args {
 
     #[arg(
         long,
-        default_value = "8",
+        default_value = "24",
         help = "Number of connections in the COPY connection pool"
     )]
     copy_pool_size: usize,
@@ -97,7 +97,7 @@ async fn main() -> Result<()> {
 
     info!("Connecting to database: {}", config.database_url);
     let pool = PgPoolOptions::new()
-        .max_connections(20)
+        .max_connections(32)
         .connect(&config.database_url)
         .await?;
 

@@ -88,21 +88,24 @@ The indexer uses a three-stage pipeline: **Fetcher** (RPC I/O) → **Parser** (C
 | Parameter             | Default | Description                          |
 | --------------------- | ------- | ------------------------------------ |
 | `pipeline_enabled`    | `true`  | Enable pipeline mode (vs sequential) |
-| `pipeline_buffer`     | `8`     | Channel capacity between stages      |
-| `batch_size`          | `500`   | Blocks per batch                     |
-| `parallel_fetch_size` | `16`    | Concurrent RPC requests              |
+| `pipeline_buffer`     | `16`    | Channel capacity between stages      |
+| `batch_size`          | `10000` | Blocks per batch                     |
+| `parallel_fetch_size` | `64`    | Concurrent RPC requests              |
+| `copy_pool_size`      | `24`    | Parallel COPY connections            |
 
 ```bash
 # CLI arguments
 cargo run -p ckbadger-indexer -- \
   --pipeline-enabled \
-  --pipeline-buffer 8 \
-  --batch-size 500
+  --pipeline-buffer 16 \
+  --batch-size 10000 \
+  --copy-pool-size 24
 
 # Environment variables
 PIPELINE_ENABLED=true
-PIPELINE_BUFFER=8
-BATCH_SIZE=500
+PIPELINE_BUFFER=16
+BATCH_SIZE=10000
+COPY_POOL_SIZE=24
 ```
 
 See `docs/INDEXER_PIPELINE.md` for architecture details.

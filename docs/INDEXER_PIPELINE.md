@@ -128,11 +128,11 @@ Block N arrives
 | --------------------- | ------- | ------------------------------------------------ |
 | `pipeline_enabled`    | `true`  | Enable three-stage pipeline (vs sequential sync) |
 | `pipeline_buffer`     | `16`    | Channel capacity between stages                  |
-| `batch_size`          | `2000`  | Blocks per batch                                 |
-| `parallel_fetch_size` | `32`    | Concurrent RPC requests                          |
+| `batch_size`          | `10000` | Blocks per batch                                 |
+| `parallel_fetch_size` | `64`    | Concurrent RPC requests                          |
 | `bulk_sync_threshold` | `1000`  | Blocks behind tip to auto-enable bulk sync       |
 | `use_copy_bulk_sync`  | `true`  | Use PostgreSQL COPY for bulk sync (5-10x faster) |
-| `copy_pool_size`      | `8`     | Number of COPY connection pool connections       |
+| `copy_pool_size`      | `24`    | Number of COPY connection pool connections       |
 | `fast_sync_mode`      | `true`  | Enable synchronous_commit=off for faster writes  |
 
 ### Environment Variables
@@ -140,11 +140,11 @@ Block N arrives
 ```bash
 PIPELINE_ENABLED=true
 PIPELINE_BUFFER=16
-BATCH_SIZE=2000
-PARALLEL_FETCH_SIZE=32
+BATCH_SIZE=10000
+PARALLEL_FETCH_SIZE=64
 BULK_SYNC_THRESHOLD=1000
 USE_COPY_BULK_SYNC=true
-COPY_POOL_SIZE=8
+COPY_POOL_SIZE=24
 FAST_SYNC_MODE=true
 ```
 
@@ -154,11 +154,11 @@ FAST_SYNC_MODE=true
 cargo run -p ckbadger-indexer -- \
   --pipeline-enabled \
   --pipeline-buffer 16 \
-  --batch-size 2000 \
-  --parallel-fetch-size 32 \
+  --batch-size 10000 \
+  --parallel-fetch-size 64 \
   --bulk-sync-threshold 1000 \
   --use-copy-bulk-sync \
-  --copy-pool-size 8
+  --copy-pool-size 24
 ```
 
 ## Error Handling
@@ -257,8 +257,8 @@ Pipeline mode uses more memory due to buffered batches:
 
 ```
 Memory ≈ pipeline_buffer × batch_size × (block_size + parsed_data)
-       ≈ 16 × 2000 × (~100KB per block)
-       ≈ 3.2GB additional
+       ≈ 16 × 10000 × (~100KB per block)
+       ≈ 16GB additional
 ```
 
 ### Channel Backpressure
