@@ -36,7 +36,7 @@ cargo check                              # Type check all crates
 cargo build -p ckbadger-api              # Build specific crate
 cargo clippy                             # Lint
 
-# Rust Testing (130 indexer tests)
+# Rust Testing (180 indexer tests)
 cargo test                               # Run all tests
 cargo test --lib                         # Unit tests only (fast)
 cargo test test_name                     # Single test (partial match)

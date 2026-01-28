@@ -3,11 +3,14 @@ use futures::future::join_all;
 use std::collections::HashMap;
 use tokio_postgres::Client;
 
+use crate::db::copy_address_transactions::CopyAddressTransactionsWriter;
+use crate::db::copy_blocks::CopyBlocksWriter;
 use crate::db::copy_cells::CopyCellsWriter;
 use crate::db::copy_inputs::{CopyCellDepsWriter, CopyInputsWriter};
 use crate::db::copy_live_cells::CopyLiveCellsWriter;
 use crate::db::copy_pool::CopyPoolManager;
 use crate::db::copy_transactions::CopyTransactionsWriter;
+use crate::parser::block::ParsedBlock;
 use crate::parser::cell::ParsedCell;
 use crate::parser::transaction::{ParsedCellDep, ParsedInput};
 use chrono::{DateTime, Utc};
@@ -43,6 +46,12 @@ type TxData<'a> = (
     bool,          // is_cellbase
     DateTime<Utc>, // timestamp
 );
+
+/// Type alias for block data tuple: (block, total_difficulty)
+type BlockData<'a> = (&'a ParsedBlock, i64);
+
+/// Type alias for address transaction data tuple
+type AddrTxData = (Vec<u8>, Vec<u8>, i64, i16, i64, DateTime<Utc>);
 
 fn get_partition_index(block_number: i64) -> usize {
     (block_number / PARTITION_SIZE) as usize
@@ -250,6 +259,69 @@ impl ParallelCopyRouter {
         }
 
         Ok(total_rows)
+    }
+
+    pub async fn copy_blocks_parallel(&self, blocks: &[BlockData<'_>]) -> Result<u64> {
+        if blocks.is_empty() {
+            return Ok(0);
+        }
+
+        let mut partition_data: HashMap<usize, Vec<BlockData<'_>>> = HashMap::new();
+
+        for block in blocks {
+            let partition = get_partition_index(block.0.number);
+            partition_data.entry(partition).or_default().push(*block);
+        }
+
+        let mut futures = Vec::new();
+
+        for (_partition, partition_blocks) in partition_data {
+            let conn = self.pool_manager.get_connection().await?;
+
+            let future = async move {
+                let mut writer = CopyBlocksWriter::new();
+                for (block, total_difficulty) in partition_blocks {
+                    writer.add_block(block, total_difficulty);
+                }
+
+                let data = writer.finish();
+                execute_copy(
+                    conn.as_ref(),
+                    "COPY blocks (number, hash, parent_hash, timestamp, version, compact_target, transactions_count, proposals_count, uncles_count, epoch_number, epoch_index, epoch_length, dao, nonce, extra_hash, proposals_hash, transactions_root, uncles_hash, total_difficulty) FROM STDIN WITH (FORMAT BINARY)",
+                    data,
+                ).await
+            };
+
+            futures.push(future);
+        }
+
+        let results = join_all(futures).await;
+        let mut total_rows = 0u64;
+        for result in results {
+            total_rows += result?;
+        }
+
+        Ok(total_rows)
+    }
+
+    pub async fn copy_address_transactions_parallel(&self, records: &[AddrTxData]) -> Result<u64> {
+        if records.is_empty() {
+            return Ok(0);
+        }
+
+        let conn = self.pool_manager.get_connection().await?;
+
+        let mut writer = CopyAddressTransactionsWriter::new();
+        for (lock_hash, tx_hash, block_num, tx_type, cap_change, ts) in records {
+            writer.add_record(lock_hash, tx_hash, *block_num, *tx_type, *cap_change, *ts);
+        }
+
+        let data = writer.finish();
+        execute_copy(
+            conn.as_ref(),
+            "COPY address_transactions (lock_script_hash, tx_hash, block_number, tx_type, capacity_change, timestamp) FROM STDIN WITH (FORMAT BINARY)",
+            data,
+        ).await
     }
 }
 

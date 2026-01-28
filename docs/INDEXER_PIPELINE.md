@@ -421,15 +421,17 @@ When the indexer catches up to the chain tip, it automatically switches back to 
 
 ### COPY Modules
 
-| Module                 | Table                 | Columns | Performance               |
-| ---------------------- | --------------------- | ------- | ------------------------- |
-| `copy_format.rs`       | -                     | -       | Core binary serialization |
-| `copy_cells.rs`        | cells                 | 16      | 5-10x faster than UNNEST  |
-| `copy_transactions.rs` | transactions          | 16      | 5-10x faster than UNNEST  |
-| `copy_inputs.rs`       | transaction_inputs    | 6       | 5-10x faster than UNNEST  |
-| `copy_inputs.rs`       | transaction_cell_deps | 6       | 5-10x faster than UNNEST  |
-| `copy_live_cells.rs`   | live_cells            | 10      | 5-10x faster than UNNEST  |
-| `parallel_copy.rs`     | -                     | -       | Partition-aware routing   |
+| Module                         | Table                 | Columns | Performance               |
+| ------------------------------ | --------------------- | ------- | ------------------------- |
+| `copy_format.rs`               | -                     | -       | Core binary serialization |
+| `copy_blocks.rs`               | blocks                | 19      | 5x faster than UNNEST     |
+| `copy_cells.rs`                | cells                 | 16      | 5-10x faster than UNNEST  |
+| `copy_transactions.rs`         | transactions          | 16      | 5-10x faster than UNNEST  |
+| `copy_inputs.rs`               | transaction_inputs    | 6       | 5-10x faster than UNNEST  |
+| `copy_inputs.rs`               | transaction_cell_deps | 6       | 5-10x faster than UNNEST  |
+| `copy_live_cells.rs`           | live_cells            | 10      | 5-10x faster than UNNEST  |
+| `copy_address_transactions.rs` | address_transactions  | 6       | 5x faster than UNNEST     |
+| `parallel_copy.rs`             | -                     | -       | Partition-aware routing   |
 
 ### COPY Pool Configuration
 
