@@ -30,6 +30,15 @@ pub struct Config {
     /// Number of connections in the COPY connection pool
     #[serde(default = "default_copy_pool_size")]
     pub copy_pool_size: usize,
+    /// Drop non-essential indexes during bulk sync for faster writes
+    #[serde(default)]
+    pub defer_indexes: bool,
+    /// Only rebuild indexes (don't sync blocks)
+    #[serde(default)]
+    pub rebuild_indexes_only: bool,
+    /// Max parallel connections for index rebuild
+    #[serde(default = "default_index_rebuild_parallel")]
+    pub index_rebuild_parallel: usize,
 }
 
 fn default_batch_size() -> usize {
@@ -75,9 +84,11 @@ fn default_use_copy_bulk_sync() -> bool {
 }
 
 fn default_copy_pool_size() -> usize {
-    // Number of parallel COPY connections for bulk insert.
-    // More connections allow higher parallelism during bulk sync.
     24
+}
+
+fn default_index_rebuild_parallel() -> usize {
+    10
 }
 
 impl Config {

@@ -110,6 +110,41 @@ COPY_POOL_SIZE=24
 
 See `docs/INDEXER_PIPELINE.md` for architecture details.
 
+## Deferred Index Optimization
+
+For fresh database syncs, the indexer automatically drops non-essential B-tree indexes to achieve ~3x faster write speeds. Indexes are rebuilt automatically when the sync catches up to the chain tip.
+
+| Parameter                  | Default | Description                                      |
+| -------------------------- | ------- | ------------------------------------------------ |
+| `--defer-indexes`          | `false` | Force enable deferred indexes (for non-fresh DB) |
+| `--no-auto-defer-indexes`  | `false` | Disable auto-optimization for fresh DB           |
+| `--rebuild-indexes-only`   | `false` | Only rebuild indexes, don't sync                 |
+| `--index-rebuild-parallel` | `10`    | Parallel connections per partitioned table       |
+
+**Behavior:**
+
+| Scenario                      | Auto-drop indexes | Auto-rebuild |
+| ----------------------------- | ----------------- | ------------ |
+| Fresh DB (tip=0)              | Yes               | Yes          |
+| Fresh DB + `--no-auto-defer`  | No                | No           |
+| Resume sync, indexes exist    | No                | No           |
+| Resume sync, indexes deferred | No                | Yes          |
+| Any DB + `--defer-indexes`    | Yes               | Yes          |
+
+```bash
+# Default: auto-optimize fresh DB, rebuild when caught up
+cargo run -p ckbadger-indexer
+
+# Disable auto-optimization
+cargo run -p ckbadger-indexer -- --no-auto-defer-indexes
+
+# Manual index rebuild only
+cargo run -p ckbadger-indexer -- --rebuild-indexes-only
+
+# Check status
+psql -c "SELECT indexes_deferred, indexes_dropped_at FROM sync_status;"
+```
+
 ## Rust Style
 
 **Imports**: External → internal → stdlib inline:

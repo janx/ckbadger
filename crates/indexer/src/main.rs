@@ -4,7 +4,7 @@ use sqlx::postgres::PgPoolOptions;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use ckbadger_indexer::{integrity::DataIntegrityService, sync::Indexer, Config};
+use ckbadger_indexer::{db::IndexManager, integrity::DataIntegrityService, sync::Indexer, Config};
 
 #[derive(Parser, Debug)]
 #[command(name = "ckbadger-indexer")]
@@ -57,6 +57,34 @@ struct Args {
         help = "Number of connections in the COPY connection pool"
     )]
     copy_pool_size: usize,
+
+    #[arg(
+        long,
+        default_value = "false",
+        help = "Drop non-essential indexes during bulk sync for faster writes (auto-rebuilds when caught up)"
+    )]
+    defer_indexes: bool,
+
+    #[arg(
+        long,
+        default_value = "false",
+        help = "Disable auto defer-indexes optimization for fresh database sync"
+    )]
+    no_auto_defer_indexes: bool,
+
+    #[arg(
+        long,
+        default_value = "false",
+        help = "Only rebuild indexes without syncing blocks"
+    )]
+    rebuild_indexes_only: bool,
+
+    #[arg(
+        long,
+        default_value = "10",
+        help = "Max parallel connections for index rebuild (per partitioned table)"
+    )]
+    index_rebuild_parallel: usize,
 }
 
 #[tokio::main]
@@ -93,6 +121,9 @@ async fn main() -> Result<()> {
         fast_sync_mode: true,
         use_copy_bulk_sync: args.use_copy_bulk_sync,
         copy_pool_size: args.copy_pool_size,
+        defer_indexes: args.defer_indexes,
+        rebuild_indexes_only: args.rebuild_indexes_only,
+        index_rebuild_parallel: args.index_rebuild_parallel,
     };
 
     info!("Connecting to database: {}", config.database_url);
@@ -105,6 +136,55 @@ async fn main() -> Result<()> {
     sqlx::migrate!("../../migrations/postgres")
         .run(&pool)
         .await?;
+
+    let index_manager = IndexManager::new(pool.clone());
+
+    if config.rebuild_indexes_only {
+        info!("Running in index rebuild only mode");
+        let progress = index_manager
+            .rebuild_indexes_parallel(config.index_rebuild_parallel)
+            .await?;
+        info!(
+            "Index rebuild completed: {}/{} succeeded, {} failed",
+            progress.completed,
+            progress.total,
+            progress.failed.len()
+        );
+        if !progress.failed.is_empty() {
+            info!("Failed indexes: {:?}", progress.failed);
+        }
+        return Ok(());
+    }
+
+    let indexes_currently_deferred = index_manager.is_indexes_deferred().await?;
+
+    let (db_tip, _): (i64, Option<Vec<u8>>) =
+        sqlx::query_as("SELECT tip_block_number, tip_block_hash FROM sync_status WHERE id = 1")
+            .fetch_one(&pool)
+            .await?;
+
+    let is_fresh_sync = db_tip == 0;
+    let should_auto_defer =
+        is_fresh_sync && !indexes_currently_deferred && !args.no_auto_defer_indexes;
+
+    if should_auto_defer {
+        info!(
+            "Fresh database detected (tip=0), auto-enabling deferred indexes for faster initial sync"
+        );
+        let dropped = index_manager.drop_deferrable_indexes().await?;
+        info!(
+            "Dropped {} indexes (will auto-rebuild when caught up)",
+            dropped
+        );
+    } else if is_fresh_sync && args.no_auto_defer_indexes {
+        info!("Fresh database detected, but auto-defer disabled via --no-auto-defer-indexes");
+    } else if config.defer_indexes && !indexes_currently_deferred {
+        info!("Defer indexes mode enabled, dropping non-essential indexes for faster bulk sync");
+        let dropped = index_manager.drop_deferrable_indexes().await?;
+        info!("Dropped {} indexes", dropped);
+    } else if indexes_currently_deferred {
+        info!("Indexes are deferred (from previous run), will auto-rebuild when caught up");
+    }
 
     info!("Connecting to CKB node: {}", config.ckb_rpc_url);
 
@@ -119,21 +199,62 @@ async fn main() -> Result<()> {
         integrity_service.run().await;
     });
 
-    let indexer = Indexer::new(config, pool, Some(integrity_handle)).await?;
+    let indexer = Indexer::new(config.clone(), pool.clone(), Some(integrity_handle)).await?;
 
     let progress = indexer.progress();
+    let progress_clone = progress.clone();
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
             info!(
                 "Progress: {:.2}% ({}/{}) - {:.2} blocks/sec",
-                progress.progress_percentage(),
-                progress.current(),
-                progress.target(),
-                progress.blocks_per_second()
+                progress_clone.progress_percentage(),
+                progress_clone.current(),
+                progress_clone.target(),
+                progress_clone.blocks_per_second()
             );
         }
     });
+
+    let should_monitor_rebuild =
+        indexes_currently_deferred || config.defer_indexes || should_auto_defer;
+    if should_monitor_rebuild {
+        let bulk_threshold = config.bulk_sync_threshold;
+        let rebuild_parallel = config.index_rebuild_parallel;
+        let pool_for_rebuild = pool.clone();
+        let progress_for_rebuild = progress.clone();
+
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+
+                let blocks_remaining = progress_for_rebuild.blocks_remaining();
+                if blocks_remaining > bulk_threshold {
+                    continue;
+                }
+
+                let mgr = IndexManager::new(pool_for_rebuild.clone());
+                if let Ok(true) = mgr.is_indexes_deferred().await {
+                    info!(
+                        "Caught up to tip (remaining={} <= threshold={}), starting index rebuild",
+                        blocks_remaining, bulk_threshold
+                    );
+                    match mgr.rebuild_indexes_parallel(rebuild_parallel).await {
+                        Ok(result) => {
+                            info!(
+                                "Index rebuild completed: {}/{} succeeded",
+                                result.completed, result.total
+                            );
+                        }
+                        Err(e) => {
+                            tracing::error!("Index rebuild failed: {}", e);
+                        }
+                    }
+                    break;
+                }
+            }
+        });
+    }
 
     indexer.run().await
 }

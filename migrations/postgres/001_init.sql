@@ -48,6 +48,13 @@ CREATE TABLE sync_status (
     -- Last reorg tracking
     last_reorg_at TIMESTAMPTZ,
     last_reorg_depth INT,
+    
+    -- Deferred index management (for bulk sync optimization)
+    indexes_deferred BOOLEAN NOT NULL DEFAULT FALSE,
+    indexes_dropped_at TIMESTAMPTZ,
+    indexes_rebuild_started_at TIMESTAMPTZ,
+    indexes_rebuild_completed_at TIMESTAMPTZ,
+    indexes_rebuild_progress TEXT,  -- JSON: {"total": 20, "completed": 5, "current": "idx_cells_lock"}
 
     CONSTRAINT single_row CHECK (id = 1)
 );
