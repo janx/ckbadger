@@ -111,13 +111,14 @@ Block N arrives
 │ WRITER                                                        │
 │  1. Validate batch sequence                                   │
 │  2. Check for reorg                                           │
-│  3. Insert blocks, txs, cells                                 │
-│  4. Consume cells (update status, delete from live_cells)     │
-│  5. Track script usage (using prefetched code_hashes)         │
-│  6. Process DAO deposits/withdrawals                          │
-│  7. Process token transfers                                   │
-│  8. Flush batch statistics                                    │
-│  9. Update sync_status (LAST - crash recovery)                │
+│  3. Insert blocks, txs, cells (parallel)                      │
+│  4. Insert inputs, cell_deps (parallel)                       │
+│  5. Consume cells (update status, delete from live_cells)     │
+│  6. Update address balances, txs, script usage (parallel)     │
+│  7. Process DAO deposits/withdrawals                          │
+│  8. Process token transfers                                   │
+│  9. Flush batch statistics                                    │
+│ 10. Update sync_status (LAST - crash recovery)                │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -239,8 +240,16 @@ With default settings on typical hardware:
 | Sequential           | ~150-200   | DB writes  |
 | Pipeline (buffer=8)  | ~280-320   | DB writes  |
 | Pipeline (buffer=16) | ~400-500   | DB writes  |
+| Pipeline + COPY      | ~5000-7000 | DB writes  |
 
-**Optimization**: When bulk sync is active (blocks_remaining > threshold), the indexer automatically uses PostgreSQL Binary COPY for 5-10x faster writes. See [Binary COPY Infrastructure](#binary-copy-infrastructure) for details.
+**Optimizations**:
+
+1. **Parallel DB writes**: Within each batch, independent operations run concurrently:
+   - blocks, transactions, cells inserts (parallel)
+   - inputs, cell_deps inserts (parallel)
+   - address balances, script usage updates (parallel)
+
+2. **Binary COPY**: When bulk sync is active (blocks_remaining > threshold), the indexer automatically uses PostgreSQL Binary COPY for 5-10x faster writes. See [Binary COPY Infrastructure](#binary-copy-infrastructure) for details.
 
 ### Memory Usage
 
@@ -293,14 +302,14 @@ Key metrics to monitor:
 
 ## Comparison: Pipeline vs Sequential
 
-| Aspect         | Sequential (`sync_blocks_batch`) | Pipeline (`run_pipeline`) |
-| -------------- | -------------------------------- | ------------------------- |
-| Architecture   | Single loop                      | 3 async tasks + channels  |
-| Parallelism    | Within batch only                | Across stages             |
-| Memory         | Lower                            | Higher (buffered batches) |
-| Complexity     | Simpler                          | More complex              |
-| Error recovery | Simpler                          | Drain + resync            |
-| Best for       | Small syncs, debugging           | Initial sync, production  |
+| Aspect         | Sequential (`sync_blocks_batch`) | Pipeline (`run_pipeline`)    |
+| -------------- | -------------------------------- | ---------------------------- |
+| Architecture   | Single loop                      | 3 async tasks + channels     |
+| Parallelism    | Within batch (DB writes)         | Across stages + within batch |
+| Memory         | Lower                            | Higher (buffered batches)    |
+| Complexity     | Simpler                          | More complex                 |
+| Error recovery | Simpler                          | Drain + resync               |
+| Best for       | Small syncs, debugging           | Initial sync, production     |
 
 ## Implementation Notes
 

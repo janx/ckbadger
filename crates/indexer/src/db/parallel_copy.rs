@@ -254,13 +254,22 @@ impl ParallelCopyRouter {
 }
 
 async fn execute_copy(client: &Client, query: &str, data: bytes::Bytes) -> Result<u64> {
+    use anyhow::Context;
     use futures::SinkExt;
     use std::pin::pin;
 
-    let sink = client.copy_in(query).await?;
+    let sink = client
+        .copy_in(query)
+        .await
+        .with_context(|| format!("COPY prepare failed: {}", query))?;
     let mut sink = pin!(sink);
-    sink.send(data).await?;
-    let rows = sink.finish().await?;
+    sink.send(data)
+        .await
+        .with_context(|| format!("COPY send failed: {}", query))?;
+    let rows = sink
+        .finish()
+        .await
+        .with_context(|| format!("COPY finish failed: {}", query))?;
     Ok(rows)
 }
 

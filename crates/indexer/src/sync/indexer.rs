@@ -736,7 +736,7 @@ impl Indexer {
                         )
                         .await
                     {
-                        error!("Sync error: {}", e);
+                        error!("Sync error: {:?}", e);
                         Self::drain_channel(&mut parse_rx).await;
                         sleep(Duration::from_secs(5)).await;
                         continue;
@@ -754,7 +754,7 @@ impl Indexer {
                         if crossed_50 {
                             if let Err(e) = self
                                 .update_secondary_issuance(
-                                    &hex::encode(&last_block.hash),
+                                    &format!("0x{}", hex::encode(&last_block.hash)),
                                     &hex::encode(&last_block.dao),
                                     last_block.number,
                                     last_block.timestamp,
@@ -1127,17 +1127,9 @@ impl Indexer {
             }
         }
 
+        // Prepare all data before parallel insertion
         let block_refs: Vec<&crate::parser::block::ParsedBlock> =
             all_parsed_blocks.iter().collect();
-        self.writer.insert_blocks_batch(&block_refs).await?;
-
-        for parsed_block in &all_parsed_blocks {
-            if !parsed_block.proposals.is_empty() {
-                self.writer
-                    .insert_block_proposals_batch(parsed_block.number, &parsed_block.proposals)
-                    .await?;
-            }
-        }
 
         let txs_for_batch: Vec<_> = all_tx_data
             .iter()
@@ -1162,11 +1154,6 @@ impl Indexer {
                 )
             })
             .collect();
-        if !txs_for_batch.is_empty() {
-            self.writer
-                .insert_transactions_batch(&txs_for_batch)
-                .await?;
-        }
 
         let mut all_cells: Vec<(&[u8], i16, &crate::parser::cell::ParsedCell, i64)> = Vec::new();
         for tx_data in &all_tx_data {
@@ -1179,8 +1166,39 @@ impl Indexer {
                 ));
             }
         }
-        if !all_cells.is_empty() {
-            self.writer.insert_cells_batch(&all_cells).await?;
+
+        // Parallel insert: blocks, transactions, and cells are independent (no FK constraints)
+        tokio::try_join!(
+            async {
+                if !block_refs.is_empty() {
+                    self.writer.insert_blocks_batch(&block_refs).await
+                } else {
+                    Ok(())
+                }
+            },
+            async {
+                if !txs_for_batch.is_empty() {
+                    self.writer.insert_transactions_batch(&txs_for_batch).await
+                } else {
+                    Ok(())
+                }
+            },
+            async {
+                if !all_cells.is_empty() {
+                    self.writer.insert_cells_batch(&all_cells).await
+                } else {
+                    Ok(())
+                }
+            }
+        )?;
+
+        // Block proposals must be inserted after blocks (references block_number)
+        for parsed_block in &all_parsed_blocks {
+            if !parsed_block.proposals.is_empty() {
+                self.writer
+                    .insert_block_proposals_batch(parsed_block.number, &parsed_block.proposals)
+                    .await?;
+            }
         }
 
         let mut all_inputs: Vec<(&[u8], i64, i16, &crate::parser::transaction::ParsedInput)> =
@@ -2693,17 +2711,21 @@ impl Indexer {
                 }
             )?;
         } else {
-            if !txs_for_batch.is_empty() {
-                self.writer
-                    .insert_transactions_batch(&txs_for_batch)
-                    .await?;
-            }
-
-            if !all_cells.is_empty() {
-                self.writer.insert_cells_batch(&all_cells).await?;
-            }
-
             tokio::try_join!(
+                async {
+                    if !txs_for_batch.is_empty() {
+                        self.writer.insert_transactions_batch(&txs_for_batch).await
+                    } else {
+                        Ok(())
+                    }
+                },
+                async {
+                    if !all_cells.is_empty() {
+                        self.writer.insert_cells_batch(&all_cells).await
+                    } else {
+                        Ok(())
+                    }
+                },
                 async {
                     if !all_inputs.is_empty() {
                         self.writer
