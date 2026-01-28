@@ -24,10 +24,15 @@ pub struct Config {
     pub bulk_sync_mode: bool,
     #[serde(default = "default_bulk_sync_threshold")]
     pub bulk_sync_threshold: u64,
+    #[serde(default = "default_fast_sync_mode")]
+    pub fast_sync_mode: bool,
 }
 
 fn default_batch_size() -> usize {
-    1000
+    // Batch size for bulk operations: larger batches reduce per-batch overhead
+    // and improve throughput, but increase memory usage (~100KB per block).
+    // 2000 blocks ≈ 200MB per batch. Can be overridden via BATCH_SIZE env var.
+    2000
 }
 
 fn default_poll_interval_ms() -> u64 {
@@ -47,11 +52,19 @@ fn default_pipeline_enabled() -> bool {
 }
 
 fn default_pipeline_buffer() -> usize {
-    6
+    // Pipeline buffer: number of batches that can be queued between stages.
+    // With batch_size=2000, each buffer slot uses ~200MB. 16 slots = ~3.2GB max.
+    // Larger buffers allow better pipelining when writer is temporarily slow.
+    // Can be overridden via PIPELINE_BUFFER env var.
+    16
 }
 
 fn default_bulk_sync_threshold() -> u64 {
     1000
+}
+
+fn default_fast_sync_mode() -> bool {
+    true
 }
 
 impl Config {

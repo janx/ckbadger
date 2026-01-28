@@ -13,7 +13,7 @@ use lru::LruCache;
 use rayon::prelude::*;
 use sqlx::PgPool;
 use tokio::time::sleep;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::cache::CacheInvalidator;
 use crate::config::Config;
@@ -273,7 +273,7 @@ impl Indexer {
     ) -> Result<Self> {
         let rpc = CkbRpcClient::new(&config.ckb_rpc_url);
         let repo = Repository::new(pool.clone());
-        let writer = BatchWriter::new(pool);
+        let writer = BatchWriter::with_fast_sync_mode(pool, config.fast_sync_mode);
 
         let (tip_number, _) = repo.get_sync_tip().await?;
         let chain_tip = rpc.get_tip_block_number().await?;
@@ -330,11 +330,23 @@ impl Indexer {
         self.writer.init_sync_start(start_block).await?;
 
         let writer_for_task = self.writer.pool().clone();
+        let fast_sync_mode = self.config.fast_sync_mode;
+        let progress_for_task = Arc::clone(&self.progress);
+        let bulk_sync_threshold = self.config.bulk_sync_threshold;
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(600));
             loop {
                 interval.tick().await;
-                let writer = BatchWriter::new(writer_for_task.clone());
+                let blocks_remaining = progress_for_task.blocks_remaining();
+                if blocks_remaining > bulk_sync_threshold {
+                    debug!(
+                        "Skipping token 24h refresh ({} blocks remaining > {} threshold)",
+                        blocks_remaining, bulk_sync_threshold
+                    );
+                    continue;
+                }
+                let writer =
+                    BatchWriter::with_fast_sync_mode(writer_for_task.clone(), fast_sync_mode);
                 match writer.refresh_token_24h_transfers().await {
                     Ok(count) => info!("Refreshed 24h transfers for {} tokens", count),
                     Err(e) => warn!("Failed to refresh token 24h transfers: {}", e),
@@ -953,6 +965,10 @@ impl Indexer {
     }
 
     async fn trigger_missing_cycles_fix_when_idle(&self) {
+        let blocks_remaining = self.progress.blocks_remaining();
+        if blocks_remaining > self.config.bulk_sync_threshold {
+            return;
+        }
         if let Some(ref handle) = self.integrity_handle {
             if !handle.is_running().await {
                 handle
@@ -2109,69 +2125,73 @@ impl Indexer {
             }
         }
 
-        // Second pass: Process consumptions (Spore, M-NFT, .bit)
-        let mut block_tx_idx = 0usize;
-        for (block_idx, block_response) in blocks.iter().enumerate() {
-            let parsed = &all_parsed_blocks[block_idx];
-            let tx_count_for_block = parsed.transactions_count as usize;
-            let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
-            block_tx_idx += tx_count_for_block;
+        // Skip per-input NFT consumption lookups during bulk sync - too slow (3 queries per input)
+        if !self.is_bulk_sync_active() {
+            let mut block_tx_idx = 0usize;
+            for (block_idx, block_response) in blocks.iter().enumerate() {
+                let parsed = &all_parsed_blocks[block_idx];
+                let tx_count_for_block = parsed.transactions_count as usize;
+                let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
+                block_tx_idx += tx_count_for_block;
 
-            for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
-                if tx_data.is_cellbase || tx_data.inputs.is_empty() {
-                    continue;
-                }
-
-                let tx = &block_response.block.transactions[tx_idx];
-
-                for input in &tx.inputs {
-                    let prev_tx_hash =
-                        crate::rpc::parse_hex_to_bytes(&input.previous_output.tx_hash);
-                    let prev_index = input
-                        .previous_output
-                        .index
-                        .strip_prefix("0x")
-                        .and_then(|s| u32::from_str_radix(s, 16).ok())
-                        .unwrap_or(0);
-
-                    // Spore consumption
-                    let consumed_spore_id = self
-                        .writer
-                        .get_spore_id_by_outpoint(&prev_tx_hash, prev_index as i16)
-                        .await?;
-
-                    if let Some(spore_id) = consumed_spore_id {
-                        if !batch_spore_ids.contains(&spore_id) {
-                            self.writer
-                                .consume_spore(&spore_id, parsed.number, &tx_data.hash)
-                                .await?;
-                        }
+                for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
+                    if tx_data.is_cellbase || tx_data.inputs.is_empty() {
+                        continue;
                     }
 
-                    // M-NFT token consumption
-                    let consumed_mnft_token_id = self
-                        .writer
-                        .get_mnft_token_id_by_outpoint(&prev_tx_hash, prev_index as i16)
-                        .await?;
+                    let tx = &block_response.block.transactions[tx_idx];
 
-                    if let Some(token_id) = consumed_mnft_token_id {
-                        if !batch_mnft_token_ids.contains(&token_id) {
-                            self.writer
-                                .consume_mnft_token(&token_id, parsed.number, &tx_data.hash)
-                                .await?;
+                    for input in &tx.inputs {
+                        let prev_tx_hash =
+                            crate::rpc::parse_hex_to_bytes(&input.previous_output.tx_hash);
+                        let prev_index = input
+                            .previous_output
+                            .index
+                            .strip_prefix("0x")
+                            .and_then(|s| u32::from_str_radix(s, 16).ok())
+                            .unwrap_or(0);
+
+                        let consumed_spore_id = self
+                            .writer
+                            .get_spore_id_by_outpoint(&prev_tx_hash, prev_index as i16)
+                            .await?;
+
+                        if let Some(spore_id) = consumed_spore_id {
+                            if !batch_spore_ids.contains(&spore_id) {
+                                self.writer
+                                    .consume_spore(&spore_id, parsed.number, &tx_data.hash)
+                                    .await?;
+                            }
                         }
-                    }
 
-                    let consumed_dotbit_account_id = self
-                        .writer
-                        .get_dotbit_account_id_by_outpoint(&prev_tx_hash, prev_index as i16)
-                        .await?;
+                        let consumed_mnft_token_id = self
+                            .writer
+                            .get_mnft_token_id_by_outpoint(&prev_tx_hash, prev_index as i16)
+                            .await?;
 
-                    if let Some(account_id) = consumed_dotbit_account_id {
-                        if !batch_dotbit_account_ids.contains(&account_id) {
-                            self.writer
-                                .consume_dotbit_account(&account_id, parsed.number, &tx_data.hash)
-                                .await?;
+                        if let Some(token_id) = consumed_mnft_token_id {
+                            if !batch_mnft_token_ids.contains(&token_id) {
+                                self.writer
+                                    .consume_mnft_token(&token_id, parsed.number, &tx_data.hash)
+                                    .await?;
+                            }
+                        }
+
+                        let consumed_dotbit_account_id = self
+                            .writer
+                            .get_dotbit_account_id_by_outpoint(&prev_tx_hash, prev_index as i16)
+                            .await?;
+
+                        if let Some(account_id) = consumed_dotbit_account_id {
+                            if !batch_dotbit_account_ids.contains(&account_id) {
+                                self.writer
+                                    .consume_dotbit_account(
+                                        &account_id,
+                                        parsed.number,
+                                        &tx_data.hash,
+                                    )
+                                    .await?;
+                            }
                         }
                     }
                 }
@@ -2194,11 +2214,16 @@ impl Indexer {
             DateTime<Utc>,
         )> = Vec::new();
 
+        let skip_nft_transfer_tracking = self.is_bulk_sync_active();
+
         for spore_info in &new_spores {
-            let prev_owner = self
-                .writer
-                .get_spore_owner_by_id(&spore_info.spore_id)
-                .await?;
+            let prev_owner = if skip_nft_transfer_tracking {
+                None
+            } else {
+                self.writer
+                    .get_spore_owner_by_id(&spore_info.spore_id)
+                    .await?
+            };
 
             let is_mint = prev_owner.is_none()
                 || prev_owner
@@ -3513,66 +3538,74 @@ impl Indexer {
             }
         }
 
-        let mut block_tx_idx = 0usize;
-        for (block_idx, block_response) in blocks.iter().enumerate() {
-            let parsed = &all_parsed_blocks[block_idx];
-            let tx_count_for_block = parsed.transactions_count as usize;
-            let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
-            block_tx_idx += tx_count_for_block;
+        // Skip per-input NFT consumption lookups during bulk sync - too slow (3 queries per input)
+        // These will be processed by integrity service after bulk sync completes
+        if !self.is_bulk_sync_active() {
+            let mut block_tx_idx = 0usize;
+            for (block_idx, block_response) in blocks.iter().enumerate() {
+                let parsed = &all_parsed_blocks[block_idx];
+                let tx_count_for_block = parsed.transactions_count as usize;
+                let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
+                block_tx_idx += tx_count_for_block;
 
-            for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
-                if tx_data.is_cellbase || tx_data.inputs.is_empty() {
-                    continue;
-                }
-
-                let tx = &block_response.block.transactions[tx_idx];
-
-                for input in &tx.inputs {
-                    let prev_tx_hash =
-                        crate::rpc::parse_hex_to_bytes(&input.previous_output.tx_hash);
-                    let prev_index = input
-                        .previous_output
-                        .index
-                        .strip_prefix("0x")
-                        .and_then(|s| u32::from_str_radix(s, 16).ok())
-                        .unwrap_or(0);
-
-                    let consumed_spore_id = self
-                        .writer
-                        .get_spore_id_by_outpoint(&prev_tx_hash, prev_index as i16)
-                        .await?;
-
-                    if let Some(spore_id) = consumed_spore_id {
-                        if !batch_spore_ids.contains(&spore_id) {
-                            self.writer
-                                .consume_spore(&spore_id, parsed.number, &tx_data.hash)
-                                .await?;
-                        }
+                for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
+                    if tx_data.is_cellbase || tx_data.inputs.is_empty() {
+                        continue;
                     }
 
-                    let consumed_mnft_token_id = self
-                        .writer
-                        .get_mnft_token_id_by_outpoint(&prev_tx_hash, prev_index as i16)
-                        .await?;
+                    let tx = &block_response.block.transactions[tx_idx];
 
-                    if let Some(token_id) = consumed_mnft_token_id {
-                        if !batch_mnft_token_ids.contains(&token_id) {
-                            self.writer
-                                .consume_mnft_token(&token_id, parsed.number, &tx_data.hash)
-                                .await?;
+                    for input in &tx.inputs {
+                        let prev_tx_hash =
+                            crate::rpc::parse_hex_to_bytes(&input.previous_output.tx_hash);
+                        let prev_index = input
+                            .previous_output
+                            .index
+                            .strip_prefix("0x")
+                            .and_then(|s| u32::from_str_radix(s, 16).ok())
+                            .unwrap_or(0);
+
+                        let consumed_spore_id = self
+                            .writer
+                            .get_spore_id_by_outpoint(&prev_tx_hash, prev_index as i16)
+                            .await?;
+
+                        if let Some(spore_id) = consumed_spore_id {
+                            if !batch_spore_ids.contains(&spore_id) {
+                                self.writer
+                                    .consume_spore(&spore_id, parsed.number, &tx_data.hash)
+                                    .await?;
+                            }
                         }
-                    }
 
-                    let consumed_dotbit_account_id = self
-                        .writer
-                        .get_dotbit_account_id_by_outpoint(&prev_tx_hash, prev_index as i16)
-                        .await?;
+                        let consumed_mnft_token_id = self
+                            .writer
+                            .get_mnft_token_id_by_outpoint(&prev_tx_hash, prev_index as i16)
+                            .await?;
 
-                    if let Some(account_id) = consumed_dotbit_account_id {
-                        if !batch_dotbit_account_ids.contains(&account_id) {
-                            self.writer
-                                .consume_dotbit_account(&account_id, parsed.number, &tx_data.hash)
-                                .await?;
+                        if let Some(token_id) = consumed_mnft_token_id {
+                            if !batch_mnft_token_ids.contains(&token_id) {
+                                self.writer
+                                    .consume_mnft_token(&token_id, parsed.number, &tx_data.hash)
+                                    .await?;
+                            }
+                        }
+
+                        let consumed_dotbit_account_id = self
+                            .writer
+                            .get_dotbit_account_id_by_outpoint(&prev_tx_hash, prev_index as i16)
+                            .await?;
+
+                        if let Some(account_id) = consumed_dotbit_account_id {
+                            if !batch_dotbit_account_ids.contains(&account_id) {
+                                self.writer
+                                    .consume_dotbit_account(
+                                        &account_id,
+                                        parsed.number,
+                                        &tx_data.hash,
+                                    )
+                                    .await?;
+                            }
                         }
                     }
                 }
@@ -3595,11 +3628,16 @@ impl Indexer {
             DateTime<Utc>,
         )> = Vec::new();
 
+        let skip_nft_transfer_tracking = self.is_bulk_sync_active();
+
         for spore_info in &new_spores {
-            let prev_owner = self
-                .writer
-                .get_spore_owner_by_id(&spore_info.spore_id)
-                .await?;
+            let prev_owner = if skip_nft_transfer_tracking {
+                None
+            } else {
+                self.writer
+                    .get_spore_owner_by_id(&spore_info.spore_id)
+                    .await?
+            };
 
             let is_mint = prev_owner.is_none()
                 || prev_owner

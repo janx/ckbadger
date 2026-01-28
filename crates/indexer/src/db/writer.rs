@@ -4,7 +4,7 @@
 
 use anyhow::Result;
 use chrono::{DateTime, NaiveDate, Utc};
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, Transaction};
 use std::collections::HashMap;
 use tracing::{info, warn};
 
@@ -57,15 +57,36 @@ pub struct SecondaryIssuanceBreakdown {
 #[derive(Clone)]
 pub struct BatchWriter {
     pool: PgPool,
+    fast_sync_mode: bool,
 }
 
 impl BatchWriter {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            fast_sync_mode: true,
+        }
+    }
+
+    pub fn with_fast_sync_mode(pool: PgPool, fast_sync_mode: bool) -> Self {
+        Self {
+            pool,
+            fast_sync_mode,
+        }
     }
 
     pub fn pool(&self) -> &PgPool {
         &self.pool
+    }
+
+    pub async fn begin_transaction(&self) -> Result<Transaction<'_, Postgres>> {
+        let mut tx = self.pool.begin().await?;
+        if self.fast_sync_mode {
+            sqlx::query("SET LOCAL synchronous_commit = off")
+                .execute(&mut *tx)
+                .await?;
+        }
+        Ok(tx)
     }
 
     pub async fn migrate_live_cells(&self) -> Result<u64> {

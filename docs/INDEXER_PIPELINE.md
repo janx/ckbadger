@@ -126,21 +126,23 @@ Block N arrives
 | Parameter             | Default | Description                                      |
 | --------------------- | ------- | ------------------------------------------------ |
 | `pipeline_enabled`    | `true`  | Enable three-stage pipeline (vs sequential sync) |
-| `pipeline_buffer`     | `6`     | Channel capacity between stages                  |
-| `batch_size`          | `1000`  | Blocks per batch                                 |
+| `pipeline_buffer`     | `16`    | Channel capacity between stages                  |
+| `batch_size`          | `2000`  | Blocks per batch                                 |
 | `parallel_fetch_size` | `32`    | Concurrent RPC requests                          |
 | `bulk_sync_mode`      | `false` | Enable bulk sync mode for faster initial sync    |
 | `bulk_sync_threshold` | `1000`  | Blocks behind tip to exit bulk sync mode         |
+| `fast_sync_mode`      | `true`  | Enable synchronous_commit=off for faster writes  |
 
 ### Environment Variables
 
 ```bash
 PIPELINE_ENABLED=true
-PIPELINE_BUFFER=6
-BATCH_SIZE=1000
+PIPELINE_BUFFER=16
+BATCH_SIZE=2000
 PARALLEL_FETCH_SIZE=32
 BULK_SYNC_MODE=false
 BULK_SYNC_THRESHOLD=1000
+FAST_SYNC_MODE=true
 ```
 
 ### CLI Arguments
@@ -148,8 +150,8 @@ BULK_SYNC_THRESHOLD=1000
 ```bash
 cargo run -p ckbadger-indexer -- \
   --pipeline-enabled \
-  --pipeline-buffer 6 \
-  --batch-size 1000 \
+  --pipeline-buffer 16 \
+  --batch-size 2000 \
   --parallel-fetch-size 32 \
   --bulk-sync-mode \
   --bulk-sync-threshold 1000
@@ -229,11 +231,13 @@ Both modes MUST produce identical database state. This is enforced by:
 
 With default settings on typical hardware:
 
-| Mode                | Blocks/sec | Bottleneck |
-| ------------------- | ---------- | ---------- |
-| Sequential          | ~150-200   | DB writes  |
-| Pipeline (buffer=2) | ~250-300   | DB writes  |
-| Pipeline (buffer=8) | ~280-320   | DB writes  |
+| Mode                 | Blocks/sec | Bottleneck |
+| -------------------- | ---------- | ---------- |
+| Sequential           | ~150-200   | DB writes  |
+| Pipeline (buffer=8)  | ~280-320   | DB writes  |
+| Pipeline (buffer=16) | ~400-500   | DB writes  |
+
+**Optimization Note**: The indexer includes PostgreSQL Binary COPY infrastructure for bulk data loading (4-6x faster than UNNEST inserts). The COPY modules are available in `crates/indexer/src/db/copy_*.rs` for future integration.
 
 ### Memory Usage
 
@@ -241,8 +245,8 @@ Pipeline mode uses more memory due to buffered batches:
 
 ```
 Memory ≈ pipeline_buffer × batch_size × (block_size + parsed_data)
-       ≈ 8 × 500 × (~100KB per block)
-       ≈ 400MB additional
+       ≈ 16 × 2000 × (~100KB per block)
+       ≈ 3.2GB additional
 ```
 
 ### Channel Backpressure
@@ -342,6 +346,40 @@ Same-batch consumptions get code_hashes from the creating transaction directly.
 2. Reduce `batch_size`
 3. Monitor for memory leaks in channel handling
 
+## Binary COPY Infrastructure
+
+The indexer includes PostgreSQL Binary COPY modules for high-performance bulk data loading:
+
+| Module                 | Table                 | Columns                   | Performance             |
+| ---------------------- | --------------------- | ------------------------- | ----------------------- |
+| `copy_format.rs`       | -                     | Core binary serialization | Foundation              |
+| `copy_cells.rs`        | cells                 | 16                        | 4-6x faster than UNNEST |
+| `copy_transactions.rs` | transactions          | 16                        | 4-6x faster than UNNEST |
+| `copy_inputs.rs`       | transaction_inputs    | 6                         | 4-6x faster than UNNEST |
+| `copy_inputs.rs`       | transaction_cell_deps | 6                         | 4-6x faster than UNNEST |
+| `copy_live_cells.rs`   | live_cells            | 10                        | 4-6x faster than UNNEST |
+| `parallel_copy.rs`     | -                     | Partition-aware routing   | 2x on top               |
+
+### COPY Pool Configuration
+
+The COPY operations use a dedicated `tokio-postgres` connection pool (separate from sqlx):
+
+```rust
+CopyConfig {
+    max_copy_connections: 8,  // 8 parallel COPY streams
+    copy_batch_size: 50_000,
+    copy_enabled: true,
+}
+```
+
+### Future Integration
+
+The COPY modules are ready for integration into the write pipeline. To enable:
+
+1. Initialize `CopyPoolManager` in indexer startup
+2. Replace UNNEST calls with COPY functions in `write_parsed_batch()`
+3. Use `ParallelCopyRouter` for partition-aware parallel writes
+
 ---
 
-_Last updated: 2026-01-26_
+_Last updated: 2026-01-27_

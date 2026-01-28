@@ -84,6 +84,7 @@ async fn main() -> Result<()> {
         redis_url: args.redis_url.or_else(|| std::env::var("REDIS_URL").ok()),
         bulk_sync_mode: args.bulk_sync_mode,
         bulk_sync_threshold: args.bulk_sync_threshold,
+        fast_sync_mode: true,
     };
 
     info!("Connecting to database: {}", config.database_url);
