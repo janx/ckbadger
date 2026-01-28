@@ -296,7 +296,7 @@ impl Indexer {
                 &config.database_url,
                 CopyConfig {
                     max_copy_connections: config.copy_pool_size,
-                    copy_batch_size: 50_000,
+                    copy_batch_size: 100_000,
                     copy_enabled: true,
                 },
             ) {

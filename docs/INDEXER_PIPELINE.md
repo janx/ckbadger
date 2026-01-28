@@ -437,8 +437,8 @@ COPY operations use a dedicated `tokio-postgres` connection pool (separate from 
 
 ```rust
 CopyConfig {
-    max_copy_connections: 8,  // --copy-pool-size
-    copy_batch_size: 50_000,
+    max_copy_connections: 24,  // --copy-pool-size
+    copy_batch_size: 100_000,
     copy_enabled: true,
 }
 ```
