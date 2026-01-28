@@ -4,7 +4,12 @@ use sqlx::postgres::PgPoolOptions;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use ckbadger_indexer::{db::IndexManager, integrity::DataIntegrityService, sync::Indexer, Config};
+use ckbadger_indexer::{
+    db::{apply_pg_tuning, IndexManager},
+    integrity::DataIntegrityService,
+    sync::Indexer,
+    Config,
+};
 
 #[derive(Parser, Debug)]
 #[command(name = "ckbadger-indexer")]
@@ -85,6 +90,13 @@ struct Args {
         help = "Max parallel connections for index rebuild (per partitioned table)"
     )]
     index_rebuild_parallel: usize,
+
+    #[arg(
+        long,
+        default_value = "false",
+        help = "Apply PostgreSQL session-level tuning for bulk sync optimization"
+    )]
+    apply_pg_tuning: bool,
 }
 
 #[tokio::main]
@@ -124,6 +136,7 @@ async fn main() -> Result<()> {
         defer_indexes: args.defer_indexes,
         rebuild_indexes_only: args.rebuild_indexes_only,
         index_rebuild_parallel: args.index_rebuild_parallel,
+        apply_pg_tuning: args.apply_pg_tuning,
     };
 
     info!("Connecting to database: {}", config.database_url);
@@ -131,6 +144,10 @@ async fn main() -> Result<()> {
         .max_connections(32)
         .connect(&config.database_url)
         .await?;
+
+    if config.apply_pg_tuning {
+        apply_pg_tuning(&pool).await?;
+    }
 
     info!("Running migrations");
     sqlx::migrate!("../../migrations/postgres")

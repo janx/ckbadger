@@ -39,6 +39,9 @@ pub struct Config {
     /// Max parallel connections for index rebuild
     #[serde(default = "default_index_rebuild_parallel")]
     pub index_rebuild_parallel: usize,
+    /// Apply PostgreSQL tuning for bulk sync optimization
+    #[serde(default)]
+    pub apply_pg_tuning: bool,
 }
 
 fn default_batch_size() -> usize {

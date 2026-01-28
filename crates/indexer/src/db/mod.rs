@@ -9,10 +9,12 @@ pub mod copy_transactions;
 pub mod indexes;
 pub mod parallel_copy;
 mod repository;
+pub mod tuning;
 mod writer;
 
 pub use copy_pool::{CopyConfig, CopyPoolManager};
 pub use indexes::{IndexManager, IndexRebuildProgress};
 pub use parallel_copy::ParallelCopyRouter;
 pub use repository::{DeepForkInfo, Repository};
+pub use tuning::apply_pg_tuning;
 pub use writer::{BatchWriter, ReorgResult, SecondaryIssuanceBreakdown};
