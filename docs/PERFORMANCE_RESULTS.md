@@ -20,7 +20,6 @@ This document tracks the performance of the CKB indexer with the in-memory LiveC
 - PostgreSQL version: 15 (Docker)
 - CKB node version: v0.204.0
 - Indexer configuration:
-  - `--live-cell-memory-limit`: 8GB (default)
   - `--live-cell-flush-interval`: 100 batches (default)
   - `--pipeline-enabled`: true
   - `--batch-size`: 10000

@@ -284,12 +284,7 @@ impl Indexer {
         let rpc = CkbRpcClient::new(&config.ckb_rpc_url);
         let repo = Repository::new(pool.clone());
 
-        let live_cell_store =
-            Arc::new(crate::db::LiveCellStore::new(config.live_cell_memory_limit));
-        info!(
-            "Initialized LiveCellStore with {}GB memory limit",
-            config.live_cell_memory_limit / (1024 * 1024 * 1024)
-        );
+        let live_cell_store = Arc::new(crate::db::LiveCellStore::new());
 
         live_cell_store.rebuild_from_db(&pool).await?;
 
@@ -4802,6 +4797,8 @@ impl Indexer {
 
         // Critical: sync_status must always be updated (crash recovery)
         if let Some((block_number, ref block_hash)) = stats.last_block {
+            let ema_rate = self.progress.ema_blocks_per_second();
+            let ema_rate_opt = if ema_rate > 0.0 { Some(ema_rate) } else { None };
             self.writer
                 .update_sync_status(
                     block_number,
@@ -4810,6 +4807,7 @@ impl Indexer {
                     stats.sync_totals.1,
                     stats.sync_totals.2,
                     0,
+                    ema_rate_opt,
                 )
                 .await?;
         }

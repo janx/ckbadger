@@ -101,13 +101,6 @@ struct Args {
 
     #[arg(
         long,
-        default_value = "8589934592",
-        help = "Maximum memory limit for LiveCellStore in bytes (default 8GB = 8589934592)"
-    )]
-    live_cell_memory_limit: usize,
-
-    #[arg(
-        long,
         default_value = "100",
         help = "Flush LiveCellStore to database every N batches (default 100)"
     )]
@@ -152,7 +145,6 @@ async fn main() -> Result<()> {
         rebuild_indexes_only: args.rebuild_indexes_only,
         index_rebuild_parallel: args.index_rebuild_parallel,
         apply_pg_tuning: args.apply_pg_tuning,
-        live_cell_memory_limit: args.live_cell_memory_limit,
         live_cell_flush_interval: args.live_cell_flush_interval,
     };
 
@@ -256,11 +248,12 @@ async fn main() -> Result<()> {
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
             info!(
-                "Progress: {:.2}% ({}/{}) - {:.2} blocks/sec",
+                "Progress: {:.2}% ({}/{}) - {:.2} blocks/sec (EMA: {:.2})",
                 progress_clone.progress_percentage(),
                 progress_clone.current(),
                 progress_clone.target(),
-                progress_clone.blocks_per_second()
+                progress_clone.blocks_per_second(),
+                progress_clone.ema_blocks_per_second()
             );
         }
     });

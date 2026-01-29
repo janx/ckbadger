@@ -64,7 +64,6 @@ impl LiveCellInfo {
 pub struct LiveCellStore {
     cells: RwLock<HashMap<(Vec<u8>, i16), LiveCellInfo>>,
     consumed_history: RwLock<VecDeque<ConsumedCellRecord>>,
-    max_memory_bytes: usize,
     max_history_blocks: i64,
     /// Cells inserted since last flush (for durability)
     dirty_inserts: RwLock<HashMap<(Vec<u8>, i16), LiveCellInfo>>,
@@ -72,9 +71,14 @@ pub struct LiveCellStore {
     dirty_removals: RwLock<HashSet<(Vec<u8>, i16)>>,
 }
 
+impl Default for LiveCellStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LiveCellStore {
-    /// Create a new LiveCellStore with specified memory limit
-    pub fn new(max_memory_bytes: usize) -> Self {
+    pub fn new() -> Self {
         // Start with modest capacity; HashMap will grow as needed
         // Avoid huge preallocation that fails in CI/low-memory environments
         let cells = RwLock::new(HashMap::with_capacity(100_000));
@@ -84,16 +88,10 @@ impl LiveCellStore {
         Self {
             cells,
             consumed_history,
-            max_memory_bytes,
             max_history_blocks: 36,
             dirty_inserts,
             dirty_removals,
         }
-    }
-
-    /// Create a new LiveCellStore with default 8GB memory limit
-    pub fn with_default_limit() -> Self {
-        Self::new(8 * 1024 * 1024 * 1024)
     }
 
     /// Insert a live cell into the store
@@ -205,54 +203,6 @@ impl LiveCellStore {
     pub fn clear(&self) {
         let mut cells = self.cells.write().unwrap();
         cells.clear();
-    }
-
-    /// Get the maximum memory limit
-    pub fn max_memory_bytes(&self) -> usize {
-        self.max_memory_bytes
-    }
-
-    /// Check if memory pressure is detected (usage >= limit)
-    pub fn is_memory_pressure(&self) -> bool {
-        self.memory_usage() >= self.max_memory_bytes
-    }
-
-    /// Get memory usage as a percentage of the limit (0-100+)
-    pub fn memory_usage_percent(&self) -> f64 {
-        let usage = self.memory_usage() as f64;
-        let limit = self.max_memory_bytes as f64;
-        (usage / limit) * 100.0
-    }
-
-    /// Check memory and log warnings/errors if pressure detected
-    /// Returns true if critical pressure (>= 90%), false otherwise
-    pub fn check_memory_and_warn(&self) -> bool {
-        let percent = self.memory_usage_percent();
-
-        if percent >= 90.0 {
-            tracing::error!(
-                "CRITICAL: LiveCellStore memory pressure at {:.1}% ({} / {} bytes)",
-                percent,
-                self.memory_usage(),
-                self.max_memory_bytes
-            );
-            true
-        } else if percent >= 75.0 {
-            tracing::warn!(
-                "LiveCellStore memory pressure at {:.1}% ({} / {} bytes)",
-                percent,
-                self.memory_usage(),
-                self.max_memory_bytes
-            );
-            false
-        } else {
-            false
-        }
-    }
-
-    /// Get the memory limit in bytes
-    pub fn memory_limit(&self) -> usize {
-        self.max_memory_bytes
     }
 
     /// Rollback the store to a specific block number
@@ -392,9 +342,21 @@ impl LiveCellStore {
         let batch_size: i64 = 100_000;
         let mut total_loaded: i64 = 0;
 
-        let mut cursor: Option<(Vec<u8>, i16)> = None;
+        let total_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM live_cells")
+            .fetch_one(pool)
+            .await?;
 
-        tracing::info!("Starting LiveCellStore rebuild from database (keyset pagination)");
+        if total_count == 0 {
+            tracing::info!("LiveCellStore rebuild: no cells in database");
+            return Ok(());
+        }
+
+        tracing::info!(
+            "LiveCellStore rebuild: loading {} cells from database",
+            total_count
+        );
+
+        let mut cursor: Option<(Vec<u8>, i16)> = None;
 
         self.clear();
 
@@ -469,28 +431,27 @@ impl LiveCellStore {
 
             // Log progress every 1M cells
             if total_loaded % 1_000_000 < batch_count as i64 {
-                let memory_usage = self.memory_usage();
-                let memory_percent = self.memory_usage_percent();
+                let progress_percent = (total_loaded as f64 / total_count as f64) * 100.0;
+                let memory_mb = self.memory_usage() / (1024 * 1024);
                 tracing::info!(
-                    "LiveCellStore rebuild progress: {} cells loaded, memory: {:.1}% ({} MB)",
+                    "LiveCellStore rebuild: {:.1}% ({}/{} cells), memory: {} MB",
+                    progress_percent,
                     total_loaded,
-                    memory_percent,
-                    memory_usage / (1024 * 1024)
+                    total_count,
+                    memory_mb
                 );
             }
         }
 
         let elapsed = start_time.elapsed();
         let final_count = self.len();
-        let final_memory = self.memory_usage();
-        let final_memory_percent = self.memory_usage_percent();
+        let final_memory_mb = self.memory_usage() / (1024 * 1024);
 
         tracing::info!(
-            "LiveCellStore rebuild completed in {:.2}s: {} cells loaded, memory: {:.1}% ({} MB)",
+            "LiveCellStore rebuild completed in {:.2}s: {} cells, {} MB",
             elapsed.as_secs_f64(),
             final_count,
-            final_memory_percent,
-            final_memory / (1024 * 1024)
+            final_memory_mb
         );
 
         Ok(())
@@ -516,21 +477,14 @@ mod tests {
 
     #[test]
     fn test_new_store() {
-        let store = LiveCellStore::new(1024 * 1024 * 1024);
+        let store = LiveCellStore::new();
         assert_eq!(store.len(), 0);
         assert!(store.is_empty());
-        assert_eq!(store.max_memory_bytes(), 1024 * 1024 * 1024);
-    }
-
-    #[test]
-    fn test_with_default_limit() {
-        let store = LiveCellStore::with_default_limit();
-        assert_eq!(store.max_memory_bytes(), 8 * 1024 * 1024 * 1024);
     }
 
     #[test]
     fn test_insert_and_get() {
-        let store = LiveCellStore::new(1024 * 1024 * 1024);
+        let store = LiveCellStore::new();
         let tx_hash = vec![0xabu8; 32];
         let output_index = 0;
         let info = create_test_cell_info();
@@ -548,7 +502,7 @@ mod tests {
 
     #[test]
     fn test_remove() {
-        let store = LiveCellStore::new(1024 * 1024 * 1024);
+        let store = LiveCellStore::new();
         let tx_hash = vec![0xabu8; 32];
         let output_index = 0;
         let info = create_test_cell_info();
@@ -566,7 +520,7 @@ mod tests {
 
     #[test]
     fn test_get_batch() {
-        let store = LiveCellStore::new(1024 * 1024 * 1024);
+        let store = LiveCellStore::new();
 
         let tx_hash1 = vec![0x11u8; 32];
         let tx_hash2 = vec![0x22u8; 32];
@@ -592,7 +546,7 @@ mod tests {
 
     #[test]
     fn test_memory_usage() {
-        let store = LiveCellStore::new(1024 * 1024 * 1024);
+        let store = LiveCellStore::new();
         let initial_usage = store.memory_usage();
 
         let tx_hash = vec![0xabu8; 32];
@@ -605,7 +559,7 @@ mod tests {
 
     #[test]
     fn test_clear() {
-        let store = LiveCellStore::new(1024 * 1024 * 1024);
+        let store = LiveCellStore::new();
 
         for i in 0..10 {
             let tx_hash = vec![i as u8; 32];
@@ -641,7 +595,7 @@ mod tests {
         use std::sync::Arc;
         use std::thread;
 
-        let store = Arc::new(LiveCellStore::new(1024 * 1024 * 1024));
+        let store = Arc::new(LiveCellStore::new());
         let mut handles = vec![];
 
         for i in 0..10 {
@@ -676,7 +630,7 @@ mod tests {
 
     #[test]
     fn test_overwrite_existing_cell() {
-        let store = LiveCellStore::new(1024 * 1024 * 1024);
+        let store = LiveCellStore::new();
         let tx_hash = vec![0xabu8; 32];
         let output_index = 0;
 
@@ -714,49 +668,8 @@ mod tests {
     }
 
     #[test]
-    fn test_is_memory_pressure() {
-        let store = LiveCellStore::new(10 * 1024 * 1024 * 1024);
-        assert!(!store.is_memory_pressure());
-
-        let tx_hash = vec![0xabu8; 32];
-        let info = create_test_cell_info();
-        store.insert(tx_hash.clone(), 0, info);
-
-        assert!(!store.is_memory_pressure());
-    }
-
-    #[test]
-    fn test_memory_usage_percent() {
-        let store = LiveCellStore::new(10 * 1024 * 1024 * 1024);
-        let percent = store.memory_usage_percent();
-        assert!(percent >= 0.0);
-
-        let tx_hash = vec![0xabu8; 32];
-        let info = create_test_cell_info();
-        store.insert(tx_hash, 0, info);
-
-        let percent_after = store.memory_usage_percent();
-        assert!(percent_after > percent);
-    }
-
-    #[test]
-    fn test_memory_limit_getter() {
-        let limit = 2 * 1024 * 1024 * 1024;
-        let store = LiveCellStore::new(limit);
-        assert_eq!(store.memory_limit(), limit);
-        assert_eq!(store.max_memory_bytes(), limit);
-    }
-
-    #[test]
-    fn test_check_memory_and_warn() {
-        let store = LiveCellStore::new(10 * 1024 * 1024 * 1024);
-        let is_critical = store.check_memory_and_warn();
-        assert!(!is_critical);
-    }
-
-    #[test]
     fn test_record_consumption() {
-        let store = LiveCellStore::new(1024 * 1024 * 1024);
+        let store = LiveCellStore::new();
         let tx_hash = vec![0xabu8; 32];
         let output_index = 0;
         let info = create_test_cell_info();
@@ -772,7 +685,7 @@ mod tests {
 
     #[test]
     fn test_record_consumption_prunes_old_history() {
-        let store = LiveCellStore::new(1024 * 1024 * 1024);
+        let store = LiveCellStore::new();
 
         for i in 0..50 {
             let tx_hash = vec![i as u8; 32];
@@ -790,7 +703,7 @@ mod tests {
 
     #[test]
     fn test_rollback_to_block_removes_new_cells() {
-        let store = LiveCellStore::new(1024 * 1024 * 1024);
+        let store = LiveCellStore::new();
 
         let tx1 = vec![0x11u8; 32];
         let tx2 = vec![0x22u8; 32];
@@ -822,7 +735,7 @@ mod tests {
 
     #[test]
     fn test_rollback_to_block_restores_consumed_cells() {
-        let store = LiveCellStore::new(1024 * 1024 * 1024);
+        let store = LiveCellStore::new();
 
         let tx1 = vec![0x11u8; 32];
         let tx2 = vec![0x22u8; 32];
@@ -849,7 +762,7 @@ mod tests {
 
     #[test]
     fn test_rollback_to_block_combined() {
-        let store = LiveCellStore::new(1024 * 1024 * 1024);
+        let store = LiveCellStore::new();
 
         let tx1 = vec![0x11u8; 32];
         let tx2 = vec![0x22u8; 32];
@@ -887,7 +800,7 @@ mod tests {
 
     #[test]
     fn test_rollback_to_block_cleans_history() {
-        let store = LiveCellStore::new(1024 * 1024 * 1024);
+        let store = LiveCellStore::new();
 
         let tx1 = vec![0x11u8; 32];
         let tx2 = vec![0x22u8; 32];
@@ -915,7 +828,7 @@ mod tests {
 
     #[test]
     fn test_cells_created_since() {
-        let store = LiveCellStore::new(1024 * 1024 * 1024);
+        let store = LiveCellStore::new();
 
         let tx1 = vec![0x11u8; 32];
         let tx2 = vec![0x22u8; 32];
@@ -941,7 +854,7 @@ mod tests {
 
     #[test]
     fn test_rollback_to_block_no_changes() {
-        let store = LiveCellStore::new(1024 * 1024 * 1024);
+        let store = LiveCellStore::new();
 
         let tx1 = vec![0x11u8; 32];
         let mut info1 = create_test_cell_info();
@@ -982,7 +895,7 @@ mod tests {
             }
         };
 
-        let store = LiveCellStore::new(1024 * 1024 * 1024);
+        let store = LiveCellStore::new();
 
         // Insert test data into live_cells table
         let tx_hash = vec![0xabu8; 32];

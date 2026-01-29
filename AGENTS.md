@@ -203,10 +203,9 @@ psql -c "SELECT indexes_deferred, indexes_dropped_at, indexes_rebuild_progress F
 
 The LiveCellStore provides O(1) cell lookups during blockchain synchronization by maintaining an in-memory cache of live cells. This significantly improves performance during bulk sync operations.
 
-| Parameter                    | Default      | Description                                        |
-| ---------------------------- | ------------ | -------------------------------------------------- |
-| `--live-cell-memory-limit`   | `8589934592` | Maximum memory for in-memory live cell store (8GB) |
-| `--live-cell-flush-interval` | `100`        | Flush dirty cells to database every N batches      |
+| Parameter                    | Default | Description                                   |
+| ---------------------------- | ------- | --------------------------------------------- |
+| `--live-cell-flush-interval` | `100`   | Flush dirty cells to database every N batches |
 
 **Behavior:**
 
@@ -228,16 +227,13 @@ CREATE TABLE live_cells_p00 PARTITION OF live_cells FOR VALUES WITH (MODULUS 16,
 **Example Usage:**
 
 ```bash
-# Default: 8GB memory limit, flush every 100 batches
+# Default: flush every 100 batches
 cargo run -p ckbadger-indexer
 
-# Custom memory limit (16GB) and flush interval (50 batches)
-cargo run -p ckbadger-indexer -- \
-  --live-cell-memory-limit 17179869184 \
-  --live-cell-flush-interval 50
+# Custom flush interval (50 batches)
+cargo run -p ckbadger-indexer -- --live-cell-flush-interval 50
 
-# Environment variables
-LIVE_CELL_MEMORY_LIMIT=17179869184
+# Environment variable
 LIVE_CELL_FLUSH_INTERVAL=50
 ```
 

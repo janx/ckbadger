@@ -310,7 +310,7 @@ async fn test_bulk_sync_mode_skips_live_cells_db_write(pool: PgPool) {
     use ckbadger_indexer::db::LiveCellStore;
     use std::sync::Arc;
 
-    let store = Arc::new(LiveCellStore::new(1024 * 1024 * 1024));
+    let store = Arc::new(LiveCellStore::new());
     let writer = BatchWriter::with_live_cell_store(pool.clone(), true, store.clone());
 
     let tx_hash = vec![0x01u8; 32];
@@ -333,7 +333,7 @@ async fn test_non_bulk_sync_mode_writes_to_live_cells_db(pool: PgPool) {
     use ckbadger_indexer::db::LiveCellStore;
     use std::sync::Arc;
 
-    let store = Arc::new(LiveCellStore::new(1024 * 1024 * 1024));
+    let store = Arc::new(LiveCellStore::new());
     let writer = BatchWriter::with_live_cell_store(pool.clone(), true, store.clone());
 
     let tx_hash = vec![0x01u8; 32];
@@ -355,7 +355,7 @@ async fn test_flush_writes_deferred_cells_to_db(pool: PgPool) {
     use ckbadger_indexer::db::LiveCellStore;
     use std::sync::Arc;
 
-    let store = Arc::new(LiveCellStore::new(1024 * 1024 * 1024));
+    let store = Arc::new(LiveCellStore::new());
     let writer = BatchWriter::with_live_cell_store(pool.clone(), true, store.clone());
 
     let tx_hash = vec![0x01u8; 32];
