@@ -327,7 +327,11 @@ impl BatchWriter {
         Ok(())
     }
 
-    pub async fn insert_cells_batch(&self, cells: &[(&[u8], i16, &ParsedCell, i64)]) -> Result<()> {
+    pub async fn insert_cells_batch(
+        &self,
+        cells: &[(&[u8], i16, &ParsedCell, i64)],
+        bulk_sync_mode: bool,
+    ) -> Result<()> {
         if cells.is_empty() {
             return Ok(());
         }
@@ -445,6 +449,26 @@ impl BatchWriter {
             .await?;
         }
 
+        if let Some(store) = &self.live_cell_store {
+            for (tx_hash, output_index, cell, created_at_block) in cells {
+                let info = super::LiveCellInfo {
+                    capacity: cell.capacity,
+                    created_at_block: *created_at_block,
+                    lock_script_hash: cell.lock_script_hash.clone(),
+                    lock_code_hash: cell.lock_code_hash.clone(),
+                    lock_args: cell.lock_args.clone(),
+                    type_script_hash: cell.type_script_hash.clone(),
+                    type_code_hash: cell.type_code_hash.clone(),
+                    data_size: cell.data_size,
+                };
+                store.insert(tx_hash.to_vec(), *output_index, info);
+            }
+
+            if bulk_sync_mode {
+                return Ok(());
+            }
+        }
+
         sqlx::query(
             r#"
             INSERT INTO live_cells (
@@ -472,23 +496,6 @@ impl BatchWriter {
         .bind(&data_sizes)
         .execute(&self.pool)
         .await?;
-
-        // Also insert into in-memory store if present
-        if let Some(store) = &self.live_cell_store {
-            for (tx_hash, output_index, cell, created_at_block) in cells {
-                let info = super::LiveCellInfo {
-                    capacity: cell.capacity,
-                    created_at_block: *created_at_block,
-                    lock_script_hash: cell.lock_script_hash.clone(),
-                    lock_code_hash: cell.lock_code_hash.clone(),
-                    lock_args: cell.lock_args.clone(),
-                    type_script_hash: cell.type_script_hash.clone(),
-                    type_code_hash: cell.type_code_hash.clone(),
-                    data_size: cell.data_size,
-                };
-                store.insert(tx_hash.to_vec(), *output_index, info);
-            }
-        }
 
         Ok(())
     }

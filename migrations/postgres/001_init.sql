@@ -273,9 +273,10 @@ CREATE TABLE cells_p07 PARTITION OF cells FOR VALUES FROM (35000000) TO (4000000
 CREATE TABLE cells_p08 PARTITION OF cells FOR VALUES FROM (40000000) TO (45000000);
 CREATE TABLE cells_p09 PARTITION OF cells FOR VALUES FROM (45000000) TO (50000000);
 
--- ---- live_cells (non-partitioned OutPoint lookup table) ----
+-- ---- live_cells (hash-partitioned OutPoint lookup table) ----
 -- Only contains cells with status=0, deleted when consumed
--- Enables O(1) OutPoint lookup without partition scanning
+-- Hash partitioned by tx_hash for parallel write distribution
+-- During bulk sync, writes are deferred to in-memory LiveCellStore and flushed periodically
 CREATE TABLE live_cells (
     tx_hash BYTEA NOT NULL,
     output_index SMALLINT NOT NULL,
@@ -289,7 +290,25 @@ CREATE TABLE live_cells (
     data_size INTEGER NOT NULL,
     
     PRIMARY KEY (tx_hash, output_index)
-);
+) PARTITION BY HASH (tx_hash);
+
+-- 16 hash partitions (matches address_transactions for consistency)
+CREATE TABLE live_cells_p00 PARTITION OF live_cells FOR VALUES WITH (MODULUS 16, REMAINDER 0);
+CREATE TABLE live_cells_p01 PARTITION OF live_cells FOR VALUES WITH (MODULUS 16, REMAINDER 1);
+CREATE TABLE live_cells_p02 PARTITION OF live_cells FOR VALUES WITH (MODULUS 16, REMAINDER 2);
+CREATE TABLE live_cells_p03 PARTITION OF live_cells FOR VALUES WITH (MODULUS 16, REMAINDER 3);
+CREATE TABLE live_cells_p04 PARTITION OF live_cells FOR VALUES WITH (MODULUS 16, REMAINDER 4);
+CREATE TABLE live_cells_p05 PARTITION OF live_cells FOR VALUES WITH (MODULUS 16, REMAINDER 5);
+CREATE TABLE live_cells_p06 PARTITION OF live_cells FOR VALUES WITH (MODULUS 16, REMAINDER 6);
+CREATE TABLE live_cells_p07 PARTITION OF live_cells FOR VALUES WITH (MODULUS 16, REMAINDER 7);
+CREATE TABLE live_cells_p08 PARTITION OF live_cells FOR VALUES WITH (MODULUS 16, REMAINDER 8);
+CREATE TABLE live_cells_p09 PARTITION OF live_cells FOR VALUES WITH (MODULUS 16, REMAINDER 9);
+CREATE TABLE live_cells_p10 PARTITION OF live_cells FOR VALUES WITH (MODULUS 16, REMAINDER 10);
+CREATE TABLE live_cells_p11 PARTITION OF live_cells FOR VALUES WITH (MODULUS 16, REMAINDER 11);
+CREATE TABLE live_cells_p12 PARTITION OF live_cells FOR VALUES WITH (MODULUS 16, REMAINDER 12);
+CREATE TABLE live_cells_p13 PARTITION OF live_cells FOR VALUES WITH (MODULUS 16, REMAINDER 13);
+CREATE TABLE live_cells_p14 PARTITION OF live_cells FOR VALUES WITH (MODULUS 16, REMAINDER 14);
+CREATE TABLE live_cells_p15 PARTITION OF live_cells FOR VALUES WITH (MODULUS 16, REMAINDER 15);
 
 CREATE INDEX idx_live_cells_lock ON live_cells(lock_script_hash);
 CREATE INDEX idx_live_cells_lock_code ON live_cells(lock_code_hash);

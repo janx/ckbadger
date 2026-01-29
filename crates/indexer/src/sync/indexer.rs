@@ -1110,6 +1110,7 @@ impl Indexer {
             .last()
             .map(|b| b.number as u64)
             .unwrap_or(0);
+        let bulk_sync_mode = chain_tip.saturating_sub(end_block) > 1000;
 
         // (capacity, created_at_block, lock_script_hash, data_size)
         let mut input_cell_info: HashMap<(Vec<u8>, i16), (i64, i64, Vec<u8>, i32)> = HashMap::new();
@@ -1265,7 +1266,9 @@ impl Indexer {
             },
             async {
                 if !all_cells.is_empty() {
-                    self.writer.insert_cells_batch(&all_cells).await
+                    self.writer
+                        .insert_cells_batch(&all_cells, bulk_sync_mode)
+                        .await
                 } else {
                     Ok(())
                 }
@@ -2623,6 +2626,7 @@ impl Indexer {
             .last()
             .map(|b| b.number as u64)
             .unwrap_or(0);
+        let bulk_sync_mode = chain_tip.saturating_sub(end_block) > 1000;
 
         let mut batch_cells: HashMap<(Vec<u8>, i16), (i64, i64, Vec<u8>, i32)> = HashMap::new();
         for tx_data in &all_tx_data {
@@ -2810,7 +2814,9 @@ impl Indexer {
                 },
                 async {
                     if !all_cells.is_empty() {
-                        self.writer.insert_cells_batch(&all_cells).await
+                        self.writer
+                            .insert_cells_batch(&all_cells, bulk_sync_mode)
+                            .await
                     } else {
                         Ok(())
                     }
@@ -4098,6 +4104,7 @@ impl Indexer {
         let parsed = BlockParser::parse(block);
         let db_start = Instant::now();
         let end_block = parsed.number as u64;
+        let bulk_sync_mode = chain_tip.saturating_sub(end_block) > 1000;
 
         self.writer.insert_block(&parsed, 0).await?;
 
@@ -4310,7 +4317,9 @@ impl Indexer {
             }
         }
         if !all_cells.is_empty() {
-            self.writer.insert_cells_batch(&all_cells).await?;
+            self.writer
+                .insert_cells_batch(&all_cells, bulk_sync_mode)
+                .await?;
         }
 
         let mut all_inputs: Vec<(&[u8], i64, i16, &crate::parser::transaction::ParsedInput)> =

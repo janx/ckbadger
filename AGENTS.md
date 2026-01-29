@@ -156,10 +156,20 @@ The LiveCellStore provides O(1) cell lookups during blockchain synchronization b
 
 **Behavior:**
 
-- **Bulk Sync Mode** (>1000 blocks behind tip): Skips database UPDATE operations for live cells, writing only to the in-memory store for maximum throughput
+- **Bulk Sync Mode** (>1000 blocks behind tip): Skips ALL `live_cells` table operations (INSERT/DELETE), writing only to the in-memory store for maximum throughput. The `cells` table still receives writes.
 - **Periodic Flushing**: Dirty cells are flushed to the `live_cells` table every N batches (default 100)
 - **Graceful Shutdown**: All pending cells are flushed to database on shutdown
 - **Crash Recovery**: On restart, the indexer rebuilds the in-memory store from the `live_cells` table, ensuring no data loss
+
+**Database Schema:**
+
+The `live_cells` table is **hash-partitioned by `tx_hash`** into 16 partitions for parallel write distribution:
+
+```sql
+CREATE TABLE live_cells (...) PARTITION BY HASH (tx_hash);
+CREATE TABLE live_cells_p00 PARTITION OF live_cells FOR VALUES WITH (MODULUS 16, REMAINDER 0);
+-- ... 15 more partitions
+```
 
 **Example Usage:**
 

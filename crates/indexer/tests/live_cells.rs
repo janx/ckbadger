@@ -47,7 +47,7 @@ async fn test_insert_cells_creates_live_cells(pool: PgPool) {
     let cell = make_parsed_cell(100_00000000);
 
     writer
-        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)])
+        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], false)
         .await
         .unwrap();
 
@@ -65,7 +65,7 @@ async fn test_live_cells_stores_lock_args(pool: PgPool) {
     let cell = make_parsed_cell(100_00000000);
 
     writer
-        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)])
+        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], false)
         .await
         .unwrap();
 
@@ -91,7 +91,10 @@ async fn test_insert_multiple_cells(pool: PgPool) {
     let cell2 = make_parsed_cell(200_00000000);
 
     writer
-        .insert_cells_batch(&[(&tx_hash1, 0, &cell1, 1000), (&tx_hash2, 0, &cell2, 1001)])
+        .insert_cells_batch(
+            &[(&tx_hash1, 0, &cell1, 1000), (&tx_hash2, 0, &cell2, 1001)],
+            false,
+        )
         .await
         .unwrap();
 
@@ -106,7 +109,7 @@ async fn test_consume_cells_removes_from_live_cells(pool: PgPool) {
     let cell = make_parsed_cell(100_00000000);
 
     writer
-        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)])
+        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], false)
         .await
         .unwrap();
 
@@ -128,7 +131,7 @@ async fn test_get_cells_info_batch_queries_live_cells(pool: PgPool) {
     let cell = make_parsed_cell(100_00000000);
 
     writer
-        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)])
+        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], false)
         .await
         .unwrap();
 
@@ -150,7 +153,7 @@ async fn test_get_cells_info_batch_returns_empty_for_consumed(pool: PgPool) {
     let cell = make_parsed_cell(100_00000000);
 
     writer
-        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)])
+        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], false)
         .await
         .unwrap();
 
@@ -261,11 +264,14 @@ async fn test_consume_cells_across_partitions(pool: PgPool) {
     let cell = make_parsed_cell(100_00000000);
 
     writer
-        .insert_cells_batch(&[
-            (&tx_p0, 0, &cell, 1_000_000),
-            (&tx_p1, 0, &cell, 6_000_000),
-            (&tx_p2, 0, &cell, 11_000_000),
-        ])
+        .insert_cells_batch(
+            &[
+                (&tx_p0, 0, &cell, 1_000_000),
+                (&tx_p1, 0, &cell, 6_000_000),
+                (&tx_p2, 0, &cell, 11_000_000),
+            ],
+            false,
+        )
         .await
         .unwrap();
 
@@ -297,4 +303,76 @@ async fn test_consume_cells_across_partitions(pool: PgPool) {
 
     assert_eq!(cells_status.len(), 3);
     assert!(cells_status.iter().all(|(s,)| *s == 1));
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn test_bulk_sync_mode_skips_live_cells_db_write(pool: PgPool) {
+    use ckbadger_indexer::db::LiveCellStore;
+    use std::sync::Arc;
+
+    let store = Arc::new(LiveCellStore::new(1024 * 1024 * 1024));
+    let writer = BatchWriter::with_live_cell_store(pool.clone(), true, store.clone());
+
+    let tx_hash = vec![0x01u8; 32];
+    let cell = make_parsed_cell(100_00000000);
+
+    writer
+        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], true)
+        .await
+        .unwrap();
+
+    assert_eq!(get_live_cells_count(&pool).await, 0);
+
+    let in_memory = store.get(&tx_hash, 0);
+    assert!(in_memory.is_some());
+    assert_eq!(in_memory.unwrap().capacity, 100_00000000);
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn test_non_bulk_sync_mode_writes_to_live_cells_db(pool: PgPool) {
+    use ckbadger_indexer::db::LiveCellStore;
+    use std::sync::Arc;
+
+    let store = Arc::new(LiveCellStore::new(1024 * 1024 * 1024));
+    let writer = BatchWriter::with_live_cell_store(pool.clone(), true, store.clone());
+
+    let tx_hash = vec![0x01u8; 32];
+    let cell = make_parsed_cell(100_00000000);
+
+    writer
+        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], false)
+        .await
+        .unwrap();
+
+    assert_eq!(get_live_cells_count(&pool).await, 1);
+
+    let in_memory = store.get(&tx_hash, 0);
+    assert!(in_memory.is_some());
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn test_flush_writes_deferred_cells_to_db(pool: PgPool) {
+    use ckbadger_indexer::db::LiveCellStore;
+    use std::sync::Arc;
+
+    let store = Arc::new(LiveCellStore::new(1024 * 1024 * 1024));
+    let writer = BatchWriter::with_live_cell_store(pool.clone(), true, store.clone());
+
+    let tx_hash = vec![0x01u8; 32];
+    let cell = make_parsed_cell(100_00000000);
+
+    writer
+        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], true)
+        .await
+        .unwrap();
+
+    assert_eq!(get_live_cells_count(&pool).await, 0);
+
+    let (inserts, _) = store.flush_to_db(&pool).await.unwrap();
+    assert_eq!(inserts, 1);
+
+    assert_eq!(get_live_cells_count(&pool).await, 1);
+    let (capacity, block) = get_live_cell(&pool, &tx_hash, 0).await.unwrap();
+    assert_eq!(capacity, 100_00000000);
+    assert_eq!(block, 1000);
 }
