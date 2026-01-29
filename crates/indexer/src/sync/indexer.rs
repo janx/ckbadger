@@ -1155,8 +1155,11 @@ impl Indexer {
             }
         }
 
-        // (capacity, created_at_block, lock_script_hash, data_size)
-        let mut batch_cells: HashMap<(Vec<u8>, i16), (i64, i64, Vec<u8>, i32)> = HashMap::new();
+        // (capacity, created_at_block, lock_script_hash, data_size, lock_code_hash, type_code_hash)
+        let mut batch_cells: HashMap<
+            (Vec<u8>, i16),
+            (i64, i64, Vec<u8>, i32, Vec<u8>, Option<Vec<u8>>),
+        > = HashMap::new();
         for tx_data in &all_tx_data {
             for (output_index, cell) in tx_data.cells.iter().enumerate() {
                 batch_cells.insert(
@@ -1166,6 +1169,8 @@ impl Indexer {
                         tx_data.block_number,
                         cell.lock_script_hash.clone(),
                         cell.data_size,
+                        cell.lock_code_hash.clone(),
+                        cell.type_code_hash.clone(),
                     ),
                 );
             }
@@ -1180,7 +1185,7 @@ impl Indexer {
                     );
                     if let Some((cap, _, _, _)) = input_cell_info.get(&key) {
                         tx_data.total_input_capacity += cap;
-                    } else if let Some((cap, _, _, _)) = batch_cells.get(&key) {
+                    } else if let Some((cap, _, _, _, _, _)) = batch_cells.get(&key) {
                         tx_data.total_input_capacity += cap;
                     }
                 }
@@ -1348,16 +1353,11 @@ impl Indexer {
                             tx_data.block_number,
                             input_index as i16,
                         ));
-                    } else if let Some((_, _, _, _)) = batch_cells.get(&key) {
-                        let created_block = all_tx_data
-                            .iter()
-                            .find(|td| td.hash == input.previous_tx_hash)
-                            .map(|td| td.block_number)
-                            .unwrap_or(tx_data.block_number);
+                    } else if let Some((_, created_block, _, _, _, _)) = batch_cells.get(&key) {
                         all_consumptions.push((
                             input.previous_tx_hash.as_slice(),
                             input.previous_output_index as i16,
-                            created_block,
+                            *created_block,
                             tx_data.hash.as_slice(),
                             tx_data.block_number,
                             input_index as i16,
@@ -1392,7 +1392,7 @@ impl Indexer {
                     if let Some((cap, _, lock_hash, _)) = input_cell_info.get(&key) {
                         *tx_balance_changes.entry(lock_hash.clone()).or_default() -= cap;
                         *tx_cells_consumed.entry(lock_hash.clone()).or_default() += 1;
-                    } else if let Some((cap, _, lock_hash, _)) = batch_cells.get(&key) {
+                    } else if let Some((cap, _, lock_hash, _, _, _)) = batch_cells.get(&key) {
                         *tx_balance_changes.entry(lock_hash.clone()).or_default() -= cap;
                         *tx_cells_consumed.entry(lock_hash.clone()).or_default() += 1;
                     }
@@ -1531,29 +1531,20 @@ impl Indexer {
                                 entry.3 -= cap;
                             }
                         }
-                    } else if let Some((cap, _, _, _)) = batch_cells.get(&key) {
-                        if let Some(src_tx) = all_tx_data
-                            .iter()
-                            .find(|td| td.hash == input.previous_tx_hash)
-                        {
-                            if let Some(cell) =
-                                src_tx.cells.get(input.previous_output_index as usize)
-                            {
-                                let lock_key = (cell.lock_code_hash.clone(), false);
-                                let entry =
-                                    script_usage_changes.entry(lock_key).or_insert((0, 0, 0, 0));
-                                entry.1 -= 1;
-                                entry.3 -= cap;
+                    } else if let Some((cap, _, _, _, lock_code_hash, type_code_hash)) =
+                        batch_cells.get(&key)
+                    {
+                        let lock_key = (lock_code_hash.clone(), false);
+                        let entry = script_usage_changes.entry(lock_key).or_insert((0, 0, 0, 0));
+                        entry.1 -= 1;
+                        entry.3 -= cap;
 
-                                if let Some(ref type_code_hash) = cell.type_code_hash {
-                                    let type_key = (type_code_hash.clone(), true);
-                                    let entry = script_usage_changes
-                                        .entry(type_key)
-                                        .or_insert((0, 0, 0, 0));
-                                    entry.1 -= 1;
-                                    entry.3 -= cap;
-                                }
-                            }
+                        if let Some(type_code_hash) = type_code_hash {
+                            let type_key = (type_code_hash.clone(), true);
+                            let entry =
+                                script_usage_changes.entry(type_key).or_insert((0, 0, 0, 0));
+                            entry.1 -= 1;
+                            entry.3 -= cap;
                         }
                     }
                 }
@@ -1645,7 +1636,7 @@ impl Indexer {
                     input_cell_info
                         .get(&key)
                         .map(|(_, _, _, ds)| *ds as i64)
-                        .or_else(|| batch_cells.get(&key).map(|(_, _, _, ds)| *ds as i64))
+                        .or_else(|| batch_cells.get(&key).map(|(_, _, _, ds, _, _)| *ds as i64))
                 })
                 .sum();
 
@@ -2032,6 +2023,12 @@ impl Indexer {
                     .process_udt_transfers_batch(&transfer_refs)
                     .await?;
 
+                // Build O(1) lookup map for tx_hash -> tx_index (avoids O(n*m) linear search)
+                let tx_index_map: std::collections::HashMap<&[u8], i32> = udt_tx_contexts
+                    .iter()
+                    .map(|ctx| (ctx.tx_hash.as_slice(), ctx.tx_index))
+                    .collect();
+
                 let mut address_asset_records: Vec<(
                     Vec<u8>,         // lock_script_hash
                     Vec<u8>,         // tx_hash
@@ -2046,16 +2043,12 @@ impl Indexer {
                     Option<String>,  // amount
                     Option<String>,  // event_type
                     DateTime<Utc>,   // timestamp
-                )> = Vec::new();
+                )> = Vec::with_capacity(all_transfers.len() * 2);
 
                 for (idx, (transfer, tx_hash, block_number, timestamp)) in
                     all_transfers.iter().enumerate()
                 {
-                    let tx_index = udt_tx_contexts
-                        .iter()
-                        .find(|ctx| ctx.tx_hash == *tx_hash)
-                        .map(|ctx| ctx.tx_index)
-                        .unwrap_or(0);
+                    let tx_index = tx_index_map.get(tx_hash.as_slice()).copied().unwrap_or(0);
 
                     let standard_str = match transfer.standard {
                         crate::parser::UdtStandard::Sudt => "sudt",
@@ -2114,14 +2107,14 @@ impl Indexer {
         }
 
         if !batch_udt_cells.is_empty() {
+            let tx_block_map: std::collections::HashMap<&[u8], i64> = udt_tx_contexts
+                .iter()
+                .map(|ctx| (ctx.tx_hash.as_slice(), ctx.block_number))
+                .collect();
             let udt_cells_to_insert: Vec<_> = batch_udt_cells
                 .iter()
                 .map(|((tx_hash, idx), cell)| {
-                    let block_number = udt_tx_contexts
-                        .iter()
-                        .find(|ctx| ctx.tx_hash == *tx_hash)
-                        .map(|ctx| ctx.block_number)
-                        .unwrap_or(0);
+                    let block_number = tx_block_map.get(tx_hash.as_slice()).copied().unwrap_or(0);
                     (tx_hash.as_slice(), *idx, cell, block_number)
                 })
                 .collect();
@@ -2624,7 +2617,10 @@ impl Indexer {
             .map(|b| b.number as u64)
             .unwrap_or(0);
 
-        let mut batch_cells: HashMap<(Vec<u8>, i16), (i64, i64, Vec<u8>, i32)> = HashMap::new();
+        let mut batch_cells: HashMap<
+            (Vec<u8>, i16),
+            (i64, i64, Vec<u8>, i32, Vec<u8>, Option<Vec<u8>>),
+        > = HashMap::new();
         for tx_data in &all_tx_data {
             for (output_index, cell) in tx_data.cells.iter().enumerate() {
                 batch_cells.insert(
@@ -2634,6 +2630,8 @@ impl Indexer {
                         tx_data.block_number,
                         cell.lock_script_hash.clone(),
                         cell.data_size,
+                        cell.lock_code_hash.clone(),
+                        cell.type_code_hash.clone(),
                     ),
                 );
             }
@@ -2648,7 +2646,7 @@ impl Indexer {
                     );
                     if let Some((cap, _, _, _)) = input_cell_info.get(&key) {
                         tx_data.total_input_capacity += cap;
-                    } else if let Some((cap, _, _, _)) = batch_cells.get(&key) {
+                    } else if let Some((cap, ..)) = batch_cells.get(&key) {
                         tx_data.total_input_capacity += cap;
                     }
                 }
@@ -2853,16 +2851,11 @@ impl Indexer {
                             tx_data.block_number,
                             input_index as i16,
                         ));
-                    } else if batch_cells.contains_key(&key) {
-                        let created_block = all_tx_data
-                            .iter()
-                            .find(|td| td.hash == input.previous_tx_hash)
-                            .map(|td| td.block_number)
-                            .unwrap_or(tx_data.block_number);
+                    } else if let Some((_, created_block, _, _, _, _)) = batch_cells.get(&key) {
                         all_consumptions.push((
                             input.previous_tx_hash.as_slice(),
                             input.previous_output_index as i16,
-                            created_block,
+                            *created_block,
                             tx_data.hash.as_slice(),
                             tx_data.block_number,
                             input_index as i16,
@@ -2897,7 +2890,7 @@ impl Indexer {
                     if let Some((cap, _, lock_hash, _)) = input_cell_info.get(&key) {
                         *tx_balance_changes.entry(lock_hash.clone()).or_default() -= cap;
                         *tx_cells_consumed.entry(lock_hash.clone()).or_default() += 1;
-                    } else if let Some((cap, _, lock_hash, _)) = batch_cells.get(&key) {
+                    } else if let Some((cap, _, lock_hash, _, _, _)) = batch_cells.get(&key) {
                         *tx_balance_changes.entry(lock_hash.clone()).or_default() -= cap;
                         *tx_cells_consumed.entry(lock_hash.clone()).or_default() += 1;
                     }
@@ -3011,29 +3004,20 @@ impl Indexer {
                                 entry.3 -= cap;
                             }
                         }
-                    } else if let Some((cap, _, _, _)) = batch_cells.get(&key) {
-                        if let Some(src_tx) = all_tx_data
-                            .iter()
-                            .find(|td| td.hash == input.previous_tx_hash)
-                        {
-                            if let Some(cell) =
-                                src_tx.cells.get(input.previous_output_index as usize)
-                            {
-                                let lock_key = (cell.lock_code_hash.clone(), false);
-                                let entry =
-                                    script_usage_changes.entry(lock_key).or_insert((0, 0, 0, 0));
-                                entry.1 -= 1;
-                                entry.3 -= cap;
+                    } else if let Some((cap, _, _, _, lock_code_hash, type_code_hash)) =
+                        batch_cells.get(&key)
+                    {
+                        let lock_key = (lock_code_hash.clone(), false);
+                        let entry = script_usage_changes.entry(lock_key).or_insert((0, 0, 0, 0));
+                        entry.1 -= 1;
+                        entry.3 -= cap;
 
-                                if let Some(ref type_code_hash) = cell.type_code_hash {
-                                    let type_key = (type_code_hash.clone(), true);
-                                    let entry = script_usage_changes
-                                        .entry(type_key)
-                                        .or_insert((0, 0, 0, 0));
-                                    entry.1 -= 1;
-                                    entry.3 -= cap;
-                                }
-                            }
+                        if let Some(type_code_hash) = type_code_hash {
+                            let type_key = (type_code_hash.clone(), true);
+                            let entry =
+                                script_usage_changes.entry(type_key).or_insert((0, 0, 0, 0));
+                            entry.1 -= 1;
+                            entry.3 -= cap;
                         }
                     }
                 }
@@ -3124,7 +3108,7 @@ impl Indexer {
                     input_cell_info
                         .get(&key)
                         .map(|(_, _, _, ds)| *ds as i64)
-                        .or_else(|| batch_cells.get(&key).map(|(_, _, _, ds)| *ds as i64))
+                        .or_else(|| batch_cells.get(&key).map(|(_, _, _, ds, _, _)| *ds as i64))
                 })
                 .sum();
 
@@ -3229,72 +3213,175 @@ impl Indexer {
         }
 
         let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
+
+        // Phase 1: Collect all DAO deposits from the batch
+        let mut all_dao_deposits: Vec<(crate::parser::ParsedDaoDeposit, i64, DateTime<Utc>, i64)> =
+            Vec::new();
+
         let mut block_tx_idx = 0usize;
         for parsed in all_parsed_blocks {
             let tx_count_for_block = parsed.transactions_count as usize;
             let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
             block_tx_idx += tx_count_for_block;
 
+            let ar = DaoParser::extract_ar_from_dao_field(&parsed.dao).unwrap_or(0) as i64;
+
             for tx_data in tx_slice {
                 let dao_deposits =
                     DaoParser::parse_deposits_from_cells(&tx_data.hash, &tx_data.cells);
-                for deposit in &dao_deposits {
-                    let ar = DaoParser::extract_ar_from_dao_field(&parsed.dao).unwrap_or(0) as i64;
-                    self.writer
-                        .insert_dao_deposit(deposit, parsed.number, parsed.timestamp, ar)
-                        .await?;
+                for deposit in dao_deposits {
+                    all_dao_deposits.push((deposit, parsed.number, parsed.timestamp, ar));
                 }
             }
+        }
+
+        // Batch insert DAO deposits
+        if !all_dao_deposits.is_empty() {
+            self.writer
+                .insert_dao_deposits_batch(&all_dao_deposits)
+                .await?;
+        }
+
+        // Phase 2: Collect ALL input outpoints from non-cellbase transactions
+        let mut all_input_outpoints: Vec<(Vec<u8>, i16)> = Vec::new();
+
+        block_tx_idx = 0;
+        for parsed in all_parsed_blocks {
+            let tx_count_for_block = parsed.transactions_count as usize;
+            let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
+            block_tx_idx += tx_count_for_block;
 
             for tx_data in tx_slice {
                 if tx_data.is_cellbase || tx_data.inputs.is_empty() {
                     continue;
                 }
-
-                let input_outpoints: Vec<(&[u8], i32)> = tx_data
-                    .inputs
-                    .iter()
-                    .map(|i| (i.previous_tx_hash.as_slice(), i.previous_output_index))
-                    .collect();
-
-                let consumed_dao = self
-                    .writer
-                    .find_consumed_dao_deposits(&input_outpoints)
-                    .await?;
-                if consumed_dao.is_empty() {
-                    continue;
+                for input in &tx_data.inputs {
+                    all_input_outpoints.push((
+                        input.previous_tx_hash.clone(),
+                        input.previous_output_index as i16,
+                    ));
                 }
+            }
+        }
 
-                let mut new_dao_outputs: Vec<(Vec<u8>, i16, Vec<u8>, i64, u64)> = Vec::new();
-                for (idx, cell) in tx_data.cells.iter().enumerate() {
-                    if let Some(ref type_code_hash) = cell.type_code_hash {
-                        if type_code_hash == &dao_code_hash && cell.data_size == 8 {
-                            if let Some(data) = tx_data.outputs_data.get(idx) {
-                                let data_bytes = crate::rpc::parse_hex_to_bytes(data);
-                                if let Some(deposit_block) =
-                                    DaoParser::parse_deposit_block_number(&data_bytes)
-                                {
-                                    new_dao_outputs.push((
-                                        tx_data.hash.clone(),
-                                        idx as i16,
-                                        cell.lock_script_hash.clone(),
-                                        cell.capacity,
-                                        deposit_block,
-                                    ));
+        // Phase 3: Batch query all potentially consumed DAO deposits
+        let consumed_dao_map = if !all_input_outpoints.is_empty() {
+            let unique_outpoints: Vec<(Vec<u8>, i16)> = {
+                let mut seen = HashSet::new();
+                all_input_outpoints
+                    .into_iter()
+                    .filter(|x| seen.insert(x.clone()))
+                    .collect()
+            };
+            let outpoint_refs: Vec<(&[u8], i16)> = unique_outpoints
+                .iter()
+                .map(|(h, i)| (h.as_slice(), *i))
+                .collect();
+            self.writer
+                .find_consumed_dao_deposits_batch(&outpoint_refs)
+                .await?
+        } else {
+            HashMap::new()
+        };
+
+        // Phase 4: Process DAO withdrawals in batch
+        if !consumed_dao_map.is_empty() {
+            use crate::db::DaoWithdrawalContextTrait;
+
+            #[derive(Clone)]
+            struct DaoWithdrawalContext {
+                consumed_deposits: Vec<(i64, Vec<u8>, i16, String, i64, i16)>,
+                new_dao_outputs: Vec<(Vec<u8>, i16, Vec<u8>, i64, u64)>,
+                block_number: i64,
+                consuming_tx_hash: Vec<u8>,
+                timestamp: DateTime<Utc>,
+            }
+
+            impl DaoWithdrawalContextTrait for DaoWithdrawalContext {
+                fn consumed_deposits(&self) -> &[(i64, Vec<u8>, i16, String, i64, i16)] {
+                    &self.consumed_deposits
+                }
+                fn new_dao_outputs(&self) -> &[(Vec<u8>, i16, Vec<u8>, i64, u64)] {
+                    &self.new_dao_outputs
+                }
+                fn block_number(&self) -> i64 {
+                    self.block_number
+                }
+                fn consuming_tx_hash(&self) -> &[u8] {
+                    &self.consuming_tx_hash
+                }
+                fn timestamp(&self) -> DateTime<Utc> {
+                    self.timestamp
+                }
+            }
+
+            let mut withdrawal_contexts: Vec<DaoWithdrawalContext> = Vec::new();
+
+            block_tx_idx = 0;
+            for parsed in all_parsed_blocks {
+                let tx_count_for_block = parsed.transactions_count as usize;
+                let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
+                block_tx_idx += tx_count_for_block;
+
+                for tx_data in tx_slice {
+                    if tx_data.is_cellbase || tx_data.inputs.is_empty() {
+                        continue;
+                    }
+
+                    // Check if any input matches a DAO deposit
+                    let mut consumed_deposits: Vec<(i64, Vec<u8>, i16, String, i64, i16)> =
+                        Vec::new();
+                    for input in &tx_data.inputs {
+                        let key = (
+                            input.previous_tx_hash.clone(),
+                            input.previous_output_index as i16,
+                        );
+                        if let Some(deposit_info) = consumed_dao_map.get(&key) {
+                            consumed_deposits.push(deposit_info.clone());
+                        }
+                    }
+
+                    if consumed_deposits.is_empty() {
+                        continue;
+                    }
+
+                    // Parse new DAO outputs (withdraw requests)
+                    let mut new_dao_outputs: Vec<(Vec<u8>, i16, Vec<u8>, i64, u64)> = Vec::new();
+                    for (idx, cell) in tx_data.cells.iter().enumerate() {
+                        if let Some(ref type_code_hash) = cell.type_code_hash {
+                            if type_code_hash == &dao_code_hash && cell.data_size == 8 {
+                                if let Some(data) = tx_data.outputs_data.get(idx) {
+                                    let data_bytes = crate::rpc::parse_hex_to_bytes(data);
+                                    if let Some(deposit_block) =
+                                        DaoParser::parse_deposit_block_number(&data_bytes)
+                                    {
+                                        new_dao_outputs.push((
+                                            tx_data.hash.clone(),
+                                            idx as i16,
+                                            cell.lock_script_hash.clone(),
+                                            cell.capacity,
+                                            deposit_block,
+                                        ));
+                                    }
                                 }
                             }
                         }
                     }
-                }
 
+                    withdrawal_contexts.push(DaoWithdrawalContext {
+                        consumed_deposits,
+                        new_dao_outputs,
+                        block_number: parsed.number,
+                        consuming_tx_hash: tx_data.hash.clone(),
+                        timestamp: parsed.timestamp,
+                    });
+                }
+            }
+
+            // Batch process all withdrawals
+            if !withdrawal_contexts.is_empty() {
                 self.writer
-                    .process_dao_withdrawals(
-                        &consumed_dao,
-                        &new_dao_outputs,
-                        parsed.number,
-                        &tx_data.hash,
-                        parsed.timestamp,
-                    )
+                    .process_dao_withdrawals_batch(&withdrawal_contexts)
                     .await?;
             }
         }
@@ -3511,6 +3598,11 @@ impl Indexer {
                     .process_udt_transfers_batch(&transfer_refs)
                     .await?;
 
+                let tx_index_map: std::collections::HashMap<&[u8], i32> = udt_tx_contexts
+                    .iter()
+                    .map(|ctx| (ctx.tx_hash.as_slice(), ctx.tx_index))
+                    .collect();
+
                 let mut address_asset_records: Vec<(
                     Vec<u8>,
                     Vec<u8>,
@@ -3525,16 +3617,12 @@ impl Indexer {
                     Option<String>,
                     Option<String>,
                     DateTime<Utc>,
-                )> = Vec::new();
+                )> = Vec::with_capacity(all_transfers.len() * 2);
 
                 for (idx, (transfer, tx_hash, block_number, timestamp)) in
                     all_transfers.iter().enumerate()
                 {
-                    let tx_index = udt_tx_contexts
-                        .iter()
-                        .find(|c| &c.tx_hash == tx_hash)
-                        .map(|ctx| ctx.tx_index)
-                        .unwrap_or(0);
+                    let tx_index = tx_index_map.get(tx_hash.as_slice()).copied().unwrap_or(0);
 
                     let standard_str = match transfer.standard {
                         crate::parser::UdtStandard::Sudt => "sudt",
@@ -3593,14 +3681,14 @@ impl Indexer {
         }
 
         if !batch_udt_cells.is_empty() {
+            let tx_block_map: std::collections::HashMap<&[u8], i64> = udt_tx_contexts
+                .iter()
+                .map(|ctx| (ctx.tx_hash.as_slice(), ctx.block_number))
+                .collect();
             let udt_cells_to_insert: Vec<_> = batch_udt_cells
                 .iter()
                 .map(|((tx_hash, idx), cell)| {
-                    let block_number = udt_tx_contexts
-                        .iter()
-                        .find(|ctx| ctx.tx_hash == *tx_hash)
-                        .map(|ctx| ctx.block_number)
-                        .unwrap_or(0);
+                    let block_number = tx_block_map.get(tx_hash.as_slice()).copied().unwrap_or(0);
                     (tx_hash.as_slice(), *idx, cell, block_number)
                 })
                 .collect();
@@ -4218,8 +4306,11 @@ impl Indexer {
             }
         }
 
-        // (capacity, created_at_block, lock_script_hash, data_size)
-        let mut block_cells: HashMap<(Vec<u8>, i16), (i64, i64, Vec<u8>, i32)> = HashMap::new();
+        // (capacity, created_at_block, lock_script_hash, data_size, lock_code_hash, type_code_hash)
+        let mut block_cells: HashMap<
+            (Vec<u8>, i16),
+            (i64, i64, Vec<u8>, i32, Vec<u8>, Option<Vec<u8>>),
+        > = HashMap::new();
         for tx_data in &tx_data_list {
             for (output_index, cell) in tx_data.cells.iter().enumerate() {
                 block_cells.insert(
@@ -4229,6 +4320,8 @@ impl Indexer {
                         parsed.number,
                         cell.lock_script_hash.clone(),
                         cell.data_size,
+                        cell.lock_code_hash.clone(),
+                        cell.type_code_hash.clone(),
                     ),
                 );
             }
@@ -4243,7 +4336,7 @@ impl Indexer {
                     );
                     if let Some((cap, _, _, _)) = input_cell_info.get(&key) {
                         tx_data.total_input_capacity += cap;
-                    } else if let Some((cap, _, _, _)) = block_cells.get(&key) {
+                    } else if let Some((cap, _, _, _, _, _)) = block_cells.get(&key) {
                         tx_data.total_input_capacity += cap;
                     }
                 }
@@ -4389,7 +4482,7 @@ impl Indexer {
                     if let Some((cap, _, lock_hash, _)) = input_cell_info.get(&key) {
                         *tx_balance_changes.entry(lock_hash.clone()).or_default() -= cap;
                         *tx_cells_consumed.entry(lock_hash.clone()).or_default() += 1;
-                    } else if let Some((cap, _, lock_hash, _)) = block_cells.get(&key) {
+                    } else if let Some((cap, _, lock_hash, _, _, _)) = block_cells.get(&key) {
                         *tx_balance_changes.entry(lock_hash.clone()).or_default() -= cap;
                         *tx_cells_consumed.entry(lock_hash.clone()).or_default() += 1;
                     }
@@ -4405,7 +4498,7 @@ impl Indexer {
                     .or_default() += 1;
             }
 
-            let all_addresses: std::collections::HashSet<Vec<u8>> = tx_balance_changes
+            let all_addresses: HashSet<Vec<u8>> = tx_balance_changes
                 .keys()
                 .chain(tx_cells_created.keys())
                 .chain(tx_cells_consumed.keys())
@@ -4488,7 +4581,7 @@ impl Indexer {
                 input_cell_info
                     .get(&key)
                     .map(|(_, _, _, ds)| *ds as i64)
-                    .or_else(|| block_cells.get(&key).map(|(_, _, _, ds)| *ds as i64))
+                    .or_else(|| block_cells.get(&key).map(|(_, _, _, ds, _, _)| *ds as i64))
             })
             .sum();
 

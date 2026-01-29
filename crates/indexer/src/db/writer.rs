@@ -5,7 +5,7 @@
 use anyhow::Result;
 use chrono::{DateTime, NaiveDate, Utc};
 use sqlx::{PgPool, Postgres, Transaction};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tracing::{info, warn};
 
@@ -20,6 +20,14 @@ use crate::parser::{
 };
 
 const DAO_OCCUPIED_CAPACITY: u64 = 102_00000000;
+
+pub trait DaoWithdrawalContextTrait {
+    fn consumed_deposits(&self) -> &[(i64, Vec<u8>, i16, String, i64, i16)];
+    fn new_dao_outputs(&self) -> &[(Vec<u8>, i16, Vec<u8>, i64, u64)];
+    fn block_number(&self) -> i64;
+    fn consuming_tx_hash(&self) -> &[u8];
+    fn timestamp(&self) -> DateTime<Utc>;
+}
 
 /// Dep group format: 4-byte count (u32 LE) + N × 36-byte OutPoints (32 tx_hash + 4 index)
 fn looks_like_dep_group(data: &[u8]) -> bool {
@@ -1763,6 +1771,336 @@ impl BatchWriter {
         }
     }
 
+    pub async fn insert_dao_deposits_batch(
+        &self,
+        deposits: &[(ParsedDaoDeposit, i64, DateTime<Utc>, i64)],
+    ) -> Result<()> {
+        if deposits.is_empty() {
+            return Ok(());
+        }
+
+        let tx_hashes: Vec<&[u8]> = deposits
+            .iter()
+            .map(|(d, _, _, _)| d.tx_hash.as_slice())
+            .collect();
+        let output_indices: Vec<i16> = deposits
+            .iter()
+            .map(|(d, _, _, _)| d.output_index as i16)
+            .collect();
+        let lock_hashes: Vec<&[u8]> = deposits
+            .iter()
+            .map(|(d, _, _, _)| d.lock_script_hash.as_slice())
+            .collect();
+        let capacities: Vec<i64> = deposits.iter().map(|(d, _, _, _)| d.capacity).collect();
+        let block_numbers: Vec<i64> = deposits.iter().map(|(_, b, _, _)| *b).collect();
+        let timestamps: Vec<DateTime<Utc>> = deposits.iter().map(|(_, _, t, _)| *t).collect();
+        let ars: Vec<i64> = deposits.iter().map(|(_, _, _, a)| *a).collect();
+
+        let inserted: Vec<(i64, i64)> = sqlx::query_as(
+            r#"
+            INSERT INTO dao_deposits (
+                tx_hash, output_index, lock_script_hash, capacity,
+                deposit_block_number, deposit_tx_hash, deposit_timestamp, deposit_ar, status
+            )
+            SELECT t.tx_hash, t.output_index, t.lock_script_hash, t.capacity,
+                   t.block_number, t.tx_hash, t.timestamp, t.ar, 0
+            FROM UNNEST($1::bytea[], $2::smallint[], $3::bytea[], $4::bigint[], $5::bigint[], $6::timestamptz[], $7::bigint[])
+            AS t(tx_hash, output_index, lock_script_hash, capacity, block_number, timestamp, ar)
+            ON CONFLICT (tx_hash, output_index) DO NOTHING
+            RETURNING id, capacity::bigint
+            "#,
+        )
+        .bind(&tx_hashes)
+        .bind(&output_indices)
+        .bind(&lock_hashes)
+        .bind(&capacities)
+        .bind(&block_numbers)
+        .bind(&timestamps)
+        .bind(&ars)
+        .fetch_all(&self.pool)
+        .await?;
+
+        if !inserted.is_empty() {
+            let total_capacity: i64 = inserted.iter().map(|(_, c)| c).sum();
+            let count = inserted.len() as i64;
+
+            sqlx::query(
+                r#"
+                UPDATE dao_statistics SET
+                    total_deposited = total_deposited + $1,
+                    active_deposits = active_deposits + $2,
+                    updated_at = NOW()
+                WHERE id = 1
+                "#,
+            )
+            .bind(total_capacity)
+            .bind(count)
+            .execute(&self.pool)
+            .await?;
+        }
+
+        Ok(())
+    }
+
+    pub async fn find_consumed_dao_deposits_batch(
+        &self,
+        inputs: &[(&[u8], i16)],
+    ) -> Result<HashMap<(Vec<u8>, i16), (i64, Vec<u8>, i16, String, i64, i16)>> {
+        if inputs.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let mut result_map: HashMap<(Vec<u8>, i16), (i64, Vec<u8>, i16, String, i64, i16)> =
+            HashMap::new();
+
+        let tx_hashes: Vec<&[u8]> = inputs.iter().map(|(h, _)| *h).collect();
+        let output_indices: Vec<i16> = inputs.iter().map(|(_, i)| *i).collect();
+
+        let rows1: Vec<(i64, Vec<u8>, i16, String, i64, i16)> = sqlx::query_as(
+            r#"
+            SELECT id, tx_hash, output_index, CAST(capacity AS TEXT), deposit_block_number, status
+            FROM dao_deposits
+            WHERE (tx_hash, output_index) IN (SELECT * FROM UNNEST($1::bytea[], $2::smallint[]))
+            "#,
+        )
+        .bind(&tx_hashes)
+        .bind(&output_indices)
+        .fetch_all(&self.pool)
+        .await?;
+
+        for row in rows1 {
+            result_map.insert((row.1.clone(), row.2), row);
+        }
+
+        let rows2: Vec<(i64, Vec<u8>, i16, String, i64, i16, Vec<u8>)> = sqlx::query_as(
+            r#"
+            SELECT id, tx_hash, output_index, CAST(capacity AS TEXT), deposit_block_number, status, withdraw_request_tx
+            FROM dao_deposits
+            WHERE withdraw_request_tx IN (SELECT * FROM UNNEST($1::bytea[])) AND status = 1
+            "#,
+        )
+        .bind(&tx_hashes)
+        .fetch_all(&self.pool)
+        .await?;
+
+        for row in rows2 {
+            let key = (row.6.clone(), 0i16);
+            result_map
+                .entry(key)
+                .or_insert((row.0, row.1, row.2, row.3, row.4, row.5));
+        }
+
+        Ok(result_map)
+    }
+
+    pub async fn process_dao_withdrawals_batch<T>(&self, contexts: &[T]) -> Result<()>
+    where
+        T: DaoWithdrawalContextTrait,
+    {
+        if contexts.is_empty() {
+            return Ok(());
+        }
+
+        let mut phase1_updates: Vec<(i64, i64, Vec<u8>, DateTime<Utc>)> = Vec::new();
+        let mut phase2_updates: Vec<(i64, i64, Vec<u8>, DateTime<Utc>, i64, i64)> = Vec::new();
+        let mut total_withdrawn_capacity: i64 = 0;
+        let mut total_compensation: i64 = 0;
+        let mut completed_count: i64 = 0;
+
+        let mut all_deposit_blocks: HashSet<i64> = HashSet::new();
+        let mut all_request_blocks: HashSet<i64> = HashSet::new();
+
+        for ctx in contexts {
+            for (_, _, _, _, deposit_block, status) in ctx.consumed_deposits() {
+                if *status == 1 {
+                    all_deposit_blocks.insert(*deposit_block);
+                }
+            }
+        }
+
+        for ctx in contexts {
+            for (deposit_id, _, _, _, _, status) in ctx.consumed_deposits() {
+                if *status == 1 {
+                    let request_block: Option<i64> = sqlx::query_scalar(
+                        "SELECT withdraw_request_block FROM dao_deposits WHERE id = $1",
+                    )
+                    .bind(deposit_id)
+                    .fetch_optional(&self.pool)
+                    .await?
+                    .flatten();
+
+                    if let Some(rb) = request_block {
+                        all_request_blocks.insert(rb);
+                    }
+                }
+            }
+        }
+
+        let all_blocks: Vec<i64> = all_deposit_blocks
+            .union(&all_request_blocks)
+            .copied()
+            .collect();
+        let dao_fields: HashMap<i64, Vec<u8>> = if !all_blocks.is_empty() {
+            let rows: Vec<(i64, Vec<u8>)> =
+                sqlx::query_as("SELECT number, dao FROM blocks WHERE number = ANY($1)")
+                    .bind(&all_blocks)
+                    .fetch_all(&self.pool)
+                    .await?;
+            rows.into_iter().collect()
+        } else {
+            HashMap::new()
+        };
+
+        for ctx in contexts {
+            for (deposit_id, _, _, capacity_str, deposit_block, status) in ctx.consumed_deposits() {
+                let capacity: i64 = capacity_str.parse().unwrap_or(0);
+
+                if *status == 0 {
+                    let matching_output = ctx
+                        .new_dao_outputs()
+                        .iter()
+                        .find(|(_, _, _, cap, _)| *cap == capacity);
+
+                    if let Some((new_tx_hash, _, _, _, _)) = matching_output {
+                        phase1_updates.push((
+                            *deposit_id,
+                            ctx.block_number(),
+                            new_tx_hash.clone(),
+                            ctx.timestamp(),
+                        ));
+                    }
+                } else if *status == 1 {
+                    let request_block: i64 = sqlx::query_scalar(
+                        "SELECT withdraw_request_block FROM dao_deposits WHERE id = $1",
+                    )
+                    .bind(deposit_id)
+                    .fetch_optional(&self.pool)
+                    .await?
+                    .flatten()
+                    .unwrap_or(ctx.block_number());
+
+                    let compensation = if let (Some(dep_dao), Some(req_dao)) = (
+                        dao_fields.get(deposit_block),
+                        dao_fields.get(&request_block),
+                    ) {
+                        let ar_deposit = extract_ar_from_dao(dep_dao).unwrap_or(1);
+                        let ar_withdraw = extract_ar_from_dao(req_dao).unwrap_or(1);
+                        if ar_deposit > 0 {
+                            let cap_u128 = capacity as u128;
+                            let free = cap_u128.saturating_sub(DAO_OCCUPIED_CAPACITY as u128);
+                            Some(
+                                ((free * ar_withdraw as u128 / ar_deposit as u128)
+                                    .saturating_sub(free)) as i64,
+                            )
+                        } else {
+                            Some(0)
+                        }
+                    } else {
+                        None
+                    };
+
+                    phase2_updates.push((
+                        *deposit_id,
+                        ctx.block_number(),
+                        ctx.consuming_tx_hash().to_vec(),
+                        ctx.timestamp(),
+                        compensation.unwrap_or(0),
+                        capacity,
+                    ));
+
+                    total_withdrawn_capacity += capacity;
+                    total_compensation += compensation.unwrap_or(0);
+                    completed_count += 1;
+                }
+            }
+        }
+
+        if !phase1_updates.is_empty() {
+            let ids: Vec<i64> = phase1_updates.iter().map(|(id, _, _, _)| *id).collect();
+            let blocks: Vec<i64> = phase1_updates.iter().map(|(_, b, _, _)| *b).collect();
+            let txs: Vec<&[u8]> = phase1_updates
+                .iter()
+                .map(|(_, _, tx, _)| tx.as_slice())
+                .collect();
+            let timestamps: Vec<DateTime<Utc>> =
+                phase1_updates.iter().map(|(_, _, _, t)| *t).collect();
+
+            sqlx::query(
+                r#"
+                UPDATE dao_deposits d SET
+                    status = 1,
+                    withdraw_request_block = v.block_number,
+                    withdraw_request_tx = v.tx_hash,
+                    withdraw_request_timestamp = v.timestamp
+                FROM (SELECT * FROM UNNEST($1::bigint[], $2::bigint[], $3::bytea[], $4::timestamptz[])
+                      AS t(id, block_number, tx_hash, timestamp)) v
+                WHERE d.id = v.id AND d.status = 0
+                "#,
+            )
+            .bind(&ids)
+            .bind(&blocks)
+            .bind(&txs)
+            .bind(&timestamps)
+            .execute(&self.pool)
+            .await?;
+        }
+
+        if !phase2_updates.is_empty() {
+            let ids: Vec<i64> = phase2_updates
+                .iter()
+                .map(|(id, _, _, _, _, _)| *id)
+                .collect();
+            let blocks: Vec<i64> = phase2_updates.iter().map(|(_, b, _, _, _, _)| *b).collect();
+            let txs: Vec<&[u8]> = phase2_updates
+                .iter()
+                .map(|(_, _, tx, _, _, _)| tx.as_slice())
+                .collect();
+            let timestamps: Vec<DateTime<Utc>> =
+                phase2_updates.iter().map(|(_, _, _, t, _, _)| *t).collect();
+            let compensations: Vec<i64> =
+                phase2_updates.iter().map(|(_, _, _, _, c, _)| *c).collect();
+
+            sqlx::query(
+                r#"
+                UPDATE dao_deposits d SET
+                    status = 2,
+                    withdraw_block = v.block_number,
+                    withdraw_tx = v.tx_hash,
+                    withdraw_timestamp = v.timestamp,
+                    compensation = v.compensation
+                FROM (SELECT * FROM UNNEST($1::bigint[], $2::bigint[], $3::bytea[], $4::timestamptz[], $5::bigint[])
+                      AS t(id, block_number, tx_hash, timestamp, compensation)) v
+                WHERE d.id = v.id
+                "#,
+            )
+            .bind(&ids)
+            .bind(&blocks)
+            .bind(&txs)
+            .bind(&timestamps)
+            .bind(&compensations)
+            .execute(&self.pool)
+            .await?;
+
+            sqlx::query(
+                r#"
+                UPDATE dao_statistics SET
+                    total_deposited = GREATEST(0, total_deposited - $1),
+                    active_deposits = GREATEST(0, active_deposits - $2),
+                    total_compensation_paid = total_compensation_paid + $3,
+                    updated_at = NOW()
+                WHERE id = 1
+                "#,
+            )
+            .bind(total_withdrawn_capacity)
+            .bind(completed_count)
+            .bind(total_compensation)
+            .execute(&self.pool)
+            .await?;
+        }
+
+        Ok(())
+    }
+
     pub async fn upsert_epoch_statistics(
         &self,
         epoch_number: i64,
@@ -2008,56 +2346,376 @@ impl BatchWriter {
             return Ok(());
         }
 
-        let mut token_cache: HashMap<Vec<u8>, i64> = HashMap::new();
+        // Step 1: Collect unique tokens (first occurrence info for new tokens)
+        let mut unique_tokens: HashMap<Vec<u8>, (&ParsedUdtTransfer, i64, Vec<u8>)> =
+            HashMap::new();
+        for (transfer, tx_hash, block_number, _) in transfers {
+            unique_tokens
+                .entry(transfer.type_script_hash.clone())
+                .or_insert((*transfer, *block_number, tx_hash.to_vec()));
+        }
 
-        for (transfer, tx_hash, block_number, timestamp) in transfers {
-            let token_id = if let Some(&id) = token_cache.get(&transfer.type_script_hash) {
-                sqlx::query("UPDATE tokens SET transfers_count = transfers_count + 1, updated_at = NOW() WHERE id = $1")
-                    .bind(id)
-                    .execute(&self.pool)
-                    .await?;
-                id
-            } else {
-                let id = self.upsert_token(transfer, *block_number, tx_hash).await?;
-                token_cache.insert(transfer.type_script_hash.clone(), id);
-                id
-            };
+        // Step 2: Batch upsert tokens - get existing + insert new, return all IDs
+        let type_script_hashes: Vec<&[u8]> = unique_tokens.keys().map(|k| k.as_slice()).collect();
 
-            if transfer.is_mint {
-                sqlx::query(
-                    "UPDATE tokens SET total_supply = total_supply + $1::numeric WHERE id = $2",
-                )
-                .bind(transfer.amount.to_string())
-                .bind(token_id)
-                .execute(&self.pool)
-                .await?;
-            } else if transfer.is_burn {
-                sqlx::query(
-                    "UPDATE tokens SET total_supply = GREATEST(total_supply - $1::numeric, 0) WHERE id = $2",
-                )
-                .bind(transfer.amount.to_string())
-                .bind(token_id)
-                .execute(&self.pool)
-                .await?;
+        // Get existing token IDs
+        let existing_tokens: Vec<(Vec<u8>, i64)> = sqlx::query_as(
+            "SELECT type_script_hash, id FROM tokens WHERE type_script_hash = ANY($1)",
+        )
+        .bind(&type_script_hashes)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut token_ids: HashMap<Vec<u8>, i64> = existing_tokens.into_iter().collect();
+
+        // Insert new tokens (ones not in existing)
+        let new_tokens: Vec<_> = unique_tokens
+            .iter()
+            .filter(|(hash, _)| !token_ids.contains_key(*hash))
+            .collect();
+
+        if !new_tokens.is_empty() {
+            let new_hashes: Vec<&[u8]> = new_tokens.iter().map(|(h, _)| h.as_slice()).collect();
+            let new_code_hashes: Vec<&[u8]> = new_tokens
+                .iter()
+                .map(|(_, (t, _, _))| t.type_code_hash.as_slice())
+                .collect();
+            let new_hash_types: Vec<i16> = new_tokens
+                .iter()
+                .map(|(_, (t, _, _))| t.type_hash_type)
+                .collect();
+            let new_args: Vec<&[u8]> = new_tokens
+                .iter()
+                .map(|(_, (t, _, _))| t.type_args.as_slice())
+                .collect();
+            let new_standards: Vec<&str> = new_tokens
+                .iter()
+                .map(|(_, (t, _, _))| t.standard.as_str())
+                .collect();
+            let new_blocks: Vec<i64> = new_tokens.iter().map(|(_, (_, b, _))| *b).collect();
+            let new_txs: Vec<&[u8]> = new_tokens
+                .iter()
+                .map(|(_, (_, _, tx))| tx.as_slice())
+                .collect();
+
+            let inserted: Vec<(Vec<u8>, i64)> = sqlx::query_as(
+                r#"
+                INSERT INTO tokens (type_script_hash, type_code_hash, type_hash_type, type_args, standard, first_seen_block, first_seen_tx)
+                SELECT * FROM UNNEST($1::bytea[], $2::bytea[], $3::smallint[], $4::bytea[], $5::text[], $6::bigint[], $7::bytea[])
+                ON CONFLICT (type_script_hash) DO NOTHING
+                RETURNING type_script_hash, id
+                "#,
+            )
+            .bind(&new_hashes)
+            .bind(&new_code_hashes)
+            .bind(&new_hash_types)
+            .bind(&new_args)
+            .bind(&new_standards)
+            .bind(&new_blocks)
+            .bind(&new_txs)
+            .fetch_all(&self.pool)
+            .await?;
+
+            for (hash, id) in inserted {
+                token_ids.insert(hash, id);
             }
 
+            // Re-fetch any that were already inserted by concurrent process
+            let still_missing: Vec<&[u8]> = new_tokens
+                .iter()
+                .filter(|(h, _)| !token_ids.contains_key(*h))
+                .map(|(h, _)| h.as_slice())
+                .collect();
+
+            if !still_missing.is_empty() {
+                let fetched: Vec<(Vec<u8>, i64)> = sqlx::query_as(
+                    "SELECT type_script_hash, id FROM tokens WHERE type_script_hash = ANY($1)",
+                )
+                .bind(&still_missing)
+                .fetch_all(&self.pool)
+                .await?;
+
+                for (hash, id) in fetched {
+                    token_ids.insert(hash, id);
+                }
+            }
+        }
+
+        // Step 3: Aggregate stats per token (transfer counts, supply changes)
+        let mut transfer_counts: HashMap<i64, i64> = HashMap::new();
+        let mut supply_changes: HashMap<i64, i128> = HashMap::new();
+
+        for (transfer, _, _, _) in transfers {
+            let token_id = token_ids[&transfer.type_script_hash];
+            *transfer_counts.entry(token_id).or_default() += 1;
+
+            if transfer.is_mint {
+                *supply_changes.entry(token_id).or_default() += transfer.amount as i128;
+            } else if transfer.is_burn {
+                *supply_changes.entry(token_id).or_default() -= transfer.amount as i128;
+            }
+        }
+
+        // Step 4: Batch update token stats
+        if !transfer_counts.is_empty() {
+            let stat_ids: Vec<i64> = transfer_counts.keys().copied().collect();
+            let stat_counts: Vec<i64> = stat_ids.iter().map(|id| transfer_counts[id]).collect();
+            let stat_supply: Vec<String> = stat_ids
+                .iter()
+                .map(|id| supply_changes.get(id).copied().unwrap_or(0).to_string())
+                .collect();
+
+            sqlx::query(
+                r#"
+                UPDATE tokens t SET
+                    transfers_count = t.transfers_count + v.cnt,
+                    total_supply = GREATEST(0, t.total_supply + v.supply::numeric),
+                    updated_at = NOW()
+                FROM (SELECT * FROM UNNEST($1::bigint[], $2::bigint[], $3::text[]) AS t(id, cnt, supply)) v
+                WHERE t.id = v.id
+                "#,
+            )
+            .bind(&stat_ids)
+            .bind(&stat_counts)
+            .bind(&stat_supply)
+            .execute(&self.pool)
+            .await?;
+        }
+
+        // Step 5: Aggregate balance changes per (token_id, lock_script_hash)
+        // Value: (delta as i128, last_tx)
+        let mut balance_changes: HashMap<(i64, Vec<u8>), (i128, Vec<u8>)> = HashMap::new();
+
+        for (transfer, tx_hash, _, _) in transfers {
+            let token_id = token_ids[&transfer.type_script_hash];
+
             if let Some(ref from_lock) = transfer.from_lock_hash {
-                self.update_token_balance(token_id, from_lock, -(transfer.amount as i64), tx_hash)
-                    .await?;
+                if !from_lock.is_empty() {
+                    balance_changes
+                        .entry((token_id, from_lock.clone()))
+                        .and_modify(|(d, t)| {
+                            *d -= transfer.amount as i128;
+                            *t = tx_hash.to_vec();
+                        })
+                        .or_insert((-(transfer.amount as i128), tx_hash.to_vec()));
+                }
             }
 
             if !transfer.to_lock_hash.is_empty() {
-                self.update_token_balance(
-                    token_id,
-                    &transfer.to_lock_hash,
-                    transfer.amount as i64,
-                    tx_hash,
-                )
-                .await?;
+                balance_changes
+                    .entry((token_id, transfer.to_lock_hash.clone()))
+                    .and_modify(|(d, t)| {
+                        *d += transfer.amount as i128;
+                        *t = tx_hash.to_vec();
+                    })
+                    .or_insert((transfer.amount as i128, tx_hash.to_vec()));
             }
+        }
 
-            self.insert_token_transfer(token_id, transfer, tx_hash, *block_number, *timestamp)
-                .await?;
+        // Step 6: Apply balance changes in batch
+        if !balance_changes.is_empty() {
+            self.batch_apply_balance_changes(&balance_changes).await?;
+        }
+
+        // Step 7: Batch insert token transfers
+        let tr_token_ids: Vec<i64> = transfers
+            .iter()
+            .map(|(t, _, _, _)| token_ids[&t.type_script_hash])
+            .collect();
+        let tr_tx_hashes: Vec<&[u8]> = transfers.iter().map(|(_, h, _, _)| *h).collect();
+        let tr_blocks: Vec<i64> = transfers.iter().map(|(_, _, b, _)| *b).collect();
+        let tr_from: Vec<Option<&[u8]>> = transfers
+            .iter()
+            .map(|(t, _, _, _)| t.from_lock_hash.as_deref())
+            .collect();
+        let tr_to: Vec<&[u8]> = transfers
+            .iter()
+            .map(|(t, _, _, _)| t.to_lock_hash.as_slice())
+            .collect();
+        let tr_amounts: Vec<i64> = transfers
+            .iter()
+            .map(|(t, _, _, _)| t.amount as i64)
+            .collect();
+        let tr_mints: Vec<bool> = transfers.iter().map(|(t, _, _, _)| t.is_mint).collect();
+        let tr_burns: Vec<bool> = transfers.iter().map(|(t, _, _, _)| t.is_burn).collect();
+        let tr_timestamps: Vec<DateTime<Utc>> = transfers.iter().map(|(_, _, _, ts)| *ts).collect();
+
+        sqlx::query(
+            r#"
+            INSERT INTO token_transfers (token_id, tx_hash, block_number, from_lock_hash, to_lock_hash, amount, is_mint, is_burn, timestamp)
+            SELECT * FROM UNNEST($1::bigint[], $2::bytea[], $3::bigint[], $4::bytea[], $5::bytea[], $6::bigint[], $7::bool[], $8::bool[], $9::timestamptz[])
+            "#,
+        )
+        .bind(&tr_token_ids)
+        .bind(&tr_tx_hashes)
+        .bind(&tr_blocks)
+        .bind(&tr_from)
+        .bind(&tr_to)
+        .bind(&tr_amounts)
+        .bind(&tr_mints)
+        .bind(&tr_burns)
+        .bind(&tr_timestamps)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    /// Batch apply balance changes: fetch existing, compute new values, batch update/insert/delete
+    async fn batch_apply_balance_changes(
+        &self,
+        changes: &HashMap<(i64, Vec<u8>), (i128, Vec<u8>)>,
+    ) -> Result<()> {
+        if changes.is_empty() {
+            return Ok(());
+        }
+
+        // Step 1: Get all existing balances in one query
+        let keys: Vec<_> = changes.keys().collect();
+        let query_tokens: Vec<i64> = keys.iter().map(|(t, _)| *t).collect();
+        let query_locks: Vec<&[u8]> = keys.iter().map(|(_, l)| l.as_slice()).collect();
+
+        let existing: Vec<(i64, Vec<u8>, String)> = sqlx::query_as(
+            r#"
+            SELECT tb.token_id, tb.lock_script_hash, tb.balance::text
+            FROM token_balances tb
+            INNER JOIN (SELECT * FROM UNNEST($1::bigint[], $2::bytea[]) AS t(token_id, lock_hash)) q
+            ON tb.token_id = q.token_id AND tb.lock_script_hash = q.lock_hash
+            "#,
+        )
+        .bind(&query_tokens)
+        .bind(&query_locks)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let existing_map: HashMap<(i64, Vec<u8>), i128> = existing
+            .into_iter()
+            .map(|(t, l, b)| ((t, l), b.parse::<i128>().unwrap_or(0)))
+            .collect();
+
+        // Step 2: Categorize into insert/update/delete
+        let mut to_insert: Vec<(i64, Vec<u8>, i128, Vec<u8>)> = Vec::new();
+        let mut to_update: Vec<(i64, Vec<u8>, i128, Vec<u8>)> = Vec::new();
+        let mut to_delete: Vec<(i64, Vec<u8>)> = Vec::new();
+        let mut tokens_with_holder_increase: HashMap<i64, i64> = HashMap::new();
+        let mut tokens_with_holder_decrease: HashMap<i64, i64> = HashMap::new();
+
+        for ((token_id, lock_hash), (delta, last_tx)) in changes {
+            let key = (*token_id, lock_hash.clone());
+            let old_balance = existing_map.get(&key).copied().unwrap_or(0);
+            let new_balance = (old_balance + delta).max(0);
+
+            if existing_map.contains_key(&key) {
+                // Existing record
+                if new_balance == 0 {
+                    to_delete.push((*token_id, lock_hash.clone()));
+                    *tokens_with_holder_decrease.entry(*token_id).or_default() += 1;
+                } else {
+                    to_update.push((*token_id, lock_hash.clone(), new_balance, last_tx.clone()));
+                }
+            } else if new_balance > 0 {
+                // New holder
+                to_insert.push((*token_id, lock_hash.clone(), new_balance, last_tx.clone()));
+                *tokens_with_holder_increase.entry(*token_id).or_default() += 1;
+            }
+        }
+
+        // Step 3: Batch delete (zero balances)
+        if !to_delete.is_empty() {
+            let del_tokens: Vec<i64> = to_delete.iter().map(|(t, _)| *t).collect();
+            let del_locks: Vec<&[u8]> = to_delete.iter().map(|(_, l)| l.as_slice()).collect();
+
+            sqlx::query(
+                r#"
+                DELETE FROM token_balances tb
+                USING (SELECT * FROM UNNEST($1::bigint[], $2::bytea[]) AS t(token_id, lock_hash)) d
+                WHERE tb.token_id = d.token_id AND tb.lock_script_hash = d.lock_hash
+                "#,
+            )
+            .bind(&del_tokens)
+            .bind(&del_locks)
+            .execute(&self.pool)
+            .await?;
+        }
+
+        // Step 4: Batch insert (new holders)
+        if !to_insert.is_empty() {
+            let ins_tokens: Vec<i64> = to_insert.iter().map(|(t, _, _, _)| *t).collect();
+            let ins_locks: Vec<&[u8]> = to_insert.iter().map(|(_, l, _, _)| l.as_slice()).collect();
+            let ins_balances: Vec<String> =
+                to_insert.iter().map(|(_, _, b, _)| b.to_string()).collect();
+            let ins_txs: Vec<&[u8]> = to_insert.iter().map(|(_, _, _, t)| t.as_slice()).collect();
+
+            sqlx::query(
+                r#"
+                INSERT INTO token_balances (token_id, lock_script_hash, balance, first_tx, last_tx)
+                SELECT * FROM UNNEST($1::bigint[], $2::bytea[], $3::numeric[], $4::bytea[], $4::bytea[])
+                ON CONFLICT (token_id, lock_script_hash) DO UPDATE SET
+                    balance = EXCLUDED.balance,
+                    last_tx = EXCLUDED.last_tx,
+                    updated_at = NOW()
+                "#,
+            )
+            .bind(&ins_tokens)
+            .bind(&ins_locks)
+            .bind(&ins_balances)
+            .bind(&ins_txs)
+            .execute(&self.pool)
+            .await?;
+        }
+
+        // Step 5: Batch update (existing holders with changed balance)
+        if !to_update.is_empty() {
+            let upd_tokens: Vec<i64> = to_update.iter().map(|(t, _, _, _)| *t).collect();
+            let upd_locks: Vec<&[u8]> = to_update.iter().map(|(_, l, _, _)| l.as_slice()).collect();
+            let upd_balances: Vec<String> =
+                to_update.iter().map(|(_, _, b, _)| b.to_string()).collect();
+            let upd_txs: Vec<&[u8]> = to_update.iter().map(|(_, _, _, t)| t.as_slice()).collect();
+
+            sqlx::query(
+                r#"
+                UPDATE token_balances tb SET
+                    balance = v.balance::numeric,
+                    last_tx = v.last_tx,
+                    updated_at = NOW()
+                FROM (SELECT * FROM UNNEST($1::bigint[], $2::bytea[], $3::text[], $4::bytea[]) AS t(token_id, lock_hash, balance, last_tx)) v
+                WHERE tb.token_id = v.token_id AND tb.lock_script_hash = v.lock_hash
+                "#,
+            )
+            .bind(&upd_tokens)
+            .bind(&upd_locks)
+            .bind(&upd_balances)
+            .bind(&upd_txs)
+            .execute(&self.pool)
+            .await?;
+        }
+
+        // Step 6: Update holders_count for affected tokens
+        let mut holder_changes: HashMap<i64, i64> = HashMap::new();
+        for (token_id, inc) in tokens_with_holder_increase {
+            *holder_changes.entry(token_id).or_default() += inc;
+        }
+        for (token_id, dec) in tokens_with_holder_decrease {
+            *holder_changes.entry(token_id).or_default() -= dec;
+        }
+
+        if !holder_changes.is_empty() {
+            let hc_tokens: Vec<i64> = holder_changes.keys().copied().collect();
+            let hc_deltas: Vec<i64> = hc_tokens.iter().map(|t| holder_changes[t]).collect();
+
+            sqlx::query(
+                r#"
+                UPDATE tokens t SET
+                    holders_count = GREATEST(0, t.holders_count + v.delta::int),
+                    updated_at = NOW()
+                FROM (SELECT * FROM UNNEST($1::bigint[], $2::bigint[]) AS t(id, delta)) v
+                WHERE t.id = v.id
+                "#,
+            )
+            .bind(&hc_tokens)
+            .bind(&hc_deltas)
+            .execute(&self.pool)
+            .await?;
         }
 
         Ok(())
