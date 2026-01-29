@@ -19,4 +19,4 @@ pub use live_cell_store::{LiveCellInfo, LiveCellStore};
 pub use parallel_copy::ParallelCopyRouter;
 pub use repository::{DeepForkInfo, Repository};
 pub use tuning::apply_pg_tuning;
-pub use writer::{BatchWriter, ReorgResult, SecondaryIssuanceBreakdown};
+pub use writer::{BatchWriter, DaoWithdrawalContextTrait, ReorgResult, SecondaryIssuanceBreakdown};
