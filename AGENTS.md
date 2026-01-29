@@ -131,6 +131,24 @@ For fresh database syncs, the indexer automatically drops non-essential B-tree i
 | Resume sync, indexes deferred | No                | Yes          |
 | Any DB + `--defer-indexes`    | Yes               | Yes          |
 
+**Sync Pause During Rebuild:**
+
+When index rebuild triggers, the indexer automatically pauses the sync loop to avoid lock contention with `CREATE INDEX CONCURRENTLY`. The flow is:
+
+1. Rebuild monitor detects sync caught up (<=1000 blocks behind)
+2. Sets `rebuild_pause_flag = true`
+3. Sync loop pauses (checks flag every 500ms)
+4. Indexes rebuilt without lock timeout errors
+5. Sets `rebuild_pause_flag = false`
+6. Sync resumes
+
+**Progress Monitoring:**
+
+- **Status Page** (`/status`): Shows Index Rebuild panel with progress bar, current index, completed/total counts
+- **Homepage Banner**: Amber banner appears during active rebuild with progress percentage
+- **WebSocket**: `new_block` messages include `indexRebuildStatus` field
+- **REST API**: `GET /api/v1/status` returns `indexRebuild` object with rebuild progress
+
 ```bash
 # Default: auto-optimize fresh DB, rebuild when caught up
 cargo run -p ckbadger-indexer
@@ -142,7 +160,7 @@ cargo run -p ckbadger-indexer -- --no-auto-defer-indexes
 cargo run -p ckbadger-indexer -- --rebuild-indexes-only
 
 # Check status
-psql -c "SELECT indexes_deferred, indexes_dropped_at FROM sync_status;"
+psql -c "SELECT indexes_deferred, indexes_dropped_at, indexes_rebuild_progress FROM sync_status;"
 ```
 
 ## In-Memory Live Cell Store

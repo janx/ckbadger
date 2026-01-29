@@ -271,6 +271,8 @@ pub struct Indexer {
     was_bulk_sync_active: std::sync::atomic::AtomicBool,
     /// Track batches processed since last LiveCellStore flush
     batches_since_flush: std::sync::atomic::AtomicU64,
+    /// Shared flag to pause sync during index rebuild
+    rebuild_pause_flag: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Indexer {
@@ -342,6 +344,7 @@ impl Indexer {
             last_cache_invalidation: tokio::sync::Mutex::new(0),
             was_bulk_sync_active: std::sync::atomic::AtomicBool::new(was_bulk),
             batches_since_flush: std::sync::atomic::AtomicU64::new(0),
+            rebuild_pause_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }
 
@@ -351,6 +354,10 @@ impl Indexer {
 
     pub fn writer(&self) -> &BatchWriter {
         &self.writer
+    }
+
+    pub fn rebuild_pause_flag(&self) -> Arc<std::sync::atomic::AtomicBool> {
+        Arc::clone(&self.rebuild_pause_flag)
     }
 
     /// Check if bulk sync mode is active (for skipping non-critical statistics).
@@ -420,6 +427,12 @@ impl Indexer {
 
     async fn run_sequential(&self) -> Result<()> {
         loop {
+            if self.rebuild_pause_flag.load(Ordering::SeqCst) {
+                debug!("Sync paused for index rebuild");
+                sleep(Duration::from_millis(500)).await;
+                continue;
+            }
+
             if self.repo.has_unresolved_deep_fork().await.unwrap_or(false) {
                 warn!("Deep fork unresolved, sync paused. Waiting for manual intervention...");
                 sleep(Duration::from_secs(30)).await;
@@ -469,11 +482,18 @@ impl Indexer {
         let config = self.config.clone();
         let progress = Arc::clone(&self.progress);
         let repo = self.repo.clone();
+        let rebuild_pause = Arc::clone(&self.rebuild_pause_flag);
 
         let fetcher = tokio::spawn(async move {
             let mut next_block: Option<u64> = None;
 
             loop {
+                if rebuild_pause.load(Ordering::SeqCst) {
+                    debug!("Fetcher paused for index rebuild");
+                    sleep(Duration::from_millis(500)).await;
+                    continue;
+                }
+
                 let chain_tip = match rpc.get_tip_block_number().await {
                     Ok(tip) => tip,
                     Err(e) => {

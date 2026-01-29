@@ -13,6 +13,14 @@ interface SyncStatus {
   chartDataMayBeIncomplete: boolean;
 }
 
+interface IndexRebuildStatus {
+  isRebuilding: boolean;
+  total: number;
+  completed: number;
+  currentIndex: string | null;
+  progress: number;
+}
+
 interface Block {
   number: number;
   hash: string;
@@ -24,6 +32,7 @@ interface Block {
   avgBlockTime: string;
   estimatedEpochTime: string;
   syncStatus: SyncStatus;
+  indexRebuildStatus?: IndexRebuildStatus | null;
 }
 
 interface Transaction {
