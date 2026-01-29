@@ -208,3 +208,33 @@ async fn test_multiple_addresses_in_same_batch(pool: PgPool) {
     assert_eq!(live_b, 0); // clamped from -1
     assert_eq!(tx_b, 1);
 }
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn test_update_clamps_negative_live_cells(pool: PgPool) {
+    let writer = BatchWriter::new(pool.clone());
+    let lock_hash = vec![0x07u8; 32];
+    let tx_hash1 = vec![0x11u8; 32];
+    let tx_hash2 = vec![0x22u8; 32];
+
+    let mut changes1: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8])> = HashMap::new();
+    changes1.insert(lock_hash.clone(), (100_00000000, 2, 2, 1, 100, &tx_hash1));
+    writer
+        .update_address_balances_batch(&changes1)
+        .await
+        .unwrap();
+
+    let (_, live_cells_before, _) = get_address_balance(&pool, &lock_hash).await.unwrap();
+    assert_eq!(live_cells_before, 2);
+
+    let mut changes2: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8])> = HashMap::new();
+    changes2.insert(lock_hash.clone(), (-50_00000000, -5, 0, 1, 200, &tx_hash2));
+    writer
+        .update_address_balances_batch(&changes2)
+        .await
+        .unwrap();
+
+    let (balance, live_cells, tx_count) = get_address_balance(&pool, &lock_hash).await.unwrap();
+    assert_eq!(balance, "5000000000");
+    assert_eq!(live_cells, 0);
+    assert_eq!(tx_count, 2);
+}

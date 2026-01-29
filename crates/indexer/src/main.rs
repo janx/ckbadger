@@ -174,7 +174,7 @@ async fn main() -> Result<()> {
     let index_manager = IndexManager::new(pool.clone());
 
     if config.rebuild_indexes_only {
-        info!("Running in index rebuild only mode");
+        info!("Running in index/constraint rebuild only mode");
         let progress = index_manager
             .rebuild_indexes_parallel(config.index_rebuild_parallel)
             .await?;
@@ -187,6 +187,15 @@ async fn main() -> Result<()> {
         if !progress.failed.is_empty() {
             info!("Failed indexes: {:?}", progress.failed);
         }
+
+        let constraints_rebuilt = index_manager
+            .rebuild_constraints_parallel(config.index_rebuild_parallel)
+            .await?;
+        info!(
+            "Constraint rebuild completed: {} constraints added",
+            constraints_rebuilt
+        );
+
         return Ok(());
     }
 
@@ -203,21 +212,26 @@ async fn main() -> Result<()> {
 
     if should_auto_defer {
         info!(
-            "Fresh database detected (tip=0), auto-enabling deferred indexes for faster initial sync"
+            "Fresh database detected (tip=0), auto-enabling deferred indexes/constraints for faster initial sync"
         );
-        let dropped = index_manager.drop_deferrable_indexes().await?;
+        let dropped_indexes = index_manager.drop_deferrable_indexes().await?;
+        let dropped_constraints = index_manager.drop_deferrable_constraints().await?;
         info!(
-            "Dropped {} indexes (will auto-rebuild when caught up)",
-            dropped
+            "Dropped {} indexes and {} constraints (will auto-rebuild when caught up)",
+            dropped_indexes, dropped_constraints
         );
     } else if is_fresh_sync && args.no_auto_defer_indexes {
         info!("Fresh database detected, but auto-defer disabled via --no-auto-defer-indexes");
     } else if config.defer_indexes && !indexes_currently_deferred {
-        info!("Defer indexes mode enabled, dropping non-essential indexes for faster bulk sync");
-        let dropped = index_manager.drop_deferrable_indexes().await?;
-        info!("Dropped {} indexes", dropped);
+        info!("Defer indexes mode enabled, dropping non-essential indexes/constraints for faster bulk sync");
+        let dropped_indexes = index_manager.drop_deferrable_indexes().await?;
+        let dropped_constraints = index_manager.drop_deferrable_constraints().await?;
+        info!(
+            "Dropped {} indexes and {} constraints",
+            dropped_indexes, dropped_constraints
+        );
     } else if indexes_currently_deferred {
-        info!("Indexes are deferred (from previous run), will auto-rebuild when caught up");
+        info!("Indexes/constraints are deferred (from previous run), will auto-rebuild when caught up");
     }
 
     info!("Connecting to CKB node: {}", config.ckb_rpc_url);
@@ -291,8 +305,17 @@ async fn main() -> Result<()> {
                         }
                     }
 
+                    match mgr.rebuild_constraints_parallel(rebuild_parallel).await {
+                        Ok(count) => {
+                            info!("Constraint rebuild completed: {} constraints added", count);
+                        }
+                        Err(e) => {
+                            tracing::error!("Constraint rebuild failed: {}", e);
+                        }
+                    }
+
                     rebuild_pause_flag.store(false, std::sync::atomic::Ordering::SeqCst);
-                    info!("Sync resumed after index rebuild");
+                    info!("Sync resumed after index/constraint rebuild");
                     break;
                 }
             }

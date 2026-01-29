@@ -22,8 +22,63 @@ struct DeferrableIndex {
     priority: u8,
 }
 
+/// Represents a UNIQUE CONSTRAINT that can be dropped during bulk sync.
+/// Unlike indexes, constraints require ALTER TABLE to drop/add.
+#[derive(Debug, Clone)]
+struct DeferrableConstraint {
+    /// Base constraint name (without partition suffix)
+    name: &'static str,
+    /// Base table name (without partition suffix)
+    table: &'static str,
+    /// Columns for the UNIQUE constraint
+    columns: &'static str,
+    /// Whether this constraint is on partitioned tables
+    is_partitioned: bool,
+}
+
 const PARTITION_SUFFIXES: &[&str] = &[
     "_p00", "_p01", "_p02", "_p03", "_p04", "_p05", "_p06", "_p07", "_p08", "_p09",
+];
+
+/// UNIQUE constraints that are safe to drop during bulk sync.
+/// These constraints are validated by CKB node, so they're redundant
+/// when syncing from a trusted local node.
+const DEFERRABLE_CONSTRAINTS: &[DeferrableConstraint] = &[
+    // cells: (created_at_block, tx_hash, output_index) - CKB guarantees cell uniqueness
+    DeferrableConstraint {
+        name: "created_at_block_tx_hash_output_index_key",
+        table: "cells",
+        columns: "created_at_block, tx_hash, output_index",
+        is_partitioned: true,
+    },
+    // transaction_inputs: (tx_block_number, tx_hash, input_index) - sequential indices
+    DeferrableConstraint {
+        name: "tx_block_number_tx_hash_input_index_key",
+        table: "transaction_inputs",
+        columns: "tx_block_number, tx_hash, input_index",
+        is_partitioned: true,
+    },
+    // transaction_cell_deps: (tx_block_number, tx_hash, dep_index) - sequential indices
+    DeferrableConstraint {
+        name: "tx_block_number_tx_hash_dep_index_key",
+        table: "transaction_cell_deps",
+        columns: "tx_block_number, tx_hash, dep_index",
+        is_partitioned: true,
+    },
+    // block_proposals: (block_number, proposal_index) - sequential indices
+    DeferrableConstraint {
+        name: "block_number_proposal_index_key",
+        table: "block_proposals",
+        columns: "block_number, proposal_index",
+        is_partitioned: true,
+    },
+    // uncle_blocks: (block_number, uncle_index) - sequential indices
+    DeferrableConstraint {
+        name: "block_number_uncle_index_key",
+        table: "uncle_blocks",
+        columns: "block_number, uncle_index",
+        is_partitioned: true,
+    },
 ];
 
 const DEFERRABLE_INDEXES: &[DeferrableIndex] = &[
@@ -462,6 +517,202 @@ impl IndexManager {
             None => Ok(None),
         }
     }
+
+    pub async fn drop_deferrable_constraints(&self) -> Result<usize> {
+        info!("Dropping deferrable UNIQUE constraints for bulk sync optimization...");
+        let start = Instant::now();
+        let mut dropped_count = 0;
+
+        for constraint in DEFERRABLE_CONSTRAINTS {
+            if constraint.is_partitioned {
+                for suffix in PARTITION_SUFFIXES {
+                    let table_name = format!("{}{}", constraint.table, suffix);
+                    let constraint_name = format!("{}_{}", table_name, constraint.name);
+                    if self
+                        .drop_constraint_if_exists(&table_name, &constraint_name)
+                        .await?
+                    {
+                        dropped_count += 1;
+                    }
+                }
+            } else {
+                let constraint_name = format!("{}_{}", constraint.table, constraint.name);
+                if self
+                    .drop_constraint_if_exists(constraint.table, &constraint_name)
+                    .await?
+                {
+                    dropped_count += 1;
+                }
+            }
+        }
+
+        info!(
+            "Dropped {} UNIQUE constraints in {:?}",
+            dropped_count,
+            start.elapsed()
+        );
+        Ok(dropped_count)
+    }
+
+    async fn drop_constraint_if_exists(&self, table: &str, constraint_name: &str) -> Result<bool> {
+        let check_sql = format!(
+            "SELECT 1 FROM pg_constraint WHERE conname = '{}' AND conrelid = '{}'::regclass",
+            constraint_name, table
+        );
+
+        let exists: Option<(i32,)> = sqlx::query_as(&check_sql)
+            .fetch_optional(&self.pool)
+            .await?;
+
+        if exists.is_some() {
+            let drop_sql = format!(
+                "ALTER TABLE {} DROP CONSTRAINT IF EXISTS {}",
+                table, constraint_name
+            );
+            match sqlx::query(&drop_sql).execute(&self.pool).await {
+                Ok(_) => {
+                    info!("Dropped constraint: {}.{}", table, constraint_name);
+                    Ok(true)
+                }
+                Err(e) => {
+                    warn!("Failed to drop constraint {}: {}", constraint_name, e);
+                    Ok(false)
+                }
+            }
+        } else {
+            Ok(false)
+        }
+    }
+
+    pub async fn rebuild_constraints_parallel(&self, max_parallel: usize) -> Result<usize> {
+        info!(
+            "Rebuilding UNIQUE constraints with max {} concurrent tasks",
+            max_parallel
+        );
+        let start = Instant::now();
+        let mut rebuilt_count = 0;
+
+        for constraint in DEFERRABLE_CONSTRAINTS {
+            if constraint.is_partitioned {
+                let count = self
+                    .rebuild_partitioned_constraint_parallel(constraint, max_parallel)
+                    .await?;
+                rebuilt_count += count;
+            } else {
+                let table_name = constraint.table;
+                let constraint_name = format!("{}_{}", constraint.table, constraint.name);
+                if self
+                    .add_constraint_if_not_exists(table_name, &constraint_name, constraint.columns)
+                    .await?
+                {
+                    rebuilt_count += 1;
+                }
+            }
+        }
+
+        info!(
+            "Rebuilt {} UNIQUE constraints in {:?}",
+            rebuilt_count,
+            start.elapsed()
+        );
+        Ok(rebuilt_count)
+    }
+
+    async fn rebuild_partitioned_constraint_parallel(
+        &self,
+        constraint: &DeferrableConstraint,
+        max_parallel: usize,
+    ) -> Result<usize> {
+        let mut join_set: JoinSet<Result<bool>> = JoinSet::new();
+        let mut pending_partitions: Vec<&str> = PARTITION_SUFFIXES.to_vec();
+        let mut rebuilt_count = 0;
+
+        while !pending_partitions.is_empty() || !join_set.is_empty() {
+            while join_set.len() < max_parallel && !pending_partitions.is_empty() {
+                let suffix = pending_partitions.remove(0);
+                let pool = self.pool.clone();
+                let table_name = format!("{}{}", constraint.table, suffix);
+                let constraint_name = format!("{}_{}", table_name, constraint.name);
+                let columns = constraint.columns.to_string();
+
+                join_set.spawn(async move {
+                    let check_sql = format!(
+                        "SELECT 1 FROM pg_constraint WHERE conname = '{}' AND conrelid = '{}'::regclass",
+                        constraint_name, table_name
+                    );
+                    let exists: Option<(i32,)> =
+                        sqlx::query_as(&check_sql).fetch_optional(&pool).await?;
+
+                    if exists.is_none() {
+                        let add_sql = format!(
+                            "ALTER TABLE {} ADD CONSTRAINT {} UNIQUE ({})",
+                            table_name, constraint_name, columns
+                        );
+                        sqlx::query(&add_sql).execute(&pool).await?;
+                        info!("Added constraint: {}", constraint_name);
+                        Ok(true)
+                    } else {
+                        Ok(false)
+                    }
+                });
+            }
+
+            if let Some(result) = join_set.join_next().await {
+                match result {
+                    Ok(Ok(true)) => rebuilt_count += 1,
+                    Ok(Ok(false)) => {}
+                    Ok(Err(e)) => warn!("Failed to add constraint: {}", e),
+                    Err(e) => warn!("Task panicked: {}", e),
+                }
+            }
+        }
+
+        Ok(rebuilt_count)
+    }
+
+    async fn add_constraint_if_not_exists(
+        &self,
+        table: &str,
+        constraint_name: &str,
+        columns: &str,
+    ) -> Result<bool> {
+        let check_sql = format!(
+            "SELECT 1 FROM pg_constraint WHERE conname = '{}' AND conrelid = '{}'::regclass",
+            constraint_name, table
+        );
+
+        let exists: Option<(i32,)> = sqlx::query_as(&check_sql)
+            .fetch_optional(&self.pool)
+            .await?;
+
+        if exists.is_none() {
+            let add_sql = format!(
+                "ALTER TABLE {} ADD CONSTRAINT {} UNIQUE ({})",
+                table, constraint_name, columns
+            );
+            match sqlx::query(&add_sql).execute(&self.pool).await {
+                Ok(_) => {
+                    info!("Added constraint: {}", constraint_name);
+                    Ok(true)
+                }
+                Err(e) => {
+                    warn!("Failed to add constraint {}: {}", constraint_name, e);
+                    Ok(false)
+                }
+            }
+        } else {
+            Ok(false)
+        }
+    }
+
+    pub async fn check_constraints_exist(&self) -> Result<bool> {
+        let row: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM pg_constraint WHERE conname LIKE 'cells_p%_created_at_block_tx_hash_output_index_key'",
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.0 > 0)
+    }
 }
 
 #[cfg(test)]
@@ -617,5 +868,81 @@ mod tests {
         assert_eq!(parsed.completed, 5);
         assert_eq!(parsed.current, Some("idx_cells_lock".to_string()));
         assert_eq!(parsed.failed, vec!["idx_test".to_string()]);
+    }
+
+    #[test]
+    fn test_deferrable_constraints_count() {
+        assert_eq!(DEFERRABLE_CONSTRAINTS.len(), 5);
+    }
+
+    #[test]
+    fn test_deferrable_constraints_are_partitioned() {
+        for constraint in DEFERRABLE_CONSTRAINTS {
+            assert!(
+                constraint.is_partitioned,
+                "Constraint {} should be partitioned",
+                constraint.name
+            );
+        }
+    }
+
+    #[test]
+    fn test_deferrable_constraints_have_valid_tables() {
+        let partitioned_tables = [
+            "cells",
+            "transaction_inputs",
+            "transaction_cell_deps",
+            "block_proposals",
+            "uncle_blocks",
+        ];
+
+        for constraint in DEFERRABLE_CONSTRAINTS {
+            assert!(
+                partitioned_tables.contains(&constraint.table),
+                "Constraint {} has invalid table {}",
+                constraint.name,
+                constraint.table
+            );
+        }
+    }
+
+    #[test]
+    fn test_deferrable_constraints_name_ends_with_key() {
+        for constraint in DEFERRABLE_CONSTRAINTS {
+            assert!(
+                constraint.name.ends_with("_key"),
+                "Constraint name {} should end with _key",
+                constraint.name
+            );
+        }
+    }
+
+    #[test]
+    fn test_constraint_name_generation_for_partition() {
+        let constraint = &DEFERRABLE_CONSTRAINTS[0];
+        let suffix = "_p00";
+        let table_name = format!("{}{}", constraint.table, suffix);
+        let constraint_name = format!("{}_{}", table_name, constraint.name);
+
+        assert_eq!(
+            constraint_name,
+            "cells_p00_created_at_block_tx_hash_output_index_key"
+        );
+    }
+
+    #[test]
+    fn test_constraint_columns_not_empty() {
+        for constraint in DEFERRABLE_CONSTRAINTS {
+            assert!(
+                !constraint.columns.is_empty(),
+                "Constraint {} has empty columns",
+                constraint.name
+            );
+            assert!(
+                constraint.columns.contains(',') || constraint.columns.contains('_'),
+                "Constraint {} should have multiple columns or underscore",
+                constraint.name
+            );
+        }
     }
 }

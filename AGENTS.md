@@ -122,37 +122,61 @@ The indexer uses two complementary log lines:
    - Shows overall sync percentage and throughput
    - Uses 10-second sliding window for `blocks/sec`
 
-## Deferred Index Optimization
+## Deferred Index and Constraint Optimization
 
-For fresh database syncs, the indexer automatically drops non-essential B-tree indexes to achieve ~3x faster write speeds. Indexes are rebuilt automatically when the sync catches up to the chain tip.
+For fresh database syncs, the indexer automatically drops non-essential B-tree indexes and UNIQUE constraints to achieve ~3-4x faster write speeds. Both are rebuilt automatically when the sync catches up to the chain tip.
 
-| Parameter                  | Default | Description                                      |
-| -------------------------- | ------- | ------------------------------------------------ |
-| `--defer-indexes`          | `false` | Force enable deferred indexes (for non-fresh DB) |
-| `--no-auto-defer-indexes`  | `false` | Disable auto-optimization for fresh DB           |
-| `--rebuild-indexes-only`   | `false` | Only rebuild indexes, don't sync                 |
-| `--index-rebuild-parallel` | `10`    | Parallel connections per partitioned table       |
+| Parameter                  | Default | Description                                           |
+| -------------------------- | ------- | ----------------------------------------------------- |
+| `--defer-indexes`          | `false` | Force enable deferred indexes/constraints (non-fresh) |
+| `--no-auto-defer-indexes`  | `false` | Disable auto-optimization for fresh DB                |
+| `--rebuild-indexes-only`   | `false` | Only rebuild indexes/constraints, don't sync          |
+| `--index-rebuild-parallel` | `10`    | Parallel connections per partitioned table            |
+
+**What Gets Deferred:**
+
+| Type               | Items                                           | Reason Safe to Drop                   |
+| ------------------ | ----------------------------------------------- | ------------------------------------- |
+| B-tree Indexes     | 26 indexes on blocks, transactions, cells, etc. | Query optimization only               |
+| UNIQUE Constraints | 5 constraints on cells, inputs, cell_deps, etc. | CKB node already validates uniqueness |
+
+**Deferred UNIQUE Constraints:**
+
+These constraints are redundant during bulk sync because CKB node validates:
+
+- Cell uniqueness: `(tx_hash, output_index)` globally unique
+- Input/output indices: Sequential within transaction
+- Block structure: Proposals/uncles indexed correctly
+
+| Table                   | Constraint                                  | CKB Guarantee       |
+| ----------------------- | ------------------------------------------- | ------------------- |
+| `cells`                 | `(created_at_block, tx_hash, output_index)` | Cell outputs unique |
+| `transaction_inputs`    | `(tx_block_number, tx_hash, input_index)`   | Sequential indices  |
+| `transaction_cell_deps` | `(tx_block_number, tx_hash, dep_index)`     | Sequential indices  |
+| `block_proposals`       | `(block_number, proposal_index)`            | Block structure     |
+| `uncle_blocks`          | `(block_number, uncle_index)`               | Block structure     |
 
 **Behavior:**
 
-| Scenario                      | Auto-drop indexes | Auto-rebuild |
-| ----------------------------- | ----------------- | ------------ |
-| Fresh DB (tip=0)              | Yes               | Yes          |
-| Fresh DB + `--no-auto-defer`  | No                | No           |
-| Resume sync, indexes exist    | No                | No           |
-| Resume sync, indexes deferred | No                | Yes          |
-| Any DB + `--defer-indexes`    | Yes               | Yes          |
+| Scenario                      | Auto-drop indexes/constraints | Auto-rebuild |
+| ----------------------------- | ----------------------------- | ------------ |
+| Fresh DB (tip=0)              | Yes                           | Yes          |
+| Fresh DB + `--no-auto-defer`  | No                            | No           |
+| Resume sync, indexes exist    | No                            | No           |
+| Resume sync, indexes deferred | No                            | Yes          |
+| Any DB + `--defer-indexes`    | Yes                           | Yes          |
 
 **Sync Pause During Rebuild:**
 
-When index rebuild triggers, the indexer automatically pauses the sync loop to avoid lock contention with `CREATE INDEX CONCURRENTLY`. The flow is:
+When rebuild triggers, the indexer automatically pauses the sync loop to avoid lock contention. The flow is:
 
 1. Rebuild monitor detects sync caught up (<=1000 blocks behind)
 2. Sets `rebuild_pause_flag = true`
 3. Sync loop pauses (checks flag every 500ms)
-4. Indexes rebuilt without lock timeout errors
-5. Sets `rebuild_pause_flag = false`
-6. Sync resumes
+4. Indexes rebuilt with `CREATE INDEX CONCURRENTLY`
+5. Constraints rebuilt with `ALTER TABLE ADD CONSTRAINT`
+6. Sets `rebuild_pause_flag = false`
+7. Sync resumes
 
 **Progress Monitoring:**
 
@@ -168,7 +192,7 @@ cargo run -p ckbadger-indexer
 # Disable auto-optimization
 cargo run -p ckbadger-indexer -- --no-auto-defer-indexes
 
-# Manual index rebuild only
+# Manual index/constraint rebuild only
 cargo run -p ckbadger-indexer -- --rebuild-indexes-only
 
 # Check status

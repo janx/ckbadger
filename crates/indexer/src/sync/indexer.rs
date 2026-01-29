@@ -582,6 +582,13 @@ impl Indexer {
                     continue;
                 }
 
+                let mut batch_cells: HashMap<(Vec<u8>, i16), ()> = HashMap::new();
+                for td in &all_tx_data {
+                    for (idx, _) in td.cells.iter().enumerate() {
+                        batch_cells.insert((td.hash.clone(), idx as i16), ());
+                    }
+                }
+
                 let mut input_cell_info: HashMap<(Vec<u8>, i16), (i64, i64, Vec<u8>, i32)> =
                     HashMap::new();
                 {
@@ -604,7 +611,10 @@ impl Indexer {
 
                 let missing_outpoints: Vec<(Vec<u8>, i16)> = all_input_outpoints
                     .iter()
-                    .filter(|(h, i)| !input_cell_info.contains_key(&(h.clone(), *i)))
+                    .filter(|(h, i)| {
+                        let key = (h.clone(), *i);
+                        !input_cell_info.contains_key(&key) && !batch_cells.contains_key(&key)
+                    })
                     .cloned()
                     .collect();
 
@@ -634,12 +644,6 @@ impl Indexer {
                 }
 
                 let mut consumed_from_db: Vec<(Vec<u8>, i16)> = Vec::new();
-                let mut batch_cells: HashMap<(Vec<u8>, i16), ()> = HashMap::new();
-                for td in &all_tx_data {
-                    for (idx, _) in td.cells.iter().enumerate() {
-                        batch_cells.insert((td.hash.clone(), idx as i16), ());
-                    }
-                }
                 for td in &all_tx_data {
                     if !td.is_cellbase {
                         for input in &td.inputs {
@@ -1136,6 +1140,26 @@ impl Indexer {
             .unwrap_or(0);
         let bulk_sync_mode = chain_tip.saturating_sub(end_block) > 1000;
 
+        let mut batch_cells: HashMap<
+            (Vec<u8>, i16),
+            (i64, i64, Vec<u8>, i32, Vec<u8>, Option<Vec<u8>>),
+        > = HashMap::new();
+        for tx_data in &all_tx_data {
+            for (output_index, cell) in tx_data.cells.iter().enumerate() {
+                batch_cells.insert(
+                    (tx_data.hash.clone(), output_index as i16),
+                    (
+                        cell.capacity,
+                        tx_data.block_number,
+                        cell.lock_script_hash.clone(),
+                        cell.data_size,
+                        cell.lock_code_hash.clone(),
+                        cell.type_code_hash.clone(),
+                    ),
+                );
+            }
+        }
+
         // (capacity, created_at_block, lock_script_hash, data_size)
         let mut input_cell_info: HashMap<(Vec<u8>, i16), (i64, i64, Vec<u8>, i32)> = HashMap::new();
         {
@@ -1158,7 +1182,10 @@ impl Indexer {
 
         let missing_outpoints: Vec<(Vec<u8>, i16)> = all_input_outpoints
             .iter()
-            .filter(|(h, i)| !input_cell_info.contains_key(&(h.clone(), *i)))
+            .filter(|(h, i)| {
+                let key = (h.clone(), *i);
+                !input_cell_info.contains_key(&key) && !batch_cells.contains_key(&key)
+            })
             .cloned()
             .collect();
 
@@ -1177,27 +1204,6 @@ impl Indexer {
             let db_info = self.writer.get_cells_info_batch(&missing_refs).await?;
             for ((tx_hash, idx), (cap, block, lock_hash, data_size)) in db_info {
                 input_cell_info.insert((tx_hash, idx), (cap, block, lock_hash, data_size));
-            }
-        }
-
-        // (capacity, created_at_block, lock_script_hash, data_size, lock_code_hash, type_code_hash)
-        let mut batch_cells: HashMap<
-            (Vec<u8>, i16),
-            (i64, i64, Vec<u8>, i32, Vec<u8>, Option<Vec<u8>>),
-        > = HashMap::new();
-        for tx_data in &all_tx_data {
-            for (output_index, cell) in tx_data.cells.iter().enumerate() {
-                batch_cells.insert(
-                    (tx_data.hash.clone(), output_index as i16),
-                    (
-                        cell.capacity,
-                        tx_data.block_number,
-                        cell.lock_script_hash.clone(),
-                        cell.data_size,
-                        cell.lock_code_hash.clone(),
-                        cell.type_code_hash.clone(),
-                    ),
-                );
             }
         }
 
@@ -4300,7 +4306,26 @@ impl Indexer {
             })
             .collect();
 
-        // (capacity, created_at_block, lock_script_hash, data_size)
+        let mut block_cells: HashMap<
+            (Vec<u8>, i16),
+            (i64, i64, Vec<u8>, i32, Vec<u8>, Option<Vec<u8>>),
+        > = HashMap::new();
+        for tx_data in &tx_data_list {
+            for (output_index, cell) in tx_data.cells.iter().enumerate() {
+                block_cells.insert(
+                    (tx_data.hash.clone(), output_index as i16),
+                    (
+                        cell.capacity,
+                        parsed.number,
+                        cell.lock_script_hash.clone(),
+                        cell.data_size,
+                        cell.lock_code_hash.clone(),
+                        cell.type_code_hash.clone(),
+                    ),
+                );
+            }
+        }
+
         let mut input_cell_info: HashMap<(Vec<u8>, i16), (i64, i64, Vec<u8>, i32)> = HashMap::new();
         {
             let mut cache = self.cell_cache.lock().await;
@@ -4322,7 +4347,10 @@ impl Indexer {
 
         let missing_outpoints: Vec<(Vec<u8>, i16)> = input_outpoints
             .iter()
-            .filter(|(h, i)| !input_cell_info.contains_key(&(h.clone(), *i)))
+            .filter(|(h, i)| {
+                let key = (h.clone(), *i);
+                !input_cell_info.contains_key(&key) && !block_cells.contains_key(&key)
+            })
             .cloned()
             .collect();
 
@@ -4334,27 +4362,6 @@ impl Indexer {
             let db_info = self.writer.get_cells_info_batch(&missing_refs).await?;
             for ((tx_hash, idx), (cap, block, lock_hash, data_size)) in db_info {
                 input_cell_info.insert((tx_hash, idx), (cap, block, lock_hash, data_size));
-            }
-        }
-
-        // (capacity, created_at_block, lock_script_hash, data_size, lock_code_hash, type_code_hash)
-        let mut block_cells: HashMap<
-            (Vec<u8>, i16),
-            (i64, i64, Vec<u8>, i32, Vec<u8>, Option<Vec<u8>>),
-        > = HashMap::new();
-        for tx_data in &tx_data_list {
-            for (output_index, cell) in tx_data.cells.iter().enumerate() {
-                block_cells.insert(
-                    (tx_data.hash.clone(), output_index as i16),
-                    (
-                        cell.capacity,
-                        parsed.number,
-                        cell.lock_script_hash.clone(),
-                        cell.data_size,
-                        cell.lock_code_hash.clone(),
-                        cell.type_code_hash.clone(),
-                    ),
-                );
             }
         }
 

@@ -760,28 +760,36 @@ impl BatchWriter {
 
         sqlx::query(
             r#"
-            INSERT INTO address_balances (
+            WITH input AS (
+                SELECT lock_hash, balance_delta, live_delta, total_delta, tx_delta, block_num, tx_hash
+                FROM UNNEST($1::bytea[], $2::bigint[], $3::int[], $4::int[], $5::bigint[], $6::bigint[], $7::bytea[])
+                AS t(lock_hash, balance_delta, live_delta, total_delta, tx_delta, block_num, tx_hash)
+            )
+            MERGE INTO address_balances ab
+            USING input i ON ab.lock_script_hash = i.lock_hash
+            WHEN MATCHED THEN UPDATE SET
+                balance = ab.balance + i.balance_delta,
+                live_cells_count = GREATEST(0, ab.live_cells_count + i.live_delta),
+                total_cells_count = ab.total_cells_count + i.total_delta,
+                transactions_count = ab.transactions_count + i.tx_delta,
+                last_activity_block = i.block_num,
+                last_activity_tx = i.tx_hash,
+                updated_at = NOW()
+            WHEN NOT MATCHED THEN INSERT (
                 lock_script_hash, balance, live_cells_count, total_cells_count,
                 transactions_count, first_seen_block, first_seen_tx,
                 last_activity_block, last_activity_tx
+            ) VALUES (
+                i.lock_hash,
+                i.balance_delta,
+                GREATEST(0, i.live_delta),
+                GREATEST(0, i.total_delta),
+                i.tx_delta,
+                i.block_num,
+                i.tx_hash,
+                i.block_num,
+                i.tx_hash
             )
-            SELECT 
-                lock_hash, balance_change, 
-                GREATEST(0, live_change), GREATEST(0, total_change),
-                tx_count, block_num, tx_hash, block_num, tx_hash
-            FROM UNNEST($1::bytea[], $2::numeric[], $3::int[], $4::int[], $5::bigint[], $6::bigint[], $7::bytea[])
-            AS t(lock_hash, balance_change, live_change, total_change, tx_count, block_num, tx_hash)
-            ON CONFLICT (lock_script_hash) DO UPDATE SET
-                balance = address_balances.balance + EXCLUDED.balance,
-                live_cells_count = GREATEST(0, address_balances.live_cells_count + (
-                    SELECT live_change FROM UNNEST($1::bytea[], $3::int[]) AS u(lh, live_change)
-                    WHERE u.lh = address_balances.lock_script_hash
-                )),
-                total_cells_count = address_balances.total_cells_count + EXCLUDED.total_cells_count,
-                transactions_count = address_balances.transactions_count + EXCLUDED.transactions_count,
-                last_activity_block = EXCLUDED.last_activity_block,
-                last_activity_tx = EXCLUDED.last_activity_tx,
-                updated_at = NOW()
             "#,
         )
         .bind(&lock_hashes)
