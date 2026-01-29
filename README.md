@@ -33,6 +33,7 @@
 - **Network Dashboard** - Hash rate, difficulty, epoch progress, TPS metrics
 - **Historical Charts** - Block time, transaction volume, active addresses
 - **Real-time Updates** - WebSocket subscriptions for new blocks and transactions
+- **System Status Page** - Monitor sync progress, index rebuild status, and integrity checks
 - **Developer API** - REST endpoints with rate limiting
 
 ## Architecture
@@ -46,17 +47,17 @@
                                 ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                         API Layer                                │
-│              Rust (Axum) - REST / GraphQL / WebSocket            │
+│              Rust (Axum) - REST / WebSocket                      │
 └─────────────────────────────────────────────────────────────────┘
                                 │
-              ┌─────────────────┼─────────────────┐
-              ▼                 ▼                 ▼
-        ┌──────────┐     ┌───────────┐     ┌───────────┐
-        │  Redis   │     │ PostgreSQL│     │ClickHouse │
-        │  (Hot)   │     │  (Warm)   │     │  (Cold)   │
-        └──────────┘     └───────────┘     └───────────┘
-                                │
-                                ▼
+                    ┌───────────┴───────────┐
+                    ▼                       ▼
+              ┌───────────┐           ┌──────────┐
+              │ PostgreSQL│           │  Redis   │
+              │  (Primary)│           │  (Cache) │
+              └───────────┘           └──────────┘
+                    │
+                    ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                       Rust Indexer                               │
 │     Block Fetcher → Cell Parser → Script Decoder → DB Writer     │
@@ -77,10 +78,9 @@
 | **UI**            | Tailwind CSS, Custom Components     | Responsive design               |
 | **Visualization** | react-force-graph-2d, D3.js         | Cell relationship graphs        |
 | **API**           | Rust (Axum)                         | High-performance REST/WebSocket |
-| **Indexer**       | Rust                                | Block parsing, cell tracking    |
-| **Database**      | PostgreSQL                          | Primary data store              |
-| **Cache**         | Redis                               | Hot data, real-time state       |
-| **Analytics**     | ClickHouse                          | Historical queries (optional)   |
+| **Indexer**       | Rust (3-stage pipeline)             | Block parsing, cell tracking    |
+| **Database**      | PostgreSQL 16                       | Primary data store              |
+| **Cache**         | Redis                               | API response cache              |
 
 ## Quick Start
 
@@ -197,6 +197,7 @@ GET  /api/v1/addresses/:address                  # Address info & balance
 GET  /api/v1/cells/live                          # Query live cells
 GET  /api/v1/cells/:tx_hash/:output_index        # Cell details
 GET  /api/v1/statistics/network                  # Network stats
+GET  /api/v1/status                              # System status (sync, index rebuild)
 
 # Graph API (Cell Relationship Visualization)
 GET  /api/v1/graph/cell/:tx_hash/:index?depth=2  # Cell relationship graph
@@ -282,7 +283,8 @@ ws.onmessage = (event) => {
 //     epochLength: 1800,
 //     avgBlockTime: "10.50s",
 //     estimatedEpochTime: "3h 45m",
-//     syncStatus: { isSyncing, syncedBlock, tipBlock, progress, estimatedTime }
+//     syncStatus: { isSyncing, syncedBlock, tipBlock, progress, estimatedTime },
+//     indexRebuildStatus: { isRebuilding, total, completed, currentIndex, progress } // optional
 //   }
 // }
 ```
@@ -377,13 +379,13 @@ cd frontend && pnpm install && pnpm dev
 ### Running Tests
 
 ```bash
-# Rust tests (83 tests)
+# Rust tests (213 tests)
 cargo test                               # All tests
 cargo test --lib                         # Unit tests only
 cargo test -p ckbadger-indexer           # Specific crate
 cargo test test_parse_epoch              # Single test (partial match)
 
-# Frontend tests (90 tests)
+# Frontend tests (191 tests)
 cd frontend && pnpm test                 # Run Vitest
 cd frontend && pnpm test:coverage        # With coverage
 
@@ -397,13 +399,11 @@ pnpm test:e2e                            # Playwright tests
 
 ### Test Coverage
 
-| Area                    | Tests | Coverage                                  |
-| ----------------------- | ----- | ----------------------------------------- |
-| **Rust Parsers**        | 83    | block, cell, transaction, dao, udt, spore |
-| **Frontend Components** | 90    | Hash, Capacity, Address, Pagination       |
-| **Frontend Hooks**      | 12    | useCursorPagination                       |
-| **API Client**          | 17    | Query building, error handling            |
-| **E2E**                 | 7     | Homepage, block detail, navigation        |
+| Area                    | Tests | Coverage                                     |
+| ----------------------- | ----- | -------------------------------------------- |
+| **Rust Indexer**        | 213   | parsers, db, live cell store, rpc types      |
+| **Frontend Components** | 191   | Hash, Capacity, Address, Pagination, Banners |
+| **E2E**                 | 7     | Homepage, block detail, navigation           |
 
 ### CI/CD
 
@@ -434,13 +434,12 @@ GitHub Actions workflow runs on every push:
 
 | Feature               | Priority | Description                            |
 | --------------------- | -------- | -------------------------------------- |
-| GraphQL API           | P1       | Alternative query interface            |
+| RGB++ Support         | P1       | RGB++ protocol parsing and display     |
 | Multi-language (i18n) | P2       | Chinese, English, Japanese, Korean     |
 | Address Labels        | P2       | Exchange, contract, whale address tags |
-| RGB++ Support         | P2       | RGB++ protocol parsing                 |
 | Address Monitoring    | P3       | Email/webhook notifications            |
 | Transaction Broadcast | P3       | Submit transactions from browser       |
-| ClickHouse Analytics  | P3       | Historical query optimization          |
+| GraphQL API           | P3       | Alternative query interface            |
 
 ---
 
