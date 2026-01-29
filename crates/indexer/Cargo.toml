@@ -53,6 +53,7 @@ hex = { workspace = true }
 futures = { workspace = true }
 lru = { workspace = true }
 rayon = { workspace = true }
+async-trait = { workspace = true }
 
 # Configuration
 config = { workspace = true }
@@ -68,6 +69,10 @@ ckb-hash = { workspace = true }
 
 # Redis (optional, for cache invalidation)
 redis = { workspace = true, optional = true }
+
+# RocksDB for persistent live cell store
+rocksdb = { workspace = true }
+bincode = { workspace = true }
 
 [features]
 default = []

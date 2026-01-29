@@ -6,7 +6,6 @@ use anyhow::Result;
 use chrono::{DateTime, NaiveDate, Utc};
 use sqlx::{PgPool, Postgres, Transaction};
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 use tracing::{info, warn};
 
 use ckbadger_common::dao::calculate_estimated_apc;
@@ -67,7 +66,7 @@ pub struct SecondaryIssuanceBreakdown {
 pub struct BatchWriter {
     pool: PgPool,
     fast_sync_mode: bool,
-    live_cell_store: Option<Arc<super::LiveCellStore>>,
+    live_cell_store: Option<super::DynLiveCellStorage>,
 }
 
 impl BatchWriter {
@@ -90,7 +89,7 @@ impl BatchWriter {
     pub fn with_live_cell_store(
         pool: PgPool,
         fast_sync_mode: bool,
-        live_cell_store: Arc<super::LiveCellStore>,
+        live_cell_store: super::DynLiveCellStorage,
     ) -> Self {
         Self {
             pool,
@@ -103,7 +102,7 @@ impl BatchWriter {
         &self.pool
     }
 
-    pub fn live_cell_store(&self) -> Option<&Arc<super::LiveCellStore>> {
+    pub fn live_cell_store(&self) -> Option<&super::DynLiveCellStorage> {
         self.live_cell_store.as_ref()
     }
 

@@ -18,8 +18,8 @@ use tracing::{debug, error, info, warn};
 use crate::cache::CacheInvalidator;
 use crate::config::Config;
 use crate::db::{
-    BatchWriter, CopyConfig, CopyPoolManager, ParallelCopyRouter, ReorgResult, Repository,
-    SecondaryIssuanceBreakdown,
+    BatchWriter, CopyConfig, CopyPoolManager, LiveCellStorage, ParallelCopyRouter, ReorgResult,
+    Repository, SecondaryIssuanceBreakdown,
 };
 use crate::integrity::IntegrityServiceHandle;
 use crate::parser::{
@@ -284,9 +284,8 @@ impl Indexer {
         let rpc = CkbRpcClient::new(&config.ckb_rpc_url);
         let repo = Repository::new(pool.clone());
 
-        let live_cell_store = Arc::new(crate::db::LiveCellStore::new());
-
-        live_cell_store.rebuild_from_db(&pool).await?;
+        let live_cell_store: crate::db::DynLiveCellStorage =
+            Self::create_live_cell_store(&config, &pool).await?;
 
         let writer =
             BatchWriter::with_live_cell_store(pool.clone(), config.fast_sync_mode, live_cell_store);
@@ -355,6 +354,22 @@ impl Indexer {
 
     pub fn rebuild_pause_flag(&self) -> Arc<std::sync::atomic::AtomicBool> {
         Arc::clone(&self.rebuild_pause_flag)
+    }
+
+    async fn create_live_cell_store(
+        config: &Config,
+        _pool: &PgPool,
+    ) -> Result<crate::db::DynLiveCellStorage> {
+        info!(
+            "Using RocksDB live cell store at: {}",
+            config.live_cell_db_path
+        );
+        let store = crate::db::RocksDbLiveCellStore::open(&config.live_cell_db_path)?;
+        let count = store.len();
+        if count > 0 {
+            info!("Loaded {} live cells from RocksDB", count);
+        }
+        Ok(Arc::new(store))
     }
 
     /// Check if bulk sync mode is active (for skipping non-critical statistics).

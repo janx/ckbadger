@@ -201,42 +201,29 @@ cargo run -p ckbadger-indexer -- --rebuild-indexes-only
 psql -c "SELECT indexes_deferred, indexes_dropped_at, indexes_rebuild_progress FROM sync_status;"
 ```
 
-## In-Memory Live Cell Store
+## Live Cell Store
 
-The LiveCellStore provides O(1) cell lookups during blockchain synchronization by maintaining an in-memory cache of live cells. This significantly improves performance during bulk sync operations.
+The LiveCellStore provides O(1) cell lookups during blockchain synchronization using RocksDB for persistent storage. This enables instant restart without rebuilding from database.
 
-| Parameter                    | Default | Description                                   |
-| ---------------------------- | ------- | --------------------------------------------- |
-| `--live-cell-flush-interval` | `100`   | Flush dirty cells to database every N batches |
+| Parameter                    | Default             | Description                                   |
+| ---------------------------- | ------------------- | --------------------------------------------- |
+| `--live-cell-db-path`        | `./data/live_cells` | RocksDB data directory                        |
+| `--live-cell-flush-interval` | `100`               | Flush dirty cells to database every N batches |
 
 **Behavior:**
 
-- **Bulk Sync Mode** (>1000 blocks behind tip): Skips ALL `live_cells` table operations (INSERT/DELETE), writing only to the in-memory store for maximum throughput. The `cells` table still receives writes.
-- **Periodic Flushing**: Dirty cells are flushed to the `live_cells` table every N batches (default 100)
-- **Graceful Shutdown**: All pending cells are flushed to database on shutdown
-- **Crash Recovery**: On restart, the indexer rebuilds the in-memory store from the `live_cells` table, ensuring no data loss
-
-**Database Schema:**
-
-The `live_cells` table is **hash-partitioned by `tx_hash`** into 16 partitions for parallel write distribution:
-
-```sql
-CREATE TABLE live_cells (...) PARTITION BY HASH (tx_hash);
-CREATE TABLE live_cells_p00 PARTITION OF live_cells FOR VALUES WITH (MODULUS 16, REMAINDER 0);
--- ... 15 more partitions
-```
+- **Bulk Sync Mode** (>1000 blocks behind tip): Skips ALL `live_cells` table operations (INSERT/DELETE), writing only to RocksDB for maximum throughput. The `cells` table still receives writes.
+- **Instant Recovery**: Data persisted to disk, indexer restarts in seconds instead of minutes
+- **Graceful Shutdown**: RocksDB data is flushed on shutdown
 
 **Example Usage:**
 
 ```bash
-# Default: flush every 100 batches
+# Default: uses ./data/live_cells
 cargo run -p ckbadger-indexer
 
-# Custom flush interval (50 batches)
-cargo run -p ckbadger-indexer -- --live-cell-flush-interval 50
-
-# Environment variable
-LIVE_CELL_FLUSH_INTERVAL=50
+# Custom path
+cargo run -p ckbadger-indexer -- --live-cell-db-path /ssd/live_cells
 ```
 
 ## Rust Style

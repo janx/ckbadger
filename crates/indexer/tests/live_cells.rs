@@ -307,10 +307,11 @@ async fn test_consume_cells_across_partitions(pool: PgPool) {
 
 #[sqlx::test(migrator = "MIGRATOR")]
 async fn test_bulk_sync_mode_skips_live_cells_db_write(pool: PgPool) {
-    use ckbadger_indexer::db::LiveCellStore;
+    use ckbadger_indexer::db::{LiveCellStorage, RocksDbLiveCellStore};
     use std::sync::Arc;
 
-    let store = Arc::new(LiveCellStore::new());
+    let tmp_dir = tempfile::TempDir::new().unwrap();
+    let store = Arc::new(RocksDbLiveCellStore::open(tmp_dir.path()).unwrap());
     let writer = BatchWriter::with_live_cell_store(pool.clone(), true, store.clone());
 
     let tx_hash = vec![0x01u8; 32];
@@ -323,17 +324,18 @@ async fn test_bulk_sync_mode_skips_live_cells_db_write(pool: PgPool) {
 
     assert_eq!(get_live_cells_count(&pool).await, 0);
 
-    let in_memory = store.get(&tx_hash, 0);
-    assert!(in_memory.is_some());
-    assert_eq!(in_memory.unwrap().capacity, 100_00000000);
+    let in_store = store.get(&tx_hash, 0);
+    assert!(in_store.is_some());
+    assert_eq!(in_store.unwrap().capacity, 100_00000000);
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
 async fn test_non_bulk_sync_mode_writes_to_live_cells_db(pool: PgPool) {
-    use ckbadger_indexer::db::LiveCellStore;
+    use ckbadger_indexer::db::{LiveCellStorage, RocksDbLiveCellStore};
     use std::sync::Arc;
 
-    let store = Arc::new(LiveCellStore::new());
+    let tmp_dir = tempfile::TempDir::new().unwrap();
+    let store = Arc::new(RocksDbLiveCellStore::open(tmp_dir.path()).unwrap());
     let writer = BatchWriter::with_live_cell_store(pool.clone(), true, store.clone());
 
     let tx_hash = vec![0x01u8; 32];
@@ -346,33 +348,38 @@ async fn test_non_bulk_sync_mode_writes_to_live_cells_db(pool: PgPool) {
 
     assert_eq!(get_live_cells_count(&pool).await, 1);
 
-    let in_memory = store.get(&tx_hash, 0);
-    assert!(in_memory.is_some());
+    let in_store = store.get(&tx_hash, 0);
+    assert!(in_store.is_some());
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
-async fn test_flush_writes_deferred_cells_to_db(pool: PgPool) {
-    use ckbadger_indexer::db::LiveCellStore;
+async fn test_rocksdb_store_persists_cells(pool: PgPool) {
+    use ckbadger_indexer::db::{LiveCellStorage, RocksDbLiveCellStore};
     use std::sync::Arc;
 
-    let store = Arc::new(LiveCellStore::new());
-    let writer = BatchWriter::with_live_cell_store(pool.clone(), true, store.clone());
+    let tmp_dir = tempfile::TempDir::new().unwrap();
+    let path = tmp_dir.path().to_path_buf();
 
     let tx_hash = vec![0x01u8; 32];
     let cell = make_parsed_cell(100_00000000);
 
-    writer
-        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], true)
-        .await
-        .unwrap();
+    {
+        let store = Arc::new(RocksDbLiveCellStore::open(&path).unwrap());
+        let writer = BatchWriter::with_live_cell_store(pool.clone(), true, store.clone());
 
-    assert_eq!(get_live_cells_count(&pool).await, 0);
+        writer
+            .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], true)
+            .await
+            .unwrap();
 
-    let (inserts, _) = store.flush_to_db(&pool).await.unwrap();
-    assert_eq!(inserts, 1);
+        assert_eq!(store.len(), 1);
+    }
 
-    assert_eq!(get_live_cells_count(&pool).await, 1);
-    let (capacity, block) = get_live_cell(&pool, &tx_hash, 0).await.unwrap();
-    assert_eq!(capacity, 100_00000000);
-    assert_eq!(block, 1000);
+    {
+        let store = RocksDbLiveCellStore::open(&path).unwrap();
+        assert_eq!(store.len(), 1);
+        let retrieved = store.get(&tx_hash, 0);
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().capacity, 100_00000000);
+    }
 }

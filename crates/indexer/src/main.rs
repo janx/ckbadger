@@ -105,6 +105,13 @@ struct Args {
         help = "Flush LiveCellStore to database every N batches (default 100)"
     )]
     live_cell_flush_interval: u64,
+
+    #[arg(
+        long,
+        default_value = "./data/live_cells",
+        help = "Path to RocksDB live cell store directory"
+    )]
+    live_cell_db_path: String,
 }
 
 #[tokio::main]
@@ -146,6 +153,7 @@ async fn main() -> Result<()> {
         index_rebuild_parallel: args.index_rebuild_parallel,
         apply_pg_tuning: args.apply_pg_tuning,
         live_cell_flush_interval: args.live_cell_flush_interval,
+        live_cell_db_path: args.live_cell_db_path,
     };
 
     info!("Connecting to database: {}", config.database_url);

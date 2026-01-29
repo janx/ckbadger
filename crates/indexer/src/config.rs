@@ -45,6 +45,9 @@ pub struct Config {
     /// Flush LiveCellStore to DB every N batches (default 100)
     #[serde(default = "default_live_cell_flush_interval")]
     pub live_cell_flush_interval: u64,
+    /// Path to RocksDB live cell store
+    #[serde(default = "default_live_cell_db_path")]
+    pub live_cell_db_path: String,
 }
 
 fn default_batch_size() -> usize {
@@ -99,6 +102,10 @@ fn default_index_rebuild_parallel() -> usize {
 
 fn default_live_cell_flush_interval() -> u64 {
     100
+}
+
+fn default_live_cell_db_path() -> String {
+    "./data/live_cells".to_string()
 }
 
 impl Config {
