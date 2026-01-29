@@ -26,4 +26,6 @@ Tokens are fungible assets defined by standards like sUDT/xUDT. NFTs are non-fun
 
 DOBs represent the most durable form of digital goods humans can create. Tokens serve as exchange mediums and may also represent rights to services or DOBs alongside NFTs. DOBs are the digital cornerstones; tokens and NFTs build upon them. CKB (or CKByte), the PoW coin, is the fundamental asset providing eternal digital space and uncensorable ownership for tokens, NFTs, and DOBs. TTThey create CKB’s economy and finance together.
 
+RGB++ creates wormholes between Bitcoin and CKB, allow assets being moved between the two digital world trustlessly.
+
 Addresses act as concise labels for ownership rules. Under each address lie all related activities and assets associated with it.
