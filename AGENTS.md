@@ -110,6 +110,14 @@ COPY_POOL_SIZE=24
 
 See `docs/INDEXER_PIPELINE.md` for architecture details.
 
+## Progress Tracking (blocks/sec)
+
+The indexer displays real-time sync speed using a **10-second sliding window**:
+
+- `blocks/sec` = blocks processed in current window / window duration
+- Window resets every 10 seconds, caching the last rate for smooth transitions
+- Displays actual recent throughput, not cumulative average since startup
+
 ## Deferred Index Optimization
 
 For fresh database syncs, the indexer automatically drops non-essential B-tree indexes to achieve ~3x faster write speeds. Indexes are rebuilt automatically when the sync catches up to the chain tip.
