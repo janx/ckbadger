@@ -55,6 +55,9 @@ CREATE TABLE sync_status (
     indexes_rebuild_started_at TIMESTAMPTZ,
     indexes_rebuild_completed_at TIMESTAMPTZ,
     indexes_rebuild_progress TEXT,  -- JSON: {"total": 20, "completed": 5, "current": "idx_cells_lock"}
+    
+    -- EMA sync rate for accurate ETA calculation (blocks/sec)
+    sync_ema_rate DOUBLE PRECISION,
 
     CONSTRAINT single_row CHECK (id = 1)
 );

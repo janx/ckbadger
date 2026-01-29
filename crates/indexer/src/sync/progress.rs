@@ -2,6 +2,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 const WINDOW_SECS: u64 = 10;
+/// EMA smoothing factor: 0.1 = slow adaptation, 0.3 = faster adaptation
+const EMA_ALPHA: f64 = 0.1;
 
 pub struct SyncProgress {
     current_block: AtomicU64,
@@ -13,6 +15,8 @@ pub struct SyncProgress {
     window_blocks: AtomicU64,
     // Cache last computed rate to avoid returning 0 during window reset
     last_rate: AtomicU64, // stored as bits of f64
+    // EMA (Exponential Moving Average) for smoother speed estimation
+    ema_rate: AtomicU64, // stored as bits of f64
 }
 
 impl SyncProgress {
@@ -26,6 +30,7 @@ impl SyncProgress {
             window_start_millis: AtomicU64::new(now_millis),
             window_blocks: AtomicU64::new(0),
             last_rate: AtomicU64::new(0),
+            ema_rate: AtomicU64::new(0),
         }
     }
 
@@ -56,12 +61,23 @@ impl SyncProgress {
             if elapsed_secs > 0.0 {
                 let rate = window_blocks as f64 / elapsed_secs;
                 self.last_rate.store(rate.to_bits(), Ordering::SeqCst);
+                self.update_ema(rate);
             }
             self.window_start_millis.store(now, Ordering::SeqCst);
             self.window_blocks.store(count, Ordering::SeqCst);
         } else {
             self.window_blocks.fetch_add(count, Ordering::SeqCst);
         }
+    }
+
+    fn update_ema(&self, current_rate: f64) {
+        let old_ema = f64::from_bits(self.ema_rate.load(Ordering::SeqCst));
+        let new_ema = if old_ema == 0.0 {
+            current_rate
+        } else {
+            EMA_ALPHA * current_rate + (1.0 - EMA_ALPHA) * old_ema
+        };
+        self.ema_rate.store(new_ema.to_bits(), Ordering::SeqCst);
     }
 
     pub fn update_target(&self, target: u64) {
@@ -94,6 +110,10 @@ impl SyncProgress {
         let window_blocks = self.window_blocks.load(Ordering::SeqCst);
         let elapsed_secs = elapsed_ms as f64 / 1000.0;
         window_blocks as f64 / elapsed_secs
+    }
+
+    pub fn ema_blocks_per_second(&self) -> f64 {
+        f64::from_bits(self.ema_rate.load(Ordering::SeqCst))
     }
 
     pub fn is_synced(&self) -> bool {
@@ -188,6 +208,46 @@ mod tests {
 
         let rate = progress.blocks_per_second();
         assert!(rate > 0.0, "should return cached rate, got: {}", rate);
+    }
+
+    #[test]
+    fn test_ema_smooths_rate_fluctuations() {
+        let progress = SyncProgress::new(0, 100000);
+
+        progress.update_current_batch(1000, 1000);
+        thread::sleep(Duration::from_millis(10200));
+        progress.update_current_batch(2000, 1000);
+        let ema1 = progress.ema_blocks_per_second();
+        assert!(
+            ema1 > 0.0,
+            "EMA should be positive after first window: {}",
+            ema1
+        );
+
+        thread::sleep(Duration::from_millis(10200));
+        progress.update_current_batch(12000, 10000);
+        let ema2 = progress.ema_blocks_per_second();
+
+        assert!(
+            ema2 > ema1,
+            "EMA should increase with higher rate: ema1={}, ema2={}",
+            ema1,
+            ema2
+        );
+    }
+
+    #[test]
+    fn test_ema_blocks_per_second_after_window_reset() {
+        let progress = SyncProgress::new(0, 10000);
+        progress.update_current_batch(1000, 1000);
+        thread::sleep(Duration::from_millis(10100));
+        progress.update_current_batch(2000, 1000);
+        let ema = progress.ema_blocks_per_second();
+        assert!(
+            ema > 0.0,
+            "EMA should be positive after window reset: {}",
+            ema
+        );
     }
 
     #[test]

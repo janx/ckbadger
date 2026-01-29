@@ -902,6 +902,7 @@ impl BatchWriter {
         cells_created: i64,
         cells_consumed: i64,
         new_addresses: i64,
+        ema_rate: Option<f64>,
     ) -> Result<()> {
         sqlx::query(
             r#"
@@ -912,7 +913,8 @@ impl BatchWriter {
                 total_cells = total_cells + $4,
                 total_live_cells = total_live_cells + $4 - $5,
                 total_addresses = total_addresses + $6,
-                last_synced_at = NOW()
+                last_synced_at = NOW(),
+                sync_ema_rate = COALESCE($7, sync_ema_rate)
             WHERE id = 1
             "#,
         )
@@ -922,6 +924,7 @@ impl BatchWriter {
         .bind(cells_created)
         .bind(cells_consumed)
         .bind(new_addresses)
+        .bind(ema_rate)
         .execute(&self.pool)
         .await?;
 

@@ -118,9 +118,11 @@ The indexer uses two complementary log lines:
    - Shows DB write duration for the batch
    - Useful for identifying slow batches
 
-2. **Progress log** (every 10s): `Progress: 33.96% (6279999/18491045) - 3465.00 blocks/sec`
+2. **Progress log** (every 10s): `Progress: 33.96% (6279999/18491045) - 3465.00 blocks/sec (EMA: 3200.00)`
    - Shows overall sync percentage and throughput
-   - Uses 10-second sliding window for `blocks/sec`
+   - `blocks/sec`: 10-second sliding window (real-time, volatile)
+   - `EMA`: Exponential Moving Average with α=0.1 (smoothed, stable)
+   - ETA calculation uses EMA rate for more accurate estimates
 
 ## Deferred Index and Constraint Optimization
 

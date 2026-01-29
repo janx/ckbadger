@@ -238,15 +238,14 @@ async fn calculate_epoch_stats(
 }
 
 async fn build_sync_status(pool: &PgPool, tip_block: i64) -> SyncStatus {
-    let sync_row: Option<(i64, Option<DateTime<Utc>>, i64)> = sqlx::query_as(
-        "SELECT tip_block_number, sync_started_at, COALESCE(sync_started_block, 0) FROM sync_status WHERE id = 1",
-    )
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
+    let sync_row: Option<(i64, Option<f64>)> =
+        sqlx::query_as("SELECT tip_block_number, sync_ema_rate FROM sync_status WHERE id = 1")
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
 
-    let (synced_block, sync_started_at, sync_started_block) = sync_row.unwrap_or((0, None, 0));
+    let (synced_block, ema_rate) = sync_row.unwrap_or((0, None));
 
     let blocks_behind = tip_block - synced_block;
     let is_syncing = blocks_behind > 100;
@@ -257,11 +256,8 @@ async fn build_sync_status(pool: &PgPool, tip_block: i64) -> SyncStatus {
     };
 
     let estimated_time = if is_syncing && blocks_behind > 0 {
-        if let Some(started_at) = sync_started_at {
-            let elapsed = Utc::now().signed_duration_since(started_at).num_seconds() as u64;
-            let blocks_synced = (synced_block - sync_started_block).max(0) as u64;
-            if elapsed > 0 && blocks_synced > 0 {
-                let rate = blocks_synced as f64 / elapsed as f64;
+        if let Some(rate) = ema_rate {
+            if rate > 0.0 {
                 let seconds_remaining = (blocks_behind as f64 / rate) as u64;
                 Some(format_duration(seconds_remaining))
             } else {

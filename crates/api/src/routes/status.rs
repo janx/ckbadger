@@ -84,8 +84,7 @@ const HEARTBEAT_TIMEOUT_SECS: i64 = 30;
 struct SyncStatusRow {
     tip_block_number: i64,
     last_synced_at: Option<chrono::DateTime<chrono::Utc>>,
-    sync_started_at: Option<chrono::DateTime<chrono::Utc>>,
-    sync_started_block: i64,
+    sync_ema_rate: Option<f64>,
     integrity_heartbeat: Option<chrono::DateTime<chrono::Utc>>,
     integrity_pending_count: i64,
     integrity_total_count: i64,
@@ -112,8 +111,7 @@ async fn get_system_status(State(state): State<Arc<AppState>>) -> ApiResult<Syst
         SELECT 
             tip_block_number,
             last_synced_at,
-            sync_started_at,
-            COALESCE(sync_started_block, 0) as sync_started_block,
+            sync_ema_rate,
             integrity_heartbeat,
             COALESCE(integrity_pending_count, 0) as integrity_pending_count,
             COALESCE(integrity_total_count, 0) as integrity_total_count,
@@ -180,13 +178,8 @@ async fn get_system_status(State(state): State<Arc<AppState>>) -> ApiResult<Syst
 
     let blocks_behind = tip_block - synced_block;
     let estimated_time = if is_syncing && blocks_behind > 0 {
-        if let Some(started_at) = row.sync_started_at {
-            let elapsed = chrono::Utc::now()
-                .signed_duration_since(started_at)
-                .num_seconds() as u64;
-            let blocks_synced = (synced_block - row.sync_started_block).max(0) as u64;
-            if elapsed > 0 && blocks_synced > 0 {
-                let rate = blocks_synced as f64 / elapsed as f64;
+        if let Some(rate) = row.sync_ema_rate {
+            if rate > 0.0 {
                 let seconds_remaining = (blocks_behind as f64 / rate) as u64;
                 Some(format_duration(seconds_remaining))
             } else {
