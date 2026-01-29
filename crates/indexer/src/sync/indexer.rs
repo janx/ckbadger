@@ -754,22 +754,6 @@ impl Indexer {
                         }
                     }
 
-                    let mode = if self.should_use_copy() {
-                        "[COPY]"
-                    } else if self.is_bulk_sync_active() {
-                        "[BULK]"
-                    } else {
-                        ""
-                    };
-                    info!(
-                        "Syncing blocks {} to {} ({} remaining, {:.2} blocks/sec) {}",
-                        start_block,
-                        end_block,
-                        self.progress.blocks_remaining(),
-                        self.progress.blocks_per_second(),
-                        mode
-                    );
-
                     let db_start = Instant::now();
                     if let Err(e) = self
                         .write_parsed_batch(
@@ -787,12 +771,29 @@ impl Indexer {
                         sleep(Duration::from_secs(5)).await;
                         continue;
                     }
-                    self.perf.add(&self.perf.db_write_us, db_start.elapsed());
+                    let db_elapsed = db_start.elapsed();
+                    self.perf.add(&self.perf.db_write_us, db_elapsed);
 
                     if let Some(last_block) = all_parsed_blocks.last() {
                         self.progress.update_current_batch(
                             last_block.number as u64,
                             all_parsed_blocks.len() as u64,
+                        );
+
+                        let mode = if self.should_use_copy() {
+                            "[COPY]"
+                        } else if self.is_bulk_sync_active() {
+                            "[BULK]"
+                        } else {
+                            ""
+                        };
+                        info!(
+                            "Wrote blocks {} to {} ({} remaining, {:.2}s) {}",
+                            start_block,
+                            end_block,
+                            self.progress.blocks_remaining(),
+                            db_elapsed.as_secs_f64(),
+                            mode
                         );
 
                         // Handle periodic updates (secondary issuance, DAO stats)
@@ -981,14 +982,6 @@ impl Indexer {
             return Ok(SyncAction::CaughtUp);
         }
 
-        info!(
-            "Syncing blocks {} to {} ({} remaining, {:.2} blocks/sec)",
-            start_block,
-            end_block,
-            self.progress.blocks_remaining(),
-            self.progress.blocks_per_second()
-        );
-
         let fetch_start = Instant::now();
         let blocks = self.fetch_blocks_parallel(start_block, end_block).await?;
         self.perf
@@ -996,12 +989,21 @@ impl Indexer {
 
         let db_start = Instant::now();
         self.sync_blocks_batch(&blocks, chain_tip).await?;
-        self.perf.add(&self.perf.db_write_us, db_start.elapsed());
+        let db_elapsed = db_start.elapsed();
+        self.perf.add(&self.perf.db_write_us, db_elapsed);
 
         if let Some(last_block_response) = blocks.last() {
             let last_block_number = BlockParser::parse_block_number(&last_block_response.block);
             self.progress
                 .update_current_batch(last_block_number, blocks.len() as u64);
+
+            info!(
+                "Wrote blocks {} to {} ({} remaining, {:.2}s)",
+                start_block,
+                end_block,
+                self.progress.blocks_remaining(),
+                db_elapsed.as_secs_f64()
+            );
         }
         self.perf
             .blocks_count

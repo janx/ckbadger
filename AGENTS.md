@@ -110,13 +110,17 @@ COPY_POOL_SIZE=24
 
 See `docs/INDEXER_PIPELINE.md` for architecture details.
 
-## Progress Tracking (blocks/sec)
+## Progress Tracking
 
-The indexer displays real-time sync speed using a **10-second sliding window**:
+The indexer uses two complementary log lines:
 
-- `blocks/sec` = blocks processed in current window / window duration
-- Window resets every 10 seconds, caching the last rate for smooth transitions
-- Displays actual recent throughput, not cumulative average since startup
+1. **Batch log** (per batch): `Wrote blocks X to Y (N remaining, 2.34s) [COPY]`
+   - Shows DB write duration for the batch
+   - Useful for identifying slow batches
+
+2. **Progress log** (every 10s): `Progress: 33.96% (6279999/18491045) - 3465.00 blocks/sec`
+   - Shows overall sync percentage and throughput
+   - Uses 10-second sliding window for `blocks/sec`
 
 ## Deferred Index Optimization
 
