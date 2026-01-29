@@ -289,6 +289,8 @@ impl Indexer {
             config.live_cell_memory_limit / (1024 * 1024 * 1024)
         );
 
+        live_cell_store.rebuild_from_db(&pool).await?;
+
         let writer =
             BatchWriter::with_live_cell_store(pool.clone(), config.fast_sync_mode, live_cell_store);
 
