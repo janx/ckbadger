@@ -258,6 +258,7 @@ async fn main() -> Result<()> {
         let rebuild_parallel = config.index_rebuild_parallel;
         let pool_for_rebuild = pool.clone();
         let progress_for_rebuild = progress.clone();
+        let rebuild_pause_flag = indexer.rebuild_pause_flag();
 
         tokio::spawn(async move {
             loop {
@@ -271,9 +272,13 @@ async fn main() -> Result<()> {
                 let mgr = IndexManager::new(pool_for_rebuild.clone());
                 if let Ok(true) = mgr.is_indexes_deferred().await {
                     info!(
-                        "Caught up to tip (remaining={} <= threshold={}), starting index rebuild",
+                        "Caught up to tip (remaining={} <= threshold={}), pausing sync for index rebuild",
                         blocks_remaining, bulk_threshold
                     );
+
+                    rebuild_pause_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+
                     match mgr.rebuild_indexes_parallel(rebuild_parallel).await {
                         Ok(result) => {
                             info!(
@@ -285,6 +290,9 @@ async fn main() -> Result<()> {
                             tracing::error!("Index rebuild failed: {}", e);
                         }
                     }
+
+                    rebuild_pause_flag.store(false, std::sync::atomic::Ordering::SeqCst);
+                    info!("Sync resumed after index rebuild");
                     break;
                 }
             }

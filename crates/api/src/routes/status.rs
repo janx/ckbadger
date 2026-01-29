@@ -11,6 +11,7 @@ pub struct SystemStatus {
     pub sync: SyncStatus,
     pub integrity: IntegrityStatus,
     pub label_import: LabelImportStatus,
+    pub index_rebuild: IndexRebuildStatus,
 }
 
 #[derive(Debug, Serialize)]
@@ -55,6 +56,18 @@ pub struct IntegrityStatus {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct IndexRebuildStatus {
+    pub is_rebuilding: bool,
+    pub total: i32,
+    pub completed: i32,
+    pub current_index: Option<String>,
+    pub failed: Vec<String>,
+    pub progress: f64,
+    pub started_at: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RecentFix {
     pub tx_hash: String,
     pub cycles: i64,
@@ -88,6 +101,9 @@ struct SyncStatusRow {
     script_info_processed_count: i64,
     script_info_started_at: Option<chrono::DateTime<chrono::Utc>>,
     script_info_last_check_at: Option<chrono::DateTime<chrono::Utc>>,
+    indexes_deferred: bool,
+    indexes_rebuild_started_at: Option<chrono::DateTime<chrono::Utc>>,
+    indexes_rebuild_progress: Option<String>,
 }
 
 async fn get_system_status(State(state): State<Arc<AppState>>) -> ApiResult<SystemStatus> {
@@ -112,7 +128,10 @@ async fn get_system_status(State(state): State<Arc<AppState>>) -> ApiResult<Syst
             COALESCE(script_info_total_count, 0) as script_info_total_count,
             COALESCE(script_info_processed_count, 0) as script_info_processed_count,
             script_info_started_at,
-            script_info_last_check_at
+            script_info_last_check_at,
+            COALESCE(indexes_deferred, false) as indexes_deferred,
+            indexes_rebuild_started_at,
+            indexes_rebuild_progress
         FROM sync_status WHERE id = 1
         "#,
     )
@@ -238,6 +257,12 @@ async fn get_system_status(State(state): State<Arc<AppState>>) -> ApiResult<Syst
         (None, None) => None,
     };
 
+    let index_rebuild = parse_index_rebuild_status(
+        row.indexes_deferred,
+        row.indexes_rebuild_started_at,
+        row.indexes_rebuild_progress.as_deref(),
+    );
+
     ok(SystemStatus {
         sync: SyncStatus {
             is_syncing,
@@ -277,6 +302,7 @@ async fn get_system_status(State(state): State<Arc<AppState>>) -> ApiResult<Syst
             started_at: label_started_at.map(|t| t.to_rfc3339()),
             last_check_at: label_last_check.map(|t| t.to_rfc3339()),
         },
+        index_rebuild,
     })
 }
 
@@ -291,6 +317,45 @@ fn format_duration(seconds: u64) -> String {
         format!("{}h {}m", hours, minutes)
     } else {
         format!("{}m", minutes.max(1))
+    }
+}
+
+fn parse_index_rebuild_status(
+    indexes_deferred: bool,
+    started_at: Option<chrono::DateTime<chrono::Utc>>,
+    progress_json: Option<&str>,
+) -> IndexRebuildStatus {
+    #[derive(serde::Deserialize)]
+    struct ProgressData {
+        total: i32,
+        completed: i32,
+        current: Option<String>,
+        failed: Vec<String>,
+    }
+
+    let progress_data =
+        progress_json.and_then(|json| serde_json::from_str::<ProgressData>(json).ok());
+
+    let (total, completed, current_index, failed) = match progress_data {
+        Some(p) => (p.total, p.completed, p.current, p.failed),
+        None => (0, 0, None, vec![]),
+    };
+
+    let is_rebuilding = indexes_deferred && started_at.is_some() && completed < total;
+    let progress = if total > 0 {
+        (completed as f64 / total as f64 * 100.0).min(100.0)
+    } else {
+        0.0
+    };
+
+    IndexRebuildStatus {
+        is_rebuilding,
+        total,
+        completed,
+        current_index,
+        failed,
+        progress,
+        started_at: started_at.map(|t| t.to_rfc3339()),
     }
 }
 

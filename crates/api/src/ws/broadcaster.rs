@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tokio::time::{interval, Duration};
 use tracing::{debug, error, info};
 
-use super::manager::{BroadcastMessage, SyncStatus, WsManager};
+use super::manager::{BroadcastMessage, IndexRebuildStatus, SyncStatus, WsManager};
 
 pub(crate) const FAST_SYNC_THRESHOLD: i64 = 100;
 
@@ -79,6 +79,7 @@ pub async fn start_block_broadcaster(
 
         if sync_mode == SyncMode::FastSync {
             let sync_status = build_sync_status(&pool, tip_block).await;
+            let index_rebuild_status = build_index_rebuild_status(&pool).await;
             let (avg_block_time, estimated_epoch_time) =
                 calculate_epoch_stats(&pool, number, epoch_index, epoch_length).await;
 
@@ -93,6 +94,7 @@ pub async fn start_block_broadcaster(
                 avg_block_time,
                 estimated_epoch_time,
                 sync_status,
+                index_rebuild_status,
             };
             debug!(
                 "Fast-sync: broadcasting latest block {} ({} behind)",
@@ -126,6 +128,7 @@ pub async fn start_block_broadcaster(
                 Ok(blocks) => {
                     for (num, h, ts, txc, ep_num, ep_idx, ep_len) in blocks {
                         let sync_status = build_sync_status(&pool, tip_block).await;
+                        let index_rebuild_status = build_index_rebuild_status(&pool).await;
                         let (avg_block_time, estimated_epoch_time) =
                             calculate_epoch_stats(&pool, num, ep_idx, ep_len).await;
 
@@ -140,6 +143,7 @@ pub async fn start_block_broadcaster(
                             avg_block_time,
                             estimated_epoch_time,
                             sync_status,
+                            index_rebuild_status,
                         };
                         info!("Broadcasting new block: {}", num);
                         ws_manager.broadcast_block(msg);
@@ -278,6 +282,56 @@ async fn build_sync_status(pool: &PgPool, tip_block: i64) -> SyncStatus {
         estimated_time,
         chart_data_may_be_incomplete: blocks_behind > 1000,
     }
+}
+
+async fn build_index_rebuild_status(pool: &PgPool) -> Option<IndexRebuildStatus> {
+    #[derive(serde::Deserialize)]
+    struct ProgressData {
+        total: i32,
+        completed: i32,
+        current: Option<String>,
+    }
+
+    let row: Option<(bool, Option<String>)> = sqlx::query_as(
+        "SELECT COALESCE(indexes_deferred, false), indexes_rebuild_progress FROM sync_status WHERE id = 1",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+
+    let (indexes_deferred, progress_json) = row?;
+    if !indexes_deferred {
+        return None;
+    }
+
+    let progress_data = progress_json
+        .as_deref()
+        .and_then(|json| serde_json::from_str::<ProgressData>(json).ok());
+
+    let (total, completed, current_index) = match progress_data {
+        Some(p) => (p.total, p.completed, p.current),
+        None => (0, 0, None),
+    };
+
+    let is_rebuilding = completed < total && total > 0;
+    if !is_rebuilding && total == 0 {
+        return None;
+    }
+
+    let progress = if total > 0 {
+        (completed as f64 / total as f64 * 100.0).min(100.0)
+    } else {
+        0.0
+    };
+
+    Some(IndexRebuildStatus {
+        is_rebuilding,
+        total,
+        completed,
+        current_index,
+        progress,
+    })
 }
 
 fn format_duration(seconds: u64) -> String {

@@ -688,10 +688,21 @@ interface MempoolInfo {
   lastUpdatedAt: number;
 }
 
+interface IndexRebuildStatus {
+  isRebuilding: boolean;
+  total: number;
+  completed: number;
+  currentIndex: string | null;
+  failed: string[];
+  progress: number;
+  startedAt: string | null;
+}
+
 interface SystemStatus {
   sync: SyncStatusDetail;
   integrity: IntegrityStatus;
   labelImport: LabelImportStatus;
+  indexRebuild: IndexRebuildStatus;
 }
 
 interface SyncStatusDetail {
@@ -877,6 +888,7 @@ export type {
   SyncStatusDetail,
   IntegrityStatus,
   LabelImportStatus,
+  IndexRebuildStatus,
   RecentFix,
   KnownScript,
   ScriptUsage,

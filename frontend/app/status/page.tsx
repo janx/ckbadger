@@ -109,6 +109,71 @@ export default function StatusPage() {
               </TerminalPanelContent>
             </TerminalPanel>
 
+            {(status?.indexRebuild?.isRebuilding || (status?.indexRebuild?.progress ?? 0) > 0) && (
+              <TerminalPanel>
+                <TerminalPanelHeader
+                  indicator={status?.indexRebuild.isRebuilding ? 'warning' : 'active'}
+                  actions={
+                    <Badge variant={status?.indexRebuild.isRebuilding ? 'amber' : 'green'}>
+                      {status?.indexRebuild.isRebuilding ? 'Rebuilding' : 'Complete'}
+                    </Badge>
+                  }
+                >
+                  Index Rebuild
+                </TerminalPanelHeader>
+                <TerminalPanelContent>
+                  <div className="space-y-4">
+                    <div>
+                      <div className="mb-2 flex justify-between font-mono text-sm">
+                        <span className="text-slate-500">Progress</span>
+                        <span className="text-terminal-green">
+                          {status?.indexRebuild.progress.toFixed(2)}%
+                        </span>
+                      </div>
+                      <ProgressBar
+                        value={status?.indexRebuild.progress || 0}
+                        max={100}
+                        showLabel={false}
+                        color={status?.indexRebuild.isRebuilding ? 'amber' : 'green'}
+                        size="md"
+                      />
+                    </div>
+
+                    <StatGrid columns={2}>
+                      <StatBlock
+                        label="Completed"
+                        value={`${status?.indexRebuild.completed ?? 0} / ${status?.indexRebuild.total ?? 0}`}
+                        size="sm"
+                      />
+                      <StatBlock
+                        label="Current"
+                        value={status?.indexRebuild.currentIndex ?? '-'}
+                        size="sm"
+                      />
+                      <StatBlock
+                        label="Failed"
+                        value={status?.indexRebuild.failed?.length ?? 0}
+                        size="sm"
+                        color={status?.indexRebuild.failed?.length ? 'amber' : 'green'}
+                      />
+                      <StatBlock
+                        label="Status"
+                        value={status?.indexRebuild.isRebuilding ? 'Building...' : 'Done'}
+                        size="sm"
+                        color={status?.indexRebuild.isRebuilding ? 'amber' : 'green'}
+                      />
+                    </StatGrid>
+
+                    {status?.indexRebuild.startedAt && (
+                      <div className="border-t border-slate-800 pt-4 font-mono text-xs text-slate-500">
+                        Started: {new Date(status.indexRebuild.startedAt).toLocaleString()}
+                      </div>
+                    )}
+                  </div>
+                </TerminalPanelContent>
+              </TerminalPanel>
+            )}
+
             <TerminalPanel>
               <TerminalPanelHeader
                 indicator={status?.labelImport.isRunning ? 'warning' : 'active'}

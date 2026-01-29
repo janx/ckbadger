@@ -143,6 +143,51 @@ export const handlers = [
     return HttpResponse.json({ status: 'ok' });
   }),
 
+  http.get(`${API_BASE}/status`, () => {
+    return HttpResponse.json({
+      sync: {
+        isSyncing: false,
+        syncedBlock: 1000000,
+        tipBlock: 1000000,
+        progress: 100,
+        estimatedTime: null,
+        lastSyncedAt: '2024-01-15T10:30:00Z',
+        chartDataMayBeIncomplete: false,
+      },
+      integrity: {
+        isRunning: false,
+        pendingCount: 0,
+        totalCount: 1000,
+        processedCount: 1000,
+        progress: 100,
+        estimatedTime: null,
+        startedAt: null,
+        lastCheckAt: '2024-01-15T10:30:00Z',
+        missingCyclesCount: 0,
+        recentFixes: [],
+      },
+      labelImport: {
+        isRunning: false,
+        tokenTotalCount: 100,
+        tokenImportedCount: 100,
+        scriptTotalCount: 50,
+        scriptImportedCount: 50,
+        progress: 100,
+        startedAt: null,
+        lastCheckAt: '2024-01-15T10:30:00Z',
+      },
+      indexRebuild: {
+        isRebuilding: false,
+        total: 28,
+        completed: 28,
+        currentIndex: null,
+        failed: [],
+        progress: 100,
+        startedAt: null,
+      },
+    });
+  }),
+
   http.get(`${API_BASE}/forks`, () => {
     return HttpResponse.json({
       data: [
