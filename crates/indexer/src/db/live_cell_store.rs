@@ -75,7 +75,9 @@ pub struct LiveCellStore {
 impl LiveCellStore {
     /// Create a new LiveCellStore with specified memory limit
     pub fn new(max_memory_bytes: usize) -> Self {
-        let cells = RwLock::new(HashMap::with_capacity(50_000_000));
+        // Start with modest capacity; HashMap will grow as needed
+        // Avoid huge preallocation that fails in CI/low-memory environments
+        let cells = RwLock::new(HashMap::with_capacity(100_000));
         let consumed_history = RwLock::new(VecDeque::new());
         let dirty_inserts = RwLock::new(HashMap::new());
         let dirty_removals = RwLock::new(HashSet::new());
@@ -382,36 +384,60 @@ impl LiveCellStore {
 
     /// Rebuild the store from the database during startup recovery
     ///
-    /// Loads all live cells from the database in batches to avoid memory spikes.
+    /// Loads all live cells from the database in batches using keyset pagination
+    /// for O(1) performance per batch (avoids OFFSET degradation).
     /// Logs progress every 1M cells and total rebuild time at completion.
     pub async fn rebuild_from_db(&self, pool: &PgPool) -> anyhow::Result<()> {
         let start_time = Instant::now();
         let batch_size: i64 = 100_000;
-        let mut offset: i64 = 0;
         let mut total_loaded: i64 = 0;
 
-        tracing::info!("Starting LiveCellStore rebuild from database");
+        let mut cursor: Option<(Vec<u8>, i16)> = None;
 
-        // Clear existing data before rebuild
+        tracing::info!("Starting LiveCellStore rebuild from database (keyset pagination)");
+
         self.clear();
 
         loop {
-            let rows: Vec<LiveCellRow> = sqlx::query_as(
-                r#"SELECT tx_hash, output_index, created_at_block, capacity,
-                          lock_script_hash, lock_code_hash, lock_args,
-                          type_script_hash, type_code_hash, data_size
-                   FROM live_cells
-                   ORDER BY tx_hash, output_index
-                   LIMIT $1 OFFSET $2"#,
-            )
-            .bind(batch_size)
-            .bind(offset)
-            .fetch_all(pool)
-            .await?;
+            let rows: Vec<LiveCellRow> = match &cursor {
+                None => {
+                    sqlx::query_as(
+                        r#"SELECT tx_hash, output_index, created_at_block, capacity,
+                                  lock_script_hash, lock_code_hash, lock_args,
+                                  type_script_hash, type_code_hash, data_size
+                           FROM live_cells
+                           ORDER BY tx_hash, output_index
+                           LIMIT $1"#,
+                    )
+                    .bind(batch_size)
+                    .fetch_all(pool)
+                    .await?
+                }
+                Some((last_tx_hash, last_output_index)) => {
+                    sqlx::query_as(
+                        r#"SELECT tx_hash, output_index, created_at_block, capacity,
+                                  lock_script_hash, lock_code_hash, lock_args,
+                                  type_script_hash, type_code_hash, data_size
+                           FROM live_cells
+                           WHERE (tx_hash, output_index) > ($1, $2)
+                           ORDER BY tx_hash, output_index
+                           LIMIT $3"#,
+                    )
+                    .bind(last_tx_hash)
+                    .bind(last_output_index)
+                    .bind(batch_size)
+                    .fetch_all(pool)
+                    .await?
+                }
+            };
 
             if rows.is_empty() {
                 break;
             }
+
+            let batch_count = rows.len() as i64;
+            let last_row = rows.last().unwrap();
+            cursor = Some((last_row.0.clone(), last_row.1));
 
             for (
                 tx_hash,
@@ -439,10 +465,10 @@ impl LiveCellStore {
                 self.insert(tx_hash, output_index, info);
             }
 
-            total_loaded += batch_size;
+            total_loaded += batch_count;
 
             // Log progress every 1M cells
-            if total_loaded % 1_000_000 == 0 {
+            if total_loaded % 1_000_000 < batch_count as i64 {
                 let memory_usage = self.memory_usage();
                 let memory_percent = self.memory_usage_percent();
                 tracing::info!(
@@ -452,8 +478,6 @@ impl LiveCellStore {
                     memory_usage / (1024 * 1024)
                 );
             }
-
-            offset += batch_size;
         }
 
         let elapsed = start_time.elapsed();
