@@ -1,5 +1,8 @@
 use chrono::{DateTime, Utc};
-use ckbadger_common::{format_duration_smart, SyncProgressData, SYNC_PROGRESS_REDIS_KEY};
+use ckbadger_common::sync::{
+    format_duration_smart, SyncProgressData, SyncStatusData, SYNC_PROGRESS_REDIS_KEY,
+    SYNC_STATUS_REDIS_KEY,
+};
 use sqlx::PgPool;
 use std::sync::Arc;
 use tokio::time::{interval, Duration};
@@ -82,7 +85,7 @@ pub async fn start_block_broadcaster(
 
         if sync_mode == SyncMode::FastSync {
             let sync_status = build_sync_status(&pool, &cache, tip_block).await;
-            let index_rebuild_status = build_index_rebuild_status(&pool).await;
+            let index_rebuild_status = build_index_rebuild_status(&pool, &cache).await;
             let (avg_block_time, estimated_epoch_time) =
                 calculate_epoch_stats(&pool, number, epoch_index, epoch_length).await;
 
@@ -131,7 +134,7 @@ pub async fn start_block_broadcaster(
                 Ok(blocks) => {
                     for (num, h, ts, txc, ep_num, ep_idx, ep_len) in blocks {
                         let sync_status = build_sync_status(&pool, &cache, tip_block).await;
-                        let index_rebuild_status = build_index_rebuild_status(&pool).await;
+                        let index_rebuild_status = build_index_rebuild_status(&pool, &cache).await;
                         let (avg_block_time, estimated_epoch_time) =
                             calculate_epoch_stats(&pool, num, ep_idx, ep_len).await;
 
@@ -241,14 +244,18 @@ async fn calculate_epoch_stats(
 }
 
 async fn build_sync_status(pool: &PgPool, cache: &CacheBackend, tip_block: i64) -> SyncStatus {
-    let sync_row: Option<(i64, Option<f64>)> =
-        sqlx::query_as("SELECT tip_block_number, sync_ema_rate FROM sync_status WHERE id = 1")
-            .fetch_optional(pool)
-            .await
-            .ok()
-            .flatten();
+    let sync_status_from_redis: Option<SyncStatusData> = cache.get(SYNC_STATUS_REDIS_KEY).await;
+    let (synced_block, db_ema_rate) = match sync_status_from_redis.as_ref() {
+        Some(s) => (s.tip_block_number, s.sync_ema_rate),
+        None => {
+            let tip: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(number), 0) FROM blocks")
+                .fetch_one(pool)
+                .await
+                .unwrap_or(0);
+            (tip, None)
+        }
+    };
 
-    let (synced_block, db_ema_rate) = sync_row.unwrap_or((0, None));
     let blocks_behind = tip_block - synced_block;
     let is_syncing = blocks_behind > 100;
 
@@ -326,33 +333,36 @@ async fn build_sync_status(pool: &PgPool, cache: &CacheBackend, tip_block: i64) 
     }
 }
 
-async fn build_index_rebuild_status(pool: &PgPool) -> Option<IndexRebuildStatus> {
-    #[derive(serde::Deserialize)]
-    struct ProgressData {
-        total: i32,
-        completed: i32,
-        current: Option<String>,
-    }
+async fn build_index_rebuild_status(
+    pool: &PgPool,
+    cache: &CacheBackend,
+) -> Option<IndexRebuildStatus> {
+    let sync_status: Option<SyncStatusData> = cache.get(SYNC_STATUS_REDIS_KEY).await;
 
-    let row: Option<(bool, Option<String>)> = sqlx::query_as(
-        "SELECT COALESCE(indexes_deferred, false), indexes_rebuild_progress FROM sync_status WHERE id = 1",
-    )
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
+    let indexes_deferred = match sync_status.as_ref() {
+        Some(s) => s.indexes_deferred,
+        None => {
+            let row: Option<(bool,)> = sqlx::query_as(
+                "SELECT COALESCE(indexes_deferred, false) FROM sync_status WHERE id = 1",
+            )
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+            row.map(|r| r.0).unwrap_or(false)
+        }
+    };
 
-    let (indexes_deferred, progress_json) = row?;
     if !indexes_deferred {
         return None;
     }
 
-    let progress_data = progress_json
-        .as_deref()
-        .and_then(|json| serde_json::from_str::<ProgressData>(json).ok());
+    let progress_data = sync_status
+        .as_ref()
+        .and_then(|s| s.indexes_rebuild_progress.as_ref());
 
     let (total, completed, current_index) = match progress_data {
-        Some(p) => (p.total, p.completed, p.current),
+        Some(p) => (p.total, p.completed, p.current_index.clone()),
         None => (0, 0, None),
     };
 

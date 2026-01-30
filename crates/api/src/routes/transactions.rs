@@ -6,6 +6,7 @@ use axum::{
 use ckbadger_common::dao::{
     is_genesis_special_burn_cell, GENESIS_SPECIAL_BURN_CELL_VIRTUAL_OCCUPIED,
 };
+use ckbadger_common::sync::{SyncStatusData, SYNC_STATUS_REDIS_KEY};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -81,11 +82,17 @@ async fn list_transactions(
                 .map_err(|e| ApiError::internal(e.to_string()))?;
         row.map(|r| r.0 as i64).unwrap_or(0)
     } else {
-        let row: (i64,) = sqlx::query_as("SELECT total_transactions FROM sync_status WHERE id = 1")
-            .fetch_one(&state.pool)
+        match state
+            .cache
+            .get::<SyncStatusData>(SYNC_STATUS_REDIS_KEY)
             .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-        row.0
+        {
+            Some(status) => status.total_transactions,
+            None => sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM transactions")
+                .fetch_one(&state.pool)
+                .await
+                .map_err(|e| ApiError::internal(e.to_string()))?,
+        }
     };
 
     let rows = if let Some(block_number) = params.block_number {
@@ -512,11 +519,8 @@ async fn get_transaction_detail(
         cycles,
     ) = tx_row.ok_or_else(|| ApiError::not_found("Transaction not found"))?;
 
-    let tip_block: (i64,) = sqlx::query_as("SELECT tip_block_number FROM sync_status WHERE id = 1")
-        .fetch_one(&state.pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    let confirmations = tip_block.0 - block_number + 1;
+    let tip_block = state.cache.get_sync_tip(&state.pool).await;
+    let confirmations = tip_block - block_number + 1;
 
     let tx_hash_hex = format!("0x{}", hex::encode(&tx_hash));
     let final_tx_size = match tx_size {
@@ -1031,10 +1035,7 @@ async fn get_transaction_lifecycle(
 
     // Cellbase transactions don't go through proposal phase
     if is_cellbase {
-        let tip: (i64,) = sqlx::query_as("SELECT tip_block_number FROM sync_status WHERE id = 1")
-            .fetch_one(&state.pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+        let tip = state.cache.get_sync_tip(&state.pool).await;
 
         return ok(TransactionLifecycleResponse {
             hash: hash_hex,
@@ -1049,7 +1050,7 @@ async fn get_transaction_lifecycle(
             commitment_distance: None,
             commitment_window: CommitmentWindow::default(),
             is_cellbase: true,
-            confirmations: Some(tip.0 - commit_block_number + 1),
+            confirmations: Some(tip - commit_block_number + 1),
         });
     }
 
@@ -1072,11 +1073,7 @@ async fn get_transaction_lifecycle(
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    // Get current tip for confirmations
-    let tip: (i64,) = sqlx::query_as("SELECT tip_block_number FROM sync_status WHERE id = 1")
-        .fetch_one(&state.pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let tip = state.cache.get_sync_tip(&state.pool).await;
 
     let (proposed_in, commitment_distance) = match proposal_row {
         Some((proposal_block, proposal_hash, proposal_timestamp)) => (
@@ -1103,7 +1100,7 @@ async fn get_transaction_lifecycle(
         commitment_distance,
         commitment_window: CommitmentWindow::default(),
         is_cellbase: false,
-        confirmations: Some(tip.0 - commit_block_number + 1),
+        confirmations: Some(tip - commit_block_number + 1),
     })
 }
 

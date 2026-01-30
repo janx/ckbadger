@@ -167,7 +167,9 @@ async fn main() -> Result<()> {
         .run(&pool)
         .await?;
 
-    let index_manager = IndexManager::new(pool.clone());
+    let cache_invalidator =
+        ckbadger_indexer::cache::CacheInvalidator::new(config.redis_url.as_deref()).await;
+    let index_manager = IndexManager::with_cache(pool.clone(), cache_invalidator.clone());
 
     if config.rebuild_indexes_only {
         info!("Running in index/constraint rebuild only mode");
@@ -197,10 +199,9 @@ async fn main() -> Result<()> {
 
     let indexes_currently_deferred = index_manager.is_indexes_deferred().await?;
 
-    let (db_tip, _): (i64, Option<Vec<u8>>) =
-        sqlx::query_as("SELECT tip_block_number, tip_block_hash FROM sync_status WHERE id = 1")
-            .fetch_one(&pool)
-            .await?;
+    let db_tip: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(number), 0) FROM blocks")
+        .fetch_one(&pool)
+        .await?;
 
     let is_fresh_sync = db_tip == 0;
     let should_auto_defer =

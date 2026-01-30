@@ -298,13 +298,26 @@ const DEFERRABLE_INDEXES: &[DeferrableIndex] = &[
     },
 ];
 
+use crate::cache::CacheInvalidator;
+
 pub struct IndexManager {
     pool: PgPool,
+    cache_invalidator: Option<CacheInvalidator>,
 }
 
 impl IndexManager {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            cache_invalidator: None,
+        }
+    }
+
+    pub fn with_cache(pool: PgPool, cache_invalidator: CacheInvalidator) -> Self {
+        Self {
+            pool,
+            cache_invalidator: Some(cache_invalidator),
+        }
     }
 
     pub async fn is_indexes_deferred(&self) -> Result<bool> {
@@ -343,6 +356,14 @@ impl IndexManager {
         .execute(&self.pool)
         .await?;
 
+        if let Some(cache) = &self.cache_invalidator {
+            cache
+                .update_sync_status(|status| {
+                    status.set_indexes_deferred(true);
+                })
+                .await;
+        }
+
         info!("Dropped {} indexes in {:?}", dropped_count, start.elapsed());
         Ok(dropped_count)
     }
@@ -377,24 +398,13 @@ impl IndexManager {
         );
         let start = Instant::now();
 
-        sqlx::query(
-            "UPDATE sync_status SET indexes_rebuild_started_at = NOW(), indexes_rebuild_progress = $1 WHERE id = 1",
-        )
-        .bind(serde_json::to_string(&IndexRebuildProgress {
-            total: DEFERRABLE_INDEXES.len(),
-            completed: 0,
-            current: None,
-            failed: vec![],
-        })?)
-        .execute(&self.pool)
-        .await?;
-
         let mut progress = IndexRebuildProgress {
             total: DEFERRABLE_INDEXES.len(),
             completed: 0,
             current: None,
             failed: vec![],
         };
+        self.update_progress(&progress).await?;
 
         let mut sorted_indexes: Vec<_> = DEFERRABLE_INDEXES.iter().collect();
         sorted_indexes.sort_by_key(|idx| idx.priority);
@@ -431,11 +441,17 @@ impl IndexManager {
         progress.current = None;
         self.update_progress(&progress).await?;
 
-        sqlx::query(
-            "UPDATE sync_status SET indexes_deferred = FALSE, indexes_rebuild_completed_at = NOW() WHERE id = 1",
-        )
-        .execute(&self.pool)
-        .await?;
+        sqlx::query("UPDATE sync_status SET indexes_deferred = FALSE WHERE id = 1")
+            .execute(&self.pool)
+            .await?;
+
+        if let Some(cache) = &self.cache_invalidator {
+            cache
+                .update_sync_status(|status| {
+                    status.complete_index_rebuild();
+                })
+                .await;
+        }
 
         info!(
             "Index rebuild completed in {:?}. {}/{} succeeded, {} failed",
@@ -520,10 +536,28 @@ impl IndexManager {
     }
 
     async fn update_progress(&self, progress: &IndexRebuildProgress) -> Result<()> {
-        sqlx::query("UPDATE sync_status SET indexes_rebuild_progress = $1 WHERE id = 1")
-            .bind(serde_json::to_string(progress)?)
-            .execute(&self.pool)
-            .await?;
+        if let Some(cache) = &self.cache_invalidator {
+            use ckbadger_common::{IndexRebuildItemData, IndexRebuildProgressData};
+            let progress_data = IndexRebuildProgressData {
+                total: progress.total as i32,
+                completed: progress.completed as i32,
+                current_index: progress.current.clone(),
+                items: progress
+                    .failed
+                    .iter()
+                    .map(|name| IndexRebuildItemData {
+                        name: name.clone(),
+                        status: "failed".to_string(),
+                        duration_ms: None,
+                    })
+                    .collect(),
+            };
+            cache
+                .update_sync_status(|status| {
+                    status.update_index_rebuild_progress(progress_data);
+                })
+                .await;
+        }
         Ok(())
     }
 
@@ -537,15 +571,24 @@ impl IndexManager {
     }
 
     pub async fn get_rebuild_progress(&self) -> Result<Option<IndexRebuildProgress>> {
-        let row: (Option<String>,) =
-            sqlx::query_as("SELECT indexes_rebuild_progress FROM sync_status WHERE id = 1")
-                .fetch_one(&self.pool)
-                .await?;
-
-        match row.0 {
-            Some(json) => Ok(Some(serde_json::from_str(&json)?)),
-            None => Ok(None),
+        if let Some(cache) = &self.cache_invalidator {
+            if let Some(status) = cache.get_sync_status().await {
+                if let Some(progress_data) = status.indexes_rebuild_progress {
+                    return Ok(Some(IndexRebuildProgress {
+                        total: progress_data.total as usize,
+                        completed: progress_data.completed as usize,
+                        current: progress_data.current_index,
+                        failed: progress_data
+                            .items
+                            .iter()
+                            .filter(|item| item.status == "failed")
+                            .map(|item| item.name.clone())
+                            .collect(),
+                    }));
+                }
+            }
         }
+        Ok(None)
     }
 
     pub async fn drop_deferrable_constraints(&self) -> Result<usize> {

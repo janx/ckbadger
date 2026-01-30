@@ -1,6 +1,6 @@
-use ckbadger_common::SyncProgressData;
+use ckbadger_common::{SyncProgressData, SyncStatusData};
 #[cfg(feature = "redis-cache")]
-use ckbadger_common::SYNC_PROGRESS_REDIS_KEY;
+use ckbadger_common::{SYNC_PROGRESS_REDIS_KEY, SYNC_STATUS_REDIS_KEY};
 #[cfg(feature = "redis-cache")]
 use redis::AsyncCommands;
 #[cfg(feature = "redis-cache")]
@@ -136,6 +136,78 @@ impl CacheInvalidator {
             let _ = (self, data);
         }
     }
+
+    pub async fn get_sync_status(&self) -> Option<SyncStatusData> {
+        #[cfg(feature = "redis-cache")]
+        {
+            let Some(ref conn) = self.conn else {
+                return None;
+            };
+
+            let mut conn = conn.clone();
+            let result: Result<Option<String>, _> = conn.get(SYNC_STATUS_REDIS_KEY).await;
+            match result {
+                Ok(Some(json)) => serde_json::from_str(&json).ok(),
+                Ok(None) => None,
+                Err(e) => {
+                    warn!("Failed to get sync status: {}", e);
+                    None
+                }
+            }
+        }
+
+        #[cfg(not(feature = "redis-cache"))]
+        {
+            let _ = self;
+            None
+        }
+    }
+
+    pub async fn set_sync_status(&self, data: &SyncStatusData) {
+        #[cfg(feature = "redis-cache")]
+        {
+            let Some(ref conn) = self.conn else {
+                return;
+            };
+
+            let mut conn = conn.clone();
+            match serde_json::to_string(data) {
+                Ok(json) => {
+                    let result: Result<(), _> = conn.set(SYNC_STATUS_REDIS_KEY, json).await;
+                    if let Err(e) = result {
+                        warn!("Failed to set sync status: {}", e);
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to serialize sync status: {}", e);
+                }
+            }
+        }
+
+        #[cfg(not(feature = "redis-cache"))]
+        {
+            let _ = (self, data);
+        }
+    }
+
+    pub async fn update_sync_status<F>(&self, updater: F) -> Option<SyncStatusData>
+    where
+        F: FnOnce(&mut SyncStatusData),
+    {
+        #[cfg(feature = "redis-cache")]
+        {
+            let mut status = self.get_sync_status().await.unwrap_or_default();
+            updater(&mut status);
+            self.set_sync_status(&status).await;
+            Some(status)
+        }
+
+        #[cfg(not(feature = "redis-cache"))]
+        {
+            let _ = (self, updater);
+            None
+        }
+    }
 }
 
 #[cfg(test)]
@@ -168,6 +240,19 @@ mod tests {
             updated_at: 1234567890,
         };
         invalidator.publish_sync_progress(&data).await;
+    }
+
+    #[tokio::test]
+    async fn test_get_sync_status_returns_none_when_disabled() {
+        let invalidator = CacheInvalidator::new(None).await;
+        assert!(invalidator.get_sync_status().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_set_sync_status_does_not_panic_when_disabled() {
+        let invalidator = CacheInvalidator::new(None).await;
+        let status = SyncStatusData::default();
+        invalidator.set_sync_status(&status).await;
     }
 
     #[cfg(feature = "redis-cache")]
@@ -258,6 +343,71 @@ mod tests {
             assert_eq!(stored.current_block, 5000);
             assert_eq!(stored.target_block, 10000);
             assert!((stored.progress_percentage - 50.0).abs() < 0.01);
+        }
+
+        #[tokio::test]
+        async fn test_sync_status_roundtrip() {
+            let redis_url = std::env::var("TEST_REDIS_URL").ok();
+            if redis_url.is_none() {
+                eprintln!("Skipping: TEST_REDIS_URL not set");
+                return;
+            }
+
+            let invalidator = CacheInvalidator::new(redis_url.as_deref()).await;
+            let status = SyncStatusData {
+                tip_block_number: 12345,
+                tip_block_hash: "0xabc123".to_string(),
+                total_transactions: 1000,
+                total_cells: 500,
+                total_live_cells: 300,
+                total_addresses: 100,
+                last_synced_at: chrono::Utc::now().timestamp(),
+                sync_started_at: None,
+                sync_started_block: 0,
+                sync_ema_rate: Some(500.0),
+                indexes_deferred: false,
+                indexes_dropped_at: None,
+                indexes_rebuild_started_at: None,
+                indexes_rebuild_completed_at: None,
+                indexes_rebuild_progress: None,
+            };
+
+            invalidator.set_sync_status(&status).await;
+            let retrieved = invalidator.get_sync_status().await;
+
+            assert!(retrieved.is_some());
+            let retrieved = retrieved.unwrap();
+            assert_eq!(retrieved.tip_block_number, 12345);
+            assert_eq!(retrieved.tip_block_hash, "0xabc123");
+            assert_eq!(retrieved.total_transactions, 1000);
+        }
+
+        #[tokio::test]
+        async fn test_update_sync_status() {
+            let redis_url = std::env::var("TEST_REDIS_URL").ok();
+            if redis_url.is_none() {
+                eprintln!("Skipping: TEST_REDIS_URL not set");
+                return;
+            }
+
+            let invalidator = CacheInvalidator::new(redis_url.as_deref()).await;
+
+            let initial = SyncStatusData {
+                tip_block_number: 100,
+                ..Default::default()
+            };
+            invalidator.set_sync_status(&initial).await;
+
+            invalidator
+                .update_sync_status(|s| {
+                    s.tip_block_number = 200;
+                    s.total_transactions += 50;
+                })
+                .await;
+
+            let updated = invalidator.get_sync_status().await.unwrap();
+            assert_eq!(updated.tip_block_number, 200);
+            assert_eq!(updated.total_transactions, 50);
         }
     }
 }

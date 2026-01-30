@@ -5,20 +5,13 @@
 -- ============================================
 
 -- ===========================================
--- 1. Sync Status
+-- 1. Sync Status (Persistent State Only)
+-- High-frequency sync data is stored in Redis (sync:status key)
+-- This table stores only data that must survive restarts
 -- ===========================================
 
 CREATE TABLE sync_status (
     id INTEGER PRIMARY KEY DEFAULT 1,
-    tip_block_number BIGINT NOT NULL DEFAULT 0,
-    tip_block_hash BYTEA,
-    total_transactions BIGINT NOT NULL DEFAULT 0,
-    total_cells BIGINT NOT NULL DEFAULT 0,
-    total_live_cells BIGINT NOT NULL DEFAULT 0,
-    total_addresses BIGINT NOT NULL DEFAULT 0,
-    last_synced_at TIMESTAMPTZ DEFAULT NOW(),
-    sync_started_at TIMESTAMPTZ,
-    sync_started_block BIGINT NOT NULL DEFAULT 0,
     
     -- Deep fork detection (reorg depth > REORG_LIMIT)
     deep_fork_detected BOOLEAN NOT NULL DEFAULT FALSE,
@@ -34,15 +27,9 @@ CREATE TABLE sync_status (
     last_reorg_at TIMESTAMPTZ,
     last_reorg_depth INT,
     
-    -- EMA sync rate for accurate ETA calculation (blocks/sec)
-    sync_ema_rate DOUBLE PRECISION,
-    
-    -- Deferred index optimization
+    -- Deferred index optimization (tracks actual DB state)
     indexes_deferred BOOLEAN NOT NULL DEFAULT FALSE,
     indexes_dropped_at TIMESTAMPTZ,
-    indexes_rebuild_started_at TIMESTAMPTZ,
-    indexes_rebuild_completed_at TIMESTAMPTZ,
-    indexes_rebuild_progress JSONB,
 
     CONSTRAINT single_row CHECK (id = 1)
 );

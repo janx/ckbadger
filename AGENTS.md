@@ -137,15 +137,34 @@ The indexer uses linear regression on speed history to predict future sync speed
 
 **Fallback**: If insufficient trend data (< 3 samples), uses simple `remaining / EMA` calculation.
 
-### Redis Sync Progress Sharing
+### Redis Sync Data
 
-The indexer publishes sync progress to Redis for API/WebSocket consumption:
+The indexer publishes sync data to Redis for API/WebSocket consumption:
 
 | Key             | TTL | Contents                        |
 | --------------- | --- | ------------------------------- |
+| `sync:status`   | 60s | JSON: `SyncStatusData` struct   |
 | `sync:progress` | 30s | JSON: `SyncProgressData` struct |
 
-**Data Structure** (`crates/common/src/sync.rs`):
+**`sync:status`** - Core sync state (`crates/common/src/sync.rs`):
+
+```rust
+pub struct SyncStatusData {
+    pub tip_block_number: i64,
+    pub tip_block_hash: String,
+    pub total_transactions: i64,
+    pub total_cells: i64,
+    pub total_live_cells: i64,
+    pub total_addresses: i64,
+    pub last_synced_at: i64,
+    pub sync_ema_rate: Option<f64>,
+    pub indexes_deferred: bool,
+    pub indexes_rebuild_progress: Option<IndexRebuildProgressData>,
+    // ... other fields
+}
+```
+
+**`sync:progress`** - Real-time progress with ETA:
 
 ```rust
 pub struct SyncProgressData {
@@ -156,17 +175,26 @@ pub struct SyncProgressData {
     pub eta_seconds: Option<f64>,
     pub eta_formatted: String,
     pub progress_percentage: f64,
-    pub updated_at: i64,  // Unix timestamp
+    pub updated_at: i64,
 }
 ```
 
-**Flow**:
+**Data Flow**:
 
-1. Indexer computes trend-based ETA every 10 seconds
-2. Publishes to Redis key `sync:progress` with 30s TTL
-3. API reads from Redis when handling `/api/v1/statistics/network`
-4. WebSocket broadcaster reads from Redis for `new_block` messages
-5. If Redis data is stale (>60s) or unavailable, API falls back to progress-only display (no ETA)
+1. Indexer updates `sync:status` after each batch write
+2. Indexer updates `sync:progress` every 10 seconds with ETA
+3. API reads `sync:status` for totals (blocks, transactions, cells)
+4. API reads `sync:progress` for real-time progress display
+5. WebSocket broadcaster uses both for `new_block` messages
+
+**Fallback** (when Redis unavailable):
+
+| Data                 | Fallback Query                      |
+| -------------------- | ----------------------------------- |
+| `tip_block_number`   | `SELECT MAX(number) FROM blocks`    |
+| `total_transactions` | `SELECT COUNT(*) FROM transactions` |
+| `total_live_cells`   | `SELECT COUNT(*) FROM live_cells`   |
+| `sync_ema_rate`      | None (ETA not displayed)            |
 
 **Requires**: `redis-cache` feature enabled on both indexer and API, plus `REDIS_URL` environment variable.
 

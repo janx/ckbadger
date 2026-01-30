@@ -9,6 +9,7 @@ use axum::{
 use ckbadger_common::dao::{
     is_genesis_special_burn_cell, GENESIS_SPECIAL_BURN_CELL_VIRTUAL_OCCUPIED,
 };
+use ckbadger_common::sync::{SyncStatusData, SYNC_STATUS_REDIS_KEY};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use std::sync::Arc;
@@ -581,11 +582,17 @@ async fn list_live_cells(
             (total.0, rows)
         }
         (None, None) => {
-            let total: (i64,) =
-                sqlx::query_as("SELECT total_live_cells FROM sync_status WHERE id = 1")
+            let total = match state
+                .cache
+                .get::<SyncStatusData>(SYNC_STATUS_REDIS_KEY)
+                .await
+            {
+                Some(status) => status.total_live_cells,
+                None => sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM live_cells")
                     .fetch_one(&state.pool)
                     .await
-                    .map_err(|e| ApiError::internal(e.to_string()))?;
+                    .map_err(|e| ApiError::internal(e.to_string()))?,
+            };
 
             let rows = sqlx::query_as::<_, LiveCellRow>(
                     r#"
@@ -606,7 +613,7 @@ async fn list_live_cells(
                 .await
                 .map_err(|e| ApiError::internal(e.to_string()))?;
 
-            (total.0, rows)
+            (total, rows)
         }
     };
 
@@ -1329,13 +1336,10 @@ async fn get_active_addresses(
     let limit = params.limit.clamp(1, 500);
     let days = params.days.clamp(1, 365);
 
-    let tip_block: (i64,) = sqlx::query_as("SELECT tip_block_number FROM sync_status WHERE id = 1")
-        .fetch_one(&state.pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let tip_block = state.cache.get_sync_tip(&state.pool).await;
 
     let blocks_per_day: i64 = 8640;
-    let min_block = tip_block.0.saturating_sub(days * blocks_per_day);
+    let min_block = tip_block.saturating_sub(days * blocks_per_day);
 
     let rows = sqlx::query_as::<_, (Vec<u8>, String, i32, i64, i64)>(
         r#"

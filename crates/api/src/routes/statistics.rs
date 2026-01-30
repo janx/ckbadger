@@ -3,7 +3,10 @@
 use axum::{extract::State, routing::get, Router};
 use chrono::{DateTime, Utc};
 use ckbadger_common::dao::GENESIS_BURNT;
-use ckbadger_common::{format_duration_smart, SyncProgressData, SYNC_PROGRESS_REDIS_KEY};
+use ckbadger_common::sync::{
+    format_duration_smart, SyncProgressData, SyncStatusData, SYNC_PROGRESS_REDIS_KEY,
+    SYNC_STATUS_REDIS_KEY,
+};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -823,25 +826,28 @@ async fn fetch_network_stats_from_db(
     let tps = tx_count_24h as f64 / 86400.0;
     let tx_per_minute = tps * 60.0;
 
-    let sync_row: Option<(
-        i64,
+    let sync_status_from_redis: Option<SyncStatusData> =
+        state.cache.get(SYNC_STATUS_REDIS_KEY).await;
+    let (synced_block, db_ema_rate) = sync_status_from_redis
+        .as_ref()
+        .map(|s| (s.tip_block_number, s.sync_ema_rate))
+        .unwrap_or((latest_block, None));
+
+    let deep_fork_row: Option<(
         bool,
         Option<DateTime<Utc>>,
         Option<i64>,
         Option<i64>,
         Option<i32>,
         Option<i64>,
-        Option<f64>,
     )> = sqlx::query_as(
         r#"SELECT 
-            tip_block_number, 
             COALESCE(deep_fork_detected, FALSE),
             deep_fork_at,
             deep_fork_db_tip,
             deep_fork_chain_tip,
             deep_fork_depth,
-            deep_fork_fork_point,
-            sync_ema_rate
+            deep_fork_fork_point
         FROM sync_status WHERE id = 1"#,
     )
     .fetch_optional(&state.pool)
@@ -850,15 +856,13 @@ async fn fetch_network_stats_from_db(
     .flatten();
 
     let (
-        synced_block,
         deep_fork_detected,
         deep_fork_at,
         deep_fork_db_tip,
         deep_fork_chain_tip,
         deep_fork_depth,
         deep_fork_fork_point,
-        db_ema_rate,
-    ) = sync_row.unwrap_or((latest_block, false, None, None, None, None, None, None));
+    ) = deep_fork_row.unwrap_or((false, None, None, None, None, None));
 
     let blocks_behind = tip_block - synced_block;
     let is_syncing = blocks_behind > 100;

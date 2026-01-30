@@ -308,11 +308,13 @@ async fn test_consume_cells_across_partitions(pool: PgPool) {
 #[sqlx::test(migrator = "MIGRATOR")]
 async fn test_bulk_sync_mode_skips_live_cells_db_write(pool: PgPool) {
     use ckbadger_indexer::db::{LiveCellStorage, RocksDbLiveCellStore};
+    use ckbadger_indexer::CacheInvalidator;
     use std::sync::Arc;
 
     let tmp_dir = tempfile::TempDir::new().unwrap();
     let store = Arc::new(RocksDbLiveCellStore::open(tmp_dir.path()).unwrap());
-    let writer = BatchWriter::with_live_cell_store(pool.clone(), true, store.clone());
+    let cache = CacheInvalidator::new(None).await;
+    let writer = BatchWriter::with_live_cell_store(pool.clone(), true, store.clone(), cache);
 
     let tx_hash = vec![0x01u8; 32];
     let cell = make_parsed_cell(100_00000000);
@@ -332,11 +334,13 @@ async fn test_bulk_sync_mode_skips_live_cells_db_write(pool: PgPool) {
 #[sqlx::test(migrator = "MIGRATOR")]
 async fn test_non_bulk_sync_mode_writes_to_live_cells_db(pool: PgPool) {
     use ckbadger_indexer::db::{LiveCellStorage, RocksDbLiveCellStore};
+    use ckbadger_indexer::CacheInvalidator;
     use std::sync::Arc;
 
     let tmp_dir = tempfile::TempDir::new().unwrap();
     let store = Arc::new(RocksDbLiveCellStore::open(tmp_dir.path()).unwrap());
-    let writer = BatchWriter::with_live_cell_store(pool.clone(), true, store.clone());
+    let cache = CacheInvalidator::new(None).await;
+    let writer = BatchWriter::with_live_cell_store(pool.clone(), true, store.clone(), cache);
 
     let tx_hash = vec![0x01u8; 32];
     let cell = make_parsed_cell(100_00000000);
@@ -355,6 +359,7 @@ async fn test_non_bulk_sync_mode_writes_to_live_cells_db(pool: PgPool) {
 #[sqlx::test(migrator = "MIGRATOR")]
 async fn test_rocksdb_store_persists_cells(pool: PgPool) {
     use ckbadger_indexer::db::{LiveCellStorage, RocksDbLiveCellStore};
+    use ckbadger_indexer::CacheInvalidator;
     use std::sync::Arc;
 
     let tmp_dir = tempfile::TempDir::new().unwrap();
@@ -365,7 +370,8 @@ async fn test_rocksdb_store_persists_cells(pool: PgPool) {
 
     {
         let store = Arc::new(RocksDbLiveCellStore::open(&path).unwrap());
-        let writer = BatchWriter::with_live_cell_store(pool.clone(), true, store.clone());
+        let cache = CacheInvalidator::new(None).await;
+        let writer = BatchWriter::with_live_cell_store(pool.clone(), true, store.clone(), cache);
 
         writer
             .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], true)

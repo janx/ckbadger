@@ -885,13 +885,6 @@ async fn test_transactions_list_with_block_number_filter(pool: sqlx::PgPool) {
     insert_test_transaction(&pool, &tx4, 101, 0).await;
     insert_test_transaction(&pool, &tx5, 101, 1).await;
 
-    sqlx::query(
-        "UPDATE sync_status SET tip_block_number = 101, total_transactions = 5 WHERE id = 1",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-
     let app = create_router(test_config(pool)).await;
 
     let request = Request::builder()
@@ -931,13 +924,6 @@ async fn test_transactions_list_without_filter_returns_global_total(pool: sqlx::
     insert_test_transaction(&pool, &tx1, 100, 0).await;
     insert_test_transaction(&pool, &tx2, 100, 1).await;
 
-    sqlx::query(
-        "UPDATE sync_status SET tip_block_number = 100, total_transactions = 1000 WHERE id = 1",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-
     let app = create_router(test_config(pool)).await;
 
     let request = Request::builder()
@@ -953,8 +939,8 @@ async fn test_transactions_list_without_filter_returns_global_total(pool: sqlx::
 
     let total = json["total"].as_i64().unwrap();
     assert_eq!(
-        total, 1000,
-        "Total should be global total_transactions from sync_status"
+        total, 2,
+        "Total should be actual transaction count from database"
     );
 }
 

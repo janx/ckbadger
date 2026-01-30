@@ -5,6 +5,7 @@ use axum::{
     routing::get,
     Router,
 };
+use ckbadger_common::sync::{SyncStatusData, SYNC_STATUS_REDIS_KEY};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
@@ -99,10 +100,17 @@ async fn list_blocks(
         }
     }
 
-    let total: (i64,) = sqlx::query_as("SELECT tip_block_number + 1 FROM sync_status WHERE id = 1")
-        .fetch_one(&state.pool)
+    let total = match state
+        .cache
+        .get::<SyncStatusData>(SYNC_STATUS_REDIS_KEY)
         .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    {
+        Some(status) => status.tip_block_number + 1,
+        None => sqlx::query_scalar::<_, i64>("SELECT COALESCE(MAX(number), 0) + 1 FROM blocks")
+            .fetch_one(&state.pool)
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?,
+    };
 
     let cursor_number = params.cursor.unwrap_or(i64::MAX);
 
@@ -146,7 +154,7 @@ async fn list_blocks(
         })
         .collect();
 
-    let response = CursorPaginatedResponse::new(blocks, total.0, limit, next_cursor);
+    let response = CursorPaginatedResponse::new(blocks, total, limit, next_cursor);
 
     if is_first_page {
         state

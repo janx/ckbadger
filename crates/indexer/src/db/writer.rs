@@ -62,11 +62,14 @@ pub struct SecondaryIssuanceBreakdown {
     pub burnt: i64,
 }
 
+use crate::cache::CacheInvalidator;
+
 #[derive(Clone)]
 pub struct BatchWriter {
     pool: PgPool,
     fast_sync_mode: bool,
     live_cell_store: Option<super::DynLiveCellStorage>,
+    cache_invalidator: Option<CacheInvalidator>,
 }
 
 impl BatchWriter {
@@ -75,6 +78,7 @@ impl BatchWriter {
             pool,
             fast_sync_mode: true,
             live_cell_store: None,
+            cache_invalidator: None,
         }
     }
 
@@ -83,6 +87,7 @@ impl BatchWriter {
             pool,
             fast_sync_mode,
             live_cell_store: None,
+            cache_invalidator: None,
         }
     }
 
@@ -90,12 +95,18 @@ impl BatchWriter {
         pool: PgPool,
         fast_sync_mode: bool,
         live_cell_store: super::DynLiveCellStorage,
+        cache_invalidator: CacheInvalidator,
     ) -> Self {
         Self {
             pool,
             fast_sync_mode,
             live_cell_store: Some(live_cell_store),
+            cache_invalidator: Some(cache_invalidator),
         }
+    }
+
+    pub fn cache_invalidator(&self) -> Option<&CacheInvalidator> {
+        self.cache_invalidator.as_ref()
     }
 
     pub fn pool(&self) -> &PgPool {
@@ -920,30 +931,22 @@ impl BatchWriter {
         new_addresses: i64,
         ema_rate: Option<f64>,
     ) -> Result<()> {
-        sqlx::query(
-            r#"
-            UPDATE sync_status SET
-                tip_block_number = $1,
-                tip_block_hash = $2,
-                total_transactions = total_transactions + $3,
-                total_cells = total_cells + $4,
-                total_live_cells = total_live_cells + $4 - $5,
-                total_addresses = total_addresses + $6,
-                last_synced_at = NOW(),
-                sync_ema_rate = COALESCE($7, sync_ema_rate)
-            WHERE id = 1
-            "#,
-        )
-        .bind(block_number)
-        .bind(block_hash)
-        .bind(tx_count)
-        .bind(cells_created)
-        .bind(cells_consumed)
-        .bind(new_addresses)
-        .bind(ema_rate)
-        .execute(&self.pool)
-        .await?;
-
+        if let Some(cache) = &self.cache_invalidator {
+            let hash_hex = format!("0x{}", hex::encode(block_hash));
+            cache
+                .update_sync_status(|status| {
+                    status.update_batch(
+                        block_number,
+                        &hash_hex,
+                        tx_count,
+                        cells_created,
+                        cells_consumed,
+                        new_addresses,
+                        ema_rate,
+                    );
+                })
+                .await;
+        }
         Ok(())
     }
 
@@ -989,17 +992,13 @@ impl BatchWriter {
             .execute(&self.pool)
             .await?;
 
-        sqlx::query(
-            r#"
-            UPDATE sync_status SET
-                sync_started_at = NOW(),
-                sync_started_block = $1
-            WHERE id = 1
-            "#,
-        )
-        .bind(start_block)
-        .execute(&self.pool)
-        .await?;
+        if let Some(cache) = &self.cache_invalidator {
+            cache
+                .update_sync_status(|status| {
+                    status.init_sync_start(start_block);
+                })
+                .await;
+        }
 
         info!(
             "Partial data cleanup complete, starting sync from block {}",
@@ -3889,17 +3888,14 @@ impl BatchWriter {
             .execute(&mut *tx)
             .await?;
 
-        // Rollback token statistics before deleting transfers
         self.rollback_token_statistics(&mut tx, rollback_from)
             .await?;
 
         sqlx::query(
             r#"
             UPDATE sync_status SET
-                tip_block_number = $1,
-                tip_block_hash = $2,
                 last_reorg_at = NOW(),
-                last_reorg_depth = $3,
+                last_reorg_depth = $1,
                 deep_fork_detected = FALSE,
                 deep_fork_at = NULL,
                 deep_fork_db_tip = NULL,
@@ -3911,8 +3907,6 @@ impl BatchWriter {
             WHERE id = 1
             "#,
         )
-        .bind(fork_point)
-        .bind(fork_hash)
         .bind(depth)
         .execute(&mut *tx)
         .await?;
@@ -3932,6 +3926,17 @@ impl BatchWriter {
         .await?;
 
         tx.commit().await?;
+
+        if let Some(cache) = &self.cache_invalidator {
+            let hash_hex = format!("0x{}", hex::encode(fork_hash));
+            cache
+                .update_sync_status(|status| {
+                    status.tip_block_number = fork_point;
+                    status.tip_block_hash = hash_hex;
+                    status.last_synced_at = chrono::Utc::now().timestamp();
+                })
+                .await;
+        }
 
         info!(
             "Reorg completed: fork_point={}, depth={}, orphaned_blocks={}, orphaned_txs={}",

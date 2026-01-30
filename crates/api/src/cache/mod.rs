@@ -4,7 +4,9 @@ mod redis_cache;
 #[cfg(feature = "redis-cache")]
 pub use redis_cache::*;
 
+use ckbadger_common::sync::{SyncStatusData, SYNC_STATUS_REDIS_KEY};
 use serde::{de::DeserializeOwned, Serialize};
+use sqlx::PgPool;
 use std::time::Duration;
 
 #[derive(Clone)]
@@ -37,6 +39,61 @@ impl CacheBackend {
             CacheBackend::Redis(cache) => cache.delete(_key).await,
             CacheBackend::None => {}
         }
+    }
+
+    /// Get sync status from Redis, with fallback to database queries
+    pub async fn get_sync_status(&self, pool: &PgPool) -> SyncStatusData {
+        if let Some(status) = self.get::<SyncStatusData>(SYNC_STATUS_REDIS_KEY).await {
+            return status;
+        }
+
+        let tip: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(number), 0) FROM blocks")
+            .fetch_one(pool)
+            .await
+            .unwrap_or(0);
+
+        let (total_tx, total_cells, total_live_cells, total_addresses): (i64, i64, i64, i64) =
+            sqlx::query_as(
+                r#"SELECT 
+                    COALESCE((SELECT COUNT(*) FROM transactions), 0),
+                    COALESCE((SELECT COUNT(*) FROM cells), 0),
+                    COALESCE((SELECT COUNT(*) FROM live_cells), 0),
+                    COALESCE((SELECT COUNT(*) FROM addresses), 0)
+                "#,
+            )
+            .fetch_one(pool)
+            .await
+            .unwrap_or((0, 0, 0, 0));
+
+        SyncStatusData {
+            tip_block_number: tip,
+            tip_block_hash: String::new(),
+            total_transactions: total_tx,
+            total_cells,
+            total_live_cells,
+            total_addresses,
+            last_synced_at: 0,
+            sync_started_at: None,
+            sync_started_block: 0,
+            sync_ema_rate: None,
+            indexes_deferred: false,
+            indexes_dropped_at: None,
+            indexes_rebuild_started_at: None,
+            indexes_rebuild_completed_at: None,
+            indexes_rebuild_progress: None,
+        }
+    }
+
+    /// Get sync status tip block (lightweight, Redis-first with DB fallback)
+    pub async fn get_sync_tip(&self, pool: &PgPool) -> i64 {
+        if let Some(status) = self.get::<SyncStatusData>(SYNC_STATUS_REDIS_KEY).await {
+            return status.tip_block_number;
+        }
+
+        sqlx::query_scalar("SELECT COALESCE(MAX(number), 0) FROM blocks")
+            .fetch_one(pool)
+            .await
+            .unwrap_or(0)
     }
 }
 

@@ -276,19 +276,23 @@ pub struct Indexer {
 impl Indexer {
     pub async fn new(config: Config, pool: PgPool) -> Result<Self> {
         let rpc = CkbRpcClient::new(&config.ckb_rpc_url);
-        let repo = Repository::new(pool.clone());
+        let cache_invalidator = CacheInvalidator::new(config.redis_url.as_deref()).await;
+        let repo = Repository::with_cache(pool.clone(), cache_invalidator.clone());
 
         let live_cell_store: crate::db::DynLiveCellStorage =
             Self::create_live_cell_store(&config, &pool).await?;
 
-        let writer =
-            BatchWriter::with_live_cell_store(pool.clone(), config.fast_sync_mode, live_cell_store);
+        let writer = BatchWriter::with_live_cell_store(
+            pool.clone(),
+            config.fast_sync_mode,
+            live_cell_store,
+            cache_invalidator.clone(),
+        );
 
         let (tip_number, _) = repo.get_sync_tip().await?;
         let chain_tip = rpc.get_tip_block_number().await?;
 
         let progress = Arc::new(SyncProgress::new(tip_number as u64, chain_tip));
-        let cache_invalidator = CacheInvalidator::new(config.redis_url.as_deref()).await;
 
         let cell_cache = Arc::new(tokio::sync::Mutex::new(LruCache::new(
             NonZeroUsize::new(CELL_CACHE_CAPACITY).unwrap(),

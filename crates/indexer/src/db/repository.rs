@@ -1,6 +1,8 @@
 use anyhow::Result;
 use sqlx::PgPool;
 
+use crate::cache::CacheInvalidator;
+
 pub struct DeepForkInfo {
     pub db_tip: i64,
     pub db_tip_hash: Vec<u8>,
@@ -13,11 +15,22 @@ pub struct DeepForkInfo {
 #[derive(Clone)]
 pub struct Repository {
     pool: PgPool,
+    cache_invalidator: Option<CacheInvalidator>,
 }
 
 impl Repository {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            cache_invalidator: None,
+        }
+    }
+
+    pub fn with_cache(pool: PgPool, cache_invalidator: CacheInvalidator) -> Self {
+        Self {
+            pool,
+            cache_invalidator: Some(cache_invalidator),
+        }
     }
 
     pub fn pool(&self) -> &PgPool {
@@ -25,12 +38,29 @@ impl Repository {
     }
 
     pub async fn get_sync_tip(&self) -> Result<(i64, Option<Vec<u8>>)> {
-        let row = sqlx::query_as::<_, (i64, Option<Vec<u8>>)>(
-            "SELECT tip_block_number, tip_block_hash FROM sync_status WHERE id = 1",
+        if let Some(cache) = &self.cache_invalidator {
+            if let Some(status) = cache.get_sync_status().await {
+                if status.tip_block_number > 0 {
+                    let hash = if status.tip_block_hash.is_empty() {
+                        None
+                    } else {
+                        hex::decode(status.tip_block_hash.trim_start_matches("0x")).ok()
+                    };
+                    return Ok((status.tip_block_number, hash));
+                }
+            }
+        }
+
+        let row = sqlx::query_as::<_, (Option<i64>, Option<Vec<u8>>)>(
+            "SELECT number, hash FROM blocks ORDER BY number DESC LIMIT 1",
         )
-        .fetch_one(&self.pool)
+        .fetch_optional(&self.pool)
         .await?;
-        Ok(row)
+
+        match row {
+            Some((Some(num), hash)) => Ok((num, hash)),
+            _ => Ok((0, None)),
+        }
     }
 
     pub async fn update_sync_tip(
@@ -39,14 +69,17 @@ impl Repository {
         block_hash: &[u8],
         tx_count_delta: i64,
     ) -> Result<()> {
-        sqlx::query(
-            "UPDATE sync_status SET tip_block_number = $1, tip_block_hash = $2, last_synced_at = NOW(), total_transactions = total_transactions + $3 WHERE id = 1",
-        )
-        .bind(block_number)
-        .bind(block_hash)
-        .bind(tx_count_delta)
-        .execute(&self.pool)
-        .await?;
+        if let Some(cache) = &self.cache_invalidator {
+            let hash_hex = format!("0x{}", hex::encode(block_hash));
+            cache
+                .update_sync_status(|status| {
+                    status.tip_block_number = block_number;
+                    status.tip_block_hash = hash_hex;
+                    status.total_transactions += tx_count_delta;
+                    status.last_synced_at = chrono::Utc::now().timestamp();
+                })
+                .await;
+        }
         Ok(())
     }
 
