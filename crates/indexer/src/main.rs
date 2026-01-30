@@ -235,15 +235,30 @@ async fn main() -> Result<()> {
     let indexer = Indexer::new(config.clone(), pool.clone()).await?;
     let indexer = Arc::new(indexer);
 
-    let progress = indexer.progress();
-    let progress_clone = progress.clone();
+    let indexer_for_progress = Arc::clone(&indexer);
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
 
-            let ema_rate = progress_clone.ema_blocks_per_second();
-            let eta = progress_clone.eta_formatted();
-            let bps = progress_clone.blocks_per_second();
+            let progress = indexer_for_progress.progress();
+            let ema_rate = progress.ema_blocks_per_second();
+            let eta = progress.eta_formatted();
+            let bps = progress.blocks_per_second();
+
+            let sync_data = ckbadger_common::SyncProgressData {
+                current_block: progress.current(),
+                target_block: progress.target(),
+                blocks_per_second: bps,
+                ema_blocks_per_second: ema_rate,
+                eta_seconds: progress.eta_seconds(),
+                eta_formatted: eta.clone(),
+                progress_percentage: progress.progress_percentage(),
+                updated_at: chrono::Utc::now().timestamp(),
+            };
+            indexer_for_progress
+                .cache_invalidator()
+                .publish_sync_progress(&sync_data)
+                .await;
 
             // ANSI color codes for speed: green (>=1000), yellow (>=100), red (<100)
             let (color_start, color_end) = if ema_rate >= 1000.0 {
@@ -257,9 +272,9 @@ async fn main() -> Result<()> {
             // Use eprintln! for ANSI colors (tracing escapes them)
             eprintln!(
                 "Progress: {:.2}% ({}/{}) - {}{:.2} blocks/sec{} (EMA: {}{:.2}{}) | ETA: {}",
-                progress_clone.progress_percentage(),
-                progress_clone.current(),
-                progress_clone.target(),
+                progress.progress_percentage(),
+                progress.current(),
+                progress.target(),
                 color_start,
                 bps,
                 color_end,

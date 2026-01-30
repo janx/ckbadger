@@ -1,10 +1,12 @@
 use chrono::{DateTime, Utc};
+use ckbadger_common::{SyncProgressData, SYNC_PROGRESS_REDIS_KEY};
 use sqlx::PgPool;
 use std::sync::Arc;
 use tokio::time::{interval, Duration};
 use tracing::{debug, error, info};
 
 use super::manager::{BroadcastMessage, IndexRebuildStatus, SyncStatus, WsManager};
+use crate::cache::CacheBackend;
 
 pub(crate) const FAST_SYNC_THRESHOLD: i64 = 100;
 
@@ -27,6 +29,7 @@ pub async fn start_block_broadcaster(
     pool: PgPool,
     ws_manager: Arc<WsManager>,
     ckb_rpc_url: String,
+    cache: CacheBackend,
 ) {
     let mut last_block_number: Option<i64> = None;
     let mut ticker = interval(Duration::from_secs(2));
@@ -78,7 +81,7 @@ pub async fn start_block_broadcaster(
         let sync_mode = determine_sync_mode(number, tip_block);
 
         if sync_mode == SyncMode::FastSync {
-            let sync_status = build_sync_status(&pool, tip_block).await;
+            let sync_status = build_sync_status(&pool, &cache, tip_block).await;
             let index_rebuild_status = build_index_rebuild_status(&pool).await;
             let (avg_block_time, estimated_epoch_time) =
                 calculate_epoch_stats(&pool, number, epoch_index, epoch_length).await;
@@ -127,7 +130,7 @@ pub async fn start_block_broadcaster(
             match new_blocks {
                 Ok(blocks) => {
                     for (num, h, ts, txc, ep_num, ep_idx, ep_len) in blocks {
-                        let sync_status = build_sync_status(&pool, tip_block).await;
+                        let sync_status = build_sync_status(&pool, &cache, tip_block).await;
                         let index_rebuild_status = build_index_rebuild_status(&pool).await;
                         let (avg_block_time, estimated_epoch_time) =
                             calculate_epoch_stats(&pool, num, ep_idx, ep_len).await;
@@ -237,37 +240,40 @@ async fn calculate_epoch_stats(
     (avg_block_time, estimated_epoch_time)
 }
 
-async fn build_sync_status(pool: &PgPool, tip_block: i64) -> SyncStatus {
-    let sync_row: Option<(i64, Option<f64>)> =
-        sqlx::query_as("SELECT tip_block_number, sync_ema_rate FROM sync_status WHERE id = 1")
+async fn build_sync_status(pool: &PgPool, cache: &CacheBackend, tip_block: i64) -> SyncStatus {
+    let sync_row: Option<(i64,)> =
+        sqlx::query_as("SELECT tip_block_number FROM sync_status WHERE id = 1")
             .fetch_optional(pool)
             .await
             .ok()
             .flatten();
 
-    let (synced_block, ema_rate) = sync_row.unwrap_or((0, None));
-
+    let synced_block = sync_row.map(|(b,)| b).unwrap_or(0);
     let blocks_behind = tip_block - synced_block;
     let is_syncing = blocks_behind > 100;
-    let progress = if tip_block > 0 {
-        (synced_block as f64 / tip_block as f64 * 100.0).min(100.0)
-    } else {
-        0.0
-    };
 
-    let estimated_time = if is_syncing && blocks_behind > 0 {
-        if let Some(rate) = ema_rate {
-            if rate > 0.0 {
-                let seconds_remaining = (blocks_behind as f64 / rate) as u64;
-                Some(format_duration(seconds_remaining))
-            } else {
-                None
-            }
+    let sync_progress_from_redis: Option<SyncProgressData> =
+        cache.get(SYNC_PROGRESS_REDIS_KEY).await;
+
+    let (progress, estimated_time) = if let Some(ref sp) = sync_progress_from_redis {
+        let stale = Utc::now().timestamp() - sp.updated_at > 60;
+        if !stale && is_syncing {
+            (sp.progress_percentage, Some(sp.eta_formatted.clone()))
         } else {
-            None
+            let p = if tip_block > 0 {
+                (synced_block as f64 / tip_block as f64 * 100.0).min(100.0)
+            } else {
+                0.0
+            };
+            (p, None)
         }
     } else {
-        None
+        let p = if tip_block > 0 {
+            (synced_block as f64 / tip_block as f64 * 100.0).min(100.0)
+        } else {
+            0.0
+        };
+        (p, None)
     };
 
     SyncStatus {

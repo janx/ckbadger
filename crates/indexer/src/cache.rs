@@ -1,3 +1,6 @@
+use ckbadger_common::SyncProgressData;
+#[cfg(feature = "redis-cache")]
+use ckbadger_common::SYNC_PROGRESS_REDIS_KEY;
 #[cfg(feature = "redis-cache")]
 use redis::AsyncCommands;
 #[cfg(feature = "redis-cache")]
@@ -103,6 +106,34 @@ impl CacheInvalidator {
         #[cfg(not(feature = "redis-cache"))]
         {
             false
+        }
+    }
+
+    pub async fn publish_sync_progress(&self, data: &SyncProgressData) {
+        #[cfg(feature = "redis-cache")]
+        {
+            let Some(ref conn) = self.conn else {
+                return;
+            };
+
+            let mut conn = conn.clone();
+            match serde_json::to_string(data) {
+                Ok(json) => {
+                    let result: Result<(), _> =
+                        conn.set_ex(SYNC_PROGRESS_REDIS_KEY, json, 30).await;
+                    if let Err(e) = result {
+                        warn!("Failed to publish sync progress: {}", e);
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to serialize sync progress: {}", e);
+                }
+            }
+        }
+
+        #[cfg(not(feature = "redis-cache"))]
+        {
+            let _ = (self, data);
         }
     }
 }

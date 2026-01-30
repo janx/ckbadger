@@ -341,6 +341,10 @@ impl Indexer {
         Arc::clone(&self.progress)
     }
 
+    pub fn cache_invalidator(&self) -> &CacheInvalidator {
+        &self.cache_invalidator
+    }
+
     pub fn writer(&self) -> &BatchWriter {
         &self.writer
     }

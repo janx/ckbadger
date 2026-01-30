@@ -3,6 +3,7 @@
 use axum::{extract::State, routing::get, Router};
 use chrono::{DateTime, Utc};
 use ckbadger_common::dao::GENESIS_BURNT;
+use ckbadger_common::{SyncProgressData, SYNC_PROGRESS_REDIS_KEY};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -822,8 +823,6 @@ async fn fetch_network_stats_from_db(
 
     let sync_row: Option<(
         i64,
-        Option<DateTime<Utc>>,
-        i64,
         bool,
         Option<DateTime<Utc>>,
         Option<i64>,
@@ -833,8 +832,6 @@ async fn fetch_network_stats_from_db(
     )> = sqlx::query_as(
         r#"SELECT 
             tip_block_number, 
-            sync_started_at, 
-            COALESCE(sync_started_block, 0),
             COALESCE(deep_fork_detected, FALSE),
             deep_fork_at,
             deep_fork_db_tip,
@@ -850,40 +847,39 @@ async fn fetch_network_stats_from_db(
 
     let (
         synced_block,
-        sync_started_at,
-        sync_started_block,
         deep_fork_detected,
         deep_fork_at,
         deep_fork_db_tip,
         deep_fork_chain_tip,
         deep_fork_depth,
         deep_fork_fork_point,
-    ) = sync_row.unwrap_or((latest_block, None, 0, false, None, None, None, None, None));
+    ) = sync_row.unwrap_or((latest_block, false, None, None, None, None, None));
 
     let blocks_behind = tip_block - synced_block;
     let is_syncing = blocks_behind > 100;
-    let progress = if tip_block > 0 {
-        (synced_block as f64 / tip_block as f64 * 100.0).min(100.0)
-    } else {
-        0.0
-    };
 
-    let estimated_time = if is_syncing && blocks_behind > 0 {
-        if let Some(started_at) = sync_started_at {
-            let elapsed = Utc::now().signed_duration_since(started_at).num_seconds() as u64;
-            let blocks_synced = (synced_block - sync_started_block).max(0) as u64;
-            if elapsed > 0 && blocks_synced > 0 {
-                let rate = blocks_synced as f64 / elapsed as f64;
-                let seconds_remaining = (blocks_behind as f64 / rate) as u64;
-                Some(format_duration(seconds_remaining))
-            } else {
-                None
-            }
+    let sync_progress_from_redis: Option<SyncProgressData> =
+        state.cache.get(SYNC_PROGRESS_REDIS_KEY).await;
+
+    let (progress, estimated_time) = if let Some(ref sp) = sync_progress_from_redis {
+        let stale = Utc::now().timestamp() - sp.updated_at > 60;
+        if !stale && is_syncing {
+            (sp.progress_percentage, Some(sp.eta_formatted.clone()))
         } else {
-            None
+            let p = if tip_block > 0 {
+                (synced_block as f64 / tip_block as f64 * 100.0).min(100.0)
+            } else {
+                0.0
+            };
+            (p, None)
         }
     } else {
-        None
+        let p = if tip_block > 0 {
+            (synced_block as f64 / tip_block as f64 * 100.0).min(100.0)
+        } else {
+            0.0
+        };
+        (p, None)
     };
 
     let sync_status = SyncStatus {

@@ -84,6 +84,7 @@ pub async fn create_router(config: AppConfig) -> Router {
 
     let broadcaster_pool = config.pool.clone();
     let broadcaster_rpc_url = config.ckb_rpc_url.clone();
+    let broadcaster_cache = cache.clone();
 
     let cycles_calculator = CyclesCalculator::new(config.pool.clone(), config.ckb_rpc_url.clone());
 
@@ -119,8 +120,13 @@ pub async fn create_router(config: AppConfig) -> Router {
 
         let broadcaster_ws = state.ws_manager.clone();
         tokio::spawn(async move {
-            ws::start_block_broadcaster(broadcaster_pool, broadcaster_ws, broadcaster_rpc_url)
-                .await;
+            ws::start_block_broadcaster(
+                broadcaster_pool,
+                broadcaster_ws,
+                broadcaster_rpc_url,
+                broadcaster_cache,
+            )
+            .await;
         });
 
         let reorg_broadcaster_pool = state.pool.clone();
