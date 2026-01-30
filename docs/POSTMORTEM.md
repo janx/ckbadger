@@ -1253,4 +1253,60 @@ if has_udt_outputs || has_udt_inputs {
 
 ---
 
-_Last updated: 2026-01-26_
+### IDX-006: live_cells partition indexes failed to rebuild (2026-01-30)
+
+**Symptom**: After bulk sync completed and index rebuild triggered, 5 indexes on `live_cells` table failed with error "cannot create index on partitioned table concurrently".
+
+```
+Failed indexes: idx_live_cells_lock, idx_live_cells_lock_code, idx_live_cells_type,
+                idx_live_cells_type_code, idx_live_cells_block
+```
+
+**Root Cause**: Two bugs in `indexes.rs`:
+
+1. **Wrong partition type**: `live_cells` indexes were marked as `is_partitioned: false`, but `live_cells` is a HASH-partitioned table with 16 partitions. The code tried to create indexes directly on the parent table with `CREATE INDEX CONCURRENTLY`, which PostgreSQL doesn't support for partitioned tables.
+
+2. **Missing partition suffixes**: Even if marked as partitioned, the `PARTITION_SUFFIXES` constant only had 10 entries (`_p00` to `_p09`) for RANGE-partitioned tables, but `live_cells` has 16 HASH partitions (`_p00` to `_p15`).
+
+```rust
+// WRONG: live_cells marked as non-partitioned
+DeferrableIndex {
+    name: "idx_live_cells_lock",
+    table: "live_cells",
+    is_partitioned: false,  // BUG: Should be partitioned!
+    ...
+}
+
+// WRONG: Only 10 suffixes, but live_cells has 16 partitions
+const PARTITION_SUFFIXES: &[&str] = &["_p00", ..., "_p09"];
+```
+
+**Fix**: Introduced `PartitionType` enum to distinguish partition schemes:
+
+```rust
+enum PartitionType {
+    None,   // Not partitioned
+    Range,  // 10 partitions (_p00 to _p09) - blocks, cells, transactions, etc.
+    Hash,   // 16 partitions (_p00 to _p15) - live_cells
+}
+
+const RANGE_PARTITION_SUFFIXES: &[&str] = &["_p00", ..., "_p09"];
+const HASH_PARTITION_SUFFIXES: &[&str] = &["_p00", ..., "_p15"];
+```
+
+**Test Coverage Added**:
+
+- `test_hash_partitioned_indexes` - Verifies live_cells indexes use Hash type
+- `test_partition_suffix_counts` - Verifies 10 RANGE and 16 HASH suffixes
+- `test_live_cells_indexes_are_hash_partitioned` - Explicit check for live_cells
+
+**Lesson**: When a table uses a different partition scheme than others, it needs explicit handling. PostgreSQL `CREATE INDEX CONCURRENTLY` cannot be used on partitioned parent tables - indexes must be created on each partition individually.
+
+**Files**:
+
+- `crates/indexer/src/db/indexes.rs` - Added PartitionType enum, fixed live_cells indexes
+- `migrations/postgres/001_init.sql` - Documents live_cells HASH partitioning (16 partitions)
+
+---
+
+_Last updated: 2026-01-30_

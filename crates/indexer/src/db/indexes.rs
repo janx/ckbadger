@@ -13,12 +13,25 @@ pub struct IndexRebuildProgress {
     pub failed: Vec<String>,
 }
 
+/// Partition scheme type for tables
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PartitionType {
+    /// Not partitioned - create index directly on table
+    #[allow(dead_code)]
+    None,
+    /// Range partitioned by block number (10 partitions: _p00 to _p09)
+    Range,
+    /// Hash partitioned (16 partitions: _p00 to _p15)
+    Hash,
+}
+
 #[derive(Debug, Clone)]
 struct DeferrableIndex {
     name: &'static str,
     table: &'static str,
     definition: &'static str,
-    is_partitioned: bool,
+    /// Partition type determines which suffixes to use
+    partition_type: PartitionType,
     priority: u8,
 }
 
@@ -36,8 +49,13 @@ struct DeferrableConstraint {
     is_partitioned: bool,
 }
 
-const PARTITION_SUFFIXES: &[&str] = &[
+const RANGE_PARTITION_SUFFIXES: &[&str] = &[
     "_p00", "_p01", "_p02", "_p03", "_p04", "_p05", "_p06", "_p07", "_p08", "_p09",
+];
+
+const HASH_PARTITION_SUFFIXES: &[&str] = &[
+    "_p00", "_p01", "_p02", "_p03", "_p04", "_p05", "_p06", "_p07", "_p08", "_p09", "_p10", "_p11",
+    "_p12", "_p13", "_p14", "_p15",
 ];
 
 /// UNIQUE constraints that are safe to drop during bulk sync.
@@ -86,196 +104,196 @@ const DEFERRABLE_INDEXES: &[DeferrableIndex] = &[
         name: "idx_blocks_hash",
         table: "blocks",
         definition: "CREATE INDEX {name} ON {table}(hash)",
-        is_partitioned: true,
+        partition_type: PartitionType::Range,
         priority: 1,
     },
     DeferrableIndex {
         name: "idx_blocks_epoch",
         table: "blocks",
         definition: "CREATE INDEX {name} ON {table}(epoch_number)",
-        is_partitioned: true,
+        partition_type: PartitionType::Range,
         priority: 2,
     },
     DeferrableIndex {
         name: "idx_blocks_miner",
         table: "blocks",
         definition: "CREATE INDEX {name} ON {table}(miner_lock_hash) WHERE miner_lock_hash IS NOT NULL",
-        is_partitioned: true,
+        partition_type: PartitionType::Range,
         priority: 3,
     },
     DeferrableIndex {
         name: "idx_tx_hash",
         table: "transactions",
         definition: "CREATE INDEX {name} ON {table}(hash)",
-        is_partitioned: true,
+        partition_type: PartitionType::Range,
         priority: 1,
     },
     DeferrableIndex {
         name: "idx_tx_timestamp",
         table: "transactions",
         definition: "CREATE INDEX {name} ON {table}(timestamp DESC)",
-        is_partitioned: true,
+        partition_type: PartitionType::Range,
         priority: 2,
     },
     DeferrableIndex {
         name: "idx_tx_short_hash",
         table: "transactions",
         definition: "CREATE INDEX {name} ON {table}(short_hash, block_number)",
-        is_partitioned: true,
+        partition_type: PartitionType::Range,
         priority: 2,
     },
     DeferrableIndex {
         name: "idx_tx_cursor",
         table: "transactions",
         definition: "CREATE INDEX {name} ON {table}(block_number DESC, tx_index DESC)",
-        is_partitioned: true,
+        partition_type: PartitionType::Range,
         priority: 2,
     },
     DeferrableIndex {
         name: "idx_tx_list_covering",
         table: "transactions",
         definition: "CREATE INDEX {name} ON {table}(block_number DESC, tx_index DESC) INCLUDE (hash, inputs_count, outputs_count, fee, is_cellbase, timestamp)",
-        is_partitioned: true,
+        partition_type: PartitionType::Range,
         priority: 3,
     },
     DeferrableIndex {
         name: "idx_cells_outpoint",
         table: "cells",
         definition: "CREATE INDEX {name} ON {table}(tx_hash, output_index)",
-        is_partitioned: true,
+        partition_type: PartitionType::Range,
         priority: 1,
     },
     DeferrableIndex {
         name: "idx_cells_lock_live",
         table: "cells",
         definition: "CREATE INDEX {name} ON {table}(lock_script_hash, created_at_block DESC) WHERE status = 0",
-        is_partitioned: true,
+        partition_type: PartitionType::Range,
         priority: 1,
     },
     DeferrableIndex {
         name: "idx_cells_lock_script_details",
         table: "cells",
         definition: "CREATE INDEX {name} ON {table}(lock_script_hash) INCLUDE (lock_code_hash, lock_hash_type, lock_args)",
-        is_partitioned: true,
+        partition_type: PartitionType::Range,
         priority: 2,
     },
     DeferrableIndex {
         name: "idx_cells_type_live",
         table: "cells",
         definition: "CREATE INDEX {name} ON {table}(type_script_hash, created_at_block DESC) WHERE status = 0 AND type_script_hash IS NOT NULL",
-        is_partitioned: true,
+        partition_type: PartitionType::Range,
         priority: 2,
     },
     DeferrableIndex {
         name: "idx_cells_consumed_by",
         table: "cells",
         definition: "CREATE INDEX {name} ON {table}(consumed_by_tx) WHERE consumed_by_tx IS NOT NULL",
-        is_partitioned: true,
+        partition_type: PartitionType::Range,
         priority: 2,
     },
     DeferrableIndex {
         name: "idx_cells_type_script_hash",
         table: "cells",
         definition: "CREATE INDEX {name} ON {table}(type_script_hash) WHERE type_script_hash IS NOT NULL",
-        is_partitioned: true,
+        partition_type: PartitionType::Range,
         priority: 2,
     },
     DeferrableIndex {
         name: "idx_cells_lock_code_hash",
         table: "cells",
         definition: "CREATE INDEX {name} ON {table}(lock_code_hash)",
-        is_partitioned: true,
+        partition_type: PartitionType::Range,
         priority: 3,
     },
     DeferrableIndex {
         name: "idx_cells_type_code_hash",
         table: "cells",
         definition: "CREATE INDEX {name} ON {table}(type_code_hash) WHERE type_code_hash IS NOT NULL",
-        is_partitioned: true,
+        partition_type: PartitionType::Range,
         priority: 3,
     },
     DeferrableIndex {
         name: "idx_cells_lock_code_hash_live",
         table: "cells",
         definition: "CREATE INDEX {name} ON {table}(lock_code_hash, lock_hash_type, created_at_block DESC, output_index DESC) WHERE status = 0",
-        is_partitioned: true,
+        partition_type: PartitionType::Range,
         priority: 3,
     },
     DeferrableIndex {
         name: "idx_cells_type_code_hash_live",
         table: "cells",
         definition: "CREATE INDEX {name} ON {table}(type_code_hash, type_hash_type, created_at_block DESC, output_index DESC) WHERE status = 0 AND type_code_hash IS NOT NULL",
-        is_partitioned: true,
+        partition_type: PartitionType::Range,
         priority: 3,
     },
     DeferrableIndex {
         name: "idx_cells_list_covering",
         table: "cells",
         definition: "CREATE INDEX {name} ON {table}(lock_script_hash, created_at_block DESC) INCLUDE (tx_hash, output_index, capacity, type_script_hash, data_size) WHERE status = 0",
-        is_partitioned: true,
+        partition_type: PartitionType::Range,
         priority: 3,
     },
     DeferrableIndex {
         name: "idx_inputs_previous",
         table: "transaction_inputs",
         definition: "CREATE INDEX {name} ON {table}(previous_tx_hash, previous_output_index)",
-        is_partitioned: true,
+        partition_type: PartitionType::Range,
         priority: 2,
     },
     DeferrableIndex {
         name: "idx_inputs_tx",
         table: "transaction_inputs",
         definition: "CREATE INDEX {name} ON {table}(tx_hash)",
-        is_partitioned: true,
+        partition_type: PartitionType::Range,
         priority: 2,
     },
     DeferrableIndex {
         name: "idx_cell_deps_tx",
         table: "transaction_cell_deps",
         definition: "CREATE INDEX {name} ON {table}(tx_hash)",
-        is_partitioned: true,
+        partition_type: PartitionType::Range,
         priority: 3,
     },
     DeferrableIndex {
         name: "idx_uncles_hash",
         table: "uncle_blocks",
         definition: "CREATE INDEX {name} ON {table}(hash)",
-        is_partitioned: true,
+        partition_type: PartitionType::Range,
         priority: 3,
     },
     DeferrableIndex {
         name: "idx_live_cells_lock",
         table: "live_cells",
         definition: "CREATE INDEX {name} ON {table}(lock_script_hash)",
-        is_partitioned: false,
+        partition_type: PartitionType::Hash,
         priority: 1,
     },
     DeferrableIndex {
         name: "idx_live_cells_lock_code",
         table: "live_cells",
         definition: "CREATE INDEX {name} ON {table}(lock_code_hash)",
-        is_partitioned: false,
+        partition_type: PartitionType::Hash,
         priority: 2,
     },
     DeferrableIndex {
         name: "idx_live_cells_type",
         table: "live_cells",
         definition: "CREATE INDEX {name} ON {table}(type_script_hash) WHERE type_script_hash IS NOT NULL",
-        is_partitioned: false,
+        partition_type: PartitionType::Hash,
         priority: 2,
     },
     DeferrableIndex {
         name: "idx_live_cells_type_code",
         table: "live_cells",
         definition: "CREATE INDEX {name} ON {table}(type_code_hash) WHERE type_code_hash IS NOT NULL",
-        is_partitioned: false,
+        partition_type: PartitionType::Hash,
         priority: 2,
     },
     DeferrableIndex {
         name: "idx_live_cells_block",
         table: "live_cells",
         definition: "CREATE INDEX {name} ON {table}(created_at_block)",
-        is_partitioned: false,
+        partition_type: PartitionType::Hash,
         priority: 3,
     },
 ];
@@ -302,8 +320,9 @@ impl IndexManager {
         let mut dropped_count = 0;
 
         for idx in DEFERRABLE_INDEXES {
-            if idx.is_partitioned {
-                for suffix in PARTITION_SUFFIXES {
+            let suffixes = Self::get_partition_suffixes(idx.partition_type);
+            if let Some(suffixes) = suffixes {
+                for suffix in suffixes {
                     let index_name = format!("{}_{}", idx.table, &idx.name[4..]);
                     let partition_index = format!("{}{}", index_name, suffix);
                     if self.drop_index_if_exists(&partition_index).await? {
@@ -326,6 +345,14 @@ impl IndexManager {
 
         info!("Dropped {} indexes in {:?}", dropped_count, start.elapsed());
         Ok(dropped_count)
+    }
+
+    fn get_partition_suffixes(partition_type: PartitionType) -> Option<&'static [&'static str]> {
+        match partition_type {
+            PartitionType::None => None,
+            PartitionType::Range => Some(RANGE_PARTITION_SUFFIXES),
+            PartitionType::Hash => Some(HASH_PARTITION_SUFFIXES),
+        }
     }
 
     async fn drop_index_if_exists(&self, name: &str) -> Result<bool> {
@@ -376,11 +403,12 @@ impl IndexManager {
             progress.current = Some(idx.name.to_string());
             self.update_progress(&progress).await?;
 
-            let result = if idx.is_partitioned {
-                self.rebuild_partitioned_index_parallel(idx, max_parallel)
-                    .await
-            } else {
-                self.rebuild_single_index(idx).await
+            let result = match idx.partition_type {
+                PartitionType::None => self.rebuild_single_index(idx).await,
+                PartitionType::Range | PartitionType::Hash => {
+                    self.rebuild_partitioned_index_parallel(idx, max_parallel)
+                        .await
+                }
             };
 
             match result {
@@ -425,15 +453,17 @@ impl IndexManager {
         idx: &DeferrableIndex,
         max_parallel: usize,
     ) -> Result<()> {
+        let suffixes = Self::get_partition_suffixes(idx.partition_type)
+            .expect("rebuild_partitioned_index_parallel called with non-partitioned index");
         info!(
             "Rebuilding partitioned index {} on {} partitions",
             idx.name,
-            PARTITION_SUFFIXES.len()
+            suffixes.len()
         );
         let start = Instant::now();
 
         let mut join_set: JoinSet<Result<String>> = JoinSet::new();
-        let mut pending_partitions: Vec<&str> = PARTITION_SUFFIXES.to_vec();
+        let mut pending_partitions: Vec<&str> = suffixes.to_vec();
 
         while !pending_partitions.is_empty() || !join_set.is_empty() {
             while join_set.len() < max_parallel && !pending_partitions.is_empty() {
@@ -525,7 +555,7 @@ impl IndexManager {
 
         for constraint in DEFERRABLE_CONSTRAINTS {
             if constraint.is_partitioned {
-                for suffix in PARTITION_SUFFIXES {
+                for suffix in RANGE_PARTITION_SUFFIXES {
                     let table_name = format!("{}{}", constraint.table, suffix);
                     let constraint_name = format!("{}_{}", table_name, constraint.name);
                     if self
@@ -624,7 +654,7 @@ impl IndexManager {
         max_parallel: usize,
     ) -> Result<usize> {
         let mut join_set: JoinSet<Result<bool>> = JoinSet::new();
-        let mut pending_partitions: Vec<&str> = PARTITION_SUFFIXES.to_vec();
+        let mut pending_partitions: Vec<&str> = RANGE_PARTITION_SUFFIXES.to_vec();
         let mut rebuilt_count = 0;
 
         while !pending_partitions.is_empty() || !join_set.is_empty() {
@@ -725,8 +755,11 @@ mod tests {
     }
 
     #[test]
-    fn test_partition_suffixes() {
-        assert_eq!(PARTITION_SUFFIXES.len(), 10);
+    fn test_range_partition_suffixes() {
+        assert_eq!(RANGE_PARTITION_SUFFIXES.len(), 10);
+        for (i, suffix) in RANGE_PARTITION_SUFFIXES.iter().enumerate() {
+            assert_eq!(*suffix, format!("_p{:02}", i));
+        }
     }
 
     #[test]
@@ -770,7 +803,7 @@ mod tests {
 
     #[test]
     fn test_partitioned_indexes_have_correct_tables() {
-        let partitioned_tables = [
+        let range_partitioned_tables = [
             "blocks",
             "transactions",
             "cells",
@@ -781,10 +814,10 @@ mod tests {
         ];
 
         for idx in DEFERRABLE_INDEXES {
-            if idx.is_partitioned {
+            if idx.partition_type == PartitionType::Range {
                 assert!(
-                    partitioned_tables.contains(&idx.table),
-                    "Index {} marked as partitioned but table {} is not partitioned",
+                    range_partitioned_tables.contains(&idx.table),
+                    "Index {} marked as Range partitioned but table {} is not range partitioned",
                     idx.name,
                     idx.table
                 );
@@ -793,22 +826,42 @@ mod tests {
     }
 
     #[test]
-    fn test_non_partitioned_indexes() {
-        let non_partitioned: Vec<_> = DEFERRABLE_INDEXES
+    fn test_hash_partitioned_indexes() {
+        let hash_partitioned: Vec<_> = DEFERRABLE_INDEXES
             .iter()
-            .filter(|idx| !idx.is_partitioned)
+            .filter(|idx| idx.partition_type == PartitionType::Hash)
             .collect();
 
         assert!(
-            !non_partitioned.is_empty(),
-            "Should have some non-partitioned indexes"
+            !hash_partitioned.is_empty(),
+            "Should have some hash-partitioned indexes"
         );
-        for idx in non_partitioned {
+        for idx in hash_partitioned {
             assert_eq!(
                 idx.table, "live_cells",
-                "Non-partitioned index {} should be on live_cells",
+                "Hash-partitioned index {} should be on live_cells",
                 idx.name
             );
+        }
+    }
+
+    #[test]
+    fn test_partition_suffix_counts() {
+        assert_eq!(RANGE_PARTITION_SUFFIXES.len(), 10);
+        assert_eq!(HASH_PARTITION_SUFFIXES.len(), 16);
+    }
+
+    #[test]
+    fn test_live_cells_indexes_are_hash_partitioned() {
+        for idx in DEFERRABLE_INDEXES {
+            if idx.table == "live_cells" {
+                assert_eq!(
+                    idx.partition_type,
+                    PartitionType::Hash,
+                    "live_cells index {} should be Hash partitioned",
+                    idx.name
+                );
+            }
         }
     }
 
@@ -841,7 +894,7 @@ mod tests {
             name: "idx_cells_lock_live",
             table: "cells",
             definition: "CREATE INDEX {name} ON {table}(lock_script_hash)",
-            is_partitioned: true,
+            partition_type: PartitionType::Range,
             priority: 1,
         };
 
