@@ -381,6 +381,18 @@ impl Indexer {
         self.progress.blocks_remaining() > self.config.bulk_sync_threshold
     }
 
+    async fn is_stats_rebuild_in_progress(&self) -> bool {
+        let result: Option<(bool,)> = sqlx::query_as(
+            "SELECT COALESCE(stats_rebuild_in_progress, false) FROM sync_status WHERE id = 1",
+        )
+        .fetch_optional(self.writer.pool())
+        .await
+        .ok()
+        .flatten();
+
+        result.map(|r| r.0).unwrap_or(false)
+    }
+
     fn should_use_copy(&self) -> bool {
         self.is_bulk_sync_active() && self.copy_router.is_some()
     }
@@ -1113,14 +1125,14 @@ impl Indexer {
         let was_bulk = self.was_bulk_sync_active.load(Ordering::SeqCst);
 
         if was_bulk && !currently_bulk {
-            info!("Bulk sync completed, rebuilding skipped statistics...");
-            if let Err(e) = self.writer.rebuild_all_statistics().await {
-                warn!("Failed to rebuild statistics after bulk sync: {}", e);
-            }
+            info!("Bulk sync completed, submitting post-sync tasks...");
 
-            // Check if indexes are deferred and auto-submit rebuild task
             if let Err(e) = self.maybe_submit_index_rebuild_task().await {
                 warn!("Failed to submit index rebuild task: {}", e);
+            }
+
+            if let Err(e) = self.maybe_submit_statistics_rebuild_task().await {
+                warn!("Failed to submit statistics rebuild task: {}", e);
             }
         }
 
@@ -1182,6 +1194,41 @@ impl Indexer {
             "Submitted index rebuild task: {} (parallel={})",
             task_id.0, self.config.index_rebuild_parallel
         );
+
+        Ok(())
+    }
+
+    async fn maybe_submit_statistics_rebuild_task(&self) -> Result<()> {
+        use ckbadger_common::{StatisticsRebuildConfig, TaskBuilder};
+
+        let existing: Option<(i64,)> = sqlx::query_as(
+            "SELECT COUNT(*) FROM tasks WHERE task_type = 'statistics_rebuild' AND status IN ('pending', 'running')",
+        )
+        .fetch_optional(self.writer.pool())
+        .await?;
+
+        if existing.map(|r| r.0).unwrap_or(0) > 0 {
+            info!("Statistics rebuild task already pending/running, skipping submission");
+            return Ok(());
+        }
+
+        let builder = TaskBuilder::statistics_rebuild(StatisticsRebuildConfig::default());
+
+        let task_id: (Uuid,) = sqlx::query_as(
+            r#"
+            INSERT INTO tasks (task_type, config, priority, max_retries)
+            VALUES ($1, $2, $3, $4)
+            RETURNING id
+            "#,
+        )
+        .bind(builder.task_type().to_string())
+        .bind(builder.config())
+        .bind(builder.get_priority())
+        .bind(builder.get_max_retries())
+        .fetch_one(self.writer.pool())
+        .await?;
+
+        info!("Submitted statistics rebuild task: {}", task_id.0);
 
         Ok(())
     }
@@ -4932,8 +4979,7 @@ impl Indexer {
                 .await?;
         }
 
-        // Non-critical statistics - skipped during bulk sync (rebuilt when bulk sync completes)
-        if !bulk_sync_active {
+        if !bulk_sync_active && !self.is_stats_rebuild_in_progress().await {
             for (
                 date,
                 (blocks, txs, created, consumed, capacity, data_size_added, data_size_consumed),

@@ -57,6 +57,8 @@ pub enum TaskType {
     CyclesBackfill,
     IndexRebuild,
     LabelImport,
+    StatisticsRebuild,
+    LiveCellsPopulate,
 }
 
 impl std::fmt::Display for TaskType {
@@ -65,6 +67,8 @@ impl std::fmt::Display for TaskType {
             TaskType::CyclesBackfill => write!(f, "cycles_backfill"),
             TaskType::IndexRebuild => write!(f, "index_rebuild"),
             TaskType::LabelImport => write!(f, "label_import"),
+            TaskType::StatisticsRebuild => write!(f, "statistics_rebuild"),
+            TaskType::LiveCellsPopulate => write!(f, "live_cells_populate"),
         }
     }
 }
@@ -77,6 +81,8 @@ impl std::str::FromStr for TaskType {
             "cycles_backfill" => Ok(TaskType::CyclesBackfill),
             "index_rebuild" => Ok(TaskType::IndexRebuild),
             "label_import" => Ok(TaskType::LabelImport),
+            "statistics_rebuild" => Ok(TaskType::StatisticsRebuild),
+            "live_cells_populate" => Ok(TaskType::LiveCellsPopulate),
             _ => Err(anyhow::anyhow!("Invalid task type: {}", s)),
         }
     }
@@ -156,6 +162,27 @@ fn default_true() -> bool {
     true
 }
 
+/// Configuration for statistics rebuild task
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct StatisticsRebuildConfig {
+    /// Tables to rebuild (None = all 7 tables)
+    pub tables: Option<Vec<String>>,
+}
+
+/// Configuration for live cells populate task
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveCellsPopulateConfig {
+    /// Batch size for COPY operations (default: 100,000)
+    #[serde(default = "default_populate_batch_size")]
+    pub batch_size: usize,
+}
+
+fn default_populate_batch_size() -> usize {
+    100_000
+}
+
 /// Unified task configuration enum
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -163,6 +190,8 @@ pub enum TaskConfig {
     CyclesBackfill(CyclesBackfillConfig),
     IndexRebuild(IndexRebuildConfig),
     LabelImport(LabelImportConfig),
+    StatisticsRebuild(StatisticsRebuildConfig),
+    LiveCellsPopulate(LiveCellsPopulateConfig),
 }
 
 impl TaskConfig {
@@ -171,6 +200,8 @@ impl TaskConfig {
             TaskConfig::CyclesBackfill(_) => TaskType::CyclesBackfill,
             TaskConfig::IndexRebuild(_) => TaskType::IndexRebuild,
             TaskConfig::LabelImport(_) => TaskType::LabelImport,
+            TaskConfig::StatisticsRebuild(_) => TaskType::StatisticsRebuild,
+            TaskConfig::LiveCellsPopulate(_) => TaskType::LiveCellsPopulate,
         }
     }
 }
@@ -231,6 +262,29 @@ pub struct LabelImportResult {
     pub errors: Vec<String>,
 }
 
+/// Progress details for statistics rebuild
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct StatisticsRebuildResult {
+    pub completed_tables: Vec<String>,
+    pub current_table: Option<String>,
+    pub failed: Vec<StatisticsFailureInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatisticsFailureInfo {
+    pub table: String,
+    pub error: String,
+}
+
+/// Progress details for live cells populate
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveCellsPopulateResult {
+    pub cells_populated: i64,
+}
+
 /// Unified task result enum
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -238,6 +292,8 @@ pub enum TaskResult {
     CyclesBackfill(CyclesBackfillResult),
     IndexRebuild(IndexRebuildResult),
     LabelImport(LabelImportResult),
+    StatisticsRebuild(StatisticsRebuildResult),
+    LiveCellsPopulate(LiveCellsPopulateResult),
 }
 
 // ============================================
@@ -406,6 +462,24 @@ impl TaskBuilder {
         }
     }
 
+    pub fn statistics_rebuild(config: StatisticsRebuildConfig) -> Self {
+        Self {
+            task_type: TaskType::StatisticsRebuild,
+            config: serde_json::to_value(TaskConfig::StatisticsRebuild(config)).unwrap(),
+            priority: 5,
+            max_retries: 2,
+        }
+    }
+
+    pub fn live_cells_populate(config: LiveCellsPopulateConfig) -> Self {
+        Self {
+            task_type: TaskType::LiveCellsPopulate,
+            config: serde_json::to_value(TaskConfig::LiveCellsPopulate(config)).unwrap(),
+            priority: 8,
+            max_retries: 1,
+        }
+    }
+
     pub fn priority(mut self, priority: i32) -> Self {
         self.priority = priority;
         self
@@ -547,6 +621,14 @@ mod tests {
         assert_eq!(TaskType::CyclesBackfill.to_string(), "cycles_backfill");
         assert_eq!(TaskType::IndexRebuild.to_string(), "index_rebuild");
         assert_eq!(TaskType::LabelImport.to_string(), "label_import");
+        assert_eq!(
+            TaskType::StatisticsRebuild.to_string(),
+            "statistics_rebuild"
+        );
+        assert_eq!(
+            TaskType::LiveCellsPopulate.to_string(),
+            "live_cells_populate"
+        );
     }
 
     #[test]
@@ -632,5 +714,19 @@ mod tests {
         let json = serde_json::to_string(&result).unwrap();
         assert!(json.contains("totalIndexes"));
         assert!(json.contains("currentIndex"));
+    }
+
+    #[test]
+    fn test_statistics_rebuild_builder() {
+        let builder = TaskBuilder::statistics_rebuild(StatisticsRebuildConfig::default());
+        assert_eq!(builder.task_type(), TaskType::StatisticsRebuild);
+        assert_eq!(builder.get_priority(), 5);
+    }
+
+    #[test]
+    fn test_live_cells_populate_builder() {
+        let builder = TaskBuilder::live_cells_populate(LiveCellsPopulateConfig::default());
+        assert_eq!(builder.task_type(), TaskType::LiveCellsPopulate);
+        assert_eq!(builder.get_priority(), 8);
     }
 }

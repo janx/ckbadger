@@ -1,6 +1,7 @@
 use anyhow::Result;
 use ckbadger_common::{
-    CyclesBackfillConfig, IndexRebuildConfig, LabelImportConfig, Task, TaskConfig, TaskType,
+    CyclesBackfillConfig, IndexRebuildConfig, LabelImportConfig, StatisticsRebuildConfig, Task,
+    TaskConfig, TaskType,
 };
 use sqlx::PgPool;
 use std::time::Duration;
@@ -11,6 +12,7 @@ use crate::db::TaskDb;
 mod cycles;
 mod index;
 mod labels;
+mod statistics;
 
 pub struct TaskExecutor {
     db: TaskDb,
@@ -98,6 +100,10 @@ impl TaskExecutor {
             TaskType::CyclesBackfill => self.execute_cycles_backfill(task).await,
             TaskType::IndexRebuild => self.execute_index_rebuild(task).await,
             TaskType::LabelImport => self.execute_label_import(task).await,
+            TaskType::StatisticsRebuild => self.execute_statistics_rebuild(task).await,
+            TaskType::LiveCellsPopulate => Err(anyhow::anyhow!(
+                "LiveCellsPopulate must be executed by the indexer, not task-runner"
+            )),
         }
     }
 
@@ -137,5 +143,14 @@ impl TaskExecutor {
         };
 
         labels::execute(&self.db, &self.pool, task.id, &config).await
+    }
+
+    async fn execute_statistics_rebuild(&self, task: &Task) -> Result<()> {
+        let config: StatisticsRebuildConfig = match task.config_typed() {
+            Some(TaskConfig::StatisticsRebuild(c)) => c,
+            _ => StatisticsRebuildConfig::default(),
+        };
+
+        statistics::execute(&self.db, &self.pool, task.id, &config).await
     }
 }

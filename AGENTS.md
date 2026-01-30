@@ -243,15 +243,35 @@ These constraints are redundant during bulk sync because CKB node validates:
 
 **Task-Based Rebuild Flow:**
 
-When bulk sync completes (catches up to <=1000 blocks behind tip), the indexer automatically submits an `index_rebuild` task to the `tasks` table:
+When bulk sync completes (catches up to <=1000 blocks behind tip), the indexer automatically submits tasks to the `tasks` table:
 
 1. Indexer detects bulk sync completion
-2. Checks if indexes are deferred and no pending/running rebuild task exists
-3. Submits `index_rebuild` task to `tasks` table (status: `pending`)
-4. Task-runner picks up the task and executes it (status: `running`)
+2. Submits `index_rebuild` task (priority 10) if indexes are deferred
+3. Submits `statistics_rebuild` task (priority 5) to rebuild aggregate statistics
+4. Task-runner picks up tasks in priority order and executes them
 5. Indexes rebuilt with `CREATE INDEX CONCURRENTLY`
-6. Constraints rebuilt with `ALTER TABLE ADD CONSTRAINT`
-7. Task completes (status: `completed`)
+6. Statistics tables rebuilt (daily_statistics, hourly_statistics, miner_statistics, etc.)
+7. Tasks complete (status: `completed`)
+
+**Available Task Types:**
+
+| Task Type             | Priority | Description                                      |
+| --------------------- | -------- | ------------------------------------------------ |
+| `index_rebuild`       | 10       | Rebuild deferred indexes and constraints         |
+| `live_cells_populate` | 8        | Populate live_cells table from RocksDB (indexer) |
+| `statistics_rebuild`  | 5        | Rebuild all 7 aggregate statistics tables        |
+| `cycles_backfill`     | 0        | Backfill transaction cycles from RPC             |
+| `label_import`        | 0        | Import UDT/script labels from token-labels repo  |
+
+**Statistics Tables Rebuilt:**
+
+- `daily_statistics` - Daily transaction/cell counts
+- `daily_block_stats` - Daily block metrics (uncle rate, block time)
+- `hourly_statistics` - Hourly transaction/cell counts
+- `miner_statistics` - Miner block counts by day
+- `block_time_distribution` - Block time histogram
+- `epoch_time_distribution` - Epoch duration histogram
+- `dao_daily_snapshots` - Daily DAO metrics
 
 **Progress Monitoring:**
 
@@ -500,15 +520,12 @@ cd frontend && pnpm test               # All frontend tests
 
 **BEFORE making changes to CKB-related code, READ the relevant documentation:**
 
-| Topic            | Document                          | Must Read Before                   |
-| ---------------- | --------------------------------- | ---------------------------------- |
-| **Worldview**    | `docs/WORLD_VIEW.md`              | **Any design or implementation**   |
-| DAO, APC, Supply | `docs/DAO_CALCULATIONS.md`        | Any DAO/supply/circulation changes |
-| Historical bugs  | `docs/POSTMORTEM.md`              | Any CKB domain changes             |
-| CKB protocol     | `docs/rfcs/`                      | Understanding CKB internals        |
-| Nervos docs      | `docs/docs.nervos.org/`           | User-facing explanations           |
-| DOB/Spore        | `docs/dob-cookbook/`              | DOB protocol, Spore NFT rendering  |
-| Script names     | `docs/script-name-overrides.json` | Script label corrections           |
+| Topic            | Document                   | Must Read Before                   |
+| ---------------- | -------------------------- | ---------------------------------- |
+| **Worldview**    | `docs/WORLD_VIEW.md`       | **Any design or implementation**   |
+| CKB protocol     | `docs/rfcs/`               | Understanding CKB internals        |
+| Nervos docs      | `docs/docs.nervos.org/`    | User-facing explanations           |
+| DAO, APC, Supply | `docs/DAO_CALCULATIONS.md` | Any DAO/supply/circulation changes |
 
 **Key domain knowledge in `docs/DAO_CALCULATIONS.md`:**
 
