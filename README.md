@@ -379,6 +379,38 @@ cargo run -p ckbadger-api --release
 cd frontend && pnpm install && pnpm dev
 ```
 
+### Task TUI (Terminal UI)
+
+A terminal-based UI for managing background tasks:
+
+```bash
+# Run task TUI (requires DATABASE_URL in .env or as argument)
+cargo run -p ckbadger-task-tui
+
+# Or specify database URL directly
+cargo run -p ckbadger-task-tui -- --database-url postgres://ckbadger:changeme@localhost:5432/ckbadger
+
+# Custom refresh interval (default: 1000ms)
+cargo run -p ckbadger-task-tui -- --refresh-ms 500
+```
+
+**Keyboard Shortcuts:**
+
+| Key       | Action             |
+| --------- | ------------------ |
+| `q`       | Quit               |
+| `j` / `↓` | Move down          |
+| `k` / `↑` | Move up            |
+| `n`       | New task           |
+| `c`       | Cancel task        |
+| `p`       | Pause task         |
+| `r`       | Resume/Retry task  |
+| `d`       | Delete task        |
+| `R`       | Refresh list       |
+| `Enter`   | Confirm dialog     |
+| `Esc`     | Cancel dialog      |
+| `Tab`     | Next dialog option |
+
 ### Running Tests
 
 ```bash
