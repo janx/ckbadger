@@ -19,21 +19,6 @@ CREATE TABLE sync_status (
     last_synced_at TIMESTAMPTZ DEFAULT NOW(),
     sync_started_at TIMESTAMPTZ,
     sync_started_block BIGINT NOT NULL DEFAULT 0,
-    integrity_heartbeat TIMESTAMPTZ,
-    integrity_pending_count BIGINT NOT NULL DEFAULT 0,
-    integrity_total_count BIGINT NOT NULL DEFAULT 0,
-    integrity_processed_count BIGINT NOT NULL DEFAULT 0,
-    integrity_started_at TIMESTAMPTZ,
-    udt_info_running BOOLEAN NOT NULL DEFAULT FALSE,
-    udt_info_total_count BIGINT NOT NULL DEFAULT 0,
-    udt_info_processed_count BIGINT NOT NULL DEFAULT 0,
-    udt_info_started_at TIMESTAMPTZ,
-    udt_info_last_check_at TIMESTAMPTZ,
-    script_info_running BOOLEAN NOT NULL DEFAULT FALSE,
-    script_info_total_count BIGINT NOT NULL DEFAULT 0,
-    script_info_processed_count BIGINT NOT NULL DEFAULT 0,
-    script_info_started_at TIMESTAMPTZ,
-    script_info_last_check_at TIMESTAMPTZ,
     
     -- Deep fork detection (reorg depth > REORG_LIMIT)
     deep_fork_detected BOOLEAN NOT NULL DEFAULT FALSE,
@@ -49,15 +34,15 @@ CREATE TABLE sync_status (
     last_reorg_at TIMESTAMPTZ,
     last_reorg_depth INT,
     
-    -- Deferred index management (for bulk sync optimization)
+    -- EMA sync rate for accurate ETA calculation (blocks/sec)
+    sync_ema_rate DOUBLE PRECISION,
+    
+    -- Deferred index optimization
     indexes_deferred BOOLEAN NOT NULL DEFAULT FALSE,
     indexes_dropped_at TIMESTAMPTZ,
     indexes_rebuild_started_at TIMESTAMPTZ,
     indexes_rebuild_completed_at TIMESTAMPTZ,
-    indexes_rebuild_progress TEXT,  -- JSON: {"total": 20, "completed": 5, "current": "idx_cells_lock"}
-    
-    -- EMA sync rate for accurate ETA calculation (blocks/sec)
-    sync_ema_rate DOUBLE PRECISION,
+    indexes_rebuild_progress JSONB,
 
     CONSTRAINT single_row CHECK (id = 1)
 );
@@ -1381,3 +1366,57 @@ CREATE INDEX idx_tx_list_covering ON transactions(block_number DESC, tx_index DE
 CREATE INDEX idx_cells_list_covering ON cells(lock_script_hash, created_at_block DESC)
     INCLUDE (tx_hash, output_index, capacity, type_script_hash, data_size)
     WHERE status = 0;
+
+-- ===========================================
+-- 12. Task System
+-- Background task management for ckbadger
+-- ===========================================
+
+CREATE TABLE tasks (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    task_type VARCHAR(50) NOT NULL,  -- 'cycles_backfill', 'index_rebuild', 'label_import'
+    status VARCHAR(20) NOT NULL DEFAULT 'pending',  -- 'pending', 'running', 'completed', 'failed', 'cancelled', 'paused'
+    priority INTEGER DEFAULT 0,
+    
+    -- Configuration (task-specific JSON)
+    config JSONB NOT NULL DEFAULT '{}',
+    
+    -- Progress tracking
+    progress_total BIGINT DEFAULT 0,
+    progress_current BIGINT DEFAULT 0,
+    progress_message TEXT,
+    
+    -- Result/error
+    result JSONB,
+    error_message TEXT,
+    
+    -- Timestamps
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    heartbeat_at TIMESTAMPTZ,
+    
+    -- Runtime metadata
+    runner_id VARCHAR(100),  -- Identifies which runner instance is executing
+    retry_count INTEGER DEFAULT 0,
+    max_retries INTEGER DEFAULT 3,
+    
+    -- Rate tracking for ETA calculation
+    rate_samples JSONB DEFAULT '[]',  -- Recent samples: [{ts: epoch, v: progress_current}, ...]
+    rate_ema DOUBLE PRECISION,  -- Exponential moving average (items/sec)
+    
+    -- Log tail for TUI display
+    log_tail TEXT  -- Last N lines of log output
+);
+
+CREATE INDEX idx_tasks_status ON tasks(status);
+CREATE INDEX idx_tasks_type_status ON tasks(task_type, status);
+CREATE INDEX idx_tasks_created_at ON tasks(created_at DESC);
+CREATE INDEX idx_tasks_runner ON tasks(runner_id) WHERE runner_id IS NOT NULL;
+
+COMMENT ON TABLE tasks IS 'Background task management for cycles backfill, index rebuild, and label import';
+COMMENT ON COLUMN tasks.task_type IS 'cycles_backfill | index_rebuild | label_import';
+COMMENT ON COLUMN tasks.status IS 'pending | running | completed | failed | cancelled | paused';
+COMMENT ON COLUMN tasks.config IS 'Task-specific configuration JSON';
+COMMENT ON COLUMN tasks.result IS 'Task result/progress details JSON (e.g., index rebuild progress)';
+COMMENT ON COLUMN tasks.rate_ema IS 'Exponential moving average rate for ETA calculation';
