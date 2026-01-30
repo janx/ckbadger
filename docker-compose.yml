@@ -68,8 +68,11 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-ckbadger}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-ckbadger}
+      REDIS_URL: redis://redis:6379
       CKB_RPC_URL: ${CKB_RPC_URL:-http://ckb-node:8114}
       TOKEN_LABELS_PATH: /app/token-labels
       RUST_LOG: info
