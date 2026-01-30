@@ -316,4 +316,10 @@ export const handlers = [
       nextCursor: null,
     });
   }),
+
+  http.get(`${API_BASE}/tasks/active`, () => {
+    return HttpResponse.json({
+      indexRebuild: null,
+    });
+  }),
 ];

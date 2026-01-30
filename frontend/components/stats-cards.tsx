@@ -85,9 +85,9 @@ export function StatsCards() {
     refetchInterval: 10000,
   });
 
-  const { data: systemStatus } = useQuery({
-    queryKey: ['systemStatus'],
-    queryFn: () => api.getSystemStatus(),
+  const { data: activeTasks } = useQuery({
+    queryKey: ['activeTasks'],
+    queryFn: () => api.getActiveTasks(),
     refetchInterval: 5000,
   });
 
@@ -107,7 +107,7 @@ export function StatsCards() {
   return (
     <div>
       {stats && <SyncBanner stats={stats} />}
-      {systemStatus?.indexRebuild && <IndexRebuildBanner status={systemStatus.indexRebuild} />}
+      {activeTasks?.indexRebuild && <IndexRebuildBanner status={activeTasks.indexRebuild} />}
       <div className="mt-4 grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
         {cards.map((card) => (
           <div key={card.label} className="terminal-card terminal-border-glow p-4">

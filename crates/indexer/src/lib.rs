@@ -1,7 +1,6 @@
 pub mod cache;
 pub mod config;
 pub mod db;
-pub mod integrity;
 pub mod parser;
 pub mod rpc;
 pub mod sync;

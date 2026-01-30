@@ -698,51 +698,8 @@ interface IndexRebuildStatus {
   startedAt: string | null;
 }
 
-interface SystemStatus {
-  sync: SyncStatusDetail;
-  integrity: IntegrityStatus;
-  labelImport: LabelImportStatus;
-  indexRebuild: IndexRebuildStatus;
-}
-
-interface SyncStatusDetail {
-  isSyncing: boolean;
-  syncedBlock: number;
-  tipBlock: number;
-  progress: number;
-  estimatedTime: string | null;
-  lastSyncedAt: string | null;
-  chartDataMayBeIncomplete: boolean;
-}
-
-interface RecentFix {
-  txHash: string;
-  cycles: number;
-  fixedAt: string;
-}
-
-interface IntegrityStatus {
-  isRunning: boolean;
-  pendingCount: number;
-  totalCount: number;
-  processedCount: number;
-  progress: number;
-  estimatedTime: string | null;
-  startedAt: string | null;
-  lastCheckAt: string | null;
-  missingCyclesCount: number;
-  recentFixes: RecentFix[];
-}
-
-interface LabelImportStatus {
-  isRunning: boolean;
-  tokenTotalCount: number;
-  tokenImportedCount: number;
-  scriptTotalCount: number;
-  scriptImportedCount: number;
-  progress: number;
-  startedAt: string | null;
-  lastCheckAt: string | null;
+interface ActiveTasksResponse {
+  indexRebuild: IndexRebuildStatus | null;
 }
 
 interface MempoolTransaction {
@@ -884,12 +841,8 @@ export type {
   FeeRateRange,
   BlockFeeStats,
   BlockProposal,
-  SystemStatus,
-  SyncStatusDetail,
-  IntegrityStatus,
-  LabelImportStatus,
+  ActiveTasksResponse,
   IndexRebuildStatus,
-  RecentFix,
   KnownScript,
   ScriptUsage,
   ScriptLookupInfo,
@@ -1303,8 +1256,8 @@ export const api = {
     return fetchApi('/mempool/fees');
   },
 
-  getSystemStatus: (): Promise<SystemStatus> => {
-    return fetchApi('/status');
+  getActiveTasks: (): Promise<ActiveTasksResponse> => {
+    return fetchApi('/tasks/active');
   },
 
   getScripts: (params: ScriptQueryParams = {}): Promise<CursorPaginatedResponse<KnownScript>> => {

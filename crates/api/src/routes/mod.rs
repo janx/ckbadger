@@ -9,7 +9,7 @@ mod scripts;
 mod search;
 mod spore;
 mod statistics;
-mod status;
+mod tasks;
 mod tokens;
 mod transactions;
 
@@ -31,7 +31,7 @@ pub fn api_routes() -> Router<Arc<AppState>> {
         .merge(dao::routes())
         .merge(spore::routes())
         .merge(mempool::routes())
-        .merge(status::routes())
         .merge(scripts::routes())
         .merge(forks::routes())
+        .merge(tasks::routes())
 }

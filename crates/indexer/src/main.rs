@@ -7,7 +7,6 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use ckbadger_indexer::{
     db::{apply_pg_tuning, IndexManager},
-    integrity::DataIntegrityService,
     sync::Indexer,
     Config,
 };
@@ -24,9 +23,6 @@ struct Args {
 
     #[arg(long, env = "REDIS_URL")]
     redis_url: Option<String>,
-
-    #[arg(long, env = "TOKEN_LABELS_PATH")]
-    token_labels_path: Option<String>,
 
     #[arg(long, default_value = "10000")]
     batch_size: usize,
@@ -236,18 +232,7 @@ async fn main() -> Result<()> {
 
     info!("Connecting to CKB node: {}", config.ckb_rpc_url);
 
-    let token_labels_path = args
-        .token_labels_path
-        .or_else(|| std::env::var("TOKEN_LABELS_PATH").ok());
-
-    let (integrity_service, integrity_handle) =
-        DataIntegrityService::new(pool.clone(), config.ckb_rpc_url.clone(), token_labels_path);
-
-    tokio::spawn(async move {
-        integrity_service.run().await;
-    });
-
-    let indexer = Indexer::new(config.clone(), pool.clone(), Some(integrity_handle)).await?;
+    let indexer = Indexer::new(config.clone(), pool.clone()).await?;
     let indexer = Arc::new(indexer);
 
     let progress = indexer.progress();
@@ -265,63 +250,6 @@ async fn main() -> Result<()> {
             );
         }
     });
-
-    let should_monitor_rebuild =
-        indexes_currently_deferred || config.defer_indexes || should_auto_defer;
-    if should_monitor_rebuild {
-        let bulk_threshold = config.bulk_sync_threshold;
-        let rebuild_parallel = config.index_rebuild_parallel;
-        let pool_for_rebuild = pool.clone();
-        let progress_for_rebuild = progress.clone();
-        let rebuild_pause_flag = indexer.rebuild_pause_flag();
-
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
-
-                let blocks_remaining = progress_for_rebuild.blocks_remaining();
-                if blocks_remaining > bulk_threshold {
-                    continue;
-                }
-
-                let mgr = IndexManager::new(pool_for_rebuild.clone());
-                if let Ok(true) = mgr.is_indexes_deferred().await {
-                    info!(
-                        "Caught up to tip (remaining={} <= threshold={}), pausing sync for index rebuild",
-                        blocks_remaining, bulk_threshold
-                    );
-
-                    rebuild_pause_flag.store(true, std::sync::atomic::Ordering::SeqCst);
-                    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-
-                    match mgr.rebuild_indexes_parallel(rebuild_parallel).await {
-                        Ok(result) => {
-                            info!(
-                                "Index rebuild completed: {}/{} succeeded",
-                                result.completed, result.total
-                            );
-                        }
-                        Err(e) => {
-                            tracing::error!("Index rebuild failed: {}", e);
-                        }
-                    }
-
-                    match mgr.rebuild_constraints_parallel(rebuild_parallel).await {
-                        Ok(count) => {
-                            info!("Constraint rebuild completed: {} constraints added", count);
-                        }
-                        Err(e) => {
-                            tracing::error!("Constraint rebuild failed: {}", e);
-                        }
-                    }
-
-                    rebuild_pause_flag.store(false, std::sync::atomic::Ordering::SeqCst);
-                    info!("Sync resumed after index/constraint rebuild");
-                    break;
-                }
-            }
-        });
-    }
 
     let indexer_for_shutdown = Arc::clone(&indexer);
     tokio::spawn(async move {

@@ -21,7 +21,6 @@ use crate::db::{
     BatchWriter, CopyConfig, CopyPoolManager, LiveCellStorage, ParallelCopyRouter, ReorgResult,
     Repository, SecondaryIssuanceBreakdown,
 };
-use crate::integrity::IntegrityServiceHandle;
 use crate::parser::{
     BlockParser, CellParser, DaoParser, DotbitParser, MnftParser, SporeParser, TransactionParser,
     UdtParser,
@@ -264,7 +263,6 @@ pub struct Indexer {
     progress: Arc<SyncProgress>,
     cell_cache: Arc<tokio::sync::Mutex<LruCache<(Vec<u8>, i32), CachedCellInfo>>>,
     perf: PerfStats,
-    integrity_handle: Option<IntegrityServiceHandle>,
     cache_invalidator: CacheInvalidator,
     last_cache_invalidation: tokio::sync::Mutex<u64>,
     /// Track previous bulk sync state to detect transition from bulk -> live sync
@@ -276,11 +274,7 @@ pub struct Indexer {
 }
 
 impl Indexer {
-    pub async fn new(
-        config: Config,
-        pool: PgPool,
-        integrity_handle: Option<IntegrityServiceHandle>,
-    ) -> Result<Self> {
+    pub async fn new(config: Config, pool: PgPool) -> Result<Self> {
         let rpc = CkbRpcClient::new(&config.ckb_rpc_url);
         let repo = Repository::new(pool.clone());
 
@@ -335,7 +329,6 @@ impl Indexer {
             progress,
             cell_cache,
             perf: PerfStats::default(),
-            integrity_handle,
             cache_invalidator,
             last_cache_invalidation: tokio::sync::Mutex::new(0),
             was_bulk_sync_active: std::sync::atomic::AtomicBool::new(was_bulk),
@@ -453,7 +446,6 @@ impl Indexer {
 
             match self.sync_batch().await {
                 Ok(SyncAction::CaughtUp) => {
-                    self.trigger_missing_cycles_fix_when_idle().await;
                     sleep(Duration::from_millis(self.config.poll_interval_ms)).await;
                 }
                 Ok(SyncAction::Continue) => {}
@@ -884,9 +876,7 @@ impl Indexer {
                     parser.abort();
                     return Err(anyhow::anyhow!("Pipeline channel closed"));
                 }
-                Err(_timeout) => {
-                    self.trigger_missing_cycles_fix_when_idle().await;
-                }
+                Err(_timeout) => {}
             }
         }
     }
@@ -1134,20 +1124,6 @@ impl Indexer {
                         warn!("Failed to flush LiveCellStore: {}", e);
                     }
                 }
-            }
-        }
-    }
-
-    async fn trigger_missing_cycles_fix_when_idle(&self) {
-        let blocks_remaining = self.progress.blocks_remaining();
-        if blocks_remaining > self.config.bulk_sync_threshold {
-            return;
-        }
-        if let Some(ref handle) = self.integrity_handle {
-            if !handle.is_running().await {
-                handle
-                    .trigger(crate::integrity::IntegrityCheck::AllMissingCycles)
-                    .await;
             }
         }
     }

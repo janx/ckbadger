@@ -2697,3 +2697,125 @@ async fn test_assets_nft_returns_real_statistics(pool: sqlx::PgPool) {
     assert_eq!(nft["transfersCount"], 7);
     assert_eq!(nft["totalSupply"], "100");
 }
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn test_tasks_active_no_running_tasks(pool: sqlx::PgPool) {
+    let app = create_router(test_config(pool)).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/tasks/active")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = BodyExt::collect(response.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert!(json["indexRebuild"].is_null());
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn test_tasks_active_with_running_index_rebuild(pool: sqlx::PgPool) {
+    let task_id = uuid::Uuid::new_v4();
+    let config = serde_json::json!({
+        "type": "index_rebuild",
+        "parallelConnections": 10,
+        "rebuildConstraints": true
+    });
+    let result = serde_json::json!({
+        "totalIndexes": 26,
+        "completedIndexes": 10,
+        "currentIndex": "idx_blocks_timestamp",
+        "completed": [
+            {"name": "idx_1", "durationMs": 1000},
+            {"name": "idx_2", "durationMs": 2000}
+        ],
+        "failed": [{"name": "idx_bad", "error": "some error"}],
+        "totalConstraints": 5,
+        "completedConstraints": 0
+    });
+
+    sqlx::query(
+        r#"
+        INSERT INTO tasks (
+            id, task_type, status, priority, config, 
+            progress_total, progress_current, result, started_at
+        ) VALUES ($1, 'index_rebuild', 'running', 10, $2, 26, 10, $3, NOW())
+        "#,
+    )
+    .bind(task_id)
+    .bind(&config)
+    .bind(&result)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let app = create_router(test_config(pool)).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/tasks/active")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = BodyExt::collect(response.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    let rebuild = &json["indexRebuild"];
+    assert!(rebuild["isRebuilding"].as_bool().unwrap());
+    assert_eq!(rebuild["total"], 26);
+    assert_eq!(rebuild["completed"], 10);
+    assert_eq!(rebuild["currentIndex"], "idx_blocks_timestamp");
+    assert_eq!(rebuild["failed"].as_array().unwrap().len(), 1);
+    assert_eq!(rebuild["failed"][0], "idx_bad");
+    assert!((rebuild["progress"].as_f64().unwrap() - 38.46).abs() < 0.1);
+    assert!(rebuild["startedAt"].is_string());
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn test_tasks_active_ignores_completed_tasks(pool: sqlx::PgPool) {
+    let task_id = uuid::Uuid::new_v4();
+    let config = serde_json::json!({"type": "index_rebuild"});
+
+    sqlx::query(
+        r#"
+        INSERT INTO tasks (
+            id, task_type, status, priority, config, 
+            progress_total, progress_current, started_at, completed_at
+        ) VALUES ($1, 'index_rebuild', 'completed', 10, $2, 26, 26, NOW(), NOW())
+        "#,
+    )
+    .bind(task_id)
+    .bind(&config)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let app = create_router(test_config(pool)).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/tasks/active")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = BodyExt::collect(response.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert!(json["indexRebuild"].is_null());
+}

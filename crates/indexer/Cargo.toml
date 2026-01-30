@@ -8,14 +8,6 @@ license.workspace = true
 name = "ckbadger-indexer"
 path = "src/main.rs"
 
-[[bin]]
-name = "backfill-cycles"
-path = "src/bin/backfill_cycles.rs"
-
-[[bin]]
-name = "import-labels"
-path = "src/bin/import_labels.rs"
-
 [dependencies]
 ckbadger-common = { path = "../common" }
 
