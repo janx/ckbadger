@@ -3,7 +3,7 @@
 use axum::{extract::State, routing::get, Router};
 use chrono::{DateTime, Utc};
 use ckbadger_common::dao::GENESIS_BURNT;
-use ckbadger_common::{SyncProgressData, SYNC_PROGRESS_REDIS_KEY};
+use ckbadger_common::{format_duration_smart, SyncProgressData, SYNC_PROGRESS_REDIS_KEY};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -65,6 +65,8 @@ pub struct SyncStatus {
     pub progress: f64,
     pub estimated_time: Option<String>,
     pub chart_data_may_be_incomplete: bool,
+    pub blocks_per_second: Option<f64>,
+    pub ema_blocks_per_second: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -829,6 +831,7 @@ async fn fetch_network_stats_from_db(
         Option<i64>,
         Option<i32>,
         Option<i64>,
+        Option<f64>,
     )> = sqlx::query_as(
         r#"SELECT 
             tip_block_number, 
@@ -837,7 +840,8 @@ async fn fetch_network_stats_from_db(
             deep_fork_db_tip,
             deep_fork_chain_tip,
             deep_fork_depth,
-            deep_fork_fork_point
+            deep_fork_fork_point,
+            sync_ema_rate
         FROM sync_status WHERE id = 1"#,
     )
     .fetch_optional(&state.pool)
@@ -853,7 +857,8 @@ async fn fetch_network_stats_from_db(
         deep_fork_chain_tip,
         deep_fork_depth,
         deep_fork_fork_point,
-    ) = sync_row.unwrap_or((latest_block, false, None, None, None, None, None));
+        db_ema_rate,
+    ) = sync_row.unwrap_or((latest_block, false, None, None, None, None, None, None));
 
     let blocks_behind = tip_block - synced_block;
     let is_syncing = blocks_behind > 100;
@@ -861,26 +866,64 @@ async fn fetch_network_stats_from_db(
     let sync_progress_from_redis: Option<SyncProgressData> =
         state.cache.get(SYNC_PROGRESS_REDIS_KEY).await;
 
-    let (progress, estimated_time) = if let Some(ref sp) = sync_progress_from_redis {
-        let stale = Utc::now().timestamp() - sp.updated_at > 60;
-        if !stale && is_syncing {
-            (sp.progress_percentage, Some(sp.eta_formatted.clone()))
+    let (progress, estimated_time, blocks_per_second, ema_blocks_per_second) =
+        if let Some(ref sp) = sync_progress_from_redis {
+            let stale = Utc::now().timestamp() - sp.updated_at > 60;
+            if !stale && is_syncing {
+                (
+                    sp.progress_percentage,
+                    Some(sp.eta_formatted.clone()),
+                    Some(sp.blocks_per_second),
+                    Some(sp.ema_blocks_per_second),
+                )
+            } else {
+                let p = if tip_block > 0 {
+                    (synced_block as f64 / tip_block as f64 * 100.0).min(100.0)
+                } else {
+                    0.0
+                };
+                let (ema, eta) = if is_syncing {
+                    if let Some(rate) = db_ema_rate {
+                        if rate > 0.0 {
+                            let remaining = blocks_behind as f64;
+                            let eta_secs = remaining / rate;
+                            let eta_str = format_duration_smart(eta_secs);
+                            (Some(rate), Some(eta_str))
+                        } else {
+                            (Some(rate), None)
+                        }
+                    } else {
+                        (None, None)
+                    }
+                } else {
+                    (None, None)
+                };
+                (p, eta, ema, ema)
+            }
         } else {
             let p = if tip_block > 0 {
                 (synced_block as f64 / tip_block as f64 * 100.0).min(100.0)
             } else {
                 0.0
             };
-            (p, None)
-        }
-    } else {
-        let p = if tip_block > 0 {
-            (synced_block as f64 / tip_block as f64 * 100.0).min(100.0)
-        } else {
-            0.0
+            let (ema, eta) = if is_syncing {
+                if let Some(rate) = db_ema_rate {
+                    if rate > 0.0 {
+                        let remaining = blocks_behind as f64;
+                        let eta_secs = remaining / rate;
+                        let eta_str = format_duration_smart(eta_secs);
+                        (Some(rate), Some(eta_str))
+                    } else {
+                        (Some(rate), None)
+                    }
+                } else {
+                    (None, None)
+                }
+            } else {
+                (None, None)
+            };
+            (p, eta, ema, ema)
         };
-        (p, None)
-    };
 
     let sync_status = SyncStatus {
         is_syncing,
@@ -889,6 +932,8 @@ async fn fetch_network_stats_from_db(
         progress,
         estimated_time,
         chart_data_may_be_incomplete: blocks_behind > 1000,
+        blocks_per_second,
+        ema_blocks_per_second,
     };
 
     let deep_fork_status = DeepForkStatus {

@@ -78,9 +78,10 @@
 | **UI**            | Tailwind CSS, Custom Components     | Responsive design               |
 | **Visualization** | react-force-graph-2d, D3.js         | Cell relationship graphs        |
 | **API**           | Rust (Axum)                         | High-performance REST/WebSocket |
-| **Indexer**       | Rust (3-stage pipeline)             | Block parsing, cell tracking    |
+| **Indexer**       | Rust (3-stage pipeline + RocksDB)   | Block parsing, cell tracking    |
 | **Database**      | PostgreSQL 16                       | Primary data store              |
-| **Cache**         | Redis                               | API response cache              |
+| **Cache**         | Redis                               | API cache + sync progress       |
+| **Cell Store**    | RocksDB                             | O(1) live cell lookups          |
 
 ## Quick Start
 
@@ -325,12 +326,14 @@ ckbadger/
 │   │   └── src/
 │   │       ├── rpc/        # CKB RPC client
 │   │       ├── parser/     # Block, cell, script parsers
-│   │       ├── db/         # Database operations
+│   │       ├── db/         # Database + RocksDB operations
 │   │       └── sync/       # Synchronization logic
-│   └── api/                # REST API server
-│       └── src/
-│           ├── routes/     # HTTP handlers (blocks, tx, cells, graph)
-│           └── ws/         # WebSocket handlers
+│   ├── api/                # REST API server
+│   │   └── src/
+│   │       ├── routes/     # HTTP handlers (blocks, tx, cells, graph)
+│   │       └── ws/         # WebSocket handlers
+│   ├── task-runner/        # Background task executor
+│   └── task-tui/           # Terminal UI for task management
 ├── frontend/               # Next.js application
 │   ├── app/                # App router pages
 │   ├── components/         # React components
@@ -379,13 +382,13 @@ cd frontend && pnpm install && pnpm dev
 ### Running Tests
 
 ```bash
-# Rust tests (213 tests)
+# Rust tests (259 tests)
 cargo test                               # All tests
 cargo test --lib                         # Unit tests only
 cargo test -p ckbadger-indexer           # Specific crate
 cargo test test_parse_epoch              # Single test (partial match)
 
-# Frontend tests (191 tests)
+# Frontend tests (195 tests)
 cd frontend && pnpm test                 # Run Vitest
 cd frontend && pnpm test:coverage        # With coverage
 
@@ -399,11 +402,11 @@ pnpm test:e2e                            # Playwright tests
 
 ### Test Coverage
 
-| Area                    | Tests | Coverage                                     |
-| ----------------------- | ----- | -------------------------------------------- |
-| **Rust Indexer**        | 213   | parsers, db, live cell store, rpc types      |
-| **Frontend Components** | 191   | Hash, Capacity, Address, Pagination, Banners |
-| **E2E**                 | 7     | Homepage, block detail, navigation           |
+| Area                    | Tests | Coverage                                       |
+| ----------------------- | ----- | ---------------------------------------------- |
+| **Rust Indexer**        | 259   | parsers, db, live cell store, rpc types, tasks |
+| **Frontend Components** | 195   | Hash, Capacity, Address, Pagination, Banners   |
+| **E2E**                 | 7     | Homepage, block detail, navigation             |
 
 ### CI/CD
 

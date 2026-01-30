@@ -40,6 +40,8 @@ describe('useRealtimeStore', () => {
           progress: 100,
           estimatedTime: null,
           chartDataMayBeIncomplete: false,
+          blocksPerSecond: null,
+          emaBlocksPerSecond: null,
         },
       };
 
@@ -254,6 +256,8 @@ describe('useRealtimeStore', () => {
           progress: 100,
           estimatedTime: null,
           chartDataMayBeIncomplete: false,
+          blocksPerSecond: null,
+          emaBlocksPerSecond: null,
         },
       };
 
@@ -271,11 +275,13 @@ describe('useRealtimeStore', () => {
         estimatedEpochTime: '4h 0m',
         syncStatus: {
           isSyncing: false,
-          syncedBlock: 12340,
-          tipBlock: 12340,
+          syncedBlock: 12345,
+          tipBlock: 12345,
           progress: 100,
           estimatedTime: null,
           chartDataMayBeIncomplete: false,
+          blocksPerSecond: null,
+          emaBlocksPerSecond: null,
         },
       };
 
@@ -295,6 +301,8 @@ describe('useRealtimeStore', () => {
           progress: 100,
           estimatedTime: null,
           chartDataMayBeIncomplete: false,
+          blocksPerSecond: null,
+          emaBlocksPerSecond: null,
         },
       };
 

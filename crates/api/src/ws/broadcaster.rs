@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use ckbadger_common::{SyncProgressData, SYNC_PROGRESS_REDIS_KEY};
+use ckbadger_common::{format_duration_smart, SyncProgressData, SYNC_PROGRESS_REDIS_KEY};
 use sqlx::PgPool;
 use std::sync::Arc;
 use tokio::time::{interval, Duration};
@@ -241,40 +241,78 @@ async fn calculate_epoch_stats(
 }
 
 async fn build_sync_status(pool: &PgPool, cache: &CacheBackend, tip_block: i64) -> SyncStatus {
-    let sync_row: Option<(i64,)> =
-        sqlx::query_as("SELECT tip_block_number FROM sync_status WHERE id = 1")
+    let sync_row: Option<(i64, Option<f64>)> =
+        sqlx::query_as("SELECT tip_block_number, sync_ema_rate FROM sync_status WHERE id = 1")
             .fetch_optional(pool)
             .await
             .ok()
             .flatten();
 
-    let synced_block = sync_row.map(|(b,)| b).unwrap_or(0);
+    let (synced_block, db_ema_rate) = sync_row.unwrap_or((0, None));
     let blocks_behind = tip_block - synced_block;
     let is_syncing = blocks_behind > 100;
 
     let sync_progress_from_redis: Option<SyncProgressData> =
         cache.get(SYNC_PROGRESS_REDIS_KEY).await;
 
-    let (progress, estimated_time) = if let Some(ref sp) = sync_progress_from_redis {
-        let stale = Utc::now().timestamp() - sp.updated_at > 60;
-        if !stale && is_syncing {
-            (sp.progress_percentage, Some(sp.eta_formatted.clone()))
+    let (progress, estimated_time, blocks_per_second, ema_blocks_per_second) =
+        if let Some(ref sp) = sync_progress_from_redis {
+            let stale = Utc::now().timestamp() - sp.updated_at > 60;
+            if !stale && is_syncing {
+                (
+                    sp.progress_percentage,
+                    Some(sp.eta_formatted.clone()),
+                    Some(sp.blocks_per_second),
+                    Some(sp.ema_blocks_per_second),
+                )
+            } else {
+                let p = if tip_block > 0 {
+                    (synced_block as f64 / tip_block as f64 * 100.0).min(100.0)
+                } else {
+                    0.0
+                };
+                let (ema, eta) = if is_syncing {
+                    if let Some(rate) = db_ema_rate {
+                        if rate > 0.0 {
+                            let remaining = blocks_behind as f64;
+                            let eta_secs = remaining / rate;
+                            let eta_str = format_duration_smart(eta_secs);
+                            (Some(rate), Some(eta_str))
+                        } else {
+                            (Some(rate), None)
+                        }
+                    } else {
+                        (None, None)
+                    }
+                } else {
+                    (None, None)
+                };
+                (p, eta, ema, ema)
+            }
         } else {
             let p = if tip_block > 0 {
                 (synced_block as f64 / tip_block as f64 * 100.0).min(100.0)
             } else {
                 0.0
             };
-            (p, None)
-        }
-    } else {
-        let p = if tip_block > 0 {
-            (synced_block as f64 / tip_block as f64 * 100.0).min(100.0)
-        } else {
-            0.0
+            let (ema, eta) = if is_syncing {
+                if let Some(rate) = db_ema_rate {
+                    if rate > 0.0 {
+                        let remaining = blocks_behind as f64;
+                        let eta_secs = remaining / rate;
+                        let eta_str = format_duration_smart(eta_secs);
+                        (Some(rate), Some(eta_str))
+                    } else {
+                        (Some(rate), None)
+                    }
+                } else {
+                    (None, None)
+                }
+            } else {
+                (None, None)
+            };
+            (p, eta, ema, ema)
         };
-        (p, None)
-    };
 
     SyncStatus {
         is_syncing,
@@ -283,6 +321,8 @@ async fn build_sync_status(pool: &PgPool, cache: &CacheBackend, tip_block: i64) 
         progress,
         estimated_time,
         chart_data_may_be_incomplete: blocks_behind > 1000,
+        blocks_per_second,
+        ema_blocks_per_second,
     }
 }
 

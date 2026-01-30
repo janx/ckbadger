@@ -4,12 +4,25 @@ import { useQuery } from '@tanstack/react-query';
 import { api, NetworkStats, IndexRebuildStatus } from '@/lib/api';
 import { TerminalNumber } from '@/components/ui/terminal-number';
 
+function formatSyncSpeed(blocksPerSecond: number | null): string | null {
+  if (blocksPerSecond === null || blocksPerSecond <= 0) {
+    return null;
+  }
+  if (blocksPerSecond >= 1000) {
+    return `${(blocksPerSecond / 1000).toFixed(1)}K`;
+  }
+  return blocksPerSecond.toFixed(0);
+}
+
 export function SyncBanner({ stats }: { stats: NetworkStats }) {
   const { syncStatus } = stats;
 
   if (!syncStatus.isSyncing) {
     return null;
   }
+
+  const syncSpeed = formatSyncSpeed(syncStatus.emaBlocksPerSecond);
+  const hasExtraInfo = syncSpeed || syncStatus.estimatedTime;
 
   return (
     <div className="terminal-card border-terminal-dark p-3">
@@ -28,9 +41,14 @@ export function SyncBanner({ stats }: { stats: NetworkStats }) {
           /> / <TerminalNumber value={syncStatus.tipBlock.toLocaleString()} glowIntensity="none" />)
         </span>
       </div>
-      {syncStatus.estimatedTime && (
-        <div className="text-terminal-dark relative z-10 mt-1 font-mono text-xs">
-          ETA: {syncStatus.estimatedTime}
+      {hasExtraInfo && (
+        <div className="text-terminal-dark relative z-10 mt-1 flex items-center gap-3 font-mono text-xs">
+          {syncSpeed && (
+            <span>
+              <TerminalNumber value={syncSpeed} glowIntensity="subtle" /> blocks/s
+            </span>
+          )}
+          {syncStatus.estimatedTime && <span>ETA: {syncStatus.estimatedTime}</span>}
         </div>
       )}
       <div className="bg-terminal-bg relative z-10 mt-2 h-1.5 w-full overflow-hidden rounded-full">

@@ -3,6 +3,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::RwLock;
 use std::time::Instant;
 
+pub use ckbadger_common::format_duration_smart;
+
 const WINDOW_SECS: u64 = 10;
 /// EMA smoothing factor: 0.1 = slow adaptation, 0.3 = faster adaptation
 const EMA_ALPHA: f64 = 0.1;
@@ -270,34 +272,6 @@ impl SyncProgress {
             None => "N/A".to_string(),
             Some(secs) => format_duration_smart(secs),
         }
-    }
-}
-
-/// Format seconds into human-readable duration with smart units.
-/// - < 1 hour: "45m 30s"
-/// - >= 1 hour: "2h 15m"
-/// - >= 1 day: "1d 5h"
-pub fn format_duration_smart(total_secs: f64) -> String {
-    let total_secs = total_secs.round() as u64;
-
-    if total_secs < 60 {
-        return format!("{}s", total_secs);
-    }
-
-    let days = total_secs / 86400;
-    let hours = (total_secs % 86400) / 3600;
-    let minutes = (total_secs % 3600) / 60;
-    let seconds = total_secs % 60;
-
-    if days > 0 {
-        // >= 1 day: "1d 5h"
-        format!("{}d {}h", days, hours)
-    } else if hours > 0 {
-        // >= 1 hour: "2h 15m"
-        format!("{}h {}m", hours, minutes)
-    } else {
-        // < 1 hour: "45m 30s"
-        format!("{}m {}s", minutes, seconds)
     }
 }
 

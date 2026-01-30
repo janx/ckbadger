@@ -11,6 +11,8 @@ interface SyncStatus {
   progress: number;
   estimatedTime: string | null;
   chartDataMayBeIncomplete: boolean;
+  blocksPerSecond: number | null;
+  emaBlocksPerSecond: number | null;
 }
 
 interface IndexRebuildStatus {

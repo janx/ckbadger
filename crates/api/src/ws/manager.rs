@@ -12,6 +12,8 @@ pub struct SyncStatus {
     pub progress: f64,
     pub estimated_time: Option<String>,
     pub chart_data_may_be_incomplete: bool,
+    pub blocks_per_second: Option<f64>,
+    pub ema_blocks_per_second: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

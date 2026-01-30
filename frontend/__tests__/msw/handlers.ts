@@ -127,6 +127,8 @@ export const handlers = [
         progress: 100,
         estimatedTime: null,
         chartDataMayBeIncomplete: false,
+        blocksPerSecond: null,
+        emaBlocksPerSecond: null,
       },
       deepForkStatus: {
         detected: false,
