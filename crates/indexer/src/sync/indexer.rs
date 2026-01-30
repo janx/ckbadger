@@ -16,7 +16,7 @@ use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
 
 use crate::cache::CacheInvalidator;
-use crate::config::Config;
+use crate::config::{Config, DEEP_FORK_DEPTH};
 use crate::db::{
     BatchWriter, CopyConfig, CopyPoolManager, LiveCellStorage, ParallelCopyRouter, ReorgResult,
     Repository, SecondaryIssuanceBreakdown,
@@ -28,8 +28,6 @@ use crate::parser::{
 use crate::rpc::{BlockResponseWithCycles, CkbRpcClient, DaoField};
 
 use super::SyncProgress;
-
-const REORG_LIMIT: u64 = 36;
 
 enum SyncAction {
     CaughtUp,
@@ -4985,10 +4983,10 @@ impl Indexer {
             .ok_or_else(|| anyhow::anyhow!("Chain tip {} not found", chain_tip))?;
         let chain_tip_hash_bytes = crate::rpc::parse_hex_to_bytes(&chain_tip_hash);
 
-        if depth > REORG_LIMIT {
+        if depth > DEEP_FORK_DEPTH {
             error!(
                 "DEEP FORK DETECTED! Depth {} exceeds limit {}. Manual intervention required.",
-                depth, REORG_LIMIT
+                depth, DEEP_FORK_DEPTH
             );
 
             self.writer
@@ -5008,7 +5006,7 @@ impl Indexer {
 
         info!(
             "Processing automatic reorg (depth={} <= limit={})",
-            depth, REORG_LIMIT
+            depth, DEEP_FORK_DEPTH
         );
 
         let result = self

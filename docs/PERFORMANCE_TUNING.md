@@ -41,18 +41,18 @@ cargo run -p ckbadger-indexer -- \
   --pipeline-buffer 6
 ```
 
-| Parameter             | Default | Tuning Range | Notes                                               |
-| --------------------- | ------- | ------------ | --------------------------------------------------- |
-| `batch_size`          | 1000    | 500-2000     | Higher = more work per DB round-trip                |
-| `parallel_fetch_size` | 32      | 16-64        | RPC is fast, prefetch more                          |
-| `pipeline_buffer`     | 6       | 4-8          | DB is bottleneck, reduce memory                     |
-| `bulk_sync_threshold` | 1000    | 500-10000    | Blocks behind chain tip to auto-enable bulk sync    |
-| `use_copy_bulk_sync`  | true    | true/false   | Use PostgreSQL COPY during bulk sync (5-10x faster) |
-| `copy_pool_size`      | 8       | 4-16         | Number of COPY connection pool connections          |
+| Parameter             | Default | Tuning Range | Notes                                                                          |
+| --------------------- | ------- | ------------ | ------------------------------------------------------------------------------ |
+| `batch_size`          | 1000    | 500-2000     | Higher = more work per DB round-trip                                           |
+| `parallel_fetch_size` | 32      | 16-64        | RPC is fast, prefetch more                                                     |
+| `pipeline_buffer`     | 6       | 4-8          | DB is bottleneck, reduce memory                                                |
+| `bulk_sync_threshold` | 72      | 50-10000     | Blocks behind chain tip to auto-enable bulk sync (default: 2x DEEP_FORK_DEPTH) |
+| `use_copy_bulk_sync`  | true    | true/false   | Use PostgreSQL COPY during bulk sync (5-10x faster)                            |
+| `copy_pool_size`      | 8       | 4-16         | Number of COPY connection pool connections                                     |
 
 ### 3. Bulk Sync Mode (Auto-Enabled)
 
-Bulk sync is **automatically enabled** when more than `bulk_sync_threshold` blocks behind the chain tip. No manual configuration needed.
+Bulk sync is **automatically enabled** when more than `bulk_sync_threshold` blocks behind the chain tip (default: 72, which is 2x DEEP_FORK_DEPTH). No manual configuration needed.
 
 **When active (blocks_remaining > threshold):**
 

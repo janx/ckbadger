@@ -124,16 +124,16 @@ Block N arrives
 
 ## Configuration
 
-| Parameter             | Default | Description                                      |
-| --------------------- | ------- | ------------------------------------------------ |
-| `pipeline_enabled`    | `true`  | Enable three-stage pipeline (vs sequential sync) |
-| `pipeline_buffer`     | `16`    | Channel capacity between stages                  |
-| `batch_size`          | `10000` | Blocks per batch                                 |
-| `parallel_fetch_size` | `64`    | Concurrent RPC requests                          |
-| `bulk_sync_threshold` | `1000`  | Blocks behind tip to auto-enable bulk sync       |
-| `use_copy_bulk_sync`  | `true`  | Use PostgreSQL COPY for bulk sync (5-10x faster) |
-| `copy_pool_size`      | `24`    | Number of COPY connection pool connections       |
-| `fast_sync_mode`      | `true`  | Enable synchronous_commit=off for faster writes  |
+| Parameter             | Default | Description                                                     |
+| --------------------- | ------- | --------------------------------------------------------------- |
+| `pipeline_enabled`    | `true`  | Enable three-stage pipeline (vs sequential sync)                |
+| `pipeline_buffer`     | `16`    | Channel capacity between stages                                 |
+| `batch_size`          | `10000` | Blocks per batch                                                |
+| `parallel_fetch_size` | `64`    | Concurrent RPC requests                                         |
+| `bulk_sync_threshold` | `72`    | Blocks behind tip to auto-enable bulk sync (2x DEEP_FORK_DEPTH) |
+| `use_copy_bulk_sync`  | `true`  | Use PostgreSQL COPY for bulk sync (5-10x faster)                |
+| `copy_pool_size`      | `24`    | Number of COPY connection pool connections                      |
+| `fast_sync_mode`      | `true`  | Enable synchronous_commit=off for faster writes                 |
 
 ### Environment Variables
 
@@ -142,7 +142,7 @@ PIPELINE_ENABLED=true
 PIPELINE_BUFFER=16
 BATCH_SIZE=10000
 PARALLEL_FETCH_SIZE=64
-BULK_SYNC_THRESHOLD=1000
+BULK_SYNC_THRESHOLD=72
 USE_COPY_BULK_SYNC=true
 COPY_POOL_SIZE=24
 FAST_SYNC_MODE=true
@@ -156,7 +156,7 @@ cargo run -p ckbadger-indexer -- \
   --pipeline-buffer 16 \
   --batch-size 10000 \
   --parallel-fetch-size 64 \
-  --bulk-sync-threshold 1000 \
+  --bulk-sync-threshold 72 \
   --use-copy-bulk-sync \
   --copy-pool-size 24
 ```
@@ -360,7 +360,7 @@ Same-batch consumptions get code_hashes from the creating transaction directly.
 
 ## Bulk Sync Statistics Optimization
 
-During bulk sync (when `blocks_remaining > bulk_sync_threshold`), the indexer skips non-critical statistics updates to reduce DB write time by ~15%.
+During bulk sync (when `blocks_remaining > bulk_sync_threshold`, default 72 = 2x DEEP_FORK_DEPTH), the indexer skips non-critical statistics updates to reduce DB write time by ~15%.
 
 ### Skipped Statistics (during bulk sync)
 
@@ -414,7 +414,7 @@ The indexer uses PostgreSQL Binary COPY for high-performance bulk data loading d
 
 COPY is **automatically enabled** when:
 
-- `blocks_remaining > bulk_sync_threshold` (default: 1000 blocks behind)
+- `blocks_remaining > bulk_sync_threshold` (default: 72 blocks behind, 2x DEEP_FORK_DEPTH)
 - `use_copy_bulk_sync = true` (default)
 
 When the indexer catches up to the chain tip, it automatically switches back to UNNEST inserts (which support conflict resolution for reorgs).

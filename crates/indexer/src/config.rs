@@ -1,5 +1,9 @@
 use serde::Deserialize;
 
+/// Maximum reorg depth before triggering deep fork handling.
+/// CKB finalizes after 24 blocks, 36 provides safety margin.
+pub const DEEP_FORK_DEPTH: u64 = 36;
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub database_url: String,
@@ -81,7 +85,7 @@ fn default_pipeline_buffer() -> usize {
 }
 
 fn default_bulk_sync_threshold() -> u64 {
-    1000
+    DEEP_FORK_DEPTH * 2
 }
 
 fn default_fast_sync_mode() -> bool {
@@ -154,5 +158,11 @@ mod tests {
             max_memory_gb <= 20,
             "Pipeline memory budget should be <= 20GB, got {max_memory_gb}GB"
         );
+    }
+
+    #[test]
+    fn test_bulk_sync_threshold_is_twice_deep_fork_depth() {
+        assert_eq!(default_bulk_sync_threshold(), DEEP_FORK_DEPTH * 2);
+        assert_eq!(default_bulk_sync_threshold(), 72);
     }
 }
