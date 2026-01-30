@@ -26,17 +26,17 @@ const HexChar = memo(function HexChar({
     green: {
       base: 'text-terminal-dim',
       hover: 'text-terminal-green',
-      glow: '0 0 8px #00ff41',
+      glow: '0 0 4px rgba(0, 255, 65, 0.6)',
     },
     amber: {
       base: 'text-amber-dim',
       hover: 'text-amber',
-      glow: '0 0 8px #ffb000',
+      glow: '0 0 4px rgba(255, 176, 0, 0.6)',
     },
     white: {
       base: 'text-slate-500',
       hover: 'text-white',
-      glow: '0 0 8px rgba(255,255,255,0.5)',
+      glow: '0 0 4px rgba(255, 255, 255, 0.4)',
     },
   };
 
@@ -53,7 +53,7 @@ const HexChar = memo(function HexChar({
       )}
       style={{
         textShadow: isHovered ? colorClasses[color].glow : 'none',
-        transform: isHovered ? 'scale(1.15)' : 'scale(1)',
+        transform: isHovered ? 'scale(1.05)' : 'scale(1)',
       }}
       onMouseEnter={() => onHover(index)}
       onMouseLeave={() => onHover(null)}

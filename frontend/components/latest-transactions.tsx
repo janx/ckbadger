@@ -114,7 +114,6 @@ export function LatestTransactions({
                         color="amber"
                         size="sm"
                         showGroupHighlight={false}
-                        className="group-hover:shadow-amber-glow transition-shadow"
                       />
                     </Link>
                     <div className="mt-1.5 flex items-center gap-2 text-xs">
