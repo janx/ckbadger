@@ -498,12 +498,22 @@ impl Indexer {
 
         let fetcher = tokio::spawn(async move {
             let mut next_block: Option<u64> = None;
+            let mut was_paused = false;
 
             loop {
                 if rebuild_pause.load(Ordering::SeqCst) {
                     debug!("Fetcher paused for index rebuild");
+                    was_paused = true;
                     sleep(Duration::from_millis(500)).await;
                     continue;
+                }
+
+                // Reset next_block after pause to re-query DB state
+                // This prevents stale next_block from causing batch mismatches
+                if was_paused {
+                    info!("Fetcher resuming from pause, resetting next_block to re-query DB state");
+                    next_block = None;
+                    was_paused = false;
                 }
 
                 let chain_tip = match rpc.get_tip_block_number().await {
@@ -536,12 +546,21 @@ impl Indexer {
                 };
 
                 if start_block > chain_tip {
+                    debug!(
+                        "Fetcher waiting: start_block {} > chain_tip {}",
+                        start_block, chain_tip
+                    );
                     sleep(Duration::from_millis(config.poll_interval_ms)).await;
                     continue;
                 }
 
                 let end_block =
                     std::cmp::min(start_block + config.batch_size as u64 - 1, chain_tip);
+
+                debug!(
+                    "Fetcher: fetching blocks {} to {} (chain_tip={}, next_block={:?})",
+                    start_block, end_block, chain_tip, next_block
+                );
 
                 let blocks = match Self::fetch_blocks_with_config(
                     &rpc,
@@ -640,15 +659,20 @@ impl Indexer {
                         .iter()
                         .map(|(h, i)| (h.as_slice(), *i))
                         .collect();
-                    match writer_for_parser.get_cells_info_batch(&missing_refs).await {
-                        Ok(db_info) => {
+                    // Add timeout to prevent parser from blocking indefinitely on DB query
+                    let db_query = writer_for_parser.get_cells_info_batch(&missing_refs);
+                    match tokio::time::timeout(Duration::from_secs(30), db_query).await {
+                        Ok(Ok(db_info)) => {
                             for ((tx_hash, idx), (cap, block, lock_hash, data_size)) in db_info {
                                 input_cell_info
                                     .insert((tx_hash, idx), (cap, block, lock_hash, data_size));
                             }
                         }
-                        Err(e) => {
+                        Ok(Err(e)) => {
                             error!("Parser: Failed to fetch cell info from DB: {}", e);
+                        }
+                        Err(_) => {
+                            warn!("Parser: DB query for cell info timed out after 30s, continuing without data");
                         }
                     }
                 }
@@ -674,10 +698,16 @@ impl Indexer {
                         .iter()
                         .map(|(h, i)| (h.as_slice(), *i))
                         .collect();
-                    match writer_for_parser.get_cells_code_hashes_batch(&refs).await {
-                        Ok(hashes) => hashes,
-                        Err(e) => {
+                    // Add timeout to prevent parser from blocking indefinitely on DB query
+                    let db_query = writer_for_parser.get_cells_code_hashes_batch(&refs);
+                    match tokio::time::timeout(Duration::from_secs(30), db_query).await {
+                        Ok(Ok(hashes)) => hashes,
+                        Ok(Err(e)) => {
                             error!("Parser: Failed to fetch code hashes from DB: {}", e);
+                            HashMap::new()
+                        }
+                        Err(_) => {
+                            warn!("Parser: DB query for code hashes timed out after 30s, continuing without data");
                             HashMap::new()
                         }
                     }

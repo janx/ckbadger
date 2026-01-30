@@ -17,8 +17,8 @@ mod writer;
 pub use copy_pool::{CopyConfig, CopyPoolManager};
 pub use indexes::{IndexManager, IndexRebuildProgress};
 pub use live_cell_storage::{
-    ConsumedCellRecord, DynLiveCellStorage, LiveCellInfo, LiveCellStorage, LiveCellStorageAsync,
-    MemoryStats,
+    CachedBlockHeader, ConsumedCellRecord, DynLiveCellStorage, LiveCellInfo, LiveCellStorage,
+    LiveCellStorageAsync, MemoryStats,
 };
 pub use parallel_copy::ParallelCopyRouter;
 pub use repository::{DeepForkInfo, Repository};

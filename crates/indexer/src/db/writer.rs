@@ -252,6 +252,23 @@ impl BatchWriter {
         .execute(&self.pool)
         .await?;
 
+        if let Some(store) = &self.live_cell_store {
+            for block in blocks {
+                store.insert_block_header(
+                    block.number,
+                    super::CachedBlockHeader {
+                        hash: block.hash.clone(),
+                        timestamp: block.timestamp.timestamp_millis(),
+                        epoch_number: block.epoch_number,
+                        epoch_index: block.epoch_index,
+                        epoch_length: block.epoch_length,
+                        dao: block.dao.clone(),
+                        transactions_count: block.transactions_count,
+                    },
+                );
+            }
+        }
+
         Ok(())
     }
 
@@ -1187,6 +1204,23 @@ impl BatchWriter {
                     missing.push(*op);
                 }
             }
+
+            if !missing.is_empty() {
+                let consumed = store.get_consumed_cells_batch(&missing);
+                for (key, info) in consumed {
+                    result.insert(
+                        key.clone(),
+                        (
+                            info.capacity,
+                            info.created_at_block,
+                            info.lock_script_hash,
+                            info.data_size,
+                        ),
+                    );
+                }
+                missing.retain(|op| !result.contains_key(&(op.0.to_vec(), op.1)));
+            }
+
             if !missing.is_empty() {
                 tracing::debug!(
                     "LiveCellStore cache miss: {}/{} cells",
@@ -1244,6 +1278,15 @@ impl BatchWriter {
                     missing.push(*op);
                 }
             }
+
+            if !missing.is_empty() {
+                let consumed = store.get_consumed_cells_batch(&missing);
+                for (key, info) in consumed {
+                    result.insert(key.clone(), (info.lock_code_hash, info.type_code_hash));
+                }
+                missing.retain(|op| !result.contains_key(&(op.0.to_vec(), op.1)));
+            }
+
             if !missing.is_empty() {
                 tracing::debug!(
                     "LiveCellStore cache miss: {}/{} cells",
@@ -1461,6 +1504,12 @@ impl BatchWriter {
     }
 
     pub async fn get_block_dao_field(&self, block_number: i64) -> Result<Option<Vec<u8>>> {
+        if let Some(store) = &self.live_cell_store {
+            if let Some(dao) = store.get_dao_field(block_number) {
+                return Ok(Some(dao));
+            }
+        }
+
         let row = sqlx::query_as::<_, (Vec<u8>,)>("SELECT dao FROM blocks WHERE number = $1")
             .bind(block_number)
             .fetch_optional(&self.pool)
@@ -1958,12 +2007,29 @@ impl BatchWriter {
             .copied()
             .collect();
         let dao_fields: HashMap<i64, Vec<u8>> = if !all_blocks.is_empty() {
-            let rows: Vec<(i64, Vec<u8>)> =
-                sqlx::query_as("SELECT number, dao FROM blocks WHERE number = ANY($1)")
-                    .bind(&all_blocks)
-                    .fetch_all(&self.pool)
-                    .await?;
-            rows.into_iter().collect()
+            let mut result = HashMap::new();
+            let mut missing = all_blocks.clone();
+
+            if let Some(store) = &self.live_cell_store {
+                let cached = store.get_dao_fields_batch(&all_blocks);
+                for (block_num, dao) in cached {
+                    result.insert(block_num, dao);
+                }
+                missing.retain(|n| !result.contains_key(n));
+            }
+
+            if !missing.is_empty() {
+                let rows: Vec<(i64, Vec<u8>)> =
+                    sqlx::query_as("SELECT number, dao FROM blocks WHERE number = ANY($1)")
+                        .bind(&missing)
+                        .fetch_all(&self.pool)
+                        .await?;
+                for (block_num, dao) in rows {
+                    result.insert(block_num, dao);
+                }
+            }
+
+            result
         } else {
             HashMap::new()
         };

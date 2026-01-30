@@ -20,8 +20,11 @@
 //!
 //! # Implementation
 //!
-//! Currently uses RocksDB for persistent storage, enabling instant recovery
-//! on indexer restart without rebuilding from PostgreSQL.
+//! Uses RocksDB with multiple Column Families for:
+//! - Live cells: O(1) lookup for unspent cells
+//! - Consumed cells: Recently consumed cells for lookup (reduces DB queries)
+//! - DAO cache: Block number -> DAO field (32 bytes)
+//! - Block headers: Block number -> header info + hash index
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -102,30 +105,15 @@ impl MemoryStats {
 /// Provides O(1) cell lookups by outpoint (tx_hash, output_index).
 /// All methods are thread-safe.
 pub trait LiveCellStorage: Send + Sync {
-    /// Insert a new live cell.
     fn insert(&self, tx_hash: Vec<u8>, output_index: i16, info: LiveCellInfo);
-
-    /// Get cell info by outpoint. Returns `None` if not found or already spent.
     fn get(&self, tx_hash: &[u8], output_index: i16) -> Option<LiveCellInfo>;
-
-    /// Remove and return a cell (when spent). Returns `None` if not found.
     fn remove(&self, tx_hash: &[u8], output_index: i16) -> Option<LiveCellInfo>;
-
-    /// Batch lookup for multiple outpoints. Used when resolving transaction inputs.
     fn get_batch(&self, outpoints: &[(&[u8], i16)]) -> HashMap<(Vec<u8>, i16), LiveCellInfo>;
-
-    /// Number of live cells in storage.
     fn len(&self) -> usize;
-
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
-
-    /// Remove all cells.
     fn clear(&self);
-
-    /// Record a consumed cell for potential rollback.
-    /// Keeps history for `max_history_blocks` to support reorg recovery.
     fn record_consumption(
         &self,
         tx_hash: Vec<u8>,
@@ -133,18 +121,34 @@ pub trait LiveCellStorage: Send + Sync {
         info: LiveCellInfo,
         consumed_at_block: i64,
     );
-
-    /// Rollback to a previous block. Returns (cells_removed, cells_restored).
     fn rollback_to_block(&self, rollback_to: i64) -> (usize, usize);
-
-    /// Get all cells created after the given block number.
     fn cells_created_since(&self, block_number: i64) -> Vec<(Vec<u8>, i16, LiveCellInfo)>;
-
-    /// Get memory/storage statistics.
     fn memory_stats(&self) -> MemoryStats;
-
-    /// Backend identifier (e.g., "rocksdb").
     fn backend_name(&self) -> &'static str;
+
+    fn insert_block_header(&self, _block_number: i64, _header: CachedBlockHeader) {}
+    fn get_block_header(&self, _block_number: i64) -> Option<CachedBlockHeader> {
+        None
+    }
+    fn get_block_number_by_hash(&self, _hash: &[u8]) -> Option<i64> {
+        None
+    }
+    fn get_dao_field(&self, _block_number: i64) -> Option<Vec<u8>> {
+        None
+    }
+    fn get_dao_fields_batch(&self, _block_numbers: &[i64]) -> HashMap<i64, Vec<u8>> {
+        HashMap::new()
+    }
+    fn get_consumed_cell(&self, _tx_hash: &[u8], _output_index: i16) -> Option<LiveCellInfo> {
+        None
+    }
+    fn get_consumed_cells_batch(
+        &self,
+        _outpoints: &[(&[u8], i16)],
+    ) -> HashMap<(Vec<u8>, i16), LiveCellInfo> {
+        HashMap::new()
+    }
+    fn rollback_block_cache(&self, _rollback_to: i64) {}
 }
 
 /// Async operations for database synchronization.
@@ -161,3 +165,14 @@ pub trait LiveCellStorageAsync: LiveCellStorage {
 
 /// Type alias for dynamic dispatch of live cell storage.
 pub type DynLiveCellStorage = Arc<dyn LiveCellStorageAsync>;
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CachedBlockHeader {
+    pub hash: Vec<u8>,
+    pub timestamp: i64,
+    pub epoch_number: i64,
+    pub epoch_index: i32,
+    pub epoch_length: i32,
+    pub dao: Vec<u8>,
+    pub transactions_count: i32,
+}
