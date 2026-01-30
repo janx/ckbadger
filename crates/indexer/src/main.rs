@@ -240,13 +240,33 @@ async fn main() -> Result<()> {
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
-            info!(
-                "Progress: {:.2}% ({}/{}) - {:.2} blocks/sec (EMA: {:.2})",
+
+            let ema_rate = progress_clone.ema_blocks_per_second();
+            let eta = progress_clone.eta_formatted();
+            let bps = progress_clone.blocks_per_second();
+
+            // ANSI color codes for speed: green (>=1000), yellow (>=100), red (<100)
+            let (color_start, color_end) = if ema_rate >= 1000.0 {
+                ("\x1b[32m", "\x1b[0m") // green
+            } else if ema_rate >= 100.0 {
+                ("\x1b[33m", "\x1b[0m") // yellow
+            } else {
+                ("\x1b[31m", "\x1b[0m") // red
+            };
+
+            // Use eprintln! for ANSI colors (tracing escapes them)
+            eprintln!(
+                "Progress: {:.2}% ({}/{}) - {}{:.2} blocks/sec{} (EMA: {}{:.2}{}) | ETA: {}",
                 progress_clone.progress_percentage(),
                 progress_clone.current(),
                 progress_clone.target(),
-                progress_clone.blocks_per_second(),
-                progress_clone.ema_blocks_per_second()
+                color_start,
+                bps,
+                color_end,
+                color_start,
+                ema_rate,
+                color_end,
+                eta
             );
         }
     });

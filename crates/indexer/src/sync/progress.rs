@@ -129,6 +129,61 @@ impl SyncProgress {
             100.0
         }
     }
+
+    /// Calculate ETA (Estimated Time of Arrival) in seconds using EMA rate.
+    /// Returns None if EMA rate is zero or already synced.
+    pub fn eta_seconds(&self) -> Option<f64> {
+        let remaining = self.blocks_remaining();
+        if remaining == 0 {
+            return None;
+        }
+
+        let ema_rate = self.ema_blocks_per_second();
+        if ema_rate <= 0.0 {
+            return None;
+        }
+
+        Some(remaining as f64 / ema_rate)
+    }
+
+    /// Format ETA as human-readable string with smart units.
+    /// - < 1 hour: "45m 30s"
+    /// - >= 1 hour: "2h 15m"
+    /// - >= 1 day: "1d 5h"
+    pub fn eta_formatted(&self) -> String {
+        match self.eta_seconds() {
+            None => "N/A".to_string(),
+            Some(secs) => format_duration_smart(secs),
+        }
+    }
+}
+
+/// Format seconds into human-readable duration with smart units.
+/// - < 1 hour: "45m 30s"
+/// - >= 1 hour: "2h 15m"
+/// - >= 1 day: "1d 5h"
+pub fn format_duration_smart(total_secs: f64) -> String {
+    let total_secs = total_secs.round() as u64;
+
+    if total_secs < 60 {
+        return format!("{}s", total_secs);
+    }
+
+    let days = total_secs / 86400;
+    let hours = (total_secs % 86400) / 3600;
+    let minutes = (total_secs % 3600) / 60;
+    let seconds = total_secs % 60;
+
+    if days > 0 {
+        // >= 1 day: "1d 5h"
+        format!("{}d {}h", days, hours)
+    } else if hours > 0 {
+        // >= 1 hour: "2h 15m"
+        format!("{}h {}m", hours, minutes)
+    } else {
+        // < 1 hour: "45m 30s"
+        format!("{}m {}s", minutes, seconds)
+    }
 }
 
 #[cfg(test)]
@@ -256,5 +311,52 @@ mod tests {
         assert_eq!(progress.target(), 100);
         progress.update_target(200);
         assert_eq!(progress.target(), 200);
+    }
+
+    #[test]
+    fn test_format_duration_smart_seconds() {
+        assert_eq!(format_duration_smart(0.0), "0s");
+        assert_eq!(format_duration_smart(30.0), "30s");
+        assert_eq!(format_duration_smart(59.0), "59s");
+    }
+
+    #[test]
+    fn test_format_duration_smart_minutes() {
+        assert_eq!(format_duration_smart(60.0), "1m 0s");
+        assert_eq!(format_duration_smart(90.0), "1m 30s");
+        assert_eq!(format_duration_smart(2730.0), "45m 30s");
+        assert_eq!(format_duration_smart(3599.0), "59m 59s");
+    }
+
+    #[test]
+    fn test_format_duration_smart_hours() {
+        assert_eq!(format_duration_smart(3600.0), "1h 0m");
+        assert_eq!(format_duration_smart(8100.0), "2h 15m");
+        assert_eq!(format_duration_smart(86399.0), "23h 59m");
+    }
+
+    #[test]
+    fn test_format_duration_smart_days() {
+        assert_eq!(format_duration_smart(86400.0), "1d 0h");
+        assert_eq!(format_duration_smart(104400.0), "1d 5h");
+        assert_eq!(format_duration_smart(172800.0), "2d 0h");
+    }
+
+    #[test]
+    fn test_eta_returns_none_when_synced() {
+        let progress = SyncProgress::new(100, 100);
+        assert!(progress.eta_seconds().is_none());
+    }
+
+    #[test]
+    fn test_eta_returns_none_when_ema_zero() {
+        let progress = SyncProgress::new(0, 1000);
+        assert!(progress.eta_seconds().is_none());
+    }
+
+    #[test]
+    fn test_eta_formatted_returns_na_when_unavailable() {
+        let progress = SyncProgress::new(0, 1000);
+        assert_eq!(progress.eta_formatted(), "N/A");
     }
 }
