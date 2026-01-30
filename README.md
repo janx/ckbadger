@@ -350,7 +350,7 @@ ckbadger/
 │   ├── token-labels/       # [submodule] Known token metadata
 │   ├── POSTMORTEM.md       # Historical bugs & lessons learned
 │   └── DAO_CALCULATIONS.md # DAO formula documentation
-├── docker/                 # Dockerfiles
+├── docker/                 # Dockerfiles (indexer, api, frontend, task-runner)
 ├── e2e/                    # Playwright E2E tests
 ├── .github/workflows/      # CI/CD pipelines
 └── docker-compose.yml      # Development setup
@@ -377,6 +377,31 @@ cargo run -p ckbadger-api --release
 
 # Run frontend
 cd frontend && pnpm install && pnpm dev
+```
+
+### Docker Services
+
+The `docker-compose.yml` includes the following services:
+
+| Service       | Description                                                  | Port |
+| ------------- | ------------------------------------------------------------ | ---- |
+| `postgres`    | PostgreSQL 16 database                                       | 5432 |
+| `redis`       | Redis cache for sync status                                  | 6379 |
+| `ckb-node`    | CKB node (profile: internal)                                 | 8114 |
+| `indexer`     | Blockchain sync daemon                                       | -    |
+| `api`         | REST/WebSocket API server                                    | 3001 |
+| `frontend`    | Next.js web application                                      | 3000 |
+| `task-runner` | Background task executor (label import, index rebuild, etc.) | -    |
+
+```bash
+# View logs for specific service
+docker compose logs -f task-runner
+
+# Restart a service
+docker compose restart task-runner
+
+# Run task-runner standalone (for development)
+cargo run -p ckbadger-task-runner
 ```
 
 ### Task TUI (Terminal UI)

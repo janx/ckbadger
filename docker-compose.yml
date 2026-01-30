@@ -113,6 +113,23 @@ services:
       - '3000:3000'
     restart: unless-stopped
 
+  task-runner:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.task-runner
+    container_name: ckbadger-task-runner
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-ckbadger}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-ckbadger}
+      CKB_RPC_URL: ${CKB_RPC_URL:-http://ckb-node:8114}
+      TOKEN_LABELS_PATH: /app/token-labels
+      RUST_LOG: info
+    volumes:
+      - ./docs/token-labels:/app/token-labels:ro
+    restart: unless-stopped
+
 volumes:
   postgres-data:
   redis-data:
