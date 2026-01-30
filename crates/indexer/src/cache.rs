@@ -154,6 +154,22 @@ mod tests {
         invalidator.invalidate_chart_caches().await;
     }
 
+    #[tokio::test]
+    async fn test_publish_sync_progress_does_not_panic_when_disabled() {
+        let invalidator = CacheInvalidator::new(None).await;
+        let data = SyncProgressData {
+            current_block: 1000,
+            target_block: 10000,
+            blocks_per_second: 100.0,
+            ema_blocks_per_second: 95.0,
+            eta_seconds: Some(90.0),
+            eta_formatted: "1m 30s".to_string(),
+            progress_percentage: 10.0,
+            updated_at: 1234567890,
+        };
+        invalidator.publish_sync_progress(&data).await;
+    }
+
     #[cfg(feature = "redis-cache")]
     #[tokio::test]
     async fn test_cache_invalidator_disabled_with_invalid_url() {
@@ -206,6 +222,42 @@ mod tests {
                 .await
                 .unwrap();
             assert!(result.is_none());
+        }
+
+        #[tokio::test]
+        async fn test_publish_sync_progress_writes_to_redis() {
+            let redis_url = std::env::var("TEST_REDIS_URL").ok();
+            if redis_url.is_none() {
+                eprintln!("Skipping: TEST_REDIS_URL not set");
+                return;
+            }
+
+            let invalidator = CacheInvalidator::new(redis_url.as_deref()).await;
+            let data = SyncProgressData {
+                current_block: 5000,
+                target_block: 10000,
+                blocks_per_second: 200.0,
+                ema_blocks_per_second: 180.0,
+                eta_seconds: Some(27.78),
+                eta_formatted: "27s".to_string(),
+                progress_percentage: 50.0,
+                updated_at: chrono::Utc::now().timestamp(),
+            };
+            invalidator.publish_sync_progress(&data).await;
+
+            let client = redis::Client::open(redis_url.as_ref().unwrap().as_str()).unwrap();
+            let mut conn = client.get_multiplexed_async_connection().await.unwrap();
+            let result: Option<String> = redis::cmd("GET")
+                .arg(SYNC_PROGRESS_REDIS_KEY)
+                .query_async(&mut conn)
+                .await
+                .unwrap();
+
+            assert!(result.is_some(), "Sync progress should be stored in Redis");
+            let stored: SyncProgressData = serde_json::from_str(&result.unwrap()).unwrap();
+            assert_eq!(stored.current_block, 5000);
+            assert_eq!(stored.target_block, 10000);
+            assert!((stored.progress_percentage - 50.0).abs() < 0.01);
         }
     }
 }

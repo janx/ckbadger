@@ -137,6 +137,39 @@ The indexer uses linear regression on speed history to predict future sync speed
 
 **Fallback**: If insufficient trend data (< 3 samples), uses simple `remaining / EMA` calculation.
 
+### Redis Sync Progress Sharing
+
+The indexer publishes sync progress to Redis for API/WebSocket consumption:
+
+| Key             | TTL | Contents                        |
+| --------------- | --- | ------------------------------- |
+| `sync:progress` | 30s | JSON: `SyncProgressData` struct |
+
+**Data Structure** (`crates/common/src/sync.rs`):
+
+```rust
+pub struct SyncProgressData {
+    pub current_block: u64,
+    pub target_block: u64,
+    pub blocks_per_second: f64,
+    pub ema_blocks_per_second: f64,
+    pub eta_seconds: Option<f64>,
+    pub eta_formatted: String,
+    pub progress_percentage: f64,
+    pub updated_at: i64,  // Unix timestamp
+}
+```
+
+**Flow**:
+
+1. Indexer computes trend-based ETA every 10 seconds
+2. Publishes to Redis key `sync:progress` with 30s TTL
+3. API reads from Redis when handling `/api/v1/statistics/network`
+4. WebSocket broadcaster reads from Redis for `new_block` messages
+5. If Redis data is stale (>60s) or unavailable, API falls back to progress-only display (no ETA)
+
+**Requires**: `redis-cache` feature enabled on both indexer and API, plus `REDIS_URL` environment variable.
+
 ## Deferred Index and Constraint Optimization
 
 For fresh database syncs, the indexer automatically drops non-essential B-tree indexes and UNIQUE constraints to achieve ~3-4x faster write speeds. Both are rebuilt automatically when the sync catches up to the chain tip.
