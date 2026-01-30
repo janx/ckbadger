@@ -834,6 +834,8 @@ impl Indexer {
                         .await
                     {
                         error!("Sync error: {:?}", e);
+                        // Notify fetcher to re-query DB state after write failure
+                        self.reorg_notify_flag.store(true, Ordering::SeqCst);
                         Self::drain_channel(&mut parse_rx).await;
                         sleep(Duration::from_secs(5)).await;
                         continue;
