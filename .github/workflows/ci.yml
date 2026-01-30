@@ -109,7 +109,7 @@ jobs:
             ${{ runner.os }}-cargo-test-
 
       - name: Run migrations
-        run: psql "postgresql://test:test@localhost:5432/ckbadger_test" -f migrations/postgres/001_init.sql
+        run: psql -U test "postgresql://test:test@localhost:5432/ckbadger_test" -f migrations/postgres/001_init.sql
 
       - name: Run tests
         run: cargo test --all
@@ -253,7 +253,7 @@ jobs:
         run: npx playwright install chromium
 
       - name: Run migrations
-        run: psql "postgresql://test:test@localhost:5433/ckbadger_test" -f migrations/postgres/001_init.sql
+        run: psql -U test "postgresql://test:test@localhost:5433/ckbadger_test" -f migrations/postgres/001_init.sql
 
       - name: Build API (release)
         run: cargo build -p ckbadger-api --release
