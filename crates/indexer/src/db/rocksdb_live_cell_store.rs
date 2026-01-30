@@ -485,6 +485,59 @@ impl LiveCellStorage for RocksDbLiveCellStore {
     }
 }
 
+impl RocksDbLiveCellStore {
+    /// Iterate over all live cells in batches.
+    ///
+    /// This is used by the `LiveCellsPopulate` task to populate the PostgreSQL
+    /// `live_cells` table from RocksDB data. The callback is invoked for each
+    /// batch with `(tx_hash, output_index, LiveCellInfo)` tuples.
+    ///
+    /// Returns the total number of cells iterated.
+    pub fn iter_live_cells_batched<F>(&self, batch_size: usize, mut callback: F) -> usize
+    where
+        F: FnMut(Vec<(Vec<u8>, i16, LiveCellInfo)>),
+    {
+        let mut batch = Vec::with_capacity(batch_size);
+        let mut total = 0;
+
+        let iter = self
+            .db
+            .iterator_cf(self.cf_live_cells(), rocksdb::IteratorMode::Start);
+
+        for item in iter.flatten() {
+            let (key, value) = item;
+            if let Ok(info) = bincode::deserialize::<LiveCellInfo>(&value) {
+                let (tx_hash, output_index) = Self::decode_cell_key(&key);
+                batch.push((tx_hash, output_index, info));
+                total += 1;
+
+                if batch.len() >= batch_size {
+                    callback(std::mem::take(&mut batch));
+                    batch = Vec::with_capacity(batch_size);
+                }
+            }
+        }
+
+        if !batch.is_empty() {
+            callback(batch);
+        }
+
+        total
+    }
+
+    /// Get the total count of live cells (more efficient than len() for large stores).
+    pub fn count_live_cells(&self) -> u64 {
+        let mut count = 0u64;
+        let iter = self
+            .db
+            .iterator_cf(self.cf_live_cells(), rocksdb::IteratorMode::Start);
+        for _ in iter.flatten() {
+            count += 1;
+        }
+        count
+    }
+}
+
 #[async_trait::async_trait]
 impl LiveCellStorageAsync for RocksDbLiveCellStore {
     async fn flush_to_db(&self, _pool: &PgPool) -> anyhow::Result<(usize, usize)> {
@@ -727,5 +780,59 @@ mod tests {
         let tmp_dir = TempDir::new().unwrap();
         let store = RocksDbLiveCellStore::open(tmp_dir.path()).unwrap();
         assert_eq!(store.backend_name(), "rocksdb");
+    }
+
+    #[test]
+    fn test_iter_live_cells_batched() {
+        let tmp_dir = TempDir::new().unwrap();
+        let store = RocksDbLiveCellStore::open(tmp_dir.path()).unwrap();
+
+        for i in 0..25 {
+            let tx_hash = vec![i as u8; 32];
+            let mut info = create_test_cell_info();
+            info.capacity = (i + 1) as i64 * 100_000_000;
+            store.insert(tx_hash, 0, info);
+        }
+
+        let mut batches_received = 0;
+        let mut total_cells = 0;
+
+        let count = store.iter_live_cells_batched(10, |batch| {
+            batches_received += 1;
+            total_cells += batch.len();
+        });
+
+        assert_eq!(count, 25);
+        assert_eq!(total_cells, 25);
+        assert_eq!(batches_received, 3); // 10 + 10 + 5
+    }
+
+    #[test]
+    fn test_iter_live_cells_batched_empty() {
+        let tmp_dir = TempDir::new().unwrap();
+        let store = RocksDbLiveCellStore::open(tmp_dir.path()).unwrap();
+
+        let mut callback_called = false;
+        let count = store.iter_live_cells_batched(10, |_batch| {
+            callback_called = true;
+        });
+
+        assert_eq!(count, 0);
+        assert!(!callback_called);
+    }
+
+    #[test]
+    fn test_count_live_cells() {
+        let tmp_dir = TempDir::new().unwrap();
+        let store = RocksDbLiveCellStore::open(tmp_dir.path()).unwrap();
+
+        assert_eq!(store.count_live_cells(), 0);
+
+        for i in 0..100 {
+            let tx_hash = vec![i as u8; 32];
+            store.insert(tx_hash, 0, create_test_cell_info());
+        }
+
+        assert_eq!(store.count_live_cells(), 100);
     }
 }

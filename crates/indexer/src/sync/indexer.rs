@@ -272,6 +272,7 @@ pub struct Indexer {
     rebuild_pause_flag: Arc<std::sync::atomic::AtomicBool>,
     /// Flag to notify fetcher that a reorg/mismatch occurred and it should reset next_block
     reorg_notify_flag: Arc<std::sync::atomic::AtomicBool>,
+    rocksdb_store: Arc<crate::db::RocksDbLiveCellStore>,
 }
 
 impl Indexer {
@@ -280,8 +281,8 @@ impl Indexer {
         let cache_invalidator = CacheInvalidator::new(config.redis_url.as_deref()).await;
         let repo = Repository::with_cache(pool.clone(), cache_invalidator.clone());
 
-        let live_cell_store: crate::db::DynLiveCellStorage =
-            Self::create_live_cell_store(&config, &pool).await?;
+        let rocksdb_store = Self::create_rocksdb_store(&config)?;
+        let live_cell_store: crate::db::DynLiveCellStorage = Arc::clone(&rocksdb_store) as _;
 
         let writer = BatchWriter::with_live_cell_store(
             pool.clone(),
@@ -340,6 +341,7 @@ impl Indexer {
             batches_since_flush: std::sync::atomic::AtomicU64::new(0),
             rebuild_pause_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             reorg_notify_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            rocksdb_store,
         })
     }
 
@@ -359,10 +361,7 @@ impl Indexer {
         Arc::clone(&self.rebuild_pause_flag)
     }
 
-    async fn create_live_cell_store(
-        config: &Config,
-        _pool: &PgPool,
-    ) -> Result<crate::db::DynLiveCellStorage> {
+    fn create_rocksdb_store(config: &Config) -> Result<Arc<crate::db::RocksDbLiveCellStore>> {
         info!(
             "Using RocksDB live cell store at: {}",
             config.live_cell_db_path
@@ -908,7 +907,11 @@ impl Indexer {
                     parser.abort();
                     return Err(anyhow::anyhow!("Pipeline channel closed"));
                 }
-                Err(_timeout) => {}
+                Err(_timeout) => {
+                    if let Err(e) = self.check_and_execute_live_cells_populate_task().await {
+                        warn!("Failed to execute live_cells_populate task: {}", e);
+                    }
+                }
             }
         }
     }
@@ -1131,6 +1134,10 @@ impl Indexer {
                 warn!("Failed to submit index rebuild task: {}", e);
             }
 
+            if let Err(e) = self.maybe_submit_live_cells_populate_task().await {
+                warn!("Failed to submit live cells populate task: {}", e);
+            }
+
             if let Err(e) = self.maybe_submit_statistics_rebuild_task().await {
                 warn!("Failed to submit statistics rebuild task: {}", e);
             }
@@ -1231,6 +1238,259 @@ impl Indexer {
         info!("Submitted statistics rebuild task: {}", task_id.0);
 
         Ok(())
+    }
+
+    async fn maybe_submit_live_cells_populate_task(&self) -> Result<()> {
+        use ckbadger_common::{LiveCellsPopulateConfig, TaskBuilder};
+
+        let existing: Option<(i64,)> = sqlx::query_as(
+            "SELECT COUNT(*) FROM tasks WHERE task_type = 'live_cells_populate' AND status IN ('pending', 'running')",
+        )
+        .fetch_optional(self.writer.pool())
+        .await?;
+
+        if existing.map(|r| r.0).unwrap_or(0) > 0 {
+            info!("Live cells populate task already pending/running, skipping submission");
+            return Ok(());
+        }
+
+        let builder = TaskBuilder::live_cells_populate(LiveCellsPopulateConfig::default());
+
+        let task_id: (Uuid,) = sqlx::query_as(
+            r#"
+            INSERT INTO tasks (task_type, config, priority, max_retries)
+            VALUES ($1, $2, $3, $4)
+            RETURNING id
+            "#,
+        )
+        .bind(builder.task_type().to_string())
+        .bind(builder.config())
+        .bind(builder.get_priority())
+        .bind(builder.get_max_retries())
+        .fetch_one(self.writer.pool())
+        .await?;
+
+        info!("Submitted live cells populate task: {}", task_id.0);
+
+        Ok(())
+    }
+
+    /// Returns `true` if a task was executed, `false` if no pending task.
+    /// Must run in indexer (not task-runner) due to RocksDB access requirement.
+    async fn check_and_execute_live_cells_populate_task(&self) -> Result<bool> {
+        use ckbadger_common::{LiveCellsPopulateConfig, LiveCellsPopulateResult, TaskConfig};
+
+        let runner_id = format!("indexer-{}", std::process::id());
+        let task: Option<ckbadger_common::Task> = sqlx::query_as(
+            r#"
+            UPDATE tasks
+            SET status = 'running',
+                runner_id = $1,
+                started_at = COALESCE(started_at, NOW()),
+                heartbeat_at = NOW()
+            WHERE id = (
+                SELECT id FROM tasks
+                WHERE task_type = 'live_cells_populate'
+                  AND status = 'pending'
+                ORDER BY priority DESC, created_at ASC
+                LIMIT 1
+                FOR UPDATE SKIP LOCKED
+            )
+            RETURNING *
+            "#,
+        )
+        .bind(&runner_id)
+        .fetch_optional(self.writer.pool())
+        .await?;
+
+        let task = match task {
+            Some(t) => t,
+            None => return Ok(false),
+        };
+
+        info!(
+            "Claimed live_cells_populate task {} (runner: {})",
+            task.id, runner_id
+        );
+
+        let batch_size = match task.config_typed() {
+            Some(TaskConfig::LiveCellsPopulate(c)) => c.batch_size,
+            _ => LiveCellsPopulateConfig::default().batch_size,
+        };
+
+        let result = self.execute_live_cells_populate(task.id, batch_size).await;
+
+        match result {
+            Ok(cells_populated) => {
+                let result_json =
+                    serde_json::to_value(LiveCellsPopulateResult { cells_populated })?;
+                sqlx::query(
+                    r#"
+                    UPDATE tasks
+                    SET status = 'completed',
+                        completed_at = NOW(),
+                        result = $2,
+                        heartbeat_at = NOW()
+                    WHERE id = $1
+                    "#,
+                )
+                .bind(task.id)
+                .bind(&result_json)
+                .execute(self.writer.pool())
+                .await?;
+
+                info!(
+                    "Completed live_cells_populate task {}: {} cells populated",
+                    task.id, cells_populated
+                );
+                Ok(true)
+            }
+            Err(e) => {
+                error!("Failed live_cells_populate task {}: {}", task.id, e);
+                sqlx::query(
+                    r#"
+                    UPDATE tasks
+                    SET status = CASE 
+                        WHEN retry_count < max_retries THEN 'pending'
+                        ELSE 'failed'
+                    END,
+                    error_message = $2,
+                    retry_count = retry_count + 1,
+                    runner_id = NULL,
+                    heartbeat_at = NOW()
+                    WHERE id = $1
+                    "#,
+                )
+                .bind(task.id)
+                .bind(e.to_string())
+                .execute(self.writer.pool())
+                .await?;
+
+                Err(e)
+            }
+        }
+    }
+
+    async fn execute_live_cells_populate(&self, task_id: Uuid, batch_size: usize) -> Result<i64> {
+        use crate::db::copy_live_cells::copy_live_cells_from_rocksdb;
+        use crate::db::copy_pool::{CopyConfig, CopyPoolManager};
+
+        info!("Starting live_cells_populate: counting cells in RocksDB...");
+
+        let total_cells = self.rocksdb_store.count_live_cells();
+        info!(
+            "Found {} live cells in RocksDB, batch_size={}",
+            total_cells, batch_size
+        );
+
+        sqlx::query(
+            r#"
+            UPDATE tasks
+            SET progress_total = $2,
+                progress_current = 0,
+                progress_message = 'Truncating live_cells table...',
+                heartbeat_at = NOW()
+            WHERE id = $1
+            "#,
+        )
+        .bind(task_id)
+        .bind(total_cells as i64)
+        .execute(self.writer.pool())
+        .await?;
+
+        info!("Truncating live_cells table...");
+        sqlx::query("TRUNCATE live_cells")
+            .execute(self.writer.pool())
+            .await?;
+
+        let copy_pool = CopyPoolManager::new(
+            &self.config.database_url,
+            CopyConfig {
+                max_copy_connections: 4,
+                copy_batch_size: batch_size,
+                copy_enabled: true,
+            },
+        )?;
+
+        sqlx::query(
+            r#"
+            UPDATE tasks
+            SET progress_message = 'Populating live_cells from RocksDB...',
+                heartbeat_at = NOW()
+            WHERE id = $1
+            "#,
+        )
+        .bind(task_id)
+        .execute(self.writer.pool())
+        .await?;
+
+        let mut cells_written: i64 = 0;
+        let mut last_progress_update = std::time::Instant::now();
+        let pool = self.writer.pool().clone();
+        let start_time = std::time::Instant::now();
+
+        let mut all_batches: Vec<Vec<(Vec<u8>, i16, crate::db::LiveCellInfo)>> = Vec::new();
+
+        self.rocksdb_store
+            .iter_live_cells_batched(batch_size, |batch| {
+                all_batches.push(batch);
+            });
+
+        info!("Collected {} batches from RocksDB", all_batches.len());
+
+        for (batch_idx, batch) in all_batches.into_iter().enumerate() {
+            let conn = copy_pool.get_connection().await?;
+            let rows = copy_live_cells_from_rocksdb(&conn, &batch).await?;
+            cells_written += rows as i64;
+
+            if last_progress_update.elapsed() > std::time::Duration::from_secs(5)
+                || batch_idx % 10 == 0
+            {
+                let elapsed = start_time.elapsed().as_secs_f64();
+                let rate = if elapsed > 0.0 {
+                    cells_written as f64 / elapsed
+                } else {
+                    0.0
+                };
+
+                sqlx::query(
+                    r#"
+                    UPDATE tasks
+                    SET progress_current = $2,
+                        rate_ema = $3,
+                        heartbeat_at = NOW()
+                    WHERE id = $1
+                    "#,
+                )
+                .bind(task_id)
+                .bind(cells_written)
+                .bind(rate)
+                .execute(&pool)
+                .await?;
+
+                last_progress_update = std::time::Instant::now();
+
+                info!(
+                    "live_cells_populate progress: {}/{} ({:.1}%), {:.0} cells/sec",
+                    cells_written,
+                    total_cells,
+                    (cells_written as f64 / total_cells as f64) * 100.0,
+                    rate
+                );
+            }
+
+            drop(conn);
+        }
+
+        let elapsed = start_time.elapsed();
+        info!(
+            "live_cells_populate completed: {} cells in {:.2}s ({:.0} cells/sec)",
+            cells_written,
+            elapsed.as_secs_f64(),
+            cells_written as f64 / elapsed.as_secs_f64()
+        );
+
+        Ok(cells_written)
     }
 
     async fn maybe_flush_live_cell_store(&self) {

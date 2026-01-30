@@ -3,6 +3,7 @@ use bytes::Bytes;
 use tokio_postgres::Client;
 
 use crate::db::copy_format::BinaryCopyBuffer;
+use crate::db::LiveCellInfo;
 use crate::parser::cell::ParsedCell;
 
 /// live_cells table has 10 columns:
@@ -63,6 +64,22 @@ impl CopyLiveCellsWriter {
     pub fn finish(self) -> Bytes {
         self.buffer.finish().freeze()
     }
+
+    pub fn add_from_rocksdb(&mut self, tx_hash: &[u8], output_index: i16, info: &LiveCellInfo) {
+        self.buffer.start_row();
+
+        self.buffer.write_bytea(tx_hash);
+        self.buffer.write_i16(output_index);
+        self.buffer.write_i64(info.created_at_block);
+        self.buffer.write_i64(info.capacity);
+        self.buffer.write_bytea(&info.lock_script_hash);
+        self.buffer.write_bytea(&info.lock_code_hash);
+        self.buffer.write_bytea(&info.lock_args);
+        self.buffer
+            .write_bytea_opt(info.type_script_hash.as_deref());
+        self.buffer.write_bytea_opt(info.type_code_hash.as_deref());
+        self.buffer.write_i32(info.data_size);
+    }
 }
 
 pub async fn copy_live_cells(
@@ -76,6 +93,35 @@ pub async fn copy_live_cells(
     let mut writer = CopyLiveCellsWriter::new();
     for (tx_hash, output_index, cell, block_number) in cells {
         writer.add_live_cell(tx_hash, *output_index, cell, *block_number);
+    }
+
+    let data = writer.finish();
+
+    let sink = client
+        .copy_in("COPY live_cells (tx_hash, output_index, created_at_block, capacity, lock_script_hash, lock_code_hash, lock_args, type_script_hash, type_code_hash, data_size) FROM STDIN WITH (FORMAT BINARY)")
+        .await?;
+
+    use futures::SinkExt;
+    use std::pin::pin;
+
+    let mut sink = pin!(sink);
+    sink.send(data).await?;
+    let rows = sink.finish().await?;
+
+    Ok(rows)
+}
+
+pub async fn copy_live_cells_from_rocksdb(
+    client: &Client,
+    cells: &[(Vec<u8>, i16, LiveCellInfo)],
+) -> Result<u64> {
+    if cells.is_empty() {
+        return Ok(0);
+    }
+
+    let mut writer = CopyLiveCellsWriter::new();
+    for (tx_hash, output_index, info) in cells {
+        writer.add_from_rocksdb(tx_hash, *output_index, info);
     }
 
     let data = writer.finish();
@@ -153,6 +199,50 @@ mod tests {
 
         let tx_hash = vec![0xbb; 32];
         writer.add_live_cell(&tx_hash, 1, &cell, 67890);
+
+        let data = writer.finish();
+        assert!(data.len() > 21);
+    }
+
+    #[test]
+    fn test_copy_live_cells_writer_from_rocksdb() {
+        let mut writer = CopyLiveCellsWriter::new();
+
+        let info = LiveCellInfo {
+            capacity: 10000000000,
+            created_at_block: 12345,
+            lock_script_hash: vec![0x01; 32],
+            lock_code_hash: vec![0x02; 32],
+            lock_args: vec![0x03; 20],
+            type_script_hash: Some(vec![0x04; 32]),
+            type_code_hash: Some(vec![0x05; 32]),
+            data_size: 100,
+        };
+
+        let tx_hash = vec![0xcc; 32];
+        writer.add_from_rocksdb(&tx_hash, 2, &info);
+
+        let data = writer.finish();
+        assert!(data.len() > 21);
+    }
+
+    #[test]
+    fn test_copy_live_cells_writer_from_rocksdb_no_type() {
+        let mut writer = CopyLiveCellsWriter::new();
+
+        let info = LiveCellInfo {
+            capacity: 5000000000,
+            created_at_block: 99999,
+            lock_script_hash: vec![0x11; 32],
+            lock_code_hash: vec![0x22; 32],
+            lock_args: vec![0x33; 20],
+            type_script_hash: None,
+            type_code_hash: None,
+            data_size: 0,
+        };
+
+        let tx_hash = vec![0xdd; 32];
+        writer.add_from_rocksdb(&tx_hash, 0, &info);
 
         let data = writer.finish();
         assert!(data.len() > 21);

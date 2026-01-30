@@ -247,11 +247,13 @@ When bulk sync completes (catches up to <=1000 blocks behind tip), the indexer a
 
 1. Indexer detects bulk sync completion
 2. Submits `index_rebuild` task (priority 10) if indexes are deferred
-3. Submits `statistics_rebuild` task (priority 5) to rebuild aggregate statistics
-4. Task-runner picks up tasks in priority order and executes them
-5. Indexes rebuilt with `CREATE INDEX CONCURRENTLY`
-6. Statistics tables rebuilt (daily_statistics, hourly_statistics, miner_statistics, etc.)
-7. Tasks complete (status: `completed`)
+3. Submits `live_cells_populate` task (priority 8) to populate PostgreSQL from RocksDB
+4. Submits `statistics_rebuild` task (priority 5) to rebuild aggregate statistics
+5. Task-runner picks up `index_rebuild` and `statistics_rebuild` tasks
+6. Indexer executes `live_cells_populate` during idle time (requires RocksDB access)
+7. Indexes rebuilt with `CREATE INDEX CONCURRENTLY`
+8. Statistics tables rebuilt (daily_statistics, hourly_statistics, miner_statistics, etc.)
+9. Tasks complete (status: `completed`)
 
 **Available Task Types:**
 
@@ -336,6 +338,44 @@ cargo run -p ckbadger-indexer
 
 # Custom path
 cargo run -p ckbadger-indexer -- --live-cell-db-path /ssd/live_cells
+```
+
+### Live Cells Populate Task
+
+During bulk sync, the indexer skips writing to the PostgreSQL `live_cells` table for performance (writes only to RocksDB). After bulk sync completes, the `live_cells_populate` task copies all live cells from RocksDB to PostgreSQL.
+
+**Why Indexer Executes (not task-runner):**
+
+- Requires direct access to RocksDB live cell store
+- Task-runner rejects this task type with error message
+
+**Execution Flow:**
+
+1. Task submitted when bulk sync completes (priority 8)
+2. Indexer checks for pending task during pipeline idle time
+3. Claims task with `FOR UPDATE SKIP LOCKED`
+4. Truncates PostgreSQL `live_cells` table
+5. Iterates RocksDB in batches (default 100,000 cells)
+6. Writes batches to PostgreSQL using COPY protocol
+7. Updates task progress every 5 seconds
+8. Marks task completed with `cells_populated` count
+
+**Configuration:**
+
+```rust
+LiveCellsPopulateConfig {
+    batch_size: 100_000,  // Cells per batch
+}
+```
+
+**Monitoring:**
+
+```bash
+# Check task status
+psql -c "SELECT id, status, progress_current, progress_total, rate_ema FROM tasks WHERE task_type = 'live_cells_populate';"
+
+# Monitor via TUI
+cargo run -p ckbadger-task-tui
 ```
 
 ## Rust Style

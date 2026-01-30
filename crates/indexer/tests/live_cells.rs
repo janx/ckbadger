@@ -389,3 +389,59 @@ async fn test_rocksdb_store_persists_cells(pool: PgPool) {
         assert_eq!(retrieved.unwrap().capacity, 100_00000000);
     }
 }
+
+#[test]
+fn test_iter_and_copy_writer_integration() {
+    use ckbadger_indexer::db::{
+        copy_live_cells::CopyLiveCellsWriter, LiveCellInfo, LiveCellStorage, RocksDbLiveCellStore,
+    };
+
+    let tmp_dir = tempfile::TempDir::new().unwrap();
+    let store = RocksDbLiveCellStore::open(tmp_dir.path()).unwrap();
+
+    for i in 1..=50 {
+        let tx_hash = vec![i as u8; 32];
+        let info = LiveCellInfo {
+            capacity: i as i64 * 100_000_000,
+            created_at_block: 1000 + i as i64,
+            lock_script_hash: vec![0x11u8; 32],
+            lock_code_hash: vec![0x22u8; 32],
+            lock_args: vec![0x33u8; 20],
+            type_script_hash: if i % 2 == 0 {
+                Some(vec![0x44u8; 32])
+            } else {
+                None
+            },
+            type_code_hash: if i % 2 == 0 {
+                Some(vec![0x55u8; 32])
+            } else {
+                None
+            },
+            data_size: 100,
+        };
+        store.insert(tx_hash, 0, info);
+    }
+
+    assert_eq!(store.count_live_cells(), 50);
+
+    let mut all_batches: Vec<Vec<(Vec<u8>, i16, LiveCellInfo)>> = Vec::new();
+    let total_iterated = store.iter_live_cells_batched(20, |batch| {
+        all_batches.push(batch);
+    });
+
+    assert_eq!(total_iterated, 50);
+    assert_eq!(all_batches.len(), 3);
+
+    let mut total_rows = 0;
+    for batch in &all_batches {
+        let mut writer = CopyLiveCellsWriter::new();
+        for (tx_hash, output_index, info) in batch {
+            writer.add_from_rocksdb(tx_hash, *output_index, info);
+            total_rows += 1;
+        }
+        let data = writer.finish();
+        assert!(data.len() > 21);
+    }
+
+    assert_eq!(total_rows, 50);
+}
