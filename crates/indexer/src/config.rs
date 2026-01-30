@@ -37,10 +37,7 @@ pub struct Config {
     /// Drop non-essential indexes during bulk sync for faster writes
     #[serde(default)]
     pub defer_indexes: bool,
-    /// Only rebuild indexes (don't sync blocks)
-    #[serde(default)]
-    pub rebuild_indexes_only: bool,
-    /// Max parallel connections for index rebuild
+    /// Max parallel connections for index rebuild task
     #[serde(default = "default_index_rebuild_parallel")]
     pub index_rebuild_parallel: usize,
     /// Apply PostgreSQL tuning for bulk sync optimization

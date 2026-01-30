@@ -691,6 +691,7 @@ interface MempoolInfo {
 }
 
 interface IndexRebuildStatus {
+  status: 'pending' | 'running';
   isRebuilding: boolean;
   total: number;
   completed: number;

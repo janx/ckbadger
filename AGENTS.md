@@ -200,13 +200,12 @@ pub struct SyncProgressData {
 
 ## Deferred Index and Constraint Optimization
 
-For fresh database syncs, the indexer automatically drops non-essential B-tree indexes and UNIQUE constraints to achieve ~3-4x faster write speeds. Both are rebuilt automatically when the sync catches up to the chain tip.
+For fresh database syncs, the indexer automatically drops non-essential B-tree indexes and UNIQUE constraints to achieve ~3-4x faster write speeds. Both are rebuilt automatically via the task-runner when the sync catches up to the chain tip.
 
 | Parameter                  | Default | Description                                           |
 | -------------------------- | ------- | ----------------------------------------------------- |
 | `--defer-indexes`          | `false` | Force enable deferred indexes/constraints (non-fresh) |
 | `--no-auto-defer-indexes`  | `false` | Disable auto-optimization for fresh DB                |
-| `--rebuild-indexes-only`   | `false` | Only rebuild indexes/constraints, don't sync          |
 | `--index-rebuild-parallel` | `10`    | Parallel connections per partitioned table            |
 
 **What Gets Deferred:**
@@ -234,45 +233,47 @@ These constraints are redundant during bulk sync because CKB node validates:
 
 **Behavior:**
 
-| Scenario                      | Auto-drop indexes/constraints | Auto-rebuild |
-| ----------------------------- | ----------------------------- | ------------ |
-| Fresh DB (tip=0)              | Yes                           | Yes          |
-| Fresh DB + `--no-auto-defer`  | No                            | No           |
-| Resume sync, indexes exist    | No                            | No           |
-| Resume sync, indexes deferred | No                            | Yes          |
-| Any DB + `--defer-indexes`    | Yes                           | Yes          |
+| Scenario                      | Auto-drop indexes/constraints | Auto-submit rebuild task |
+| ----------------------------- | ----------------------------- | ------------------------ |
+| Fresh DB (tip=0)              | Yes                           | Yes                      |
+| Fresh DB + `--no-auto-defer`  | No                            | No                       |
+| Resume sync, indexes exist    | No                            | No                       |
+| Resume sync, indexes deferred | No                            | Yes                      |
+| Any DB + `--defer-indexes`    | Yes                           | Yes                      |
 
-**Sync Pause During Rebuild:**
+**Task-Based Rebuild Flow:**
 
-When rebuild triggers, the indexer automatically pauses the sync loop to avoid lock contention. The flow is:
+When bulk sync completes (catches up to <=1000 blocks behind tip), the indexer automatically submits an `index_rebuild` task to the `tasks` table:
 
-1. Rebuild monitor detects sync caught up (<=1000 blocks behind)
-2. Sets `rebuild_pause_flag = true`
-3. Sync loop pauses (checks flag every 500ms)
-4. Indexes rebuilt with `CREATE INDEX CONCURRENTLY`
-5. Constraints rebuilt with `ALTER TABLE ADD CONSTRAINT`
-6. Sets `rebuild_pause_flag = false`
-7. Sync resumes
+1. Indexer detects bulk sync completion
+2. Checks if indexes are deferred and no pending/running rebuild task exists
+3. Submits `index_rebuild` task to `tasks` table (status: `pending`)
+4. Task-runner picks up the task and executes it (status: `running`)
+5. Indexes rebuilt with `CREATE INDEX CONCURRENTLY`
+6. Constraints rebuilt with `ALTER TABLE ADD CONSTRAINT`
+7. Task completes (status: `completed`)
 
 **Progress Monitoring:**
 
 - **Status Page** (`/status`): Shows Index Rebuild panel with progress bar, current index, completed/total counts
-- **Homepage Banner**: Amber banner appears during active rebuild with progress percentage
+- **Homepage Banner**: Amber banner appears for both pending and running rebuild tasks
 - **WebSocket**: `new_block` messages include `indexRebuildStatus` field
-- **REST API**: `GET /api/v1/status` returns `indexRebuild` object with rebuild progress
+- **REST API**: `GET /api/v1/tasks/active` returns `indexRebuild` object with status and progress
+- **Task TUI**: Use `cargo run -p ckbadger-task-tui` to monitor/manage tasks
 
 ```bash
-# Default: auto-optimize fresh DB, rebuild when caught up
+# Default: auto-optimize fresh DB, submit rebuild task when caught up
 cargo run -p ckbadger-indexer
 
 # Disable auto-optimization
 cargo run -p ckbadger-indexer -- --no-auto-defer-indexes
 
-# Manual index/constraint rebuild only
-cargo run -p ckbadger-indexer -- --rebuild-indexes-only
-
 # Check status
-psql -c "SELECT indexes_deferred, indexes_dropped_at, indexes_rebuild_progress FROM sync_status;"
+psql -c "SELECT indexes_deferred, indexes_dropped_at FROM sync_status;"
+psql -c "SELECT id, task_type, status, progress_current, progress_total FROM tasks WHERE task_type = 'index_rebuild';"
+
+# Monitor tasks via TUI
+cargo run -p ckbadger-task-tui
 ```
 
 ## Live Cell Store

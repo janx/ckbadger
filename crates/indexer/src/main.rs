@@ -76,15 +76,8 @@ struct Args {
 
     #[arg(
         long,
-        default_value = "false",
-        help = "Only rebuild indexes without syncing blocks"
-    )]
-    rebuild_indexes_only: bool,
-
-    #[arg(
-        long,
         default_value = "10",
-        help = "Max parallel connections for index rebuild (per partitioned table)"
+        help = "Max parallel connections for index rebuild task (per partitioned table)"
     )]
     index_rebuild_parallel: usize,
 
@@ -145,7 +138,6 @@ async fn main() -> Result<()> {
         use_copy_bulk_sync: args.use_copy_bulk_sync,
         copy_pool_size: args.copy_pool_size,
         defer_indexes: args.defer_indexes,
-        rebuild_indexes_only: args.rebuild_indexes_only,
         index_rebuild_parallel: args.index_rebuild_parallel,
         apply_pg_tuning: args.apply_pg_tuning,
         live_cell_flush_interval: args.live_cell_flush_interval,
@@ -170,32 +162,6 @@ async fn main() -> Result<()> {
     let cache_invalidator =
         ckbadger_indexer::cache::CacheInvalidator::new(config.redis_url.as_deref()).await;
     let index_manager = IndexManager::with_cache(pool.clone(), cache_invalidator.clone());
-
-    if config.rebuild_indexes_only {
-        info!("Running in index/constraint rebuild only mode");
-        let progress = index_manager
-            .rebuild_indexes_parallel(config.index_rebuild_parallel)
-            .await?;
-        info!(
-            "Index rebuild completed: {}/{} succeeded, {} failed",
-            progress.completed,
-            progress.total,
-            progress.failed.len()
-        );
-        if !progress.failed.is_empty() {
-            info!("Failed indexes: {:?}", progress.failed);
-        }
-
-        let constraints_rebuilt = index_manager
-            .rebuild_constraints_parallel(config.index_rebuild_parallel)
-            .await?;
-        info!(
-            "Constraint rebuild completed: {} constraints added",
-            constraints_rebuilt
-        );
-
-        return Ok(());
-    }
 
     let indexes_currently_deferred = index_manager.is_indexes_deferred().await?;
 

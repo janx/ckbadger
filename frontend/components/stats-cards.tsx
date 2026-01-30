@@ -62,7 +62,10 @@ export function SyncBanner({ stats }: { stats: NetworkStats }) {
 }
 
 export function IndexRebuildBanner({ status }: { status: IndexRebuildStatus }) {
-  if (!status.isRebuilding) {
+  const isPending = status.status === 'pending';
+  const isRunning = status.status === 'running';
+
+  if (!isPending && !isRunning) {
     return null;
   }
 
@@ -72,26 +75,33 @@ export function IndexRebuildBanner({ status }: { status: IndexRebuildStatus }) {
         <div className="flex items-center gap-2">
           <div className="h-2 w-2 animate-pulse rounded-full bg-amber-400" />
           <span className="font-mono text-sm font-medium text-amber-300">
-            REBUILDING INDEXES...
+            {isPending ? 'INDEX REBUILD PENDING...' : 'REBUILDING INDEXES...'}
           </span>
         </div>
-        <span className="font-mono text-sm text-amber-400">
-          <TerminalNumber value={status.progress.toFixed(1)} glowIntensity="subtle" />% (
-          <TerminalNumber value={status.completed.toString()} glowIntensity="none" /> /{' '}
-          <TerminalNumber value={status.total.toString()} glowIntensity="none" />)
-        </span>
+        {isRunning && (
+          <span className="font-mono text-sm text-amber-400">
+            <TerminalNumber value={status.progress.toFixed(1)} glowIntensity="subtle" />% (
+            <TerminalNumber value={status.completed.toString()} glowIntensity="none" /> /{' '}
+            <TerminalNumber value={status.total.toString()} glowIntensity="none" />)
+          </span>
+        )}
+        {isPending && (
+          <span className="font-mono text-sm text-amber-400/70">Waiting for task runner...</span>
+        )}
       </div>
-      {status.currentIndex && (
+      {isRunning && status.currentIndex && (
         <div className="relative z-10 mt-1 font-mono text-xs text-amber-400/70">
           Current: {status.currentIndex}
         </div>
       )}
-      <div className="relative z-10 mt-2 h-1.5 w-full overflow-hidden rounded-full bg-amber-950/50">
-        <div
-          className="h-full rounded-full bg-gradient-to-r from-amber-600 via-amber-500 to-amber-400 transition-all duration-500"
-          style={{ width: `${status.progress}%` }}
-        />
-      </div>
+      {isRunning && (
+        <div className="relative z-10 mt-2 h-1.5 w-full overflow-hidden rounded-full bg-amber-950/50">
+          <div
+            className="h-full rounded-full bg-gradient-to-r from-amber-600 via-amber-500 to-amber-400 transition-all duration-500"
+            style={{ width: `${status.progress}%` }}
+          />
+        </div>
+      )}
     </div>
   );
 }

@@ -1,17 +1,7 @@
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use std::time::Instant;
-use tokio::task::JoinSet;
 use tracing::{info, warn};
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IndexRebuildProgress {
-    pub total: usize,
-    pub completed: usize,
-    pub current: Option<String>,
-    pub failed: Vec<String>,
-}
 
 /// Partition scheme type for tables
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,9 +19,11 @@ enum PartitionType {
 struct DeferrableIndex {
     name: &'static str,
     table: &'static str,
+    #[allow(dead_code)]
     definition: &'static str,
     /// Partition type determines which suffixes to use
     partition_type: PartitionType,
+    #[allow(dead_code)]
     priority: u8,
 }
 
@@ -43,6 +35,7 @@ struct DeferrableConstraint {
     name: &'static str,
     /// Base table name (without partition suffix)
     table: &'static str,
+    #[allow(dead_code)]
     /// Columns for the UNIQUE constraint
     columns: &'static str,
     /// Whether this constraint is on partitioned tables
@@ -388,179 +381,6 @@ impl IndexManager {
         }
     }
 
-    pub async fn rebuild_indexes_parallel(
-        &self,
-        max_parallel: usize,
-    ) -> Result<IndexRebuildProgress> {
-        info!(
-            "Starting parallel index rebuild with max {} concurrent tasks",
-            max_parallel
-        );
-        let start = Instant::now();
-
-        let mut progress = IndexRebuildProgress {
-            total: DEFERRABLE_INDEXES.len(),
-            completed: 0,
-            current: None,
-            failed: vec![],
-        };
-        self.update_progress(&progress).await?;
-
-        let mut sorted_indexes: Vec<_> = DEFERRABLE_INDEXES.iter().collect();
-        sorted_indexes.sort_by_key(|idx| idx.priority);
-
-        for idx in sorted_indexes {
-            progress.current = Some(idx.name.to_string());
-            self.update_progress(&progress).await?;
-
-            let result = match idx.partition_type {
-                PartitionType::None => self.rebuild_single_index(idx).await,
-                PartitionType::Range | PartitionType::Hash => {
-                    self.rebuild_partitioned_index_parallel(idx, max_parallel)
-                        .await
-                }
-            };
-
-            match result {
-                Ok(_) => {
-                    progress.completed += 1;
-                    info!(
-                        "Rebuilt index {} ({}/{})",
-                        idx.name, progress.completed, progress.total
-                    );
-                }
-                Err(e) => {
-                    warn!("Failed to rebuild index {}: {}", idx.name, e);
-                    progress.failed.push(idx.name.to_string());
-                }
-            }
-
-            self.update_progress(&progress).await?;
-        }
-
-        progress.current = None;
-        self.update_progress(&progress).await?;
-
-        sqlx::query("UPDATE sync_status SET indexes_deferred = FALSE WHERE id = 1")
-            .execute(&self.pool)
-            .await?;
-
-        if let Some(cache) = &self.cache_invalidator {
-            cache
-                .update_sync_status(|status| {
-                    status.complete_index_rebuild();
-                })
-                .await;
-        }
-
-        info!(
-            "Index rebuild completed in {:?}. {}/{} succeeded, {} failed",
-            start.elapsed(),
-            progress.completed,
-            progress.total,
-            progress.failed.len()
-        );
-
-        Ok(progress)
-    }
-
-    async fn rebuild_partitioned_index_parallel(
-        &self,
-        idx: &DeferrableIndex,
-        max_parallel: usize,
-    ) -> Result<()> {
-        let suffixes = Self::get_partition_suffixes(idx.partition_type)
-            .expect("rebuild_partitioned_index_parallel called with non-partitioned index");
-        info!(
-            "Rebuilding partitioned index {} on {} partitions",
-            idx.name,
-            suffixes.len()
-        );
-        let start = Instant::now();
-
-        let mut join_set: JoinSet<Result<String>> = JoinSet::new();
-        let mut pending_partitions: Vec<&str> = suffixes.to_vec();
-
-        while !pending_partitions.is_empty() || !join_set.is_empty() {
-            while join_set.len() < max_parallel && !pending_partitions.is_empty() {
-                let suffix = pending_partitions.remove(0);
-                let pool = self.pool.clone();
-                let table = format!("{}{}", idx.table, suffix);
-                let base_name = &idx.name[4..];
-                let index_name = format!("{}_{}{}", idx.table, base_name, suffix);
-                let definition = idx
-                    .definition
-                    .replace("{name}", &index_name)
-                    .replace("{table}", &table);
-                let sql =
-                    definition.replace("CREATE INDEX", "CREATE INDEX CONCURRENTLY IF NOT EXISTS");
-
-                join_set.spawn(async move {
-                    sqlx::query(&sql).execute(&pool).await?;
-                    Ok(index_name)
-                });
-            }
-
-            if let Some(result) = join_set.join_next().await {
-                match result {
-                    Ok(Ok(name)) => {
-                        info!("  Created partition index: {}", name);
-                    }
-                    Ok(Err(e)) => {
-                        warn!("  Failed to create partition index: {}", e);
-                    }
-                    Err(e) => {
-                        warn!("  Task panicked: {}", e);
-                    }
-                }
-            }
-        }
-
-        info!(
-            "Partitioned index {} rebuilt in {:?}",
-            idx.name,
-            start.elapsed()
-        );
-        Ok(())
-    }
-
-    async fn rebuild_single_index(&self, idx: &DeferrableIndex) -> Result<()> {
-        let sql = idx
-            .definition
-            .replace("{name}", idx.name)
-            .replace("{table}", idx.table);
-        let sql = sql.replace("CREATE INDEX", "CREATE INDEX CONCURRENTLY IF NOT EXISTS");
-
-        sqlx::query(&sql).execute(&self.pool).await?;
-        Ok(())
-    }
-
-    async fn update_progress(&self, progress: &IndexRebuildProgress) -> Result<()> {
-        if let Some(cache) = &self.cache_invalidator {
-            use ckbadger_common::{IndexRebuildItemData, IndexRebuildProgressData};
-            let progress_data = IndexRebuildProgressData {
-                total: progress.total as i32,
-                completed: progress.completed as i32,
-                current_index: progress.current.clone(),
-                items: progress
-                    .failed
-                    .iter()
-                    .map(|name| IndexRebuildItemData {
-                        name: name.clone(),
-                        status: "failed".to_string(),
-                        duration_ms: None,
-                    })
-                    .collect(),
-            };
-            cache
-                .update_sync_status(|status| {
-                    status.update_index_rebuild_progress(progress_data);
-                })
-                .await;
-        }
-        Ok(())
-    }
-
     pub async fn check_indexes_exist(&self) -> Result<bool> {
         let row: (i64,) = sqlx::query_as(
             "SELECT COUNT(*) FROM pg_indexes WHERE indexname = 'idx_tx_hash' OR indexname = 'transactions_hash_idx'",
@@ -568,27 +388,6 @@ impl IndexManager {
         .fetch_one(&self.pool)
         .await?;
         Ok(row.0 > 0)
-    }
-
-    pub async fn get_rebuild_progress(&self) -> Result<Option<IndexRebuildProgress>> {
-        if let Some(cache) = &self.cache_invalidator {
-            if let Some(status) = cache.get_sync_status().await {
-                if let Some(progress_data) = status.indexes_rebuild_progress {
-                    return Ok(Some(IndexRebuildProgress {
-                        total: progress_data.total as usize,
-                        completed: progress_data.completed as usize,
-                        current: progress_data.current_index,
-                        failed: progress_data
-                            .items
-                            .iter()
-                            .filter(|item| item.status == "failed")
-                            .map(|item| item.name.clone())
-                            .collect(),
-                    }));
-                }
-            }
-        }
-        Ok(None)
     }
 
     pub async fn drop_deferrable_constraints(&self) -> Result<usize> {
@@ -649,127 +448,6 @@ impl IndexManager {
                 }
                 Err(e) => {
                     warn!("Failed to drop constraint {}: {}", constraint_name, e);
-                    Ok(false)
-                }
-            }
-        } else {
-            Ok(false)
-        }
-    }
-
-    pub async fn rebuild_constraints_parallel(&self, max_parallel: usize) -> Result<usize> {
-        info!(
-            "Rebuilding UNIQUE constraints with max {} concurrent tasks",
-            max_parallel
-        );
-        let start = Instant::now();
-        let mut rebuilt_count = 0;
-
-        for constraint in DEFERRABLE_CONSTRAINTS {
-            if constraint.is_partitioned {
-                let count = self
-                    .rebuild_partitioned_constraint_parallel(constraint, max_parallel)
-                    .await?;
-                rebuilt_count += count;
-            } else {
-                let table_name = constraint.table;
-                let constraint_name = format!("{}_{}", constraint.table, constraint.name);
-                if self
-                    .add_constraint_if_not_exists(table_name, &constraint_name, constraint.columns)
-                    .await?
-                {
-                    rebuilt_count += 1;
-                }
-            }
-        }
-
-        info!(
-            "Rebuilt {} UNIQUE constraints in {:?}",
-            rebuilt_count,
-            start.elapsed()
-        );
-        Ok(rebuilt_count)
-    }
-
-    async fn rebuild_partitioned_constraint_parallel(
-        &self,
-        constraint: &DeferrableConstraint,
-        max_parallel: usize,
-    ) -> Result<usize> {
-        let mut join_set: JoinSet<Result<bool>> = JoinSet::new();
-        let mut pending_partitions: Vec<&str> = RANGE_PARTITION_SUFFIXES.to_vec();
-        let mut rebuilt_count = 0;
-
-        while !pending_partitions.is_empty() || !join_set.is_empty() {
-            while join_set.len() < max_parallel && !pending_partitions.is_empty() {
-                let suffix = pending_partitions.remove(0);
-                let pool = self.pool.clone();
-                let table_name = format!("{}{}", constraint.table, suffix);
-                let constraint_name = format!("{}_{}", table_name, constraint.name);
-                let columns = constraint.columns.to_string();
-
-                join_set.spawn(async move {
-                    let check_sql = format!(
-                        "SELECT 1 FROM pg_constraint WHERE conname = '{}' AND conrelid = '{}'::regclass",
-                        constraint_name, table_name
-                    );
-                    let exists: Option<(i32,)> =
-                        sqlx::query_as(&check_sql).fetch_optional(&pool).await?;
-
-                    if exists.is_none() {
-                        let add_sql = format!(
-                            "ALTER TABLE {} ADD CONSTRAINT {} UNIQUE ({})",
-                            table_name, constraint_name, columns
-                        );
-                        sqlx::query(&add_sql).execute(&pool).await?;
-                        info!("Added constraint: {}", constraint_name);
-                        Ok(true)
-                    } else {
-                        Ok(false)
-                    }
-                });
-            }
-
-            if let Some(result) = join_set.join_next().await {
-                match result {
-                    Ok(Ok(true)) => rebuilt_count += 1,
-                    Ok(Ok(false)) => {}
-                    Ok(Err(e)) => warn!("Failed to add constraint: {}", e),
-                    Err(e) => warn!("Task panicked: {}", e),
-                }
-            }
-        }
-
-        Ok(rebuilt_count)
-    }
-
-    async fn add_constraint_if_not_exists(
-        &self,
-        table: &str,
-        constraint_name: &str,
-        columns: &str,
-    ) -> Result<bool> {
-        let check_sql = format!(
-            "SELECT 1 FROM pg_constraint WHERE conname = '{}' AND conrelid = '{}'::regclass",
-            constraint_name, table
-        );
-
-        let exists: Option<(i32,)> = sqlx::query_as(&check_sql)
-            .fetch_optional(&self.pool)
-            .await?;
-
-        if exists.is_none() {
-            let add_sql = format!(
-                "ALTER TABLE {} ADD CONSTRAINT {} UNIQUE ({})",
-                table, constraint_name, columns
-            );
-            match sqlx::query(&add_sql).execute(&self.pool).await {
-                Ok(_) => {
-                    info!("Added constraint: {}", constraint_name);
-                    Ok(true)
-                }
-                Err(e) => {
-                    warn!("Failed to add constraint {}: {}", constraint_name, e);
                     Ok(false)
                 }
             }
@@ -946,24 +624,6 @@ mod tests {
         let index_name = format!("{}_{}{}", idx.table, base_name, suffix);
 
         assert_eq!(index_name, "cells_cells_lock_live_p00");
-    }
-
-    #[test]
-    fn test_index_rebuild_progress_serialization() {
-        let progress = IndexRebuildProgress {
-            total: 20,
-            completed: 5,
-            current: Some("idx_cells_lock".to_string()),
-            failed: vec!["idx_test".to_string()],
-        };
-
-        let json = serde_json::to_string(&progress).unwrap();
-        let parsed: IndexRebuildProgress = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(parsed.total, 20);
-        assert_eq!(parsed.completed, 5);
-        assert_eq!(parsed.current, Some("idx_cells_lock".to_string()));
-        assert_eq!(parsed.failed, vec!["idx_test".to_string()]);
     }
 
     #[test]

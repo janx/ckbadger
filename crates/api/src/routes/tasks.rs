@@ -17,6 +17,7 @@ pub struct ActiveTasksResponse {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IndexRebuildStatus {
+    pub status: String,
     pub is_rebuilding: bool,
     pub total: i64,
     pub completed: i64,
@@ -30,6 +31,7 @@ async fn get_active_tasks(State(state): State<Arc<AppState>>) -> ApiResult<Activ
     let row = sqlx::query_as::<
         _,
         (
+            String,
             i64,
             i64,
             Option<serde_json::Value>,
@@ -38,13 +40,16 @@ async fn get_active_tasks(State(state): State<Arc<AppState>>) -> ApiResult<Activ
     >(
         r#"
         SELECT 
+            status,
             COALESCE(progress_total, 0),
             COALESCE(progress_current, 0),
             result,
             started_at
         FROM tasks
-        WHERE task_type = 'index_rebuild' AND status = 'running'
-        ORDER BY created_at DESC
+        WHERE task_type = 'index_rebuild' AND status IN ('pending', 'running')
+        ORDER BY 
+            CASE status WHEN 'running' THEN 0 ELSE 1 END,
+            created_at DESC
         LIMIT 1
         "#,
     )
@@ -53,7 +58,9 @@ async fn get_active_tasks(State(state): State<Arc<AppState>>) -> ApiResult<Activ
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let index_rebuild = match row {
-        Some((progress_total, progress_current, result_json, started_at)) => {
+        Some((status, progress_total, progress_current, result_json, started_at)) => {
+            let is_running = status == "running";
+
             let (current_index, failed) = match result_json {
                 Some(json) => match serde_json::from_value::<IndexRebuildResult>(json) {
                     Ok(result) => (
@@ -72,7 +79,8 @@ async fn get_active_tasks(State(state): State<Arc<AppState>>) -> ApiResult<Activ
             };
 
             Some(IndexRebuildStatus {
-                is_rebuilding: true,
+                status,
+                is_rebuilding: is_running,
                 total: progress_total,
                 completed: progress_current,
                 current_index,

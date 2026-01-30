@@ -15,7 +15,7 @@ pub mod tuning;
 mod writer;
 
 pub use copy_pool::{CopyConfig, CopyPoolManager};
-pub use indexes::{IndexManager, IndexRebuildProgress};
+pub use indexes::IndexManager;
 pub use live_cell_storage::{
     CachedBlockHeader, ConsumedCellRecord, DynLiveCellStorage, LiveCellInfo, LiveCellStorage,
     LiveCellStorageAsync, MemoryStats,

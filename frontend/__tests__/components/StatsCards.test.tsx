@@ -44,6 +44,7 @@ describe('StatsCards', () => {
       http.get(`${API_BASE}/tasks/active`, () => {
         return HttpResponse.json({
           indexRebuild: {
+            status: 'running',
             isRebuilding: true,
             total: 26,
             completed: 13,
@@ -64,6 +65,33 @@ describe('StatsCards', () => {
 
     expect(screen.getByText('50.0')).toBeInTheDocument();
     expect(screen.getByText('Current: idx_blocks_timestamp')).toBeInTheDocument();
+  });
+
+  it('shows index rebuild banner when task is pending', async () => {
+    server.use(
+      http.get(`${API_BASE}/tasks/active`, () => {
+        return HttpResponse.json({
+          indexRebuild: {
+            status: 'pending',
+            isRebuilding: false,
+            total: 0,
+            completed: 0,
+            currentIndex: null,
+            failed: [],
+            progress: 0,
+            startedAt: null,
+          },
+        });
+      })
+    );
+
+    render(<StatsCards />, { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(screen.getByText('INDEX REBUILD PENDING...')).toBeInTheDocument();
+    });
+
+    expect(screen.getByText('Waiting for task runner...')).toBeInTheDocument();
   });
 
   it('does not show index rebuild banner when no task running', async () => {
