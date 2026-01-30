@@ -950,6 +950,41 @@ impl BatchWriter {
         Ok(())
     }
 
+    pub async fn find_last_consistent_block(&self) -> Result<Option<i64>> {
+        let row: Option<(Option<i64>, Option<i64>)> = sqlx::query_as(
+            r#"
+            SELECT 
+                (SELECT MAX(number) FROM blocks) as max_block,
+                (SELECT MAX(block_number) FROM transactions) as max_tx_block
+            "#,
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+
+        match row {
+            Some((Some(max_block), Some(max_tx_block))) => {
+                if max_block > max_tx_block {
+                    warn!(
+                        "Data inconsistency detected: blocks up to {} but transactions only up to {}",
+                        max_block, max_tx_block
+                    );
+                    Ok(Some(max_tx_block))
+                } else {
+                    Ok(Some(max_block))
+                }
+            }
+            Some((Some(max_block), None)) => {
+                warn!(
+                    "Data inconsistency: blocks exist up to {} but no transactions found",
+                    max_block
+                );
+                Ok(Some(-1))
+            }
+            Some((None, _)) => Ok(None),
+            None => Ok(None),
+        }
+    }
+
     pub async fn init_sync_start(&self, start_block: i64) -> Result<()> {
         let next_block = start_block + 1;
         info!(
@@ -1003,6 +1038,139 @@ impl BatchWriter {
         info!(
             "Partial data cleanup complete, starting sync from block {}",
             next_block
+        );
+        Ok(())
+    }
+
+    pub async fn cleanup_batch_range(&self, start_block: i64, end_block: i64) -> Result<()> {
+        info!(
+            "Cleaning up partial batch data for blocks {} to {}",
+            start_block, end_block
+        );
+
+        sqlx::query(
+            "DELETE FROM transaction_inputs WHERE tx_block_number >= $1 AND tx_block_number <= $2",
+        )
+        .bind(start_block)
+        .bind(end_block)
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            "DELETE FROM transaction_cell_deps WHERE tx_block_number >= $1 AND tx_block_number <= $2",
+        )
+        .bind(start_block)
+        .bind(end_block)
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            "DELETE FROM live_cells WHERE created_at_block >= $1 AND created_at_block <= $2",
+        )
+        .bind(start_block)
+        .bind(end_block)
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query("DELETE FROM cells WHERE created_at_block >= $1 AND created_at_block <= $2")
+            .bind(start_block)
+            .bind(end_block)
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query("DELETE FROM transactions WHERE block_number >= $1 AND block_number <= $2")
+            .bind(start_block)
+            .bind(end_block)
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query("DELETE FROM block_proposals WHERE block_number >= $1 AND block_number <= $2")
+            .bind(start_block)
+            .bind(end_block)
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query(
+            "DELETE FROM address_transactions WHERE block_number >= $1 AND block_number <= $2",
+        )
+        .bind(start_block)
+        .bind(end_block)
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            "DELETE FROM udt_cells WHERE created_at_block >= $1 AND created_at_block <= $2",
+        )
+        .bind(start_block)
+        .bind(end_block)
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query("DELETE FROM token_transfers WHERE block_number >= $1 AND block_number <= $2")
+            .bind(start_block)
+            .bind(end_block)
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query(
+            "DELETE FROM dao_deposits WHERE deposit_block_number >= $1 AND deposit_block_number <= $2",
+        )
+        .bind(start_block)
+        .bind(end_block)
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            "DELETE FROM spore_cells WHERE created_at_block >= $1 AND created_at_block <= $2",
+        )
+        .bind(start_block)
+        .bind(end_block)
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            "DELETE FROM spore_clusters WHERE created_at_block >= $1 AND created_at_block <= $2",
+        )
+        .bind(start_block)
+        .bind(end_block)
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            "DELETE FROM mnft_tokens WHERE created_at_block >= $1 AND created_at_block <= $2",
+        )
+        .bind(start_block)
+        .bind(end_block)
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            "DELETE FROM mnft_classes WHERE created_at_block >= $1 AND created_at_block <= $2",
+        )
+        .bind(start_block)
+        .bind(end_block)
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            "DELETE FROM mnft_issuers WHERE created_at_block >= $1 AND created_at_block <= $2",
+        )
+        .bind(start_block)
+        .bind(end_block)
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            "DELETE FROM dotbit_accounts WHERE created_at_block >= $1 AND created_at_block <= $2",
+        )
+        .bind(start_block)
+        .bind(end_block)
+        .execute(&self.pool)
+        .await?;
+
+        info!(
+            "Batch cleanup complete for blocks {} to {}",
+            start_block, end_block
         );
         Ok(())
     }

@@ -417,7 +417,20 @@ impl Indexer {
         }
 
         let (start_block, _) = self.repo.get_sync_tip().await?;
-        self.writer.init_sync_start(start_block).await?;
+
+        let consistent_block = self.writer.find_last_consistent_block().await?;
+        let actual_start = match consistent_block {
+            Some(cb) if cb < start_block => {
+                warn!(
+                    "Rolling back from block {} to {} due to data inconsistency",
+                    start_block, cb
+                );
+                cb
+            }
+            _ => start_block,
+        };
+
+        self.writer.init_sync_start(actual_start).await?;
 
         let writer_for_task = self.writer.pool().clone();
         let fast_sync_mode = self.config.fast_sync_mode;
@@ -834,7 +847,13 @@ impl Indexer {
                         .await
                     {
                         error!("Sync error: {:?}", e);
-                        // Notify fetcher to re-query DB state after write failure
+                        if let Err(cleanup_err) = self
+                            .writer
+                            .cleanup_batch_range(start_block as i64, end_block as i64)
+                            .await
+                        {
+                            error!("Failed to cleanup partial batch: {:?}", cleanup_err);
+                        }
                         self.reorg_notify_flag.store(true, Ordering::SeqCst);
                         Self::drain_channel(&mut parse_rx).await;
                         sleep(Duration::from_secs(5)).await;
@@ -1059,7 +1078,16 @@ impl Indexer {
             .add(&self.perf.rpc_fetch_us, fetch_start.elapsed());
 
         let db_start = Instant::now();
-        self.sync_blocks_batch(&blocks, chain_tip).await?;
+        if let Err(e) = self.sync_blocks_batch(&blocks, chain_tip).await {
+            if let Err(cleanup_err) = self
+                .writer
+                .cleanup_batch_range(start_block as i64, end_block as i64)
+                .await
+            {
+                error!("Failed to cleanup partial batch: {:?}", cleanup_err);
+            }
+            return Err(e);
+        }
         let db_elapsed = db_start.elapsed();
         self.perf.add(&self.perf.db_write_us, db_elapsed);
 
@@ -3145,10 +3173,6 @@ impl Indexer {
             }
         }
 
-        let block_refs: Vec<&crate::parser::block::ParsedBlock> =
-            all_parsed_blocks.iter().collect();
-        self.writer.insert_blocks_batch(&block_refs).await?;
-
         for parsed_block in all_parsed_blocks {
             if !parsed_block.proposals.is_empty() {
                 self.writer
@@ -4672,6 +4696,12 @@ impl Indexer {
                 .insert_address_asset_transfers_batch(&nft_address_records)
                 .await?;
         }
+
+        // Write blocks LAST - this is the "commit marker" for crash recovery.
+        // All other data must be written successfully before blocks exist.
+        let block_refs: Vec<&crate::parser::block::ParsedBlock> =
+            all_parsed_blocks.iter().collect();
+        self.writer.insert_blocks_batch(&block_refs).await?;
 
         self.flush_batch_stats(&batch_stats).await?;
 

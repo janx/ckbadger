@@ -457,6 +457,98 @@ INFO Syncing blocks 0 to 999 (5999001 remaining, 450.00 blocks/sec) [COPY]
 INFO Syncing blocks 5999000 to 5999500 (500 remaining, 320.00 blocks/sec)
 ```
 
+## Crash Recovery
+
+The indexer implements crash recovery to handle failures during batch writes. Since COPY operations run on independent connections without transaction wrapping, a crash mid-batch can leave partial data in the database.
+
+### Write Ordering Strategy
+
+**Blocks are written LAST** as the "commit marker". The write order is:
+
+1. Transactions, cells, inputs, cell_deps (parallel COPY operations)
+2. Live cells, address transactions, script usage
+3. DAO deposits, token transfers, NFT data
+4. Statistics updates
+5. **Blocks (LAST)** - only after all other data succeeds
+
+This ensures that if blocks exist for a range, all related data is complete.
+
+### Startup Consistency Check
+
+On startup, `find_last_consistent_block()` validates database consistency:
+
+```rust
+// Compares MAX(number) FROM blocks vs MAX(block_number) FROM transactions
+if max_block > max_tx_block {
+    // Blocks exist without transactions = inconsistent state
+    // Roll back to max_tx_block
+}
+```
+
+### Partial Batch Cleanup
+
+When a batch write fails, `cleanup_batch_range(start, end)` removes partial data:
+
+| Table                   | Block Column           |
+| ----------------------- | ---------------------- |
+| `transactions`          | `block_number`         |
+| `cells`                 | `created_at_block`     |
+| `live_cells`            | `created_at_block`     |
+| `transaction_inputs`    | `tx_block_number`      |
+| `transaction_cell_deps` | `tx_block_number`      |
+| `block_proposals`       | `block_number`         |
+| `address_transactions`  | `block_number`         |
+| `udt_cells`             | `created_at_block`     |
+| `token_transfers`       | `block_number`         |
+| `dao_deposits`          | `deposit_block_number` |
+| `spore_cells`           | `created_at_block`     |
+| `spore_clusters`        | `created_at_block`     |
+| `mnft_tokens`           | `created_at_block`     |
+| `mnft_classes`          | `created_at_block`     |
+| `mnft_issuers`          | `created_at_block`     |
+| `dotbit_accounts`       | `created_at_block`     |
+
+### Recovery Flow
+
+```
+                    ┌─────────────────┐
+                    │  Batch Write    │
+                    │    Fails        │
+                    └────────┬────────┘
+                             │
+                             ▼
+                    ┌─────────────────┐
+                    │ cleanup_batch   │
+                    │ _range()        │──▶ DELETE partial data
+                    └────────┬────────┘
+                             │
+                             ▼
+                    ┌─────────────────┐
+                    │  Sleep 5s       │
+                    │  Retry          │
+                    └────────┬────────┘
+                             │
+                             ▼
+                    ┌─────────────────┐
+    On startup ────▶│ find_last       │
+                    │ _consistent     │──▶ Detect & rollback if needed
+                    │ _block()        │
+                    └─────────────────┘
+```
+
+### Log Messages
+
+```
+# Cleanup on error
+ERROR Sync error: connection reset
+INFO Cleaning up partial batch data for blocks 1000 to 1999
+INFO Batch cleanup complete for blocks 1000 to 1999
+
+# Startup recovery
+WARN Data inconsistency detected: blocks up to 2000 but transactions only up to 1500
+WARN Rolling back from block 2000 to 1500 due to data inconsistency
+```
+
 ---
 
-_Last updated: 2026-01-28_
+_Last updated: 2026-01-30_
