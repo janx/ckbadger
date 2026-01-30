@@ -271,6 +271,8 @@ pub struct Indexer {
     batches_since_flush: std::sync::atomic::AtomicU64,
     /// Shared flag to pause sync during index rebuild
     rebuild_pause_flag: Arc<std::sync::atomic::AtomicBool>,
+    /// Flag to notify fetcher that a reorg/mismatch occurred and it should reset next_block
+    reorg_notify_flag: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Indexer {
@@ -338,6 +340,7 @@ impl Indexer {
             was_bulk_sync_active: std::sync::atomic::AtomicBool::new(was_bulk),
             batches_since_flush: std::sync::atomic::AtomicU64::new(0),
             rebuild_pause_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            reorg_notify_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }
 
@@ -495,6 +498,7 @@ impl Indexer {
         let progress = Arc::clone(&self.progress);
         let repo = self.repo.clone();
         let rebuild_pause = Arc::clone(&self.rebuild_pause_flag);
+        let reorg_notify = Arc::clone(&self.reorg_notify_flag);
 
         let fetcher = tokio::spawn(async move {
             let mut next_block: Option<u64> = None;
@@ -514,6 +518,12 @@ impl Indexer {
                     info!("Fetcher resuming from pause, resetting next_block to re-query DB state");
                     next_block = None;
                     was_paused = false;
+                }
+
+                // Check if writer signaled a reorg/mismatch - reset next_block to re-query DB
+                if reorg_notify.swap(false, Ordering::SeqCst) {
+                    info!("Fetcher received reorg notification, resetting next_block");
+                    next_block = None;
                 }
 
                 let chain_tip = match rpc.get_tip_block_number().await {
@@ -771,6 +781,7 @@ impl Indexer {
                             "Pipeline batch mismatch: expected {}, got {}. Draining stale batches.",
                             expected_start, start_block
                         );
+                        self.reorg_notify_flag.store(true, Ordering::SeqCst);
                         Self::drain_channel(&mut parse_rx).await;
                         continue;
                     }
@@ -784,11 +795,13 @@ impl Indexer {
                             {
                                 Some(ReorgAction::Handled(_)) => {
                                     info!("Reorg handled, draining stale batches");
+                                    self.reorg_notify_flag.store(true, Ordering::SeqCst);
                                     Self::drain_channel(&mut parse_rx).await;
                                     continue;
                                 }
                                 Some(ReorgAction::DeepForkPaused) => {
                                     warn!("Deep fork detected, sync paused");
+                                    self.reorg_notify_flag.store(true, Ordering::SeqCst);
                                     Self::drain_channel(&mut parse_rx).await;
                                     sleep(Duration::from_secs(30)).await;
                                     continue;

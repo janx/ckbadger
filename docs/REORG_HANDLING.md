@@ -51,9 +51,24 @@ For reorgs up to 36 blocks deep, the indexer automatically:
 8. Deletes `token_transfers` in rollback range
 9. Updates `sync_status` to fork point
 10. Records event in `reorg_events` table
-11. Continues syncing from the new chain
+11. **Notifies fetcher task** via `reorg_notify_flag` to reset its state
+12. Drains stale batches from pipeline channels
+13. Continues syncing from the new chain
 
 All operations execute in a single database transaction for atomicity.
+
+### Pipeline Coordination
+
+The indexer uses a three-stage pipeline (Fetcher → Parser → Writer). When a reorg is detected:
+
+1. **Writer stage** handles the database rollback
+2. **Writer stage** sets `reorg_notify_flag = true`
+3. **Writer stage** drains stale batches from the parse channel
+4. **Fetcher stage** checks the flag on each iteration
+5. **Fetcher stage** resets its internal `next_block` state when flag is set
+6. **Fetcher stage** re-queries DB for correct sync position
+
+This coordination prevents the fetcher from continuing to send batches starting from outdated block numbers after a reorg.
 
 ### Deep Fork (depth > 36)
 

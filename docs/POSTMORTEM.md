@@ -1110,6 +1110,57 @@ loop {
 
 ---
 
+### IDX-005: Pipeline stuck after reorg - fetcher not notified (2026-01-30)
+
+**Symptom**: After a chain reorganization, the indexer becomes stuck with continuous warnings:
+
+```
+INFO Reorg completed: fork_point=18499538, depth=1, orphaned_blocks=1, orphaned_txs=6
+INFO Reorg handled, draining stale batches
+INFO Drained 9 stale batches from pipeline
+WARN Pipeline batch mismatch: expected 18499539, got 18499550. Draining stale batches.
+WARN Pipeline batch mismatch: expected 18499539, got 18499551. Draining stale batches.
+# ... repeats indefinitely, sync speed drops to 0
+```
+
+**Root Cause**: The IDX-004 fix introduced `next_block` local state tracking in the fetcher task. However, when a reorg occurs:
+
+1. Writer detects reorg, rolls back DB to fork_point (18499538)
+2. Writer drains stale batches from parse channel
+3. **Fetcher is unaware** - its `next_block` still holds the old value (e.g., 18499550)
+4. Fetcher continues sending batches starting from wrong block
+5. Writer keeps rejecting with mismatch, draining, but fetcher keeps sending wrong blocks
+6. **Deadlock**: Writer expects 18499539, fetcher sends 18499550+, forever
+
+The periodic db_tip re-check (every 1000 blocks) was not triggered because the fetcher was already past that point.
+
+**Solution**: Added `reorg_notify_flag: Arc<AtomicBool>` for cross-task communication:
+
+```rust
+// Writer: Signal fetcher after reorg/mismatch
+if start_block != expected_start {
+    self.reorg_notify_flag.store(true, Ordering::SeqCst);
+    Self::drain_channel(&mut parse_rx).await;
+    continue;
+}
+
+// Fetcher: Check flag and reset state
+if reorg_notify.swap(false, Ordering::SeqCst) {
+    info!("Fetcher received reorg notification, resetting next_block");
+    next_block = None;  // Force re-query from DB
+}
+```
+
+**Impact**: Indexer completely stuck after any reorg. Required manual container restart to recover.
+
+**Lesson**: When one task in a pipeline modifies shared state that affects another task's assumptions, explicit notification is required. The "drain stale batches" pattern only clears the channel buffer, but doesn't reset the producer's internal state.
+
+**Related**: IDX-004 (introduced `next_block` tracking to fix duplicate fetches)
+
+**Files**: `crates/indexer/src/sync/indexer.rs`
+
+---
+
 ## Category: Performance
 
 ### PERF-001: Slow cell consumption due to partition scan (2026-01-24)
