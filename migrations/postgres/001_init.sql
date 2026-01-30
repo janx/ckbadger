@@ -449,7 +449,7 @@ CREATE TABLE address_transactions (
     tx_hash BYTEA NOT NULL,
     block_number BIGINT NOT NULL,
     tx_type SMALLINT NOT NULL,  -- 1=received, 2=sent, 3=both
-    capacity_change NUMERIC(20,0) NOT NULL,  -- positive=income, negative=expense
+    capacity_change BIGINT NOT NULL,  -- positive=income, negative=expense (max ~9.2e18 shannons = ~92B CKB, sufficient for any address)
     timestamp TIMESTAMPTZ NOT NULL,
 
     PRIMARY KEY (lock_script_hash, block_number, tx_hash)
