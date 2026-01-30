@@ -261,29 +261,37 @@ async fn main() -> Result<()> {
                 .publish_sync_progress(&sync_data)
                 .await;
 
-            // ANSI color codes for speed: green (>=1000), yellow (>=100), red (<100)
-            let (color_start, color_end) = if ema_rate >= 1000.0 {
-                ("\x1b[32m", "\x1b[0m") // green
-            } else if ema_rate >= 100.0 {
-                ("\x1b[33m", "\x1b[0m") // yellow
-            } else {
-                ("\x1b[31m", "\x1b[0m") // red
-            };
+            if indexer_for_progress.is_bulk_sync_active() {
+                // ANSI color codes for speed: green (>=1000), yellow (>=100), red (<100)
+                let (color_start, color_end) = if ema_rate >= 1000.0 {
+                    ("\x1b[32m", "\x1b[0m") // green
+                } else if ema_rate >= 100.0 {
+                    ("\x1b[33m", "\x1b[0m") // yellow
+                } else {
+                    ("\x1b[31m", "\x1b[0m") // red
+                };
 
-            // Use eprintln! for ANSI colors (tracing escapes them)
-            eprintln!(
-                "Progress: {:.2}% ({}/{}) - {}{:.2} blocks/sec{} (EMA: {}{:.2}{}) | ETA: {}",
-                progress.progress_percentage(),
-                progress.current(),
-                progress.target(),
-                color_start,
-                bps,
-                color_end,
-                color_start,
-                ema_rate,
-                color_end,
-                eta
-            );
+                eprintln!(
+                    "Progress: {:.2}% ({}/{}) - {}{:.2} blocks/sec{} (EMA: {}{:.2}{}) | ETA: {}",
+                    progress.progress_percentage(),
+                    progress.current(),
+                    progress.target(),
+                    color_start,
+                    bps,
+                    color_end,
+                    color_start,
+                    ema_rate,
+                    color_end,
+                    eta
+                );
+            } else {
+                info!(
+                    "Synced to block {} (tip: {}, {} behind)",
+                    progress.current(),
+                    progress.target(),
+                    progress.blocks_remaining()
+                );
+            }
         }
     });
 

@@ -376,7 +376,7 @@ impl Indexer {
 
     /// Check if bulk sync mode is active (for skipping non-critical statistics).
     /// Auto-enabled when blocks_remaining > bulk_sync_threshold (no manual config needed)
-    fn is_bulk_sync_active(&self) -> bool {
+    pub fn is_bulk_sync_active(&self) -> bool {
         self.progress.blocks_remaining() > self.config.bulk_sync_threshold
     }
 
