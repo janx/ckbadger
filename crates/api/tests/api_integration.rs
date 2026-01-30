@@ -152,13 +152,163 @@ async fn test_blocks_endpoint_empty_db(pool: sqlx::PgPool) {
     let response = app.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
-    let body = http_body_util::BodyExt::collect(response.into_body())
+    let body = BodyExt::collect(response.into_body())
         .await
         .unwrap()
         .to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-    assert!(json["data"].as_array().unwrap().is_empty());
+    assert!(json["indexRebuild"].is_null());
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn test_tasks_active_with_running_statistics_rebuild(pool: sqlx::PgPool) {
+    let task_id = uuid::Uuid::new_v4();
+    let config = serde_json::json!({
+        "type": "statistics_rebuild",
+        "tables": null
+    });
+    let result = serde_json::json!({
+        "completedTables": ["daily_statistics", "hourly_statistics"],
+        "currentTable": "miner_statistics",
+        "failed": []
+    });
+
+    sqlx::query(
+        r#"
+        INSERT INTO tasks (
+            id, task_type, status, priority, config, 
+            progress_total, progress_current, result, started_at
+        ) VALUES ($1, 'statistics_rebuild', 'running', 5, $2, 7, 3, $3, NOW())
+        "#,
+    )
+    .bind(task_id)
+    .bind(&config)
+    .bind(&result)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let app = create_router(test_config(pool)).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/tasks/active")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = BodyExt::collect(response.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    let rebuild = &json["statisticsRebuild"];
+    assert_eq!(rebuild["status"], "running");
+    assert_eq!(rebuild["total"], 7);
+    assert_eq!(rebuild["completed"], 3);
+    assert_eq!(rebuild["currentTable"], "miner_statistics");
+    assert!((rebuild["progress"].as_f64().unwrap() - 42.86).abs() < 0.1);
+    assert!(rebuild["startedAt"].is_string());
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn test_tasks_active_with_running_live_cells_populate(pool: sqlx::PgPool) {
+    let task_id = uuid::Uuid::new_v4();
+    let config = serde_json::json!({
+        "type": "live_cells_populate",
+        "batchSize": 100000
+    });
+
+    sqlx::query(
+        r#"
+        INSERT INTO tasks (
+            id, task_type, status, priority, config, 
+            progress_total, progress_current, started_at
+        ) VALUES ($1, 'live_cells_populate', 'running', 8, $2, 50000000, 25000000, NOW())
+        "#,
+    )
+    .bind(task_id)
+    .bind(&config)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let app = create_router(test_config(pool)).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/tasks/active")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = BodyExt::collect(response.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    let populate = &json["liveCellsPopulate"];
+    assert_eq!(populate["status"], "running");
+    assert_eq!(populate["total"], 50000000);
+    assert_eq!(populate["populated"], 25000000);
+    assert!((populate["progress"].as_f64().unwrap() - 50.0).abs() < 0.1);
+    assert!(populate["startedAt"].is_string());
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn test_tasks_active_with_multiple_task_types(pool: sqlx::PgPool) {
+    let config_index = serde_json::json!({"type": "index_rebuild"});
+    let config_stats = serde_json::json!({"type": "statistics_rebuild"});
+    let config_live = serde_json::json!({"type": "live_cells_populate"});
+
+    sqlx::query(
+        r#"
+        INSERT INTO tasks (id, task_type, status, priority, config, progress_total, progress_current, started_at)
+        VALUES 
+            ($1, 'index_rebuild', 'running', 10, $2, 26, 13, NOW()),
+            ($3, 'statistics_rebuild', 'pending', 5, $4, 7, 0, NULL),
+            ($5, 'live_cells_populate', 'running', 8, $6, 1000000, 500000, NOW())
+        "#,
+    )
+    .bind(uuid::Uuid::new_v4())
+    .bind(&config_index)
+    .bind(uuid::Uuid::new_v4())
+    .bind(&config_stats)
+    .bind(uuid::Uuid::new_v4())
+    .bind(&config_live)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let app = create_router(test_config(pool)).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/tasks/active")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = BodyExt::collect(response.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert!(json["indexRebuild"].is_object());
+    assert_eq!(json["indexRebuild"]["status"], "running");
+
+    assert!(json["statisticsRebuild"].is_object());
+    assert_eq!(json["statisticsRebuild"]["status"], "pending");
+
+    assert!(json["liveCellsPopulate"].is_object());
+    assert_eq!(json["liveCellsPopulate"]["status"], "running");
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]

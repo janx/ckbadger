@@ -1,6 +1,7 @@
 use anyhow::Result;
 use ckbadger_common::{
-    CyclesBackfillConfig, IndexRebuildConfig, LabelImportConfig, Task, TaskBuilder,
+    CyclesBackfillConfig, IndexRebuildConfig, LabelImportConfig, LiveCellsPopulateConfig,
+    StatisticsRebuildConfig, Task, TaskBuilder,
 };
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -106,7 +107,7 @@ impl App {
 
     pub fn next_dialog_option(&mut self) {
         if let Some(DialogType::NewTask) = self.dialog {
-            self.dialog_selection = (self.dialog_selection + 1) % 3;
+            self.dialog_selection = (self.dialog_selection + 1) % 5;
         }
     }
 
@@ -117,6 +118,8 @@ impl App {
                     0 => TaskBuilder::cycles_backfill(CyclesBackfillConfig::default()),
                     1 => TaskBuilder::index_rebuild(IndexRebuildConfig::default()),
                     2 => TaskBuilder::label_import(LabelImportConfig::default()),
+                    3 => TaskBuilder::statistics_rebuild(StatisticsRebuildConfig::default()),
+                    4 => TaskBuilder::live_cells_populate(LiveCellsPopulateConfig::default()),
                     _ => return Ok(()),
                 };
                 let id = self.db.create_task(&builder).await?;
@@ -348,7 +351,13 @@ fn draw_dialog(f: &mut Frame, app: &App, dialog: &DialogType) {
 
     match dialog {
         DialogType::NewTask => {
-            let options = ["Cycles Backfill", "Index Rebuild", "Label Import"];
+            let options = [
+                "Cycles Backfill",
+                "Index Rebuild",
+                "Label Import",
+                "Statistics Rebuild",
+                "Live Cells Populate",
+            ];
             let items: Vec<Line> = options
                 .iter()
                 .enumerate()
