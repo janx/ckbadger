@@ -122,7 +122,20 @@ The indexer uses two complementary log lines:
    - Shows overall sync percentage and throughput
    - `blocks/sec`: 10-second sliding window (real-time, volatile)
    - `EMA`: Exponential Moving Average with α=0.1 (smoothed, stable)
-   - ETA calculation uses EMA rate for more accurate estimates
+   - ETA uses trend-based prediction for improved accuracy (see below)
+
+### ETA Calculation (Trend-Based)
+
+The indexer uses linear regression on speed history to predict future sync speed:
+
+1. **Speed History**: Records last 30 speed samples (~5 minutes of data)
+2. **Trend Detection**: Uses linear regression to calculate speed change rate (slope)
+3. **Segmented Prediction**: Divides remaining blocks into 10 segments, predicts speed for each
+4. **Safety Clamp**: Predicted speeds are clamped to `[10%, 200%]` of current EMA
+
+**Why this matters**: Block sizes grow over time (more transactions, more cells). Early blocks sync at ~5000 blocks/sec, recent blocks at ~1000 blocks/sec. Simple `remaining/rate` underestimates ETA when speed is declining.
+
+**Fallback**: If insufficient trend data (< 3 samples), uses simple `remaining / EMA` calculation.
 
 ## Deferred Index and Constraint Optimization
 
