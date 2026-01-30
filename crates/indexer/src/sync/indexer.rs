@@ -1990,36 +1990,66 @@ impl Indexer {
             }
         }
 
-        // Parallel writes: address balances, address txs, script usage are independent
-        tokio::try_join!(
-            async {
-                if !changes_ref.is_empty() {
-                    self.writer
-                        .update_address_balances_batch(&changes_ref)
+        // Use COPY for address_transactions in bulk sync mode (5-10x faster)
+        if self.should_use_copy() && !address_tx_records.is_empty() {
+            let copy_router = self.copy_router.as_ref().unwrap();
+            tokio::try_join!(
+                async {
+                    if !changes_ref.is_empty() {
+                        self.writer
+                            .update_address_balances_batch(&changes_ref)
+                            .await
+                    } else {
+                        Ok(())
+                    }
+                },
+                async {
+                    copy_router
+                        .copy_address_transactions_parallel(&address_tx_records)
                         .await
-                } else {
-                    Ok(())
+                        .map(|_| ())
+                },
+                async {
+                    if !script_usage_changes.is_empty() {
+                        self.writer
+                            .update_script_usage_batch(&script_usage_changes)
+                            .await
+                    } else {
+                        Ok(())
+                    }
                 }
-            },
-            async {
-                if !address_tx_records.is_empty() {
-                    self.writer
-                        .insert_address_transactions_batch(&address_tx_records)
-                        .await
-                } else {
-                    Ok(())
+            )?;
+        } else {
+            tokio::try_join!(
+                async {
+                    if !changes_ref.is_empty() {
+                        self.writer
+                            .update_address_balances_batch(&changes_ref)
+                            .await
+                    } else {
+                        Ok(())
+                    }
+                },
+                async {
+                    if !address_tx_records.is_empty() {
+                        self.writer
+                            .insert_address_transactions_batch(&address_tx_records)
+                            .await
+                    } else {
+                        Ok(())
+                    }
+                },
+                async {
+                    if !script_usage_changes.is_empty() {
+                        self.writer
+                            .update_script_usage_batch(&script_usage_changes)
+                            .await
+                    } else {
+                        Ok(())
+                    }
                 }
-            },
-            async {
-                if !script_usage_changes.is_empty() {
-                    self.writer
-                        .update_script_usage_batch(&script_usage_changes)
-                        .await
-                } else {
-                    Ok(())
-                }
-            }
-        )?;
+            )?;
+        }
 
         let mut batch_stats = BatchStats::default();
         let mut prev_timestamp: Option<chrono::DateTime<Utc>> =
@@ -3466,35 +3496,66 @@ impl Indexer {
             }
         }
 
-        tokio::try_join!(
-            async {
-                if !changes_ref.is_empty() {
-                    self.writer
-                        .update_address_balances_batch(&changes_ref)
+        // Use COPY for address_transactions in bulk sync mode (5-10x faster)
+        if self.should_use_copy() && !address_tx_records.is_empty() {
+            let copy_router = self.copy_router.as_ref().unwrap();
+            tokio::try_join!(
+                async {
+                    if !changes_ref.is_empty() {
+                        self.writer
+                            .update_address_balances_batch(&changes_ref)
+                            .await
+                    } else {
+                        Ok(())
+                    }
+                },
+                async {
+                    copy_router
+                        .copy_address_transactions_parallel(&address_tx_records)
                         .await
-                } else {
-                    Ok(())
+                        .map(|_| ())
+                },
+                async {
+                    if !script_usage_changes.is_empty() {
+                        self.writer
+                            .update_script_usage_batch(&script_usage_changes)
+                            .await
+                    } else {
+                        Ok(())
+                    }
                 }
-            },
-            async {
-                if !address_tx_records.is_empty() {
-                    self.writer
-                        .insert_address_transactions_batch(&address_tx_records)
-                        .await
-                } else {
-                    Ok(())
+            )?;
+        } else {
+            tokio::try_join!(
+                async {
+                    if !changes_ref.is_empty() {
+                        self.writer
+                            .update_address_balances_batch(&changes_ref)
+                            .await
+                    } else {
+                        Ok(())
+                    }
+                },
+                async {
+                    if !address_tx_records.is_empty() {
+                        self.writer
+                            .insert_address_transactions_batch(&address_tx_records)
+                            .await
+                    } else {
+                        Ok(())
+                    }
+                },
+                async {
+                    if !script_usage_changes.is_empty() {
+                        self.writer
+                            .update_script_usage_batch(&script_usage_changes)
+                            .await
+                    } else {
+                        Ok(())
+                    }
                 }
-            },
-            async {
-                if !script_usage_changes.is_empty() {
-                    self.writer
-                        .update_script_usage_batch(&script_usage_changes)
-                        .await
-                } else {
-                    Ok(())
-                }
-            }
-        )?;
+            )?;
+        }
 
         let mut batch_stats = BatchStats::default();
         let mut prev_timestamp: Option<chrono::DateTime<Utc>> =
@@ -4992,7 +5053,13 @@ impl Indexer {
                 .await?;
         }
 
-        if !address_tx_records.is_empty() {
+        // Use COPY for address_transactions in bulk sync mode (5-10x faster)
+        if self.should_use_copy() && !address_tx_records.is_empty() {
+            let copy_router = self.copy_router.as_ref().unwrap();
+            copy_router
+                .copy_address_transactions_parallel(&address_tx_records)
+                .await?;
+        } else if !address_tx_records.is_empty() {
             self.writer
                 .insert_address_transactions_batch(&address_tx_records)
                 .await?;
