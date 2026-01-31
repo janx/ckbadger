@@ -252,6 +252,7 @@ pub struct AddressResponse {
     pub balance: String,
     pub live_cells_count: i64,
     pub transactions_count: i64,
+    pub recent_activities_count: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lock_script: Option<ScriptResponse>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -957,12 +958,21 @@ async fn get_address(
         .map(|(b, l, t)| (b, l as i64, t))
         .unwrap_or(("0".to_string(), 0, 0));
 
+    let recent_activities_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM activities WHERE from_lock_hash = $1 OR to_lock_hash = $1",
+    )
+    .bind(&lock_hash)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap_or(0);
+
     ok(AddressResponse {
         lock_script_hash: format!("0x{}", hex::encode(&lock_hash)),
         address,
         balance,
         live_cells_count,
         transactions_count,
+        recent_activities_count,
         lock_script,
         lock_script_info,
     })

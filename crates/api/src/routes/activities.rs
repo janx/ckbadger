@@ -546,6 +546,28 @@ async fn get_address_activities(
     ))
 }
 
+pub async fn fetch_transaction_activities(
+    pool: &sqlx::PgPool,
+    tx_hash: &[u8],
+) -> Result<Vec<ActivityResponse>, String> {
+    let rows: Vec<ActivityRow> = sqlx::query_as(
+        r#"
+        SELECT activity_id, activity_type, activity_category, block_number, tx_hash,
+               tx_index, activity_index, from_lock_hash, to_lock_hash, amount::TEXT,
+               asset_id, metadata, timestamp
+        FROM activities
+        WHERE tx_hash = $1
+        ORDER BY activity_index ASC
+        "#,
+    )
+    .bind(tx_hash)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(rows.into_iter().map(row_to_response).collect())
+}
+
 async fn get_transaction_activities(
     State(state): State<Arc<AppState>>,
     Path(hash): Path<String>,

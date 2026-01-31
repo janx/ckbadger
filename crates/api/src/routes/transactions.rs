@@ -14,6 +14,7 @@ use crate::cycles::{CyclesStatus, CyclesStatusResponse};
 use crate::response::{
     decode_cursor, encode_cursor, ok, ApiError, ApiResult, CursorPaginatedResponse,
 };
+use crate::routes::activities::{fetch_transaction_activities, ActivityResponse};
 use crate::utils::script_to_address;
 use crate::AppState;
 
@@ -36,6 +37,7 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/transactions/{hash}/asset-transfers",
             get(get_transaction_asset_transfers),
         )
+        .route("/transactions/{hash}/activities", get(get_tx_activities))
 }
 
 #[derive(Debug, Deserialize)]
@@ -341,6 +343,7 @@ pub struct TransactionDetailResponse {
     pub outputs_occupied_capacity: String,
     pub inputs: Vec<TransactionInputResponse>,
     pub outputs: Vec<TransactionOutputResponse>,
+    pub activities: Vec<ActivityResponse>,
 }
 
 fn hash_type_to_string(hash_type: i16) -> String {
@@ -748,6 +751,10 @@ async fn get_transaction_detail(
         }
     });
 
+    let activities = fetch_transaction_activities(&state.pool, &hash_bytes)
+        .await
+        .unwrap_or_default();
+
     ok(TransactionDetailResponse {
         hash: tx_hash_hex,
         block_number,
@@ -768,6 +775,7 @@ async fn get_transaction_detail(
         outputs_occupied_capacity: outputs_occupied_capacity.to_string(),
         inputs,
         outputs,
+        activities,
     })
 }
 
@@ -1247,4 +1255,24 @@ async fn get_transaction_asset_transfers(
         .collect();
 
     ok(transfers)
+}
+
+async fn get_tx_activities(
+    State(state): State<Arc<AppState>>,
+    Path(hash): Path<String>,
+) -> ApiResult<Vec<ActivityResponse>> {
+    let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap_or(&hash))
+        .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
+
+    if hash_bytes.len() != 32 {
+        return Err(ApiError::bad_request(
+            "Transaction hash must be 32 bytes (64 hex chars)",
+        ));
+    }
+
+    let activities = fetch_transaction_activities(&state.pool, &hash_bytes)
+        .await
+        .map_err(ApiError::internal)?;
+
+    ok(activities)
 }
