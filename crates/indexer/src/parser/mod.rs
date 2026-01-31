@@ -1,18 +1,22 @@
+pub mod activity;
 pub mod block;
 pub mod cell;
 pub mod dao;
 pub mod dotbit;
 pub mod mnft;
+pub mod rgbpp;
 pub mod script;
 pub mod spore;
 pub mod transaction;
 pub mod udt;
 
+pub use activity::{ActivityParser, ParsedActivity};
 pub use block::BlockParser;
 pub use cell::CellParser;
 pub use dao::{DaoParser, DaoState, ParsedDaoDeposit, ParsedDaoWithdrawRequest};
 pub use dotbit::{DotbitParser, ParsedDotbitAccount};
 pub use mnft::{MnftParser, ParsedMnftClass, ParsedMnftIssuer, ParsedMnftToken};
+pub use rgbpp::{RgbppLockArgs, RgbppLockType, RgbppParser};
 pub use script::ScriptParser;
 pub use spore::{ParsedClusterCell, ParsedSporeCell, SporeParser};
 pub use transaction::TransactionParser;

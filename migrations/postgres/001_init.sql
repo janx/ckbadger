@@ -1409,3 +1409,107 @@ COMMENT ON COLUMN tasks.status IS 'pending | running | completed | failed | canc
 COMMENT ON COLUMN tasks.config IS 'Task-specific configuration JSON';
 COMMENT ON COLUMN tasks.result IS 'Task result/progress details JSON (e.g., index rebuild progress)';
 COMMENT ON COLUMN tasks.rate_ema IS 'Exponential moving average rate for ETA calculation';
+
+-- ===========================================
+-- 13. Activities Table (Unified Activity Model)
+-- RANGE partitioned by block_number for efficient time-series queries
+-- Replaces: token_transfers, dob_transfers, nft_transfers, 
+--           address_asset_transfers, address_transactions
+-- ===========================================
+
+CREATE TABLE activities (
+    -- Identity
+    id BIGINT GENERATED ALWAYS AS IDENTITY,
+    
+    -- Deterministic unique key: hash of (tx_hash, activity_type, activity_index)
+    -- Used for deduplication and idempotent writes
+    activity_id BYTEA NOT NULL,
+    
+    -- Classification
+    activity_type VARCHAR(30) NOT NULL,  -- CKB_TRANSFER, TOKEN_MINT, DAO_DEPOSIT, etc.
+    activity_category VARCHAR(15) NOT NULL,  -- ckb, cellbase, token, dob, nft, dao, script, rgbpp
+    
+    -- Transaction context
+    block_number BIGINT NOT NULL,
+    tx_hash BYTEA NOT NULL,
+    tx_index INTEGER NOT NULL,
+    activity_index SMALLINT NOT NULL DEFAULT 0,  -- Order within tx for multiple activities
+    
+    -- Participants (lock_script_hash, not address encoding)
+    from_lock_hash BYTEA,  -- NULL for mint, cellbase
+    to_lock_hash BYTEA,    -- NULL for burn
+    
+    -- Value (semantic meaning depends on activity_type)
+    -- CKB: capacity in shannons
+    -- Token: amount in token's smallest unit
+    -- NFT/DOB: 1 (always)
+    -- DAO: deposited capacity
+    amount NUMERIC(40,0) NOT NULL DEFAULT 0,
+    
+    -- Asset reference (type_script_hash for tokens, spore_id for DOB, etc.)
+    asset_id BYTEA,
+    
+    -- Type-specific metadata (JSONB for flexibility)
+    -- CKB_TRANSFER: {}
+    -- CELLBASE_REWARD: { "totalReward": 123, "blockReward": 100, "proposalReward": 23 }
+    -- TOKEN_*: { "symbol": "SEAL", "decimals": 8, "tokenTypeHash": "0x..." }
+    -- DOB_*: { "clusterId": "0x...", "contentType": "image/png" }
+    -- DAO_*: { "depositAr": "0x...", "withdrawAr": "0x...", "compensation": 123 }
+    -- RGBPP_*: { "btcTxid": "0x...", "commitment": "0x..." }
+    metadata JSONB NOT NULL DEFAULT '{}',
+    
+    -- Timestamp (denormalized from block for efficient queries)
+    timestamp TIMESTAMPTZ NOT NULL,
+    
+    -- Partition key included in PK for partition pruning
+    PRIMARY KEY (block_number, id),
+    
+    -- Ensure unique activities per transaction
+    UNIQUE (block_number, activity_id)
+) PARTITION BY RANGE (block_number);
+
+-- 10 RANGE partitions: 0-50M blocks (~15 years at 6s/block)
+CREATE TABLE activities_p00 PARTITION OF activities FOR VALUES FROM (0) TO (5000000);
+CREATE TABLE activities_p01 PARTITION OF activities FOR VALUES FROM (5000000) TO (10000000);
+CREATE TABLE activities_p02 PARTITION OF activities FOR VALUES FROM (10000000) TO (15000000);
+CREATE TABLE activities_p03 PARTITION OF activities FOR VALUES FROM (15000000) TO (20000000);
+CREATE TABLE activities_p04 PARTITION OF activities FOR VALUES FROM (20000000) TO (25000000);
+CREATE TABLE activities_p05 PARTITION OF activities FOR VALUES FROM (25000000) TO (30000000);
+CREATE TABLE activities_p06 PARTITION OF activities FOR VALUES FROM (30000000) TO (35000000);
+CREATE TABLE activities_p07 PARTITION OF activities FOR VALUES FROM (35000000) TO (40000000);
+CREATE TABLE activities_p08 PARTITION OF activities FOR VALUES FROM (40000000) TO (45000000);
+CREATE TABLE activities_p09 PARTITION OF activities FOR VALUES FROM (45000000) TO (50000000);
+
+-- ===========================================
+-- 13b. Activities Indexes
+-- ===========================================
+
+-- Address activity feed (most important query)
+-- Covers both sender and receiver queries
+CREATE INDEX idx_activities_from_lock ON activities(from_lock_hash, block_number DESC, activity_index DESC)
+    WHERE from_lock_hash IS NOT NULL;
+CREATE INDEX idx_activities_to_lock ON activities(to_lock_hash, block_number DESC, activity_index DESC)
+    WHERE to_lock_hash IS NOT NULL;
+
+-- Transaction activities (for tx detail page)
+CREATE INDEX idx_activities_tx ON activities(tx_hash);
+
+-- Activity type filtering (for category tabs on address page)
+CREATE INDEX idx_activities_type ON activities(activity_type, block_number DESC);
+CREATE INDEX idx_activities_category ON activities(activity_category, block_number DESC);
+
+-- Asset-specific queries (token detail page, DOB history)
+CREATE INDEX idx_activities_asset ON activities(asset_id, block_number DESC)
+    WHERE asset_id IS NOT NULL;
+
+-- Time-series queries (BRIN for efficiency on sequential data)
+CREATE INDEX idx_activities_block_brin ON activities USING BRIN (block_number) WITH (pages_per_range = 128);
+
+-- Reorg rollback (delete by block_number range)
+-- Already efficient due to RANGE partitioning by block_number
+
+COMMENT ON TABLE activities IS 'Unified activity table capturing all semantic actions on CKB';
+COMMENT ON COLUMN activities.activity_id IS 'Deterministic hash for deduplication: blake2b(tx_hash || activity_type || activity_index)';
+COMMENT ON COLUMN activities.activity_type IS 'CKB_TRANSFER | CELLBASE_REWARD | TOKEN_MINT | TOKEN_TRANSFER | TOKEN_BURN | DOB_MINT | DOB_TRANSFER | DOB_BURN | NFT_MINT | NFT_TRANSFER | DAO_DEPOSIT | DAO_WITHDRAW_REQUEST | DAO_WITHDRAW_COMPLETE | SCRIPT_DEPLOY | RGBPP_TRANSFER | RGBPP_LEAP_IN | RGBPP_LEAP_OUT | RGBPP_ISSUANCE';
+COMMENT ON COLUMN activities.activity_category IS 'ckb | cellbase | token | dob | nft | dao | script | rgbpp';
+COMMENT ON COLUMN activities.metadata IS 'Type-specific JSONB data (token info, DAO compensation, RGB++ commitment, etc.)';
