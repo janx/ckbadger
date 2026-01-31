@@ -27,6 +27,8 @@ import {
   type AssetTransfer,
 } from '@/lib/api';
 import { formatTimeAgo, formatCkbAmount } from '@/lib/utils';
+import { ActivityIcon, ActivityBadge } from '@/components/activity';
+import type { Activity, ActivityType } from '@/types/activity';
 
 function useCyclesCalculation(hash: string, txCycles: number | undefined, isCellbase: boolean) {
   const queryClient = useQueryClient();
@@ -148,6 +150,67 @@ function getAssetBadgeVariant(category: string): 'green' | 'amber' | 'red' | 'gr
   }
 }
 
+function getActivityLabel(activityType: ActivityType): string {
+  const labels: Record<ActivityType, string> = {
+    CKB_TRANSFER: 'CKB Transfer',
+    CELLBASE_REWARD: 'Mining Reward',
+    TOKEN_MINT: 'Token Mint',
+    TOKEN_TRANSFER: 'Token Transfer',
+    TOKEN_BURN: 'Token Burn',
+    DOB_MINT: 'DOB Mint',
+    DOB_TRANSFER: 'DOB Transfer',
+    DOB_BURN: 'DOB Burn',
+    NFT_MINT: 'NFT Mint',
+    NFT_TRANSFER: 'NFT Transfer',
+    DAO_DEPOSIT: 'DAO Deposit',
+    DAO_WITHDRAW_REQUEST: 'DAO Withdraw Request',
+    DAO_WITHDRAW_COMPLETE: 'DAO Withdraw Complete',
+    SCRIPT_DEPLOY: 'Script Deploy',
+    RGBPP_TRANSFER: 'RGB++ Transfer',
+    RGBPP_LEAP_IN: 'RGB++ Leap In',
+    RGBPP_LEAP_OUT: 'RGB++ Leap Out',
+    RGBPP_ISSUANCE: 'RGB++ Issuance',
+  };
+  return labels[activityType] || 'Activity';
+}
+
+function formatActivityAmount(activity: Activity): string | null {
+  if (!activity.amount || activity.amount === '0') return null;
+
+  const isCkbActivity =
+    activity.activityCategory === 'ckb' ||
+    activity.activityCategory === 'cellbase' ||
+    activity.activityCategory === 'dao';
+
+  if (isCkbActivity) {
+    const ckb = formatCkbAmount(activity.amount);
+    return `${ckb.full} CKB`;
+  }
+
+  const metadata = activity.metadata as {
+    symbol?: string;
+    decimals?: number;
+    tokenName?: string;
+  };
+
+  if (metadata.decimals !== undefined) {
+    const decimals = metadata.decimals;
+    const rawAmount = BigInt(activity.amount);
+    const divisor = BigInt(10 ** decimals);
+    const whole = rawAmount / divisor;
+    const fraction = rawAmount % divisor;
+    const formatted =
+      decimals > 0
+        ? `${whole.toLocaleString()}.${fraction.toString().padStart(decimals, '0').slice(0, 4).replace(/0+$/, '') || '0'}`
+        : whole.toLocaleString();
+
+    const symbol = metadata.symbol || metadata.tokenName || '';
+    return symbol ? `${formatted} ${symbol}` : formatted;
+  }
+
+  return BigInt(activity.amount).toLocaleString();
+}
+
 export default function TransactionDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -209,6 +272,12 @@ export default function TransactionDetailPage() {
   const { data: assetTransfers } = useQuery({
     queryKey: ['txAssetTransfers', hash],
     queryFn: () => api.getTransactionAssetTransfers(hash),
+    enabled: !!hash,
+  });
+
+  const { data: activities } = useQuery({
+    queryKey: ['txActivities', hash],
+    queryFn: () => api.getTransactionActivities(hash),
     enabled: !!hash,
   });
 
@@ -417,6 +486,81 @@ export default function TransactionDetailPage() {
             </DataGrid>
           </TerminalPanelContent>
         </TerminalPanel>
+
+        {activities && activities.length > 0 && (
+          <TerminalPanel className="mb-8">
+            <TerminalPanelHeader>Activity Summary ({activities.length})</TerminalPanelHeader>
+            <TerminalPanelContent padding="none">
+              <div className="min-w-full">
+                <div className="flex border-b border-slate-800 bg-slate-900/50 px-4 py-2 font-mono text-xs uppercase tracking-wider text-slate-500">
+                  <div className="w-10"></div>
+                  <div className="w-32">Type</div>
+                  <div className="flex-1">Description</div>
+                  <div className="w-48 text-right">Amount</div>
+                </div>
+                {activities.map((activity, idx) => (
+                  <TerminalRow key={activity.activityId || idx} className="flex items-center">
+                    <div className="w-10">
+                      <ActivityIcon activityType={activity.activityType} size="md" />
+                    </div>
+                    <div className="w-32">
+                      <ActivityBadge category={activity.activityCategory} />
+                    </div>
+                    <div className="flex flex-1 items-center gap-2">
+                      <span className="text-sm text-slate-300">
+                        {getActivityLabel(activity.activityType)}
+                      </span>
+                      {activity.fromAddress && (
+                        <>
+                          <span className="text-xs text-slate-600">from</span>
+                          <Link
+                            href={`/address/${activity.fromAddress}`}
+                            className="hover:text-amber-400"
+                          >
+                            <HexDisplay
+                              value={activity.fromAddress}
+                              truncate
+                              startChars={6}
+                              endChars={4}
+                              color="white"
+                              size="sm"
+                            />
+                          </Link>
+                        </>
+                      )}
+                      {activity.fromAddress && activity.toAddress && (
+                        <span className="text-slate-600">→</span>
+                      )}
+                      {activity.toAddress && (
+                        <>
+                          {!activity.fromAddress && (
+                            <span className="text-xs text-slate-600">to</span>
+                          )}
+                          <Link
+                            href={`/address/${activity.toAddress}`}
+                            className="hover:text-amber-400"
+                          >
+                            <HexDisplay
+                              value={activity.toAddress}
+                              truncate
+                              startChars={6}
+                              endChars={4}
+                              color="white"
+                              size="sm"
+                            />
+                          </Link>
+                        </>
+                      )}
+                    </div>
+                    <div className="w-48 text-right font-mono text-amber-400">
+                      {formatActivityAmount(activity) || '-'}
+                    </div>
+                  </TerminalRow>
+                ))}
+              </div>
+            </TerminalPanelContent>
+          </TerminalPanel>
+        )}
 
         {assetTransfers && assetTransfers.length > 0 && (
           <TerminalPanel className="mb-8">

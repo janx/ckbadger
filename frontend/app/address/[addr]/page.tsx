@@ -19,6 +19,7 @@ import { Capacity } from '@/components/ui/capacity';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, type AddressToken, type AssetTransfer, type DaoDeposit } from '@/lib/api';
+import { ActivityFeed } from '@/components/activity';
 import { formatTimeAgo, formatCkbAmount } from '@/lib/utils';
 
 function groupAssetTransfersByTx(transfers: AssetTransfer[]): Map<string, AssetTransfer[]> {
@@ -37,13 +38,16 @@ export default function AddressDetailPage() {
 
   const [selectedToken, setSelectedToken] = useState<AddressToken | null>(null);
   const [selectedDao, setSelectedDao] = useState(false);
-  const [activeTab, setActiveTab] = useState<'cells' | 'transactions' | 'dao'>('cells');
+  const [activeTab, setActiveTab] = useState<'cells' | 'transactions' | 'activities' | 'dao'>(
+    'cells'
+  );
 
   const DAO_CODE_HASH = '0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e';
 
   const cellsPagination = useCursorPagination();
   const txPagination = useCursorPagination();
   const daoPagination = useCursorPagination();
+  const activitiesPagination = useCursorPagination();
 
   const { data: address, isLoading } = useQuery({
     queryKey: ['address', addr],
@@ -125,6 +129,16 @@ export default function AddressDetailPage() {
         cursor: txPagination.cursor,
       }),
     enabled: !!address && activeTab === 'transactions',
+  });
+
+  const { data: activities, isLoading: activitiesLoading } = useQuery({
+    queryKey: ['address-activities', address?.lockScriptHash, activitiesPagination.cursor],
+    queryFn: () =>
+      api.getAddressActivities(address!.lockScriptHash, {
+        limit: 20,
+        cursor: activitiesPagination.cursor,
+      }),
+    enabled: !!address && activeTab === 'activities',
   });
 
   const assetTransfersByTx = useMemo(
@@ -489,6 +503,16 @@ export default function AddressDetailPage() {
                   Transactions
                   <span className="ml-1 opacity-75">({address.transactionsCount})</span>
                 </button>
+                <button
+                  onClick={() => setActiveTab('activities')}
+                  className={`rounded px-3 py-1 font-mono text-sm transition-colors ${
+                    activeTab === 'activities'
+                      ? 'bg-terminal-green/20 text-terminal-green'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  Activities
+                </button>
                 {daoSummary?.hasDaoActivity && (
                   <button
                     onClick={() => setActiveTab('dao')}
@@ -525,6 +549,8 @@ export default function AddressDetailPage() {
                   </Badge>
                 )}
               </div>
+            ) : activeTab === 'activities' ? (
+              'Activities'
             ) : activeTab === 'dao' ? (
               'DAO Activities'
             ) : (
@@ -804,6 +830,18 @@ export default function AddressDetailPage() {
                   <div className="py-12 text-center text-slate-500">No transactions</div>
                 )}
               </>
+            )}
+
+            {activeTab === 'activities' && (
+              <ActivityFeed
+                activities={activities?.activities || []}
+                isLoading={activitiesLoading}
+                hasMore={activities?.hasMore}
+                onLoadMore={() => activitiesPagination.goToNext(activities?.nextCursor)}
+                loadingMore={false}
+                showHeader={false}
+                emptyMessage="No activities found for this address"
+              />
             )}
 
             {activeTab === 'dao' && (
