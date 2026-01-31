@@ -1098,6 +1098,12 @@ impl BatchWriter {
         .execute(&self.pool)
         .await?;
 
+        sqlx::query("DELETE FROM activities WHERE block_number >= $1 AND block_number <= $2")
+            .bind(start_block)
+            .bind(end_block)
+            .execute(&self.pool)
+            .await?;
+
         sqlx::query(
             "DELETE FROM udt_cells WHERE created_at_block >= $1 AND created_at_block <= $2",
         )
