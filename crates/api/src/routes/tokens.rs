@@ -595,50 +595,51 @@ async fn get_token_transfers(
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let (token_id, transfers_count) = match token_row {
+    let (_token_id, transfers_count) = match token_row {
         Some((id, count)) => (id, count),
         None => return Err(ApiError::not_found("Token not found")),
     };
 
     let limit = params.limit.clamp(1, 100);
-    let (cursor_block, cursor_id) = params
+    let (cursor_block, cursor_idx) = params
         .cursor
         .as_ref()
         .and_then(|c| {
             let parts: Vec<&str> = c.split(':').collect();
             if parts.len() == 2 {
-                Some((parts[0].parse::<i64>().ok()?, parts[1].parse::<i64>().ok()?))
+                Some((parts[0].parse::<i64>().ok()?, parts[1].parse::<i16>().ok()?))
             } else {
                 None
             }
         })
-        .unwrap_or((i64::MAX, i64::MAX));
+        .unwrap_or((i64::MAX, i16::MAX));
 
-    type TransferRow = (
-        i64,
+    type ActivityRow = (
         Vec<u8>,
         i64,
+        i32,
+        i16,
         Option<Vec<u8>>,
-        Vec<u8>,
+        Option<Vec<u8>>,
         String,
-        bool,
-        bool,
+        String,
         chrono::DateTime<chrono::Utc>,
     );
 
-    let rows = sqlx::query_as::<_, TransferRow>(
+    let rows = sqlx::query_as::<_, ActivityRow>(
         r#"
-        SELECT tt.id, tt.tx_hash, tt.block_number, tt.from_lock_hash, tt.to_lock_hash,
-               tt.amount::text, tt.is_mint, tt.is_burn, tt.timestamp
-        FROM token_transfers tt
-        WHERE tt.token_id = $1 AND (tt.block_number, tt.id) < ($2, $3)
-        ORDER BY tt.block_number DESC, tt.id DESC
+        SELECT tx_hash, block_number, tx_index, activity_index,
+               from_lock_hash, to_lock_hash, amount::text, activity_type, timestamp
+        FROM activities
+        WHERE activity_category = 'token' AND asset_id = $1
+          AND (block_number, activity_index) < ($2, $3)
+        ORDER BY block_number DESC, activity_index DESC
         LIMIT $4
         "#,
     )
-    .bind(token_id)
+    .bind(&hash)
     .bind(cursor_block)
-    .bind(cursor_id)
+    .bind(cursor_idx)
     .bind(limit + 1)
     .fetch_all(&state.pool)
     .await
@@ -649,20 +650,22 @@ async fn get_token_transfers(
 
     let next_cursor = if has_more {
         rows.last()
-            .map(|(id, _, block, _, _, _, _, _, _)| format!("{}:{}", block, id))
+            .map(|(_, block, _, idx, _, _, _, _, _)| format!("{}:{}", block, idx))
     } else {
         None
     };
 
     let mut lock_hashes: Vec<Vec<u8>> = Vec::new();
-    for (_, _, _, from_lock, to_lock, _, _, _, _) in &rows {
+    for (_, _, _, _, from_lock, to_lock, _, _, _) in &rows {
         if let Some(from) = from_lock {
             if !lock_hashes.iter().any(|h| h == from) {
                 lock_hashes.push(from.clone());
             }
         }
-        if !lock_hashes.iter().any(|h| h == to_lock) {
-            lock_hashes.push(to_lock.clone());
+        if let Some(to) = to_lock {
+            if !lock_hashes.iter().any(|h| h == to) {
+                lock_hashes.push(to.clone());
+            }
         }
     }
 
@@ -696,27 +699,34 @@ async fn get_token_transfers(
         .into_iter()
         .map(
             |(
-                _,
                 tx_hash,
                 block_number,
+                _tx_index,
+                _activity_index,
                 from_lock_hash,
                 to_lock_hash,
                 amount,
-                is_mint,
-                is_burn,
+                activity_type,
                 timestamp,
             )| {
                 let from_address = from_lock_hash
                     .as_ref()
                     .and_then(|h| address_map.get(h).cloned());
-                let to_address = address_map.get(&to_lock_hash).cloned();
+                let to_address = to_lock_hash
+                    .as_ref()
+                    .and_then(|h| address_map.get(h).cloned());
+
+                let is_mint = activity_type == "TOKEN_MINT";
+                let is_burn = activity_type == "TOKEN_BURN";
 
                 TokenTransferResponse {
                     tx_hash: format!("0x{}", hex::encode(&tx_hash)),
                     block_number,
                     from_lock_hash: from_lock_hash.map(|h| format!("0x{}", hex::encode(&h))),
                     from_address,
-                    to_lock_hash: format!("0x{}", hex::encode(&to_lock_hash)),
+                    to_lock_hash: to_lock_hash
+                        .map(|h| format!("0x{}", hex::encode(&h)))
+                        .unwrap_or_default(),
                     to_address,
                     amount,
                     is_mint,

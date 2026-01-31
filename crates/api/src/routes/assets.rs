@@ -315,12 +315,12 @@ async fn fetch_assets(
             ) h ON h.cluster_id = sc.cluster_id
             LEFT JOIN (
                 SELECT 
-                    cluster_id,
+                    DECODE(SUBSTRING(metadata->>'clusterId' FROM 3), 'hex') AS cluster_id,
                     COUNT(*) AS transfers_count,
                     COUNT(*) FILTER (WHERE timestamp > NOW() - INTERVAL '24 hours') AS transfers_24h
-                FROM dob_transfers
-                WHERE cluster_id IS NOT NULL
-                GROUP BY cluster_id
+                FROM activities
+                WHERE activity_category = 'dob' AND metadata->>'clusterId' IS NOT NULL
+                GROUP BY metadata->>'clusterId'
             ) t ON t.cluster_id = sc.cluster_id
             WHERE sc.id < $1 AND LOWER(sc.name) LIKE $2
             ORDER BY COALESCE(t.transfers_24h, 0) DESC, COALESCE(h.holders_count, 0) DESC, sc.id DESC
@@ -353,12 +353,12 @@ async fn fetch_assets(
             ) h ON h.cluster_id = sc.cluster_id
             LEFT JOIN (
                 SELECT 
-                    cluster_id,
+                    DECODE(SUBSTRING(metadata->>'clusterId' FROM 3), 'hex') AS cluster_id,
                     COUNT(*) AS transfers_count,
                     COUNT(*) FILTER (WHERE timestamp > NOW() - INTERVAL '24 hours') AS transfers_24h
-                FROM dob_transfers
-                WHERE cluster_id IS NOT NULL
-                GROUP BY cluster_id
+                FROM activities
+                WHERE activity_category = 'dob' AND metadata->>'clusterId' IS NOT NULL
+                GROUP BY metadata->>'clusterId'
             ) t ON t.cluster_id = sc.cluster_id
             WHERE sc.id < $1
             ORDER BY COALESCE(t.transfers_24h, 0) DESC, COALESCE(h.holders_count, 0) DESC, sc.id DESC
@@ -403,19 +403,19 @@ async fn fetch_assets(
                 COALESCE(t.transfers_24h, 0) AS transfers_24h
             FROM mnft_classes mc
             LEFT JOIN (
-                SELECT class_id, COUNT(DISTINCT to_lock_hash) AS holders_count
-                FROM nft_transfers
-                WHERE class_id IS NOT NULL AND event_type != 'burn'
-                GROUP BY class_id
+                SELECT SUBSTRING(asset_id FROM 1 FOR 24) AS class_id, COUNT(DISTINCT to_lock_hash) AS holders_count
+                FROM activities
+                WHERE activity_category = 'nft' AND metadata->>'nftType' = 'mnft' AND activity_type != 'NFT_BURN'
+                GROUP BY SUBSTRING(asset_id FROM 1 FOR 24)
             ) h ON h.class_id = mc.class_id
             LEFT JOIN (
                 SELECT 
-                    class_id,
+                    SUBSTRING(asset_id FROM 1 FOR 24) AS class_id,
                     COUNT(*) AS transfers_count,
                     COUNT(*) FILTER (WHERE timestamp > NOW() - INTERVAL '24 hours') AS transfers_24h
-                FROM nft_transfers
-                WHERE class_id IS NOT NULL
-                GROUP BY class_id
+                FROM activities
+                WHERE activity_category = 'nft' AND metadata->>'nftType' = 'mnft'
+                GROUP BY SUBSTRING(asset_id FROM 1 FOR 24)
             ) t ON t.class_id = mc.class_id
             WHERE mc.id < $1 AND LOWER(mc.name) LIKE $2 AND mc.is_live = TRUE
             ORDER BY COALESCE(t.transfers_24h, 0) DESC, COALESCE(h.holders_count, 0) DESC, mc.id DESC
@@ -443,19 +443,19 @@ async fn fetch_assets(
                 COALESCE(t.transfers_24h, 0) AS transfers_24h
             FROM mnft_classes mc
             LEFT JOIN (
-                SELECT class_id, COUNT(DISTINCT to_lock_hash) AS holders_count
-                FROM nft_transfers
-                WHERE class_id IS NOT NULL AND event_type != 'burn'
-                GROUP BY class_id
+                SELECT SUBSTRING(asset_id FROM 1 FOR 24) AS class_id, COUNT(DISTINCT to_lock_hash) AS holders_count
+                FROM activities
+                WHERE activity_category = 'nft' AND metadata->>'nftType' = 'mnft' AND activity_type != 'NFT_BURN'
+                GROUP BY SUBSTRING(asset_id FROM 1 FOR 24)
             ) h ON h.class_id = mc.class_id
             LEFT JOIN (
                 SELECT 
-                    class_id,
+                    SUBSTRING(asset_id FROM 1 FOR 24) AS class_id,
                     COUNT(*) AS transfers_count,
                     COUNT(*) FILTER (WHERE timestamp > NOW() - INTERVAL '24 hours') AS transfers_24h
-                FROM nft_transfers
-                WHERE class_id IS NOT NULL
-                GROUP BY class_id
+                FROM activities
+                WHERE activity_category = 'nft' AND metadata->>'nftType' = 'mnft'
+                GROUP BY SUBSTRING(asset_id FROM 1 FOR 24)
             ) t ON t.class_id = mc.class_id
             WHERE mc.id < $1 AND mc.is_live = TRUE
             ORDER BY COALESCE(t.transfers_24h, 0) DESC, COALESCE(h.holders_count, 0) DESC, mc.id DESC

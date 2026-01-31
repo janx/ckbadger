@@ -269,7 +269,7 @@ CREATE TABLE live_cells (
     PRIMARY KEY (tx_hash, output_index)
 ) PARTITION BY HASH (tx_hash);
 
--- 16 hash partitions (matches address_transactions for consistency)
+-- 16 hash partitions
 CREATE TABLE live_cells_p00 PARTITION OF live_cells FOR VALUES WITH (MODULUS 16, REMAINDER 0);
 CREATE TABLE live_cells_p01 PARTITION OF live_cells FOR VALUES WITH (MODULUS 16, REMAINDER 1);
 CREATE TABLE live_cells_p02 PARTITION OF live_cells FOR VALUES WITH (MODULUS 16, REMAINDER 2);
@@ -441,37 +441,6 @@ CREATE INDEX idx_address_balances_balance ON address_balances(balance DESC)
     WHERE balance > 0;
 -- Active addresses
 CREATE INDEX idx_address_balances_activity ON address_balances(last_activity_block DESC);
-
--- ---- address_transactions ----
--- For address page transaction history, avoiding complex UNION queries
-CREATE TABLE address_transactions (
-    lock_script_hash BYTEA NOT NULL,
-    tx_hash BYTEA NOT NULL,
-    block_number BIGINT NOT NULL,
-    tx_type SMALLINT NOT NULL,  -- 1=received, 2=sent, 3=both
-    capacity_change BIGINT NOT NULL,  -- positive=income, negative=expense (max ~9.2e18 shannons = ~92B CKB, sufficient for any address)
-    timestamp TIMESTAMPTZ NOT NULL,
-
-    PRIMARY KEY (lock_script_hash, block_number, tx_hash)
-) PARTITION BY HASH (lock_script_hash);
-
--- 16 hash partitions (even distribution)
-CREATE TABLE address_transactions_p00 PARTITION OF address_transactions FOR VALUES WITH (MODULUS 16, REMAINDER 0);
-CREATE TABLE address_transactions_p01 PARTITION OF address_transactions FOR VALUES WITH (MODULUS 16, REMAINDER 1);
-CREATE TABLE address_transactions_p02 PARTITION OF address_transactions FOR VALUES WITH (MODULUS 16, REMAINDER 2);
-CREATE TABLE address_transactions_p03 PARTITION OF address_transactions FOR VALUES WITH (MODULUS 16, REMAINDER 3);
-CREATE TABLE address_transactions_p04 PARTITION OF address_transactions FOR VALUES WITH (MODULUS 16, REMAINDER 4);
-CREATE TABLE address_transactions_p05 PARTITION OF address_transactions FOR VALUES WITH (MODULUS 16, REMAINDER 5);
-CREATE TABLE address_transactions_p06 PARTITION OF address_transactions FOR VALUES WITH (MODULUS 16, REMAINDER 6);
-CREATE TABLE address_transactions_p07 PARTITION OF address_transactions FOR VALUES WITH (MODULUS 16, REMAINDER 7);
-CREATE TABLE address_transactions_p08 PARTITION OF address_transactions FOR VALUES WITH (MODULUS 16, REMAINDER 8);
-CREATE TABLE address_transactions_p09 PARTITION OF address_transactions FOR VALUES WITH (MODULUS 16, REMAINDER 9);
-CREATE TABLE address_transactions_p10 PARTITION OF address_transactions FOR VALUES WITH (MODULUS 16, REMAINDER 10);
-CREATE TABLE address_transactions_p11 PARTITION OF address_transactions FOR VALUES WITH (MODULUS 16, REMAINDER 11);
-CREATE TABLE address_transactions_p12 PARTITION OF address_transactions FOR VALUES WITH (MODULUS 16, REMAINDER 12);
-CREATE TABLE address_transactions_p13 PARTITION OF address_transactions FOR VALUES WITH (MODULUS 16, REMAINDER 13);
-CREATE TABLE address_transactions_p14 PARTITION OF address_transactions FOR VALUES WITH (MODULUS 16, REMAINDER 14);
-CREATE TABLE address_transactions_p15 PARTITION OF address_transactions FOR VALUES WITH (MODULUS 16, REMAINDER 15);
 
 -- ===========================================
 -- 4. Statistics Tables
@@ -752,32 +721,6 @@ CREATE INDEX idx_token_balances_lock ON token_balances(lock_script_hash);
 CREATE INDEX idx_token_balances_balance ON token_balances(token_id, balance DESC);
 CREATE INDEX idx_token_balances_pagination ON token_balances(token_id, balance DESC, lock_script_hash DESC) WHERE balance > 0;
 
--- ---- token_transfers ----
-CREATE TABLE token_transfers (
-    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    token_id BIGINT NOT NULL REFERENCES tokens(id) ON DELETE CASCADE,
-    tx_hash BYTEA NOT NULL,
-    block_number BIGINT NOT NULL,
-    
-    from_lock_hash BYTEA,
-    to_lock_hash BYTEA NOT NULL,
-    amount NUMERIC(40,0) NOT NULL,
-    
-    is_mint BOOLEAN NOT NULL DEFAULT FALSE,
-    is_burn BOOLEAN NOT NULL DEFAULT FALSE,
-    
-    timestamp TIMESTAMPTZ NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX idx_token_transfers_token ON token_transfers(token_id);
-CREATE INDEX idx_token_transfers_tx ON token_transfers(tx_hash);
-CREATE INDEX idx_token_transfers_from ON token_transfers(from_lock_hash) WHERE from_lock_hash IS NOT NULL;
-CREATE INDEX idx_token_transfers_to ON token_transfers(to_lock_hash);
-CREATE INDEX idx_token_transfers_block ON token_transfers(block_number DESC);
-CREATE INDEX idx_token_transfers_timestamp ON token_transfers(timestamp DESC);
-CREATE INDEX idx_token_transfers_pagination ON token_transfers(token_id, block_number DESC, id DESC);
-
 -- ---- udt_cells ----
 CREATE TABLE udt_cells (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -1025,161 +968,6 @@ CREATE INDEX idx_dotbit_accounts_live ON dotbit_accounts(is_live) WHERE is_live 
 CREATE INDEX idx_dotbit_accounts_expired ON dotbit_accounts(expired_at) WHERE expired_at IS NOT NULL;
 
 -- ===========================================
--- 7d. DOB Transfer History (Spore, DOB/0, DOB/1, did:ckb)
--- ===========================================
-
--- ---- dob_transfers ----
--- Transfer history for Digital Objects (Spore ecosystem)
--- Asset-centric table for DOB/Spore detail pages
-CREATE TABLE dob_transfers (
-    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    
-    -- DOB identification
-    dob_id BYTEA NOT NULL,             -- spore_id (type_script.args)
-    cluster_id BYTEA,                   -- parent cluster (nullable)
-    dob_type TEXT NOT NULL,             -- 'spore', 'dob/0', 'dob/1', 'did:ckb'
-    
-    -- Transaction info
-    tx_hash BYTEA NOT NULL,
-    block_number BIGINT NOT NULL,
-    
-    -- Transfer parties
-    from_lock_hash BYTEA,               -- NULL = mint
-    to_lock_hash BYTEA NOT NULL,
-    
-    -- Event type
-    event_type TEXT NOT NULL,           -- 'mint', 'transfer', 'burn'
-    
-    -- Metadata for display
-    content_type TEXT,                  -- 'image/png', 'dob/0', etc.
-    
-    timestamp TIMESTAMPTZ NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX idx_dob_transfers_dob ON dob_transfers(dob_id, block_number DESC);
-CREATE INDEX idx_dob_transfers_cluster ON dob_transfers(cluster_id, block_number DESC) 
-    WHERE cluster_id IS NOT NULL;
-CREATE INDEX idx_dob_transfers_block ON dob_transfers(block_number);
-CREATE INDEX idx_dob_transfers_type ON dob_transfers(dob_type, block_number DESC);
-CREATE INDEX idx_dob_transfers_to ON dob_transfers(to_lock_hash, block_number DESC);
-CREATE INDEX idx_dob_transfers_from ON dob_transfers(from_lock_hash, block_number DESC) 
-    WHERE from_lock_hash IS NOT NULL;
-
--- ===========================================
--- 7e. NFT Transfer History (M-NFT, .bit)
--- ===========================================
-
--- ---- nft_transfers ----
--- Transfer history for legacy NFTs and naming services
--- Asset-centric table for M-NFT/.bit detail pages
-CREATE TABLE nft_transfers (
-    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    
-    -- NFT identification
-    nft_id BYTEA NOT NULL,              -- token_id (M-NFT) or account_id (.bit)
-    nft_type TEXT NOT NULL,             -- 'mnft', 'dotbit'
-    
-    -- M-NFT hierarchy (M-NFT only)
-    issuer_id BYTEA,                    -- M-NFT issuer
-    class_id BYTEA,                     -- M-NFT class
-    
-    -- Transaction info
-    tx_hash BYTEA NOT NULL,
-    block_number BIGINT NOT NULL,
-    
-    -- Transfer parties
-    from_lock_hash BYTEA,               -- NULL = mint/register
-    to_lock_hash BYTEA NOT NULL,
-    
-    -- Event type
-    event_type TEXT NOT NULL,           -- 'mint', 'transfer', 'burn', 'register', 'renew'
-    
-    -- Metadata for display
-    name TEXT,                          -- .bit: "alice.bit", M-NFT: token name
-    
-    timestamp TIMESTAMPTZ NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX idx_nft_transfers_nft ON nft_transfers(nft_id, block_number DESC);
-CREATE INDEX idx_nft_transfers_class ON nft_transfers(class_id, block_number DESC) 
-    WHERE class_id IS NOT NULL;
-CREATE INDEX idx_nft_transfers_issuer ON nft_transfers(issuer_id, block_number DESC)
-    WHERE issuer_id IS NOT NULL;
-CREATE INDEX idx_nft_transfers_block ON nft_transfers(block_number);
-CREATE INDEX idx_nft_transfers_type ON nft_transfers(nft_type, block_number DESC);
-CREATE INDEX idx_nft_transfers_name ON nft_transfers(name) WHERE name IS NOT NULL;
-CREATE INDEX idx_nft_transfers_to ON nft_transfers(to_lock_hash, block_number DESC);
-CREATE INDEX idx_nft_transfers_from ON nft_transfers(from_lock_hash, block_number DESC)
-    WHERE from_lock_hash IS NOT NULL;
-
--- ===========================================
--- 7f. Address Asset Transfers (Projection Table)
--- ===========================================
-
--- ---- address_asset_transfers ----
--- Address-centric projection of all non-CKB asset movements
--- Optimized for Address page queries (HASH partitioned by lock_script_hash)
-CREATE TABLE address_asset_transfers (
-    id BIGINT GENERATED ALWAYS AS IDENTITY,
-    
-    -- Address association (partition key)
-    lock_script_hash BYTEA NOT NULL,
-    
-    -- Transaction info
-    tx_hash BYTEA NOT NULL,
-    block_number BIGINT NOT NULL,
-    tx_index INT NOT NULL,
-    event_index SMALLINT NOT NULL DEFAULT 0,  -- ordering within tx
-    
-    -- Asset classification
-    asset_category TEXT NOT NULL,       -- 'token', 'dob', 'nft', 'dao'
-    asset_type TEXT NOT NULL,           -- 'sudt', 'xudt', 'spore', 'dob/0', 'mnft', 'dotbit', 'dao'
-    asset_id BYTEA,                     -- type_script_hash / spore_id / nft_id / deposit_id
-    
-    -- Transfer semantics
-    direction SMALLINT NOT NULL,        -- 1=in, 2=out
-    peer_lock_hash BYTEA,               -- counterparty (nullable for mint/burn)
-    amount NUMERIC(40,0),               -- quantity (NFT = 1, DAO = shannons)
-    
-    -- Special events (DAO etc.)
-    event_type TEXT,                    -- 'deposit', 'withdraw_request', 'withdraw_complete'
-    
-    timestamp TIMESTAMPTZ NOT NULL,
-    
-    PRIMARY KEY (lock_script_hash, block_number, tx_index, event_index, id)
-) PARTITION BY HASH (lock_script_hash);
-
--- 16 hash partitions (matches address_transactions)
-CREATE TABLE address_asset_transfers_p00 PARTITION OF address_asset_transfers FOR VALUES WITH (MODULUS 16, REMAINDER 0);
-CREATE TABLE address_asset_transfers_p01 PARTITION OF address_asset_transfers FOR VALUES WITH (MODULUS 16, REMAINDER 1);
-CREATE TABLE address_asset_transfers_p02 PARTITION OF address_asset_transfers FOR VALUES WITH (MODULUS 16, REMAINDER 2);
-CREATE TABLE address_asset_transfers_p03 PARTITION OF address_asset_transfers FOR VALUES WITH (MODULUS 16, REMAINDER 3);
-CREATE TABLE address_asset_transfers_p04 PARTITION OF address_asset_transfers FOR VALUES WITH (MODULUS 16, REMAINDER 4);
-CREATE TABLE address_asset_transfers_p05 PARTITION OF address_asset_transfers FOR VALUES WITH (MODULUS 16, REMAINDER 5);
-CREATE TABLE address_asset_transfers_p06 PARTITION OF address_asset_transfers FOR VALUES WITH (MODULUS 16, REMAINDER 6);
-CREATE TABLE address_asset_transfers_p07 PARTITION OF address_asset_transfers FOR VALUES WITH (MODULUS 16, REMAINDER 7);
-CREATE TABLE address_asset_transfers_p08 PARTITION OF address_asset_transfers FOR VALUES WITH (MODULUS 16, REMAINDER 8);
-CREATE TABLE address_asset_transfers_p09 PARTITION OF address_asset_transfers FOR VALUES WITH (MODULUS 16, REMAINDER 9);
-CREATE TABLE address_asset_transfers_p10 PARTITION OF address_asset_transfers FOR VALUES WITH (MODULUS 16, REMAINDER 10);
-CREATE TABLE address_asset_transfers_p11 PARTITION OF address_asset_transfers FOR VALUES WITH (MODULUS 16, REMAINDER 11);
-CREATE TABLE address_asset_transfers_p12 PARTITION OF address_asset_transfers FOR VALUES WITH (MODULUS 16, REMAINDER 12);
-CREATE TABLE address_asset_transfers_p13 PARTITION OF address_asset_transfers FOR VALUES WITH (MODULUS 16, REMAINDER 13);
-CREATE TABLE address_asset_transfers_p14 PARTITION OF address_asset_transfers FOR VALUES WITH (MODULUS 16, REMAINDER 14);
-CREATE TABLE address_asset_transfers_p15 PARTITION OF address_asset_transfers FOR VALUES WITH (MODULUS 16, REMAINDER 15);
-
--- Indexes for address_asset_transfers
--- Primary use case: fetch assets for specific txs on address page
-CREATE INDEX idx_aat_addr_tx ON address_asset_transfers(lock_script_hash, tx_hash);
--- Timeline pagination (address assets tab)
-CREATE INDEX idx_aat_timeline ON address_asset_transfers(lock_script_hash, block_number DESC, tx_index DESC, event_index);
--- Reorg rollback
-CREATE INDEX idx_aat_block ON address_asset_transfers(block_number);
--- Filter by category
-CREATE INDEX idx_aat_category ON address_asset_transfers(lock_script_hash, asset_category, block_number DESC);
-
--- ===========================================
 -- 8. Scripts Tables
 -- ===========================================
 
@@ -1413,8 +1201,7 @@ COMMENT ON COLUMN tasks.rate_ema IS 'Exponential moving average rate for ETA cal
 -- ===========================================
 -- 13. Activities Table (Unified Activity Model)
 -- RANGE partitioned by block_number for efficient time-series queries
--- Replaces: token_transfers, dob_transfers, nft_transfers, 
---           address_asset_transfers, address_transactions
+-- Unified event model for all blockchain activities
 -- ===========================================
 
 CREATE TABLE activities (

@@ -2227,28 +2227,33 @@ async fn test_get_address_asset_transfers_empty(pool: sqlx::PgPool) {
 #[sqlx::test(migrator = "MIGRATOR")]
 async fn test_get_address_asset_transfers_with_data(pool: sqlx::PgPool) {
     let lock_hash: [u8; 32] = [0x11; 32];
+    let other_lock_hash: [u8; 32] = [0x22; 32];
     let tx_hash: [u8; 32] = [0xAA; 32];
     let asset_id: [u8; 32] = [0xBB; 32];
+    let activity_id: [u8; 32] = [0x01; 32];
     let now = chrono::Utc::now();
 
     sqlx::query(
         r#"
-        INSERT INTO address_asset_transfers (
-            lock_script_hash, tx_hash, block_number, tx_index, event_index,
-            asset_category, asset_type, asset_id, direction, amount, timestamp
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        INSERT INTO activities (
+            activity_id, activity_type, activity_category, block_number, tx_hash,
+            tx_index, activity_index, from_lock_hash, to_lock_hash, amount, asset_id,
+            metadata, timestamp
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         "#,
     )
-    .bind(&lock_hash[..])
-    .bind(&tx_hash[..])
+    .bind(&activity_id[..])
+    .bind("TOKEN_TRANSFER")
+    .bind("token")
     .bind(1000i64)
+    .bind(&tx_hash[..])
     .bind(0i32)
     .bind(0i16)
-    .bind("token")
-    .bind("sudt")
+    .bind(&other_lock_hash[..])
+    .bind(&lock_hash[..])
+    .bind(1000000i64)
     .bind(&asset_id[..])
-    .bind(1i16)
-    .bind(Some(1000000i64))
+    .bind(serde_json::json!({}))
     .bind(now)
     .execute(&pool)
     .await
@@ -2277,7 +2282,7 @@ async fn test_get_address_asset_transfers_with_data(pool: sqlx::PgPool) {
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 1);
     assert_eq!(data[0]["assetCategory"], "token");
-    assert_eq!(data[0]["assetType"], "sudt");
+    assert_eq!(data[0]["assetType"], "TOKEN_TRANSFER");
     assert_eq!(data[0]["direction"], "in");
     assert_eq!(data[0]["amount"], "1000000");
 }
@@ -2285,29 +2290,35 @@ async fn test_get_address_asset_transfers_with_data(pool: sqlx::PgPool) {
 #[sqlx::test(migrator = "MIGRATOR")]
 async fn test_get_address_asset_transfers_category_filter(pool: sqlx::PgPool) {
     let lock_hash: [u8; 32] = [0x22; 32];
+    let other_lock_hash: [u8; 32] = [0x33; 32];
     let tx_hash1: [u8; 32] = [0xAA; 32];
     let tx_hash2: [u8; 32] = [0xBB; 32];
     let asset_id: [u8; 32] = [0xCC; 32];
+    let activity_id_1: [u8; 32] = [0x02; 32];
+    let activity_id_2: [u8; 32] = [0x03; 32];
     let now = chrono::Utc::now();
 
     sqlx::query(
         r#"
-        INSERT INTO address_asset_transfers (
-            lock_script_hash, tx_hash, block_number, tx_index, event_index,
-            asset_category, asset_type, asset_id, direction, amount, timestamp
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        INSERT INTO activities (
+            activity_id, activity_type, activity_category, block_number, tx_hash,
+            tx_index, activity_index, from_lock_hash, to_lock_hash, amount, asset_id,
+            metadata, timestamp
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         "#,
     )
-    .bind(&lock_hash[..])
-    .bind(&tx_hash1[..])
+    .bind(&activity_id_1[..])
+    .bind("TOKEN_TRANSFER")
+    .bind("token")
     .bind(1000i64)
+    .bind(&tx_hash1[..])
     .bind(0i32)
     .bind(0i16)
-    .bind("token")
-    .bind("sudt")
+    .bind(&other_lock_hash[..])
+    .bind(&lock_hash[..])
+    .bind(1000000i64)
     .bind(&asset_id[..])
-    .bind(1i16)
-    .bind(Some(1000000i64))
+    .bind(serde_json::json!({}))
     .bind(now)
     .execute(&pool)
     .await
@@ -2315,21 +2326,25 @@ async fn test_get_address_asset_transfers_category_filter(pool: sqlx::PgPool) {
 
     sqlx::query(
         r#"
-        INSERT INTO address_asset_transfers (
-            lock_script_hash, tx_hash, block_number, tx_index, event_index,
-            asset_category, asset_type, asset_id, direction, timestamp
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        INSERT INTO activities (
+            activity_id, activity_type, activity_category, block_number, tx_hash,
+            tx_index, activity_index, from_lock_hash, to_lock_hash, amount, asset_id,
+            metadata, timestamp
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         "#,
     )
-    .bind(&lock_hash[..])
-    .bind(&tx_hash2[..])
+    .bind(&activity_id_2[..])
+    .bind("DOB_TRANSFER")
+    .bind("dob")
     .bind(1001i64)
+    .bind(&tx_hash2[..])
     .bind(0i32)
     .bind(0i16)
-    .bind("dob")
-    .bind("spore")
+    .bind(&other_lock_hash[..])
+    .bind(&lock_hash[..])
+    .bind(1i64)
     .bind(&asset_id[..])
-    .bind(1i16)
+    .bind(serde_json::json!({}))
     .bind(now)
     .execute(&pool)
     .await
@@ -2386,26 +2401,30 @@ async fn test_get_transaction_asset_transfers_with_data(pool: sqlx::PgPool) {
     let lock_hash: [u8; 32] = [0x11; 32];
     let tx_hash: [u8; 32] = [0xDD; 32];
     let asset_id: [u8; 32] = [0xEE; 32];
+    let activity_id: [u8; 32] = [0x04; 32];
     let now = chrono::Utc::now();
 
     sqlx::query(
         r#"
-        INSERT INTO address_asset_transfers (
-            lock_script_hash, tx_hash, block_number, tx_index, event_index,
-            asset_category, asset_type, asset_id, direction, amount, timestamp
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        INSERT INTO activities (
+            activity_id, activity_type, activity_category, block_number, tx_hash,
+            tx_index, activity_index, from_lock_hash, to_lock_hash, amount, asset_id,
+            metadata, timestamp
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         "#,
     )
-    .bind(&lock_hash[..])
-    .bind(&tx_hash[..])
+    .bind(&activity_id[..])
+    .bind("NFT_TRANSFER")
+    .bind("nft")
     .bind(2000i64)
+    .bind(&tx_hash[..])
     .bind(1i32)
     .bind(0i16)
-    .bind("nft")
-    .bind("mnft")
+    .bind(&lock_hash[..])
+    .bind(Option::<Vec<u8>>::None)
+    .bind(1i64)
     .bind(&asset_id[..])
-    .bind(2i16)
-    .bind(Some(1i64))
+    .bind(serde_json::json!({}))
     .bind(now)
     .execute(&pool)
     .await
@@ -2433,7 +2452,7 @@ async fn test_get_transaction_asset_transfers_with_data(pool: sqlx::PgPool) {
     let data = json.as_array().unwrap();
     assert_eq!(data.len(), 1);
     assert_eq!(data[0]["assetCategory"], "nft");
-    assert_eq!(data[0]["assetType"], "mnft");
+    assert_eq!(data[0]["assetType"], "NFT_TRANSFER");
     assert_eq!(data[0]["direction"], "out");
 }
 

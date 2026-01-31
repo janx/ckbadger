@@ -1416,18 +1416,31 @@ async fn get_address_transactions(
     .map_err(|e| ApiError::internal(e.to_string()))?
     .unwrap_or((0,));
 
-    let rows = sqlx::query_as::<_, (Vec<u8>, i64, i16, String, chrono::DateTime<chrono::Utc>)>(
+    // Query activities table for CKB transfers involving this address
+    // Determine direction based on from/to lock hash
+    type ActivityRow = (
+        Vec<u8>,
+        i64,
+        i32,
+        Option<Vec<u8>>,
+        Option<Vec<u8>>,
+        String,
+        chrono::DateTime<chrono::Utc>,
+    );
+    let rows = sqlx::query_as::<_, ActivityRow>(
         r#"
-        SELECT tx_hash, block_number, tx_type, capacity_change::TEXT, timestamp
-        FROM address_transactions
-        WHERE lock_script_hash = $1 AND (block_number, tx_type) < ($2, $3)
-        ORDER BY block_number DESC, tx_type DESC
+        SELECT tx_hash, block_number, tx_index, from_lock_hash, to_lock_hash, amount::TEXT, timestamp
+        FROM activities
+        WHERE activity_category = 'ckb' 
+          AND (from_lock_hash = $1 OR to_lock_hash = $1)
+          AND (block_number, tx_index) < ($2, $3)
+        ORDER BY block_number DESC, tx_index DESC
         LIMIT $4
         "#,
     )
     .bind(&lock_hash)
     .bind(cursor_block)
-    .bind(cursor_idx as i16)
+    .bind(cursor_idx)
     .bind(limit + 1)
     .fetch_all(&state.pool)
     .await
@@ -1438,7 +1451,7 @@ async fn get_address_transactions(
 
     let next_cursor = if has_more {
         rows.last()
-            .map(|(_, block_number, tx_type, _, _)| encode_cursor(*block_number, *tx_type as i32))
+            .map(|(_, block_number, tx_index, _, _, _, _)| encode_cursor(*block_number, *tx_index))
     } else {
         None
     };
@@ -1446,12 +1459,35 @@ async fn get_address_transactions(
     let txs: Vec<AddressTransactionResponse> = rows
         .into_iter()
         .map(
-            |(tx_hash, block_number, tx_type, capacity_change, timestamp)| {
-                let tx_type_str = match tx_type {
-                    1 => "received",
-                    2 => "sent",
-                    3 => "internal",
-                    _ => "unknown",
+            |(
+                tx_hash,
+                block_number,
+                _tx_index,
+                from_lock_hash,
+                to_lock_hash,
+                amount,
+                timestamp,
+            )| {
+                // Determine tx_type based on from/to relationship with lock_hash
+                let is_sender = from_lock_hash
+                    .as_ref()
+                    .map(|h| h == &lock_hash)
+                    .unwrap_or(false);
+                let is_receiver = to_lock_hash
+                    .as_ref()
+                    .map(|h| h == &lock_hash)
+                    .unwrap_or(false);
+                let tx_type_str = match (is_sender, is_receiver) {
+                    (true, true) => "internal", // Self-transfer
+                    (true, false) => "sent",
+                    (false, true) => "received",
+                    (false, false) => "unknown",
+                };
+                // Calculate capacity_change: positive for received, negative for sent
+                let capacity_change = if is_sender && !is_receiver {
+                    format!("-{}", amount)
+                } else {
+                    amount
                 };
                 AddressTransactionResponse {
                     tx_hash: format!("0x{}", hex::encode(&tx_hash)),
@@ -1676,77 +1712,90 @@ async fn get_address_asset_transfers(
     }
 
     #[rustfmt::skip]
-    type AssetTransferRow = (
-        Vec<u8>,    i64,           i32,       i16,            // tx_hash, block_number, tx_index, event_index
-        String,     String,        Option<Vec<u8>>, i16,      // asset_category, asset_type, asset_id, direction
-        Option<Vec<u8>>, Option<String>, Option<String>,      // peer_lock_hash, amount, event_type
-        chrono::DateTime<chrono::Utc>,                        // timestamp
+    type ActivityRow = (
+        Vec<u8>,                       // tx_hash
+        i64,                           // block_number
+        i32,                           // tx_index
+        i16,                           // activity_index
+        String,                        // activity_category
+        String,                        // activity_type
+        Option<Vec<u8>>,               // asset_id
+        Option<Vec<u8>>,               // from_lock_hash
+        Option<Vec<u8>>,               // to_lock_hash
+        String,                        // amount
+        serde_json::Value,             // metadata
+        chrono::DateTime<chrono::Utc>, // timestamp
     );
 
+    let base_condition = "(from_lock_hash = $1 OR to_lock_hash = $1) AND activity_category IN ('token', 'dob', 'nft', 'dao')";
+
     let total: i64 = if let Some(ref cat) = params.category {
-        let row: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM address_asset_transfers WHERE lock_script_hash = $1 AND asset_category = $2",
-        )
-        .bind(&lock_hash)
-        .bind(cat)
-        .fetch_one(&state.pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-        row.0
+        let query = format!(
+            "SELECT COUNT(*) FROM activities WHERE {} AND activity_category = $2",
+            base_condition
+        );
+        sqlx::query_scalar(&query)
+            .bind(&lock_hash)
+            .bind(cat)
+            .fetch_one(&state.pool)
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?
     } else {
-        let row: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM address_asset_transfers WHERE lock_script_hash = $1",
-        )
-        .bind(&lock_hash)
-        .fetch_one(&state.pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-        row.0
+        let query = format!("SELECT COUNT(*) FROM activities WHERE {}", base_condition);
+        sqlx::query_scalar(&query)
+            .bind(&lock_hash)
+            .fetch_one(&state.pool)
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?
     };
 
-    let rows: Vec<AssetTransferRow> = if let Some(ref cat) = params.category {
-        sqlx::query_as(
+    let rows: Vec<ActivityRow> = if let Some(ref cat) = params.category {
+        let query = format!(
             r#"
-            SELECT tx_hash, block_number, tx_index, event_index,
-                   asset_category, asset_type, asset_id, direction,
-                   peer_lock_hash, amount::TEXT, event_type, timestamp
-            FROM address_asset_transfers
-            WHERE lock_script_hash = $1 AND asset_category = $2
-              AND (block_number, tx_index, event_index) < ($3, $4, $5)
-            ORDER BY block_number DESC, tx_index DESC, event_index DESC
+            SELECT tx_hash, block_number, tx_index, activity_index,
+                   activity_category, activity_type, asset_id,
+                   from_lock_hash, to_lock_hash, amount::TEXT, metadata, timestamp
+            FROM activities
+            WHERE {} AND activity_category = $2
+              AND (block_number, tx_index, activity_index) < ($3, $4, $5)
+            ORDER BY block_number DESC, tx_index DESC, activity_index DESC
             LIMIT $6
             "#,
-        )
-        .bind(&lock_hash)
-        .bind(cat)
-        .bind(cursor_block)
-        .bind(cursor_tx_idx)
-        .bind(cursor_evt_idx)
-        .bind(limit + 1)
-        .fetch_all(&state.pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
+            base_condition
+        );
+        sqlx::query_as(&query)
+            .bind(&lock_hash)
+            .bind(cat)
+            .bind(cursor_block)
+            .bind(cursor_tx_idx)
+            .bind(cursor_evt_idx)
+            .bind(limit + 1)
+            .fetch_all(&state.pool)
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?
     } else {
-        sqlx::query_as(
+        let query = format!(
             r#"
-            SELECT tx_hash, block_number, tx_index, event_index,
-                   asset_category, asset_type, asset_id, direction,
-                   peer_lock_hash, amount::TEXT, event_type, timestamp
-            FROM address_asset_transfers
-            WHERE lock_script_hash = $1
-              AND (block_number, tx_index, event_index) < ($2, $3, $4)
-            ORDER BY block_number DESC, tx_index DESC, event_index DESC
+            SELECT tx_hash, block_number, tx_index, activity_index,
+                   activity_category, activity_type, asset_id,
+                   from_lock_hash, to_lock_hash, amount::TEXT, metadata, timestamp
+            FROM activities
+            WHERE {}
+              AND (block_number, tx_index, activity_index) < ($2, $3, $4)
+            ORDER BY block_number DESC, tx_index DESC, activity_index DESC
             LIMIT $5
             "#,
-        )
-        .bind(&lock_hash)
-        .bind(cursor_block)
-        .bind(cursor_tx_idx)
-        .bind(cursor_evt_idx)
-        .bind(limit + 1)
-        .fetch_all(&state.pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
+            base_condition
+        );
+        sqlx::query_as(&query)
+            .bind(&lock_hash)
+            .bind(cursor_block)
+            .bind(cursor_tx_idx)
+            .bind(cursor_evt_idx)
+            .bind(limit + 1)
+            .fetch_all(&state.pool)
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?
     };
 
     let has_more = rows.len() as i64 > limit;
@@ -1754,8 +1803,8 @@ async fn get_address_asset_transfers(
 
     let next_cursor = if has_more {
         rows.last().map(
-            |(_, block_number, tx_index, event_index, _, _, _, _, _, _, _, _)| {
-                encode_timeline_cursor(*block_number, *tx_index, *event_index)
+            |(_, block_number, tx_index, activity_index, _, _, _, _, _, _, _, _)| {
+                encode_timeline_cursor(*block_number, *tx_index, *activity_index)
             },
         )
     } else {
@@ -1799,44 +1848,62 @@ async fn get_address_asset_transfers(
                 tx_hash,
                 block_number,
                 tx_index,
-                event_index,
-                asset_category,
-                asset_type,
+                activity_index,
+                activity_category,
+                activity_type,
                 asset_id,
-                direction,
-                peer_lock_hash,
+                from_lock_hash,
+                to_lock_hash,
                 amount,
-                event_type,
+                metadata,
                 timestamp,
             )| {
-                let direction_str = match direction {
-                    1 => "in",
-                    2 => "out",
+                let is_sender = from_lock_hash
+                    .as_ref()
+                    .map(|h| h == &lock_hash)
+                    .unwrap_or(false);
+                let is_receiver = to_lock_hash
+                    .as_ref()
+                    .map(|h| h == &lock_hash)
+                    .unwrap_or(false);
+
+                let direction_str = match (is_sender, is_receiver) {
+                    (true, false) => "out",
+                    (false, true) => "in",
                     _ => "unknown",
                 };
 
+                let peer_lock_hash = if is_sender {
+                    to_lock_hash
+                } else {
+                    from_lock_hash
+                };
+
+                let event_type = activity_type_to_event_type(&activity_type);
+
                 let (token_name, token_symbol, token_decimals) =
-                    if let (true, Some(id)) = (asset_category == "token", asset_id.as_ref()) {
-                        token_metadata
-                            .get(id)
+                    if activity_category == "token" && asset_id.is_some() {
+                        asset_id
+                            .as_ref()
+                            .and_then(|id| token_metadata.get(id))
                             .map(|(n, s, d)| (n.clone(), s.clone(), Some(*d)))
                             .unwrap_or((None, None, None))
                     } else {
-                        (None, None, None)
+                        extract_token_meta_from_metadata(&metadata)
                     };
 
                 AssetTransferResponse {
                     tx_hash: format!("0x{}", hex::encode(&tx_hash)),
                     block_number,
                     tx_index,
-                    event_index,
-                    asset_category,
-                    asset_type,
+                    event_index: activity_index,
+                    asset_category: activity_category,
+                    asset_type: activity_type,
                     asset_id: asset_id.map(|id| format!("0x{}", hex::encode(&id))),
                     direction: direction_str.to_string(),
                     peer_address: peer_lock_hash.map(|h| format!("0x{}", hex::encode(&h))),
-                    amount,
-                    event_type,
+                    amount: Some(amount),
+                    event_type: Some(event_type),
                     timestamp: timestamp.to_rfc3339(),
                     token_name,
                     token_symbol,
@@ -1852,4 +1919,36 @@ async fn get_address_asset_transfers(
         limit,
         next_cursor,
     ))
+}
+
+fn activity_type_to_event_type(activity_type: &str) -> String {
+    match activity_type {
+        "TOKEN_MINT" | "DOB_MINT" | "NFT_MINT" => "mint".to_string(),
+        "TOKEN_BURN" | "DOB_BURN" => "burn".to_string(),
+        "TOKEN_TRANSFER" | "DOB_TRANSFER" | "NFT_TRANSFER" => "transfer".to_string(),
+        "DAO_DEPOSIT" => "deposit".to_string(),
+        "DAO_WITHDRAW_REQUEST" => "withdraw_request".to_string(),
+        "DAO_WITHDRAW_COMPLETE" => "withdraw_complete".to_string(),
+        _ => activity_type.to_lowercase(),
+    }
+}
+
+fn extract_token_meta_from_metadata(
+    metadata: &serde_json::Value,
+) -> (Option<String>, Option<String>, Option<i16>) {
+    let name = metadata
+        .get("token_name")
+        .or_else(|| metadata.get("name"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let symbol = metadata
+        .get("token_symbol")
+        .or_else(|| metadata.get("symbol"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let decimals = metadata
+        .get("decimals")
+        .and_then(|v| v.as_i64())
+        .map(|d| d as i16);
+    (name, symbol, decimals)
 }

@@ -832,49 +832,6 @@ impl BatchWriter {
         Ok(())
     }
 
-    pub async fn insert_address_transactions_batch(
-        &self,
-        records: &[(Vec<u8>, Vec<u8>, i64, i16, i64, DateTime<Utc>)],
-    ) -> Result<()> {
-        if records.is_empty() {
-            return Ok(());
-        }
-
-        let lock_hashes: Vec<&[u8]> = records
-            .iter()
-            .map(|(l, _, _, _, _, _)| l.as_slice())
-            .collect();
-        let tx_hashes: Vec<&[u8]> = records
-            .iter()
-            .map(|(_, t, _, _, _, _)| t.as_slice())
-            .collect();
-        let block_numbers: Vec<i64> = records.iter().map(|(_, _, b, _, _, _)| *b).collect();
-        let tx_types: Vec<i16> = records.iter().map(|(_, _, _, t, _, _)| *t).collect();
-        let capacity_changes: Vec<i64> = records.iter().map(|(_, _, _, _, c, _)| *c).collect();
-        let timestamps: Vec<DateTime<Utc>> =
-            records.iter().map(|(_, _, _, _, _, ts)| *ts).collect();
-
-        sqlx::query(
-            r#"
-            INSERT INTO address_transactions (
-                lock_script_hash, tx_hash, block_number, tx_type, capacity_change, timestamp
-            )
-            SELECT * FROM UNNEST($1::bytea[], $2::bytea[], $3::bigint[], $4::smallint[], $5::numeric[], $6::timestamptz[])
-            ON CONFLICT (lock_script_hash, block_number, tx_hash) DO NOTHING
-            "#,
-        )
-        .bind(&lock_hashes)
-        .bind(&tx_hashes)
-        .bind(&block_numbers)
-        .bind(&tx_types)
-        .bind(&capacity_changes)
-        .bind(&timestamps)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(())
-    }
-
     pub async fn update_script_usage_batch(
         &self,
         changes: &HashMap<(Vec<u8>, bool), (i64, i64, i64, i64)>,
@@ -1090,14 +1047,6 @@ impl BatchWriter {
             .execute(&self.pool)
             .await?;
 
-        sqlx::query(
-            "DELETE FROM address_transactions WHERE block_number >= $1 AND block_number <= $2",
-        )
-        .bind(start_block)
-        .bind(end_block)
-        .execute(&self.pool)
-        .await?;
-
         sqlx::query("DELETE FROM activities WHERE block_number >= $1 AND block_number <= $2")
             .bind(start_block)
             .bind(end_block)
@@ -1111,12 +1060,6 @@ impl BatchWriter {
         .bind(end_block)
         .execute(&self.pool)
         .await?;
-
-        sqlx::query("DELETE FROM token_transfers WHERE block_number >= $1 AND block_number <= $2")
-            .bind(start_block)
-            .bind(end_block)
-            .execute(&self.pool)
-            .await?;
 
         sqlx::query(
             "DELETE FROM dao_deposits WHERE deposit_block_number >= $1 AND deposit_block_number <= $2",
@@ -2415,7 +2358,7 @@ impl BatchWriter {
         transfer: &ParsedUdtTransfer,
         tx_hash: &[u8],
         block_number: i64,
-        timestamp: DateTime<Utc>,
+        _timestamp: DateTime<Utc>,
     ) -> Result<()> {
         let token_id = self.upsert_token(transfer, block_number, tx_hash).await?;
 
@@ -2451,9 +2394,6 @@ impl BatchWriter {
             )
             .await?;
         }
-
-        self.insert_token_transfer(token_id, transfer, tx_hash, block_number, timestamp)
-            .await?;
 
         Ok(())
     }
@@ -2559,37 +2499,6 @@ impl BatchWriter {
                 }
             }
         }
-
-        Ok(())
-    }
-
-    async fn insert_token_transfer(
-        &self,
-        token_id: i64,
-        transfer: &ParsedUdtTransfer,
-        tx_hash: &[u8],
-        block_number: i64,
-        timestamp: DateTime<Utc>,
-    ) -> Result<()> {
-        sqlx::query(
-            r#"
-            INSERT INTO token_transfers (
-                token_id, tx_hash, block_number, from_lock_hash, to_lock_hash,
-                amount, is_mint, is_burn, timestamp
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-            "#,
-        )
-        .bind(token_id)
-        .bind(tx_hash)
-        .bind(block_number)
-        .bind(transfer.from_lock_hash.as_deref())
-        .bind(&transfer.to_lock_hash)
-        .bind(transfer.amount as i64)
-        .bind(transfer.is_mint)
-        .bind(transfer.is_burn)
-        .bind(timestamp)
-        .execute(&self.pool)
-        .await?;
 
         Ok(())
     }
@@ -2772,47 +2681,6 @@ impl BatchWriter {
         if !balance_changes.is_empty() {
             self.batch_apply_balance_changes(&balance_changes).await?;
         }
-
-        // Step 7: Batch insert token transfers
-        let tr_token_ids: Vec<i64> = transfers
-            .iter()
-            .map(|(t, _, _, _)| token_ids[&t.type_script_hash])
-            .collect();
-        let tr_tx_hashes: Vec<&[u8]> = transfers.iter().map(|(_, h, _, _)| *h).collect();
-        let tr_blocks: Vec<i64> = transfers.iter().map(|(_, _, b, _)| *b).collect();
-        let tr_from: Vec<Option<&[u8]>> = transfers
-            .iter()
-            .map(|(t, _, _, _)| t.from_lock_hash.as_deref())
-            .collect();
-        let tr_to: Vec<&[u8]> = transfers
-            .iter()
-            .map(|(t, _, _, _)| t.to_lock_hash.as_slice())
-            .collect();
-        let tr_amounts: Vec<i64> = transfers
-            .iter()
-            .map(|(t, _, _, _)| t.amount as i64)
-            .collect();
-        let tr_mints: Vec<bool> = transfers.iter().map(|(t, _, _, _)| t.is_mint).collect();
-        let tr_burns: Vec<bool> = transfers.iter().map(|(t, _, _, _)| t.is_burn).collect();
-        let tr_timestamps: Vec<DateTime<Utc>> = transfers.iter().map(|(_, _, _, ts)| *ts).collect();
-
-        sqlx::query(
-            r#"
-            INSERT INTO token_transfers (token_id, tx_hash, block_number, from_lock_hash, to_lock_hash, amount, is_mint, is_burn, timestamp)
-            SELECT * FROM UNNEST($1::bigint[], $2::bytea[], $3::bigint[], $4::bytea[], $5::bytea[], $6::bigint[], $7::bool[], $8::bool[], $9::timestamptz[])
-            "#,
-        )
-        .bind(&tr_token_ids)
-        .bind(&tr_tx_hashes)
-        .bind(&tr_blocks)
-        .bind(&tr_from)
-        .bind(&tr_to)
-        .bind(&tr_amounts)
-        .bind(&tr_mints)
-        .bind(&tr_burns)
-        .bind(&tr_timestamps)
-        .execute(&self.pool)
-        .await?;
 
         Ok(())
     }
@@ -3979,26 +3847,6 @@ impl BatchWriter {
             .execute(&mut *tx)
             .await?;
 
-        sqlx::query("DELETE FROM address_transactions WHERE block_number >= $1")
-            .bind(rollback_from)
-            .execute(&mut *tx)
-            .await?;
-
-        sqlx::query("DELETE FROM address_asset_transfers WHERE block_number >= $1")
-            .bind(rollback_from)
-            .execute(&mut *tx)
-            .await?;
-
-        sqlx::query("DELETE FROM dob_transfers WHERE block_number >= $1")
-            .bind(rollback_from)
-            .execute(&mut *tx)
-            .await?;
-
-        sqlx::query("DELETE FROM nft_transfers WHERE block_number >= $1")
-            .bind(rollback_from)
-            .execute(&mut *tx)
-            .await?;
-
         sqlx::query("DELETE FROM activities WHERE block_number >= $1")
             .bind(rollback_from)
             .execute(&mut *tx)
@@ -4132,148 +3980,9 @@ impl BatchWriter {
 
     async fn rollback_token_statistics(
         &self,
-        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-        rollback_from: i64,
+        _tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        _rollback_from: i64,
     ) -> Result<()> {
-        let affected_tokens: Vec<(i64,)> = sqlx::query_as(
-            "SELECT DISTINCT token_id FROM token_transfers WHERE block_number >= $1",
-        )
-        .bind(rollback_from)
-        .fetch_all(&mut **tx)
-        .await?;
-
-        if affected_tokens.is_empty() {
-            sqlx::query("DELETE FROM token_transfers WHERE block_number >= $1")
-                .bind(rollback_from)
-                .execute(&mut **tx)
-                .await?;
-            return Ok(());
-        }
-
-        let token_ids: Vec<i64> = affected_tokens.into_iter().map(|(id,)| id).collect();
-
-        for &token_id in &token_ids {
-            let supply_delta: (Option<String>, Option<String>) = sqlx::query_as(
-                r#"
-                SELECT 
-                    SUM(CASE WHEN is_mint THEN amount ELSE 0 END)::text,
-                    SUM(CASE WHEN is_burn THEN amount ELSE 0 END)::text
-                FROM token_transfers 
-                WHERE token_id = $1 AND block_number >= $2
-                "#,
-            )
-            .bind(token_id)
-            .bind(rollback_from)
-            .fetch_one(&mut **tx)
-            .await?;
-
-            let minted: i128 = supply_delta.0.unwrap_or_default().parse().unwrap_or(0);
-            let burned: i128 = supply_delta.1.unwrap_or_default().parse().unwrap_or(0);
-            let net_supply_change = minted - burned;
-
-            if net_supply_change != 0 {
-                sqlx::query(
-                    r#"
-                    UPDATE tokens SET 
-                        total_supply = GREATEST(total_supply - $1::numeric, 0)
-                    WHERE id = $2
-                    "#,
-                )
-                .bind(net_supply_change.to_string())
-                .bind(token_id)
-                .execute(&mut **tx)
-                .await?;
-            }
-
-            let transfers_to_remove: i64 = sqlx::query_scalar(
-                "SELECT COUNT(*) FROM token_transfers WHERE token_id = $1 AND block_number >= $2",
-            )
-            .bind(token_id)
-            .bind(rollback_from)
-            .fetch_one(&mut **tx)
-            .await?;
-
-            sqlx::query(
-                r#"
-                UPDATE tokens SET 
-                    transfers_count = GREATEST(transfers_count - $1, 0)
-                WHERE id = $2
-                "#,
-            )
-            .bind(transfers_to_remove)
-            .bind(token_id)
-            .execute(&mut **tx)
-            .await?;
-        }
-
-        sqlx::query("DELETE FROM token_transfers WHERE block_number >= $1")
-            .bind(rollback_from)
-            .execute(&mut **tx)
-            .await?;
-
-        for &token_id in &token_ids {
-            sqlx::query("DELETE FROM token_balances WHERE token_id = $1")
-                .bind(token_id)
-                .execute(&mut **tx)
-                .await?;
-
-            sqlx::query(
-                r#"
-                INSERT INTO token_balances (token_id, lock_script_hash, balance, first_tx, last_tx)
-                SELECT 
-                    b.token_id,
-                    b.lock_hash,
-                    b.balance,
-                    first_t.tx_hash as first_tx,
-                    last_t.tx_hash as last_tx
-                FROM (
-                    SELECT 
-                        token_id,
-                        lock_hash,
-                        SUM(amount) as balance,
-                        MIN(block_number) as first_block,
-                        MAX(block_number) as last_block
-                    FROM (
-                        SELECT token_id, to_lock_hash as lock_hash, amount, block_number
-                        FROM token_transfers WHERE token_id = $1
-                        UNION ALL
-                        SELECT token_id, from_lock_hash as lock_hash, -amount, block_number
-                        FROM token_transfers WHERE token_id = $1 AND from_lock_hash IS NOT NULL
-                    ) movements
-                    GROUP BY token_id, lock_hash
-                    HAVING SUM(amount) > 0
-                ) b
-                JOIN LATERAL (
-                    SELECT tx_hash FROM token_transfers 
-                    WHERE token_id = b.token_id 
-                      AND (to_lock_hash = b.lock_hash OR from_lock_hash = b.lock_hash)
-                    ORDER BY block_number ASC, id ASC LIMIT 1
-                ) first_t ON true
-                JOIN LATERAL (
-                    SELECT tx_hash FROM token_transfers 
-                    WHERE token_id = b.token_id 
-                      AND (to_lock_hash = b.lock_hash OR from_lock_hash = b.lock_hash)
-                    ORDER BY block_number DESC, id DESC LIMIT 1
-                ) last_t ON true
-                "#,
-            )
-            .bind(token_id)
-            .execute(&mut **tx)
-            .await?;
-
-            let holders: i64 =
-                sqlx::query_scalar("SELECT COUNT(*) FROM token_balances WHERE token_id = $1")
-                    .bind(token_id)
-                    .fetch_one(&mut **tx)
-                    .await?;
-
-            sqlx::query("UPDATE tokens SET holders_count = $1 WHERE id = $2")
-                .bind(holders as i32)
-                .bind(token_id)
-                .execute(&mut **tx)
-                .await?;
-        }
-
         Ok(())
     }
 
@@ -4817,184 +4526,6 @@ impl BatchWriter {
         .await?;
 
         Ok(result.map(|(id,)| id))
-    }
-
-    pub async fn insert_dob_transfer(
-        &self,
-        dob_id: &[u8],
-        cluster_id: Option<&[u8]>,
-        dob_type: &str,
-        tx_hash: &[u8],
-        block_number: i64,
-        from_lock_hash: Option<&[u8]>,
-        to_lock_hash: &[u8],
-        event_type: &str,
-        content_type: Option<&str>,
-        timestamp: DateTime<Utc>,
-    ) -> Result<()> {
-        sqlx::query(
-            r#"
-            INSERT INTO dob_transfers (
-                dob_id, cluster_id, dob_type, tx_hash, block_number,
-                from_lock_hash, to_lock_hash, event_type, content_type, timestamp
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-            "#,
-        )
-        .bind(dob_id)
-        .bind(cluster_id)
-        .bind(dob_type)
-        .bind(tx_hash)
-        .bind(block_number)
-        .bind(from_lock_hash)
-        .bind(to_lock_hash)
-        .bind(event_type)
-        .bind(content_type)
-        .bind(timestamp)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(())
-    }
-
-    pub async fn insert_nft_transfer(
-        &self,
-        nft_id: &[u8],
-        nft_type: &str,
-        issuer_id: Option<&[u8]>,
-        class_id: Option<&[u8]>,
-        tx_hash: &[u8],
-        block_number: i64,
-        from_lock_hash: Option<&[u8]>,
-        to_lock_hash: &[u8],
-        event_type: &str,
-        name: Option<&str>,
-        timestamp: DateTime<Utc>,
-    ) -> Result<()> {
-        sqlx::query(
-            r#"
-            INSERT INTO nft_transfers (
-                nft_id, nft_type, issuer_id, class_id, tx_hash, block_number,
-                from_lock_hash, to_lock_hash, event_type, name, timestamp
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-            "#,
-        )
-        .bind(nft_id)
-        .bind(nft_type)
-        .bind(issuer_id)
-        .bind(class_id)
-        .bind(tx_hash)
-        .bind(block_number)
-        .bind(from_lock_hash)
-        .bind(to_lock_hash)
-        .bind(event_type)
-        .bind(name)
-        .bind(timestamp)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(())
-    }
-
-    pub async fn insert_address_asset_transfers_batch(
-        &self,
-        records: &[(
-            Vec<u8>,         // lock_script_hash
-            Vec<u8>,         // tx_hash
-            i64,             // block_number
-            i32,             // tx_index
-            i16,             // event_index
-            String,          // asset_category
-            String,          // asset_type
-            Option<Vec<u8>>, // asset_id
-            i16,             // direction (1=in, 2=out)
-            Option<Vec<u8>>, // peer_lock_hash
-            Option<String>,  // amount (as string for NUMERIC)
-            Option<String>,  // event_type
-            DateTime<Utc>,   // timestamp
-        )],
-    ) -> Result<()> {
-        if records.is_empty() {
-            return Ok(());
-        }
-
-        let lock_hashes: Vec<&[u8]> = records.iter().map(|r| r.0.as_slice()).collect();
-        let tx_hashes: Vec<&[u8]> = records.iter().map(|r| r.1.as_slice()).collect();
-        let block_numbers: Vec<i64> = records.iter().map(|r| r.2).collect();
-        let tx_indexes: Vec<i32> = records.iter().map(|r| r.3).collect();
-        let event_indexes: Vec<i16> = records.iter().map(|r| r.4).collect();
-        let asset_categories: Vec<&str> = records.iter().map(|r| r.5.as_str()).collect();
-        let asset_types: Vec<&str> = records.iter().map(|r| r.6.as_str()).collect();
-        let asset_ids: Vec<Option<&[u8]>> = records.iter().map(|r| r.7.as_deref()).collect();
-        let directions: Vec<i16> = records.iter().map(|r| r.8).collect();
-        let peer_lock_hashes: Vec<Option<&[u8]>> = records.iter().map(|r| r.9.as_deref()).collect();
-        let amounts: Vec<Option<&str>> = records.iter().map(|r| r.10.as_deref()).collect();
-        let event_types: Vec<Option<&str>> = records.iter().map(|r| r.11.as_deref()).collect();
-        let timestamps: Vec<DateTime<Utc>> = records.iter().map(|r| r.12).collect();
-
-        sqlx::query(
-            r#"
-            INSERT INTO address_asset_transfers (
-                lock_script_hash, tx_hash, block_number, tx_index, event_index,
-                asset_category, asset_type, asset_id, direction, peer_lock_hash,
-                amount, event_type, timestamp
-            )
-            SELECT * FROM UNNEST(
-                $1::bytea[], $2::bytea[], $3::bigint[], $4::int[], $5::smallint[],
-                $6::text[], $7::text[], $8::bytea[], $9::smallint[], $10::bytea[],
-                $11::numeric[], $12::text[], $13::timestamptz[]
-            )
-            "#,
-        )
-        .bind(&lock_hashes)
-        .bind(&tx_hashes)
-        .bind(&block_numbers)
-        .bind(&tx_indexes)
-        .bind(&event_indexes)
-        .bind(&asset_categories)
-        .bind(&asset_types)
-        .bind(&asset_ids)
-        .bind(&directions)
-        .bind(&peer_lock_hashes)
-        .bind(&amounts)
-        .bind(&event_types)
-        .bind(&timestamps)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(())
-    }
-
-    pub async fn get_spore_owner_by_id(&self, spore_id: &[u8]) -> Result<Option<Vec<u8>>> {
-        let result = sqlx::query_as::<_, (Vec<u8>,)>(
-            "SELECT owner_lock_hash FROM spore_cells WHERE spore_id = $1",
-        )
-        .bind(spore_id)
-        .fetch_optional(&self.pool)
-        .await?;
-
-        Ok(result.map(|(hash,)| hash))
-    }
-
-    pub async fn get_mnft_token_owner_by_id(&self, token_id: &[u8]) -> Result<Option<Vec<u8>>> {
-        let result = sqlx::query_as::<_, (Vec<u8>,)>(
-            "SELECT owner_lock_hash FROM mnft_tokens WHERE token_id = $1",
-        )
-        .bind(token_id)
-        .fetch_optional(&self.pool)
-        .await?;
-
-        Ok(result.map(|(hash,)| hash))
-    }
-
-    pub async fn get_dotbit_owner_by_id(&self, account_id: &[u8]) -> Result<Option<Vec<u8>>> {
-        let result = sqlx::query_as::<_, (Vec<u8>,)>(
-            "SELECT owner_lock_hash FROM dotbit_accounts WHERE account_id = $1",
-        )
-        .bind(account_id)
-        .fetch_optional(&self.pool)
-        .await?;
-
-        Ok(result.map(|(hash,)| hash))
     }
 
     pub async fn rebuild_all_statistics(&self) -> Result<()> {

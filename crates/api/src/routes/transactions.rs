@@ -1147,21 +1147,29 @@ async fn get_transaction_asset_transfers(
         .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
 
     #[rustfmt::skip]
-    type AssetTransferRow = (
-        Vec<u8>,    i64,           i32,       i16,            // tx_hash, block_number, tx_index, event_index
-        String,     String,        Option<Vec<u8>>, i16,      // asset_category, asset_type, asset_id, direction
-        Option<Vec<u8>>, Option<String>, Option<String>,      // peer_lock_hash, amount, event_type
-        chrono::DateTime<chrono::Utc>,                        // timestamp
+    type ActivityRow = (
+        Vec<u8>,                       // tx_hash
+        i64,                           // block_number
+        i32,                           // tx_index
+        i16,                           // activity_index
+        String,                        // activity_category
+        String,                        // activity_type
+        Option<Vec<u8>>,               // asset_id
+        Option<Vec<u8>>,               // from_lock_hash
+        Option<Vec<u8>>,               // to_lock_hash
+        String,                        // amount
+        serde_json::Value,             // metadata
+        chrono::DateTime<chrono::Utc>, // timestamp
     );
 
-    let rows: Vec<AssetTransferRow> = sqlx::query_as(
+    let rows: Vec<ActivityRow> = sqlx::query_as(
         r#"
-        SELECT tx_hash, block_number, tx_index, event_index,
-               asset_category, asset_type, asset_id, direction,
-               peer_lock_hash, amount::TEXT, event_type, timestamp
-        FROM address_asset_transfers
-        WHERE tx_hash = $1
-        ORDER BY event_index ASC
+        SELECT tx_hash, block_number, tx_index, activity_index,
+               activity_category, activity_type, asset_id,
+               from_lock_hash, to_lock_hash, amount::TEXT, metadata, timestamp
+        FROM activities
+        WHERE tx_hash = $1 AND activity_category IN ('token', 'dob', 'nft', 'dao')
+        ORDER BY activity_index ASC
         "#,
     )
     .bind(&hash_bytes)
@@ -1207,44 +1215,63 @@ async fn get_transaction_asset_transfers(
                 tx_hash,
                 block_number,
                 tx_index,
-                event_index,
-                asset_category,
-                asset_type,
+                activity_index,
+                activity_category,
+                activity_type,
                 asset_id,
-                direction,
-                peer_lock_hash,
+                from_lock_hash,
+                to_lock_hash,
                 amount,
-                event_type,
+                metadata,
                 timestamp,
             )| {
-                let direction_str = match direction {
-                    1 => "in",
-                    2 => "out",
-                    _ => "unknown",
+                let direction_str = if from_lock_hash.is_some() && to_lock_hash.is_none() {
+                    "out"
+                } else if from_lock_hash.is_none() && to_lock_hash.is_some() {
+                    "in"
+                } else {
+                    "transfer"
+                };
+
+                let peer_lock_hash = if from_lock_hash.is_some() {
+                    to_lock_hash
+                } else {
+                    from_lock_hash
+                };
+
+                let event_type = match activity_type.as_str() {
+                    "TOKEN_MINT" | "DOB_MINT" | "NFT_MINT" => "mint",
+                    "TOKEN_BURN" | "DOB_BURN" => "burn",
+                    "TOKEN_TRANSFER" | "DOB_TRANSFER" | "NFT_TRANSFER" => "transfer",
+                    "DAO_DEPOSIT" => "deposit",
+                    "DAO_WITHDRAW_REQUEST" => "withdraw_request",
+                    "DAO_WITHDRAW_COMPLETE" => "withdraw_complete",
+                    _ => &activity_type.to_lowercase(),
                 };
 
                 let (token_name, token_symbol, token_decimals) =
-                    if let (true, Some(id)) = (asset_category == "token", asset_id.as_ref()) {
-                        token_metadata
-                            .get(id)
+                    if activity_category == "token" && asset_id.is_some() {
+                        asset_id
+                            .as_ref()
+                            .and_then(|id| token_metadata.get(id))
                             .map(|(n, s, d)| (n.clone(), s.clone(), Some(*d)))
-                            .unwrap_or((None, None, None))
+                            .unwrap_or_else(|| extract_token_meta(&metadata))
                     } else {
-                        (None, None, None)
+                        extract_token_meta(&metadata)
                     };
 
                 TxAssetTransferResponse {
                     tx_hash: format!("0x{}", hex::encode(&tx_hash)),
                     block_number,
                     tx_index,
-                    event_index,
-                    asset_category,
-                    asset_type,
+                    event_index: activity_index,
+                    asset_category: activity_category,
+                    asset_type: activity_type,
                     asset_id: asset_id.map(|id| format!("0x{}", hex::encode(&id))),
                     direction: direction_str.to_string(),
                     peer_address: peer_lock_hash.map(|h| format!("0x{}", hex::encode(&h))),
-                    amount,
-                    event_type,
+                    amount: Some(amount),
+                    event_type: Some(event_type.to_string()),
                     timestamp: timestamp.to_rfc3339(),
                     token_name,
                     token_symbol,
@@ -1255,6 +1282,26 @@ async fn get_transaction_asset_transfers(
         .collect();
 
     ok(transfers)
+}
+
+fn extract_token_meta(
+    metadata: &serde_json::Value,
+) -> (Option<String>, Option<String>, Option<i16>) {
+    let name = metadata
+        .get("token_name")
+        .or_else(|| metadata.get("name"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let symbol = metadata
+        .get("token_symbol")
+        .or_else(|| metadata.get("symbol"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let decimals = metadata
+        .get("decimals")
+        .and_then(|v| v.as_i64())
+        .map(|d| d as i16);
+    (name, symbol, decimals)
 }
 
 async fn get_tx_activities(

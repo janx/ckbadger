@@ -211,56 +211,6 @@ async fn test_cleanup_batch_range_cleans_cells(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
-async fn test_cleanup_batch_range_cleans_address_transactions(pool: PgPool) {
-    let writer = BatchWriter::new(pool.clone());
-
-    let lock_hash = vec![0xAAu8; 32];
-    let tx1 = vec![0x01u8; 32];
-    let tx2 = vec![0x02u8; 32];
-    let timestamp = Utc::now();
-
-    sqlx::query(
-        "INSERT INTO address_transactions (lock_script_hash, tx_hash, block_number, tx_type, capacity_change, timestamp) VALUES ($1, $2, $3, $4, $5, $6)",
-    )
-    .bind(&lock_hash)
-    .bind(&tx1)
-    .bind(100i64)
-    .bind(0i16)
-    .bind(100_00000000i64)
-    .bind(timestamp)
-    .execute(&pool)
-    .await
-    .unwrap();
-
-    sqlx::query(
-        "INSERT INTO address_transactions (lock_script_hash, tx_hash, block_number, tx_type, capacity_change, timestamp) VALUES ($1, $2, $3, $4, $5, $6)",
-    )
-    .bind(&lock_hash)
-    .bind(&tx2)
-    .bind(101i64)
-    .bind(0i16)
-    .bind(200_00000000i64)
-    .bind(timestamp)
-    .execute(&pool)
-    .await
-    .unwrap();
-
-    let count_before: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM address_transactions")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    assert_eq!(count_before.0, 2);
-
-    writer.cleanup_batch_range(101, 102).await.unwrap();
-
-    let count_after: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM address_transactions")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    assert_eq!(count_after.0, 1);
-}
-
-#[sqlx::test(migrator = "MIGRATOR")]
 async fn test_cleanup_batch_range_preserves_earlier_data(pool: PgPool) {
     let writer = BatchWriter::new(pool.clone());
 

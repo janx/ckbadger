@@ -2367,8 +2367,6 @@ impl Indexer {
 
         let mut address_balance_changes: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, Vec<u8>)> =
             HashMap::new();
-        let mut address_tx_records: Vec<(Vec<u8>, Vec<u8>, i64, i16, i64, chrono::DateTime<Utc>)> =
-            Vec::new();
 
         for tx_data in &all_tx_data {
             let mut tx_balance_changes: HashMap<Vec<u8>, i64> = HashMap::new();
@@ -2412,12 +2410,6 @@ impl Indexer {
                 let cells_created = tx_cells_created.get(&lock_hash).copied().unwrap_or(0);
                 let cells_consumed = tx_cells_consumed.get(&lock_hash).copied().unwrap_or(0);
 
-                let tx_type: i16 = match balance_change.cmp(&0) {
-                    std::cmp::Ordering::Greater => 1,
-                    std::cmp::Ordering::Less => 2,
-                    std::cmp::Ordering::Equal => 3,
-                };
-
                 let entry = address_balance_changes.entry(lock_hash.clone()).or_insert((
                     0,
                     0,
@@ -2432,15 +2424,6 @@ impl Indexer {
                 entry.3 += 1;
                 entry.4 = tx_data.block_number;
                 entry.5 = tx_data.hash.clone();
-
-                address_tx_records.push((
-                    lock_hash.clone(),
-                    tx_data.hash.clone(),
-                    tx_data.block_number,
-                    tx_type,
-                    balance_change,
-                    tx_data.timestamp,
-                ));
             }
         }
 
@@ -2543,66 +2526,26 @@ impl Indexer {
             }
         }
 
-        // Use COPY for address_transactions in bulk sync mode (5-10x faster)
-        if self.should_use_copy() && !address_tx_records.is_empty() {
-            let copy_router = self.copy_router.as_ref().unwrap();
-            tokio::try_join!(
-                async {
-                    if !changes_ref.is_empty() {
-                        self.writer
-                            .update_address_balances_batch(&changes_ref)
-                            .await
-                    } else {
-                        Ok(())
-                    }
-                },
-                async {
-                    copy_router
-                        .copy_address_transactions_parallel(&address_tx_records)
+        tokio::try_join!(
+            async {
+                if !changes_ref.is_empty() {
+                    self.writer
+                        .update_address_balances_batch(&changes_ref)
                         .await
-                        .map(|_| ())
-                },
-                async {
-                    if !script_usage_changes.is_empty() {
-                        self.writer
-                            .update_script_usage_batch(&script_usage_changes)
-                            .await
-                    } else {
-                        Ok(())
-                    }
+                } else {
+                    Ok(())
                 }
-            )?;
-        } else {
-            tokio::try_join!(
-                async {
-                    if !changes_ref.is_empty() {
-                        self.writer
-                            .update_address_balances_batch(&changes_ref)
-                            .await
-                    } else {
-                        Ok(())
-                    }
-                },
-                async {
-                    if !address_tx_records.is_empty() {
-                        self.writer
-                            .insert_address_transactions_batch(&address_tx_records)
-                            .await
-                    } else {
-                        Ok(())
-                    }
-                },
-                async {
-                    if !script_usage_changes.is_empty() {
-                        self.writer
-                            .update_script_usage_batch(&script_usage_changes)
-                            .await
-                    } else {
-                        Ok(())
-                    }
+            },
+            async {
+                if !script_usage_changes.is_empty() {
+                    self.writer
+                        .update_script_usage_batch(&script_usage_changes)
+                        .await
+                } else {
+                    Ok(())
                 }
-            )?;
-        }
+            }
+        )?;
 
         let mut batch_stats = BatchStats::default();
         let mut prev_timestamp: Option<chrono::DateTime<Utc>> =
@@ -2836,7 +2779,6 @@ impl Indexer {
         struct UdtTxContext {
             tx_hash: Vec<u8>,
             block_number: i64,
-            tx_index: i32,
             timestamp: chrono::DateTime<Utc>,
             output_udts: Vec<crate::parser::ParsedUdtCell>,
             input_outpoints: Vec<(Vec<u8>, i16)>,
@@ -2853,7 +2795,6 @@ impl Indexer {
         struct TxInfoForUdt {
             tx_hash: Vec<u8>,
             block_number: i64,
-            tx_index: i32,
             timestamp: chrono::DateTime<Utc>,
             output_udts: Vec<crate::parser::ParsedUdtCell>,
             input_outpoints: Vec<(Vec<u8>, i16)>,
@@ -2894,7 +2835,6 @@ impl Indexer {
                 all_tx_infos_for_udt.push(TxInfoForUdt {
                     tx_hash: tx_data.hash.clone(),
                     block_number: parsed.number,
-                    tx_index: tx_idx as i32,
                     timestamp: parsed.timestamp,
                     output_udts,
                     input_outpoints,
@@ -2932,7 +2872,6 @@ impl Indexer {
                 udt_tx_contexts.push(UdtTxContext {
                     tx_hash: tx_info.tx_hash,
                     block_number: tx_info.block_number,
-                    tx_index: tx_info.tx_index,
                     timestamp: tx_info.timestamp,
                     output_udts: tx_info.output_udts,
                     input_outpoints: tx_info.input_outpoints,
@@ -3053,81 +2992,6 @@ impl Indexer {
                 self.writer
                     .process_udt_transfers_batch(&transfer_refs)
                     .await?;
-
-                // Build O(1) lookup map for tx_hash -> tx_index (avoids O(n*m) linear search)
-                let tx_index_map: std::collections::HashMap<&[u8], i32> = udt_tx_contexts
-                    .iter()
-                    .map(|ctx| (ctx.tx_hash.as_slice(), ctx.tx_index))
-                    .collect();
-
-                let mut address_asset_records: Vec<(
-                    Vec<u8>,         // lock_script_hash
-                    Vec<u8>,         // tx_hash
-                    i64,             // block_number
-                    i32,             // tx_index
-                    i16,             // event_index
-                    String,          // asset_category
-                    String,          // asset_type
-                    Option<Vec<u8>>, // asset_id
-                    i16,             // direction
-                    Option<Vec<u8>>, // peer_lock_hash
-                    Option<String>,  // amount
-                    Option<String>,  // event_type
-                    DateTime<Utc>,   // timestamp
-                )> = Vec::with_capacity(all_transfers.len() * 2);
-
-                for (idx, (transfer, tx_hash, block_number, timestamp)) in
-                    all_transfers.iter().enumerate()
-                {
-                    let tx_index = tx_index_map.get(tx_hash.as_slice()).copied().unwrap_or(0);
-
-                    let standard_str = match transfer.standard {
-                        crate::parser::UdtStandard::Sudt => "sudt",
-                        crate::parser::UdtStandard::Xudt => "xudt",
-                    };
-
-                    if let Some(ref from_lock) = transfer.from_lock_hash {
-                        address_asset_records.push((
-                            from_lock.clone(),
-                            tx_hash.clone(),
-                            *block_number,
-                            tx_index,
-                            (idx * 2) as i16,
-                            "token".to_string(),
-                            standard_str.to_string(),
-                            Some(transfer.type_script_hash.clone()),
-                            2, // out
-                            Some(transfer.to_lock_hash.clone()),
-                            Some(transfer.amount.to_string()),
-                            None,
-                            *timestamp,
-                        ));
-                    }
-
-                    if !transfer.to_lock_hash.is_empty() {
-                        address_asset_records.push((
-                            transfer.to_lock_hash.clone(),
-                            tx_hash.clone(),
-                            *block_number,
-                            tx_index,
-                            (idx * 2 + 1) as i16,
-                            "token".to_string(),
-                            standard_str.to_string(),
-                            Some(transfer.type_script_hash.clone()),
-                            1, // in
-                            transfer.from_lock_hash.clone(),
-                            Some(transfer.amount.to_string()),
-                            None,
-                            *timestamp,
-                        ));
-                    }
-                }
-
-                if !address_asset_records.is_empty() {
-                    self.writer
-                        .insert_address_asset_transfers_batch(&address_asset_records)
-                        .await?;
-                }
             }
 
             if !consumed_udt_outpoints.is_empty() {
@@ -3159,42 +3023,6 @@ impl Indexer {
         let mut batch_mnft_token_ids: HashSet<Vec<u8>> = HashSet::new();
         let mut batch_dotbit_account_ids: HashSet<Vec<u8>> = HashSet::new();
 
-        struct NewSporeInfo {
-            spore_id: Vec<u8>,
-            owner_lock_hash: Vec<u8>,
-            cluster_id: Option<Vec<u8>>,
-            content_type: String,
-            tx_hash: Vec<u8>,
-            block_number: i64,
-            tx_index: i32,
-            timestamp: DateTime<Utc>,
-        }
-        let mut new_spores: Vec<NewSporeInfo> = Vec::new();
-
-        struct NewMnftInfo {
-            token_id: Vec<u8>,
-            owner_lock_hash: Vec<u8>,
-            class_id: Vec<u8>,
-            issuer_id: Vec<u8>,
-            name: Option<String>,
-            tx_hash: Vec<u8>,
-            block_number: i64,
-            tx_index: i32,
-            timestamp: DateTime<Utc>,
-        }
-        let mut new_mnft_tokens: Vec<NewMnftInfo> = Vec::new();
-
-        struct NewDotbitInfo {
-            account_id: Vec<u8>,
-            owner_lock_hash: Vec<u8>,
-            account_name: String,
-            tx_hash: Vec<u8>,
-            block_number: i64,
-            tx_index: i32,
-            timestamp: DateTime<Utc>,
-        }
-        let mut new_dotbit_accounts: Vec<NewDotbitInfo> = Vec::new();
-
         let mut block_tx_idx = 0usize;
         for (block_idx, block_response) in blocks.iter().enumerate() {
             let parsed = &all_parsed_blocks[block_idx];
@@ -3213,16 +3041,6 @@ impl Indexer {
 
                 for (output_index, spore) in SporeParser::parse_spores(tx).iter().enumerate() {
                     batch_spore_ids.insert(spore.spore_id.clone());
-                    new_spores.push(NewSporeInfo {
-                        spore_id: spore.spore_id.clone(),
-                        owner_lock_hash: spore.owner_lock_hash.clone(),
-                        cluster_id: spore.cluster_id.clone(),
-                        content_type: spore.content_type.clone(),
-                        tx_hash: tx_data.hash.clone(),
-                        block_number: parsed.number,
-                        tx_index: tx_idx as i32,
-                        timestamp: parsed.timestamp,
-                    });
                     self.writer
                         .insert_spore_cell(spore, &tx_data.hash, output_index as i16, parsed.number)
                         .await?;
@@ -3246,17 +3064,6 @@ impl Indexer {
 
                 for (output_index, token) in MnftParser::parse_tokens(tx).iter().enumerate() {
                     batch_mnft_token_ids.insert(token.token_id.clone());
-                    new_mnft_tokens.push(NewMnftInfo {
-                        token_id: token.token_id.clone(),
-                        owner_lock_hash: token.owner_lock_hash.clone(),
-                        class_id: token.class_id.clone(),
-                        issuer_id: token.class_id[0..20].to_vec(),
-                        name: None,
-                        tx_hash: tx_data.hash.clone(),
-                        block_number: parsed.number,
-                        tx_index: tx_idx as i32,
-                        timestamp: parsed.timestamp,
-                    });
                     self.writer
                         .insert_mnft_token(token, &tx_data.hash, output_index as i16, parsed.number)
                         .await?;
@@ -3264,15 +3071,6 @@ impl Indexer {
 
                 for (output_index, account) in DotbitParser::parse_accounts(tx).iter().enumerate() {
                     batch_dotbit_account_ids.insert(account.account_id.clone());
-                    new_dotbit_accounts.push(NewDotbitInfo {
-                        account_id: account.account_id.clone(),
-                        owner_lock_hash: account.owner_lock_hash.clone(),
-                        account_name: format!("0x{}", hex::encode(&account.account_id)),
-                        tx_hash: tx_data.hash.clone(),
-                        block_number: parsed.number,
-                        tx_index: tx_idx as i32,
-                        timestamp: parsed.timestamp,
-                    });
                     self.writer
                         .insert_dotbit_account(
                             account,
@@ -3356,273 +3154,6 @@ impl Indexer {
                     }
                 }
             }
-        }
-
-        let mut dob_address_records: Vec<(
-            Vec<u8>,
-            Vec<u8>,
-            i64,
-            i32,
-            i16,
-            String,
-            String,
-            Option<Vec<u8>>,
-            i16,
-            Option<Vec<u8>>,
-            Option<String>,
-            Option<String>,
-            DateTime<Utc>,
-        )> = Vec::new();
-
-        let skip_nft_transfer_tracking = self.is_bulk_sync_active();
-
-        for spore_info in &new_spores {
-            let prev_owner = if skip_nft_transfer_tracking {
-                None
-            } else {
-                self.writer
-                    .get_spore_owner_by_id(&spore_info.spore_id)
-                    .await?
-            };
-
-            let is_mint = prev_owner.is_none()
-                || prev_owner
-                    .as_ref()
-                    .map(|o| o == &spore_info.owner_lock_hash)
-                    .unwrap_or(false);
-
-            let dob_type = if spore_info.content_type.starts_with("dob/") {
-                &spore_info.content_type
-            } else {
-                "spore"
-            };
-
-            let event_type = if is_mint { "mint" } else { "transfer" };
-
-            self.writer
-                .insert_dob_transfer(
-                    &spore_info.spore_id,
-                    spore_info.cluster_id.as_deref(),
-                    dob_type,
-                    &spore_info.tx_hash,
-                    spore_info.block_number,
-                    prev_owner.as_deref(),
-                    &spore_info.owner_lock_hash,
-                    event_type,
-                    Some(&spore_info.content_type),
-                    spore_info.timestamp,
-                )
-                .await?;
-
-            if let Some(ref from_lock) = prev_owner {
-                if from_lock != &spore_info.owner_lock_hash {
-                    dob_address_records.push((
-                        from_lock.clone(),
-                        spore_info.tx_hash.clone(),
-                        spore_info.block_number,
-                        spore_info.tx_index,
-                        0,
-                        "dob".to_string(),
-                        dob_type.to_string(),
-                        Some(spore_info.spore_id.clone()),
-                        2,
-                        Some(spore_info.owner_lock_hash.clone()),
-                        Some("1".to_string()),
-                        None,
-                        spore_info.timestamp,
-                    ));
-                }
-            }
-
-            dob_address_records.push((
-                spore_info.owner_lock_hash.clone(),
-                spore_info.tx_hash.clone(),
-                spore_info.block_number,
-                spore_info.tx_index,
-                1,
-                "dob".to_string(),
-                dob_type.to_string(),
-                Some(spore_info.spore_id.clone()),
-                1,
-                prev_owner.clone(),
-                Some("1".to_string()),
-                if is_mint {
-                    Some("mint".to_string())
-                } else {
-                    None
-                },
-                spore_info.timestamp,
-            ));
-        }
-
-        let mut nft_address_records: Vec<(
-            Vec<u8>,
-            Vec<u8>,
-            i64,
-            i32,
-            i16,
-            String,
-            String,
-            Option<Vec<u8>>,
-            i16,
-            Option<Vec<u8>>,
-            Option<String>,
-            Option<String>,
-            DateTime<Utc>,
-        )> = Vec::new();
-
-        for mnft_info in &new_mnft_tokens {
-            let prev_owner = self
-                .writer
-                .get_mnft_token_owner_by_id(&mnft_info.token_id)
-                .await?;
-
-            let is_mint = prev_owner.is_none()
-                || prev_owner
-                    .as_ref()
-                    .map(|o| o == &mnft_info.owner_lock_hash)
-                    .unwrap_or(false);
-
-            let event_type = if is_mint { "mint" } else { "transfer" };
-
-            self.writer
-                .insert_nft_transfer(
-                    &mnft_info.token_id,
-                    "mnft",
-                    Some(&mnft_info.issuer_id),
-                    Some(&mnft_info.class_id),
-                    &mnft_info.tx_hash,
-                    mnft_info.block_number,
-                    prev_owner.as_deref(),
-                    &mnft_info.owner_lock_hash,
-                    event_type,
-                    mnft_info.name.as_deref(),
-                    mnft_info.timestamp,
-                )
-                .await?;
-
-            if let Some(ref from_lock) = prev_owner {
-                if from_lock != &mnft_info.owner_lock_hash {
-                    nft_address_records.push((
-                        from_lock.clone(),
-                        mnft_info.tx_hash.clone(),
-                        mnft_info.block_number,
-                        mnft_info.tx_index,
-                        0,
-                        "nft".to_string(),
-                        "mnft".to_string(),
-                        Some(mnft_info.token_id.clone()),
-                        2,
-                        Some(mnft_info.owner_lock_hash.clone()),
-                        Some("1".to_string()),
-                        None,
-                        mnft_info.timestamp,
-                    ));
-                }
-            }
-
-            nft_address_records.push((
-                mnft_info.owner_lock_hash.clone(),
-                mnft_info.tx_hash.clone(),
-                mnft_info.block_number,
-                mnft_info.tx_index,
-                1,
-                "nft".to_string(),
-                "mnft".to_string(),
-                Some(mnft_info.token_id.clone()),
-                1,
-                prev_owner.clone(),
-                Some("1".to_string()),
-                if is_mint {
-                    Some("mint".to_string())
-                } else {
-                    None
-                },
-                mnft_info.timestamp,
-            ));
-        }
-
-        for dotbit_info in &new_dotbit_accounts {
-            let prev_owner = self
-                .writer
-                .get_dotbit_owner_by_id(&dotbit_info.account_id)
-                .await?;
-
-            let is_register = prev_owner.is_none()
-                || prev_owner
-                    .as_ref()
-                    .map(|o| o == &dotbit_info.owner_lock_hash)
-                    .unwrap_or(false);
-
-            let event_type = if is_register { "register" } else { "transfer" };
-
-            self.writer
-                .insert_nft_transfer(
-                    &dotbit_info.account_id,
-                    "dotbit",
-                    None,
-                    None,
-                    &dotbit_info.tx_hash,
-                    dotbit_info.block_number,
-                    prev_owner.as_deref(),
-                    &dotbit_info.owner_lock_hash,
-                    event_type,
-                    Some(&dotbit_info.account_name),
-                    dotbit_info.timestamp,
-                )
-                .await?;
-
-            if let Some(ref from_lock) = prev_owner {
-                if from_lock != &dotbit_info.owner_lock_hash {
-                    nft_address_records.push((
-                        from_lock.clone(),
-                        dotbit_info.tx_hash.clone(),
-                        dotbit_info.block_number,
-                        dotbit_info.tx_index,
-                        0,
-                        "nft".to_string(),
-                        "dotbit".to_string(),
-                        Some(dotbit_info.account_id.clone()),
-                        2,
-                        Some(dotbit_info.owner_lock_hash.clone()),
-                        None,
-                        None,
-                        dotbit_info.timestamp,
-                    ));
-                }
-            }
-
-            nft_address_records.push((
-                dotbit_info.owner_lock_hash.clone(),
-                dotbit_info.tx_hash.clone(),
-                dotbit_info.block_number,
-                dotbit_info.tx_index,
-                1,
-                "nft".to_string(),
-                "dotbit".to_string(),
-                Some(dotbit_info.account_id.clone()),
-                1,
-                prev_owner.clone(),
-                None,
-                if is_register {
-                    Some("register".to_string())
-                } else {
-                    None
-                },
-                dotbit_info.timestamp,
-            ));
-        }
-
-        if !dob_address_records.is_empty() {
-            self.writer
-                .insert_address_asset_transfers_batch(&dob_address_records)
-                .await?;
-        }
-
-        if !nft_address_records.is_empty() {
-            self.writer
-                .insert_address_asset_transfers_batch(&nft_address_records)
-                .await?;
         }
 
         let activities_by_block = self
@@ -3916,8 +3447,6 @@ impl Indexer {
 
         let mut address_balance_changes: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, Vec<u8>)> =
             HashMap::new();
-        let mut address_tx_records: Vec<(Vec<u8>, Vec<u8>, i64, i16, i64, chrono::DateTime<Utc>)> =
-            Vec::new();
 
         for tx_data in &all_tx_data {
             let mut tx_balance_changes: HashMap<Vec<u8>, i64> = HashMap::new();
@@ -3961,12 +3490,6 @@ impl Indexer {
                 let cells_created = tx_cells_created.get(&lock_hash).copied().unwrap_or(0);
                 let cells_consumed = tx_cells_consumed.get(&lock_hash).copied().unwrap_or(0);
 
-                let tx_type: i16 = match balance_change.cmp(&0) {
-                    std::cmp::Ordering::Greater => 1,
-                    std::cmp::Ordering::Less => 2,
-                    std::cmp::Ordering::Equal => 3,
-                };
-
                 let entry = address_balance_changes.entry(lock_hash.clone()).or_insert((
                     0,
                     0,
@@ -3981,15 +3504,6 @@ impl Indexer {
                 entry.3 += 1;
                 entry.4 = tx_data.block_number;
                 entry.5 = tx_data.hash.clone();
-
-                address_tx_records.push((
-                    lock_hash.clone(),
-                    tx_data.hash.clone(),
-                    tx_data.block_number,
-                    tx_type,
-                    balance_change,
-                    tx_data.timestamp,
-                ));
             }
         }
 
@@ -4067,66 +3581,26 @@ impl Indexer {
             }
         }
 
-        // Use COPY for address_transactions in bulk sync mode (5-10x faster)
-        if self.should_use_copy() && !address_tx_records.is_empty() {
-            let copy_router = self.copy_router.as_ref().unwrap();
-            tokio::try_join!(
-                async {
-                    if !changes_ref.is_empty() {
-                        self.writer
-                            .update_address_balances_batch(&changes_ref)
-                            .await
-                    } else {
-                        Ok(())
-                    }
-                },
-                async {
-                    copy_router
-                        .copy_address_transactions_parallel(&address_tx_records)
+        tokio::try_join!(
+            async {
+                if !changes_ref.is_empty() {
+                    self.writer
+                        .update_address_balances_batch(&changes_ref)
                         .await
-                        .map(|_| ())
-                },
-                async {
-                    if !script_usage_changes.is_empty() {
-                        self.writer
-                            .update_script_usage_batch(&script_usage_changes)
-                            .await
-                    } else {
-                        Ok(())
-                    }
+                } else {
+                    Ok(())
                 }
-            )?;
-        } else {
-            tokio::try_join!(
-                async {
-                    if !changes_ref.is_empty() {
-                        self.writer
-                            .update_address_balances_batch(&changes_ref)
-                            .await
-                    } else {
-                        Ok(())
-                    }
-                },
-                async {
-                    if !address_tx_records.is_empty() {
-                        self.writer
-                            .insert_address_transactions_batch(&address_tx_records)
-                            .await
-                    } else {
-                        Ok(())
-                    }
-                },
-                async {
-                    if !script_usage_changes.is_empty() {
-                        self.writer
-                            .update_script_usage_batch(&script_usage_changes)
-                            .await
-                    } else {
-                        Ok(())
-                    }
+            },
+            async {
+                if !script_usage_changes.is_empty() {
+                    self.writer
+                        .update_script_usage_batch(&script_usage_changes)
+                        .await
+                } else {
+                    Ok(())
                 }
-            )?;
-        }
+            }
+        )?;
 
         let mut batch_stats = BatchStats::default();
         let mut prev_timestamp: Option<chrono::DateTime<Utc>> =
@@ -4463,7 +3937,6 @@ impl Indexer {
         struct UdtTxContext {
             tx_hash: Vec<u8>,
             block_number: i64,
-            tx_index: i32,
             timestamp: chrono::DateTime<Utc>,
             output_udts: Vec<crate::parser::ParsedUdtCell>,
             input_outpoints: Vec<(Vec<u8>, i16)>,
@@ -4480,7 +3953,6 @@ impl Indexer {
         struct TxInfoForUdt {
             tx_hash: Vec<u8>,
             block_number: i64,
-            tx_index: i32,
             timestamp: chrono::DateTime<Utc>,
             output_udts: Vec<crate::parser::ParsedUdtCell>,
             input_outpoints: Vec<(Vec<u8>, i16)>,
@@ -4521,7 +3993,6 @@ impl Indexer {
                 all_tx_infos_for_udt.push(TxInfoForUdt {
                     tx_hash: tx_data.hash.clone(),
                     block_number: parsed.number,
-                    tx_index: tx_idx as i32,
                     timestamp: parsed.timestamp,
                     output_udts,
                     input_outpoints,
@@ -4559,7 +4030,6 @@ impl Indexer {
                 udt_tx_contexts.push(UdtTxContext {
                     tx_hash: tx_info.tx_hash,
                     block_number: tx_info.block_number,
-                    tx_index: tx_info.tx_index,
                     timestamp: tx_info.timestamp,
                     output_udts: tx_info.output_udts,
                     input_outpoints: tx_info.input_outpoints,
@@ -4680,80 +4150,6 @@ impl Indexer {
                 self.writer
                     .process_udt_transfers_batch(&transfer_refs)
                     .await?;
-
-                let tx_index_map: std::collections::HashMap<&[u8], i32> = udt_tx_contexts
-                    .iter()
-                    .map(|ctx| (ctx.tx_hash.as_slice(), ctx.tx_index))
-                    .collect();
-
-                let mut address_asset_records: Vec<(
-                    Vec<u8>,
-                    Vec<u8>,
-                    i64,
-                    i32,
-                    i16,
-                    String,
-                    String,
-                    Option<Vec<u8>>,
-                    i16,
-                    Option<Vec<u8>>,
-                    Option<String>,
-                    Option<String>,
-                    DateTime<Utc>,
-                )> = Vec::with_capacity(all_transfers.len() * 2);
-
-                for (idx, (transfer, tx_hash, block_number, timestamp)) in
-                    all_transfers.iter().enumerate()
-                {
-                    let tx_index = tx_index_map.get(tx_hash.as_slice()).copied().unwrap_or(0);
-
-                    let standard_str = match transfer.standard {
-                        crate::parser::UdtStandard::Sudt => "sudt",
-                        crate::parser::UdtStandard::Xudt => "xudt",
-                    };
-
-                    if let Some(ref from_lock) = transfer.from_lock_hash {
-                        address_asset_records.push((
-                            from_lock.clone(),
-                            tx_hash.clone(),
-                            *block_number,
-                            tx_index,
-                            (idx * 2) as i16,
-                            "token".to_string(),
-                            standard_str.to_string(),
-                            Some(transfer.type_script_hash.clone()),
-                            2,
-                            Some(transfer.to_lock_hash.clone()),
-                            Some(transfer.amount.to_string()),
-                            None,
-                            *timestamp,
-                        ));
-                    }
-
-                    if !transfer.to_lock_hash.is_empty() {
-                        address_asset_records.push((
-                            transfer.to_lock_hash.clone(),
-                            tx_hash.clone(),
-                            *block_number,
-                            tx_index,
-                            (idx * 2 + 1) as i16,
-                            "token".to_string(),
-                            standard_str.to_string(),
-                            Some(transfer.type_script_hash.clone()),
-                            1,
-                            transfer.from_lock_hash.clone(),
-                            Some(transfer.amount.to_string()),
-                            None,
-                            *timestamp,
-                        ));
-                    }
-                }
-
-                if !address_asset_records.is_empty() {
-                    self.writer
-                        .insert_address_asset_transfers_batch(&address_asset_records)
-                        .await?;
-                }
             }
 
             if !consumed_udt_outpoints.is_empty() {
@@ -4780,45 +4176,10 @@ impl Indexer {
                 .await?;
         }
 
-        struct NewSporeInfo {
-            spore_id: Vec<u8>,
-            owner_lock_hash: Vec<u8>,
-            cluster_id: Option<Vec<u8>>,
-            content_type: String,
-            tx_hash: Vec<u8>,
-            block_number: i64,
-            tx_index: i32,
-            timestamp: DateTime<Utc>,
-        }
         let mut batch_spore_ids: HashSet<Vec<u8>> = HashSet::new();
-        let mut new_spores: Vec<NewSporeInfo> = Vec::new();
-
-        struct NewMnftInfo {
-            token_id: Vec<u8>,
-            owner_lock_hash: Vec<u8>,
-            class_id: Vec<u8>,
-            issuer_id: Vec<u8>,
-            name: Option<String>,
-            tx_hash: Vec<u8>,
-            block_number: i64,
-            tx_index: i32,
-            timestamp: DateTime<Utc>,
-        }
         let mut batch_mnft_class_ids: HashSet<Vec<u8>> = HashSet::new();
         let mut batch_mnft_token_ids: HashSet<Vec<u8>> = HashSet::new();
-        let mut new_mnft_tokens: Vec<NewMnftInfo> = Vec::new();
-
-        struct NewDotbitInfo {
-            account_id: Vec<u8>,
-            owner_lock_hash: Vec<u8>,
-            account_name: String,
-            tx_hash: Vec<u8>,
-            block_number: i64,
-            tx_index: i32,
-            timestamp: DateTime<Utc>,
-        }
         let mut batch_dotbit_account_ids: HashSet<Vec<u8>> = HashSet::new();
-        let mut new_dotbit_accounts: Vec<NewDotbitInfo> = Vec::new();
 
         let mut block_tx_idx = 0usize;
         for (block_idx, block_response) in blocks.iter().enumerate() {
@@ -4838,16 +4199,6 @@ impl Indexer {
 
                 for (output_index, spore) in SporeParser::parse_spores(tx).iter().enumerate() {
                     batch_spore_ids.insert(spore.spore_id.clone());
-                    new_spores.push(NewSporeInfo {
-                        spore_id: spore.spore_id.clone(),
-                        owner_lock_hash: spore.owner_lock_hash.clone(),
-                        cluster_id: spore.cluster_id.clone(),
-                        content_type: spore.content_type.clone(),
-                        tx_hash: tx_data.hash.clone(),
-                        block_number: parsed.number,
-                        tx_index: tx_idx as i32,
-                        timestamp: parsed.timestamp,
-                    });
                     self.writer
                         .insert_spore_cell(spore, &tx_data.hash, output_index as i16, parsed.number)
                         .await?;
@@ -4871,17 +4222,6 @@ impl Indexer {
 
                 for (output_index, token) in MnftParser::parse_tokens(tx).iter().enumerate() {
                     batch_mnft_token_ids.insert(token.token_id.clone());
-                    new_mnft_tokens.push(NewMnftInfo {
-                        token_id: token.token_id.clone(),
-                        owner_lock_hash: token.owner_lock_hash.clone(),
-                        class_id: token.class_id.clone(),
-                        issuer_id: token.class_id[0..20].to_vec(),
-                        name: None,
-                        tx_hash: tx_data.hash.clone(),
-                        block_number: parsed.number,
-                        tx_index: tx_idx as i32,
-                        timestamp: parsed.timestamp,
-                    });
                     self.writer
                         .insert_mnft_token(token, &tx_data.hash, output_index as i16, parsed.number)
                         .await?;
@@ -4889,15 +4229,6 @@ impl Indexer {
 
                 for (output_index, account) in DotbitParser::parse_accounts(tx).iter().enumerate() {
                     batch_dotbit_account_ids.insert(account.account_id.clone());
-                    new_dotbit_accounts.push(NewDotbitInfo {
-                        account_id: account.account_id.clone(),
-                        owner_lock_hash: account.owner_lock_hash.clone(),
-                        account_name: format!("0x{}", hex::encode(&account.account_id)),
-                        tx_hash: tx_data.hash.clone(),
-                        block_number: parsed.number,
-                        tx_index: tx_idx as i32,
-                        timestamp: parsed.timestamp,
-                    });
                     self.writer
                         .insert_dotbit_account(
                             account,
@@ -4982,273 +4313,6 @@ impl Indexer {
                     }
                 }
             }
-        }
-
-        let mut dob_address_records: Vec<(
-            Vec<u8>,
-            Vec<u8>,
-            i64,
-            i32,
-            i16,
-            String,
-            String,
-            Option<Vec<u8>>,
-            i16,
-            Option<Vec<u8>>,
-            Option<String>,
-            Option<String>,
-            DateTime<Utc>,
-        )> = Vec::new();
-
-        let skip_nft_transfer_tracking = self.is_bulk_sync_active();
-
-        for spore_info in &new_spores {
-            let prev_owner = if skip_nft_transfer_tracking {
-                None
-            } else {
-                self.writer
-                    .get_spore_owner_by_id(&spore_info.spore_id)
-                    .await?
-            };
-
-            let is_mint = prev_owner.is_none()
-                || prev_owner
-                    .as_ref()
-                    .map(|o| o == &spore_info.owner_lock_hash)
-                    .unwrap_or(false);
-
-            let dob_type = if spore_info.content_type.starts_with("dob/") {
-                &spore_info.content_type
-            } else {
-                "spore"
-            };
-
-            let event_type = if is_mint { "mint" } else { "transfer" };
-
-            self.writer
-                .insert_dob_transfer(
-                    &spore_info.spore_id,
-                    spore_info.cluster_id.as_deref(),
-                    dob_type,
-                    &spore_info.tx_hash,
-                    spore_info.block_number,
-                    prev_owner.as_deref(),
-                    &spore_info.owner_lock_hash,
-                    event_type,
-                    Some(&spore_info.content_type),
-                    spore_info.timestamp,
-                )
-                .await?;
-
-            if let Some(ref from_lock) = prev_owner {
-                if from_lock != &spore_info.owner_lock_hash {
-                    dob_address_records.push((
-                        from_lock.clone(),
-                        spore_info.tx_hash.clone(),
-                        spore_info.block_number,
-                        spore_info.tx_index,
-                        0,
-                        "dob".to_string(),
-                        dob_type.to_string(),
-                        Some(spore_info.spore_id.clone()),
-                        2,
-                        Some(spore_info.owner_lock_hash.clone()),
-                        Some("1".to_string()),
-                        None,
-                        spore_info.timestamp,
-                    ));
-                }
-            }
-
-            dob_address_records.push((
-                spore_info.owner_lock_hash.clone(),
-                spore_info.tx_hash.clone(),
-                spore_info.block_number,
-                spore_info.tx_index,
-                1,
-                "dob".to_string(),
-                dob_type.to_string(),
-                Some(spore_info.spore_id.clone()),
-                1,
-                prev_owner.clone(),
-                Some("1".to_string()),
-                if is_mint {
-                    Some("mint".to_string())
-                } else {
-                    None
-                },
-                spore_info.timestamp,
-            ));
-        }
-
-        let mut nft_address_records: Vec<(
-            Vec<u8>,
-            Vec<u8>,
-            i64,
-            i32,
-            i16,
-            String,
-            String,
-            Option<Vec<u8>>,
-            i16,
-            Option<Vec<u8>>,
-            Option<String>,
-            Option<String>,
-            DateTime<Utc>,
-        )> = Vec::new();
-
-        for mnft_info in &new_mnft_tokens {
-            let prev_owner = self
-                .writer
-                .get_mnft_token_owner_by_id(&mnft_info.token_id)
-                .await?;
-
-            let is_mint = prev_owner.is_none()
-                || prev_owner
-                    .as_ref()
-                    .map(|o| o == &mnft_info.owner_lock_hash)
-                    .unwrap_or(false);
-
-            let event_type = if is_mint { "mint" } else { "transfer" };
-
-            self.writer
-                .insert_nft_transfer(
-                    &mnft_info.token_id,
-                    "mnft",
-                    Some(&mnft_info.issuer_id),
-                    Some(&mnft_info.class_id),
-                    &mnft_info.tx_hash,
-                    mnft_info.block_number,
-                    prev_owner.as_deref(),
-                    &mnft_info.owner_lock_hash,
-                    event_type,
-                    mnft_info.name.as_deref(),
-                    mnft_info.timestamp,
-                )
-                .await?;
-
-            if let Some(ref from_lock) = prev_owner {
-                if from_lock != &mnft_info.owner_lock_hash {
-                    nft_address_records.push((
-                        from_lock.clone(),
-                        mnft_info.tx_hash.clone(),
-                        mnft_info.block_number,
-                        mnft_info.tx_index,
-                        0,
-                        "nft".to_string(),
-                        "mnft".to_string(),
-                        Some(mnft_info.token_id.clone()),
-                        2,
-                        Some(mnft_info.owner_lock_hash.clone()),
-                        Some("1".to_string()),
-                        None,
-                        mnft_info.timestamp,
-                    ));
-                }
-            }
-
-            nft_address_records.push((
-                mnft_info.owner_lock_hash.clone(),
-                mnft_info.tx_hash.clone(),
-                mnft_info.block_number,
-                mnft_info.tx_index,
-                1,
-                "nft".to_string(),
-                "mnft".to_string(),
-                Some(mnft_info.token_id.clone()),
-                1,
-                prev_owner.clone(),
-                Some("1".to_string()),
-                if is_mint {
-                    Some("mint".to_string())
-                } else {
-                    None
-                },
-                mnft_info.timestamp,
-            ));
-        }
-
-        for dotbit_info in &new_dotbit_accounts {
-            let prev_owner = self
-                .writer
-                .get_dotbit_owner_by_id(&dotbit_info.account_id)
-                .await?;
-
-            let is_register = prev_owner.is_none()
-                || prev_owner
-                    .as_ref()
-                    .map(|o| o == &dotbit_info.owner_lock_hash)
-                    .unwrap_or(false);
-
-            let event_type = if is_register { "register" } else { "transfer" };
-
-            self.writer
-                .insert_nft_transfer(
-                    &dotbit_info.account_id,
-                    "dotbit",
-                    None,
-                    None,
-                    &dotbit_info.tx_hash,
-                    dotbit_info.block_number,
-                    prev_owner.as_deref(),
-                    &dotbit_info.owner_lock_hash,
-                    event_type,
-                    Some(&dotbit_info.account_name),
-                    dotbit_info.timestamp,
-                )
-                .await?;
-
-            if let Some(ref from_lock) = prev_owner {
-                if from_lock != &dotbit_info.owner_lock_hash {
-                    nft_address_records.push((
-                        from_lock.clone(),
-                        dotbit_info.tx_hash.clone(),
-                        dotbit_info.block_number,
-                        dotbit_info.tx_index,
-                        0,
-                        "nft".to_string(),
-                        "dotbit".to_string(),
-                        Some(dotbit_info.account_id.clone()),
-                        2,
-                        Some(dotbit_info.owner_lock_hash.clone()),
-                        None,
-                        None,
-                        dotbit_info.timestamp,
-                    ));
-                }
-            }
-
-            nft_address_records.push((
-                dotbit_info.owner_lock_hash.clone(),
-                dotbit_info.tx_hash.clone(),
-                dotbit_info.block_number,
-                dotbit_info.tx_index,
-                1,
-                "nft".to_string(),
-                "dotbit".to_string(),
-                Some(dotbit_info.account_id.clone()),
-                1,
-                prev_owner.clone(),
-                None,
-                if is_register {
-                    Some("register".to_string())
-                } else {
-                    None
-                },
-                dotbit_info.timestamp,
-            ));
-        }
-
-        if !dob_address_records.is_empty() {
-            self.writer
-                .insert_address_asset_transfers_batch(&dob_address_records)
-                .await?;
-        }
-
-        if !nft_address_records.is_empty() {
-            self.writer
-                .insert_address_asset_transfers_batch(&nft_address_records)
-                .await?;
         }
 
         let activities_by_block = self
@@ -5571,8 +4635,6 @@ impl Indexer {
 
         let mut address_balance_changes: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8])> =
             HashMap::new();
-        let mut address_tx_records: Vec<(Vec<u8>, Vec<u8>, i64, i16, i64, chrono::DateTime<Utc>)> =
-            Vec::new();
 
         for tx_data in &tx_data_list {
             let mut tx_balance_changes: HashMap<Vec<u8>, i64> = HashMap::new();
@@ -5616,12 +4678,6 @@ impl Indexer {
                 let cells_created = tx_cells_created.get(&lock_hash).copied().unwrap_or(0);
                 let cells_consumed = tx_cells_consumed.get(&lock_hash).copied().unwrap_or(0);
 
-                let tx_type: i16 = match balance_change.cmp(&0) {
-                    std::cmp::Ordering::Greater => 1,
-                    std::cmp::Ordering::Less => 2,
-                    std::cmp::Ordering::Equal => 3,
-                };
-
                 let entry = address_balance_changes.entry(lock_hash.clone()).or_insert((
                     0,
                     0,
@@ -5634,33 +4690,12 @@ impl Indexer {
                 entry.1 += cells_created - cells_consumed;
                 entry.2 += cells_created;
                 entry.3 += 1;
-
-                address_tx_records.push((
-                    lock_hash.clone(),
-                    tx_data.hash.clone(),
-                    parsed.number,
-                    tx_type,
-                    balance_change,
-                    parsed.timestamp,
-                ));
             }
         }
 
         if !address_balance_changes.is_empty() {
             self.writer
                 .update_address_balances_batch(&address_balance_changes)
-                .await?;
-        }
-
-        // Use COPY for address_transactions in bulk sync mode (5-10x faster)
-        if self.should_use_copy() && !address_tx_records.is_empty() {
-            let copy_router = self.copy_router.as_ref().unwrap();
-            copy_router
-                .copy_address_transactions_parallel(&address_tx_records)
-                .await?;
-        } else if !address_tx_records.is_empty() {
-            self.writer
-                .insert_address_transactions_batch(&address_tx_records)
                 .await?;
         }
 

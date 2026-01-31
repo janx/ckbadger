@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use tokio_postgres::Client;
 
 use crate::db::copy_activities::CopyActivitiesWriter;
-use crate::db::copy_address_transactions::CopyAddressTransactionsWriter;
 use crate::db::copy_blocks::CopyBlocksWriter;
 use crate::db::copy_cells::CopyCellsWriter;
 use crate::db::copy_inputs::{CopyCellDepsWriter, CopyInputsWriter};
@@ -51,9 +50,6 @@ type TxData<'a> = (
 
 /// Type alias for block data tuple: (block, total_difficulty)
 type BlockData<'a> = (&'a ParsedBlock, i64);
-
-/// Type alias for address transaction data tuple
-type AddrTxData = (Vec<u8>, Vec<u8>, i64, i16, i64, DateTime<Utc>);
 
 /// Type alias for activity data tuple: (activity, block_number, timestamp)
 type ActivityData<'a> = (&'a ParsedActivity, i64, DateTime<Utc>);
@@ -307,26 +303,6 @@ impl ParallelCopyRouter {
         }
 
         Ok(total_rows)
-    }
-
-    pub async fn copy_address_transactions_parallel(&self, records: &[AddrTxData]) -> Result<u64> {
-        if records.is_empty() {
-            return Ok(0);
-        }
-
-        let conn = self.pool_manager.get_connection().await?;
-
-        let mut writer = CopyAddressTransactionsWriter::new();
-        for (lock_hash, tx_hash, block_num, tx_type, cap_change, ts) in records {
-            writer.add_record(lock_hash, tx_hash, *block_num, *tx_type, *cap_change, *ts);
-        }
-
-        let data = writer.finish();
-        execute_copy(
-            conn.as_ref(),
-            "COPY address_transactions (lock_script_hash, tx_hash, block_number, tx_type, capacity_change, timestamp) FROM STDIN WITH (FORMAT BINARY)",
-            data,
-        ).await
     }
 
     pub async fn copy_activities_parallel(&self, activities: &[ActivityData<'_>]) -> Result<u64> {
