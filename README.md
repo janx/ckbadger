@@ -28,6 +28,13 @@
 - **sUDT/xUDT Support** - Token listings, holder rankings, transfer history
 - **Spore NFT Support** - NFT collections, metadata rendering, ownership tracking
 
+### Activity System
+
+- **Unified Activity Feed** - Human-readable interpretation of blockchain events
+- **8 Activity Categories** - CKB, Cellbase, Token, DOB, NFT, DAO, Script, RGB++
+- **Address Activity History** - All activities involving an address in one view
+- **Transaction Activity Summary** - See what happened in any transaction at a glance
+
 ### Data & Analytics
 
 - **Network Dashboard** - Hash rate, difficulty, epoch progress, TPS metrics
