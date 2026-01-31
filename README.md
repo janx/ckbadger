@@ -200,6 +200,11 @@ GET  /api/v1/cells/:tx_hash/:output_index        # Cell details
 GET  /api/v1/statistics/network                  # Network stats
 GET  /api/v1/status                              # System status (sync, index rebuild)
 
+# Activities API (Semantic blockchain events)
+GET  /api/v1/activities                          # List activities (paginated)
+GET  /api/v1/activities/address/:address         # Activities for an address
+GET  /api/v1/activities/transaction/:hash        # Activities in a transaction
+
 # Graph API (Cell Relationship Visualization)
 GET  /api/v1/graph/cell/:tx_hash/:index?depth=2  # Cell relationship graph
 GET  /api/v1/graph/transaction/:hash?depth=2     # Transaction I/O graph

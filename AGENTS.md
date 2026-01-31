@@ -563,6 +563,7 @@ cd frontend && pnpm test               # All frontend tests
 | Topic            | Document                   | Must Read Before                   |
 | ---------------- | -------------------------- | ---------------------------------- |
 | **Worldview**    | `docs/WORLD_VIEW.md`       | **Any design or implementation**   |
+| **Activities**   | `docs/ACTIVITIES.md`       | Activity parsing or API changes    |
 | CKB protocol     | `docs/rfcs/`               | Understanding CKB internals        |
 | Nervos docs      | `docs/docs.nervos.org/`    | User-facing explanations           |
 | DAO, APC, Supply | `docs/DAO_CALCULATIONS.md` | Any DAO/supply/circulation changes |
@@ -620,23 +621,28 @@ const DAO_OCCUPIED_CAPACITY: u64 = 102_00000000; // 102 CKB
 
 ## File Locations
 
-| What            | Where                                   |
-| --------------- | --------------------------------------- |
-| API routes      | `crates/api/src/routes/*.rs`            |
-| Response types  | `crates/api/src/response.rs`            |
-| WebSocket       | `crates/api/src/ws/`                    |
-| RPC client      | `crates/indexer/src/rpc/client.rs`      |
-| Parsers         | `crates/indexer/src/parser/*.rs`        |
-| DB writes       | `crates/indexer/src/db/writer.rs`       |
-| Frontend API    | `frontend/lib/api.ts`                   |
-| UI components   | `frontend/components/ui/`               |
-| Pages           | `frontend/app/`                         |
-| Rust tests      | Inline `#[cfg(test)]` in parser files   |
-| API integration | `crates/api/tests/api_integration.rs`   |
-| Frontend tests  | `frontend/__tests__/**/*.test.{ts,tsx}` |
-| MSW handlers    | `frontend/__tests__/msw/handlers.ts`    |
-| E2E tests       | `e2e/*.spec.ts`                         |
-| CI workflow     | `.github/workflows/ci.yml`              |
+| What                | Where                                      |
+| ------------------- | ------------------------------------------ |
+| API routes          | `crates/api/src/routes/*.rs`               |
+| Activities API      | `crates/api/src/routes/activities.rs`      |
+| Response types      | `crates/api/src/response.rs`               |
+| WebSocket           | `crates/api/src/ws/`                       |
+| RPC client          | `crates/indexer/src/rpc/client.rs`         |
+| Parsers             | `crates/indexer/src/parser/*.rs`           |
+| Activity parser     | `crates/indexer/src/parser/activity.rs`    |
+| Activity writer     | `crates/indexer/src/db/copy_activities.rs` |
+| DB writes           | `crates/indexer/src/db/writer.rs`          |
+| Activity types      | `crates/common/src/activity.rs`            |
+| Frontend API        | `frontend/lib/api.ts`                      |
+| UI components       | `frontend/components/ui/`                  |
+| Activity components | `frontend/components/activity/`            |
+| Pages               | `frontend/app/`                            |
+| Rust tests          | Inline `#[cfg(test)]` in parser files      |
+| API integration     | `crates/api/tests/api_integration.rs`      |
+| Frontend tests      | `frontend/__tests__/**/*.test.{ts,tsx}`    |
+| MSW handlers        | `frontend/__tests__/msw/handlers.ts`       |
+| E2E tests           | `e2e/*.spec.ts`                            |
+| CI workflow         | `.github/workflows/ci.yml`                 |
 
 ## Dependencies
 
