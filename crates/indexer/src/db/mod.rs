@@ -1,3 +1,4 @@
+pub mod copy_activities;
 pub mod copy_address_transactions;
 pub mod copy_blocks;
 pub mod copy_cells;
@@ -14,6 +15,10 @@ mod rocksdb_live_cell_store;
 pub mod tuning;
 mod writer;
 
+pub use copy_activities::{
+    copy_activities, copy_activities_batch, delete_activities_from, delete_activities_range,
+    CopyActivitiesWriter,
+};
 pub use copy_pool::{CopyConfig, CopyPoolManager};
 pub use indexes::IndexManager;
 pub use live_cell_storage::{
