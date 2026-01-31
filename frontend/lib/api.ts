@@ -1,3 +1,5 @@
+import type { Activity } from '@/types/activity';
+
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api/v1';
 
 interface PaginatedResponse<T> {
@@ -864,6 +866,15 @@ export type {
   RecentReorgResponse,
 };
 
+export type {
+  Activity,
+  ActivityType,
+  ActivityCategory,
+  ActivitiesResponse,
+  ActivityQueryParams,
+  AddressActivityQueryParams,
+} from '@/types/activity';
+
 export const api = {
   getForks: (params: CursorQueryParams = {}): Promise<CursorPaginatedResponse<ReorgEvent>> => {
     const query = new URLSearchParams();
@@ -1316,5 +1327,48 @@ export const api = {
       throw new Error(`API error: ${res.status}`);
     }
     return res.json();
+  },
+
+  getActivities: (
+    params: {
+      limit?: number;
+      cursor?: string;
+      activityType?: string;
+      activityCategory?: string;
+    } = {}
+  ): Promise<{
+    activities: Activity[];
+    nextCursor: string | null;
+    hasMore: boolean;
+  }> => {
+    const query = new URLSearchParams();
+    if (params.limit) query.set('limit', String(params.limit));
+    if (params.cursor) query.set('cursor', params.cursor);
+    if (params.activityType) query.set('activity_type', params.activityType);
+    if (params.activityCategory) query.set('activity_category', params.activityCategory);
+    return fetchApi(`/activities?${query}`);
+  },
+
+  getAddressActivities: (
+    address: string,
+    params: {
+      limit?: number;
+      cursor?: string;
+      direction?: 'in' | 'out' | 'all';
+    } = {}
+  ): Promise<{
+    activities: Activity[];
+    nextCursor: string | null;
+    hasMore: boolean;
+  }> => {
+    const query = new URLSearchParams();
+    if (params.limit) query.set('limit', String(params.limit));
+    if (params.cursor) query.set('cursor', params.cursor);
+    if (params.direction) query.set('direction', params.direction);
+    return fetchApi(`/activities/address/${address}?${query}`);
+  },
+
+  getTransactionActivities: (txHash: string): Promise<Activity[]> => {
+    return fetchApi(`/activities/transaction/${txHash}`);
   },
 };
