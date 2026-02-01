@@ -1410,6 +1410,7 @@ impl Indexer {
                     UPDATE tasks
                     SET status = 'completed',
                         completed_at = NOW(),
+                        progress_current = progress_total,
                         result = $2,
                         heartbeat_at = NOW()
                     WHERE id = $1

@@ -82,9 +82,14 @@ pub async fn execute(
         }
 
         let progress_msg = format!(
-            "Tables: {}/{} completed",
+            "Tables: {}/{} completed{}",
             result.completed_tables.len(),
-            total
+            total,
+            if !result.failed.is_empty() {
+                format!(", {} failed", result.failed.len())
+            } else {
+                String::new()
+            }
         );
         db.update_progress(task_id, (i + 1) as i64, total, Some(&progress_msg), None)
             .await?;

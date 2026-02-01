@@ -385,10 +385,11 @@ impl Task {
         Some(format_duration(seconds as u64))
     }
 
-    /// Get elapsed time since task started
+    /// Get elapsed time since task started (or total duration if completed)
     pub fn elapsed_seconds(&self) -> Option<i64> {
-        self.started_at
-            .map(|started| Utc::now().signed_duration_since(started).num_seconds())
+        let started = self.started_at?;
+        let end_time = self.completed_at.unwrap_or_else(Utc::now);
+        Some(end_time.signed_duration_since(started).num_seconds())
     }
 
     /// Format elapsed time as human-readable string

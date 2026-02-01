@@ -122,6 +122,7 @@ impl TaskDb {
             UPDATE tasks
             SET status = 'completed',
                 completed_at = NOW(),
+                progress_current = progress_total,
                 result = COALESCE($2, result),
                 heartbeat_at = NOW()
             WHERE id = $1

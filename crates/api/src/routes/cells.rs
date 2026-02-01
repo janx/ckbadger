@@ -17,7 +17,9 @@ use std::sync::Arc;
 use crate::response::{
     decode_cursor, encode_cursor, ok, ApiError, ApiResult, CursorPaginatedResponse,
 };
-use crate::utils::{address_to_lock_script_hash, is_ckb_address, script_to_address, shannon_to_ckb};
+use crate::utils::{
+    address_to_lock_script_hash, is_ckb_address, script_to_address, shannon_to_ckb,
+};
 use crate::AppState;
 
 struct DepGroupParseResult {
