@@ -58,12 +58,12 @@ impl CopyActivitiesWriter {
         // to_lock_hash (BYTEA, nullable)
         self.buffer
             .write_bytea_opt(activity.to_lock_hash.as_deref());
-        // amount (NUMERIC as TEXT - PostgreSQL accepts text for numeric)
-        self.buffer.write_text(&activity.amount);
+        // amount (NUMERIC - binary format)
+        self.buffer.write_numeric(&activity.amount);
         // asset_id (BYTEA, nullable)
         self.buffer.write_bytea_opt(activity.asset_id.as_deref());
-        // metadata (JSONB as TEXT - PostgreSQL parses JSON from text)
-        self.buffer.write_text(&activity.metadata.to_string());
+        // metadata (JSONB)
+        self.buffer.write_jsonb(&activity.metadata.to_string());
         // timestamp (TIMESTAMPTZ)
         self.buffer.write_timestamptz(timestamp);
 

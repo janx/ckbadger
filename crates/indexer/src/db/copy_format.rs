@@ -198,6 +198,128 @@ impl BinaryCopyBuffer {
         }
     }
 
+    /// Write JSONB (JSON binary format)
+    ///
+    /// PostgreSQL binary JSONB format requires a version byte prefix.
+    /// Currently only version 1 is supported.
+    ///
+    /// # Arguments
+    /// * `json_str` - Valid JSON string (will be prefixed with version byte)
+    pub fn write_jsonb(&mut self, json_str: &str) {
+        // JSONB binary format: 1-byte version + JSON text
+        // Version 1 is the only supported version
+        let json_bytes = json_str.as_bytes();
+        let total_len = 1 + json_bytes.len(); // version byte + JSON content
+        self.buf.put_i32(total_len as i32);
+        self.buf.put_u8(1); // JSONB version 1
+        self.buf.put_slice(json_bytes);
+    }
+
+    /// Write optional JSONB (NULL if None)
+    ///
+    /// # Arguments
+    /// * `json_str` - Optional JSON string
+    pub fn write_jsonb_opt(&mut self, json_str: Option<&str>) {
+        match json_str {
+            Some(v) => self.write_jsonb(v),
+            None => self.write_null(),
+        }
+    }
+
+    /// Write NUMERIC from a decimal string
+    ///
+    /// Encodes a numeric string (e.g., "12345678901234567890") into PostgreSQL
+    /// binary NUMERIC format. Supports very large numbers (up to ~40 digits).
+    ///
+    /// PostgreSQL NUMERIC binary format:
+    /// - ndigits (i16): number of base-10000 digit groups
+    /// - weight (i16): weight of first digit (position relative to decimal point)
+    /// - sign (i16): 0x0000=positive, 0x4000=negative, 0xC000=NaN
+    /// - dscale (i16): display scale (decimal places to show)
+    /// - digits (i16[]): base-10000 digit groups
+    ///
+    /// # Arguments
+    /// * `s` - Numeric string (e.g., "12345", "-67890", "0")
+    ///
+    /// # Panics
+    /// Panics if the string is not a valid integer (no decimal point support).
+    pub fn write_numeric(&mut self, s: &str) {
+        // Handle empty or zero
+        if s.is_empty() || s == "0" || s == "-0" {
+            // Special case: zero
+            // ndigits=0, weight=0, sign=0, dscale=0
+            self.buf.put_i32(8); // length: 4 i16 values = 8 bytes
+            self.buf.put_i16(0); // ndigits
+            self.buf.put_i16(0); // weight
+            self.buf.put_i16(0); // sign (positive)
+            self.buf.put_i16(0); // dscale
+            return;
+        }
+
+        // Determine sign and get absolute value string
+        let (is_negative, abs_str) = if let Some(stripped) = s.strip_prefix('-') {
+            (true, stripped)
+        } else {
+            (false, s)
+        };
+
+        // Remove leading zeros (but keep at least one digit)
+        let abs_str = abs_str.trim_start_matches('0');
+        let abs_str = if abs_str.is_empty() { "0" } else { abs_str };
+
+        // Handle zero case after stripping
+        if abs_str == "0" {
+            self.buf.put_i32(8);
+            self.buf.put_i16(0);
+            self.buf.put_i16(0);
+            self.buf.put_i16(0);
+            self.buf.put_i16(0);
+            return;
+        }
+
+        // Convert to base-10000 digits
+        // PostgreSQL NUMERIC uses base 10000 for each digit group
+        let mut digits: Vec<i16> = Vec::new();
+        let len = abs_str.len();
+
+        // Process from right to left, 4 digits at a time
+        let mut pos = len;
+        while pos > 0 {
+            let start = pos.saturating_sub(4);
+            let chunk = &abs_str[start..pos];
+            let val: i16 = chunk.parse().expect("Invalid numeric digit");
+            digits.push(val);
+            pos = start;
+        }
+
+        // Reverse to get most significant first
+        digits.reverse();
+
+        // Remove leading zero groups (shouldn't happen after trim, but be safe)
+        while digits.len() > 1 && digits[0] == 0 {
+            digits.remove(0);
+        }
+
+        let ndigits = digits.len() as i16;
+        // Weight is the position of the first digit group relative to the decimal point
+        // For integer, weight = ndigits - 1 (counting from 0)
+        let weight = ndigits - 1;
+        let sign: i16 = if is_negative { 0x4000 } else { 0x0000 };
+        let dscale: i16 = 0; // No decimal places for integers
+
+        // Calculate total length: header (8 bytes) + digits (2 bytes each)
+        let total_len = 8 + (ndigits as i32 * 2);
+        self.buf.put_i32(total_len);
+        self.buf.put_i16(ndigits);
+        self.buf.put_i16(weight);
+        self.buf.put_i16(sign);
+        self.buf.put_i16(dscale);
+
+        for d in digits {
+            self.buf.put_i16(d);
+        }
+    }
+
     /// Finalize and return the buffer
     ///
     /// Writes the PostgreSQL binary COPY trailer and consumes self.
@@ -495,5 +617,134 @@ mod tests {
 
         // Header (19) + column count (2) + timestamp Some (12) + timestamp None (4) + trailer (2)
         assert_eq!(data.len(), 39);
+    }
+
+    #[test]
+    fn test_write_numeric_zero() {
+        let mut buf = BinaryCopyBuffer::new(1);
+        buf.start_row();
+        buf.write_numeric("0");
+        let data = buf.finish();
+
+        // Header (19) + column count (2) + length (4) + numeric header (8) + trailer (2) = 35
+        assert_eq!(data.len(), 35);
+
+        // Verify length prefix (8 bytes for zero numeric)
+        assert_eq!(&data[21..25], &[0, 0, 0, 8]);
+
+        // Verify numeric header: ndigits=0, weight=0, sign=0, dscale=0
+        assert_eq!(&data[25..27], &[0, 0]); // ndigits
+        assert_eq!(&data[27..29], &[0, 0]); // weight
+        assert_eq!(&data[29..31], &[0, 0]); // sign (positive)
+        assert_eq!(&data[31..33], &[0, 0]); // dscale
+    }
+
+    #[test]
+    fn test_write_numeric_small() {
+        let mut buf = BinaryCopyBuffer::new(1);
+        buf.start_row();
+        buf.write_numeric("1234");
+        let data = buf.finish();
+
+        // Header (19) + column count (2) + length (4) + numeric (8 + 2) + trailer (2) = 37
+        assert_eq!(data.len(), 37);
+
+        // Verify ndigits=1
+        assert_eq!(&data[25..27], &[0, 1]);
+        // Verify weight=0 (single digit group)
+        assert_eq!(&data[27..29], &[0, 0]);
+        // Verify sign=positive
+        assert_eq!(&data[29..31], &[0, 0]);
+        // Verify dscale=0
+        assert_eq!(&data[31..33], &[0, 0]);
+        // Verify digit: 1234 = 0x04D2
+        assert_eq!(&data[33..35], &[0x04, 0xD2]);
+    }
+
+    #[test]
+    fn test_write_numeric_large() {
+        let mut buf = BinaryCopyBuffer::new(1);
+        buf.start_row();
+        buf.write_numeric("12345678");
+        let data = buf.finish();
+
+        // ndigits=2: [1234, 5678]
+        // Header (19) + column count (2) + length (4) + numeric (8 + 4) + trailer (2) = 39
+        assert_eq!(data.len(), 39);
+
+        // Verify ndigits=2
+        assert_eq!(&data[25..27], &[0, 2]);
+        // Verify weight=1 (first digit has weight 1)
+        assert_eq!(&data[27..29], &[0, 1]);
+        // Verify digits: 1234, 5678
+        let d1 = i16::from_be_bytes([data[33], data[34]]);
+        let d2 = i16::from_be_bytes([data[35], data[36]]);
+        assert_eq!(d1, 1234);
+        assert_eq!(d2, 5678);
+    }
+
+    #[test]
+    fn test_write_numeric_negative() {
+        let mut buf = BinaryCopyBuffer::new(1);
+        buf.start_row();
+        buf.write_numeric("-42");
+        let data = buf.finish();
+
+        // Verify sign=0x4000 (negative)
+        assert_eq!(&data[29..31], &[0x40, 0x00]);
+        // Verify digit: 42
+        let d1 = i16::from_be_bytes([data[33], data[34]]);
+        assert_eq!(d1, 42);
+    }
+
+    #[test]
+    fn test_write_numeric_very_large() {
+        let mut buf = BinaryCopyBuffer::new(1);
+        buf.start_row();
+        buf.write_numeric("123456789012345678901234567890");
+        let data = buf.finish();
+
+        // 30 digits = 8 groups of 4 (last group partial)
+        // [12, 3456, 7890, 1234, 5678, 9012, 3456, 7890]
+        let ndigits = i16::from_be_bytes([data[25], data[26]]);
+        assert_eq!(ndigits, 8);
+
+        let weight = i16::from_be_bytes([data[27], data[28]]);
+        assert_eq!(weight, 7);
+    }
+
+    #[test]
+    fn test_write_jsonb() {
+        let mut buf = BinaryCopyBuffer::new(1);
+        buf.start_row();
+        buf.write_jsonb(r#"{"key":"value"}"#);
+        let data = buf.finish();
+
+        // Header (19) + column count (2) + length (4) + version (1) + json (15) + trailer (2) = 43
+        assert_eq!(data.len(), 43);
+
+        // Verify length prefix (16 = 1 version byte + 15 json bytes)
+        assert_eq!(&data[21..25], &[0, 0, 0, 16]);
+
+        // Verify JSONB version byte (1)
+        assert_eq!(data[25], 1);
+
+        // Verify JSON content
+        assert_eq!(&data[26..41], br#"{"key":"value"}"#);
+    }
+
+    #[test]
+    fn test_write_jsonb_opt() {
+        let mut buf = BinaryCopyBuffer::new(2);
+        buf.start_row();
+        buf.write_jsonb_opt(Some(r#"{"a":1}"#));
+        buf.write_jsonb_opt(None);
+        let data = buf.finish();
+
+        // Header (19) + column count (2) + jsonb Some (4+1+7=12) + jsonb None (4) + trailer (2)
+        assert_eq!(data.len(), 39);
+
+        // Verify first JSONB version byte
+        assert_eq!(data[25], 1);
     }
 }
