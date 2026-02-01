@@ -136,41 +136,61 @@ async fn rebuild_daily_statistics(pool: &PgPool) -> Result<()> {
         r#"
         INSERT INTO daily_statistics (
             date, blocks_count, transactions_count, cells_created, cells_consumed,
-            capacity_transferred, total_live_cells, total_data_size
+            capacity_transferred, total_live_cells, total_data_size, avg_block_time_ms
         )
-        WITH daily_blocks AS (
+        WITH block_times AS (
             SELECT 
+                number,
+                timestamp,
                 timestamp::date as date,
-                COUNT(*) as blocks_count,
-                SUM(transactions_count) as transactions_count
+                transactions_count,
+                EXTRACT(EPOCH FROM (timestamp - LAG(timestamp) OVER (ORDER BY number))) * 1000 as block_time_ms
             FROM blocks
-            GROUP BY timestamp::date
         ),
-        daily_cells AS (
+        daily_blocks AS (
+            SELECT 
+                date,
+                COUNT(*) as blocks_count,
+                SUM(transactions_count) as transactions_count,
+                AVG(block_time_ms)::int as avg_block_time_ms
+            FROM block_times
+            GROUP BY date
+        ),
+        cells_created_agg AS (
             SELECT 
                 b.timestamp::date as date,
-                SUM(CASE WHEN c.created_at_block = b.number THEN 1 ELSE 0 END) as cells_created,
-                SUM(CASE WHEN c.consumed_at_block = b.number THEN 1 ELSE 0 END) as cells_consumed,
-                SUM(CASE WHEN c.created_at_block = b.number THEN c.capacity ELSE 0 END) as capacity_transferred,
-                SUM(CASE WHEN c.created_at_block = b.number THEN c.data_size ELSE 0 END) as data_size_added,
-                SUM(CASE WHEN c.consumed_at_block = b.number THEN c.data_size ELSE 0 END) as data_size_consumed
-            FROM blocks b
-            LEFT JOIN cells c ON c.created_at_block = b.number OR c.consumed_at_block = b.number
+                COUNT(*) as cells_created,
+                SUM(c.capacity) as capacity_transferred,
+                SUM(c.data_size) as data_size_added
+            FROM cells c
+            JOIN blocks b ON b.number = c.created_at_block
+            GROUP BY b.timestamp::date
+        ),
+        cells_consumed_agg AS (
+            SELECT 
+                b.timestamp::date as date,
+                COUNT(*) as cells_consumed,
+                SUM(c.data_size) as data_size_consumed
+            FROM cells c
+            JOIN blocks b ON b.number = c.consumed_at_block
+            WHERE c.consumed_at_block IS NOT NULL
             GROUP BY b.timestamp::date
         )
         SELECT 
             db.date,
             db.blocks_count::int,
             db.transactions_count::int,
-            COALESCE(dc.cells_created, 0)::int,
-            COALESCE(dc.cells_consumed, 0)::int,
-            COALESCE(dc.capacity_transferred, 0),
-            SUM(COALESCE(dc.cells_created, 0) - COALESCE(dc.cells_consumed, 0)) 
+            COALESCE(cc.cells_created, 0)::int,
+            COALESCE(cd.cells_consumed, 0)::int,
+            COALESCE(cc.capacity_transferred, 0),
+            SUM(COALESCE(cc.cells_created, 0) - COALESCE(cd.cells_consumed, 0)) 
                 OVER (ORDER BY db.date) as total_live_cells,
-            SUM(COALESCE(dc.data_size_added, 0) - COALESCE(dc.data_size_consumed, 0)) 
-                OVER (ORDER BY db.date) as total_data_size
+            SUM(COALESCE(cc.data_size_added, 0) - COALESCE(cd.data_size_consumed, 0)) 
+                OVER (ORDER BY db.date) as total_data_size,
+            db.avg_block_time_ms
         FROM daily_blocks db
-        LEFT JOIN daily_cells dc ON db.date = dc.date
+        LEFT JOIN cells_created_agg cc ON db.date = cc.date
+        LEFT JOIN cells_consumed_agg cd ON db.date = cd.date
         ORDER BY db.date
         "#,
     )

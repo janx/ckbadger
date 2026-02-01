@@ -263,6 +263,11 @@ pub async fn execute(
         result.completed_indexes, total_indexes, result.completed_constraints, total_constraints
     );
 
+    sqlx::query("UPDATE sync_status SET indexes_deferred = false, indexes_dropped_at = NULL")
+        .execute(pool)
+        .await?;
+    info!("Cleared indexes_deferred flag in sync_status");
+
     db.complete_task(task_id, Some(serde_json::to_value(&result)?))
         .await?;
 

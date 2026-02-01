@@ -123,6 +123,21 @@ impl PerfStats {
 
 const CELL_CACHE_CAPACITY: usize = 200_000;
 
+/// Convert block time in seconds to a bucket for block_time_distribution.
+/// Matches the bucketing logic used in rebuild:
+/// - block_time < 1s → bucket 0
+/// - 1s <= block_time < 30s → floor(block_time)
+/// - block_time >= 30s → bucket 30
+fn block_time_to_bucket(block_time_seconds: i64) -> i32 {
+    if block_time_seconds < 1 {
+        0
+    } else if block_time_seconds < 30 {
+        block_time_seconds as i32
+    } else {
+        30
+    }
+}
+
 fn infer_is_mainnet(rpc_url: &str) -> bool {
     let lowered = rpc_url.to_lowercase();
     !(lowered.contains("testnet") || lowered.contains("devnet"))
@@ -1372,6 +1387,7 @@ impl Indexer {
     async fn maybe_submit_label_import_task(&self) -> Result<()> {
         use ckbadger_common::{LabelImportConfig, TaskBuilder};
 
+        // Check if token-labels directory exists
         // Use TOKEN_LABELS_PATH env var (for Docker) or fall back to relative path (for local dev)
         let token_labels_path =
             std::env::var("TOKEN_LABELS_PATH").unwrap_or_else(|_| "docs/token-labels".to_string());
@@ -2767,7 +2783,7 @@ impl Indexer {
                 if block_time_seconds >= 0 {
                     *batch_stats
                         .block_time_dist
-                        .entry(block_time_seconds as i32)
+                        .entry(block_time_to_bucket(block_time_seconds))
                         .or_default() += 1;
                     let block_time_ms = block_time_seconds * 1000;
                     let entry = batch_stats
@@ -3825,7 +3841,7 @@ impl Indexer {
                 if block_time_seconds >= 0 {
                     *batch_stats
                         .block_time_dist
-                        .entry(block_time_seconds as i32)
+                        .entry(block_time_to_bucket(block_time_seconds))
                         .or_default() += 1;
                     let block_time_ms = block_time_seconds * 1000;
                     let entry = batch_stats
@@ -4895,10 +4911,8 @@ impl Indexer {
         if let Some(prev_ts) = prev_timestamp {
             let block_time_seconds = (parsed.timestamp - *prev_ts).num_seconds();
             if block_time_seconds >= 0 {
-                *batch_stats
-                    .block_time_dist
-                    .entry(block_time_seconds as i32)
-                    .or_default() += 1;
+                let bucket = block_time_to_bucket(block_time_seconds);
+                *batch_stats.block_time_dist.entry(bucket).or_default() += 1;
                 let block_time_ms = block_time_seconds * 1000;
                 let entry = batch_stats
                     .daily_block_times

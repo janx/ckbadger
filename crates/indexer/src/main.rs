@@ -197,6 +197,32 @@ async fn main() -> Result<()> {
         info!("Indexes/constraints are deferred (from previous run), will auto-rebuild when caught up");
     }
 
+    // Check if statistics tables are empty while blocks exist (needs rebuild after DB restore)
+    if db_tip > 0 {
+        let stats_empty: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM daily_statistics")
+            .fetch_one(&pool)
+            .await?;
+
+        if stats_empty.0 == 0 {
+            let existing: Option<(i64,)> = sqlx::query_as(
+                "SELECT COUNT(*) FROM tasks WHERE task_type = 'statistics_rebuild' AND status IN ('pending', 'running')"
+            )
+            .fetch_optional(&pool)
+            .await?;
+
+            if existing.map(|r| r.0).unwrap_or(0) == 0 {
+                info!(
+                    "Statistics tables empty but blocks exist - submitting statistics_rebuild task"
+                );
+                sqlx::query(
+                    "INSERT INTO tasks (task_type, config, priority, max_retries) VALUES ('statistics_rebuild', '{}', 5, 3)"
+                )
+                .execute(&pool)
+                .await?;
+            }
+        }
+    }
+
     info!("Connecting to CKB node: {}", config.ckb_rpc_url);
 
     let indexer = Indexer::new(config.clone(), pool.clone()).await?;

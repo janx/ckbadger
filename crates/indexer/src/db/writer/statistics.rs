@@ -368,6 +368,14 @@ impl BatchWriter {
             return Ok(());
         }
 
+        let bucket = if block_time_seconds < 1 {
+            0
+        } else if block_time_seconds < 30 {
+            block_time_seconds as i32
+        } else {
+            30
+        };
+
         sqlx::query(
             r#"
             INSERT INTO block_time_distribution (bucket_seconds, block_count)
@@ -377,7 +385,7 @@ impl BatchWriter {
                 updated_at = NOW()
             "#,
         )
-        .bind(block_time_seconds as i32)
+        .bind(bucket)
         .execute(&self.pool)
         .await?;
 
@@ -733,15 +741,25 @@ impl BatchWriter {
             r#"
             INSERT INTO daily_statistics (
                 date, blocks_count, transactions_count, cells_created, cells_consumed,
-                capacity_transferred, total_live_cells, total_data_size
+                capacity_transferred, total_live_cells, total_data_size, avg_block_time_ms
             )
-            WITH daily_blocks AS (
+            WITH block_times AS (
                 SELECT 
+                    number,
+                    timestamp,
                     timestamp::date as date,
-                    COUNT(*) as blocks_count,
-                    SUM(transactions_count) as transactions_count
+                    transactions_count,
+                    EXTRACT(EPOCH FROM (timestamp - LAG(timestamp) OVER (ORDER BY number))) * 1000 as block_time_ms
                 FROM blocks
-                GROUP BY timestamp::date
+            ),
+            daily_blocks AS (
+                SELECT 
+                    date,
+                    COUNT(*) as blocks_count,
+                    SUM(transactions_count) as transactions_count,
+                    AVG(block_time_ms)::int as avg_block_time_ms
+                FROM block_times
+                GROUP BY date
             ),
             daily_cells AS (
                 SELECT 
@@ -765,7 +783,8 @@ impl BatchWriter {
                 SUM(COALESCE(dc.cells_created, 0) - COALESCE(dc.cells_consumed, 0)) 
                     OVER (ORDER BY db.date) as total_live_cells,
                 SUM(COALESCE(dc.data_size_added, 0) - COALESCE(dc.data_size_consumed, 0)) 
-                    OVER (ORDER BY db.date) as total_data_size
+                    OVER (ORDER BY db.date) as total_data_size,
+                db.avg_block_time_ms
             FROM daily_blocks db
             LEFT JOIN daily_cells dc ON db.date = dc.date
             ORDER BY db.date
