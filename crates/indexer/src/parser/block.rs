@@ -96,7 +96,9 @@ impl BlockParser {
 
     pub fn parse_timestamp(timestamp_hex: &str) -> DateTime<Utc> {
         let ms = Self::parse_hex_u64(timestamp_hex);
-        Utc.timestamp_millis_opt(ms as i64).unwrap()
+        Utc.timestamp_millis_opt(ms as i64)
+            .single()
+            .expect("Invalid timestamp in block header")
     }
 
     fn parse_nonce(nonce_hex: &str) -> Vec<u8> {

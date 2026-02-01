@@ -451,7 +451,8 @@ impl TaskBuilder {
     pub fn cycles_backfill(config: CyclesBackfillConfig) -> Self {
         Self {
             task_type: TaskType::CyclesBackfill,
-            config: serde_json::to_value(TaskConfig::CyclesBackfill(config)).unwrap(),
+            config: serde_json::to_value(TaskConfig::CyclesBackfill(config))
+                .expect("CyclesBackfillConfig should be serializable"),
             priority: 0,
             max_retries: 3,
         }
@@ -460,7 +461,8 @@ impl TaskBuilder {
     pub fn index_rebuild(config: IndexRebuildConfig) -> Self {
         Self {
             task_type: TaskType::IndexRebuild,
-            config: serde_json::to_value(TaskConfig::IndexRebuild(config)).unwrap(),
+            config: serde_json::to_value(TaskConfig::IndexRebuild(config))
+                .expect("IndexRebuildConfig should be serializable"),
             priority: 10,   // Higher priority by default
             max_retries: 1, // Index rebuilds should not retry by default
         }
@@ -469,7 +471,8 @@ impl TaskBuilder {
     pub fn label_import(config: LabelImportConfig) -> Self {
         Self {
             task_type: TaskType::LabelImport,
-            config: serde_json::to_value(TaskConfig::LabelImport(config)).unwrap(),
+            config: serde_json::to_value(TaskConfig::LabelImport(config))
+                .expect("LabelImportConfig should be serializable"),
             priority: 0,
             max_retries: 3,
         }
@@ -478,7 +481,8 @@ impl TaskBuilder {
     pub fn statistics_rebuild(config: StatisticsRebuildConfig) -> Self {
         Self {
             task_type: TaskType::StatisticsRebuild,
-            config: serde_json::to_value(TaskConfig::StatisticsRebuild(config)).unwrap(),
+            config: serde_json::to_value(TaskConfig::StatisticsRebuild(config))
+                .expect("StatisticsRebuildConfig should be serializable"),
             priority: 5,
             max_retries: 2,
         }
@@ -487,7 +491,8 @@ impl TaskBuilder {
     pub fn live_cells_populate(config: LiveCellsPopulateConfig) -> Self {
         Self {
             task_type: TaskType::LiveCellsPopulate,
-            config: serde_json::to_value(TaskConfig::LiveCellsPopulate(config)).unwrap(),
+            config: serde_json::to_value(TaskConfig::LiveCellsPopulate(config))
+                .expect("LiveCellsPopulateConfig should be serializable"),
             priority: 8,
             max_retries: 1,
         }

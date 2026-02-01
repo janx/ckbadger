@@ -110,8 +110,8 @@ pub fn script_to_address(
     }
 
     let hrp = match network {
-        "mainnet" => Hrp::parse("ckb").unwrap(),
-        _ => Hrp::parse("ckt").unwrap(),
+        "mainnet" => Hrp::parse("ckb").expect("'ckb' is a valid HRP"),
+        _ => Hrp::parse("ckt").expect("'ckt' is a valid HRP"),
     };
 
     let hash_type_byte = match hash_type {

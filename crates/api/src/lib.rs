@@ -45,7 +45,8 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            pool: PgPool::connect_lazy("postgres://localhost/ckbadger").unwrap(),
+            pool: PgPool::connect_lazy("postgres://localhost/ckbadger")
+                .expect("Failed to create lazy connection pool for default config"),
             redis_url: None,
             ckb_rpc_url: "http://localhost:8114".to_string(),
             ckb_network: "mainnet".to_string(),

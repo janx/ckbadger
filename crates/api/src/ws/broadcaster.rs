@@ -100,7 +100,7 @@ pub async fn start_block_broadcaster(
                 epoch_length,
                 avg_block_time,
                 estimated_epoch_time,
-                sync_status,
+                sync_status: Box::new(sync_status),
                 index_rebuild_status,
             };
             debug!(
@@ -111,7 +111,9 @@ pub async fn start_block_broadcaster(
             ws_manager.broadcast_block(msg);
             last_block_number = Some(number);
         } else {
-            let last = last_block_number.unwrap();
+            // Safe: we checked is_none() above and set last_block_number to Some
+            let last =
+                last_block_number.expect("last_block_number must be Some after initial setup");
             let new_blocks = sqlx::query_as::<
                 _,
                 (
@@ -149,7 +151,7 @@ pub async fn start_block_broadcaster(
                             epoch_length: ep_len,
                             avg_block_time,
                             estimated_epoch_time,
-                            sync_status,
+                            sync_status: Box::new(sync_status),
                             index_rebuild_status,
                         };
                         info!("Broadcasting new block: {}", num);
@@ -246,26 +248,56 @@ async fn calculate_epoch_stats(
 
 async fn build_sync_status(pool: &PgPool, cache: &CacheBackend, tip_block: i64) -> SyncStatus {
     let sync_status_from_redis: Option<SyncStatusData> = cache.get(SYNC_STATUS_REDIS_KEY).await;
-    let (synced_block, db_ema_rate) = match sync_status_from_redis.as_ref() {
-        Some(s) => (s.tip_block_number, s.sync_ema_rate),
-        None => {
-            let tip: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(number), 0) FROM blocks")
-                .fetch_one(pool)
-                .await
-                .unwrap_or(0);
-            (tip, None)
-        }
-    };
+    let (synced_block, db_ema_rate, sync_started_at, bulk_sync_completed_at) =
+        match sync_status_from_redis.as_ref() {
+            Some(s) => (
+                s.tip_block_number,
+                s.sync_ema_rate,
+                s.sync_started_at,
+                s.bulk_sync_completed_at,
+            ),
+            None => {
+                let tip: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(number), 0) FROM blocks")
+                    .fetch_one(pool)
+                    .await
+                    .unwrap_or(0);
+                (tip, None, None, None)
+            }
+        };
 
     let blocks_behind = tip_block - synced_block;
     let is_syncing = blocks_behind > 100;
+    let is_bulk_syncing = blocks_behind > 1000;
+
+    let sync_mode = if bulk_sync_completed_at.is_some() && !is_syncing {
+        "synced".to_string()
+    } else if is_bulk_syncing {
+        "bulk".to_string()
+    } else if is_syncing {
+        "normal".to_string()
+    } else {
+        "synced".to_string()
+    };
+
+    let now = chrono::Utc::now().timestamp();
+    let elapsed_time = sync_started_at.map(|started| {
+        let end = bulk_sync_completed_at.unwrap_or(now);
+        format_duration_smart((end - started) as f64)
+    });
+
+    let total_time =
+        if let (Some(started), Some(completed)) = (sync_started_at, bulk_sync_completed_at) {
+            Some(format_duration_smart((completed - started) as f64))
+        } else {
+            None
+        };
 
     let sync_progress_from_redis: Option<SyncProgressData> =
         cache.get(SYNC_PROGRESS_REDIS_KEY).await;
 
     let (progress, estimated_time, blocks_per_second, ema_blocks_per_second) =
         if let Some(ref sp) = sync_progress_from_redis {
-            let stale = Utc::now().timestamp() - sp.updated_at > 60;
+            let stale = chrono::Utc::now().timestamp() - sp.updated_at > 60;
             if !stale && is_syncing {
                 (
                     sp.progress_percentage,
@@ -331,6 +363,10 @@ async fn build_sync_status(pool: &PgPool, cache: &CacheBackend, tip_block: i64) 
         chart_data_may_be_incomplete: blocks_behind > 1000,
         blocks_per_second,
         ema_blocks_per_second,
+        sync_mode,
+        started_at: sync_started_at,
+        elapsed_time,
+        total_time,
     }
 }
 

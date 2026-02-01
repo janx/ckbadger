@@ -338,7 +338,7 @@ impl Indexer {
         let progress = Arc::new(SyncProgress::new(tip_number as u64, chain_tip));
 
         let cell_cache = Arc::new(tokio::sync::Mutex::new(LruCache::new(
-            NonZeroUsize::new(CELL_CACHE_CAPACITY).unwrap(),
+            NonZeroUsize::new(CELL_CACHE_CAPACITY).expect("CELL_CACHE_CAPACITY must be non-zero"),
         )));
 
         let copy_router = if config.use_copy_bulk_sync {
@@ -2149,7 +2149,10 @@ impl Indexer {
         }
 
         if self.should_use_copy() {
-            let copy_router = self.copy_router.as_ref().unwrap();
+            let copy_router = self
+                .copy_router
+                .as_ref()
+                .expect("copy_router must exist when should_use_copy() is true");
             let mut activity_data: Vec<(&ParsedActivity, i64, DateTime<Utc>)> = Vec::new();
             for (block_number, timestamp, activities) in activities_by_block {
                 for activity in activities {
@@ -3414,7 +3417,10 @@ impl Indexer {
         }
 
         if self.should_use_copy() {
-            let copy_router = self.copy_router.as_ref().unwrap();
+            let copy_router = self
+                .copy_router
+                .as_ref()
+                .expect("copy_router must exist when should_use_copy() is true");
             tokio::try_join!(
                 async {
                     if !txs_for_batch.is_empty() {

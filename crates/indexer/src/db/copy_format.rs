@@ -105,7 +105,7 @@ impl BinaryCopyBuffer {
     pub fn write_timestamptz(&mut self, dt: DateTime<Utc>) {
         self.buf.put_i32(8);
         let epoch = DateTime::parse_from_rfc3339("2000-01-01T00:00:00Z")
-            .unwrap()
+            .expect("PostgreSQL epoch is a valid date")
             .with_timezone(&Utc);
         let duration = dt.signed_duration_since(epoch);
         let usecs = duration.num_microseconds().unwrap_or(0);

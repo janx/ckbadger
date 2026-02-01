@@ -13,6 +13,10 @@ interface SyncStatus {
   chartDataMayBeIncomplete: boolean;
   blocksPerSecond: number | null;
   emaBlocksPerSecond: number | null;
+  syncMode: string;
+  startedAt: number | null;
+  elapsedTime: string | null;
+  totalTime: string | null;
 }
 
 interface IndexRebuildStatus {

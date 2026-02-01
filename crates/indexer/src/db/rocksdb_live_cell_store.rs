@@ -283,7 +283,10 @@ impl LiveCellStorage for RocksDbLiveCellStore {
         let _ = self.db.write(batch);
 
         {
-            let history = self.consumed_history.read().unwrap();
+            let history = self
+                .consumed_history
+                .read()
+                .expect("consumed_history lock poisoned");
             let to_restore: Vec<_> = history
                 .iter()
                 .filter(|r| r.consumed_at_block > rollback_to)
@@ -298,7 +301,10 @@ impl LiveCellStorage for RocksDbLiveCellStore {
         }
 
         {
-            let mut history = self.consumed_history.write().unwrap();
+            let mut history = self
+                .consumed_history
+                .write()
+                .expect("consumed_history lock poisoned");
             history.retain(|r| r.consumed_at_block <= rollback_to);
         }
 

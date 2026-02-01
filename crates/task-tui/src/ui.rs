@@ -193,11 +193,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),  // header
-            Constraint::Length(5),  // sync status
-            Constraint::Min(10),    // task table
-            Constraint::Length(10), // task detail
-            Constraint::Length(3),  // footer
+            Constraint::Length(3),
+            Constraint::Length(6),
+            Constraint::Min(10),
+            Constraint::Length(10),
+            Constraint::Length(3),
         ])
         .split(f.area());
 
@@ -237,7 +237,11 @@ fn draw_sync_status(f: &mut Frame, app: &App, area: Rect) {
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Length(1)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
         .split(inner);
 
     let (mode, mode_color) = if !sync.is_syncing {
@@ -266,12 +270,40 @@ fn draw_sync_status(f: &mut Frame, app: &App, area: Rect) {
     ]);
     f.render_widget(Paragraph::new(status_line), chunks[0]);
 
+    let mut info_spans = Vec::new();
+    if let Some(rate) = sync.rate {
+        if rate > 0.0 {
+            let rate_str = if rate >= 1000.0 {
+                format!("{:.1}K", rate / 1000.0)
+            } else {
+                format!("{:.0}", rate)
+            };
+            info_spans.push(Span::styled("Rate: ", Style::default().fg(Color::DarkGray)));
+            info_spans.push(Span::raw(format!("{} blk/s  ", rate_str)));
+        }
+    }
+    if let Some(ref elapsed) = sync.elapsed_time {
+        info_spans.push(Span::styled(
+            "Elapsed: ",
+            Style::default().fg(Color::DarkGray),
+        ));
+        info_spans.push(Span::raw(format!("{}  ", elapsed)));
+    }
+    if let Some(ref eta) = sync.eta {
+        info_spans.push(Span::styled("ETA: ", Style::default().fg(Color::DarkGray)));
+        info_spans.push(Span::raw(eta.clone()));
+    }
+
+    if !info_spans.is_empty() {
+        f.render_widget(Paragraph::new(Line::from(info_spans)), chunks[1]);
+    }
+
     let ratio = (sync.progress / 100.0).clamp(0.0, 1.0);
     let gauge = Gauge::default()
         .gauge_style(Style::default().fg(mode_color))
         .ratio(ratio)
         .label(format!("{:.2}%", sync.progress));
-    f.render_widget(gauge, chunks[1]);
+    f.render_widget(gauge, chunks[2]);
 }
 
 fn draw_task_table(f: &mut Frame, app: &mut App, area: Rect) {

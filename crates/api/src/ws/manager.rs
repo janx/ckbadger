@@ -14,6 +14,10 @@ pub struct SyncStatus {
     pub chart_data_may_be_incomplete: bool,
     pub blocks_per_second: Option<f64>,
     pub ema_blocks_per_second: Option<f64>,
+    pub sync_mode: String,
+    pub started_at: Option<i64>,
+    pub elapsed_time: Option<String>,
+    pub total_time: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,7 +44,7 @@ pub enum BroadcastMessage {
         epoch_length: i32,
         avg_block_time: String,
         estimated_epoch_time: String,
-        sync_status: SyncStatus,
+        sync_status: Box<SyncStatus>,
         index_rebuild_status: Option<IndexRebuildStatus>,
     },
     #[serde(rename = "new_transaction", rename_all = "camelCase")]

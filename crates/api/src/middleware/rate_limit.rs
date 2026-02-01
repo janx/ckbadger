@@ -262,14 +262,20 @@ pub struct ApiKeyRateLimitLayer {
 impl ApiKeyRateLimitLayer {
     pub fn new() -> Self {
         let anon_config = ApiKeyTier::Anonymous.rate_limit();
-        let anon_quota =
-            Quota::per_second(NonZeroU32::new(anon_config.requests_per_second).unwrap())
-                .allow_burst(NonZeroU32::new(anon_config.burst_size).unwrap());
+        let anon_quota = Quota::per_second(
+            NonZeroU32::new(anon_config.requests_per_second)
+                .expect("requests_per_second must be non-zero"),
+        )
+        .allow_burst(NonZeroU32::new(anon_config.burst_size).expect("burst_size must be non-zero"));
 
         let premium_config = ApiKeyTier::Premium.rate_limit();
-        let key_quota =
-            Quota::per_second(NonZeroU32::new(premium_config.requests_per_second).unwrap())
-                .allow_burst(NonZeroU32::new(premium_config.burst_size).unwrap());
+        let key_quota = Quota::per_second(
+            NonZeroU32::new(premium_config.requests_per_second)
+                .expect("requests_per_second must be non-zero"),
+        )
+        .allow_burst(
+            NonZeroU32::new(premium_config.burst_size).expect("burst_size must be non-zero"),
+        );
 
         Self {
             anonymous_limiter: Arc::new(RateLimiter::dashmap(anon_quota)),
@@ -360,7 +366,11 @@ where
                         };
 
                         if key_limiter
-                            .check_key_n(&key, NonZeroU32::new(cells_to_consume).unwrap())
+                            .check_key_n(
+                                &key,
+                                NonZeroU32::new(cells_to_consume)
+                                    .expect("cells_to_consume is always non-zero"),
+                            )
                             .is_err()
                         {
                             return Ok(RateLimitErrorWithTier {

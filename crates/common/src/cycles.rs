@@ -568,10 +568,14 @@ async fn run_ckb_debugger(mock_tx: &MockTransaction) -> Result<i64, String> {
         .await
         .map_err(|e| format!("Failed to write temp file: {}", e))?;
 
+    let temp_file_str = temp_file
+        .to_str()
+        .ok_or_else(|| "Temp file path contains invalid UTF-8".to_string())?;
+
     let output = Command::new("ckb-debugger")
         .args([
             "--tx-file",
-            temp_file.to_str().unwrap(),
+            temp_file_str,
             "--cell-index",
             "0",
             "--cell-type",

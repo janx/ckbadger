@@ -42,6 +42,10 @@ describe('useRealtimeStore', () => {
           chartDataMayBeIncomplete: false,
           blocksPerSecond: null,
           emaBlocksPerSecond: null,
+          syncMode: 'synced',
+          startedAt: null,
+          elapsedTime: null,
+          totalTime: null,
         },
       };
 
@@ -258,6 +262,10 @@ describe('useRealtimeStore', () => {
           chartDataMayBeIncomplete: false,
           blocksPerSecond: null,
           emaBlocksPerSecond: null,
+          syncMode: 'synced',
+          startedAt: null,
+          elapsedTime: null,
+          totalTime: null,
         },
       };
 
@@ -282,6 +290,10 @@ describe('useRealtimeStore', () => {
           chartDataMayBeIncomplete: false,
           blocksPerSecond: null,
           emaBlocksPerSecond: null,
+          syncMode: 'synced',
+          startedAt: null,
+          elapsedTime: null,
+          totalTime: null,
         },
       };
 
@@ -303,6 +315,10 @@ describe('useRealtimeStore', () => {
           chartDataMayBeIncomplete: false,
           blocksPerSecond: null,
           emaBlocksPerSecond: null,
+          syncMode: 'synced',
+          startedAt: null,
+          elapsedTime: null,
+          totalTime: null,
         },
       };
 

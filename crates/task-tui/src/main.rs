@@ -23,6 +23,9 @@ struct Args {
     #[arg(long, env = "DATABASE_URL")]
     database_url: String,
 
+    #[arg(long, env = "REDIS_URL")]
+    redis_url: Option<String>,
+
     #[arg(long, default_value = "1000")]
     refresh_ms: u64,
 }
@@ -38,7 +41,7 @@ async fn main() -> Result<()> {
         .connect(&args.database_url)
         .await?;
 
-    let db = TaskDb::new(pool);
+    let db = TaskDb::new(pool, args.redis_url.as_deref()).await;
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
