@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { Header } from '@/components/layout/header';
@@ -19,197 +19,17 @@ import { Capacity } from '@/components/ui/capacity';
 import { Address } from '@/components/ui/address';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { CellGraph } from '@/components/cell-graph';
-import {
-  api,
-  type CellDep,
-  type GraphNode,
-  type ScriptLookupResponse,
-  type AssetTransfer,
-} from '@/lib/api';
+import { api, type CellDep, type GraphNode, type ScriptLookupResponse } from '@/lib/api';
 import { formatTimeAgo, formatCkbAmount } from '@/lib/utils';
 import { ActivityIcon, ActivityBadge } from '@/components/activity';
-import type { Activity, ActivityType } from '@/types/activity';
-
-function useCyclesCalculation(hash: string, txCycles: number | undefined, isCellbase: boolean) {
-  const queryClient = useQueryClient();
-  const [isCalculating, setIsCalculating] = useState(false);
-  const [hasFailed, setHasFailed] = useState(false);
-  const [triggeredForHash, setTriggeredForHash] = useState<string | null>(null);
-
-  const parsedCycles = txCycles ?? null;
-  const hasCycles = parsedCycles !== null && parsedCycles > 0;
-  const needsCalculation = !isCellbase && !hasCycles && !hasFailed;
-
-  useEffect(() => {
-    setIsCalculating(false);
-    setHasFailed(false);
-    setTriggeredForHash(null);
-  }, [hash]);
-
-  useEffect(() => {
-    if (!needsCalculation || triggeredForHash === hash) return;
-
-    setTriggeredForHash(hash);
-
-    const trigger = async () => {
-      try {
-        const response = await api.triggerCyclesCalculation(hash);
-
-        if (response.status === 'done') {
-          queryClient.invalidateQueries({ queryKey: ['transaction', hash] });
-        } else if (response.status === 'failed' || response.status === 'notFound') {
-          setHasFailed(true);
-        } else {
-          setIsCalculating(true);
-        }
-      } catch {
-        setHasFailed(true);
-      }
-    };
-
-    trigger();
-  }, [needsCalculation, triggeredForHash, hash, queryClient]);
-
-  useEffect(() => {
-    if (!isCalculating) return;
-
-    const pollInterval = setInterval(async () => {
-      try {
-        const response = await api.getCyclesStatus(hash);
-
-        if (response.status === 'done') {
-          setIsCalculating(false);
-          queryClient.invalidateQueries({ queryKey: ['transaction', hash] });
-        } else if (response.status === 'failed' || response.status === 'notFound') {
-          setIsCalculating(false);
-          setHasFailed(true);
-        }
-      } catch {
-        setIsCalculating(false);
-        setHasFailed(true);
-      }
-    }, 2000);
-
-    return () => clearInterval(pollInterval);
-  }, [isCalculating, hash, queryClient]);
-
-  return {
-    cycles: parsedCycles,
-    hasCycles,
-    isCalculating,
-    hasFailed,
-  };
-}
-
-function formatAssetAmount(transfer: AssetTransfer): string {
-  if (!transfer.amount) return '1';
-  const decimals = transfer.tokenDecimals ?? 0;
-  if (decimals === 0) return BigInt(transfer.amount).toLocaleString();
-  const balanceBigInt = BigInt(transfer.amount);
-  const divisor = BigInt(10 ** decimals);
-  const wholePart = balanceBigInt / divisor;
-  const fractionalPart = balanceBigInt % divisor;
-  const fractionalStr = fractionalPart.toString().padStart(decimals, '0');
-  const trimmedFractional = fractionalStr.replace(/0+$/, '');
-  if (trimmedFractional === '') return wholePart.toLocaleString();
-  return `${wholePart.toLocaleString()}.${trimmedFractional}`;
-}
-
-function getAssetLabel(transfer: AssetTransfer): string {
-  if (transfer.tokenSymbol) return transfer.tokenSymbol;
-  if (transfer.tokenName) return transfer.tokenName;
-  switch (transfer.assetType) {
-    case 'spore':
-      return 'Spore';
-    case 'dob/0':
-    case 'dob/1':
-      return 'DOB';
-    case 'mnft':
-      return 'M-NFT';
-    case 'dotbit':
-      return '.bit';
-    case 'dao':
-      return 'DAO';
-    default:
-      return transfer.assetType.toUpperCase();
-  }
-}
-
-function getAssetBadgeVariant(category: string): 'green' | 'amber' | 'red' | 'gray' | 'purple' {
-  switch (category) {
-    case 'token':
-      return 'amber';
-    case 'dob':
-      return 'purple';
-    case 'nft':
-      return 'green';
-    case 'dao':
-      return 'gray';
-    default:
-      return 'gray';
-  }
-}
-
-function getActivityLabel(activityType: ActivityType): string {
-  const labels: Record<ActivityType, string> = {
-    CKB_TRANSFER: 'CKB Transfer',
-    CELLBASE_REWARD: 'Mining Reward',
-    TOKEN_MINT: 'Token Mint',
-    TOKEN_TRANSFER: 'Token Transfer',
-    TOKEN_BURN: 'Token Burn',
-    DOB_MINT: 'DOB Mint',
-    DOB_TRANSFER: 'DOB Transfer',
-    DOB_BURN: 'DOB Burn',
-    NFT_MINT: 'NFT Mint',
-    NFT_TRANSFER: 'NFT Transfer',
-    DAO_DEPOSIT: 'DAO Deposit',
-    DAO_WITHDRAW_REQUEST: 'DAO Withdraw Request',
-    DAO_WITHDRAW_COMPLETE: 'DAO Withdraw Complete',
-    SCRIPT_DEPLOY: 'Script Deploy',
-    RGBPP_TRANSFER: 'RGB++ Transfer',
-    RGBPP_LEAP_IN: 'RGB++ Leap In',
-    RGBPP_LEAP_OUT: 'RGB++ Leap Out',
-    RGBPP_ISSUANCE: 'RGB++ Issuance',
-  };
-  return labels[activityType] || 'Activity';
-}
-
-function formatActivityAmount(activity: Activity): string | null {
-  if (!activity.amount || activity.amount === '0') return null;
-
-  const isCkbActivity =
-    activity.activityCategory === 'ckb' ||
-    activity.activityCategory === 'cellbase' ||
-    activity.activityCategory === 'dao';
-
-  if (isCkbActivity) {
-    const ckb = formatCkbAmount(activity.amount);
-    return `${ckb.full} CKB`;
-  }
-
-  const metadata = activity.metadata as {
-    symbol?: string;
-    decimals?: number;
-    tokenName?: string;
-  };
-
-  if (metadata.decimals !== undefined) {
-    const decimals = metadata.decimals;
-    const rawAmount = BigInt(activity.amount);
-    const divisor = BigInt(10 ** decimals);
-    const whole = rawAmount / divisor;
-    const fraction = rawAmount % divisor;
-    const formatted =
-      decimals > 0
-        ? `${whole.toLocaleString()}.${fraction.toString().padStart(decimals, '0').slice(0, 4).replace(/0+$/, '') || '0'}`
-        : whole.toLocaleString();
-
-    const symbol = metadata.symbol || metadata.tokenName || '';
-    return symbol ? `${formatted} ${symbol}` : formatted;
-  }
-
-  return BigInt(activity.amount).toLocaleString();
-}
+import {
+  formatAssetAmount,
+  getAssetLabel,
+  getAssetBadgeVariant,
+  getActivityLabel,
+  formatActivityAmount,
+} from '@/lib/format-asset';
+import { useCyclesCalculation } from '@/hooks/useCyclesCalculation';
 
 export default function TransactionDetailPage() {
   const params = useParams();
