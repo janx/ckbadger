@@ -41,6 +41,19 @@ impl ParsedActivity {
 pub struct ActivityParser;
 
 impl ActivityParser {
+    /// Parse CKB transfer activities from a transaction.
+    ///
+    /// This uses a flow-based algorithm to properly attribute transfers:
+    /// 1. Calculate net balance change for each address (output - input)
+    /// 2. Addresses with positive net change are receivers
+    /// 3. Addresses with negative net change are senders
+    /// 4. Match senders to receivers using a greedy flow algorithm
+    ///
+    /// The algorithm ensures:
+    /// - Total sent by all senders = Total received by all receivers (conservation)
+    /// - Each transfer has a specific from/to pair with exact amount
+    /// - No O(N²) explosion - at most O(senders × receivers) activities, but with
+    ///   amount tracking to prevent duplicate counting
     pub fn parse_ckb_transfers(
         tx: &TransactionView,
         tx_hash: &[u8],
@@ -52,6 +65,7 @@ impl ActivityParser {
             return vec![];
         }
 
+        // Calculate total input capacity per address
         let mut input_capacity: HashMap<Vec<u8>, i128> = HashMap::new();
         for cell in input_cells {
             *input_capacity
@@ -59,6 +73,7 @@ impl ActivityParser {
                 .or_insert(0) += cell.capacity as i128;
         }
 
+        // Calculate total output capacity per address
         let mut output_capacity: HashMap<Vec<u8>, i128> = HashMap::new();
         for cell in output_cells {
             *output_capacity
@@ -66,65 +81,98 @@ impl ActivityParser {
                 .or_insert(0) += cell.capacity as i128;
         }
 
+        // Calculate net balance change for each address
+        // Positive = net receiver, Negative = net sender
         let all_addresses: std::collections::HashSet<Vec<u8>> = input_capacity
             .keys()
             .chain(output_capacity.keys())
             .cloned()
             .collect();
 
+        // Collect senders (net negative) and receivers (net positive)
+        let mut senders: Vec<(Vec<u8>, i128)> = Vec::new();
+        let mut receivers: Vec<(Vec<u8>, i128)> = Vec::new();
+
+        for addr in all_addresses {
+            let input = *input_capacity.get(&addr).unwrap_or(&0);
+            let output = *output_capacity.get(&addr).unwrap_or(&0);
+            let net_change = output - input;
+
+            if net_change > 0 {
+                receivers.push((addr, net_change));
+            } else if net_change < 0 {
+                senders.push((addr, -net_change)); // Store as positive amount
+            }
+            // net_change == 0 means no transfer for this address (e.g., just reorganizing cells)
+        }
+
+        // If no senders or no receivers, no transfers occurred
+        // (This handles self-transfers where all outputs go back to sender)
+        if senders.is_empty() || receivers.is_empty() {
+            return vec![];
+        }
+
+        // Sort by amount descending for more intuitive pairing (largest transfers first)
+        senders.sort_by(|a, b| b.1.cmp(&a.1));
+        receivers.sort_by(|a, b| b.1.cmp(&a.1));
+
+        // Greedy flow algorithm: match senders to receivers
+        // This produces at most (senders + receivers - 1) activities
         let mut activities = Vec::new();
         let mut activity_index: i16 = 0;
 
-        for from_addr in input_capacity.keys() {
-            let sent = *input_capacity.get(from_addr).unwrap_or(&0);
-            let received = *output_capacity.get(from_addr).unwrap_or(&0);
+        let mut sender_remaining: Vec<i128> = senders.iter().map(|(_, amt)| *amt).collect();
+        let mut receiver_remaining: Vec<i128> = receivers.iter().map(|(_, amt)| *amt).collect();
 
-            if sent <= received {
+        let mut sender_idx = 0;
+        let mut receiver_idx = 0;
+
+        while sender_idx < senders.len() && receiver_idx < receivers.len() {
+            let send_amt = sender_remaining[sender_idx];
+            let recv_amt = receiver_remaining[receiver_idx];
+
+            if send_amt == 0 {
+                sender_idx += 1;
+                continue;
+            }
+            if recv_amt == 0 {
+                receiver_idx += 1;
                 continue;
             }
 
-            let net_sent = sent - received;
+            // Transfer the minimum of what sender can send and receiver can receive
+            let transfer_amount = std::cmp::min(send_amt, recv_amt);
 
-            for to_addr in &all_addresses {
-                if to_addr == from_addr {
-                    continue;
-                }
+            let activity_id = ParsedActivity::compute_activity_id(
+                tx_hash,
+                &ActivityType::CkbTransfer,
+                activity_index,
+            );
 
-                let to_received = *output_capacity.get(to_addr).unwrap_or(&0);
-                let to_sent = *input_capacity.get(to_addr).unwrap_or(&0);
+            activities.push(ParsedActivity {
+                activity_id,
+                activity_type: ActivityType::CkbTransfer,
+                activity_category: ActivityCategory::Ckb,
+                tx_hash: tx_hash.to_vec(),
+                tx_index,
+                activity_index,
+                from_lock_hash: Some(senders[sender_idx].0.clone()),
+                to_lock_hash: Some(receivers[receiver_idx].0.clone()),
+                amount: transfer_amount.to_string(),
+                asset_id: None,
+                metadata: ActivityMetadata::CkbTransfer {}.to_json(),
+            });
 
-                if to_received <= to_sent {
-                    continue;
-                }
+            activity_index += 1;
 
-                let net_received = to_received - to_sent;
-                let transfer_amount = std::cmp::min(net_sent, net_received);
+            sender_remaining[sender_idx] -= transfer_amount;
+            receiver_remaining[receiver_idx] -= transfer_amount;
 
-                if transfer_amount <= 0 {
-                    continue;
-                }
-
-                let activity_id = ParsedActivity::compute_activity_id(
-                    tx_hash,
-                    &ActivityType::CkbTransfer,
-                    activity_index,
-                );
-
-                activities.push(ParsedActivity {
-                    activity_id,
-                    activity_type: ActivityType::CkbTransfer,
-                    activity_category: ActivityCategory::Ckb,
-                    tx_hash: tx_hash.to_vec(),
-                    tx_index,
-                    activity_index,
-                    from_lock_hash: Some(from_addr.clone()),
-                    to_lock_hash: Some(to_addr.clone()),
-                    amount: transfer_amount.to_string(),
-                    asset_id: None,
-                    metadata: ActivityMetadata::CkbTransfer {}.to_json(),
-                });
-
-                activity_index += 1;
+            if sender_remaining[sender_idx] == 0 {
+                sender_idx += 1;
+            }
+            if receiver_remaining[receiver_idx] == 0 {
+                receiver_idx += 1;
             }
         }
 
@@ -1091,6 +1139,122 @@ mod tests {
             ActivityParser::parse_ckb_transfers(&tx, &tx_hash, 1, &output_cells, &input_cells);
 
         assert!(activities.is_empty()); // No net transfer
+    }
+
+    #[test]
+    fn test_parse_ckb_transfer_many_to_many() {
+        let tx = create_regular_tx();
+        let tx_hash = crate::rpc::parse_hex_to_bytes(&tx.hash);
+
+        // 3 senders, 2 receivers
+        let input_cells = vec![
+            create_parsed_cell(50_00000000, "0xaa0001"),
+            create_parsed_cell(30_00000000, "0xaa0002"),
+            create_parsed_cell(20_00000000, "0xaa0003"),
+        ];
+
+        let output_cells = vec![
+            create_parsed_cell(60_00000000, "0xbb0001"),
+            create_parsed_cell(40_00000000, "0xbb0002"),
+        ];
+
+        let activities =
+            ActivityParser::parse_ckb_transfers(&tx, &tx_hash, 1, &output_cells, &input_cells);
+
+        // Flow algorithm: at most (3 senders + 2 receivers - 1) = 4 activities
+        assert!(activities.len() <= 4);
+
+        let total_transferred: i128 = activities
+            .iter()
+            .map(|a| a.amount.parse::<i128>().unwrap())
+            .sum();
+        assert_eq!(total_transferred, 100_00000000);
+
+        for activity in &activities {
+            assert!(activity.from_lock_hash.is_some());
+            assert!(activity.to_lock_hash.is_some());
+            assert!(activity.amount.parse::<i128>().unwrap() > 0);
+        }
+    }
+
+    #[test]
+    fn test_parse_ckb_transfer_partial_change() {
+        let tx = create_regular_tx();
+        let tx_hash = crate::rpc::parse_hex_to_bytes(&tx.hash);
+
+        // Sender sends 100, gets 30 back, net transfer = 70
+        let input_cells = vec![create_parsed_cell(100_00000000, "0xcc0001")];
+
+        let output_cells = vec![
+            create_parsed_cell(70_00000000, "0xdd0001"),
+            create_parsed_cell(30_00000000, "0xcc0001"),
+        ];
+
+        let activities =
+            ActivityParser::parse_ckb_transfers(&tx, &tx_hash, 1, &output_cells, &input_cells);
+
+        assert_eq!(activities.len(), 1);
+        assert_eq!(activities[0].amount, "7000000000");
+    }
+
+    #[test]
+    fn test_parse_ckb_transfer_exact_amounts_conserved() {
+        let tx = create_regular_tx();
+        let tx_hash = crate::rpc::parse_hex_to_bytes(&tx.hash);
+
+        // Multiple senders and receivers: net sent = 250, net received = 250
+        let input_cells = vec![
+            create_parsed_cell(100_00000000, "0xee0001"),
+            create_parsed_cell(200_00000000, "0xee0002"),
+        ];
+
+        let output_cells = vec![
+            create_parsed_cell(150_00000000, "0xff0001"),
+            create_parsed_cell(100_00000000, "0xff0002"),
+            create_parsed_cell(50_00000000, "0xee0001"),
+        ];
+
+        let activities =
+            ActivityParser::parse_ckb_transfers(&tx, &tx_hash, 1, &output_cells, &input_cells);
+
+        let total_transferred: i128 = activities
+            .iter()
+            .map(|a| a.amount.parse::<i128>().unwrap())
+            .sum();
+        assert_eq!(total_transferred, 250_00000000);
+    }
+
+    #[test]
+    fn test_parse_ckb_transfer_stress_many_addresses() {
+        let tx = create_regular_tx();
+        let tx_hash = crate::rpc::parse_hex_to_bytes(&tx.hash);
+
+        // 10 senders × 10 receivers - old O(N²) would create 100 activities
+        let mut input_cells = Vec::new();
+        for i in 0..10u8 {
+            input_cells.push(create_parsed_cell(10_00000000, &format!("0x1100{:02x}", i)));
+        }
+
+        let mut output_cells = Vec::new();
+        for i in 0..10u8 {
+            output_cells.push(create_parsed_cell(10_00000000, &format!("0x2200{:02x}", i)));
+        }
+
+        let activities =
+            ActivityParser::parse_ckb_transfers(&tx, &tx_hash, 1, &output_cells, &input_cells);
+
+        // Flow algorithm: at most (10 + 10 - 1) = 19 activities
+        assert!(
+            activities.len() <= 19,
+            "Expected at most 19 activities, got {}",
+            activities.len()
+        );
+
+        let total_transferred: i128 = activities
+            .iter()
+            .map(|a| a.amount.parse::<i128>().unwrap())
+            .sum();
+        assert_eq!(total_transferred, 100_00000000);
     }
 
     #[test]

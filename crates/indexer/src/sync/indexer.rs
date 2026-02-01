@@ -2041,6 +2041,18 @@ impl Indexer {
             }
 
             if !block_activities.is_empty() {
+                let original_count = block_activities.len();
+                let mut seen_ids: HashSet<Vec<u8>> = HashSet::new();
+                block_activities.retain(|a| seen_ids.insert(a.activity_id.clone()));
+
+                if block_activities.len() < original_count {
+                    debug!(
+                        "Block {}: Removed {} duplicate activity_ids",
+                        parsed.number,
+                        original_count - block_activities.len()
+                    );
+                }
+
                 activities_by_block.push((parsed.number, parsed.timestamp, block_activities));
             }
         }
