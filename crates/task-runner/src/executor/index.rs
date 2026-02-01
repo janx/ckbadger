@@ -269,19 +269,28 @@ pub async fn execute(
     Ok(())
 }
 
+const MAX_RETRIES: usize = 3;
+const RETRY_DELAY_MS: u64 = 5000;
+
+struct IndexBuildTask {
+    index_name: String,
+    sql: String,
+    attempt: usize,
+}
+
 async fn rebuild_partitioned_index(
     pool: &PgPool,
     idx: &DeferrableIndex,
     suffixes: &[&str],
     max_parallel: usize,
 ) -> Result<()> {
-    let mut join_set: JoinSet<Result<String>> = JoinSet::new();
-    let mut pending: Vec<&str> = suffixes.to_vec();
+    let effective_parallel = max_parallel.min(4);
 
-    while !pending.is_empty() || !join_set.is_empty() {
-        while join_set.len() < max_parallel && !pending.is_empty() {
-            let suffix = pending.remove(0);
-            let pool = pool.clone();
+    let mut join_set: JoinSet<std::result::Result<String, (IndexBuildTask, String)>> =
+        JoinSet::new();
+    let mut pending: Vec<IndexBuildTask> = suffixes
+        .iter()
+        .map(|suffix| {
             let table = format!("{}{}", idx.table, suffix);
             let base_name = &idx.name[4..];
             let index_name = format!("{}_{}{}", idx.table, base_name, suffix);
@@ -290,17 +299,93 @@ async fn rebuild_partitioned_index(
                 .replace("{name}", &index_name)
                 .replace("{table}", &table);
             let sql = definition.replace("CREATE INDEX", "CREATE INDEX CONCURRENTLY IF NOT EXISTS");
+            IndexBuildTask {
+                index_name,
+                sql,
+                attempt: 1,
+            }
+        })
+        .collect();
+    let mut retry_queue: Vec<IndexBuildTask> = Vec::new();
+
+    while !pending.is_empty() || !join_set.is_empty() || !retry_queue.is_empty() {
+        while join_set.len() < effective_parallel && !pending.is_empty() {
+            let task = pending.remove(0);
+            let pool = pool.clone();
+            let sql = task.sql.clone();
+            let index_name = task.index_name.clone();
+            let attempt = task.attempt;
 
             join_set.spawn(async move {
-                sqlx::query(&sql).execute(&pool).await?;
-                Ok(index_name)
+                match sqlx::query(&sql).execute(&pool).await {
+                    Ok(_) => Ok(index_name),
+                    Err(e) => Err((
+                        IndexBuildTask {
+                            index_name,
+                            sql,
+                            attempt,
+                        },
+                        e.to_string(),
+                    )),
+                }
+            });
+        }
+
+        while join_set.len() < effective_parallel && !retry_queue.is_empty() {
+            let mut task = retry_queue.remove(0);
+            task.attempt += 1;
+            let pool = pool.clone();
+            let sql = task.sql.clone();
+            let index_name = task.index_name.clone();
+            let attempt = task.attempt;
+
+            info!(
+                "Retrying index {} (attempt {}/{})",
+                index_name, attempt, MAX_RETRIES
+            );
+
+            join_set.spawn(async move {
+                tokio::time::sleep(tokio::time::Duration::from_millis(RETRY_DELAY_MS)).await;
+                match sqlx::query(&sql).execute(&pool).await {
+                    Ok(_) => Ok(index_name),
+                    Err(e) => Err((
+                        IndexBuildTask {
+                            index_name,
+                            sql,
+                            attempt,
+                        },
+                        e.to_string(),
+                    )),
+                }
             });
         }
 
         if let Some(result) = join_set.join_next().await {
             match result {
-                Ok(Ok(_name)) => {}
-                Ok(Err(e)) => warn!("Failed to create partition index: {}", e),
+                Ok(Ok(_)) => {}
+                Ok(Err((task, err_str))) => {
+                    let is_lock_timeout = err_str.contains("lock timeout")
+                        || err_str.contains("could not obtain lock")
+                        || err_str.contains("canceling statement due to lock timeout");
+
+                    if is_lock_timeout && task.attempt < MAX_RETRIES {
+                        warn!(
+                            "Lock timeout for {}, will retry (attempt {}/{})",
+                            task.index_name, task.attempt, MAX_RETRIES
+                        );
+                        retry_queue.push(task);
+                    } else if is_lock_timeout {
+                        warn!(
+                            "Failed to create index {} after {} retries: {}",
+                            task.index_name, MAX_RETRIES, err_str
+                        );
+                    } else {
+                        warn!(
+                            "Failed to create partition index {}: {}",
+                            task.index_name, err_str
+                        );
+                    }
+                }
                 Err(e) => warn!("Task panicked: {}", e),
             }
         }

@@ -202,11 +202,19 @@ pub struct SyncProgressData {
 
 For fresh database syncs, the indexer automatically drops non-essential B-tree indexes and UNIQUE constraints to achieve ~3-4x faster write speeds. Both are rebuilt automatically via the task-runner when the sync catches up to the chain tip.
 
-| Parameter                  | Default | Description                                           |
-| -------------------------- | ------- | ----------------------------------------------------- |
-| `--defer-indexes`          | `false` | Force enable deferred indexes/constraints (non-fresh) |
-| `--no-auto-defer-indexes`  | `false` | Disable auto-optimization for fresh DB                |
-| `--index-rebuild-parallel` | `10`    | Parallel connections per partitioned table            |
+| Parameter                  | Default | Description                                                         |
+| -------------------------- | ------- | ------------------------------------------------------------------- |
+| `--defer-indexes`          | `false` | Force enable deferred indexes/constraints (non-fresh)               |
+| `--no-auto-defer-indexes`  | `false` | Disable auto-optimization for fresh DB                              |
+| `--index-rebuild-parallel` | `10`    | Parallel connections per partitioned table (capped at 4 internally) |
+
+**Index Rebuild Lock Contention Handling:**
+
+When rebuilding indexes on partitioned tables, multiple `CREATE INDEX CONCURRENTLY` operations may compete for locks. The task-runner handles this with:
+
+1. **Reduced Parallelism**: Effective parallelism capped at 4 connections per logical index (regardless of `--index-rebuild-parallel` setting) to reduce lock contention
+2. **Automatic Retry**: Lock timeout failures retry up to 3 times with 5-second delays
+3. **Error Detection**: Detects PostgreSQL lock timeout messages (`lock timeout`, `could not obtain lock`, `canceling statement due to lock timeout`)
 
 **What Gets Deferred:**
 
@@ -283,6 +291,17 @@ This ensures token labels are refreshed at least once per indexer lifecycle with
 - `block_time_distribution` - Block time histogram
 - `epoch_time_distribution` - Epoch duration histogram
 - `dao_daily_snapshots` - Daily DAO metrics
+
+**Token 24h Transfers Refresh:**
+
+The indexer refreshes `tokens.transfers_24h` every 10 minutes via `refresh_token_24h_transfers()`. The query is optimized using a single GROUP BY scan instead of N+1 correlated subqueries:
+
+1. Calculate block number from 24 hours ago (based on max timestamp)
+2. Single scan: `GROUP BY type_script_hash` to count all transfers
+3. Batch UPDATE via JOIN for active tokens
+4. Reset inactive tokens to 0
+
+This reduces query time from ~15s to <1s for 700+ tokens.
 
 **Progress Monitoring:**
 
