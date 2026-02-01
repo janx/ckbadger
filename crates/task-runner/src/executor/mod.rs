@@ -134,13 +134,14 @@ impl TaskExecutor {
     }
 
     async fn execute_label_import(&self, task: &Task) -> Result<()> {
-        let config: LabelImportConfig = match task.config_typed() {
+        let mut config: LabelImportConfig = match task.config_typed() {
             Some(TaskConfig::LabelImport(c)) => c,
-            _ => LabelImportConfig {
-                token_labels_path: self.token_labels_path.clone(),
-                ..Default::default()
-            },
+            _ => LabelImportConfig::default(),
         };
+
+        if config.token_labels_path == "docs/token-labels" {
+            config.token_labels_path = self.token_labels_path.clone();
+        }
 
         labels::execute(&self.db, &self.pool, task.id, &config).await
     }

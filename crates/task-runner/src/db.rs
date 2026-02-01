@@ -117,12 +117,35 @@ impl TaskDb {
         task_id: Uuid,
         result: Option<serde_json::Value>,
     ) -> Result<()> {
+        let completion_message = result.as_ref().and_then(|r| r.as_object()).and_then(|obj| {
+            let mut parts = Vec::new();
+            for (key, label) in [
+                ("udt_labels_imported", "UDT labels"),
+                ("script_labels_imported", "scripts"),
+                ("cells_populated", "cells"),
+                ("blocks_processed", "blocks"),
+                ("transactions_updated", "txs"),
+            ] {
+                if let Some(count) = obj.get(key).and_then(|v| v.as_i64()) {
+                    if count > 0 {
+                        parts.push(format!("{} {}", count, label));
+                    }
+                }
+            }
+            if parts.is_empty() {
+                None
+            } else {
+                Some(format!("Completed: {}", parts.join(", ")))
+            }
+        });
+
         sqlx::query(
             r#"
             UPDATE tasks
             SET status = 'completed',
                 completed_at = NOW(),
                 progress_current = progress_total,
+                progress_message = COALESCE($3, progress_message),
                 result = COALESCE($2, result),
                 heartbeat_at = NOW()
             WHERE id = $1
@@ -130,6 +153,7 @@ impl TaskDb {
         )
         .bind(task_id)
         .bind(result)
+        .bind(completion_message)
         .execute(&self.pool)
         .await?;
 

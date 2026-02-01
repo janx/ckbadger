@@ -86,6 +86,23 @@ pub async fn execute(
         config.token_labels_path, config.network, config.import_udt, config.import_scripts
     );
 
+    let base_path = Path::new(&config.token_labels_path);
+    if !base_path.exists() {
+        let msg = format!(
+            "Token labels path not found: {}. No labels imported.",
+            config.token_labels_path
+        );
+        info!("{}", msg);
+        db.update_progress(task_id, 100, 100, Some(&msg), None)
+            .await?;
+        db.complete_task(
+            task_id,
+            Some(serde_json::to_value(LabelImportResult::default())?),
+        )
+        .await?;
+        return Ok(());
+    }
+
     let mut result = LabelImportResult::default();
 
     if config.import_udt {
