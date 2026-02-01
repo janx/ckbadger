@@ -850,27 +850,32 @@ impl Indexer {
                         continue;
                     }
 
-                    // Check for reorg before processing
-                    if let Some(ref stored_hash) = db_tip_hash {
-                        if db_tip > 0 {
-                            match self
-                                .check_and_handle_reorg(db_tip as u64, stored_hash)
-                                .await?
-                            {
-                                Some(ReorgAction::Handled(_)) => {
-                                    info!("Reorg handled, draining stale batches");
-                                    self.reorg_notify_flag.store(true, Ordering::SeqCst);
-                                    Self::drain_channel(&mut parse_rx).await;
-                                    continue;
+                    // Check for reorg before processing - skip during bulk sync
+                    // Historical blocks are already finalized (CKB finalizes after 24 blocks),
+                    // so reorg checks are only needed when approaching the chain tip.
+                    let blocks_behind = chain_tip.saturating_sub(db_tip as u64);
+                    if blocks_behind <= self.config.bulk_sync_threshold {
+                        if let Some(ref stored_hash) = db_tip_hash {
+                            if db_tip > 0 {
+                                match self
+                                    .check_and_handle_reorg(db_tip as u64, stored_hash)
+                                    .await?
+                                {
+                                    Some(ReorgAction::Handled(_)) => {
+                                        info!("Reorg handled, draining stale batches");
+                                        self.reorg_notify_flag.store(true, Ordering::SeqCst);
+                                        Self::drain_channel(&mut parse_rx).await;
+                                        continue;
+                                    }
+                                    Some(ReorgAction::DeepForkPaused) => {
+                                        warn!("Deep fork detected, sync paused");
+                                        self.reorg_notify_flag.store(true, Ordering::SeqCst);
+                                        Self::drain_channel(&mut parse_rx).await;
+                                        sleep(Duration::from_secs(30)).await;
+                                        continue;
+                                    }
+                                    None => {}
                                 }
-                                Some(ReorgAction::DeepForkPaused) => {
-                                    warn!("Deep fork detected, sync paused");
-                                    self.reorg_notify_flag.store(true, Ordering::SeqCst);
-                                    Self::drain_channel(&mut parse_rx).await;
-                                    sleep(Duration::from_secs(30)).await;
-                                    continue;
-                                }
-                                None => {}
                             }
                         }
                     }
@@ -1094,15 +1099,20 @@ impl Indexer {
             return Ok(SyncAction::CaughtUp);
         }
 
-        if let Some(ref stored_hash) = db_tip_hash {
-            if db_tip > 0 {
-                match self
-                    .check_and_handle_reorg(db_tip as u64, stored_hash)
-                    .await?
-                {
-                    Some(ReorgAction::Handled(_)) => return Ok(SyncAction::ReorgHandled),
-                    Some(ReorgAction::DeepForkPaused) => return Ok(SyncAction::DeepForkPaused),
-                    None => {}
+        // Check for reorg - skip during bulk sync since historical blocks are finalized
+        // (CKB finalizes after 24 blocks, bulk_sync_threshold is 72)
+        let blocks_behind = chain_tip.saturating_sub(start_block);
+        if blocks_behind <= self.config.bulk_sync_threshold {
+            if let Some(ref stored_hash) = db_tip_hash {
+                if db_tip > 0 {
+                    match self
+                        .check_and_handle_reorg(db_tip as u64, stored_hash)
+                        .await?
+                    {
+                        Some(ReorgAction::Handled(_)) => return Ok(SyncAction::ReorgHandled),
+                        Some(ReorgAction::DeepForkPaused) => return Ok(SyncAction::DeepForkPaused),
+                        None => {}
+                    }
                 }
             }
         }

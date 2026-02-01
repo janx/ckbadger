@@ -162,4 +162,17 @@ mod tests {
         assert_eq!(default_bulk_sync_threshold(), DEEP_FORK_DEPTH * 2);
         assert_eq!(default_bulk_sync_threshold(), 72);
     }
+
+    #[test]
+    fn test_bulk_sync_threshold_exceeds_finalization() {
+        // CKB finalizes after 24 blocks. bulk_sync_threshold must exceed this
+        // to ensure reorg checks are only skipped for finalized blocks.
+        const CKB_FINALIZATION_DEPTH: u64 = 24;
+        assert!(
+            default_bulk_sync_threshold() > CKB_FINALIZATION_DEPTH,
+            "bulk_sync_threshold ({}) must exceed CKB finalization depth ({})",
+            default_bulk_sync_threshold(),
+            CKB_FINALIZATION_DEPTH
+        );
+    }
 }

@@ -19,14 +19,24 @@ A chain reorganization occurs when the CKB node switches to a different fork of 
 
 ## Reorg Detection
 
-The indexer detects reorgs by comparing the parent hash of the chain's block at height N with our stored block hash at height N-1:
+The indexer detects reorgs by comparing the stored block hash at the DB tip with the chain's block hash at the same height:
 
 ```
-DB Block N-1 hash: 0xabc...
-Chain Block N parent_hash: 0xdef...  <- Mismatch indicates reorg
+DB Block N hash: 0xabc...
+Chain Block N hash: 0xdef...  <- Mismatch indicates reorg
 ```
 
 When a mismatch is detected, the indexer walks backwards to find the fork point (last common ancestor).
+
+### Bulk Sync Optimization
+
+During bulk sync (when more than `bulk_sync_threshold` blocks behind the chain tip, default 72), reorg checks are **skipped**. This is safe because:
+
+- CKB finalizes blocks after 24 confirmations
+- `bulk_sync_threshold = 72` (2 × DEEP_FORK_DEPTH) ensures only finalized blocks are synced
+- Historical blocks cannot be reorganized
+
+Reorg detection resumes automatically when the indexer approaches the chain tip.
 
 ## Handling Strategies
 

@@ -184,11 +184,13 @@ If `write_parsed_batch()` fails:
 
 ### Reorg Detection
 
-Before processing each batch:
+Before processing each batch (only when close to chain tip):
 
 1. Fetch current db_tip and hash
 2. Compare with chain's block at that height
 3. If mismatch: handle reorg, drain stale batches
+
+**Bulk Sync Optimization**: During bulk sync (blocks_remaining > bulk_sync_threshold), reorg checks are skipped since historical blocks are already finalized (CKB finalizes after 24 blocks).
 
 ### Deep Fork
 
