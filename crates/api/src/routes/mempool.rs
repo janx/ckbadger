@@ -274,7 +274,7 @@ async fn get_mempool_transactions(
         });
     }
 
-    transactions.sort_by(|a, b| b.fee_rate.partial_cmp(&a.fee_rate).unwrap());
+    transactions.sort_by(|a, b| b.fee_rate.total_cmp(&a.fee_rate));
 
     state
         .cache
@@ -315,7 +315,7 @@ async fn get_mempool_blocks(
         all_txs.push((hash.clone(), size, fee, cycles, fee_rate));
     }
 
-    all_txs.sort_by(|a, b| b.4.partial_cmp(&a.4).unwrap());
+    all_txs.sort_by(|a, b| b.4.total_cmp(&a.4));
 
     let mut pending_blocks: Vec<MempoolBlock> = Vec::new();
     let mut current_block_txs: Vec<(u64, u64, u64, f64)> = Vec::new();
@@ -392,7 +392,7 @@ fn create_mempool_block(
 
     let median_fee_rate = if !fee_rates.is_empty() {
         let mut sorted = fee_rates.clone();
-        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        sorted.sort_by(|a, b| a.total_cmp(b));
         let mid = sorted.len() / 2;
         if sorted.len() % 2 == 0 {
             (sorted[mid - 1] + sorted[mid]) / 2.0
@@ -516,7 +516,7 @@ async fn get_mempool_blocks_internal(state: &AppState) -> Result<MempoolBlocksRe
         all_txs.push((hash.clone(), size, fee, cycles, fee_rate));
     }
 
-    all_txs.sort_by(|a, b| b.4.partial_cmp(&a.4).unwrap());
+    all_txs.sort_by(|a, b| b.4.total_cmp(&a.4));
 
     let mut pending_blocks: Vec<MempoolBlock> = Vec::new();
     let mut current_block_txs: Vec<(u64, u64, u64, f64)> = Vec::new();
