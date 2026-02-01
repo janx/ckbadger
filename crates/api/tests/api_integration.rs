@@ -18,13 +18,13 @@ fn test_config(pool: sqlx::PgPool) -> AppConfig {
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
-async fn test_health_endpoint(pool: sqlx::PgPool) {
+async fn test_network_stats_returns_ok(pool: sqlx::PgPool) {
     let mut config = test_config(pool);
     config.ckb_network = "testnet".to_string();
     let app = create_router(config).await;
 
     let request = Request::builder()
-        .uri("/api/v1/status")
+        .uri("/api/v1/statistics/network")
         .body(Body::empty())
         .unwrap();
 
@@ -2714,6 +2714,7 @@ async fn test_assets_dob_returns_real_statistics(pool: sqlx::PgPool) {
         .await
         .unwrap();
 
+    let cluster_id_hex = format!("0x{}", hex::encode(&cluster_id));
     for i in 0u8..5 {
         let tx_hash = vec![0x70 + i; 32];
         let from_lock: Option<Vec<u8>> = if i == 0 {
@@ -2722,22 +2723,34 @@ async fn test_assets_dob_returns_real_statistics(pool: sqlx::PgPool) {
             Some(vec![0x80 + i; 32])
         };
         let to_lock = vec![0x90 + i; 32];
+        let activity_id = vec![0xD0 + i; 32];
+        let spore_id = vec![0x50u8; 32];
+
+        let activity_type = if i == 0 { "DOB_MINT" } else { "DOB_TRANSFER" };
+        let metadata = serde_json::json!({
+            "clusterId": cluster_id_hex,
+            "contentType": "dob/0"
+        });
 
         sqlx::query(
             r#"
-            INSERT INTO dob_transfers (
-                dob_id, cluster_id, dob_type, tx_hash, block_number,
-                from_lock_hash, to_lock_hash, event_type, content_type, timestamp
-            ) VALUES ($1, $2, 'dob/0', $3, $4, $5, $6, $7, 'dob/0', NOW())
+            INSERT INTO activities (
+                activity_id, activity_type, activity_category, block_number, tx_hash,
+                tx_index, activity_index, from_lock_hash, to_lock_hash, amount, asset_id,
+                metadata, timestamp
+            ) VALUES ($1, $2, 'dob', $3, $4, $5, $6, $7, $8, 1, $9, $10, NOW())
             "#,
         )
-        .bind(vec![0x50u8; 32])
-        .bind(&cluster_id)
-        .bind(&tx_hash)
+        .bind(&activity_id)
+        .bind(activity_type)
         .bind(100i64 + i64::from(i))
+        .bind(&tx_hash)
+        .bind(0i32)
+        .bind(i as i16)
         .bind(from_lock.as_deref())
         .bind(&to_lock)
-        .bind(if i == 0 { "mint" } else { "transfer" })
+        .bind(&spore_id)
+        .bind(metadata)
         .execute(&pool)
         .await
         .unwrap();
@@ -2771,8 +2784,8 @@ async fn test_assets_dob_returns_real_statistics(pool: sqlx::PgPool) {
 
 #[sqlx::test(migrator = "MIGRATOR")]
 async fn test_assets_nft_returns_real_statistics(pool: sqlx::PgPool) {
-    let class_id = vec![0x01u8; 32];
-    let issuer_id = vec![0x02u8; 32];
+    let class_id = vec![0x01u8; 24];
+    let issuer_id = vec![0x02u8; 20];
     let owner_lock_hash = vec![0x03u8; 32];
     let type_script_hash = vec![0x04u8; 32];
     let tx_hash = vec![0x05u8; 32];
@@ -2802,24 +2815,35 @@ async fn test_assets_nft_returns_real_statistics(pool: sqlx::PgPool) {
             Some(vec![0x80 + i; 32])
         };
         let to_lock = vec![0x90 + i; 32];
-        let token_id = vec![0xA0 + i; 32];
+        let activity_id = vec![0xA0 + i; 32];
+        let mut asset_id = class_id.clone();
+        asset_id.extend_from_slice(&[0x00, 0x00, 0x00, i]);
+
+        let activity_type = if i == 0 { "NFT_MINT" } else { "NFT_TRANSFER" };
+        let metadata = serde_json::json!({
+            "nftType": "mnft",
+            "name": "Test NFT"
+        });
 
         sqlx::query(
             r#"
-            INSERT INTO nft_transfers (
-                nft_id, nft_type, issuer_id, class_id, tx_hash, block_number,
-                from_lock_hash, to_lock_hash, event_type, name, timestamp
-            ) VALUES ($1, 'mnft', $2, $3, $4, $5, $6, $7, $8, 'Test NFT', NOW())
+            INSERT INTO activities (
+                activity_id, activity_type, activity_category, block_number, tx_hash,
+                tx_index, activity_index, from_lock_hash, to_lock_hash, amount, asset_id,
+                metadata, timestamp
+            ) VALUES ($1, $2, 'nft', $3, $4, $5, $6, $7, $8, 1, $9, $10, NOW())
             "#,
         )
-        .bind(&token_id)
-        .bind(&issuer_id)
-        .bind(&class_id)
-        .bind(&tx_hash)
+        .bind(&activity_id)
+        .bind(activity_type)
         .bind(100i64 + i64::from(i))
+        .bind(&tx_hash)
+        .bind(0i32)
+        .bind(i as i16)
         .bind(from_lock.as_deref())
         .bind(&to_lock)
-        .bind(if i == 0 { "mint" } else { "transfer" })
+        .bind(&asset_id)
+        .bind(metadata)
         .execute(&pool)
         .await
         .unwrap();
