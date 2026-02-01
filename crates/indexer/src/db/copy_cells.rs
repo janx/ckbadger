@@ -112,7 +112,7 @@ impl Default for CopyCellsWriter {
 /// use ckbadger_indexer::parser::cell::ParsedCell;
 ///
 /// # async fn example(client: &tokio_postgres::Client, cells: Vec<ParsedCell>) -> anyhow::Result<()> {
-/// let tx_hash = &[0u8; 32];
+/// let tx_hash: &[u8] = &[0u8; 32];
 /// let data: Vec<_> = cells.iter().enumerate()
 ///     .map(|(i, cell)| (tx_hash, i as i16, cell, 12345i64))
 ///     .collect();

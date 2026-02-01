@@ -3,6 +3,8 @@ use reqwest::Client;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+pub use ckbadger_common::{parse_capacity, parse_hex_to_bytes, parse_hex_u32};
+
 use super::types::*;
 
 #[derive(Clone)]
@@ -180,21 +182,4 @@ pub struct TxStatus {
 fn parse_hex_u64(hex: &str) -> Result<u64> {
     let hex = hex.strip_prefix("0x").unwrap_or(hex);
     u64::from_str_radix(hex, 16).map_err(|e| anyhow!("Failed to parse hex: {}", e))
-}
-
-pub fn parse_hex_to_bytes(hex: &str) -> Vec<u8> {
-    let hex = hex.strip_prefix("0x").unwrap_or(hex);
-    hex::decode(hex).unwrap_or_default()
-}
-
-pub fn parse_hex_u32(hex: &str) -> u32 {
-    let hex = hex.strip_prefix("0x").unwrap_or(hex);
-    u32::from_str_radix(hex, 16).unwrap_or(0)
-}
-
-pub fn parse_capacity(hex: &str) -> String {
-    let hex = hex.strip_prefix("0x").unwrap_or(hex);
-    u64::from_str_radix(hex, 16)
-        .map(|v| v.to_string())
-        .unwrap_or_else(|_| "0".to_string())
 }

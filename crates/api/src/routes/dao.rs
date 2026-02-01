@@ -11,7 +11,7 @@ use std::time::Duration;
 use crate::response::{
     decode_cursor_single, encode_cursor_single, ok, ApiError, ApiResult, CursorPaginatedResponse,
 };
-use crate::utils::script_to_address;
+use crate::utils::{script_to_address, shannon_to_ckb};
 use crate::AppState;
 
 const CHART_CACHE_TTL: Duration = Duration::from_secs(3600);
@@ -753,19 +753,6 @@ fn status_to_string(status: i16) -> String {
         1 => "withdrawing".to_string(),
         2 => "withdrawn".to_string(),
         _ => "unknown".to_string(),
-    }
-}
-
-fn shannon_to_ckb(shannon: &str) -> String {
-    let num: u128 = shannon.parse().unwrap_or(0);
-    let ckb = num / 100_000_000;
-    let remainder = num % 100_000_000;
-    if remainder == 0 {
-        format!("{}", ckb)
-    } else {
-        format!("{}.{:08}", ckb, remainder)
-            .trim_end_matches('0')
-            .to_string()
     }
 }
 

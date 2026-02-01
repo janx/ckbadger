@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use crate::cache::{CacheKeys, CacheTtl};
 use crate::response::{ok, ApiError, ApiResult};
-use crate::utils::script_to_address;
+use crate::utils::{format_duration, script_to_address, shannon_to_ckb};
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -695,30 +695,6 @@ async fn fetch_tip_block_from_ckb(ckb_rpc_url: &str) -> Result<u64, String> {
     u64::from_str_radix(hex, 16).map_err(|e| e.to_string())
 }
 
-fn format_duration(seconds: u64) -> String {
-    if seconds < 60 {
-        format!("{}s", seconds)
-    } else if seconds < 3600 {
-        format!("{}m", seconds / 60)
-    } else if seconds < 86400 {
-        let hours = seconds / 3600;
-        let mins = (seconds % 3600) / 60;
-        if mins > 0 {
-            format!("{}h {}m", hours, mins)
-        } else {
-            format!("{}h", hours)
-        }
-    } else {
-        let days = seconds / 86400;
-        let hours = (seconds % 86400) / 3600;
-        if hours > 0 {
-            format!("{}d {}h", days, hours)
-        } else {
-            format!("{}d", days)
-        }
-    }
-}
-
 async fn fetch_network_stats_from_db(
     state: &AppState,
 ) -> Result<
@@ -1193,19 +1169,6 @@ async fn get_miner_address_distribution_chart(
         .await;
 
     ok(response)
-}
-
-fn shannon_to_ckb(shannon: &str) -> String {
-    let num: u128 = shannon.parse().unwrap_or(0);
-    let ckb = num / 100_000_000;
-    let remainder = num % 100_000_000;
-    if remainder == 0 {
-        format!("{}", ckb)
-    } else {
-        format!("{}.{:08}", ckb, remainder)
-            .trim_end_matches('0')
-            .to_string()
-    }
 }
 
 async fn get_total_supply_chart(

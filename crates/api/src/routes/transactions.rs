@@ -6,6 +6,7 @@ use axum::{
 use ckbadger_common::dao::{
     is_genesis_special_burn_cell, GENESIS_SPECIAL_BURN_CELL_VIRTUAL_OCCUPIED,
 };
+use ckbadger_common::parse_hex_to_bytes;
 use ckbadger_common::sync::{SyncStatusData, SYNC_STATUS_REDIS_KEY};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -417,11 +418,6 @@ async fn fetch_tx_size_from_rpc(rpc_url: &str, tx_hash: &str) -> Option<i32> {
     #[derive(serde::Deserialize)]
     struct Script {
         args: String,
-    }
-
-    fn parse_hex_to_bytes(hex: &str) -> Vec<u8> {
-        let hex = hex.strip_prefix("0x").unwrap_or(hex);
-        hex::decode(hex).unwrap_or_default()
     }
 
     let client = reqwest::Client::new();

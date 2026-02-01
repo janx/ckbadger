@@ -171,7 +171,7 @@ async fn test_get_cells_info_batch_returns_empty_for_consumed(pool: PgPool) {
 async fn test_reorg_restores_live_cells(pool: PgPool) {
     let writer = BatchWriter::new(pool.clone());
 
-    sqlx::query("INSERT INTO sync_status (id, tip_block_number, tip_block_hash) VALUES (1, 0, '') ON CONFLICT (id) DO NOTHING")
+    sqlx::query("INSERT INTO sync_status (id) VALUES (1) ON CONFLICT (id) DO NOTHING")
         .execute(&pool)
         .await
         .unwrap();

@@ -401,12 +401,6 @@ async fn test_execute_reorg_updates_sync_status(pool: PgPool) {
     insert_test_block(&pool, 100, &block_100_hash, &block_99_hash).await;
     insert_test_block(&pool, 101, &block_101_hash, &block_100_hash).await;
 
-    sqlx::query("UPDATE sync_status SET tip_block_number = 101, tip_block_hash = $1 WHERE id = 1")
-        .bind(&block_101_hash)
-        .execute(&pool)
-        .await
-        .unwrap();
-
     let new_tip_hash = vec![0xFFu8; 32];
 
     writer
@@ -421,14 +415,14 @@ async fn test_execute_reorg_updates_sync_status(pool: PgPool) {
         .await
         .unwrap();
 
-    let (tip_number, last_reorg_depth): (i64, Option<i32>) =
-        sqlx::query_as("SELECT tip_block_number, last_reorg_depth FROM sync_status WHERE id = 1")
+    let (last_reorg_depth, deep_fork_detected): (Option<i32>, bool) =
+        sqlx::query_as("SELECT last_reorg_depth, deep_fork_detected FROM sync_status WHERE id = 1")
             .fetch_one(&pool)
             .await
             .unwrap();
 
-    assert_eq!(tip_number, 100);
     assert_eq!(last_reorg_depth, Some(1));
+    assert!(!deep_fork_detected);
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]

@@ -10,6 +10,7 @@ use tracing::{debug, error, info};
 
 use super::manager::{BroadcastMessage, IndexRebuildStatus, SyncStatus, WsManager};
 use crate::cache::CacheBackend;
+use crate::utils::format_duration;
 
 pub(crate) const FAST_SYNC_THRESHOLD: i64 = 100;
 
@@ -384,30 +385,6 @@ async fn build_index_rebuild_status(
         current_index,
         progress,
     })
-}
-
-fn format_duration(seconds: u64) -> String {
-    if seconds < 60 {
-        format!("{}s", seconds)
-    } else if seconds < 3600 {
-        format!("{}m", seconds / 60)
-    } else if seconds < 86400 {
-        let hours = seconds / 3600;
-        let mins = (seconds % 3600) / 60;
-        if mins > 0 {
-            format!("{}h {}m", hours, mins)
-        } else {
-            format!("{}h", hours)
-        }
-    } else {
-        let days = seconds / 86400;
-        let hours = (seconds % 86400) / 3600;
-        if hours > 0 {
-            format!("{}d {}h", days, hours)
-        } else {
-            format!("{}d", days)
-        }
-    }
 }
 
 async fn fetch_tip_block(ckb_rpc_url: &str) -> Result<u64, String> {

@@ -17,7 +17,7 @@ use std::sync::Arc;
 use crate::response::{
     decode_cursor, encode_cursor, ok, ApiError, ApiResult, CursorPaginatedResponse,
 };
-use crate::utils::{address_to_lock_script_hash, is_ckb_address, script_to_address};
+use crate::utils::{address_to_lock_script_hash, is_ckb_address, script_to_address, shannon_to_ckb};
 use crate::AppState;
 
 struct DepGroupParseResult {
@@ -1036,19 +1036,6 @@ async fn lookup_code_cell_scripts(
         None
     } else {
         Some(scripts)
-    }
-}
-
-fn shannon_to_ckb(shannon: &str) -> String {
-    let num: u128 = shannon.parse().unwrap_or(0);
-    let ckb = num / 100_000_000;
-    let remainder = num % 100_000_000;
-    if remainder == 0 {
-        format!("{}", ckb)
-    } else {
-        format!("{}.{:08}", ckb, remainder)
-            .trim_end_matches('0')
-            .to_string()
     }
 }
 

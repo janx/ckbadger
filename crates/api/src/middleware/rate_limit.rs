@@ -25,8 +25,10 @@ pub struct RateLimitLayer {
 
 impl RateLimitLayer {
     pub fn new(requests_per_second: u32, burst_size: u32) -> Self {
-        let quota = Quota::per_second(NonZeroU32::new(requests_per_second).unwrap())
-            .allow_burst(NonZeroU32::new(burst_size).unwrap());
+        let requests_per_second = requests_per_second.max(1);
+        let burst_size = burst_size.max(1);
+        let quota = Quota::per_second(NonZeroU32::new(requests_per_second).expect("max(1) ensures non-zero"))
+            .allow_burst(NonZeroU32::new(burst_size).expect("max(1) ensures non-zero"));
         let limiter = Arc::new(RateLimiter::direct(quota));
         Self { limiter }
     }
@@ -123,8 +125,10 @@ impl<S> Layer<S> for IpRateLimitLayer {
     type Service = IpRateLimitService<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
-        let quota = Quota::per_second(NonZeroU32::new(self.requests_per_second).unwrap())
-            .allow_burst(NonZeroU32::new(self.burst_size).unwrap());
+        let requests_per_second = self.requests_per_second.max(1);
+        let burst_size = self.burst_size.max(1);
+        let quota = Quota::per_second(NonZeroU32::new(requests_per_second).expect("max(1) ensures non-zero"))
+            .allow_burst(NonZeroU32::new(burst_size).expect("max(1) ensures non-zero"));
 
         let limiter = Arc::new(RateLimiter::dashmap(quota));
 

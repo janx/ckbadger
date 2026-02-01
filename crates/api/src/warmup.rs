@@ -1,3 +1,4 @@
+use crate::utils::shannon_to_ckb_u128;
 use crate::AppState;
 use ckbadger_common::dao::GENESIS_BURNT;
 use std::sync::Arc;
@@ -360,9 +361,9 @@ async fn warmup_total_supply(state: &AppState) -> Result<(), String> {
                 serde_json::json!({
                     "date": date.format("%Y/%m/%d").to_string(),
                     "values": {
-                        "circulating": shannon_to_ckb(liquid),
-                        "locked": shannon_to_ckb(locked),
-                        "burnt": shannon_to_ckb(total_burnt)
+                        "circulating": shannon_to_ckb_u128(liquid),
+                        "locked": shannon_to_ckb_u128(locked),
+                        "burnt": shannon_to_ckb_u128(total_burnt)
                     }
                 })
             },
@@ -479,16 +480,4 @@ fn compact_to_difficulty(compact: i64) -> u64 {
     };
 
     difficulty as u64
-}
-
-fn shannon_to_ckb(shannon: u128) -> String {
-    let ckb = shannon / 100_000_000;
-    let remainder = shannon % 100_000_000;
-    if remainder == 0 {
-        format!("{}", ckb)
-    } else {
-        format!("{}.{:08}", ckb, remainder)
-            .trim_end_matches('0')
-            .to_string()
-    }
 }
