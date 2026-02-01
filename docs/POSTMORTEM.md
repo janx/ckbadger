@@ -1360,4 +1360,60 @@ const HASH_PARTITION_SUFFIXES: &[&str] = &["_p00", ..., "_p15"];
 
 ---
 
-_Last updated: 2026-01-30_
+### IDX-007: Task-runner dao_daily_snapshots rebuild missing cumulative fields (2026-02-01)
+
+**Symptom**: After database rebuild and running `statistics_rebuild` task, DAO charts, Total Supply chart, and Secondary Issuance chart showed incorrect or empty data.
+
+- Total Supply Chart: `burnt` layer only showed genesis burnt (8.4B), missing secondary burnt
+- Secondary Issuance Chart: Completely empty (no data points)
+- DAO Circulation Ratio: Potentially incorrect values
+
+**Root Cause**: The task-runner's `rebuild_dao_daily_snapshots` function in `crates/task-runner/src/executor/statistics.rs` was implemented incorrectly compared to the indexer's version in `crates/indexer/src/db/writer/statistics.rs`:
+
+1. **Missing cumulative fields**: Did not query `block_secondary_issuance` table, leaving `cumulative_burnt`, `cumulative_mining_reward`, `cumulative_deposit_compensation` as NULL
+2. **Wrong field names**: Used `total_deposited`, `active_deposits`, `unique_depositors` instead of schema fields `total_deposit`, `depositors_count`
+3. **Missing `dao_data`**: Did not store the raw DAO bytes
+4. **Wrong deposit query**: Used `withdraw_request_tx IS NULL` instead of timestamp-based logic
+
+```rust
+// WRONG: Task-runner implementation was completely different from indexer
+// - Did not query block_secondary_issuance for cumulative values
+// - Used wrong column names
+// - Used block-number based deposit logic instead of timestamp-based
+
+// CORRECT: Must match indexer's update_dao_daily_snapshot() exactly
+let secondary_issuance = sqlx::query_as::<_, (String, String, String)>(
+    r#"
+    SELECT
+        COALESCE(SUM(burnt), 0)::text,
+        COALESCE(SUM(miner_secondary), 0)::text,
+        COALESCE(SUM(dao_compensation), 0)::text
+    FROM block_secondary_issuance
+    WHERE block_timestamp::date <= $1
+    "#,
+)
+.bind(date)
+.fetch_one(pool)
+.await?;
+```
+
+**Impact**: Charts relying on `dao_daily_snapshots` displayed incorrect data:
+
+| Chart              | API Query              | Effect of NULL cumulative fields            |
+| ------------------ | ---------------------- | ------------------------------------------- |
+| Total Supply       | `cumulative_burnt`     | Only genesis 8.4B shown as burnt            |
+| Secondary Issuance | `cumulative_*` columns | WHERE clause filters all rows → empty chart |
+
+**Lesson**: When two codepaths (indexer sync vs task-runner rebuild) populate the same table, they MUST produce identical output. Add integration tests that verify the rebuild produces the same schema/values as incremental updates.
+
+**Test Coverage Added**: `crates/task-runner/tests/dao_daily_snapshot.rs` - 5 tests verifying cumulative fields, deposit totals, and DAO field parsing.
+
+**Files**:
+
+- `crates/task-runner/src/executor/statistics.rs` - Fixed `update_dao_daily_snapshot()`
+- `crates/task-runner/src/lib.rs` - Added lib.rs to export modules for testing
+- `crates/task-runner/tests/dao_daily_snapshot.rs` - New integration tests
+
+---
+
+_Last updated: 2026-02-01_

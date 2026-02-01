@@ -379,75 +379,93 @@ async fn rebuild_dao_daily_snapshots(pool: &PgPool) -> Result<()> {
     Ok(())
 }
 
-async fn update_dao_daily_snapshot(pool: &PgPool, date: NaiveDate) -> Result<()> {
-    let block_data: Option<(i64, Vec<u8>)> = sqlx::query_as(
+pub async fn update_dao_daily_snapshot(pool: &PgPool, date: NaiveDate) -> Result<()> {
+    // Query DAO deposit statistics for this date
+    // Uses deposit_timestamp and withdraw_timestamp to determine active deposits at end of day
+    let stats = sqlx::query_as::<_, (String, i64, String, i64)>(
         r#"
-        SELECT number, dao
-        FROM blocks
-        WHERE timestamp::date = $1
-        ORDER BY number DESC
-        LIMIT 1
+        SELECT 
+            COALESCE(SUM(capacity::numeric), 0)::text as total_deposit,
+            COUNT(DISTINCT lock_script_hash) as depositors_count,
+            COALESCE(SUM(CASE WHEN deposit_timestamp::date = $1 THEN capacity::numeric ELSE 0 END), 0)::text as daily_deposit,
+            COUNT(CASE WHEN deposit_timestamp::date = $1 THEN 1 END) as daily_deposit_count
+        FROM dao_deposits
+        WHERE deposit_timestamp::date <= $1
+          AND (withdraw_timestamp IS NULL OR withdraw_timestamp::date > $1)
         "#,
+    )
+    .bind(date)
+    .fetch_one(pool)
+    .await?;
+
+    // Get DAO field from the last block of the day
+    let dao_data = sqlx::query_as::<_, (Vec<u8>,)>(
+        "SELECT dao FROM blocks WHERE timestamp::date = $1 ORDER BY number DESC LIMIT 1",
     )
     .bind(date)
     .fetch_optional(pool)
     .await?;
 
-    let Some((block_number, dao_bytes)) = block_data else {
-        return Ok(());
-    };
+    // Extract total_issuance from DAO field (bytes 0-7, little-endian u64)
+    let total_issuance = dao_data
+        .as_ref()
+        .and_then(|(dao,)| {
+            if dao.len() >= 8 {
+                let bytes: [u8; 8] = dao[0..8].try_into().ok()?;
+                Some(u64::from_le_bytes(bytes).to_string())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| "0".to_string());
 
-    if dao_bytes.len() < 32 {
-        return Ok(());
-    }
-
-    let total_issuance = u64::from_le_bytes(dao_bytes[0..8].try_into()?);
-    let accumulated_rate = u64::from_le_bytes(dao_bytes[8..16].try_into()?);
-    let secondary_issuance = u64::from_le_bytes(dao_bytes[16..24].try_into()?);
-    let occupied_capacity = u64::from_le_bytes(dao_bytes[24..32].try_into()?);
-
-    let dao_stats: (i64, i64, i64) = sqlx::query_as(
+    // Query cumulative secondary issuance breakdown from block_secondary_issuance table
+    // This is critical for Total Supply and Secondary Issuance charts
+    let secondary_issuance = sqlx::query_as::<_, (String, String, String)>(
         r#"
         SELECT 
-            COALESCE(SUM(CASE WHEN withdraw_request_tx IS NULL THEN deposit_capacity ELSE 0 END), 0) as total_deposited,
-            COALESCE(COUNT(CASE WHEN withdraw_request_tx IS NULL THEN 1 END), 0) as active_deposits,
-            COALESCE(COUNT(DISTINCT CASE WHEN withdraw_request_tx IS NULL THEN depositor_address END), 0) as unique_depositors
-        FROM dao_deposits
-        WHERE deposit_block_number <= $1
+            COALESCE(SUM(burnt), 0)::text,
+            COALESCE(SUM(miner_secondary), 0)::text,
+            COALESCE(SUM(dao_compensation), 0)::text
+        FROM block_secondary_issuance
+        WHERE block_timestamp::date <= $1
         "#,
     )
-    .bind(block_number)
+    .bind(date)
     .fetch_one(pool)
-    .await?;
-
-    let (total_deposited, active_deposits, unique_depositors) = dao_stats;
+    .await
+    .unwrap_or_else(|_| ("0".to_string(), "0".to_string(), "0".to_string()));
 
     sqlx::query(
         r#"
         INSERT INTO dao_daily_snapshots (
-            date, block_number, total_issuance, accumulated_rate, secondary_issuance,
-            occupied_capacity, total_deposited, active_deposits, unique_depositors
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            date, total_deposit, depositors_count, daily_deposit, daily_deposit_count, 
+            total_issuance, cumulative_burnt, cumulative_mining_reward, cumulative_deposit_compensation,
+            dao_data
+        )
+        VALUES ($1, $2::numeric, $3, $4::numeric, $5, $6::numeric, $7, $8, $9, $10)
         ON CONFLICT (date) DO UPDATE SET
-            block_number = EXCLUDED.block_number,
+            total_deposit = EXCLUDED.total_deposit,
+            depositors_count = EXCLUDED.depositors_count,
+            daily_deposit = EXCLUDED.daily_deposit,
+            daily_deposit_count = EXCLUDED.daily_deposit_count,
             total_issuance = EXCLUDED.total_issuance,
-            accumulated_rate = EXCLUDED.accumulated_rate,
-            secondary_issuance = EXCLUDED.secondary_issuance,
-            occupied_capacity = EXCLUDED.occupied_capacity,
-            total_deposited = EXCLUDED.total_deposited,
-            active_deposits = EXCLUDED.active_deposits,
-            unique_depositors = EXCLUDED.unique_depositors
+            cumulative_burnt = EXCLUDED.cumulative_burnt,
+            cumulative_mining_reward = EXCLUDED.cumulative_mining_reward,
+            cumulative_deposit_compensation = EXCLUDED.cumulative_deposit_compensation,
+            dao_data = EXCLUDED.dao_data
         "#,
     )
     .bind(date)
-    .bind(block_number)
-    .bind(total_issuance as i64)
-    .bind(accumulated_rate as i64)
-    .bind(secondary_issuance as i64)
-    .bind(occupied_capacity as i64)
-    .bind(total_deposited)
-    .bind(active_deposits as i32)
-    .bind(unique_depositors as i32)
+    .bind(&stats.0) // total_deposit
+    .bind(stats.1 as i32) // depositors_count
+    .bind(&stats.2) // daily_deposit
+    .bind(stats.3 as i32) // daily_deposit_count
+    .bind(&total_issuance)
+    .bind(&secondary_issuance.0) // cumulative_burnt
+    .bind(&secondary_issuance.1) // cumulative_mining_reward
+    .bind(&secondary_issuance.2) // cumulative_deposit_compensation
+    .bind(dao_data.map(|(d,)| d)) // dao_data
     .execute(pool)
     .await?;
 

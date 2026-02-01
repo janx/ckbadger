@@ -12,7 +12,7 @@ use crate::db::TaskDb;
 mod cycles;
 mod index;
 mod labels;
-mod statistics;
+pub mod statistics;
 
 pub struct TaskExecutor {
     db: TaskDb,

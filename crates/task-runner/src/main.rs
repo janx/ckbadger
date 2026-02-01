@@ -1,14 +1,10 @@
 use anyhow::Result;
+use ckbadger_task_runner::executor::TaskExecutor;
 use clap::Parser;
 use sqlx::postgres::PgPoolOptions;
 use std::time::Duration;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
-
-mod db;
-mod executor;
-
-use executor::TaskExecutor;
 
 #[derive(Parser, Debug)]
 #[command(name = "ckbadger-task-runner")]
