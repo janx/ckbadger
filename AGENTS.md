@@ -265,6 +265,15 @@ When bulk sync completes (catches up to <=1000 blocks behind tip), the indexer a
 | `cycles_backfill`     | 0        | Backfill transaction cycles from RPC             |
 | `label_import`        | 0        | Import UDT/script labels from token-labels repo  |
 
+**Label Import Auto-Trigger:**
+
+The `label_import` task is automatically submitted when the indexer starts, if:
+
+1. `docs/token-labels/information/` directory exists
+2. No pending/running `label_import` task already exists
+
+This ensures token labels are refreshed at least once per indexer lifecycle without manual intervention.
+
 **Statistics Tables Rebuilt:**
 
 - `daily_statistics` - Daily transaction/cell counts

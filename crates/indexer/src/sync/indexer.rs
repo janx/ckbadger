@@ -473,6 +473,10 @@ impl Indexer {
 
         self.writer.init_sync_start(actual_start).await?;
 
+        if let Err(e) = self.maybe_submit_label_import_task().await {
+            warn!("Failed to submit label import task: {}", e);
+        }
+
         let writer_for_task = self.writer.pool().clone();
         let fast_sync_mode = self.config.fast_sync_mode;
         let progress_for_task = Arc::clone(&self.progress);
@@ -1359,6 +1363,64 @@ impl Indexer {
         .await?;
 
         info!("Submitted live cells populate task: {}", task_id.0);
+
+        Ok(())
+    }
+
+    /// Submit a label import task on indexer startup if not already pending/running.
+    /// This ensures token labels are imported at least once per indexer lifecycle.
+    async fn maybe_submit_label_import_task(&self) -> Result<()> {
+        use ckbadger_common::{LabelImportConfig, TaskBuilder};
+
+        // Check if token-labels directory exists
+        let token_labels_path = "docs/token-labels";
+        if !std::path::Path::new(token_labels_path)
+            .join("information")
+            .exists()
+        {
+            debug!(
+                "Token labels directory not found at {}, skipping label import",
+                token_labels_path
+            );
+            return Ok(());
+        }
+
+        // Check if there's already a pending or running label_import task
+        let existing: Option<(i64,)> = sqlx::query_as(
+            "SELECT COUNT(*) FROM tasks WHERE task_type = 'label_import' AND status IN ('pending', 'running')",
+        )
+        .fetch_optional(self.writer.pool())
+        .await?;
+
+        if existing.map(|r| r.0).unwrap_or(0) > 0 {
+            debug!("Label import task already pending/running, skipping submission");
+            return Ok(());
+        }
+
+        // Submit new label import task
+        let builder = TaskBuilder::label_import(LabelImportConfig {
+            token_labels_path: token_labels_path.to_string(),
+            ..Default::default()
+        });
+
+        let task_id: (Uuid,) = sqlx::query_as(
+            r#"
+            INSERT INTO tasks (task_type, config, priority, max_retries)
+            VALUES ($1, $2, $3, $4)
+            RETURNING id
+            "#,
+        )
+        .bind(builder.task_type().to_string())
+        .bind(builder.config())
+        .bind(builder.get_priority())
+        .bind(builder.get_max_retries())
+        .fetch_one(self.writer.pool())
+        .await?;
+
+        info!(
+            "Submitted label import task: {} (path: {})",
+            task_id.0, token_labels_path
+        );
 
         Ok(())
     }
