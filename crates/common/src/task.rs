@@ -139,20 +139,32 @@ fn default_rebuild_constraints() -> bool {
 }
 
 /// Configuration for label import task
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LabelImportConfig {
-    /// Path to token-labels directory
+    #[serde(default = "default_token_labels_path")]
     pub token_labels_path: String,
-    /// Network to import labels for
     #[serde(default = "default_network")]
     pub network: String,
-    /// Import UDT labels
     #[serde(default = "default_true")]
     pub import_udt: bool,
-    /// Import script labels
     #[serde(default = "default_true")]
     pub import_scripts: bool,
+}
+
+impl Default for LabelImportConfig {
+    fn default() -> Self {
+        Self {
+            token_labels_path: default_token_labels_path(),
+            network: default_network(),
+            import_udt: true,
+            import_scripts: true,
+        }
+    }
+}
+
+fn default_token_labels_path() -> String {
+    "docs/token-labels".to_string()
 }
 
 fn default_network() -> String {
