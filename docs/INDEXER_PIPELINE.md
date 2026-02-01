@@ -127,7 +127,7 @@ Block N arrives
 | Parameter             | Default | Description                                                     |
 | --------------------- | ------- | --------------------------------------------------------------- |
 | `pipeline_enabled`    | `true`  | Enable three-stage pipeline (vs sequential sync)                |
-| `pipeline_buffer`     | `16`    | Channel capacity between stages                                 |
+| `pipeline_buffer`     | `4`     | Channel capacity between stages                                 |
 | `batch_size`          | `10000` | Blocks per batch                                                |
 | `parallel_fetch_size` | `64`    | Concurrent RPC requests                                         |
 | `bulk_sync_threshold` | `72`    | Blocks behind tip to auto-enable bulk sync (2x DEEP_FORK_DEPTH) |
@@ -139,7 +139,7 @@ Block N arrives
 
 ```bash
 PIPELINE_ENABLED=true
-PIPELINE_BUFFER=16
+PIPELINE_BUFFER=4
 BATCH_SIZE=10000
 PARALLEL_FETCH_SIZE=64
 BULK_SYNC_THRESHOLD=72
@@ -259,8 +259,8 @@ Pipeline mode uses more memory due to buffered batches:
 
 ```
 Memory ≈ pipeline_buffer × batch_size × (block_size + parsed_data)
-       ≈ 16 × 10000 × (~100KB per block)
-       ≈ 16GB additional
+       ≈ 4 × 10000 × (~100KB per block)
+       ≈ 4GB additional
 ```
 
 ### Channel Backpressure

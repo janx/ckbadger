@@ -43,8 +43,10 @@ impl RocksDbLiveCellStore {
         opts.set_max_bytes_for_level_base(512 * 1024 * 1024);
         opts.set_compression_type(DBCompressionType::Lz4);
 
+        let block_cache = rocksdb::Cache::new_lru_cache(512 * 1024 * 1024);
         let mut block_opts = rocksdb::BlockBasedOptions::default();
         block_opts.set_block_size(16 * 1024);
+        block_opts.set_block_cache(&block_cache);
         block_opts.set_cache_index_and_filter_blocks(true);
         block_opts.set_bloom_filter(10.0, false);
         opts.set_block_based_table_factory(&block_opts);

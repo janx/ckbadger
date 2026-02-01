@@ -76,9 +76,9 @@ fn default_pipeline_enabled() -> bool {
 
 fn default_pipeline_buffer() -> usize {
     // Pipeline buffer: number of batches that can be queued between stages.
-    // With batch_size=10000, each buffer slot uses ~1GB. 16 slots = ~16GB max.
+    // With batch_size=10000, each buffer slot uses ~1GB. 4 slots = ~4GB max.
     // Can be overridden via PIPELINE_BUFFER env var.
-    16
+    4
 }
 
 fn default_bulk_sync_threshold() -> u64 {
@@ -132,7 +132,7 @@ mod tests {
 
     #[test]
     fn test_default_pipeline_buffer() {
-        assert_eq!(default_pipeline_buffer(), 16);
+        assert_eq!(default_pipeline_buffer(), 4);
     }
 
     #[test]
