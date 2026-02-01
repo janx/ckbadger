@@ -3,6 +3,10 @@
 import dynamic from 'next/dynamic';
 import { useCallback, useMemo, useRef } from 'react';
 import type { GraphNode, GraphLink, ProposalGraphMetadata } from '@/lib/api';
+import type { ForceGraphMethods, NodeObject, LinkObject } from 'react-force-graph-2d';
+
+type ForceNode = NodeObject;
+type ForceLink = LinkObject;
 
 const ForceGraph2D = dynamic(() => import('react-force-graph-2d'), {
   ssr: false,
@@ -29,7 +33,7 @@ const NODE_COLORS = {
     fast: '#22c55e',
     medium: '#eab308',
     slow: '#ef4444',
-  },
+  } as Record<string, string>,
 };
 
 const LINK_COLORS: Record<string, string> = {
@@ -45,8 +49,7 @@ export function ProposalGraph({
   width = 800,
   height = 500,
 }: ProposalGraphProps) {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const graphRef = useRef<any>(null);
+  const graphRef = useRef<ForceGraphMethods | undefined>(undefined);
 
   const graphData = useMemo(
     () => ({
@@ -56,8 +59,7 @@ export function ProposalGraph({
     [nodes, links]
   );
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const getNodeColor = useCallback((node: any) => {
+  const getNodeColor = useCallback((node: ForceNode) => {
     if (node.nodeType === 'source_block') {
       return NODE_COLORS.source_block;
     }
@@ -65,24 +67,24 @@ export function ProposalGraph({
       return NODE_COLORS.proposal;
     }
     if (node.nodeType === 'commit_block') {
-      const speed = (node.data?.speedCategory as 'fast' | 'medium' | 'slow') || 'slow';
+      const data = node.data as Record<string, unknown> | undefined;
+      const speed = (data?.speedCategory as string) || 'slow';
       return NODE_COLORS.commit_block[speed];
     }
     return '#6b7280';
   }, []);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const getLinkColor = useCallback((link: any) => {
-    return LINK_COLORS[link.linkType] || '#6b7280';
+  const getLinkColor = useCallback((link: ForceLink) => {
+    const linkType = link.linkType as string;
+    return LINK_COLORS[linkType] || '#6b7280';
   }, []);
 
   const drawNode = useCallback(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
-      const label = node.label || '';
+    (node: ForceNode, ctx: CanvasRenderingContext2D, globalScale: number) => {
+      const label = (node.label as string) || '';
       const fontSize = 12 / globalScale;
-      const x = node.x || 0;
-      const y = node.y || 0;
+      const x = node.x ?? 0;
+      const y = node.y ?? 0;
 
       ctx.beginPath();
 
@@ -120,29 +122,28 @@ export function ProposalGraph({
   );
 
   const handleNodeClick = useCallback(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (node: any) => {
+    (node: ForceNode) => {
       if (node.nodeType === 'source_block' || node.nodeType === 'commit_block') {
-        const blockNumber = node.data?.blockNumber;
+        const data = node.data as Record<string, unknown> | undefined;
+        const blockNumber = data?.blockNumber;
         if (blockNumber !== undefined) {
           window.location.href = `/blocks/${blockNumber}`;
           return;
         }
       }
       if (onNodeClick) {
-        onNodeClick(node as GraphNode);
+        onNodeClick(node as unknown as GraphNode);
       }
     },
     [onNodeClick]
   );
 
   const nodePointerAreaPaint = useCallback(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (node: any, color: string, ctx: CanvasRenderingContext2D) => {
+    (node: ForceNode, color: string, ctx: CanvasRenderingContext2D) => {
       const nodeSize = node.nodeType === 'proposal' ? 6 : 12;
       ctx.fillStyle = color;
       ctx.beginPath();
-      ctx.arc(node.x || 0, node.y || 0, nodeSize, 0, 2 * Math.PI, false);
+      ctx.arc(node.x ?? 0, node.y ?? 0, nodeSize, 0, 2 * Math.PI, false);
       ctx.fill();
     },
     []

@@ -1,9 +1,12 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 'use client';
 
 import dynamic from 'next/dynamic';
 import { useCallback, useMemo, useRef } from 'react';
 import type { GraphNode, GraphLink } from '@/lib/api';
+import type { ForceGraphMethods, NodeObject, LinkObject } from 'react-force-graph-2d';
+
+type ForceNode = NodeObject;
+type ForceLink = LinkObject;
 
 const ForceGraph2D = dynamic(() => import('react-force-graph-2d'), {
   ssr: false,
@@ -26,7 +29,7 @@ const NODE_COLORS = {
   cell: {
     live: '#22c55e',
     dead: '#ef4444',
-  },
+  } as Record<string, string>,
   transaction: '#3b82f6',
 };
 
@@ -44,7 +47,7 @@ export function CellGraph({
   width = 800,
   height = 500,
 }: CellGraphProps) {
-  const graphRef = useRef<any>(null);
+  const graphRef = useRef<ForceGraphMethods | undefined>(undefined);
 
   const graphData = useMemo(
     () => ({
@@ -54,25 +57,26 @@ export function CellGraph({
     [nodes, links]
   );
 
-  const getNodeColor = useCallback((node: any) => {
+  const getNodeColor = useCallback((node: ForceNode) => {
     if (node.nodeType === 'transaction') {
       return NODE_COLORS.transaction;
     }
-    const status = (node.data?.status as 'live' | 'dead') || 'dead';
+    const status = (node.data as GraphNode['data'])?.status || 'dead';
     return NODE_COLORS.cell[status];
   }, []);
 
-  const getLinkColor = useCallback((link: any) => {
-    return LINK_COLORS[link.linkType] || '#6b7280';
+  const getLinkColor = useCallback((link: ForceLink) => {
+    const linkType = link.linkType as string;
+    return LINK_COLORS[linkType] || '#6b7280';
   }, []);
 
   const drawNode = useCallback(
-    (node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
-      const label = node.label || '';
+    (node: ForceNode, ctx: CanvasRenderingContext2D, globalScale: number) => {
+      const label = (node.label as string) || '';
       const fontSize = 12 / globalScale;
       const nodeSize = node.nodeType === 'transaction' ? 8 : 6;
-      const x = node.x || 0;
-      const y = node.y || 0;
+      const x = node.x ?? 0;
+      const y = node.y ?? 0;
 
       ctx.beginPath();
 
@@ -105,20 +109,20 @@ export function CellGraph({
   );
 
   const handleNodeClick = useCallback(
-    (node: any) => {
+    (node: ForceNode) => {
       if (onNodeClick) {
-        onNodeClick(node as GraphNode);
+        onNodeClick(node as unknown as GraphNode);
       }
     },
     [onNodeClick]
   );
 
   const nodePointerAreaPaint = useCallback(
-    (node: any, color: string, ctx: CanvasRenderingContext2D) => {
+    (node: ForceNode, color: string, ctx: CanvasRenderingContext2D) => {
       const nodeSize = node.nodeType === 'transaction' ? 10 : 8;
       ctx.fillStyle = color;
       ctx.beginPath();
-      ctx.arc(node.x || 0, node.y || 0, nodeSize, 0, 2 * Math.PI, false);
+      ctx.arc(node.x ?? 0, node.y ?? 0, nodeSize, 0, 2 * Math.PI, false);
       ctx.fill();
     },
     []
