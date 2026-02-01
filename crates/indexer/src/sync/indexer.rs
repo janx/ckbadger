@@ -1372,9 +1372,10 @@ impl Indexer {
     async fn maybe_submit_label_import_task(&self) -> Result<()> {
         use ckbadger_common::{LabelImportConfig, TaskBuilder};
 
-        // Check if token-labels directory exists
-        let token_labels_path = "docs/token-labels";
-        if !std::path::Path::new(token_labels_path)
+        // Use TOKEN_LABELS_PATH env var (for Docker) or fall back to relative path (for local dev)
+        let token_labels_path =
+            std::env::var("TOKEN_LABELS_PATH").unwrap_or_else(|_| "docs/token-labels".to_string());
+        if !std::path::Path::new(&token_labels_path)
             .join("information")
             .exists()
         {
@@ -1397,9 +1398,8 @@ impl Indexer {
             return Ok(());
         }
 
-        // Submit new label import task
         let builder = TaskBuilder::label_import(LabelImportConfig {
-            token_labels_path: token_labels_path.to_string(),
+            token_labels_path: token_labels_path.clone(),
             ..Default::default()
         });
 

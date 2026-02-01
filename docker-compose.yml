@@ -128,6 +128,7 @@ services:
       RUST_LOG: info
     volumes:
       - ./docs/token-labels:/app/token-labels:ro
+      - ./docs/script-name-overrides.json:/app/script-name-overrides.json:ro
     restart: unless-stopped
 
 volumes:

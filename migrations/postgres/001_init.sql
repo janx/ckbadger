@@ -1053,7 +1053,7 @@ INSERT INTO known_scripts (code_hash, name, description, network, hash_type, is_
  'https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0024-ckb-genesis-script-list/0024-ckb-genesis-script-list.md', ''),
 (decode('5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8', 'hex'), 
  'Default Multisig', 'Multi-signature lock script', 'mainnet', 'type', true,
- 'https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0024-ckb-genesis-script-list/0024-ckb-genesis-script-list.md', ''),
+ 'https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0024-ckb-genesis-script-list/0024-ckb-genesis-script-list.md', '@5c5069eb'),
 (decode('82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e', 'hex'), 
  'Nervos DAO', 'Nervos DAO type script for deposits and withdrawals', 'mainnet', 'type', true,
  'https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0024-ckb-genesis-script-list/0024-ckb-genesis-script-list.md', ''),

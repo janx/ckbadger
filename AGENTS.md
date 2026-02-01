@@ -277,8 +277,10 @@ When bulk sync completes (catches up to <=1000 blocks behind tip), the indexer a
 
 The `label_import` task is automatically submitted when the indexer starts, if:
 
-1. `docs/token-labels/information/` directory exists
+1. Token labels directory exists (checks `$TOKEN_LABELS_PATH/information/` or `docs/token-labels/information/`)
 2. No pending/running `label_import` task already exists
+
+The path is determined by `TOKEN_LABELS_PATH` environment variable, defaulting to `docs/token-labels` for local development. In Docker, this is set to `/app/token-labels` with a volume mount.
 
 This ensures token labels are refreshed at least once per indexer lifecycle without manual intervention.
 
