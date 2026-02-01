@@ -22,7 +22,8 @@ export function SyncBanner({ stats }: { stats: NetworkStats }) {
   }
 
   const syncSpeed = formatSyncSpeed(syncStatus.emaBlocksPerSecond);
-  const hasExtraInfo = syncSpeed || syncStatus.estimatedTime;
+  const isBulkSync = syncStatus.syncMode === 'bulk';
+  const hasExtraInfo = syncSpeed || syncStatus.estimatedTime || syncStatus.elapsedTime;
 
   return (
     <div className="terminal-card border-terminal-dark p-3">
@@ -30,7 +31,7 @@ export function SyncBanner({ stats }: { stats: NetworkStats }) {
         <div className="flex items-center gap-2">
           <div className="bg-terminal-green h-2 w-2 animate-pulse rounded-full" />
           <span className="text-terminal-dim font-mono text-sm font-medium">
-            SYNCING BLOCKCHAIN DATA...
+            {isBulkSync ? 'BULK SYNCING...' : 'SYNCING BLOCKCHAIN DATA...'}
           </span>
         </div>
         <span className="text-terminal-dark font-mono text-sm">
@@ -48,6 +49,7 @@ export function SyncBanner({ stats }: { stats: NetworkStats }) {
               <TerminalNumber value={syncSpeed} glowIntensity="subtle" /> blocks/s
             </span>
           )}
+          {syncStatus.elapsedTime && <span>Elapsed: {syncStatus.elapsedTime}</span>}
           {syncStatus.estimatedTime && <span>ETA: {syncStatus.estimatedTime}</span>}
         </div>
       )}

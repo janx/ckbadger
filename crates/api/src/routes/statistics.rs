@@ -70,6 +70,10 @@ pub struct SyncStatus {
     pub chart_data_may_be_incomplete: bool,
     pub blocks_per_second: Option<f64>,
     pub ema_blocks_per_second: Option<f64>,
+    pub sync_mode: String,
+    pub started_at: Option<i64>,
+    pub elapsed_time: Option<String>,
+    pub total_time: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -804,10 +808,18 @@ async fn fetch_network_stats_from_db(
 
     let sync_status_from_redis: Option<SyncStatusData> =
         state.cache.get(SYNC_STATUS_REDIS_KEY).await;
-    let (synced_block, db_ema_rate) = sync_status_from_redis
-        .as_ref()
-        .map(|s| (s.tip_block_number, s.sync_ema_rate))
-        .unwrap_or((latest_block, None));
+    let (synced_block, db_ema_rate, sync_started_at, bulk_sync_completed_at) =
+        sync_status_from_redis
+            .as_ref()
+            .map(|s| {
+                (
+                    s.tip_block_number,
+                    s.sync_ema_rate,
+                    s.sync_started_at,
+                    s.bulk_sync_completed_at,
+                )
+            })
+            .unwrap_or((latest_block, None, None, None));
 
     let deep_fork_row: Option<(
         bool,
@@ -842,6 +854,30 @@ async fn fetch_network_stats_from_db(
 
     let blocks_behind = tip_block - synced_block;
     let is_syncing = blocks_behind > 100;
+    let is_bulk_syncing = blocks_behind > 1000;
+
+    let sync_mode = if bulk_sync_completed_at.is_some() && !is_syncing {
+        "synced".to_string()
+    } else if is_bulk_syncing {
+        "bulk".to_string()
+    } else if is_syncing {
+        "normal".to_string()
+    } else {
+        "synced".to_string()
+    };
+
+    let now = Utc::now().timestamp();
+    let elapsed_time = sync_started_at.map(|started| {
+        let end = bulk_sync_completed_at.unwrap_or(now);
+        format_duration_smart((end - started) as f64)
+    });
+
+    let total_time =
+        if let (Some(started), Some(completed)) = (sync_started_at, bulk_sync_completed_at) {
+            Some(format_duration_smart((completed - started) as f64))
+        } else {
+            None
+        };
 
     let sync_progress_from_redis: Option<SyncProgressData> =
         state.cache.get(SYNC_PROGRESS_REDIS_KEY).await;
@@ -914,6 +950,10 @@ async fn fetch_network_stats_from_db(
         chart_data_may_be_incomplete: blocks_behind > 1000,
         blocks_per_second,
         ema_blocks_per_second,
+        sync_mode,
+        started_at: sync_started_at,
+        elapsed_time,
+        total_time,
     };
 
     let deep_fork_status = DeepForkStatus {

@@ -7,12 +7,12 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Wrap},
+    widgets::{Block, Borders, Cell, Clear, Gauge, Paragraph, Row, Table, TableState, Wrap},
     Frame,
 };
 use std::time::Instant;
 
-use crate::db::TaskDb;
+use crate::db::{SyncStatusRow, TaskDb};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[allow(dead_code)]
@@ -24,6 +24,7 @@ pub enum DialogType {
 pub struct App {
     db: TaskDb,
     tasks: Vec<Task>,
+    sync_status: Option<SyncStatusRow>,
     table_state: TableState,
     last_refresh: Instant,
     dialog: Option<DialogType>,
@@ -36,6 +37,7 @@ impl App {
         Self {
             db,
             tasks: Vec::new(),
+            sync_status: None,
             table_state: TableState::default(),
             last_refresh: Instant::now(),
             dialog: None,
@@ -46,6 +48,7 @@ impl App {
 
     pub async fn refresh(&mut self) -> Result<()> {
         self.tasks = self.db.list_tasks(100).await?;
+        self.sync_status = self.db.get_sync_status().await.ok();
         self.last_refresh = Instant::now();
         if self.table_state.selected().is_none() && !self.tasks.is_empty() {
             self.table_state.select(Some(0));
@@ -190,17 +193,19 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
-            Constraint::Min(10),
-            Constraint::Length(10),
-            Constraint::Length(3),
+            Constraint::Length(3),  // header
+            Constraint::Length(5),  // sync status
+            Constraint::Min(10),    // task table
+            Constraint::Length(10), // task detail
+            Constraint::Length(3),  // footer
         ])
         .split(f.area());
 
     draw_header(f, chunks[0]);
-    draw_task_table(f, app, chunks[1]);
-    draw_task_detail(f, app, chunks[2]);
-    draw_footer(f, app, chunks[3]);
+    draw_sync_status(f, app, chunks[1]);
+    draw_task_table(f, app, chunks[2]);
+    draw_task_detail(f, app, chunks[3]);
+    draw_footer(f, app, chunks[4]);
 
     if let Some(dialog) = &app.dialog {
         draw_dialog(f, app, dialog);
@@ -216,6 +221,57 @@ fn draw_header(f: &mut Frame, area: Rect) {
         )
         .block(Block::default().borders(Borders::ALL));
     f.render_widget(title, area);
+}
+
+fn draw_sync_status(f: &mut Frame, app: &App, area: Rect) {
+    let block = Block::default().borders(Borders::ALL).title("Sync Status");
+
+    let Some(sync) = &app.sync_status else {
+        let msg = Paragraph::new("No sync data available").block(block);
+        f.render_widget(msg, area);
+        return;
+    };
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Length(1)])
+        .split(inner);
+
+    let (mode, mode_color) = if !sync.is_syncing {
+        ("SYNCED", Color::Green)
+    } else if sync.is_bulk_sync {
+        ("BULK SYNC", Color::Yellow)
+    } else {
+        ("SYNCING", Color::Cyan)
+    };
+
+    let idx_status = if sync.indexes_deferred {
+        " [IDX DEFERRED]"
+    } else {
+        ""
+    };
+
+    let status_line = Line::from(vec![
+        Span::styled(
+            format!(" {} ", mode),
+            Style::default().fg(Color::Black).bg(mode_color),
+        ),
+        Span::raw(format!(
+            " Block {}/{} ({:.2}%){}",
+            sync.tip_block, sync.chain_tip, sync.progress, idx_status
+        )),
+    ]);
+    f.render_widget(Paragraph::new(status_line), chunks[0]);
+
+    let ratio = (sync.progress / 100.0).clamp(0.0, 1.0);
+    let gauge = Gauge::default()
+        .gauge_style(Style::default().fg(mode_color))
+        .ratio(ratio)
+        .label(format!("{:.2}%", sync.progress));
+    f.render_widget(gauge, chunks[1]);
 }
 
 fn draw_task_table(f: &mut Frame, app: &mut App, area: Rect) {

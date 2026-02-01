@@ -1211,6 +1211,13 @@ impl Indexer {
         if was_bulk && !currently_bulk {
             info!("Bulk sync completed, submitting post-sync tasks...");
 
+            let chain_tip = self.progress.target();
+            self.cache_invalidator
+                .update_sync_status(|status| {
+                    status.mark_bulk_sync_completed(chain_tip as i64);
+                })
+                .await;
+
             if let Err(e) = self.maybe_submit_index_rebuild_task().await {
                 warn!("Failed to submit index rebuild task: {}", e);
             }

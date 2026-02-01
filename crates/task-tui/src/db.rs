@@ -3,6 +3,16 @@ use ckbadger_common::{Task, TaskBuilder};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+#[derive(Debug, Clone)]
+pub struct SyncStatusRow {
+    pub tip_block: i64,
+    pub chain_tip: i64,
+    pub is_syncing: bool,
+    pub is_bulk_sync: bool,
+    pub progress: f64,
+    pub indexes_deferred: bool,
+}
+
 pub struct TaskDb {
     pool: PgPool,
 }
@@ -11,6 +21,47 @@ pub struct TaskDb {
 impl TaskDb {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
+    }
+
+    pub async fn get_sync_status(&self) -> Result<SyncStatusRow> {
+        let tip: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(number), 0) FROM blocks")
+            .fetch_one(&self.pool)
+            .await?;
+
+        let chain_tip: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(MAX(number), 0) FROM blocks WHERE timestamp > NOW() - INTERVAL '1 hour'",
+        )
+        .fetch_optional(&self.pool)
+        .await?
+        .unwrap_or(tip);
+
+        let chain_tip = chain_tip.max(tip);
+
+        let indexes_deferred: bool = sqlx::query_scalar(
+            "SELECT COALESCE(indexes_deferred, false) FROM sync_status WHERE id = 1",
+        )
+        .fetch_optional(&self.pool)
+        .await?
+        .unwrap_or(false);
+
+        let blocks_behind = chain_tip - tip;
+        let is_syncing = blocks_behind > 100;
+        let is_bulk_sync = blocks_behind > 1000;
+
+        let progress = if chain_tip > 0 {
+            (tip as f64 / chain_tip as f64 * 100.0).min(100.0)
+        } else {
+            100.0
+        };
+
+        Ok(SyncStatusRow {
+            tip_block: tip,
+            chain_tip,
+            is_syncing,
+            is_bulk_sync,
+            progress,
+            indexes_deferred,
+        })
     }
 
     pub async fn list_tasks(&self, limit: i64) -> Result<Vec<Task>> {

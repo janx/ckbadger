@@ -76,6 +76,8 @@ impl CacheBackend {
             sync_started_at: None,
             sync_started_block: 0,
             sync_ema_rate: None,
+            bulk_sync_completed_at: None,
+            bulk_sync_completed_block: None,
             indexes_deferred: false,
             indexes_dropped_at: None,
             indexes_rebuild_started_at: None,

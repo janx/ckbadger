@@ -19,6 +19,11 @@ pub struct SyncStatusData {
     pub sync_started_block: i64,
     pub sync_ema_rate: Option<f64>,
 
+    /// Timestamp when bulk sync completed (caught up to chain tip)
+    pub bulk_sync_completed_at: Option<i64>,
+    /// Chain tip block number when bulk sync completed
+    pub bulk_sync_completed_block: Option<i64>,
+
     #[serde(default)]
     pub indexes_deferred: bool,
     pub indexes_dropped_at: Option<i64>,
@@ -58,6 +63,27 @@ impl SyncStatusData {
     pub fn init_sync_start(&mut self, start_block: i64) {
         self.sync_started_at = Some(chrono::Utc::now().timestamp());
         self.sync_started_block = start_block;
+    }
+
+    pub fn mark_bulk_sync_completed(&mut self, chain_tip: i64) {
+        if self.bulk_sync_completed_at.is_none() {
+            self.bulk_sync_completed_at = Some(chrono::Utc::now().timestamp());
+            self.bulk_sync_completed_block = Some(chain_tip);
+        }
+    }
+
+    pub fn bulk_sync_elapsed_seconds(&self) -> Option<i64> {
+        let started = self.sync_started_at?;
+        let completed = self
+            .bulk_sync_completed_at
+            .unwrap_or_else(|| chrono::Utc::now().timestamp());
+        Some(completed - started)
+    }
+
+    pub fn bulk_sync_total_seconds(&self) -> Option<i64> {
+        let started = self.sync_started_at?;
+        let completed = self.bulk_sync_completed_at?;
+        Some(completed - started)
     }
 
     pub fn set_indexes_deferred(&mut self, deferred: bool) {
@@ -169,6 +195,8 @@ mod tests {
             sync_started_at: Some(1699999000),
             sync_started_block: 0,
             sync_ema_rate: Some(500.5),
+            bulk_sync_completed_at: None,
+            bulk_sync_completed_block: None,
             indexes_deferred: false,
             indexes_dropped_at: None,
             indexes_rebuild_started_at: None,

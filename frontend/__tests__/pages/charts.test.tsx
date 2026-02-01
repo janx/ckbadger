@@ -51,6 +51,10 @@ const mockNetworkStatsComplete = {
     chartDataMayBeIncomplete: false,
     blocksPerSecond: null,
     emaBlocksPerSecond: null,
+    syncMode: 'synced',
+    startedAt: null,
+    elapsedTime: null,
+    totalTime: null,
   },
   deepForkStatus: {
     detected: false,
@@ -73,6 +77,10 @@ const mockNetworkStatsSyncing = {
     chartDataMayBeIncomplete: true,
     blocksPerSecond: 1500.0,
     emaBlocksPerSecond: 1200.0,
+    syncMode: 'bulk',
+    startedAt: 1700000000,
+    elapsedTime: '1h 15m',
+    totalTime: null,
   },
 };
 
