@@ -1,7 +1,7 @@
 use anyhow::Result;
 use ckbadger_common::{
     CyclesBackfillConfig, IndexRebuildConfig, LabelImportConfig, LiveCellsPopulateConfig,
-    StatisticsRebuildConfig, Task, TaskBuilder,
+    SporeRebuildConfig, StatisticsRebuildConfig, Task, TaskBuilder,
 };
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -110,8 +110,22 @@ impl App {
 
     pub fn next_dialog_option(&mut self) {
         if let Some(DialogType::NewTask) = self.dialog {
-            self.dialog_selection = (self.dialog_selection + 1) % 5;
+            self.dialog_selection = (self.dialog_selection + 1) % 6;
         }
+    }
+
+    pub fn previous_dialog_option(&mut self) {
+        if let Some(DialogType::NewTask) = self.dialog {
+            self.dialog_selection = if self.dialog_selection == 0 {
+                5
+            } else {
+                self.dialog_selection - 1
+            };
+        }
+    }
+
+    pub fn has_dialog(&self) -> bool {
+        self.dialog.is_some()
     }
 
     pub async fn confirm_dialog(&mut self) -> Result<()> {
@@ -123,6 +137,7 @@ impl App {
                     2 => TaskBuilder::label_import(LabelImportConfig::default()),
                     3 => TaskBuilder::statistics_rebuild(StatisticsRebuildConfig::default()),
                     4 => TaskBuilder::live_cells_populate(LiveCellsPopulateConfig::default()),
+                    5 => TaskBuilder::spore_rebuild(SporeRebuildConfig::default()),
                     _ => return Ok(()),
                 };
                 let id = self.db.create_task(&builder).await?;
@@ -445,6 +460,7 @@ fn draw_dialog(f: &mut Frame, app: &App, dialog: &DialogType) {
                 "Label Import",
                 "Statistics Rebuild",
                 "Live Cells Populate",
+                "Spore Rebuild",
             ];
             let items: Vec<Line> = options
                 .iter()

@@ -648,6 +648,7 @@ const DAO_OCCUPIED_CAPACITY: u64 = 102_00000000; // 102 CKB
 | Vitest globals                | Add `vitest/globals` to tsconfig types                            |
 | MSW handlers                  | Must start server in setup.ts `beforeAll`                         |
 | sqlx::test                    | Requires `MIGRATOR` constant in lib.rs                            |
+| Spore molecule `Bytes`        | Size field = content length (NOT total size including header)     |
 
 ## File Locations
 
@@ -663,6 +664,8 @@ const DAO_OCCUPIED_CAPACITY: u64 = 102_00000000; // 102 CKB
 | Activity writer     | `crates/indexer/src/db/copy_activities.rs` |
 | DB writes           | `crates/indexer/src/db/writer.rs`          |
 | Activity types      | `crates/common/src/activity.rs`            |
+| Spore parser        | `crates/indexer/src/parser/spore.rs`       |
+| Spore writer        | `crates/indexer/src/db/writer/spore.rs`    |
 | Frontend API        | `frontend/lib/api.ts`                      |
 | UI components       | `frontend/components/ui/`                  |
 | Activity components | `frontend/components/activity/`            |

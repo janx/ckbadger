@@ -59,6 +59,7 @@ pub enum TaskType {
     LabelImport,
     StatisticsRebuild,
     LiveCellsPopulate,
+    SporeRebuild,
 }
 
 impl std::fmt::Display for TaskType {
@@ -69,6 +70,7 @@ impl std::fmt::Display for TaskType {
             TaskType::LabelImport => write!(f, "label_import"),
             TaskType::StatisticsRebuild => write!(f, "statistics_rebuild"),
             TaskType::LiveCellsPopulate => write!(f, "live_cells_populate"),
+            TaskType::SporeRebuild => write!(f, "spore_rebuild"),
         }
     }
 }
@@ -83,6 +85,7 @@ impl std::str::FromStr for TaskType {
             "label_import" => Ok(TaskType::LabelImport),
             "statistics_rebuild" => Ok(TaskType::StatisticsRebuild),
             "live_cells_populate" => Ok(TaskType::LiveCellsPopulate),
+            "spore_rebuild" => Ok(TaskType::SporeRebuild),
             _ => Err(anyhow::anyhow!("Invalid task type: {}", s)),
         }
     }
@@ -195,6 +198,20 @@ fn default_populate_batch_size() -> usize {
     100_000
 }
 
+/// Configuration for spore rebuild task
+/// Rebuilds spore_cells.is_live status and spore_clusters.spores_count
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SporeRebuildConfig {
+    /// Batch size for processing spore cells (default: 10,000)
+    #[serde(default = "default_spore_batch_size")]
+    pub batch_size: usize,
+}
+
+fn default_spore_batch_size() -> usize {
+    10_000
+}
+
 /// Unified task configuration enum
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -204,6 +221,7 @@ pub enum TaskConfig {
     LabelImport(LabelImportConfig),
     StatisticsRebuild(StatisticsRebuildConfig),
     LiveCellsPopulate(LiveCellsPopulateConfig),
+    SporeRebuild(SporeRebuildConfig),
 }
 
 impl TaskConfig {
@@ -214,6 +232,7 @@ impl TaskConfig {
             TaskConfig::LabelImport(_) => TaskType::LabelImport,
             TaskConfig::StatisticsRebuild(_) => TaskType::StatisticsRebuild,
             TaskConfig::LiveCellsPopulate(_) => TaskType::LiveCellsPopulate,
+            TaskConfig::SporeRebuild(_) => TaskType::SporeRebuild,
         }
     }
 }
@@ -297,6 +316,14 @@ pub struct LiveCellsPopulateResult {
     pub cells_populated: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SporeRebuildResult {
+    pub spores_processed: i64,
+    pub spores_marked_consumed: i64,
+    pub clusters_updated: i64,
+}
+
 /// Unified task result enum
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -306,6 +333,7 @@ pub enum TaskResult {
     LabelImport(LabelImportResult),
     StatisticsRebuild(StatisticsRebuildResult),
     LiveCellsPopulate(LiveCellsPopulateResult),
+    SporeRebuild(SporeRebuildResult),
 }
 
 // ============================================
@@ -498,6 +526,16 @@ impl TaskBuilder {
         }
     }
 
+    pub fn spore_rebuild(config: SporeRebuildConfig) -> Self {
+        Self {
+            task_type: TaskType::SporeRebuild,
+            config: serde_json::to_value(TaskConfig::SporeRebuild(config))
+                .expect("SporeRebuildConfig should be serializable"),
+            priority: 6,
+            max_retries: 2,
+        }
+    }
+
     pub fn priority(mut self, priority: i32) -> Self {
         self.priority = priority;
         self
@@ -647,6 +685,7 @@ mod tests {
             TaskType::LiveCellsPopulate.to_string(),
             "live_cells_populate"
         );
+        assert_eq!(TaskType::SporeRebuild.to_string(), "spore_rebuild");
     }
 
     #[test]
@@ -746,5 +785,12 @@ mod tests {
         let builder = TaskBuilder::live_cells_populate(LiveCellsPopulateConfig::default());
         assert_eq!(builder.task_type(), TaskType::LiveCellsPopulate);
         assert_eq!(builder.get_priority(), 8);
+    }
+
+    #[test]
+    fn test_spore_rebuild_builder() {
+        let builder = TaskBuilder::spore_rebuild(SporeRebuildConfig::default());
+        assert_eq!(builder.task_type(), TaskType::SporeRebuild);
+        assert_eq!(builder.get_priority(), 6);
     }
 }

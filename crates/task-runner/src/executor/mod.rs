@@ -1,7 +1,7 @@
 use anyhow::Result;
 use ckbadger_common::{
-    CyclesBackfillConfig, IndexRebuildConfig, LabelImportConfig, StatisticsRebuildConfig, Task,
-    TaskConfig, TaskType,
+    CyclesBackfillConfig, IndexRebuildConfig, LabelImportConfig, SporeRebuildConfig,
+    StatisticsRebuildConfig, Task, TaskConfig, TaskType,
 };
 use sqlx::PgPool;
 use std::time::Duration;
@@ -12,6 +12,7 @@ use crate::db::TaskDb;
 mod cycles;
 mod index;
 mod labels;
+mod spore;
 pub mod statistics;
 
 pub struct TaskExecutor {
@@ -104,6 +105,7 @@ impl TaskExecutor {
             TaskType::LiveCellsPopulate => Err(anyhow::anyhow!(
                 "LiveCellsPopulate must be executed by the indexer, not task-runner"
             )),
+            TaskType::SporeRebuild => self.execute_spore_rebuild(task).await,
         }
     }
 
@@ -153,5 +155,14 @@ impl TaskExecutor {
         };
 
         statistics::execute(&self.db, &self.pool, task.id, &config).await
+    }
+
+    async fn execute_spore_rebuild(&self, task: &Task) -> Result<()> {
+        let config: SporeRebuildConfig = match task.config_typed() {
+            Some(TaskConfig::SporeRebuild(c)) => c,
+            _ => SporeRebuildConfig::default(),
+        };
+
+        spore::execute(&self.db, &self.pool, task.id, &config).await
     }
 }

@@ -392,16 +392,147 @@ async fn rebuild_dao_daily_snapshots(pool: &PgPool) -> Result<()> {
         .execute(pool)
         .await?;
 
-    let dates: Vec<(NaiveDate,)> =
-        sqlx::query_as("SELECT DISTINCT timestamp::date as date FROM blocks ORDER BY date")
-            .fetch_all(pool)
-            .await?;
-
-    info!("Rebuilding DAO snapshots for {} days...", dates.len());
-
-    for (date,) in dates {
-        update_dao_daily_snapshot(pool, date).await?;
-    }
+    // Single efficient query using window functions for cumulative sums
+    // Key optimization: O(n) instead of O(n²) for secondary_issuance cumulative
+    //
+    // Previous approach: loop through ~2000 days, each doing:
+    //   SELECT SUM(...) FROM block_secondary_issuance WHERE date <= $1
+    // This scans from genesis for EVERY day = O(n²) ≈ 18 billion row scans
+    //
+    // New approach: Single query with window functions = O(n) ≈ 18 million rows once
+    sqlx::query(
+        r#"
+        INSERT INTO dao_daily_snapshots (
+            date, total_deposit, depositors_count, daily_deposit, daily_deposit_count,
+            total_issuance, cumulative_burnt, cumulative_mining_reward, cumulative_deposit_compensation,
+            dao_data
+        )
+        WITH 
+        -- All unique dates from blockchain
+        dates AS (
+            SELECT DISTINCT timestamp::date as date FROM blocks
+        ),
+        -- Secondary issuance: aggregate by day, then cumulative sum via window function
+        secondary_daily AS (
+            SELECT 
+                block_timestamp::date as date,
+                SUM(burnt)::numeric as daily_burnt,
+                SUM(miner_secondary)::numeric as daily_miner,
+                SUM(dao_compensation)::numeric as daily_dao
+            FROM block_secondary_issuance
+            GROUP BY block_timestamp::date
+        ),
+        secondary_cumulative AS (
+            SELECT 
+                date,
+                SUM(daily_burnt) OVER w as cumulative_burnt,
+                SUM(daily_miner) OVER w as cumulative_mining_reward,
+                SUM(daily_dao) OVER w as cumulative_deposit_compensation
+            FROM secondary_daily
+            WINDOW w AS (ORDER BY date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+        ),
+        -- Last block of each day (for DAO field extraction)
+        last_blocks AS (
+            SELECT DISTINCT ON (timestamp::date)
+                timestamp::date as date,
+                dao
+            FROM blocks
+            ORDER BY timestamp::date, number DESC
+        ),
+        -- DAO deposit events: model as +capacity on deposit, -capacity on withdraw
+        deposit_events AS (
+            SELECT deposit_timestamp::date as date, capacity, lock_script_hash, 1 as event_type
+            FROM dao_deposits
+            UNION ALL
+            SELECT withdraw_timestamp::date as date, capacity, lock_script_hash, -1 as event_type
+            FROM dao_deposits
+            WHERE withdraw_timestamp IS NOT NULL
+        ),
+        -- Aggregate deposit events by date
+        deposit_daily AS (
+            SELECT 
+                date,
+                SUM(capacity * event_type)::numeric as delta_capacity,
+                SUM(CASE WHEN event_type = 1 THEN capacity ELSE 0 END)::numeric as daily_deposit,
+                COUNT(*) FILTER (WHERE event_type = 1)::int as daily_deposit_count
+            FROM deposit_events
+            GROUP BY date
+        ),
+        -- Cumulative deposit totals using window function
+        deposit_cumulative AS (
+            SELECT 
+                date,
+                daily_deposit,
+                daily_deposit_count,
+                SUM(delta_capacity) OVER w as total_deposit
+            FROM deposit_daily
+            WINDOW w AS (ORDER BY date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+        ),
+        -- Depositors count: track active depositors at each point in time
+        -- This requires knowing when each depositor's first deposit started and last withdraw ended
+        depositor_spans AS (
+            SELECT 
+                lock_script_hash,
+                MIN(deposit_timestamp::date) as first_deposit,
+                -- If any deposit has no withdraw, depositor is still active (use far future date)
+                CASE 
+                    WHEN bool_or(withdraw_timestamp IS NULL) THEN '9999-12-31'::date
+                    ELSE MAX(withdraw_timestamp::date)
+                END as last_active
+            FROM dao_deposits
+            GROUP BY lock_script_hash
+        ),
+        depositor_events AS (
+            SELECT first_deposit as date, 1 as delta FROM depositor_spans
+            UNION ALL
+            SELECT last_active as date, -1 as delta FROM depositor_spans WHERE last_active < '9999-12-31'::date
+        ),
+        depositor_daily AS (
+            SELECT date, SUM(delta)::int as delta_depositors
+            FROM depositor_events
+            GROUP BY date
+        ),
+        depositor_cumulative AS (
+            SELECT 
+                date,
+                SUM(delta_depositors) OVER w as depositors_count
+            FROM depositor_daily
+            WINDOW w AS (ORDER BY date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+        )
+        SELECT 
+            d.date,
+            COALESCE(dc.total_deposit, 0) as total_deposit,
+            COALESCE(depc.depositors_count, (
+                SELECT COUNT(DISTINCT lock_script_hash) FROM depositor_spans 
+                WHERE first_deposit <= d.date AND last_active >= d.date
+            ))::int as depositors_count,
+            COALESCE(dc.daily_deposit, 0) as daily_deposit,
+            COALESCE(dc.daily_deposit_count, 0) as daily_deposit_count,
+            -- Extract total_issuance from DAO field bytes 0-7 (little-endian u64)
+            COALESCE((
+                get_byte(lb.dao, 0)::bigint +
+                get_byte(lb.dao, 1)::bigint * 256 +
+                get_byte(lb.dao, 2)::bigint * 65536 +
+                get_byte(lb.dao, 3)::bigint * 16777216 +
+                get_byte(lb.dao, 4)::bigint * 4294967296::bigint +
+                get_byte(lb.dao, 5)::bigint * 1099511627776::bigint +
+                get_byte(lb.dao, 6)::bigint * 281474976710656::bigint +
+                get_byte(lb.dao, 7)::bigint * 72057594037927936::bigint
+            )::numeric, 0) as total_issuance,
+            COALESCE(sc.cumulative_burnt::text, '0') as cumulative_burnt,
+            COALESCE(sc.cumulative_mining_reward::text, '0') as cumulative_mining_reward,
+            COALESCE(sc.cumulative_deposit_compensation::text, '0') as cumulative_deposit_compensation,
+            lb.dao as dao_data
+        FROM dates d
+        LEFT JOIN deposit_cumulative dc ON d.date = dc.date
+        LEFT JOIN depositor_cumulative depc ON d.date = depc.date
+        LEFT JOIN last_blocks lb ON d.date = lb.date
+        LEFT JOIN secondary_cumulative sc ON d.date = sc.date
+        ORDER BY d.date
+        "#,
+    )
+    .execute(pool)
+    .await?;
 
     info!("dao_daily_snapshots rebuild completed");
     Ok(())

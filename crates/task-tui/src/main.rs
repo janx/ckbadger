@@ -85,20 +85,31 @@ async fn run_app<B: ratatui::backend::Backend>(
         if crossterm::event::poll(tick_rate)? {
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {
-                    match key.code {
-                        KeyCode::Char('q') => return Ok(()),
-                        KeyCode::Char('j') | KeyCode::Down => app.next(),
-                        KeyCode::Char('k') | KeyCode::Up => app.previous(),
-                        KeyCode::Char('n') => app.show_new_task_dialog(),
-                        KeyCode::Char('c') => app.cancel_selected().await?,
-                        KeyCode::Char('p') => app.pause_selected().await?,
-                        KeyCode::Char('r') => app.resume_or_retry_selected().await?,
-                        KeyCode::Char('d') => app.delete_selected().await?,
-                        KeyCode::Char('R') => app.refresh().await?,
-                        KeyCode::Enter => app.confirm_dialog().await?,
-                        KeyCode::Esc => app.cancel_dialog(),
-                        KeyCode::Tab => app.next_dialog_option(),
-                        _ => {}
+                    if app.has_dialog() {
+                        match key.code {
+                            KeyCode::Char('q') | KeyCode::Esc => app.cancel_dialog(),
+                            KeyCode::Char('j') | KeyCode::Down | KeyCode::Tab => {
+                                app.next_dialog_option()
+                            }
+                            KeyCode::Char('k') | KeyCode::Up => app.previous_dialog_option(),
+                            KeyCode::Enter => app.confirm_dialog().await?,
+                            _ => {}
+                        }
+                    } else {
+                        match key.code {
+                            KeyCode::Char('q') => return Ok(()),
+                            KeyCode::Char('j') | KeyCode::Down => app.next(),
+                            KeyCode::Char('k') | KeyCode::Up => app.previous(),
+                            KeyCode::Char('n') => app.show_new_task_dialog(),
+                            KeyCode::Char('c') => app.cancel_selected().await?,
+                            KeyCode::Char('p') => app.pause_selected().await?,
+                            KeyCode::Char('r') => app.resume_or_retry_selected().await?,
+                            KeyCode::Char('d') => app.delete_selected().await?,
+                            KeyCode::Char('R') => app.refresh().await?,
+                            KeyCode::Enter => app.confirm_dialog().await?,
+                            KeyCode::Esc => app.cancel_dialog(),
+                            _ => {}
+                        }
                     }
                 }
             }

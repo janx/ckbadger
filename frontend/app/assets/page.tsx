@@ -177,7 +177,7 @@ function AssetTable({ assetType, search }: { assetType: AssetTab; search: string
             </div>
             {assetType === 'dob' && (
               <div className="w-24 shrink-0 text-right font-mono text-white">
-                {formatNumber(asset.holdersCount)}
+                {formatNumber(asset.totalSupply || 0)}
               </div>
             )}
             <div className="text-amber w-24 shrink-0 text-right font-mono">

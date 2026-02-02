@@ -205,13 +205,8 @@ impl SporeParser {
             return None;
         }
 
-        let field_size = u32::from_le_bytes(data[start..start + 4].try_into().ok()?) as usize;
-        if field_size < 4 {
-            return None;
-        }
-
+        let content_len = u32::from_le_bytes(data[start..start + 4].try_into().ok()?) as usize;
         let content_start = start + 4;
-        let content_len = field_size - 4;
 
         if content_start + content_len > data.len() {
             return None;
@@ -281,7 +276,7 @@ mod tests {
     }
 
     fn encode_molecule_bytes(data: &[u8]) -> Vec<u8> {
-        let len = (data.len() + 4) as u32;
+        let len = data.len() as u32;
         let mut result = len.to_le_bytes().to_vec();
         result.extend_from_slice(data);
         result
@@ -483,5 +478,40 @@ mod tests {
         let data = [0u8; 16];
         let result = SporeParser::read_bytes_field(&data, 20, 30);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_cluster_id_parsed_as_32_bytes_not_28() {
+        let spore_id = "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef";
+        let cluster_id_32_bytes = [0xab; 32];
+        let output = CellOutput {
+            capacity: "0x174876e800".to_string(),
+            lock: create_lock_script(),
+            type_: Some(create_spore_type_script(spore_id)),
+        };
+
+        let data = create_spore_data("image/png", b"test", Some(&cluster_id_32_bytes));
+        let data_hex = format!("0x{}", hex::encode(&data));
+
+        let result = SporeParser::parse_spore_cell(&output, &data_hex);
+        let parsed = result.expect("Should parse successfully");
+
+        let cluster_id = parsed.cluster_id.expect("Should have cluster_id");
+        assert_eq!(
+            cluster_id.len(),
+            32,
+            "cluster_id must be 32 bytes, not 28 (molecule Bytes size = content length)"
+        );
+        assert_eq!(cluster_id, cluster_id_32_bytes.to_vec());
+    }
+
+    #[test]
+    fn test_molecule_bytes_encoding() {
+        let content = [0x12, 0x34, 0x56, 0x78];
+        let encoded = encode_molecule_bytes(&content);
+
+        assert_eq!(encoded.len(), 8);
+        assert_eq!(&encoded[0..4], &[4, 0, 0, 0]);
+        assert_eq!(&encoded[4..8], &content);
     }
 }
