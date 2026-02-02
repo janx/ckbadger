@@ -521,8 +521,10 @@ CREATE TABLE daily_block_stats (
 );
 
 -- ---- block_time_distribution ----
+-- Distribution of block times for recent 50,000 blocks
+-- Uses 100ms (0.1s) bucket granularity, range 0-50s (matching official CKB explorer)
 CREATE TABLE block_time_distribution (
-    bucket_seconds INTEGER PRIMARY KEY,
+    bucket_ms INTEGER PRIMARY KEY,  -- 100, 200, 300, ..., 50000 (0.1s to 50s in 100ms steps)
     block_count BIGINT NOT NULL DEFAULT 0,
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );

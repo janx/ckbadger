@@ -322,30 +322,33 @@ async fn rebuild_miner_statistics(pool: &PgPool) -> Result<()> {
 }
 
 async fn rebuild_block_time_distribution(pool: &PgPool) -> Result<()> {
-    info!("Rebuilding block_time_distribution...");
+    info!("Rebuilding block_time_distribution (recent 50K blocks, 100ms buckets)...");
     sqlx::query("TRUNCATE TABLE block_time_distribution")
         .execute(pool)
         .await?;
 
     sqlx::query(
         r#"
-        INSERT INTO block_time_distribution (bucket_seconds, block_count)
-        SELECT 
-            CASE 
-                WHEN block_time_sec < 1 THEN 0
-                WHEN block_time_sec < 30 THEN FLOOR(block_time_sec)::int
-                ELSE 30
-            END as bucket_seconds,
-            COUNT(*) as block_count
-        FROM (
-            SELECT 
-                EXTRACT(EPOCH FROM (timestamp - LAG(timestamp) OVER (ORDER BY number))) as block_time_sec
+        WITH recent_blocks AS (
+            SELECT number, timestamp
             FROM blocks
             WHERE number > 0
-        ) block_times
-        WHERE block_time_sec IS NOT NULL AND block_time_sec >= 0
-        GROUP BY bucket_seconds
-        ORDER BY bucket_seconds
+            ORDER BY number DESC
+            LIMIT 50000
+        ),
+        block_times AS (
+            SELECT 
+                EXTRACT(EPOCH FROM (timestamp - LAG(timestamp) OVER (ORDER BY number))) * 1000 as block_time_ms
+            FROM recent_blocks
+        )
+        INSERT INTO block_time_distribution (bucket_ms, block_count)
+        SELECT 
+            LEAST(CEIL(block_time_ms / 100.0)::int * 100, 50000) as bucket_ms,
+            COUNT(*) as block_count
+        FROM block_times
+        WHERE block_time_ms IS NOT NULL AND block_time_ms > 0
+        GROUP BY bucket_ms
+        ORDER BY bucket_ms
         "#,
     )
     .execute(pool)

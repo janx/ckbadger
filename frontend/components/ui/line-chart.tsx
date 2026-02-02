@@ -324,7 +324,8 @@ export function LineChart({
     Math.floor((i / (xTickCount - 1 || 1)) * (data.length - 1))
   );
 
-  const isPercent = yAxisLabel === '%' || yAxisLabel === 'APC';
+  const isPercent =
+    yAxisLabel.includes('%') || yAxisLabel === 'APC' || yAxisLabel.includes('Ratio');
 
   const selectionStart =
     dragStart !== null && dragEnd !== null ? Math.min(dragStart, dragEnd) : null;

@@ -489,28 +489,38 @@ async fn get_block_time_distribution_chart(
 
     let rows = sqlx::query_as::<_, (i32, i64)>(
         r#"
-        SELECT bucket_seconds, block_count
+        SELECT bucket_ms, block_count
         FROM block_time_distribution
-        ORDER BY bucket_seconds
+        ORDER BY bucket_ms
         "#,
     )
     .fetch_all(&state.pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
+    let total_blocks: i64 = rows.iter().map(|(_, count)| count).sum();
+
     let data: Vec<ChartDataPoint> = rows
         .into_iter()
-        .map(|(bucket_seconds, count)| ChartDataPoint {
-            date: format!("{}s", bucket_seconds),
-            value: count.to_string(),
-            value2: None,
+        .map(|(bucket_ms, count)| {
+            let time_seconds = bucket_ms as f64 / 1000.0;
+            let ratio = if total_blocks > 0 {
+                (count as f64 / total_blocks as f64 * 100.0 * 1000.0).round() / 1000.0
+            } else {
+                0.0
+            };
+            ChartDataPoint {
+                date: format!("{:.1}", time_seconds),
+                value: format!("{:.3}", ratio),
+                value2: None,
+            }
         })
         .collect();
 
     let response = ChartResponse {
         data,
-        title: "Block Time Distribution".to_string(),
-        y_axis_label: "Blocks".to_string(),
+        title: "Block Time Distribution (Recent 50000 blocks)".to_string(),
+        y_axis_label: "Block Ratio (%)".to_string(),
         y2_axis_label: None,
     };
 

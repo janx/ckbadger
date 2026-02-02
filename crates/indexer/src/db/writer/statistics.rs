@@ -363,32 +363,9 @@ impl BatchWriter {
         Ok(row)
     }
 
-    pub async fn update_block_time_distribution(&self, block_time_seconds: i64) -> Result<()> {
-        if block_time_seconds < 0 {
-            return Ok(());
-        }
-
-        let bucket = if block_time_seconds < 1 {
-            0
-        } else if block_time_seconds < 30 {
-            block_time_seconds as i32
-        } else {
-            30
-        };
-
-        sqlx::query(
-            r#"
-            INSERT INTO block_time_distribution (bucket_seconds, block_count)
-            VALUES ($1, 1)
-            ON CONFLICT (bucket_seconds) DO UPDATE SET
-                block_count = block_time_distribution.block_count + 1,
-                updated_at = NOW()
-            "#,
-        )
-        .bind(bucket)
-        .execute(&self.pool)
-        .await?;
-
+    pub async fn update_block_time_distribution(&self, _block_time_seconds: i64) -> Result<()> {
+        // No-op: block_time_distribution uses sliding window (recent 50K blocks)
+        // and is rebuilt periodically via statistics_rebuild task
         Ok(())
     }
 
@@ -601,27 +578,10 @@ impl BatchWriter {
 
     pub async fn update_block_time_distribution_batch(
         &self,
-        bucket_seconds: i32,
-        count: i32,
+        _bucket_seconds: i32,
+        _count: i32,
     ) -> Result<()> {
-        if bucket_seconds < 0 {
-            return Ok(());
-        }
-
-        sqlx::query(
-            r#"
-            INSERT INTO block_time_distribution (bucket_seconds, block_count)
-            VALUES ($1, $2)
-            ON CONFLICT (bucket_seconds) DO UPDATE SET
-                block_count = block_time_distribution.block_count + $2,
-                updated_at = NOW()
-            "#,
-        )
-        .bind(bucket_seconds)
-        .bind(count)
-        .execute(&self.pool)
-        .await?;
-
+        // No-op: rebuilt periodically via statistics_rebuild task
         Ok(())
     }
 
@@ -1020,30 +980,33 @@ impl BatchWriter {
     }
 
     async fn rebuild_block_time_distribution(&self) -> Result<()> {
-        info!("Rebuilding block_time_distribution...");
+        info!("Rebuilding block_time_distribution (recent 50K blocks, 100ms buckets)...");
         sqlx::query("TRUNCATE TABLE block_time_distribution")
             .execute(&self.pool)
             .await?;
 
         sqlx::query(
             r#"
-            INSERT INTO block_time_distribution (bucket_seconds, block_count)
-            SELECT 
-                CASE 
-                    WHEN block_time_sec < 1 THEN 0
-                    WHEN block_time_sec < 30 THEN FLOOR(block_time_sec)::int
-                    ELSE 30
-                END as bucket_seconds,
-                COUNT(*) as block_count
-            FROM (
-                SELECT 
-                    EXTRACT(EPOCH FROM (timestamp - LAG(timestamp) OVER (ORDER BY number))) as block_time_sec
+            WITH recent_blocks AS (
+                SELECT number, timestamp
                 FROM blocks
                 WHERE number > 0
-            ) block_times
-            WHERE block_time_sec IS NOT NULL AND block_time_sec >= 0
-            GROUP BY bucket_seconds
-            ORDER BY bucket_seconds
+                ORDER BY number DESC
+                LIMIT 50000
+            ),
+            block_times AS (
+                SELECT 
+                    EXTRACT(EPOCH FROM (timestamp - LAG(timestamp) OVER (ORDER BY number))) * 1000 as block_time_ms
+                FROM recent_blocks
+            )
+            INSERT INTO block_time_distribution (bucket_ms, block_count)
+            SELECT 
+                LEAST(CEIL(block_time_ms / 100.0)::int * 100, 50000) as bucket_ms,
+                COUNT(*) as block_count
+            FROM block_times
+            WHERE block_time_ms IS NOT NULL AND block_time_ms > 0
+            GROUP BY bucket_ms
+            ORDER BY bucket_ms
             "#,
         )
         .execute(&self.pool)

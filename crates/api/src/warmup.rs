@@ -178,26 +178,34 @@ async fn warmup_uncle_rate(state: &AppState) -> Result<(), String> {
 
 async fn warmup_block_time_distribution(state: &AppState) -> Result<(), String> {
     let rows = sqlx::query_as::<_, (i32, i64)>(
-        "SELECT bucket_seconds, block_count FROM block_time_distribution ORDER BY bucket_seconds",
+        "SELECT bucket_ms, block_count FROM block_time_distribution ORDER BY bucket_ms",
     )
     .fetch_all(&state.pool)
     .await
     .map_err(|e| e.to_string())?;
 
+    let total_blocks: i64 = rows.iter().map(|(_, count)| count).sum();
+
     let data: Vec<serde_json::Value> = rows
         .into_iter()
-        .map(|(bucket_seconds, count)| {
+        .map(|(bucket_ms, count)| {
+            let time_seconds = bucket_ms as f64 / 1000.0;
+            let ratio = if total_blocks > 0 {
+                (count as f64 / total_blocks as f64 * 100.0 * 1000.0).round() / 1000.0
+            } else {
+                0.0
+            };
             serde_json::json!({
-                "date": format!("{}s", bucket_seconds),
-                "value": count.to_string()
+                "date": format!("{:.1}", time_seconds),
+                "value": format!("{:.3}", ratio)
             })
         })
         .collect();
 
     let response = serde_json::json!({
         "data": data,
-        "title": "Block Time Distribution",
-        "yAxisLabel": "Blocks"
+        "title": "Block Time Distribution (Recent 50000 blocks)",
+        "yAxisLabel": "Block Ratio (%)"
     });
 
     state
