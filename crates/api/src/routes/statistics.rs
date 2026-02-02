@@ -554,10 +554,9 @@ async fn get_epoch_time_distribution_chart(
     let data: Vec<ChartDataPoint> = rows
         .into_iter()
         .map(|(bucket_minutes, count)| {
-            let hours = bucket_minutes / 60;
-            let mins = bucket_minutes % 60;
+            let hours_decimal = bucket_minutes as f64 / 60.0;
             ChartDataPoint {
-                date: format!("{}:{:02}", hours, mins),
+                date: format!("{:.2}", hours_decimal),
                 value: count.to_string(),
                 value2: None,
             }

@@ -438,7 +438,8 @@ impl BatchWriter {
             return Ok(());
         }
 
-        let bucket_minutes = ((epoch_duration_minutes / 2.0).floor() as i32) * 2;
+        // Use 1-minute buckets to match official CKB Explorer
+        let bucket_minutes = epoch_duration_minutes.round() as i32;
 
         sqlx::query(
             r#"
@@ -1021,15 +1022,12 @@ impl BatchWriter {
             .execute(&self.pool)
             .await?;
 
+        // Use 1-minute buckets to match official CKB Explorer
         sqlx::query(
             r#"
             INSERT INTO epoch_time_distribution (bucket_minutes, epoch_count)
             SELECT 
-                CASE 
-                    WHEN epoch_minutes < 180 THEN 180
-                    WHEN epoch_minutes > 300 THEN 300
-                    ELSE (FLOOR(epoch_minutes / 5) * 5)::int
-                END as bucket_minutes,
+                ROUND(epoch_minutes)::int as bucket_minutes,
                 COUNT(*) as epoch_count
             FROM (
                 SELECT 

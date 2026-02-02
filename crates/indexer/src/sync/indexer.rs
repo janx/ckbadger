@@ -2853,7 +2853,8 @@ impl Indexer {
                     if prev_epoch_num == parsed.epoch_number - 1 {
                         let epoch_duration_minutes =
                             (parsed.timestamp - prev_start_ts).num_seconds() as f64 / 60.0;
-                        let bucket_minutes = ((epoch_duration_minutes / 2.0).floor() as i32) * 2;
+                        // Use 1-minute buckets to match official CKB Explorer
+                        let bucket_minutes = epoch_duration_minutes.round() as i32;
                         *batch_stats
                             .epoch_time_dist
                             .entry(bucket_minutes)
@@ -3911,7 +3912,8 @@ impl Indexer {
                     if prev_epoch_num == parsed.epoch_number - 1 {
                         let epoch_duration_minutes =
                             (parsed.timestamp - prev_start_ts).num_seconds() as f64 / 60.0;
-                        let bucket_minutes = ((epoch_duration_minutes / 2.0).floor() as i32) * 2;
+                        // Use 1-minute buckets to match official CKB Explorer
+                        let bucket_minutes = epoch_duration_minutes.round() as i32;
                         *batch_stats
                             .epoch_time_dist
                             .entry(bucket_minutes)
@@ -4981,7 +4983,8 @@ impl Indexer {
                 if *prev_epoch_num == parsed.epoch_number - 1 {
                     let epoch_duration_minutes =
                         (parsed.timestamp - *prev_start_ts).num_seconds() as f64 / 60.0;
-                    let bucket_minutes = ((epoch_duration_minutes / 2.0).floor() as i32) * 2;
+                    // Use 1-minute buckets to match official CKB Explorer
+                    let bucket_minutes = epoch_duration_minutes.round() as i32;
                     *batch_stats
                         .epoch_time_dist
                         .entry(bucket_minutes)
