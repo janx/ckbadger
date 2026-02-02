@@ -1,5 +1,7 @@
 use chrono::{NaiveDate, TimeZone, Utc};
-use ckbadger_task_runner::executor::statistics::update_dao_daily_snapshot;
+use ckbadger_task_runner::executor::statistics::{
+    rebuild_dao_daily_snapshots, update_dao_daily_snapshot,
+};
 use ckbadger_task_runner::MIGRATOR;
 use sqlx::PgPool;
 
@@ -221,4 +223,87 @@ async fn test_snapshot_handles_missing_secondary_issuance(pool: PgPool) {
         snapshot.cumulative_deposit_compensation,
         Some("0".to_string())
     );
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn test_bulk_rebuild_creates_all_snapshots_with_correct_cumulative_values(pool: PgPool) {
+    // Given: 3 days of blocks with secondary issuance and deposits
+    let jan1 = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+    let jan2 = NaiveDate::from_ymd_opt(2024, 1, 2).unwrap();
+    let jan3 = NaiveDate::from_ymd_opt(2024, 1, 3).unwrap();
+
+    insert_test_block(&pool, 1, jan1).await;
+    insert_test_block(&pool, 2, jan2).await;
+    insert_test_block(&pool, 3, jan3).await;
+
+    insert_block_secondary_issuance(&pool, 1, jan1, 1000, 100, 50).await;
+    insert_block_secondary_issuance(&pool, 2, jan2, 2000, 200, 100).await;
+    insert_block_secondary_issuance(&pool, 3, jan3, 3000, 300, 150).await;
+
+    insert_dao_deposit(&pool, 1, jan1, None, 1000_00000000).await;
+    insert_dao_deposit(&pool, 2, jan2, None, 2000_00000000).await;
+
+    // When: bulk rebuild all snapshots
+    rebuild_dao_daily_snapshots(&pool).await.unwrap();
+
+    // Then: all 3 days should have snapshots with correct cumulative values
+    let snap1 = get_snapshot(&pool, jan1).await.unwrap();
+    assert_eq!(snap1.cumulative_burnt, Some("1000".to_string()));
+    assert_eq!(snap1.cumulative_mining_reward, Some("100".to_string()));
+    assert_eq!(
+        snap1.cumulative_deposit_compensation,
+        Some("50".to_string())
+    );
+    assert_eq!(snap1.total_deposit, "100000000000");
+    assert_eq!(snap1.depositors_count, 1);
+
+    let snap2 = get_snapshot(&pool, jan2).await.unwrap();
+    assert_eq!(snap2.cumulative_burnt, Some("3000".to_string()));
+    assert_eq!(snap2.cumulative_mining_reward, Some("300".to_string()));
+    assert_eq!(
+        snap2.cumulative_deposit_compensation,
+        Some("150".to_string())
+    );
+    assert_eq!(snap2.total_deposit, "300000000000");
+    assert_eq!(snap2.depositors_count, 2);
+
+    let snap3 = get_snapshot(&pool, jan3).await.unwrap();
+    assert_eq!(snap3.cumulative_burnt, Some("6000".to_string()));
+    assert_eq!(snap3.cumulative_mining_reward, Some("600".to_string()));
+    assert_eq!(
+        snap3.cumulative_deposit_compensation,
+        Some("300".to_string())
+    );
+    assert_eq!(snap3.total_deposit, "300000000000");
+    assert_eq!(snap3.depositors_count, 2);
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn test_bulk_rebuild_tracks_withdrawn_deposits_correctly(pool: PgPool) {
+    // Given: deposit on day 1, withdrawn on day 2
+    let jan1 = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+    let jan2 = NaiveDate::from_ymd_opt(2024, 1, 2).unwrap();
+    let jan3 = NaiveDate::from_ymd_opt(2024, 1, 3).unwrap();
+
+    insert_test_block(&pool, 1, jan1).await;
+    insert_test_block(&pool, 2, jan2).await;
+    insert_test_block(&pool, 3, jan3).await;
+
+    insert_dao_deposit(&pool, 1, jan1, Some(jan2), 1000_00000000).await;
+
+    // When: bulk rebuild
+    rebuild_dao_daily_snapshots(&pool).await.unwrap();
+
+    // Then: day 1 should have deposit, day 2+ should not
+    let snap1 = get_snapshot(&pool, jan1).await.unwrap();
+    assert_eq!(snap1.total_deposit, "100000000000");
+    assert_eq!(snap1.depositors_count, 1);
+
+    let snap2 = get_snapshot(&pool, jan2).await.unwrap();
+    assert_eq!(snap2.total_deposit, "0");
+    assert_eq!(snap2.depositors_count, 0);
+
+    let snap3 = get_snapshot(&pool, jan3).await.unwrap();
+    assert_eq!(snap3.total_deposit, "0");
+    assert_eq!(snap3.depositors_count, 0);
 }

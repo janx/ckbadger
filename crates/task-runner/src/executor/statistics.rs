@@ -386,7 +386,7 @@ async fn rebuild_epoch_time_distribution(pool: &PgPool) -> Result<()> {
     Ok(())
 }
 
-async fn rebuild_dao_daily_snapshots(pool: &PgPool) -> Result<()> {
+pub async fn rebuild_dao_daily_snapshots(pool: &PgPool) -> Result<()> {
     info!("Rebuilding dao_daily_snapshots...");
     sqlx::query("TRUNCATE TABLE dao_daily_snapshots")
         .execute(pool)
@@ -501,8 +501,8 @@ async fn rebuild_dao_daily_snapshots(pool: &PgPool) -> Result<()> {
         )
         SELECT 
             d.date,
-            COALESCE(dc.total_deposit, 0) as total_deposit,
-            COALESCE(depc.depositors_count, (
+            COALESCE(dc_latest.total_deposit, 0) as total_deposit,
+            COALESCE(depc_latest.depositors_count, (
                 SELECT COUNT(DISTINCT lock_script_hash) FROM depositor_spans 
                 WHERE first_deposit <= d.date AND last_active >= d.date
             ))::int as depositors_count,
@@ -525,7 +525,13 @@ async fn rebuild_dao_daily_snapshots(pool: &PgPool) -> Result<()> {
             lb.dao as dao_data
         FROM dates d
         LEFT JOIN deposit_cumulative dc ON d.date = dc.date
+        LEFT JOIN LATERAL (
+            SELECT total_deposit FROM deposit_cumulative WHERE date <= d.date ORDER BY date DESC LIMIT 1
+        ) dc_latest ON true
         LEFT JOIN depositor_cumulative depc ON d.date = depc.date
+        LEFT JOIN LATERAL (
+            SELECT depositors_count FROM depositor_cumulative WHERE date <= d.date ORDER BY date DESC LIMIT 1
+        ) depc_latest ON true
         LEFT JOIN last_blocks lb ON d.date = lb.date
         LEFT JOIN secondary_cumulative sc ON d.date = sc.date
         ORDER BY d.date
