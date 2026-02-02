@@ -31,6 +31,7 @@ interface ChartPageProps {
   queryFn: () => Promise<ChartResponse>;
   backLink?: string;
   backLabel?: string;
+  defaultLogScale?: boolean;
 }
 
 export function ChartPage({
@@ -39,6 +40,7 @@ export function ChartPage({
   queryFn,
   backLink = '/charts',
   backLabel = 'Back to Charts',
+  defaultLogScale = false,
 }: ChartPageProps) {
   const { data: networkStats } = useQuery({
     queryKey: ['network-stats'],
@@ -83,6 +85,7 @@ export function ChartPage({
                   yAxisLabel={data.yAxisLabel}
                   y2AxisLabel={data.y2AxisLabel}
                   height={400}
+                  defaultLogScale={defaultLogScale}
                 />
                 <div className="mt-6 flex items-center justify-center gap-6 text-sm">
                   <div className="flex items-center gap-2">

@@ -9,6 +9,7 @@ export default function TransactionCountPage() {
       title="Transaction Count"
       queryKey="chart-transaction-count"
       queryFn={api.getTransactionCountChart}
+      defaultLogScale
     />
   );
 }

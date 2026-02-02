@@ -11,6 +11,7 @@ interface LineChartProps {
   secondaryColor?: string;
   height?: number;
   interactive?: boolean;
+  defaultLogScale?: boolean;
 }
 
 function formatValue(val: number | undefined, isPercent = false): string {
@@ -40,6 +41,7 @@ export function LineChart({
   secondaryColor = '#00c389',
   height: chartHeightProp = 240,
   interactive = true,
+  defaultLogScale = false,
 }: LineChartProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
@@ -48,6 +50,7 @@ export function LineChart({
   const [dragEnd, setDragEnd] = useState<number | null>(null);
   const [zoomRange, setZoomRange] = useState<[number, number] | null>(null);
   const [panStart, setPanStart] = useState<{ x: number; range: [number, number] } | null>(null);
+  const [useLogScale, setUseLogScale] = useState(defaultLogScale);
 
   const width = 600;
   const height = chartHeightProp;
@@ -87,8 +90,14 @@ export function LineChart({
     }
     if (!isFinite(max2) || max2 === 0) max2 = 1;
 
+    // For log scale, ensure min is at least 1 (log(0) is undefined)
+    if (useLogScale) {
+      min = Math.max(1, min);
+      return { minVal: min, maxVal: max * 1.1, minVal2: 0, maxVal2: max2 * 1.1 };
+    }
+
     return { minVal: min * 0.9, maxVal: max * 1.1, minVal2: 0, maxVal2: max2 * 1.1 };
-  }, [values, values2]);
+  }, [values, values2, useLogScale]);
 
   const xScale = useCallback(
     (i: number) => padding.left + (i / (data.length - 1 || 1)) * chartWidth,
@@ -96,9 +105,16 @@ export function LineChart({
   );
 
   const yScale = useCallback(
-    (v: number) =>
-      padding.top + chartHeight - ((v - minVal) / (maxVal - minVal || 1)) * chartHeight,
-    [padding.top, chartHeight, minVal, maxVal]
+    (v: number) => {
+      if (useLogScale) {
+        const logMin = Math.log10(Math.max(1, minVal));
+        const logMax = Math.log10(maxVal);
+        const logV = Math.log10(Math.max(1, v));
+        return padding.top + chartHeight - ((logV - logMin) / (logMax - logMin || 1)) * chartHeight;
+      }
+      return padding.top + chartHeight - ((v - minVal) / (maxVal - minVal || 1)) * chartHeight;
+    },
+    [padding.top, chartHeight, minVal, maxVal, useLogScale]
   );
 
   const y2Scale = useCallback(
@@ -308,13 +324,29 @@ export function LineChart({
     return parts.join(' ');
   }, [data.length, xScale, y2Scale, values2]);
 
+  const yTicks = useMemo(() => {
+    if (useLogScale) {
+      const logMin = Math.floor(Math.log10(Math.max(1, minVal)));
+      const logMax = Math.ceil(Math.log10(maxVal));
+      const ticks: number[] = [];
+      for (let exp = logMin; exp <= logMax && ticks.length < 6; exp++) {
+        ticks.push(Math.pow(10, exp));
+      }
+      return ticks.length >= 2 ? ticks : [minVal, maxVal];
+    }
+    return Array.from({ length: 5 }, (_, i) => minVal + ((maxVal - minVal) / 4) * i);
+  }, [minVal, maxVal, useLogScale]);
+
+  const handleToggleLogScale = useCallback(() => {
+    setUseLogScale((prev) => !prev);
+  }, []);
+
   if (!fullData.length) {
     return (
       <div className="flex h-64 items-center justify-center text-slate-500">No data available</div>
     );
   }
 
-  const yTicks = Array.from({ length: 5 }, (_, i) => minVal + ((maxVal - minVal) / 4) * i);
   const y2Ticks = values2.length
     ? Array.from({ length: 5 }, (_, i) => minVal2 + ((maxVal2 - minVal2) / 4) * i)
     : [];
@@ -333,14 +365,26 @@ export function LineChart({
 
   return (
     <div className="relative">
-      {interactive && isZoomed && (
+      <div className="absolute right-2 top-2 z-10 flex gap-2">
         <button
-          onClick={handleReset}
-          className="hover:border-terminal-green hover:text-terminal-green absolute right-2 top-2 z-10 rounded border border-slate-700 bg-slate-800 px-2 py-1 font-mono text-xs text-slate-300 transition-colors"
+          onClick={handleToggleLogScale}
+          className={`rounded border px-2 py-1 font-mono text-xs transition-colors ${
+            useLogScale
+              ? 'border-terminal-green text-terminal-green bg-terminal-green/10'
+              : 'hover:border-terminal-green hover:text-terminal-green border-slate-700 bg-slate-800 text-slate-300'
+          }`}
         >
-          Reset Zoom
+          Log Scale
         </button>
-      )}
+        {interactive && isZoomed && (
+          <button
+            onClick={handleReset}
+            className="hover:border-terminal-green hover:text-terminal-green rounded border border-slate-700 bg-slate-800 px-2 py-1 font-mono text-xs text-slate-300 transition-colors"
+          >
+            Reset Zoom
+          </button>
+        )}
+      </div>
       <svg
         ref={svgRef}
         viewBox={`0 0 ${width} ${height}`}
