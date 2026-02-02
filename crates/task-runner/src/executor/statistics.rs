@@ -258,25 +258,34 @@ async fn rebuild_hourly_statistics(pool: &PgPool) -> Result<()> {
             FROM blocks
             GROUP BY date_trunc('hour', timestamp)
         ),
-        hourly_cells AS (
+        cells_created_agg AS (
             SELECT 
                 date_trunc('hour', b.timestamp) as hour,
-                SUM(CASE WHEN c.created_at_block = b.number THEN 1 ELSE 0 END) as cells_created,
-                SUM(CASE WHEN c.consumed_at_block = b.number THEN 1 ELSE 0 END) as cells_consumed,
-                SUM(CASE WHEN c.created_at_block = b.number THEN c.capacity ELSE 0 END) as capacity_transferred
-            FROM blocks b
-            LEFT JOIN cells c ON c.created_at_block = b.number OR c.consumed_at_block = b.number
+                COUNT(*) as cells_created,
+                SUM(c.capacity) as capacity_transferred
+            FROM cells c
+            JOIN blocks b ON b.number = c.created_at_block
+            GROUP BY date_trunc('hour', b.timestamp)
+        ),
+        cells_consumed_agg AS (
+            SELECT 
+                date_trunc('hour', b.timestamp) as hour,
+                COUNT(*) as cells_consumed
+            FROM cells c
+            JOIN blocks b ON b.number = c.consumed_at_block
+            WHERE c.consumed_at_block IS NOT NULL
             GROUP BY date_trunc('hour', b.timestamp)
         )
         SELECT 
             hb.hour,
             hb.blocks_count::int,
             hb.transactions_count::int,
-            COALESCE(hc.cells_created, 0)::int,
-            COALESCE(hc.cells_consumed, 0)::int,
-            COALESCE(hc.capacity_transferred, 0)
+            COALESCE(cc.cells_created, 0)::int,
+            COALESCE(cd.cells_consumed, 0)::int,
+            COALESCE(cc.capacity_transferred, 0)
         FROM hourly_blocks hb
-        LEFT JOIN hourly_cells hc ON hb.hour = hc.hour
+        LEFT JOIN cells_created_agg cc ON hb.hour = cc.hour
+        LEFT JOIN cells_consumed_agg cd ON hb.hour = cd.hour
         ORDER BY hb.hour
         "#,
     )
@@ -296,14 +305,13 @@ async fn rebuild_miner_statistics(pool: &PgPool) -> Result<()> {
         r#"
         INSERT INTO miner_statistics (date, miner_lock_hash, blocks_count, last_block_number)
         SELECT 
-            b.timestamp::date as date,
-            c.lock_script_hash as miner_lock_hash,
+            timestamp::date as date,
+            miner_lock_hash,
             COUNT(*)::int as blocks_count,
-            MAX(b.number) as last_block_number
-        FROM blocks b
-        JOIN transactions t ON t.block_number = b.number AND t.tx_index = 0
-        JOIN cells c ON c.tx_hash = t.hash AND c.output_index = 0
-        GROUP BY b.timestamp::date, c.lock_script_hash
+            MAX(number) as last_block_number
+        FROM blocks
+        WHERE miner_lock_hash IS NOT NULL
+        GROUP BY timestamp::date, miner_lock_hash
         ORDER BY date, blocks_count DESC
         "#,
     )
