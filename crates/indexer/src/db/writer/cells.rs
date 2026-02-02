@@ -232,11 +232,8 @@ impl BatchWriter {
             }
         }
 
-        // Skip DB operations in bulk sync mode
-        if bulk_sync_mode {
-            return Ok(());
-        }
-
+        // Always update cells table to track consumption (needed for statistics)
+        // This is essential for accurate live cell count in daily_statistics
         const PARTITION_SIZE: i64 = 5_000_000;
         let mut by_partition: std::collections::HashMap<i64, Vec<usize>> =
             std::collections::HashMap::new();
@@ -292,11 +289,21 @@ impl BatchWriter {
             update_futures.push(fut);
         }
 
+        for fut in update_futures {
+            fut.await?;
+        }
+
+        // Skip live_cells table operations in bulk sync mode
+        // (live_cells will be populated from RocksDB after bulk sync completes)
+        if bulk_sync_mode {
+            return Ok(());
+        }
+
         let all_tx_hashes: Vec<&[u8]> = consumptions.iter().map(|(h, _, _, _, _, _)| *h).collect();
         let all_output_indices: Vec<i16> =
             consumptions.iter().map(|(_, i, _, _, _, _)| *i).collect();
 
-        let delete_live_cells_fut = sqlx::query(
+        sqlx::query(
             r#"
             DELETE FROM live_cells
             WHERE (tx_hash, output_index) IN (
@@ -306,23 +313,8 @@ impl BatchWriter {
         )
         .bind(&all_tx_hashes)
         .bind(&all_output_indices)
-        .execute(&self.pool);
-
-        let (update_results, delete_result) = tokio::join!(
-            async {
-                let mut results = Vec::with_capacity(update_futures.len());
-                for fut in update_futures {
-                    results.push(fut.await);
-                }
-                results
-            },
-            delete_live_cells_fut
-        );
-
-        for result in update_results {
-            result?;
-        }
-        delete_result?;
+        .execute(&self.pool)
+        .await?;
 
         Ok(())
     }

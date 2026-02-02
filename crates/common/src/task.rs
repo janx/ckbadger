@@ -200,7 +200,7 @@ fn default_populate_batch_size() -> usize {
 
 /// Configuration for spore rebuild task
 /// Rebuilds spore_cells.is_live status and spore_clusters.spores_count
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SporeRebuildConfig {
     /// Batch size for processing spore cells (default: 10,000)
@@ -210,6 +210,14 @@ pub struct SporeRebuildConfig {
 
 fn default_spore_batch_size() -> usize {
     10_000
+}
+
+impl Default for SporeRebuildConfig {
+    fn default() -> Self {
+        Self {
+            batch_size: default_spore_batch_size(),
+        }
+    }
 }
 
 /// Unified task configuration enum

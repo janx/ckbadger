@@ -106,6 +106,16 @@ const mockStackedAreaResponse = {
   ],
 };
 
+const mockCellCountResponse = {
+  title: 'Cell Count',
+  data: [{ date: '2024-01-01', values: { allCells: '1000', liveCells: '800', deadCells: '200' } }],
+  series: [
+    { key: 'allCells', label: 'All Cells', color: '#6b7280' },
+    { key: 'liveCells', label: 'Live Cells', color: '#00c389' },
+    { key: 'deadCells', label: 'Dead Cells', color: '#ef4444' },
+  ],
+};
+
 describe('ChartsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -113,7 +123,7 @@ describe('ChartsPage', () => {
     vi.mocked(api.getDaoDailyDepositChart).mockResolvedValue(mockChartResponse);
     vi.mocked(api.getDaoCirculationRatioChart).mockResolvedValue(mockChartResponse);
     vi.mocked(api.getTransactionCountChart).mockResolvedValue(mockChartResponse);
-    vi.mocked(api.getCellCountChart).mockResolvedValue(mockChartResponse);
+    vi.mocked(api.getCellCountChart).mockResolvedValue(mockCellCountResponse);
     vi.mocked(api.getKnowledgeSizeChart).mockResolvedValue(mockChartResponse);
     vi.mocked(api.getBlockTimeDistributionChart).mockResolvedValue(mockChartResponse);
     vi.mocked(api.getEpochTimeDistributionChart).mockResolvedValue(mockChartResponse);

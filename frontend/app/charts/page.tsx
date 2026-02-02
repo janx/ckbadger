@@ -65,6 +65,46 @@ function StackedAreaPreview({
   );
 }
 
+function MultiSeriesPreview({
+  data,
+  href,
+  defaultSeries = 'liveCells',
+}: {
+  data: StackedAreaChartResponse | undefined;
+  href: string;
+  defaultSeries?: string;
+}) {
+  const chartData: ChartResponse | undefined = data
+    ? {
+        data: data.data.map((d) => ({
+          date: d.date,
+          value: d.values[defaultSeries] || '0',
+        })),
+        title: data.title,
+        yAxisLabel: 'Cells',
+      }
+    : undefined;
+
+  return (
+    <ChartCard
+      title={data?.title ?? 'Loading...'}
+      href={href}
+      isLoading={!data}
+      error={data === null}
+    >
+      {chartData && (
+        <LineChart
+          data={chartData.data}
+          yAxisLabel={chartData.yAxisLabel}
+          height={160}
+          interactive={false}
+          primaryColor="#00c389"
+        />
+      )}
+    </ChartCard>
+  );
+}
+
 function MinerDistributionPreview({
   data,
   href,
@@ -233,7 +273,11 @@ export default function ChartsPage() {
 
         <ChartSection title="Activities">
           <LineChartPreview data={transactionCount} href="/charts/transaction-count" />
-          <LineChartPreview data={cellCount} href="/charts/cell-count" />
+          <MultiSeriesPreview
+            data={cellCount}
+            href="/charts/cell-count"
+            defaultSeries="liveCells"
+          />
           <LineChartPreview data={knowledgeSize} href="/charts/knowledge-size" />
         </ChartSection>
 

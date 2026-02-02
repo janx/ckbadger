@@ -136,7 +136,8 @@ async fn rebuild_daily_statistics(pool: &PgPool) -> Result<()> {
         r#"
         INSERT INTO daily_statistics (
             date, blocks_count, transactions_count, cells_created, cells_consumed,
-            capacity_transferred, total_live_cells, total_data_size, avg_block_time_ms
+            capacity_transferred, total_live_cells, total_dead_cells, total_all_cells,
+            total_data_size, avg_block_time_ms
         )
         WITH block_times AS (
             SELECT 
@@ -185,6 +186,10 @@ async fn rebuild_daily_statistics(pool: &PgPool) -> Result<()> {
             COALESCE(cc.capacity_transferred, 0),
             SUM(COALESCE(cc.cells_created, 0) - COALESCE(cd.cells_consumed, 0)) 
                 OVER (ORDER BY db.date) as total_live_cells,
+            SUM(COALESCE(cd.cells_consumed, 0)) 
+                OVER (ORDER BY db.date) as total_dead_cells,
+            SUM(COALESCE(cc.cells_created, 0)) 
+                OVER (ORDER BY db.date) as total_all_cells,
             SUM(COALESCE(cc.data_size_added, 0) - COALESCE(cd.data_size_consumed, 0)) 
                 OVER (ORDER BY db.date) as total_data_size,
             db.avg_block_time_ms

@@ -459,6 +459,8 @@ CREATE TABLE daily_statistics (
     total_blocks BIGINT NOT NULL DEFAULT 0,
     total_transactions BIGINT NOT NULL DEFAULT 0,
     total_live_cells BIGINT NOT NULL DEFAULT 0,
+    total_dead_cells BIGINT NOT NULL DEFAULT 0,
+    total_all_cells BIGINT NOT NULL DEFAULT 0,
     total_data_size BIGINT NOT NULL DEFAULT 0,
     cumulative_cells BIGINT NOT NULL DEFAULT 0,
     cumulative_data_size BIGINT NOT NULL DEFAULT 0,

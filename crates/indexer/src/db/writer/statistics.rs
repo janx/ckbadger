@@ -53,9 +53,13 @@ impl BatchWriter {
         data_size_added: i64,
         data_size_consumed: i64,
     ) -> Result<()> {
-        let prev_cumulative = sqlx::query_as::<_, (i64, i64)>(
+        let prev_cumulative = sqlx::query_as::<_, (i64, i64, i64, i64)>(
             r#"
-            SELECT COALESCE(total_live_cells, 0), COALESCE(total_data_size, 0)
+            SELECT 
+                COALESCE(total_live_cells, 0), 
+                COALESCE(total_dead_cells, 0),
+                COALESCE(total_all_cells, 0),
+                COALESCE(total_data_size, 0)
             FROM daily_statistics
             WHERE date < $1
             ORDER BY date DESC
@@ -65,7 +69,7 @@ impl BatchWriter {
         .bind(date)
         .fetch_optional(&self.pool)
         .await?
-        .unwrap_or((0, 0));
+        .unwrap_or((0, 0, 0, 0));
 
         let net_cells = (cells_created - cells_consumed) as i64;
         let net_data_size = data_size_added - data_size_consumed;
@@ -74,9 +78,9 @@ impl BatchWriter {
             r#"
             INSERT INTO daily_statistics (
                 date, blocks_count, transactions_count, cells_created, cells_consumed, 
-                capacity_transferred, total_live_cells, total_data_size
+                capacity_transferred, total_live_cells, total_dead_cells, total_all_cells, total_data_size
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             ON CONFLICT (date) DO UPDATE SET
                 blocks_count = daily_statistics.blocks_count + EXCLUDED.blocks_count,
                 transactions_count = daily_statistics.transactions_count + EXCLUDED.transactions_count,
@@ -84,7 +88,9 @@ impl BatchWriter {
                 cells_consumed = daily_statistics.cells_consumed + EXCLUDED.cells_consumed,
                 capacity_transferred = daily_statistics.capacity_transferred + EXCLUDED.capacity_transferred,
                 total_live_cells = daily_statistics.total_live_cells + $4 - $5,
-                total_data_size = daily_statistics.total_data_size + $9
+                total_dead_cells = daily_statistics.total_dead_cells + $5,
+                total_all_cells = daily_statistics.total_all_cells + $4,
+                total_data_size = daily_statistics.total_data_size + $11
             "#,
         )
         .bind(date)
@@ -94,7 +100,9 @@ impl BatchWriter {
         .bind(cells_consumed)
         .bind(capacity_transferred)
         .bind(prev_cumulative.0 + net_cells)
-        .bind(prev_cumulative.1 + net_data_size)
+        .bind(prev_cumulative.1 + cells_consumed as i64)
+        .bind(prev_cumulative.2 + cells_created as i64)
+        .bind(prev_cumulative.3 + net_data_size)
         .bind(net_data_size)
         .execute(&self.pool)
         .await?;
@@ -812,7 +820,8 @@ impl BatchWriter {
             r#"
             INSERT INTO daily_statistics (
                 date, blocks_count, transactions_count, cells_created, cells_consumed,
-                capacity_transferred, total_live_cells, total_data_size, avg_block_time_ms
+                capacity_transferred, total_live_cells, total_dead_cells, total_all_cells,
+                total_data_size, avg_block_time_ms
             )
             WITH block_times AS (
                 SELECT 
@@ -853,6 +862,10 @@ impl BatchWriter {
                 COALESCE(dc.capacity_transferred, 0),
                 SUM(COALESCE(dc.cells_created, 0) - COALESCE(dc.cells_consumed, 0)) 
                     OVER (ORDER BY db.date) as total_live_cells,
+                SUM(COALESCE(dc.cells_consumed, 0)) 
+                    OVER (ORDER BY db.date) as total_dead_cells,
+                SUM(COALESCE(dc.cells_created, 0)) 
+                    OVER (ORDER BY db.date) as total_all_cells,
                 SUM(COALESCE(dc.data_size_added, 0) - COALESCE(dc.data_size_consumed, 0)) 
                     OVER (ORDER BY db.date) as total_data_size,
                 db.avg_block_time_ms

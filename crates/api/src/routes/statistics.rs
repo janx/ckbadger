@@ -419,12 +419,14 @@ async fn get_transaction_count_chart(
     })
 }
 
-async fn get_cell_count_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
-    let rows = sqlx::query_as::<_, (chrono::NaiveDate, i64)>(
+async fn get_cell_count_chart(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<StackedAreaChartResponse> {
+    let rows = sqlx::query_as::<_, (chrono::NaiveDate, i64, i64, i64)>(
         r#"
-        SELECT date, total_live_cells
+        SELECT date, total_all_cells, total_live_cells, total_dead_cells
         FROM daily_statistics
-        WHERE total_live_cells IS NOT NULL
+        WHERE total_all_cells IS NOT NULL
         ORDER BY date ASC
         "#,
     )
@@ -432,20 +434,42 @@ async fn get_cell_count_chart(State(state): State<Arc<AppState>>) -> ApiResult<C
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let data: Vec<ChartDataPoint> = rows
+    let data: Vec<StackedAreaDataPoint> = rows
         .into_iter()
-        .map(|(date, cumulative_cells)| ChartDataPoint {
-            date: date.format("%Y/%m/%d").to_string(),
-            value: cumulative_cells.to_string(),
-            value2: None,
+        .map(|(date, all_cells, live_cells, dead_cells)| {
+            let mut values = std::collections::HashMap::new();
+            values.insert("allCells".to_string(), all_cells.to_string());
+            values.insert("liveCells".to_string(), live_cells.to_string());
+            values.insert("deadCells".to_string(), dead_cells.to_string());
+            StackedAreaDataPoint {
+                date: date.format("%Y/%m/%d").to_string(),
+                values,
+            }
         })
         .collect();
 
-    ok(ChartResponse {
+    let series = vec![
+        StackedAreaSeries {
+            key: "allCells".to_string(),
+            label: "All Cells".to_string(),
+            color: "#6b7280".to_string(),
+        },
+        StackedAreaSeries {
+            key: "liveCells".to_string(),
+            label: "Live Cells".to_string(),
+            color: "#00c389".to_string(),
+        },
+        StackedAreaSeries {
+            key: "deadCells".to_string(),
+            label: "Dead Cells".to_string(),
+            color: "#ef4444".to_string(),
+        },
+    ];
+
+    ok(StackedAreaChartResponse {
         data,
-        title: "Live Cell Count".to_string(),
-        y_axis_label: "Cells".to_string(),
-        y2_axis_label: None,
+        series,
+        title: "Cell Count".to_string(),
     })
 }
 

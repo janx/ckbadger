@@ -1202,7 +1202,7 @@ export const api = {
     return fetchApi('/charts/transaction-count');
   },
 
-  getCellCountChart: (): Promise<ChartResponse> => {
+  getCellCountChart: (): Promise<StackedAreaChartResponse> => {
     return fetchApi('/charts/cell-count');
   },
 
