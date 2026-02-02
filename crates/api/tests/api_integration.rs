@@ -2794,8 +2794,9 @@ async fn test_assets_nft_returns_real_statistics(pool: sqlx::PgPool) {
         r#"
         INSERT INTO mnft_classes (
             class_id, type_script_hash, issuer_id, name, description,
-            total, issued, owner_lock_hash, is_live, created_at_block, created_at_tx
-        ) VALUES ($1, $2, $3, 'NFT Stats Collection', 'Test NFT', 100, 10, $4, TRUE, 100, $5)
+            total, issued, holders_count, transfers_count, transfers_24h,
+            owner_lock_hash, is_live, created_at_block, created_at_tx
+        ) VALUES ($1, $2, $3, 'NFT Stats Collection', 'Test NFT', 100, 10, 7, 7, 0, $4, TRUE, 100, $5)
         "#,
     )
     .bind(&class_id)

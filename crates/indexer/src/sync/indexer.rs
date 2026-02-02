@@ -514,6 +514,10 @@ impl Indexer {
                     Ok(count) => info!("Refreshed 24h transfers for {} tokens", count),
                     Err(e) => warn!("Failed to refresh token 24h transfers: {}", e),
                 }
+                match writer.refresh_mnft_24h_transfers().await {
+                    Ok(count) => info!("Refreshed 24h transfers for {} NFT classes", count),
+                    Err(e) => warn!("Failed to refresh NFT 24h transfers: {}", e),
+                }
             }
         });
 
@@ -1248,6 +1252,10 @@ impl Indexer {
             if let Err(e) = self.maybe_submit_statistics_rebuild_task().await {
                 warn!("Failed to submit statistics rebuild task: {}", e);
             }
+
+            if let Err(e) = self.maybe_submit_spore_rebuild_task().await {
+                warn!("Failed to submit spore rebuild task: {}", e);
+            }
         }
 
         self.was_bulk_sync_active
@@ -1378,6 +1386,50 @@ impl Indexer {
         .await?;
 
         info!("Submitted live cells populate task: {}", task_id.0);
+
+        Ok(())
+    }
+
+    async fn maybe_submit_spore_rebuild_task(&self) -> Result<()> {
+        use ckbadger_common::{SporeRebuildConfig, TaskBuilder};
+
+        let existing: Option<(i64,)> = sqlx::query_as(
+            "SELECT COUNT(*) FROM tasks WHERE task_type = 'spore_rebuild' AND status IN ('pending', 'running')",
+        )
+        .fetch_optional(self.writer.pool())
+        .await?;
+
+        if existing.map(|r| r.0).unwrap_or(0) > 0 {
+            info!("Spore rebuild task already pending/running, skipping submission");
+            return Ok(());
+        }
+
+        let spore_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM spore_cells")
+            .fetch_one(self.writer.pool())
+            .await?;
+
+        if spore_count.0 == 0 {
+            debug!("No spore cells found, skipping spore rebuild task");
+            return Ok(());
+        }
+
+        let builder = TaskBuilder::spore_rebuild(SporeRebuildConfig::default());
+
+        let task_id: (Uuid,) = sqlx::query_as(
+            r#"
+            INSERT INTO tasks (task_type, config, priority, max_retries)
+            VALUES ($1, $2, $3, $4)
+            RETURNING id
+            "#,
+        )
+        .bind(builder.task_type().to_string())
+        .bind(builder.config())
+        .bind(builder.get_priority())
+        .bind(builder.get_max_retries())
+        .fetch_one(self.writer.pool())
+        .await?;
+
+        info!("Submitted spore rebuild task: {}", task_id.0);
 
         Ok(())
     }

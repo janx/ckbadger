@@ -870,6 +870,11 @@ CREATE TABLE mnft_classes (
     total INTEGER NOT NULL DEFAULT 0,  -- Max supply (0 = unlimited)
     issued INTEGER NOT NULL DEFAULT 0,  -- Currently minted count
     
+    -- Pre-computed statistics (like tokens table)
+    holders_count INTEGER NOT NULL DEFAULT 0,
+    transfers_count BIGINT NOT NULL DEFAULT 0,
+    transfers_24h INTEGER NOT NULL DEFAULT 0,
+    
     owner_lock_hash BYTEA NOT NULL,
     
     is_live BOOLEAN NOT NULL DEFAULT TRUE,
@@ -888,6 +893,7 @@ CREATE INDEX idx_mnft_classes_issuer ON mnft_classes(issuer_id);
 CREATE INDEX idx_mnft_classes_owner ON mnft_classes(owner_lock_hash);
 CREATE INDEX idx_mnft_classes_live ON mnft_classes(is_live) WHERE is_live = TRUE;
 CREATE INDEX idx_mnft_classes_name ON mnft_classes(name) WHERE name IS NOT NULL;
+CREATE INDEX idx_mnft_classes_ranking ON mnft_classes(transfers_24h DESC, holders_count DESC, id DESC) WHERE is_live = TRUE;
 
 -- ---- mnft_tokens ----
 -- M-NFT Token cells are individual NFTs

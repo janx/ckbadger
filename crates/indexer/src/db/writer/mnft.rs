@@ -211,9 +211,9 @@ impl BatchWriter {
         .execute(&self.pool)
         .await?;
 
-        // Update class issued count
+        // Update class issued count and transfers_count
         sqlx::query(
-            "UPDATE mnft_classes SET issued = issued + 1, updated_at = NOW() WHERE class_id = $1",
+            "UPDATE mnft_classes SET issued = issued + 1, transfers_count = transfers_count + 1, updated_at = NOW() WHERE class_id = $1",
         )
         .bind(&token.class_id)
         .execute(&self.pool)

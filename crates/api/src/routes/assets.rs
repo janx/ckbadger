@@ -391,34 +391,11 @@ async fn fetch_assets(
     } else if let Some(pattern) = search_pattern {
         let query_str = r#"
             SELECT 
-                mc.id, 
-                mc.class_id, 
-                mc.issuer_id, 
-                mc.name, 
-                mc.description, 
-                mc.total, 
-                mc.issued,
-                COALESCE(h.holders_count, 0) AS holders_count,
-                COALESCE(t.transfers_count, 0) AS transfers_count,
-                COALESCE(t.transfers_24h, 0) AS transfers_24h
-            FROM mnft_classes mc
-            LEFT JOIN (
-                SELECT SUBSTRING(asset_id FROM 1 FOR 24) AS class_id, COUNT(DISTINCT to_lock_hash) AS holders_count
-                FROM activities
-                WHERE activity_category = 'nft' AND metadata->>'nftType' = 'mnft' AND activity_type != 'NFT_BURN'
-                GROUP BY SUBSTRING(asset_id FROM 1 FOR 24)
-            ) h ON h.class_id = mc.class_id
-            LEFT JOIN (
-                SELECT 
-                    SUBSTRING(asset_id FROM 1 FOR 24) AS class_id,
-                    COUNT(*) AS transfers_count,
-                    COUNT(*) FILTER (WHERE timestamp > NOW() - INTERVAL '24 hours') AS transfers_24h
-                FROM activities
-                WHERE activity_category = 'nft' AND metadata->>'nftType' = 'mnft'
-                GROUP BY SUBSTRING(asset_id FROM 1 FOR 24)
-            ) t ON t.class_id = mc.class_id
-            WHERE mc.id < $1 AND LOWER(mc.name) LIKE $2 AND mc.is_live = TRUE
-            ORDER BY COALESCE(t.transfers_24h, 0) DESC, COALESCE(h.holders_count, 0) DESC, mc.id DESC
+                id, class_id, issuer_id, name, description, total, issued,
+                holders_count::bigint, transfers_count, transfers_24h::bigint
+            FROM mnft_classes
+            WHERE id < $1 AND LOWER(name) LIKE $2 AND is_live = TRUE
+            ORDER BY transfers_24h DESC, holders_count DESC, id DESC
             LIMIT $3
         "#;
         sqlx::query_as::<_, MnftClassRow>(query_str)
@@ -431,34 +408,11 @@ async fn fetch_assets(
     } else {
         let query_str = r#"
             SELECT 
-                mc.id, 
-                mc.class_id, 
-                mc.issuer_id, 
-                mc.name, 
-                mc.description, 
-                mc.total, 
-                mc.issued,
-                COALESCE(h.holders_count, 0) AS holders_count,
-                COALESCE(t.transfers_count, 0) AS transfers_count,
-                COALESCE(t.transfers_24h, 0) AS transfers_24h
-            FROM mnft_classes mc
-            LEFT JOIN (
-                SELECT SUBSTRING(asset_id FROM 1 FOR 24) AS class_id, COUNT(DISTINCT to_lock_hash) AS holders_count
-                FROM activities
-                WHERE activity_category = 'nft' AND metadata->>'nftType' = 'mnft' AND activity_type != 'NFT_BURN'
-                GROUP BY SUBSTRING(asset_id FROM 1 FOR 24)
-            ) h ON h.class_id = mc.class_id
-            LEFT JOIN (
-                SELECT 
-                    SUBSTRING(asset_id FROM 1 FOR 24) AS class_id,
-                    COUNT(*) AS transfers_count,
-                    COUNT(*) FILTER (WHERE timestamp > NOW() - INTERVAL '24 hours') AS transfers_24h
-                FROM activities
-                WHERE activity_category = 'nft' AND metadata->>'nftType' = 'mnft'
-                GROUP BY SUBSTRING(asset_id FROM 1 FOR 24)
-            ) t ON t.class_id = mc.class_id
-            WHERE mc.id < $1 AND mc.is_live = TRUE
-            ORDER BY COALESCE(t.transfers_24h, 0) DESC, COALESCE(h.holders_count, 0) DESC, mc.id DESC
+                id, class_id, issuer_id, name, description, total, issued,
+                holders_count::bigint, transfers_count, transfers_24h::bigint
+            FROM mnft_classes
+            WHERE id < $1 AND is_live = TRUE
+            ORDER BY transfers_24h DESC, holders_count DESC, id DESC
             LIMIT $2
         "#;
         sqlx::query_as::<_, MnftClassRow>(query_str)

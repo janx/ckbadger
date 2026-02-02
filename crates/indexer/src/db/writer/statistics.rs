@@ -716,6 +716,115 @@ impl BatchWriter {
         Ok(updated_with_transfers + reset_result.rows_affected())
     }
 
+    pub async fn refresh_mnft_24h_transfers(&self) -> Result<u64> {
+        let result = sqlx::query(
+            r#"
+            WITH block_24h_ago AS (
+                SELECT COALESCE(
+                    (SELECT number FROM blocks 
+                     WHERE timestamp >= (SELECT MAX(timestamp) - INTERVAL '24 hours' FROM blocks)
+                     ORDER BY number ASC LIMIT 1),
+                    0
+                ) as block_num
+            ),
+            transfer_counts AS (
+                SELECT 
+                    SUBSTRING(asset_id FROM 1 FOR 24) AS class_id,
+                    COUNT(*) as cnt
+                FROM activities
+                WHERE activity_category = 'nft' 
+                  AND metadata->>'nftType' = 'mnft'
+                  AND block_number >= (SELECT block_num FROM block_24h_ago)
+                GROUP BY SUBSTRING(asset_id FROM 1 FOR 24)
+            )
+            UPDATE mnft_classes mc
+            SET transfers_24h = COALESCE(tc.cnt, 0)::int,
+                updated_at = NOW()
+            FROM transfer_counts tc
+            WHERE mc.class_id = tc.class_id
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        let updated_with_transfers = result.rows_affected();
+
+        let reset_result = sqlx::query(
+            r#"
+            WITH block_24h_ago AS (
+                SELECT COALESCE(
+                    (SELECT number FROM blocks 
+                     WHERE timestamp >= (SELECT MAX(timestamp) - INTERVAL '24 hours' FROM blocks)
+                     ORDER BY number ASC LIMIT 1),
+                    0
+                ) as block_num
+            ),
+            active_classes AS (
+                SELECT DISTINCT SUBSTRING(asset_id FROM 1 FOR 24) AS class_id
+                FROM activities
+                WHERE activity_category = 'nft' 
+                  AND metadata->>'nftType' = 'mnft'
+                  AND block_number >= (SELECT block_num FROM block_24h_ago)
+            )
+            UPDATE mnft_classes mc
+            SET transfers_24h = 0,
+                updated_at = NOW()
+            WHERE mc.transfers_24h > 0
+              AND NOT EXISTS (
+                  SELECT 1 FROM active_classes ac 
+                  WHERE ac.class_id = mc.class_id
+              )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        Ok(updated_with_transfers + reset_result.rows_affected())
+    }
+
+    pub async fn rebuild_mnft_statistics(&self) -> Result<u64> {
+        info!("Rebuilding mnft_classes statistics (holders_count, transfers_count)...");
+
+        let result = sqlx::query(
+            r#"
+            WITH holder_stats AS (
+                SELECT 
+                    SUBSTRING(asset_id FROM 1 FOR 24) AS class_id,
+                    COUNT(DISTINCT to_lock_hash) AS holders_count
+                FROM activities
+                WHERE activity_category = 'nft' 
+                  AND metadata->>'nftType' = 'mnft'
+                  AND activity_type != 'NFT_BURN'
+                GROUP BY SUBSTRING(asset_id FROM 1 FOR 24)
+            ),
+            transfer_stats AS (
+                SELECT 
+                    SUBSTRING(asset_id FROM 1 FOR 24) AS class_id,
+                    COUNT(*) AS transfers_count
+                FROM activities
+                WHERE activity_category = 'nft' 
+                  AND metadata->>'nftType' = 'mnft'
+                GROUP BY SUBSTRING(asset_id FROM 1 FOR 24)
+            )
+            UPDATE mnft_classes mc
+            SET holders_count = COALESCE(h.holders_count, 0)::int,
+                transfers_count = COALESCE(t.transfers_count, 0),
+                updated_at = NOW()
+            FROM holder_stats h
+            FULL OUTER JOIN transfer_stats t ON h.class_id = t.class_id
+            WHERE mc.class_id = COALESCE(h.class_id, t.class_id)
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        info!(
+            "Rebuilt mnft_classes statistics for {} classes",
+            result.rows_affected()
+        );
+        Ok(result.rows_affected())
+    }
+
     pub async fn rebuild_all_statistics(&self) -> Result<()> {
         info!("Rebuilding all statistics after bulk sync completion...");
 
@@ -726,6 +835,7 @@ impl BatchWriter {
         self.rebuild_block_time_distribution().await?;
         self.rebuild_epoch_time_distribution().await?;
         self.rebuild_dao_daily_snapshots().await?;
+        self.rebuild_mnft_statistics().await?;
 
         info!("All statistics rebuild completed");
         Ok(())

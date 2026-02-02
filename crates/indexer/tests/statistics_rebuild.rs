@@ -202,3 +202,124 @@ async fn test_rebuild_epoch_time_distribution(pool: PgPool) {
 
     assert!(count >= 1, "Should have at least one epoch time bucket");
 }
+
+async fn insert_mnft_class(pool: &PgPool, class_id: &[u8], name: &str) {
+    sqlx::query(
+        r#"
+        INSERT INTO mnft_classes (
+            class_id, type_script_hash, issuer_id, name, description,
+            total, issued, holders_count, transfers_count, transfers_24h,
+            owner_lock_hash, is_live, created_at_block, created_at_tx
+        ) VALUES ($1, $2, $3, $4, 'Test', 100, 10, 0, 0, 0, $5, TRUE, 100, $6)
+        "#,
+    )
+    .bind(class_id)
+    .bind(vec![0u8; 32])
+    .bind(vec![0u8; 20])
+    .bind(name)
+    .bind(vec![0u8; 32])
+    .bind(vec![0u8; 32])
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn insert_nft_activity(
+    pool: &PgPool,
+    class_id: &[u8],
+    block_number: i64,
+    to_lock_hash: &[u8],
+    activity_type: &str,
+) {
+    let activity_id = vec![block_number as u8; 32];
+    let tx_hash = vec![block_number as u8; 32];
+    let mut asset_id = class_id.to_vec();
+    asset_id.extend_from_slice(&[0, 0, 0, block_number as u8]);
+
+    let metadata = serde_json::json!({ "nftType": "mnft" });
+
+    sqlx::query(
+        r#"
+        INSERT INTO activities (
+            activity_id, activity_type, activity_category, block_number, tx_hash,
+            tx_index, activity_index, from_lock_hash, to_lock_hash, amount, asset_id,
+            metadata, timestamp
+        ) VALUES ($1, $2, 'nft', $3, $4, 0, 0, NULL, $5, 1, $6, $7, NOW())
+        "#,
+    )
+    .bind(&activity_id)
+    .bind(activity_type)
+    .bind(block_number)
+    .bind(&tx_hash)
+    .bind(to_lock_hash)
+    .bind(&asset_id)
+    .bind(metadata)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn test_rebuild_mnft_statistics(pool: PgPool) {
+    let writer = BatchWriter::new(pool.clone());
+
+    let class_id = vec![0x01u8; 24];
+    insert_mnft_class(&pool, &class_id, "Test NFT").await;
+
+    let holder1 = vec![0x10u8; 32];
+    let holder2 = vec![0x20u8; 32];
+    let holder3 = vec![0x30u8; 32];
+
+    insert_nft_activity(&pool, &class_id, 1, &holder1, "NFT_MINT").await;
+    insert_nft_activity(&pool, &class_id, 2, &holder2, "NFT_TRANSFER").await;
+    insert_nft_activity(&pool, &class_id, 3, &holder3, "NFT_TRANSFER").await;
+    insert_nft_activity(&pool, &class_id, 4, &holder1, "NFT_TRANSFER").await;
+
+    let result = writer.rebuild_mnft_statistics().await.unwrap();
+    assert_eq!(result, 1, "Should update 1 class");
+
+    let (holders_count, transfers_count): (i32, i64) = sqlx::query_as(
+        "SELECT holders_count, transfers_count FROM mnft_classes WHERE class_id = $1",
+    )
+    .bind(&class_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(holders_count, 3, "Should have 3 unique holders");
+    assert_eq!(transfers_count, 4, "Should have 4 transfers");
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn test_refresh_mnft_24h_transfers(pool: PgPool) {
+    let writer = BatchWriter::new(pool.clone());
+
+    let ts_now = Utc::now();
+    let ts_recent = ts_now - chrono::Duration::hours(12);
+    let ts_old = ts_now - chrono::Duration::hours(48);
+
+    insert_test_block(&pool, 1, ts_old).await;
+    insert_test_block(&pool, 100, ts_recent).await;
+    insert_test_block(&pool, 200, ts_now).await;
+
+    let class_id = vec![0x02u8; 24];
+    insert_mnft_class(&pool, &class_id, "24h Test NFT").await;
+
+    let holder = vec![0x40u8; 32];
+    insert_nft_activity(&pool, &class_id, 1, &holder, "NFT_MINT").await;
+    insert_nft_activity(&pool, &class_id, 100, &holder, "NFT_TRANSFER").await;
+    insert_nft_activity(&pool, &class_id, 200, &holder, "NFT_TRANSFER").await;
+
+    let result = writer.refresh_mnft_24h_transfers().await.unwrap();
+    assert!(result >= 1, "Should update at least 1 class");
+
+    let transfers_24h: i32 =
+        sqlx::query_as::<_, (i32,)>("SELECT transfers_24h FROM mnft_classes WHERE class_id = $1")
+            .bind(&class_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .0;
+
+    assert_eq!(transfers_24h, 2, "Should have 2 transfers in last 24h");
+}
