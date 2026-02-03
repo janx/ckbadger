@@ -306,17 +306,20 @@ async fn rebuild_miner_statistics(pool: &PgPool) -> Result<()> {
         .execute(pool)
         .await?;
 
+    // Join through cellbase transaction to get miner's lock_script_hash from first output
+    // This works even when blocks.miner_lock_hash is NULL (bulk sync doesn't populate it)
     sqlx::query(
         r#"
         INSERT INTO miner_statistics (date, miner_lock_hash, blocks_count, last_block_number)
         SELECT 
-            timestamp::date as date,
-            miner_lock_hash,
+            b.timestamp::date as date,
+            c.lock_script_hash as miner_lock_hash,
             COUNT(*)::int as blocks_count,
-            MAX(number) as last_block_number
-        FROM blocks
-        WHERE miner_lock_hash IS NOT NULL
-        GROUP BY timestamp::date, miner_lock_hash
+            MAX(b.number) as last_block_number
+        FROM blocks b
+        JOIN transactions t ON t.block_number = b.number AND t.tx_index = 0
+        JOIN cells c ON c.tx_hash = t.hash AND c.output_index = 0
+        GROUP BY b.timestamp::date, c.lock_script_hash
         ORDER BY date, blocks_count DESC
         "#,
     )

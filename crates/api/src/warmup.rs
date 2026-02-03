@@ -294,13 +294,13 @@ async fn warmup_epoch_time_length(state: &AppState) -> Result<(), String> {
 
 async fn warmup_miner_distribution(state: &AppState) -> Result<(), String> {
     let total_blocks: (i64,) =
-        sqlx::query_as("SELECT COALESCE(SUM(blocks_mined), 0)::bigint FROM miner_statistics")
+        sqlx::query_as("SELECT COALESCE(SUM(blocks_count), 0)::bigint FROM miner_statistics")
             .fetch_one(&state.pool)
             .await
             .map_err(|e| e.to_string())?;
 
     let rows = sqlx::query_as::<_, (Vec<u8>, i64)>(
-        "SELECT lock_script_hash, blocks_mined FROM miner_statistics ORDER BY blocks_mined DESC LIMIT 100",
+        "SELECT miner_lock_hash, blocks_count FROM miner_statistics ORDER BY blocks_count DESC LIMIT 100",
     )
     .fetch_all(&state.pool)
     .await
