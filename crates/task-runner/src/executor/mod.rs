@@ -1,7 +1,8 @@
 use anyhow::Result;
 use ckbadger_common::{
     ConsumedAtBackfillConfig, CyclesBackfillConfig, IndexRebuildConfig, LabelImportConfig,
-    SporeRebuildConfig, StatisticsRebuildConfig, Task, TaskConfig, TaskType,
+    SecondaryIssuanceBackfillConfig, SporeRebuildConfig, StatisticsRebuildConfig, Task, TaskConfig,
+    TaskType,
 };
 use sqlx::PgPool;
 use std::time::Duration;
@@ -13,6 +14,7 @@ mod consumed;
 mod cycles;
 mod index;
 mod labels;
+mod secondary_issuance;
 mod spore;
 pub mod statistics;
 
@@ -108,6 +110,9 @@ impl TaskExecutor {
             )),
             TaskType::SporeRebuild => self.execute_spore_rebuild(task).await,
             TaskType::ConsumedAtBackfill => self.execute_consumed_at_backfill(task).await,
+            TaskType::SecondaryIssuanceBackfill => {
+                self.execute_secondary_issuance_backfill(task).await
+            }
         }
     }
 
@@ -175,5 +180,18 @@ impl TaskExecutor {
         };
 
         consumed::execute(&self.db, &self.pool, task.id, &config).await
+    }
+
+    async fn execute_secondary_issuance_backfill(&self, task: &Task) -> Result<()> {
+        let mut config: SecondaryIssuanceBackfillConfig = match task.config_typed() {
+            Some(TaskConfig::SecondaryIssuanceBackfill(c)) => c,
+            _ => SecondaryIssuanceBackfillConfig::default(),
+        };
+
+        if config.ckb_rpc_url.is_empty() {
+            config.ckb_rpc_url = self.ckb_rpc_url.clone();
+        }
+
+        secondary_issuance::execute(&self.db, &self.pool, task.id, &config).await
     }
 }

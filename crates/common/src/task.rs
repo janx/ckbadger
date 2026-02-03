@@ -61,6 +61,7 @@ pub enum TaskType {
     LiveCellsPopulate,
     SporeRebuild,
     ConsumedAtBackfill,
+    SecondaryIssuanceBackfill,
 }
 
 impl std::fmt::Display for TaskType {
@@ -73,6 +74,7 @@ impl std::fmt::Display for TaskType {
             TaskType::LiveCellsPopulate => write!(f, "live_cells_populate"),
             TaskType::SporeRebuild => write!(f, "spore_rebuild"),
             TaskType::ConsumedAtBackfill => write!(f, "consumed_at_backfill"),
+            TaskType::SecondaryIssuanceBackfill => write!(f, "secondary_issuance_backfill"),
         }
     }
 }
@@ -89,6 +91,7 @@ impl std::str::FromStr for TaskType {
             "live_cells_populate" => Ok(TaskType::LiveCellsPopulate),
             "spore_rebuild" => Ok(TaskType::SporeRebuild),
             "consumed_at_backfill" => Ok(TaskType::ConsumedAtBackfill),
+            "secondary_issuance_backfill" => Ok(TaskType::SecondaryIssuanceBackfill),
             _ => Err(anyhow::anyhow!("Invalid task type: {}", s)),
         }
     }
@@ -121,6 +124,28 @@ fn default_cycles_batch_size() -> i64 {
 }
 fn default_concurrent_requests() -> usize {
     4
+}
+
+/// Configuration for secondary issuance backfill task
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SecondaryIssuanceBackfillConfig {
+    /// CKB RPC URL to fetch economic state from
+    pub ckb_rpc_url: String,
+    /// Start from specific block (None = genesis)
+    pub start_block: Option<i64>,
+    /// End at specific block (None = current tip)
+    pub end_block: Option<i64>,
+    /// Batch size for processing blocks
+    #[serde(default = "default_secondary_issuance_batch_size")]
+    pub batch_size: i64,
+    /// Number of concurrent RPC requests
+    #[serde(default = "default_concurrent_requests")]
+    pub concurrent_requests: usize,
+}
+
+fn default_secondary_issuance_batch_size() -> i64 {
+    1000
 }
 
 /// Configuration for index rebuild task
@@ -253,6 +278,7 @@ pub enum TaskConfig {
     LiveCellsPopulate(LiveCellsPopulateConfig),
     SporeRebuild(SporeRebuildConfig),
     ConsumedAtBackfill(ConsumedAtBackfillConfig),
+    SecondaryIssuanceBackfill(SecondaryIssuanceBackfillConfig),
 }
 
 impl TaskConfig {
@@ -265,6 +291,7 @@ impl TaskConfig {
             TaskConfig::LiveCellsPopulate(_) => TaskType::LiveCellsPopulate,
             TaskConfig::SporeRebuild(_) => TaskType::SporeRebuild,
             TaskConfig::ConsumedAtBackfill(_) => TaskType::ConsumedAtBackfill,
+            TaskConfig::SecondaryIssuanceBackfill(_) => TaskType::SecondaryIssuanceBackfill,
         }
     }
 }
@@ -363,6 +390,15 @@ pub struct ConsumedAtBackfillResult {
     pub blocks_processed: i64,
 }
 
+/// Progress details for secondary issuance backfill
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SecondaryIssuanceBackfillResult {
+    pub blocks_processed: i64,
+    pub blocks_total: i64,
+    pub errors: Vec<String>,
+}
+
 /// Unified task result enum
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -374,6 +410,7 @@ pub enum TaskResult {
     LiveCellsPopulate(LiveCellsPopulateResult),
     SporeRebuild(SporeRebuildResult),
     ConsumedAtBackfill(ConsumedAtBackfillResult),
+    SecondaryIssuanceBackfill(SecondaryIssuanceBackfillResult),
 }
 
 // ============================================
@@ -586,6 +623,16 @@ impl TaskBuilder {
         }
     }
 
+    pub fn secondary_issuance_backfill(config: SecondaryIssuanceBackfillConfig) -> Self {
+        Self {
+            task_type: TaskType::SecondaryIssuanceBackfill,
+            config: serde_json::to_value(TaskConfig::SecondaryIssuanceBackfill(config))
+                .expect("SecondaryIssuanceBackfillConfig should be serializable"),
+            priority: 4,
+            max_retries: 2,
+        }
+    }
+
     pub fn priority(mut self, priority: i32) -> Self {
         self.priority = priority;
         self
@@ -736,6 +783,10 @@ mod tests {
             "live_cells_populate"
         );
         assert_eq!(TaskType::SporeRebuild.to_string(), "spore_rebuild");
+        assert_eq!(
+            TaskType::SecondaryIssuanceBackfill.to_string(),
+            "secondary_issuance_backfill"
+        );
     }
 
     #[test]
@@ -845,6 +896,14 @@ mod tests {
     }
 
     #[test]
+    fn test_secondary_issuance_backfill_builder() {
+        let builder =
+            TaskBuilder::secondary_issuance_backfill(SecondaryIssuanceBackfillConfig::default());
+        assert_eq!(builder.task_type(), TaskType::SecondaryIssuanceBackfill);
+        assert_eq!(builder.get_priority(), 4);
+    }
+
+    #[test]
     fn test_consumed_at_backfill_builder() {
         let builder = TaskBuilder::consumed_at_backfill(ConsumedAtBackfillConfig::default());
         assert_eq!(builder.task_type(), TaskType::ConsumedAtBackfill);
@@ -868,6 +927,14 @@ mod tests {
     }
 
     #[test]
+    fn test_secondary_issuance_backfill_type_parse() {
+        assert_eq!(
+            "secondary_issuance_backfill".parse::<TaskType>().unwrap(),
+            TaskType::SecondaryIssuanceBackfill
+        );
+    }
+
+    #[test]
     fn test_consumed_at_backfill_config_serialization() {
         let config = TaskConfig::ConsumedAtBackfill(ConsumedAtBackfillConfig { batch_size: 50000 });
         let json = serde_json::to_string(&config).unwrap();
@@ -876,5 +943,24 @@ mod tests {
 
         let parsed: TaskConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.task_type(), TaskType::ConsumedAtBackfill);
+    }
+
+    #[test]
+    fn test_secondary_issuance_backfill_config_serialization() {
+        let config = TaskConfig::SecondaryIssuanceBackfill(SecondaryIssuanceBackfillConfig {
+            ckb_rpc_url: "http://localhost:8114".to_string(),
+            start_block: Some(0),
+            end_block: Some(100),
+            batch_size: 1000,
+            concurrent_requests: 4,
+        });
+
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("secondary_issuance_backfill"));
+        assert!(json.contains("ckbRpcUrl"));
+        assert!(json.contains("startBlock"));
+
+        let parsed: TaskConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.task_type(), TaskType::SecondaryIssuanceBackfill);
     }
 }

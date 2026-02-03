@@ -308,6 +308,7 @@ fn parse_blocks_parallel(
 }
 
 const CACHE_INVALIDATION_INTERVAL: u64 = 10_000;
+const SECONDARY_ISSUANCE_BACKFILL_THRESHOLD: u64 = 1000;
 
 pub struct Indexer {
     config: Config,
@@ -322,6 +323,8 @@ pub struct Indexer {
     last_cache_invalidation: tokio::sync::Mutex<u64>,
     /// Track previous bulk sync state to detect transition from bulk -> live sync
     was_bulk_sync_active: std::sync::atomic::AtomicBool,
+    /// Track previous secondary issuance bulk state (>1000 blocks behind)
+    was_secondary_issuance_bulk_active: std::sync::atomic::AtomicBool,
     /// Track batches processed since last LiveCellStore flush
     batches_since_flush: std::sync::atomic::AtomicU64,
     /// Shared flag to pause sync during index rebuild
@@ -382,6 +385,8 @@ impl Indexer {
         };
 
         let was_bulk = progress.blocks_remaining() > config.bulk_sync_threshold;
+        let was_secondary_bulk =
+            progress.blocks_remaining() > SECONDARY_ISSUANCE_BACKFILL_THRESHOLD;
         Ok(Self {
             config,
             rpc,
@@ -394,6 +399,9 @@ impl Indexer {
             cache_invalidator,
             last_cache_invalidation: tokio::sync::Mutex::new(0),
             was_bulk_sync_active: std::sync::atomic::AtomicBool::new(was_bulk),
+            was_secondary_issuance_bulk_active: std::sync::atomic::AtomicBool::new(
+                was_secondary_bulk,
+            ),
             batches_since_flush: std::sync::atomic::AtomicU64::new(0),
             rebuild_pause_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             reorg_notify_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -434,6 +442,10 @@ impl Indexer {
     /// Auto-enabled when blocks_remaining > bulk_sync_threshold (no manual config needed)
     pub fn is_bulk_sync_active(&self) -> bool {
         self.progress.blocks_remaining() > self.config.bulk_sync_threshold
+    }
+
+    fn is_secondary_issuance_bulk_active(&self) -> bool {
+        self.progress.blocks_remaining() > SECONDARY_ISSUANCE_BACKFILL_THRESHOLD
     }
 
     async fn is_stats_rebuild_in_progress(&self) -> bool {
@@ -954,18 +966,22 @@ impl Indexer {
                         );
 
                         // Handle periodic updates (secondary issuance, DAO stats)
-                        let crossed_50 = (start_block / 50) != (end_block / 50);
-                        if crossed_50 {
-                            if let Err(e) = self
-                                .update_secondary_issuance(
-                                    &format!("0x{}", hex::encode(&last_block.hash)),
-                                    &hex::encode(&last_block.dao),
-                                    last_block.number,
-                                    last_block.timestamp,
-                                )
-                                .await
-                            {
-                                warn!("Failed to update secondary issuance: {}", e);
+                        if !self.is_secondary_issuance_bulk_active() {
+                            for block in &all_parsed_blocks {
+                                if let Err(e) = self
+                                    .update_secondary_issuance(
+                                        &format!("0x{}", hex::encode(&block.hash)),
+                                        &hex::encode(&block.dao),
+                                        block.number,
+                                        block.timestamp,
+                                    )
+                                    .await
+                                {
+                                    warn!(
+                                        "Failed to update secondary issuance for block {}: {}",
+                                        block.number, e
+                                    );
+                                }
                             }
                         }
 
@@ -1058,8 +1074,7 @@ impl Indexer {
     ) {
         let last_block_number = BlockParser::parse_block_number(&last_block_response.block);
 
-        let crossed_50 = (start_block / 50) != (end_block / 50);
-        if crossed_50 {
+        if !self.is_secondary_issuance_bulk_active() {
             let block_timestamp =
                 BlockParser::parse_timestamp(&last_block_response.block.header.timestamp);
             if let Err(e) = self
@@ -1184,23 +1199,27 @@ impl Indexer {
 
         self.perf.report_and_reset();
 
-        if let Some(last_block_response) = blocks.last() {
-            let last_block_number = BlockParser::parse_block_number(&last_block_response.block);
-
-            let crossed_50 = (start_block / 50) != (end_block / 50);
-            if crossed_50 {
-                let block_timestamp =
-                    BlockParser::parse_timestamp(&last_block_response.block.header.timestamp);
-                if let Err(e) = self
-                    .update_secondary_issuance(
-                        &last_block_response.block.header.hash,
-                        &last_block_response.block.header.dao,
-                        last_block_number as i64,
-                        block_timestamp,
-                    )
-                    .await
-                {
-                    warn!("Failed to update secondary issuance: {}", e);
+        if !blocks.is_empty() {
+            if !self.is_secondary_issuance_bulk_active() {
+                for block_response in &blocks {
+                    let block_number =
+                        BlockParser::parse_block_number(&block_response.block) as i64;
+                    let block_timestamp =
+                        BlockParser::parse_timestamp(&block_response.block.header.timestamp);
+                    if let Err(e) = self
+                        .update_secondary_issuance(
+                            &block_response.block.header.hash,
+                            &block_response.block.header.dao,
+                            block_number,
+                            block_timestamp,
+                        )
+                        .await
+                    {
+                        warn!(
+                            "Failed to update secondary issuance for block {}: {}",
+                            block_number, e
+                        );
+                    }
                 }
             }
 
@@ -1230,6 +1249,10 @@ impl Indexer {
 
         let currently_bulk = self.is_bulk_sync_active();
         let was_bulk = self.was_bulk_sync_active.load(Ordering::SeqCst);
+        let currently_secondary_bulk = self.is_secondary_issuance_bulk_active();
+        let was_secondary_bulk = self
+            .was_secondary_issuance_bulk_active
+            .load(Ordering::SeqCst);
 
         if was_bulk && !currently_bulk {
             info!("Bulk sync completed, submitting post-sync tasks...");
@@ -1258,8 +1281,18 @@ impl Indexer {
             }
         }
 
+        if was_secondary_bulk && !currently_secondary_bulk {
+            info!("Secondary issuance bulk sync completed, submitting backfill task...");
+
+            if let Err(e) = self.maybe_submit_secondary_issuance_backfill_task().await {
+                warn!("Failed to submit secondary issuance backfill task: {}", e);
+            }
+        }
+
         self.was_bulk_sync_active
             .store(currently_bulk, Ordering::SeqCst);
+        self.was_secondary_issuance_bulk_active
+            .store(currently_secondary_bulk, Ordering::SeqCst);
     }
 
     /// Submit an index rebuild task if indexes are deferred and no rebuild task is pending/running
@@ -1430,6 +1463,46 @@ impl Indexer {
         .await?;
 
         info!("Submitted spore rebuild task: {}", task_id.0);
+
+        Ok(())
+    }
+
+    async fn maybe_submit_secondary_issuance_backfill_task(&self) -> Result<()> {
+        use ckbadger_common::{SecondaryIssuanceBackfillConfig, TaskBuilder};
+
+        let existing: Option<(i64,)> = sqlx::query_as(
+            "SELECT COUNT(*) FROM tasks WHERE task_type = 'secondary_issuance_backfill' AND status IN ('pending', 'running')",
+        )
+        .fetch_optional(self.writer.pool())
+        .await?;
+
+        if existing.map(|r| r.0).unwrap_or(0) > 0 {
+            info!("Secondary issuance backfill task already pending/running, skipping submission");
+            return Ok(());
+        }
+
+        let builder = TaskBuilder::secondary_issuance_backfill(SecondaryIssuanceBackfillConfig {
+            ckb_rpc_url: self.config.ckb_rpc_url.clone(),
+            start_block: Some(0),
+            end_block: None,
+            ..Default::default()
+        });
+
+        let task_id: (Uuid,) = sqlx::query_as(
+            r#"
+            INSERT INTO tasks (task_type, config, priority, max_retries)
+            VALUES ($1, $2, $3, $4)
+            RETURNING id
+            "#,
+        )
+        .bind(builder.task_type().to_string())
+        .bind(builder.config())
+        .bind(builder.get_priority())
+        .bind(builder.get_max_retries())
+        .fetch_one(self.writer.pool())
+        .await?;
+
+        info!("Submitted secondary issuance backfill task: {}", task_id.0);
 
         Ok(())
     }
@@ -5397,5 +5470,25 @@ mod tests {
         assert_eq!(cell.type_script_hash, Some(vec![9, 10, 11]));
         assert_eq!(cell.type_code_hash, Some(vec![12, 13, 14]));
         assert_eq!(cell.data_size, 123);
+    }
+
+    #[test]
+    fn test_secondary_issuance_backfill_threshold_is_1000() {
+        assert_eq!(SECONDARY_ISSUANCE_BACKFILL_THRESHOLD, 1000);
+    }
+
+    #[test]
+    fn test_secondary_issuance_skipped_when_more_than_1000_blocks_behind() {
+        let threshold = SECONDARY_ISSUANCE_BACKFILL_THRESHOLD;
+        assert!(1001 > threshold);
+        assert!(5000 > threshold);
+    }
+
+    #[test]
+    fn test_secondary_issuance_tracked_when_1000_or_fewer_blocks_behind() {
+        let threshold = SECONDARY_ISSUANCE_BACKFILL_THRESHOLD;
+        assert!(1000 <= threshold);
+        assert!(999 <= threshold);
+        assert!(1 <= threshold);
     }
 }

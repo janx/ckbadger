@@ -265,13 +265,14 @@ When bulk sync completes (catches up to <=1000 blocks behind tip), the indexer a
 
 **Available Task Types:**
 
-| Task Type             | Priority | Description                                      |
-| --------------------- | -------- | ------------------------------------------------ |
-| `index_rebuild`       | 10       | Rebuild deferred indexes and constraints         |
-| `live_cells_populate` | 8        | Populate live_cells table from RocksDB (indexer) |
-| `statistics_rebuild`  | 5        | Rebuild all 7 aggregate statistics tables        |
-| `cycles_backfill`     | 0        | Backfill transaction cycles from RPC             |
-| `label_import`        | 0        | Import UDT/script labels from token-labels repo  |
+| Task Type                     | Priority | Description                                          |
+| ----------------------------- | -------- | ---------------------------------------------------- |
+| `index_rebuild`               | 10       | Rebuild deferred indexes and constraints             |
+| `live_cells_populate`         | 8        | Populate live_cells table from RocksDB (indexer)     |
+| `secondary_issuance_backfill` | 7        | Backfill ALL blocks' secondary issuance data (exact) |
+| `statistics_rebuild`          | 5        | Rebuild all 7 aggregate statistics tables            |
+| `cycles_backfill`             | 0        | Backfill transaction cycles from RPC                 |
+| `label_import`                | 0        | Import UDT/script labels from token-labels repo      |
 
 **Label Import Auto-Trigger:**
 
@@ -283,6 +284,27 @@ The `label_import` task is automatically submitted when the indexer starts, if:
 The path is determined by `TOKEN_LABELS_PATH` environment variable, defaulting to `docs/token-labels` for local development. In Docker, this is set to `/app/token-labels` with a volume mount.
 
 This ensures token labels are refreshed at least once per indexer lifecycle without manual intervention.
+
+**Secondary Issuance Backfill Auto-Trigger:**
+
+The `secondary_issuance_backfill` task is automatically submitted when the indexer crosses the 1000-block threshold (from bulk sync to real-time sync).
+
+**Indexer behavior by sync state:**
+
+| Blocks Behind     | Secondary Issuance Tracking | On State Change      |
+| ----------------- | --------------------------- | -------------------- |
+| >1000 (bulk)      | Skipped entirely            | -                    |
+| ≤1000 (real-time) | Track every block           | Submit backfill task |
+
+The backfill task:
+
+1. Resets `block_secondary_issuance` table and cumulative values to 0
+2. Processes ALL blocks from genesis to tip
+3. Calls `get_block_economic_state` RPC for each block (with concurrency)
+4. Calculates breakdown using RFC-0015 formula (exact, not sampled)
+5. Updates `dao_statistics.cumulative_burnt` with accurate totals
+
+**Why exact calculation matters:** Secondary issuance varies per block (~340-590 CKB). Sampling every N blocks and multiplying produces ~50x under-reporting of burnt amounts.
 
 **Statistics Tables Rebuilt:**
 
@@ -604,6 +626,30 @@ cd frontend && pnpm test               # All frontend tests
 - `total_issuance` (dao field) ≠ `circulating` (subtract burnt)
 - APC formula: `secondary_issuance_per_year / circulating_supply * 100`
 - When to use `total_issuance` vs `circulating` for different calculations
+
+### Numerical Precision (MANDATORY)
+
+**All numerical calculations MUST be exact. NO estimation, interpolation, or sampling-based approximations.**
+
+| Approach                     | Status       | Example                                   |
+| ---------------------------- | ------------ | ----------------------------------------- |
+| Exact per-block calculation  | ✅ REQUIRED  | Track every block's secondary issuance    |
+| Sampling with multiplication | ❌ FORBIDDEN | Sample every N blocks, multiply by N      |
+| Interpolation between points | ❌ FORBIDDEN | Estimate values between known data points |
+| Average-based estimation     | ❌ FORBIDDEN | Use average rate × time period            |
+
+**Why this matters:**
+
+- Blockchain data is deterministic - there's always an exact value
+- Sampling errors compound over millions of blocks
+- Users expect explorer data to match on-chain reality exactly
+- Small per-block errors become massive cumulative errors (e.g., 50x under-reporting)
+
+**If exact calculation is expensive (e.g., RPC calls for every block):**
+
+1. Defer during bulk sync, backfill via task-runner after sync completes
+2. Use cumulative on-chain values (e.g., DAO field differences) instead of per-block sampling
+3. Never sacrifice accuracy for performance - correctness is non-negotiable
 
 ### Script Identification
 

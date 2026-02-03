@@ -1,7 +1,8 @@
 use anyhow::Result;
 use ckbadger_common::{
     CyclesBackfillConfig, IndexRebuildConfig, LabelImportConfig, LiveCellsPopulateConfig,
-    SporeRebuildConfig, StatisticsRebuildConfig, Task, TaskBuilder,
+    SecondaryIssuanceBackfillConfig, SporeRebuildConfig, StatisticsRebuildConfig, Task,
+    TaskBuilder,
 };
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -110,14 +111,14 @@ impl App {
 
     pub fn next_dialog_option(&mut self) {
         if let Some(DialogType::NewTask) = self.dialog {
-            self.dialog_selection = (self.dialog_selection + 1) % 6;
+            self.dialog_selection = (self.dialog_selection + 1) % 7;
         }
     }
 
     pub fn previous_dialog_option(&mut self) {
         if let Some(DialogType::NewTask) = self.dialog {
             self.dialog_selection = if self.dialog_selection == 0 {
-                5
+                6
             } else {
                 self.dialog_selection - 1
             };
@@ -138,6 +139,9 @@ impl App {
                     3 => TaskBuilder::statistics_rebuild(StatisticsRebuildConfig::default()),
                     4 => TaskBuilder::live_cells_populate(LiveCellsPopulateConfig::default()),
                     5 => TaskBuilder::spore_rebuild(SporeRebuildConfig::default()),
+                    6 => TaskBuilder::secondary_issuance_backfill(
+                        SecondaryIssuanceBackfillConfig::default(),
+                    ),
                     _ => return Ok(()),
                 };
                 let id = self.db.create_task(&builder).await?;
@@ -461,6 +465,7 @@ fn draw_dialog(f: &mut Frame, app: &App, dialog: &DialogType) {
                 "Statistics Rebuild",
                 "Live Cells Populate",
                 "Spore Rebuild",
+                "Secondary Issuance Backfill",
             ];
             let items: Vec<Line> = options
                 .iter()
