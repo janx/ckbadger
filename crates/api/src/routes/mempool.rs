@@ -236,7 +236,7 @@ async fn get_mempool_transactions(
         let size = parse_hex(&entry.size);
         let fee = parse_hex(&entry.fee);
         let fee_rate = if size > 0 {
-            (fee as f64 / size as f64) * 1000.0
+            fee as f64 / size as f64
         } else {
             0.0
         };
@@ -257,7 +257,7 @@ async fn get_mempool_transactions(
         let size = parse_hex(&entry.size);
         let fee = parse_hex(&entry.fee);
         let fee_rate = if size > 0 {
-            (fee as f64 / size as f64) * 1000.0
+            fee as f64 / size as f64
         } else {
             0.0
         };
@@ -308,7 +308,7 @@ async fn get_mempool_blocks(
         let fee = parse_hex(&entry.fee);
         let cycles = parse_hex(&entry.cycles);
         let fee_rate = if size > 0 {
-            (fee as f64 / size as f64) * 1000.0
+            fee as f64 / size as f64
         } else {
             0.0
         };
@@ -509,7 +509,7 @@ async fn get_mempool_blocks_internal(state: &AppState) -> Result<MempoolBlocksRe
         let fee = parse_hex(&entry.fee);
         let cycles = parse_hex(&entry.cycles);
         let fee_rate = if size > 0 {
-            (fee as f64 / size as f64) * 1000.0
+            fee as f64 / size as f64
         } else {
             0.0
         };

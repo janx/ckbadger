@@ -196,7 +196,7 @@ async fn get_tx_stats(State(state): State<Arc<AppState>>) -> ApiResult<TxStatsRe
 
     state
         .cache
-        .set(cache_key, &response, std::time::Duration::from_secs(60))
+        .set(cache_key, &response, std::time::Duration::from_secs(10))
         .await;
 
     ok(response)

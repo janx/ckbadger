@@ -3,7 +3,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api, TxStatsDataPoint } from '@/lib/api';
-import { useRecentBlocks } from '@/hooks/useRecentBlocksStore';
 import { cn } from '@/lib/utils';
 
 interface MiniStatsCardsProps {
@@ -111,17 +110,17 @@ function TxStatWidget({ label, value, data, color }: TxStatWidgetProps) {
 }
 
 export function MiniStatsCards({ className }: MiniStatsCardsProps) {
-  const { txsLastHour, txsLast24Hours } = useRecentBlocks();
-
   const { data: txStats } = useQuery({
     queryKey: ['tx-stats'],
     queryFn: () => api.getTxStats(),
-    staleTime: 60000,
-    refetchInterval: 300000,
+    staleTime: 10000,
+    refetchInterval: 30000,
   });
 
   const hourlyData = txStats?.hourlyData ?? [];
   const dailyData = txStats?.dailyData ?? [];
+  const txsLastHour = txStats?.currentHour ?? 0;
+  const txsLast24Hours = txStats?.currentDay ?? 0;
 
   return (
     <div className={cn('h-full rounded-lg border border-slate-800 bg-slate-900 p-4', className)}>
