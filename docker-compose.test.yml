@@ -54,7 +54,7 @@ services:
       redis-test:
         condition: service_healthy
     healthcheck:
-      test: ['CMD', 'curl', '-f', 'http://localhost:3001/api/v1/status/health']
+      test: ['CMD', 'curl', '-f', 'http://localhost:3001/api/v1/blocks']
       interval: 10s
       timeout: 5s
       retries: 5

@@ -30,7 +30,7 @@ export default defineConfig({
   webServer: [
     {
       command: 'cargo run -p ckbadger-api --release',
-      url: 'http://localhost:3001/api/v1/status',
+      url: 'http://localhost:3001/api/v1/blocks',
       reuseExistingServer: !process.env.CI,
       timeout: 180_000,
       env: {
