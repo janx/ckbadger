@@ -1,6 +1,4 @@
-use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::RwLock;
 use std::time::Instant;
 
 pub use ckbadger_common::format_duration_smart;
@@ -8,16 +6,6 @@ pub use ckbadger_common::format_duration_smart;
 const WINDOW_SECS: u64 = 10;
 /// EMA smoothing factor: 0.1 = slow adaptation, 0.3 = faster adaptation
 const EMA_ALPHA: f64 = 0.1;
-
-/// Number of speed samples to keep for trend analysis
-const SPEED_HISTORY_SIZE: usize = 30; // 30 windows × 10 secs = 5 minutes of history
-
-/// A speed sample recording block position and rate at that point
-#[derive(Debug, Clone, Copy)]
-struct SpeedSample {
-    block_number: u64,
-    blocks_per_sec: f64,
-}
 
 pub struct SyncProgress {
     current_block: AtomicU64,
@@ -31,8 +19,6 @@ pub struct SyncProgress {
     last_rate: AtomicU64, // stored as bits of f64
     // EMA (Exponential Moving Average) for smoother speed estimation
     ema_rate: AtomicU64, // stored as bits of f64
-    // Speed history for trend analysis (block_number, speed)
-    speed_history: RwLock<VecDeque<SpeedSample>>,
 }
 
 impl SyncProgress {
@@ -47,7 +33,6 @@ impl SyncProgress {
             window_blocks: AtomicU64::new(0),
             last_rate: AtomicU64::new(0),
             ema_rate: AtomicU64::new(0),
-            speed_history: RwLock::new(VecDeque::with_capacity(SPEED_HISTORY_SIZE)),
         }
     }
 
@@ -95,21 +80,6 @@ impl SyncProgress {
             EMA_ALPHA * current_rate + (1.0 - EMA_ALPHA) * old_ema
         };
         self.ema_rate.store(new_ema.to_bits(), Ordering::SeqCst);
-
-        let block_number = self.current_block.load(Ordering::SeqCst);
-        self.record_speed_sample(block_number, new_ema);
-    }
-
-    fn record_speed_sample(&self, block_number: u64, blocks_per_sec: f64) {
-        if let Ok(mut history) = self.speed_history.write() {
-            if history.len() >= SPEED_HISTORY_SIZE {
-                history.pop_front();
-            }
-            history.push_back(SpeedSample {
-                block_number,
-                blocks_per_sec,
-            });
-        }
     }
 
     pub fn update_target(&self, target: u64) {
@@ -162,67 +132,7 @@ impl SyncProgress {
         }
     }
 
-    /// Calculate speed trend using linear regression on speed history.
-    /// Returns (slope, intercept) where:
-    /// - slope: speed change per block (negative = slowing down)
-    /// - intercept: extrapolated speed at block 0
-    ///
-    /// Returns None if insufficient data (need at least 3 samples).
-    fn calculate_speed_trend(&self) -> Option<(f64, f64)> {
-        let history = self.speed_history.read().ok()?;
-        if history.len() < 3 {
-            return None;
-        }
-
-        // Linear regression: speed = slope * block_number + intercept
-        // Using ordinary least squares
-        let n = history.len() as f64;
-        let mut sum_x = 0.0; // block numbers
-        let mut sum_y = 0.0; // speeds
-        let mut sum_xy = 0.0;
-        let mut sum_xx = 0.0;
-
-        for sample in history.iter() {
-            let x = sample.block_number as f64;
-            let y = sample.blocks_per_sec;
-            sum_x += x;
-            sum_y += y;
-            sum_xy += x * y;
-            sum_xx += x * x;
-        }
-
-        let denominator = n * sum_xx - sum_x * sum_x;
-        if denominator.abs() < 1e-10 {
-            return None;
-        }
-
-        let slope = (n * sum_xy - sum_x * sum_y) / denominator;
-        let intercept = (sum_y - slope * sum_x) / n;
-
-        Some((slope, intercept))
-    }
-
-    /// Predict speed at a future block number based on trend.
-    /// Clamps to a minimum of 10% of current EMA to avoid unrealistic predictions.
-    fn predict_speed_at(&self, block_number: u64) -> f64 {
-        let current_ema = self.ema_blocks_per_second();
-        if current_ema <= 0.0 {
-            return 0.0;
-        }
-
-        match self.calculate_speed_trend() {
-            Some((slope, intercept)) => {
-                let predicted = slope * block_number as f64 + intercept;
-                // Clamp: at least 10% of current EMA, at most 200% of current EMA
-                predicted.clamp(current_ema * 0.1, current_ema * 2.0)
-            }
-            None => current_ema,
-        }
-    }
-
-    /// Calculate ETA using trend-based prediction.
-    /// Divides remaining blocks into segments and predicts speed for each.
-    /// Falls back to simple EMA-based calculation if trend data is insufficient.
+    /// Calculate ETA based on EMA speed and remaining blocks.
     pub fn eta_seconds(&self) -> Option<f64> {
         let remaining = self.blocks_remaining();
         if remaining == 0 {
@@ -234,33 +144,7 @@ impl SyncProgress {
             return None;
         }
 
-        // If no trend data, fall back to simple calculation
-        if self.calculate_speed_trend().is_none() {
-            return Some(remaining as f64 / ema_rate);
-        }
-
-        let current = self.current();
-        let target = self.target();
-
-        let segment_size = (remaining / 10).clamp(1, 100_000);
-        let mut total_time = 0.0;
-        let mut block = current;
-
-        while block < target {
-            let segment_end = (block + segment_size).min(target);
-            let segment_blocks = segment_end - block;
-
-            let midpoint = block + segment_blocks / 2;
-            let predicted_speed = self.predict_speed_at(midpoint);
-
-            if predicted_speed > 0.0 {
-                total_time += segment_blocks as f64 / predicted_speed;
-            }
-
-            block = segment_end;
-        }
-
-        Some(total_time)
+        Some(remaining as f64 / ema_rate)
     }
 
     /// Format ETA as human-readable string with smart units.
@@ -462,113 +346,7 @@ mod tests {
     }
 
     #[test]
-    fn test_speed_trend_needs_minimum_samples() {
-        let progress = SyncProgress::new(0, 1_000_000);
-        assert!(
-            progress.calculate_speed_trend().is_none(),
-            "Trend should be None with no samples"
-        );
-
-        progress.record_speed_sample(1000, 100.0);
-        assert!(
-            progress.calculate_speed_trend().is_none(),
-            "Trend should be None with 1 sample"
-        );
-
-        progress.record_speed_sample(2000, 95.0);
-        assert!(
-            progress.calculate_speed_trend().is_none(),
-            "Trend should be None with 2 samples"
-        );
-
-        progress.record_speed_sample(3000, 90.0);
-        assert!(
-            progress.calculate_speed_trend().is_some(),
-            "Trend should be Some with 3 samples"
-        );
-    }
-
-    #[test]
-    fn test_speed_trend_detects_slowdown() {
-        let progress = SyncProgress::new(0, 1_000_000);
-
-        progress.record_speed_sample(0, 1000.0);
-        progress.record_speed_sample(100_000, 800.0);
-        progress.record_speed_sample(200_000, 600.0);
-        progress.record_speed_sample(300_000, 400.0);
-
-        let (slope, _) = progress.calculate_speed_trend().unwrap();
-        assert!(
-            slope < 0.0,
-            "Slope should be negative for slowing down: {}",
-            slope
-        );
-    }
-
-    #[test]
-    fn test_speed_trend_detects_speedup() {
-        let progress = SyncProgress::new(0, 1_000_000);
-
-        progress.record_speed_sample(0, 400.0);
-        progress.record_speed_sample(100_000, 600.0);
-        progress.record_speed_sample(200_000, 800.0);
-        progress.record_speed_sample(300_000, 1000.0);
-
-        let (slope, _) = progress.calculate_speed_trend().unwrap();
-        assert!(
-            slope > 0.0,
-            "Slope should be positive for speeding up: {}",
-            slope
-        );
-    }
-
-    #[test]
-    fn test_predict_speed_clamps_to_reasonable_range() {
-        let progress = SyncProgress::new(0, 1_000_000);
-        progress
-            .ema_rate
-            .store((500.0_f64).to_bits(), Ordering::SeqCst);
-
-        progress.record_speed_sample(0, 1000.0);
-        progress.record_speed_sample(100_000, 500.0);
-        progress.record_speed_sample(200_000, 100.0);
-
-        let predicted = progress.predict_speed_at(1_000_000);
-        let min_allowed = 500.0 * 0.1;
-        let max_allowed = 500.0 * 2.0;
-        assert!(
-            predicted >= min_allowed && predicted <= max_allowed,
-            "Predicted speed {} should be between {} and {}",
-            predicted,
-            min_allowed,
-            max_allowed
-        );
-    }
-
-    #[test]
-    fn test_eta_with_trend_accounts_for_slowdown() {
-        let progress = SyncProgress::new(0, 1_000_000);
-        progress
-            .ema_rate
-            .store((1000.0_f64).to_bits(), Ordering::SeqCst);
-
-        progress.record_speed_sample(0, 2000.0);
-        progress.record_speed_sample(100_000, 1500.0);
-        progress.record_speed_sample(200_000, 1000.0);
-
-        let eta = progress.eta_seconds().unwrap();
-        let simple_eta = 1_000_000.0 / 1000.0;
-
-        assert!(
-            eta > simple_eta,
-            "ETA with slowdown trend ({}) should be > simple ETA ({})",
-            eta,
-            simple_eta
-        );
-    }
-
-    #[test]
-    fn test_eta_falls_back_to_simple_without_trend() {
+    fn test_eta_simple_calculation() {
         let progress = SyncProgress::new(0, 10_000);
         progress
             .ema_rate
@@ -581,23 +359,6 @@ mod tests {
             "ETA {} should be close to simple calculation {}",
             eta,
             expected
-        );
-    }
-
-    #[test]
-    fn test_speed_history_respects_max_size() {
-        let progress = SyncProgress::new(0, 1_000_000);
-
-        for i in 0..(SPEED_HISTORY_SIZE + 10) {
-            progress.record_speed_sample(i as u64 * 1000, 100.0);
-        }
-
-        let history = progress.speed_history.read().unwrap();
-        assert_eq!(
-            history.len(),
-            SPEED_HISTORY_SIZE,
-            "History size should be capped at {}",
-            SPEED_HISTORY_SIZE
         );
     }
 }
