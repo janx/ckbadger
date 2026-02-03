@@ -358,8 +358,10 @@ mod tests {
     fn test_ema_smooths_rate_fluctuations() {
         let progress = SyncProgress::new(0, 100000);
 
+        // Window 1: 1000 blocks
         progress.update_current_batch(1000, 1000);
         thread::sleep(Duration::from_millis(10200));
+        // This triggers window 1 completion: rate ≈ 98 blocks/sec, EMA = 98
         progress.update_current_batch(2000, 1000);
         let ema1 = progress.ema_blocks_per_second();
         assert!(
@@ -368,8 +370,18 @@ mod tests {
             ema1
         );
 
+        // Window 2: 1000 blocks (from previous batch)
         thread::sleep(Duration::from_millis(10200));
+        // This triggers window 2 completion: rate ≈ 98 blocks/sec
+        // EMA updates but stays similar since rate is similar
         progress.update_current_batch(12000, 10000);
+
+        // Window 3: 10000 blocks - need to wait for this window to complete
+        // to see the higher rate reflected in EMA
+        thread::sleep(Duration::from_millis(10200));
+        // This triggers window 3 completion: rate ≈ 980 blocks/sec
+        // EMA = 0.1 * 980 + 0.9 * ~98 ≈ 186
+        progress.update_current_batch(13000, 1000);
         let ema2 = progress.ema_blocks_per_second();
 
         assert!(
