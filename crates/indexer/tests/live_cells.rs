@@ -445,3 +445,47 @@ fn test_iter_and_copy_writer_integration() {
 
     assert_eq!(total_rows, 50);
 }
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn test_get_cells_info_batch_falls_back_to_cells_table(pool: PgPool) {
+    use ckbadger_indexer::db::RocksDbLiveCellStore;
+    use ckbadger_indexer::CacheInvalidator;
+    use std::sync::Arc;
+
+    let tmp_dir = tempfile::TempDir::new().unwrap();
+    let store = Arc::new(RocksDbLiveCellStore::open(tmp_dir.path()).unwrap());
+    let cache = CacheInvalidator::new(None).await;
+    let writer = BatchWriter::with_live_cell_store(pool.clone(), true, store, cache);
+
+    let tx_hash = vec![0x01u8; 32];
+    let cell = make_parsed_cell(100_00000000);
+
+    writer
+        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], true)
+        .await
+        .unwrap();
+
+    assert_eq!(get_live_cells_count(&pool).await, 0);
+
+    let cell_exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM cells WHERE tx_hash = $1)")
+            .bind(&tx_hash)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(cell_exists);
+
+    drop(writer);
+    let writer_no_store = BatchWriter::new(pool.clone());
+    let result = writer_no_store
+        .get_cells_info_batch(&[(&tx_hash, 0)])
+        .await
+        .unwrap();
+
+    assert_eq!(result.len(), 1);
+    let (capacity, block, lock_hash, data_size) = result.get(&(tx_hash.clone(), 0)).unwrap();
+    assert_eq!(*capacity, 100_00000000);
+    assert_eq!(*block, 1000);
+    assert_eq!(lock_hash.len(), 32);
+    assert_eq!(*data_size, 100);
+}

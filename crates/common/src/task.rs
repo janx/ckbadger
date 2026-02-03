@@ -60,6 +60,7 @@ pub enum TaskType {
     StatisticsRebuild,
     LiveCellsPopulate,
     SporeRebuild,
+    ConsumedAtBackfill,
 }
 
 impl std::fmt::Display for TaskType {
@@ -71,6 +72,7 @@ impl std::fmt::Display for TaskType {
             TaskType::StatisticsRebuild => write!(f, "statistics_rebuild"),
             TaskType::LiveCellsPopulate => write!(f, "live_cells_populate"),
             TaskType::SporeRebuild => write!(f, "spore_rebuild"),
+            TaskType::ConsumedAtBackfill => write!(f, "consumed_at_backfill"),
         }
     }
 }
@@ -86,6 +88,7 @@ impl std::str::FromStr for TaskType {
             "statistics_rebuild" => Ok(TaskType::StatisticsRebuild),
             "live_cells_populate" => Ok(TaskType::LiveCellsPopulate),
             "spore_rebuild" => Ok(TaskType::SporeRebuild),
+            "consumed_at_backfill" => Ok(TaskType::ConsumedAtBackfill),
             _ => Err(anyhow::anyhow!("Invalid task type: {}", s)),
         }
     }
@@ -220,6 +223,25 @@ impl Default for SporeRebuildConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsumedAtBackfillConfig {
+    #[serde(default = "default_consumed_batch_size")]
+    pub batch_size: i64,
+}
+
+fn default_consumed_batch_size() -> i64 {
+    100_000
+}
+
+impl Default for ConsumedAtBackfillConfig {
+    fn default() -> Self {
+        Self {
+            batch_size: default_consumed_batch_size(),
+        }
+    }
+}
+
 /// Unified task configuration enum
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -230,6 +252,7 @@ pub enum TaskConfig {
     StatisticsRebuild(StatisticsRebuildConfig),
     LiveCellsPopulate(LiveCellsPopulateConfig),
     SporeRebuild(SporeRebuildConfig),
+    ConsumedAtBackfill(ConsumedAtBackfillConfig),
 }
 
 impl TaskConfig {
@@ -241,6 +264,7 @@ impl TaskConfig {
             TaskConfig::StatisticsRebuild(_) => TaskType::StatisticsRebuild,
             TaskConfig::LiveCellsPopulate(_) => TaskType::LiveCellsPopulate,
             TaskConfig::SporeRebuild(_) => TaskType::SporeRebuild,
+            TaskConfig::ConsumedAtBackfill(_) => TaskType::ConsumedAtBackfill,
         }
     }
 }
@@ -332,6 +356,13 @@ pub struct SporeRebuildResult {
     pub clusters_updated: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsumedAtBackfillResult {
+    pub cells_updated: i64,
+    pub blocks_processed: i64,
+}
+
 /// Unified task result enum
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -342,6 +373,7 @@ pub enum TaskResult {
     StatisticsRebuild(StatisticsRebuildResult),
     LiveCellsPopulate(LiveCellsPopulateResult),
     SporeRebuild(SporeRebuildResult),
+    ConsumedAtBackfill(ConsumedAtBackfillResult),
 }
 
 // ============================================
@@ -540,6 +572,16 @@ impl TaskBuilder {
             config: serde_json::to_value(TaskConfig::SporeRebuild(config))
                 .expect("SporeRebuildConfig should be serializable"),
             priority: 6,
+            max_retries: 2,
+        }
+    }
+
+    pub fn consumed_at_backfill(config: ConsumedAtBackfillConfig) -> Self {
+        Self {
+            task_type: TaskType::ConsumedAtBackfill,
+            config: serde_json::to_value(TaskConfig::ConsumedAtBackfill(config))
+                .expect("ConsumedAtBackfillConfig should be serializable"),
+            priority: 7,
             max_retries: 2,
         }
     }
@@ -800,5 +842,39 @@ mod tests {
         let builder = TaskBuilder::spore_rebuild(SporeRebuildConfig::default());
         assert_eq!(builder.task_type(), TaskType::SporeRebuild);
         assert_eq!(builder.get_priority(), 6);
+    }
+
+    #[test]
+    fn test_consumed_at_backfill_builder() {
+        let builder = TaskBuilder::consumed_at_backfill(ConsumedAtBackfillConfig::default());
+        assert_eq!(builder.task_type(), TaskType::ConsumedAtBackfill);
+        assert_eq!(builder.get_priority(), 7);
+    }
+
+    #[test]
+    fn test_consumed_at_backfill_type_display() {
+        assert_eq!(
+            TaskType::ConsumedAtBackfill.to_string(),
+            "consumed_at_backfill"
+        );
+    }
+
+    #[test]
+    fn test_consumed_at_backfill_type_parse() {
+        assert_eq!(
+            "consumed_at_backfill".parse::<TaskType>().unwrap(),
+            TaskType::ConsumedAtBackfill
+        );
+    }
+
+    #[test]
+    fn test_consumed_at_backfill_config_serialization() {
+        let config = TaskConfig::ConsumedAtBackfill(ConsumedAtBackfillConfig { batch_size: 50000 });
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("consumed_at_backfill"));
+        assert!(json.contains("batchSize"));
+
+        let parsed: TaskConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.task_type(), TaskType::ConsumedAtBackfill);
     }
 }

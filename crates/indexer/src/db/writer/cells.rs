@@ -416,6 +416,44 @@ impl BatchWriter {
             for (tx_hash, idx, cap, block, lock_hash, data_size) in rows {
                 result.insert((tx_hash, idx), (cap, block, lock_hash, data_size));
             }
+
+            // STATS-007 fix: Fallback to cells table for bulk sync mode when live_cells is unpopulated
+            let still_missing: Vec<(&[u8], i16)> = missing
+                .iter()
+                .filter(|(h, i)| !result.contains_key(&(h.to_vec(), *i)))
+                .copied()
+                .collect();
+
+            if !still_missing.is_empty() {
+                let tx_hashes: Vec<&[u8]> = still_missing.iter().map(|(h, _)| *h).collect();
+                let indices: Vec<i16> = still_missing.iter().map(|(_, i)| *i).collect();
+
+                let fallback_rows = sqlx::query_as::<_, (Vec<u8>, i16, i64, i64, Vec<u8>, i32)>(
+                    r#"
+                    SELECT c.tx_hash, c.output_index, c.capacity, c.created_at_block, c.lock_script_hash, c.data_size
+                    FROM cells c
+                    JOIN UNNEST($1::bytea[], $2::smallint[]) AS t(tx_hash, output_index)
+                      ON c.tx_hash = t.tx_hash AND c.output_index = t.output_index
+                    WHERE c.status = 0
+                    "#,
+                )
+                .bind(&tx_hashes)
+                .bind(&indices)
+                .fetch_all(&self.pool)
+                .await?;
+
+                if !fallback_rows.is_empty() {
+                    tracing::debug!(
+                        "Cells table fallback found {}/{} cells not in live_cells",
+                        fallback_rows.len(),
+                        still_missing.len()
+                    );
+                }
+
+                for (tx_hash, idx, cap, block, lock_hash, data_size) in fallback_rows {
+                    result.insert((tx_hash, idx), (cap, block, lock_hash, data_size));
+                }
+            }
         }
 
         Ok(result)

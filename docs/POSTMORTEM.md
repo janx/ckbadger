@@ -560,40 +560,48 @@ Test by wiping database and re-syncing from genesis.
 
 ### STATS-007: Common Knowledge Size only accumulated, never decremented
 
-**Symptom**: "Common Knowledge Size" chart shows monotonically increasing values, even though cells are constantly being consumed. The metric represents total historical data written, not current live cell data size.
+**Symptom**: "Common Knowledge Size" chart shows monotonically increasing values (~1.7GB), even though cells are constantly being consumed. The official CKB explorer shows ~156MB. This means `cells.consumed_at_block` was almost never being set (only 0.03% of cells had it populated).
 
-**Root Cause**: `total_data_size` in `daily_statistics` only tracked `data_size_added` (from newly created cells) but never subtracted `data_size_consumed` (from consumed cells).
+**Initial Analysis**: Thought `data_size_consumed` wasn't being calculated in statistics. But the code was updated correctly to use `net_data_size = data_size_added - data_size_consumed`.
 
-```rust
-// WRONG: Only adding, never subtracting
-let data_size_added: i64 = tx_slice
-    .iter()
-    .flat_map(|tx| tx.cells.iter())
-    .map(|cell| cell.data_size as i64)
-    .sum();
-// ...
-total_data_size = total_data_size + data_size_added;
+**Actual Root Cause**: During bulk sync, cell lookup in `get_cells_info_batch()` silently failed for most cells:
 
-// CORRECT: Track net change (added - consumed)
-let data_size_consumed: i64 = tx_slice
-    .iter()
-    .filter(|tx| !tx.is_cellbase)
-    .flat_map(|tx| tx.inputs.iter())
-    .filter_map(|input| /* lookup input cell's data_size */)
-    .sum();
-let net_data_size = data_size_added - data_size_consumed;
-total_data_size = total_data_size + net_data_size;
-```
+1. Check RocksDB `live_cell_store` → miss (not populated during bulk sync startup)
+2. Check `consumed_cells` cache → miss (recently consumed only)
+3. Fallback to `live_cells` table → **only 4,836 records!** (not populated in bulk sync mode)
+4. **Missing**: No fallback to `cells` table
 
-**Fix required**:
+Since lookups failed, `consume_cells_batch()` never received consumption data, so `cells.consumed_at_block` was never set (except for a tiny fraction).
 
-1. Extend cell info cache/lookup to include `data_size` field
-2. Calculate `data_size_consumed` by summing consumed cells' data_size
-3. Update `daily_statistics.total_data_size` with net change
+**Fix** (Feb 2026):
 
-**Lesson**: When tracking cumulative metrics for UTXO-like models, always consider both creation AND consumption. Compare with `total_live_cells` which correctly uses `cells_created - cells_consumed`.
+1. Added fallback to `cells` table in `get_cells_info_batch()`:
 
-**Files**: `crates/indexer/src/sync/indexer.rs`, `crates/indexer/src/db/writer.rs`
+   ```rust
+   // STATS-007 fix: Fallback to cells table for bulk sync mode
+   let fallback_rows = sqlx::query_as(
+       "SELECT ... FROM cells c WHERE c.status = 0 ..."
+   )
+   ```
+
+2. Created `consumed_at_backfill` task to backfill historical data:
+
+   ```sql
+   UPDATE cells c SET
+       status = 1,
+       consumed_at_block = ti.tx_block_number,
+       consumed_by_tx = ti.tx_hash
+   FROM transaction_inputs ti
+   WHERE c.tx_hash = ti.previous_tx_hash
+     AND c.output_index = ti.previous_output_index
+     AND c.consumed_at_block IS NULL
+   ```
+
+3. After backfill: run `statistics_rebuild` task to recalculate `daily_statistics.total_data_size`
+
+**Lesson**: Multi-stage lookups with fallbacks must be tested with realistic data. Silent failures (returning empty results instead of errors) mask critical bugs. Add logging when fallback queries return significant results.
+
+**Files**: `crates/indexer/src/db/writer/cells.rs`, `crates/task-runner/src/executor/consumed.rs`
 
 ---
 
