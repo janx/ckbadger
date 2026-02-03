@@ -427,10 +427,13 @@ impl Indexer {
 
     fn create_rocksdb_store(config: &Config) -> Result<Arc<crate::db::RocksDbLiveCellStore>> {
         info!(
-            "Using RocksDB live cell store at: {}",
-            config.live_cell_db_path
+            "Using RocksDB live cell store at: {} (bulk_sync_cell_cache={})",
+            config.live_cell_db_path, config.bulk_sync_cell_cache
         );
-        let store = crate::db::RocksDbLiveCellStore::open(&config.live_cell_db_path)?;
+        let store = crate::db::RocksDbLiveCellStore::open(
+            &config.live_cell_db_path,
+            config.bulk_sync_cell_cache,
+        )?;
         let count = store.len();
         if count > 0 {
             info!("Loaded {} live cells from RocksDB", count);
@@ -482,6 +485,18 @@ impl Indexer {
                 self.config.bulk_sync_threshold,
                 if copy_enabled { ", using COPY" } else { "" }
             );
+
+            if let Some(store) = self.writer.live_cell_store() {
+                store.set_bulk_sync_mode(true);
+                if self.config.bulk_sync_cell_cache {
+                    let (count, bytes) = store.consumed_cells_stats();
+                    info!(
+                        "Bulk sync cell cache: {} consumed cells ({:.2} MB) retained",
+                        count,
+                        bytes as f64 / 1024.0 / 1024.0
+                    );
+                }
+            }
         }
 
         let (start_block, _) = self.repo.get_sync_tip().await?;
@@ -1256,6 +1271,17 @@ impl Indexer {
 
         if was_bulk && !currently_bulk {
             info!("Bulk sync completed, submitting post-sync tasks...");
+
+            if let Some(store) = self.writer.live_cell_store() {
+                store.set_bulk_sync_mode(false);
+                if self.config.bulk_sync_cell_cache {
+                    let cleaned = store.cleanup_consumed_cells();
+                    info!(
+                        "Bulk sync cell cache: cleaned up {} consumed cells",
+                        cleaned
+                    );
+                }
+            }
 
             let chain_tip = self.progress.target();
             self.cache_invalidator

@@ -6,6 +6,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use rocksdb::{ColumnFamily, ColumnFamilyDescriptor, DBCompressionType, Options, DB};
 use sqlx::PgPool;
@@ -29,10 +30,15 @@ pub struct RocksDbLiveCellStore {
     db: DB,
     consumed_history: RwLock<VecDeque<ConsumedCellRecord>>,
     max_history_blocks: i64,
+    bulk_sync_mode: AtomicBool,
+    bulk_sync_cell_cache_enabled: bool,
 }
 
 impl RocksDbLiveCellStore {
-    pub fn open<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
+    pub fn open<P: AsRef<Path>>(
+        path: P,
+        bulk_sync_cell_cache_enabled: bool,
+    ) -> anyhow::Result<Self> {
         let mut opts = Options::default();
         opts.create_if_missing(true);
         opts.create_missing_column_families(true);
@@ -64,6 +70,8 @@ impl RocksDbLiveCellStore {
             db,
             consumed_history: RwLock::new(VecDeque::new()),
             max_history_blocks: 36,
+            bulk_sync_mode: AtomicBool::new(false),
+            bulk_sync_cell_cache_enabled,
         })
     }
 
@@ -127,6 +135,10 @@ impl RocksDbLiveCellStore {
     }
 
     fn prune_old_consumed_cells(&self, current_block: i64) {
+        if self.bulk_sync_cell_cache_enabled && self.bulk_sync_mode.load(Ordering::Relaxed) {
+            return;
+        }
+
         let cutoff_block = current_block - MAX_CONSUMED_HISTORY_BLOCKS;
         if cutoff_block <= 0 {
             return;
@@ -244,11 +256,16 @@ impl LiveCellStorage for RocksDbLiveCellStore {
         let mut history = self.consumed_history.write().unwrap();
         history.push_back(record);
 
-        while let Some(oldest) = history.front() {
-            if consumed_at_block - oldest.consumed_at_block > self.max_history_blocks {
-                history.pop_front();
-            } else {
-                break;
+        let skip_prune =
+            self.bulk_sync_cell_cache_enabled && self.bulk_sync_mode.load(Ordering::Relaxed);
+
+        if !skip_prune {
+            while let Some(oldest) = history.front() {
+                if consumed_at_block - oldest.consumed_at_block > self.max_history_blocks {
+                    history.pop_front();
+                } else {
+                    break;
+                }
             }
         }
 
@@ -491,6 +508,59 @@ impl LiveCellStorage for RocksDbLiveCellStore {
 
         let _ = self.db.write(batch);
     }
+
+    fn set_bulk_sync_mode(&self, enabled: bool) {
+        let was_enabled = self.bulk_sync_mode.swap(enabled, Ordering::SeqCst);
+        if was_enabled != enabled {
+            if enabled {
+                tracing::info!("Bulk sync cell cache: ENABLED (consumed cells prune suspended)");
+            } else {
+                tracing::info!("Bulk sync cell cache: DISABLED (resuming normal prune)");
+            }
+        }
+    }
+
+    fn is_bulk_sync_mode(&self) -> bool {
+        self.bulk_sync_mode.load(Ordering::Relaxed)
+    }
+
+    fn cleanup_consumed_cells(&self) -> usize {
+        let cf = self.cf_consumed_cells();
+        let mut batch = rocksdb::WriteBatch::default();
+        let mut count = 0;
+
+        let iter = self.db.iterator_cf(cf, rocksdb::IteratorMode::Start);
+        for item in iter.flatten() {
+            batch.delete_cf(cf, &item.0);
+            count += 1;
+        }
+
+        if !batch.is_empty() {
+            let _ = self.db.write(batch);
+        }
+
+        let mut history = self.consumed_history.write().unwrap();
+        history.clear();
+
+        if count > 0 {
+            tracing::info!("Cleaned up {} consumed cells from RocksDB", count);
+        }
+        count
+    }
+
+    fn consumed_cells_stats(&self) -> (usize, usize) {
+        let cf = self.cf_consumed_cells();
+        let mut count = 0;
+        let mut bytes = 0;
+
+        let iter = self.db.iterator_cf(cf, rocksdb::IteratorMode::Start);
+        for item in iter.flatten() {
+            count += 1;
+            bytes += item.0.len() + item.1.len();
+        }
+
+        (count, bytes)
+    }
 }
 
 impl RocksDbLiveCellStore {
@@ -598,7 +668,7 @@ mod tests {
     #[test]
     fn test_open_and_insert() {
         let tmp_dir = TempDir::new().unwrap();
-        let store = RocksDbLiveCellStore::open(tmp_dir.path()).unwrap();
+        let store = RocksDbLiveCellStore::open(tmp_dir.path(), true).unwrap();
 
         let tx_hash = vec![0xabu8; 32];
         let output_index = 0;
@@ -616,7 +686,7 @@ mod tests {
     #[test]
     fn test_remove_moves_to_consumed() {
         let tmp_dir = TempDir::new().unwrap();
-        let store = RocksDbLiveCellStore::open(tmp_dir.path()).unwrap();
+        let store = RocksDbLiveCellStore::open(tmp_dir.path(), true).unwrap();
 
         let tx_hash = vec![0xabu8; 32];
         let info = create_test_cell_info();
@@ -636,7 +706,7 @@ mod tests {
     #[test]
     fn test_get_batch() {
         let tmp_dir = TempDir::new().unwrap();
-        let store = RocksDbLiveCellStore::open(tmp_dir.path()).unwrap();
+        let store = RocksDbLiveCellStore::open(tmp_dir.path(), true).unwrap();
 
         let tx1 = vec![0x11u8; 32];
         let tx2 = vec![0x22u8; 32];
@@ -660,7 +730,7 @@ mod tests {
     #[test]
     fn test_consumed_cells_batch() {
         let tmp_dir = TempDir::new().unwrap();
-        let store = RocksDbLiveCellStore::open(tmp_dir.path()).unwrap();
+        let store = RocksDbLiveCellStore::open(tmp_dir.path(), true).unwrap();
 
         let tx1 = vec![0x11u8; 32];
         let tx2 = vec![0x22u8; 32];
@@ -679,7 +749,7 @@ mod tests {
     #[test]
     fn test_block_header_cache() {
         let tmp_dir = TempDir::new().unwrap();
-        let store = RocksDbLiveCellStore::open(tmp_dir.path()).unwrap();
+        let store = RocksDbLiveCellStore::open(tmp_dir.path(), true).unwrap();
 
         let header = create_test_block_header(12345);
         store.insert_block_header(12345, header.clone());
@@ -697,7 +767,7 @@ mod tests {
     #[test]
     fn test_dao_cache() {
         let tmp_dir = TempDir::new().unwrap();
-        let store = RocksDbLiveCellStore::open(tmp_dir.path()).unwrap();
+        let store = RocksDbLiveCellStore::open(tmp_dir.path(), true).unwrap();
 
         for i in 0..10 {
             let mut header = create_test_block_header(i);
@@ -723,14 +793,14 @@ mod tests {
         let info = create_test_cell_info();
 
         {
-            let store = RocksDbLiveCellStore::open(&path).unwrap();
+            let store = RocksDbLiveCellStore::open(&path, true).unwrap();
             store.insert(tx_hash.clone(), 0, info.clone());
             store.insert_block_header(100, create_test_block_header(100));
             assert_eq!(store.len(), 1);
         }
 
         {
-            let store = RocksDbLiveCellStore::open(&path).unwrap();
+            let store = RocksDbLiveCellStore::open(&path, true).unwrap();
             assert_eq!(store.len(), 1);
             let retrieved = store.get(&tx_hash, 0);
             assert!(retrieved.is_some());
@@ -744,7 +814,7 @@ mod tests {
     #[test]
     fn test_rollback() {
         let tmp_dir = TempDir::new().unwrap();
-        let store = RocksDbLiveCellStore::open(tmp_dir.path()).unwrap();
+        let store = RocksDbLiveCellStore::open(tmp_dir.path(), true).unwrap();
 
         let tx1 = vec![0x11u8; 32];
         let tx2 = vec![0x22u8; 32];
@@ -770,7 +840,7 @@ mod tests {
     #[test]
     fn test_rollback_block_cache() {
         let tmp_dir = TempDir::new().unwrap();
-        let store = RocksDbLiveCellStore::open(tmp_dir.path()).unwrap();
+        let store = RocksDbLiveCellStore::open(tmp_dir.path(), true).unwrap();
 
         for i in 1..=10 {
             store.insert_block_header(i, create_test_block_header(i));
@@ -786,14 +856,14 @@ mod tests {
     #[test]
     fn test_backend_name() {
         let tmp_dir = TempDir::new().unwrap();
-        let store = RocksDbLiveCellStore::open(tmp_dir.path()).unwrap();
+        let store = RocksDbLiveCellStore::open(tmp_dir.path(), true).unwrap();
         assert_eq!(store.backend_name(), "rocksdb");
     }
 
     #[test]
     fn test_iter_live_cells_batched() {
         let tmp_dir = TempDir::new().unwrap();
-        let store = RocksDbLiveCellStore::open(tmp_dir.path()).unwrap();
+        let store = RocksDbLiveCellStore::open(tmp_dir.path(), true).unwrap();
 
         for i in 0..25 {
             let tx_hash = vec![i as u8; 32];
@@ -818,7 +888,7 @@ mod tests {
     #[test]
     fn test_iter_live_cells_batched_empty() {
         let tmp_dir = TempDir::new().unwrap();
-        let store = RocksDbLiveCellStore::open(tmp_dir.path()).unwrap();
+        let store = RocksDbLiveCellStore::open(tmp_dir.path(), true).unwrap();
 
         let mut callback_called = false;
         let count = store.iter_live_cells_batched(10, |_batch| {
@@ -832,7 +902,7 @@ mod tests {
     #[test]
     fn test_count_live_cells() {
         let tmp_dir = TempDir::new().unwrap();
-        let store = RocksDbLiveCellStore::open(tmp_dir.path()).unwrap();
+        let store = RocksDbLiveCellStore::open(tmp_dir.path(), true).unwrap();
 
         assert_eq!(store.count_live_cells(), 0);
 
@@ -842,5 +912,77 @@ mod tests {
         }
 
         assert_eq!(store.count_live_cells(), 100);
+    }
+
+    #[test]
+    fn test_bulk_sync_mode_skips_prune() {
+        let tmp_dir = TempDir::new().unwrap();
+        let store = RocksDbLiveCellStore::open(tmp_dir.path(), true).unwrap();
+
+        store.set_bulk_sync_mode(true);
+        assert!(store.is_bulk_sync_mode());
+
+        let tx_hash = vec![0xabu8; 32];
+        let mut info = create_test_cell_info();
+        info.created_at_block = 100;
+        store.insert(tx_hash.clone(), 0, info);
+
+        store.remove(&tx_hash, 0);
+        store.record_consumption(tx_hash.clone(), 0, create_test_cell_info(), 5000);
+
+        let (count, _) = store.consumed_cells_stats();
+        assert!(
+            count > 0,
+            "consumed cells should be retained in bulk sync mode"
+        );
+
+        let consumed = store.get_consumed_cell(&tx_hash, 0);
+        assert!(consumed.is_some());
+    }
+
+    #[test]
+    fn test_bulk_sync_cell_cache_disabled_ignores_mode() {
+        let tmp_dir = TempDir::new().unwrap();
+        let store = RocksDbLiveCellStore::open(tmp_dir.path(), false).unwrap();
+
+        store.set_bulk_sync_mode(true);
+        assert!(store.is_bulk_sync_mode());
+
+        let tx_hash = vec![0xabu8; 32];
+        let mut info = create_test_cell_info();
+        info.created_at_block = 100;
+        store.insert(tx_hash.clone(), 0, info);
+        store.remove(&tx_hash, 0);
+
+        let consumed_before = store.get_consumed_cell(&tx_hash, 0);
+        assert!(
+            consumed_before.is_some(),
+            "consumed cell should exist before prune"
+        );
+
+        store.record_consumption(vec![0xff; 32], 0, create_test_cell_info(), 5000);
+
+        let (_, _) = store.consumed_cells_stats();
+    }
+
+    #[test]
+    fn test_cleanup_consumed_cells() {
+        let tmp_dir = TempDir::new().unwrap();
+        let store = RocksDbLiveCellStore::open(tmp_dir.path(), true).unwrap();
+
+        for i in 0..10 {
+            let tx_hash = vec![i as u8; 32];
+            store.insert(tx_hash.clone(), 0, create_test_cell_info());
+            store.remove(&tx_hash, 0);
+        }
+
+        let (count_before, _) = store.consumed_cells_stats();
+        assert_eq!(count_before, 10);
+
+        let cleaned = store.cleanup_consumed_cells();
+        assert_eq!(cleaned, 10);
+
+        let (count_after, _) = store.consumed_cells_stats();
+        assert_eq!(count_after, 0);
     }
 }

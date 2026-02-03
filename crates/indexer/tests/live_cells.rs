@@ -312,7 +312,7 @@ async fn test_bulk_sync_mode_skips_live_cells_db_write(pool: PgPool) {
     use std::sync::Arc;
 
     let tmp_dir = tempfile::TempDir::new().unwrap();
-    let store = Arc::new(RocksDbLiveCellStore::open(tmp_dir.path()).unwrap());
+    let store = Arc::new(RocksDbLiveCellStore::open(tmp_dir.path(), true).unwrap());
     let cache = CacheInvalidator::new(None).await;
     let writer = BatchWriter::with_live_cell_store(pool.clone(), true, store.clone(), cache);
 
@@ -338,7 +338,7 @@ async fn test_non_bulk_sync_mode_writes_to_live_cells_db(pool: PgPool) {
     use std::sync::Arc;
 
     let tmp_dir = tempfile::TempDir::new().unwrap();
-    let store = Arc::new(RocksDbLiveCellStore::open(tmp_dir.path()).unwrap());
+    let store = Arc::new(RocksDbLiveCellStore::open(tmp_dir.path(), true).unwrap());
     let cache = CacheInvalidator::new(None).await;
     let writer = BatchWriter::with_live_cell_store(pool.clone(), true, store.clone(), cache);
 
@@ -369,7 +369,7 @@ async fn test_rocksdb_store_persists_cells(pool: PgPool) {
     let cell = make_parsed_cell(100_00000000);
 
     {
-        let store = Arc::new(RocksDbLiveCellStore::open(&path).unwrap());
+        let store = Arc::new(RocksDbLiveCellStore::open(&path, true).unwrap());
         let cache = CacheInvalidator::new(None).await;
         let writer = BatchWriter::with_live_cell_store(pool.clone(), true, store.clone(), cache);
 
@@ -382,7 +382,7 @@ async fn test_rocksdb_store_persists_cells(pool: PgPool) {
     }
 
     {
-        let store = RocksDbLiveCellStore::open(&path).unwrap();
+        let store = RocksDbLiveCellStore::open(&path, true).unwrap();
         assert_eq!(store.len(), 1);
         let retrieved = store.get(&tx_hash, 0);
         assert!(retrieved.is_some());
@@ -397,7 +397,7 @@ fn test_iter_and_copy_writer_integration() {
     };
 
     let tmp_dir = tempfile::TempDir::new().unwrap();
-    let store = RocksDbLiveCellStore::open(tmp_dir.path()).unwrap();
+    let store = RocksDbLiveCellStore::open(tmp_dir.path(), true).unwrap();
 
     for i in 1..=50 {
         let tx_hash = vec![i as u8; 32];
@@ -453,7 +453,7 @@ async fn test_get_cells_info_batch_falls_back_to_cells_table(pool: PgPool) {
     use std::sync::Arc;
 
     let tmp_dir = tempfile::TempDir::new().unwrap();
-    let store = Arc::new(RocksDbLiveCellStore::open(tmp_dir.path()).unwrap());
+    let store = Arc::new(RocksDbLiveCellStore::open(tmp_dir.path(), true).unwrap());
     let cache = CacheInvalidator::new(None).await;
     let writer = BatchWriter::with_live_cell_store(pool.clone(), true, store, cache);
 

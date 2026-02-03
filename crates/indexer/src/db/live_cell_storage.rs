@@ -149,6 +149,17 @@ pub trait LiveCellStorage: Send + Sync {
         HashMap::new()
     }
     fn rollback_block_cache(&self, _rollback_to: i64) {}
+
+    fn set_bulk_sync_mode(&self, _enabled: bool) {}
+    fn is_bulk_sync_mode(&self) -> bool {
+        false
+    }
+    fn cleanup_consumed_cells(&self) -> usize {
+        0
+    }
+    fn consumed_cells_stats(&self) -> (usize, usize) {
+        (0, 0)
+    }
 }
 
 /// Async operations for database synchronization.

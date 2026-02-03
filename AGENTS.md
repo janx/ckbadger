@@ -354,10 +354,11 @@ cargo run -p ckbadger-task-tui
 
 The LiveCellStore provides O(1) cell lookups during blockchain synchronization using RocksDB for persistent storage. This enables instant restart without rebuilding from database.
 
-| Parameter                    | Default             | Description                                   |
-| ---------------------------- | ------------------- | --------------------------------------------- |
-| `--live-cell-db-path`        | `./data/live_cells` | RocksDB data directory                        |
-| `--live-cell-flush-interval` | `100`               | Flush dirty cells to database every N batches |
+| Parameter                    | Default             | Description                                       |
+| ---------------------------- | ------------------- | ------------------------------------------------- |
+| `--live-cell-db-path`        | `./data/live_cells` | RocksDB data directory                            |
+| `--live-cell-flush-interval` | `100`               | Flush dirty cells to database every N batches     |
+| `--no-bulk-sync-cell-cache`  | `false`             | Disable consumed cells retention during bulk sync |
 
 **RocksDB Column Families:**
 
@@ -377,10 +378,23 @@ The LiveCellStore provides O(1) cell lookups during blockchain synchronization u
 **Behavior:**
 
 - **Bulk Sync Mode** (>1000 blocks behind tip): Skips ALL `live_cells` table operations (INSERT/DELETE), writing only to RocksDB for maximum throughput. The `cells` table still receives writes.
-- **Consumed Cell Cache**: When a cell is spent, its info is preserved in `consumed_cells` CF for 1000 blocks, reducing PostgreSQL fallback queries by 10-20%.
+- **Bulk Sync Cell Cache** (default enabled): Retains ALL consumed cells in RocksDB during bulk sync, eliminating PostgreSQL fallback queries. Requires ~15GB extra memory for full chain sync. Disabled automatically on sync completion.
+- **Consumed Cell Cache**: When a cell is spent, its info is preserved in `consumed_cells` CF for 1000 blocks (or indefinitely during bulk sync if cell cache enabled).
 - **Block Header Cache**: Automatically populated when blocks are written; enables O(1) DAO field lookups.
 - **Instant Recovery**: Data persisted to disk, indexer restarts in seconds instead of minutes
 - **Graceful Shutdown**: RocksDB data is flushed on shutdown
+
+**Memory Considerations:**
+
+| Machine RAM | Bulk Sync Cell Cache | Expected Usage |
+| ----------- | -------------------- | -------------- |
+| ≥32GB       | Enabled (default)    | ~22GB peak     |
+| <32GB       | Disable recommended  | ~8GB peak      |
+
+```bash
+# For low-memory machines
+cargo run -p ckbadger-indexer -- --no-bulk-sync-cell-cache
+```
 
 **Example Usage:**
 

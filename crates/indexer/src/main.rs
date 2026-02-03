@@ -101,6 +101,13 @@ struct Args {
         help = "Path to RocksDB live cell store directory"
     )]
     live_cell_db_path: String,
+
+    #[arg(
+        long,
+        default_value = "false",
+        help = "Disable bulk sync cell cache (saves ~15GB RAM, but slower sync)"
+    )]
+    no_bulk_sync_cell_cache: bool,
 }
 
 #[tokio::main]
@@ -142,6 +149,7 @@ async fn main() -> Result<()> {
         apply_pg_tuning: args.apply_pg_tuning,
         live_cell_flush_interval: args.live_cell_flush_interval,
         live_cell_db_path: args.live_cell_db_path,
+        bulk_sync_cell_cache: !args.no_bulk_sync_cell_cache,
     };
 
     info!("Connecting to database: {}", config.database_url);
