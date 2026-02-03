@@ -12,7 +12,7 @@ use std::time::Duration;
 #[derive(Clone)]
 pub enum CacheBackend {
     #[cfg(feature = "redis-cache")]
-    Redis(RedisCache),
+    Redis(Box<RedisCache>),
     None,
 }
 
@@ -38,6 +38,14 @@ impl CacheBackend {
             #[cfg(feature = "redis-cache")]
             CacheBackend::Redis(cache) => cache.delete(_key).await,
             CacheBackend::None => {}
+        }
+    }
+
+    pub async fn hgetall<T: serde::de::DeserializeOwned>(&self, _key: &str) -> Vec<T> {
+        match self {
+            #[cfg(feature = "redis-cache")]
+            CacheBackend::Redis(cache) => cache.hgetall(_key).await,
+            CacheBackend::None => Vec::new(),
         }
     }
 
@@ -126,4 +134,23 @@ impl CacheTtl {
     pub const BLOCK: Duration = Duration::from_secs(300);
     pub const TRANSACTION: Duration = Duration::from_secs(300);
     pub const MEMPOOL_INFO: Duration = Duration::from_secs(2);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_cache_backend_none_hgetall_returns_empty_vec() {
+        let cache = CacheBackend::None;
+        let result: Vec<String> = cache.hgetall("any_key").await;
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_cache_backend_none_get_returns_none() {
+        let cache = CacheBackend::None;
+        let result: Option<String> = cache.get("any_key").await;
+        assert!(result.is_none());
+    }
 }

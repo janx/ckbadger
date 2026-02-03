@@ -16,6 +16,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/mempool/transactions", get(get_mempool_transactions))
         .route("/mempool/blocks", get(get_mempool_blocks))
         .route("/mempool/fees", get(get_recommended_fees))
+        .route("/mempool/pending-proposals", get(get_pending_proposals))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -569,5 +570,36 @@ async fn get_mempool_blocks_internal(state: &AppState) -> Result<MempoolBlocksRe
         pending_blocks,
         total_pending_count: pool.pending.len() as u64,
         total_proposed_count: pool.proposed.len() as u64,
+    })
+}
+
+async fn get_pending_proposals(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<ckbadger_common::PendingProposalsResponse> {
+    use ckbadger_common::{
+        CachedProposal, PendingProposal, PendingProposalsResponse, PENDING_PROPOSALS_REDIS_KEY,
+    };
+
+    let cached_proposals: Vec<CachedProposal> =
+        state.cache.hgetall(PENDING_PROPOSALS_REDIS_KEY).await;
+
+    let tip = state.cache.get_sync_tip(&state.pool).await;
+
+    let mut proposals: Vec<PendingProposal> = cached_proposals
+        .iter()
+        .filter(|p| !p.is_expired(tip))
+        .map(|p| PendingProposal::from_cached(p, tip))
+        .collect();
+
+    proposals.sort_by(|a, b| {
+        b.proposed_at_block
+            .cmp(&a.proposed_at_block)
+            .then(a.proposed_at_index.cmp(&b.proposed_at_index))
+    });
+
+    ok(PendingProposalsResponse {
+        proposals: proposals.clone(),
+        tip_block_number: tip,
+        total_count: proposals.len(),
     })
 }

@@ -2537,6 +2537,12 @@ impl Indexer {
                 self.writer
                     .insert_block_proposals_batch(parsed_block.number, &parsed_block.proposals)
                     .await?;
+
+                // Cache proposals in Redis during live sync for frontend display
+                if !self.is_bulk_sync_active() {
+                    self.cache_block_proposals(&parsed_block.proposals, parsed_block.number)
+                        .await;
+                }
             }
         }
 
@@ -3517,6 +3523,11 @@ impl Indexer {
                 self.writer
                     .insert_block_proposals_batch(parsed_block.number, &parsed_block.proposals)
                     .await?;
+
+                if !self.is_bulk_sync_active() {
+                    self.cache_block_proposals(&parsed_block.proposals, parsed_block.number)
+                        .await;
+                }
             }
         }
 
@@ -4627,6 +4638,11 @@ impl Indexer {
             self.writer
                 .insert_block_proposals_batch(parsed.number, &parsed.proposals)
                 .await?;
+
+            if !self.is_bulk_sync_active() {
+                self.cache_block_proposals(&parsed.proposals, parsed.number)
+                    .await;
+            }
         }
 
         struct TxData {
@@ -5461,6 +5477,78 @@ impl Indexer {
             .await?;
 
         Ok(())
+    }
+
+    async fn cache_block_proposals(&self, proposals: &[Vec<u8>], block_number: i64) {
+        use ckbadger_common::CachedProposal;
+
+        if proposals.is_empty() || !self.cache_invalidator.is_enabled() {
+            return;
+        }
+
+        let mempool = match self.rpc.get_raw_tx_pool_verbose().await {
+            Ok(pool) => pool,
+            Err(e) => {
+                warn!("Failed to fetch mempool for proposal enrichment: {}", e);
+                let cached: Vec<CachedProposal> = proposals
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, p)| {
+                        CachedProposal::new_minimal(hex::encode(p), block_number, idx as i16)
+                    })
+                    .collect();
+                self.cache_invalidator.cache_proposals(&cached).await;
+                return;
+            }
+        };
+
+        let mut all_mempool_txs: HashMap<String, &crate::rpc::TxPoolEntry> = HashMap::new();
+        for (tx_hash, entry) in mempool.pending.iter().chain(mempool.proposed.iter()) {
+            let short_id = &tx_hash[2..22];
+            all_mempool_txs.insert(short_id.to_string(), entry);
+        }
+
+        let mut cached_proposals = Vec::with_capacity(proposals.len());
+
+        for (idx, proposal_bytes) in proposals.iter().enumerate() {
+            let proposal_id = hex::encode(proposal_bytes);
+
+            if let Some(entry) = all_mempool_txs.get(&proposal_id) {
+                let fee = crate::rpc::parse_hex_to_bytes(&entry.fee);
+                let fee_u64 = if fee.len() >= 8 {
+                    u64::from_be_bytes(fee[fee.len() - 8..].try_into().unwrap_or_default())
+                } else {
+                    u64::from_str_radix(entry.fee.trim_start_matches("0x"), 16).unwrap_or(0)
+                };
+                let size =
+                    u64::from_str_radix(entry.size.trim_start_matches("0x"), 16).unwrap_or(0);
+                let cycles =
+                    u64::from_str_radix(entry.cycles.trim_start_matches("0x"), 16).unwrap_or(0);
+
+                cached_proposals.push(CachedProposal::new_with_details(
+                    proposal_id,
+                    "".to_string(),
+                    block_number,
+                    idx as i16,
+                    fee_u64,
+                    size,
+                    cycles,
+                ));
+            } else {
+                cached_proposals.push(CachedProposal::new_minimal(
+                    proposal_id,
+                    block_number,
+                    idx as i16,
+                ));
+            }
+        }
+
+        self.cache_invalidator
+            .cache_proposals(&cached_proposals)
+            .await;
+        self.cache_invalidator
+            .cleanup_expired_proposals(block_number)
+            .await;
     }
 }
 

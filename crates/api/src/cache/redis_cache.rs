@@ -64,4 +64,24 @@ impl RedisCache {
             warn!(key = %key, error = %e, "Redis delete error");
         }
     }
+
+    pub async fn hgetall<T: DeserializeOwned>(&self, key: &str) -> Vec<T> {
+        let mut conn = self.conn.clone();
+        let result: Result<std::collections::HashMap<String, String>, _> = conn.hgetall(key).await;
+        match result {
+            Ok(map) => {
+                let mut items = Vec::new();
+                for (_field, json) in map {
+                    if let Ok(value) = serde_json::from_str::<T>(&json) {
+                        items.push(value);
+                    }
+                }
+                items
+            }
+            Err(e) => {
+                warn!(key = %key, error = %e, "Redis hgetall error");
+                Vec::new()
+            }
+        }
+    }
 }

@@ -2999,3 +2999,26 @@ async fn test_tasks_active_ignores_completed_tasks(pool: sqlx::PgPool) {
 
     assert!(json["indexRebuild"].is_null());
 }
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn test_pending_proposals_returns_empty_without_redis(pool: sqlx::PgPool) {
+    let app = create_router(test_config(pool)).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/mempool/pending-proposals")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = BodyExt::collect(response.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert!(json["proposals"].as_array().unwrap().is_empty());
+    assert_eq!(json["totalCount"], 0);
+    assert_eq!(json["tipBlockNumber"], 0);
+}

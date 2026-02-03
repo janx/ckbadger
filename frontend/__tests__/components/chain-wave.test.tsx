@@ -3,37 +3,55 @@ import { screen } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import { ProposalsContainer } from '@/components/chain-wave/proposals-container';
 import { EpochProgress } from '@/components/chain-wave/epoch-progress';
+import type { PendingProposal } from '@/lib/api';
+
+function createProposal(
+  proposalId: string,
+  overrides: Partial<PendingProposal> = {}
+): PendingProposal {
+  return {
+    proposalId,
+    fullTxHash: null,
+    proposedAtBlock: 1000,
+    proposedAtIndex: 0,
+    blocksUntilExpiry: 5,
+    fee: null,
+    size: null,
+    cycles: null,
+    feeRate: null,
+    ...overrides,
+  };
+}
 
 describe('ProposalsContainer', () => {
   it('renders empty state when no proposals', () => {
-    render(<ProposalsContainer shortIds={[]} totalCount={0} />);
+    render(<ProposalsContainer proposals={[]} totalCount={0} />);
     expect(screen.getByText('No proposed txs')).toBeInTheDocument();
     expect(screen.getByText('0')).toBeInTheDocument();
   });
 
   it('renders proposal short IDs', () => {
-    const txHashes = [
-      '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
-      '0xfedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321',
+    const proposals = [
+      createProposal('0x1234567890abcdef1234'),
+      createProposal('0xfedcba0987654321fedc'),
     ];
-    render(<ProposalsContainer shortIds={txHashes} totalCount={2} />);
+    render(<ProposalsContainer proposals={proposals} totalCount={2} />);
 
-    // toShortId displays as 0x{first 6}...{last 6}
-    expect(screen.getByText('0x123456...abcdef')).toBeInTheDocument();
-    expect(screen.getByText('0xfedcba...654321')).toBeInTheDocument();
+    expect(screen.getByText(/0x123456/)).toBeInTheDocument();
+    expect(screen.getByText(/0xfedcba/)).toBeInTheDocument();
     expect(screen.getByText('2')).toBeInTheDocument();
   });
 
   it('displays correct title and subtitle', () => {
-    render(<ProposalsContainer shortIds={[]} totalCount={0} />);
+    render(<ProposalsContainer proposals={[]} totalCount={0} />);
     expect(screen.getByText('Proposed')).toBeInTheDocument();
     expect(screen.getByText('Awaiting commit')).toBeInTheDocument();
   });
 
-  it('converts full tx hash to truncated display format', () => {
-    const txHash = '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890';
-    render(<ProposalsContainer shortIds={[txHash]} totalCount={1} />);
-    expect(screen.getByText('0xabcdef...567890')).toBeInTheDocument();
+  it('displays fee rate when available', () => {
+    const proposals = [createProposal('0xabcdef1234567890abcd', { feeRate: 1.5 })];
+    render(<ProposalsContainer proposals={proposals} totalCount={1} />);
+    expect(screen.getByText('1.5')).toBeInTheDocument();
   });
 });
 

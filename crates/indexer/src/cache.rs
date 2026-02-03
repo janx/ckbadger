@@ -1,6 +1,9 @@
-use ckbadger_common::{SyncProgressData, SyncStatusData};
+use ckbadger_common::{CachedProposal, SyncProgressData, SyncStatusData};
 #[cfg(feature = "redis-cache")]
-use ckbadger_common::{SYNC_PROGRESS_REDIS_KEY, SYNC_STATUS_REDIS_KEY};
+use ckbadger_common::{
+    PENDING_PROPOSALS_REDIS_KEY, PROPOSAL_CACHE_TTL_SECS, SYNC_PROGRESS_REDIS_KEY,
+    SYNC_STATUS_REDIS_KEY,
+};
 #[cfg(feature = "redis-cache")]
 use redis::AsyncCommands;
 #[cfg(feature = "redis-cache")]
@@ -140,9 +143,7 @@ impl CacheInvalidator {
     pub async fn get_sync_status(&self) -> Option<SyncStatusData> {
         #[cfg(feature = "redis-cache")]
         {
-            let Some(ref conn) = self.conn else {
-                return None;
-            };
+            let conn = self.conn.as_ref()?;
 
             let mut conn = conn.clone();
             let result: Result<Option<String>, _> = conn.get(SYNC_STATUS_REDIS_KEY).await;
@@ -206,6 +207,165 @@ impl CacheInvalidator {
         {
             let _ = (self, updater);
             None
+        }
+    }
+
+    pub async fn cache_proposals(&self, proposals: &[CachedProposal]) {
+        #[cfg(feature = "redis-cache")]
+        {
+            let Some(ref conn) = self.conn else {
+                return;
+            };
+
+            if proposals.is_empty() {
+                return;
+            }
+
+            let mut conn = conn.clone();
+
+            for proposal in proposals {
+                match serde_json::to_string(proposal) {
+                    Ok(json) => {
+                        let result: Result<(), _> = conn
+                            .hset(PENDING_PROPOSALS_REDIS_KEY, &proposal.proposal_id, json)
+                            .await;
+                        if let Err(e) = result {
+                            warn!("Failed to cache proposal {}: {}", &proposal.proposal_id, e);
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to serialize proposal {}: {}",
+                            &proposal.proposal_id, e
+                        );
+                    }
+                }
+            }
+
+            let _: Result<(), _> = conn
+                .expire(PENDING_PROPOSALS_REDIS_KEY, PROPOSAL_CACHE_TTL_SECS as i64)
+                .await;
+        }
+
+        #[cfg(not(feature = "redis-cache"))]
+        {
+            let _ = (self, proposals);
+        }
+    }
+
+    pub async fn remove_committed_proposals(&self, proposal_ids: &[String]) {
+        #[cfg(feature = "redis-cache")]
+        {
+            let Some(ref conn) = self.conn else {
+                return;
+            };
+
+            if proposal_ids.is_empty() {
+                return;
+            }
+
+            let mut conn = conn.clone();
+
+            for proposal_id in proposal_ids {
+                let result: Result<i64, _> =
+                    conn.hdel(PENDING_PROPOSALS_REDIS_KEY, proposal_id).await;
+                if let Err(e) = result {
+                    warn!("Failed to remove committed proposal {}: {}", proposal_id, e);
+                }
+            }
+        }
+
+        #[cfg(not(feature = "redis-cache"))]
+        {
+            let _ = (self, proposal_ids);
+        }
+    }
+
+    pub async fn cleanup_expired_proposals(&self, current_tip: i64) {
+        #[cfg(feature = "redis-cache")]
+        {
+            use ckbadger_common::PROPOSAL_WINDOW_FARTHEST;
+
+            let Some(ref conn) = self.conn else {
+                return;
+            };
+
+            let mut conn = conn.clone();
+
+            let all_proposals: Result<std::collections::HashMap<String, String>, _> =
+                conn.hgetall(PENDING_PROPOSALS_REDIS_KEY).await;
+
+            match all_proposals {
+                Ok(proposals) => {
+                    let mut expired = Vec::new();
+                    for (proposal_id, json) in proposals {
+                        if let Ok(cached) = serde_json::from_str::<CachedProposal>(&json) {
+                            let expiry_block =
+                                cached.proposed_at_block + PROPOSAL_WINDOW_FARTHEST as i64;
+                            if current_tip > expiry_block {
+                                expired.push(proposal_id);
+                            }
+                        }
+                    }
+
+                    if !expired.is_empty() {
+                        info!("Cleaning up {} expired proposals", expired.len());
+                        for proposal_id in &expired {
+                            let _: Result<i64, _> =
+                                conn.hdel(PENDING_PROPOSALS_REDIS_KEY, proposal_id).await;
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to get proposals for cleanup: {}", e);
+                }
+            }
+        }
+
+        #[cfg(not(feature = "redis-cache"))]
+        {
+            let _ = (self, current_tip);
+        }
+    }
+
+    pub async fn get_pending_proposals(&self) -> Vec<CachedProposal> {
+        #[cfg(feature = "redis-cache")]
+        {
+            let Some(ref conn) = self.conn else {
+                return Vec::new();
+            };
+
+            let mut conn = conn.clone();
+
+            let all_proposals: Result<std::collections::HashMap<String, String>, _> =
+                conn.hgetall(PENDING_PROPOSALS_REDIS_KEY).await;
+
+            match all_proposals {
+                Ok(proposals) => {
+                    let mut result = Vec::new();
+                    for (_proposal_id, json) in proposals {
+                        if let Ok(cached) = serde_json::from_str::<CachedProposal>(&json) {
+                            result.push(cached);
+                        }
+                    }
+                    result.sort_by(|a, b| {
+                        b.proposed_at_block
+                            .cmp(&a.proposed_at_block)
+                            .then(a.proposed_at_index.cmp(&b.proposed_at_index))
+                    });
+                    result
+                }
+                Err(e) => {
+                    warn!("Failed to get pending proposals: {}", e);
+                    Vec::new()
+                }
+            }
+        }
+
+        #[cfg(not(feature = "redis-cache"))]
+        {
+            let _ = self;
+            Vec::new()
         }
     }
 }
@@ -365,6 +525,8 @@ mod tests {
                 sync_started_at: None,
                 sync_started_block: 0,
                 sync_ema_rate: Some(500.0),
+                bulk_sync_completed_at: None,
+                bulk_sync_completed_block: None,
                 indexes_deferred: false,
                 indexes_dropped_at: None,
                 indexes_rebuild_started_at: None,

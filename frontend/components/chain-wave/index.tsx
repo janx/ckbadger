@@ -2,7 +2,14 @@
 
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { api, Block, NetworkStats, MempoolTransaction, Transaction } from '@/lib/api';
+import {
+  api,
+  Block,
+  NetworkStats,
+  MempoolTransaction,
+  Transaction,
+  PendingProposal,
+} from '@/lib/api';
 import { PackedContainer, TxItem, TxCategory } from './packed-container';
 import { ProposalsContainer } from './proposals-container';
 
@@ -59,6 +66,12 @@ export function ChainWave({ initialBlocks }: ChainWaveProps) {
     refetchInterval: 5000,
   });
 
+  const { data: pendingProposalsData } = useQuery({
+    queryKey: ['pending-proposals'],
+    queryFn: () => api.getPendingProposals(),
+    refetchInterval: 5000,
+  });
+
   const { data: blocksData } = useQuery({
     queryKey: ['chain-wave-tip-block'],
     queryFn: () => api.getBlocks({ limit: 1 }),
@@ -91,10 +104,9 @@ export function ChainWave({ initialBlocks }: ChainWaveProps) {
     return mempoolTxs.filter((tx) => tx.status === 'pending').map(mempoolTxToItem);
   }, [mempoolTxs]);
 
-  const proposedTxHashes = useMemo(() => {
-    if (!mempoolTxs) return [];
-    return mempoolTxs.filter((tx) => tx.status === 'proposed').map((tx) => tx.txHash);
-  }, [mempoolTxs]);
+  const pendingProposals: PendingProposal[] = useMemo(() => {
+    return pendingProposalsData?.proposals ?? [];
+  }, [pendingProposalsData]);
 
   const tipBlockItems = useMemo(() => {
     if (!tipBlockTxs?.data) return [];
@@ -147,7 +159,7 @@ export function ChainWave({ initialBlocks }: ChainWaveProps) {
 
         <FlowArrow />
 
-        <ProposalsContainer shortIds={proposedTxHashes} totalCount={proposedTxHashes.length} />
+        <ProposalsContainer proposals={pendingProposals} totalCount={pendingProposals.length} />
 
         <FlowArrow />
 

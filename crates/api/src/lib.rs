@@ -65,7 +65,7 @@ pub async fn create_router(config: AppConfig) -> Router {
         Some(ref url) => match cache::RedisCache::new(url).await {
             Ok(redis) => {
                 tracing::info!("Redis cache connected");
-                CacheBackend::Redis(redis)
+                CacheBackend::Redis(Box::new(redis))
             }
             Err(e) => {
                 tracing::warn!("Failed to connect to Redis: {}, running without cache", e);

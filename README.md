@@ -207,6 +207,9 @@ GET  /api/v1/cells/:tx_hash/:output_index        # Cell details
 GET  /api/v1/statistics/network                  # Network stats
 GET  /api/v1/status                              # System status (sync, index rebuild)
 
+# Mempool API (Real-time transaction pool)
+GET  /api/v1/mempool/pending-proposals           # Pending proposals with fee/size metadata
+
 # Activities API (Semantic blockchain events)
 GET  /api/v1/activities                          # List activities (paginated)
 GET  /api/v1/activities/address/:address         # Activities for an address
