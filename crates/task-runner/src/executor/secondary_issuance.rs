@@ -2,9 +2,9 @@ use anyhow::{anyhow, Result};
 use ckbadger_common::{
     RateCalculator, SecondaryIssuanceBackfillConfig, SecondaryIssuanceBackfillResult,
 };
-use futures::stream::{FuturesUnordered, StreamExt};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sqlx::PgPool;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -15,25 +15,15 @@ use crate::db::TaskDb;
 
 const RETRY_ATTEMPTS: usize = 3;
 const RETRY_BACKOFF_MS: u64 = 500;
+/// Maximum number of RPC requests in a single batch
+const RPC_BATCH_SIZE: usize = 100;
 
 #[derive(Debug, Serialize)]
-struct RpcRequest<T> {
+struct RpcRequest {
     jsonrpc: &'static str,
     id: u32,
     method: &'static str,
-    params: T,
-}
-
-#[derive(Debug, Deserialize)]
-struct RpcResponse<T> {
-    result: Option<T>,
-    error: Option<RpcError>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RpcError {
-    code: i64,
-    message: String,
+    params: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -77,8 +67,8 @@ pub async fn execute(
     config: &SecondaryIssuanceBackfillConfig,
 ) -> Result<()> {
     info!(
-        "Starting secondary issuance backfill: rpc={}, batch_size={}, concurrent={}",
-        config.ckb_rpc_url, config.batch_size, config.concurrent_requests
+        "Starting secondary issuance backfill: rpc={}, batch_size={}, rpc_batch_size={}",
+        config.ckb_rpc_url, config.batch_size, RPC_BATCH_SIZE
     );
 
     let max_block: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(number), 0) FROM blocks")
@@ -120,7 +110,6 @@ pub async fn execute(
     };
     let mut processed: i64 = 0;
     let mut current = start_block;
-    let concurrent = config.concurrent_requests.max(1);
     let batch_size = config.batch_size.max(1);
 
     while current <= end_block {
@@ -139,28 +128,27 @@ pub async fn execute(
         let block_numbers: Vec<i64> = blocks.iter().map(|b| b.number).collect();
         let dao_deposits = fetch_dao_deposits(pool, &block_numbers).await?;
 
-        let mut futures = FuturesUnordered::new();
+        let block_hashes: Vec<String> = blocks
+            .iter()
+            .map(|b| format!("0x{}", hex::encode(&b.hash)))
+            .collect();
+        let economic_states =
+            fetch_block_economic_states_batch(&client, &config.ckb_rpc_url, &block_hashes).await?;
+
         let mut batch_rows: Vec<BlockIssuanceRow> = Vec::with_capacity(blocks.len());
+        for block in &blocks {
+            let block_hash = format!("0x{}", hex::encode(&block.hash));
+            let economic_state = economic_states.get(&block_hash).ok_or_else(|| {
+                anyhow!(
+                    "Missing economic state for block {} ({})",
+                    block.number,
+                    block_hash
+                )
+            })?;
 
-        for block in blocks {
-            let client = client.clone();
-            let rpc_url = config.ckb_rpc_url.clone();
             let deposits = *dao_deposits.get(&block.number).unwrap_or(&0);
-
-            futures.push(async move {
-                let row = process_block(&client, &rpc_url, block, deposits).await?;
-                Ok::<BlockIssuanceRow, anyhow::Error>(row)
-            });
-
-            if futures.len() >= concurrent {
-                if let Some(result) = futures.next().await {
-                    batch_rows.push(result?);
-                }
-            }
-        }
-
-        while let Some(result) = futures.next().await {
-            batch_rows.push(result?);
+            let row = process_block_with_state(block, economic_state, deposits)?;
+            batch_rows.push(row);
         }
 
         insert_secondary_issuance_rows(pool, &batch_rows).await?;
@@ -190,7 +178,6 @@ pub async fn execute(
             .await?;
 
         current = batch_end + 1;
-        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
     info!(
@@ -278,14 +265,111 @@ async fn fetch_dao_deposits(pool: &PgPool, block_numbers: &[i64]) -> Result<Hash
     Ok(map)
 }
 
-async fn process_block(
+async fn fetch_block_economic_states_batch(
     client: &Client,
     rpc_url: &str,
-    block: BlockRow,
+    block_hashes: &[String],
+) -> Result<HashMap<String, BlockEconomicState>> {
+    let mut results: HashMap<String, BlockEconomicState> = HashMap::new();
+
+    for chunk in block_hashes.chunks(RPC_BATCH_SIZE) {
+        let chunk_results = fetch_rpc_batch_with_retry(client, rpc_url, chunk).await?;
+        results.extend(chunk_results);
+    }
+
+    Ok(results)
+}
+
+async fn fetch_rpc_batch_with_retry(
+    client: &Client,
+    rpc_url: &str,
+    block_hashes: &[String],
+) -> Result<HashMap<String, BlockEconomicState>> {
+    for attempt in 1..=RETRY_ATTEMPTS {
+        match fetch_rpc_batch(client, rpc_url, block_hashes).await {
+            Ok(results) => return Ok(results),
+            Err(err) => {
+                warn!(
+                    "RPC batch request failed (attempt {}/{}): {}",
+                    attempt, RETRY_ATTEMPTS, err
+                );
+                if attempt < RETRY_ATTEMPTS {
+                    tokio::time::sleep(Duration::from_millis(RETRY_BACKOFF_MS * attempt as u64))
+                        .await;
+                }
+            }
+        }
+    }
+
+    Err(anyhow!(
+        "Failed to fetch economic states batch after {} attempts",
+        RETRY_ATTEMPTS
+    ))
+}
+
+async fn fetch_rpc_batch(
+    client: &Client,
+    rpc_url: &str,
+    block_hashes: &[String],
+) -> Result<HashMap<String, BlockEconomicState>> {
+    let requests: Vec<RpcRequest> = block_hashes
+        .iter()
+        .enumerate()
+        .map(|(i, hash)| RpcRequest {
+            jsonrpc: "2.0",
+            id: i as u32,
+            method: "get_block_economic_state",
+            params: vec![hash.clone()],
+        })
+        .collect();
+
+    let response = client.post(rpc_url).json(&requests).send().await?;
+    let responses: Vec<Value> = response.json().await?;
+
+    let mut results: HashMap<String, BlockEconomicState> = HashMap::new();
+
+    for (i, resp_value) in responses.into_iter().enumerate() {
+        let block_hash = &block_hashes[i];
+
+        if let Some(error) = resp_value.get("error") {
+            if !error.is_null() {
+                let code = error.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
+                let message = error
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("unknown");
+                warn!(
+                    "RPC error for block {}: {} (code: {})",
+                    block_hash, message, code
+                );
+                continue;
+            }
+        }
+
+        if let Some(result) = resp_value.get("result") {
+            if result.is_null() {
+                warn!("RPC returned null for block {}", block_hash);
+                continue;
+            }
+            match serde_json::from_value::<BlockEconomicState>(result.clone()) {
+                Ok(state) => {
+                    results.insert(block_hash.clone(), state);
+                }
+                Err(e) => {
+                    warn!("Failed to parse economic state for {}: {}", block_hash, e);
+                }
+            }
+        }
+    }
+
+    Ok(results)
+}
+
+fn process_block_with_state(
+    block: &BlockRow,
+    economic_state: &BlockEconomicState,
     dao_deposits: u128,
 ) -> Result<BlockIssuanceRow> {
-    let block_hash = format!("0x{}", hex::encode(&block.hash));
-    let economic_state = fetch_block_economic_state(client, rpc_url, &block_hash).await?;
     let (total_issuance, occupied) = parse_dao_field(&block.dao)
         .ok_or_else(|| anyhow!("Invalid DAO field at block {}", block.number))?;
 
@@ -313,49 +397,6 @@ async fn process_block(
         dao_compensation: u128_to_i64(dao_compensation)?,
         burnt: u128_to_i64(burnt)?,
     })
-}
-
-async fn fetch_block_economic_state(
-    client: &Client,
-    rpc_url: &str,
-    block_hash: &str,
-) -> Result<BlockEconomicState> {
-    for attempt in 1..=RETRY_ATTEMPTS {
-        let request = RpcRequest {
-            jsonrpc: "2.0",
-            id: 1,
-            method: "get_block_economic_state",
-            params: vec![block_hash.to_string()],
-        };
-
-        let response = client.post(rpc_url).json(&request).send().await;
-        match response {
-            Ok(resp) => {
-                let parsed: RpcResponse<BlockEconomicState> = resp.json().await?;
-                if let Some(error) = parsed.error {
-                    warn!(
-                        "RPC error for block {}: {} ({})",
-                        block_hash, error.message, error.code
-                    );
-                } else if let Some(result) = parsed.result {
-                    return Ok(result);
-                }
-            }
-            Err(err) => {
-                warn!("RPC request failed for block {}: {}", block_hash, err);
-            }
-        }
-
-        if attempt < RETRY_ATTEMPTS {
-            tokio::time::sleep(Duration::from_millis(RETRY_BACKOFF_MS * attempt as u64)).await;
-        }
-    }
-
-    Err(anyhow!(
-        "Failed to fetch economic state for block {} after {} attempts",
-        block_hash,
-        RETRY_ATTEMPTS
-    ))
 }
 
 fn parse_dao_field(dao: &[u8]) -> Option<(u64, u64)> {
@@ -489,5 +530,111 @@ mod tests {
 
         let too_large = max + 1;
         assert!(u128_to_i64(too_large).is_err());
+    }
+
+    #[test]
+    fn test_rpc_batch_size_constant() {
+        assert_eq!(RPC_BATCH_SIZE, 100);
+    }
+
+    #[test]
+    fn test_process_block_with_state_calculates_burnt_correctly() {
+        let block = BlockRow {
+            number: 100,
+            hash: vec![0u8; 32],
+            dao: {
+                let mut dao = vec![0u8; 32];
+                let total_issuance: u64 = 1_000_000_000_000;
+                let occupied: u64 = 100_000_000_000;
+                dao[0..8].copy_from_slice(&total_issuance.to_le_bytes());
+                dao[24..32].copy_from_slice(&occupied.to_le_bytes());
+                dao
+            },
+            timestamp: chrono::Utc::now(),
+        };
+
+        let economic_state = BlockEconomicState {
+            issuance: BlockIssuance {
+                secondary: "0x5f5e100".to_string(), // 100_000_000
+            },
+            miner_reward: MinerReward {
+                secondary: "0x2faf080".to_string(), // 50_000_000
+            },
+        };
+
+        let dao_deposits: u128 = 200_000_000_000;
+
+        let row = process_block_with_state(&block, &economic_state, dao_deposits).unwrap();
+
+        assert_eq!(row.number, 100);
+        assert_eq!(row.secondary_issuance, 100_000_000);
+        assert_eq!(row.miner_secondary, 50_000_000);
+
+        let non_miner = 100_000_000i64 - 50_000_000;
+        let denominator = 1_000_000_000_000u128 - 100_000_000_000;
+        let expected_dao_share = (non_miner as u128 * dao_deposits) / denominator;
+        let expected_burnt = non_miner as u128 - expected_dao_share;
+
+        assert_eq!(row.dao_compensation, expected_dao_share as i64);
+        assert_eq!(row.burnt, expected_burnt as i64);
+    }
+
+    #[test]
+    fn test_process_block_with_state_handles_zero_denominator() {
+        let block = BlockRow {
+            number: 1,
+            hash: vec![0u8; 32],
+            dao: {
+                let mut dao = vec![0u8; 32];
+                let total_issuance: u64 = 100;
+                let occupied: u64 = 100;
+                dao[0..8].copy_from_slice(&total_issuance.to_le_bytes());
+                dao[24..32].copy_from_slice(&occupied.to_le_bytes());
+                dao
+            },
+            timestamp: chrono::Utc::now(),
+        };
+
+        let economic_state = BlockEconomicState {
+            issuance: BlockIssuance {
+                secondary: "0x64".to_string(), // 100
+            },
+            miner_reward: MinerReward {
+                secondary: "0x32".to_string(), // 50
+            },
+        };
+
+        let row = process_block_with_state(&block, &economic_state, 1000).unwrap();
+
+        assert_eq!(row.dao_compensation, 0);
+        assert_eq!(row.burnt, 50);
+    }
+
+    #[test]
+    fn test_rpc_request_serialization() {
+        let request = RpcRequest {
+            jsonrpc: "2.0",
+            id: 42,
+            method: "get_block_economic_state",
+            params: vec!["0xabc123".to_string()],
+        };
+
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains("\"jsonrpc\":\"2.0\""));
+        assert!(json.contains("\"id\":42"));
+        assert!(json.contains("\"method\":\"get_block_economic_state\""));
+        assert!(json.contains("\"params\":[\"0xabc123\"]"));
+    }
+
+    #[test]
+    fn test_block_economic_state_deserialization() {
+        let json = r#"{
+            "issuance": {"primary": "0x0", "secondary": "0x5f5e100"},
+            "miner_reward": {"primary": "0x0", "secondary": "0x2faf080", "committed": "0x0", "proposal": "0x0"}
+        }"#;
+
+        let state: BlockEconomicState = serde_json::from_str(json).unwrap();
+        assert_eq!(state.issuance.secondary, "0x5f5e100");
+        assert_eq!(state.miner_reward.secondary, "0x2faf080");
     }
 }

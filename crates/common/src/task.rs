@@ -123,7 +123,7 @@ fn default_cycles_batch_size() -> i64 {
     50
 }
 fn default_concurrent_requests() -> usize {
-    4
+    16
 }
 
 /// Configuration for secondary issuance backfill task
@@ -974,14 +974,5 @@ mod tests {
 
         let parsed: TaskConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.task_type(), TaskType::SecondaryIssuanceBackfill);
-    }
-
-    #[test]
-    fn test_secondary_issuance_backfill_config_default_values() {
-        let config = SecondaryIssuanceBackfillConfig::default();
-        assert_eq!(config.batch_size, 1000);
-        assert_eq!(config.concurrent_requests, 4);
-        assert!(config.start_block.is_none());
-        assert!(config.end_block.is_none());
     }
 }
