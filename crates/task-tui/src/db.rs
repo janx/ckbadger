@@ -1,7 +1,7 @@
 use anyhow::Result;
 use ckbadger_common::{
-    SyncProgressData, SyncStatusData, Task, TaskBuilder, SYNC_PROGRESS_REDIS_KEY,
-    SYNC_STATUS_REDIS_KEY,
+    MemoryStatsData, SyncProgressData, SyncStatusData, Task, TaskBuilder, MEMORY_STATS_REDIS_KEY,
+    SYNC_PROGRESS_REDIS_KEY, SYNC_STATUS_REDIS_KEY,
 };
 use redis::AsyncCommands;
 use sqlx::PgPool;
@@ -187,6 +187,10 @@ impl TaskDb {
             rate_realtime: None,
             rate_ema: None,
         })
+    }
+
+    pub async fn get_memory_stats(&self) -> Option<MemoryStatsData> {
+        self.get_redis_key(MEMORY_STATS_REDIS_KEY).await
     }
 
     pub async fn list_tasks(&self, limit: i64) -> Result<Vec<Task>> {

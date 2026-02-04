@@ -88,9 +88,13 @@ pub struct ConsumedCellRecord {
 }
 
 /// Memory/storage statistics for monitoring.
+#[derive(Debug, Clone, Default)]
 pub struct MemoryStats {
     pub cells_count: usize,
     pub memory_bytes: usize,
+    pub memtable_bytes: usize,
+    pub block_cache_bytes: usize,
+    pub table_readers_bytes: usize,
     pub fragmentation_ratio: f64,
 }
 
@@ -159,6 +163,14 @@ pub trait LiveCellStorage: Send + Sync {
     }
     fn consumed_cells_stats(&self) -> (usize, usize) {
         (0, 0)
+    }
+
+    fn block_headers_count(&self) -> usize {
+        0
+    }
+
+    fn is_bulk_sync_cell_cache_enabled(&self) -> bool {
+        false
     }
 }
 

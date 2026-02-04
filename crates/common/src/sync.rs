@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 pub const SYNC_STATUS_REDIS_KEY: &str = "sync:status";
 pub const SYNC_PROGRESS_REDIS_KEY: &str = "sync:progress";
+pub const MEMORY_STATS_REDIS_KEY: &str = "memory:stats";
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -164,6 +165,48 @@ pub fn format_duration_smart(total_secs: f64) -> String {
     }
 }
 
+/// Memory statistics for key indexer components.
+/// Published to Redis for monitoring by TUI and other tools.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryStatsData {
+    /// Number of live (unspent) cells in RocksDB
+    pub live_cells_count: u64,
+    /// Number of consumed cells retained in cache (for reorg support)
+    pub consumed_cells_count: u64,
+    /// Bytes used by consumed cells cache
+    pub consumed_cells_bytes: u64,
+
+    /// RocksDB memtable (write buffer) memory usage
+    pub rocksdb_memtable_bytes: u64,
+    /// RocksDB block cache usage
+    pub rocksdb_block_cache_bytes: u64,
+    /// RocksDB table readers memory estimate
+    pub rocksdb_table_readers_bytes: u64,
+    /// Total RocksDB memory usage
+    pub rocksdb_total_bytes: u64,
+
+    /// Number of block headers cached
+    pub block_headers_count: u64,
+
+    /// Whether bulk sync cell cache is enabled (retains all consumed cells)
+    pub bulk_sync_cell_cache_enabled: bool,
+    /// Whether currently in bulk sync mode (>1000 blocks behind)
+    pub bulk_sync_mode: bool,
+
+    /// Unix timestamp when this data was collected
+    pub updated_at: i64,
+}
+
+impl MemoryStatsData {
+    pub fn new() -> Self {
+        Self {
+            updated_at: chrono::Utc::now().timestamp(),
+            ..Default::default()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,5 +260,29 @@ mod tests {
         assert_eq!(format_duration_smart(90.0), "1m 30s");
         assert_eq!(format_duration_smart(3700.0), "1h 1m");
         assert_eq!(format_duration_smart(90000.0), "1d 1h");
+    }
+
+    #[test]
+    fn test_memory_stats_serialization() {
+        let stats = MemoryStatsData {
+            live_cells_count: 45_000_000,
+            consumed_cells_count: 12_000_000,
+            consumed_cells_bytes: 14_000_000_000,
+            rocksdb_memtable_bytes: 1_000_000_000,
+            rocksdb_block_cache_bytes: 512_000_000,
+            rocksdb_table_readers_bytes: 100_000_000,
+            rocksdb_total_bytes: 1_612_000_000,
+            block_headers_count: 6_000_000,
+            bulk_sync_cell_cache_enabled: true,
+            bulk_sync_mode: true,
+            updated_at: 1700000000,
+        };
+
+        let json = serde_json::to_string(&stats).unwrap();
+        let parsed: MemoryStatsData = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.live_cells_count, stats.live_cells_count);
+        assert_eq!(parsed.rocksdb_total_bytes, stats.rocksdb_total_bytes);
+        assert_eq!(parsed.bulk_sync_mode, stats.bulk_sync_mode);
     }
 }

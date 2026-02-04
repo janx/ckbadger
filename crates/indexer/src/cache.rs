@@ -1,8 +1,8 @@
-use ckbadger_common::{CachedProposal, SyncProgressData, SyncStatusData};
+use ckbadger_common::{CachedProposal, MemoryStatsData, SyncProgressData, SyncStatusData};
 #[cfg(feature = "redis-cache")]
 use ckbadger_common::{
-    PENDING_PROPOSALS_REDIS_KEY, PROPOSAL_CACHE_TTL_SECS, SYNC_PROGRESS_REDIS_KEY,
-    SYNC_STATUS_REDIS_KEY,
+    MEMORY_STATS_REDIS_KEY, PENDING_PROPOSALS_REDIS_KEY, PROPOSAL_CACHE_TTL_SECS,
+    SYNC_PROGRESS_REDIS_KEY, SYNC_STATUS_REDIS_KEY,
 };
 #[cfg(feature = "redis-cache")]
 use redis::AsyncCommands;
@@ -366,6 +366,33 @@ impl CacheInvalidator {
         {
             let _ = self;
             Vec::new()
+        }
+    }
+
+    pub async fn publish_memory_stats(&self, data: &MemoryStatsData) {
+        #[cfg(feature = "redis-cache")]
+        {
+            let Some(ref conn) = self.conn else {
+                return;
+            };
+
+            let mut conn = conn.clone();
+            match serde_json::to_string(data) {
+                Ok(json) => {
+                    let result: Result<(), _> = conn.set_ex(MEMORY_STATS_REDIS_KEY, json, 30).await;
+                    if let Err(e) = result {
+                        warn!("Failed to publish memory stats: {}", e);
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to serialize memory stats: {}", e);
+                }
+            }
+        }
+
+        #[cfg(not(feature = "redis-cache"))]
+        {
+            let _ = (self, data);
         }
     }
 }

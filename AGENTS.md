@@ -132,6 +132,7 @@ The indexer publishes sync data to Redis for API/WebSocket consumption:
 | --------------- | --- | ------------------------------- |
 | `sync:status`   | 60s | JSON: `SyncStatusData` struct   |
 | `sync:progress` | 30s | JSON: `SyncProgressData` struct |
+| `memory:stats`  | 30s | JSON: `MemoryStatsData` struct  |
 
 **`sync:status`** - Core sync state (`crates/common/src/sync.rs`):
 
@@ -166,13 +167,33 @@ pub struct SyncProgressData {
 }
 ```
 
+**`memory:stats`** - RocksDB and cell store memory usage:
+
+```rust
+pub struct MemoryStatsData {
+    pub live_cells_count: u64,           // Live cells in RocksDB
+    pub consumed_cells_count: u64,       // Consumed cells cache count
+    pub consumed_cells_bytes: u64,       // Consumed cells cache size
+    pub rocksdb_memtable_bytes: u64,     // RocksDB memtable usage
+    pub rocksdb_block_cache_bytes: u64,  // RocksDB block cache usage
+    pub rocksdb_table_readers_bytes: u64,// RocksDB table readers
+    pub rocksdb_total_bytes: u64,        // Total RocksDB memory
+    pub block_headers_count: u64,        // Cached block headers
+    pub bulk_sync_cell_cache_enabled: bool, // Bulk sync cache flag
+    pub bulk_sync_mode: bool,            // Currently in bulk sync
+    pub updated_at: i64,                 // Unix timestamp
+}
+```
+
 **Data Flow**:
 
 1. Indexer updates `sync:status` after each batch write
 2. Indexer updates `sync:progress` every 10 seconds with ETA
-3. API reads `sync:status` for totals (blocks, transactions, cells)
-4. API reads `sync:progress` for real-time progress display
-5. WebSocket broadcaster uses both for `new_block` messages
+3. Indexer updates `memory:stats` every 10 seconds with RocksDB memory usage
+4. API reads `sync:status` for totals (blocks, transactions, cells)
+5. API reads `sync:progress` for real-time progress display
+6. Task TUI reads `memory:stats` for Memory Usage panel
+7. WebSocket broadcaster uses both for `new_block` messages
 
 **Fallback** (when Redis unavailable):
 

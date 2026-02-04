@@ -2,8 +2,8 @@ use anyhow::Result;
 use chrono::Local;
 use ckbadger_common::{
     CyclesBackfillConfig, IndexRebuildConfig, LabelImportConfig, LiveCellsPopulateConfig,
-    SecondaryIssuanceBackfillConfig, SporeRebuildConfig, StatisticsRebuildConfig, Task,
-    TaskBuilder,
+    MemoryStatsData, SecondaryIssuanceBackfillConfig, SporeRebuildConfig, StatisticsRebuildConfig,
+    Task, TaskBuilder,
 };
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -36,6 +36,7 @@ pub struct App {
     db: TaskDb,
     tasks: Vec<Task>,
     sync_status: Option<SyncStatusRow>,
+    memory_stats: Option<MemoryStatsData>,
     table_state: TableState,
     last_refresh: Instant,
     last_sample: Instant,
@@ -53,6 +54,7 @@ impl App {
             db,
             tasks: Vec::new(),
             sync_status: None,
+            memory_stats: None,
             table_state: TableState::default(),
             last_refresh: Instant::now(),
             last_sample: Instant::now(),
@@ -67,6 +69,7 @@ impl App {
     pub async fn refresh(&mut self) -> Result<()> {
         self.tasks = self.db.list_tasks(100).await?;
         self.sync_status = self.db.get_sync_status().await.ok();
+        self.memory_stats = self.db.get_memory_stats().await;
         self.last_refresh = Instant::now();
 
         if self.last_sample.elapsed().as_secs() >= 1 {
@@ -250,6 +253,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .constraints([
             Constraint::Length(3),
             Constraint::Length(7),
+            Constraint::Length(5),
             Constraint::Length(8),
             Constraint::Min(10),
             Constraint::Length(8),
@@ -259,10 +263,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     draw_header(f, app, chunks[0]);
     draw_sync_status(f, app, chunks[1]);
-    draw_rate_chart(f, app, chunks[2]);
-    draw_task_table(f, app, chunks[3]);
-    draw_task_detail(f, app, chunks[4]);
-    draw_footer(f, app, chunks[5]);
+    draw_memory_stats(f, app, chunks[2]);
+    draw_rate_chart(f, app, chunks[3]);
+    draw_task_table(f, app, chunks[4]);
+    draw_task_detail(f, app, chunks[5]);
+    draw_footer(f, app, chunks[6]);
 
     if let Some(dialog) = &app.dialog {
         draw_dialog(f, app, dialog);
@@ -437,6 +442,105 @@ fn draw_sync_status(f: &mut Frame, app: &App, area: Rect) {
         .label(format!("{:.2}%", sync.progress))
         .use_unicode(true);
     f.render_widget(gauge, rows[2]);
+}
+
+fn draw_memory_stats(f: &mut Frame, app: &App, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(COLOR_BORDER))
+        .title(Span::styled(
+            "Memory Usage",
+            Style::default().fg(Color::White),
+        ));
+
+    let Some(mem) = &app.memory_stats else {
+        let msg = Paragraph::new("No memory data available").block(block);
+        f.render_widget(msg, area);
+        return;
+    };
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(inner);
+
+    let left_lines = vec![
+        Line::from(vec![
+            Span::styled("RocksDB: ", Style::default().fg(Color::Gray)),
+            Span::styled(
+                format_bytes(mem.rocksdb_total_bytes),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("  Memtable: ", Style::default().fg(Color::Gray)),
+            Span::raw(format_bytes(mem.rocksdb_memtable_bytes)),
+        ]),
+        Line::from(vec![
+            Span::styled("  Block Cache: ", Style::default().fg(Color::Gray)),
+            Span::raw(format_bytes(mem.rocksdb_block_cache_bytes)),
+        ]),
+    ];
+    f.render_widget(Paragraph::new(left_lines), cols[0]);
+
+    let bulk_indicator = if mem.bulk_sync_mode {
+        Span::styled(" [BULK]", Style::default().fg(Color::Yellow))
+    } else {
+        Span::raw("")
+    };
+
+    let right_lines = vec![
+        Line::from(vec![
+            Span::styled("Live Cells: ", Style::default().fg(Color::Gray)),
+            Span::styled(
+                format_count(mem.live_cells_count),
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            bulk_indicator,
+        ]),
+        Line::from(vec![
+            Span::styled("Consumed Cache: ", Style::default().fg(Color::Gray)),
+            Span::raw(format!(
+                "{} ({})",
+                format_count(mem.consumed_cells_count),
+                format_bytes(mem.consumed_cells_bytes)
+            )),
+        ]),
+        Line::from(vec![
+            Span::styled("Headers: ", Style::default().fg(Color::Gray)),
+            Span::raw(format_count(mem.block_headers_count)),
+        ]),
+    ];
+    f.render_widget(Paragraph::new(right_lines), cols[1]);
+}
+
+fn format_bytes(bytes: u64) -> String {
+    if bytes >= 1024 * 1024 * 1024 {
+        format!("{:.2} GB", bytes as f64 / 1024.0 / 1024.0 / 1024.0)
+    } else if bytes >= 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / 1024.0 / 1024.0)
+    } else if bytes >= 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{} B", bytes)
+    }
+}
+
+fn format_count(count: u64) -> String {
+    if count >= 1_000_000 {
+        format!("{:.2}M", count as f64 / 1_000_000.0)
+    } else if count >= 1_000 {
+        format!("{:.1}K", count as f64 / 1_000.0)
+    } else {
+        format!("{}", count)
+    }
 }
 
 fn draw_rate_chart(f: &mut Frame, app: &mut App, area: Rect) {
@@ -774,4 +878,69 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_bytes_gigabytes() {
+        assert_eq!(format_bytes(1_073_741_824), "1.00 GB"); // 1 GB
+        assert_eq!(format_bytes(1_610_612_736), "1.50 GB"); // 1.5 GB
+        assert_eq!(format_bytes(10_737_418_240), "10.00 GB"); // 10 GB
+    }
+
+    #[test]
+    fn test_format_bytes_megabytes() {
+        assert_eq!(format_bytes(1_048_576), "1.0 MB"); // 1 MB
+        assert_eq!(format_bytes(524_288_000), "500.0 MB"); // 500 MB
+        assert_eq!(format_bytes(104_857_600), "100.0 MB"); // 100 MB
+    }
+
+    #[test]
+    fn test_format_bytes_kilobytes() {
+        assert_eq!(format_bytes(1_024), "1.0 KB"); // 1 KB
+        assert_eq!(format_bytes(512_000), "500.0 KB"); // ~500 KB
+        assert_eq!(format_bytes(102_400), "100.0 KB"); // 100 KB
+    }
+
+    #[test]
+    fn test_format_bytes_bytes() {
+        assert_eq!(format_bytes(0), "0 B");
+        assert_eq!(format_bytes(1), "1 B");
+        assert_eq!(format_bytes(512), "512 B");
+        assert_eq!(format_bytes(1023), "1023 B");
+    }
+
+    #[test]
+    fn test_format_count_millions() {
+        assert_eq!(format_count(1_000_000), "1.00M");
+        assert_eq!(format_count(45_000_000), "45.00M");
+        assert_eq!(format_count(1_234_567), "1.23M");
+    }
+
+    #[test]
+    fn test_format_count_thousands() {
+        assert_eq!(format_count(1_000), "1.0K");
+        assert_eq!(format_count(45_500), "45.5K");
+        assert_eq!(format_count(999_999), "1000.0K"); // Just under 1M
+    }
+
+    #[test]
+    fn test_format_count_small() {
+        assert_eq!(format_count(0), "0");
+        assert_eq!(format_count(1), "1");
+        assert_eq!(format_count(999), "999");
+    }
+
+    #[test]
+    fn test_format_rate() {
+        assert_eq!(format_rate(0.0), "0");
+        assert_eq!(format_rate(100.0), "100");
+        assert_eq!(format_rate(999.0), "999");
+        assert_eq!(format_rate(1000.0), "1.0K");
+        assert_eq!(format_rate(3465.0), "3.5K");
+        assert_eq!(format_rate(10000.0), "10.0K");
+    }
 }

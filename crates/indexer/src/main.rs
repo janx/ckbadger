@@ -261,6 +261,12 @@ async fn main() -> Result<()> {
                 .publish_sync_progress(&sync_data)
                 .await;
 
+            let memory_stats = indexer_for_progress.get_memory_stats();
+            indexer_for_progress
+                .cache_invalidator()
+                .publish_memory_stats(&memory_stats)
+                .await;
+
             if indexer_for_progress.is_bulk_sync_active() {
                 // ANSI color codes for speed: green (>=1000), yellow (>=100), red (<100)
                 let (color_start, color_end) = if ema_rate >= 1000.0 {

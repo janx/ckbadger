@@ -348,22 +348,35 @@ impl LiveCellStorage for RocksDbLiveCellStore {
     fn memory_stats(&self) -> MemoryStats {
         let cells_count = self.len();
 
-        let memory_bytes = self
+        let memtable_bytes = self
             .db
             .property_int_value("rocksdb.cur-size-all-mem-tables")
             .ok()
             .flatten()
-            .unwrap_or(0) as usize
-            + self
-                .db
-                .property_int_value("rocksdb.block-cache-usage")
-                .ok()
-                .flatten()
-                .unwrap_or(0) as usize;
+            .unwrap_or(0) as usize;
+
+        let block_cache_bytes = self
+            .db
+            .property_int_value("rocksdb.block-cache-usage")
+            .ok()
+            .flatten()
+            .unwrap_or(0) as usize;
+
+        let table_readers_bytes = self
+            .db
+            .property_int_value("rocksdb.estimate-table-readers-mem")
+            .ok()
+            .flatten()
+            .unwrap_or(0) as usize;
+
+        let memory_bytes = memtable_bytes + block_cache_bytes + table_readers_bytes;
 
         MemoryStats {
             cells_count,
             memory_bytes,
+            memtable_bytes,
+            block_cache_bytes,
+            table_readers_bytes,
             fragmentation_ratio: 0.0,
         }
     }
@@ -560,6 +573,16 @@ impl LiveCellStorage for RocksDbLiveCellStore {
         }
 
         (count, bytes)
+    }
+
+    fn block_headers_count(&self) -> usize {
+        let cf = self.cf_block_headers();
+        let iter = self.db.iterator_cf(cf, rocksdb::IteratorMode::Start);
+        iter.flatten().count()
+    }
+
+    fn is_bulk_sync_cell_cache_enabled(&self) -> bool {
+        self.bulk_sync_cell_cache_enabled
     }
 }
 

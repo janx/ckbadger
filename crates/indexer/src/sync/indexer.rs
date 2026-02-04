@@ -449,6 +449,32 @@ impl Indexer {
         self.progress.blocks_remaining() > self.config.bulk_sync_threshold
     }
 
+    /// Get memory statistics for the live cell store.
+    /// Returns MemoryStatsData suitable for publishing to Redis.
+    pub fn get_memory_stats(&self) -> ckbadger_common::MemoryStatsData {
+        use crate::db::LiveCellStorage;
+
+        let stats = self.rocksdb_store.memory_stats();
+        let (consumed_count, consumed_bytes) = self.rocksdb_store.consumed_cells_stats();
+        let block_headers_count = self.rocksdb_store.block_headers_count();
+        let bulk_sync_cell_cache_enabled = self.rocksdb_store.is_bulk_sync_cell_cache_enabled();
+        let bulk_sync_mode = self.rocksdb_store.is_bulk_sync_mode();
+
+        ckbadger_common::MemoryStatsData {
+            live_cells_count: stats.cells_count as u64,
+            consumed_cells_count: consumed_count as u64,
+            consumed_cells_bytes: consumed_bytes as u64,
+            rocksdb_memtable_bytes: stats.memtable_bytes as u64,
+            rocksdb_block_cache_bytes: stats.block_cache_bytes as u64,
+            rocksdb_table_readers_bytes: stats.table_readers_bytes as u64,
+            rocksdb_total_bytes: stats.memory_bytes as u64,
+            block_headers_count: block_headers_count as u64,
+            bulk_sync_cell_cache_enabled,
+            bulk_sync_mode,
+            updated_at: chrono::Utc::now().timestamp(),
+        }
+    }
+
     fn is_secondary_issuance_bulk_active(&self) -> bool {
         self.progress.blocks_remaining() > SECONDARY_ISSUANCE_BACKFILL_THRESHOLD
     }
