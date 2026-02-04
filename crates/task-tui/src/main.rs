@@ -6,10 +6,12 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
+use ratatui_image::picker::Picker;
 use sqlx::postgres::PgPoolOptions;
 use std::io;
 use std::time::Duration;
 
+mod chart;
 mod db;
 mod ui;
 
@@ -43,13 +45,15 @@ async fn main() -> Result<()> {
 
     let db = TaskDb::new(pool, args.redis_url.as_deref()).await;
 
+    let picker = Picker::from_query_stdio().ok();
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new(db);
+    let mut app = App::new(db, picker);
     let res = run_app(
         &mut terminal,
         &mut app,
