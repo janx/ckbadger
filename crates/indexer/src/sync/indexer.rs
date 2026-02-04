@@ -1341,6 +1341,10 @@ impl Indexer {
             if let Err(e) = self.maybe_submit_spore_rebuild_task().await {
                 warn!("Failed to submit spore rebuild task: {}", e);
             }
+
+            if let Err(e) = self.maybe_submit_activities_rebuild_task().await {
+                warn!("Failed to submit activities rebuild task: {}", e);
+            }
         }
 
         if was_secondary_bulk && !currently_secondary_bulk {
@@ -1600,6 +1604,53 @@ impl Indexer {
         .await?;
 
         info!("Submitted cells status rebuild task: {}", task_id.0);
+
+        Ok(())
+    }
+
+    async fn maybe_submit_activities_rebuild_task(&self) -> Result<()> {
+        use ckbadger_common::{ActivitiesRebuildConfig, TaskBuilder};
+
+        let activities_deferred: bool = sqlx::query_scalar(
+            "SELECT COALESCE(activities_deferred, false) FROM sync_status WHERE id = 1",
+        )
+        .fetch_one(self.writer.pool())
+        .await
+        .unwrap_or(false);
+
+        if !activities_deferred {
+            debug!("Activities are not deferred, skipping rebuild task submission");
+            return Ok(());
+        }
+
+        let existing: Option<(i64,)> = sqlx::query_as(
+            "SELECT COUNT(*) FROM tasks WHERE task_type = 'activities_rebuild' AND status IN ('pending', 'running')",
+        )
+        .fetch_optional(self.writer.pool())
+        .await?;
+
+        if existing.map(|r| r.0).unwrap_or(0) > 0 {
+            info!("Activities rebuild task already pending/running, skipping submission");
+            return Ok(());
+        }
+
+        let builder = TaskBuilder::activities_rebuild(ActivitiesRebuildConfig::default());
+
+        let task_id: (Uuid,) = sqlx::query_as(
+            r#"
+            INSERT INTO tasks (task_type, config, priority, max_retries)
+            VALUES ($1, $2, $3, $4)
+            RETURNING id
+            "#,
+        )
+        .bind(builder.task_type().to_string())
+        .bind(builder.config())
+        .bind(builder.get_priority())
+        .bind(builder.get_max_retries())
+        .fetch_one(self.writer.pool())
+        .await?;
+
+        info!("Submitted activities rebuild task: {}", task_id.0);
 
         Ok(())
     }
@@ -2381,8 +2432,13 @@ impl Indexer {
     async fn write_activities_batch(
         &self,
         activities_by_block: &[(i64, DateTime<Utc>, Vec<ParsedActivity>)],
+        bulk_sync_mode: bool,
     ) -> Result<()> {
         if activities_by_block.is_empty() {
+            return Ok(());
+        }
+
+        if self.config.defer_activities && bulk_sync_mode {
             return Ok(());
         }
 
@@ -3545,7 +3601,8 @@ impl Indexer {
                 bulk_sync_mode,
             )
             .await?;
-        self.write_activities_batch(&activities_by_block).await?;
+        self.write_activities_batch(&activities_by_block, bulk_sync_mode)
+            .await?;
 
         self.flush_batch_stats(&batch_stats).await?;
 
@@ -4717,7 +4774,8 @@ impl Indexer {
                 bulk_sync_mode,
             )
             .await?;
-        self.write_activities_batch(&activities_by_block).await?;
+        self.write_activities_batch(&activities_by_block, bulk_sync_mode)
+            .await?;
 
         // Write blocks LAST - this is the "commit marker" for crash recovery.
         // All other data must be written successfully before blocks exist.

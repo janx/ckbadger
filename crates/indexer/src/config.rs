@@ -53,6 +53,10 @@ pub struct Config {
     /// Requires ~15GB extra memory for full sync. Disable on low-memory machines (<32GB RAM).
     #[serde(default = "default_bulk_sync_cell_cache")]
     pub bulk_sync_cell_cache: bool,
+    /// Skip activities table writes during bulk sync for faster initial sync.
+    /// Activities will be rebuilt via task-runner after sync completes.
+    #[serde(default)]
+    pub defer_activities: bool,
 }
 
 fn default_batch_size() -> usize {

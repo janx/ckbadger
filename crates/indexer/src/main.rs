@@ -108,6 +108,20 @@ struct Args {
         help = "Disable bulk sync cell cache (saves ~15GB RAM, but slower sync)"
     )]
     no_bulk_sync_cell_cache: bool,
+
+    #[arg(
+        long,
+        default_value = "false",
+        help = "Skip activities table writes during bulk sync (auto-rebuilds when caught up)"
+    )]
+    defer_activities: bool,
+
+    #[arg(
+        long,
+        default_value = "false",
+        help = "Disable auto defer-activities optimization for fresh database sync"
+    )]
+    no_auto_defer_activities: bool,
 }
 
 #[tokio::main]
@@ -150,6 +164,7 @@ async fn main() -> Result<()> {
         live_cell_flush_interval: args.live_cell_flush_interval,
         live_cell_db_path: args.live_cell_db_path,
         bulk_sync_cell_cache: !args.no_bulk_sync_cell_cache,
+        defer_activities: args.defer_activities,
     };
 
     info!("Connecting to database: {}", config.database_url);
@@ -203,6 +218,30 @@ async fn main() -> Result<()> {
         );
     } else if indexes_currently_deferred {
         info!("Indexes/constraints are deferred (from previous run), will auto-rebuild when caught up");
+    }
+
+    // Check and handle activities deferred state
+    let activities_currently_deferred: bool = sqlx::query_scalar(
+        "SELECT COALESCE(activities_deferred, false) FROM sync_status WHERE id = 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap_or(false);
+
+    let should_auto_defer_activities =
+        is_fresh_sync && !activities_currently_deferred && !args.no_auto_defer_activities;
+
+    if should_auto_defer_activities || (config.defer_activities && !activities_currently_deferred) {
+        info!(
+            "Enabling deferred activities for faster bulk sync (will auto-rebuild when caught up)"
+        );
+        sqlx::query("UPDATE sync_status SET activities_deferred = TRUE, activities_deferred_at = NOW() WHERE id = 1")
+            .execute(&pool)
+            .await?;
+    } else if is_fresh_sync && args.no_auto_defer_activities {
+        info!("Fresh database detected, but auto-defer-activities disabled via --no-auto-defer-activities");
+    } else if activities_currently_deferred {
+        info!("Activities are deferred (from previous run), will auto-rebuild when caught up");
     }
 
     // Check if statistics tables are empty while blocks exist (needs rebuild after DB restore)

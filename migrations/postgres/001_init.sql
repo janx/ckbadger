@@ -31,6 +31,10 @@ CREATE TABLE sync_status (
     indexes_deferred BOOLEAN NOT NULL DEFAULT FALSE,
     indexes_dropped_at TIMESTAMPTZ,
 
+    -- Deferred activities optimization (skip activities writes during bulk sync)
+    activities_deferred BOOLEAN NOT NULL DEFAULT FALSE,
+    activities_deferred_at TIMESTAMPTZ,
+
     stats_rebuild_in_progress BOOLEAN NOT NULL DEFAULT FALSE,
 
     CONSTRAINT single_row CHECK (id = 1)

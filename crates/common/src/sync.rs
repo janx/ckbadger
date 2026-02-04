@@ -31,6 +31,12 @@ pub struct SyncStatusData {
     pub indexes_rebuild_started_at: Option<i64>,
     pub indexes_rebuild_completed_at: Option<i64>,
     pub indexes_rebuild_progress: Option<IndexRebuildProgressData>,
+
+    #[serde(default)]
+    pub activities_deferred: bool,
+    pub activities_deferred_at: Option<i64>,
+    pub activities_rebuild_started_at: Option<i64>,
+    pub activities_rebuild_completed_at: Option<i64>,
 }
 
 impl SyncStatusData {
@@ -111,6 +117,22 @@ impl SyncStatusData {
     pub fn complete_index_rebuild(&mut self) {
         self.indexes_deferred = false;
         self.indexes_rebuild_completed_at = Some(chrono::Utc::now().timestamp());
+    }
+
+    pub fn set_activities_deferred(&mut self, deferred: bool) {
+        self.activities_deferred = deferred;
+        if deferred {
+            self.activities_deferred_at = Some(chrono::Utc::now().timestamp());
+        }
+    }
+
+    pub fn start_activities_rebuild(&mut self) {
+        self.activities_rebuild_started_at = Some(chrono::Utc::now().timestamp());
+    }
+
+    pub fn complete_activities_rebuild(&mut self) {
+        self.activities_deferred = false;
+        self.activities_rebuild_completed_at = Some(chrono::Utc::now().timestamp());
     }
 }
 
@@ -245,6 +267,10 @@ mod tests {
             indexes_rebuild_started_at: None,
             indexes_rebuild_completed_at: None,
             indexes_rebuild_progress: None,
+            activities_deferred: false,
+            activities_deferred_at: None,
+            activities_rebuild_started_at: None,
+            activities_rebuild_completed_at: None,
         };
 
         let json = serde_json::to_string(&status).unwrap();

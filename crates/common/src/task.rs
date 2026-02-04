@@ -63,6 +63,7 @@ pub enum TaskType {
     ConsumedAtBackfill,
     SecondaryIssuanceBackfill,
     CellsStatusRebuild,
+    ActivitiesRebuild,
 }
 
 impl std::fmt::Display for TaskType {
@@ -77,6 +78,7 @@ impl std::fmt::Display for TaskType {
             TaskType::ConsumedAtBackfill => write!(f, "consumed_at_backfill"),
             TaskType::SecondaryIssuanceBackfill => write!(f, "secondary_issuance_backfill"),
             TaskType::CellsStatusRebuild => write!(f, "cells_status_rebuild"),
+            TaskType::ActivitiesRebuild => write!(f, "activities_rebuild"),
         }
     }
 }
@@ -95,6 +97,7 @@ impl std::str::FromStr for TaskType {
             "consumed_at_backfill" => Ok(TaskType::ConsumedAtBackfill),
             "secondary_issuance_backfill" => Ok(TaskType::SecondaryIssuanceBackfill),
             "cells_status_rebuild" => Ok(TaskType::CellsStatusRebuild),
+            "activities_rebuild" => Ok(TaskType::ActivitiesRebuild),
             _ => Err(anyhow::anyhow!("Invalid task type: {}", s)),
         }
     }
@@ -127,7 +130,8 @@ impl TaskType {
             | TaskType::ConsumedAtBackfill
             | TaskType::SporeRebuild
             | TaskType::StatisticsRebuild
-            | TaskType::SecondaryIssuanceBackfill => true,
+            | TaskType::SecondaryIssuanceBackfill
+            | TaskType::ActivitiesRebuild => true,
         }
     }
 }
@@ -336,6 +340,25 @@ impl Default for CellsStatusRebuildConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivitiesRebuildConfig {
+    #[serde(default = "default_activities_batch_size")]
+    pub batch_size: i64,
+}
+
+fn default_activities_batch_size() -> i64 {
+    10_000
+}
+
+impl Default for ActivitiesRebuildConfig {
+    fn default() -> Self {
+        Self {
+            batch_size: default_activities_batch_size(),
+        }
+    }
+}
+
 /// Unified task configuration enum
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -349,6 +372,7 @@ pub enum TaskConfig {
     ConsumedAtBackfill(ConsumedAtBackfillConfig),
     SecondaryIssuanceBackfill(SecondaryIssuanceBackfillConfig),
     CellsStatusRebuild(CellsStatusRebuildConfig),
+    ActivitiesRebuild(ActivitiesRebuildConfig),
 }
 
 impl TaskConfig {
@@ -363,6 +387,7 @@ impl TaskConfig {
             TaskConfig::ConsumedAtBackfill(_) => TaskType::ConsumedAtBackfill,
             TaskConfig::SecondaryIssuanceBackfill(_) => TaskType::SecondaryIssuanceBackfill,
             TaskConfig::CellsStatusRebuild(_) => TaskType::CellsStatusRebuild,
+            TaskConfig::ActivitiesRebuild(_) => TaskType::ActivitiesRebuild,
         }
     }
 }
@@ -477,6 +502,13 @@ pub struct CellsStatusRebuildResult {
     pub blocks_processed: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivitiesRebuildResult {
+    pub activities_created: i64,
+    pub blocks_processed: i64,
+}
+
 /// Unified task result enum
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -490,6 +522,7 @@ pub enum TaskResult {
     ConsumedAtBackfill(ConsumedAtBackfillResult),
     SecondaryIssuanceBackfill(SecondaryIssuanceBackfillResult),
     CellsStatusRebuild(CellsStatusRebuildResult),
+    ActivitiesRebuild(ActivitiesRebuildResult),
 }
 
 // ============================================
@@ -718,6 +751,16 @@ impl TaskBuilder {
             config: serde_json::to_value(TaskConfig::CellsStatusRebuild(config))
                 .expect("CellsStatusRebuildConfig should be serializable"),
             priority: 9, // High priority - needed before statistics work correctly
+            max_retries: 2,
+        }
+    }
+
+    pub fn activities_rebuild(config: ActivitiesRebuildConfig) -> Self {
+        Self {
+            task_type: TaskType::ActivitiesRebuild,
+            config: serde_json::to_value(TaskConfig::ActivitiesRebuild(config))
+                .expect("ActivitiesRebuildConfig should be serializable"),
+            priority: 7, // After bulk sync completes, before statistics
             max_retries: 2,
         }
     }

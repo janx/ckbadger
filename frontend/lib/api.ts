@@ -707,8 +707,36 @@ interface IndexRebuildStatus {
   startedAt: string | null;
 }
 
+interface StatisticsRebuildStatus {
+  status: string;
+  total: number;
+  completed: number;
+  currentTable: string | null;
+  progress: number;
+  startedAt: string | null;
+}
+
+interface LiveCellsPopulateStatus {
+  status: string;
+  total: number;
+  populated: number;
+  progress: number;
+  startedAt: string | null;
+}
+
+interface ActivitiesRebuildStatus {
+  status: string;
+  total: number;
+  processed: number;
+  progress: number;
+  startedAt: string | null;
+}
+
 interface ActiveTasksResponse {
   indexRebuild: IndexRebuildStatus | null;
+  statisticsRebuild: StatisticsRebuildStatus | null;
+  liveCellsPopulate: LiveCellsPopulateStatus | null;
+  activitiesRebuild: ActivitiesRebuildStatus | null;
 }
 
 interface MempoolTransaction {

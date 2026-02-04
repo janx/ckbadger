@@ -281,6 +281,7 @@ When bulk sync completes (catches up to <=1000 blocks behind tip), the indexer a
 | `cells_status_rebuild`        | 9        | Rebuild cells.status from transaction_inputs         |
 | `live_cells_populate`         | 8        | Populate live_cells table from RocksDB (indexer)     |
 | `secondary_issuance_backfill` | 7        | Backfill ALL blocks' secondary issuance data (exact) |
+| `activities_rebuild`          | 7        | Rebuild activities table from blocks/transactions    |
 | `spore_rebuild`               | 6        | Rebuild spore_cells status from cells table          |
 | `statistics_rebuild`          | 5        | Rebuild all 7 aggregate statistics tables            |
 | `consumed_at_backfill`        | 7        | Backfill consumed_at fields on cells                 |
@@ -299,6 +300,7 @@ Tasks that require complete blockchain data are automatically deferred during bu
 | `cells_status_rebuild`        | ❌ No          | Requires all transaction_inputs written    |
 | `live_cells_populate`         | ❌ No          | Requires RocksDB fully populated           |
 | `consumed_at_backfill`        | ❌ No          | Requires complete transaction history      |
+| `activities_rebuild`          | ❌ No          | Requires all transactions/cells written    |
 | `spore_rebuild`               | ❌ No          | Requires accurate cell status              |
 | `statistics_rebuild`          | ❌ No          | Requires complete blockchain data          |
 | `secondary_issuance_backfill` | ❌ No          | Requires all blocks to exist               |
@@ -366,6 +368,60 @@ The indexer refreshes `tokens.transfers_24h` every 10 minutes via `refresh_token
 4. Reset inactive tokens to 0
 
 This reduces query time from ~15s to <1s for 700+ tokens.
+
+## Deferred Activities Write Optimization
+
+For fresh database syncs, the indexer can skip writing to the `activities` table to achieve ~10-20% faster bulk sync speeds. Activities are rebuilt via task-runner after sync completes.
+
+| Parameter                    | Default | Description                                  |
+| ---------------------------- | ------- | -------------------------------------------- |
+| `--defer-activities`         | `false` | Force enable deferred activities (non-fresh) |
+| `--no-auto-defer-activities` | `false` | Disable auto-optimization for fresh DB       |
+
+**What Gets Deferred:**
+
+- All `activities` table INSERT operations during bulk sync
+- Activity parsing still occurs (for token/DAO processing), just writes are skipped
+
+**Behavior:**
+
+| Scenario                         | Auto-defer activities | Auto-submit rebuild task |
+| -------------------------------- | --------------------- | ------------------------ |
+| Fresh DB (tip=0)                 | Yes                   | Yes                      |
+| Fresh DB + `--no-auto-defer`     | No                    | No                       |
+| Resume sync, activities exist    | No                    | No                       |
+| Resume sync, activities deferred | No                    | Yes                      |
+| Any DB + `--defer-activities`    | Yes                   | Yes                      |
+
+**Activities Rebuild Task:**
+
+When bulk sync completes, the indexer automatically submits an `activities_rebuild` task (priority 7). The task-runner:
+
+1. Truncates the `activities` table
+2. Rebuilds activities in batches (10,000 blocks per batch)
+3. Currently rebuilds `CKB_TRANSFER` and `CELLBASE_REWARD` activity types
+4. Updates `sync_status.activities_deferred = FALSE` on completion
+
+**Limitations:**
+
+The current SQL-based rebuild only handles basic activity types. Token transfers, DAO operations, and Spore activities require the full Rust ActivityParser and are not rebuilt. For complete activity coverage, avoid using `--defer-activities` or be prepared to re-sync if full activity history is needed.
+
+**Progress Monitoring:**
+
+- **REST API**: `GET /api/v1/tasks/active` returns `activitiesRebuild` object with status and progress
+- **Task TUI**: Use `cargo run -p ckbadger-task-tui` to monitor progress
+
+```bash
+# Default: auto-defer activities for fresh DB
+cargo run -p ckbadger-indexer
+
+# Disable auto-optimization
+cargo run -p ckbadger-indexer -- --no-auto-defer-activities
+
+# Check status
+psql -c "SELECT activities_deferred FROM sync_status;"
+psql -c "SELECT id, task_type, status, progress_current, progress_total FROM tasks WHERE task_type = 'activities_rebuild';"
+```
 
 **Progress Monitoring:**
 
