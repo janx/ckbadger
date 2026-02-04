@@ -1,57 +1,81 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import { screen } from '@testing-library/react';
 import { render } from '../utils/test-utils';
-import { ProposalsContainer } from '@/components/chain-wave/proposals-container';
+import { PackedContainer, TxItem } from '@/components/chain-wave/packed-container';
 import { EpochProgress } from '@/components/chain-wave/epoch-progress';
-import type { PendingProposal } from '@/lib/api';
 
-function createProposal(
-  proposalId: string,
-  overrides: Partial<PendingProposal> = {}
-): PendingProposal {
+// Mock ResizeObserver for PackedContainer tests
+beforeAll(() => {
+  global.ResizeObserver = class ResizeObserver {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  };
+});
+
+function createProposalItem(id: string, overrides: Partial<TxItem> = {}): TxItem {
   return {
-    proposalId,
-    fullTxHash: null,
-    proposedAtBlock: 1000,
-    proposedAtIndex: 0,
-    blocksUntilExpiry: 5,
-    fee: null,
-    size: null,
-    cycles: null,
-    feeRate: null,
+    id,
+    size: 500,
+    fee: undefined,
+    feeRate: undefined,
+    category: 'normal',
     ...overrides,
   };
 }
 
-describe('ProposalsContainer', () => {
+describe('PackedContainer (proposals type)', () => {
   it('renders empty state when no proposals', () => {
-    render(<ProposalsContainer proposals={[]} totalCount={0} />);
+    render(
+      <PackedContainer
+        title="Proposed"
+        subtitle="Awaiting commit"
+        type="proposals"
+        items={[]}
+        totalCount={0}
+        emptyText="No proposed txs"
+        globalMaxSize={10000}
+      />
+    );
     expect(screen.getByText('No proposed txs')).toBeInTheDocument();
     expect(screen.getByText('0')).toBeInTheDocument();
   });
 
-  it('renders proposal short IDs', () => {
-    const proposals = [
-      createProposal('0x1234567890abcdef1234'),
-      createProposal('0xfedcba0987654321fedc'),
+  it('renders proposal items as boxes', () => {
+    const items = [
+      createProposalItem('0x1234567890abcdef1234', { size: 1000 }),
+      createProposalItem('0xfedcba0987654321fedc', { size: 2000 }),
     ];
-    render(<ProposalsContainer proposals={proposals} totalCount={2} />);
+    render(
+      <PackedContainer
+        title="Proposed"
+        subtitle="Awaiting commit"
+        type="proposals"
+        items={items}
+        totalCount={2}
+        emptyText="No proposed txs"
+        globalMaxSize={10000}
+      />
+    );
 
-    expect(screen.getByText(/0x123456/)).toBeInTheDocument();
-    expect(screen.getByText(/0xfedcba/)).toBeInTheDocument();
     expect(screen.getByText('2')).toBeInTheDocument();
+    expect(screen.getByText('Proposed')).toBeInTheDocument();
   });
 
   it('displays correct title and subtitle', () => {
-    render(<ProposalsContainer proposals={[]} totalCount={0} />);
+    render(
+      <PackedContainer
+        title="Proposed"
+        subtitle="Awaiting commit"
+        type="proposals"
+        items={[]}
+        totalCount={0}
+        emptyText="No proposed txs"
+        globalMaxSize={10000}
+      />
+    );
     expect(screen.getByText('Proposed')).toBeInTheDocument();
     expect(screen.getByText('Awaiting commit')).toBeInTheDocument();
-  });
-
-  it('displays fee rate when available', () => {
-    const proposals = [createProposal('0xabcdef1234567890abcd', { feeRate: 1.5 })];
-    render(<ProposalsContainer proposals={proposals} totalCount={1} />);
-    expect(screen.getByText('1.5')).toBeInTheDocument();
   });
 });
 

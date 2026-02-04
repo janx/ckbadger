@@ -212,8 +212,10 @@ function TxBox({ item, boxSize, x, y, type, isCommitted }: TxBoxProps) {
             }}
           >
             <div className="mb-1 text-[10px] text-slate-500">{CATEGORY_LABELS[item.category]}</div>
-            <div className="mb-1 font-mono text-slate-300">{truncateHash(item.id)}</div>
             <div className="space-y-0.5 text-slate-400">
+              <div>
+                TX: <span className="font-mono text-white">{truncateHash(item.id)}</span>
+              </div>
               {item.size > 0 && (
                 <div>
                   Size: <span className="text-white">{formatBytes(item.size)}</span>

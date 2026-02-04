@@ -11,7 +11,6 @@ import {
   PendingProposal,
 } from '@/lib/api';
 import { PackedContainer, TxItem, TxCategory } from './packed-container';
-import { ProposalsContainer } from './proposals-container';
 
 interface ChainWaveProps {
   initialBlocks?: Block[];
@@ -56,6 +55,16 @@ function blockTxToItem(tx: Transaction): TxItem {
     fee: feeNum,
     feeRate,
     category: tx.isCellbase ? 'cellbase' : 'normal',
+  };
+}
+
+function proposalToItem(proposal: PendingProposal): TxItem {
+  return {
+    id: proposal.fullTxHash || proposal.proposalId,
+    size: proposal.size ?? 500,
+    fee: proposal.fee ?? undefined,
+    feeRate: proposal.feeRate ?? undefined,
+    category: 'normal' as TxCategory,
   };
 }
 
@@ -104,8 +113,9 @@ export function ChainWave({ initialBlocks }: ChainWaveProps) {
     return mempoolTxs.filter((tx) => tx.status === 'pending').map(mempoolTxToItem);
   }, [mempoolTxs]);
 
-  const pendingProposals: PendingProposal[] = useMemo(() => {
-    return pendingProposalsData?.proposals ?? [];
+  const proposalItems = useMemo(() => {
+    const proposals = pendingProposalsData?.proposals ?? [];
+    return proposals.map(proposalToItem);
   }, [pendingProposalsData]);
 
   const tipBlockItems = useMemo(() => {
@@ -116,11 +126,12 @@ export function ChainWave({ initialBlocks }: ChainWaveProps) {
   const globalMaxSize = useMemo(() => {
     const allSizes = [
       ...pendingItems.map((item) => item.size),
+      ...proposalItems.map((item) => item.size),
       ...tipBlockItems.map((item) => item.size),
     ];
     if (allSizes.length === 0) return 10000;
     return Math.max(...allSizes, 2000);
-  }, [pendingItems, tipBlockItems]);
+  }, [pendingItems, proposalItems, tipBlockItems]);
 
   return (
     <div className="rounded-2xl border border-slate-700/50 bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800 p-4 shadow-xl sm:p-6">
@@ -159,7 +170,15 @@ export function ChainWave({ initialBlocks }: ChainWaveProps) {
 
         <FlowArrow />
 
-        <ProposalsContainer proposals={pendingProposals} totalCount={pendingProposals.length} />
+        <PackedContainer
+          title="Proposed"
+          subtitle="Awaiting commit"
+          type="proposals"
+          items={proposalItems}
+          totalCount={proposalItems.length}
+          emptyText="No proposed txs"
+          globalMaxSize={globalMaxSize}
+        />
 
         <FlowArrow />
 
