@@ -209,7 +209,7 @@ async fn rebuild_activities_batch(pool: &PgPool, start_block: i64, end_block: i6
             amount, asset_id, metadata, timestamp
         )
         SELECT * FROM all_activities
-        RETURNING 1
+        RETURNING 1::BIGINT
         "#,
     )
     .bind(start_block)

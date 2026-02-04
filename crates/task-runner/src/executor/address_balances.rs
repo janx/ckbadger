@@ -132,7 +132,7 @@ async fn rebuild_address_balances(pool: &PgPool) -> Result<i64> {
         LEFT JOIN tx_counts tc ON tc.lock_script_hash = cs.lock_script_hash
         LEFT JOIN first_last_tx ft ON ft.lock_script_hash = cs.lock_script_hash
         LEFT JOIN last_tx lt ON lt.lock_script_hash = cs.lock_script_hash
-        RETURNING 1
+        RETURNING 1::BIGINT
         "#,
     )
     .fetch_all(pool)

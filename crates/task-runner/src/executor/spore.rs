@@ -84,7 +84,7 @@ pub async fn execute(
               AND sc.tx_hash = c.tx_hash
               AND sc.output_index = c.output_index
               AND c.consumed_at_block IS NOT NULL
-            RETURNING 1
+            RETURNING 1::BIGINT
             "#,
         )
         .bind(current_block)
