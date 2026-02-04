@@ -188,13 +188,13 @@ async fn rebuild_activities_batch(pool: &PgPool, start_block: i64, end_block: i6
             UNION ALL
             
             SELECT 
-                encode(sha256(tx_hash || 'CELLBASE_REWARD'::bytea || '\x0000'::bytea), 'hex')::bytea AS activity_id,
+                encode(sha256(tx_hash || 'CELLBASE_REWARD'::bytea || int2send(ROW_NUMBER() OVER (PARTITION BY tx_hash ORDER BY to_lock_hash)::int2)), 'hex')::bytea AS activity_id,
                 'CELLBASE_REWARD' AS activity_type,
                 'cellbase' AS activity_category,
                 block_number,
                 tx_hash,
                 tx_index,
-                0::int2 AS activity_index,
+                (ROW_NUMBER() OVER (PARTITION BY tx_hash ORDER BY to_lock_hash) - 1)::int2 AS activity_index,
                 NULL::bytea AS from_lock_hash,
                 to_lock_hash,
                 amount::numeric(40,0),
