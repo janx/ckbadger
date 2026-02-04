@@ -110,6 +110,52 @@ impl BatchWriter {
             .execute(&self.pool)
             .await?;
 
+        // Clean up derived/parsed tables (must match cleanup_batch_range)
+        sqlx::query("DELETE FROM activities WHERE block_number >= $1")
+            .bind(next_block)
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query("DELETE FROM udt_cells WHERE created_at_block >= $1")
+            .bind(next_block)
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query("DELETE FROM dao_deposits WHERE deposit_block_number >= $1")
+            .bind(next_block)
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query("DELETE FROM spore_cells WHERE created_at_block >= $1")
+            .bind(next_block)
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query("DELETE FROM spore_clusters WHERE created_at_block >= $1")
+            .bind(next_block)
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query("DELETE FROM mnft_tokens WHERE created_at_block >= $1")
+            .bind(next_block)
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query("DELETE FROM mnft_classes WHERE created_at_block >= $1")
+            .bind(next_block)
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query("DELETE FROM mnft_issuers WHERE created_at_block >= $1")
+            .bind(next_block)
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query("DELETE FROM dotbit_accounts WHERE created_at_block >= $1")
+            .bind(next_block)
+            .execute(&self.pool)
+            .await?;
+
         if let Some(cache) = &self.cache_invalidator {
             cache
                 .update_sync_status(|status| {
