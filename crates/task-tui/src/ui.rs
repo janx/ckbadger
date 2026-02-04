@@ -531,7 +531,7 @@ fn draw_rate_chart_blocks(f: &mut Frame, app: &App, area: Rect) {
     let label_para = Paragraph::new(Line::from(axis_label)).alignment(Alignment::Right);
     let label_area = Rect {
         x: inner.x,
-        y: inner.y + inner.height.saturating_sub(1),
+        y: inner.y,
         width: inner.width,
         height: 1,
     };
