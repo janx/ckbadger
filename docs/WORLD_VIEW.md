@@ -29,3 +29,5 @@ DOBs represent the most durable form of digital goods humans can create. Tokens 
 RGB++ creates wormholes between Bitcoin and CKB, allow assets being moved between the two digital world trustlessly.
 
 Addresses act as concise labels for ownership rules. Under each address lie all related activities and assets associated with it.
+
+Common knowledge are state verified by global consensus, stored in live cells, including live cells' capacities, data, lock scripts and type scripts.

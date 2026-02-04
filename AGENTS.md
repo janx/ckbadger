@@ -622,6 +622,44 @@ cd frontend && pnpm test               # All frontend tests
 | Nervos docs      | `docs/docs.nervos.org/`    | User-facing explanations           |
 | DAO, APC, Supply | `docs/DAO_CALCULATIONS.md` | Any DAO/supply/circulation changes |
 
+### Common Knowledge (CKB Core Concept)
+
+**Common Knowledge** refers to state verified by global consensus and accepted by all in the network. The set of all live cells represents the current common knowledge on CKB.
+
+**Common Knowledge Size** = Total occupied capacity of all live cells (NOT just cell data bytes).
+
+A cell's **occupied capacity** includes ALL storage requirements:
+
+| Component      | Size                                  |
+| -------------- | ------------------------------------- |
+| Capacity field | 8 bytes                               |
+| Lock script    | 32 (code_hash) + 1 (hash_type) + args |
+| Type script    | 32 (code_hash) + 1 (hash_type) + args |
+| Data           | Actual data bytes                     |
+
+**Source**: The `U` field in the DAO header (`dao[24..32]`) stores the cumulative occupied capacity in shannons.
+
+```rust
+// DAO field structure (32 bytes, little-endian u64s):
+// [0..8]   C = total issuance
+// [8..16]  AR = accumulated rate
+// [16..24] S = secondary pool (unissued)
+// [24..32] U = total occupied capacity  <-- Common Knowledge Size
+```
+
+**Official Explorer Formula** (for reference):
+
+```ruby
+knowledge_size = dao.U - (BURN_QUOTA * 0.6)
+# Where BURN_QUOTA = 8,400,000,000 CKB (genesis burnt tokens)
+```
+
+**IMPORTANT**: Do NOT confuse:
+
+- `cell.data.len()` = Only the data field bytes
+- `occupied_capacity` = Full storage cost (capacity + scripts + data)
+- `U` field = Protocol-level cumulative occupied capacity
+
 **Key domain knowledge in `docs/DAO_CALCULATIONS.md`:**
 
 - Genesis issued 33.6B but only 25.2B circulating (8.4B burnt)
