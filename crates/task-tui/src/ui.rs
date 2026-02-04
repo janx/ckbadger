@@ -467,38 +467,53 @@ fn draw_memory_stats(f: &mut Frame, app: &App, area: Rect) {
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(inner);
 
-    let left_lines = vec![
-        Line::from(vec![
-            Span::styled("RocksDB: ", Style::default().fg(Color::Gray)),
-            Span::styled(
-                format_bytes(mem.rocksdb_total_bytes),
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  Memtable: ", Style::default().fg(Color::Gray)),
-            Span::raw(format_bytes(mem.rocksdb_memtable_bytes)),
-        ]),
-        Line::from(vec![
-            Span::styled("  Block Cache: ", Style::default().fg(Color::Gray)),
-            Span::raw(format_bytes(mem.rocksdb_block_cache_bytes)),
-        ]),
-    ];
-    f.render_widget(Paragraph::new(left_lines), cols[0]);
-
     let bulk_indicator = if mem.bulk_sync_mode {
         Span::styled(" [BULK]", Style::default().fg(Color::Yellow))
     } else {
         Span::raw("")
     };
 
+    let left_lines = vec![
+        Line::from(vec![
+            Span::styled(
+                format!("{:>14}", "RocksDB:"),
+                Style::default().fg(Color::Gray),
+            ),
+            Span::styled(
+                format!(" {:>10}", format_bytes(mem.rocksdb_total_bytes)),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled(
+                format!("{:>14}", "Memtable:"),
+                Style::default().fg(Color::Gray),
+            ),
+            Span::raw(format!(" {:>10}", format_bytes(mem.rocksdb_memtable_bytes))),
+        ]),
+        Line::from(vec![
+            Span::styled(
+                format!("{:>14}", "Block Cache:"),
+                Style::default().fg(Color::Gray),
+            ),
+            Span::raw(format!(
+                " {:>10}",
+                format_bytes(mem.rocksdb_block_cache_bytes)
+            )),
+        ]),
+    ];
+    f.render_widget(Paragraph::new(left_lines), cols[0]);
+
     let right_lines = vec![
         Line::from(vec![
-            Span::styled("Live Cells: ", Style::default().fg(Color::Gray)),
             Span::styled(
-                format_count(mem.live_cells_count),
+                format!("{:>16}", "Live Cells:"),
+                Style::default().fg(Color::Gray),
+            ),
+            Span::styled(
+                format!(" {:>10}", format_count(mem.live_cells_count)),
                 Style::default()
                     .fg(Color::Green)
                     .add_modifier(Modifier::BOLD),
@@ -506,16 +521,22 @@ fn draw_memory_stats(f: &mut Frame, app: &App, area: Rect) {
             bulk_indicator,
         ]),
         Line::from(vec![
-            Span::styled("Consumed Cache: ", Style::default().fg(Color::Gray)),
+            Span::styled(
+                format!("{:>16}", "Consumed Cache:"),
+                Style::default().fg(Color::Gray),
+            ),
             Span::raw(format!(
-                "{} ({})",
+                " {:>10} ({})",
                 format_count(mem.consumed_cells_count),
                 format_bytes(mem.consumed_cells_bytes)
             )),
         ]),
         Line::from(vec![
-            Span::styled("Headers: ", Style::default().fg(Color::Gray)),
-            Span::raw(format_count(mem.block_headers_count)),
+            Span::styled(
+                format!("{:>16}", "Headers:"),
+                Style::default().fg(Color::Gray),
+            ),
+            Span::raw(format!(" {:>10}", format_count(mem.block_headers_count))),
         ]),
     ];
     f.render_widget(Paragraph::new(right_lines), cols[1]);

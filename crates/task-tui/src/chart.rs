@@ -113,17 +113,17 @@ fn gradient_color(position: f64) -> Color {
 
 fn format_axis_value(value: f64) -> String {
     if value >= 1_000_000.0 {
-        format!("{:.1}M", value / 1_000_000.0)
+        format!("{:.0}M", value / 1_000_000.0)
+    } else if value >= 10_000.0 {
+        format!("{:.0}K", value / 1_000.0)
     } else if value >= 1_000.0 {
         format!("{:.1}K", value / 1_000.0)
-    } else if value >= 100.0 {
-        format!("{:.0}", value)
     } else {
-        format!("{:.1}", value)
+        format!("{:.0}", value)
     }
 }
 
-const Y_AXIS_WIDTH: usize = 5;
+const Y_AXIS_WIDTH: usize = 6;
 
 pub fn render_bar_chart(
     data: &VecDeque<f64>,
@@ -147,31 +147,27 @@ pub fn render_bar_chart(
     let pixel_width = chart_width * 2;
     let pixel_height = char_height * 4;
 
-    let max_val = data.iter().cloned().fold(0.0_f64, f64::max).max(100.0) * 1.05;
-
     let num_bars = pixel_width;
-    let start_x = if data.len() < num_bars {
-        num_bars - data.len()
+    let display_data: Vec<f64> = if data.len() > num_bars {
+        data.iter().skip(data.len() - num_bars).copied().collect()
+    } else {
+        data.iter().copied().collect()
+    };
+
+    let max_val = display_data
+        .iter()
+        .cloned()
+        .fold(0.0_f64, f64::max)
+        .max(100.0)
+        * 1.05;
+
+    let start_x = if display_data.len() < num_bars {
+        num_bars - display_data.len()
     } else {
         0
     };
 
-    let step = if data.len() > num_bars {
-        data.len() as f64 / num_bars as f64
-    } else {
-        1.0
-    };
-
-    let num_points = data.len().min(num_bars);
-
-    for i in 0..num_points {
-        let data_idx = if data.len() > num_bars {
-            (i as f64 * step) as usize
-        } else {
-            i
-        };
-
-        let val = data.get(data_idx).copied().unwrap_or(0.0);
+    for (i, &val) in display_data.iter().enumerate() {
         let x = start_x + i;
 
         let bar_height = if max_val > 0.0 {
@@ -195,13 +191,13 @@ pub fn render_bar_chart(
         let color = gradient_color(position);
 
         let y_label = if i == 0 {
-            format!("{:>4}│", format_axis_value(max_val))
+            format!("{:>5}│", format_axis_value(max_val))
         } else if i == char_height / 2 {
-            format!("{:>4}│", format_axis_value(max_val / 2.0))
+            format!("{:>5}│", format_axis_value(max_val / 2.0))
         } else if i == char_height - 1 {
-            format!("{:>4}│", "0")
+            format!("{:>5}│", "0")
         } else {
-            "    │".to_string()
+            "     │".to_string()
         };
 
         let content = format!("{}{}", y_label, chart_line);
@@ -281,8 +277,9 @@ mod tests {
     #[test]
     fn test_format_axis_value() {
         assert_eq!(format_axis_value(1500.0), "1.5K");
-        assert_eq!(format_axis_value(1500000.0), "1.5M");
+        assert_eq!(format_axis_value(16600.0), "17K");
+        assert_eq!(format_axis_value(1500000.0), "2M");
         assert_eq!(format_axis_value(150.0), "150");
-        assert_eq!(format_axis_value(15.5), "15.5");
+        assert_eq!(format_axis_value(15.5), "16");
     }
 }
