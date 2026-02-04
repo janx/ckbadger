@@ -10,10 +10,13 @@ use crate::db::copy_inputs::{CopyCellDepsWriter, CopyInputsWriter};
 use crate::db::copy_live_cells::CopyLiveCellsWriter;
 use crate::db::copy_pool::CopyPoolManager;
 use crate::db::copy_transactions::CopyTransactionsWriter;
+use crate::db::copy_udt_cells::CopyUdtCellsWriter;
+use crate::db::live_cell_storage::{DynLiveCellStorage, LiveCellInfo};
 use crate::parser::activity::ParsedActivity;
 use crate::parser::block::ParsedBlock;
 use crate::parser::cell::ParsedCell;
 use crate::parser::transaction::{ParsedCellDep, ParsedInput};
+use crate::parser::ParsedUdtCell;
 use chrono::{DateTime, Utc};
 
 const PARTITION_SIZE: i64 = 5_000_000;
@@ -54,17 +57,31 @@ type BlockData<'a> = (&'a ParsedBlock, i64);
 /// Type alias for activity data tuple: (activity, block_number, timestamp)
 type ActivityData<'a> = (&'a ParsedActivity, i64, DateTime<Utc>);
 
+/// Type alias for UDT cell data tuple: (tx_hash, output_index, cell, block_number)
+type UdtCellData<'a> = (&'a [u8], i16, &'a ParsedUdtCell, i64);
+
 fn get_partition_index(block_number: i64) -> usize {
     (block_number / PARTITION_SIZE) as usize
 }
 
 pub struct ParallelCopyRouter {
     pool_manager: CopyPoolManager,
+    live_cell_store: Option<DynLiveCellStorage>,
 }
 
 impl ParallelCopyRouter {
     pub fn new(pool_manager: CopyPoolManager) -> Self {
-        Self { pool_manager }
+        Self {
+            pool_manager,
+            live_cell_store: None,
+        }
+    }
+
+    pub fn with_live_cell_store(pool_manager: CopyPoolManager, store: DynLiveCellStorage) -> Self {
+        Self {
+            pool_manager,
+            live_cell_store: Some(store),
+        }
     }
 
     pub async fn copy_cells_parallel(&self, cells: &[CellData<'_>]) -> Result<u64> {
@@ -113,6 +130,22 @@ impl ParallelCopyRouter {
     pub async fn copy_live_cells_parallel(&self, cells: &[CellData<'_>]) -> Result<u64> {
         if cells.is_empty() {
             return Ok(0);
+        }
+
+        if let Some(ref store) = self.live_cell_store {
+            for (tx_hash, output_index, cell, block_number) in cells {
+                let info = LiveCellInfo {
+                    capacity: cell.capacity,
+                    created_at_block: *block_number,
+                    lock_script_hash: cell.lock_script_hash.clone(),
+                    lock_code_hash: cell.lock_code_hash.clone(),
+                    lock_args: cell.lock_args.clone(),
+                    type_script_hash: cell.type_script_hash.clone(),
+                    type_code_hash: cell.type_code_hash.clone(),
+                    data_size: cell.data_size,
+                };
+                store.insert(tx_hash.to_vec(), *output_index, info);
+            }
         }
 
         let conn = self.pool_manager.get_connection().await?;
@@ -348,6 +381,29 @@ impl ParallelCopyRouter {
         }
 
         Ok(total_rows)
+    }
+
+    pub async fn copy_udt_cells_parallel(&self, udt_cells: &[UdtCellData<'_>]) -> Result<u64> {
+        if udt_cells.is_empty() {
+            return Ok(0);
+        }
+
+        let conn = self.pool_manager.get_connection().await?;
+
+        let mut writer = CopyUdtCellsWriter::new();
+        for (tx_hash, output_index, cell, block_number) in udt_cells {
+            writer.add_cell(tx_hash, *output_index, cell, *block_number);
+        }
+
+        let data = writer.finish();
+        execute_copy(
+            conn.as_ref(),
+            "COPY udt_cells (tx_hash, output_index, type_script_hash, type_code_hash, \
+             type_hash_type, type_args, lock_script_hash, amount, standard, is_live, \
+             created_at_block) FROM STDIN WITH (FORMAT BINARY)",
+            data,
+        )
+        .await
     }
 }
 

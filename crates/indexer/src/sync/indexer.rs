@@ -375,7 +375,10 @@ impl Indexer {
                         "COPY bulk sync enabled with {} connections",
                         config.copy_pool_size
                     );
-                    Some(ParallelCopyRouter::new(pool_manager))
+                    Some(ParallelCopyRouter::with_live_cell_store(
+                        pool_manager,
+                        Arc::clone(&rocksdb_store) as _,
+                    ))
                 }
                 Err(e) => {
                     warn!("Failed to create COPY pool, falling back to UNNEST: {}", e);
@@ -541,7 +544,12 @@ impl Indexer {
             _ => start_block,
         };
 
-        self.writer.init_sync_start(actual_start).await?;
+        self.writer
+            .init_sync_start(
+                actual_start,
+                blocks_behind > self.config.bulk_sync_threshold,
+            )
+            .await?;
 
         if let Err(e) = self.maybe_submit_label_import_task().await {
             warn!("Failed to submit label import task: {}", e);
@@ -3447,9 +3455,19 @@ impl Indexer {
                     (tx_hash.as_slice(), *idx, cell, block_number)
                 })
                 .collect();
-            self.writer
-                .insert_udt_cells_batch(&udt_cells_to_insert)
-                .await?;
+            if self.should_use_copy() {
+                let copy_router = self
+                    .copy_router
+                    .as_ref()
+                    .expect("copy_router must exist when should_use_copy() is true");
+                copy_router
+                    .copy_udt_cells_parallel(&udt_cells_to_insert)
+                    .await?;
+            } else {
+                self.writer
+                    .insert_udt_cells_batch(&udt_cells_to_insert)
+                    .await?;
+            }
         }
 
         let mut batch_spore_ids: HashSet<Vec<u8>> = HashSet::new();
@@ -4619,9 +4637,19 @@ impl Indexer {
                     (tx_hash.as_slice(), *idx, cell, block_number)
                 })
                 .collect();
-            self.writer
-                .insert_udt_cells_batch(&udt_cells_to_insert)
-                .await?;
+            if self.should_use_copy() {
+                let copy_router = self
+                    .copy_router
+                    .as_ref()
+                    .expect("copy_router must exist when should_use_copy() is true");
+                copy_router
+                    .copy_udt_cells_parallel(&udt_cells_to_insert)
+                    .await?;
+            } else {
+                self.writer
+                    .insert_udt_cells_batch(&udt_cells_to_insert)
+                    .await?;
+            }
         }
 
         let mut batch_spore_ids: HashSet<Vec<u8>> = HashSet::new();

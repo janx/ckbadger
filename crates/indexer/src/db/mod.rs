@@ -6,6 +6,7 @@ pub mod copy_inputs;
 pub mod copy_live_cells;
 pub mod copy_pool;
 pub mod copy_transactions;
+pub mod copy_udt_cells;
 pub mod indexes;
 pub mod live_cell_storage;
 pub mod parallel_copy;
@@ -19,6 +20,7 @@ pub use copy_activities::{
     CopyActivitiesWriter,
 };
 pub use copy_pool::{CopyConfig, CopyPoolManager};
+pub use copy_udt_cells::{copy_udt_cells, CopyUdtCellsWriter};
 pub use indexes::IndexManager;
 pub use live_cell_storage::{
     CachedBlockHeader, ConsumedCellRecord, DynLiveCellStorage, LiveCellInfo, LiveCellStorage,
