@@ -17,7 +17,10 @@ pub struct SyncStatusRow {
     pub indexes_deferred: bool,
     pub elapsed_time: Option<String>,
     pub eta: Option<String>,
-    pub rate: Option<f64>,
+    /// Real-time rate (10-second sliding window)
+    pub rate_realtime: Option<f64>,
+    /// EMA rate (smoothed)
+    pub rate_ema: Option<f64>,
 }
 
 pub struct TaskDb {
@@ -110,7 +113,8 @@ impl TaskDb {
             indexes_deferred,
             elapsed_time,
             eta: Some(progress.eta_formatted.clone()),
-            rate: Some(progress.ema_blocks_per_second),
+            rate_realtime: Some(progress.blocks_per_second),
+            rate_ema: Some(progress.ema_blocks_per_second),
         }
     }
 
@@ -161,7 +165,8 @@ impl TaskDb {
             indexes_deferred,
             elapsed_time,
             eta,
-            rate: status.sync_ema_rate,
+            rate_realtime: None,
+            rate_ema: status.sync_ema_rate,
         })
     }
 
@@ -179,7 +184,8 @@ impl TaskDb {
             indexes_deferred,
             elapsed_time: None,
             eta: None,
-            rate: None,
+            rate_realtime: None,
+            rate_ema: None,
         })
     }
 
