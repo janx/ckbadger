@@ -127,12 +127,12 @@ fn default_concurrent_requests() -> usize {
 }
 
 /// Configuration for secondary issuance backfill task
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SecondaryIssuanceBackfillConfig {
     /// CKB RPC URL to fetch economic state from
     pub ckb_rpc_url: String,
-    /// Start from specific block (None = genesis)
+    /// Start from specific block (default: 1, skipping genesis which has no economic state)
     pub start_block: Option<i64>,
     /// End at specific block (None = current tip)
     pub end_block: Option<i64>,
@@ -142,6 +142,18 @@ pub struct SecondaryIssuanceBackfillConfig {
     /// Number of concurrent RPC requests
     #[serde(default = "default_concurrent_requests")]
     pub concurrent_requests: usize,
+}
+
+impl Default for SecondaryIssuanceBackfillConfig {
+    fn default() -> Self {
+        Self {
+            ckb_rpc_url: String::new(),
+            start_block: None,
+            end_block: None,
+            batch_size: default_secondary_issuance_batch_size(),
+            concurrent_requests: default_concurrent_requests(),
+        }
+    }
 }
 
 fn default_secondary_issuance_batch_size() -> i64 {
@@ -962,5 +974,14 @@ mod tests {
 
         let parsed: TaskConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.task_type(), TaskType::SecondaryIssuanceBackfill);
+    }
+
+    #[test]
+    fn test_secondary_issuance_backfill_config_default_values() {
+        let config = SecondaryIssuanceBackfillConfig::default();
+        assert_eq!(config.batch_size, 1000);
+        assert_eq!(config.concurrent_requests, 4);
+        assert!(config.start_block.is_none());
+        assert!(config.end_block.is_none());
     }
 }

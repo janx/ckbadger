@@ -85,7 +85,8 @@ pub async fn execute(
         .fetch_one(pool)
         .await?;
 
-    let start_block = config.start_block.unwrap_or(0).max(0);
+    // Genesis block (0) has no economic state - CKB RPC returns null for it
+    let start_block = config.start_block.unwrap_or(1).max(1);
     let end_block = config.end_block.unwrap_or(max_block).min(max_block);
 
     if start_block > end_block {

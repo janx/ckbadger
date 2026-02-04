@@ -286,7 +286,7 @@ The `secondary_issuance_backfill` task is automatically submitted when the index
 The backfill task:
 
 1. Resets `block_secondary_issuance` table and cumulative values to 0
-2. Processes ALL blocks from genesis to tip
+2. Processes blocks from block 1 to tip (genesis block 0 is skipped - CKB RPC returns null for it)
 3. Calls `get_block_economic_state` RPC for each block (with concurrency)
 4. Calculates breakdown using RFC-0015 formula (exact, not sampled)
 5. Updates `dao_statistics.cumulative_burnt` with accurate totals

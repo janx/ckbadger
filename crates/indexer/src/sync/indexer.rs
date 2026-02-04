@@ -1513,7 +1513,7 @@ impl Indexer {
 
         let builder = TaskBuilder::secondary_issuance_backfill(SecondaryIssuanceBackfillConfig {
             ckb_rpc_url: self.config.ckb_rpc_url.clone(),
-            start_block: Some(0),
+            start_block: None,
             end_block: None,
             ..Default::default()
         });
