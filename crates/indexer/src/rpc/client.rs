@@ -54,6 +54,30 @@ impl CkbRpcClient {
         response.result.ok_or_else(|| anyhow!("Empty RPC response"))
     }
 
+    /// Like `call`, but returns Ok(None) when the RPC result is null.
+    /// Use for methods where null is a valid response (e.g., unfinalized blocks).
+    async fn call_optional<P, R>(&self, method: &'static str, params: P) -> Result<Option<R>>
+    where
+        P: serde::Serialize,
+        R: serde::de::DeserializeOwned,
+    {
+        let request = JsonRpcRequest::new(self.next_id(), method, params);
+        let response = self
+            .client
+            .post(&self.url)
+            .json(&request)
+            .send()
+            .await?
+            .json::<JsonRpcResponse<R>>()
+            .await?;
+
+        if let Some(error) = response.error {
+            return Err(anyhow!("RPC error {}: {}", error.code, error.message));
+        }
+
+        Ok(response.result)
+    }
+
     async fn call_batch(
         &self,
         requests: Vec<JsonRpcBatchRequest>,
@@ -102,7 +126,8 @@ impl CkbRpcClient {
     }
 
     pub async fn get_block_economic_state(&self, hash: &str) -> Result<Option<BlockEconomicState>> {
-        self.call("get_block_economic_state", (hash,)).await
+        self.call_optional("get_block_economic_state", (hash,))
+            .await
     }
 
     pub async fn get_transaction(&self, hash: &str) -> Result<Option<TransactionWithStatus>> {
