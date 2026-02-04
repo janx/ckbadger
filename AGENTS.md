@@ -343,12 +343,24 @@ The `secondary_issuance_backfill` task is automatically submitted when the index
 The backfill task:
 
 1. Resets `block_secondary_issuance` table and cumulative values to 0
-2. Processes blocks from block 1 to tip (genesis block 0 is skipped - CKB RPC returns null for it)
-3. Uses JSON-RPC batch requests (100 blocks per batch) to `get_block_economic_state` for optimal throughput
-4. Calculates breakdown using RFC-0015 formula (exact, not sampled)
-5. Updates `dao_statistics.cumulative_burnt` with accurate totals
+2. Pre-loads all DAO deposit/withdrawal events to memory (eliminates per-batch DB queries)
+3. Processes blocks from block 1 to tip (genesis block 0 is skipped - CKB RPC returns null for it)
+4. Uses JSON-RPC batch requests (250 blocks per batch, 32 concurrent) to `get_block_economic_state`
+5. Writes using PostgreSQL COPY binary protocol (2-3x faster than INSERT)
+6. Calculates breakdown using RFC-0015 formula (exact, not sampled)
+7. Updates `dao_statistics.cumulative_burnt` with accurate totals
 
-**Performance:** RPC batch requests reduce full-chain backfill time from ~10 days to ~10 hours.
+**Performance Configuration:**
+
+| Parameter             | Default | Description                             |
+| --------------------- | ------- | --------------------------------------- |
+| `batch_size`          | 1000    | Blocks per DB write batch               |
+| `concurrent_requests` | 32      | Concurrent RPC batch requests           |
+| RPC batch size        | 250     | Blocks per JSON-RPC request (hardcoded) |
+| HTTP timeout          | 60s     | Request timeout for stability           |
+| HTTP connect timeout  | 10s     | Connection establishment timeout        |
+
+**Performance:** Optimized implementation reduces full-chain backfill time from ~10 hours to ~2-3 hours.
 
 **Why exact calculation matters:** Secondary issuance varies per block (~340-590 CKB). Sampling every N blocks and multiplying produces ~50x under-reporting of burnt amounts.
 

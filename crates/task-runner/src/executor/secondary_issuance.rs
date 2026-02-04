@@ -2,12 +2,17 @@ use anyhow::{anyhow, Result};
 use ckbadger_common::{
     RateCalculator, SecondaryIssuanceBackfillConfig, SecondaryIssuanceBackfillResult,
 };
+use futures::{
+    stream::{self, StreamExt},
+    SinkExt,
+};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::PgPool;
 use std::collections::HashMap;
 use std::time::Duration;
+use tokio_postgres::NoTls;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
@@ -15,8 +20,9 @@ use crate::db::TaskDb;
 
 const RETRY_ATTEMPTS: usize = 3;
 const RETRY_BACKOFF_MS: u64 = 500;
-/// Maximum number of RPC requests in a single batch
-const RPC_BATCH_SIZE: usize = 100;
+const RPC_BATCH_SIZE: usize = 250;
+const HTTP_TIMEOUT_SECS: u64 = 60;
+const HTTP_CONNECT_TIMEOUT_SECS: u64 = 10;
 
 #[derive(Debug, Serialize)]
 struct RpcRequest {
@@ -63,12 +69,13 @@ struct BlockIssuanceRow {
 pub async fn execute(
     db: &TaskDb,
     pool: &PgPool,
+    database_url: &str,
     task_id: Uuid,
     config: &SecondaryIssuanceBackfillConfig,
 ) -> Result<()> {
     info!(
-        "Starting secondary issuance backfill: rpc={}, batch_size={}, rpc_batch_size={}",
-        config.ckb_rpc_url, config.batch_size, RPC_BATCH_SIZE
+        "Starting secondary issuance backfill: rpc={}, batch_size={}, rpc_batch_size={}, concurrent_requests={}",
+        config.ckb_rpc_url, config.batch_size, RPC_BATCH_SIZE, config.concurrent_requests
     );
 
     let max_block: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(number), 0) FROM blocks")
@@ -102,7 +109,25 @@ pub async fn execute(
 
     reset_secondary_issuance_state(pool).await?;
 
-    let client = Client::new();
+    let client = Client::builder()
+        .timeout(Duration::from_secs(HTTP_TIMEOUT_SECS))
+        .connect_timeout(Duration::from_secs(HTTP_CONNECT_TIMEOUT_SECS))
+        .pool_max_idle_per_host(config.concurrent_requests)
+        .build()
+        .map_err(|e| anyhow!("Failed to create HTTP client: {}", e))?;
+
+    db.update_progress(
+        task_id,
+        0,
+        total_blocks,
+        Some("Pre-loading DAO deposit events"),
+        None,
+    )
+    .await?;
+
+    let dao_events = preload_all_dao_events(pool).await?;
+    let mut active_deposit_cache: HashMap<i64, u128> = HashMap::new();
+
     let mut rate_calc = RateCalculator::default();
     let mut result = SecondaryIssuanceBackfillResult {
         blocks_total: total_blocks,
@@ -125,15 +150,20 @@ pub async fn execute(
             continue;
         }
 
-        let block_numbers: Vec<i64> = blocks.iter().map(|b| b.number).collect();
-        let dao_deposits = fetch_dao_deposits(pool, &block_numbers).await?;
+        let dao_deposits =
+            compute_batch_dao_deposits(current, batch_end, &dao_events, &mut active_deposit_cache);
 
         let block_hashes: Vec<String> = blocks
             .iter()
             .map(|b| format!("0x{}", hex::encode(&b.hash)))
             .collect();
-        let economic_states =
-            fetch_block_economic_states_batch(&client, &config.ckb_rpc_url, &block_hashes).await?;
+        let economic_states = fetch_block_economic_states_batch(
+            &client,
+            &config.ckb_rpc_url,
+            &block_hashes,
+            config.concurrent_requests,
+        )
+        .await?;
 
         let mut batch_rows: Vec<BlockIssuanceRow> = Vec::with_capacity(blocks.len());
         for block in &blocks {
@@ -151,7 +181,7 @@ pub async fn execute(
             batch_rows.push(row);
         }
 
-        insert_secondary_issuance_rows(pool, &batch_rows).await?;
+        insert_secondary_issuance_rows_copy(database_url, &batch_rows).await?;
         update_secondary_issuance_totals(pool, &batch_rows, batch_end).await?;
 
         processed += batch_rows.len() as i64;
@@ -242,38 +272,139 @@ async fn fetch_block_rows(pool: &PgPool, start: i64, end: i64) -> Result<Vec<Blo
         .collect())
 }
 
-async fn fetch_dao_deposits(pool: &PgPool, block_numbers: &[i64]) -> Result<HashMap<i64, u128>> {
-    let rows = sqlx::query_as::<_, (i64, String)>(
+struct DaoDepositEvents {
+    deposits_by_block: HashMap<i64, u128>,
+    withdrawals_by_block: HashMap<i64, u128>,
+}
+
+async fn preload_all_dao_events(pool: &PgPool) -> Result<DaoDepositEvents> {
+    info!("Pre-loading all DAO deposit events...");
+
+    let deposit_rows = sqlx::query_as::<_, (i64, String)>(
         r#"
-        SELECT b.block_number, COALESCE(SUM(d.capacity::numeric), 0)::text
-        FROM UNNEST($1::bigint[]) AS b(block_number)
-        LEFT JOIN dao_deposits d
-          ON d.deposit_block_number < b.block_number
-         AND (d.withdraw_block IS NULL OR d.withdraw_block >= b.block_number)
-        GROUP BY b.block_number
+        SELECT deposit_block_number, COALESCE(SUM(capacity::numeric), 0)::text
+        FROM dao_deposits
+        GROUP BY deposit_block_number
+        ORDER BY deposit_block_number
         "#,
     )
-    .bind(block_numbers)
     .fetch_all(pool)
     .await?;
 
-    let mut map = HashMap::new();
-    for (block_number, total) in rows {
-        map.insert(block_number, total.parse().unwrap_or(0));
+    let withdraw_rows = sqlx::query_as::<_, (i64, String)>(
+        r#"
+        SELECT withdraw_block, COALESCE(SUM(capacity::numeric), 0)::text
+        FROM dao_deposits
+        WHERE withdraw_block IS NOT NULL
+        GROUP BY withdraw_block
+        ORDER BY withdraw_block
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut deposits_by_block = HashMap::new();
+    for (block_number, total) in deposit_rows {
+        deposits_by_block.insert(block_number, parse_numeric_u128(&total)?);
     }
 
-    Ok(map)
+    let mut withdrawals_by_block = HashMap::new();
+    for (block_number, total) in withdraw_rows {
+        withdrawals_by_block.insert(block_number, parse_numeric_u128(&total)?);
+    }
+
+    info!(
+        "Loaded {} deposit events and {} withdrawal events",
+        deposits_by_block.len(),
+        withdrawals_by_block.len()
+    );
+
+    Ok(DaoDepositEvents {
+        deposits_by_block,
+        withdrawals_by_block,
+    })
+}
+
+fn compute_active_dao_deposit_at_block(
+    block_number: i64,
+    events: &DaoDepositEvents,
+    cache: &mut HashMap<i64, u128>,
+) -> u128 {
+    if let Some(&cached) = cache.get(&block_number) {
+        return cached;
+    }
+
+    let mut active: u128 = 0;
+    for block in 1..=block_number {
+        if let Some(&deposit) = events.deposits_by_block.get(&block) {
+            active = active.saturating_add(deposit);
+        }
+        if let Some(&withdrawal) = events.withdrawals_by_block.get(&block) {
+            active = active.saturating_sub(withdrawal);
+        }
+    }
+
+    cache.insert(block_number, active);
+    active
+}
+
+fn compute_batch_dao_deposits(
+    start: i64,
+    end: i64,
+    events: &DaoDepositEvents,
+    active_deposit_cache: &mut HashMap<i64, u128>,
+) -> HashMap<i64, u128> {
+    let initial_active = if start > 1 {
+        compute_active_dao_deposit_at_block(start - 1, events, active_deposit_cache)
+    } else {
+        0
+    };
+
+    let mut active = initial_active;
+    let mut result = HashMap::new();
+
+    for block in start..=end {
+        result.insert(block, active);
+
+        if let Some(&withdrawal) = events.withdrawals_by_block.get(&block) {
+            active = active.saturating_sub(withdrawal);
+        }
+        if let Some(&deposit) = events.deposits_by_block.get(&block) {
+            active = active.saturating_add(deposit);
+        }
+    }
+
+    if end > 0 {
+        active_deposit_cache.insert(end, result.get(&end).copied().unwrap_or(0));
+    }
+
+    result
 }
 
 async fn fetch_block_economic_states_batch(
     client: &Client,
     rpc_url: &str,
     block_hashes: &[String],
+    concurrent_requests: usize,
 ) -> Result<HashMap<String, BlockEconomicState>> {
     let mut results: HashMap<String, BlockEconomicState> = HashMap::new();
 
-    for chunk in block_hashes.chunks(RPC_BATCH_SIZE) {
-        let chunk_results = fetch_rpc_batch_with_retry(client, rpc_url, chunk).await?;
+    let rpc_url = rpc_url.to_string();
+    let chunks: Vec<Vec<String>> = block_hashes
+        .chunks(RPC_BATCH_SIZE)
+        .map(|chunk| chunk.to_vec())
+        .collect();
+
+    let concurrency = concurrent_requests.max(1);
+    let mut stream = stream::iter(chunks.into_iter().map(|chunk| {
+        let client = client.clone();
+        let rpc_url = rpc_url.clone();
+        async move { fetch_rpc_batch_with_retry(&client, &rpc_url, &chunk).await }
+    }))
+    .buffer_unordered(concurrency);
+
+    while let Some(chunk_result) = stream.next().await {
+        let chunk_results = chunk_result?;
         results.extend(chunk_results);
     }
 
@@ -413,46 +544,68 @@ fn parse_hex_u128(value: &str) -> Result<u128> {
     u128::from_str_radix(hex, 16).map_err(|e| anyhow!("Invalid hex value {}: {}", value, e))
 }
 
+fn parse_numeric_u128(value: &str) -> Result<u128> {
+    value
+        .parse::<u128>()
+        .map_err(|e| anyhow!("Invalid numeric value {}: {}", value, e))
+}
+
 fn u128_to_i64(value: u128) -> Result<i64> {
     i64::try_from(value).map_err(|_| anyhow!("Value too large for i64: {}", value))
 }
 
-async fn insert_secondary_issuance_rows(pool: &PgPool, rows: &[BlockIssuanceRow]) -> Result<()> {
+async fn insert_secondary_issuance_rows_copy(
+    database_url: &str,
+    rows: &[BlockIssuanceRow],
+) -> Result<()> {
     if rows.is_empty() {
         return Ok(());
     }
 
-    let numbers: Vec<i64> = rows.iter().map(|r| r.number).collect();
-    let timestamps: Vec<chrono::DateTime<chrono::Utc>> = rows.iter().map(|r| r.timestamp).collect();
-    let secondary: Vec<i64> = rows.iter().map(|r| r.secondary_issuance).collect();
-    let miner: Vec<i64> = rows.iter().map(|r| r.miner_secondary).collect();
-    let dao: Vec<i64> = rows.iter().map(|r| r.dao_compensation).collect();
-    let burnt: Vec<i64> = rows.iter().map(|r| r.burnt).collect();
+    let (client, connection) = tokio_postgres::connect(database_url, NoTls)
+        .await
+        .map_err(|e| anyhow!("COPY connection failed: {}", e))?;
 
-    sqlx::query(
-        r#"
-        INSERT INTO block_secondary_issuance (
-            block_number, block_timestamp, secondary_issuance, miner_secondary, dao_compensation, burnt
+    tokio::spawn(async move {
+        if let Err(e) = connection.await {
+            warn!("COPY connection error: {}", e);
+        }
+    });
+
+    let copy_stmt = r#"COPY block_secondary_issuance 
+        (block_number, block_timestamp, secondary_issuance, miner_secondary, dao_compensation, burnt) 
+        FROM STDIN WITH (FORMAT text, DELIMITER E'\t')"#;
+
+    let sink = client
+        .copy_in(copy_stmt)
+        .await
+        .map_err(|e| anyhow!("COPY IN failed: {}", e))?;
+    futures::pin_mut!(sink);
+
+    let mut text_data = String::with_capacity(rows.len() * 100);
+    for row in rows {
+        use std::fmt::Write;
+        writeln!(
+            &mut text_data,
+            "{}\t{}\t{}\t{}\t{}\t{}",
+            row.number,
+            row.timestamp.format("%Y-%m-%d %H:%M:%S%.6f%:z"),
+            row.secondary_issuance,
+            row.miner_secondary,
+            row.dao_compensation,
+            row.burnt
         )
-        SELECT * FROM UNNEST(
-            $1::bigint[],
-            $2::timestamptz[],
-            $3::bigint[],
-            $4::bigint[],
-            $5::bigint[],
-            $6::bigint[]
-        )
-        ON CONFLICT (block_number) DO NOTHING
-        "#,
-    )
-    .bind(&numbers)
-    .bind(&timestamps)
-    .bind(&secondary)
-    .bind(&miner)
-    .bind(&dao)
-    .bind(&burnt)
-    .execute(pool)
-    .await?;
+        .expect("String write should not fail");
+    }
+
+    sink.send(bytes::Bytes::from(text_data))
+        .await
+        .map_err(|e| anyhow!("COPY send failed: {}", e))?;
+    let rows_written = sink
+        .finish()
+        .await
+        .map_err(|e| anyhow!("COPY finish failed: {}", e))?;
+    debug!("COPY wrote {} rows", rows_written);
 
     Ok(())
 }
@@ -534,7 +687,7 @@ mod tests {
 
     #[test]
     fn test_rpc_batch_size_constant() {
-        assert_eq!(RPC_BATCH_SIZE, 100);
+        assert_eq!(RPC_BATCH_SIZE, 250);
     }
 
     #[test]
@@ -611,6 +764,30 @@ mod tests {
     }
 
     #[test]
+    fn test_compute_batch_dao_deposits_applies_withdraws_then_deposits() {
+        let mut deposits_by_block = HashMap::new();
+        deposits_by_block.insert(10i64, 5u128);
+        deposits_by_block.insert(11i64, 10u128);
+
+        let mut withdrawals_by_block = HashMap::new();
+        withdrawals_by_block.insert(10i64, 20u128);
+
+        let events = DaoDepositEvents {
+            deposits_by_block,
+            withdrawals_by_block,
+        };
+
+        let mut cache: HashMap<i64, u128> = HashMap::new();
+        cache.insert(9, 100u128);
+
+        let series = compute_batch_dao_deposits(10, 12, &events, &mut cache);
+
+        assert_eq!(series.get(&10), Some(&100));
+        assert_eq!(series.get(&11), Some(&85));
+        assert_eq!(series.get(&12), Some(&95));
+    }
+
+    #[test]
     fn test_rpc_request_serialization() {
         let request = RpcRequest {
             jsonrpc: "2.0",
@@ -636,5 +813,51 @@ mod tests {
         let state: BlockEconomicState = serde_json::from_str(json).unwrap();
         assert_eq!(state.issuance.secondary, "0x5f5e100");
         assert_eq!(state.miner_reward.secondary, "0x2faf080");
+    }
+
+    #[test]
+    fn test_compute_active_dao_deposit_at_block_with_cache() {
+        let mut deposits = HashMap::new();
+        deposits.insert(5i64, 100u128);
+        deposits.insert(10i64, 50u128);
+
+        let mut withdrawals = HashMap::new();
+        withdrawals.insert(8i64, 30u128);
+
+        let events = DaoDepositEvents {
+            deposits_by_block: deposits,
+            withdrawals_by_block: withdrawals,
+        };
+
+        let mut cache: HashMap<i64, u128> = HashMap::new();
+
+        let at_block_10 = compute_active_dao_deposit_at_block(10, &events, &mut cache);
+        assert_eq!(at_block_10, 120);
+
+        assert!(cache.contains_key(&10));
+
+        let at_block_10_cached = compute_active_dao_deposit_at_block(10, &events, &mut cache);
+        assert_eq!(at_block_10_cached, 120);
+    }
+
+    #[test]
+    fn test_compute_batch_dao_deposits_empty_events() {
+        let events = DaoDepositEvents {
+            deposits_by_block: HashMap::new(),
+            withdrawals_by_block: HashMap::new(),
+        };
+
+        let mut cache: HashMap<i64, u128> = HashMap::new();
+        let series = compute_batch_dao_deposits(1, 5, &events, &mut cache);
+
+        for block in 1..=5 {
+            assert_eq!(series.get(&block), Some(&0));
+        }
+    }
+
+    #[test]
+    fn test_http_timeout_constants() {
+        assert_eq!(HTTP_TIMEOUT_SECS, 60);
+        assert_eq!(HTTP_CONNECT_TIMEOUT_SECS, 10);
     }
 }

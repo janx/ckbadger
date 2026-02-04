@@ -66,6 +66,7 @@ async fn main() -> Result<()> {
 
     let executor = TaskExecutor::new(
         pool,
+        args.database_url,
         runner_id,
         args.ckb_rpc_url,
         args.token_labels_path,

@@ -170,7 +170,7 @@ fn default_cycles_batch_size() -> i64 {
     50
 }
 fn default_concurrent_requests() -> usize {
-    16
+    32
 }
 
 /// Configuration for secondary issuance backfill task
@@ -591,7 +591,7 @@ pub enum TaskResult {
 /// Rate sample for EMA calculation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RateSample {
-    /// Unix timestamp (seconds)
+    /// Unix timestamp (milliseconds)
     pub ts: i64,
     /// Progress value at this timestamp
     pub v: i64,
@@ -905,13 +905,14 @@ impl RateCalculator {
 
     /// Add a progress sample and update EMA
     pub fn add_sample(&mut self, progress: i64) {
-        let now = Utc::now().timestamp();
+        let now_ms = Utc::now().timestamp_millis();
 
         if let Some(last) = self.samples.last() {
-            let dt = (now - last.ts) as f64;
-            if dt > 0.0 {
+            let dt_ms = now_ms - last.ts;
+            if dt_ms > 0 {
                 let dp = (progress - last.v) as f64;
-                let rate = dp / dt;
+                let dt_secs = dt_ms as f64 / 1000.0;
+                let rate = dp / dt_secs;
 
                 self.ema = Some(match self.ema {
                     Some(prev) => self.alpha * rate + (1.0 - self.alpha) * prev,
@@ -921,7 +922,7 @@ impl RateCalculator {
         }
 
         self.samples.push(RateSample {
-            ts: now,
+            ts: now_ms,
             v: progress,
         });
 

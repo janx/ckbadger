@@ -32,6 +32,7 @@ tokio-postgres = "0.7"
 postgres-types = { version = "0.2", features = ["derive"] }
 deadpool-postgres = "0.14"
 byteorder = "1.5"
+bytes = "1.9"
 
 # Decimal types for NUMERIC
 rust_decimal = { version = "1.36", features = ["serde"] }
