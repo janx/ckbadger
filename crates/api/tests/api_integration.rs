@@ -1424,6 +1424,128 @@ async fn test_fork_detail_not_found(pool: sqlx::PgPool) {
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
+async fn test_knowledge_size_chart_empty_db(pool: sqlx::PgPool) {
+    let app = create_router(test_config(pool)).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/charts/knowledge-size")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = http_body_util::BodyExt::collect(response.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert!(json["data"].as_array().unwrap().is_empty());
+    assert_eq!(json["title"], "Common Knowledge Size");
+    assert_eq!(json["yAxisLabel"], "CKB");
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn test_knowledge_size_chart_with_data(pool: sqlx::PgPool) {
+    // Insert daily_statistics with knowledge_size
+    // knowledge_size = U_field - BURN_ADJUSTMENT
+    // where BURN_ADJUSTMENT = 504,000,000,000,000,000 shannons
+    // Example: U = 520,000,000,000,000,000, knowledge_size = 16,000,000,000,000,000
+    let knowledge_size_day1 = "16000000000000000"; // 160 billion CKB worth of occupied capacity
+    let knowledge_size_day2 = "17000000000000000";
+
+    sqlx::query(
+        r#"
+        INSERT INTO daily_statistics (
+            date, blocks_count, transactions_count, cells_created, cells_consumed,
+            capacity_transferred, total_live_cells, total_dead_cells, total_all_cells,
+            total_data_size, knowledge_size
+        ) VALUES 
+            ($1, 100, 1000, 500, 200, 0, 300, 200, 500, 1000000, $2::numeric),
+            ($3, 100, 1000, 500, 200, 0, 600, 400, 1000, 2000000, $4::numeric)
+        "#,
+    )
+    .bind(chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap())
+    .bind(knowledge_size_day1)
+    .bind(chrono::NaiveDate::from_ymd_opt(2024, 1, 2).unwrap())
+    .bind(knowledge_size_day2)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let app = create_router(test_config(pool)).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/charts/knowledge-size")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = http_body_util::BodyExt::collect(response.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    let data = json["data"].as_array().unwrap();
+    assert_eq!(data.len(), 2);
+
+    assert_eq!(data[0]["date"], "2024/01/01");
+    assert_eq!(data[0]["value"], knowledge_size_day1);
+
+    assert_eq!(data[1]["date"], "2024/01/02");
+    assert_eq!(data[1]["value"], knowledge_size_day2);
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn test_knowledge_size_chart_filters_null_values(pool: sqlx::PgPool) {
+    sqlx::query(
+        r#"
+        INSERT INTO daily_statistics (
+            date, blocks_count, transactions_count, cells_created, cells_consumed,
+            capacity_transferred, total_live_cells, total_dead_cells, total_all_cells,
+            total_data_size, knowledge_size
+        ) VALUES 
+            ($1, 100, 1000, 500, 200, 0, 300, 200, 500, 1000000, $2::numeric),
+            ($3, 100, 1000, 500, 200, 0, 600, 400, 1000, 2000000, NULL)
+        "#,
+    )
+    .bind(chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap())
+    .bind("16000000000000000")
+    .bind(chrono::NaiveDate::from_ymd_opt(2024, 1, 2).unwrap())
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let app = create_router(test_config(pool)).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/charts/knowledge-size")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = http_body_util::BodyExt::collect(response.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    let data = json["data"].as_array().unwrap();
+    assert_eq!(
+        data.len(),
+        1,
+        "Should only return rows with non-null knowledge_size"
+    );
+    assert_eq!(data[0]["date"], "2024/01/01");
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
 async fn test_forks_recent_no_events(pool: sqlx::PgPool) {
     let app = create_router(test_config(pool)).await;
 

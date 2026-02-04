@@ -363,3 +363,92 @@ These are different concepts:
 
 - **DAO Compensation**: What depositors receive based on AR growth (individual deposits)
 - **Secondary Allocation to DAO**: Portion of secondary issuance allocated to DAO pool (affects AR growth)
+
+## 8. Common Knowledge Size
+
+**Common Knowledge** is a core CKB concept referring to state verified by global consensus and accepted by all network participants. The set of all live cells represents the current common knowledge on CKB.
+
+### Formula
+
+```
+knowledge_size = U - BURN_ADJUSTMENT
+```
+
+Where:
+
+- `U` = DAO field bytes 24-31 (occupied capacity in shannons)
+- `BURN_ADJUSTMENT` = 504,000,000,000,000,000 shannons (5.04B CKB)
+
+### Why the Burn Adjustment?
+
+The 8.4B CKB burnt at genesis is "issued but not circulating". Of this:
+
+- **5.04B (60%)** is hard-coded as "occupied" capacity
+- **3.36B (40%)** is hard-coded as "liquid"
+
+The `U` field in the DAO includes this virtual 5.04B occupied capacity. Since the burn cell doesn't actually store any data, we subtract it to get the real Common Knowledge Size.
+
+### Constants
+
+```rust
+const GENESIS_BURNT: u64 = 8_400_000_000 * SHANNON;     // 8.4B CKB
+const BURN_OCCUPIED_RATIO: f64 = 0.6;                    // 60%
+const BURN_ADJUSTMENT: i128 = 504_000_000_000_000_000;  // 5.04B CKB in shannons
+// Derivation: 8_400_000_000 * 100_000_000 * 0.6 = 504_000_000_000_000_000
+```
+
+### What Occupied Capacity Includes
+
+A cell's occupied capacity is NOT just `cell.data.len()`. It includes ALL storage requirements:
+
+| Component      | Size                                  |
+| -------------- | ------------------------------------- |
+| Capacity field | 8 bytes                               |
+| Lock script    | 32 (code_hash) + 1 (hash_type) + args |
+| Type script    | 32 (code_hash) + 1 (hash_type) + args |
+| Data           | Actual data bytes                     |
+
+**IMPORTANT**: Do NOT confuse:
+
+- `cell.data.len()` = Only the data field bytes
+- `occupied_capacity` = Full storage cost (capacity + scripts + data)
+- `U` field = Protocol-level cumulative occupied capacity
+
+### Implementation
+
+**Indexer** (`crates/indexer/src/db/writer/statistics.rs`):
+
+```rust
+pub fn calculate_knowledge_size(dao_field: &[u8]) -> Option<i128> {
+    if dao_field.len() < 32 { return None; }
+    let u_field = u64::from_le_bytes(dao_field[24..32].try_into().ok()?);
+    Some(u_field as i128 - BURN_ADJUSTMENT)
+}
+```
+
+**Task Runner** (`crates/task-runner/src/executor/statistics.rs`):
+
+- Uses embedded SQL constant `504000000000000000` for rebuild
+
+**API** (`crates/api/src/routes/statistics.rs`):
+
+- Endpoint: `GET /api/v1/charts/knowledge-size`
+- Returns daily values in shannons as strings (for precision)
+- Frontend converts to CKB for display
+
+### Data Flow
+
+1. Each block's DAO field is stored during indexing
+2. `update_daily_statistics()` extracts U field from the last block of each day
+3. Calculates `knowledge_size = U - 504000000000000000`
+4. Stores in `daily_statistics.knowledge_size` column
+5. API serves historical chart data
+
+### Reference
+
+The formula matches the official CKB Explorer implementation:
+
+```ruby
+# Official explorer (Ruby)
+knowledge_size = dao.U - (BURN_QUOTA * 0.6)
+```

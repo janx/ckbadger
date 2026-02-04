@@ -52,6 +52,7 @@ impl BatchWriter {
         capacity_transferred: i64,
         data_size_added: i64,
         data_size_consumed: i64,
+        dao_field: Option<&[u8]>,
     ) -> Result<()> {
         let prev_cumulative = sqlx::query_as::<_, (i64, i64, i64, i64)>(
             r#"
@@ -74,13 +75,17 @@ impl BatchWriter {
         let net_cells = (cells_created - cells_consumed) as i64;
         let net_data_size = data_size_added - data_size_consumed;
 
+        let knowledge_size: Option<String> =
+            dao_field.and_then(|dao| calculate_knowledge_size(dao).map(|v| v.to_string()));
+
         sqlx::query(
             r#"
             INSERT INTO daily_statistics (
                 date, blocks_count, transactions_count, cells_created, cells_consumed, 
-                capacity_transferred, total_live_cells, total_dead_cells, total_all_cells, total_data_size
+                capacity_transferred, total_live_cells, total_dead_cells, total_all_cells, total_data_size,
+                knowledge_size
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $12::numeric)
             ON CONFLICT (date) DO UPDATE SET
                 blocks_count = daily_statistics.blocks_count + EXCLUDED.blocks_count,
                 transactions_count = daily_statistics.transactions_count + EXCLUDED.transactions_count,
@@ -90,7 +95,8 @@ impl BatchWriter {
                 total_live_cells = daily_statistics.total_live_cells + $4 - $5,
                 total_dead_cells = daily_statistics.total_dead_cells + $5,
                 total_all_cells = daily_statistics.total_all_cells + $4,
-                total_data_size = daily_statistics.total_data_size + $11
+                total_data_size = daily_statistics.total_data_size + $11,
+                knowledge_size = COALESCE($12::numeric, daily_statistics.knowledge_size)
             "#,
         )
         .bind(date)
@@ -104,6 +110,7 @@ impl BatchWriter {
         .bind(prev_cumulative.2 + cells_created as i64)
         .bind(prev_cumulative.3 + net_data_size)
         .bind(net_data_size)
+        .bind(knowledge_size)
         .execute(&self.pool)
         .await?;
 
@@ -1197,5 +1204,141 @@ impl BatchWriter {
 
         info!("dao_daily_snapshots rebuild completed");
         Ok(())
+    }
+}
+
+/// Calculates knowledge_size from DAO field bytes.
+/// Formula: U field (bytes 24-32, little-endian u64) - BURN_ADJUSTMENT
+/// where BURN_ADJUSTMENT = 8,400,000,000 CKB * 0.6 * 10^8 shannons = 504,000,000,000,000,000
+///
+/// This matches the official CKB Explorer formula:
+/// `knowledge_size = dao.U - (BURN_QUOTA * 0.6)`
+///
+/// The U field represents the total occupied capacity (Common Knowledge Size) in the DAO header.
+pub fn calculate_knowledge_size(dao_field: &[u8]) -> Option<i128> {
+    // BURN_QUOTA * 0.6 in shannons = 8,400,000,000 CKB * 0.6 * 10^8
+    const BURN_ADJUSTMENT: i128 = 504_000_000_000_000_000;
+
+    if dao_field.len() >= 32 {
+        let bytes: [u8; 8] = dao_field[24..32].try_into().ok()?;
+        let u_field = u64::from_le_bytes(bytes) as i128;
+        Some(u_field - BURN_ADJUSTMENT)
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // BURN_ADJUSTMENT constant for tests
+    const BURN_ADJUSTMENT: i128 = 504_000_000_000_000_000;
+
+    #[test]
+    fn test_calculate_knowledge_size_extracts_u_field() {
+        // Create a mock DAO field (32 bytes)
+        // DAO structure: [0..8]=C, [8..16]=AR, [16..24]=S, [24..32]=U
+        let mut dao = vec![0u8; 32];
+
+        // Set U field (bytes 24-32) to a known value: 600,000,000,000,000,000 shannons
+        // In little-endian
+        let u_value: u64 = 600_000_000_000_000_000;
+        dao[24..32].copy_from_slice(&u_value.to_le_bytes());
+
+        let result = calculate_knowledge_size(&dao);
+        assert!(result.is_some());
+
+        // Expected: 600,000,000,000,000,000 - 504,000,000,000,000,000 = 96,000,000,000,000,000
+        let expected = u_value as i128 - BURN_ADJUSTMENT;
+        assert_eq!(result.unwrap(), expected);
+        assert_eq!(result.unwrap(), 96_000_000_000_000_000);
+    }
+
+    #[test]
+    fn test_calculate_knowledge_size_handles_real_mainnet_value() {
+        // Real mainnet DAO field from block ~14,000,000 (approximate)
+        // U field should be around 500+ quadrillion shannons
+        let mut dao = vec![0u8; 32];
+
+        // Simulate a realistic U value: ~520 quadrillion shannons (~5200 billion CKB occupied)
+        let u_value: u64 = 520_000_000_000_000_000;
+        dao[24..32].copy_from_slice(&u_value.to_le_bytes());
+
+        let result = calculate_knowledge_size(&dao);
+        assert!(result.is_some());
+
+        // After subtracting BURN_ADJUSTMENT, should be positive
+        let knowledge_size = result.unwrap();
+        assert!(knowledge_size > 0);
+
+        // Expected: 520 - 504 = 16 quadrillion shannons = 160 billion CKB
+        assert_eq!(knowledge_size, 16_000_000_000_000_000);
+    }
+
+    #[test]
+    fn test_calculate_knowledge_size_returns_none_for_short_dao() {
+        // DAO field too short (< 32 bytes)
+        let short_dao = vec![0u8; 24];
+        assert!(calculate_knowledge_size(&short_dao).is_none());
+
+        let empty_dao: Vec<u8> = vec![];
+        assert!(calculate_knowledge_size(&empty_dao).is_none());
+    }
+
+    #[test]
+    fn test_calculate_knowledge_size_handles_minimum_u_value() {
+        // U field at exactly BURN_ADJUSTMENT should give 0
+        let mut dao = vec![0u8; 32];
+        let u_value: u64 = BURN_ADJUSTMENT as u64;
+        dao[24..32].copy_from_slice(&u_value.to_le_bytes());
+
+        let result = calculate_knowledge_size(&dao);
+        assert_eq!(result, Some(0));
+    }
+
+    #[test]
+    fn test_calculate_knowledge_size_handles_u_below_burn_adjustment() {
+        // If U is below BURN_ADJUSTMENT (shouldn't happen in practice), result is negative
+        let mut dao = vec![0u8; 32];
+        let u_value: u64 = 400_000_000_000_000_000; // Less than BURN_ADJUSTMENT
+        dao[24..32].copy_from_slice(&u_value.to_le_bytes());
+
+        let result = calculate_knowledge_size(&dao);
+        assert!(result.is_some());
+        assert!(result.unwrap() < 0);
+    }
+
+    #[test]
+    fn test_calculate_knowledge_size_uses_little_endian() {
+        // Verify little-endian byte order is correctly used
+        let mut dao = vec![0u8; 32];
+
+        // Set U field to 0x0102030405060708 (little-endian stored as 08 07 06 05 04 03 02 01)
+        dao[24] = 0x08;
+        dao[25] = 0x07;
+        dao[26] = 0x06;
+        dao[27] = 0x05;
+        dao[28] = 0x04;
+        dao[29] = 0x03;
+        dao[30] = 0x02;
+        dao[31] = 0x01;
+
+        let expected_u: u64 = 0x0102030405060708;
+        let result = calculate_knowledge_size(&dao);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), expected_u as i128 - BURN_ADJUSTMENT);
+    }
+
+    #[test]
+    fn test_burn_adjustment_constant_matches_formula() {
+        // BURN_QUOTA = 8,400,000,000 CKB (genesis burnt tokens)
+        // BURN_ADJUSTMENT = BURN_QUOTA * 0.6 * 10^8 (convert to shannons)
+        let burn_quota_ckb: i128 = 8_400_000_000;
+        let shannons_per_ckb: i128 = 100_000_000;
+        let expected = (burn_quota_ckb * shannons_per_ckb * 6) / 10; // * 0.6
+
+        assert_eq!(BURN_ADJUSTMENT, expected);
+        assert_eq!(BURN_ADJUSTMENT, 504_000_000_000_000_000);
     }
 }

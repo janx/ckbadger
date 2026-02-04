@@ -464,6 +464,10 @@ CREATE TABLE daily_statistics (
     total_data_size BIGINT NOT NULL DEFAULT 0,
     cumulative_cells BIGINT NOT NULL DEFAULT 0,
     cumulative_data_size BIGINT NOT NULL DEFAULT 0,
+    -- Common Knowledge Size: occupied capacity from DAO U field (shannons)
+    -- Source: U field of the last block's DAO header for each day
+    -- Formula matches official explorer: dao.U - (BURN_QUOTA * 0.6)
+    knowledge_size NUMERIC(30,0),
 
     avg_block_time_ms INTEGER,
     avg_tx_per_block NUMERIC(10,2),

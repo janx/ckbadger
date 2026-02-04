@@ -132,12 +132,15 @@ async fn rebuild_daily_statistics(pool: &PgPool) -> Result<()> {
         .execute(pool)
         .await?;
 
+    // BURN_QUOTA * 0.6 in shannons = 8,400,000,000 CKB * 0.6 * 10^8 = 504,000,000,000,000,000
+    // This constant is embedded in the SQL query below since sqlx doesn't support i128 binding.
+
     sqlx::query(
         r#"
         INSERT INTO daily_statistics (
             date, blocks_count, transactions_count, cells_created, cells_consumed,
             capacity_transferred, total_live_cells, total_dead_cells, total_all_cells,
-            total_data_size, avg_block_time_ms
+            total_data_size, avg_block_time_ms, knowledge_size
         )
         WITH block_times AS (
             SELECT 
@@ -145,6 +148,7 @@ async fn rebuild_daily_statistics(pool: &PgPool) -> Result<()> {
                 timestamp,
                 timestamp::date as date,
                 transactions_count,
+                dao,
                 EXTRACT(EPOCH FROM (timestamp - LAG(timestamp) OVER (ORDER BY number))) * 1000 as block_time_ms
             FROM blocks
         ),
@@ -156,6 +160,13 @@ async fn rebuild_daily_statistics(pool: &PgPool) -> Result<()> {
                 AVG(block_time_ms)::int as avg_block_time_ms
             FROM block_times
             GROUP BY date
+        ),
+        daily_dao AS (
+            SELECT DISTINCT ON (date)
+                date,
+                dao
+            FROM block_times
+            ORDER BY date, number DESC
         ),
         cells_created_agg AS (
             SELECT 
@@ -192,10 +203,13 @@ async fn rebuild_daily_statistics(pool: &PgPool) -> Result<()> {
                 OVER (ORDER BY db.date) as total_all_cells,
             SUM(COALESCE(cc.data_size_added, 0) - COALESCE(cd.data_size_consumed, 0)) 
                 OVER (ORDER BY db.date) as total_data_size,
-            db.avg_block_time_ms
+            db.avg_block_time_ms,
+            (('x' || encode(reverse(substring(dd.dao from 25 for 8)), 'hex'))::bit(64)::bigint)::numeric - 504000000000000000
+                as knowledge_size
         FROM daily_blocks db
         LEFT JOIN cells_created_agg cc ON db.date = cc.date
         LEFT JOIN cells_consumed_agg cd ON db.date = cd.date
+        LEFT JOIN daily_dao dd ON db.date = dd.date
         ORDER BY db.date
         "#,
     )

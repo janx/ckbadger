@@ -70,6 +70,8 @@ struct BatchStats {
     dao_snapshot_dates: HashSet<NaiveDate>,
     /// Per-date block time totals: (sum_ms, count) for avg calculation
     daily_block_times: HashMap<NaiveDate, (i64, i32)>,
+    /// Per-date DAO field from the last block of each date (for knowledge_size calculation)
+    daily_dao_fields: HashMap<NaiveDate, Vec<u8>>,
 }
 
 #[derive(Clone)]
@@ -2846,6 +2848,7 @@ impl Indexer {
         let mut block_tx_idx = 0usize;
         for parsed in &all_parsed_blocks {
             let block_date = parsed.timestamp.date_naive();
+
             let tx_count_for_block = parsed.transactions_count as usize;
             let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
             block_tx_idx += tx_count_for_block;
@@ -2896,6 +2899,38 @@ impl Indexer {
                 entry.4 += capacity_transferred;
                 entry.5 += data_size_added;
                 entry.6 += data_size_consumed;
+            }
+
+            batch_stats
+                .daily_dao_fields
+                .insert(block_date, parsed.dao.clone());
+
+            {
+                let block_hour = truncate_to_hour(parsed.timestamp);
+                let entry = batch_stats.hourly_stats.entry(block_hour).or_default();
+                entry.0 += 1;
+                entry.1 += parsed.transactions_count;
+                entry.2 += cells_created;
+                entry.3 += cells_consumed;
+                entry.4 += capacity_transferred;
+            }
+
+            {
+                let entry = batch_stats.daily_block_stats.entry(block_date).or_default();
+                entry.0 += parsed.compact_target as i128;
+                entry.1 += 1;
+                entry.2 += parsed.uncles_count;
+            }
+
+            if let Some(first_tx) = tx_slice.first() {
+                if first_tx.is_cellbase {
+                    if let Some(first_cell) = first_tx.cells.first() {
+                        let key = (block_date, first_cell.lock_script_hash.clone());
+                        let entry = batch_stats.miner_stats.entry(key).or_insert((0, 0));
+                        entry.0 += 1;
+                        entry.1 = parsed.number;
+                    }
+                }
             }
 
             {
@@ -3961,6 +3996,10 @@ impl Indexer {
                 entry.5 += data_size_added;
                 entry.6 += data_size_consumed;
             }
+
+            batch_stats
+                .daily_dao_fields
+                .insert(block_date, parsed.dao.clone());
 
             {
                 let block_hour = truncate_to_hour(parsed.timestamp);
@@ -5043,6 +5082,10 @@ impl Indexer {
             entry.6 += data_size_consumed;
         }
 
+        batch_stats
+            .daily_dao_fields
+            .insert(block_date, parsed.dao.clone());
+
         {
             let block_hour = truncate_to_hour(parsed.timestamp);
             let entry = batch_stats.hourly_stats.entry(block_hour).or_default();
@@ -5240,6 +5283,7 @@ impl Indexer {
                 (blocks, txs, created, consumed, capacity, data_size_added, data_size_consumed),
             ) in &stats.daily_stats
             {
+                let dao_field = stats.daily_dao_fields.get(date);
                 self.writer
                     .update_daily_statistics(
                         *date,
@@ -5250,6 +5294,7 @@ impl Indexer {
                         *capacity,
                         *data_size_added,
                         *data_size_consumed,
+                        dao_field.map(|v| v.as_slice()),
                     )
                     .await?;
             }

@@ -474,11 +474,11 @@ async fn get_cell_count_chart(
 }
 
 async fn get_knowledge_size_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
-    let rows = sqlx::query_as::<_, (chrono::NaiveDate, i64)>(
+    let rows = sqlx::query_as::<_, (chrono::NaiveDate, String)>(
         r#"
-        SELECT date, total_data_size
+        SELECT date, knowledge_size::text
         FROM daily_statistics
-        WHERE total_data_size IS NOT NULL
+        WHERE knowledge_size IS NOT NULL
         ORDER BY date ASC
         "#,
     )
@@ -488,9 +488,9 @@ async fn get_knowledge_size_chart(State(state): State<Arc<AppState>>) -> ApiResu
 
     let data: Vec<ChartDataPoint> = rows
         .into_iter()
-        .map(|(date, cumulative_size)| ChartDataPoint {
+        .map(|(date, knowledge_size)| ChartDataPoint {
             date: date.format("%Y/%m/%d").to_string(),
-            value: cumulative_size.to_string(),
+            value: knowledge_size,
             value2: None,
         })
         .collect();
@@ -498,7 +498,7 @@ async fn get_knowledge_size_chart(State(state): State<Arc<AppState>>) -> ApiResu
     ok(ChartResponse {
         data,
         title: "Common Knowledge Size".to_string(),
-        y_axis_label: "Bytes".to_string(),
+        y_axis_label: "CKB".to_string(),
         y2_axis_label: None,
     })
 }
