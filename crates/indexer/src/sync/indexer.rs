@@ -1300,6 +1300,10 @@ impl Indexer {
                 warn!("Failed to submit index rebuild task: {}", e);
             }
 
+            if let Err(e) = self.maybe_submit_cells_status_rebuild_task().await {
+                warn!("Failed to submit cells status rebuild task: {}", e);
+            }
+
             if let Err(e) = self.maybe_submit_live_cells_populate_task().await {
                 warn!("Failed to submit live cells populate task: {}", e);
             }
@@ -1535,6 +1539,41 @@ impl Indexer {
         .await?;
 
         info!("Submitted secondary issuance backfill task: {}", task_id.0);
+
+        Ok(())
+    }
+
+    async fn maybe_submit_cells_status_rebuild_task(&self) -> Result<()> {
+        use ckbadger_common::{CellsStatusRebuildConfig, TaskBuilder};
+
+        let existing: Option<(i64,)> = sqlx::query_as(
+            "SELECT COUNT(*) FROM tasks WHERE task_type = 'cells_status_rebuild' AND status IN ('pending', 'running')",
+        )
+        .fetch_optional(self.writer.pool())
+        .await?;
+
+        if existing.map(|r| r.0).unwrap_or(0) > 0 {
+            info!("Cells status rebuild task already pending/running, skipping submission");
+            return Ok(());
+        }
+
+        let builder = TaskBuilder::cells_status_rebuild(CellsStatusRebuildConfig::default());
+
+        let task_id: (Uuid,) = sqlx::query_as(
+            r#"
+            INSERT INTO tasks (task_type, config, priority, max_retries)
+            VALUES ($1, $2, $3, $4)
+            RETURNING id
+            "#,
+        )
+        .bind(builder.task_type().to_string())
+        .bind(builder.config())
+        .bind(builder.get_priority())
+        .bind(builder.get_max_retries())
+        .fetch_one(self.writer.pool())
+        .await?;
+
+        info!("Submitted cells status rebuild task: {}", task_id.0);
 
         Ok(())
     }

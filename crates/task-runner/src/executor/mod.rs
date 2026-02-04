@@ -1,8 +1,8 @@
 use anyhow::Result;
 use ckbadger_common::{
-    ConsumedAtBackfillConfig, CyclesBackfillConfig, IndexRebuildConfig, LabelImportConfig,
-    SecondaryIssuanceBackfillConfig, SporeRebuildConfig, StatisticsRebuildConfig, Task, TaskConfig,
-    TaskType,
+    CellsStatusRebuildConfig, ConsumedAtBackfillConfig, CyclesBackfillConfig, IndexRebuildConfig,
+    LabelImportConfig, SecondaryIssuanceBackfillConfig, SporeRebuildConfig,
+    StatisticsRebuildConfig, Task, TaskConfig, TaskType,
 };
 use sqlx::PgPool;
 use std::time::Duration;
@@ -10,6 +10,7 @@ use tracing::{error, info};
 
 use crate::db::TaskDb;
 
+mod cells_status;
 mod consumed;
 mod cycles;
 mod index;
@@ -113,6 +114,7 @@ impl TaskExecutor {
             TaskType::SecondaryIssuanceBackfill => {
                 self.execute_secondary_issuance_backfill(task).await
             }
+            TaskType::CellsStatusRebuild => self.execute_cells_status_rebuild(task).await,
         }
     }
 
@@ -193,5 +195,14 @@ impl TaskExecutor {
         }
 
         secondary_issuance::execute(&self.db, &self.pool, task.id, &config).await
+    }
+
+    async fn execute_cells_status_rebuild(&self, task: &Task) -> Result<()> {
+        let config: CellsStatusRebuildConfig = match task.config_typed() {
+            Some(TaskConfig::CellsStatusRebuild(c)) => c,
+            _ => CellsStatusRebuildConfig::default(),
+        };
+
+        cells_status::execute(&self.db, &self.pool, task.id, &config).await
     }
 }

@@ -62,6 +62,7 @@ pub enum TaskType {
     SporeRebuild,
     ConsumedAtBackfill,
     SecondaryIssuanceBackfill,
+    CellsStatusRebuild,
 }
 
 impl std::fmt::Display for TaskType {
@@ -75,6 +76,7 @@ impl std::fmt::Display for TaskType {
             TaskType::SporeRebuild => write!(f, "spore_rebuild"),
             TaskType::ConsumedAtBackfill => write!(f, "consumed_at_backfill"),
             TaskType::SecondaryIssuanceBackfill => write!(f, "secondary_issuance_backfill"),
+            TaskType::CellsStatusRebuild => write!(f, "cells_status_rebuild"),
         }
     }
 }
@@ -92,6 +94,7 @@ impl std::str::FromStr for TaskType {
             "spore_rebuild" => Ok(TaskType::SporeRebuild),
             "consumed_at_backfill" => Ok(TaskType::ConsumedAtBackfill),
             "secondary_issuance_backfill" => Ok(TaskType::SecondaryIssuanceBackfill),
+            "cells_status_rebuild" => Ok(TaskType::CellsStatusRebuild),
             _ => Err(anyhow::anyhow!("Invalid task type: {}", s)),
         }
     }
@@ -279,6 +282,28 @@ impl Default for ConsumedAtBackfillConfig {
     }
 }
 
+/// Configuration for cells status rebuild task
+/// Rebuilds cells.status and consumed_at fields from transaction_inputs table
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CellsStatusRebuildConfig {
+    /// Batch size for processing blocks (default: 100,000)
+    #[serde(default = "default_cells_status_batch_size")]
+    pub batch_size: i64,
+}
+
+fn default_cells_status_batch_size() -> i64 {
+    100_000
+}
+
+impl Default for CellsStatusRebuildConfig {
+    fn default() -> Self {
+        Self {
+            batch_size: default_cells_status_batch_size(),
+        }
+    }
+}
+
 /// Unified task configuration enum
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -291,6 +316,7 @@ pub enum TaskConfig {
     SporeRebuild(SporeRebuildConfig),
     ConsumedAtBackfill(ConsumedAtBackfillConfig),
     SecondaryIssuanceBackfill(SecondaryIssuanceBackfillConfig),
+    CellsStatusRebuild(CellsStatusRebuildConfig),
 }
 
 impl TaskConfig {
@@ -304,6 +330,7 @@ impl TaskConfig {
             TaskConfig::SporeRebuild(_) => TaskType::SporeRebuild,
             TaskConfig::ConsumedAtBackfill(_) => TaskType::ConsumedAtBackfill,
             TaskConfig::SecondaryIssuanceBackfill(_) => TaskType::SecondaryIssuanceBackfill,
+            TaskConfig::CellsStatusRebuild(_) => TaskType::CellsStatusRebuild,
         }
     }
 }
@@ -411,6 +438,13 @@ pub struct SecondaryIssuanceBackfillResult {
     pub errors: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CellsStatusRebuildResult {
+    pub cells_updated: i64,
+    pub blocks_processed: i64,
+}
+
 /// Unified task result enum
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -423,6 +457,7 @@ pub enum TaskResult {
     SporeRebuild(SporeRebuildResult),
     ConsumedAtBackfill(ConsumedAtBackfillResult),
     SecondaryIssuanceBackfill(SecondaryIssuanceBackfillResult),
+    CellsStatusRebuild(CellsStatusRebuildResult),
 }
 
 // ============================================
@@ -645,6 +680,16 @@ impl TaskBuilder {
         }
     }
 
+    pub fn cells_status_rebuild(config: CellsStatusRebuildConfig) -> Self {
+        Self {
+            task_type: TaskType::CellsStatusRebuild,
+            config: serde_json::to_value(TaskConfig::CellsStatusRebuild(config))
+                .expect("CellsStatusRebuildConfig should be serializable"),
+            priority: 9, // High priority - needed before statistics work correctly
+            max_retries: 2,
+        }
+    }
+
     pub fn priority(mut self, priority: i32) -> Self {
         self.priority = priority;
         self
@@ -798,6 +843,10 @@ mod tests {
         assert_eq!(
             TaskType::SecondaryIssuanceBackfill.to_string(),
             "secondary_issuance_backfill"
+        );
+        assert_eq!(
+            TaskType::CellsStatusRebuild.to_string(),
+            "cells_status_rebuild"
         );
     }
 
@@ -974,5 +1023,39 @@ mod tests {
 
         let parsed: TaskConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.task_type(), TaskType::SecondaryIssuanceBackfill);
+    }
+
+    #[test]
+    fn test_cells_status_rebuild_builder() {
+        let builder = TaskBuilder::cells_status_rebuild(CellsStatusRebuildConfig::default());
+        assert_eq!(builder.task_type(), TaskType::CellsStatusRebuild);
+        assert_eq!(builder.get_priority(), 9);
+    }
+
+    #[test]
+    fn test_cells_status_rebuild_type_display() {
+        assert_eq!(
+            TaskType::CellsStatusRebuild.to_string(),
+            "cells_status_rebuild"
+        );
+    }
+
+    #[test]
+    fn test_cells_status_rebuild_type_parse() {
+        assert_eq!(
+            "cells_status_rebuild".parse::<TaskType>().unwrap(),
+            TaskType::CellsStatusRebuild
+        );
+    }
+
+    #[test]
+    fn test_cells_status_rebuild_config_serialization() {
+        let config = TaskConfig::CellsStatusRebuild(CellsStatusRebuildConfig { batch_size: 50000 });
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("cells_status_rebuild"));
+        assert!(json.contains("batchSize"));
+
+        let parsed: TaskConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.task_type(), TaskType::CellsStatusRebuild);
     }
 }

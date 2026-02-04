@@ -232,8 +232,12 @@ impl BatchWriter {
             }
         }
 
-        // Always update cells table to track consumption (needed for statistics)
-        // This is essential for accurate live cell count in daily_statistics
+        // Skip cells.status UPDATE in bulk sync mode - will be rebuilt via CellsStatusRebuild task
+        // This eliminates the 100+ second bottleneck per batch during bulk sync
+        if bulk_sync_mode {
+            return Ok(());
+        }
+
         const PARTITION_SIZE: i64 = 5_000_000;
         let mut by_partition: std::collections::HashMap<i64, Vec<usize>> =
             std::collections::HashMap::new();
@@ -291,12 +295,6 @@ impl BatchWriter {
 
         for fut in update_futures {
             fut.await?;
-        }
-
-        // Skip live_cells table operations in bulk sync mode
-        // (live_cells will be populated from RocksDB after bulk sync completes)
-        if bulk_sync_mode {
-            return Ok(());
         }
 
         let all_tx_hashes: Vec<&[u8]> = consumptions.iter().map(|(h, _, _, _, _, _)| *h).collect();

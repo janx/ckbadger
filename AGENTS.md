@@ -242,19 +242,22 @@ When bulk sync completes (catches up to <=1000 blocks behind tip), the indexer a
 
 1. Indexer detects bulk sync completion
 2. Submits `index_rebuild` task (priority 10) if indexes are deferred
-3. Submits `live_cells_populate` task (priority 8) to populate PostgreSQL from RocksDB
-4. Submits `statistics_rebuild` task (priority 5) to rebuild aggregate statistics
-5. Task-runner picks up `index_rebuild` and `statistics_rebuild` tasks
-6. Indexer executes `live_cells_populate` during idle time (requires RocksDB access)
-7. Indexes rebuilt with `CREATE INDEX CONCURRENTLY`
-8. Statistics tables rebuilt (daily_statistics, hourly_statistics, miner_statistics, etc.)
-9. Tasks complete (status: `completed`)
+3. Submits `cells_status_rebuild` task (priority 9) to rebuild cells.status
+4. Submits `live_cells_populate` task (priority 8) to populate PostgreSQL from RocksDB
+5. Submits `statistics_rebuild` task (priority 5) to rebuild aggregate statistics
+6. Task-runner picks up `index_rebuild`, `cells_status_rebuild`, and `statistics_rebuild` tasks
+7. Indexer executes `live_cells_populate` during idle time (requires RocksDB access)
+8. Indexes rebuilt with `CREATE INDEX CONCURRENTLY`
+9. Cells status rebuilt from transaction_inputs table
+10. Statistics tables rebuilt (daily_statistics, hourly_statistics, miner_statistics, etc.)
+11. Tasks complete (status: `completed`)
 
 **Available Task Types:**
 
 | Task Type                     | Priority | Description                                          |
 | ----------------------------- | -------- | ---------------------------------------------------- |
 | `index_rebuild`               | 10       | Rebuild deferred indexes and constraints             |
+| `cells_status_rebuild`        | 9        | Rebuild cells.status from transaction_inputs         |
 | `live_cells_populate`         | 8        | Populate live_cells table from RocksDB (indexer)     |
 | `secondary_issuance_backfill` | 7        | Backfill ALL blocks' secondary issuance data (exact) |
 | `statistics_rebuild`          | 5        | Rebuild all 7 aggregate statistics tables            |
