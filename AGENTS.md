@@ -358,13 +358,14 @@ The LiveCellStore provides O(1) cell lookups during blockchain synchronization u
 
 **Cache Lookup Order:**
 
-1. `get_cells_info_batch()`: live_cells → consumed_cells → PostgreSQL
-2. `get_block_dao_field()`: block_headers → PostgreSQL
-3. `get_block_number_by_hash()`: block_hash_index → PostgreSQL
+1. `get_cells_info_batch(bulk_sync_mode)`: live_cells → consumed_cells → PostgreSQL (skipped if bulk_sync_mode=true)
+2. `get_cells_code_hashes_batch(bulk_sync_mode)`: live_cells → consumed_cells → PostgreSQL (skipped if bulk_sync_mode=true)
+3. `get_block_dao_field()`: block_headers → PostgreSQL
+4. `get_block_number_by_hash()`: block_hash_index → PostgreSQL
 
 **Behavior:**
 
-- **Bulk Sync Mode** (>1000 blocks behind tip): Skips ALL `live_cells` table operations (INSERT/DELETE), writing only to RocksDB for maximum throughput. The `cells` table still receives writes.
+- **Bulk Sync Mode** (>1000 blocks behind tip): Skips ALL `live_cells` table operations (INSERT/DELETE), writing only to RocksDB for maximum throughput. The `cells` table still receives writes. Additionally, `get_cells_info_batch` and `get_cells_code_hashes_batch` skip PostgreSQL fallback queries when RocksDB is enabled, avoiding expensive partition scans that return 0 rows.
 - **Bulk Sync Cell Cache** (default enabled): Retains ALL consumed cells in RocksDB during bulk sync, eliminating PostgreSQL fallback queries. Requires ~15GB extra memory for full chain sync. Disabled automatically on sync completion.
 - **Consumed Cell Cache**: When a cell is spent, its info is preserved in `consumed_cells` CF for 1000 blocks (or indefinitely during bulk sync if cell cache enabled).
 - **Block Header Cache**: Automatically populated when blocks are written; enables O(1) DAO field lookups.

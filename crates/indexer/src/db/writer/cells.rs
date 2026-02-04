@@ -339,9 +339,16 @@ impl BatchWriter {
         Ok(row)
     }
 
+    /// Get cell info for a batch of outpoints.
+    ///
+    /// When `bulk_sync_mode` is true and RocksDB store is enabled, skips PostgreSQL
+    /// fallback queries entirely. During bulk sync, live_cells table is unpopulated
+    /// and the cells table query causes severe performance issues (2-7s per query
+    /// scanning all partitions for 0 rows).
     pub async fn get_cells_info_batch(
         &self,
         outpoints: &[(&[u8], i16)],
+        bulk_sync_mode: bool,
     ) -> Result<HashMap<(Vec<u8>, i16), (i64, i64, Vec<u8>, i32)>> {
         if outpoints.is_empty() {
             return Ok(HashMap::new());
@@ -392,6 +399,13 @@ impl BatchWriter {
                     outpoints.len()
                 );
             }
+
+            // In bulk sync mode with RocksDB enabled, skip PostgreSQL fallback.
+            // The live_cells table is unpopulated during bulk sync, and querying
+            // the cells table causes severe performance degradation.
+            if bulk_sync_mode {
+                return Ok(result);
+            }
         } else {
             missing.extend(outpoints.iter().copied());
         }
@@ -417,7 +431,8 @@ impl BatchWriter {
                 result.insert((tx_hash, idx), (cap, block, lock_hash, data_size));
             }
 
-            // STATS-007 fix: Fallback to cells table for bulk sync mode when live_cells is unpopulated
+            // STATS-007 fix: Fallback to cells table when live_cells is unpopulated
+            // (only used in non-bulk-sync mode, e.g., real-time sync after restart)
             let still_missing: Vec<(&[u8], i16)> = missing
                 .iter()
                 .filter(|(h, i)| !result.contains_key(&(h.to_vec(), *i)))
@@ -462,6 +477,7 @@ impl BatchWriter {
     pub async fn get_cells_code_hashes_batch(
         &self,
         outpoints: &[(&[u8], i16)],
+        bulk_sync_mode: bool,
     ) -> Result<HashMap<(Vec<u8>, i16), (Vec<u8>, Option<Vec<u8>>)>> {
         if outpoints.is_empty() {
             return Ok(HashMap::new());
@@ -495,6 +511,10 @@ impl BatchWriter {
                     missing.len(),
                     outpoints.len()
                 );
+            }
+
+            if bulk_sync_mode {
+                return Ok(result);
             }
         } else {
             missing.extend(outpoints.iter().copied());

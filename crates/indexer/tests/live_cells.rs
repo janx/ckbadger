@@ -135,7 +135,10 @@ async fn test_get_cells_info_batch_queries_live_cells(pool: PgPool) {
         .await
         .unwrap();
 
-    let result = writer.get_cells_info_batch(&[(&tx_hash, 0)]).await.unwrap();
+    let result = writer
+        .get_cells_info_batch(&[(&tx_hash, 0)], false)
+        .await
+        .unwrap();
 
     assert_eq!(result.len(), 1);
     let (capacity, block, lock_hash, data_size) = result.get(&(tx_hash.clone(), 0)).unwrap();
@@ -162,7 +165,10 @@ async fn test_get_cells_info_batch_returns_empty_for_consumed(pool: PgPool) {
         .await
         .unwrap();
 
-    let result = writer.get_cells_info_batch(&[(&tx_hash, 0)]).await.unwrap();
+    let result = writer
+        .get_cells_info_batch(&[(&tx_hash, 0)], false)
+        .await
+        .unwrap();
 
     assert!(result.is_empty());
 }
@@ -478,7 +484,7 @@ async fn test_get_cells_info_batch_falls_back_to_cells_table(pool: PgPool) {
     drop(writer);
     let writer_no_store = BatchWriter::new(pool.clone());
     let result = writer_no_store
-        .get_cells_info_batch(&[(&tx_hash, 0)])
+        .get_cells_info_batch(&[(&tx_hash, 0)], false)
         .await
         .unwrap();
 
@@ -488,4 +494,94 @@ async fn test_get_cells_info_batch_falls_back_to_cells_table(pool: PgPool) {
     assert_eq!(*block, 1000);
     assert_eq!(lock_hash.len(), 32);
     assert_eq!(*data_size, 100);
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn test_get_cells_info_batch_bulk_sync_skips_db_fallback(pool: PgPool) {
+    use ckbadger_indexer::db::{LiveCellStorage, RocksDbLiveCellStore};
+    use ckbadger_indexer::CacheInvalidator;
+    use std::sync::Arc;
+
+    let tmp_dir = tempfile::TempDir::new().unwrap();
+    let store = Arc::new(RocksDbLiveCellStore::open(tmp_dir.path(), true).unwrap());
+    let cache = CacheInvalidator::new(None).await;
+    let writer = BatchWriter::with_live_cell_store(pool.clone(), true, store.clone(), cache);
+
+    let tx_hash_in_rocksdb = vec![0x01u8; 32];
+    let tx_hash_only_in_db = vec![0x02u8; 32];
+    let cell = make_parsed_cell(100_00000000);
+
+    writer
+        .insert_cells_batch(&[(&tx_hash_in_rocksdb, 0, &cell, 1000)], true)
+        .await
+        .unwrap();
+
+    assert!(store.get(&tx_hash_in_rocksdb, 0).is_some());
+
+    let writer_no_store = BatchWriter::new(pool.clone());
+    writer_no_store
+        .insert_cells_batch(&[(&tx_hash_only_in_db, 0, &cell, 1001)], false)
+        .await
+        .unwrap();
+
+    assert!(store.get(&tx_hash_only_in_db, 0).is_none());
+
+    let result_bulk = writer
+        .get_cells_info_batch(&[(&tx_hash_in_rocksdb, 0), (&tx_hash_only_in_db, 0)], true)
+        .await
+        .unwrap();
+    assert_eq!(result_bulk.len(), 1);
+    assert!(result_bulk.contains_key(&(tx_hash_in_rocksdb.clone(), 0)));
+    assert!(!result_bulk.contains_key(&(tx_hash_only_in_db.clone(), 0)));
+
+    let result_non_bulk = writer
+        .get_cells_info_batch(&[(&tx_hash_in_rocksdb, 0), (&tx_hash_only_in_db, 0)], false)
+        .await
+        .unwrap();
+    assert_eq!(result_non_bulk.len(), 2);
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn test_get_cells_code_hashes_batch_bulk_sync_skips_db_fallback(pool: PgPool) {
+    use ckbadger_indexer::db::{LiveCellStorage, RocksDbLiveCellStore};
+    use ckbadger_indexer::CacheInvalidator;
+    use std::sync::Arc;
+
+    let tmp_dir = tempfile::TempDir::new().unwrap();
+    let store = Arc::new(RocksDbLiveCellStore::open(tmp_dir.path(), true).unwrap());
+    let cache = CacheInvalidator::new(None).await;
+    let writer = BatchWriter::with_live_cell_store(pool.clone(), true, store.clone(), cache);
+
+    let tx_hash_in_rocksdb = vec![0x01u8; 32];
+    let tx_hash_only_in_db = vec![0x02u8; 32];
+    let cell = make_parsed_cell(100_00000000);
+
+    writer
+        .insert_cells_batch(&[(&tx_hash_in_rocksdb, 0, &cell, 1000)], false)
+        .await
+        .unwrap();
+
+    assert!(store.get(&tx_hash_in_rocksdb, 0).is_some());
+
+    let writer_no_store = BatchWriter::new(pool.clone());
+    writer_no_store
+        .insert_cells_batch(&[(&tx_hash_only_in_db, 0, &cell, 1001)], false)
+        .await
+        .unwrap();
+
+    assert!(store.get(&tx_hash_only_in_db, 0).is_none());
+
+    let result_bulk = writer
+        .get_cells_code_hashes_batch(&[(&tx_hash_in_rocksdb, 0), (&tx_hash_only_in_db, 0)], true)
+        .await
+        .unwrap();
+    assert_eq!(result_bulk.len(), 1);
+    assert!(result_bulk.contains_key(&(tx_hash_in_rocksdb.clone(), 0)));
+    assert!(!result_bulk.contains_key(&(tx_hash_only_in_db.clone(), 0)));
+
+    let result_non_bulk = writer
+        .get_cells_code_hashes_batch(&[(&tx_hash_in_rocksdb, 0), (&tx_hash_only_in_db, 0)], false)
+        .await
+        .unwrap();
+    assert_eq!(result_non_bulk.len(), 2);
 }

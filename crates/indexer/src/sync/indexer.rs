@@ -783,8 +783,10 @@ impl Indexer {
                         .iter()
                         .map(|(h, i)| (h.as_slice(), *i))
                         .collect();
+                    let bulk_sync_mode = chain_tip.saturating_sub(end_block) > 1000;
                     // Add timeout to prevent parser from blocking indefinitely on DB query
-                    let db_query = writer_for_parser.get_cells_info_batch(&missing_refs);
+                    let db_query =
+                        writer_for_parser.get_cells_info_batch(&missing_refs, bulk_sync_mode);
                     match tokio::time::timeout(Duration::from_secs(30), db_query).await {
                         Ok(Ok(db_info)) => {
                             for ((tx_hash, idx), (cap, block, lock_hash, data_size)) in db_info {
@@ -822,8 +824,10 @@ impl Indexer {
                         .iter()
                         .map(|(h, i)| (h.as_slice(), *i))
                         .collect();
+                    let bulk_sync_mode = chain_tip.saturating_sub(end_block) > 1000;
                     // Add timeout to prevent parser from blocking indefinitely on DB query
-                    let db_query = writer_for_parser.get_cells_code_hashes_batch(&refs);
+                    let db_query =
+                        writer_for_parser.get_cells_code_hashes_batch(&refs, bulk_sync_mode);
                     match tokio::time::timeout(Duration::from_secs(30), db_query).await {
                         Ok(Ok(hashes)) => hashes,
                         Ok(Err(e)) => {
@@ -2422,7 +2426,10 @@ impl Indexer {
                 .iter()
                 .map(|(h, i)| (h.as_slice(), *i))
                 .collect();
-            let db_info = self.writer.get_cells_info_batch(&missing_refs).await?;
+            let db_info = self
+                .writer
+                .get_cells_info_batch(&missing_refs, bulk_sync_mode)
+                .await?;
             for ((tx_hash, idx), (cap, block, lock_hash, data_size)) in db_info {
                 input_cell_info.insert((tx_hash, idx), (cap, block, lock_hash, data_size));
             }
@@ -2744,7 +2751,9 @@ impl Indexer {
                 .iter()
                 .map(|(h, i)| (h.as_slice(), *i))
                 .collect();
-            self.writer.get_cells_code_hashes_batch(&refs).await?
+            self.writer
+                .get_cells_code_hashes_batch(&refs, bulk_sync_mode)
+                .await?
         } else {
             HashMap::new()
         };
@@ -4772,7 +4781,10 @@ impl Indexer {
                 .iter()
                 .map(|(h, i)| (h.as_slice(), *i))
                 .collect();
-            let db_info = self.writer.get_cells_info_batch(&missing_refs).await?;
+            let db_info = self
+                .writer
+                .get_cells_info_batch(&missing_refs, bulk_sync_mode)
+                .await?;
             for ((tx_hash, idx), (cap, block, lock_hash, data_size)) in db_info {
                 input_cell_info.insert((tx_hash, idx), (cap, block, lock_hash, data_size));
             }

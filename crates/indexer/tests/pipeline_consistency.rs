@@ -39,7 +39,10 @@ async fn test_cell_info_lookup_returns_all_fields(pool: PgPool) {
         .await
         .unwrap();
 
-    let result = writer.get_cells_info_batch(&[(&tx_hash, 0)]).await.unwrap();
+    let result = writer
+        .get_cells_info_batch(&[(&tx_hash, 0)], false)
+        .await
+        .unwrap();
 
     assert_eq!(result.len(), 1);
     let (capacity, created_at_block, lock_script_hash, data_size) =
@@ -76,7 +79,7 @@ async fn test_cell_info_batch_lookup_multiple_cells(pool: PgPool) {
         .unwrap();
 
     let result = writer
-        .get_cells_info_batch(&[(&tx1, 0), (&tx2, 0), (&tx3, 0)])
+        .get_cells_info_batch(&[(&tx1, 0), (&tx2, 0), (&tx3, 0)], false)
         .await
         .unwrap();
 
@@ -123,7 +126,7 @@ async fn test_code_hash_lookup_returns_lock_and_type(pool: PgPool) {
         .unwrap();
 
     let result = writer
-        .get_cells_code_hashes_batch(&[(&tx_hash, 0)])
+        .get_cells_code_hashes_batch(&[(&tx_hash, 0)], false)
         .await
         .unwrap();
 
@@ -159,7 +162,7 @@ async fn test_code_hash_lookup_no_type_script(pool: PgPool) {
         .unwrap();
 
     let result = writer
-        .get_cells_code_hashes_batch(&[(&tx_hash, 0)])
+        .get_cells_code_hashes_batch(&[(&tx_hash, 0)], false)
         .await
         .unwrap();
 
@@ -370,7 +373,7 @@ async fn test_multiple_outputs_same_tx(pool: PgPool) {
         .unwrap();
 
     let result = writer
-        .get_cells_info_batch(&[(&tx_hash, 0), (&tx_hash, 1), (&tx_hash, 2)])
+        .get_cells_info_batch(&[(&tx_hash, 0), (&tx_hash, 1), (&tx_hash, 2)], false)
         .await
         .unwrap();
 
@@ -402,7 +405,10 @@ async fn test_consumed_cell_not_in_info_batch(pool: PgPool) {
         .await
         .unwrap();
 
-    let result = writer.get_cells_info_batch(&[(&tx_hash, 0)]).await.unwrap();
+    let result = writer
+        .get_cells_info_batch(&[(&tx_hash, 0)], false)
+        .await
+        .unwrap();
     assert!(result.is_empty());
 }
 
@@ -422,7 +428,7 @@ async fn test_cross_partition_cell_lookup(pool: PgPool) {
         .unwrap();
 
     let result = writer
-        .get_cells_info_batch(&[(&tx_p0, 0), (&tx_p1, 0)])
+        .get_cells_info_batch(&[(&tx_p0, 0), (&tx_p1, 0)], false)
         .await
         .unwrap();
 
