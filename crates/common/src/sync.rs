@@ -67,9 +67,11 @@ impl SyncStatusData {
         }
     }
 
-    pub fn init_sync_start(&mut self, start_block: i64) {
-        self.sync_started_at = Some(chrono::Utc::now().timestamp());
+    pub fn init_sync_start(&mut self, start_block: i64, is_bulk_sync: bool) {
         self.sync_started_block = start_block;
+        if is_bulk_sync && self.sync_started_at.is_none() {
+            self.sync_started_at = Some(chrono::Utc::now().timestamp());
+        }
     }
 
     pub fn mark_bulk_sync_completed(&mut self, chain_tip: i64) {

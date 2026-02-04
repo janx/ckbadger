@@ -68,7 +68,7 @@ impl BatchWriter {
         }
     }
 
-    pub async fn init_sync_start(&self, start_block: i64) -> Result<()> {
+    pub async fn init_sync_start(&self, start_block: i64, is_bulk_sync: bool) -> Result<()> {
         let next_block = start_block + 1;
         info!(
             "Cleaning up any partial data from block {} onwards before sync start",
@@ -113,7 +113,7 @@ impl BatchWriter {
         if let Some(cache) = &self.cache_invalidator {
             cache
                 .update_sync_status(|status| {
-                    status.init_sync_start(start_block);
+                    status.init_sync_start(start_block, is_bulk_sync);
                 })
                 .await;
         }
