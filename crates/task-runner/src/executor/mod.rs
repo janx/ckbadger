@@ -1,18 +1,17 @@
 use anyhow::Result;
 use ckbadger_common::{
-    ActivitiesRebuildConfig, CellsStatusRebuildConfig, ConsumedAtBackfillConfig,
-    CyclesBackfillConfig, IndexRebuildConfig, LabelImportConfig, SecondaryIssuanceBackfillConfig,
-    SporeRebuildConfig, StatisticsRebuildConfig, Task, TaskConfig, TaskType,
+    ActivitiesRebuildConfig, CellsStatusRebuildConfig, CyclesBackfillConfig, IndexRebuildConfig,
+    LabelImportConfig, SecondaryIssuanceBackfillConfig, SporeRebuildConfig,
+    StatisticsRebuildConfig, Task, TaskConfig, TaskType,
 };
 use sqlx::PgPool;
 use std::time::Duration;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::db::TaskDb;
 
 mod activities;
 mod cells_status;
-mod consumed;
 mod cycles;
 mod index;
 mod labels;
@@ -139,7 +138,10 @@ impl TaskExecutor {
                 "LiveCellsPopulate must be executed by the indexer, not task-runner"
             )),
             TaskType::SporeRebuild => self.execute_spore_rebuild(task).await,
-            TaskType::ConsumedAtBackfill => self.execute_consumed_at_backfill(task).await,
+            TaskType::ConsumedAtBackfill => {
+                warn!("ConsumedAtBackfill is deprecated, redirecting to cells_status_rebuild");
+                self.execute_cells_status_rebuild(task).await
+            }
             TaskType::SecondaryIssuanceBackfill => {
                 self.execute_secondary_issuance_backfill(task).await
             }
@@ -203,15 +205,6 @@ impl TaskExecutor {
         };
 
         spore::execute(&self.db, &self.pool, task.id, &config).await
-    }
-
-    async fn execute_consumed_at_backfill(&self, task: &Task) -> Result<()> {
-        let config: ConsumedAtBackfillConfig = match task.config_typed() {
-            Some(TaskConfig::ConsumedAtBackfill(c)) => c,
-            _ => ConsumedAtBackfillConfig::default(),
-        };
-
-        consumed::execute(&self.db, &self.pool, task.id, &config).await
     }
 
     async fn execute_secondary_issuance_backfill(&self, task: &Task) -> Result<()> {

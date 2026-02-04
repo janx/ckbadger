@@ -275,18 +275,19 @@ When bulk sync completes (catches up to <=1000 blocks behind tip), the indexer a
 
 **Available Task Types:**
 
-| Task Type                     | Priority | Description                                          |
-| ----------------------------- | -------- | ---------------------------------------------------- |
-| `index_rebuild`               | 10       | Rebuild deferred indexes and constraints             |
-| `cells_status_rebuild`        | 9        | Rebuild cells.status from transaction_inputs         |
-| `live_cells_populate`         | 8        | Populate live_cells table from RocksDB (indexer)     |
-| `secondary_issuance_backfill` | 7        | Backfill ALL blocks' secondary issuance data (exact) |
-| `activities_rebuild`          | 7        | Rebuild activities table from blocks/transactions    |
-| `spore_rebuild`               | 6        | Rebuild spore_cells status from cells table          |
-| `statistics_rebuild`          | 5        | Rebuild all 7 aggregate statistics tables            |
-| `consumed_at_backfill`        | 7        | Backfill consumed_at fields on cells                 |
-| `cycles_backfill`             | 0        | Backfill transaction cycles from RPC                 |
-| `label_import`                | 0        | Import UDT/script labels from token-labels repo      |
+| Task Type                     | Priority | Description                                                     |
+| ----------------------------- | -------- | --------------------------------------------------------------- |
+| `index_rebuild`               | 10       | Rebuild deferred indexes and constraints                        |
+| `cells_status_rebuild`        | 9        | Rebuild cells.status and consumed*at*\* from transaction_inputs |
+| `live_cells_populate`         | 8        | Populate live_cells table from RocksDB (indexer)                |
+| `secondary_issuance_backfill` | 7        | Backfill ALL blocks' secondary issuance data (exact)            |
+| `activities_rebuild`          | 7        | Rebuild activities table from blocks/transactions               |
+| `spore_rebuild`               | 6        | Rebuild spore_cells status from cells table (batched)           |
+| `statistics_rebuild`          | 5        | Rebuild all 7 aggregate statistics tables (parallel, up to 4)   |
+| `cycles_backfill`             | 0        | Backfill transaction cycles from RPC                            |
+| `label_import`                | 0        | Import UDT/script labels from token-labels repo                 |
+
+> **Note:** `consumed_at_backfill` has been merged into `cells_status_rebuild`. Existing pending tasks will be redirected automatically.
 
 **Bulk Sync Protection:**
 
@@ -299,7 +300,6 @@ Tasks that require complete blockchain data are automatically deferred during bu
 | `index_rebuild`               | ❌ No          | Would slow down writes by 3-4x during sync |
 | `cells_status_rebuild`        | ❌ No          | Requires all transaction_inputs written    |
 | `live_cells_populate`         | ❌ No          | Requires RocksDB fully populated           |
-| `consumed_at_backfill`        | ❌ No          | Requires complete transaction history      |
 | `activities_rebuild`          | ❌ No          | Requires all transactions/cells written    |
 | `spore_rebuild`               | ❌ No          | Requires accurate cell status              |
 | `statistics_rebuild`          | ❌ No          | Requires complete blockchain data          |

@@ -2,6 +2,8 @@ use anyhow::Result;
 use chrono::NaiveDate;
 use ckbadger_common::{StatisticsFailureInfo, StatisticsRebuildConfig, StatisticsRebuildResult};
 use sqlx::PgPool;
+use std::time::Instant;
+use tokio::task::JoinSet;
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -17,6 +19,8 @@ const STATISTICS_TABLES: &[&str] = &[
     "dao_daily_snapshots",
 ];
 
+const MAX_PARALLEL_TABLES: usize = 4;
+
 pub async fn execute(
     db: &TaskDb,
     pool: &PgPool,
@@ -31,7 +35,11 @@ pub async fn execute(
         None => STATISTICS_TABLES.to_vec(),
     };
 
-    info!("Starting statistics rebuild: {} tables", tables.len());
+    info!(
+        "Starting statistics rebuild: {} tables (parallel={})",
+        tables.len(),
+        MAX_PARALLEL_TABLES
+    );
 
     let total = tables.len() as i64;
     let mut result = StatisticsRebuildResult::default();
@@ -40,7 +48,7 @@ pub async fn execute(
         task_id,
         0,
         total,
-        Some("Starting statistics rebuild..."),
+        Some("Starting parallel statistics rebuild..."),
         None,
     )
     .await?;
@@ -49,50 +57,87 @@ pub async fn execute(
         .execute(pool)
         .await?;
 
-    for (i, table) in tables.iter().enumerate() {
+    let start_time = Instant::now();
+    let mut join_set: JoinSet<(String, Result<()>)> = JoinSet::new();
+    let mut pending_tables: Vec<&str> = tables.clone();
+    let mut completed_count = 0;
+
+    while !pending_tables.is_empty() || !join_set.is_empty() {
         if db.check_cancelled(task_id).await? {
-            info!("Task cancelled, stopping");
+            info!("Task cancelled, aborting remaining tables");
+            join_set.abort_all();
             sqlx::query("UPDATE sync_status SET stats_rebuild_in_progress = false")
                 .execute(pool)
                 .await?;
             return Ok(());
         }
 
-        result.current_table = Some(table.to_string());
-        db.update_result(task_id, &serde_json::to_value(&result)?)
-            .await?;
+        while join_set.len() < MAX_PARALLEL_TABLES && !pending_tables.is_empty() {
+            let table = pending_tables.remove(0);
+            let pool = pool.clone();
+            let table_name = table.to_string();
 
-        let msg = format!("Rebuilding: {}", table);
-        db.append_log(task_id, &msg).await?;
-
-        let rebuild_result = rebuild_table(pool, table).await;
-
-        match rebuild_result {
-            Ok(_) => {
-                result.completed_tables.push(table.to_string());
-                info!("Rebuilt table: {}", table);
-            }
-            Err(e) => {
-                result.failed.push(StatisticsFailureInfo {
-                    table: table.to_string(),
-                    error: e.to_string(),
-                });
-                warn!("Failed to rebuild table {}: {}", table, e);
-            }
+            join_set.spawn(async move {
+                let result = rebuild_table(&pool, &table_name).await;
+                (table_name, result)
+            });
         }
 
-        let progress_msg = format!(
-            "Tables: {}/{} completed{}",
-            result.completed_tables.len(),
-            total,
-            if !result.failed.is_empty() {
-                format!(", {} failed", result.failed.len())
-            } else {
-                String::new()
+        if let Some(join_result) = join_set.join_next().await {
+            match join_result {
+                Ok((table_name, rebuild_result)) => match rebuild_result {
+                    Ok(_) => {
+                        completed_count += 1;
+                        result.completed_tables.push(table_name.clone());
+                        info!("Rebuilt table: {}", table_name);
+                    }
+                    Err(e) => {
+                        completed_count += 1;
+                        result.failed.push(StatisticsFailureInfo {
+                            table: table_name.clone(),
+                            error: e.to_string(),
+                        });
+                        warn!("Failed to rebuild table {}: {}", table_name, e);
+                    }
+                },
+                Err(e) => {
+                    completed_count += 1;
+                    warn!("Table rebuild task panicked: {}", e);
+                }
             }
-        );
-        db.update_progress(task_id, (i + 1) as i64, total, Some(&progress_msg), None)
-            .await?;
+
+            let in_progress: Vec<_> = tables
+                .iter()
+                .filter(|t| {
+                    !result.completed_tables.contains(&t.to_string())
+                        && !result.failed.iter().any(|f| f.table == **t)
+                        && !pending_tables.contains(t)
+                })
+                .collect();
+
+            let progress_msg = format!(
+                "Tables: {}/{} done{}{}",
+                result.completed_tables.len(),
+                total,
+                if !result.failed.is_empty() {
+                    format!(", {} failed", result.failed.len())
+                } else {
+                    String::new()
+                },
+                if !in_progress.is_empty() {
+                    {
+                        let names: Vec<&str> = in_progress.iter().map(|s| **s).collect();
+                        format!(", rebuilding: {}", names.join(", "))
+                    }
+                } else {
+                    String::new()
+                }
+            );
+
+            result.current_table = in_progress.first().map(|s| s.to_string());
+            db.update_progress(task_id, completed_count, total, Some(&progress_msg), None)
+                .await?;
+        }
     }
 
     result.current_table = None;
@@ -101,10 +146,12 @@ pub async fn execute(
         .execute(pool)
         .await?;
 
+    let elapsed = start_time.elapsed();
     info!(
-        "Statistics rebuild completed: {}/{} tables",
+        "Statistics rebuild completed: {}/{} tables in {:.1}s",
         result.completed_tables.len(),
-        tables.len()
+        tables.len(),
+        elapsed.as_secs_f64()
     );
 
     db.complete_task(task_id, Some(serde_json::to_value(&result)?))
@@ -114,7 +161,8 @@ pub async fn execute(
 }
 
 async fn rebuild_table(pool: &PgPool, table: &str) -> Result<()> {
-    match table {
+    let start = Instant::now();
+    let result = match table {
         "daily_statistics" => rebuild_daily_statistics(pool).await,
         "daily_block_stats" => rebuild_daily_block_stats(pool).await,
         "hourly_statistics" => rebuild_hourly_statistics(pool).await,
@@ -123,7 +171,15 @@ async fn rebuild_table(pool: &PgPool, table: &str) -> Result<()> {
         "epoch_time_distribution" => rebuild_epoch_time_distribution(pool).await,
         "dao_daily_snapshots" => rebuild_dao_daily_snapshots(pool).await,
         _ => Err(anyhow::anyhow!("Unknown statistics table: {}", table)),
+    };
+    if result.is_ok() {
+        info!(
+            "{} completed in {:.1}s",
+            table,
+            start.elapsed().as_secs_f64()
+        );
     }
+    result
 }
 
 async fn rebuild_daily_statistics(pool: &PgPool) -> Result<()> {
@@ -668,6 +724,20 @@ mod tests {
         assert_eq!(STATISTICS_TABLES.len(), 7);
         assert!(STATISTICS_TABLES.contains(&"daily_statistics"));
         assert!(STATISTICS_TABLES.contains(&"dao_daily_snapshots"));
+    }
+
+    #[test]
+    fn test_max_parallel_tables_is_reasonable() {
+        let max_parallel = MAX_PARALLEL_TABLES;
+        let total_tables = STATISTICS_TABLES.len();
+        assert!(
+            max_parallel >= 2,
+            "MAX_PARALLEL_TABLES should be at least 2"
+        );
+        assert!(
+            max_parallel <= total_tables,
+            "MAX_PARALLEL_TABLES should not exceed table count"
+        );
     }
 
     #[test]

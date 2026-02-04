@@ -1,18 +1,27 @@
 use anyhow::Result;
-use ckbadger_common::{CellsStatusRebuildConfig, CellsStatusRebuildResult};
+use ckbadger_common::{CellsStatusRebuildConfig, CellsStatusRebuildResult, RateCalculator};
 use sqlx::PgPool;
 use tracing::info;
 use uuid::Uuid;
 
 use crate::db::TaskDb;
 
+/// Rebuilds cells.status and consumed_at_* fields from transaction_inputs.
+///
+/// This task consolidates the former `cells_status_rebuild` and `consumed_at_backfill`
+/// tasks into a single pass. It handles:
+/// - Cells with status=0 that need to be marked as consumed (status=1)
+/// - Cells with NULL consumed_at_block that need backfilling
+///
+/// The unified WHERE clause `(c.status = 0 OR c.consumed_at_block IS NULL)` ensures
+/// both cases are handled efficiently in a single scan per batch.
 pub async fn execute(
     db: &TaskDb,
     pool: &PgPool,
     task_id: Uuid,
     config: &CellsStatusRebuildConfig,
 ) -> Result<()> {
-    info!("Starting cells_status_rebuild task");
+    info!("Starting cells_status_rebuild task (unified with consumed_at_backfill)");
 
     let total_blocks: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(number), 0) FROM blocks")
         .fetch_one(pool)
@@ -24,10 +33,13 @@ pub async fn execute(
     let mut cells_updated: i64 = 0;
     let mut blocks_processed: i64 = 0;
     let mut current_block: i64 = 0;
+    let mut rate_calc = RateCalculator::default();
 
     while current_block <= total_blocks {
         let end_block = (current_block + config.batch_size).min(total_blocks);
 
+        // Unified query: handles both status=0 cells AND cells with NULL consumed_at_block
+        // This replaces the need for separate cells_status_rebuild and consumed_at_backfill tasks
         let updated = sqlx::query_scalar::<_, i64>(
             r#"
             WITH input_consumption AS (
@@ -50,7 +62,7 @@ pub async fn execute(
             FROM input_consumption ic
             WHERE c.tx_hash = ic.previous_tx_hash
               AND c.output_index = ic.previous_output_index
-              AND c.status = 0
+              AND (c.status = 0 OR c.consumed_at_block IS NULL)
             RETURNING 1
             "#,
         )
@@ -70,6 +82,7 @@ pub async fn execute(
             );
         }
 
+        rate_calc.add_sample(blocks_processed);
         db.update_progress(
             task_id,
             blocks_processed,
@@ -78,7 +91,7 @@ pub async fn execute(
                 "Processed blocks {}-{}, {} cells updated",
                 current_block, end_block, cells_updated
             )),
-            None,
+            rate_calc.rate(),
         )
         .await?;
 
