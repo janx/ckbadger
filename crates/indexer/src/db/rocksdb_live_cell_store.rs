@@ -28,6 +28,9 @@ const MAX_CONSUMED_HISTORY_BLOCKS: i64 = 1000;
 
 pub struct RocksDbLiveCellStore {
     db: DB,
+    /// Keep block cache alive for the lifetime of the store.
+    /// Without this, the cache is dropped when `open()` returns.
+    block_cache: rocksdb::Cache,
     consumed_history: RwLock<VecDeque<ConsumedCellRecord>>,
     max_history_blocks: i64,
     bulk_sync_mode: AtomicBool,
@@ -68,6 +71,7 @@ impl RocksDbLiveCellStore {
 
         Ok(Self {
             db,
+            block_cache,
             consumed_history: RwLock::new(VecDeque::new()),
             max_history_blocks: 36,
             bulk_sync_mode: AtomicBool::new(false),
@@ -348,26 +352,35 @@ impl LiveCellStorage for RocksDbLiveCellStore {
     fn memory_stats(&self) -> MemoryStats {
         let cells_count = self.len();
 
-        let memtable_bytes = self
-            .db
-            .property_int_value("rocksdb.cur-size-all-mem-tables")
-            .ok()
-            .flatten()
-            .unwrap_or(0) as usize;
+        let cfs = [
+            self.cf_live_cells(),
+            self.cf_consumed_cells(),
+            self.cf_block_headers(),
+            self.cf_block_hash_index(),
+        ];
+        let memtable_bytes: usize = cfs
+            .iter()
+            .filter_map(|cf| {
+                self.db
+                    .property_int_value_cf(cf, "rocksdb.cur-size-all-mem-tables")
+                    .ok()
+                    .flatten()
+            })
+            .map(|v| v as usize)
+            .sum();
 
-        let block_cache_bytes = self
-            .db
-            .property_int_value("rocksdb.block-cache-usage")
-            .ok()
-            .flatten()
-            .unwrap_or(0) as usize;
+        let block_cache_bytes = self.block_cache.get_usage();
 
-        let table_readers_bytes = self
-            .db
-            .property_int_value("rocksdb.estimate-table-readers-mem")
-            .ok()
-            .flatten()
-            .unwrap_or(0) as usize;
+        let table_readers_bytes: usize = cfs
+            .iter()
+            .filter_map(|cf| {
+                self.db
+                    .property_int_value_cf(cf, "rocksdb.estimate-table-readers-mem")
+                    .ok()
+                    .flatten()
+            })
+            .map(|v| v as usize)
+            .sum();
 
         let memory_bytes = memtable_bytes + block_cache_bytes + table_readers_bytes;
 
