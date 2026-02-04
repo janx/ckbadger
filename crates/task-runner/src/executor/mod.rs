@@ -81,6 +81,34 @@ impl TaskExecutor {
             task.id, task.task_type, task.status
         );
 
+        let task_type = match task.task_type_enum() {
+            Some(t) => t,
+            None => {
+                let err = format!("Invalid task type: {}", task.task_type);
+                error!("{}", err);
+                self.db.fail_task(task.id, &err).await?;
+                return Ok(true);
+            }
+        };
+
+        if task_type.requires_bulk_sync_completion() {
+            match self.db.is_bulk_sync_active().await {
+                Ok(true) => {
+                    let reason = format!(
+                        "Task {} deferred: bulk sync in progress (requires completion)",
+                        task_type
+                    );
+                    info!("{}", reason);
+                    self.db.defer_task(task.id, &reason).await?;
+                    return Ok(true);
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    error!("Failed to check bulk sync status: {}", e);
+                }
+            }
+        }
+
         let result = self.execute_task(&task).await;
 
         match result {

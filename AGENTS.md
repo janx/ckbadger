@@ -281,9 +281,36 @@ When bulk sync completes (catches up to <=1000 blocks behind tip), the indexer a
 | `cells_status_rebuild`        | 9        | Rebuild cells.status from transaction_inputs         |
 | `live_cells_populate`         | 8        | Populate live_cells table from RocksDB (indexer)     |
 | `secondary_issuance_backfill` | 7        | Backfill ALL blocks' secondary issuance data (exact) |
+| `spore_rebuild`               | 6        | Rebuild spore_cells status from cells table          |
 | `statistics_rebuild`          | 5        | Rebuild all 7 aggregate statistics tables            |
+| `consumed_at_backfill`        | 7        | Backfill consumed_at fields on cells                 |
 | `cycles_backfill`             | 0        | Backfill transaction cycles from RPC                 |
 | `label_import`                | 0        | Import UDT/script labels from token-labels repo      |
+
+**Bulk Sync Protection:**
+
+Tasks that require complete blockchain data are automatically deferred during bulk sync. The task-runner checks sync status before executing each task:
+
+| Task Type                     | Bulk Sync Safe | Reason                                     |
+| ----------------------------- | -------------- | ------------------------------------------ |
+| `cycles_backfill`             | ✅ Yes         | RPC-based, independent of sync state       |
+| `label_import`                | ✅ Yes         | File-based, independent of sync state      |
+| `index_rebuild`               | ❌ No          | Would slow down writes by 3-4x during sync |
+| `cells_status_rebuild`        | ❌ No          | Requires all transaction_inputs written    |
+| `live_cells_populate`         | ❌ No          | Requires RocksDB fully populated           |
+| `consumed_at_backfill`        | ❌ No          | Requires complete transaction history      |
+| `spore_rebuild`               | ❌ No          | Requires accurate cell status              |
+| `statistics_rebuild`          | ❌ No          | Requires complete blockchain data          |
+| `secondary_issuance_backfill` | ❌ No          | Requires all blocks to exist               |
+
+When a bulk-sync-unsafe task is claimed during bulk sync:
+
+1. Task-runner detects bulk sync active (blocks_behind > 1000)
+2. Task status is set back to `pending`
+3. Reason is recorded in `error_message` field
+4. Task will be re-attempted on next poll cycle
+
+This prevents incomplete/incorrect results from tasks that depend on having all blockchain data available.
 
 **Label Import Auto-Trigger:**
 

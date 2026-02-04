@@ -100,6 +100,38 @@ impl std::str::FromStr for TaskType {
     }
 }
 
+impl TaskType {
+    /// Returns true if this task type requires bulk sync to be completed before execution.
+    ///
+    /// Tasks that depend on having complete/consistent blockchain data should not run
+    /// during bulk sync, as they would produce incomplete or incorrect results.
+    ///
+    /// Safe tasks (can run anytime):
+    /// - CyclesBackfill: RPC-based, independent of sync state
+    /// - LabelImport: File-based, independent of sync state
+    ///
+    /// Unsafe tasks (require bulk sync completion):
+    /// - IndexRebuild: Would slow down writes by 3-4x during sync
+    /// - CellsStatusRebuild: Requires all transaction_inputs written
+    /// - LiveCellsPopulate: Requires RocksDB fully populated
+    /// - ConsumedAtBackfill: Requires complete transaction history
+    /// - SporeRebuild: Requires accurate cell status
+    /// - StatisticsRebuild: Requires complete blockchain data
+    /// - SecondaryIssuanceBackfill: Requires all blocks to exist
+    pub fn requires_bulk_sync_completion(&self) -> bool {
+        match self {
+            TaskType::CyclesBackfill | TaskType::LabelImport => false,
+            TaskType::IndexRebuild
+            | TaskType::CellsStatusRebuild
+            | TaskType::LiveCellsPopulate
+            | TaskType::ConsumedAtBackfill
+            | TaskType::SporeRebuild
+            | TaskType::StatisticsRebuild
+            | TaskType::SecondaryIssuanceBackfill => true,
+        }
+    }
+}
+
 // ============================================
 // Task Configuration Types
 // ============================================
@@ -1057,5 +1089,22 @@ mod tests {
 
         let parsed: TaskConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.task_type(), TaskType::CellsStatusRebuild);
+    }
+
+    #[test]
+    fn test_requires_bulk_sync_completion_safe_tasks() {
+        assert!(!TaskType::CyclesBackfill.requires_bulk_sync_completion());
+        assert!(!TaskType::LabelImport.requires_bulk_sync_completion());
+    }
+
+    #[test]
+    fn test_requires_bulk_sync_completion_unsafe_tasks() {
+        assert!(TaskType::IndexRebuild.requires_bulk_sync_completion());
+        assert!(TaskType::CellsStatusRebuild.requires_bulk_sync_completion());
+        assert!(TaskType::LiveCellsPopulate.requires_bulk_sync_completion());
+        assert!(TaskType::ConsumedAtBackfill.requires_bulk_sync_completion());
+        assert!(TaskType::SporeRebuild.requires_bulk_sync_completion());
+        assert!(TaskType::StatisticsRebuild.requires_bulk_sync_completion());
+        assert!(TaskType::SecondaryIssuanceBackfill.requires_bulk_sync_completion());
     }
 }

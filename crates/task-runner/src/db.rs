@@ -3,6 +3,8 @@ use ckbadger_common::{Task, TaskBuilder};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+const BULK_SYNC_THRESHOLD: i64 = 1000;
+
 pub struct TaskDb {
     pool: PgPool,
 }
@@ -11,6 +13,45 @@ pub struct TaskDb {
 impl TaskDb {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
+    }
+
+    pub async fn is_bulk_sync_active(&self) -> Result<bool> {
+        let row: Option<(i64, i64)> = sqlx::query_as(
+            r#"
+            SELECT 
+                COALESCE((SELECT MAX(number) FROM blocks), 0) as synced_block,
+                COALESCE((SELECT tip_block_number FROM sync_status WHERE id = 1), 0) as chain_tip
+            "#,
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+
+        match row {
+            Some((synced_block, chain_tip)) => {
+                let blocks_behind = chain_tip - synced_block;
+                Ok(blocks_behind > BULK_SYNC_THRESHOLD)
+            }
+            None => Ok(false),
+        }
+    }
+
+    pub async fn defer_task(&self, task_id: Uuid, reason: &str) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE tasks
+            SET status = 'pending',
+                runner_id = NULL,
+                error_message = $2,
+                heartbeat_at = NOW()
+            WHERE id = $1
+            "#,
+        )
+        .bind(task_id)
+        .bind(reason)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
     }
 
     pub async fn claim_next_task(&self, runner_id: &str) -> Result<Option<Task>> {
