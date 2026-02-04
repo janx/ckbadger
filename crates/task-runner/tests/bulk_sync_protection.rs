@@ -2,92 +2,78 @@ use ckbadger_task_runner::db::TaskDb;
 use ckbadger_task_runner::MIGRATOR;
 use sqlx::PgPool;
 
-async fn setup_sync_status(pool: &PgPool, tip_block_number: i64) {
+async fn setup_sync_status(
+    pool: &PgPool,
+    indexes_deferred: bool,
+    address_balances_deferred: bool,
+    token_deferred: bool,
+) {
     sqlx::query(
         r#"
-        INSERT INTO sync_status (id, tip_block_number)
-        VALUES (1, $1)
-        ON CONFLICT (id) DO UPDATE SET tip_block_number = $1
+        UPDATE sync_status 
+        SET indexes_deferred = $1,
+            address_balances_deferred = $2,
+            token_deferred = $3
+        WHERE id = 1
         "#,
     )
-    .bind(tip_block_number)
+    .bind(indexes_deferred)
+    .bind(address_balances_deferred)
+    .bind(token_deferred)
     .execute(pool)
     .await
     .unwrap();
 }
 
-async fn insert_blocks_up_to(pool: &PgPool, max_block: i64) {
-    for number in 0..=max_block {
-        let hash: Vec<u8> = vec![number as u8; 32];
-        let dao_bytes: Vec<u8> = vec![0u8; 32];
-
-        sqlx::query(
-            r#"
-            INSERT INTO blocks (number, hash, parent_hash, timestamp, version, compact_target,
-                transactions_count, epoch_number, epoch_index, epoch_length, dao, nonce,
-                extra_hash, proposals_hash, transactions_root, uncles_hash)
-            VALUES ($1, $2, $2, NOW(), 0, 0, 1, 0, 0, 1, $3, $2, $2, $2, $2, $2)
-            "#,
-        )
-        .bind(number)
-        .bind(&hash)
-        .bind(&dao_bytes)
-        .execute(pool)
-        .await
-        .unwrap();
-    }
-}
-
 #[sqlx::test(migrator = "MIGRATOR")]
-async fn test_is_bulk_sync_active_when_far_behind(pool: PgPool) {
-    setup_sync_status(&pool, 10000).await;
-    insert_blocks_up_to(&pool, 100).await;
-
-    let db = TaskDb::new(pool);
-    let is_bulk = db.is_bulk_sync_active().await.unwrap();
-
-    assert!(is_bulk, "Should be in bulk sync when 9900 blocks behind");
-}
-
-#[sqlx::test(migrator = "MIGRATOR")]
-async fn test_is_bulk_sync_active_when_caught_up(pool: PgPool) {
-    setup_sync_status(&pool, 10000).await;
-    insert_blocks_up_to(&pool, 9500).await;
-
-    let db = TaskDb::new(pool);
-    let is_bulk = db.is_bulk_sync_active().await.unwrap();
-
-    assert!(
-        !is_bulk,
-        "Should not be in bulk sync when only 500 blocks behind"
-    );
-}
-
-#[sqlx::test(migrator = "MIGRATOR")]
-async fn test_is_bulk_sync_active_at_threshold(pool: PgPool) {
-    setup_sync_status(&pool, 10000).await;
-    insert_blocks_up_to(&pool, 9000).await;
-
-    let db = TaskDb::new(pool);
-    let is_bulk = db.is_bulk_sync_active().await.unwrap();
-
-    assert!(
-        !is_bulk,
-        "Should not be in bulk sync when exactly 1000 blocks behind (threshold)"
-    );
-}
-
-#[sqlx::test(migrator = "MIGRATOR")]
-async fn test_is_bulk_sync_active_just_over_threshold(pool: PgPool) {
-    setup_sync_status(&pool, 10000).await;
-    insert_blocks_up_to(&pool, 8999).await;
+async fn test_is_bulk_sync_active_when_indexes_deferred(pool: PgPool) {
+    setup_sync_status(&pool, true, false, false).await;
 
     let db = TaskDb::new(pool);
     let is_bulk = db.is_bulk_sync_active().await.unwrap();
 
     assert!(
         is_bulk,
-        "Should be in bulk sync when 1001 blocks behind (over threshold)"
+        "Should be in bulk sync when indexes_deferred is true"
+    );
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn test_is_bulk_sync_active_when_all_flags_false(pool: PgPool) {
+    setup_sync_status(&pool, false, false, false).await;
+
+    let db = TaskDb::new(pool);
+    let is_bulk = db.is_bulk_sync_active().await.unwrap();
+
+    assert!(
+        !is_bulk,
+        "Should not be in bulk sync when all deferred flags are false"
+    );
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn test_is_bulk_sync_active_when_address_balances_deferred(pool: PgPool) {
+    setup_sync_status(&pool, false, true, false).await;
+
+    let db = TaskDb::new(pool);
+    let is_bulk = db.is_bulk_sync_active().await.unwrap();
+
+    assert!(
+        is_bulk,
+        "Should be in bulk sync when address_balances_deferred is true"
+    );
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn test_is_bulk_sync_active_when_token_deferred(pool: PgPool) {
+    setup_sync_status(&pool, false, false, true).await;
+
+    let db = TaskDb::new(pool);
+    let is_bulk = db.is_bulk_sync_active().await.unwrap();
+
+    assert!(
+        is_bulk,
+        "Should be in bulk sync when token_deferred is true"
     );
 }
 

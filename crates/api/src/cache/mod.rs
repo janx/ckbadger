@@ -95,6 +95,12 @@ impl CacheBackend {
             activities_deferred_at: None,
             activities_rebuild_started_at: None,
             activities_rebuild_completed_at: None,
+            address_balances_deferred: false,
+            address_balances_deferred_at: None,
+            address_balances_rebuild_completed_at: None,
+            token_deferred: false,
+            token_deferred_at: None,
+            token_rebuild_completed_at: None,
         }
     }
 

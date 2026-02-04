@@ -55,6 +55,17 @@ async fn list_assets(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<AssetResponse>> {
+    let sync_status = state.cache.get_sync_status(&state.pool).await;
+
+    if sync_status.token_deferred {
+        return ok(CursorPaginatedResponse::new(
+            Vec::new(),
+            0,
+            params.limit.clamp(1, 100),
+            None,
+        ));
+    }
+
     let limit = params.limit.clamp(1, 100);
 
     let (cursor_24h, cursor_holders, cursor_id, cursor_type) = params

@@ -57,6 +57,14 @@ pub struct Config {
     /// Activities will be rebuilt via task-runner after sync completes.
     #[serde(default)]
     pub defer_activities: bool,
+    /// Skip address_balances table writes during bulk sync for faster initial sync.
+    /// Address balances will be rebuilt via task-runner after sync completes.
+    #[serde(default)]
+    pub defer_address_balances: bool,
+    /// Skip token-related table writes (tokens, token_balances, udt_cells) during bulk sync.
+    /// Token data will be rebuilt via task-runner after sync completes.
+    #[serde(default)]
+    pub defer_token: bool,
 }
 
 fn default_batch_size() -> usize {

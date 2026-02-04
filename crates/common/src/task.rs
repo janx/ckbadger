@@ -64,6 +64,8 @@ pub enum TaskType {
     SecondaryIssuanceBackfill,
     CellsStatusRebuild,
     ActivitiesRebuild,
+    AddressBalancesRebuild,
+    TokenRebuild,
 }
 
 impl std::fmt::Display for TaskType {
@@ -79,6 +81,8 @@ impl std::fmt::Display for TaskType {
             TaskType::SecondaryIssuanceBackfill => write!(f, "secondary_issuance_backfill"),
             TaskType::CellsStatusRebuild => write!(f, "cells_status_rebuild"),
             TaskType::ActivitiesRebuild => write!(f, "activities_rebuild"),
+            TaskType::AddressBalancesRebuild => write!(f, "address_balances_rebuild"),
+            TaskType::TokenRebuild => write!(f, "token_rebuild"),
         }
     }
 }
@@ -98,6 +102,8 @@ impl std::str::FromStr for TaskType {
             "secondary_issuance_backfill" => Ok(TaskType::SecondaryIssuanceBackfill),
             "cells_status_rebuild" => Ok(TaskType::CellsStatusRebuild),
             "activities_rebuild" => Ok(TaskType::ActivitiesRebuild),
+            "address_balances_rebuild" => Ok(TaskType::AddressBalancesRebuild),
+            "token_rebuild" => Ok(TaskType::TokenRebuild),
             _ => Err(anyhow::anyhow!("Invalid task type: {}", s)),
         }
     }
@@ -131,7 +137,9 @@ impl TaskType {
             | TaskType::SporeRebuild
             | TaskType::StatisticsRebuild
             | TaskType::SecondaryIssuanceBackfill
-            | TaskType::ActivitiesRebuild => true,
+            | TaskType::ActivitiesRebuild
+            | TaskType::AddressBalancesRebuild
+            | TaskType::TokenRebuild => true,
         }
     }
 }
@@ -359,6 +367,37 @@ impl Default for ActivitiesRebuildConfig {
     }
 }
 
+/// Configuration for address balances rebuild task
+/// Rebuilds address_balances table from cells table
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AddressBalancesRebuildConfig {
+    /// Not used currently, but reserved for future batching
+    #[serde(default)]
+    pub _reserved: Option<bool>,
+}
+
+/// Configuration for token rebuild task
+/// Rebuilds tokens, token_balances, and udt_cells from cells table
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenRebuildConfig {
+    #[serde(default = "default_token_rebuild_batch_size")]
+    pub batch_size: i64,
+}
+
+fn default_token_rebuild_batch_size() -> i64 {
+    10_000
+}
+
+impl Default for TokenRebuildConfig {
+    fn default() -> Self {
+        Self {
+            batch_size: default_token_rebuild_batch_size(),
+        }
+    }
+}
+
 /// Unified task configuration enum
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -373,6 +412,8 @@ pub enum TaskConfig {
     SecondaryIssuanceBackfill(SecondaryIssuanceBackfillConfig),
     CellsStatusRebuild(CellsStatusRebuildConfig),
     ActivitiesRebuild(ActivitiesRebuildConfig),
+    AddressBalancesRebuild(AddressBalancesRebuildConfig),
+    TokenRebuild(TokenRebuildConfig),
 }
 
 impl TaskConfig {
@@ -388,6 +429,8 @@ impl TaskConfig {
             TaskConfig::SecondaryIssuanceBackfill(_) => TaskType::SecondaryIssuanceBackfill,
             TaskConfig::CellsStatusRebuild(_) => TaskType::CellsStatusRebuild,
             TaskConfig::ActivitiesRebuild(_) => TaskType::ActivitiesRebuild,
+            TaskConfig::AddressBalancesRebuild(_) => TaskType::AddressBalancesRebuild,
+            TaskConfig::TokenRebuild(_) => TaskType::TokenRebuild,
         }
     }
 }
@@ -509,6 +552,20 @@ pub struct ActivitiesRebuildResult {
     pub blocks_processed: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AddressBalancesRebuildResult {
+    pub addresses_updated: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenRebuildResult {
+    pub tokens_created: i64,
+    pub balances_updated: i64,
+    pub udt_cells_created: i64,
+}
+
 /// Unified task result enum
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -523,6 +580,8 @@ pub enum TaskResult {
     SecondaryIssuanceBackfill(SecondaryIssuanceBackfillResult),
     CellsStatusRebuild(CellsStatusRebuildResult),
     ActivitiesRebuild(ActivitiesRebuildResult),
+    AddressBalancesRebuild(AddressBalancesRebuildResult),
+    TokenRebuild(TokenRebuildResult),
 }
 
 // ============================================
@@ -761,6 +820,26 @@ impl TaskBuilder {
             config: serde_json::to_value(TaskConfig::ActivitiesRebuild(config))
                 .expect("ActivitiesRebuildConfig should be serializable"),
             priority: 7, // After bulk sync completes, before statistics
+            max_retries: 2,
+        }
+    }
+
+    pub fn address_balances_rebuild(config: AddressBalancesRebuildConfig) -> Self {
+        Self {
+            task_type: TaskType::AddressBalancesRebuild,
+            config: serde_json::to_value(TaskConfig::AddressBalancesRebuild(config))
+                .expect("AddressBalancesRebuildConfig should be serializable"),
+            priority: 8, // After cells_status_rebuild (9), before token_rebuild
+            max_retries: 2,
+        }
+    }
+
+    pub fn token_rebuild(config: TokenRebuildConfig) -> Self {
+        Self {
+            task_type: TaskType::TokenRebuild,
+            config: serde_json::to_value(TaskConfig::TokenRebuild(config))
+                .expect("TokenRebuildConfig should be serializable"),
+            priority: 7, // After bulk sync completes, after address balances
             max_retries: 2,
         }
     }
@@ -1149,5 +1228,72 @@ mod tests {
         assert!(TaskType::SporeRebuild.requires_bulk_sync_completion());
         assert!(TaskType::StatisticsRebuild.requires_bulk_sync_completion());
         assert!(TaskType::SecondaryIssuanceBackfill.requires_bulk_sync_completion());
+        assert!(TaskType::AddressBalancesRebuild.requires_bulk_sync_completion());
+        assert!(TaskType::TokenRebuild.requires_bulk_sync_completion());
+    }
+
+    #[test]
+    fn test_address_balances_rebuild_builder() {
+        let builder =
+            TaskBuilder::address_balances_rebuild(AddressBalancesRebuildConfig::default());
+        assert_eq!(builder.task_type(), TaskType::AddressBalancesRebuild);
+        assert_eq!(builder.get_priority(), 8);
+    }
+
+    #[test]
+    fn test_address_balances_rebuild_type_display() {
+        assert_eq!(
+            TaskType::AddressBalancesRebuild.to_string(),
+            "address_balances_rebuild"
+        );
+    }
+
+    #[test]
+    fn test_address_balances_rebuild_type_parse() {
+        assert_eq!(
+            "address_balances_rebuild".parse::<TaskType>().unwrap(),
+            TaskType::AddressBalancesRebuild
+        );
+    }
+
+    #[test]
+    fn test_address_balances_rebuild_config_serialization() {
+        let config = TaskConfig::AddressBalancesRebuild(AddressBalancesRebuildConfig::default());
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("address_balances_rebuild"));
+
+        let parsed: TaskConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.task_type(), TaskType::AddressBalancesRebuild);
+    }
+
+    #[test]
+    fn test_token_rebuild_builder() {
+        let builder = TaskBuilder::token_rebuild(TokenRebuildConfig::default());
+        assert_eq!(builder.task_type(), TaskType::TokenRebuild);
+        assert_eq!(builder.get_priority(), 7);
+    }
+
+    #[test]
+    fn test_token_rebuild_type_display() {
+        assert_eq!(TaskType::TokenRebuild.to_string(), "token_rebuild");
+    }
+
+    #[test]
+    fn test_token_rebuild_type_parse() {
+        assert_eq!(
+            "token_rebuild".parse::<TaskType>().unwrap(),
+            TaskType::TokenRebuild
+        );
+    }
+
+    #[test]
+    fn test_token_rebuild_config_serialization() {
+        let config = TaskConfig::TokenRebuild(TokenRebuildConfig { batch_size: 20000 });
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("token_rebuild"));
+        assert!(json.contains("batchSize"));
+
+        let parsed: TaskConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.task_type(), TaskType::TokenRebuild);
     }
 }

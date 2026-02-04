@@ -34,6 +34,17 @@ CREATE TABLE sync_status (
     -- Deferred activities optimization (skip activities writes during bulk sync)
     activities_deferred BOOLEAN NOT NULL DEFAULT FALSE,
     activities_deferred_at TIMESTAMPTZ,
+    activities_rebuild_completed_at TIMESTAMPTZ,
+
+    -- Deferred address_balances optimization
+    address_balances_deferred BOOLEAN NOT NULL DEFAULT FALSE,
+    address_balances_deferred_at TIMESTAMPTZ,
+    address_balances_rebuild_completed_at TIMESTAMPTZ,
+
+    -- Deferred token optimization
+    token_deferred BOOLEAN NOT NULL DEFAULT FALSE,
+    token_deferred_at TIMESTAMPTZ,
+    token_rebuild_completed_at TIMESTAMPTZ,
 
     stats_rebuild_in_progress BOOLEAN NOT NULL DEFAULT FALSE,
 
@@ -761,6 +772,7 @@ CREATE INDEX idx_udt_cells_type_script ON udt_cells(type_script_hash);
 CREATE INDEX idx_udt_cells_lock ON udt_cells(lock_script_hash);
 CREATE INDEX idx_udt_cells_live ON udt_cells(is_live) WHERE is_live = TRUE;
 CREATE INDEX idx_udt_cells_block ON udt_cells(created_at_block DESC);
+CREATE INDEX idx_udt_cells_lookup ON udt_cells(tx_hash, output_index);
 
 -- ===========================================
 -- 7. Spore Tables

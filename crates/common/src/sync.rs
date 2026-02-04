@@ -37,6 +37,16 @@ pub struct SyncStatusData {
     pub activities_deferred_at: Option<i64>,
     pub activities_rebuild_started_at: Option<i64>,
     pub activities_rebuild_completed_at: Option<i64>,
+
+    #[serde(default)]
+    pub address_balances_deferred: bool,
+    pub address_balances_deferred_at: Option<i64>,
+    pub address_balances_rebuild_completed_at: Option<i64>,
+
+    #[serde(default)]
+    pub token_deferred: bool,
+    pub token_deferred_at: Option<i64>,
+    pub token_rebuild_completed_at: Option<i64>,
 }
 
 impl SyncStatusData {
@@ -273,6 +283,12 @@ mod tests {
             activities_deferred_at: None,
             activities_rebuild_started_at: None,
             activities_rebuild_completed_at: None,
+            address_balances_deferred: false,
+            address_balances_deferred_at: None,
+            address_balances_rebuild_completed_at: None,
+            token_deferred: false,
+            token_deferred_at: None,
+            token_rebuild_completed_at: None,
         };
 
         let json = serde_json::to_string(&status).unwrap();

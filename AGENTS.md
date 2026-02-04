@@ -279,7 +279,9 @@ When bulk sync completes (catches up to <=1000 blocks behind tip), the indexer a
 | ----------------------------- | -------- | --------------------------------------------------------------- |
 | `index_rebuild`               | 10       | Rebuild deferred indexes and constraints                        |
 | `cells_status_rebuild`        | 9        | Rebuild cells.status and consumed*at*\* from transaction_inputs |
+| `address_balances_rebuild`    | 8        | Rebuild address_balances from cells GROUP BY                    |
 | `live_cells_populate`         | 8        | Populate live_cells table from RocksDB (indexer)                |
+| `token_rebuild`               | 7        | Rebuild tokens/token_balances/udt_cells with UDT parsing        |
 | `secondary_issuance_backfill` | 7        | Backfill ALL blocks' secondary issuance data (exact)            |
 | `activities_rebuild`          | 7        | Rebuild activities table from blocks/transactions               |
 | `spore_rebuild`               | 6        | Rebuild spore_cells status from cells table (batched)           |
@@ -299,7 +301,9 @@ Tasks that require complete blockchain data are automatically deferred during bu
 | `label_import`                | ✅ Yes         | File-based, independent of sync state      |
 | `index_rebuild`               | ❌ No          | Would slow down writes by 3-4x during sync |
 | `cells_status_rebuild`        | ❌ No          | Requires all transaction_inputs written    |
+| `address_balances_rebuild`    | ❌ No          | Requires all cells written                 |
 | `live_cells_populate`         | ❌ No          | Requires RocksDB fully populated           |
+| `token_rebuild`               | ❌ No          | Requires all cells with UDT type_script    |
 | `activities_rebuild`          | ❌ No          | Requires all transactions/cells written    |
 | `spore_rebuild`               | ❌ No          | Requires accurate cell status              |
 | `statistics_rebuild`          | ❌ No          | Requires complete blockchain data          |
@@ -444,6 +448,102 @@ psql -c "SELECT id, task_type, status, progress_current, progress_total FROM tas
 
 # Monitor tasks via TUI
 cargo run -p ckbadger-task-tui
+```
+
+## Deferred Address Balances Optimization
+
+For fresh database syncs, the indexer can skip updating the `address_balances` table to achieve ~20-30% faster bulk sync speeds. Address balances are rebuilt via task-runner after sync completes.
+
+| Parameter                          | Default | Description                                        |
+| ---------------------------------- | ------- | -------------------------------------------------- |
+| `--defer-address-balances`         | `false` | Force enable deferred address balances (non-fresh) |
+| `--no-auto-defer-address-balances` | `false` | Disable auto-optimization for fresh DB             |
+
+**What Gets Deferred:**
+
+- All `address_balances` table MERGE operations during bulk sync
+- The `address_balances` table remains empty until rebuild completes
+
+**Behavior:**
+
+| Scenario                               | Auto-defer | Auto-submit rebuild task |
+| -------------------------------------- | ---------- | ------------------------ |
+| Fresh DB (tip=0)                       | Yes        | Yes                      |
+| Fresh DB + `--no-auto-defer`           | No         | No                       |
+| Resume sync, address_balances exist    | No         | No                       |
+| Resume sync, address_balances deferred | No         | Yes                      |
+| Any DB + `--defer-address-balances`    | Yes        | Yes                      |
+
+**Address Balances Rebuild Task:**
+
+When bulk sync completes, the indexer automatically submits an `address_balances_rebuild` task (priority 8). The task-runner:
+
+1. Truncates the `address_balances` table
+2. Rebuilds from `cells` table using `GROUP BY lock_script_hash`
+3. Calculates balance, live_cells_count, total_cells_count, transactions_count
+4. Updates `sync_status.address_balances_deferred = FALSE` on completion
+
+**API Fallback:**
+
+When `address_balances_deferred = TRUE`, the API automatically falls back to querying the `cells` table directly:
+
+- `GET /api/v1/addresses/{addr}` - Calculates balance from `SUM(capacity) WHERE status=0`
+- `GET /api/v1/addresses/top` - Returns empty array during deferral
+
+```bash
+# Check status
+psql -c "SELECT address_balances_deferred FROM sync_status;"
+psql -c "SELECT id, task_type, status, progress_current FROM tasks WHERE task_type = 'address_balances_rebuild';"
+```
+
+## Deferred Token Tables Optimization
+
+For fresh database syncs, the indexer can skip writing to `tokens`, `token_balances`, and `udt_cells` tables to achieve ~10-20% faster bulk sync speeds. Token data is rebuilt via task-runner after sync completes.
+
+| Parameter               | Default | Description                              |
+| ----------------------- | ------- | ---------------------------------------- |
+| `--defer-token`         | `false` | Force enable deferred tokens (non-fresh) |
+| `--no-auto-defer-token` | `false` | Disable auto-optimization for fresh DB   |
+
+**What Gets Deferred:**
+
+- All `tokens` table INSERT/UPDATE operations
+- All `token_balances` table INSERT/UPDATE operations
+- All `udt_cells` table INSERT/UPDATE operations
+- UDT parsing still occurs (for cell data), just writes are skipped
+
+**Behavior:**
+
+| Scenario                     | Auto-defer | Auto-submit rebuild task |
+| ---------------------------- | ---------- | ------------------------ |
+| Fresh DB (tip=0)             | Yes        | Yes                      |
+| Fresh DB + `--no-auto-defer` | No         | No                       |
+| Resume sync, tokens exist    | No         | No                       |
+| Resume sync, tokens deferred | No         | Yes                      |
+| Any DB + `--defer-token`     | Yes        | Yes                      |
+
+**Token Rebuild Task:**
+
+When bulk sync completes, the indexer automatically submits a `token_rebuild` task (priority 7). The task-runner:
+
+1. Truncates `udt_cells`, `token_balances`, `tokens` tables (in order)
+2. Scans `cells` table for UDT type_scripts (sUDT/xUDT code hashes)
+3. Parses UDT amount from cell data (first 16 bytes, u128 little-endian)
+4. Rebuilds `udt_cells`, then aggregates to `tokens` and `token_balances`
+5. Updates `sync_status.token_deferred = FALSE` on completion
+
+**API Fallback:**
+
+When `token_deferred = TRUE`, token-related API endpoints return empty data:
+
+- `GET /api/v1/tokens` - Returns empty array
+- `GET /api/v1/tokens/{id}` - Returns 404
+- `GET /api/v1/addresses/{addr}/tokens` - Returns empty array
+
+```bash
+# Check status
+psql -c "SELECT token_deferred FROM sync_status;"
+psql -c "SELECT id, task_type, status, progress_current, progress_total FROM tasks WHERE task_type = 'token_rebuild';"
 ```
 
 ## Live Cell Store

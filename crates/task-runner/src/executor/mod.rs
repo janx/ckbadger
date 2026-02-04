@@ -1,8 +1,8 @@
 use anyhow::Result;
 use ckbadger_common::{
-    ActivitiesRebuildConfig, CellsStatusRebuildConfig, CyclesBackfillConfig, IndexRebuildConfig,
-    LabelImportConfig, SecondaryIssuanceBackfillConfig, SporeRebuildConfig,
-    StatisticsRebuildConfig, Task, TaskConfig, TaskType,
+    ActivitiesRebuildConfig, AddressBalancesRebuildConfig, CellsStatusRebuildConfig,
+    CyclesBackfillConfig, IndexRebuildConfig, LabelImportConfig, SecondaryIssuanceBackfillConfig,
+    SporeRebuildConfig, StatisticsRebuildConfig, Task, TaskConfig, TaskType, TokenRebuildConfig,
 };
 use sqlx::PgPool;
 use std::time::Duration;
@@ -11,6 +11,7 @@ use tracing::{error, info, warn};
 use crate::db::TaskDb;
 
 mod activities;
+mod address_balances;
 mod cells_status;
 mod cycles;
 mod index;
@@ -18,6 +19,7 @@ mod labels;
 mod secondary_issuance;
 mod spore;
 pub mod statistics;
+mod token;
 
 pub struct TaskExecutor {
     db: TaskDb,
@@ -147,6 +149,8 @@ impl TaskExecutor {
             }
             TaskType::CellsStatusRebuild => self.execute_cells_status_rebuild(task).await,
             TaskType::ActivitiesRebuild => self.execute_activities_rebuild(task).await,
+            TaskType::AddressBalancesRebuild => self.execute_address_balances_rebuild(task).await,
+            TaskType::TokenRebuild => self.execute_token_rebuild(task).await,
         }
     }
 
@@ -236,5 +240,23 @@ impl TaskExecutor {
         };
 
         activities::execute(&self.db, &self.pool, task.id, &config).await
+    }
+
+    async fn execute_address_balances_rebuild(&self, task: &Task) -> Result<()> {
+        let config: AddressBalancesRebuildConfig = match task.config_typed() {
+            Some(TaskConfig::AddressBalancesRebuild(c)) => c,
+            _ => AddressBalancesRebuildConfig::default(),
+        };
+
+        address_balances::execute(&self.db, &self.pool, task.id, &config).await
+    }
+
+    async fn execute_token_rebuild(&self, task: &Task) -> Result<()> {
+        let config: TokenRebuildConfig = match task.config_typed() {
+            Some(TaskConfig::TokenRebuild(c)) => c,
+            _ => TokenRebuildConfig::default(),
+        };
+
+        token::execute(&self.db, &self.pool, task.id, &config).await
     }
 }

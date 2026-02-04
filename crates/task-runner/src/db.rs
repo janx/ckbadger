@@ -3,8 +3,6 @@ use ckbadger_common::{Task, TaskBuilder};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-const BULK_SYNC_THRESHOLD: i64 = 1000;
-
 pub struct TaskDb {
     pool: PgPool,
 }
@@ -16,21 +14,20 @@ impl TaskDb {
     }
 
     pub async fn is_bulk_sync_active(&self) -> Result<bool> {
-        let row: Option<(i64, i64)> = sqlx::query_as(
+        let row: Option<(bool, bool, bool)> = sqlx::query_as(
             r#"
             SELECT 
-                COALESCE((SELECT MAX(number) FROM blocks), 0) as synced_block,
-                COALESCE((SELECT tip_block_number FROM sync_status WHERE id = 1), 0) as chain_tip
+                COALESCE(indexes_deferred, FALSE),
+                COALESCE(address_balances_deferred, FALSE),
+                COALESCE(token_deferred, FALSE)
+            FROM sync_status WHERE id = 1
             "#,
         )
         .fetch_optional(&self.pool)
         .await?;
 
         match row {
-            Some((synced_block, chain_tip)) => {
-                let blocks_behind = chain_tip - synced_block;
-                Ok(blocks_behind > BULK_SYNC_THRESHOLD)
-            }
+            Some((indexes, addr_bal, token)) => Ok(indexes || addr_bal || token),
             None => Ok(false),
         }
     }

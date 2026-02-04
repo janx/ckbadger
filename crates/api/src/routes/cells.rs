@@ -406,7 +406,7 @@ async fn list_live_cells(
                        lc.type_script_hash, lc.type_code_hash, lc.data_size, lc.created_at_block, lc.lock_args,
                        uc.amount::TEXT
                 FROM live_cells lc
-                LEFT JOIN udt_cells uc ON lc.tx_hash = uc.tx_hash AND lc.output_index = uc.output_index AND uc.is_live = TRUE
+                LEFT JOIN udt_cells uc ON lc.tx_hash = uc.tx_hash AND lc.output_index = uc.output_index
                 WHERE lc.lock_script_hash = $1 AND lc.type_code_hash = $2
                   AND (lc.created_at_block, lc.output_index) < ($3, $4)
                 ORDER BY lc.created_at_block DESC, lc.output_index DESC
@@ -504,7 +504,7 @@ async fn list_live_cells(
                            lc.type_script_hash, lc.type_code_hash, lc.data_size, lc.created_at_block, lc.lock_args,
                            uc.amount::TEXT
                     FROM live_cells lc
-                    LEFT JOIN udt_cells uc ON lc.tx_hash = uc.tx_hash AND lc.output_index = uc.output_index AND uc.is_live = TRUE
+                    LEFT JOIN udt_cells uc ON lc.tx_hash = uc.tx_hash AND lc.output_index = uc.output_index
                     WHERE lc.lock_script_hash = $1 AND lc.type_script_hash = $2
                       AND (lc.created_at_block, lc.output_index) < ($3, $4)
                     ORDER BY lc.created_at_block DESC, lc.output_index DESC
@@ -536,7 +536,7 @@ async fn list_live_cells(
                            lc.type_script_hash, lc.type_code_hash, lc.data_size, lc.created_at_block, lc.lock_args,
                            uc.amount::TEXT
                     FROM live_cells lc
-                    LEFT JOIN udt_cells uc ON lc.tx_hash = uc.tx_hash AND lc.output_index = uc.output_index AND uc.is_live = TRUE
+                    LEFT JOIN udt_cells uc ON lc.tx_hash = uc.tx_hash AND lc.output_index = uc.output_index
                     WHERE lc.lock_script_hash = $1
                       AND (lc.created_at_block, lc.output_index) < ($2, $3)
                     ORDER BY lc.created_at_block DESC, lc.output_index DESC
@@ -567,7 +567,7 @@ async fn list_live_cells(
                            lc.type_script_hash, lc.type_code_hash, lc.data_size, lc.created_at_block, lc.lock_args,
                            uc.amount::TEXT
                     FROM live_cells lc
-                    LEFT JOIN udt_cells uc ON lc.tx_hash = uc.tx_hash AND lc.output_index = uc.output_index AND uc.is_live = TRUE
+                    LEFT JOIN udt_cells uc ON lc.tx_hash = uc.tx_hash AND lc.output_index = uc.output_index
                     WHERE lc.type_script_hash = $1
                       AND (lc.created_at_block, lc.output_index) < ($2, $3)
                     ORDER BY lc.created_at_block DESC, lc.output_index DESC
@@ -603,7 +603,7 @@ async fn list_live_cells(
                            lc.type_script_hash, lc.type_code_hash, lc.data_size, lc.created_at_block, lc.lock_args,
                            uc.amount::TEXT
                     FROM live_cells lc
-                    LEFT JOIN udt_cells uc ON lc.tx_hash = uc.tx_hash AND lc.output_index = uc.output_index AND uc.is_live = TRUE
+                    LEFT JOIN udt_cells uc ON lc.tx_hash = uc.tx_hash AND lc.output_index = uc.output_index
                     WHERE (lc.created_at_block, lc.output_index) < ($1, $2)
                     ORDER BY lc.created_at_block DESC, lc.output_index DESC
                     LIMIT $3
@@ -876,20 +876,42 @@ async fn get_address(
         (hash, None)
     };
 
-    let row = sqlx::query_as::<_, (String, i32, i64)>(
-        r#"
-        SELECT 
-            COALESCE(balance::TEXT, '0'),
-            COALESCE(live_cells_count, 0),
-            COALESCE(transactions_count, 0)
-        FROM address_balances
-        WHERE lock_script_hash = $1
-        "#,
-    )
-    .bind(&lock_hash)
-    .fetch_optional(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    // Check if address_balances is deferred
+    let sync_status = state.cache.get_sync_status(&state.pool).await;
+
+    let row = if sync_status.address_balances_deferred {
+        // Fallback: query cells table directly
+        sqlx::query_as::<_, (String, i32, i64)>(
+            r#"
+            SELECT 
+                COALESCE(SUM(capacity)::TEXT, '0'),
+                COALESCE(COUNT(*)::INT, 0),
+                0
+            FROM cells
+            WHERE lock_script_hash = $1 AND status = 0
+            "#,
+        )
+        .bind(&lock_hash)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+    } else {
+        // Normal: query address_balances table
+        sqlx::query_as::<_, (String, i32, i64)>(
+            r#"
+            SELECT 
+                COALESCE(balance::TEXT, '0'),
+                COALESCE(live_cells_count, 0),
+                COALESCE(transactions_count, 0)
+            FROM address_balances
+            WHERE lock_script_hash = $1
+            "#,
+        )
+        .bind(&lock_hash)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+    };
 
     let script_row = sqlx::query_as::<_, (Vec<u8>, i16, Vec<u8>)>(
         r#"
@@ -1295,6 +1317,12 @@ async fn get_top_addresses(
     State(state): State<Arc<AppState>>,
     Query(params): Query<TopAddressesParams>,
 ) -> ApiResult<Vec<TopAddressResponse>> {
+    let sync_status = state.cache.get_sync_status(&state.pool).await;
+
+    if sync_status.address_balances_deferred {
+        return ok(Vec::new());
+    }
+
     let limit = params.limit.clamp(1, 500);
 
     let rows = sqlx::query_as::<_, (Vec<u8>, String, i32, i64)>(
@@ -1332,6 +1360,12 @@ async fn get_active_addresses(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ActiveAddressesParams>,
 ) -> ApiResult<Vec<ActiveAddressResponse>> {
+    let sync_status = state.cache.get_sync_status(&state.pool).await;
+
+    if sync_status.address_balances_deferred {
+        return ok(Vec::new());
+    }
+
     let limit = params.limit.clamp(1, 500);
     let days = params.days.clamp(1, 365);
 
@@ -1396,14 +1430,26 @@ async fn get_address_transactions(
     let cursor = params.cursor.as_ref().and_then(|c| decode_cursor(c));
     let (cursor_block, cursor_idx) = cursor.unwrap_or((i64::MAX, i32::MAX));
 
-    let total: (i64,) = sqlx::query_as(
-        "SELECT COALESCE(transactions_count, 0) FROM address_balances WHERE lock_script_hash = $1",
-    )
-    .bind(&lock_hash)
-    .fetch_optional(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
-    .unwrap_or((0,));
+    let sync_status = state.cache.get_sync_status(&state.pool).await;
+
+    let total: (i64,) = if sync_status.address_balances_deferred {
+        sqlx::query_as(
+            "SELECT COUNT(*) FROM activities WHERE activity_category = 'ckb' AND (from_lock_hash = $1 OR to_lock_hash = $1)",
+        )
+        .bind(&lock_hash)
+        .fetch_one(&state.pool)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+    } else {
+        sqlx::query_as(
+            "SELECT COALESCE(transactions_count, 0) FROM address_balances WHERE lock_script_hash = $1",
+        )
+        .bind(&lock_hash)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .unwrap_or((0,))
+    };
 
     // Query activities table for CKB transfers involving this address
     // Determine direction based on from/to lock hash
@@ -1502,6 +1548,17 @@ async fn get_address_tokens(
     axum::extract::Path(addr): axum::extract::Path<String>,
     Query(params): Query<AddressTokensParams>,
 ) -> ApiResult<CursorPaginatedResponse<AddressTokenResponse>> {
+    let sync_status = state.cache.get_sync_status(&state.pool).await;
+
+    if sync_status.token_deferred {
+        return ok(CursorPaginatedResponse::new(
+            Vec::new(),
+            0,
+            params.limit.clamp(1, 100),
+            None,
+        ));
+    }
+
     let lock_hash = if is_ckb_address(&addr) {
         address_to_lock_script_hash(&addr)
             .map_err(|e| ApiError::bad_request(format!("Invalid CKB address: {}", e)))?

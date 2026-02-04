@@ -125,6 +125,17 @@ async fn list_tokens(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<TokenResponse>> {
+    let sync_status = state.cache.get_sync_status(&state.pool).await;
+
+    if sync_status.token_deferred {
+        return ok(CursorPaginatedResponse::new(
+            Vec::new(),
+            0,
+            params.limit.clamp(1, 100),
+            None,
+        ));
+    }
+
     let limit = params.limit.clamp(1, 100);
     let (cursor_24h, cursor_holders, cursor_id) = params
         .cursor
@@ -403,6 +414,14 @@ async fn get_token(
     State(state): State<Arc<AppState>>,
     Path(type_hash): Path<String>,
 ) -> ApiResult<TokenResponse> {
+    let sync_status = state.cache.get_sync_status(&state.pool).await;
+
+    if sync_status.token_deferred {
+        return Err(ApiError::not_found(
+            "Token data not available during rebuild",
+        ));
+    }
+
     let hash = hex::decode(type_hash.strip_prefix("0x").unwrap_or(&type_hash))
         .map_err(|_| ApiError::bad_request("Invalid type script hash"))?;
 
@@ -455,6 +474,17 @@ async fn get_token_holders(
     Path(type_hash): Path<String>,
     Query(params): Query<HolderParams>,
 ) -> ApiResult<CursorPaginatedResponse<TokenHolderResponse>> {
+    let sync_status = state.cache.get_sync_status(&state.pool).await;
+
+    if sync_status.token_deferred {
+        return ok(CursorPaginatedResponse::new(
+            Vec::new(),
+            0,
+            params.limit.clamp(1, 100),
+            None,
+        ));
+    }
+
     let hash = hex::decode(type_hash.strip_prefix("0x").unwrap_or(&type_hash))
         .map_err(|_| ApiError::bad_request("Invalid type script hash"))?;
 
@@ -585,6 +615,17 @@ async fn get_token_transfers(
     Path(type_hash): Path<String>,
     Query(params): Query<TransferParams>,
 ) -> ApiResult<CursorPaginatedResponse<TokenTransferResponse>> {
+    let sync_status = state.cache.get_sync_status(&state.pool).await;
+
+    if sync_status.token_deferred {
+        return ok(CursorPaginatedResponse::new(
+            Vec::new(),
+            0,
+            params.limit.clamp(1, 100),
+            None,
+        ));
+    }
+
     let hash = hex::decode(type_hash.strip_prefix("0x").unwrap_or(&type_hash))
         .map_err(|_| ApiError::bad_request("Invalid type script hash"))?;
 

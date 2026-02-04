@@ -1353,6 +1353,14 @@ impl Indexer {
             if let Err(e) = self.maybe_submit_activities_rebuild_task().await {
                 warn!("Failed to submit activities rebuild task: {}", e);
             }
+
+            if let Err(e) = self.maybe_submit_address_balances_rebuild_task().await {
+                warn!("Failed to submit address balances rebuild task: {}", e);
+            }
+
+            if let Err(e) = self.maybe_submit_token_rebuild_task().await {
+                warn!("Failed to submit token rebuild task: {}", e);
+            }
         }
 
         if was_secondary_bulk && !currently_secondary_bulk {
@@ -1663,8 +1671,84 @@ impl Indexer {
         Ok(())
     }
 
-    /// Submit a label import task on indexer startup if not already pending/running.
-    /// This ensures token labels are imported at least once per indexer lifecycle.
+    async fn maybe_submit_address_balances_rebuild_task(&self) -> Result<()> {
+        let address_balances_deferred: bool = sqlx::query_scalar(
+            "SELECT COALESCE(address_balances_deferred, false) FROM sync_status WHERE id = 1",
+        )
+        .fetch_one(self.writer.pool())
+        .await
+        .unwrap_or(false);
+
+        if !address_balances_deferred {
+            debug!("Address balances are not deferred, skipping rebuild task submission");
+            return Ok(());
+        }
+
+        let existing: Option<(i64,)> = sqlx::query_as(
+            "SELECT COUNT(*) FROM tasks WHERE task_type = 'address_balances_rebuild' AND status IN ('pending', 'running')",
+        )
+        .fetch_optional(self.writer.pool())
+        .await?;
+
+        if existing.map(|r| r.0).unwrap_or(0) > 0 {
+            info!("Address balances rebuild task already pending/running, skipping submission");
+            return Ok(());
+        }
+
+        let task_id: (uuid::Uuid,) = sqlx::query_as(
+            r#"
+            INSERT INTO tasks (task_type, config, priority, max_retries)
+            VALUES ('address_balances_rebuild', '{}', 6, 2)
+            RETURNING id
+            "#,
+        )
+        .fetch_one(self.writer.pool())
+        .await?;
+
+        info!("Submitted address_balances_rebuild task: {}", task_id.0);
+
+        Ok(())
+    }
+
+    async fn maybe_submit_token_rebuild_task(&self) -> Result<()> {
+        let token_deferred: bool = sqlx::query_scalar(
+            "SELECT COALESCE(token_deferred, false) FROM sync_status WHERE id = 1",
+        )
+        .fetch_one(self.writer.pool())
+        .await
+        .unwrap_or(false);
+
+        if !token_deferred {
+            debug!("Token writes are not deferred, skipping rebuild task submission");
+            return Ok(());
+        }
+
+        let existing: Option<(i64,)> = sqlx::query_as(
+            "SELECT COUNT(*) FROM tasks WHERE task_type = 'token_rebuild' AND status IN ('pending', 'running')",
+        )
+        .fetch_optional(self.writer.pool())
+        .await?;
+
+        if existing.map(|r| r.0).unwrap_or(0) > 0 {
+            info!("Token rebuild task already pending/running, skipping submission");
+            return Ok(());
+        }
+
+        let task_id: (uuid::Uuid,) = sqlx::query_as(
+            r#"
+            INSERT INTO tasks (task_type, config, priority, max_retries)
+            VALUES ('token_rebuild', '{}', 5, 2)
+            RETURNING id
+            "#,
+        )
+        .fetch_one(self.writer.pool())
+        .await?;
+
+        info!("Submitted token_rebuild task: {}", task_id.0);
+
+        Ok(())
+    }
+
     async fn maybe_submit_label_import_task(&self) -> Result<()> {
         use ckbadger_common::{LabelImportConfig, TaskBuilder};
 
@@ -2934,9 +3018,10 @@ impl Indexer {
             }
         }
 
+        let skip_address_balances = self.config.defer_address_balances && bulk_sync_mode;
         tokio::try_join!(
             async {
-                if !changes_ref.is_empty() {
+                if !skip_address_balances && !changes_ref.is_empty() {
                     self.writer
                         .update_address_balances_batch(&changes_ref)
                         .await
@@ -3218,6 +3303,8 @@ impl Indexer {
             }
         }
 
+        let skip_token = self.config.defer_token && bulk_sync_mode;
+
         struct UdtTxContext {
             tx_hash: Vec<u8>,
             block_number: i64,
@@ -3285,7 +3372,8 @@ impl Indexer {
         }
 
         // Fetch UDT info for ALL input outpoints to detect UDT consumption
-        let input_udt_info = if !all_input_outpoints_udt.is_empty() {
+        // Skip when token deferred - no UDT cells in DB during bulk sync
+        let input_udt_info = if !skip_token && !all_input_outpoints_udt.is_empty() {
             let unique_outpoints: Vec<(Vec<u8>, i16)> = {
                 let mut seen = HashSet::new();
                 all_input_outpoints_udt
@@ -3321,7 +3409,7 @@ impl Indexer {
             }
         }
 
-        if !udt_tx_contexts.is_empty() {
+        if !skip_token && !udt_tx_contexts.is_empty() {
             let mut all_transfers: Vec<(
                 crate::parser::ParsedUdtTransfer,
                 Vec<u8>,
@@ -3443,7 +3531,7 @@ impl Indexer {
             }
         }
 
-        if !batch_udt_cells.is_empty() {
+        if !skip_token && !batch_udt_cells.is_empty() {
             let tx_block_map: std::collections::HashMap<&[u8], i64> = udt_tx_contexts
                 .iter()
                 .map(|ctx| (ctx.tx_hash.as_slice(), ctx.block_number))
@@ -4042,9 +4130,10 @@ impl Indexer {
             }
         }
 
+        let skip_address_balances = self.config.defer_address_balances && bulk_sync_mode;
         tokio::try_join!(
             async {
-                if !changes_ref.is_empty() {
+                if !skip_address_balances && !changes_ref.is_empty() {
                     self.writer
                         .update_address_balances_batch(&changes_ref)
                         .await
@@ -4399,6 +4488,7 @@ impl Indexer {
                     .await?;
             }
         }
+        let skip_token = self.config.defer_token && bulk_sync_mode;
 
         struct UdtTxContext {
             tx_hash: Vec<u8>,
@@ -4467,7 +4557,9 @@ impl Indexer {
         }
 
         // Fetch UDT info for ALL input outpoints to detect UDT consumption
-        let input_udt_info = if !all_input_outpoints_udt.is_empty() {
+        // Skip when token deferred - no UDT cells in DB during bulk sync
+        // Skip when token deferred - no UDT cells in DB during bulk sync
+        let input_udt_info = if !skip_token && !all_input_outpoints_udt.is_empty() {
             let unique_outpoints: Vec<(Vec<u8>, i16)> = {
                 let mut seen = HashSet::new();
                 all_input_outpoints_udt
@@ -4503,7 +4595,7 @@ impl Indexer {
             }
         }
 
-        if !udt_tx_contexts.is_empty() {
+        if !skip_token && !udt_tx_contexts.is_empty() {
             let mut all_transfers: Vec<(
                 crate::parser::ParsedUdtTransfer,
                 Vec<u8>,
@@ -4625,7 +4717,7 @@ impl Indexer {
             }
         }
 
-        if !batch_udt_cells.is_empty() {
+        if !skip_token && !batch_udt_cells.is_empty() {
             let tx_block_map: std::collections::HashMap<&[u8], i64> = udt_tx_contexts
                 .iter()
                 .map(|ctx| (ctx.tx_hash.as_slice(), ctx.block_number))
@@ -5178,7 +5270,8 @@ impl Indexer {
             }
         }
 
-        if !address_balance_changes.is_empty() {
+        let skip_address_balances = self.config.defer_address_balances && bulk_sync_mode;
+        if !skip_address_balances && !address_balance_changes.is_empty() {
             self.writer
                 .update_address_balances_batch(&address_balance_changes)
                 .await?;

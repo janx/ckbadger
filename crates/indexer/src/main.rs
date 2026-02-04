@@ -122,6 +122,34 @@ struct Args {
         help = "Disable auto defer-activities optimization for fresh database sync"
     )]
     no_auto_defer_activities: bool,
+
+    #[arg(
+        long,
+        default_value = "false",
+        help = "Skip address_balances table writes during bulk sync (auto-rebuilds when caught up)"
+    )]
+    defer_address_balances: bool,
+
+    #[arg(
+        long,
+        default_value = "false",
+        help = "Disable auto defer-address-balances optimization for fresh database sync"
+    )]
+    no_auto_defer_address_balances: bool,
+
+    #[arg(
+        long,
+        default_value = "false",
+        help = "Skip token-related table writes during bulk sync (auto-rebuilds when caught up)"
+    )]
+    defer_token: bool,
+
+    #[arg(
+        long,
+        default_value = "false",
+        help = "Disable auto defer-token optimization for fresh database sync"
+    )]
+    no_auto_defer_token: bool,
 }
 
 #[tokio::main]
@@ -165,6 +193,8 @@ async fn main() -> Result<()> {
         live_cell_db_path: args.live_cell_db_path,
         bulk_sync_cell_cache: !args.no_bulk_sync_cell_cache,
         defer_activities: args.defer_activities,
+        defer_address_balances: args.defer_address_balances,
+        defer_token: args.defer_token,
     };
 
     info!("Connecting to database: {}", config.database_url);
@@ -242,6 +272,58 @@ async fn main() -> Result<()> {
         info!("Fresh database detected, but auto-defer-activities disabled via --no-auto-defer-activities");
     } else if activities_currently_deferred {
         info!("Activities are deferred (from previous run), will auto-rebuild when caught up");
+    }
+
+    let address_balances_currently_deferred: bool = sqlx::query_scalar(
+        "SELECT COALESCE(address_balances_deferred, false) FROM sync_status WHERE id = 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap_or(false);
+
+    let should_auto_defer_address_balances = is_fresh_sync
+        && !address_balances_currently_deferred
+        && !args.no_auto_defer_address_balances;
+
+    if should_auto_defer_address_balances
+        || (config.defer_address_balances && !address_balances_currently_deferred)
+    {
+        info!(
+            "Enabling deferred address_balances for faster bulk sync (will auto-rebuild when caught up)"
+        );
+        sqlx::query("UPDATE sync_status SET address_balances_deferred = TRUE, address_balances_deferred_at = NOW() WHERE id = 1")
+            .execute(&pool)
+            .await?;
+    } else if is_fresh_sync && args.no_auto_defer_address_balances {
+        info!("Fresh database detected, but auto-defer-address-balances disabled via --no-auto-defer-address-balances");
+    } else if address_balances_currently_deferred {
+        info!(
+            "Address balances are deferred (from previous run), will auto-rebuild when caught up"
+        );
+    }
+
+    let token_currently_deferred: bool =
+        sqlx::query_scalar("SELECT COALESCE(token_deferred, false) FROM sync_status WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap_or(false);
+
+    let should_auto_defer_token =
+        is_fresh_sync && !token_currently_deferred && !args.no_auto_defer_token;
+
+    if should_auto_defer_token || (config.defer_token && !token_currently_deferred) {
+        info!(
+            "Enabling deferred token writes for faster bulk sync (will auto-rebuild when caught up)"
+        );
+        sqlx::query(
+            "UPDATE sync_status SET token_deferred = TRUE, token_deferred_at = NOW() WHERE id = 1",
+        )
+        .execute(&pool)
+        .await?;
+    } else if is_fresh_sync && args.no_auto_defer_token {
+        info!("Fresh database detected, but auto-defer-token disabled via --no-auto-defer-token");
+    } else if token_currently_deferred {
+        info!("Token writes are deferred (from previous run), will auto-rebuild when caught up");
     }
 
     info!("Connecting to CKB node: {}", config.ckb_rpc_url);
