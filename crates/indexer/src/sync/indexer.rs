@@ -555,6 +555,14 @@ impl Indexer {
             warn!("Failed to submit label import task: {}", e);
         }
 
+        // Recovery: If not in bulk sync but deferred flags are set, submit pending rebuild tasks.
+        // This handles cases where indexer crashed/restarted after bulk sync completed but before
+        // tasks were submitted, or if task submission failed previously.
+        if !self.is_bulk_sync_active() {
+            info!("Not in bulk sync - checking for pending rebuild tasks from previous run...");
+            self.maybe_submit_pending_rebuild_tasks().await;
+        }
+
         let writer_for_task = self.writer.pool().clone();
         let fast_sync_mode = self.config.fast_sync_mode;
         let progress_for_task = Arc::clone(&self.progress);
@@ -1377,7 +1385,36 @@ impl Indexer {
             .store(currently_secondary_bulk, Ordering::SeqCst);
     }
 
-    /// Submit an index rebuild task if indexes are deferred and no rebuild task is pending/running
+    async fn maybe_submit_pending_rebuild_tasks(&self) {
+        if let Err(e) = self.maybe_submit_index_rebuild_task().await {
+            warn!("Failed to submit index rebuild task: {}", e);
+        }
+        if let Err(e) = self.maybe_submit_cells_status_rebuild_task().await {
+            warn!("Failed to submit cells status rebuild task: {}", e);
+        }
+        if let Err(e) = self.maybe_submit_live_cells_populate_task().await {
+            warn!("Failed to submit live cells populate task: {}", e);
+        }
+        if let Err(e) = self.maybe_submit_statistics_rebuild_task().await {
+            warn!("Failed to submit statistics rebuild task: {}", e);
+        }
+        if let Err(e) = self.maybe_submit_spore_rebuild_task().await {
+            warn!("Failed to submit spore rebuild task: {}", e);
+        }
+        if let Err(e) = self.maybe_submit_activities_rebuild_task().await {
+            warn!("Failed to submit activities rebuild task: {}", e);
+        }
+        if let Err(e) = self.maybe_submit_address_balances_rebuild_task().await {
+            warn!("Failed to submit address balances rebuild task: {}", e);
+        }
+        if let Err(e) = self.maybe_submit_token_rebuild_task().await {
+            warn!("Failed to submit token rebuild task: {}", e);
+        }
+        if let Err(e) = self.maybe_submit_secondary_issuance_backfill_task().await {
+            warn!("Failed to submit secondary issuance backfill task: {}", e);
+        }
+    }
+
     async fn maybe_submit_index_rebuild_task(&self) -> Result<()> {
         use ckbadger_common::{IndexRebuildConfig, TaskBuilder};
 

@@ -259,7 +259,7 @@ These constraints are redundant during bulk sync because CKB node validates:
 
 **Task-Based Rebuild Flow:**
 
-When bulk sync completes (catches up to <=1000 blocks behind tip), the indexer automatically submits tasks to the `tasks` table:
+When bulk sync completes (catches up to <=72 blocks behind tip), the indexer automatically submits tasks to the `tasks` table:
 
 1. Indexer detects bulk sync completion
 2. Submits `index_rebuild` task (priority 10) if indexes are deferred
@@ -272,6 +272,21 @@ When bulk sync completes (catches up to <=1000 blocks behind tip), the indexer a
 9. Cells status rebuilt from transaction_inputs table
 10. Statistics tables rebuilt (daily_statistics, hourly_statistics, miner_statistics, etc.)
 11. Tasks complete (status: `completed`)
+
+**Startup Recovery:**
+
+If the indexer restarts after bulk sync completed (or crashes during task submission), pending rebuild tasks are automatically recovered:
+
+1. On startup, if `blocks_remaining <= bulk_sync_threshold` (not in bulk sync)
+2. Indexer calls `maybe_submit_pending_rebuild_tasks()`
+3. Each `maybe_submit_*_task()` checks if deferred flag is set AND no pending/running task exists
+4. Missing tasks are submitted to ensure rebuild completes
+
+This handles edge cases:
+
+- Indexer crash after bulk sync but before task submission
+- Task submission failures that weren't retried
+- Manual indexer restart after bulk sync
 
 **Available Task Types:**
 
