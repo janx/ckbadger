@@ -120,4 +120,29 @@ impl BatchWriter {
 
         Ok(())
     }
+
+    pub async fn insert_proposals_batch(&self, proposals: &[(i64, i16, &[u8])]) -> Result<()> {
+        if proposals.is_empty() {
+            return Ok(());
+        }
+
+        let block_numbers: Vec<i64> = proposals.iter().map(|(b, _, _)| *b).collect();
+        let proposal_indices: Vec<i16> = proposals.iter().map(|(_, i, _)| *i).collect();
+        let proposal_ids: Vec<&[u8]> = proposals.iter().map(|(_, _, p)| *p).collect();
+
+        sqlx::query(
+            r#"
+            INSERT INTO block_proposals (block_number, proposal_index, proposal_id)
+            SELECT * FROM UNNEST($1::bigint[], $2::smallint[], $3::bytea[])
+            ON CONFLICT (block_number, proposal_index) DO NOTHING
+            "#,
+        )
+        .bind(&block_numbers)
+        .bind(&proposal_indices)
+        .bind(&proposal_ids)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
 }

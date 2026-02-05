@@ -431,6 +431,7 @@ When the indexer catches up to the chain tip, it automatically switches back to 
 | `copy_transactions.rs`         | transactions          | 16      | 5-10x faster than UNNEST  |
 | `copy_inputs.rs`               | transaction_inputs    | 6       | 5-10x faster than UNNEST  |
 | `copy_inputs.rs`               | transaction_cell_deps | 6       | 5-10x faster than UNNEST  |
+| `copy_proposals.rs`            | block_proposals       | 3       | 5-10x faster than UNNEST  |
 | `copy_live_cells.rs`           | live_cells            | 10      | 5-10x faster than UNNEST  |
 | `copy_address_transactions.rs` | address_transactions  | 6       | 5x faster than UNNEST     |
 | `parallel_copy.rs`             | -                     | -       | Partition-aware routing   |

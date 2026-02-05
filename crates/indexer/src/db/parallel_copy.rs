@@ -9,6 +9,7 @@ use crate::db::copy_cells::CopyCellsWriter;
 use crate::db::copy_inputs::{CopyCellDepsWriter, CopyInputsWriter};
 use crate::db::copy_live_cells::CopyLiveCellsWriter;
 use crate::db::copy_pool::CopyPoolManager;
+use crate::db::copy_proposals::CopyProposalsWriter;
 use crate::db::copy_transactions::CopyTransactionsWriter;
 use crate::db::copy_udt_cells::CopyUdtCellsWriter;
 use crate::db::live_cell_storage::{DynLiveCellStorage, LiveCellInfo};
@@ -59,6 +60,9 @@ type ActivityData<'a> = (&'a ParsedActivity, i64, DateTime<Utc>);
 
 /// Type alias for UDT cell data tuple: (tx_hash, output_index, cell, block_number)
 type UdtCellData<'a> = (&'a [u8], i16, &'a ParsedUdtCell, i64);
+
+/// Type alias for proposal data tuple: (block_number, proposal_index, proposal_id)
+type ProposalData<'a> = (i64, i16, &'a [u8]);
 
 fn get_partition_index(block_number: i64) -> usize {
     (block_number / PARTITION_SIZE) as usize
@@ -404,6 +408,49 @@ impl ParallelCopyRouter {
             data,
         )
         .await
+    }
+
+    pub async fn copy_proposals_parallel(&self, proposals: &[ProposalData<'_>]) -> Result<u64> {
+        if proposals.is_empty() {
+            return Ok(0);
+        }
+
+        let mut partition_data: HashMap<usize, Vec<ProposalData<'_>>> = HashMap::new();
+
+        for proposal in proposals {
+            let partition = get_partition_index(proposal.0);
+            partition_data.entry(partition).or_default().push(*proposal);
+        }
+
+        let mut futures = Vec::new();
+
+        for (_partition, partition_proposals) in partition_data {
+            let conn = self.pool_manager.get_connection().await?;
+
+            let future = async move {
+                let mut writer = CopyProposalsWriter::new();
+                for (block_number, proposal_index, proposal_id) in partition_proposals {
+                    writer.add_proposal(block_number, proposal_index, proposal_id);
+                }
+
+                let data = writer.finish();
+                execute_copy(
+                    conn.as_ref(),
+                    "COPY block_proposals (block_number, proposal_index, proposal_id) FROM STDIN WITH (FORMAT BINARY)",
+                    data,
+                ).await
+            };
+
+            futures.push(future);
+        }
+
+        let results = join_all(futures).await;
+        let mut total_rows = 0u64;
+        for result in results {
+            total_rows += result?;
+        }
+
+        Ok(total_rows)
     }
 }
 

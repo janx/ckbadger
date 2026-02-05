@@ -5,6 +5,7 @@ pub mod copy_format;
 pub mod copy_inputs;
 pub mod copy_live_cells;
 pub mod copy_pool;
+pub mod copy_proposals;
 pub mod copy_transactions;
 pub mod copy_udt_cells;
 pub mod indexes;

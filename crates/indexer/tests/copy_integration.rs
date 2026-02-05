@@ -2,6 +2,7 @@ use ckbadger_indexer::db::copy_cells::CopyCellsWriter;
 use ckbadger_indexer::db::copy_format::BinaryCopyBuffer;
 use ckbadger_indexer::db::copy_inputs::{CopyCellDepsWriter, CopyInputsWriter};
 use ckbadger_indexer::db::copy_live_cells::CopyLiveCellsWriter;
+use ckbadger_indexer::db::copy_proposals::CopyProposalsWriter;
 use ckbadger_indexer::db::copy_transactions::CopyTransactionsWriter;
 use ckbadger_indexer::parser::cell::ParsedCell;
 use ckbadger_indexer::parser::transaction::{ParsedCellDep, ParsedInput};
@@ -179,4 +180,45 @@ fn test_partition_distribution() {
 
     assert_eq!(cells_p0[0].3 / 5_000_000, 0);
     assert_eq!(cells_p1[0].3 / 5_000_000, 1);
+}
+
+#[test]
+fn test_proposals_writer_produces_valid_binary() {
+    let proposal_id = vec![0u8; 10];
+
+    let mut writer = CopyProposalsWriter::new();
+    writer.add_proposal(1000, 0, &proposal_id);
+    let data = writer.finish();
+
+    assert!(&data[0..11] == b"PGCOPY\n\xff\r\n\0");
+    assert!(data.len() > 30);
+}
+
+#[test]
+fn test_multiple_proposals_produces_larger_buffer() {
+    let proposal_id = vec![0u8; 10];
+
+    let mut writer1 = CopyProposalsWriter::new();
+    writer1.add_proposal(1000, 0, &proposal_id);
+    let data1 = writer1.finish();
+
+    let mut writer2 = CopyProposalsWriter::new();
+    writer2.add_proposal(1000, 0, &proposal_id);
+    writer2.add_proposal(1000, 1, &proposal_id);
+    writer2.add_proposal(1000, 2, &proposal_id);
+    let data2 = writer2.finish();
+
+    assert!(data2.len() > data1.len());
+    assert!(data2.len() > data1.len() * 2);
+}
+
+#[test]
+fn test_proposals_partition_distribution() {
+    let proposal_id = vec![0u8; 10];
+
+    let proposals_p0: Vec<(i64, i16, &[u8])> = vec![(1_000_000, 0, &proposal_id)];
+    let proposals_p1: Vec<(i64, i16, &[u8])> = vec![(6_000_000, 0, &proposal_id)];
+
+    assert_eq!(proposals_p0[0].0 / 5_000_000, 0);
+    assert_eq!(proposals_p1[0].0 / 5_000_000, 1);
 }

@@ -3827,11 +3827,16 @@ impl Indexer {
             }
         }
 
+        let mut all_proposals: Vec<(i64, i16, &[u8])> = Vec::new();
         for parsed_block in all_parsed_blocks {
             if !parsed_block.proposals.is_empty() {
-                self.writer
-                    .insert_block_proposals_batch(parsed_block.number, &parsed_block.proposals)
-                    .await?;
+                for (proposal_index, proposal_id) in parsed_block.proposals.iter().enumerate() {
+                    all_proposals.push((
+                        parsed_block.number,
+                        proposal_index as i16,
+                        proposal_id.as_slice(),
+                    ));
+                }
 
                 if !self.is_bulk_sync_active() {
                     self.cache_block_proposals(&parsed_block.proposals, parsed_block.number)
@@ -3953,6 +3958,16 @@ impl Indexer {
                     } else {
                         Ok(())
                     }
+                },
+                async {
+                    if !all_proposals.is_empty() {
+                        copy_router
+                            .copy_proposals_parallel(&all_proposals)
+                            .await
+                            .map(|_| ())
+                    } else {
+                        Ok(())
+                    }
                 }
             )?;
         } else {
@@ -3987,6 +4002,13 @@ impl Indexer {
                         self.writer
                             .insert_transaction_cell_deps_batch(&all_cell_deps)
                             .await
+                    } else {
+                        Ok(())
+                    }
+                },
+                async {
+                    if !all_proposals.is_empty() {
+                        self.writer.insert_proposals_batch(&all_proposals).await
                     } else {
                         Ok(())
                     }
