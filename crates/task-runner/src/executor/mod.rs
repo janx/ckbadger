@@ -1,7 +1,7 @@
 use anyhow::Result;
 use ckbadger_common::{
     ActivitiesRebuildConfig, AddressBalancesRebuildConfig, CellsStatusRebuildConfig,
-    CyclesBackfillConfig, IndexRebuildConfig, LabelImportConfig,
+    CyclesBackfillConfig, DotbitRebuildConfig, IndexRebuildConfig, LabelImportConfig,
     MnftRebuildConfig, SecondaryIssuanceBackfillConfig, SporeRebuildConfig,
     StatisticsRebuildConfig, Task, TaskConfig, TaskType, TokenRebuildConfig,
 };
@@ -15,6 +15,7 @@ mod activities;
 mod address_balances;
 mod cells_status;
 mod cycles;
+mod dotbit;
 mod index;
 mod labels;
 mod secondary_issuance;
@@ -158,9 +159,7 @@ impl TaskExecutor {
             TaskType::AddressBalancesRebuild => self.execute_address_balances_rebuild(task).await,
             TaskType::TokenRebuild => self.execute_token_rebuild(task).await,
             TaskType::MnftRebuild => self.execute_mnft_rebuild(task).await,
-            TaskType::DotbitRebuild => {
-                Err(anyhow::anyhow!("DotbitRebuild executor not yet implemented"))
-            }
+            TaskType::DotbitRebuild => self.execute_dotbit_rebuild(task).await,
         }
     }
 
@@ -278,5 +277,14 @@ impl TaskExecutor {
         };
 
         mnft::execute(&self.db, &self.pool, task.id, &config).await
+    }
+
+    async fn execute_dotbit_rebuild(&self, task: &Task) -> Result<()> {
+        let config: DotbitRebuildConfig = match task.config_typed() {
+            Some(TaskConfig::DotbitRebuild(c)) => c,
+            _ => DotbitRebuildConfig::default(),
+        };
+
+        dotbit::execute(&self.db, &self.pool, task.id, &config).await
     }
 }
