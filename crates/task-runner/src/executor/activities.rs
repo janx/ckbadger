@@ -98,6 +98,13 @@ pub async fn execute(
 }
 
 async fn rebuild_activities_batch(pool: &PgPool, start_block: i64, end_block: i64) -> Result<i64> {
+    // Uses net-balance approach matching the Rust ActivityParser's greedy flow algorithm:
+    // 1. Compute net CKB balance change per address per transaction (ALL cells, not just plain CKB)
+    // 2. Identify senders (net negative) and receivers (net positive)
+    // 3. Pair each receiver with the primary (largest) sender
+    //
+    // This produces at most (unique receiver addresses) activities per transaction,
+    // avoiding the cartesian product that the old JOIN approach caused (N inputs × M outputs).
     let inserted = sqlx::query_scalar::<_, i64>(
         r#"
         WITH block_txs AS (
@@ -106,9 +113,6 @@ async fn rebuild_activities_batch(pool: &PgPool, start_block: i64, end_block: i6
                 t.block_number,
                 t.tx_index,
                 t.is_cellbase,
-                t.total_input_capacity,
-                t.total_output_capacity,
-                t.fee,
                 b.timestamp
             FROM transactions t
             JOIN blocks b ON b.number = t.block_number
@@ -117,42 +121,59 @@ async fn rebuild_activities_batch(pool: &PgPool, start_block: i64, end_block: i6
         tx_outputs AS (
             SELECT 
                 c.tx_hash,
-                c.output_index,
                 c.capacity,
-                c.lock_script_hash,
-                c.type_script_hash,
-                c.created_at_block
+                c.lock_script_hash
             FROM cells c
             WHERE c.created_at_block >= $1 AND c.created_at_block < $2
         ),
         tx_inputs AS (
             SELECT 
                 ti.tx_hash,
-                ti.tx_block_number,
-                ti.input_index,
                 c.capacity AS input_capacity,
-                c.lock_script_hash AS input_lock_hash,
-                c.type_script_hash AS input_type_hash
+                c.lock_script_hash AS input_lock_hash
             FROM transaction_inputs ti
             JOIN cells c ON c.tx_hash = ti.previous_tx_hash 
                         AND c.output_index = ti.previous_output_index
             WHERE ti.tx_block_number >= $1 AND ti.tx_block_number < $2
         ),
+        -- Net balance change per address per transaction (include ALL cells for CKB capacity tracking)
+        address_net AS (
+            SELECT 
+                tx_hash,
+                lock_script_hash,
+                SUM(net) AS net_change
+            FROM (
+                SELECT tx_hash, lock_script_hash, capacity AS net
+                FROM tx_outputs
+                UNION ALL
+                SELECT tx_hash, input_lock_hash, -input_capacity
+                FROM tx_inputs
+            ) flows
+            GROUP BY tx_hash, lock_script_hash
+        ),
+        -- Primary (largest) sender per transaction
+        top_senders AS (
+            SELECT DISTINCT ON (tx_hash)
+                tx_hash,
+                lock_script_hash AS from_lock_hash
+            FROM address_net
+            WHERE net_change < 0
+            ORDER BY tx_hash, net_change ASC
+        ),
+        -- One CKB_TRANSFER per net receiver (matches Rust parser's net-balance approach)
         ckb_transfers AS (
             SELECT 
                 bt.block_number,
                 bt.tx_hash,
                 bt.tx_index,
                 bt.timestamp,
-                ti.input_lock_hash AS from_lock_hash,
-                o.lock_script_hash AS to_lock_hash,
-                o.capacity AS amount
-            FROM block_txs bt
-            JOIN tx_outputs o ON o.tx_hash = bt.tx_hash
-            LEFT JOIN tx_inputs ti ON ti.tx_hash = bt.tx_hash
-            WHERE NOT bt.is_cellbase
-              AND o.type_script_hash IS NULL
-              AND ti.input_lock_hash IS DISTINCT FROM o.lock_script_hash
+                ts.from_lock_hash,
+                an.lock_script_hash AS to_lock_hash,
+                an.net_change AS amount
+            FROM address_net an
+            JOIN block_txs bt ON bt.tx_hash = an.tx_hash AND NOT bt.is_cellbase
+            LEFT JOIN top_senders ts ON ts.tx_hash = an.tx_hash
+            WHERE an.net_change > 0
         ),
         cellbase_rewards AS (
             SELECT 
@@ -169,13 +190,13 @@ async fn rebuild_activities_batch(pool: &PgPool, start_block: i64, end_block: i6
         ),
         all_activities AS (
             SELECT 
-                encode(sha256(tx_hash || 'CKB_TRANSFER'::bytea || int2send(ROW_NUMBER() OVER (PARTITION BY tx_hash ORDER BY from_lock_hash, to_lock_hash)::int2)), 'hex')::bytea AS activity_id,
+                encode(sha256(tx_hash || 'CKB_TRANSFER'::bytea || int2send((ROW_NUMBER() OVER (PARTITION BY tx_hash ORDER BY to_lock_hash))::int2)), 'hex')::bytea AS activity_id,
                 'CKB_TRANSFER' AS activity_type,
                 'ckb' AS activity_category,
                 block_number,
                 tx_hash,
                 tx_index,
-                (ROW_NUMBER() OVER (PARTITION BY tx_hash ORDER BY from_lock_hash, to_lock_hash) - 1)::int2 AS activity_index,
+                (ROW_NUMBER() OVER (PARTITION BY tx_hash ORDER BY to_lock_hash) - 1)::int2 AS activity_index,
                 from_lock_hash,
                 to_lock_hash,
                 amount::numeric(40,0),
@@ -188,7 +209,7 @@ async fn rebuild_activities_batch(pool: &PgPool, start_block: i64, end_block: i6
             UNION ALL
             
             SELECT 
-                encode(sha256(tx_hash || 'CELLBASE_REWARD'::bytea || int2send(ROW_NUMBER() OVER (PARTITION BY tx_hash ORDER BY to_lock_hash)::int2)), 'hex')::bytea AS activity_id,
+                encode(sha256(tx_hash || 'CELLBASE_REWARD'::bytea || int2send((ROW_NUMBER() OVER (PARTITION BY tx_hash ORDER BY to_lock_hash))::int2)), 'hex')::bytea AS activity_id,
                 'CELLBASE_REWARD' AS activity_type,
                 'cellbase' AS activity_category,
                 block_number,
