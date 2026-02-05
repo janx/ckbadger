@@ -338,6 +338,7 @@ pub struct Indexer {
     activities_deferred: std::sync::atomic::AtomicBool,
     address_balances_deferred: std::sync::atomic::AtomicBool,
     token_deferred: std::sync::atomic::AtomicBool,
+    spore_deferred: std::sync::atomic::AtomicBool,
 }
 
 impl Indexer {
@@ -418,10 +419,17 @@ impl Indexer {
         .await
         .unwrap_or(false);
 
-        if activities_deferred || address_balances_deferred || token_deferred {
+        let spore_deferred: bool = sqlx::query_scalar(
+            "SELECT COALESCE(spore_deferred, false) FROM sync_status WHERE id = 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap_or(false);
+
+        if activities_deferred || address_balances_deferred || token_deferred || spore_deferred {
             info!(
-                "Loaded deferred states from database: activities={}, address_balances={}, token={}",
-                activities_deferred, address_balances_deferred, token_deferred
+                "Loaded deferred states from database: activities={}, address_balances={}, token={}, spore={}",
+                activities_deferred, address_balances_deferred, token_deferred, spore_deferred
             );
         }
 
@@ -449,6 +457,7 @@ impl Indexer {
                 address_balances_deferred,
             ),
             token_deferred: std::sync::atomic::AtomicBool::new(token_deferred),
+            spore_deferred: std::sync::atomic::AtomicBool::new(spore_deferred),
         })
     }
 
@@ -1407,6 +1416,14 @@ impl Indexer {
             if let Err(e) = self.maybe_submit_token_rebuild_task().await {
                 warn!("Failed to submit token rebuild task: {}", e);
             }
+
+            if let Err(e) = self.maybe_submit_mnft_rebuild_task().await {
+                warn!("Failed to submit mnft rebuild task: {}", e);
+            }
+
+            if let Err(e) = self.maybe_submit_dotbit_rebuild_task().await {
+                warn!("Failed to submit dotbit rebuild task: {}", e);
+            }
         }
 
         if was_secondary_bulk && !currently_secondary_bulk {
@@ -1447,6 +1464,12 @@ impl Indexer {
         }
         if let Err(e) = self.maybe_submit_token_rebuild_task().await {
             warn!("Failed to submit token rebuild task: {}", e);
+        }
+        if let Err(e) = self.maybe_submit_mnft_rebuild_task().await {
+            warn!("Failed to submit mnft rebuild task: {}", e);
+        }
+        if let Err(e) = self.maybe_submit_dotbit_rebuild_task().await {
+            warn!("Failed to submit dotbit rebuild task: {}", e);
         }
         if let Err(e) = self.maybe_submit_secondary_issuance_backfill_task().await {
             warn!("Failed to submit secondary issuance backfill task: {}", e);
@@ -1583,6 +1606,18 @@ impl Indexer {
     async fn maybe_submit_spore_rebuild_task(&self) -> Result<()> {
         use ckbadger_common::{SporeRebuildConfig, TaskBuilder};
 
+        let spore_deferred: bool = sqlx::query_scalar(
+            "SELECT COALESCE(spore_deferred, false) FROM sync_status WHERE id = 1",
+        )
+        .fetch_one(self.writer.pool())
+        .await
+        .unwrap_or(false);
+
+        if !spore_deferred {
+            debug!("Spore writes are not deferred, skipping rebuild task submission");
+            return Ok(());
+        }
+
         let existing: Option<(i64,)> = sqlx::query_as(
             "SELECT COUNT(*) FROM tasks WHERE task_type = 'spore_rebuild' AND status IN ('pending', 'running')",
         )
@@ -1591,15 +1626,6 @@ impl Indexer {
 
         if existing.map(|r| r.0).unwrap_or(0) > 0 {
             info!("Spore rebuild task already pending/running, skipping submission");
-            return Ok(());
-        }
-
-        let spore_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM spore_cells")
-            .fetch_one(self.writer.pool())
-            .await?;
-
-        if spore_count.0 == 0 {
-            debug!("No spore cells found, skipping spore rebuild task");
             return Ok(());
         }
 
@@ -1620,6 +1646,96 @@ impl Indexer {
         .await?;
 
         info!("Submitted spore rebuild task: {}", task_id.0);
+
+        Ok(())
+    }
+
+    async fn maybe_submit_mnft_rebuild_task(&self) -> Result<()> {
+        use ckbadger_common::{MnftRebuildConfig, TaskBuilder};
+
+        let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM mnft_issuers")
+            .fetch_one(self.writer.pool())
+            .await?;
+        if count > 0 {
+            debug!("M-NFT data exists, skipping rebuild task submission");
+            return Ok(());
+        }
+
+        let existing: Option<(i64,)> = sqlx::query_as(
+            "SELECT COUNT(*) FROM tasks WHERE task_type = 'mnft_rebuild' AND status IN ('pending', 'running')",
+        )
+        .fetch_optional(self.writer.pool())
+        .await?;
+
+        if existing.map(|r| r.0).unwrap_or(0) > 0 {
+            info!("M-NFT rebuild task already pending/running, skipping submission");
+            return Ok(());
+        }
+
+        info!("Submitting mnft_rebuild task (M-NFT tables empty after bulk sync)");
+
+        let builder = TaskBuilder::mnft_rebuild(MnftRebuildConfig::default());
+
+        let task_id: (Uuid,) = sqlx::query_as(
+            r#"
+            INSERT INTO tasks (task_type, config, priority, max_retries)
+            VALUES ($1, $2, $3, $4)
+            RETURNING id
+            "#,
+        )
+        .bind(builder.task_type().to_string())
+        .bind(builder.config())
+        .bind(builder.get_priority())
+        .bind(builder.get_max_retries())
+        .fetch_one(self.writer.pool())
+        .await?;
+
+        info!("Submitted mnft_rebuild task: {}", task_id.0);
+
+        Ok(())
+    }
+
+    async fn maybe_submit_dotbit_rebuild_task(&self) -> Result<()> {
+        use ckbadger_common::{DotbitRebuildConfig, TaskBuilder};
+
+        let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM dotbit_accounts")
+            .fetch_one(self.writer.pool())
+            .await?;
+        if count > 0 {
+            debug!("DotBit data exists, skipping rebuild task submission");
+            return Ok(());
+        }
+
+        let existing: Option<(i64,)> = sqlx::query_as(
+            "SELECT COUNT(*) FROM tasks WHERE task_type = 'dotbit_rebuild' AND status IN ('pending', 'running')",
+        )
+        .fetch_optional(self.writer.pool())
+        .await?;
+
+        if existing.map(|r| r.0).unwrap_or(0) > 0 {
+            info!("DotBit rebuild task already pending/running, skipping submission");
+            return Ok(());
+        }
+
+        info!("Submitting dotbit_rebuild task (DotBit tables empty after bulk sync)");
+
+        let builder = TaskBuilder::dotbit_rebuild(DotbitRebuildConfig::default());
+
+        let task_id: (Uuid,) = sqlx::query_as(
+            r#"
+            INSERT INTO tasks (task_type, config, priority, max_retries)
+            VALUES ($1, $2, $3, $4)
+            RETURNING id
+            "#,
+        )
+        .bind(builder.task_type().to_string())
+        .bind(builder.config())
+        .bind(builder.get_priority())
+        .bind(builder.get_max_retries())
+        .fetch_one(self.writer.pool())
+        .await?;
+
+        info!("Submitted dotbit_rebuild task: {}", task_id.0);
 
         Ok(())
     }
@@ -3390,6 +3506,11 @@ impl Indexer {
             .load(std::sync::atomic::Ordering::Relaxed)
             && bulk_sync_mode;
 
+        let skip_spore = self
+            .spore_deferred
+            .load(std::sync::atomic::Ordering::Relaxed)
+            && bulk_sync_mode;
+
         struct UdtTxContext {
             tx_hash: Vec<u8>,
             block_number: i64,
@@ -3658,20 +3779,27 @@ impl Indexer {
             for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
                 let tx = &block_response.block.transactions[tx_idx];
 
-                for cluster in SporeParser::parse_clusters(tx) {
-                    self.writer
-                        .insert_spore_cluster(&cluster, parsed.number, &tx_data.hash)
-                        .await?;
-                }
+                if !skip_spore {
+                    for cluster in SporeParser::parse_clusters(tx) {
+                        self.writer
+                            .insert_spore_cluster(&cluster, parsed.number, &tx_data.hash)
+                            .await?;
+                    }
 
-                for (output_index, spore) in SporeParser::parse_spores(tx).iter().enumerate() {
-                    batch_spore_ids.insert(spore.spore_id.clone());
-                    self.writer
-                        .insert_spore_cell(spore, &tx_data.hash, output_index as i16, parsed.number)
-                        .await?;
-                    self.writer
-                        .insert_spore_content(&spore.spore_id, &spore.content)
-                        .await?;
+                    for (output_index, spore) in SporeParser::parse_spores(tx).iter().enumerate() {
+                        batch_spore_ids.insert(spore.spore_id.clone());
+                        self.writer
+                            .insert_spore_cell(
+                                spore,
+                                &tx_data.hash,
+                                output_index as i16,
+                                parsed.number,
+                            )
+                            .await?;
+                        self.writer
+                            .insert_spore_content(&spore.spore_id, &spore.content)
+                            .await?;
+                    }
                 }
 
                 // Skip MNFT/DotBit writes during bulk sync - too slow (individual upserts)
@@ -4619,6 +4747,11 @@ impl Indexer {
             .load(std::sync::atomic::Ordering::Relaxed)
             && bulk_sync_mode;
 
+        let skip_spore = self
+            .spore_deferred
+            .load(std::sync::atomic::Ordering::Relaxed)
+            && bulk_sync_mode;
+
         struct UdtTxContext {
             tx_hash: Vec<u8>,
             block_number: i64,
@@ -4888,20 +5021,27 @@ impl Indexer {
             for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
                 let tx = &block_response.block.transactions[tx_idx];
 
-                for cluster in SporeParser::parse_clusters(tx) {
-                    self.writer
-                        .insert_spore_cluster(&cluster, parsed.number, &tx_data.hash)
-                        .await?;
-                }
+                if !skip_spore {
+                    for cluster in SporeParser::parse_clusters(tx) {
+                        self.writer
+                            .insert_spore_cluster(&cluster, parsed.number, &tx_data.hash)
+                            .await?;
+                    }
 
-                for (output_index, spore) in SporeParser::parse_spores(tx).iter().enumerate() {
-                    batch_spore_ids.insert(spore.spore_id.clone());
-                    self.writer
-                        .insert_spore_cell(spore, &tx_data.hash, output_index as i16, parsed.number)
-                        .await?;
-                    self.writer
-                        .insert_spore_content(&spore.spore_id, &spore.content)
-                        .await?;
+                    for (output_index, spore) in SporeParser::parse_spores(tx).iter().enumerate() {
+                        batch_spore_ids.insert(spore.spore_id.clone());
+                        self.writer
+                            .insert_spore_cell(
+                                spore,
+                                &tx_data.hash,
+                                output_index as i16,
+                                parsed.number,
+                            )
+                            .await?;
+                        self.writer
+                            .insert_spore_content(&spore.spore_id, &spore.content)
+                            .await?;
+                    }
                 }
 
                 if !bulk_sync_mode {

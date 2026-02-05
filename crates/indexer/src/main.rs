@@ -122,6 +122,13 @@ struct Args {
         help = "Disable auto defer-token optimization for fresh database sync"
     )]
     no_auto_defer_token: bool,
+
+    #[arg(
+        long,
+        default_value = "false",
+        help = "Disable auto defer-spore optimization for fresh database sync"
+    )]
+    no_auto_defer_spore: bool,
 }
 
 #[tokio::main]
@@ -282,6 +289,30 @@ async fn main() -> Result<()> {
         info!("Fresh database detected, but auto-defer-token disabled via --no-auto-defer-token");
     } else if token_currently_deferred {
         info!("Token writes are deferred (from previous run), will auto-rebuild when caught up");
+    }
+
+    let spore_currently_deferred: bool =
+        sqlx::query_scalar("SELECT COALESCE(spore_deferred, false) FROM sync_status WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap_or(false);
+
+    let should_auto_defer_spore =
+        is_fresh_sync && !spore_currently_deferred && !args.no_auto_defer_spore;
+
+    if should_auto_defer_spore {
+        info!(
+            "Enabling deferred spore writes for faster bulk sync (will auto-rebuild when caught up)"
+        );
+        sqlx::query(
+            "UPDATE sync_status SET spore_deferred = TRUE, spore_deferred_at = NOW() WHERE id = 1",
+        )
+        .execute(&pool)
+        .await?;
+    } else if is_fresh_sync && args.no_auto_defer_spore {
+        info!("Fresh database detected, but auto-defer-spore disabled via --no-auto-defer-spore");
+    } else if spore_currently_deferred {
+        info!("Spore writes are deferred (from previous run), will auto-rebuild when caught up");
     }
 
     info!("Connecting to CKB node: {}", config.ckb_rpc_url);
