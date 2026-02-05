@@ -1142,6 +1142,9 @@ impl Indexer {
                     if let Err(e) = self.check_and_execute_live_cells_populate_task().await {
                         warn!("Failed to execute live_cells_populate task: {}", e);
                     }
+                    if let Err(e) = self.check_and_execute_dao_rebuild_task().await {
+                        warn!("Failed to execute dao_rebuild task: {}", e);
+                    }
                 }
             }
         }
@@ -2293,6 +2296,256 @@ impl Indexer {
         );
 
         Ok(cells_written)
+    }
+
+    async fn check_and_execute_dao_rebuild_task(&self) -> Result<bool> {
+        use ckbadger_common::{DaoRebuildConfig, DaoRebuildResult, TaskConfig};
+
+        let runner_id = format!("indexer-{}", std::process::id());
+        let task: Option<ckbadger_common::Task> = sqlx::query_as(
+            r#"
+            UPDATE tasks
+            SET status = 'running',
+                runner_id = $1,
+                started_at = COALESCE(started_at, NOW()),
+                heartbeat_at = NOW()
+            WHERE id = (
+                SELECT id FROM tasks
+                WHERE task_type = 'dao_rebuild'
+                  AND status = 'pending'
+                ORDER BY priority DESC, created_at ASC
+                LIMIT 1
+                FOR UPDATE SKIP LOCKED
+            )
+            RETURNING *
+            "#,
+        )
+        .bind(&runner_id)
+        .fetch_optional(self.writer.pool())
+        .await?;
+
+        let task = match task {
+            Some(t) => t,
+            None => return Ok(false),
+        };
+
+        info!(
+            "Claimed dao_rebuild task {} (runner: {})",
+            task.id, runner_id
+        );
+
+        let batch_size = match task.config_typed() {
+            Some(TaskConfig::DaoRebuild(c)) => c.batch_size as usize,
+            _ => DaoRebuildConfig::default().batch_size as usize,
+        };
+
+        let result = self.execute_dao_rebuild(task.id, batch_size).await;
+
+        match result {
+            Ok(deposits_populated) => {
+                let result_json = serde_json::to_value(DaoRebuildResult { deposits_populated })?;
+                sqlx::query(
+                    r#"
+                    UPDATE tasks
+                    SET status = 'completed',
+                        completed_at = NOW(),
+                        progress_current = progress_total,
+                        result = $2,
+                        heartbeat_at = NOW()
+                    WHERE id = $1
+                    "#,
+                )
+                .bind(task.id)
+                .bind(&result_json)
+                .execute(self.writer.pool())
+                .await?;
+
+                info!(
+                    "Completed dao_rebuild task {}: {} deposits populated",
+                    task.id, deposits_populated
+                );
+                Ok(true)
+            }
+            Err(e) => {
+                error!("Failed dao_rebuild task {}: {}", task.id, e);
+                sqlx::query(
+                    r#"
+                    UPDATE tasks
+                    SET status = CASE 
+                        WHEN retry_count < max_retries THEN 'pending'
+                        ELSE 'failed'
+                    END,
+                    error_message = $2,
+                    retry_count = retry_count + 1,
+                    runner_id = NULL,
+                    heartbeat_at = NOW()
+                    WHERE id = $1
+                    "#,
+                )
+                .bind(task.id)
+                .bind(e.to_string())
+                .execute(self.writer.pool())
+                .await?;
+
+                Err(e)
+            }
+        }
+    }
+
+    async fn execute_dao_rebuild(&self, task_id: Uuid, batch_size: usize) -> Result<i64> {
+        use crate::db::copy_dao_deposits::{collect_block_numbers, copy_dao_deposits_from_rocksdb};
+        use crate::db::copy_pool::{CopyConfig, CopyPoolManager};
+
+        info!("Starting dao_rebuild: counting deposits in RocksDB...");
+
+        let total_deposits = self.rocksdb_store.count_dao_deposits() as i64;
+        info!(
+            "Found {} DAO deposits in RocksDB, batch_size={}",
+            total_deposits, batch_size
+        );
+
+        sqlx::query(
+            r#"
+            UPDATE tasks
+            SET progress_total = $2,
+                progress_current = 0,
+                progress_message = 'Truncating dao_deposits table...',
+                heartbeat_at = NOW()
+            WHERE id = $1
+            "#,
+        )
+        .bind(task_id)
+        .bind(total_deposits)
+        .execute(self.writer.pool())
+        .await?;
+
+        info!("Truncating dao_deposits table...");
+        sqlx::query("TRUNCATE dao_deposits")
+            .execute(self.writer.pool())
+            .await?;
+
+        let copy_pool = CopyPoolManager::new(
+            &self.config.database_url,
+            CopyConfig {
+                max_copy_connections: 4,
+                copy_batch_size: batch_size,
+                copy_enabled: true,
+            },
+        )?;
+
+        sqlx::query(
+            r#"
+            UPDATE tasks
+            SET progress_message = 'Populating dao_deposits from RocksDB...',
+                heartbeat_at = NOW()
+            WHERE id = $1
+            "#,
+        )
+        .bind(task_id)
+        .execute(self.writer.pool())
+        .await?;
+
+        let mut deposits_written: i64 = 0;
+        let mut last_progress_update = std::time::Instant::now();
+        let pool = self.writer.pool().clone();
+        let start_time = std::time::Instant::now();
+
+        let mut all_batches: Vec<Vec<(Vec<u8>, i16, crate::db::DaoDepositCacheEntry)>> = Vec::new();
+
+        self.rocksdb_store
+            .iter_dao_deposits_batched(batch_size, |batch| {
+                all_batches.push(batch);
+            });
+
+        info!("Collected {} batches from RocksDB", all_batches.len());
+
+        for (batch_idx, batch) in all_batches.into_iter().enumerate() {
+            let block_numbers = collect_block_numbers(&batch);
+            let timestamps = self.fetch_block_timestamps(&block_numbers).await?;
+
+            let conn = copy_pool.get_connection().await?;
+            let rows = copy_dao_deposits_from_rocksdb(&conn, &batch, &timestamps).await?;
+            deposits_written += rows as i64;
+
+            if last_progress_update.elapsed() > std::time::Duration::from_secs(5)
+                || batch_idx % 10 == 0
+            {
+                let elapsed = start_time.elapsed().as_secs_f64();
+                let rate = if elapsed > 0.0 {
+                    deposits_written as f64 / elapsed
+                } else {
+                    0.0
+                };
+
+                sqlx::query(
+                    r#"
+                    UPDATE tasks
+                    SET progress_current = $2,
+                        rate_ema = $3,
+                        heartbeat_at = NOW()
+                    WHERE id = $1
+                    "#,
+                )
+                .bind(task_id)
+                .bind(deposits_written)
+                .bind(rate)
+                .execute(&pool)
+                .await?;
+
+                last_progress_update = std::time::Instant::now();
+
+                info!(
+                    "dao_rebuild progress: {}/{} ({:.1}%), {:.0} deposits/sec",
+                    deposits_written,
+                    total_deposits,
+                    if total_deposits > 0 {
+                        (deposits_written as f64 / total_deposits as f64) * 100.0
+                    } else {
+                        100.0
+                    },
+                    rate
+                );
+            }
+
+            drop(conn);
+        }
+
+        sqlx::query("UPDATE sync_status SET dao_deferred = FALSE WHERE id = 1")
+            .execute(self.writer.pool())
+            .await?;
+
+        let elapsed = start_time.elapsed();
+        info!(
+            "dao_rebuild completed: {} deposits in {:.2}s ({:.0} deposits/sec)",
+            deposits_written,
+            elapsed.as_secs_f64(),
+            if elapsed.as_secs_f64() > 0.0 {
+                deposits_written as f64 / elapsed.as_secs_f64()
+            } else {
+                0.0
+            }
+        );
+
+        Ok(deposits_written)
+    }
+
+    async fn fetch_block_timestamps(
+        &self,
+        block_numbers: &[i64],
+    ) -> Result<std::collections::HashMap<i64, chrono::DateTime<chrono::Utc>>> {
+        use std::collections::HashMap;
+
+        if block_numbers.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let rows: Vec<(i64, chrono::DateTime<chrono::Utc>)> =
+            sqlx::query_as("SELECT number, timestamp FROM blocks WHERE number = ANY($1)")
+                .bind(block_numbers)
+                .fetch_all(self.writer.pool())
+                .await?;
+
+        Ok(rows.into_iter().collect())
     }
 
     async fn maybe_flush_live_cell_store(&self) {

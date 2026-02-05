@@ -320,6 +320,17 @@ impl BinaryCopyBuffer {
         }
     }
 
+    /// Write optional NUMERIC from a decimal string (NULL if None)
+    ///
+    /// # Arguments
+    /// * `s` - Optional numeric string
+    pub fn write_numeric_opt(&mut self, s: Option<&str>) {
+        match s {
+            Some(v) => self.write_numeric(v),
+            None => self.write_null(),
+        }
+    }
+
     /// Finalize and return the buffer
     ///
     /// Writes the PostgreSQL binary COPY trailer and consumes self.

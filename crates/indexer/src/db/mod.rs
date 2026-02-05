@@ -1,6 +1,7 @@
 pub mod copy_activities;
 pub mod copy_blocks;
 pub mod copy_cells;
+pub mod copy_dao_deposits;
 pub mod copy_format;
 pub mod copy_inputs;
 pub mod copy_live_cells;
@@ -29,6 +30,6 @@ pub use live_cell_storage::{
 };
 pub use parallel_copy::ParallelCopyRouter;
 pub use repository::{DeepForkInfo, Repository};
-pub use rocksdb_live_cell_store::RocksDbLiveCellStore;
+pub use rocksdb_live_cell_store::{DaoDepositCacheEntry, RocksDbLiveCellStore};
 pub use tuning::apply_pg_tuning;
 pub use writer::{BatchWriter, DaoWithdrawalContextTrait, ReorgResult, SecondaryIssuanceBreakdown};

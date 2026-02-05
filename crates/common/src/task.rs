@@ -693,6 +693,12 @@ pub struct DotbitRebuildResult {
     pub accounts_created: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DaoRebuildResult {
+    pub deposits_populated: i64,
+}
+
 /// Unified task result enum
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -711,6 +717,7 @@ pub enum TaskResult {
     TokenRebuild(TokenRebuildResult),
     MnftRebuild(MnftRebuildResult),
     DotbitRebuild(DotbitRebuildResult),
+    DaoRebuild(DaoRebuildResult),
 }
 
 // ============================================
