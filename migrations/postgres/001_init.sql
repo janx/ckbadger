@@ -46,6 +46,11 @@ CREATE TABLE sync_status (
     token_deferred_at TIMESTAMPTZ,
     token_rebuild_completed_at TIMESTAMPTZ,
 
+    -- Deferred spore optimization
+    spore_deferred BOOLEAN NOT NULL DEFAULT FALSE,
+    spore_deferred_at TIMESTAMPTZ,
+    spore_rebuild_completed_at TIMESTAMPTZ,
+
     stats_rebuild_in_progress BOOLEAN NOT NULL DEFAULT FALSE,
 
     CONSTRAINT single_row CHECK (id = 1)

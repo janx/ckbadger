@@ -66,6 +66,8 @@ pub enum TaskType {
     ActivitiesRebuild,
     AddressBalancesRebuild,
     TokenRebuild,
+    MnftRebuild,
+    DotbitRebuild,
 }
 
 impl std::fmt::Display for TaskType {
@@ -83,6 +85,8 @@ impl std::fmt::Display for TaskType {
             TaskType::ActivitiesRebuild => write!(f, "activities_rebuild"),
             TaskType::AddressBalancesRebuild => write!(f, "address_balances_rebuild"),
             TaskType::TokenRebuild => write!(f, "token_rebuild"),
+            TaskType::MnftRebuild => write!(f, "mnft_rebuild"),
+            TaskType::DotbitRebuild => write!(f, "dotbit_rebuild"),
         }
     }
 }
@@ -104,6 +108,8 @@ impl std::str::FromStr for TaskType {
             "activities_rebuild" => Ok(TaskType::ActivitiesRebuild),
             "address_balances_rebuild" => Ok(TaskType::AddressBalancesRebuild),
             "token_rebuild" => Ok(TaskType::TokenRebuild),
+            "mnft_rebuild" => Ok(TaskType::MnftRebuild),
+            "dotbit_rebuild" => Ok(TaskType::DotbitRebuild),
             _ => Err(anyhow::anyhow!("Invalid task type: {}", s)),
         }
     }
@@ -139,7 +145,9 @@ impl TaskType {
             | TaskType::SecondaryIssuanceBackfill
             | TaskType::ActivitiesRebuild
             | TaskType::AddressBalancesRebuild
-            | TaskType::TokenRebuild => true,
+            | TaskType::TokenRebuild
+            | TaskType::MnftRebuild
+            | TaskType::DotbitRebuild => true,
         }
     }
 }
@@ -290,6 +298,9 @@ fn default_populate_batch_size() -> usize {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SporeRebuildConfig {
+    /// CKB RPC URL for fetching full cell data (needed for cluster_id extraction)
+    #[serde(default)]
+    pub ckb_rpc_url: String,
     /// Batch size for processing spore cells (default: 10,000)
     #[serde(default = "default_spore_batch_size")]
     pub batch_size: usize,
@@ -302,6 +313,7 @@ fn default_spore_batch_size() -> usize {
 impl Default for SporeRebuildConfig {
     fn default() -> Self {
         Self {
+            ckb_rpc_url: String::new(),
             batch_size: default_spore_batch_size(),
         }
     }
@@ -398,6 +410,48 @@ impl Default for TokenRebuildConfig {
     }
 }
 
+/// Configuration for M-NFT rebuild task
+/// Rebuilds mnft_issuers, mnft_classes, mnft_tokens from cells table
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MnftRebuildConfig {
+    #[serde(default = "default_mnft_rebuild_batch_size")]
+    pub batch_size: i64,
+}
+
+fn default_mnft_rebuild_batch_size() -> i64 {
+    10_000
+}
+
+impl Default for MnftRebuildConfig {
+    fn default() -> Self {
+        Self {
+            batch_size: default_mnft_rebuild_batch_size(),
+        }
+    }
+}
+
+/// Configuration for DotBit rebuild task
+/// Rebuilds dotbit_accounts from cells table
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DotbitRebuildConfig {
+    #[serde(default = "default_dotbit_rebuild_batch_size")]
+    pub batch_size: i64,
+}
+
+fn default_dotbit_rebuild_batch_size() -> i64 {
+    10_000
+}
+
+impl Default for DotbitRebuildConfig {
+    fn default() -> Self {
+        Self {
+            batch_size: default_dotbit_rebuild_batch_size(),
+        }
+    }
+}
+
 /// Unified task configuration enum
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -414,6 +468,8 @@ pub enum TaskConfig {
     ActivitiesRebuild(ActivitiesRebuildConfig),
     AddressBalancesRebuild(AddressBalancesRebuildConfig),
     TokenRebuild(TokenRebuildConfig),
+    MnftRebuild(MnftRebuildConfig),
+    DotbitRebuild(DotbitRebuildConfig),
 }
 
 impl TaskConfig {
@@ -431,6 +487,8 @@ impl TaskConfig {
             TaskConfig::ActivitiesRebuild(_) => TaskType::ActivitiesRebuild,
             TaskConfig::AddressBalancesRebuild(_) => TaskType::AddressBalancesRebuild,
             TaskConfig::TokenRebuild(_) => TaskType::TokenRebuild,
+            TaskConfig::MnftRebuild(_) => TaskType::MnftRebuild,
+            TaskConfig::DotbitRebuild(_) => TaskType::DotbitRebuild,
         }
     }
 }
@@ -566,6 +624,20 @@ pub struct TokenRebuildResult {
     pub udt_cells_created: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MnftRebuildResult {
+    pub issuers_created: i64,
+    pub classes_created: i64,
+    pub tokens_created: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DotbitRebuildResult {
+    pub accounts_created: i64,
+}
+
 /// Unified task result enum
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -582,6 +654,8 @@ pub enum TaskResult {
     ActivitiesRebuild(ActivitiesRebuildResult),
     AddressBalancesRebuild(AddressBalancesRebuildResult),
     TokenRebuild(TokenRebuildResult),
+    MnftRebuild(MnftRebuildResult),
+    DotbitRebuild(DotbitRebuildResult),
 }
 
 // ============================================
@@ -840,6 +914,26 @@ impl TaskBuilder {
             config: serde_json::to_value(TaskConfig::TokenRebuild(config))
                 .expect("TokenRebuildConfig should be serializable"),
             priority: 7, // After bulk sync completes, after address balances
+            max_retries: 2,
+        }
+    }
+
+    pub fn mnft_rebuild(config: MnftRebuildConfig) -> Self {
+        Self {
+            task_type: TaskType::MnftRebuild,
+            config: serde_json::to_value(TaskConfig::MnftRebuild(config))
+                .expect("MnftRebuildConfig should be serializable"),
+            priority: 6,
+            max_retries: 2,
+        }
+    }
+
+    pub fn dotbit_rebuild(config: DotbitRebuildConfig) -> Self {
+        Self {
+            task_type: TaskType::DotbitRebuild,
+            config: serde_json::to_value(TaskConfig::DotbitRebuild(config))
+                .expect("DotbitRebuildConfig should be serializable"),
+            priority: 6,
             max_retries: 2,
         }
     }
@@ -1231,6 +1325,8 @@ mod tests {
         assert!(TaskType::SecondaryIssuanceBackfill.requires_bulk_sync_completion());
         assert!(TaskType::AddressBalancesRebuild.requires_bulk_sync_completion());
         assert!(TaskType::TokenRebuild.requires_bulk_sync_completion());
+        assert!(TaskType::MnftRebuild.requires_bulk_sync_completion());
+        assert!(TaskType::DotbitRebuild.requires_bulk_sync_completion());
     }
 
     #[test]
@@ -1296,5 +1392,73 @@ mod tests {
 
         let parsed: TaskConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.task_type(), TaskType::TokenRebuild);
+    }
+
+    #[test]
+    fn test_mnft_rebuild_builder() {
+        let builder = TaskBuilder::mnft_rebuild(MnftRebuildConfig::default());
+        assert_eq!(builder.task_type(), TaskType::MnftRebuild);
+        assert_eq!(builder.get_priority(), 6);
+    }
+
+    #[test]
+    fn test_mnft_rebuild_type_display() {
+        assert_eq!(TaskType::MnftRebuild.to_string(), "mnft_rebuild");
+    }
+
+    #[test]
+    fn test_mnft_rebuild_type_parse() {
+        assert_eq!(
+            "mnft_rebuild".parse::<TaskType>().unwrap(),
+            TaskType::MnftRebuild
+        );
+    }
+
+    #[test]
+    fn test_mnft_rebuild_config_serialization() {
+        let config = TaskConfig::MnftRebuild(MnftRebuildConfig { batch_size: 5000 });
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("mnft_rebuild"));
+        assert!(json.contains("batchSize"));
+
+        let parsed: TaskConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.task_type(), TaskType::MnftRebuild);
+    }
+
+    #[test]
+    fn test_dotbit_rebuild_builder() {
+        let builder = TaskBuilder::dotbit_rebuild(DotbitRebuildConfig::default());
+        assert_eq!(builder.task_type(), TaskType::DotbitRebuild);
+        assert_eq!(builder.get_priority(), 6);
+    }
+
+    #[test]
+    fn test_dotbit_rebuild_type_display() {
+        assert_eq!(TaskType::DotbitRebuild.to_string(), "dotbit_rebuild");
+    }
+
+    #[test]
+    fn test_dotbit_rebuild_type_parse() {
+        assert_eq!(
+            "dotbit_rebuild".parse::<TaskType>().unwrap(),
+            TaskType::DotbitRebuild
+        );
+    }
+
+    #[test]
+    fn test_dotbit_rebuild_config_serialization() {
+        let config = TaskConfig::DotbitRebuild(DotbitRebuildConfig { batch_size: 5000 });
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("dotbit_rebuild"));
+        assert!(json.contains("batchSize"));
+
+        let parsed: TaskConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.task_type(), TaskType::DotbitRebuild);
+    }
+
+    #[test]
+    fn test_mnft_dotbit_require_bulk_sync_completion() {
+        assert!(TaskType::MnftRebuild.requires_bulk_sync_completion());
+        assert!(TaskType::DotbitRebuild.requires_bulk_sync_completion());
     }
 }
