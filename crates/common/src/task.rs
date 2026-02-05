@@ -157,7 +157,7 @@ impl TaskType {
 // ============================================
 
 /// Configuration for cycles backfill task
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CyclesBackfillConfig {
     /// CKB RPC URL to fetch cycles from
@@ -172,6 +172,18 @@ pub struct CyclesBackfillConfig {
     /// Number of concurrent RPC requests
     #[serde(default = "default_concurrent_requests")]
     pub concurrent_requests: usize,
+}
+
+impl Default for CyclesBackfillConfig {
+    fn default() -> Self {
+        Self {
+            ckb_rpc_url: String::new(),
+            start_block: None,
+            end_block: None,
+            batch_size: default_cycles_batch_size(),
+            concurrent_requests: default_concurrent_requests(),
+        }
+    }
 }
 
 fn default_cycles_batch_size() -> i64 {
@@ -216,7 +228,7 @@ fn default_secondary_issuance_batch_size() -> i64 {
 }
 
 /// Configuration for index rebuild task
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IndexRebuildConfig {
     /// Parallel connections per partitioned table
@@ -227,6 +239,16 @@ pub struct IndexRebuildConfig {
     /// Also rebuild constraints
     #[serde(default = "default_rebuild_constraints")]
     pub rebuild_constraints: bool,
+}
+
+impl Default for IndexRebuildConfig {
+    fn default() -> Self {
+        Self {
+            parallel_connections: default_parallel_connections(),
+            indexes: None,
+            rebuild_constraints: default_rebuild_constraints(),
+        }
+    }
 }
 
 fn default_parallel_connections() -> usize {
@@ -281,12 +303,20 @@ pub struct StatisticsRebuildConfig {
 }
 
 /// Configuration for live cells populate task
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LiveCellsPopulateConfig {
     /// Batch size for COPY operations (default: 100,000)
     #[serde(default = "default_populate_batch_size")]
     pub batch_size: usize,
+}
+
+impl Default for LiveCellsPopulateConfig {
+    fn default() -> Self {
+        Self {
+            batch_size: default_populate_batch_size(),
+        }
+    }
 }
 
 fn default_populate_batch_size() -> usize {
@@ -1196,6 +1226,32 @@ mod tests {
         let builder = TaskBuilder::live_cells_populate(LiveCellsPopulateConfig::default());
         assert_eq!(builder.task_type(), TaskType::LiveCellsPopulate);
         assert_eq!(builder.get_priority(), 8);
+    }
+
+    #[test]
+    fn test_config_defaults_match_serde_defaults() {
+        let live_cells = LiveCellsPopulateConfig::default();
+        assert_eq!(live_cells.batch_size, 100_000);
+
+        let cycles = CyclesBackfillConfig::default();
+        assert_eq!(cycles.batch_size, 50);
+        assert_eq!(cycles.concurrent_requests, 32);
+
+        let index = IndexRebuildConfig::default();
+        assert_eq!(index.parallel_connections, 10);
+        assert!(index.rebuild_constraints);
+
+        let secondary = SecondaryIssuanceBackfillConfig::default();
+        assert_eq!(secondary.batch_size, 1000);
+        assert_eq!(secondary.concurrent_requests, 32);
+    }
+
+    #[test]
+    fn test_config_roundtrip_preserves_defaults() {
+        let config = LiveCellsPopulateConfig::default();
+        let json = serde_json::to_value(&config).unwrap();
+        let restored: LiveCellsPopulateConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(restored.batch_size, 100_000);
     }
 
     #[test]

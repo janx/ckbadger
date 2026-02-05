@@ -42,6 +42,22 @@ impl TaskDb {
         }
     }
 
+    /// Check if a specific task type is currently running.
+    /// Used to prevent I/O-heavy tasks from running concurrently.
+    pub async fn is_task_type_running(&self, task_type: &str) -> Result<bool> {
+        let row: Option<(i64,)> = sqlx::query_as(
+            r#"
+            SELECT COUNT(*) FROM tasks
+            WHERE task_type = $1 AND status = 'running'
+            "#,
+        )
+        .bind(task_type)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|r| r.0).unwrap_or(0) > 0)
+    }
+
     pub async fn defer_task(&self, task_id: Uuid, reason: &str) -> Result<()> {
         sqlx::query(
             r#"

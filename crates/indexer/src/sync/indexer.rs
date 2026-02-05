@@ -2002,6 +2002,16 @@ impl Indexer {
     async fn check_and_execute_live_cells_populate_task(&self) -> Result<bool> {
         use ckbadger_common::{LiveCellsPopulateConfig, LiveCellsPopulateResult, TaskConfig};
 
+        // Avoid I/O contention: skip if cells_status_rebuild is running
+        let conflicting: Option<(i64,)> = sqlx::query_as(
+            "SELECT COUNT(*) FROM tasks WHERE task_type = 'cells_status_rebuild' AND status = 'running'",
+        )
+        .fetch_optional(self.writer.pool())
+        .await?;
+        if conflicting.map(|r| r.0).unwrap_or(0) > 0 {
+            return Ok(false);
+        }
+
         let runner_id = format!("indexer-{}", std::process::id());
         let task: Option<ckbadger_common::Task> = sqlx::query_as(
             r#"
