@@ -23,8 +23,27 @@ const CF_LIVE_CELLS: &str = "live_cells";
 const CF_CONSUMED_CELLS: &str = "consumed_cells";
 const CF_BLOCK_HEADERS: &str = "block_headers";
 const CF_BLOCK_HASH_INDEX: &str = "block_hash_index";
+const CF_DAO_DEPOSITS: &str = "dao_deposits";
+const CF_DAO_DEPOSIT_BY_WITHDRAW_TX: &str = "dao_deposit_by_withdraw_tx";
 
 const MAX_CONSUMED_HISTORY_BLOCKS: i64 = 1000;
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct DaoDepositCacheEntry {
+    pub capacity: i64,
+    pub deposit_block_number: i64,
+    pub lock_script_hash: Vec<u8>,
+    pub deposit_ar: i64,
+    pub status: i16,
+    pub withdraw_request_tx: Option<Vec<u8>>,
+    pub withdraw_request_block: Option<i64>,
+    pub withdraw_request_ar: Option<i64>,
+    pub withdraw_block: Option<i64>,
+    pub withdraw_tx: Option<Vec<u8>>,
+    pub compensation: Option<i64>,
+}
+
+type DaoDepositCacheList = Vec<(Vec<u8>, i16, DaoDepositCacheEntry)>;
 
 pub struct RocksDbLiveCellStore {
     db: DB,
@@ -65,6 +84,8 @@ impl RocksDbLiveCellStore {
             ColumnFamilyDescriptor::new(CF_CONSUMED_CELLS, opts.clone()),
             ColumnFamilyDescriptor::new(CF_BLOCK_HEADERS, opts.clone()),
             ColumnFamilyDescriptor::new(CF_BLOCK_HASH_INDEX, opts.clone()),
+            ColumnFamilyDescriptor::new(CF_DAO_DEPOSITS, opts.clone()),
+            ColumnFamilyDescriptor::new(CF_DAO_DEPOSIT_BY_WITHDRAW_TX, opts.clone()),
         ];
 
         let db = DB::open_cf_descriptors(&opts, path, cf_descriptors)?;
@@ -99,6 +120,16 @@ impl RocksDbLiveCellStore {
         self.db
             .cf_handle(CF_BLOCK_HASH_INDEX)
             .expect("CF block_hash_index")
+    }
+
+    fn cf_dao_deposits(&self) -> &ColumnFamily {
+        self.db.cf_handle(CF_DAO_DEPOSITS).expect("CF dao_deposits")
+    }
+
+    fn cf_dao_deposit_by_withdraw_tx(&self) -> &ColumnFamily {
+        self.db
+            .cf_handle(CF_DAO_DEPOSIT_BY_WITHDRAW_TX)
+            .expect("CF dao_deposit_by_withdraw_tx")
     }
 
     fn encode_cell_key(tx_hash: &[u8], output_index: i16) -> [u8; KEY_SIZE] {
@@ -357,6 +388,8 @@ impl LiveCellStorage for RocksDbLiveCellStore {
             self.cf_consumed_cells(),
             self.cf_block_headers(),
             self.cf_block_hash_index(),
+            self.cf_dao_deposits(),
+            self.cf_dao_deposit_by_withdraw_tx(),
         ];
         let memtable_bytes: usize = cfs
             .iter()
@@ -650,6 +683,226 @@ impl RocksDbLiveCellStore {
         }
         count
     }
+
+    pub fn insert_dao_deposit(
+        &self,
+        tx_hash: &[u8],
+        output_index: i16,
+        entry: &DaoDepositCacheEntry,
+    ) {
+        let key = Self::encode_cell_key(tx_hash, output_index);
+        let value = bincode::serialize(entry).expect("serialize DaoDepositCacheEntry");
+        self.db
+            .put_cf(self.cf_dao_deposits(), key, &value)
+            .expect("put to dao_deposits CF");
+    }
+
+    pub fn get_dao_deposit(
+        &self,
+        tx_hash: &[u8],
+        output_index: i16,
+    ) -> Option<DaoDepositCacheEntry> {
+        let key = Self::encode_cell_key(tx_hash, output_index);
+        match self.db.get_cf(self.cf_dao_deposits(), key) {
+            Ok(Some(value)) => bincode::deserialize(&value).ok(),
+            _ => None,
+        }
+    }
+
+    pub fn get_dao_deposits_batch(
+        &self,
+        outpoints: &[(&[u8], i16)],
+    ) -> HashMap<(Vec<u8>, i16), DaoDepositCacheEntry> {
+        let mut result = HashMap::with_capacity(outpoints.len());
+
+        let keys: Vec<[u8; KEY_SIZE]> = outpoints
+            .iter()
+            .map(|(tx_hash, idx)| Self::encode_cell_key(tx_hash, *idx))
+            .collect();
+
+        let cf = self.cf_dao_deposits();
+        let cf_keys: Vec<(&ColumnFamily, &[u8])> =
+            keys.iter().map(|k| (cf, k.as_slice())).collect();
+        let values = self.db.multi_get_cf(cf_keys);
+
+        for (i, value_result) in values.into_iter().enumerate() {
+            if let Ok(Some(value)) = value_result {
+                if let Ok(entry) = bincode::deserialize::<DaoDepositCacheEntry>(&value) {
+                    let (tx_hash, idx) = outpoints[i];
+                    result.insert((tx_hash.to_vec(), idx), entry);
+                }
+            }
+        }
+
+        result
+    }
+
+    pub fn get_dao_deposits_by_withdraw_tx(&self, withdraw_tx: &[u8]) -> DaoDepositCacheList {
+        let cf_secondary = self.cf_dao_deposit_by_withdraw_tx();
+        let cf_primary = self.cf_dao_deposits();
+        let mut result = Vec::new();
+
+        if let Ok(Some(primary_key)) = self.db.get_cf(cf_secondary, withdraw_tx) {
+            if primary_key.len() == KEY_SIZE {
+                if let Ok(Some(value)) = self.db.get_cf(cf_primary, &primary_key) {
+                    if let Ok(entry) = bincode::deserialize::<DaoDepositCacheEntry>(&value) {
+                        let (tx_hash, output_index) = Self::decode_cell_key(&primary_key);
+                        result.push((tx_hash, output_index, entry));
+                    }
+                }
+            }
+        }
+
+        result
+    }
+
+    pub fn get_dao_deposits_by_withdraw_tx_batch(
+        &self,
+        tx_hashes: &[Vec<u8>],
+    ) -> HashMap<Vec<u8>, DaoDepositCacheList> {
+        let mut result: HashMap<Vec<u8>, DaoDepositCacheList> =
+            HashMap::with_capacity(tx_hashes.len());
+
+        let cf_secondary = self.cf_dao_deposit_by_withdraw_tx();
+        let cf_primary = self.cf_dao_deposits();
+
+        let cf_keys: Vec<(&ColumnFamily, &[u8])> = tx_hashes
+            .iter()
+            .map(|h| (cf_secondary, h.as_slice()))
+            .collect();
+        let values = self.db.multi_get_cf(cf_keys);
+
+        for (i, value_result) in values.into_iter().enumerate() {
+            if let Ok(Some(primary_key)) = value_result {
+                if primary_key.len() != KEY_SIZE {
+                    continue;
+                }
+                if let Ok(Some(value)) = self.db.get_cf(cf_primary, &primary_key) {
+                    if let Ok(entry) = bincode::deserialize::<DaoDepositCacheEntry>(&value) {
+                        let (tx_hash, output_index) = Self::decode_cell_key(&primary_key);
+                        result.entry(tx_hashes[i].clone()).or_default().push((
+                            tx_hash,
+                            output_index,
+                            entry,
+                        ));
+                    }
+                }
+            }
+        }
+
+        result
+    }
+
+    pub fn update_dao_deposit_status(
+        &self,
+        tx_hash: &[u8],
+        output_index: i16,
+        entry: &DaoDepositCacheEntry,
+    ) {
+        let key = Self::encode_cell_key(tx_hash, output_index);
+        let cf_primary = self.cf_dao_deposits();
+        let cf_secondary = self.cf_dao_deposit_by_withdraw_tx();
+        let existing = self.get_dao_deposit(tx_hash, output_index);
+
+        let mut batch = rocksdb::WriteBatch::default();
+
+        let value = bincode::serialize(entry).expect("serialize DaoDepositCacheEntry");
+        batch.put_cf(cf_primary, key, value);
+
+        if let Some(old_entry) = existing {
+            if let Some(old_withdraw_tx) = old_entry.withdraw_request_tx {
+                let should_remove = entry.status == 2
+                    || entry
+                        .withdraw_request_tx
+                        .as_ref()
+                        .map(|tx| tx.as_slice() != old_withdraw_tx.as_slice())
+                        .unwrap_or(true);
+                if should_remove {
+                    batch.delete_cf(cf_secondary, old_withdraw_tx);
+                }
+            }
+        }
+
+        if entry.status == 1 {
+            if let Some(ref withdraw_tx) = entry.withdraw_request_tx {
+                batch.put_cf(cf_secondary, withdraw_tx, key);
+            }
+        }
+
+        let _ = self.db.write(batch);
+    }
+
+    pub fn rollback_dao_deposits(&self, rollback_to: i64) -> (usize, usize) {
+        let cf_primary = self.cf_dao_deposits();
+        let cf_secondary = self.cf_dao_deposit_by_withdraw_tx();
+        let mut removed_primary = 0;
+        let mut removed_secondary = 0;
+
+        let mut batch = rocksdb::WriteBatch::default();
+        let iter = self
+            .db
+            .iterator_cf(cf_primary, rocksdb::IteratorMode::Start);
+
+        for item in iter.flatten() {
+            let (key, value) = item;
+            if let Ok(entry) = bincode::deserialize::<DaoDepositCacheEntry>(&value) {
+                if entry.deposit_block_number > rollback_to {
+                    batch.delete_cf(cf_primary, &key);
+                    removed_primary += 1;
+                    if let Some(withdraw_tx) = entry.withdraw_request_tx {
+                        batch.delete_cf(cf_secondary, withdraw_tx);
+                        removed_secondary += 1;
+                    }
+                }
+            }
+        }
+
+        let _ = self.db.write(batch);
+        (removed_primary, removed_secondary)
+    }
+
+    pub fn count_dao_deposits(&self) -> usize {
+        let mut count = 0;
+        let iter = self
+            .db
+            .iterator_cf(self.cf_dao_deposits(), rocksdb::IteratorMode::Start);
+        for _ in iter.flatten() {
+            count += 1;
+        }
+        count
+    }
+
+    pub fn iter_dao_deposits_batched<F>(&self, batch_size: usize, mut callback: F) -> usize
+    where
+        F: FnMut(DaoDepositCacheList),
+    {
+        let mut batch = Vec::with_capacity(batch_size);
+        let mut total = 0;
+
+        let iter = self
+            .db
+            .iterator_cf(self.cf_dao_deposits(), rocksdb::IteratorMode::Start);
+
+        for item in iter.flatten() {
+            let (key, value) = item;
+            if let Ok(entry) = bincode::deserialize::<DaoDepositCacheEntry>(&value) {
+                let (tx_hash, output_index) = Self::decode_cell_key(&key);
+                batch.push((tx_hash, output_index, entry));
+                total += 1;
+
+                if batch.len() >= batch_size {
+                    callback(std::mem::take(&mut batch));
+                    batch = Vec::with_capacity(batch_size);
+                }
+            }
+        }
+
+        if !batch.is_empty() {
+            callback(batch);
+        }
+
+        total
+    }
 }
 
 #[async_trait::async_trait]
@@ -698,6 +951,22 @@ mod tests {
             epoch_length: 1800,
             dao: vec![0u8; 32],
             transactions_count: 3,
+        }
+    }
+
+    fn create_test_dao_deposit(block_number: i64) -> DaoDepositCacheEntry {
+        DaoDepositCacheEntry {
+            capacity: 10000000000,
+            deposit_block_number: block_number,
+            lock_script_hash: vec![9u8; 32],
+            deposit_ar: 1234,
+            status: 0,
+            withdraw_request_tx: None,
+            withdraw_request_block: None,
+            withdraw_request_ar: None,
+            withdraw_block: None,
+            withdraw_tx: None,
+            compensation: None,
         }
     }
 
@@ -845,6 +1114,192 @@ mod tests {
             let header = store.get_block_header(100);
             assert!(header.is_some());
         }
+    }
+
+    #[test]
+    fn test_dao_deposit_insert_and_get() {
+        let tmp_dir = TempDir::new().unwrap();
+        let store = RocksDbLiveCellStore::open(tmp_dir.path(), true).unwrap();
+
+        let tx_hash = vec![0x33u8; 32];
+        let entry = create_test_dao_deposit(100);
+
+        store.insert_dao_deposit(&tx_hash, 0, &entry);
+        let retrieved = store.get_dao_deposit(&tx_hash, 0).unwrap();
+        assert_eq!(retrieved, entry);
+    }
+
+    #[test]
+    fn test_dao_deposit_batch_get() {
+        let tmp_dir = TempDir::new().unwrap();
+        let store = RocksDbLiveCellStore::open(tmp_dir.path(), true).unwrap();
+
+        let tx1 = vec![0x11u8; 32];
+        let tx2 = vec![0x22u8; 32];
+        let tx_missing = vec![0xffu8; 32];
+
+        store.insert_dao_deposit(&tx1, 0, &create_test_dao_deposit(10));
+        store.insert_dao_deposit(&tx2, 1, &create_test_dao_deposit(11));
+
+        let outpoints = vec![
+            (tx1.as_slice(), 0),
+            (tx2.as_slice(), 1),
+            (tx_missing.as_slice(), 99),
+        ];
+
+        let result = store.get_dao_deposits_batch(&outpoints);
+        assert_eq!(result.len(), 2);
+        assert!(result.contains_key(&(tx1, 0)));
+        assert!(result.contains_key(&(tx2, 1)));
+    }
+
+    #[test]
+    fn test_dao_deposit_secondary_index() {
+        let tmp_dir = TempDir::new().unwrap();
+        let store = RocksDbLiveCellStore::open(tmp_dir.path(), true).unwrap();
+
+        let tx_hash = vec![0x44u8; 32];
+        let withdraw_tx = vec![0x55u8; 32];
+        let entry = create_test_dao_deposit(200);
+
+        store.insert_dao_deposit(&tx_hash, 0, &entry);
+
+        let mut updated = entry.clone();
+        updated.status = 1;
+        updated.withdraw_request_tx = Some(withdraw_tx.clone());
+        updated.withdraw_request_block = Some(210);
+        store.update_dao_deposit_status(&tx_hash, 0, &updated);
+
+        let results = store.get_dao_deposits_by_withdraw_tx(&withdraw_tx);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, tx_hash);
+        assert_eq!(results[0].1, 0);
+
+        let batch =
+            store.get_dao_deposits_by_withdraw_tx_batch(&[withdraw_tx.clone(), vec![0x99u8; 32]]);
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch.get(&withdraw_tx).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_dao_deposit_secondary_index_removal() {
+        let tmp_dir = TempDir::new().unwrap();
+        let store = RocksDbLiveCellStore::open(tmp_dir.path(), true).unwrap();
+
+        let tx_hash = vec![0x66u8; 32];
+        let withdraw_tx = vec![0x77u8; 32];
+        let entry = create_test_dao_deposit(300);
+
+        store.insert_dao_deposit(&tx_hash, 0, &entry);
+
+        let mut updated = entry.clone();
+        updated.status = 1;
+        updated.withdraw_request_tx = Some(withdraw_tx.clone());
+        store.update_dao_deposit_status(&tx_hash, 0, &updated);
+
+        let mut withdrawn = updated.clone();
+        withdrawn.status = 2;
+        store.update_dao_deposit_status(&tx_hash, 0, &withdrawn);
+
+        let results = store.get_dao_deposits_by_withdraw_tx(&withdraw_tx);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_dao_deposit_rollback() {
+        let tmp_dir = TempDir::new().unwrap();
+        let store = RocksDbLiveCellStore::open(tmp_dir.path(), true).unwrap();
+
+        let tx1 = vec![0x01u8; 32];
+        let tx2 = vec![0x02u8; 32];
+        let withdraw_tx = vec![0x03u8; 32];
+
+        let entry1 = create_test_dao_deposit(90);
+        let entry2 = create_test_dao_deposit(110);
+
+        store.insert_dao_deposit(&tx1, 0, &entry1);
+        store.insert_dao_deposit(&tx2, 0, &entry2);
+
+        let mut updated = entry2.clone();
+        updated.status = 1;
+        updated.withdraw_request_tx = Some(withdraw_tx.clone());
+        store.update_dao_deposit_status(&tx2, 0, &updated);
+
+        let (removed_primary, removed_secondary) = store.rollback_dao_deposits(100);
+        assert_eq!(removed_primary, 1);
+        assert_eq!(removed_secondary, 1);
+        assert!(store.get_dao_deposit(&tx1, 0).is_some());
+        assert!(store.get_dao_deposit(&tx2, 0).is_none());
+        assert!(store
+            .get_dao_deposits_by_withdraw_tx(&withdraw_tx)
+            .is_empty());
+    }
+
+    #[test]
+    fn test_dao_deposit_persistence() {
+        let tmp_dir = TempDir::new().unwrap();
+        let path = tmp_dir.path().to_path_buf();
+
+        let tx_hash = vec![0x88u8; 32];
+        let withdraw_tx = vec![0x99u8; 32];
+        let entry = create_test_dao_deposit(400);
+
+        {
+            let store = RocksDbLiveCellStore::open(&path, true).unwrap();
+            store.insert_dao_deposit(&tx_hash, 0, &entry);
+            let mut updated = entry.clone();
+            updated.status = 1;
+            updated.withdraw_request_tx = Some(withdraw_tx.clone());
+            store.update_dao_deposit_status(&tx_hash, 0, &updated);
+        }
+
+        {
+            let store = RocksDbLiveCellStore::open(&path, true).unwrap();
+            let retrieved = store.get_dao_deposit(&tx_hash, 0).unwrap();
+            assert_eq!(retrieved.deposit_block_number, entry.deposit_block_number);
+            let results = store.get_dao_deposits_by_withdraw_tx(&withdraw_tx);
+            assert_eq!(results.len(), 1);
+        }
+    }
+
+    #[test]
+    fn test_dao_deposit_iter_batched() {
+        let tmp_dir = TempDir::new().unwrap();
+        let store = RocksDbLiveCellStore::open(tmp_dir.path(), true).unwrap();
+
+        for i in 0..25 {
+            let tx_hash = vec![i as u8; 32];
+            let mut entry = create_test_dao_deposit(500 + i as i64);
+            entry.capacity = (i + 1) as i64 * 10_000_000;
+            store.insert_dao_deposit(&tx_hash, 0, &entry);
+        }
+
+        let mut batches_received = 0;
+        let mut total_deposits = 0;
+
+        let count = store.iter_dao_deposits_batched(10, |batch| {
+            batches_received += 1;
+            total_deposits += batch.len();
+        });
+
+        assert_eq!(count, 25);
+        assert_eq!(total_deposits, 25);
+        assert_eq!(batches_received, 3);
+    }
+
+    #[test]
+    fn test_dao_deposit_count() {
+        let tmp_dir = TempDir::new().unwrap();
+        let store = RocksDbLiveCellStore::open(tmp_dir.path(), true).unwrap();
+
+        assert_eq!(store.count_dao_deposits(), 0);
+
+        for i in 0..5 {
+            let tx_hash = vec![i as u8; 32];
+            store.insert_dao_deposit(&tx_hash, 0, &create_test_dao_deposit(600 + i as i64));
+        }
+
+        assert_eq!(store.count_dao_deposits(), 5);
     }
 
     #[test]
