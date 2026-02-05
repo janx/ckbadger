@@ -11,6 +11,15 @@ use super::BatchWriter;
 
 const DAO_OCCUPIED_CAPACITY: u64 = 102_00000000;
 
+fn dedup_tx_hashes<'a>(tx_hashes: &[&'a [u8]]) -> Vec<&'a [u8]> {
+    let mut seen = std::collections::HashSet::new();
+    tx_hashes
+        .iter()
+        .filter(|h| seen.insert(**h))
+        .copied()
+        .collect()
+}
+
 pub trait DaoWithdrawalContextTrait {
     fn consumed_deposits(&self) -> &[(i64, Vec<u8>, i16, String, i64, i16)];
     fn new_dao_outputs(&self) -> &[(Vec<u8>, i16, Vec<u8>, i64, u64)];
@@ -235,13 +244,15 @@ impl BatchWriter {
             results.push(row);
         }
 
+        let unique_tx_hashes = dedup_tx_hashes(&tx_hashes);
+
         let query2 = r#"
             SELECT id, tx_hash, output_index, CAST(capacity AS TEXT), deposit_block_number, status 
             FROM dao_deposits 
-            WHERE withdraw_request_tx IN (SELECT * FROM UNNEST($1::bytea[])) AND status = 1
+            WHERE withdraw_request_tx = ANY($1::bytea[]) AND status = 1
         "#;
         let rows2: Vec<(i64, Vec<u8>, i16, String, i64, i16)> = sqlx::query_as(query2)
-            .bind(&tx_hashes)
+            .bind(&unique_tx_hashes)
             .fetch_all(&self.pool)
             .await?;
 
@@ -479,14 +490,16 @@ impl BatchWriter {
             result_map.insert((row.1.clone(), row.2), row);
         }
 
+        let unique_tx_hashes = dedup_tx_hashes(&tx_hashes);
+
         let rows2: Vec<(i64, Vec<u8>, i16, String, i64, i16, Vec<u8>)> = sqlx::query_as(
             r#"
             SELECT id, tx_hash, output_index, CAST(capacity AS TEXT), deposit_block_number, status, withdraw_request_tx
             FROM dao_deposits
-            WHERE withdraw_request_tx IN (SELECT * FROM UNNEST($1::bytea[])) AND status = 1
+            WHERE withdraw_request_tx = ANY($1::bytea[]) AND status = 1
             "#,
         )
-        .bind(&tx_hashes)
+        .bind(&unique_tx_hashes)
         .fetch_all(&self.pool)
         .await?;
 
@@ -525,21 +538,26 @@ impl BatchWriter {
             }
         }
 
-        for ctx in contexts {
-            for (deposit_id, _, _, _, _, status) in ctx.consumed_deposits() {
-                if *status == 1 {
-                    let request_block: Option<i64> = sqlx::query_scalar(
-                        "SELECT withdraw_request_block FROM dao_deposits WHERE id = $1",
-                    )
-                    .bind(deposit_id)
-                    .fetch_optional(&self.pool)
-                    .await?
-                    .flatten();
+        let status1_deposit_ids: Vec<i64> = contexts
+            .iter()
+            .flat_map(|ctx| {
+                ctx.consumed_deposits()
+                    .iter()
+                    .filter(|(_, _, _, _, _, status)| *status == 1)
+                    .map(|(id, _, _, _, _, _)| *id)
+            })
+            .collect();
 
-                    if let Some(rb) = request_block {
-                        all_request_blocks.insert(rb);
-                    }
-                }
+        if !status1_deposit_ids.is_empty() {
+            let rows: Vec<(i64,)> = sqlx::query_as(
+                "SELECT DISTINCT withdraw_request_block FROM dao_deposits WHERE id = ANY($1) AND withdraw_request_block IS NOT NULL",
+            )
+            .bind(&status1_deposit_ids)
+            .fetch_all(&self.pool)
+            .await?;
+
+            for (rb,) in rows {
+                all_request_blocks.insert(rb);
             }
         }
 
@@ -932,5 +950,75 @@ impl BatchWriter {
         .await?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_dedup_tx_hashes_removes_duplicates() {
+        let h1 = vec![0xaa; 32];
+        let h2 = vec![0xbb; 32];
+        let input: Vec<&[u8]> = vec![&h1, &h2, &h1, &h2, &h1];
+
+        let result = dedup_tx_hashes(&input);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], h1.as_slice());
+        assert_eq!(result[1], h2.as_slice());
+    }
+
+    #[test]
+    fn test_dedup_tx_hashes_preserves_order() {
+        let h1 = vec![0x01; 32];
+        let h2 = vec![0x02; 32];
+        let h3 = vec![0x03; 32];
+        let input: Vec<&[u8]> = vec![&h3, &h1, &h2, &h3, &h1];
+
+        let result = dedup_tx_hashes(&input);
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0], h3.as_slice());
+        assert_eq!(result[1], h1.as_slice());
+        assert_eq!(result[2], h2.as_slice());
+    }
+
+    #[test]
+    fn test_dedup_tx_hashes_empty_input() {
+        let input: Vec<&[u8]> = vec![];
+        assert!(dedup_tx_hashes(&input).is_empty());
+    }
+
+    #[test]
+    fn test_dedup_tx_hashes_all_same() {
+        let h = vec![0xff; 32];
+        let input: Vec<&[u8]> = vec![&h, &h, &h, &h];
+
+        let result = dedup_tx_hashes(&input);
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn test_dedup_tx_hashes_all_unique() {
+        let hashes: Vec<Vec<u8>> = (0..5u8).map(|i| vec![i; 32]).collect();
+        let input: Vec<&[u8]> = hashes.iter().map(|h| h.as_slice()).collect();
+
+        let result = dedup_tx_hashes(&input);
+        assert_eq!(result.len(), 5);
+    }
+
+    #[test]
+    fn test_dedup_realistic_batch_reduction() {
+        let hashes: Vec<Vec<u8>> = (0..100u8).map(|i| vec![i; 32]).collect();
+        let mut input: Vec<&[u8]> = Vec::new();
+        for h in &hashes {
+            input.push(h.as_slice());
+            input.push(h.as_slice());
+            input.push(h.as_slice());
+        }
+        assert_eq!(input.len(), 300);
+
+        let result = dedup_tx_hashes(&input);
+        assert_eq!(result.len(), 100);
     }
 }

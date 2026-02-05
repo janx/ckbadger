@@ -567,6 +567,27 @@ psql -c "SELECT token_deferred FROM sync_status;"
 psql -c "SELECT id, task_type, status, progress_current, progress_total FROM tasks WHERE task_type = 'token_rebuild';"
 ```
 
+## MNFT/DotBit Bulk Sync Skip
+
+During bulk sync, MNFT and DotBit table writes are skipped entirely to avoid slow individual UPSERT operations that block batch processing (4-5s per operation observed in profiling).
+
+**What Gets Skipped During Bulk Sync:**
+
+- All `mnft_issuers` INSERT/UPDATE operations
+- All `mnft_classes` INSERT/UPDATE operations
+- All `mnft_tokens` INSERT/UPDATE operations
+- All `dotbit_accounts` INSERT/UPDATE operations
+- Consumption lookups for MNFT/DotBit were already skipped (`!is_bulk_sync_active()` guard)
+
+**Behavior:**
+
+| Scenario                 | MNFT/DotBit writes | Consumption tracking |
+| ------------------------ | ------------------ | -------------------- |
+| Bulk sync (>1000 blocks) | Skipped            | Skipped              |
+| Real-time sync (≤1000)   | Active             | Active               |
+
+**Note:** Unlike activities/tokens/address_balances, there is no deferred flag or automatic rebuild task for MNFT/DotBit. Historical MNFT/DotBit data from before bulk sync completion will be missing. New data arriving after the indexer reaches real-time sync will be written normally.
+
 ## Live Cell Store
 
 The LiveCellStore provides O(1) cell lookups during blockchain synchronization using RocksDB for persistent storage. This enables instant restart without rebuilding from database.

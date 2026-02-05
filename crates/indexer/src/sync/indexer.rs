@@ -3674,36 +3674,52 @@ impl Indexer {
                         .await?;
                 }
 
-                for issuer in MnftParser::parse_issuers(tx) {
-                    self.writer
-                        .insert_mnft_issuer(&issuer, &tx_data.hash, 0, parsed.number)
-                        .await?;
-                }
+                // Skip MNFT/DotBit writes during bulk sync - too slow (individual upserts)
+                // These will need to be rebuilt after bulk sync completes
+                if !bulk_sync_mode {
+                    for issuer in MnftParser::parse_issuers(tx) {
+                        self.writer
+                            .insert_mnft_issuer(&issuer, &tx_data.hash, 0, parsed.number)
+                            .await?;
+                    }
 
-                for (output_index, class) in MnftParser::parse_classes(tx).iter().enumerate() {
-                    batch_mnft_class_ids.insert(class.class_id.clone());
-                    self.writer
-                        .insert_mnft_class(class, &tx_data.hash, output_index as i16, parsed.number)
-                        .await?;
-                }
+                    for (output_index, class) in MnftParser::parse_classes(tx).iter().enumerate() {
+                        batch_mnft_class_ids.insert(class.class_id.clone());
+                        self.writer
+                            .insert_mnft_class(
+                                class,
+                                &tx_data.hash,
+                                output_index as i16,
+                                parsed.number,
+                            )
+                            .await?;
+                    }
 
-                for (output_index, token) in MnftParser::parse_tokens(tx).iter().enumerate() {
-                    batch_mnft_token_ids.insert(token.token_id.clone());
-                    self.writer
-                        .insert_mnft_token(token, &tx_data.hash, output_index as i16, parsed.number)
-                        .await?;
-                }
+                    for (output_index, token) in MnftParser::parse_tokens(tx).iter().enumerate() {
+                        batch_mnft_token_ids.insert(token.token_id.clone());
+                        self.writer
+                            .insert_mnft_token(
+                                token,
+                                &tx_data.hash,
+                                output_index as i16,
+                                parsed.number,
+                            )
+                            .await?;
+                    }
 
-                for (output_index, account) in DotbitParser::parse_accounts(tx).iter().enumerate() {
-                    batch_dotbit_account_ids.insert(account.account_id.clone());
-                    self.writer
-                        .insert_dotbit_account(
-                            account,
-                            &tx_data.hash,
-                            output_index as i16,
-                            parsed.number,
-                        )
-                        .await?;
+                    for (output_index, account) in
+                        DotbitParser::parse_accounts(tx).iter().enumerate()
+                    {
+                        batch_dotbit_account_ids.insert(account.account_id.clone());
+                        self.writer
+                            .insert_dotbit_account(
+                                account,
+                                &tx_data.hash,
+                                output_index as i16,
+                                parsed.number,
+                            )
+                            .await?;
+                    }
                 }
             }
         }
@@ -4888,36 +4904,50 @@ impl Indexer {
                         .await?;
                 }
 
-                for issuer in MnftParser::parse_issuers(tx) {
-                    self.writer
-                        .insert_mnft_issuer(&issuer, &tx_data.hash, 0, parsed.number)
-                        .await?;
-                }
+                if !bulk_sync_mode {
+                    for issuer in MnftParser::parse_issuers(tx) {
+                        self.writer
+                            .insert_mnft_issuer(&issuer, &tx_data.hash, 0, parsed.number)
+                            .await?;
+                    }
 
-                for (output_index, class) in MnftParser::parse_classes(tx).iter().enumerate() {
-                    batch_mnft_class_ids.insert(class.class_id.clone());
-                    self.writer
-                        .insert_mnft_class(class, &tx_data.hash, output_index as i16, parsed.number)
-                        .await?;
-                }
+                    for (output_index, class) in MnftParser::parse_classes(tx).iter().enumerate() {
+                        batch_mnft_class_ids.insert(class.class_id.clone());
+                        self.writer
+                            .insert_mnft_class(
+                                class,
+                                &tx_data.hash,
+                                output_index as i16,
+                                parsed.number,
+                            )
+                            .await?;
+                    }
 
-                for (output_index, token) in MnftParser::parse_tokens(tx).iter().enumerate() {
-                    batch_mnft_token_ids.insert(token.token_id.clone());
-                    self.writer
-                        .insert_mnft_token(token, &tx_data.hash, output_index as i16, parsed.number)
-                        .await?;
-                }
+                    for (output_index, token) in MnftParser::parse_tokens(tx).iter().enumerate() {
+                        batch_mnft_token_ids.insert(token.token_id.clone());
+                        self.writer
+                            .insert_mnft_token(
+                                token,
+                                &tx_data.hash,
+                                output_index as i16,
+                                parsed.number,
+                            )
+                            .await?;
+                    }
 
-                for (output_index, account) in DotbitParser::parse_accounts(tx).iter().enumerate() {
-                    batch_dotbit_account_ids.insert(account.account_id.clone());
-                    self.writer
-                        .insert_dotbit_account(
-                            account,
-                            &tx_data.hash,
-                            output_index as i16,
-                            parsed.number,
-                        )
-                        .await?;
+                    for (output_index, account) in
+                        DotbitParser::parse_accounts(tx).iter().enumerate()
+                    {
+                        batch_dotbit_account_ids.insert(account.account_id.clone());
+                        self.writer
+                            .insert_dotbit_account(
+                                account,
+                                &tx_data.hash,
+                                output_index as i16,
+                                parsed.number,
+                            )
+                            .await?;
+                    }
                 }
             }
         }
