@@ -284,7 +284,11 @@ impl BatchWriter {
                     entry.withdraw_block = Some(block_number);
                     entry.withdraw_tx = Some(tx_hash.to_vec());
                     entry.compensation = Some(compensation);
-                    store.update_dao_deposit_status(&original_tx_hash, original_output_index, &entry);
+                    store.update_dao_deposit_status(
+                        &original_tx_hash,
+                        original_output_index,
+                        &entry,
+                    );
                 }
             }
 
@@ -349,10 +353,8 @@ impl BatchWriter {
         let output_indices: Vec<i16> = inputs.iter().map(|(_, i)| *i as i16).collect();
 
         if let Some(store) = live_cell_store {
-            let outpoints: Vec<(&[u8], i16)> = inputs
-                .iter()
-                .map(|(h, i)| (*h, *i as i16))
-                .collect();
+            let outpoints: Vec<(&[u8], i16)> =
+                inputs.iter().map(|(h, i)| (*h, *i as i16)).collect();
             let mut seen_keys: HashSet<(Vec<u8>, i16)> = HashSet::new();
 
             let cached = store.get_dao_deposits_batch(&outpoints);
@@ -706,15 +708,9 @@ impl BatchWriter {
             for (withdraw_tx, entries) in by_withdraw {
                 if let Some((tx_hash, output_index, entry)) = entries.first() {
                     let key = (withdraw_tx, 0i16);
-                    result_map
-                        .entry(key)
-                        .or_insert_with(|| {
-                            dao_cache_entry_to_row(
-                                tx_hash.clone(),
-                                *output_index,
-                                entry.clone(),
-                            )
-                        });
+                    result_map.entry(key).or_insert_with(|| {
+                        dao_cache_entry_to_row(tx_hash.clone(), *output_index, entry.clone())
+                    });
                 }
             }
 
@@ -989,7 +985,10 @@ impl BatchWriter {
                 .iter()
                 .map(|(tx_hash, _, _, _, _)| tx_hash.as_slice())
                 .collect();
-            let indices: Vec<i16> = phase1_updates.iter().map(|(_, idx, _, _, _)| *idx).collect();
+            let indices: Vec<i16> = phase1_updates
+                .iter()
+                .map(|(_, idx, _, _, _)| *idx)
+                .collect();
             let blocks: Vec<i64> = phase1_updates.iter().map(|(_, _, b, _, _)| *b).collect();
             let txs: Vec<&[u8]> = phase1_updates
                 .iter()
@@ -1024,16 +1023,26 @@ impl BatchWriter {
                 .iter()
                 .map(|(tx_hash, _, _, _, _, _, _)| tx_hash.as_slice())
                 .collect();
-            let indices: Vec<i16> = phase2_updates.iter().map(|(_, idx, _, _, _, _, _)| *idx).collect();
-            let blocks: Vec<i64> = phase2_updates.iter().map(|(_, _, b, _, _, _, _)| *b).collect();
+            let indices: Vec<i16> = phase2_updates
+                .iter()
+                .map(|(_, idx, _, _, _, _, _)| *idx)
+                .collect();
+            let blocks: Vec<i64> = phase2_updates
+                .iter()
+                .map(|(_, _, b, _, _, _, _)| *b)
+                .collect();
             let txs: Vec<&[u8]> = phase2_updates
                 .iter()
                 .map(|(_, _, _, tx, _, _, _)| tx.as_slice())
                 .collect();
-            let timestamps: Vec<DateTime<Utc>> =
-                phase2_updates.iter().map(|(_, _, _, _, t, _, _)| *t).collect();
-            let compensations: Vec<i64> =
-                phase2_updates.iter().map(|(_, _, _, _, _, c, _)| *c).collect();
+            let timestamps: Vec<DateTime<Utc>> = phase2_updates
+                .iter()
+                .map(|(_, _, _, _, t, _, _)| *t)
+                .collect();
+            let compensations: Vec<i64> = phase2_updates
+                .iter()
+                .map(|(_, _, _, _, _, c, _)| *c)
+                .collect();
 
             sqlx::query(
                 r#"

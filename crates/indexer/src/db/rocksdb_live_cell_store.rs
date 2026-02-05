@@ -1476,4 +1476,70 @@ mod tests {
         let (count_after, _) = store.consumed_cells_stats();
         assert_eq!(count_after, 0);
     }
+
+    #[test]
+    fn test_dao_deposit_writebatch_atomicity() {
+        let tmp_dir = TempDir::new().unwrap();
+        let store = RocksDbLiveCellStore::open(tmp_dir.path(), true).unwrap();
+
+        let tx_hash = vec![0xabu8; 32];
+        let withdraw_tx = vec![0xcdu8; 32];
+        let entry = create_test_dao_deposit(500);
+
+        // Step 1: Insert deposit with status=0
+        store.insert_dao_deposit(&tx_hash, 0, &entry);
+        let retrieved = store.get_dao_deposit(&tx_hash, 0).unwrap();
+        assert_eq!(retrieved.status, 0);
+        assert!(retrieved.withdraw_request_tx.is_none());
+        // No secondary index yet
+        assert!(store
+            .get_dao_deposits_by_withdraw_tx(&withdraw_tx)
+            .is_empty());
+
+        // Step 2: Update to status=1 with withdraw_request_tx
+        // This uses WriteBatch to atomically update primary CF + add secondary index
+        let mut updated = entry.clone();
+        updated.status = 1;
+        updated.withdraw_request_tx = Some(withdraw_tx.clone());
+        updated.withdraw_request_block = Some(510);
+        store.update_dao_deposit_status(&tx_hash, 0, &updated);
+
+        // Verify primary CF has updated entry
+        let after_phase1 = store.get_dao_deposit(&tx_hash, 0).unwrap();
+        assert_eq!(after_phase1.status, 1);
+        assert_eq!(
+            after_phase1.withdraw_request_tx.as_ref().unwrap(),
+            &withdraw_tx
+        );
+        assert_eq!(after_phase1.withdraw_request_block, Some(510));
+
+        // Verify secondary CF has the index entry
+        let by_withdraw = store.get_dao_deposits_by_withdraw_tx(&withdraw_tx);
+        assert_eq!(by_withdraw.len(), 1);
+        assert_eq!(by_withdraw[0].0, tx_hash);
+        assert_eq!(by_withdraw[0].1, 0);
+        assert_eq!(by_withdraw[0].2.status, 1);
+
+        // Step 3: Update to status=2 (completion)
+        // This uses WriteBatch to atomically update primary CF + remove secondary index
+        let mut completed = after_phase1.clone();
+        completed.status = 2;
+        completed.withdraw_block = Some(600);
+        completed.withdraw_tx = Some(vec![0xefu8; 32]);
+        completed.compensation = Some(12345);
+        store.update_dao_deposit_status(&tx_hash, 0, &completed);
+
+        // Verify primary CF has status=2
+        let after_phase2 = store.get_dao_deposit(&tx_hash, 0).unwrap();
+        assert_eq!(after_phase2.status, 2);
+        assert_eq!(after_phase2.withdraw_block, Some(600));
+        assert_eq!(after_phase2.compensation, Some(12345));
+
+        // Verify secondary CF no longer has the index entry
+        let by_withdraw_after = store.get_dao_deposits_by_withdraw_tx(&withdraw_tx);
+        assert!(
+            by_withdraw_after.is_empty(),
+            "Secondary index should be removed after status=2 (WriteBatch atomicity)"
+        );
+    }
 }
