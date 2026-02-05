@@ -16,7 +16,7 @@ mod address_balances;
 mod cells_status;
 mod cycles;
 mod dotbit;
-mod index;
+pub mod index;
 mod labels;
 mod mnft;
 mod secondary_issuance;

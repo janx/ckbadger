@@ -839,30 +839,31 @@ SELECT SUM(
 
 ## Quick Reference: Common Pitfalls
 
-| Area        | Pitfall                             | Prevention                                               |
-| ----------- | ----------------------------------- | -------------------------------------------------------- |
-| CKB Scripts | Confusing code_hash vs script_hash  | code_hash = script type, script_hash = instance identity |
-| CKB Scripts | Hardcoded hashes                    | Verify against chain, reference RFC-0024                 |
-| DAO         | Multi-phase tracking                | Map full lifecycle before implementing                   |
-| DAO         | Compensation formula                | Follow RFC-0023 exactly, use free_capacity               |
-| DAO         | DAO field parsing                   | 32 bytes, 4 x u64 LE, check byte offsets                 |
-| DAO         | APC calculation                     | Estimated = issuance/supply; Nominal = AR growth         |
-| DAO         | Point-in-time aggregations          | Filter out withdrawn deposits for historical snapshots   |
-| DAO         | Phase 2 withdrawal lookup           | Match by `withdraw_request_tx`, not `tx_hash`            |
-| Supply      | Using total_issuance as circulating | Subtract 8.4B genesis burnt + secondary burnt            |
-| Supply      | Confusing issuance vs circulating   | Read `docs/DAO_CALCULATIONS.md` supply model             |
-| SQL         | Cumulative values                   | Test INSERT and UPDATE paths separately                  |
-| SQL         | Type mismatches                     | Cast explicitly: `::float8`, `::numeric`, `::TEXT`       |
-| SQL         | NUMERIC to String                   | Blockchain amounts need `::TEXT` cast for API responses  |
-| SQL         | FK violations                       | Insert parents before children                           |
-| SQL         | CONCURRENTLY in migrations          | Don't use; SQLx runs in transactions                     |
-| SQL         | N+1 queries                         | Use JOINs to batch-fetch related records                 |
-| SQL         | Querying wrong table                | Verify table/column names after schema refactors         |
-| Indexer     | Fields not in batch sync            | Ensure both real-time AND batch sync populate all fields |
-| Frontend    | Percentage double-multiply          | Establish API contract: ratio (0-1) or percent (0-100)   |
-| Docker      | Missing files                       | Verify all runtime deps are COPY'd                       |
-| Docker      | Network isolation                   | Use host network or proper bridging                      |
-| Charts      | Incomplete data                     | Exclude current incomplete period                        |
+| Area        | Pitfall                               | Prevention                                               |
+| ----------- | ------------------------------------- | -------------------------------------------------------- |
+| CKB Scripts | Confusing code_hash vs script_hash    | code_hash = script type, script_hash = instance identity |
+| CKB Scripts | Hardcoded hashes                      | Verify against chain, reference RFC-0024                 |
+| DAO         | Multi-phase tracking                  | Map full lifecycle before implementing                   |
+| DAO         | Compensation formula                  | Follow RFC-0023 exactly, use free_capacity               |
+| DAO         | DAO field parsing                     | 32 bytes, 4 x u64 LE, check byte offsets                 |
+| DAO         | APC calculation                       | Estimated = issuance/supply; Nominal = AR growth         |
+| DAO         | Point-in-time aggregations            | Filter out withdrawn deposits for historical snapshots   |
+| DAO         | Phase 2 withdrawal lookup             | Match by `withdraw_request_tx`, not `tx_hash`            |
+| Supply      | Using total_issuance as circulating   | Subtract 8.4B genesis burnt + secondary burnt            |
+| Supply      | Confusing issuance vs circulating     | Read `docs/DAO_CALCULATIONS.md` supply model             |
+| SQL         | Cumulative values                     | Test INSERT and UPDATE paths separately                  |
+| SQL         | Type mismatches                       | Cast explicitly: `::float8`, `::numeric`, `::TEXT`       |
+| SQL         | NUMERIC to String                     | Blockchain amounts need `::TEXT` cast for API responses  |
+| SQL         | FK violations                         | Insert parents before children                           |
+| SQL         | CONCURRENTLY in migrations            | Don't use; SQLx runs in transactions                     |
+| SQL         | Partition constraint only on children | ADD constraint to parent table (auto-attaches children)  |
+| SQL         | N+1 queries                           | Use JOINs to batch-fetch related records                 |
+| SQL         | Querying wrong table                  | Verify table/column names after schema refactors         |
+| Indexer     | Fields not in batch sync              | Ensure both real-time AND batch sync populate all fields |
+| Frontend    | Percentage double-multiply            | Establish API contract: ratio (0-1) or percent (0-100)   |
+| Docker      | Missing files                         | Verify all runtime deps are COPY'd                       |
+| Docker      | Network isolation                     | Use host network or proper bridging                      |
+| Charts      | Incomplete data                       | Exclude current incomplete period                        |
 
 ---
 
@@ -1451,7 +1452,7 @@ drop_constraint_if_exists(constraint.table, &constraint_name)  // cells
 **Key Insight**: PostgreSQL partition inheritance is asymmetric:
 
 - **DROP**: Must target parent table (cascades to children)
-- **ADD**: Can target individual partitions (task-runner rebuild does this correctly)
+- **ADD**: Must target parent table (auto-attaches existing partition constraints). Adding ONLY to partitions is insufficient for `ON CONFLICT` — see TR-003.
 
 **Performance Impact**:
 
@@ -1509,6 +1510,50 @@ return Ok(true);  // BUG: triggers immediate retry
 **Test Coverage Added**: `test_run_once_returns_false_when_task_deferred` and `test_run_once_returns_true_when_task_executes` in `crates/task-runner/tests/bulk_sync_protection.rs`.
 
 **Files**: `crates/task-runner/src/executor/mod.rs` - `run_once()`
+
+---
+
+### TR-003: Parent table UNIQUE constraints missing after index rebuild (2026-02-05)
+
+**Symptom**: Indexer stuck at block 18,549,997, failing every ~30 seconds with:
+
+```
+ERROR: there is no unique or exclusion constraint matching the ON CONFLICT specification
+```
+
+**Root Cause**: `rebuild_partitioned_constraint()` in `crates/task-runner/src/executor/index.rs` added UNIQUE constraints to individual partitions (e.g., `cells_p00`, `cells_p01`...) but **never to the parent partitioned table** (e.g., `cells`). PostgreSQL's `INSERT ... ON CONFLICT` requires the constraint on the parent table — having it only on partitions is insufficient.
+
+**Affected tables** (all 5 `DEFERRABLE_CONSTRAINTS`):
+
+| Table                   | Constraint                                  |
+| ----------------------- | ------------------------------------------- |
+| `cells`                 | `(created_at_block, tx_hash, output_index)` |
+| `transaction_inputs`    | `(tx_block_number, tx_hash, input_index)`   |
+| `transaction_cell_deps` | `(tx_block_number, tx_hash, dep_index)`     |
+| `block_proposals`       | `(block_number, proposal_index)`            |
+| `uncle_blocks`          | `(block_number, uncle_index)`               |
+
+**Fix**: Added parent table constraint creation after all partition constraints are built (lines 447-472 of `index.rs`):
+
+```rust
+// After all partition constraints are created...
+let parent_constraint_name = format!("{}_{}", constraint.table, constraint.name);
+let add_parent_sql = format!(
+    "ALTER TABLE {} ADD CONSTRAINT {} UNIQUE ({})",
+    constraint.table, parent_constraint_name, constraint.columns
+);
+sqlx::query(&add_parent_sql).execute(pool).await?;
+```
+
+**Key Insight**: When you `ALTER TABLE parent ADD CONSTRAINT ... UNIQUE (...)` and partitions already have matching constraints, PostgreSQL automatically "attaches" them — no data scan needed.
+
+**Cross-reference**: PERF-003 previously had incorrect documentation stating "ADD: Can target individual partitions (task-runner rebuild does this correctly)" — this was the exact opposite of correct behavior and has been corrected.
+
+**Lesson**: When rebuilding constraints on partitioned tables, always add the constraint to the parent table. Partition-only constraints are invisible to `ON CONFLICT` on the parent. The immediate fix was to run `ALTER TABLE` on all 5 parent tables directly in psql, which instantly unblocked the indexer.
+
+**Test Coverage Added**: `test_rebuild_constraint_creates_parent_constraint` and `test_rebuild_constraint_enables_on_conflict` in `crates/task-runner/tests/index_rebuild_constraint.rs`.
+
+**Files**: `crates/task-runner/src/executor/index.rs` - `rebuild_partitioned_constraint()`
 
 ---
 

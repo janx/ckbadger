@@ -24,10 +24,10 @@ struct DeferrableIndex {
     priority: u8,
 }
 
-struct DeferrableConstraint {
-    name: &'static str,
-    table: &'static str,
-    columns: &'static str,
+pub struct DeferrableConstraint {
+    pub name: &'static str,
+    pub table: &'static str,
+    pub columns: &'static str,
 }
 
 const RANGE_PARTITION_SUFFIXES: &[&str] = &[
@@ -399,7 +399,7 @@ async fn rebuild_partitioned_index(
     Ok(())
 }
 
-async fn rebuild_partitioned_constraint(
+pub async fn rebuild_partitioned_constraint(
     pool: &PgPool,
     constraint: &DeferrableConstraint,
     max_parallel: usize,
@@ -442,6 +442,33 @@ async fn rebuild_partitioned_constraint(
                 Err(e) => warn!("Task panicked: {}", e),
             }
         }
+    }
+
+    // Add the constraint to the parent table after all partitions are done
+    let parent_constraint_name = format!("{}_{}", constraint.table, constraint.name);
+    let check_parent_sql = format!(
+        "SELECT 1 FROM pg_constraint WHERE conname = '{}' AND conrelid = '{}'::regclass",
+        parent_constraint_name, constraint.table
+    );
+    let parent_exists: Option<(i32,)> = sqlx::query_as(&check_parent_sql)
+        .fetch_optional(pool)
+        .await?;
+
+    if parent_exists.is_none() {
+        let add_parent_sql = format!(
+            "ALTER TABLE {} ADD CONSTRAINT {} UNIQUE ({})",
+            constraint.table, parent_constraint_name, constraint.columns
+        );
+        sqlx::query(&add_parent_sql).execute(pool).await?;
+        info!(
+            "Added UNIQUE constraint {} to parent table {}",
+            parent_constraint_name, constraint.table
+        );
+    } else {
+        info!(
+            "UNIQUE constraint {} already exists on parent table {}",
+            parent_constraint_name, constraint.table
+        );
     }
 
     Ok(())
