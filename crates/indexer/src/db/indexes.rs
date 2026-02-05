@@ -36,9 +36,8 @@ struct DeferrableConstraint {
     /// Base table name (without partition suffix)
     table: &'static str,
     #[allow(dead_code)]
-    /// Columns for the UNIQUE constraint
     columns: &'static str,
-    /// Whether this constraint is on partitioned tables
+    #[allow(dead_code)]
     is_partitioned: bool,
 }
 
@@ -396,25 +395,13 @@ impl IndexManager {
         let mut dropped_count = 0;
 
         for constraint in DEFERRABLE_CONSTRAINTS {
-            if constraint.is_partitioned {
-                for suffix in RANGE_PARTITION_SUFFIXES {
-                    let table_name = format!("{}{}", constraint.table, suffix);
-                    let constraint_name = format!("{}_{}", table_name, constraint.name);
-                    if self
-                        .drop_constraint_if_exists(&table_name, &constraint_name)
-                        .await?
-                    {
-                        dropped_count += 1;
-                    }
-                }
-            } else {
-                let constraint_name = format!("{}_{}", constraint.table, constraint.name);
-                if self
-                    .drop_constraint_if_exists(constraint.table, &constraint_name)
-                    .await?
-                {
-                    dropped_count += 1;
-                }
+            // Drop on parent table - PostgreSQL propagates to all partitions
+            let constraint_name = format!("{}_{}", constraint.table, constraint.name);
+            if self
+                .drop_constraint_if_exists(constraint.table, &constraint_name)
+                .await?
+            {
+                dropped_count += 1;
             }
         }
 
@@ -698,6 +685,18 @@ mod tests {
                 constraint.columns.contains(',') || constraint.columns.contains('_'),
                 "Constraint {} should have multiple columns or underscore",
                 constraint.name
+            );
+        }
+    }
+
+    #[test]
+    fn test_constraint_drop_uses_parent_table_name() {
+        // DROP must target parent table; partition tables fail with "cannot drop inherited constraint"
+        for constraint in DEFERRABLE_CONSTRAINTS {
+            assert!(
+                !constraint.table.contains("_p0"),
+                "Constraint table '{}' should be parent table, not partition",
+                constraint.table
             );
         }
     }

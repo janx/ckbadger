@@ -1424,4 +1424,47 @@ let secondary_issuance = sqlx::query_as::<_, (String, String, String)>(
 
 ---
 
-_Last updated: 2026-02-01_
+### PERF-003: UNIQUE constraints not dropped on partition tables (2026-02-05)
+
+**Symptom**: Bulk sync performance degraded ~37% (5,700 → 3,600 blocks/sec). Logs showed warnings:
+
+```
+WARN Failed to drop constraint cells_p00_created_at_block_tx_hash_output_index_key:
+  cannot drop inherited constraint "cells_p00_created_at_block_tx_hash_output_index_key"
+```
+
+**Root Cause**: `drop_deferrable_constraints()` tried to drop constraints on partition tables (e.g., `cells_p00`), but PostgreSQL partition constraints are inherited from the parent table and cannot be dropped directly on children.
+
+```rust
+// WRONG: Drop on partition tables
+for suffix in RANGE_PARTITION_SUFFIXES {
+    let table_name = format!("{}{}", constraint.table, suffix); // cells_p00
+    drop_constraint_if_exists(&table_name, &constraint_name)    // Fails!
+}
+
+// CORRECT: Drop on parent table
+let constraint_name = format!("{}_{}", constraint.table, constraint.name);
+drop_constraint_if_exists(constraint.table, &constraint_name)  // cells
+// PostgreSQL cascades to all partitions automatically
+```
+
+**Key Insight**: PostgreSQL partition inheritance is asymmetric:
+
+- **DROP**: Must target parent table (cascades to children)
+- **ADD**: Can target individual partitions (task-runner rebuild does this correctly)
+
+**Performance Impact**:
+
+| Metric        | Before (bug)  | After (fix) |
+| ------------- | ------------- | ----------- |
+| DB write time | 3-6s/10K      | ~1.5s/10K   |
+| Sync rate     | 3,600/sec     | 6,000+/sec  |
+| Slow INSERTs  | 2.3s (2 rows) | <100ms      |
+
+**Test Coverage Added**: `test_constraint_drop_uses_parent_table_name` in `crates/indexer/src/db/indexes.rs`
+
+**Files**: `crates/indexer/src/db/indexes.rs` - `drop_deferrable_constraints()`
+
+---
+
+_Last updated: 2026-02-05_
