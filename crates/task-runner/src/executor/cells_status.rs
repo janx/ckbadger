@@ -40,7 +40,13 @@ pub async fn execute(
 
         // Unified query: handles both status=0 cells AND cells with NULL consumed_at_block
         // This replaces the need for separate cells_status_rebuild and consumed_at_backfill tasks
-        let updated = sqlx::query_scalar::<_, i64>(
+        //
+        // Optimization: `c.created_at_block < $2` enables PostgreSQL partition pruning on
+        // the RANGE-partitioned cells table. A cell must be created before it can be consumed,
+        // so if the consuming transaction is at block X, the cell's created_at_block < X.
+        // This avoids probing cells partitions that cannot contain relevant cells.
+        // For early batches (0-5M), this prunes 3 of 4 partitions (~75% fewer index probes).
+        let updated = sqlx::query(
             r#"
             WITH input_consumption AS (
                 SELECT 
@@ -63,14 +69,14 @@ pub async fn execute(
             WHERE c.tx_hash = ic.previous_tx_hash
               AND c.output_index = ic.previous_output_index
               AND (c.status = 0 OR c.consumed_at_block IS NULL)
-            RETURNING 1::BIGINT
+              AND c.created_at_block < $2
             "#,
         )
         .bind(current_block)
         .bind(end_block)
-        .fetch_all(pool)
+        .execute(pool)
         .await?
-        .len() as i64;
+        .rows_affected() as i64;
 
         cells_updated += updated;
         blocks_processed = end_block;
