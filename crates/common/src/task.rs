@@ -68,6 +68,7 @@ pub enum TaskType {
     TokenRebuild,
     MnftRebuild,
     DotbitRebuild,
+    DaoRebuild,
 }
 
 impl std::fmt::Display for TaskType {
@@ -87,6 +88,7 @@ impl std::fmt::Display for TaskType {
             TaskType::TokenRebuild => write!(f, "token_rebuild"),
             TaskType::MnftRebuild => write!(f, "mnft_rebuild"),
             TaskType::DotbitRebuild => write!(f, "dotbit_rebuild"),
+            TaskType::DaoRebuild => write!(f, "dao_rebuild"),
         }
     }
 }
@@ -110,6 +112,7 @@ impl std::str::FromStr for TaskType {
             "token_rebuild" => Ok(TaskType::TokenRebuild),
             "mnft_rebuild" => Ok(TaskType::MnftRebuild),
             "dotbit_rebuild" => Ok(TaskType::DotbitRebuild),
+            "dao_rebuild" => Ok(TaskType::DaoRebuild),
             _ => Err(anyhow::anyhow!("Invalid task type: {}", s)),
         }
     }
@@ -147,7 +150,8 @@ impl TaskType {
             | TaskType::AddressBalancesRebuild
             | TaskType::TokenRebuild
             | TaskType::MnftRebuild
-            | TaskType::DotbitRebuild => true,
+            | TaskType::DotbitRebuild
+            | TaskType::DaoRebuild => true,
         }
     }
 }
@@ -482,6 +486,25 @@ impl Default for DotbitRebuildConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DaoRebuildConfig {
+    #[serde(default = "default_dao_rebuild_batch_size")]
+    pub batch_size: i64,
+}
+
+fn default_dao_rebuild_batch_size() -> i64 {
+    10_000
+}
+
+impl Default for DaoRebuildConfig {
+    fn default() -> Self {
+        Self {
+            batch_size: default_dao_rebuild_batch_size(),
+        }
+    }
+}
+
 /// Unified task configuration enum
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -500,6 +523,7 @@ pub enum TaskConfig {
     TokenRebuild(TokenRebuildConfig),
     MnftRebuild(MnftRebuildConfig),
     DotbitRebuild(DotbitRebuildConfig),
+    DaoRebuild(DaoRebuildConfig),
 }
 
 impl TaskConfig {
@@ -519,6 +543,7 @@ impl TaskConfig {
             TaskConfig::TokenRebuild(_) => TaskType::TokenRebuild,
             TaskConfig::MnftRebuild(_) => TaskType::MnftRebuild,
             TaskConfig::DotbitRebuild(_) => TaskType::DotbitRebuild,
+            TaskConfig::DaoRebuild(_) => TaskType::DaoRebuild,
         }
     }
 }
@@ -968,6 +993,16 @@ impl TaskBuilder {
         }
     }
 
+    pub fn dao_rebuild(config: DaoRebuildConfig) -> Self {
+        Self {
+            task_type: TaskType::DaoRebuild,
+            config: serde_json::to_value(TaskConfig::DaoRebuild(config))
+                .expect("DaoRebuildConfig should be serializable"),
+            priority: 8,
+            max_retries: 2,
+        }
+    }
+
     pub fn priority(mut self, priority: i32) -> Self {
         self.priority = priority;
         self
@@ -1383,6 +1418,7 @@ mod tests {
         assert!(TaskType::TokenRebuild.requires_bulk_sync_completion());
         assert!(TaskType::MnftRebuild.requires_bulk_sync_completion());
         assert!(TaskType::DotbitRebuild.requires_bulk_sync_completion());
+        assert!(TaskType::DaoRebuild.requires_bulk_sync_completion());
     }
 
     #[test]
@@ -1516,5 +1552,41 @@ mod tests {
     fn test_mnft_dotbit_require_bulk_sync_completion() {
         assert!(TaskType::MnftRebuild.requires_bulk_sync_completion());
         assert!(TaskType::DotbitRebuild.requires_bulk_sync_completion());
+    }
+
+    #[test]
+    fn test_dao_rebuild_builder() {
+        let builder = TaskBuilder::dao_rebuild(DaoRebuildConfig::default());
+        assert_eq!(builder.task_type(), TaskType::DaoRebuild);
+        assert_eq!(builder.get_priority(), 8);
+    }
+
+    #[test]
+    fn test_dao_rebuild_type_display() {
+        assert_eq!(TaskType::DaoRebuild.to_string(), "dao_rebuild");
+    }
+
+    #[test]
+    fn test_dao_rebuild_type_parse() {
+        assert_eq!(
+            "dao_rebuild".parse::<TaskType>().unwrap(),
+            TaskType::DaoRebuild
+        );
+    }
+
+    #[test]
+    fn test_dao_rebuild_config_serialization() {
+        let config = TaskConfig::DaoRebuild(DaoRebuildConfig { batch_size: 5000 });
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("dao_rebuild"));
+        assert!(json.contains("batchSize"));
+
+        let parsed: TaskConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.task_type(), TaskType::DaoRebuild);
+    }
+
+    #[test]
+    fn test_dao_rebuild_requires_bulk_sync_completion() {
+        assert!(TaskType::DaoRebuild.requires_bulk_sync_completion());
     }
 }

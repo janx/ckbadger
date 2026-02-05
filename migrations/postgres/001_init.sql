@@ -51,6 +51,11 @@ CREATE TABLE sync_status (
     spore_deferred_at TIMESTAMPTZ,
     spore_rebuild_completed_at TIMESTAMPTZ,
 
+    -- Deferred DAO optimization (skip DAO deposit/withdrawal writes during bulk sync)
+    dao_deferred BOOLEAN NOT NULL DEFAULT FALSE,
+    dao_deferred_at TIMESTAMPTZ,
+    dao_rebuild_completed_at TIMESTAMPTZ,
+
     stats_rebuild_in_progress BOOLEAN NOT NULL DEFAULT FALSE,
 
     CONSTRAINT single_row CHECK (id = 1)

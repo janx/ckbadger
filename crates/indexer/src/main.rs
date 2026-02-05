@@ -129,6 +129,13 @@ struct Args {
         help = "Disable auto defer-spore optimization for fresh database sync"
     )]
     no_auto_defer_spore: bool,
+
+    #[arg(
+        long,
+        default_value = "false",
+        help = "Disable auto defer-dao optimization for fresh database sync"
+    )]
+    no_auto_defer_dao: bool,
 }
 
 #[tokio::main]
@@ -313,6 +320,29 @@ async fn main() -> Result<()> {
         info!("Fresh database detected, but auto-defer-spore disabled via --no-auto-defer-spore");
     } else if spore_currently_deferred {
         info!("Spore writes are deferred (from previous run), will auto-rebuild when caught up");
+    }
+
+    let dao_currently_deferred: bool =
+        sqlx::query_scalar("SELECT COALESCE(dao_deferred, false) FROM sync_status WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap_or(false);
+
+    let should_auto_defer_dao = is_fresh_sync && !dao_currently_deferred && !args.no_auto_defer_dao;
+
+    if should_auto_defer_dao {
+        info!(
+            "Enabling deferred DAO writes for faster bulk sync (will auto-rebuild when caught up)"
+        );
+        sqlx::query(
+            "UPDATE sync_status SET dao_deferred = TRUE, dao_deferred_at = NOW() WHERE id = 1",
+        )
+        .execute(&pool)
+        .await?;
+    } else if is_fresh_sync && args.no_auto_defer_dao {
+        info!("Fresh database detected, but auto-defer-dao disabled via --no-auto-defer-dao");
+    } else if dao_currently_deferred {
+        info!("DAO writes are deferred (from previous run), will auto-rebuild when caught up");
     }
 
     info!("Connecting to CKB node: {}", config.ckb_rpc_url);

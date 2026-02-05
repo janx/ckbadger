@@ -178,6 +178,9 @@ impl TaskExecutor {
             TaskType::TokenRebuild => self.execute_token_rebuild(task).await,
             TaskType::MnftRebuild => self.execute_mnft_rebuild(task).await,
             TaskType::DotbitRebuild => self.execute_dotbit_rebuild(task).await,
+            TaskType::DaoRebuild => Err(anyhow::anyhow!(
+                "DaoRebuild must be executed by the indexer, not task-runner"
+            )),
         }
     }
 
