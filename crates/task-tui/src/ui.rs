@@ -1,9 +1,9 @@
 use anyhow::Result;
 use chrono::Local;
 use ckbadger_common::{
-    CyclesBackfillConfig, IndexRebuildConfig, LabelImportConfig, LiveCellsPopulateConfig,
-    MemoryStatsData, SecondaryIssuanceBackfillConfig, SporeRebuildConfig, StatisticsRebuildConfig,
-    Task, TaskBuilder,
+    CyclesBackfillConfig, DotbitRebuildConfig, IndexRebuildConfig, LabelImportConfig,
+    LiveCellsPopulateConfig, MemoryStatsData, MnftRebuildConfig, SecondaryIssuanceBackfillConfig,
+    SporeRebuildConfig, StatisticsRebuildConfig, Task, TaskBuilder,
 };
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -150,14 +150,14 @@ impl App {
 
     pub fn next_dialog_option(&mut self) {
         if let Some(DialogType::NewTask) = self.dialog {
-            self.dialog_selection = (self.dialog_selection + 1) % 7;
+            self.dialog_selection = (self.dialog_selection + 1) % 9;
         }
     }
 
     pub fn previous_dialog_option(&mut self) {
         if let Some(DialogType::NewTask) = self.dialog {
             self.dialog_selection = if self.dialog_selection == 0 {
-                6
+                8
             } else {
                 self.dialog_selection - 1
             };
@@ -181,6 +181,8 @@ impl App {
                     6 => TaskBuilder::secondary_issuance_backfill(
                         SecondaryIssuanceBackfillConfig::default(),
                     ),
+                    7 => TaskBuilder::mnft_rebuild(MnftRebuildConfig::default()),
+                    8 => TaskBuilder::dotbit_rebuild(DotbitRebuildConfig::default()),
                     _ => return Ok(()),
                 };
                 let id = self.db.create_task(&builder).await?;
@@ -829,6 +831,8 @@ fn draw_dialog(f: &mut Frame, app: &App, dialog: &DialogType) {
                     "Secondary Issuance Backfill",
                     "Backfill secondary issuance data",
                 ),
+                ("MNFT Rebuild", "Rebuild M-NFT issuers/classes/tokens"),
+                ("DotBit Rebuild", "Rebuild DotBit accounts"),
             ];
             let items: Vec<Line> = options
                 .iter()

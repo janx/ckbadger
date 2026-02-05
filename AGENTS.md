@@ -290,19 +290,21 @@ This handles edge cases:
 
 **Available Task Types:**
 
-| Task Type                     | Priority | Description                                                     |
-| ----------------------------- | -------- | --------------------------------------------------------------- |
-| `index_rebuild`               | 10       | Rebuild deferred indexes and constraints                        |
-| `cells_status_rebuild`        | 9        | Rebuild cells.status and consumed*at*\* from transaction_inputs |
-| `address_balances_rebuild`    | 8        | Rebuild address_balances from cells GROUP BY                    |
-| `live_cells_populate`         | 8        | Populate live_cells table from RocksDB (indexer)                |
-| `token_rebuild`               | 7        | Rebuild tokens/token_balances/udt_cells with UDT parsing        |
-| `secondary_issuance_backfill` | 7        | Backfill ALL blocks' secondary issuance data (exact)            |
-| `activities_rebuild`          | 7        | Rebuild activities table from blocks/transactions               |
-| `spore_rebuild`               | 6        | Rebuild spore_cells status from cells table (batched)           |
-| `statistics_rebuild`          | 5        | Rebuild all 7 aggregate statistics tables (parallel, up to 4)   |
-| `cycles_backfill`             | 0        | Backfill transaction cycles from RPC                            |
-| `label_import`                | 0        | Import UDT/script labels from token-labels repo                 |
+| Task Type                     | Priority | Description                                                            |
+| ----------------------------- | -------- | ---------------------------------------------------------------------- |
+| `index_rebuild`               | 10       | Rebuild deferred indexes and constraints                               |
+| `cells_status_rebuild`        | 9        | Rebuild cells.status and consumed*at*\* from transaction_inputs        |
+| `address_balances_rebuild`    | 8        | Rebuild address_balances from cells GROUP BY                           |
+| `live_cells_populate`         | 8        | Populate live_cells table from RocksDB (indexer)                       |
+| `token_rebuild`               | 7        | Rebuild tokens/token_balances/udt_cells with UDT parsing               |
+| `secondary_issuance_backfill` | 7        | Backfill ALL blocks' secondary issuance data (exact)                   |
+| `activities_rebuild`          | 7        | Rebuild activities table from blocks/transactions                      |
+| `spore_rebuild`               | 6        | Rebuild spore_clusters and spore_cells from cells + RPC (full rebuild) |
+| `mnft_rebuild`                | 6        | Rebuild M-NFT issuers/classes/tokens from cells                        |
+| `dotbit_rebuild`              | 6        | Rebuild DotBit accounts from cells                                     |
+| `statistics_rebuild`          | 5        | Rebuild all 7 aggregate statistics tables (parallel, up to 4)          |
+| `cycles_backfill`             | 0        | Backfill transaction cycles from RPC                                   |
+| `label_import`                | 0        | Import UDT/script labels from token-labels repo                        |
 
 > **Note:** `consumed_at_backfill` has been merged into `cells_status_rebuild`. Existing pending tasks will be redirected automatically.
 
@@ -321,6 +323,8 @@ Tasks that require complete blockchain data are automatically deferred during bu
 | `token_rebuild`               | ❌ No          | Requires all cells with UDT type_script    |
 | `activities_rebuild`          | ❌ No          | Requires all transactions/cells written    |
 | `spore_rebuild`               | ❌ No          | Requires accurate cell status              |
+| `mnft_rebuild`                | ❌ No          | Requires all cells written                 |
+| `dotbit_rebuild`              | ❌ No          | Requires all cells written                 |
 | `statistics_rebuild`          | ❌ No          | Requires complete blockchain data          |
 | `secondary_issuance_backfill` | ❌ No          | Requires all blocks to exist               |
 
@@ -565,6 +569,53 @@ When `token_deferred = TRUE`, token-related API endpoints return empty data:
 # Check status
 psql -c "SELECT token_deferred FROM sync_status;"
 psql -c "SELECT id, task_type, status, progress_current, progress_total FROM tasks WHERE task_type = 'token_rebuild';"
+```
+
+## Deferred Spore Tables Optimization
+
+For fresh database syncs, the indexer can skip writing to `spore_clusters` and `spore_cells` tables to achieve ~10-15% faster bulk sync speeds. Spore data is rebuilt via task-runner after sync completes.
+
+| Parameter               | Default | Description                            |
+| ----------------------- | ------- | -------------------------------------- |
+| `--no-auto-defer-spore` | `false` | Disable auto-optimization for fresh DB |
+
+**What Gets Deferred:**
+
+- All `spore_clusters` table INSERT/UPDATE operations
+- All `spore_cells` table INSERT/UPDATE operations
+- Spore parsing still occurs (for cell data), just writes are skipped
+
+**Behavior:**
+
+| Scenario                     | Auto-defer | Auto-submit rebuild task |
+| ---------------------------- | ---------- | ------------------------ |
+| Fresh DB (tip=0)             | Yes        | Yes                      |
+| Fresh DB + `--no-auto-defer` | No         | No                       |
+| Resume sync, spore exists    | No         | No                       |
+| Resume sync, spore deferred  | No         | Yes                      |
+
+**Spore Rebuild Task:**
+
+When bulk sync completes, the indexer automatically submits a `spore_rebuild` task (priority 6). The task-runner:
+
+1. Truncates `spore_cells`, then `spore_clusters` tables
+2. Scans `cells` table for Spore type_scripts (Spore code hash)
+3. Parses Spore metadata from cell data using molecule codec
+4. Rebuilds `spore_cells`, then aggregates to `spore_clusters`
+5. Updates `sync_status.spore_deferred = FALSE` on completion
+
+**API Fallback:**
+
+When `spore_deferred = TRUE`, Spore-related API endpoints return empty data:
+
+- `GET /api/v1/spores` - Returns empty array
+- `GET /api/v1/spores/{id}` - Returns 404
+- `GET /api/v1/addresses/{addr}/spores` - Returns empty array
+
+```bash
+# Check status
+psql -c "SELECT spore_deferred FROM sync_status;"
+psql -c "SELECT id, task_type, status, progress_current, progress_total FROM tasks WHERE task_type = 'spore_rebuild';"
 ```
 
 ## MNFT/DotBit Bulk Sync Skip
