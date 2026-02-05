@@ -63,13 +63,6 @@ struct Args {
     #[arg(
         long,
         default_value = "false",
-        help = "Drop non-essential indexes during bulk sync for faster writes (auto-rebuilds when caught up)"
-    )]
-    defer_indexes: bool,
-
-    #[arg(
-        long,
-        default_value = "false",
         help = "Disable auto defer-indexes optimization for fresh database sync"
     )]
     no_auto_defer_indexes: bool,
@@ -112,13 +105,6 @@ struct Args {
     #[arg(
         long,
         default_value = "false",
-        help = "Skip activities table writes during bulk sync (auto-rebuilds when caught up)"
-    )]
-    defer_activities: bool,
-
-    #[arg(
-        long,
-        default_value = "false",
         help = "Disable auto defer-activities optimization for fresh database sync"
     )]
     no_auto_defer_activities: bool,
@@ -126,23 +112,9 @@ struct Args {
     #[arg(
         long,
         default_value = "false",
-        help = "Skip address_balances table writes during bulk sync (auto-rebuilds when caught up)"
-    )]
-    defer_address_balances: bool,
-
-    #[arg(
-        long,
-        default_value = "false",
         help = "Disable auto defer-address-balances optimization for fresh database sync"
     )]
     no_auto_defer_address_balances: bool,
-
-    #[arg(
-        long,
-        default_value = "false",
-        help = "Skip token-related table writes during bulk sync (auto-rebuilds when caught up)"
-    )]
-    defer_token: bool,
 
     #[arg(
         long,
@@ -186,15 +158,11 @@ async fn main() -> Result<()> {
         fast_sync_mode: true,
         use_copy_bulk_sync: args.use_copy_bulk_sync,
         copy_pool_size: args.copy_pool_size,
-        defer_indexes: args.defer_indexes,
         index_rebuild_parallel: args.index_rebuild_parallel,
         apply_pg_tuning: args.apply_pg_tuning,
         live_cell_flush_interval: args.live_cell_flush_interval,
         live_cell_db_path: args.live_cell_db_path,
         bulk_sync_cell_cache: !args.no_bulk_sync_cell_cache,
-        defer_activities: args.defer_activities,
-        defer_address_balances: args.defer_address_balances,
-        defer_token: args.defer_token,
     };
 
     info!("Connecting to database: {}", config.database_url);
@@ -238,14 +206,6 @@ async fn main() -> Result<()> {
         );
     } else if is_fresh_sync && args.no_auto_defer_indexes {
         info!("Fresh database detected, but auto-defer disabled via --no-auto-defer-indexes");
-    } else if config.defer_indexes && !indexes_currently_deferred {
-        info!("Defer indexes mode enabled, dropping non-essential indexes/constraints for faster bulk sync");
-        let dropped_indexes = index_manager.drop_deferrable_indexes().await?;
-        let dropped_constraints = index_manager.drop_deferrable_constraints().await?;
-        info!(
-            "Dropped {} indexes and {} constraints",
-            dropped_indexes, dropped_constraints
-        );
     } else if indexes_currently_deferred {
         info!("Indexes/constraints are deferred (from previous run), will auto-rebuild when caught up");
     }
@@ -261,7 +221,7 @@ async fn main() -> Result<()> {
     let should_auto_defer_activities =
         is_fresh_sync && !activities_currently_deferred && !args.no_auto_defer_activities;
 
-    if should_auto_defer_activities || (config.defer_activities && !activities_currently_deferred) {
+    if should_auto_defer_activities {
         info!(
             "Enabling deferred activities for faster bulk sync (will auto-rebuild when caught up)"
         );
@@ -285,9 +245,7 @@ async fn main() -> Result<()> {
         && !address_balances_currently_deferred
         && !args.no_auto_defer_address_balances;
 
-    if should_auto_defer_address_balances
-        || (config.defer_address_balances && !address_balances_currently_deferred)
-    {
+    if should_auto_defer_address_balances {
         info!(
             "Enabling deferred address_balances for faster bulk sync (will auto-rebuild when caught up)"
         );
@@ -311,7 +269,7 @@ async fn main() -> Result<()> {
     let should_auto_defer_token =
         is_fresh_sync && !token_currently_deferred && !args.no_auto_defer_token;
 
-    if should_auto_defer_token || (config.defer_token && !token_currently_deferred) {
+    if should_auto_defer_token {
         info!(
             "Enabling deferred token writes for faster bulk sync (will auto-rebuild when caught up)"
         );

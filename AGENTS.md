@@ -212,9 +212,10 @@ For fresh database syncs, the indexer automatically drops non-essential B-tree i
 
 | Parameter                  | Default | Description                                                         |
 | -------------------------- | ------- | ------------------------------------------------------------------- |
-| `--defer-indexes`          | `false` | Force enable deferred indexes/constraints (non-fresh)               |
 | `--no-auto-defer-indexes`  | `false` | Disable auto-optimization for fresh DB                              |
 | `--index-rebuild-parallel` | `10`    | Parallel connections per partitioned table (capped at 4 internally) |
+
+**Note:** Deferred states are stored in `sync_status` table in the database, not in command line arguments. The indexer reads these flags from the database on startup.
 
 **Index Rebuild Lock Contention Handling:**
 
@@ -255,7 +256,6 @@ These constraints are redundant during bulk sync because CKB node validates:
 | Fresh DB + `--no-auto-defer`  | No                            | No                       |
 | Resume sync, indexes exist    | No                            | No                       |
 | Resume sync, indexes deferred | No                            | Yes                      |
-| Any DB + `--defer-indexes`    | Yes                           | Yes                      |
 
 **Task-Based Rebuild Flow:**
 
@@ -404,10 +404,9 @@ This reduces query time from ~15s to <1s for 700+ tokens.
 
 For fresh database syncs, the indexer can skip writing to the `activities` table to achieve ~10-20% faster bulk sync speeds. Activities are rebuilt via task-runner after sync completes.
 
-| Parameter                    | Default | Description                                  |
-| ---------------------------- | ------- | -------------------------------------------- |
-| `--defer-activities`         | `false` | Force enable deferred activities (non-fresh) |
-| `--no-auto-defer-activities` | `false` | Disable auto-optimization for fresh DB       |
+| Parameter                    | Default | Description                            |
+| ---------------------------- | ------- | -------------------------------------- |
+| `--no-auto-defer-activities` | `false` | Disable auto-optimization for fresh DB |
 
 **What Gets Deferred:**
 
@@ -422,7 +421,6 @@ For fresh database syncs, the indexer can skip writing to the `activities` table
 | Fresh DB + `--no-auto-defer`     | No                    | No                       |
 | Resume sync, activities exist    | No                    | No                       |
 | Resume sync, activities deferred | No                    | Yes                      |
-| Any DB + `--defer-activities`    | Yes                   | Yes                      |
 
 **Activities Rebuild Task:**
 
@@ -435,7 +433,7 @@ When bulk sync completes, the indexer automatically submits an `activities_rebui
 
 **Limitations:**
 
-The current SQL-based rebuild only handles basic activity types. Token transfers, DAO operations, and Spore activities require the full Rust ActivityParser and are not rebuilt. For complete activity coverage, avoid using `--defer-activities` or be prepared to re-sync if full activity history is needed.
+The current SQL-based rebuild only handles basic activity types. Token transfers, DAO operations, and Spore activities require the full Rust ActivityParser and are not rebuilt. For complete activity coverage, use `--no-auto-defer-activities` on fresh DB or be prepared to re-sync if full activity history is needed.
 
 **Progress Monitoring:**
 
@@ -481,10 +479,9 @@ cargo run -p ckbadger-task-tui
 
 For fresh database syncs, the indexer can skip updating the `address_balances` table to achieve ~20-30% faster bulk sync speeds. Address balances are rebuilt via task-runner after sync completes.
 
-| Parameter                          | Default | Description                                        |
-| ---------------------------------- | ------- | -------------------------------------------------- |
-| `--defer-address-balances`         | `false` | Force enable deferred address balances (non-fresh) |
-| `--no-auto-defer-address-balances` | `false` | Disable auto-optimization for fresh DB             |
+| Parameter                          | Default | Description                            |
+| ---------------------------------- | ------- | -------------------------------------- |
+| `--no-auto-defer-address-balances` | `false` | Disable auto-optimization for fresh DB |
 
 **What Gets Deferred:**
 
@@ -499,7 +496,6 @@ For fresh database syncs, the indexer can skip updating the `address_balances` t
 | Fresh DB + `--no-auto-defer`           | No         | No                       |
 | Resume sync, address_balances exist    | No         | No                       |
 | Resume sync, address_balances deferred | No         | Yes                      |
-| Any DB + `--defer-address-balances`    | Yes        | Yes                      |
 
 **Address Balances Rebuild Task:**
 
@@ -527,10 +523,9 @@ psql -c "SELECT id, task_type, status, progress_current FROM tasks WHERE task_ty
 
 For fresh database syncs, the indexer can skip writing to `tokens`, `token_balances`, and `udt_cells` tables to achieve ~10-20% faster bulk sync speeds. Token data is rebuilt via task-runner after sync completes.
 
-| Parameter               | Default | Description                              |
-| ----------------------- | ------- | ---------------------------------------- |
-| `--defer-token`         | `false` | Force enable deferred tokens (non-fresh) |
-| `--no-auto-defer-token` | `false` | Disable auto-optimization for fresh DB   |
+| Parameter               | Default | Description                            |
+| ----------------------- | ------- | -------------------------------------- |
+| `--no-auto-defer-token` | `false` | Disable auto-optimization for fresh DB |
 
 **What Gets Deferred:**
 
@@ -547,7 +542,6 @@ For fresh database syncs, the indexer can skip writing to `tokens`, `token_balan
 | Fresh DB + `--no-auto-defer` | No         | No                       |
 | Resume sync, tokens exist    | No         | No                       |
 | Resume sync, tokens deferred | No         | Yes                      |
-| Any DB + `--defer-token`     | Yes        | Yes                      |
 
 **Token Rebuild Task:**
 

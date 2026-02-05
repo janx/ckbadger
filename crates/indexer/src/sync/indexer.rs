@@ -334,6 +334,10 @@ pub struct Indexer {
     /// Flag to notify fetcher that a reorg/mismatch occurred and it should reset next_block
     reorg_notify_flag: Arc<std::sync::atomic::AtomicBool>,
     rocksdb_store: Arc<crate::db::RocksDbLiveCellStore>,
+    /// Deferred state flags (loaded from database sync_status table)
+    activities_deferred: std::sync::atomic::AtomicBool,
+    address_balances_deferred: std::sync::atomic::AtomicBool,
+    token_deferred: std::sync::atomic::AtomicBool,
 }
 
 impl Indexer {
@@ -392,6 +396,35 @@ impl Indexer {
         let was_bulk = progress.blocks_remaining() > config.bulk_sync_threshold;
         let was_secondary_bulk =
             progress.blocks_remaining() > SECONDARY_ISSUANCE_BACKFILL_THRESHOLD;
+
+        let activities_deferred: bool = sqlx::query_scalar(
+            "SELECT COALESCE(activities_deferred, false) FROM sync_status WHERE id = 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap_or(false);
+
+        let address_balances_deferred: bool = sqlx::query_scalar(
+            "SELECT COALESCE(address_balances_deferred, false) FROM sync_status WHERE id = 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap_or(false);
+
+        let token_deferred: bool = sqlx::query_scalar(
+            "SELECT COALESCE(token_deferred, false) FROM sync_status WHERE id = 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap_or(false);
+
+        if activities_deferred || address_balances_deferred || token_deferred {
+            info!(
+                "Loaded deferred states from database: activities={}, address_balances={}, token={}",
+                activities_deferred, address_balances_deferred, token_deferred
+            );
+        }
+
         Ok(Self {
             config,
             rpc,
@@ -411,6 +444,11 @@ impl Indexer {
             rebuild_pause_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             reorg_notify_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             rocksdb_store,
+            activities_deferred: std::sync::atomic::AtomicBool::new(activities_deferred),
+            address_balances_deferred: std::sync::atomic::AtomicBool::new(
+                address_balances_deferred,
+            ),
+            token_deferred: std::sync::atomic::AtomicBool::new(token_deferred),
         })
     }
 
@@ -2567,7 +2605,11 @@ impl Indexer {
             return Ok(());
         }
 
-        if self.config.defer_activities && bulk_sync_mode {
+        if self
+            .activities_deferred
+            .load(std::sync::atomic::Ordering::Relaxed)
+            && bulk_sync_mode
+        {
             return Ok(());
         }
 
@@ -3055,7 +3097,10 @@ impl Indexer {
             }
         }
 
-        let skip_address_balances = self.config.defer_address_balances && bulk_sync_mode;
+        let skip_address_balances = self
+            .address_balances_deferred
+            .load(std::sync::atomic::Ordering::Relaxed)
+            && bulk_sync_mode;
         tokio::try_join!(
             async {
                 if !skip_address_balances && !changes_ref.is_empty() {
@@ -3340,7 +3385,10 @@ impl Indexer {
             }
         }
 
-        let skip_token = self.config.defer_token && bulk_sync_mode;
+        let skip_token = self
+            .token_deferred
+            .load(std::sync::atomic::Ordering::Relaxed)
+            && bulk_sync_mode;
 
         struct UdtTxContext {
             tx_hash: Vec<u8>,
@@ -4189,7 +4237,10 @@ impl Indexer {
             }
         }
 
-        let skip_address_balances = self.config.defer_address_balances && bulk_sync_mode;
+        let skip_address_balances = self
+            .address_balances_deferred
+            .load(std::sync::atomic::Ordering::Relaxed)
+            && bulk_sync_mode;
         tokio::try_join!(
             async {
                 if !skip_address_balances && !changes_ref.is_empty() {
@@ -4547,7 +4598,10 @@ impl Indexer {
                     .await?;
             }
         }
-        let skip_token = self.config.defer_token && bulk_sync_mode;
+        let skip_token = self
+            .token_deferred
+            .load(std::sync::atomic::Ordering::Relaxed)
+            && bulk_sync_mode;
 
         struct UdtTxContext {
             tx_hash: Vec<u8>,
@@ -5329,7 +5383,10 @@ impl Indexer {
             }
         }
 
-        let skip_address_balances = self.config.defer_address_balances && bulk_sync_mode;
+        let skip_address_balances = self
+            .address_balances_deferred
+            .load(std::sync::atomic::Ordering::Relaxed)
+            && bulk_sync_mode;
         if !skip_address_balances && !address_balance_changes.is_empty() {
             self.writer
                 .update_address_balances_batch(&address_balance_changes)

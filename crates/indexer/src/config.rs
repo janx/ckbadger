@@ -34,9 +34,6 @@ pub struct Config {
     /// Number of connections in the COPY connection pool
     #[serde(default = "default_copy_pool_size")]
     pub copy_pool_size: usize,
-    /// Drop non-essential indexes during bulk sync for faster writes
-    #[serde(default)]
-    pub defer_indexes: bool,
     /// Max parallel connections for index rebuild task
     #[serde(default = "default_index_rebuild_parallel")]
     pub index_rebuild_parallel: usize,
@@ -53,18 +50,6 @@ pub struct Config {
     /// Requires ~15GB extra memory for full sync. Disable on low-memory machines (<32GB RAM).
     #[serde(default = "default_bulk_sync_cell_cache")]
     pub bulk_sync_cell_cache: bool,
-    /// Skip activities table writes during bulk sync for faster initial sync.
-    /// Activities will be rebuilt via task-runner after sync completes.
-    #[serde(default)]
-    pub defer_activities: bool,
-    /// Skip address_balances table writes during bulk sync for faster initial sync.
-    /// Address balances will be rebuilt via task-runner after sync completes.
-    #[serde(default)]
-    pub defer_address_balances: bool,
-    /// Skip token-related table writes (tokens, token_balances, udt_cells) during bulk sync.
-    /// Token data will be rebuilt via task-runner after sync completes.
-    #[serde(default)]
-    pub defer_token: bool,
 }
 
 fn default_batch_size() -> usize {
