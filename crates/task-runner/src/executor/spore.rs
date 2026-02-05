@@ -194,7 +194,10 @@ mod tests {
 
     #[test]
     fn test_custom_batch_size() {
-        let config = SporeRebuildConfig { batch_size: 5_000 };
+        let config = SporeRebuildConfig {
+            batch_size: 5_000,
+            ..Default::default()
+        };
         assert_eq!(config.batch_size, 5_000);
     }
 

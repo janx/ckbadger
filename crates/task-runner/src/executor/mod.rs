@@ -1,8 +1,9 @@
 use anyhow::Result;
 use ckbadger_common::{
     ActivitiesRebuildConfig, AddressBalancesRebuildConfig, CellsStatusRebuildConfig,
-    CyclesBackfillConfig, IndexRebuildConfig, LabelImportConfig, SecondaryIssuanceBackfillConfig,
-    SporeRebuildConfig, StatisticsRebuildConfig, Task, TaskConfig, TaskType, TokenRebuildConfig,
+    CyclesBackfillConfig, IndexRebuildConfig, LabelImportConfig,
+    MnftRebuildConfig, SecondaryIssuanceBackfillConfig, SporeRebuildConfig,
+    StatisticsRebuildConfig, Task, TaskConfig, TaskType, TokenRebuildConfig,
 };
 use sqlx::PgPool;
 use std::time::Duration;
@@ -19,6 +20,7 @@ mod labels;
 mod secondary_issuance;
 mod spore;
 pub mod statistics;
+mod mnft;
 mod token;
 
 pub struct TaskExecutor {
@@ -155,6 +157,10 @@ impl TaskExecutor {
             TaskType::ActivitiesRebuild => self.execute_activities_rebuild(task).await,
             TaskType::AddressBalancesRebuild => self.execute_address_balances_rebuild(task).await,
             TaskType::TokenRebuild => self.execute_token_rebuild(task).await,
+            TaskType::MnftRebuild => self.execute_mnft_rebuild(task).await,
+            TaskType::DotbitRebuild => {
+                Err(anyhow::anyhow!("DotbitRebuild executor not yet implemented"))
+            }
         }
     }
 
@@ -263,5 +269,14 @@ impl TaskExecutor {
         };
 
         token::execute(&self.db, &self.pool, task.id, &config).await
+    }
+
+    async fn execute_mnft_rebuild(&self, task: &Task) -> Result<()> {
+        let config: MnftRebuildConfig = match task.config_typed() {
+            Some(TaskConfig::MnftRebuild(c)) => c,
+            _ => MnftRebuildConfig::default(),
+        };
+
+        mnft::execute(&self.db, &self.pool, task.id, &config).await
     }
 }
