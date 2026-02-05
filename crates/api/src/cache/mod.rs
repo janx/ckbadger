@@ -101,6 +101,9 @@ impl CacheBackend {
             token_deferred: false,
             token_deferred_at: None,
             token_rebuild_completed_at: None,
+            spore_deferred: false,
+            spore_deferred_at: None,
+            spore_rebuild_completed_at: None,
         }
     }
 

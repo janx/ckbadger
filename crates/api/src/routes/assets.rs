@@ -102,6 +102,7 @@ async fn list_assets(
         cursor_id,
         &cursor_type,
         limit,
+        sync_status.spore_deferred,
     )
     .await?;
 
@@ -183,6 +184,7 @@ async fn fetch_assets(
     cursor_id: i64,
     _cursor_type: &str,
     limit: i64,
+    spore_deferred: bool,
 ) -> Result<(i64, Vec<AssetRow>), (StatusCode, Json<ApiError>)> {
     let token_count: (i64,) = match (filter_type, search_pattern) {
         (Some("nft") | Some("dob"), _) => (0,),
@@ -199,19 +201,23 @@ async fn fetch_assets(
             .map_err(|e| ApiError::internal(e.to_string()))?,
     };
 
-    let dob_count: (i64,) = match (filter_type, search_pattern) {
-        (Some("token") | Some("nft"), _) => (0,),
-        (_, Some(pattern)) => {
-            sqlx::query_as(r#"SELECT COUNT(*) FROM spore_clusters WHERE LOWER(name) LIKE $1"#)
-                .bind(pattern)
+    let dob_count: (i64,) = if spore_deferred {
+        (0,)
+    } else {
+        match (filter_type, search_pattern) {
+            (Some("token") | Some("nft"), _) => (0,),
+            (_, Some(pattern)) => {
+                sqlx::query_as(r#"SELECT COUNT(*) FROM spore_clusters WHERE LOWER(name) LIKE $1"#)
+                    .bind(pattern)
+                    .fetch_one(&state.pool)
+                    .await
+                    .map_err(|e| ApiError::internal(e.to_string()))?
+            }
+            _ => sqlx::query_as("SELECT COUNT(*) FROM spore_clusters")
                 .fetch_one(&state.pool)
                 .await
-                .map_err(|e| ApiError::internal(e.to_string()))?
+                .map_err(|e| ApiError::internal(e.to_string()))?,
         }
-        _ => sqlx::query_as("SELECT COUNT(*) FROM spore_clusters")
-            .fetch_one(&state.pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?,
     };
 
     let nft_count: (i64,) = match (filter_type, search_pattern) {
@@ -304,7 +310,7 @@ async fn fetch_assets(
         i64,
     );
 
-    let clusters: Vec<ClusterRow> = if matches!(filter_type, Some("token") | Some("nft")) {
+    let clusters: Vec<ClusterRow> = if spore_deferred || matches!(filter_type, Some("token") | Some("nft")) {
         vec![]
     } else if let Some(pattern) = search_pattern {
         let query_str = r#"

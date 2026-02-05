@@ -65,6 +65,17 @@ async fn list_clusters(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<ClusterResponse>> {
+    let sync_status = state.cache.get_sync_status(&state.pool).await;
+
+    if sync_status.spore_deferred {
+        return ok(CursorPaginatedResponse::new(
+            Vec::new(),
+            0,
+            params.limit.clamp(1, 100),
+            None,
+        ));
+    }
+
     let limit = params.limit.clamp(1, 100);
     let cursor_block = params.cursor.unwrap_or(i64::MAX);
 
@@ -161,6 +172,17 @@ async fn get_spores_by_cluster(
     Path(cluster_id): Path<String>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<SporeResponse>> {
+    let sync_status = state.cache.get_sync_status(&state.pool).await;
+
+    if sync_status.spore_deferred {
+        return ok(CursorPaginatedResponse::new(
+            Vec::new(),
+            0,
+            params.limit.clamp(1, 100),
+            None,
+        ));
+    }
+
     type SporeRow = (
         Vec<u8>,
         Vec<u8>,
@@ -269,6 +291,14 @@ async fn get_cluster(
     State(state): State<Arc<AppState>>,
     Path(cluster_id): Path<String>,
 ) -> ApiResult<ClusterResponse> {
+    let sync_status = state.cache.get_sync_status(&state.pool).await;
+
+    if sync_status.spore_deferred {
+        return Err(ApiError::not_found(
+            "Cluster data not yet available (rebuilding)",
+        ));
+    }
+
     type ClusterRow = (
         Vec<u8>,
         Option<String>,
@@ -335,6 +365,17 @@ async fn list_spores(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<SporeResponse>> {
+    let sync_status = state.cache.get_sync_status(&state.pool).await;
+
+    if sync_status.spore_deferred {
+        return ok(CursorPaginatedResponse::new(
+            Vec::new(),
+            0,
+            params.limit.clamp(1, 100),
+            None,
+        ));
+    }
+
     let limit = params.limit.clamp(1, 100);
     let cursor_block = params.cursor.unwrap_or(i64::MAX);
 
@@ -437,6 +478,14 @@ async fn get_spore(
     State(state): State<Arc<AppState>>,
     Path(spore_id): Path<String>,
 ) -> ApiResult<SporeResponse> {
+    let sync_status = state.cache.get_sync_status(&state.pool).await;
+
+    if sync_status.spore_deferred {
+        return Err(ApiError::not_found(
+            "Spore data not yet available (rebuilding)",
+        ));
+    }
+
     type SporeRow = (
         Vec<u8>,
         Vec<u8>,
@@ -512,6 +561,17 @@ async fn get_spores_by_owner(
     Path(lock_hash): Path<String>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<SporeResponse>> {
+    let sync_status = state.cache.get_sync_status(&state.pool).await;
+
+    if sync_status.spore_deferred {
+        return ok(CursorPaginatedResponse::new(
+            Vec::new(),
+            0,
+            params.limit.clamp(1, 100),
+            None,
+        ));
+    }
+
     type SporeRow = (
         Vec<u8>,
         Vec<u8>,

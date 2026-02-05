@@ -47,6 +47,11 @@ pub struct SyncStatusData {
     pub token_deferred: bool,
     pub token_deferred_at: Option<i64>,
     pub token_rebuild_completed_at: Option<i64>,
+
+    #[serde(default)]
+    pub spore_deferred: bool,
+    pub spore_deferred_at: Option<i64>,
+    pub spore_rebuild_completed_at: Option<i64>,
 }
 
 impl SyncStatusData {
@@ -289,6 +294,9 @@ mod tests {
             token_deferred: false,
             token_deferred_at: None,
             token_rebuild_completed_at: None,
+            spore_deferred: false,
+            spore_deferred_at: None,
+            spore_rebuild_completed_at: None,
         };
 
         let json = serde_json::to_string(&status).unwrap();
