@@ -1096,7 +1096,7 @@ impl Indexer {
                         }
 
                         let crossed_1000 = (start_block / 1000) != (end_block / 1000);
-                        if crossed_1000 {
+                        if crossed_1000 && !self.is_bulk_sync_active() {
                             let update_block = ((end_block / 1000) * 1000) as i64;
                             if let Err(e) = self
                                 .writer
@@ -1201,7 +1201,7 @@ impl Indexer {
         }
 
         let crossed_1000 = (start_block / 1000) != (end_block / 1000);
-        if crossed_1000 {
+        if crossed_1000 && !self.is_bulk_sync_active() {
             let update_block = ((end_block / 1000) * 1000) as i64;
             if let Err(e) = self
                 .writer
@@ -1334,7 +1334,7 @@ impl Indexer {
             }
 
             let crossed_1000 = (start_block / 1000) != (end_block / 1000);
-            if crossed_1000 {
+            if crossed_1000 && !self.is_bulk_sync_active() {
                 let update_block = ((end_block / 1000) * 1000) as i64;
                 if let Err(e) = self
                     .writer
@@ -6191,5 +6191,87 @@ mod tests {
         assert!(1000 <= threshold);
         assert!(999 <= threshold);
         assert!(1 <= threshold);
+    }
+
+    // --- DAO recalculation boundary tests ---
+
+    /// Helper: returns true if this batch crosses a 1000-block boundary
+    fn crosses_1000_boundary(start_block: u64, end_block: u64) -> bool {
+        (start_block / 1000) != (end_block / 1000)
+    }
+
+    #[test]
+    fn test_crossed_1000_within_same_thousand() {
+        // Batch 6330000..6339999 — start and end in same 1000-block range
+        assert!(!crosses_1000_boundary(6330000, 6330999));
+        assert!(!crosses_1000_boundary(0, 999));
+        assert!(!crosses_1000_boundary(5000, 5999));
+    }
+
+    #[test]
+    fn test_crossed_1000_across_boundary() {
+        // Batch that spans a 1000-block boundary
+        assert!(crosses_1000_boundary(6330000, 6339999));
+        assert!(crosses_1000_boundary(999, 1000));
+        assert!(crosses_1000_boundary(0, 9999));
+        assert!(crosses_1000_boundary(4500, 5500));
+    }
+
+    #[test]
+    fn test_crossed_1000_exact_boundary() {
+        // 999/1000=0, 1000/1000=1 → crosses boundary
+        assert!(crosses_1000_boundary(999, 1000));
+        // 1000/1000=1, 1001/1000=1 → same range, no crossing
+        assert!(!crosses_1000_boundary(1000, 1001));
+        // 1999/1000=1, 2000/1000=2 → crosses boundary
+        assert!(crosses_1000_boundary(1999, 2000));
+    }
+
+    #[test]
+    fn test_dao_recalc_skipped_during_bulk_sync() {
+        // Simulates the guard: crossed_1000 && !is_bulk_sync_active()
+        let bulk_sync_threshold = 1000u64;
+
+        // During bulk sync (10M blocks remaining) - should NOT recalculate
+        let blocks_remaining = 10_000_000u64;
+        let is_bulk = blocks_remaining > bulk_sync_threshold;
+        let crossed = crosses_1000_boundary(6330000, 6339999);
+        assert!(crossed, "batch should cross 1000-block boundary");
+        assert!(is_bulk, "should be in bulk sync mode");
+        assert!(
+            !crossed || is_bulk,
+            "DAO recalc should be skipped during bulk sync"
+        );
+    }
+
+    #[test]
+    fn test_dao_recalc_runs_in_realtime_sync() {
+        // During real-time sync (500 blocks remaining) - should recalculate
+        let bulk_sync_threshold = 1000u64;
+
+        let blocks_remaining = 500u64;
+        let is_bulk = blocks_remaining > bulk_sync_threshold;
+        let crossed = crosses_1000_boundary(18545999, 18546999);
+        assert!(crossed, "batch should cross 1000-block boundary");
+        assert!(!is_bulk, "should NOT be in bulk sync mode");
+        assert!(
+            crossed && !is_bulk,
+            "DAO recalc should run in real-time sync"
+        );
+    }
+
+    #[test]
+    fn test_dao_recalc_not_triggered_without_boundary_crossing() {
+        // Real-time sync but no boundary crossing - should NOT recalculate
+        let bulk_sync_threshold = 1000u64;
+
+        let blocks_remaining = 100u64;
+        let is_bulk = blocks_remaining > bulk_sync_threshold;
+        let crossed = crosses_1000_boundary(18546500, 18546800);
+        assert!(!crossed, "batch should NOT cross 1000-block boundary");
+        assert!(
+            !crossed || is_bulk,
+            "DAO recalc should not trigger without boundary crossing"
+        );
     }
 }

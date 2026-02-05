@@ -231,11 +231,13 @@ Using current deposits (`WHERE status = 0`) will produce incorrect historical va
 
 ## 5. Update Triggers
 
-| Statistic                    | Trigger            | Function                                |
-| ---------------------------- | ------------------ | --------------------------------------- |
-| Secondary issuance breakdown | Every 50 blocks    | `update_secondary_issuance()`           |
-| APC, unclaimed compensation  | Every 1,000 blocks | `recalculate_dao_extended_statistics()` |
-| Daily snapshots              | Daily              | `update_dao_daily_snapshot()`           |
+| Statistic                    | Trigger                       | Function                                |
+| ---------------------------- | ----------------------------- | --------------------------------------- |
+| Secondary issuance breakdown | Every 50 blocks               | `update_secondary_issuance()`           |
+| APC, unclaimed compensation  | Every 1,000 blocks (non-bulk) | `recalculate_dao_extended_statistics()` |
+| Daily snapshots              | Daily                         | `update_dao_daily_snapshot()`           |
+
+> **Note:** `recalculate_dao_extended_statistics()` is skipped during bulk sync (`is_bulk_sync_active()` guard) because the full-table scan of active deposits causes connection pool contention and 2x write time spikes. The first recalculation after bulk sync completion produces correct results from all historical data.
 
 ## 6. Charts Data
 

@@ -19,16 +19,18 @@ The `docker/postgres/postgresql.conf` is pre-optimized for write-heavy blockchai
 
 **WAL & Checkpoint Settings (Critical for Bulk Sync):**
 
-| Parameter                      | Value | Purpose                                      |
-| ------------------------------ | ----- | -------------------------------------------- |
-| `synchronous_commit`           | off   | 2-3x write speed (safe for re-syncable data) |
-| `commit_delay`                 | 10000 | Batch commits in 10ms window                 |
-| `max_wal_size`                 | 64GB  | Reduce WAL-triggered checkpoint frequency    |
-| `min_wal_size`                 | 8GB   | Keep more WAL segments cached                |
-| `checkpoint_timeout`           | 60min | Reduce time-triggered checkpoint frequency   |
-| `checkpoint_completion_target` | 0.9   | Spread checkpoint I/O over time              |
+| Parameter                      | Value | Purpose                                               |
+| ------------------------------ | ----- | ----------------------------------------------------- |
+| `synchronous_commit`           | off   | 2-3x write speed (safe for re-syncable data)          |
+| `commit_delay`                 | 10000 | Batch commits in 10ms window                          |
+| `wal_compression`              | lz4   | Reduce WAL volume by 30-50% for COPY workloads        |
+| `full_page_writes`             | off   | Eliminate 8KB page images (data is re-syncable)       |
+| `max_wal_size`                 | 8GB   | Trigger checkpoint every ~8GB of WAL                  |
+| `min_wal_size`                 | 4GB   | Keep WAL segments cached                              |
+| `checkpoint_timeout`           | 15min | Frequent small checkpoints prevent dirty page buildup |
+| `checkpoint_completion_target` | 0.9   | Spread checkpoint I/O over time                       |
 
-> **Note:** Checkpoint optimization is critical for sustained write performance. During bulk sync, PostgreSQL can write 17+ GB of WAL between checkpoints. If checkpoints occur too frequently, they cause 15-20 second write stalls.
+> **Note:** With `wal_compression=lz4` + `full_page_writes=off`, WAL volume is ~3-4x smaller than default. This allows frequent small checkpoints (15min/8GB) without causing stalls. The key tradeoff: too-infrequent checkpoints cause dirty page accumulation in shared_buffers, forcing backends to evict dirty pages themselves (backend writes in `pg_stat_bgwriter`), which causes periodic 2x write time spikes.
 
 ### 2. Indexer Parameters
 
@@ -192,28 +194,42 @@ For extreme scale (100M+ blocks), consider:
 3. Check for lock contention: `SELECT * FROM pg_stat_activity WHERE wait_event IS NOT NULL;`
 4. Increase `batch_size` if DB time is low
 
-### Periodic DB Write Spikes (15-25 seconds)
+### Periodic DB Write Spikes (2x normal)
 
-**Symptom:** `PERF` logs show DB time jumping from ~3s to 15-25s periodically.
+**Symptom:** `PERF` logs show DB time jumping from ~3s to 7-9s every 2-3 batches.
 
-**Cause:** PostgreSQL checkpoint in progress.
+**Cause 1: Backend dirty page eviction.** When `checkpoint_timeout` or `max_wal_size` is too large, dirty pages accumulate in shared_buffers. Backends are forced to evict dirty pages to disk before reading new ones.
 
 **Diagnosis:**
 
 ```bash
-# Check if checkpoint correlates with slow PERF
-docker logs ckbadger-indexer 2>&1 | grep -E "PERF|slow statement" | tail -20
-docker exec ckbadger-postgres grep "checkpoint" \
-  /var/lib/postgresql/data/log/postgresql-$(date +%Y-%m-%d).log | tail -5
+# Check backend writes vs checkpoint writes
+docker exec ckbadger-postgres psql -U ckbadger -d ckbadger -c \
+  "SELECT pg_size_pretty(buffers_checkpoint * 8192::bigint) as ckpt_written,
+          pg_size_pretty(buffers_clean * 8192::bigint) as bgwriter_written,
+          pg_size_pretty(buffers_backend * 8192::bigint) as backend_written,
+          checkpoints_timed, checkpoints_req
+   FROM pg_stat_bgwriter;"
 ```
 
-**Solution:** Increase checkpoint interval:
+If `backend_written` is large (GBs), checkpoints are too infrequent.
+
+**Solution:** Reduce checkpoint interval (with `wal_compression=lz4` + `full_page_writes=off`, small checkpoints are fast):
 
 ```sql
 -- Apply without restart
-ALTER SYSTEM SET checkpoint_timeout = '60min';
-ALTER SYSTEM SET max_wal_size = '64GB';
+ALTER SYSTEM SET checkpoint_timeout = '15min';
+ALTER SYSTEM SET max_wal_size = '8GB';
 SELECT pg_reload_conf();
+```
+
+**Cause 2: DAO statistics recalculation.** `recalculate_dao_extended_statistics()` runs every 1,000 blocks and scans all active deposits. During bulk sync this is skipped automatically, but if the `is_bulk_sync_active()` guard is missing, it causes connection pool contention.
+
+**Diagnosis:**
+
+```bash
+# Look for slow DAO queries and pool acquire warnings
+docker logs ckbadger-indexer 2>&1 | grep -E "slow statement.*dao|pool::acquire" | tail -10
 ```
 
 Or update `docker/postgres/postgresql.conf` for persistence.

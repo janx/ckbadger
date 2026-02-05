@@ -641,6 +641,28 @@ During bulk sync, MNFT and DotBit table writes are skipped entirely to avoid slo
 
 **Note:** Unlike activities/tokens/address_balances, there is no deferred flag or automatic rebuild task for MNFT/DotBit. Historical MNFT/DotBit data from before bulk sync completion will be missing. New data arriving after the indexer reaches real-time sync will be written normally.
 
+## DAO Statistics Recalculation Bulk Sync Skip
+
+During bulk sync, `recalculate_dao_extended_statistics()` is skipped entirely. This function normally runs every 1,000 blocks and scans ALL active DAO deposits (20,000+) with a JOIN to the blocks table to calculate unclaimed compensation, APC, and other DAO statistics.
+
+**Why skipped during bulk sync:**
+
+- The full-table scan takes 3-5 seconds when data is cold (evicted from shared_buffers by COPY writes)
+- Holding a connection for 5s causes pool contention, stalling subsequent COPY batches
+- Results in periodic 2x write time spikes (3s → 7-8s per batch)
+- Nobody reads DAO statistics during bulk sync
+
+**Behavior:**
+
+| Scenario                 | DAO recalculation  | DAO deposit/withdrawal writes |
+| ------------------------ | ------------------ | ----------------------------- |
+| Bulk sync (>1000 blocks) | Skipped            | Active (always written)       |
+| Real-time sync (≤1000)   | Every 1,000 blocks | Active                        |
+
+**Important:** Only the `recalculate_dao_extended_statistics()` call is skipped. DAO deposit and withdrawal INSERT/UPDATE operations continue normally during bulk sync — the data is always written, just the aggregate statistics recalculation is deferred.
+
+When the indexer transitions from bulk sync to real-time sync, the next 1,000-block boundary will trigger the first recalculation with all historical data, producing correct results.
+
 ## Live Cell Store
 
 The LiveCellStore provides O(1) cell lookups during blockchain synchronization using RocksDB for persistent storage. This enables instant restart without rebuilding from database.
