@@ -1,79 +1,82 @@
 use ckbadger_task_runner::db::TaskDb;
+use ckbadger_task_runner::executor::TaskExecutor;
 use ckbadger_task_runner::MIGRATOR;
 use sqlx::PgPool;
 
-async fn setup_sync_status(
-    pool: &PgPool,
-    indexes_deferred: bool,
-    address_balances_deferred: bool,
-    token_deferred: bool,
-) {
+async fn insert_block_with_timestamp(pool: &PgPool, number: i64, hours_ago: f64) {
+    let hash = vec![0u8; 32];
+    let nonce = vec![0u8; 16];
     sqlx::query(
         r#"
-        UPDATE sync_status 
-        SET indexes_deferred = $1,
-            address_balances_deferred = $2,
-            token_deferred = $3
-        WHERE id = 1
+        INSERT INTO blocks (number, hash, parent_hash, timestamp, version, compact_target,
+                           transactions_count, proposals_count, uncles_count, epoch_number,
+                           epoch_index, epoch_length, dao, nonce, extra_hash,
+                           proposals_hash, transactions_root, uncles_hash,
+                           total_difficulty, miner_lock_hash)
+        VALUES ($1, $2, $3, NOW() - ($4 || ' hours')::INTERVAL, 0, 0, 1, 0, 0, $1, 0, 1000,
+                $5, $6, $7, $8, $9, $10, 0, $11)
         "#,
     )
-    .bind(indexes_deferred)
-    .bind(address_balances_deferred)
-    .bind(token_deferred)
+    .bind(number)
+    .bind(&hash)
+    .bind(&hash)
+    .bind(hours_ago.to_string())
+    .bind(&hash) // dao
+    .bind(&nonce) // nonce
+    .bind(&hash) // extra_hash
+    .bind(&hash) // proposals_hash
+    .bind(&hash) // transactions_root
+    .bind(&hash) // uncles_hash
+    .bind(&hash) // miner_lock_hash
     .execute(pool)
     .await
     .unwrap();
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
-async fn test_is_bulk_sync_active_when_indexes_deferred(pool: PgPool) {
-    setup_sync_status(&pool, true, false, false).await;
+async fn test_is_bulk_sync_active_no_blocks(pool: PgPool) {
+    let db = TaskDb::new(pool);
+    let is_bulk = db.is_bulk_sync_active().await.unwrap();
+
+    assert!(is_bulk, "Should be in bulk sync when no blocks exist");
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn test_is_bulk_sync_active_old_blocks(pool: PgPool) {
+    insert_block_with_timestamp(&pool, 100, 2.0).await;
 
     let db = TaskDb::new(pool);
     let is_bulk = db.is_bulk_sync_active().await.unwrap();
 
     assert!(
         is_bulk,
-        "Should be in bulk sync when indexes_deferred is true"
+        "Should be in bulk sync when latest block is 2 hours old"
     );
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
-async fn test_is_bulk_sync_active_when_all_flags_false(pool: PgPool) {
-    setup_sync_status(&pool, false, false, false).await;
+async fn test_is_bulk_sync_active_recent_blocks(pool: PgPool) {
+    insert_block_with_timestamp(&pool, 18000000, 0.1).await;
 
     let db = TaskDb::new(pool);
     let is_bulk = db.is_bulk_sync_active().await.unwrap();
 
     assert!(
         !is_bulk,
-        "Should not be in bulk sync when all deferred flags are false"
+        "Should not be in bulk sync when latest block is 6 minutes old"
     );
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
-async fn test_is_bulk_sync_active_when_address_balances_deferred(pool: PgPool) {
-    setup_sync_status(&pool, false, true, false).await;
+async fn test_is_bulk_sync_active_boundary(pool: PgPool) {
+    insert_block_with_timestamp(&pool, 18000000, 0.5).await;
 
     let db = TaskDb::new(pool);
     let is_bulk = db.is_bulk_sync_active().await.unwrap();
 
     assert!(
-        is_bulk,
-        "Should be in bulk sync when address_balances_deferred is true"
-    );
-}
-
-#[sqlx::test(migrator = "MIGRATOR")]
-async fn test_is_bulk_sync_active_when_token_deferred(pool: PgPool) {
-    setup_sync_status(&pool, false, false, true).await;
-
-    let db = TaskDb::new(pool);
-    let is_bulk = db.is_bulk_sync_active().await.unwrap();
-
-    assert!(
-        is_bulk,
-        "Should be in bulk sync when token_deferred is true"
+        !is_bulk,
+        "Should not be in bulk sync when latest block is 30 minutes old"
     );
 }
 
@@ -119,12 +122,79 @@ async fn test_defer_task_sets_pending_status(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
-async fn test_is_bulk_sync_active_with_empty_database(pool: PgPool) {
+async fn test_is_bulk_sync_active_with_empty_blocks_table(pool: PgPool) {
     let db = TaskDb::new(pool);
     let is_bulk = db.is_bulk_sync_active().await.unwrap();
 
     assert!(
-        !is_bulk,
-        "Empty database should not be considered bulk sync"
+        is_bulk,
+        "Empty blocks table means no sync has happened - should be bulk sync"
+    );
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn test_run_once_returns_false_when_task_deferred(pool: PgPool) {
+    let db_url = "unused".to_string();
+    let executor = TaskExecutor::new(
+        pool.clone(),
+        db_url,
+        "test-runner".to_string(),
+        "http://unused:8114".to_string(),
+        "/nonexistent".to_string(),
+        4,
+        1000,
+        8,
+    );
+
+    sqlx::query(
+        "INSERT INTO tasks (task_type, status, priority) VALUES ('index_rebuild', 'pending', 10)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let result = executor.run_once().await.unwrap();
+
+    assert!(
+        !result,
+        "run_once should return false when task is deferred (triggers poll sleep)"
+    );
+
+    let (status,): (String,) =
+        sqlx::query_as("SELECT status FROM tasks WHERE task_type = 'index_rebuild'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(status, "pending", "Deferred task should be back to pending");
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn test_run_once_returns_true_when_task_executes(pool: PgPool) {
+    insert_block_with_timestamp(&pool, 18000000, 0.1).await;
+
+    let db_url = "unused".to_string();
+    let executor = TaskExecutor::new(
+        pool.clone(),
+        db_url,
+        "test-runner".to_string(),
+        "http://unused:8114".to_string(),
+        "/nonexistent".to_string(),
+        4,
+        1000,
+        8,
+    );
+
+    sqlx::query(
+        "INSERT INTO tasks (task_type, status, priority) VALUES ('label_import', 'pending', 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let result = executor.run_once().await.unwrap();
+
+    assert!(
+        result,
+        "run_once should return true when task actually executes (no sleep)"
     );
 }

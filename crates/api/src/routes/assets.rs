@@ -310,7 +310,9 @@ async fn fetch_assets(
         i64,
     );
 
-    let clusters: Vec<ClusterRow> = if spore_deferred || matches!(filter_type, Some("token") | Some("nft")) {
+    let clusters: Vec<ClusterRow> = if spore_deferred
+        || matches!(filter_type, Some("token") | Some("nft"))
+    {
         vec![]
     } else if let Some(pattern) = search_pattern {
         let query_str = r#"

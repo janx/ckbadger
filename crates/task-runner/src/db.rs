@@ -13,22 +13,32 @@ impl TaskDb {
         Self { pool }
     }
 
+    /// Check if bulk sync is still in progress by looking at actual block data.
+    ///
+    /// Uses the latest block timestamp to determine if the indexer has caught up
+    /// to the chain tip. If the latest block is within 1 hour of current time,
+    /// bulk sync is considered complete.
+    ///
+    /// This avoids a circular dependency: deferred flags (indexes_deferred, etc.)
+    /// are cleared BY rebuild tasks, so checking them here would prevent those
+    /// same tasks from ever running.
     pub async fn is_bulk_sync_active(&self) -> Result<bool> {
-        let row: Option<(bool, bool, bool)> = sqlx::query_as(
+        let row: Option<(bool,)> = sqlx::query_as(
             r#"
-            SELECT 
-                COALESCE(indexes_deferred, FALSE),
-                COALESCE(address_balances_deferred, FALSE),
-                COALESCE(token_deferred, FALSE)
-            FROM sync_status WHERE id = 1
+            SELECT CASE
+                WHEN MAX(timestamp) IS NULL THEN TRUE
+                WHEN MAX(timestamp) < NOW() - INTERVAL '1 hour' THEN TRUE
+                ELSE FALSE
+            END
+            FROM blocks
             "#,
         )
         .fetch_optional(&self.pool)
         .await?;
 
         match row {
-            Some((indexes, addr_bal, token)) => Ok(indexes || addr_bal || token),
-            None => Ok(false),
+            Some((is_bulk,)) => Ok(is_bulk),
+            None => Ok(true),
         }
     }
 

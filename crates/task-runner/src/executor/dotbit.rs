@@ -1,5 +1,7 @@
 use anyhow::Result;
-use ckbadger_common::{parse_hex_to_bytes, DotbitRebuildConfig, DotbitRebuildResult, RateCalculator};
+use ckbadger_common::{
+    parse_hex_to_bytes, DotbitRebuildConfig, DotbitRebuildResult, RateCalculator,
+};
 use sqlx::PgPool;
 use tracing::info;
 use uuid::Uuid;
@@ -242,9 +244,7 @@ pub async fn execute(
         .await?;
     }
 
-    let result = DotbitRebuildResult {
-        accounts_created,
-    };
+    let result = DotbitRebuildResult { accounts_created };
 
     db.complete_task(task_id, Some(serde_json::to_value(&result)?))
         .await?;

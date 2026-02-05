@@ -330,10 +330,12 @@ Tasks that require complete blockchain data are automatically deferred during bu
 
 When a bulk-sync-unsafe task is claimed during bulk sync:
 
-1. Task-runner detects bulk sync active (blocks_behind > 1000)
+1. Task-runner checks `is_bulk_sync_active()` which queries `MAX(timestamp)` from the `blocks` table. If the latest block is older than 1 hour, bulk sync is considered active.
 2. Task status is set back to `pending`
 3. Reason is recorded in `error_message` field
-4. Task will be re-attempted on next poll cycle
+4. `run_once()` returns `false`, triggering a poll interval sleep before re-attempt
+
+**IMPORTANT**: `is_bulk_sync_active()` must NOT check deferred flags (`indexes_deferred`, etc.) because those flags are cleared by the rebuild tasks themselves, creating a circular dependency deadlock. See `docs/POSTMORTEM.md` TR-001.
 
 This prevents incomplete/incorrect results from tasks that depend on having all blockchain data available.
 

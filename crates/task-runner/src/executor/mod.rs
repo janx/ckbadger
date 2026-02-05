@@ -18,10 +18,10 @@ mod cycles;
 mod dotbit;
 mod index;
 mod labels;
+mod mnft;
 mod secondary_issuance;
 mod spore;
 pub mod statistics;
-mod mnft;
 mod token;
 
 pub struct TaskExecutor {
@@ -109,7 +109,7 @@ impl TaskExecutor {
                     );
                     info!("{}", reason);
                     self.db.defer_task(task.id, &reason).await?;
-                    return Ok(true);
+                    return Ok(false);
                 }
                 Ok(false) => {}
                 Err(e) => {

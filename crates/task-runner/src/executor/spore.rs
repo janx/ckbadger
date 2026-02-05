@@ -49,29 +49,29 @@ struct RpcTransaction {
 }
 
 type ClusterCellRow = (
-    i64,       // created_at_block
-    i64,       // id
-    Vec<u8>,   // tx_hash
-    Vec<u8>,   // type_script_hash
-    Vec<u8>,   // type_args (= cluster_id)
-    Vec<u8>,   // lock_script_hash
+    i64,             // created_at_block
+    i64,             // id
+    Vec<u8>,         // tx_hash
+    Vec<u8>,         // type_script_hash
+    Vec<u8>,         // type_args (= cluster_id)
+    Vec<u8>,         // lock_script_hash
     Option<Vec<u8>>, // data
-    i16,       // status
+    i16,             // status
 );
 
 type SporeCellRow = (
-    i64,              // created_at_block
-    i64,              // id
-    Vec<u8>,          // tx_hash
-    i16,              // output_index
-    Vec<u8>,          // type_script_hash
-    Vec<u8>,          // type_args (= spore_id)
-    Vec<u8>,          // lock_script_hash
-    Option<Vec<u8>>,  // data
-    i32,              // data_size
-    i16,              // status
-    Option<i64>,      // consumed_at_block
-    Option<Vec<u8>>,  // consumed_by_tx
+    i64,             // created_at_block
+    i64,             // id
+    Vec<u8>,         // tx_hash
+    i16,             // output_index
+    Vec<u8>,         // type_script_hash
+    Vec<u8>,         // type_args (= spore_id)
+    Vec<u8>,         // lock_script_hash
+    Option<Vec<u8>>, // data
+    i32,             // data_size
+    i16,             // status
+    Option<i64>,     // consumed_at_block
+    Option<Vec<u8>>, // consumed_by_tx
 );
 
 struct ClusterInfo {
@@ -102,8 +102,14 @@ pub async fn execute(
 
     let mut result = SporeRebuildResult::default();
 
-    db.update_progress(task_id, 0, 100, Some("Phase 1: Truncating spore tables..."), None)
-        .await?;
+    db.update_progress(
+        task_id,
+        0,
+        100,
+        Some("Phase 1: Truncating spore tables..."),
+        None,
+    )
+    .await?;
 
     sqlx::query("TRUNCATE TABLE spore_content CASCADE")
         .execute(pool)
@@ -147,7 +153,15 @@ pub async fn execute(
     )
     .await?;
 
-    let clusters_created = rebuild_clusters(db, pool, task_id, config, &cluster_code_hashes, total_cluster_cells).await?;
+    let clusters_created = rebuild_clusters(
+        db,
+        pool,
+        task_id,
+        config,
+        &cluster_code_hashes,
+        total_cluster_cells,
+    )
+    .await?;
     result.clusters_updated = clusters_created;
     info!("Phase 1 complete: {} clusters created", clusters_created);
 
@@ -183,7 +197,15 @@ pub async fn execute(
     )
     .await?;
 
-    let spores_inserted = rebuild_spore_cells(db, pool, task_id, config, &spore_code_hashes, total_spore_cells).await?;
+    let spores_inserted = rebuild_spore_cells(
+        db,
+        pool,
+        task_id,
+        config,
+        &spore_code_hashes,
+        total_spore_cells,
+    )
+    .await?;
     result.spores_processed = spores_inserted;
     info!("Phase 2 complete: {} spore cells created", spores_inserted);
 
@@ -206,7 +228,10 @@ pub async fn execute(
                 info!("Phase 3 complete: {} cluster_ids resolved via RPC", count);
             }
             Err(e) => {
-                warn!("Phase 3 failed (non-fatal): {}. Continuing with remaining phases.", e);
+                warn!(
+                    "Phase 3 failed (non-fatal): {}. Continuing with remaining phases.",
+                    e
+                );
             }
         }
     }
@@ -312,7 +337,17 @@ async fn rebuild_clusters(
             last_id = last_row.1;
         }
 
-        for (created_at_block, _id, tx_hash, type_script_hash, type_args, lock_script_hash, data, status) in &rows {
+        for (
+            created_at_block,
+            _id,
+            tx_hash,
+            type_script_hash,
+            type_args,
+            lock_script_hash,
+            data,
+            status,
+        ) in &rows
+        {
             let cluster_id = type_args.clone();
 
             let (name, description) = data
@@ -356,7 +391,9 @@ async fn rebuild_clusters(
             total_cells,
             Some(&format!(
                 "Phase 1: Scanned {} of {} cluster cells, {} unique clusters",
-                processed, total_cells, clusters_map.len()
+                processed,
+                total_cells,
+                clusters_map.len()
             )),
             rate_calc.rate(),
         )
@@ -479,8 +516,18 @@ async fn rebuild_spore_cells(
         let mut consumed_by_txs: Vec<Option<Vec<u8>>> = Vec::with_capacity(rows.len());
 
         for (
-            created_at_block, _id, tx_hash, output_index, type_script_hash, type_args,
-            lock_script_hash, data, data_size, status, consumed_at_block, consumed_by_tx,
+            created_at_block,
+            _id,
+            tx_hash,
+            output_index,
+            type_script_hash,
+            type_args,
+            lock_script_hash,
+            data,
+            data_size,
+            status,
+            consumed_at_block,
+            consumed_by_tx,
         ) in &rows
         {
             let content_type = data
@@ -883,7 +930,11 @@ fn parse_spore_cluster_id(data: &[u8]) -> Option<Vec<u8>> {
         return None;
     }
 
-    let opt_header = u32::from_le_bytes(data[offset_cluster_id..offset_cluster_id + 4].try_into().ok()?) as usize;
+    let opt_header = u32::from_le_bytes(
+        data[offset_cluster_id..offset_cluster_id + 4]
+            .try_into()
+            .ok()?,
+    ) as usize;
     if opt_header == 0 {
         return None;
     }

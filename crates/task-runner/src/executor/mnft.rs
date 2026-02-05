@@ -560,7 +560,11 @@ async fn rebuild_tokens(
 
             let parsed = row.7.as_deref().and_then(parse_token_data);
             let (characteristic, configure, state) = match parsed {
-                Some(td) => (Some(td.characteristic), td.configure as i16, td.state as i16),
+                Some(td) => (
+                    Some(td.characteristic),
+                    td.configure as i16,
+                    td.state as i16,
+                ),
                 None => (None, 0, 0),
             };
 
@@ -721,8 +725,7 @@ fn parse_issuer_data(data: &[u8]) -> IssuerParsed {
         return IssuerParsed::default();
     }
 
-    let info_size =
-        u16::from_le_bytes(data[9..11].try_into().unwrap_or([0; 2])) as usize;
+    let info_size = u16::from_le_bytes(data[9..11].try_into().unwrap_or([0; 2])) as usize;
 
     if info_size == 0 || data.len() < 11 + info_size {
         return IssuerParsed::default();
