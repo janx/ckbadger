@@ -296,6 +296,7 @@ This handles edge cases:
 | `cells_status_rebuild`        | 9        | Rebuild cells.status and consumed*at*\* from transaction_inputs        |
 | `address_balances_rebuild`    | 8        | Rebuild address_balances from cells GROUP BY                           |
 | `live_cells_populate`         | 8        | Populate live_cells table from RocksDB (indexer)                       |
+| `dao_rebuild`                 | 8        | Rebuild dao_deposits from RocksDB (indexer)                            |
 | `token_rebuild`               | 7        | Rebuild tokens/token_balances/udt_cells with UDT parsing               |
 | `secondary_issuance_backfill` | 7        | Backfill ALL blocks' secondary issuance data (exact)                   |
 | `activities_rebuild`          | 7        | Rebuild activities table from blocks/transactions                      |
@@ -320,6 +321,7 @@ Tasks that require complete blockchain data are automatically deferred during bu
 | `cells_status_rebuild`        | ❌ No          | Requires all transaction_inputs written    |
 | `address_balances_rebuild`    | ❌ No          | Requires all cells written                 |
 | `live_cells_populate`         | ❌ No          | Requires RocksDB fully populated           |
+| `dao_rebuild`                 | ❌ No          | Requires all DAO deposits in RocksDB       |
 | `token_rebuild`               | ❌ No          | Requires all cells with UDT type_script    |
 | `activities_rebuild`          | ❌ No          | Requires all transactions/cells written    |
 | `spore_rebuild`               | ❌ No          | Requires accurate cell status              |
@@ -620,6 +622,48 @@ psql -c "SELECT spore_deferred FROM sync_status;"
 psql -c "SELECT id, task_type, status, progress_current, progress_total FROM tasks WHERE task_type = 'spore_rebuild';"
 ```
 
+## Deferred DAO Deposit Tables Optimization
+
+For fresh database syncs, the indexer can skip writing to the `dao_deposits` table and skip `dao_statistics` updates to achieve faster bulk sync speeds. DAO deposit data is cached in RocksDB instead, providing O(1) lookups. The PostgreSQL table is rebuilt via the indexer after sync completes.
+
+| Parameter             | Default | Description                            |
+| --------------------- | ------- | -------------------------------------- |
+| `--no-auto-defer-dao` | `false` | Disable auto-optimization for fresh DB |
+
+**What Gets Deferred:**
+
+- All `dao_deposits` table INSERT/UPDATE/SELECT operations during bulk sync
+- All `dao_statistics` UPDATE operations from DAO processing during bulk sync
+- DAO deposit data is written to RocksDB instead (O(1) lookups via primary and secondary indexes)
+
+**Behavior:**
+
+| Scenario                     | Auto-defer | Auto-submit rebuild task |
+| ---------------------------- | ---------- | ------------------------ |
+| Fresh DB (tip=0)             | Yes        | Yes                      |
+| Fresh DB + `--no-auto-defer` | No         | No                       |
+| Resume sync, dao exists      | No         | No                       |
+| Resume sync, dao deferred    | No         | Yes                      |
+
+**DAO Rebuild Task:**
+
+When bulk sync completes, the indexer automatically submits a `dao_rebuild` task (priority 8). The **indexer** executes this task (not task-runner) because it requires direct RocksDB access. It:
+
+1. Truncates the `dao_deposits` table
+2. Streams all DAO deposits from RocksDB via `iter_dao_deposits_batched()`
+3. Writes to PostgreSQL using COPY binary protocol
+4. Updates `sync_status.dao_deferred = FALSE` on completion
+
+**API Fallback:**
+
+When `dao_deferred = TRUE`, DAO deposit counts show as zero. `recalculate_dao_extended_statistics` self-corrects at the first 1000-block boundary after rebuild populates the table.
+
+```bash
+# Check status
+psql -c "SELECT dao_deferred FROM sync_status;"
+psql -c "SELECT id, task_type, status, progress_current, progress_total FROM tasks WHERE task_type = 'dao_rebuild';"
+```
+
 ## MNFT/DotBit Bulk Sync Skip
 
 During bulk sync, MNFT and DotBit table writes are skipped entirely to avoid slow individual UPSERT operations that block batch processing (4-5s per operation observed in profiling).
@@ -661,6 +705,10 @@ During bulk sync, `recalculate_dao_extended_statistics()` is skipped entirely. T
 
 **Important:** Only the `recalculate_dao_extended_statistics()` call is skipped. DAO deposit and withdrawal INSERT/UPDATE operations continue normally during bulk sync — the data is always written, just the aggregate statistics recalculation is deferred.
 
+> **Note:** When `dao_deferred = TRUE` (see "Deferred DAO Deposit Tables Optimization"), both DAO deposit writes AND statistics recalculation are skipped during bulk sync. The statistics self-correct after the `dao_rebuild` task populates the `dao_deposits` table.
+
+**PostgreSQL bgwriter Tuning:** The bgwriter is already aggressively tuned in `docker/postgres/postgresql.conf`: `delay=10ms, maxpages=4000, multiplier=10.0, flush_after=512kB`. These settings are MORE aggressive than commonly suggested values (`delay=50ms, multiplier=4.0`). No changes needed.
+
 When the indexer transitions from bulk sync to real-time sync, the next 1,000-block boundary will trigger the first recalculation with all historical data, producing correct results.
 
 ## Live Cell Store
@@ -675,12 +723,14 @@ The LiveCellStore provides O(1) cell lookups during blockchain synchronization u
 
 **RocksDB Column Families:**
 
-| Column Family      | Key                          | Value             | Purpose                               |
-| ------------------ | ---------------------------- | ----------------- | ------------------------------------- |
-| `live_cells`       | tx_hash + output_index (34B) | LiveCellInfo      | O(1) lookup for unspent cells         |
-| `consumed_cells`   | tx_hash + output_index (34B) | LiveCellInfo      | Recently consumed cells (1000 blocks) |
-| `block_headers`    | block_number (8B)            | CachedBlockHeader | Block header + DAO field cache        |
-| `block_hash_index` | block_hash (32B)             | block_number (8B) | Reverse lookup: hash → number         |
+| Column Family                | Key                          | Value                | Purpose                               |
+| ---------------------------- | ---------------------------- | -------------------- | ------------------------------------- |
+| `live_cells`                 | tx_hash + output_index (34B) | LiveCellInfo         | O(1) lookup for unspent cells         |
+| `consumed_cells`             | tx_hash + output_index (34B) | LiveCellInfo         | Recently consumed cells (1000 blocks) |
+| `block_headers`              | block_number (8B)            | CachedBlockHeader    | Block header + DAO field cache        |
+| `block_hash_index`           | block_hash (32B)             | block_number (8B)    | Reverse lookup: hash → number         |
+| `dao_deposits`               | tx_hash + output_index (34B) | DaoDepositCacheEntry | DAO deposit lifecycle cache           |
+| `dao_deposit_by_withdraw_tx` | withdraw_request_tx (32B)    | outpoint key (34B)   | Reverse lookup: withdraw tx → deposit |
 
 **Cache Lookup Order:**
 
