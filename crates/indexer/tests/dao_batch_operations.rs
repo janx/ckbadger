@@ -141,7 +141,10 @@ async fn test_insert_dao_deposits_batch_single(pool: PgPool) {
     let ar: i64 = 10_000_000_000_000_000;
 
     let deposits = vec![(deposit, 100i64, timestamp, ar)];
-    writer.insert_dao_deposits_batch(&deposits).await.unwrap();
+    writer
+        .insert_dao_deposits_batch(&deposits, None, false)
+        .await
+        .unwrap();
 
     assert_eq!(get_deposit_status(&pool, &[1u8; 32], 0).await, Some(0));
 
@@ -164,7 +167,10 @@ async fn test_insert_dao_deposits_batch_multiple(pool: PgPool) {
         (create_test_deposit(2, 200_00000000), 100i64, timestamp, ar),
         (create_test_deposit(3, 300_00000000), 100i64, timestamp, ar),
     ];
-    writer.insert_dao_deposits_batch(&deposits).await.unwrap();
+    writer
+        .insert_dao_deposits_batch(&deposits, None, false)
+        .await
+        .unwrap();
 
     assert_eq!(get_deposit_status(&pool, &[1u8; 32], 0).await, Some(0));
     assert_eq!(get_deposit_status(&pool, &[2u8; 32], 0).await, Some(0));
@@ -180,7 +186,10 @@ async fn test_insert_dao_deposits_batch_empty(pool: PgPool) {
     let writer = BatchWriter::new(pool.clone());
 
     let deposits: Vec<(ParsedDaoDeposit, i64, DateTime<Utc>, i64)> = vec![];
-    writer.insert_dao_deposits_batch(&deposits).await.unwrap();
+    writer
+        .insert_dao_deposits_batch(&deposits, None, false)
+        .await
+        .unwrap();
 
     let (total_deposited, active_deposits) = get_dao_statistics(&pool).await;
     assert_eq!(total_deposited, 0);
@@ -197,10 +206,16 @@ async fn test_insert_dao_deposits_batch_duplicate_ignored(pool: PgPool) {
     let ar: i64 = 10_000_000_000_000_000;
 
     let deposits1 = vec![(create_test_deposit(1, 100_00000000), 100i64, timestamp, ar)];
-    writer.insert_dao_deposits_batch(&deposits1).await.unwrap();
+    writer
+        .insert_dao_deposits_batch(&deposits1, None, false)
+        .await
+        .unwrap();
 
     let deposits2 = vec![(create_test_deposit(1, 100_00000000), 100i64, timestamp, ar)];
-    writer.insert_dao_deposits_batch(&deposits2).await.unwrap();
+    writer
+        .insert_dao_deposits_batch(&deposits2, None, false)
+        .await
+        .unwrap();
 
     let (total_deposited, active_deposits) = get_dao_statistics(&pool).await;
     assert_eq!(total_deposited, 100_00000000);
@@ -219,7 +234,7 @@ async fn test_find_consumed_dao_deposits_batch_by_outpoint(pool: PgPool) {
 
     let inputs: Vec<(&[u8], i16)> = vec![(tx_hash1.as_slice(), 0), (tx_hash2.as_slice(), 0)];
     let result = writer
-        .find_consumed_dao_deposits_batch(&inputs)
+        .find_consumed_dao_deposits_batch(&inputs, None)
         .await
         .unwrap();
 
@@ -253,7 +268,7 @@ async fn test_find_consumed_dao_deposits_batch_by_withdraw_request_tx(pool: PgPo
 
     let inputs: Vec<(&[u8], i16)> = vec![(request_tx.as_slice(), 0)];
     let result = writer
-        .find_consumed_dao_deposits_batch(&inputs)
+        .find_consumed_dao_deposits_batch(&inputs, None)
         .await
         .unwrap();
 
@@ -270,7 +285,7 @@ async fn test_find_consumed_dao_deposits_batch_empty_input(pool: PgPool) {
 
     let inputs: Vec<(&[u8], i16)> = vec![];
     let result = writer
-        .find_consumed_dao_deposits_batch(&inputs)
+        .find_consumed_dao_deposits_batch(&inputs, None)
         .await
         .unwrap();
 
@@ -284,7 +299,7 @@ async fn test_find_consumed_dao_deposits_batch_not_found(pool: PgPool) {
     let tx_hash = vec![99u8; 32];
     let inputs: Vec<(&[u8], i16)> = vec![(tx_hash.as_slice(), 0)];
     let result = writer
-        .find_consumed_dao_deposits_batch(&inputs)
+        .find_consumed_dao_deposits_batch(&inputs, None)
         .await
         .unwrap();
 

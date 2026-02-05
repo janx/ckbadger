@@ -3510,6 +3510,8 @@ impl Indexer {
         }
 
         let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
+        let dao_deferred = self.dao_deferred.load(Ordering::Relaxed);
+        let live_cell_store = Some(self.rocksdb_store.as_ref());
         let mut block_tx_idx = 0usize;
         for parsed in &all_parsed_blocks {
             let tx_count_for_block = parsed.transactions_count as usize;
@@ -3522,7 +3524,14 @@ impl Indexer {
                 for deposit in &dao_deposits {
                     let ar = DaoParser::extract_ar_from_dao_field(&parsed.dao).unwrap_or(0) as i64;
                     self.writer
-                        .insert_dao_deposit(deposit, parsed.number, parsed.timestamp, ar)
+                        .insert_dao_deposit(
+                            deposit,
+                            parsed.number,
+                            parsed.timestamp,
+                            ar,
+                            live_cell_store,
+                            dao_deferred,
+                        )
                         .await?;
                 }
             }
@@ -3540,7 +3549,7 @@ impl Indexer {
 
                 let consumed_dao = self
                     .writer
-                    .find_consumed_dao_deposits(&input_outpoints)
+                    .find_consumed_dao_deposits(&input_outpoints, live_cell_store)
                     .await?;
                 if consumed_dao.is_empty() {
                     continue;
@@ -3575,6 +3584,8 @@ impl Indexer {
                         parsed.number,
                         &tx_data.hash,
                         parsed.timestamp,
+                        live_cell_store,
+                        dao_deferred,
                     )
                     .await?;
             }
@@ -4649,6 +4660,8 @@ impl Indexer {
         }
 
         let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
+        let dao_deferred = self.dao_deferred.load(Ordering::Relaxed);
+        let live_cell_store = Some(self.rocksdb_store.as_ref());
 
         // Phase 1: Collect all DAO deposits from the batch
         let mut all_dao_deposits: Vec<(crate::parser::ParsedDaoDeposit, i64, DateTime<Utc>, i64)> =
@@ -4674,7 +4687,7 @@ impl Indexer {
         // Batch insert DAO deposits
         if !all_dao_deposits.is_empty() {
             self.writer
-                .insert_dao_deposits_batch(&all_dao_deposits)
+                .insert_dao_deposits_batch(&all_dao_deposits, live_cell_store, dao_deferred)
                 .await?;
         }
 
@@ -4714,7 +4727,7 @@ impl Indexer {
                 .map(|(h, i)| (h.as_slice(), *i))
                 .collect();
             self.writer
-                .find_consumed_dao_deposits_batch(&outpoint_refs)
+                .find_consumed_dao_deposits_batch(&outpoint_refs, live_cell_store)
                 .await?
         } else {
             HashMap::new()
@@ -4817,7 +4830,11 @@ impl Indexer {
             // Batch process all withdrawals
             if !withdrawal_contexts.is_empty() {
                 self.writer
-                    .process_dao_withdrawals_batch(&withdrawal_contexts)
+                    .process_dao_withdrawals_batch_with_store(
+                        &withdrawal_contexts,
+                        live_cell_store,
+                        dao_deferred,
+                    )
                     .await?;
             }
         }
@@ -5777,6 +5794,9 @@ impl Indexer {
 
         batch_stats.dao_snapshot_dates.insert(block_date);
 
+        let dao_deferred = self.dao_deferred.load(Ordering::Relaxed);
+        let live_cell_store = Some(self.rocksdb_store.as_ref());
+
         for tx_data in &tx_data_list {
             let dao_deposits = DaoParser::parse_deposits_from_cells(&tx_data.hash, &tx_data.cells);
             for deposit in &dao_deposits {
@@ -5787,7 +5807,14 @@ impl Indexer {
                     .and_then(|dao| DaoParser::extract_ar_from_dao_field(&dao))
                     .unwrap_or(0) as i64;
                 self.writer
-                    .insert_dao_deposit(deposit, parsed.number, parsed.timestamp, ar)
+                    .insert_dao_deposit(
+                        deposit,
+                        parsed.number,
+                        parsed.timestamp,
+                        ar,
+                        live_cell_store,
+                        dao_deferred,
+                    )
                     .await?;
             }
         }
@@ -5806,7 +5833,7 @@ impl Indexer {
 
             let consumed_dao = self
                 .writer
-                .find_consumed_dao_deposits(&input_outpoints)
+                .find_consumed_dao_deposits(&input_outpoints, live_cell_store)
                 .await?;
             if consumed_dao.is_empty() {
                 continue;
@@ -5841,6 +5868,8 @@ impl Indexer {
                     parsed.number,
                     &tx_data.hash,
                     parsed.timestamp,
+                    live_cell_store,
+                    dao_deferred,
                 )
                 .await?;
         }

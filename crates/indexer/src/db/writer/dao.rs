@@ -5,11 +5,48 @@ use tracing::{info, warn};
 
 use ckbadger_common::dao::calculate_estimated_apc;
 
+use crate::db::rocksdb_live_cell_store::DaoDepositCacheEntry;
+use crate::db::RocksDbLiveCellStore;
 use crate::parser::{ParsedDaoDeposit, ParsedDaoWithdrawRequest};
 
 use super::BatchWriter;
 
 const DAO_OCCUPIED_CAPACITY: u64 = 102_00000000;
+
+fn build_dao_cache_entry(
+    deposit: &ParsedDaoDeposit,
+    block_number: i64,
+    deposit_ar: i64,
+) -> DaoDepositCacheEntry {
+    DaoDepositCacheEntry {
+        capacity: deposit.capacity,
+        deposit_block_number: block_number,
+        lock_script_hash: deposit.lock_script_hash.clone(),
+        deposit_ar,
+        status: 0,
+        withdraw_request_tx: None,
+        withdraw_request_block: None,
+        withdraw_request_ar: None,
+        withdraw_block: None,
+        withdraw_tx: None,
+        compensation: None,
+    }
+}
+
+fn dao_cache_entry_to_row(
+    tx_hash: Vec<u8>,
+    output_index: i16,
+    entry: DaoDepositCacheEntry,
+) -> (i64, Vec<u8>, i16, String, i64, i16) {
+    (
+        0,
+        tx_hash,
+        output_index,
+        entry.capacity.to_string(),
+        entry.deposit_block_number,
+        entry.status,
+    )
+}
 
 fn dedup_tx_hashes<'a>(tx_hashes: &[&'a [u8]]) -> Vec<&'a [u8]> {
     let mut seen = std::collections::HashSet::new();
@@ -74,7 +111,18 @@ impl BatchWriter {
         block_number: i64,
         timestamp: DateTime<Utc>,
         deposit_ar: i64,
+        live_cell_store: Option<&RocksDbLiveCellStore>,
+        dao_deferred: bool,
     ) -> Result<()> {
+        if let Some(store) = live_cell_store {
+            let entry = build_dao_cache_entry(deposit, block_number, deposit_ar);
+            store.insert_dao_deposit(&deposit.tx_hash, deposit.output_index as i16, &entry);
+        }
+
+        if dao_deferred {
+            return Ok(());
+        }
+
         let inserted: Option<(i64,)> = sqlx::query_as(
             r#"
             INSERT INTO dao_deposits (
@@ -119,7 +167,30 @@ impl BatchWriter {
         block_number: i64,
         timestamp: DateTime<Utc>,
         withdraw_ar: i64,
+        live_cell_store: Option<&RocksDbLiveCellStore>,
+        dao_deferred: bool,
     ) -> Result<()> {
+        if let Some(store) = live_cell_store {
+            if let Some(mut entry) = store.get_dao_deposit(
+                &request.original_tx_hash,
+                request.original_output_index as i16,
+            ) {
+                entry.status = 1;
+                entry.withdraw_request_block = Some(block_number);
+                entry.withdraw_request_tx = Some(request.tx_hash.clone());
+                entry.withdraw_request_ar = Some(withdraw_ar);
+                store.update_dao_deposit_status(
+                    &request.original_tx_hash,
+                    request.original_output_index as i16,
+                    &entry,
+                );
+            }
+        }
+
+        if dao_deferred {
+            return Ok(());
+        }
+
         sqlx::query(
             r#"
             UPDATE dao_deposits SET
@@ -149,30 +220,77 @@ impl BatchWriter {
         block_number: i64,
         tx_hash: &[u8],
         timestamp: DateTime<Utc>,
+        live_cell_store: Option<&RocksDbLiveCellStore>,
+        dao_deferred: bool,
     ) -> Result<()> {
-        let deposit = sqlx::query_as::<_, (i64, i64, i64, Vec<u8>, i16)>(
-            r#"
-            SELECT capacity::bigint, deposit_block_number, withdraw_request_block, tx_hash, output_index 
-            FROM dao_deposits 
-            WHERE withdraw_request_tx = $1 AND status = 1
-            "#,
-        )
-        .bind(withdraw_request_tx_hash)
-        .fetch_optional(&self.pool)
-        .await?;
+        let mut deposits: Vec<(i64, i64, i64, Vec<u8>, i16)> = Vec::new();
+        if let Some(store) = live_cell_store {
+            let cached = store.get_dao_deposits_by_withdraw_tx(withdraw_request_tx_hash);
+            for (original_tx_hash, original_output_index, entry) in cached {
+                let request_block = entry.withdraw_request_block.unwrap_or(block_number);
+                deposits.push((
+                    entry.capacity,
+                    entry.deposit_block_number,
+                    request_block,
+                    original_tx_hash,
+                    original_output_index,
+                ));
+            }
+        }
 
-        if let Some((
-            capacity,
-            deposit_block,
-            request_block,
-            original_tx_hash,
-            original_output_index,
-        )) = deposit
+        if deposits.is_empty() && !dao_deferred {
+            let deposit = sqlx::query_as::<_, (i64, i64, i64, Vec<u8>, i16)>(
+                r#"
+                SELECT capacity::bigint, deposit_block_number, withdraw_request_block, tx_hash, output_index 
+                FROM dao_deposits 
+                WHERE withdraw_request_tx = $1 AND status = 1
+                "#,
+            )
+            .bind(withdraw_request_tx_hash)
+            .fetch_optional(&self.pool)
+            .await?;
+
+            if let Some((
+                capacity,
+                deposit_block,
+                request_block,
+                original_tx_hash,
+                original_output_index,
+            )) = deposit
+            {
+                deposits.push((
+                    capacity,
+                    deposit_block,
+                    request_block,
+                    original_tx_hash,
+                    original_output_index,
+                ));
+            }
+        }
+
+        for (capacity, deposit_block, request_block, original_tx_hash, original_output_index) in
+            deposits
         {
             let compensation = self
                 .calculate_dao_compensation(capacity, deposit_block, request_block)
                 .await?
                 .unwrap_or(0);
+
+            if let Some(store) = live_cell_store {
+                if let Some(mut entry) =
+                    store.get_dao_deposit(&original_tx_hash, original_output_index)
+                {
+                    entry.status = 2;
+                    entry.withdraw_block = Some(block_number);
+                    entry.withdraw_tx = Some(tx_hash.to_vec());
+                    entry.compensation = Some(compensation);
+                    store.update_dao_deposit_status(&original_tx_hash, original_output_index, &entry);
+                }
+            }
+
+            if dao_deferred {
+                continue;
+            }
 
             sqlx::query(
                 r#"
@@ -218,6 +336,7 @@ impl BatchWriter {
     pub async fn find_consumed_dao_deposits(
         &self,
         inputs: &[(&[u8], i32)],
+        live_cell_store: Option<&RocksDbLiveCellStore>,
     ) -> Result<Vec<(i64, Vec<u8>, i16, String, i64, i16)>> {
         if inputs.is_empty() {
             return Ok(vec![]);
@@ -228,6 +347,40 @@ impl BatchWriter {
 
         let tx_hashes: Vec<&[u8]> = inputs.iter().map(|(h, _)| *h).collect();
         let output_indices: Vec<i16> = inputs.iter().map(|(_, i)| *i as i16).collect();
+
+        if let Some(store) = live_cell_store {
+            let outpoints: Vec<(&[u8], i16)> = inputs
+                .iter()
+                .map(|(h, i)| (*h, *i as i16))
+                .collect();
+            let mut seen_keys: HashSet<(Vec<u8>, i16)> = HashSet::new();
+
+            let cached = store.get_dao_deposits_batch(&outpoints);
+            for ((tx_hash, output_index), entry) in cached {
+                seen_keys.insert((tx_hash.clone(), output_index));
+                results.push(dao_cache_entry_to_row(tx_hash, output_index, entry));
+            }
+
+            let unique_tx_hashes = dedup_tx_hashes(&tx_hashes);
+            let withdraw_tx_hashes: Vec<Vec<u8>> =
+                unique_tx_hashes.iter().map(|h| h.to_vec()).collect();
+            let by_withdraw = store.get_dao_deposits_by_withdraw_tx_batch(&withdraw_tx_hashes);
+            for entries in by_withdraw.values() {
+                if let Some((tx_hash, output_index, entry)) = entries.first() {
+                    let key = (tx_hash.clone(), *output_index);
+                    if seen_keys.insert(key) {
+                        results.push(dao_cache_entry_to_row(
+                            tx_hash.clone(),
+                            *output_index,
+                            entry.clone(),
+                        ));
+                    }
+                }
+            }
+
+            return Ok(results);
+        }
+
         let query1 = r#"
             SELECT id, tx_hash, output_index, CAST(capacity AS TEXT), deposit_block_number, status 
             FROM dao_deposits 
@@ -272,10 +425,12 @@ impl BatchWriter {
         block_number: i64,
         consuming_tx_hash: &[u8],
         timestamp: DateTime<Utc>,
+        live_cell_store: Option<&RocksDbLiveCellStore>,
+        dao_deferred: bool,
     ) -> Result<()> {
         for (
-            deposit_id,
-            _original_tx_hash,
+            _deposit_id,
+            original_tx_hash,
             original_output_index,
             capacity_str,
             deposit_block,
@@ -290,6 +445,25 @@ impl BatchWriter {
                     .find(|(_, _, _, cap, _)| *cap == capacity);
 
                 if let Some((new_tx_hash, _, _, _, _)) = matching_output {
+                    if let Some(store) = live_cell_store {
+                        if let Some(mut entry) =
+                            store.get_dao_deposit(original_tx_hash, *original_output_index)
+                        {
+                            entry.status = 1;
+                            entry.withdraw_request_block = Some(block_number);
+                            entry.withdraw_request_tx = Some(new_tx_hash.clone());
+                            store.update_dao_deposit_status(
+                                original_tx_hash,
+                                *original_output_index,
+                                &entry,
+                            );
+                        }
+                    }
+
+                    if dao_deferred {
+                        continue;
+                    }
+
                     sqlx::query(
                         r#"
                         UPDATE dao_deposits SET
@@ -297,10 +471,10 @@ impl BatchWriter {
                             withdraw_request_block = $3,
                             withdraw_request_tx = $4,
                             withdraw_request_timestamp = $5
-                        WHERE id = $1 AND status = 0
+                        WHERE tx_hash = $1 AND output_index = $2 AND status = 0
                         "#,
                     )
-                    .bind(deposit_id)
+                    .bind(original_tx_hash)
                     .bind(*original_output_index)
                     .bind(block_number)
                     .bind(new_tx_hash.as_slice())
@@ -309,18 +483,45 @@ impl BatchWriter {
                     .await?;
                 }
             } else if *status == 1 {
-                let withdraw_request_block = sqlx::query_as::<_, (Option<i64>,)>(
-                    "SELECT withdraw_request_block FROM dao_deposits WHERE id = $1",
-                )
-                .bind(deposit_id)
-                .fetch_one(&self.pool)
-                .await?
-                .0
-                .unwrap_or(block_number);
+                let withdraw_request_block = if let Some(store) = live_cell_store {
+                    store
+                        .get_dao_deposit(original_tx_hash, *original_output_index)
+                        .and_then(|entry| entry.withdraw_request_block)
+                        .unwrap_or(block_number)
+                } else {
+                    sqlx::query_as::<_, (Option<i64>,)>(
+                        "SELECT withdraw_request_block FROM dao_deposits WHERE id = $1",
+                    )
+                    .bind(_deposit_id)
+                    .fetch_one(&self.pool)
+                    .await?
+                    .0
+                    .unwrap_or(block_number)
+                };
 
                 let compensation = self
                     .calculate_dao_compensation(capacity, *deposit_block, withdraw_request_block)
                     .await?;
+
+                if let Some(store) = live_cell_store {
+                    if let Some(mut entry) =
+                        store.get_dao_deposit(original_tx_hash, *original_output_index)
+                    {
+                        entry.status = 2;
+                        entry.withdraw_block = Some(block_number);
+                        entry.withdraw_tx = Some(consuming_tx_hash.to_vec());
+                        entry.compensation = Some(compensation.unwrap_or(0));
+                        store.update_dao_deposit_status(
+                            original_tx_hash,
+                            *original_output_index,
+                            &entry,
+                        );
+                    }
+                }
+
+                if dao_deferred {
+                    continue;
+                }
 
                 sqlx::query(
                     r#"
@@ -330,14 +531,15 @@ impl BatchWriter {
                         withdraw_tx = $3,
                         withdraw_timestamp = $4,
                         compensation = $5
-                    WHERE id = $1
+                    WHERE tx_hash = $1 AND output_index = $6
                     "#,
                 )
-                .bind(deposit_id)
+                .bind(original_tx_hash)
                 .bind(block_number)
                 .bind(consuming_tx_hash)
                 .bind(timestamp)
                 .bind(compensation)
+                .bind(*original_output_index)
                 .execute(&self.pool)
                 .await?;
 
@@ -392,8 +594,21 @@ impl BatchWriter {
     pub async fn insert_dao_deposits_batch(
         &self,
         deposits: &[(ParsedDaoDeposit, i64, DateTime<Utc>, i64)],
+        live_cell_store: Option<&RocksDbLiveCellStore>,
+        dao_deferred: bool,
     ) -> Result<()> {
         if deposits.is_empty() {
+            return Ok(());
+        }
+
+        if let Some(store) = live_cell_store {
+            for (deposit, block_number, _timestamp, ar) in deposits {
+                let entry = build_dao_cache_entry(deposit, *block_number, *ar);
+                store.insert_dao_deposit(&deposit.tx_hash, deposit.output_index as i16, &entry);
+            }
+        }
+
+        if dao_deferred {
             return Ok(());
         }
 
@@ -463,6 +678,7 @@ impl BatchWriter {
     pub async fn find_consumed_dao_deposits_batch(
         &self,
         inputs: &[(&[u8], i16)],
+        live_cell_store: Option<&RocksDbLiveCellStore>,
     ) -> Result<HashMap<(Vec<u8>, i16), (i64, Vec<u8>, i16, String, i64, i16)>> {
         if inputs.is_empty() {
             return Ok(HashMap::new());
@@ -473,6 +689,37 @@ impl BatchWriter {
 
         let tx_hashes: Vec<&[u8]> = inputs.iter().map(|(h, _)| *h).collect();
         let output_indices: Vec<i16> = inputs.iter().map(|(_, i)| *i).collect();
+
+        if let Some(store) = live_cell_store {
+            let cached = store.get_dao_deposits_batch(inputs);
+            for ((tx_hash, output_index), entry) in cached {
+                result_map.insert(
+                    (tx_hash.clone(), output_index),
+                    dao_cache_entry_to_row(tx_hash, output_index, entry),
+                );
+            }
+
+            let unique_tx_hashes = dedup_tx_hashes(&tx_hashes);
+            let withdraw_tx_hashes: Vec<Vec<u8>> =
+                unique_tx_hashes.iter().map(|h| h.to_vec()).collect();
+            let by_withdraw = store.get_dao_deposits_by_withdraw_tx_batch(&withdraw_tx_hashes);
+            for (withdraw_tx, entries) in by_withdraw {
+                if let Some((tx_hash, output_index, entry)) = entries.first() {
+                    let key = (withdraw_tx, 0i16);
+                    result_map
+                        .entry(key)
+                        .or_insert_with(|| {
+                            dao_cache_entry_to_row(
+                                tx_hash.clone(),
+                                *output_index,
+                                entry.clone(),
+                            )
+                        });
+                }
+            }
+
+            return Ok(result_map);
+        }
 
         let rows1: Vec<(i64, Vec<u8>, i16, String, i64, i16)> = sqlx::query_as(
             r#"
@@ -517,12 +764,26 @@ impl BatchWriter {
     where
         T: DaoWithdrawalContextTrait,
     {
+        self.process_dao_withdrawals_batch_with_store(contexts, None, false)
+            .await
+    }
+
+    pub async fn process_dao_withdrawals_batch_with_store<T>(
+        &self,
+        contexts: &[T],
+        live_cell_store: Option<&RocksDbLiveCellStore>,
+        dao_deferred: bool,
+    ) -> Result<()>
+    where
+        T: DaoWithdrawalContextTrait,
+    {
         if contexts.is_empty() {
             return Ok(());
         }
 
-        let mut phase1_updates: Vec<(i64, i64, Vec<u8>, DateTime<Utc>)> = Vec::new();
-        let mut phase2_updates: Vec<(i64, i64, Vec<u8>, DateTime<Utc>, i64, i64)> = Vec::new();
+        let mut phase1_updates: Vec<(Vec<u8>, i16, i64, Vec<u8>, DateTime<Utc>)> = Vec::new();
+        let mut phase2_updates: Vec<(Vec<u8>, i16, i64, Vec<u8>, DateTime<Utc>, i64, i64)> =
+            Vec::new();
         let mut total_withdrawn_capacity: i64 = 0;
         let mut total_compensation: i64 = 0;
         let mut completed_count: i64 = 0;
@@ -538,26 +799,40 @@ impl BatchWriter {
             }
         }
 
-        let status1_deposit_ids: Vec<i64> = contexts
-            .iter()
-            .flat_map(|ctx| {
-                ctx.consumed_deposits()
-                    .iter()
-                    .filter(|(_, _, _, _, _, status)| *status == 1)
-                    .map(|(id, _, _, _, _, _)| *id)
-            })
-            .collect();
+        if let Some(store) = live_cell_store {
+            for ctx in contexts {
+                for (_, tx_hash, output_index, _, _, status) in ctx.consumed_deposits() {
+                    if *status == 1 {
+                        if let Some(entry) = store.get_dao_deposit(tx_hash, *output_index) {
+                            if let Some(block) = entry.withdraw_request_block {
+                                all_request_blocks.insert(block);
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            let status1_deposit_ids: Vec<i64> = contexts
+                .iter()
+                .flat_map(|ctx| {
+                    ctx.consumed_deposits()
+                        .iter()
+                        .filter(|(_, _, _, _, _, status)| *status == 1)
+                        .map(|(id, _, _, _, _, _)| *id)
+                })
+                .collect();
 
-        if !status1_deposit_ids.is_empty() {
-            let rows: Vec<(i64,)> = sqlx::query_as(
-                "SELECT DISTINCT withdraw_request_block FROM dao_deposits WHERE id = ANY($1) AND withdraw_request_block IS NOT NULL",
-            )
-            .bind(&status1_deposit_ids)
-            .fetch_all(&self.pool)
-            .await?;
+            if !status1_deposit_ids.is_empty() {
+                let rows: Vec<(i64,)> = sqlx::query_as(
+                    "SELECT DISTINCT withdraw_request_block FROM dao_deposits WHERE id = ANY($1) AND withdraw_request_block IS NOT NULL",
+                )
+                .bind(&status1_deposit_ids)
+                .fetch_all(&self.pool)
+                .await?;
 
-            for (rb,) in rows {
-                all_request_blocks.insert(rb);
+                for (rb,) in rows {
+                    all_request_blocks.insert(rb);
+                }
             }
         }
 
@@ -594,7 +869,15 @@ impl BatchWriter {
         };
 
         for ctx in contexts {
-            for (deposit_id, _, _, capacity_str, deposit_block, status) in ctx.consumed_deposits() {
+            for (
+                _deposit_id,
+                original_tx_hash,
+                original_output_index,
+                capacity_str,
+                deposit_block,
+                status,
+            ) in ctx.consumed_deposits()
+            {
                 let capacity: i64 = capacity_str.parse().unwrap_or(0);
 
                 if *status == 0 {
@@ -604,22 +887,45 @@ impl BatchWriter {
                         .find(|(_, _, _, cap, _)| *cap == capacity);
 
                     if let Some((new_tx_hash, _, _, _, _)) = matching_output {
+                        if let Some(store) = live_cell_store {
+                            if let Some(mut entry) =
+                                store.get_dao_deposit(original_tx_hash, *original_output_index)
+                            {
+                                entry.status = 1;
+                                entry.withdraw_request_block = Some(ctx.block_number());
+                                entry.withdraw_request_tx = Some(new_tx_hash.clone());
+                                store.update_dao_deposit_status(
+                                    original_tx_hash,
+                                    *original_output_index,
+                                    &entry,
+                                );
+                            }
+                        }
+
                         phase1_updates.push((
-                            *deposit_id,
+                            original_tx_hash.clone(),
+                            *original_output_index,
                             ctx.block_number(),
                             new_tx_hash.clone(),
                             ctx.timestamp(),
                         ));
                     }
                 } else if *status == 1 {
-                    let request_block: i64 = sqlx::query_scalar(
-                        "SELECT withdraw_request_block FROM dao_deposits WHERE id = $1",
-                    )
-                    .bind(deposit_id)
-                    .fetch_optional(&self.pool)
-                    .await?
-                    .flatten()
-                    .unwrap_or(ctx.block_number());
+                    let request_block: i64 = if let Some(store) = live_cell_store {
+                        store
+                            .get_dao_deposit(original_tx_hash, *original_output_index)
+                            .and_then(|entry| entry.withdraw_request_block)
+                            .unwrap_or(ctx.block_number())
+                    } else {
+                        sqlx::query_scalar(
+                            "SELECT withdraw_request_block FROM dao_deposits WHERE id = $1",
+                        )
+                        .bind(_deposit_id)
+                        .fetch_optional(&self.pool)
+                        .await?
+                        .flatten()
+                        .unwrap_or(ctx.block_number())
+                    };
 
                     let compensation = if let (Some(dep_dao), Some(req_dao)) = (
                         dao_fields.get(deposit_block),
@@ -642,13 +948,30 @@ impl BatchWriter {
                     };
 
                     phase2_updates.push((
-                        *deposit_id,
+                        original_tx_hash.clone(),
+                        *original_output_index,
                         ctx.block_number(),
                         ctx.consuming_tx_hash().to_vec(),
                         ctx.timestamp(),
                         compensation.unwrap_or(0),
                         capacity,
                     ));
+
+                    if let Some(store) = live_cell_store {
+                        if let Some(mut entry) =
+                            store.get_dao_deposit(original_tx_hash, *original_output_index)
+                        {
+                            entry.status = 2;
+                            entry.withdraw_block = Some(ctx.block_number());
+                            entry.withdraw_tx = Some(ctx.consuming_tx_hash().to_vec());
+                            entry.compensation = Some(compensation.unwrap_or(0));
+                            store.update_dao_deposit_status(
+                                original_tx_hash,
+                                *original_output_index,
+                                &entry,
+                            );
+                        }
+                    }
 
                     total_withdrawn_capacity += capacity;
                     total_compensation += compensation.unwrap_or(0);
@@ -657,29 +980,38 @@ impl BatchWriter {
             }
         }
 
+        if dao_deferred {
+            return Ok(());
+        }
+
         if !phase1_updates.is_empty() {
-            let ids: Vec<i64> = phase1_updates.iter().map(|(id, _, _, _)| *id).collect();
-            let blocks: Vec<i64> = phase1_updates.iter().map(|(_, b, _, _)| *b).collect();
+            let tx_hashes: Vec<&[u8]> = phase1_updates
+                .iter()
+                .map(|(tx_hash, _, _, _, _)| tx_hash.as_slice())
+                .collect();
+            let indices: Vec<i16> = phase1_updates.iter().map(|(_, idx, _, _, _)| *idx).collect();
+            let blocks: Vec<i64> = phase1_updates.iter().map(|(_, _, b, _, _)| *b).collect();
             let txs: Vec<&[u8]> = phase1_updates
                 .iter()
-                .map(|(_, _, tx, _)| tx.as_slice())
+                .map(|(_, _, _, tx, _)| tx.as_slice())
                 .collect();
             let timestamps: Vec<DateTime<Utc>> =
-                phase1_updates.iter().map(|(_, _, _, t)| *t).collect();
+                phase1_updates.iter().map(|(_, _, _, _, t)| *t).collect();
 
             sqlx::query(
                 r#"
                 UPDATE dao_deposits d SET
                     status = 1,
                     withdraw_request_block = v.block_number,
-                    withdraw_request_tx = v.tx_hash,
+                    withdraw_request_tx = v.withdraw_tx,
                     withdraw_request_timestamp = v.timestamp
-                FROM (SELECT * FROM UNNEST($1::bigint[], $2::bigint[], $3::bytea[], $4::timestamptz[])
-                      AS t(id, block_number, tx_hash, timestamp)) v
-                WHERE d.id = v.id AND d.status = 0
+                FROM (SELECT * FROM UNNEST($1::bytea[], $2::smallint[], $3::bigint[], $4::bytea[], $5::timestamptz[])
+                      AS t(tx_hash, output_index, block_number, withdraw_tx, timestamp)) v
+                WHERE d.tx_hash = v.tx_hash AND d.output_index = v.output_index AND d.status = 0
                 "#,
             )
-            .bind(&ids)
+            .bind(&tx_hashes)
+            .bind(&indices)
             .bind(&blocks)
             .bind(&txs)
             .bind(&timestamps)
@@ -688,34 +1020,36 @@ impl BatchWriter {
         }
 
         if !phase2_updates.is_empty() {
-            let ids: Vec<i64> = phase2_updates
+            let tx_hashes: Vec<&[u8]> = phase2_updates
                 .iter()
-                .map(|(id, _, _, _, _, _)| *id)
+                .map(|(tx_hash, _, _, _, _, _, _)| tx_hash.as_slice())
                 .collect();
-            let blocks: Vec<i64> = phase2_updates.iter().map(|(_, b, _, _, _, _)| *b).collect();
+            let indices: Vec<i16> = phase2_updates.iter().map(|(_, idx, _, _, _, _, _)| *idx).collect();
+            let blocks: Vec<i64> = phase2_updates.iter().map(|(_, _, b, _, _, _, _)| *b).collect();
             let txs: Vec<&[u8]> = phase2_updates
                 .iter()
-                .map(|(_, _, tx, _, _, _)| tx.as_slice())
+                .map(|(_, _, _, tx, _, _, _)| tx.as_slice())
                 .collect();
             let timestamps: Vec<DateTime<Utc>> =
-                phase2_updates.iter().map(|(_, _, _, t, _, _)| *t).collect();
+                phase2_updates.iter().map(|(_, _, _, _, t, _, _)| *t).collect();
             let compensations: Vec<i64> =
-                phase2_updates.iter().map(|(_, _, _, _, c, _)| *c).collect();
+                phase2_updates.iter().map(|(_, _, _, _, _, c, _)| *c).collect();
 
             sqlx::query(
                 r#"
                 UPDATE dao_deposits d SET
                     status = 2,
                     withdraw_block = v.block_number,
-                    withdraw_tx = v.tx_hash,
+                    withdraw_tx = v.tx_hash_withdraw,
                     withdraw_timestamp = v.timestamp,
                     compensation = v.compensation
-                FROM (SELECT * FROM UNNEST($1::bigint[], $2::bigint[], $3::bytea[], $4::timestamptz[], $5::bigint[])
-                      AS t(id, block_number, tx_hash, timestamp, compensation)) v
-                WHERE d.id = v.id
+                FROM (SELECT * FROM UNNEST($1::bytea[], $2::smallint[], $3::bigint[], $4::bytea[], $5::timestamptz[], $6::bigint[])
+                      AS t(tx_hash, output_index, block_number, tx_hash_withdraw, timestamp, compensation)) v
+                WHERE d.tx_hash = v.tx_hash AND d.output_index = v.output_index
                 "#,
             )
-            .bind(&ids)
+            .bind(&tx_hashes)
+            .bind(&indices)
             .bind(&blocks)
             .bind(&txs)
             .bind(&timestamps)
@@ -956,6 +1290,55 @@ impl BatchWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_build_dao_cache_entry_sets_defaults() {
+        let deposit = ParsedDaoDeposit {
+            tx_hash: vec![0x11; 32],
+            output_index: 7,
+            lock_script_hash: vec![0x22; 32],
+            capacity: 123_456,
+        };
+        let entry = build_dao_cache_entry(&deposit, 42, 9876);
+
+        assert_eq!(entry.capacity, deposit.capacity);
+        assert_eq!(entry.deposit_block_number, 42);
+        assert_eq!(entry.lock_script_hash, deposit.lock_script_hash);
+        assert_eq!(entry.deposit_ar, 9876);
+        assert_eq!(entry.status, 0);
+        assert!(entry.withdraw_request_tx.is_none());
+        assert!(entry.withdraw_request_block.is_none());
+        assert!(entry.withdraw_request_ar.is_none());
+        assert!(entry.withdraw_block.is_none());
+        assert!(entry.withdraw_tx.is_none());
+        assert!(entry.compensation.is_none());
+    }
+
+    #[test]
+    fn test_dao_cache_entry_to_row_maps_fields() {
+        let entry = DaoDepositCacheEntry {
+            capacity: 999,
+            deposit_block_number: 77,
+            lock_script_hash: vec![0x33; 32],
+            deposit_ar: 123,
+            status: 1,
+            withdraw_request_tx: Some(vec![0x44; 32]),
+            withdraw_request_block: Some(88),
+            withdraw_request_ar: Some(456),
+            withdraw_block: None,
+            withdraw_tx: None,
+            compensation: None,
+        };
+        let (id, tx_hash, output_index, capacity_str, deposit_block, status) =
+            dao_cache_entry_to_row(vec![0xaa; 32], 3, entry);
+
+        assert_eq!(id, 0);
+        assert_eq!(tx_hash, vec![0xaa; 32]);
+        assert_eq!(output_index, 3);
+        assert_eq!(capacity_str, "999");
+        assert_eq!(deposit_block, 77);
+        assert_eq!(status, 1);
+    }
 
     #[test]
     fn test_dedup_tx_hashes_removes_duplicates() {
