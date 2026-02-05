@@ -212,10 +212,14 @@ impl TaskExecutor {
     }
 
     async fn execute_spore_rebuild(&self, task: &Task) -> Result<()> {
-        let config: SporeRebuildConfig = match task.config_typed() {
+        let mut config: SporeRebuildConfig = match task.config_typed() {
             Some(TaskConfig::SporeRebuild(c)) => c,
             _ => SporeRebuildConfig::default(),
         };
+
+        if config.ckb_rpc_url.is_empty() {
+            config.ckb_rpc_url = self.ckb_rpc_url.clone();
+        }
 
         spore::execute(&self.db, &self.pool, task.id, &config).await
     }
