@@ -111,13 +111,7 @@ pub async fn execute(
     )
     .await?;
 
-    sqlx::query("TRUNCATE TABLE spore_content CASCADE")
-        .execute(pool)
-        .await?;
-    sqlx::query("TRUNCATE TABLE spore_cells CASCADE")
-        .execute(pool)
-        .await?;
-    sqlx::query("TRUNCATE TABLE spore_clusters CASCADE")
+    sqlx::query("TRUNCATE TABLE spore_content, spore_cells, spore_clusters CASCADE")
         .execute(pool)
         .await?;
     info!("Truncated spore_content, spore_cells, spore_clusters");

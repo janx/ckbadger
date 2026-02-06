@@ -69,13 +69,11 @@ pub async fn execute(
     )
     .await?;
 
-    sqlx::query("TRUNCATE TABLE udt_cells")
+    // Truncate all token tables in a single statement with CASCADE
+    // to handle foreign key constraints (token_balances -> tokens)
+    sqlx::query("TRUNCATE TABLE udt_cells, token_balances, tokens CASCADE")
         .execute(pool)
         .await?;
-    sqlx::query("TRUNCATE TABLE token_balances")
-        .execute(pool)
-        .await?;
-    sqlx::query("TRUNCATE TABLE tokens").execute(pool).await?;
 
     db.update_progress(task_id, 0, total_cells, Some("Scanning UDT cells"), None)
         .await?;

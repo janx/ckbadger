@@ -62,13 +62,7 @@ pub async fn execute(
     )
     .await?;
 
-    sqlx::query("TRUNCATE TABLE mnft_tokens")
-        .execute(pool)
-        .await?;
-    sqlx::query("TRUNCATE TABLE mnft_classes")
-        .execute(pool)
-        .await?;
-    sqlx::query("TRUNCATE TABLE mnft_issuers")
+    sqlx::query("TRUNCATE TABLE mnft_tokens, mnft_classes, mnft_issuers")
         .execute(pool)
         .await?;
 
