@@ -193,7 +193,7 @@ async fn list_blocks(
     Query(params): Query<ListBlocksParams>,
 ) -> ApiResult<Vec<BlockResponse>> {
     let query = format!(
-        "SELECT b.number, b.hash, b.parent_hash, toUnixTimestamp64Milli(b.timestamp) as timestamp, \
+        "SELECT b.number, b.hash, b.parent_hash, b.timestamp, \
          b.version, b.compact_target, b.transactions_count, b.proposals_count, b.uncles_count, \
          b.epoch_number, b.epoch_index, b.epoch_length, b.dao, b.nonce, b.extra_hash, \
          b.extension, b.proposals_hash, b.transactions_root, b.uncles_hash, \
@@ -229,7 +229,7 @@ async fn get_block(
         }
 
         format!(
-            "SELECT b.number, b.hash, b.parent_hash, toUnixTimestamp64Milli(b.timestamp) as timestamp, \
+            "SELECT b.number, b.hash, b.parent_hash, b.timestamp, \
              b.version, b.compact_target, b.transactions_count, b.proposals_count, b.uncles_count, \
              b.epoch_number, b.epoch_index, b.epoch_length, b.dao, b.nonce, b.extra_hash, \
              b.extension, b.proposals_hash, b.transactions_root, b.uncles_hash, \
@@ -247,7 +247,7 @@ async fn get_block(
             .map_err(|_| ApiError::bad_request("Invalid block number format"))?;
 
         format!(
-            "SELECT b.number, b.hash, b.parent_hash, toUnixTimestamp64Milli(b.timestamp) as timestamp, \
+            "SELECT b.number, b.hash, b.parent_hash, b.timestamp, \
              b.version, b.compact_target, b.transactions_count, b.proposals_count, b.uncles_count, \
              b.epoch_number, b.epoch_index, b.epoch_length, b.dao, b.nonce, b.extra_hash, \
              b.extension, b.proposals_hash, b.transactions_root, b.uncles_hash, \
