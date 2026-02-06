@@ -128,10 +128,11 @@ async fn get_cell_graph(
             let inputs = sqlx::query_as::<_, (Vec<u8>, i16, Vec<u8>, i16)>(
                 r#"
                 SELECT tx_hash, input_index, previous_tx_hash, previous_output_index
-                FROM transaction_inputs WHERE tx_hash = $1
+                FROM transaction_inputs WHERE tx_hash = $1 AND tx_block_number = $2
                 "#,
             )
             .bind(&hash_bytes)
+            .bind(block_number)
             .fetch_all(&state.pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?;
@@ -255,9 +256,10 @@ async fn get_tx_graph(
 
         if !is_cellbase {
             let inputs = sqlx::query_as::<_, (Vec<u8>, i16)>(
-                "SELECT previous_tx_hash, previous_output_index FROM transaction_inputs WHERE tx_hash = $1",
+                "SELECT previous_tx_hash, previous_output_index FROM transaction_inputs WHERE tx_hash = $1 AND tx_block_number = $2",
             )
             .bind(&hash_bytes)
+            .bind(block_number)
             .fetch_all(&state.pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?;

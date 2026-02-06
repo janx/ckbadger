@@ -17,6 +17,7 @@ use std::sync::Arc;
 use crate::response::{
     decode_cursor, encode_cursor, ok, ApiError, ApiResult, CursorPaginatedResponse,
 };
+use crate::tx_block_map::get_block_number_for_tx;
 use crate::utils::{
     address_to_lock_script_hash, is_ckb_address, script_to_address, shannon_to_ckb,
 };
@@ -1190,25 +1191,53 @@ async fn get_cell(
         full_data: Option<Vec<u8>>,
     }
 
-    let row = sqlx::query_as::<_, CellRow>(
-        r#"
-        SELECT 
-            c.tx_hash, c.output_index, c.capacity::TEXT,
-            c.lock_code_hash, c.lock_hash_type, c.lock_args, c.lock_script_hash,
-            c.type_code_hash, c.type_hash_type, c.type_args, c.type_script_hash,
-            c.data_hash, c.data_size, c.status, c.created_at_block, c.consumed_at_block, c.consumed_by_tx, 
-            c.data,
-            cd.data AS full_data
-        FROM cells c
-        LEFT JOIN cell_data cd ON cd.tx_hash = c.tx_hash AND cd.output_index = c.output_index
-        WHERE c.tx_hash = $1 AND c.output_index = $2
-        "#,
-    )
-    .bind(&hash_bytes)
-    .bind(output_index)
-    .fetch_optional(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let block_number = get_block_number_for_tx(&state.pool, &hash_bytes)
+        .await
+        .ok()
+        .flatten();
+
+    let row = if let Some(bn) = block_number {
+        sqlx::query_as::<_, CellRow>(
+            r#"
+            SELECT 
+                c.tx_hash, c.output_index, c.capacity::TEXT,
+                c.lock_code_hash, c.lock_hash_type, c.lock_args, c.lock_script_hash,
+                c.type_code_hash, c.type_hash_type, c.type_args, c.type_script_hash,
+                c.data_hash, c.data_size, c.status, c.created_at_block, c.consumed_at_block, c.consumed_by_tx, 
+                c.data,
+                cd.data AS full_data
+            FROM cells c
+            LEFT JOIN cell_data cd ON cd.tx_hash = c.tx_hash AND cd.output_index = c.output_index
+            WHERE c.tx_hash = $1 AND c.output_index = $2 AND c.created_at_block = $3
+            "#,
+        )
+        .bind(&hash_bytes)
+        .bind(output_index)
+        .bind(bn)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+    } else {
+        sqlx::query_as::<_, CellRow>(
+            r#"
+            SELECT 
+                c.tx_hash, c.output_index, c.capacity::TEXT,
+                c.lock_code_hash, c.lock_hash_type, c.lock_args, c.lock_script_hash,
+                c.type_code_hash, c.type_hash_type, c.type_args, c.type_script_hash,
+                c.data_hash, c.data_size, c.status, c.created_at_block, c.consumed_at_block, c.consumed_by_tx, 
+                c.data,
+                cd.data AS full_data
+            FROM cells c
+            LEFT JOIN cell_data cd ON cd.tx_hash = c.tx_hash AND cd.output_index = c.output_index
+            WHERE c.tx_hash = $1 AND c.output_index = $2
+            "#,
+        )
+        .bind(&hash_bytes)
+        .bind(output_index)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+    };
 
     match row {
         Some(r) => {

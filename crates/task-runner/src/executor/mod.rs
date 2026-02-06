@@ -4,6 +4,7 @@ use ckbadger_common::{
     CyclesBackfillConfig, DotbitRebuildConfig, IndexRebuildConfig, LabelImportConfig,
     MnftRebuildConfig, SecondaryIssuanceBackfillConfig, SporeRebuildConfig,
     StatisticsRebuildConfig, Task, TaskConfig, TaskType, TokenRebuildConfig,
+    TxBlockMapRebuildConfig,
 };
 use sqlx::PgPool;
 use std::time::Duration;
@@ -23,6 +24,7 @@ mod secondary_issuance;
 mod spore;
 pub mod statistics;
 mod token;
+mod tx_block_map;
 
 pub struct TaskExecutor {
     db: TaskDb,
@@ -181,6 +183,7 @@ impl TaskExecutor {
             TaskType::DaoRebuild => Err(anyhow::anyhow!(
                 "DaoRebuild must be executed by the indexer, not task-runner"
             )),
+            TaskType::TxBlockMapRebuild => self.execute_tx_block_map_rebuild(task).await,
         }
     }
 
@@ -311,5 +314,14 @@ impl TaskExecutor {
         };
 
         dotbit::execute(&self.db, &self.pool, task.id, &config).await
+    }
+
+    async fn execute_tx_block_map_rebuild(&self, task: &Task) -> Result<()> {
+        let config: TxBlockMapRebuildConfig = match task.config_typed() {
+            Some(TaskConfig::TxBlockMapRebuild(c)) => c,
+            _ => TxBlockMapRebuildConfig::default(),
+        };
+
+        tx_block_map::execute(&self.db, &self.pool, task.id, &config).await
     }
 }

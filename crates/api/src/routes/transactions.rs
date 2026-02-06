@@ -16,6 +16,7 @@ use crate::response::{
     decode_cursor, encode_cursor, ok, ApiError, ApiResult, CursorPaginatedResponse,
 };
 use crate::routes::activities::{fetch_transaction_activities, ActivityResponse};
+use crate::tx_block_map::get_block_number_for_tx;
 use crate::utils::script_to_address;
 use crate::AppState;
 
@@ -550,11 +551,12 @@ async fn get_transaction_detail(
                c.lock_code_hash, c.lock_hash_type, c.lock_args
         FROM transaction_inputs ti
         LEFT JOIN cells c ON c.tx_hash = ti.previous_tx_hash AND c.output_index = ti.previous_output_index
-        WHERE ti.tx_hash = $1
+        WHERE ti.tx_hash = $1 AND ti.tx_block_number = $2
         ORDER BY ti.input_index ASC
         "#,
     )
     .bind(&hash_bytes)
+    .bind(block_number)
     .fetch_all(&state.pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
@@ -632,11 +634,12 @@ async fn get_transaction_detail(
                data_size)::INT as occupied_capacity,
                created_at_block
         FROM cells
-        WHERE tx_hash = $1
+        WHERE tx_hash = $1 AND created_at_block = $2
         ORDER BY output_index ASC
         "#,
     )
     .bind(&hash_bytes)
+    .bind(block_number)
     .fetch_all(&state.pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
@@ -790,18 +793,42 @@ async fn get_cell_deps(
     let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap_or(&hash))
         .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
 
-    let rows = sqlx::query_as::<_, (Vec<u8>, i16, i16)>(
-        r#"
-        SELECT out_point_tx_hash, out_point_index, dep_type
-        FROM transaction_cell_deps
-        WHERE tx_hash = $1
-        ORDER BY dep_index ASC
-        "#,
-    )
-    .bind(&hash_bytes)
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    // 2-phase lookup: get block_number from tx_block_map for partition pruning
+    let block_number = get_block_number_for_tx(&state.pool, &hash_bytes)
+        .await
+        .ok()
+        .flatten();
+
+    let rows = if let Some(bn) = block_number {
+        // Fast path: partition-pruned query
+        sqlx::query_as::<_, (Vec<u8>, i16, i16)>(
+            r#"
+            SELECT out_point_tx_hash, out_point_index, dep_type
+            FROM transaction_cell_deps
+            WHERE tx_hash = $1 AND tx_block_number = $2
+            ORDER BY dep_index ASC
+            "#,
+        )
+        .bind(&hash_bytes)
+        .bind(bn)
+        .fetch_all(&state.pool)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+    } else {
+        // Fallback: full scan (tx_block_map not populated)
+        sqlx::query_as::<_, (Vec<u8>, i16, i16)>(
+            r#"
+            SELECT out_point_tx_hash, out_point_index, dep_type
+            FROM transaction_cell_deps
+            WHERE tx_hash = $1
+            ORDER BY dep_index ASC
+            "#,
+        )
+        .bind(&hash_bytes)
+        .fetch_all(&state.pool)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+    };
 
     let cell_deps: Vec<CellDepResponse> = rows
         .into_iter()
@@ -1158,20 +1185,43 @@ async fn get_transaction_asset_transfers(
         chrono::DateTime<chrono::Utc>, // timestamp
     );
 
-    let rows: Vec<ActivityRow> = sqlx::query_as(
-        r#"
-        SELECT tx_hash, block_number, tx_index, activity_index,
-               activity_category, activity_type, asset_id,
-               from_lock_hash, to_lock_hash, amount::TEXT, metadata, timestamp
-        FROM activities
-        WHERE tx_hash = $1 AND activity_category IN ('token', 'dob', 'nft', 'dao')
-        ORDER BY activity_index ASC
-        "#,
-    )
-    .bind(&hash_bytes)
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let block_number = get_block_number_for_tx(&state.pool, &hash_bytes)
+        .await
+        .ok()
+        .flatten();
+
+    let rows: Vec<ActivityRow> = if let Some(bn) = block_number {
+        sqlx::query_as(
+            r#"
+            SELECT tx_hash, block_number, tx_index, activity_index,
+                   activity_category, activity_type, asset_id,
+                   from_lock_hash, to_lock_hash, amount::TEXT, metadata, timestamp
+            FROM activities
+            WHERE tx_hash = $1 AND block_number = $2 AND activity_category IN ('token', 'dob', 'nft', 'dao')
+            ORDER BY activity_index ASC
+            "#,
+        )
+        .bind(&hash_bytes)
+        .bind(bn)
+        .fetch_all(&state.pool)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+    } else {
+        sqlx::query_as(
+            r#"
+            SELECT tx_hash, block_number, tx_index, activity_index,
+                   activity_category, activity_type, asset_id,
+                   from_lock_hash, to_lock_hash, amount::TEXT, metadata, timestamp
+            FROM activities
+            WHERE tx_hash = $1 AND activity_category IN ('token', 'dob', 'nft', 'dao')
+            ORDER BY activity_index ASC
+            "#,
+        )
+        .bind(&hash_bytes)
+        .fetch_all(&state.pool)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+    };
 
     let token_ids: Vec<Vec<u8>> = rows
         .iter()

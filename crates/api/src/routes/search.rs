@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::response::{ok, ApiError, ApiResult};
+use crate::tx_block_map::get_block_number_for_tx;
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -138,14 +139,31 @@ async fn search(
 
                 if tx_hash_normalized.len() == 66 {
                     if let Ok(hash_bytes) = hex::decode(&tx_hash_normalized[2..]) {
-                        let cell = sqlx::query_as::<_, (String, i16)>(
-                            "SELECT capacity::TEXT, status FROM cells WHERE tx_hash = $1 AND output_index = $2",
-                        )
-                        .bind(&hash_bytes)
-                        .bind(index)
-                        .fetch_optional(&state.pool)
-                        .await
-                        .map_err(|e| ApiError::internal(e.to_string()))?;
+                        let block_number = get_block_number_for_tx(&state.pool, &hash_bytes)
+                            .await
+                            .ok()
+                            .flatten();
+
+                        let cell = if let Some(bn) = block_number {
+                            sqlx::query_as::<_, (String, i16)>(
+                                "SELECT capacity::TEXT, status FROM cells WHERE tx_hash = $1 AND output_index = $2 AND created_at_block = $3",
+                            )
+                            .bind(&hash_bytes)
+                            .bind(index)
+                            .bind(bn)
+                            .fetch_optional(&state.pool)
+                            .await
+                            .map_err(|e| ApiError::internal(e.to_string()))?
+                        } else {
+                            sqlx::query_as::<_, (String, i16)>(
+                                "SELECT capacity::TEXT, status FROM cells WHERE tx_hash = $1 AND output_index = $2",
+                            )
+                            .bind(&hash_bytes)
+                            .bind(index)
+                            .fetch_optional(&state.pool)
+                            .await
+                            .map_err(|e| ApiError::internal(e.to_string()))?
+                        };
 
                         if let Some((capacity, status)) = cell {
                             let status_str = if status == 0 { "Live" } else { "Dead" };

@@ -69,6 +69,7 @@ pub enum TaskType {
     MnftRebuild,
     DotbitRebuild,
     DaoRebuild,
+    TxBlockMapRebuild,
 }
 
 impl std::fmt::Display for TaskType {
@@ -89,6 +90,7 @@ impl std::fmt::Display for TaskType {
             TaskType::MnftRebuild => write!(f, "mnft_rebuild"),
             TaskType::DotbitRebuild => write!(f, "dotbit_rebuild"),
             TaskType::DaoRebuild => write!(f, "dao_rebuild"),
+            TaskType::TxBlockMapRebuild => write!(f, "tx_block_map_rebuild"),
         }
     }
 }
@@ -113,6 +115,7 @@ impl std::str::FromStr for TaskType {
             "mnft_rebuild" => Ok(TaskType::MnftRebuild),
             "dotbit_rebuild" => Ok(TaskType::DotbitRebuild),
             "dao_rebuild" => Ok(TaskType::DaoRebuild),
+            "tx_block_map_rebuild" => Ok(TaskType::TxBlockMapRebuild),
             _ => Err(anyhow::anyhow!("Invalid task type: {}", s)),
         }
     }
@@ -151,7 +154,8 @@ impl TaskType {
             | TaskType::TokenRebuild
             | TaskType::MnftRebuild
             | TaskType::DotbitRebuild
-            | TaskType::DaoRebuild => true,
+            | TaskType::DaoRebuild
+            | TaskType::TxBlockMapRebuild => true,
         }
     }
 }
@@ -505,6 +509,23 @@ impl Default for DaoRebuildConfig {
     }
 }
 
+/// Configuration for tx_block_map rebuild task
+/// Rebuilds tx_block_map lookup table from transactions table
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TxBlockMapRebuildConfig {
+    /// Not used currently, reserved for future batching
+    #[serde(default)]
+    pub _reserved: Option<bool>,
+}
+
+/// Result for tx_block_map rebuild task
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TxBlockMapRebuildResult {
+    pub rows_inserted: i64,
+}
+
 /// Unified task configuration enum
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -524,6 +545,7 @@ pub enum TaskConfig {
     MnftRebuild(MnftRebuildConfig),
     DotbitRebuild(DotbitRebuildConfig),
     DaoRebuild(DaoRebuildConfig),
+    TxBlockMapRebuild(TxBlockMapRebuildConfig),
 }
 
 impl TaskConfig {
@@ -544,6 +566,7 @@ impl TaskConfig {
             TaskConfig::MnftRebuild(_) => TaskType::MnftRebuild,
             TaskConfig::DotbitRebuild(_) => TaskType::DotbitRebuild,
             TaskConfig::DaoRebuild(_) => TaskType::DaoRebuild,
+            TaskConfig::TxBlockMapRebuild(_) => TaskType::TxBlockMapRebuild,
         }
     }
 }
@@ -718,6 +741,7 @@ pub enum TaskResult {
     MnftRebuild(MnftRebuildResult),
     DotbitRebuild(DotbitRebuildResult),
     DaoRebuild(DaoRebuildResult),
+    TxBlockMapRebuild(TxBlockMapRebuildResult),
 }
 
 // ============================================
@@ -1005,6 +1029,16 @@ impl TaskBuilder {
             task_type: TaskType::DaoRebuild,
             config: serde_json::to_value(TaskConfig::DaoRebuild(config))
                 .expect("DaoRebuildConfig should be serializable"),
+            priority: 8,
+            max_retries: 2,
+        }
+    }
+
+    pub fn tx_block_map_rebuild(config: TxBlockMapRebuildConfig) -> Self {
+        Self {
+            task_type: TaskType::TxBlockMapRebuild,
+            config: serde_json::to_value(TaskConfig::TxBlockMapRebuild(config))
+                .expect("TxBlockMapRebuildConfig should be serializable"),
             priority: 8,
             max_retries: 2,
         }

@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
+use crate::tx_block_map::get_block_number_for_tx;
 use crate::utils::{address_to_lock_script_hash, is_ckb_address};
 use crate::AppState;
 
@@ -550,20 +551,40 @@ pub async fn fetch_transaction_activities(
     pool: &sqlx::PgPool,
     tx_hash: &[u8],
 ) -> Result<Vec<ActivityResponse>, String> {
-    let rows: Vec<ActivityRow> = sqlx::query_as(
-        r#"
-        SELECT activity_id, activity_type, activity_category, block_number, tx_hash,
-               tx_index, activity_index, from_lock_hash, to_lock_hash, amount::TEXT,
-               asset_id, metadata, timestamp
-        FROM activities
-        WHERE tx_hash = $1
-        ORDER BY activity_index ASC
-        "#,
-    )
-    .bind(tx_hash)
-    .fetch_all(pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    let block_number = get_block_number_for_tx(pool, tx_hash).await.ok().flatten();
+
+    let rows: Vec<ActivityRow> = if let Some(bn) = block_number {
+        sqlx::query_as(
+            r#"
+            SELECT activity_id, activity_type, activity_category, block_number, tx_hash,
+                   tx_index, activity_index, from_lock_hash, to_lock_hash, amount::TEXT,
+                   asset_id, metadata, timestamp
+            FROM activities
+            WHERE tx_hash = $1 AND block_number = $2
+            ORDER BY activity_index ASC
+            "#,
+        )
+        .bind(tx_hash)
+        .bind(bn)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| e.to_string())?
+    } else {
+        sqlx::query_as(
+            r#"
+            SELECT activity_id, activity_type, activity_category, block_number, tx_hash,
+                   tx_index, activity_index, from_lock_hash, to_lock_hash, amount::TEXT,
+                   asset_id, metadata, timestamp
+            FROM activities
+            WHERE tx_hash = $1
+            ORDER BY activity_index ASC
+            "#,
+        )
+        .bind(tx_hash)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| e.to_string())?
+    };
 
     Ok(rows.into_iter().map(row_to_response).collect())
 }
@@ -581,20 +602,43 @@ async fn get_transaction_activities(
         ));
     }
 
-    let rows: Vec<ActivityRow> = sqlx::query_as(
-        r#"
-        SELECT activity_id, activity_type, activity_category, block_number, tx_hash,
-               tx_index, activity_index, from_lock_hash, to_lock_hash, amount::TEXT,
-               asset_id, metadata, timestamp
-        FROM activities
-        WHERE tx_hash = $1
-        ORDER BY activity_index ASC
-        "#,
-    )
-    .bind(&tx_hash)
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let block_number = get_block_number_for_tx(&state.pool, &tx_hash)
+        .await
+        .ok()
+        .flatten();
+
+    let rows: Vec<ActivityRow> = if let Some(bn) = block_number {
+        sqlx::query_as(
+            r#"
+            SELECT activity_id, activity_type, activity_category, block_number, tx_hash,
+                   tx_index, activity_index, from_lock_hash, to_lock_hash, amount::TEXT,
+                   asset_id, metadata, timestamp
+            FROM activities
+            WHERE tx_hash = $1 AND block_number = $2
+            ORDER BY activity_index ASC
+            "#,
+        )
+        .bind(&tx_hash)
+        .bind(bn)
+        .fetch_all(&state.pool)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+    } else {
+        sqlx::query_as(
+            r#"
+            SELECT activity_id, activity_type, activity_category, block_number, tx_hash,
+                   tx_index, activity_index, from_lock_hash, to_lock_hash, amount::TEXT,
+                   asset_id, metadata, timestamp
+            FROM activities
+            WHERE tx_hash = $1
+            ORDER BY activity_index ASC
+            "#,
+        )
+        .bind(&tx_hash)
+        .fetch_all(&state.pool)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+    };
 
     let data: Vec<ActivityResponse> = rows.into_iter().map(row_to_response).collect();
 
