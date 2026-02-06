@@ -1068,7 +1068,7 @@ impl Indexer {
                     if self.should_use_copy() {
                         if let Some(copy_router) = &self.copy_router {
                             let pool_status = copy_router.pool_status();
-                            debug!(
+                            info!(
                                 "Pool status before write: size={}, available={}, max_size={}",
                                 pool_status.size, pool_status.available, pool_status.max_size
                             );
@@ -1136,7 +1136,7 @@ impl Indexer {
                         if self.should_use_copy() {
                             if let Some(copy_router) = &self.copy_router {
                                 let pool_status = copy_router.pool_status();
-                                debug!(
+                                info!(
                                     "Pool status after write: size={}, available={}, max_size={}",
                                     pool_status.size, pool_status.available, pool_status.max_size
                                 );
@@ -1385,7 +1385,7 @@ impl Indexer {
             if self.should_use_copy() {
                 if let Some(copy_router) = &self.copy_router {
                     let pool_status = copy_router.pool_status();
-                    debug!(
+                    info!(
                         "Pool status after write: size={}, available={}, max_size={}",
                         pool_status.size, pool_status.available, pool_status.max_size
                     );
