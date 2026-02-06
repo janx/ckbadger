@@ -388,7 +388,7 @@ async fn rebuild_miner_statistics(pool: &PgPool) -> Result<()> {
             MAX(b.number) as last_block_number
         FROM blocks b
         JOIN transactions t ON t.block_number = b.number AND t.tx_index = 0
-        JOIN cells c ON c.tx_hash = t.hash AND c.output_index = 0
+        JOIN cells c ON c.tx_hash = t.hash AND c.output_index = 0 AND c.created_at_block = b.number
         GROUP BY b.timestamp::date, c.lock_script_hash
         ORDER BY date, blocks_count DESC
         "#,

@@ -122,6 +122,29 @@ pub async fn execute(
         parse_hex_to_bytes(CLUSTER_CODE_HASH_TESTNET_V1),
     ];
 
+    // Pre-compute block range for partition pruning (Cluster cells)
+    // Spore protocol launched ~2023, cells are concentrated in blocks 10M+
+    let (cluster_min_block, cluster_max_block): (Option<i64>, Option<i64>) = sqlx::query_as(
+        r#"
+        SELECT MIN(created_at_block), MAX(created_at_block)
+        FROM cells
+        WHERE type_code_hash = ANY($1)
+        "#,
+    )
+    .bind(&cluster_code_hashes)
+    .fetch_one(pool)
+    .await?;
+
+    let (cluster_min_block, cluster_max_block) = (
+        cluster_min_block.unwrap_or(0),
+        cluster_max_block.unwrap_or(i64::MAX),
+    );
+
+    info!(
+        "Cluster cells block range: {} to {}",
+        cluster_min_block, cluster_max_block
+    );
+
     let total_cluster_cells: i64 = sqlx::query_scalar(
         r#"
         SELECT COUNT(*)
@@ -154,6 +177,8 @@ pub async fn execute(
         config,
         &cluster_code_hashes,
         total_cluster_cells,
+        cluster_min_block,
+        cluster_max_block,
     )
     .await?;
     result.clusters_updated = clusters_created;
@@ -165,6 +190,27 @@ pub async fn execute(
         parse_hex_to_bytes(SPORE_CODE_HASH_TESTNET_V2),
         parse_hex_to_bytes(SPORE_CODE_HASH_TESTNET_V1),
     ];
+
+    let (spore_min_block, spore_max_block): (Option<i64>, Option<i64>) = sqlx::query_as(
+        r#"
+        SELECT MIN(created_at_block), MAX(created_at_block)
+        FROM cells
+        WHERE type_code_hash = ANY($1)
+        "#,
+    )
+    .bind(&spore_code_hashes)
+    .fetch_one(pool)
+    .await?;
+
+    let (spore_min_block, spore_max_block) = (
+        spore_min_block.unwrap_or(0),
+        spore_max_block.unwrap_or(i64::MAX),
+    );
+
+    info!(
+        "Spore cells block range: {} to {}",
+        spore_min_block, spore_max_block
+    );
 
     let total_spore_cells: i64 = sqlx::query_scalar(
         r#"
@@ -198,6 +244,8 @@ pub async fn execute(
         config,
         &spore_code_hashes,
         total_spore_cells,
+        spore_min_block,
+        spore_max_block,
     )
     .await?;
     result.spores_processed = spores_inserted;
@@ -278,6 +326,7 @@ pub async fn execute(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn rebuild_clusters(
     db: &TaskDb,
     pool: &PgPool,
@@ -285,6 +334,8 @@ async fn rebuild_clusters(
     config: &SporeRebuildConfig,
     cluster_code_hashes: &[Vec<u8>],
     total_cells: i64,
+    min_block: i64,
+    max_block: i64,
 ) -> Result<i64> {
     let batch_size = config.batch_size as i64;
     let mut last_block: i64 = -1;
@@ -309,6 +360,8 @@ async fn rebuild_clusters(
               AND type_hash_type IS NOT NULL
               AND type_script_hash IS NOT NULL
               AND type_args IS NOT NULL
+              AND created_at_block >= $5
+              AND created_at_block <= $6
               AND (created_at_block > $2 OR (created_at_block = $2 AND id > $3))
             ORDER BY created_at_block, id
             LIMIT $4
@@ -318,6 +371,8 @@ async fn rebuild_clusters(
         .bind(last_block)
         .bind(last_id)
         .bind(batch_size)
+        .bind(min_block)
+        .bind(max_block)
         .fetch_all(pool)
         .await?;
 
@@ -444,6 +499,7 @@ async fn rebuild_clusters(
     Ok(count)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn rebuild_spore_cells(
     db: &TaskDb,
     pool: &PgPool,
@@ -451,6 +507,8 @@ async fn rebuild_spore_cells(
     config: &SporeRebuildConfig,
     spore_code_hashes: &[Vec<u8>],
     total_cells: i64,
+    min_block: i64,
+    max_block: i64,
 ) -> Result<i64> {
     let batch_size = config.batch_size as i64;
     let mut last_block: i64 = -1;
@@ -474,6 +532,8 @@ async fn rebuild_spore_cells(
               AND type_hash_type IS NOT NULL
               AND type_script_hash IS NOT NULL
               AND type_args IS NOT NULL
+              AND created_at_block >= $5
+              AND created_at_block <= $6
               AND (created_at_block > $2 OR (created_at_block = $2 AND id > $3))
             ORDER BY created_at_block, id
             LIMIT $4
@@ -483,6 +543,8 @@ async fn rebuild_spore_cells(
         .bind(last_block)
         .bind(last_id)
         .bind(batch_size)
+        .bind(min_block)
+        .bind(max_block)
         .fetch_all(pool)
         .await?;
 

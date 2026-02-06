@@ -1145,14 +1145,12 @@ CREATE INDEX idx_blocks_epoch ON blocks(epoch_number);
 CREATE INDEX idx_blocks_miner ON blocks(miner_lock_hash) WHERE miner_lock_hash IS NOT NULL;
 
 -- transactions
-CREATE INDEX idx_tx_hash ON transactions(hash);
 CREATE INDEX idx_tx_timestamp ON transactions(timestamp DESC);
 CREATE INDEX idx_tx_short_hash ON transactions(short_hash, block_number);
 -- Cursor pagination
 CREATE INDEX idx_tx_cursor ON transactions(block_number DESC, tx_index DESC);
 
 -- cells
-CREATE INDEX idx_cells_outpoint ON cells(tx_hash, output_index);
 -- Live cells query (most important)
 CREATE INDEX idx_cells_lock_live ON cells(lock_script_hash, created_at_block DESC)
     WHERE status = 0;
@@ -1161,9 +1159,6 @@ CREATE INDEX idx_cells_lock_script_details ON cells(lock_script_hash)
     INCLUDE (lock_code_hash, lock_hash_type, lock_args);
 CREATE INDEX idx_cells_type_live ON cells(type_script_hash, created_at_block DESC)
     WHERE status = 0 AND type_script_hash IS NOT NULL;
--- Consumed query
-CREATE INDEX idx_cells_consumed_by ON cells(consumed_by_tx)
-    WHERE consumed_by_tx IS NOT NULL;
 -- Type script hash lookup (for UDT)
 CREATE INDEX idx_cells_type_script_hash ON cells(type_script_hash) WHERE type_script_hash IS NOT NULL;
 -- Code hash lookup (for script usage stats) - basic indexes
@@ -1176,13 +1171,6 @@ CREATE INDEX idx_cells_lock_code_hash_live ON cells(lock_code_hash, lock_hash_ty
     WHERE status = 0;
 CREATE INDEX idx_cells_type_code_hash_live ON cells(type_code_hash, type_hash_type, created_at_block DESC, output_index DESC)
     WHERE status = 0 AND type_code_hash IS NOT NULL;
-
--- transaction_inputs
-CREATE INDEX idx_inputs_previous ON transaction_inputs(previous_tx_hash, previous_output_index);
-CREATE INDEX idx_inputs_tx ON transaction_inputs(tx_hash);
-
--- transaction_cell_deps
-CREATE INDEX idx_cell_deps_tx ON transaction_cell_deps(tx_hash);
 
 -- uncle_blocks
 CREATE INDEX idx_uncles_hash ON uncle_blocks(hash);

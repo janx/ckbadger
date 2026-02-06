@@ -45,9 +45,10 @@ pub async fn execute(
         xudt_type_hash.clone(),
     ];
 
-    let total_cells: i64 = sqlx::query_scalar(
+    // Pre-compute block range for partition pruning
+    let (min_block, max_block): (Option<i64>, Option<i64>) = sqlx::query_as(
         r#"
-        SELECT COUNT(*)
+        SELECT MIN(created_at_block), MAX(created_at_block)
         FROM cells
         WHERE type_code_hash = ANY($1)
           AND type_hash_type IS NOT NULL
@@ -57,6 +58,42 @@ pub async fn execute(
         "#,
     )
     .bind(&code_hashes)
+    .fetch_one(pool)
+    .await?;
+
+    let (min_block, max_block) = match (min_block, max_block) {
+        (Some(min), Some(max)) => (min, max),
+        _ => {
+            info!("No UDT cells found, skipping token rebuild");
+            db.complete_task(task_id, Some(serde_json::json!({ "udt_cells_created": 0 })))
+                .await?;
+            return Ok(());
+        }
+    };
+
+    info!(
+        "UDT cells block range: {} to {} (will prune {} partitions)",
+        min_block,
+        max_block,
+        10 - ((max_block - min_block) / 5_000_000 + 1).min(10)
+    );
+
+    let total_cells: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM cells
+        WHERE type_code_hash = ANY($1)
+          AND type_hash_type IS NOT NULL
+          AND type_script_hash IS NOT NULL
+          AND type_args IS NOT NULL
+          AND data_size >= 16
+          AND created_at_block >= $2
+          AND created_at_block <= $3
+        "#,
+    )
+    .bind(&code_hashes)
+    .bind(min_block)
+    .bind(max_block)
     .fetch_one(pool)
     .await?;
 
@@ -95,6 +132,8 @@ pub async fn execute(
               AND type_script_hash IS NOT NULL
               AND type_args IS NOT NULL
               AND data_size >= 16
+              AND created_at_block >= $5
+              AND created_at_block <= $6
               AND (created_at_block > $2 OR (created_at_block = $2 AND id > $3))
             ORDER BY created_at_block, id
             LIMIT $4
@@ -104,6 +143,8 @@ pub async fn execute(
         .bind(last_block)
         .bind(last_id)
         .bind(config.batch_size)
+        .bind(min_block)
+        .bind(max_block)
         .fetch_all(pool)
         .await?;
 

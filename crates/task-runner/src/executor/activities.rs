@@ -132,8 +132,10 @@ async fn rebuild_activities_batch(pool: &PgPool, start_block: i64, end_block: i6
                 c.capacity AS input_capacity,
                 c.lock_script_hash AS input_lock_hash
             FROM transaction_inputs ti
+            JOIN tx_block_map tbm ON tbm.tx_hash = ti.previous_tx_hash
             JOIN cells c ON c.tx_hash = ti.previous_tx_hash 
                         AND c.output_index = ti.previous_output_index
+                        AND c.created_at_block = tbm.block_number
             WHERE ti.tx_block_number >= $1 AND ti.tx_block_number < $2
         ),
         -- Net balance change per address per transaction (include ALL cells for CKB capacity tracking)
