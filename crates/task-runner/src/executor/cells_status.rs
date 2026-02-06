@@ -35,7 +35,7 @@ pub async fn execute(
     let mut current_block: i64 = 0;
     let mut rate_calc = RateCalculator::default();
 
-    while current_block <= total_blocks {
+    while current_block < total_blocks {
         let end_block = (current_block + config.batch_size).min(total_blocks);
 
         // Unified query: handles both status=0 cells AND cells with NULL consumed_at_block
