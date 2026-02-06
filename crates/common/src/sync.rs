@@ -52,6 +52,11 @@ pub struct SyncStatusData {
     pub spore_deferred: bool,
     pub spore_deferred_at: Option<i64>,
     pub spore_rebuild_completed_at: Option<i64>,
+
+    #[serde(default)]
+    pub tx_block_map_deferred: bool,
+    pub tx_block_map_deferred_at: Option<i64>,
+    pub tx_block_map_rebuild_completed_at: Option<i64>,
 }
 
 impl SyncStatusData {
@@ -150,6 +155,13 @@ impl SyncStatusData {
     pub fn complete_activities_rebuild(&mut self) {
         self.activities_deferred = false;
         self.activities_rebuild_completed_at = Some(chrono::Utc::now().timestamp());
+    }
+
+    pub fn set_tx_block_map_deferred(&mut self, deferred: bool) {
+        self.tx_block_map_deferred = deferred;
+        if deferred {
+            self.tx_block_map_deferred_at = Some(chrono::Utc::now().timestamp());
+        }
     }
 }
 
@@ -297,6 +309,9 @@ mod tests {
             spore_deferred: false,
             spore_deferred_at: None,
             spore_rebuild_completed_at: None,
+            tx_block_map_deferred: false,
+            tx_block_map_deferred_at: None,
+            tx_block_map_rebuild_completed_at: None,
         };
 
         let json = serde_json::to_string(&status).unwrap();

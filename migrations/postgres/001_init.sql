@@ -56,6 +56,11 @@ CREATE TABLE sync_status (
     dao_deferred_at TIMESTAMPTZ,
     dao_rebuild_completed_at TIMESTAMPTZ,
 
+    -- Deferred tx_block_map optimization (skip tx_block_map writes during bulk sync)
+    tx_block_map_deferred BOOLEAN NOT NULL DEFAULT FALSE,
+    tx_block_map_deferred_at TIMESTAMPTZ,
+    tx_block_map_rebuild_completed_at TIMESTAMPTZ,
+
     stats_rebuild_in_progress BOOLEAN NOT NULL DEFAULT FALSE,
 
     CONSTRAINT single_row CHECK (id = 1)
@@ -433,6 +438,17 @@ CREATE TABLE cell_data (
 
     UNIQUE(tx_hash, output_index)
 );
+
+-- ---- tx_block_map (non-partitioned lookup table for partition pruning) ----
+-- Maps tx_hash to block_number, enabling 2-phase queries for partition pruning
+-- Size: ~5GB (54M rows × ~63 bytes + index)
+CREATE TABLE tx_block_map (
+    tx_hash BYTEA NOT NULL,
+    block_number BIGINT NOT NULL,
+    PRIMARY KEY (tx_hash)
+);
+
+CREATE INDEX idx_tx_block_map_block ON tx_block_map(block_number);
 
 -- ===========================================
 -- 3. Pre-computed Aggregation Tables

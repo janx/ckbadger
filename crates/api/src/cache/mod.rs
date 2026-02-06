@@ -104,6 +104,9 @@ impl CacheBackend {
             spore_deferred: false,
             spore_deferred_at: None,
             spore_rebuild_completed_at: None,
+            tx_block_map_deferred: false,
+            tx_block_map_deferred_at: None,
+            tx_block_map_rebuild_completed_at: None,
         }
     }
 
