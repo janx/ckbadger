@@ -36,7 +36,7 @@ struct Args {
     #[arg(long, default_value = "true")]
     pipeline_enabled: bool,
 
-    #[arg(long, default_value = "16")]
+    #[arg(long, default_value = "4")]
     pipeline_buffer: usize,
 
     #[arg(

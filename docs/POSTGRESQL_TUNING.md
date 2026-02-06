@@ -324,7 +324,7 @@ top -p $(pgrep -f ckbadger-indexer)
 
 1. Reduce `shared_buffers` (currently 24GB)
 2. Reduce `work_mem` (currently 256MB)
-3. Reduce `pipeline_buffer` in indexer (currently 16)
+3. Reduce `pipeline_buffer` in indexer (default 4, reduce further if needed)
 
 ```bash
 cargo run -p ckbadger-indexer -- --apply-pg-tuning --pipeline-buffer 8

@@ -69,6 +69,7 @@ pub enum DialogType {
 pub enum FocusedPanel {
     #[default]
     Tasks,
+    Details,
     Log,
 }
 
@@ -86,6 +87,7 @@ pub struct App {
     rate_history: VecDeque<f64>,
     log_entries: VecDeque<LogEntry>,
     log_scroll: usize,
+    detail_scroll: usize,
     focused_panel: FocusedPanel,
     prev_is_bulk_sync: Option<bool>,
     prev_is_syncing: Option<bool>,
@@ -119,6 +121,7 @@ impl App {
             rate_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             log_entries,
             log_scroll: 0,
+            detail_scroll: 0,
             focused_panel: FocusedPanel::default(),
             prev_is_bulk_sync: None,
             prev_is_syncing: None,
@@ -131,7 +134,8 @@ impl App {
 
     pub fn toggle_focus(&mut self) {
         self.focused_panel = match self.focused_panel {
-            FocusedPanel::Tasks => FocusedPanel::Log,
+            FocusedPanel::Tasks => FocusedPanel::Details,
+            FocusedPanel::Details => FocusedPanel::Log,
             FocusedPanel::Log => FocusedPanel::Tasks,
         };
     }
@@ -156,6 +160,19 @@ impl App {
 
     pub fn scroll_log_to_top(&mut self) {
         self.log_scroll = self.log_entries.len().saturating_sub(1);
+    }
+
+    pub fn scroll_detail_up(&mut self) {
+        self.detail_scroll = self.detail_scroll.saturating_add(1);
+    }
+
+    pub fn scroll_detail_down(&mut self) {
+        self.detail_scroll = self.detail_scroll.saturating_sub(1);
+    }
+
+    #[allow(dead_code)]
+    pub fn reset_detail_scroll(&mut self) {
+        self.detail_scroll = 0;
     }
 
     pub async fn refresh(&mut self) -> Result<()> {
@@ -460,20 +477,20 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),
-            Constraint::Length(9),
-            Constraint::Length(5),
-            Constraint::Min(6),
+            Constraint::Length(7),
             Constraint::Length(8),
-            Constraint::Length(12),
+            Constraint::Length(5),
+            Constraint::Min(8),
+            Constraint::Length(10),
             Constraint::Length(3),
         ])
         .split(f.area());
 
     draw_header(f, app, chunks[0]);
-    draw_sync_and_chart(f, app, chunks[1]);
-    draw_memory_stats(f, app, chunks[2]);
-    draw_task_table(f, app, chunks[3]);
-    draw_task_detail(f, app, chunks[4]);
+    draw_sync_status_full(f, app, chunks[1]);
+    draw_rate_chart_full(f, app, chunks[2]);
+    draw_memory_stats(f, app, chunks[3]);
+    draw_tasks_and_details(f, app, chunks[4]);
     draw_log(f, app, chunks[5]);
     draw_footer(f, app, chunks[6]);
 
@@ -526,6 +543,234 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(time_widget, cols[1]);
 }
 
+fn draw_sync_status_full(f: &mut Frame, app: &App, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(COLOR_BORDER))
+        .title(Span::styled(
+            "Sync Status",
+            Style::default().fg(Color::White),
+        ));
+
+    let Some(sync) = &app.sync_status else {
+        let msg = Paragraph::new("No sync data available").block(block);
+        f.render_widget(msg, area);
+        return;
+    };
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(20),
+            Constraint::Min(30),
+            Constraint::Length(25),
+        ])
+        .split(inner);
+
+    let (mode, mode_color) = if !sync.is_syncing {
+        ("SYNCED", Color::Green)
+    } else if sync.is_bulk_sync {
+        ("BULK SYNC", Color::Yellow)
+    } else {
+        ("SYNCING", Color::Cyan)
+    };
+
+    let mut left_lines = vec![
+        Line::from(vec![
+            Span::styled(
+                format!(" {} ", mode),
+                Style::default().fg(Color::Black).bg(mode_color),
+            ),
+            if sync.indexes_deferred {
+                Span::styled(" [IDX]", Style::default().fg(Color::Yellow))
+            } else {
+                Span::raw("")
+            },
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Progress: ", Style::default().fg(COLOR_MUTED)),
+            Span::styled(
+                format!("{:.2}%", sync.progress),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+    ];
+
+    let ratio = (sync.progress / 100.0).clamp(0.0, 1.0);
+    let bar_width = 16;
+    let filled = (ratio * bar_width as f64) as usize;
+    let bar = format!("[{}{}]", "█".repeat(filled), "░".repeat(bar_width - filled));
+    left_lines.push(Line::from(Span::styled(
+        bar,
+        Style::default().fg(Color::Cyan),
+    )));
+
+    f.render_widget(Paragraph::new(left_lines), cols[0]);
+
+    let format_num = |n: i64| -> String {
+        if n >= 1_000_000 {
+            format!("{:.2}M", n as f64 / 1_000_000.0)
+        } else if n >= 1_000 {
+            format!("{:.1}K", n as f64 / 1_000.0)
+        } else {
+            format!("{}", n)
+        }
+    };
+
+    let blocks_behind = sync.chain_tip - sync.tip_block;
+    let mid_lines = vec![
+        Line::from(vec![
+            Span::styled("Current Block: ", Style::default().fg(COLOR_MUTED)),
+            Span::styled(
+                format_num(sync.tip_block),
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" / {}", format_num(sync.chain_tip)),
+                Style::default().fg(COLOR_MUTED),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("Blocks Behind: ", Style::default().fg(COLOR_MUTED)),
+            Span::styled(
+                format_num(blocks_behind),
+                Style::default().fg(if blocks_behind > 1000 {
+                    Color::Yellow
+                } else if blocks_behind > 0 {
+                    Color::Cyan
+                } else {
+                    Color::Green
+                }),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("Speed (now):   ", Style::default().fg(COLOR_MUTED)),
+            if let Some(rt) = sync.rate_realtime {
+                Span::styled(
+                    format!("{:.0} blk/s", rt),
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                )
+            } else {
+                Span::styled("-", Style::default().fg(COLOR_MUTED))
+            },
+        ]),
+        Line::from(vec![
+            Span::styled("Speed (EMA):   ", Style::default().fg(COLOR_MUTED)),
+            if let Some(ema) = sync.rate_ema {
+                Span::raw(format!("{:.0} blk/s", ema))
+            } else {
+                Span::styled("-", Style::default().fg(COLOR_MUTED))
+            },
+        ]),
+    ];
+    f.render_widget(Paragraph::new(mid_lines), cols[1]);
+
+    let mut right_lines = Vec::new();
+    if let Some(ref eta) = sync.eta {
+        right_lines.push(Line::from(vec![
+            Span::styled("ETA: ", Style::default().fg(COLOR_MUTED)),
+            Span::styled(
+                eta.clone(),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+    }
+    if let Some(ref elapsed) = sync.elapsed_time {
+        right_lines.push(Line::from(vec![
+            Span::styled("Elapsed: ", Style::default().fg(COLOR_MUTED)),
+            Span::raw(elapsed.clone()),
+        ]));
+    }
+    if right_lines.is_empty() {
+        right_lines.push(Line::from(Span::styled(
+            "Real-time sync",
+            Style::default().fg(Color::Green),
+        )));
+    }
+    f.render_widget(Paragraph::new(right_lines), cols[2]);
+}
+
+fn draw_rate_chart_full(f: &mut Frame, app: &App, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(COLOR_BORDER))
+        .title(chart_title(app));
+
+    if app.rate_history.is_empty() {
+        let msg = Paragraph::new("Collecting data...")
+            .style(Style::default().fg(COLOR_MUTED))
+            .block(block);
+        f.render_widget(msg, area);
+        return;
+    }
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let chart_result = render_bar_chart(
+        &app.rate_history,
+        inner.width as usize,
+        inner.height as usize,
+    );
+
+    for (i, row) in chart_result.rows.iter().enumerate() {
+        if i < inner.height as usize {
+            let y = inner.y + i as u16;
+            let span = Span::styled(row.content.clone(), Style::default().fg(row.color));
+            let paragraph = Paragraph::new(Line::from(span));
+            let line_area = Rect {
+                x: inner.x,
+                y,
+                width: inner.width,
+                height: 1,
+            };
+            f.render_widget(paragraph, line_area);
+        }
+    }
+
+    let samples = app.rate_history.len();
+    let duration = if samples >= 3600 {
+        "1h".to_string()
+    } else if samples >= 60 {
+        format!("{}m", samples / 60)
+    } else {
+        format!("{}s", samples)
+    };
+
+    let axis_label = Span::styled(format!(" {} ", duration), Style::default().fg(COLOR_MUTED));
+    let label_para = Paragraph::new(Line::from(axis_label)).alignment(Alignment::Right);
+    let label_area = Rect {
+        x: inner.x,
+        y: inner.y,
+        width: inner.width,
+        height: 1,
+    };
+    f.render_widget(label_para, label_area);
+}
+
+fn draw_tasks_and_details(f: &mut Frame, app: &mut App, area: Rect) {
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+        .split(area);
+
+    draw_task_table(f, app, cols[0]);
+    draw_task_detail(f, app, cols[1]);
+}
+
+#[allow(dead_code)]
 fn draw_sync_and_chart(f: &mut Frame, app: &App, area: Rect) {
     let cols = Layout::default()
         .direction(Direction::Horizontal)
@@ -536,6 +781,7 @@ fn draw_sync_and_chart(f: &mut Frame, app: &App, area: Rect) {
     draw_rate_chart_compact(f, app, cols[1]);
 }
 
+#[allow(dead_code)]
 fn draw_sync_status_compact(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
@@ -642,6 +888,7 @@ fn draw_sync_status_compact(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(gauge, rows[2]);
 }
 
+#[allow(dead_code)]
 fn draw_rate_chart_compact(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
@@ -865,40 +1112,31 @@ fn draw_task_table(f: &mut Frame, app: &mut App, area: Rect) {
         COLOR_BORDER
     };
 
-    let header_cells = ["ID", "Type", "Status", "Progress", "Rate", "ETA", "Created"]
+    let header_cells = ["Type", "Status", "Progress", "ETA"]
         .iter()
         .map(|h| Cell::from(*h).style(Style::default().fg(Color::Yellow)));
     let header = Row::new(header_cells).style(Style::default()).height(1);
 
     let rows = app.tasks.iter().map(|task| {
-        let id = task.id.to_string()[..8].to_string();
         let task_type = task.task_type.clone();
         let progress = format!("{:.1}%", task.progress_percent());
-        let rate = task
-            .rate_ema
-            .map(|r| format!("{:.1}/s", r))
-            .unwrap_or_default();
         let eta = task.eta_formatted().unwrap_or_default();
-        let created = task.created_at.format("%Y-%m-%d %H:%M").to_string();
 
         let (status_icon, status_text, status_style) = match task.status.as_str() {
             "running" => ("▶ ", "running", Style::default().fg(Color::Green)),
             "pending" => ("◌ ", "pending", Style::default().fg(Color::Yellow)),
-            "completed" => ("✓ ", "completed", Style::default().fg(Color::Blue)),
+            "completed" => ("✓ ", "done", Style::default().fg(Color::Blue)),
             "failed" => ("✗ ", "failed", Style::default().fg(Color::Red)),
-            "cancelled" => ("○ ", "cancelled", Style::default().fg(COLOR_MUTED)),
+            "cancelled" => ("○ ", "cancel", Style::default().fg(COLOR_MUTED)),
             "paused" => ("⏸ ", "paused", Style::default().fg(Color::Magenta)),
             _ => ("  ", task.status.as_str(), Style::default()),
         };
 
         Row::new(vec![
-            Cell::from(id),
             Cell::from(task_type),
             Cell::from(format!("{}{}", status_icon, status_text)).style(status_style),
             Cell::from(progress),
-            Cell::from(rate),
             Cell::from(eta),
-            Cell::from(created),
         ])
     });
 
@@ -913,13 +1151,10 @@ fn draw_task_table(f: &mut Frame, app: &mut App, area: Rect) {
     let table = Table::new(
         rows,
         [
-            Constraint::Length(10),
-            Constraint::Length(16),
-            Constraint::Length(14),
-            Constraint::Length(10),
+            Constraint::Min(16),
+            Constraint::Length(12),
             Constraint::Length(10),
             Constraint::Length(10),
-            Constraint::Length(18),
         ],
     )
     .header(header)
@@ -942,21 +1177,69 @@ fn draw_task_table(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_task_detail(f: &mut Frame, app: &App, area: Rect) {
-    let detail = if let Some(task) = app.selected_task() {
+    let is_focused = app.focused_panel == FocusedPanel::Details;
+    let border_color = if is_focused {
+        Color::Cyan
+    } else {
+        COLOR_BORDER
+    };
+
+    let (lines, total_lines) = if let Some(task) = app.selected_task() {
+        let (status_icon, status_color) = match task.status.as_str() {
+            "running" => ("▶", Color::Green),
+            "pending" => ("◌", Color::Yellow),
+            "completed" => ("✓", Color::Blue),
+            "failed" => ("✗", Color::Red),
+            "cancelled" => ("○", COLOR_MUTED),
+            "paused" => ("⏸", Color::Magenta),
+            _ => (" ", Color::White),
+        };
+
         let mut lines = vec![
             Line::from(vec![
-                Span::styled("ID: ", Style::default().fg(COLOR_MUTED)),
-                Span::raw(task.id.to_string()),
+                Span::styled("ID:      ", Style::default().fg(COLOR_MUTED)),
+                Span::styled(task.id.to_string(), Style::default().fg(Color::Cyan)),
             ]),
             Line::from(vec![
-                Span::styled("Type: ", Style::default().fg(COLOR_MUTED)),
-                Span::styled(&task.task_type, Style::default().fg(Color::Cyan)),
+                Span::styled("Status:  ", Style::default().fg(COLOR_MUTED)),
+                Span::styled(
+                    format!("{} {}", status_icon, task.status),
+                    Style::default().fg(status_color),
+                ),
             ]),
             Line::from(vec![
-                Span::styled("Status: ", Style::default().fg(COLOR_MUTED)),
-                Span::raw(&task.status),
+                Span::styled("Created: ", Style::default().fg(COLOR_MUTED)),
+                Span::raw(task.created_at.format("%Y-%m-%d %H:%M:%S").to_string()),
             ]),
         ];
+
+        if let Some(rate) = task.rate_ema {
+            lines.push(Line::from(vec![
+                Span::styled("Rate:    ", Style::default().fg(COLOR_MUTED)),
+                Span::styled(
+                    format!("{:.1}/s", rate),
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]));
+        }
+
+        if let Some(elapsed) = task.elapsed_formatted() {
+            lines.push(Line::from(vec![
+                Span::styled("Elapsed: ", Style::default().fg(COLOR_MUTED)),
+                Span::raw(elapsed),
+            ]));
+        }
+
+        if let Some(eta) = task.eta_formatted() {
+            lines.push(Line::from(vec![
+                Span::styled("ETA:     ", Style::default().fg(COLOR_MUTED)),
+                Span::styled(eta, Style::default().fg(Color::Yellow)),
+            ]));
+        }
+
+        lines.push(Line::from(""));
 
         if let Some(msg) = &task.progress_message {
             lines.push(Line::from(vec![
@@ -974,31 +1257,56 @@ fn draw_task_detail(f: &mut Frame, app: &App, area: Rect) {
 
         if let Some(runner) = &task.runner_id {
             lines.push(Line::from(vec![
-                Span::styled("Runner: ", Style::default().fg(COLOR_MUTED)),
+                Span::styled("Runner:  ", Style::default().fg(COLOR_MUTED)),
                 Span::raw(runner),
             ]));
         }
 
-        if let Some(elapsed) = task.elapsed_formatted() {
-            lines.push(Line::from(vec![
-                Span::styled("Elapsed: ", Style::default().fg(COLOR_MUTED)),
-                Span::raw(elapsed),
-            ]));
-        }
-
-        Paragraph::new(lines)
+        let total = lines.len();
+        (lines, total)
     } else {
-        Paragraph::new(Span::styled(
+        let lines = vec![Line::from(Span::styled(
             "No task selected",
             Style::default().fg(COLOR_MUTED),
-        ))
+        ))];
+        (lines, 1)
     };
 
+    let scroll_indicator = if app.detail_scroll > 0 {
+        format!(" ↑{}", app.detail_scroll)
+    } else {
+        String::new()
+    };
+
+    let title = format!("Details{}", scroll_indicator);
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(COLOR_BORDER))
-        .title(Span::styled("Details", Style::default().fg(Color::White)));
-    f.render_widget(detail.block(block).wrap(Wrap { trim: true }), area);
+        .border_style(Style::default().fg(border_color))
+        .title(Span::styled(
+            title,
+            Style::default().fg(if is_focused {
+                Color::Cyan
+            } else {
+                Color::White
+            }),
+        ));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let visible_height = inner.height as usize;
+    let scroll = app
+        .detail_scroll
+        .min(total_lines.saturating_sub(visible_height));
+
+    let visible_lines: Vec<Line> = lines
+        .into_iter()
+        .skip(scroll)
+        .take(visible_height)
+        .collect();
+
+    let paragraph = Paragraph::new(visible_lines).wrap(Wrap { trim: true });
+    f.render_widget(paragraph, inner);
 }
 
 fn draw_log(f: &mut Frame, app: &App, area: Rect) {
@@ -1071,7 +1379,10 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     } else {
         match app.focused_panel {
             FocusedPanel::Tasks => {
-                "Tab: Log │ j/k: Navigate │ n: New │ c: Cancel │ p: Pause │ r: Retry │ d: Del │ q: Quit".to_string()
+                "Tab: Details │ j/k: Navigate │ n: New │ c: Cancel │ p: Pause │ r: Retry │ d: Del │ q: Quit".to_string()
+            }
+            FocusedPanel::Details => {
+                "Tab: Log │ j/k: Scroll │ q: Quit".to_string()
             }
             FocusedPanel::Log => {
                 "Tab: Tasks │ j/k: Scroll │ g: Bottom │ G: Top │ q: Quit".to_string()

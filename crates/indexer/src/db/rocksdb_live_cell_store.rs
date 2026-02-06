@@ -13,8 +13,8 @@ use sqlx::PgPool;
 use std::sync::RwLock;
 
 use super::live_cell_storage::{
-    CachedBlockHeader, ConsumedCellRecord, LiveCellInfo, LiveCellStorage, LiveCellStorageAsync,
-    MemoryStats,
+    CachedBlockHeader, CompactConsumedCellInfo, ConsumedCellRecord, LiveCellInfo, LiveCellStorage,
+    LiveCellStorageAsync, MemoryStats,
 };
 
 const KEY_SIZE: usize = 34;
@@ -27,6 +27,13 @@ const CF_DAO_DEPOSITS: &str = "dao_deposits";
 const CF_DAO_DEPOSIT_BY_WITHDRAW_TX: &str = "dao_deposit_by_withdraw_tx";
 
 const MAX_CONSUMED_HISTORY_BLOCKS: i64 = 1000;
+
+fn deserialize_consumed_cell(value: &[u8]) -> Option<LiveCellInfo> {
+    if let Ok(compact) = bincode::deserialize::<CompactConsumedCellInfo>(value) {
+        return Some(compact.to_live_cell_info());
+    }
+    bincode::deserialize::<LiveCellInfo>(value).ok()
+}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct DaoDepositCacheEntry {
@@ -163,7 +170,8 @@ impl RocksDbLiveCellStore {
 
     fn insert_consumed_internal(&self, tx_hash: &[u8], output_index: i16, info: &LiveCellInfo) {
         let key = Self::encode_cell_key(tx_hash, output_index);
-        let value = bincode::serialize(info).expect("serialize LiveCellInfo");
+        let compact = CompactConsumedCellInfo::from_live_cell_info(info);
+        let value = bincode::serialize(&compact).expect("serialize CompactConsumedCellInfo");
         self.db
             .put_cf(self.cf_consumed_cells(), key, &value)
             .expect("put to consumed_cells CF");
@@ -185,7 +193,7 @@ impl RocksDbLiveCellStore {
 
         for item in iter.flatten() {
             let (key, value) = item;
-            if let Ok(info) = bincode::deserialize::<LiveCellInfo>(&value) {
+            if let Some(info) = deserialize_consumed_cell(&value) {
                 if info.created_at_block < cutoff_block {
                     batch.delete_cf(cf, &key);
                 }
@@ -499,7 +507,7 @@ impl LiveCellStorage for RocksDbLiveCellStore {
     fn get_consumed_cell(&self, tx_hash: &[u8], output_index: i16) -> Option<LiveCellInfo> {
         let key = Self::encode_cell_key(tx_hash, output_index);
         match self.db.get_cf(self.cf_consumed_cells(), key) {
-            Ok(Some(value)) => bincode::deserialize(&value).ok(),
+            Ok(Some(value)) => deserialize_consumed_cell(&value),
             _ => None,
         }
     }
@@ -522,7 +530,7 @@ impl LiveCellStorage for RocksDbLiveCellStore {
 
         for (i, value_result) in values.into_iter().enumerate() {
             if let Ok(Some(value)) = value_result {
-                if let Ok(info) = bincode::deserialize::<LiveCellInfo>(&value) {
+                if let Some(info) = deserialize_consumed_cell(&value) {
                     let (tx_hash, idx) = outpoints[i];
                     result.insert((tx_hash.to_vec(), idx), info);
                 }
@@ -558,7 +566,7 @@ impl LiveCellStorage for RocksDbLiveCellStore {
             .iterator_cf(cf_consumed, rocksdb::IteratorMode::Start);
         for item in iter.flatten() {
             let (key, value) = item;
-            if let Ok(info) = bincode::deserialize::<LiveCellInfo>(&value) {
+            if let Some(info) = deserialize_consumed_cell(&value) {
                 if info.created_at_block > rollback_to {
                     batch.delete_cf(cf_consumed, &key);
                 }
@@ -1540,6 +1548,99 @@ mod tests {
         assert!(
             by_withdraw_after.is_empty(),
             "Secondary index should be removed after status=2 (WriteBatch atomicity)"
+        );
+    }
+
+    #[test]
+    fn test_consumed_cell_backward_compat_old_format() {
+        // Test that deserialize_consumed_cell() can read old LiveCellInfo format
+        // This ensures backward compatibility during migration
+        let tmp_dir = TempDir::new().unwrap();
+        let store = RocksDbLiveCellStore::open(tmp_dir.path(), true).unwrap();
+
+        let tx_hash = vec![0xbbu8; 32];
+        let info = create_test_cell_info();
+
+        // Manually insert using OLD format (LiveCellInfo) directly into consumed_cells CF
+        let cf = store.db.cf_handle(CF_CONSUMED_CELLS).unwrap();
+        let key = RocksDbLiveCellStore::encode_cell_key(&tx_hash, 0);
+        let old_format_bytes = bincode::serialize(&info).unwrap();
+        store.db.put_cf(cf, key, &old_format_bytes).unwrap();
+
+        // Verify we can read it back via the public API (which uses deserialize_consumed_cell)
+        let retrieved = store.get_consumed_cell(&tx_hash, 0);
+        assert!(
+            retrieved.is_some(),
+            "Should deserialize old LiveCellInfo format"
+        );
+        let retrieved = retrieved.unwrap();
+        assert_eq!(retrieved.capacity, info.capacity);
+        assert_eq!(retrieved.created_at_block, info.created_at_block);
+        assert_eq!(retrieved.lock_script_hash, info.lock_script_hash);
+        assert_eq!(retrieved.lock_code_hash, info.lock_code_hash);
+        assert_eq!(retrieved.data_size, info.data_size);
+    }
+
+    #[test]
+    fn test_consumed_cell_new_compact_format() {
+        // Test that new compact format is used for new entries and can be read back
+        let tmp_dir = TempDir::new().unwrap();
+        let store = RocksDbLiveCellStore::open(tmp_dir.path(), true).unwrap();
+
+        let tx_hash = vec![0xccu8; 32];
+        let info = create_test_cell_info();
+
+        // Insert via normal path (should use compact format internally)
+        store.insert(tx_hash.clone(), 0, info.clone());
+        store.remove(&tx_hash, 0);
+
+        // Verify we can read it back
+        let retrieved = store.get_consumed_cell(&tx_hash, 0);
+        assert!(
+            retrieved.is_some(),
+            "Should deserialize new CompactConsumedCellInfo format"
+        );
+        let retrieved = retrieved.unwrap();
+        assert_eq!(retrieved.capacity, info.capacity);
+        assert_eq!(retrieved.created_at_block, info.created_at_block);
+        assert_eq!(retrieved.lock_script_hash, info.lock_script_hash);
+        assert_eq!(retrieved.lock_code_hash, info.lock_code_hash);
+        assert_eq!(retrieved.data_size, info.data_size);
+
+        // The reconstituted LiveCellInfo should have empty lock_args and None type_script_hash
+        // (these fields are intentionally not stored in compact format)
+        assert!(
+            retrieved.lock_args.is_empty(),
+            "lock_args should be empty in compact format"
+        );
+        assert!(
+            retrieved.type_script_hash.is_none(),
+            "type_script_hash should be None in compact format"
+        );
+    }
+
+    #[test]
+    fn test_compact_format_size_reduction() {
+        // Verify that compact format is actually smaller than full format
+        use super::super::live_cell_storage::CompactConsumedCellInfo;
+
+        let info = create_test_cell_info();
+        let full_size = bincode::serialize(&info).unwrap().len();
+        let compact = CompactConsumedCellInfo::from_live_cell_info(&info);
+        let compact_size = bincode::serialize(&compact).unwrap().len();
+
+        // Compact format should be significantly smaller (at least 40 bytes less)
+        // lock_args (20 bytes) + type_script_hash (32 bytes) = 52 bytes minimum savings
+        assert!(
+            compact_size < full_size,
+            "Compact format ({} bytes) should be smaller than full format ({} bytes)",
+            compact_size,
+            full_size
+        );
+        assert!(
+            full_size - compact_size >= 40,
+            "Should save at least 40 bytes, but only saved {} bytes",
+            full_size - compact_size
         );
     }
 }

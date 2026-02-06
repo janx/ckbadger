@@ -153,7 +153,7 @@ FAST_SYNC_MODE=true
 ```bash
 cargo run -p ckbadger-indexer -- \
   --pipeline-enabled \
-  --pipeline-buffer 16 \
+  --pipeline-buffer 4 \
   --batch-size 10000 \
   --parallel-fetch-size 64 \
   --bulk-sync-threshold 72 \

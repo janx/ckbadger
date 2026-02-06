@@ -105,10 +105,12 @@ async fn run_app<B: ratatui::backend::Backend>(
                             KeyCode::Tab => app.toggle_focus(),
                             KeyCode::Char('j') | KeyCode::Down => match app.focused_panel() {
                                 FocusedPanel::Tasks => app.next(),
+                                FocusedPanel::Details => app.scroll_detail_down(),
                                 FocusedPanel::Log => app.scroll_log_down(),
                             },
                             KeyCode::Char('k') | KeyCode::Up => match app.focused_panel() {
                                 FocusedPanel::Tasks => app.previous(),
+                                FocusedPanel::Details => app.scroll_detail_up(),
                                 FocusedPanel::Log => app.scroll_log_up(),
                             },
                             KeyCode::Char('g') | KeyCode::End => app.scroll_log_to_bottom(),

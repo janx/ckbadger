@@ -87,6 +87,66 @@ pub struct ConsumedCellRecord {
     pub consumed_at_block: i64,
 }
 
+/// Compact representation of consumed cell info for RocksDB storage.
+///
+/// Only stores fields that are actually queried:
+/// - `get_cells_info_batch`: capacity, created_at_block, lock_script_hash, data_size
+/// - `get_cells_code_hashes_batch`: lock_code_hash, type_code_hash
+///
+/// Omits unused fields to reduce memory by ~41%:
+/// - lock_args (20-52 bytes) - never queried
+/// - type_script_hash (32 bytes) - never queried
+///
+/// Size comparison per cell:
+/// - LiveCellInfo: ~197 bytes
+/// - CompactConsumedCellInfo: ~116 bytes
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CompactConsumedCellInfo {
+    /// Cell capacity in shannons.
+    pub capacity: i64,
+    /// Block number where this cell was created.
+    pub created_at_block: i64,
+    /// Blake2b hash of the lock script (32 bytes).
+    pub lock_script_hash: Vec<u8>,
+    /// Code hash from the lock script (32 bytes).
+    pub lock_code_hash: Vec<u8>,
+    /// Code hash from the type script, if present.
+    pub type_code_hash: Option<Vec<u8>>,
+    /// Size of cell data in bytes.
+    pub data_size: i32,
+}
+
+impl CompactConsumedCellInfo {
+    /// Create from full LiveCellInfo, dropping unused fields.
+    pub fn from_live_cell_info(info: &LiveCellInfo) -> Self {
+        Self {
+            capacity: info.capacity,
+            created_at_block: info.created_at_block,
+            lock_script_hash: info.lock_script_hash.clone(),
+            lock_code_hash: info.lock_code_hash.clone(),
+            type_code_hash: info.type_code_hash.clone(),
+            data_size: info.data_size,
+        }
+    }
+
+    /// Convert to LiveCellInfo with dummy values for omitted fields.
+    ///
+    /// The dummy values (empty lock_args, None type_script_hash) are safe because
+    /// these fields are never accessed when querying consumed cells.
+    pub fn to_live_cell_info(&self) -> LiveCellInfo {
+        LiveCellInfo {
+            capacity: self.capacity,
+            created_at_block: self.created_at_block,
+            lock_script_hash: self.lock_script_hash.clone(),
+            lock_code_hash: self.lock_code_hash.clone(),
+            lock_args: Vec::new(),
+            type_script_hash: None,
+            type_code_hash: self.type_code_hash.clone(),
+            data_size: self.data_size,
+        }
+    }
+}
+
 /// Memory/storage statistics for monitoring.
 #[derive(Debug, Clone, Default)]
 pub struct MemoryStats {
