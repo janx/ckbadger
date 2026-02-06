@@ -32,6 +32,31 @@ use crate::rpc::{BlockResponseWithCycles, CkbRpcClient, DaoField};
 
 use super::SyncProgress;
 
+#[allow(dead_code)]
+const PARTITION_SIZE: u64 = 5_000_000;
+
+#[allow(dead_code)]
+fn get_partition_index(block_number: u64) -> usize {
+    (block_number / PARTITION_SIZE) as usize
+}
+
+#[allow(dead_code)]
+fn format_partition_range(start_block: u64, end_block: u64) -> String {
+    let start_partition = get_partition_index(start_block);
+    let end_partition = get_partition_index(end_block);
+
+    if start_partition == end_partition {
+        format!("[p{}]", start_partition)
+    } else {
+        format!("[p{}->p{}]", start_partition, end_partition)
+    }
+}
+
+#[allow(dead_code)]
+fn crosses_partition_boundary(start_block: u64, end_block: u64) -> bool {
+    get_partition_index(start_block) != get_partition_index(end_block)
+}
+
 enum SyncAction {
     CaughtUp,
     Continue,
@@ -1040,6 +1065,16 @@ impl Indexer {
                         }
                     }
 
+                    if self.should_use_copy() {
+                        if let Some(copy_router) = &self.copy_router {
+                            let pool_status = copy_router.pool_status();
+                            debug!(
+                                "Pool status before write: size={}, available={}, max_size={}",
+                                pool_status.size, pool_status.available, pool_status.max_size
+                            );
+                        }
+                    }
+
                     let db_start = Instant::now();
                     if let Err(e) = self
                         .write_parsed_batch(
@@ -1089,6 +1124,16 @@ impl Indexer {
                             db_elapsed.as_secs_f64(),
                             mode
                         );
+
+                        if self.should_use_copy() {
+                            if let Some(copy_router) = &self.copy_router {
+                                let pool_status = copy_router.pool_status();
+                                debug!(
+                                    "Pool status after write: size={}, available={}, max_size={}",
+                                    pool_status.size, pool_status.available, pool_status.max_size
+                                );
+                            }
+                        }
 
                         // Handle periodic updates (secondary issuance, DAO stats)
                         if !self.is_secondary_issuance_bulk_active() {

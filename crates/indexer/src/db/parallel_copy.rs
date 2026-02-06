@@ -88,6 +88,10 @@ impl ParallelCopyRouter {
         }
     }
 
+    pub fn pool_status(&self) -> crate::db::copy_pool::PoolStatus {
+        self.pool_manager.pool_status()
+    }
+
     pub async fn copy_cells_parallel(&self, cells: &[CellData<'_>]) -> Result<u64> {
         if cells.is_empty() {
             return Ok(0);
