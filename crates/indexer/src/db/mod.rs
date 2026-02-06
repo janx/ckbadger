@@ -8,6 +8,7 @@ pub mod copy_live_cells;
 pub mod copy_pool;
 pub mod copy_proposals;
 pub mod copy_transactions;
+pub mod copy_tx_block_map;
 pub mod copy_udt_cells;
 pub mod indexes;
 pub mod live_cell_storage;
@@ -22,6 +23,7 @@ pub use copy_activities::{
     CopyActivitiesWriter,
 };
 pub use copy_pool::{CopyConfig, CopyPoolManager};
+pub use copy_tx_block_map::{copy_tx_block_map, CopyTxBlockMapWriter};
 pub use copy_udt_cells::{copy_udt_cells, CopyUdtCellsWriter};
 pub use indexes::IndexManager;
 pub use live_cell_storage::{

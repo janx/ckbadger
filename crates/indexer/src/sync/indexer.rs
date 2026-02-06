@@ -366,6 +366,7 @@ pub struct Indexer {
     spore_deferred: std::sync::atomic::AtomicBool,
     #[allow(dead_code)] // Used in Task 3 (DAO writer skip logic)
     dao_deferred: std::sync::atomic::AtomicBool,
+    tx_block_map_deferred: std::sync::atomic::AtomicBool,
 }
 
 impl Indexer {
@@ -460,15 +461,23 @@ impl Indexer {
         .await
         .unwrap_or(false);
 
+        let tx_block_map_deferred: bool = sqlx::query_scalar(
+            "SELECT COALESCE(tx_block_map_deferred, false) FROM sync_status WHERE id = 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap_or(false);
+
         if activities_deferred
             || address_balances_deferred
             || token_deferred
             || spore_deferred
             || dao_deferred
+            || tx_block_map_deferred
         {
             info!(
-                "Loaded deferred states from database: activities={}, address_balances={}, token={}, spore={}, dao={}",
-                activities_deferred, address_balances_deferred, token_deferred, spore_deferred, dao_deferred
+                "Loaded deferred states from database: activities={}, address_balances={}, token={}, spore={}, dao={}, tx_block_map={}",
+                activities_deferred, address_balances_deferred, token_deferred, spore_deferred, dao_deferred, tx_block_map_deferred
             );
         }
 
@@ -498,6 +507,7 @@ impl Indexer {
             token_deferred: std::sync::atomic::AtomicBool::new(token_deferred),
             spore_deferred: std::sync::atomic::AtomicBool::new(spore_deferred),
             dao_deferred: std::sync::atomic::AtomicBool::new(dao_deferred),
+            tx_block_map_deferred: std::sync::atomic::AtomicBool::new(tx_block_map_deferred),
         })
     }
 
@@ -4520,11 +4530,22 @@ impl Indexer {
                 .copy_router
                 .as_ref()
                 .expect("copy_router must exist when should_use_copy() is true");
+            let tx_block_map_deferred = self.tx_block_map_deferred.load(Ordering::Relaxed);
             tokio::try_join!(
                 async {
                     if !txs_for_batch.is_empty() {
                         copy_router
                             .copy_transactions_parallel(&txs_for_batch)
+                            .await
+                            .map(|_| ())
+                    } else {
+                        Ok(())
+                    }
+                },
+                async {
+                    if !tx_block_map_deferred && !txs_for_batch.is_empty() {
+                        copy_router
+                            .copy_tx_block_map(&txs_for_batch)
                             .await
                             .map(|_| ())
                     } else {
@@ -4577,10 +4598,32 @@ impl Indexer {
                 }
             )?;
         } else {
+            let tx_block_map_deferred = self.tx_block_map_deferred.load(Ordering::Relaxed);
             tokio::try_join!(
                 async {
                     if !txs_for_batch.is_empty() {
                         self.writer.insert_transactions_batch(&txs_for_batch).await
+                    } else {
+                        Ok(())
+                    }
+                },
+                async {
+                    if !tx_block_map_deferred && !txs_for_batch.is_empty() {
+                        let hashes: Vec<&[u8]> = txs_for_batch.iter().map(|t| t.0).collect();
+                        let block_numbers: Vec<i64> = txs_for_batch.iter().map(|t| t.1).collect();
+                        sqlx::query(
+                            r#"
+                            INSERT INTO tx_block_map (tx_hash, block_number)
+                            SELECT * FROM UNNEST($1::bytea[], $2::bigint[])
+                            ON CONFLICT (tx_hash) DO NOTHING
+                            "#,
+                        )
+                        .bind(&hashes)
+                        .bind(&block_numbers)
+                        .execute(self.writer.pool())
+                        .await
+                        .map(|_| ())
+                        .map_err(|e| anyhow::anyhow!("Failed to insert tx_block_map: {}", e))
                     } else {
                         Ok(())
                     }

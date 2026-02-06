@@ -11,6 +11,7 @@ use crate::db::copy_live_cells::CopyLiveCellsWriter;
 use crate::db::copy_pool::CopyPoolManager;
 use crate::db::copy_proposals::CopyProposalsWriter;
 use crate::db::copy_transactions::CopyTransactionsWriter;
+use crate::db::copy_tx_block_map::CopyTxBlockMapWriter;
 use crate::db::copy_udt_cells::CopyUdtCellsWriter;
 use crate::db::live_cell_storage::{DynLiveCellStorage, LiveCellInfo};
 use crate::parser::activity::ParsedActivity;
@@ -409,6 +410,27 @@ impl ParallelCopyRouter {
             "COPY udt_cells (tx_hash, output_index, type_script_hash, type_code_hash, \
              type_hash_type, type_args, lock_script_hash, amount, standard, is_live, \
              created_at_block) FROM STDIN WITH (FORMAT BINARY)",
+            data,
+        )
+        .await
+    }
+
+    pub async fn copy_tx_block_map(&self, txs: &[TxData<'_>]) -> Result<u64> {
+        if txs.is_empty() {
+            return Ok(0);
+        }
+
+        let conn = self.pool_manager.get_connection().await?;
+
+        let mut writer = CopyTxBlockMapWriter::new();
+        for tx in txs {
+            writer.add_tx_block_map(tx.0, tx.1);
+        }
+
+        let data = writer.finish();
+        execute_copy(
+            conn.as_ref(),
+            "COPY tx_block_map (tx_hash, block_number) FROM STDIN WITH (FORMAT BINARY)",
             data,
         )
         .await
