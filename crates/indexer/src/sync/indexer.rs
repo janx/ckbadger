@@ -7,8 +7,8 @@ use anyhow::{Context, Result};
 use crate::cache::{CacheInvalidator, CellInfoCache};
 use crate::config::Config;
 use crate::db::writer::{
-    ActivityRow, BatchData, BatchWriter, BlockRow, CellInputRow, CellOutputRow, CellStateRow,
-    TransactionRow, u64_to_u256_bytes,
+    u64_to_u256_bytes, ActivityRow, BatchData, BatchWriter, BlockRow, CellInputRow, CellOutputRow,
+    CellStateRow, TransactionRow,
 };
 use crate::db::{ClickHouseClient, LiveCellInfo, MemoryStats};
 use crate::rpc::{BlockView, Script, TransactionView};
@@ -92,18 +92,22 @@ impl Default for IndexerConfig {
 
 impl Indexer {
     pub async fn new(config: IndexerConfig) -> Result<Self> {
-        let ch_config = crate::db::ClickHouseConfig::new(&config.clickhouse_url, &config.clickhouse_database);
+        let ch_config =
+            crate::db::ClickHouseConfig::new(&config.clickhouse_url, &config.clickhouse_database);
         let client = ClickHouseClient::new(ch_config);
-        
-        client.ping().await.context("Failed to connect to ClickHouse")?;
-        
+
+        client
+            .ping()
+            .await
+            .context("Failed to connect to ClickHouse")?;
+
         let max_version = Self::fetch_max_canon_version(&client).await?;
         let canon_version_mgr = CanonVersionManager::recover_from_db(max_version);
-        
+
         let batch_writer = BatchWriter::with_fast_sync_mode(client.clone(), config.fast_sync_mode);
         let cell_cache = CellInfoCache::new(config.cell_cache_capacity);
         let cache_invalidator = CacheInvalidator::new(config.redis_url.as_deref()).await;
-        
+
         Ok(Self {
             client,
             batch_writer,
@@ -118,18 +122,21 @@ impl Indexer {
 
     pub async fn from_legacy_config(config: Config) -> Result<Self> {
         let cache_invalidator = CacheInvalidator::new(config.redis_url.as_deref()).await;
-        
+
         let ch_config = crate::db::ClickHouseConfig::from_env()?;
         let client = ClickHouseClient::new(ch_config);
-        
-        client.ping().await.context("Failed to connect to ClickHouse")?;
-        
+
+        client
+            .ping()
+            .await
+            .context("Failed to connect to ClickHouse")?;
+
         let max_version = Self::fetch_max_canon_version(&client).await?;
         let canon_version_mgr = CanonVersionManager::recover_from_db(max_version);
-        
+
         let batch_writer = BatchWriter::with_fast_sync_mode(client.clone(), config.fast_sync_mode);
         let cell_cache = CellInfoCache::new(1_000_000);
-        
+
         Ok(Self {
             client,
             batch_writer,
@@ -146,7 +153,13 @@ impl Indexer {
         let rows: Vec<MaxVersionRow> = client
             .query_all("SELECT max(canon_version) as max_version FROM canonical_blocks")
             .await?;
-        Ok(rows.first().and_then(|r| if r.max_version == 0 { None } else { Some(r.max_version) }))
+        Ok(rows.first().and_then(|r| {
+            if r.max_version == 0 {
+                None
+            } else {
+                Some(r.max_version)
+            }
+        }))
     }
 
     pub fn progress(&self) -> Arc<SyncProgress> {
@@ -175,8 +188,9 @@ impl Indexer {
         let block_hash = parse_hex_bytes32(&block.header.hash)?;
         let block_timestamp_ms = parse_hex_u64(&block.header.timestamp)? as i64;
 
-        let block_row = self.extract_block_row(block, block_number, &block_hash, block_timestamp_ms)?;
-        
+        let block_row =
+            self.extract_block_row(block, block_number, &block_hash, block_timestamp_ms)?;
+
         let mut transaction_rows = Vec::with_capacity(block.transactions.len());
         let mut cell_output_rows = Vec::new();
         let mut cell_input_rows = Vec::new();
@@ -185,7 +199,7 @@ impl Indexer {
         for (tx_index, tx) in block.transactions.iter().enumerate() {
             let tx_hash = parse_hex_bytes32(&tx.hash)?;
             let is_cellbase = tx_index == 0;
-            
+
             let (tx_row, outputs, inputs) = self.extract_transaction_data(
                 tx,
                 &tx_hash,
@@ -195,15 +209,19 @@ impl Indexer {
                 block_timestamp_ms,
                 is_cellbase,
             )?;
-            
+
             transaction_rows.push(tx_row);
             cell_output_rows.extend(outputs);
             cell_input_rows.extend(inputs);
 
             for (output_index, output) in tx.outputs.iter().enumerate() {
-                let data = tx.outputs_data.get(output_index).map(|s| s.as_str()).unwrap_or("0x");
+                let data = tx
+                    .outputs_data
+                    .get(output_index)
+                    .map(|s| s.as_str())
+                    .unwrap_or("0x");
                 let data_bytes = parse_hex_bytes(data)?;
-                
+
                 let lock_script_hash = compute_script_hash(&output.lock)?;
                 let lock_code_hash = parse_hex_bytes32(&output.lock.code_hash)?;
                 let type_script_hash = match &output.type_ {
@@ -248,24 +266,29 @@ impl Indexer {
                     },
                     data_size: data_bytes.len() as i32,
                 };
-                self.cell_cache.insert(tx_hash.to_vec(), output_index as i16, cell_info);
+                self.cell_cache
+                    .insert(tx_hash.to_vec(), output_index as i16, cell_info);
             }
 
             if !is_cellbase {
                 for (input_index, input) in tx.inputs.iter().enumerate() {
                     let prev_tx_hash = parse_hex_bytes32(&input.previous_output.tx_hash)?;
                     let prev_output_index = parse_hex_u32(&input.previous_output.index)? as u16;
-                    
-                    if let Some(cell_info) = self.cell_cache.get(&prev_tx_hash, prev_output_index as i16) {
-                        let type_script_hash = cell_info.type_script_hash
+
+                    if let Some(cell_info) =
+                        self.cell_cache.get(&prev_tx_hash, prev_output_index as i16)
+                    {
+                        let type_script_hash = cell_info
+                            .type_script_hash
                             .as_ref()
                             .map(|v| to_bytes32(v))
                             .unwrap_or([0u8; 32]);
-                        let type_code_hash = cell_info.type_code_hash
+                        let type_code_hash = cell_info
+                            .type_code_hash
                             .as_ref()
                             .map(|v| to_bytes32(v))
                             .unwrap_or([0u8; 32]);
-                        
+
                         let consumed_state = CellStateRow::new_consumed(
                             prev_tx_hash,
                             prev_output_index,
@@ -287,7 +310,8 @@ impl Indexer {
             }
         }
 
-        let activities = self.generate_activities(block, block_number, &block_hash, block_timestamp_ms)?;
+        let activities =
+            self.generate_activities(block, block_number, &block_hash, block_timestamp_ms)?;
 
         let batch_data = BatchData {
             blocks: vec![block_row],
@@ -326,7 +350,8 @@ impl Indexer {
             let block_hash = parse_hex_bytes32(&block.header.hash)?;
             let block_timestamp_ms = parse_hex_u64(&block.header.timestamp)? as i64;
 
-            let block_row = self.extract_block_row(block, block_number, &block_hash, block_timestamp_ms)?;
+            let block_row =
+                self.extract_block_row(block, block_number, &block_hash, block_timestamp_ms)?;
             all_block_rows.push(block_row);
 
             for (tx_index, tx) in block.transactions.iter().enumerate() {
@@ -348,7 +373,11 @@ impl Indexer {
                 all_input_rows.extend(inputs);
 
                 for (output_index, output) in tx.outputs.iter().enumerate() {
-                    let data = tx.outputs_data.get(output_index).map(|s| s.as_str()).unwrap_or("0x");
+                    let data = tx
+                        .outputs_data
+                        .get(output_index)
+                        .map(|s| s.as_str())
+                        .unwrap_or("0x");
                     let data_bytes = parse_hex_bytes(data)?;
 
                     let lock_script_hash = compute_script_hash(&output.lock)?;
@@ -395,7 +424,8 @@ impl Indexer {
                         },
                         data_size: data_bytes.len() as i32,
                     };
-                    self.cell_cache.insert(tx_hash.to_vec(), output_index as i16, cell_info);
+                    self.cell_cache
+                        .insert(tx_hash.to_vec(), output_index as i16, cell_info);
                 }
 
                 if !is_cellbase {
@@ -403,12 +433,16 @@ impl Indexer {
                         let prev_tx_hash = parse_hex_bytes32(&input.previous_output.tx_hash)?;
                         let prev_output_index = parse_hex_u32(&input.previous_output.index)? as u16;
 
-                        if let Some(cell_info) = self.cell_cache.get(&prev_tx_hash, prev_output_index as i16) {
-                            let type_script_hash = cell_info.type_script_hash
+                        if let Some(cell_info) =
+                            self.cell_cache.get(&prev_tx_hash, prev_output_index as i16)
+                        {
+                            let type_script_hash = cell_info
+                                .type_script_hash
                                 .as_ref()
                                 .map(|v| to_bytes32(v))
                                 .unwrap_or([0u8; 32]);
-                            let type_code_hash = cell_info.type_code_hash
+                            let type_code_hash = cell_info
+                                .type_code_hash
                                 .as_ref()
                                 .map(|v| to_bytes32(v))
                                 .unwrap_or([0u8; 32]);
@@ -434,7 +468,8 @@ impl Indexer {
                 }
             }
 
-            let block_activities = self.generate_activities(block, block_number, &block_hash, block_timestamp_ms)?;
+            let block_activities =
+                self.generate_activities(block, block_number, &block_hash, block_timestamp_ms)?;
             all_activities.extend(block_activities);
 
             all_canonical_mappings.push((block_number, block_hash.to_vec(), canon_version));
@@ -501,8 +536,7 @@ impl Indexer {
              FROM cell_inputs_all WHERE tx_block_number = {}",
             block_number
         );
-        let inputs_consumed: Vec<CellInputQueryRow> =
-            self.client.query_all(&inputs_query).await?;
+        let inputs_consumed: Vec<CellInputQueryRow> = self.client.query_all(&inputs_query).await?;
 
         for input in &inputs_consumed {
             let state_query = format!(
@@ -515,8 +549,7 @@ impl Indexer {
                 hex::encode(input.previous_tx_hash),
                 input.previous_output_index
             );
-            let cell_states: Vec<CellStateQueryRow> =
-                self.client.query_all(&state_query).await?;
+            let cell_states: Vec<CellStateQueryRow> = self.client.query_all(&state_query).await?;
 
             if let Some(cell_state) = cell_states.first() {
                 let canon_version = self.canon_version_mgr.next();
@@ -542,7 +575,9 @@ impl Indexer {
         }
 
         if !cell_state_rows.is_empty() {
-            self.batch_writer.write_cell_states(&cell_state_rows).await?;
+            self.batch_writer
+                .write_cell_states(&cell_state_rows)
+                .await?;
         }
 
         Ok(DisconnectResult {
@@ -641,18 +676,20 @@ impl Indexer {
     ) -> Result<Vec<ActivityRow>> {
         let mut activities = Vec::new();
 
-        let mut input_capacities: std::collections::HashMap<[u8; 32], u64> = std::collections::HashMap::new();
+        let mut input_capacities: std::collections::HashMap<[u8; 32], u64> =
+            std::collections::HashMap::new();
         for input in &tx.inputs {
             let prev_tx_hash = parse_hex_bytes32(&input.previous_output.tx_hash)?;
             let prev_output_index = parse_hex_u32(&input.previous_output.index)? as i16;
-            
+
             if let Some(cell_info) = self.cell_cache.get(&prev_tx_hash, prev_output_index) {
                 let lock_hash = to_bytes32(&cell_info.lock_script_hash);
                 *input_capacities.entry(lock_hash).or_insert(0) += cell_info.capacity as u64;
             }
         }
 
-        let mut output_capacities: std::collections::HashMap<[u8; 32], u64> = std::collections::HashMap::new();
+        let mut output_capacities: std::collections::HashMap<[u8; 32], u64> =
+            std::collections::HashMap::new();
         for output in &tx.outputs {
             let capacity = parse_hex_u64(&output.capacity)?;
             let lock_hash = compute_script_hash(&output.lock)?;
@@ -661,17 +698,18 @@ impl Indexer {
 
         for (from_lock_hash, input_amount) in &input_capacities {
             let output_amount = output_capacities.get(from_lock_hash).copied().unwrap_or(0);
-            
+
             if output_amount < *input_amount {
                 let transfer_amount = input_amount - output_amount;
-                
+
                 for (to_lock_hash, to_amount) in &output_capacities {
                     if to_lock_hash == from_lock_hash {
                         continue;
                     }
 
-                    let activity_id = generate_activity_id(tx_hash, "CKB_TRANSFER", *activity_index);
-                    
+                    let activity_id =
+                        generate_activity_id(tx_hash, "CKB_TRANSFER", *activity_index);
+
                     activities.push(ActivityRow {
                         activity_id,
                         activity_type: "CKB_TRANSFER".to_string(),
@@ -687,7 +725,7 @@ impl Indexer {
                         metadata: String::new(),
                         timestamp: timestamp_ms,
                     });
-                    
+
                     *activity_index += 1;
                     break;
                 }
@@ -705,9 +743,9 @@ impl Indexer {
         timestamp_ms: i64,
     ) -> Result<BlockRow> {
         let header = &block.header;
-        
+
         let epoch_info = parse_epoch(&header.epoch)?;
-        
+
         Ok(BlockRow {
             number: block_number,
             hash: *block_hash,
@@ -753,13 +791,18 @@ impl Indexer {
         for (output_index, output) in tx.outputs.iter().enumerate() {
             let capacity = parse_hex_u64(&output.capacity)?;
             total_output_capacity += capacity;
-            
-            let data = tx.outputs_data.get(output_index).map(|s| s.as_str()).unwrap_or("0x");
+
+            let data = tx
+                .outputs_data
+                .get(output_index)
+                .map(|s| s.as_str())
+                .unwrap_or("0x");
             let data_bytes = parse_hex_bytes(data)?;
             let data_hash = blake2b_hash(&data_bytes);
-            
+
             let lock_script_hash = compute_script_hash(&output.lock)?;
-            let (type_code_hash, type_hash_type, type_args, type_script_hash) = match &output.type_ {
+            let (type_code_hash, type_hash_type, type_args, type_script_hash) = match &output.type_
+            {
                 Some(type_script) => (
                     parse_hex_bytes32(&type_script.code_hash)?,
                     parse_hash_type(&type_script.hash_type),
@@ -768,7 +811,7 @@ impl Indexer {
                 ),
                 None => ([0u8; 32], 0, String::new(), [0u8; 32]),
             };
-            
+
             let output_row = CellOutputRow {
                 tx_hash: *tx_hash,
                 output_index: output_index as u16,
@@ -892,9 +935,9 @@ fn compute_script_hash(script: &Script) -> Result<[u8; 32]> {
     let code_hash = parse_hex_bytes(&script.code_hash)?;
     let hash_type = parse_hash_type(&script.hash_type);
     let args = parse_hex_bytes(&script.args)?;
-    
+
     let mut serialized = Vec::with_capacity(4 + 4 + 4 + 4 + code_hash.len() + 1 + args.len());
-    
+
     let total_size = 4 + 4 + 4 + 4 + code_hash.len() + 1 + args.len();
     serialized.extend_from_slice(&(total_size as u32).to_le_bytes());
     serialized.extend_from_slice(&(16u32).to_le_bytes());
@@ -903,7 +946,7 @@ fn compute_script_hash(script: &Script) -> Result<[u8; 32]> {
     serialized.extend_from_slice(&code_hash);
     serialized.push(hash_type);
     serialized.extend_from_slice(&args);
-    
+
     Ok(blake2b_hash(&serialized))
 }
 

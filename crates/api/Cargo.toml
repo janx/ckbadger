@@ -64,7 +64,8 @@ bech32 = "0.11"
 # CKB hashing
 ckb-hash = { workspace = true }
 
-
+# ClickHouse client
+clickhouse = { version = "0.14", features = ["lz4"] }
 
 [features]
 default = []

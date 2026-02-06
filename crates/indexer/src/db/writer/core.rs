@@ -149,10 +149,7 @@ impl BatchWriter {
     }
 
     /// Write only canonical block mappings (used after reorg).
-    pub async fn write_canonical_only(
-        &self,
-        mappings: &[(u64, Vec<u8>, u64)],
-    ) -> Result<()> {
+    pub async fn write_canonical_only(&self, mappings: &[(u64, Vec<u8>, u64)]) -> Result<()> {
         self.write_canonical_blocks(mappings).await
     }
 }
@@ -230,7 +227,7 @@ mod tests {
         batch.activities.push(ActivityRow::default());
         batch.cell_states.push(CellStateRow::default());
         batch.canonical_mappings.push((1, vec![0u8; 32], 1));
-        
+
         assert!(!batch.is_empty());
         assert_eq!(batch.total_rows(), 10);
     }
@@ -239,35 +236,35 @@ mod tests {
     fn test_batch_data_is_empty_requires_all_empty() {
         let mut batch = BatchData::new();
         assert!(batch.is_empty());
-        
+
         batch.blocks.push(BlockRow::default());
         assert!(!batch.is_empty());
         batch.blocks.clear();
-        
+
         batch.transactions.push(TransactionRow::default());
         assert!(!batch.is_empty());
         batch.transactions.clear();
-        
+
         batch.cell_outputs.push(CellOutputRow::default());
         assert!(!batch.is_empty());
         batch.cell_outputs.clear();
-        
+
         batch.cell_inputs.push(CellInputRow::default());
         assert!(!batch.is_empty());
         batch.cell_inputs.clear();
-        
+
         batch.activities.push(ActivityRow::default());
         assert!(!batch.is_empty());
         batch.activities.clear();
-        
+
         batch.cell_states.push(CellStateRow::default());
         assert!(!batch.is_empty());
         batch.cell_states.clear();
-        
+
         batch.canonical_mappings.push((1, vec![0u8; 32], 1));
         assert!(!batch.is_empty());
         batch.canonical_mappings.clear();
-        
+
         assert!(batch.is_empty());
     }
 }

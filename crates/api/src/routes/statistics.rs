@@ -1,7 +1,8 @@
 use axum::{extract::State, routing::get, Router};
+use serde::Serialize;
 use std::sync::Arc;
 
-use crate::response::{ApiError, ApiResult};
+use crate::response::{ok, ApiError, ApiResult};
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -47,8 +48,80 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/charts/inflation-rate", get(get_inflation_rate_chart))
 }
 
-async fn get_network_stats(State(_state): State<Arc<AppState>>) -> ApiResult<()> {
-    Err(ApiError::internal("ClickHouse implementation pending"))
+// ============================================
+// Response Types
+// ============================================
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkStatsResponse {
+    pub tip_block_number: u64,
+    pub total_transactions: u64,
+    pub total_live_cells: u64,
+}
+
+// ============================================
+// ClickHouse Row Types
+// ============================================
+
+#[derive(Debug, Clone, clickhouse::Row, serde::Deserialize)]
+struct TipBlockRow {
+    tip_block: u64,
+}
+
+#[derive(Debug, Clone, clickhouse::Row, serde::Deserialize)]
+struct TotalTransactionsRow {
+    total_txs: u64,
+}
+
+#[derive(Debug, Clone, clickhouse::Row, serde::Deserialize)]
+struct TotalLiveCellsRow {
+    total_live: u64,
+}
+
+// ============================================
+// Route Handlers
+// ============================================
+
+async fn get_network_stats(State(state): State<Arc<AppState>>) -> ApiResult<NetworkStatsResponse> {
+    // Query 1: Get tip block number
+    let tip_query = "SELECT max(number) as tip_block FROM canonical_blocks FINAL";
+    let tip_row: Option<TipBlockRow> = state
+        .pool
+        .query_one(tip_query)
+        .await
+        .map_err(|e| ApiError::internal(format!("Failed to query tip block: {}", e)))?;
+
+    let tip_block_number = tip_row.map(|r| r.tip_block).unwrap_or(0);
+
+    // Query 2: Get total transactions (canonical only)
+    let tx_query = "SELECT count() as total_txs FROM transactions_all t \
+                    INNER JOIN canonical_blocks c ON t.block_number = c.number AND t.block_hash = c.block_hash";
+    let tx_row: Option<TotalTransactionsRow> =
+        state.pool.query_one(tx_query).await.map_err(|e| {
+            ApiError::internal(format!("Failed to query total transactions: {}", e))
+        })?;
+
+    let total_transactions = tx_row.map(|r| r.total_txs).unwrap_or(0);
+
+    // Query 3: Get total live cells (latest version per cell)
+    let cells_query = "SELECT count() as total_live FROM cell_state \
+                       ORDER BY canon_version DESC \
+                       LIMIT 1 BY (tx_hash, output_index) \
+                       HAVING is_live = 1 AND is_present = 1";
+    let cells_row: Option<TotalLiveCellsRow> = state
+        .pool
+        .query_one(cells_query)
+        .await
+        .map_err(|e| ApiError::internal(format!("Failed to query total live cells: {}", e)))?;
+
+    let total_live_cells = cells_row.map(|r| r.total_live).unwrap_or(0);
+
+    ok(NetworkStatsResponse {
+        tip_block_number,
+        total_transactions,
+        total_live_cells,
+    })
 }
 
 async fn get_tx_stats(State(_state): State<Arc<AppState>>) -> ApiResult<()> {
