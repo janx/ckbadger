@@ -393,38 +393,102 @@ async fn rebuild_partitioned_index(
     Ok(())
 }
 
+struct ConstraintBuildTask {
+    table_name: String,
+    constraint_name: String,
+    columns: String,
+    attempt: usize,
+}
+
+fn is_lock_timeout_error(err_str: &str) -> bool {
+    err_str.contains("lock timeout")
+        || err_str.contains("could not obtain lock")
+        || err_str.contains("canceling statement due to lock timeout")
+}
+
 pub async fn rebuild_partitioned_constraint(
     pool: &PgPool,
     constraint: &DeferrableConstraint,
     max_parallel: usize,
 ) -> Result<()> {
-    let mut join_set: JoinSet<Result<bool>> = JoinSet::new();
-    let mut pending: Vec<&str> = RANGE_PARTITION_SUFFIXES.to_vec();
+    let effective_parallel = max_parallel.min(4);
 
-    while !pending.is_empty() || !join_set.is_empty() {
-        while join_set.len() < max_parallel && !pending.is_empty() {
-            let suffix = pending.remove(0);
-            let pool = pool.clone();
+    let mut join_set: JoinSet<std::result::Result<String, (ConstraintBuildTask, String)>> =
+        JoinSet::new();
+    let mut pending: Vec<ConstraintBuildTask> = RANGE_PARTITION_SUFFIXES
+        .iter()
+        .map(|suffix| {
             let table_name = format!("{}{}", constraint.table, suffix);
             let constraint_name = format!("{}_{}", table_name, constraint.name);
-            let columns = constraint.columns.to_string();
+            ConstraintBuildTask {
+                table_name,
+                constraint_name,
+                columns: constraint.columns.to_string(),
+                attempt: 1,
+            }
+        })
+        .collect();
+    let mut retry_queue: Vec<ConstraintBuildTask> = Vec::new();
+
+    while !pending.is_empty() || !join_set.is_empty() || !retry_queue.is_empty() {
+        while join_set.len() < effective_parallel && !pending.is_empty() {
+            let task = pending.remove(0);
+            let pool = pool.clone();
+            let table_name = task.table_name.clone();
+            let constraint_name = task.constraint_name.clone();
+            let columns = task.columns.clone();
 
             join_set.spawn(async move {
                 let check_sql = format!(
                     "SELECT 1 FROM pg_constraint WHERE conname = '{}' AND conrelid = '{}'::regclass",
                     constraint_name, table_name
                 );
-                let exists: Option<(i32,)> = sqlx::query_as(&check_sql).fetch_optional(&pool).await?;
+                let exists: Option<(i32,)> = match sqlx::query_as(&check_sql)
+                    .fetch_optional(&pool)
+                    .await
+                {
+                    Ok(r) => r,
+                    Err(e) => return Err((task, e.to_string())),
+                };
 
                 if exists.is_none() {
                     let add_sql = format!(
                         "ALTER TABLE {} ADD CONSTRAINT {} UNIQUE ({})",
                         table_name, constraint_name, columns
                     );
-                    sqlx::query(&add_sql).execute(&pool).await?;
-                    Ok(true)
+                    match sqlx::query(&add_sql).execute(&pool).await {
+                        Ok(_) => Ok(constraint_name),
+                        Err(e) => Err((task, e.to_string())),
+                    }
                 } else {
-                    Ok(false)
+                    Ok(constraint_name)
+                }
+            });
+        }
+
+        while join_set.len() < effective_parallel && !retry_queue.is_empty() {
+            let mut task = retry_queue.remove(0);
+            task.attempt += 1;
+            let pool = pool.clone();
+            let table_name = task.table_name.clone();
+            let constraint_name = task.constraint_name.clone();
+            let columns = task.columns.clone();
+            let attempt = task.attempt;
+
+            info!(
+                "Retrying constraint {} (attempt {}/{})",
+                constraint_name, attempt, MAX_RETRIES
+            );
+
+            join_set.spawn(async move {
+                tokio::time::sleep(tokio::time::Duration::from_millis(RETRY_DELAY_MS)).await;
+                let add_sql = format!(
+                    "ALTER TABLE {} ADD CONSTRAINT {} UNIQUE ({})",
+                    table_name, constraint_name, columns
+                );
+                match sqlx::query(&add_sql).execute(&pool).await {
+                    Ok(_) => Ok(constraint_name),
+                    Err(e) => Err((task, e.to_string())),
                 }
             });
         }
@@ -432,7 +496,25 @@ pub async fn rebuild_partitioned_constraint(
         if let Some(result) = join_set.join_next().await {
             match result {
                 Ok(Ok(_)) => {}
-                Ok(Err(e)) => warn!("Failed to add constraint: {}", e),
+                Ok(Err((task, err_str))) => {
+                    if is_lock_timeout_error(&err_str) && task.attempt < MAX_RETRIES {
+                        warn!(
+                            "Lock timeout for constraint {}, will retry (attempt {}/{})",
+                            task.constraint_name, task.attempt, MAX_RETRIES
+                        );
+                        retry_queue.push(task);
+                    } else if is_lock_timeout_error(&err_str) {
+                        warn!(
+                            "Failed to create constraint {} after {} retries: {}",
+                            task.constraint_name, MAX_RETRIES, err_str
+                        );
+                    } else {
+                        warn!(
+                            "Failed to create partition constraint {}: {}",
+                            task.constraint_name, err_str
+                        );
+                    }
+                }
                 Err(e) => warn!("Task panicked: {}", e),
             }
         }
@@ -453,11 +535,33 @@ pub async fn rebuild_partitioned_constraint(
             "ALTER TABLE {} ADD CONSTRAINT {} UNIQUE ({})",
             constraint.table, parent_constraint_name, constraint.columns
         );
-        sqlx::query(&add_parent_sql).execute(pool).await?;
-        info!(
-            "Added UNIQUE constraint {} to parent table {}",
-            parent_constraint_name, constraint.table
-        );
+
+        let mut attempt = 1;
+        loop {
+            match sqlx::query(&add_parent_sql).execute(pool).await {
+                Ok(_) => {
+                    info!(
+                        "Added UNIQUE constraint {} to parent table {}",
+                        parent_constraint_name, constraint.table
+                    );
+                    break;
+                }
+                Err(e) => {
+                    let err_str = e.to_string();
+                    if is_lock_timeout_error(&err_str) && attempt < MAX_RETRIES {
+                        warn!(
+                            "Lock timeout for parent constraint {}, will retry (attempt {}/{})",
+                            parent_constraint_name, attempt, MAX_RETRIES
+                        );
+                        attempt += 1;
+                        tokio::time::sleep(tokio::time::Duration::from_millis(RETRY_DELAY_MS))
+                            .await;
+                    } else {
+                        return Err(e.into());
+                    }
+                }
+            }
+        }
     } else {
         info!(
             "UNIQUE constraint {} already exists on parent table {}",
