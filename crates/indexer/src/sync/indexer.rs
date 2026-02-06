@@ -1366,12 +1366,20 @@ impl Indexer {
             self.progress
                 .update_current_batch(last_block_number, blocks.len() as u64);
 
+            let partition_range = format_partition_range(start_block, end_block);
+            let boundary_info = if crosses_partition_boundary(start_block, end_block) {
+                " (crosses boundary)"
+            } else {
+                ""
+            };
             info!(
-                "Wrote blocks {} to {} ({} remaining, {:.2}s)",
+                "Wrote blocks {} to {} ({} remaining, {:.2}s) {}{}",
                 start_block,
                 end_block,
                 self.progress.blocks_remaining(),
-                db_elapsed.as_secs_f64()
+                db_elapsed.as_secs_f64(),
+                partition_range,
+                boundary_info
             );
 
             if self.should_use_copy() {
@@ -6697,5 +6705,36 @@ mod tests {
             !crossed || is_bulk,
             "DAO recalc should not trigger without boundary crossing"
         );
+    }
+
+    #[test]
+    fn test_partition_boundary_detection() {
+        // Same partition
+        let start = 4_000_000u64;
+        let end = 4_999_999u64;
+        assert_eq!(get_partition_index(start), get_partition_index(end));
+        assert!(!crosses_partition_boundary(start, end));
+        assert_eq!(format_partition_range(start, end), "[p0]");
+
+        // Crosses boundary
+        let start = 4_999_990u64;
+        let end = 5_000_009u64;
+        assert_ne!(get_partition_index(start), get_partition_index(end));
+        assert!(crosses_partition_boundary(start, end));
+        assert_eq!(format_partition_range(start, end), "[p0->p1]");
+
+        // Multiple partitions
+        let start = 9_999_999u64;
+        let end = 10_000_001u64;
+        assert_ne!(get_partition_index(start), get_partition_index(end));
+        assert!(crosses_partition_boundary(start, end));
+        assert_eq!(format_partition_range(start, end), "[p1->p2]");
+
+        // Same partition, different blocks
+        let start = 5_000_000u64;
+        let end = 5_100_000u64;
+        assert_eq!(get_partition_index(start), get_partition_index(end));
+        assert!(!crosses_partition_boundary(start, end));
+        assert_eq!(format_partition_range(start, end), "[p1]");
     }
 }
