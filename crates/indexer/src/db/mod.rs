@@ -2,12 +2,12 @@
 
 use anyhow::Result;
 
-// mod clickhouse_client;  // Wave 2: ClickHouse implementation
+mod clickhouse_client;
 pub mod live_cell_storage;
 mod repository;
 mod writer;
 
-// pub use clickhouse_client::{ClickHouseClient, ClickHouseConfig};  // Wave 2
+pub use clickhouse_client::{ClickHouseClient, ClickHouseConfig};
 
 #[derive(Clone, Default)]
 pub struct DbPool;

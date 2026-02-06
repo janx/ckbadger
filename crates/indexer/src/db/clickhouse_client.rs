@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use clickhouse::{insert::Insert, inserter::Inserter, Client, Row};
+use clickhouse::{insert::Insert, inserter::Inserter, Client, Row, RowOwned};
 use serde::{de::DeserializeOwned, Serialize};
 
 const DEFAULT_MAX_ROWS: u64 = 500_000;
@@ -46,7 +46,11 @@ impl ClickHouseConfig {
         }
     }
 
-    pub fn with_credentials(mut self, user: impl Into<String>, password: impl Into<String>) -> Self {
+    pub fn with_credentials(
+        mut self,
+        user: impl Into<String>,
+        password: impl Into<String>,
+    ) -> Self {
         self.user = Some(user.into());
         self.password = Some(password.into());
         self
@@ -59,10 +63,10 @@ impl ClickHouseConfig {
     }
 
     pub fn from_env() -> Result<Self> {
-        let url = std::env::var("CLICKHOUSE_URL")
-            .unwrap_or_else(|_| "http://localhost:8123".to_string());
-        let database = std::env::var("CLICKHOUSE_DATABASE")
-            .unwrap_or_else(|_| "ckbadger".to_string());
+        let url =
+            std::env::var("CLICKHOUSE_URL").unwrap_or_else(|_| "http://localhost:8123".to_string());
+        let database =
+            std::env::var("CLICKHOUSE_DATABASE").unwrap_or_else(|_| "ckbadger".to_string());
         let user = std::env::var("CLICKHOUSE_USER").ok();
         let password = std::env::var("CLICKHOUSE_PASSWORD").ok();
 
@@ -113,7 +117,7 @@ impl ClickHouseClient {
 
     pub async fn query_one<T>(&self, query: &str) -> Result<Option<T>>
     where
-        T: Row + DeserializeOwned,
+        T: RowOwned + DeserializeOwned,
     {
         self.client
             .query(query)
@@ -132,7 +136,7 @@ impl ClickHouseClient {
 
     pub async fn query_all<T>(&self, query: &str) -> Result<Vec<T>>
     where
-        T: Row + DeserializeOwned,
+        T: RowOwned + DeserializeOwned,
     {
         self.client
             .query(query)
@@ -159,39 +163,26 @@ impl ClickHouseClient {
             .context("Failed to create insert")
     }
 
-    pub fn inserter<T>(&self, table: &str) -> Result<Inserter<T>>
+    pub fn inserter<T>(&self, table: &str) -> Inserter<T>
     where
         T: Row + Serialize,
     {
-        let inserter = self
-            .client
+        self.client
             .inserter(table)
-            .map_err(|e| anyhow::anyhow!("Failed to create inserter: {}", e))?
             .with_max_rows(self.config.max_inserter_rows)
             .with_max_bytes(self.config.max_inserter_bytes)
-            .with_period(Some(Duration::from_secs(self.config.inserter_period_secs)));
-
-        Ok(inserter)
+            .with_period(Some(Duration::from_secs(self.config.inserter_period_secs)))
     }
 
-    pub fn inserter_with_limits<T>(
-        &self,
-        table: &str,
-        max_rows: u64,
-        max_bytes: u64,
-    ) -> Result<Inserter<T>>
+    pub fn inserter_with_limits<T>(&self, table: &str, max_rows: u64, max_bytes: u64) -> Inserter<T>
     where
         T: Row + Serialize,
     {
-        let inserter = self
-            .client
+        self.client
             .inserter(table)
-            .map_err(|e| anyhow::anyhow!("Failed to create inserter: {}", e))?
             .with_max_rows(max_rows)
             .with_max_bytes(max_bytes)
-            .with_period(Some(Duration::from_secs(self.config.inserter_period_secs)));
-
-        Ok(inserter)
+            .with_period(Some(Duration::from_secs(self.config.inserter_period_secs)))
     }
 
     pub async fn ping(&self) -> Result<()> {

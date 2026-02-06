@@ -54,6 +54,9 @@ ckb-hash = { workspace = true }
 # Redis (optional, for cache invalidation)
 redis = { workspace = true, optional = true }
 
+# ClickHouse database client
+clickhouse = { version = "0.14", features = ["lz4", "inserter"] }
+
 [features]
 default = []
 redis-cache = ["redis"]
