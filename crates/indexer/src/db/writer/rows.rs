@@ -11,9 +11,10 @@
 //! - FixedString(32) → [u8; 32]
 //! - FixedString(16) → [u8; 16]
 //! - DateTime64(3, 'UTC') → i64 (milliseconds since epoch)
-//! - UInt256 → [u8; 32] (little-endian bytes)
+//! - UInt256 → clickhouse::types::UInt256
 //! - LowCardinality(String) → String
 
+use clickhouse::types::UInt256;
 use clickhouse::Row;
 use serde::Serialize;
 
@@ -27,13 +28,12 @@ pub const EMPTY_NONCE: [u8; 16] = [0u8; 16];
 // blocks_all
 // =============================================================================
 
-/// Row for `blocks_all` table (MergeTree, append-only).
 #[derive(Debug, Clone, Row, Serialize)]
 pub struct BlockRow {
     pub number: u64,
     pub hash: [u8; 32],
     pub parent_hash: [u8; 32],
-    pub timestamp: i64, // milliseconds since epoch
+    pub timestamp: i64,
     pub version: u32,
     pub compact_target: u64,
     pub transactions_count: u32,
@@ -51,7 +51,7 @@ pub struct BlockRow {
     pub uncles_hash: [u8; 32],
     pub miner_lock_hash: [u8; 32],
     pub miner_message: String,
-    pub total_difficulty: [u8; 32], // UInt256 as LE bytes
+    pub total_difficulty: UInt256,
     pub reward: u64,
 }
 
@@ -79,7 +79,7 @@ impl Default for BlockRow {
             uncles_hash: EMPTY_HASH,
             miner_lock_hash: EMPTY_HASH,
             miner_message: String::new(),
-            total_difficulty: EMPTY_HASH,
+            total_difficulty: UInt256::from_le_bytes([0u8; 32]),
             reward: 0,
         }
     }

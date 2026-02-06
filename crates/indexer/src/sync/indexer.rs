@@ -998,7 +998,7 @@ impl Indexer {
             uncles_hash: parse_hex_bytes32_with_default(&header.extra_hash, [0u8; 32]),
             miner_lock_hash: [0u8; 32],
             miner_message: String::new(),
-            total_difficulty: [0u8; 32],
+            total_difficulty: clickhouse::types::UInt256::from_le_bytes([0u8; 32]),
             reward: 0,
         })
     }
