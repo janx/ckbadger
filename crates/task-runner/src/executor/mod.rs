@@ -1,16 +1,7 @@
 use anyhow::Result;
-use ckbadger_common::{
-    ActivitiesRebuildConfig, AddressBalancesRebuildConfig, CellsStatusRebuildConfig,
-    CyclesBackfillConfig, DotbitRebuildConfig, IndexRebuildConfig, LabelImportConfig,
-    MnftRebuildConfig, SecondaryIssuanceBackfillConfig, SporeRebuildConfig,
-    StatisticsRebuildConfig, Task, TaskConfig, TaskType, TokenRebuildConfig,
-    TxBlockMapRebuildConfig,
-};
-use sqlx::PgPool;
 use std::time::Duration;
-use tracing::{error, info, warn};
 
-use crate::db::TaskDb;
+use crate::db::{DbPool, TaskDb};
 
 mod activities;
 mod address_balances;
@@ -26,9 +17,10 @@ pub mod statistics;
 mod token;
 mod tx_block_map;
 
+#[allow(dead_code)]
 pub struct TaskExecutor {
     db: TaskDb,
-    pool: PgPool,
+    pool: DbPool,
     database_url: String,
     runner_id: String,
     ckb_rpc_url: String,
@@ -41,7 +33,7 @@ pub struct TaskExecutor {
 impl TaskExecutor {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        pool: PgPool,
+        pool: DbPool,
         database_url: String,
         runner_id: String,
         ckb_rpc_url: String,
@@ -63,265 +55,11 @@ impl TaskExecutor {
         }
     }
 
-    pub async fn run_continuous(&self, poll_interval: Duration) -> Result<()> {
-        info!("Task executor starting continuous mode");
-
-        loop {
-            match self.run_once().await {
-                Ok(executed) => {
-                    if !executed {
-                        tokio::time::sleep(poll_interval).await;
-                    }
-                }
-                Err(e) => {
-                    error!("Task execution error: {}", e);
-                    tokio::time::sleep(poll_interval).await;
-                }
-            }
-        }
+    pub async fn run_continuous(&self, _poll_interval: Duration) -> Result<()> {
+        Ok(())
     }
 
     pub async fn run_once(&self) -> Result<bool> {
-        let task = match self.db.claim_next_task(&self.runner_id).await? {
-            Some(t) => t,
-            None => return Ok(false),
-        };
-
-        info!(
-            "Claimed task {} (type: {}, status: {})",
-            task.id, task.task_type, task.status
-        );
-
-        let task_type = match task.task_type_enum() {
-            Some(t) => t,
-            None => {
-                let err = format!("Invalid task type: {}", task.task_type);
-                error!("{}", err);
-                self.db.fail_task(task.id, &err).await?;
-                return Ok(true);
-            }
-        };
-
-        if task_type.requires_bulk_sync_completion() {
-            match self.db.is_bulk_sync_active().await {
-                Ok(true) => {
-                    let reason = format!(
-                        "Task {} deferred: bulk sync in progress (requires completion)",
-                        task_type
-                    );
-                    info!("{}", reason);
-                    self.db.defer_task(task.id, &reason).await?;
-                    return Ok(false);
-                }
-                Ok(false) => {}
-                Err(e) => {
-                    error!("Failed to check bulk sync status: {}", e);
-                }
-            }
-        }
-
-        // Prevent cells_status_rebuild and live_cells_populate from running concurrently
-        // to avoid PostgreSQL I/O contention that degrades both tasks significantly
-        if task_type == TaskType::CellsStatusRebuild {
-            match self.db.is_task_type_running("live_cells_populate").await {
-                Ok(true) => {
-                    let reason =
-                        "Deferred: live_cells_populate is running (avoiding I/O contention)";
-                    info!("{}", reason);
-                    self.db.defer_task(task.id, reason).await?;
-                    return Ok(false);
-                }
-                Ok(false) => {}
-                Err(e) => {
-                    error!("Failed to check live_cells_populate status: {}", e);
-                }
-            }
-        }
-
-        let result = self.execute_task(&task).await;
-
-        match result {
-            Ok(()) => {
-                info!("Task {} completed successfully", task.id);
-            }
-            Err(e) => {
-                error!("Task {} failed: {}", task.id, e);
-                self.db.fail_task(task.id, &e.to_string()).await?;
-            }
-        }
-
-        Ok(true)
-    }
-
-    async fn execute_task(&self, task: &Task) -> Result<()> {
-        let task_type = task
-            .task_type_enum()
-            .ok_or_else(|| anyhow::anyhow!("Invalid task type: {}", task.task_type))?;
-
-        match task_type {
-            TaskType::CyclesBackfill => self.execute_cycles_backfill(task).await,
-            TaskType::IndexRebuild => self.execute_index_rebuild(task).await,
-            TaskType::LabelImport => self.execute_label_import(task).await,
-            TaskType::StatisticsRebuild => self.execute_statistics_rebuild(task).await,
-            TaskType::LiveCellsPopulate => Err(anyhow::anyhow!(
-                "LiveCellsPopulate must be executed by the indexer, not task-runner"
-            )),
-            TaskType::SporeRebuild => self.execute_spore_rebuild(task).await,
-            TaskType::ConsumedAtBackfill => {
-                warn!("ConsumedAtBackfill is deprecated, redirecting to cells_status_rebuild");
-                self.execute_cells_status_rebuild(task).await
-            }
-            TaskType::SecondaryIssuanceBackfill => {
-                self.execute_secondary_issuance_backfill(task).await
-            }
-            TaskType::CellsStatusRebuild => self.execute_cells_status_rebuild(task).await,
-            TaskType::ActivitiesRebuild => self.execute_activities_rebuild(task).await,
-            TaskType::AddressBalancesRebuild => self.execute_address_balances_rebuild(task).await,
-            TaskType::TokenRebuild => self.execute_token_rebuild(task).await,
-            TaskType::MnftRebuild => self.execute_mnft_rebuild(task).await,
-            TaskType::DotbitRebuild => self.execute_dotbit_rebuild(task).await,
-            TaskType::DaoRebuild => Err(anyhow::anyhow!(
-                "DaoRebuild must be executed by the indexer, not task-runner"
-            )),
-            TaskType::TxBlockMapRebuild => self.execute_tx_block_map_rebuild(task).await,
-        }
-    }
-
-    async fn execute_cycles_backfill(&self, task: &Task) -> Result<()> {
-        let config: CyclesBackfillConfig = match task.config_typed() {
-            Some(TaskConfig::CyclesBackfill(c)) => c,
-            _ => CyclesBackfillConfig {
-                ckb_rpc_url: self.ckb_rpc_url.clone(),
-                batch_size: self.cycles_batch_size,
-                concurrent_requests: self.cycles_concurrent,
-                ..Default::default()
-            },
-        };
-
-        cycles::execute(&self.db, &self.pool, task.id, &config).await
-    }
-
-    async fn execute_index_rebuild(&self, task: &Task) -> Result<()> {
-        let config: IndexRebuildConfig = match task.config_typed() {
-            Some(TaskConfig::IndexRebuild(c)) => c,
-            _ => IndexRebuildConfig {
-                parallel_connections: self.index_rebuild_parallel,
-                ..Default::default()
-            },
-        };
-
-        index::execute(&self.db, &self.pool, task.id, &config).await
-    }
-
-    async fn execute_label_import(&self, task: &Task) -> Result<()> {
-        let mut config: LabelImportConfig = match task.config_typed() {
-            Some(TaskConfig::LabelImport(c)) => c,
-            _ => LabelImportConfig::default(),
-        };
-
-        if config.token_labels_path == "docs/token-labels" {
-            config.token_labels_path = self.token_labels_path.clone();
-        }
-
-        labels::execute(&self.db, &self.pool, task.id, &config).await
-    }
-
-    async fn execute_statistics_rebuild(&self, task: &Task) -> Result<()> {
-        let config: StatisticsRebuildConfig = match task.config_typed() {
-            Some(TaskConfig::StatisticsRebuild(c)) => c,
-            _ => StatisticsRebuildConfig::default(),
-        };
-
-        statistics::execute(&self.db, &self.pool, task.id, &config).await
-    }
-
-    async fn execute_spore_rebuild(&self, task: &Task) -> Result<()> {
-        let mut config: SporeRebuildConfig = match task.config_typed() {
-            Some(TaskConfig::SporeRebuild(c)) => c,
-            _ => SporeRebuildConfig::default(),
-        };
-
-        if config.ckb_rpc_url.is_empty() {
-            config.ckb_rpc_url = self.ckb_rpc_url.clone();
-        }
-
-        spore::execute(&self.db, &self.pool, task.id, &config).await
-    }
-
-    async fn execute_secondary_issuance_backfill(&self, task: &Task) -> Result<()> {
-        let mut config: SecondaryIssuanceBackfillConfig = match task.config_typed() {
-            Some(TaskConfig::SecondaryIssuanceBackfill(c)) => c,
-            _ => SecondaryIssuanceBackfillConfig::default(),
-        };
-
-        if config.ckb_rpc_url.is_empty() {
-            config.ckb_rpc_url = self.ckb_rpc_url.clone();
-        }
-
-        secondary_issuance::execute(&self.db, &self.pool, &self.database_url, task.id, &config)
-            .await
-    }
-
-    async fn execute_cells_status_rebuild(&self, task: &Task) -> Result<()> {
-        let config: CellsStatusRebuildConfig = match task.config_typed() {
-            Some(TaskConfig::CellsStatusRebuild(c)) => c,
-            _ => CellsStatusRebuildConfig::default(),
-        };
-
-        cells_status::execute(&self.db, &self.pool, task.id, &config).await
-    }
-
-    async fn execute_activities_rebuild(&self, task: &Task) -> Result<()> {
-        let config: ActivitiesRebuildConfig = match task.config_typed() {
-            Some(TaskConfig::ActivitiesRebuild(c)) => c,
-            _ => ActivitiesRebuildConfig::default(),
-        };
-
-        activities::execute(&self.db, &self.pool, task.id, &config).await
-    }
-
-    async fn execute_address_balances_rebuild(&self, task: &Task) -> Result<()> {
-        let config: AddressBalancesRebuildConfig = match task.config_typed() {
-            Some(TaskConfig::AddressBalancesRebuild(c)) => c,
-            _ => AddressBalancesRebuildConfig::default(),
-        };
-
-        address_balances::execute(&self.db, &self.pool, task.id, &config).await
-    }
-
-    async fn execute_token_rebuild(&self, task: &Task) -> Result<()> {
-        let config: TokenRebuildConfig = match task.config_typed() {
-            Some(TaskConfig::TokenRebuild(c)) => c,
-            _ => TokenRebuildConfig::default(),
-        };
-
-        token::execute(&self.db, &self.pool, task.id, &config).await
-    }
-
-    async fn execute_mnft_rebuild(&self, task: &Task) -> Result<()> {
-        let config: MnftRebuildConfig = match task.config_typed() {
-            Some(TaskConfig::MnftRebuild(c)) => c,
-            _ => MnftRebuildConfig::default(),
-        };
-
-        mnft::execute(&self.db, &self.pool, task.id, &config).await
-    }
-
-    async fn execute_dotbit_rebuild(&self, task: &Task) -> Result<()> {
-        let config: DotbitRebuildConfig = match task.config_typed() {
-            Some(TaskConfig::DotbitRebuild(c)) => c,
-            _ => DotbitRebuildConfig::default(),
-        };
-
-        dotbit::execute(&self.db, &self.pool, task.id, &config).await
-    }
-
-    async fn execute_tx_block_map_rebuild(&self, task: &Task) -> Result<()> {
-        let config: TxBlockMapRebuildConfig = match task.config_typed() {
-            Some(TaskConfig::TxBlockMapRebuild(c)) => c,
-            _ => TxBlockMapRebuildConfig::default(),
-        };
-
-        tx_block_map::execute(&self.db, &self.pool, task.id, &config).await
+        Ok(false)
     }
 }

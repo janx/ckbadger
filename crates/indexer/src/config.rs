@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use serde::Deserialize;
 
 /// Maximum reorg depth before triggering deep fork handling.
@@ -40,16 +42,6 @@ pub struct Config {
     /// Apply PostgreSQL tuning for bulk sync optimization
     #[serde(default)]
     pub apply_pg_tuning: bool,
-    /// Flush LiveCellStore to DB every N batches (default 100)
-    #[serde(default = "default_live_cell_flush_interval")]
-    pub live_cell_flush_interval: u64,
-    /// Path to RocksDB live cell store
-    #[serde(default = "default_live_cell_db_path")]
-    pub live_cell_db_path: String,
-    /// Keep all consumed cells in RocksDB during bulk sync to avoid PostgreSQL fallback queries.
-    /// Requires ~15GB extra memory for full sync. Disable on low-memory machines (<32GB RAM).
-    #[serde(default = "default_bulk_sync_cell_cache")]
-    pub bulk_sync_cell_cache: bool,
 }
 
 fn default_batch_size() -> usize {
@@ -100,18 +92,6 @@ fn default_copy_pool_size() -> usize {
 
 fn default_index_rebuild_parallel() -> usize {
     10
-}
-
-fn default_live_cell_flush_interval() -> u64 {
-    100
-}
-
-fn default_live_cell_db_path() -> String {
-    "./data/live_cells".to_string()
-}
-
-fn default_bulk_sync_cell_cache() -> bool {
-    true
 }
 
 impl Config {

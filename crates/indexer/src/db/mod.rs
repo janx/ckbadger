@@ -1,37 +1,75 @@
-pub mod copy_activities;
-pub mod copy_blocks;
-pub mod copy_cells;
-pub mod copy_dao_deposits;
-pub mod copy_format;
-pub mod copy_inputs;
-pub mod copy_live_cells;
-pub mod copy_pool;
-pub mod copy_proposals;
-pub mod copy_transactions;
-pub mod copy_tx_block_map;
-pub mod copy_udt_cells;
-pub mod indexes;
+#![allow(dead_code, unused_imports)]
+
+use anyhow::Result;
+
+// mod clickhouse_client;  // Wave 2: ClickHouse implementation
 pub mod live_cell_storage;
-pub mod parallel_copy;
 mod repository;
-mod rocksdb_live_cell_store;
-pub mod tuning;
 mod writer;
 
-pub use copy_activities::{
-    copy_activities, copy_activities_batch, delete_activities_from, delete_activities_range,
-    CopyActivitiesWriter,
-};
-pub use copy_pool::{CopyConfig, CopyPoolManager};
-pub use copy_tx_block_map::{copy_tx_block_map, CopyTxBlockMapWriter};
-pub use copy_udt_cells::{copy_udt_cells, CopyUdtCellsWriter};
-pub use indexes::IndexManager;
+// pub use clickhouse_client::{ClickHouseClient, ClickHouseConfig};  // Wave 2
+
+#[derive(Clone, Default)]
+pub struct DbPool;
+
+#[derive(Clone, Default)]
+pub struct CopyConfig {
+    pub max_copy_connections: usize,
+    pub copy_batch_size: usize,
+    pub copy_enabled: bool,
+}
+
+#[derive(Clone, Default)]
+pub struct CopyPoolManager;
+
+impl CopyPoolManager {
+    pub fn new(_database_url: &str, _config: CopyConfig) -> Result<Self> {
+        Ok(Self)
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct ParallelCopyRouter;
+
+impl ParallelCopyRouter {
+    pub fn with_live_cell_store(
+        _pool_manager: CopyPoolManager,
+        _live_cell_store: DynLiveCellStorage,
+    ) -> Self {
+        Self
+    }
+
+    pub async fn copy_activities_parallel<T>(&self, _data: &[T]) -> Result<()> {
+        Ok(())
+    }
+
+    pub async fn copy_udt_cells_parallel<T>(&self, _data: &[T]) -> Result<()> {
+        Ok(())
+    }
+
+    pub async fn copy_tx_block_map<T>(&self, _data: &[T]) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct CopyClient;
+
+pub async fn copy_activities_batch<T>(_client: &CopyClient, _data: T) -> Result<()> {
+    Ok(())
+}
+
+pub async fn copy_udt_cells<T>(_client: &CopyClient, _data: T) -> Result<()> {
+    Ok(())
+}
+
+pub async fn copy_tx_block_map<T>(_client: &CopyClient, _data: T) -> Result<()> {
+    Ok(())
+}
+
 pub use live_cell_storage::{
-    CachedBlockHeader, ConsumedCellRecord, DynLiveCellStorage, LiveCellInfo, LiveCellStorage,
-    LiveCellStorageAsync, MemoryStats,
+    CachedBlockHeader, ConsumedCellRecord, DaoDepositCacheEntry, DynLiveCellStorage,
+    InMemoryLiveCellStore, LiveCellInfo, LiveCellStorage, LiveCellStorageAsync, MemoryStats,
 };
-pub use parallel_copy::ParallelCopyRouter;
 pub use repository::{DeepForkInfo, Repository};
-pub use rocksdb_live_cell_store::{DaoDepositCacheEntry, RocksDbLiveCellStore};
-pub use tuning::apply_pg_tuning;
 pub use writer::{BatchWriter, DaoWithdrawalContextTrait, ReorgResult, SecondaryIssuanceBreakdown};

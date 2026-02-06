@@ -7,7 +7,6 @@ use crossterm::{
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use ratatui_image::picker::Picker;
-use sqlx::postgres::PgPoolOptions;
 use std::io;
 use std::time::Duration;
 
@@ -15,7 +14,7 @@ mod chart;
 mod db;
 mod ui;
 
-use db::TaskDb;
+use db::{DbPool, TaskDb};
 use ui::{App, FocusedPanel};
 
 #[derive(Parser, Debug)]
@@ -38,10 +37,7 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
 
-    let pool = PgPoolOptions::new()
-        .max_connections(5)
-        .connect(&args.database_url)
-        .await?;
+    let pool = DbPool;
 
     let db = TaskDb::new(pool, args.redis_url.as_deref()).await;
 

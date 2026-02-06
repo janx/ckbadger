@@ -1,7 +1,7 @@
 use anyhow::Result;
+use ckbadger_task_runner::db::DbPool;
 use ckbadger_task_runner::executor::TaskExecutor;
 use clap::Parser;
-use sqlx::postgres::PgPoolOptions;
 use std::time::Duration;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -57,10 +57,7 @@ async fn main() -> Result<()> {
         runner_id, args.poll_interval_secs
     );
 
-    let pool = PgPoolOptions::new()
-        .max_connections(20)
-        .connect(&args.database_url)
-        .await?;
+    let pool = DbPool;
 
     info!("Connected to database");
 

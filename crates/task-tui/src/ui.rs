@@ -979,7 +979,7 @@ fn draw_memory_stats(f: &mut Frame, app: &App, area: Rect) {
     let left_lines = vec![
         Line::from(vec![
             Span::styled(
-                format!("{:>14}", "RocksDB:"),
+                format!("{:>14}", "Cache:"),
                 Style::default().fg(Color::Gray),
             ),
             Span::styled(
@@ -1417,7 +1417,7 @@ fn draw_dialog(f: &mut Frame, app: &App, dialog: &DialogType) {
                 ("Index Rebuild", "Rebuild deferred indexes and constraints"),
                 ("Label Import", "Import UDT/script labels from token-labels"),
                 ("Statistics Rebuild", "Rebuild all aggregate statistics"),
-                ("Live Cells Populate", "Populate live_cells from RocksDB"),
+                ("Live Cells Populate", "Populate live_cells from cache"),
                 ("Spore Rebuild", "Rebuild Spore NFT data"),
                 (
                     "Secondary Issuance Backfill",

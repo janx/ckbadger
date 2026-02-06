@@ -10,22 +10,19 @@ pub mod warmup;
 pub mod ws;
 
 use axum::{routing::get, Router};
-use sqlx::PgPool;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
 use cache::CacheBackend;
 use cycles::CyclesCalculator;
+use db::DbPool;
 use middleware::IpRateLimitLayer;
 use ws::WsManager;
 
-/// Embedded database migrator for use with `#[sqlx::test]`
-pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations/postgres");
-
 #[derive(Clone)]
 pub struct AppState {
-    pub pool: PgPool,
+    pub pool: DbPool,
     pub ws_manager: Arc<WsManager>,
     pub cache: CacheBackend,
     pub ckb_rpc_url: String,
@@ -34,7 +31,7 @@ pub struct AppState {
 }
 
 pub struct AppConfig {
-    pub pool: PgPool,
+    pub pool: DbPool,
     pub redis_url: Option<String>,
     pub ckb_rpc_url: String,
     pub ckb_network: String,
@@ -46,8 +43,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            pool: PgPool::connect_lazy("postgres://localhost/ckbadger")
-                .expect("Failed to create lazy connection pool for default config"),
+            pool: DbPool,
             redis_url: None,
             ckb_rpc_url: "http://localhost:8114".to_string(),
             ckb_network: "mainnet".to_string(),

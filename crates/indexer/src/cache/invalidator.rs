@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use ckbadger_common::{CachedProposal, MemoryStatsData, SyncProgressData, SyncStatusData};
 #[cfg(feature = "redis-cache")]
 use ckbadger_common::{

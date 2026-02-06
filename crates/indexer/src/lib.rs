@@ -7,6 +7,3 @@ pub mod sync;
 
 pub use cache::CacheInvalidator;
 pub use config::Config;
-
-/// Migrator for sqlx::test integration tests
-pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations/postgres");

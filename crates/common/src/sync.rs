@@ -221,20 +221,20 @@ pub fn format_duration_smart(total_secs: f64) -> String {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct MemoryStatsData {
-    /// Number of live (unspent) cells in RocksDB
+    /// Number of live (unspent) cells in the cache
     pub live_cells_count: u64,
     /// Number of consumed cells retained in cache (for reorg support)
     pub consumed_cells_count: u64,
     /// Bytes used by consumed cells cache
     pub consumed_cells_bytes: u64,
 
-    /// RocksDB memtable (write buffer) memory usage
+    /// LRU cache memtable (write buffer) memory usage
     pub rocksdb_memtable_bytes: u64,
-    /// RocksDB block cache usage
+    /// LRU cache block cache usage
     pub rocksdb_block_cache_bytes: u64,
-    /// RocksDB table readers memory estimate
+    /// LRU cache table readers memory estimate
     pub rocksdb_table_readers_bytes: u64,
-    /// Total RocksDB memory usage
+    /// Total LRU cache memory usage
     pub rocksdb_total_bytes: u64,
 
     /// Number of block headers cached
