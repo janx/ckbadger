@@ -10,7 +10,7 @@
 //! Type mappings:
 //! - FixedString(32) → [u8; 32]
 //! - FixedString(16) → [u8; 16]
-//! - DateTime64(3, 'UTC') → i64 (milliseconds since epoch)
+//! - Int64 → i64 (milliseconds since epoch for timestamp fields)
 //! - UInt256 → clickhouse::types::UInt256
 //! - LowCardinality(String) → String
 
@@ -227,7 +227,7 @@ pub struct ActivityRow {
     pub activity_index: u16,
     pub from_lock_hash: [u8; 32], // Empty for mint/cellbase
     pub to_lock_hash: [u8; 32],   // Empty for burn
-    pub amount: [u8; 32],         // UInt256 as LE bytes
+    pub amount: UInt256,          // UInt256 for ClickHouse
     pub asset_id: [u8; 32],       // Empty if N/A
     pub metadata: String,         // JSON string
     pub timestamp: i64,           // milliseconds since epoch
@@ -245,7 +245,7 @@ impl Default for ActivityRow {
             activity_index: 0,
             from_lock_hash: EMPTY_HASH,
             to_lock_hash: EMPTY_HASH,
-            amount: EMPTY_HASH,
+            amount: UInt256::from_le_bytes([0u8; 32]),
             asset_id: EMPTY_HASH,
             metadata: String::new(),
             timestamp: 0,

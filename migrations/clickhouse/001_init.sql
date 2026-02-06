@@ -55,8 +55,8 @@ CREATE TABLE IF NOT EXISTS blocks_all
     hash FixedString(32) CODEC(ZSTD(1)),
     parent_hash FixedString(32) CODEC(ZSTD(1)),
     
-    -- Timestamp
-    timestamp DateTime64(3, 'UTC'),
+    -- Timestamp (milliseconds since epoch)
+    timestamp Int64,
     
     -- Block metadata
     version UInt32,
@@ -129,8 +129,8 @@ CREATE TABLE IF NOT EXISTS transactions_all
     -- Flags
     is_cellbase UInt8 DEFAULT 0,
     
-    -- Denormalized timestamp for efficient queries
-    timestamp DateTime64(3, 'UTC'),
+    -- Denormalized timestamp for efficient queries (milliseconds since epoch)
+    timestamp Int64,
     
     -- Bloom filter indexes
     INDEX idx_hash hash TYPE bloom_filter(0.01) GRANULARITY 1,
@@ -265,8 +265,8 @@ CREATE TABLE IF NOT EXISTS activities_all
     -- Type-specific metadata
     metadata String CODEC(ZSTD(3)),  -- JSON string
     
-    -- Timestamp
-    timestamp DateTime64(3, 'UTC'),
+    -- Timestamp (milliseconds since epoch)
+    timestamp Int64,
     
     -- Indexes
     INDEX idx_activity_id activity_id TYPE bloom_filter(0.01) GRANULARITY 1,
