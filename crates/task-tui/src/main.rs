@@ -16,7 +16,7 @@ mod db;
 mod ui;
 
 use db::TaskDb;
-use ui::App;
+use ui::{App, FocusedPanel};
 
 #[derive(Parser, Debug)]
 #[command(name = "ckbadger-task-tui")]
@@ -102,8 +102,17 @@ async fn run_app<B: ratatui::backend::Backend>(
                     } else {
                         match key.code {
                             KeyCode::Char('q') => return Ok(()),
-                            KeyCode::Char('j') | KeyCode::Down => app.next(),
-                            KeyCode::Char('k') | KeyCode::Up => app.previous(),
+                            KeyCode::Tab => app.toggle_focus(),
+                            KeyCode::Char('j') | KeyCode::Down => match app.focused_panel() {
+                                FocusedPanel::Tasks => app.next(),
+                                FocusedPanel::Log => app.scroll_log_down(),
+                            },
+                            KeyCode::Char('k') | KeyCode::Up => match app.focused_panel() {
+                                FocusedPanel::Tasks => app.previous(),
+                                FocusedPanel::Log => app.scroll_log_up(),
+                            },
+                            KeyCode::Char('g') | KeyCode::End => app.scroll_log_to_bottom(),
+                            KeyCode::Char('G') | KeyCode::Home => app.scroll_log_to_top(),
                             KeyCode::Char('n') => app.show_new_task_dialog(),
                             KeyCode::Char('c') => app.cancel_selected().await?,
                             KeyCode::Char('p') => app.pause_selected().await?,

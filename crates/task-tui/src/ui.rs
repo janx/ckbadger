@@ -1,5 +1,5 @@
 use anyhow::Result;
-use chrono::Local;
+use chrono::{DateTime, Local};
 use ckbadger_common::{
     CyclesBackfillConfig, DotbitRebuildConfig, IndexRebuildConfig, LabelImportConfig,
     LiveCellsPopulateConfig, MemoryStatsData, MnftRebuildConfig, SecondaryIssuanceBackfillConfig,
@@ -20,6 +20,39 @@ use crate::chart::{render_bar_chart, ChartStats};
 use crate::db::{SyncStatusRow, TaskDb};
 
 const RATE_HISTORY_SIZE: usize = 3600;
+const LOG_HISTORY_SIZE: usize = 100;
+
+#[derive(Debug, Clone)]
+pub struct LogEntry {
+    pub timestamp: DateTime<Local>,
+    pub message: String,
+    pub level: LogLevel,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LogLevel {
+    Info,
+    Success,
+    Warning,
+}
+
+impl LogLevel {
+    fn color(&self) -> Color {
+        match self {
+            LogLevel::Info => Color::Cyan,
+            LogLevel::Success => Color::Green,
+            LogLevel::Warning => Color::Yellow,
+        }
+    }
+
+    fn prefix(&self) -> &'static str {
+        match self {
+            LogLevel::Info => "INFO",
+            LogLevel::Success => " OK ",
+            LogLevel::Warning => "WARN",
+        }
+    }
+}
 
 const COLOR_BORDER: Color = Color::Rgb(88, 88, 88);
 const COLOR_MUTED: Color = Color::Rgb(128, 128, 128);
@@ -30,6 +63,13 @@ const COLOR_SEPARATOR: Color = Color::Rgb(100, 100, 100);
 pub enum DialogType {
     NewTask,
     Confirm(&'static str),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum FocusedPanel {
+    #[default]
+    Tasks,
+    Log,
 }
 
 pub struct App {
@@ -44,12 +84,27 @@ pub struct App {
     dialog_selection: usize,
     status_message: Option<String>,
     rate_history: VecDeque<f64>,
+    log_entries: VecDeque<LogEntry>,
+    log_scroll: usize,
+    focused_panel: FocusedPanel,
+    prev_is_bulk_sync: Option<bool>,
+    prev_is_syncing: Option<bool>,
+    prev_task_ids: Vec<uuid::Uuid>,
+    prev_running_task_ids: Vec<uuid::Uuid>,
+    prev_indexes_deferred: Option<bool>,
     #[allow(dead_code)]
     picker: Option<Picker>,
 }
 
 impl App {
     pub fn new(db: TaskDb, picker: Option<Picker>) -> Self {
+        let mut log_entries = VecDeque::with_capacity(LOG_HISTORY_SIZE);
+        log_entries.push_back(LogEntry {
+            timestamp: Local::now(),
+            message: "Task Manager started".to_string(),
+            level: LogLevel::Info,
+        });
+
         Self {
             db,
             tasks: Vec::new(),
@@ -62,8 +117,45 @@ impl App {
             dialog_selection: 0,
             status_message: None,
             rate_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
+            log_entries,
+            log_scroll: 0,
+            focused_panel: FocusedPanel::default(),
+            prev_is_bulk_sync: None,
+            prev_is_syncing: None,
+            prev_task_ids: Vec::new(),
+            prev_running_task_ids: Vec::new(),
+            prev_indexes_deferred: None,
             picker,
         }
+    }
+
+    pub fn toggle_focus(&mut self) {
+        self.focused_panel = match self.focused_panel {
+            FocusedPanel::Tasks => FocusedPanel::Log,
+            FocusedPanel::Log => FocusedPanel::Tasks,
+        };
+    }
+
+    pub fn focused_panel(&self) -> FocusedPanel {
+        self.focused_panel
+    }
+
+    pub fn scroll_log_up(&mut self) {
+        if self.log_scroll < self.log_entries.len().saturating_sub(1) {
+            self.log_scroll += 1;
+        }
+    }
+
+    pub fn scroll_log_down(&mut self) {
+        self.log_scroll = self.log_scroll.saturating_sub(1);
+    }
+
+    pub fn scroll_log_to_bottom(&mut self) {
+        self.log_scroll = 0;
+    }
+
+    pub fn scroll_log_to_top(&mut self) {
+        self.log_scroll = self.log_entries.len().saturating_sub(1);
     }
 
     pub async fn refresh(&mut self) -> Result<()> {
@@ -71,6 +163,8 @@ impl App {
         self.sync_status = self.db.get_sync_status().await.ok();
         self.memory_stats = self.db.get_memory_stats().await;
         self.last_refresh = Instant::now();
+
+        self.detect_events();
 
         if self.last_sample.elapsed().as_secs() >= 1 {
             self.sample_rate();
@@ -81,6 +175,118 @@ impl App {
             self.table_state.select(Some(0));
         }
         Ok(())
+    }
+
+    fn detect_events(&mut self) {
+        if let Some(sync) = &self.sync_status {
+            if let Some(prev_bulk) = self.prev_is_bulk_sync {
+                if prev_bulk && !sync.is_bulk_sync {
+                    self.log_entries.push_back(LogEntry {
+                        timestamp: Local::now(),
+                        message: "Bulk sync completed".to_string(),
+                        level: LogLevel::Success,
+                    });
+                } else if !prev_bulk && sync.is_bulk_sync {
+                    self.log_entries.push_back(LogEntry {
+                        timestamp: Local::now(),
+                        message: "Bulk sync started".to_string(),
+                        level: LogLevel::Info,
+                    });
+                }
+            }
+            self.prev_is_bulk_sync = Some(sync.is_bulk_sync);
+
+            if let Some(prev_syncing) = self.prev_is_syncing {
+                if prev_syncing && !sync.is_syncing {
+                    self.log_entries.push_back(LogEntry {
+                        timestamp: Local::now(),
+                        message: "Sync completed - now in real-time mode".to_string(),
+                        level: LogLevel::Success,
+                    });
+                } else if !prev_syncing && sync.is_syncing {
+                    self.log_entries.push_back(LogEntry {
+                        timestamp: Local::now(),
+                        message: "Syncing started".to_string(),
+                        level: LogLevel::Info,
+                    });
+                }
+            }
+            self.prev_is_syncing = Some(sync.is_syncing);
+
+            if let Some(prev_deferred) = self.prev_indexes_deferred {
+                if prev_deferred && !sync.indexes_deferred {
+                    self.log_entries.push_back(LogEntry {
+                        timestamp: Local::now(),
+                        message: "Index rebuild completed".to_string(),
+                        level: LogLevel::Success,
+                    });
+                } else if !prev_deferred && sync.indexes_deferred {
+                    self.log_entries.push_back(LogEntry {
+                        timestamp: Local::now(),
+                        message: "Indexes deferred for bulk sync".to_string(),
+                        level: LogLevel::Warning,
+                    });
+                }
+            }
+            self.prev_indexes_deferred = Some(sync.indexes_deferred);
+        }
+
+        let current_task_ids: Vec<uuid::Uuid> = self.tasks.iter().map(|t| t.id).collect();
+        for task in &self.tasks {
+            if !self.prev_task_ids.contains(&task.id) {
+                self.log_entries.push_back(LogEntry {
+                    timestamp: Local::now(),
+                    message: format!("New task created: {}", task.task_type),
+                    level: LogLevel::Info,
+                });
+            }
+        }
+
+        let current_running: Vec<uuid::Uuid> = self
+            .tasks
+            .iter()
+            .filter(|t| t.status == "running")
+            .map(|t| t.id)
+            .collect();
+        for task in &self.tasks {
+            if task.status == "running" && !self.prev_running_task_ids.contains(&task.id) {
+                self.log_entries.push_back(LogEntry {
+                    timestamp: Local::now(),
+                    message: format!("Task started: {}", task.task_type),
+                    level: LogLevel::Info,
+                });
+            }
+        }
+        for prev_id in &self.prev_running_task_ids {
+            if !current_running.contains(prev_id) {
+                if let Some(task) = self.tasks.iter().find(|t| &t.id == prev_id) {
+                    let msg = match task.status.as_str() {
+                        "completed" => format!("Task completed: {}", task.task_type),
+                        "failed" => format!("Task failed: {}", task.task_type),
+                        "cancelled" => format!("Task cancelled: {}", task.task_type),
+                        "paused" => format!("Task paused: {}", task.task_type),
+                        _ => format!("Task stopped: {}", task.task_type),
+                    };
+                    let level = match task.status.as_str() {
+                        "completed" => LogLevel::Success,
+                        "failed" | "cancelled" => LogLevel::Warning,
+                        _ => LogLevel::Info,
+                    };
+                    self.log_entries.push_back(LogEntry {
+                        timestamp: Local::now(),
+                        message: msg,
+                        level,
+                    });
+                }
+            }
+        }
+
+        self.prev_task_ids = current_task_ids;
+        self.prev_running_task_ids = current_running;
+
+        while self.log_entries.len() > LOG_HISTORY_SIZE {
+            self.log_entries.pop_front();
+        }
     }
 
     fn sample_rate(&mut self) {
@@ -254,21 +460,21 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),
-            Constraint::Length(7),
+            Constraint::Length(9),
             Constraint::Length(5),
+            Constraint::Min(6),
             Constraint::Length(8),
-            Constraint::Min(10),
-            Constraint::Length(8),
+            Constraint::Length(12),
             Constraint::Length(3),
         ])
         .split(f.area());
 
     draw_header(f, app, chunks[0]);
-    draw_sync_status(f, app, chunks[1]);
+    draw_sync_and_chart(f, app, chunks[1]);
     draw_memory_stats(f, app, chunks[2]);
-    draw_rate_chart(f, app, chunks[3]);
-    draw_task_table(f, app, chunks[4]);
-    draw_task_detail(f, app, chunks[5]);
+    draw_task_table(f, app, chunks[3]);
+    draw_task_detail(f, app, chunks[4]);
+    draw_log(f, app, chunks[5]);
     draw_footer(f, app, chunks[6]);
 
     if let Some(dialog) = &app.dialog {
@@ -320,7 +526,17 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(time_widget, cols[1]);
 }
 
-fn draw_sync_status(f: &mut Frame, app: &App, area: Rect) {
+fn draw_sync_and_chart(f: &mut Frame, app: &App, area: Rect) {
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
+        .split(area);
+
+    draw_sync_status_compact(f, app, cols[0]);
+    draw_rate_chart_compact(f, app, cols[1]);
+}
+
+fn draw_sync_status_compact(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(COLOR_BORDER))
@@ -342,7 +558,7 @@ fn draw_sync_status(f: &mut Frame, app: &App, area: Rect) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
-            Constraint::Length(2),
+            Constraint::Length(4),
             Constraint::Length(1),
         ])
         .split(inner);
@@ -355,28 +571,16 @@ fn draw_sync_status(f: &mut Frame, app: &App, area: Rect) {
         ("SYNCING", Color::Cyan)
     };
 
-    let idx_status = if sync.indexes_deferred {
-        " [IDX DEFERRED]"
-    } else {
-        ""
-    };
+    let idx_status = if sync.indexes_deferred { " [IDX]" } else { "" };
 
     let status_line = Line::from(vec![
         Span::styled(
             format!(" {} ", mode),
             Style::default().fg(Color::Black).bg(mode_color),
         ),
-        Span::raw(format!(
-            " Block {}/{} ({:.2}%){}",
-            sync.tip_block, sync.chain_tip, sync.progress, idx_status
-        )),
+        Span::raw(format!(" {:.2}%{}", sync.progress, idx_status)),
     ]);
     f.render_widget(Paragraph::new(status_line), rows[0]);
-
-    let cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(rows[1]);
 
     let format_rate = |rate: f64| -> String {
         if rate >= 1000.0 {
@@ -386,56 +590,48 @@ fn draw_sync_status(f: &mut Frame, app: &App, area: Rect) {
         }
     };
 
-    let mut left_lines = Vec::new();
+    let mut info_lines = Vec::new();
+    info_lines.push(Line::from(vec![
+        Span::styled("Block: ", Style::default().fg(Color::Gray)),
+        Span::raw(format!("{}/{}", sync.tip_block, sync.chain_tip)),
+    ]));
+
     if let Some(realtime) = sync.rate_realtime {
         if realtime > 0.0 {
-            left_lines.push(Line::from(vec![
+            info_lines.push(Line::from(vec![
                 Span::styled("Speed: ", Style::default().fg(Color::Gray)),
                 Span::styled(
-                    format_rate(realtime),
+                    format!("{} blk/s", format_rate(realtime)),
                     Style::default()
                         .fg(Color::Green)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::raw(" blk/s"),
             ]));
         }
     }
+
+    if let Some(ref eta) = sync.eta {
+        info_lines.push(Line::from(vec![
+            Span::styled("ETA:   ", Style::default().fg(Color::Gray)),
+            Span::styled(eta.clone(), Style::default().fg(Color::Yellow)),
+        ]));
+    } else if let Some(ref elapsed) = sync.elapsed_time {
+        info_lines.push(Line::from(vec![
+            Span::styled("Time:  ", Style::default().fg(Color::Gray)),
+            Span::raw(elapsed.clone()),
+        ]));
+    }
+
     if let Some(ema) = sync.rate_ema {
         if ema > 0.0 {
-            left_lines.push(Line::from(vec![
+            info_lines.push(Line::from(vec![
                 Span::styled("EMA:   ", Style::default().fg(Color::Gray)),
                 Span::raw(format!("{} blk/s", format_rate(ema))),
             ]));
         }
     }
-    if left_lines.is_empty() {
-        left_lines.push(Line::from(Span::styled(
-            "--",
-            Style::default().fg(Color::Gray),
-        )));
-    }
-    f.render_widget(Paragraph::new(left_lines), cols[0]);
 
-    let mut right_lines = Vec::new();
-    if let Some(ref eta) = sync.eta {
-        right_lines.push(Line::from(vec![
-            Span::styled("ETA:     ", Style::default().fg(Color::Gray)),
-            Span::styled(
-                eta.clone(),
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]));
-    }
-    if let Some(ref elapsed) = sync.elapsed_time {
-        right_lines.push(Line::from(vec![
-            Span::styled("Elapsed: ", Style::default().fg(Color::Gray)),
-            Span::raw(elapsed.clone()),
-        ]));
-    }
-    f.render_widget(Paragraph::new(right_lines), cols[1]);
+    f.render_widget(Paragraph::new(info_lines), rows[1]);
 
     let ratio = (sync.progress / 100.0).clamp(0.0, 1.0);
     let gauge = Gauge::default()
@@ -444,6 +640,64 @@ fn draw_sync_status(f: &mut Frame, app: &App, area: Rect) {
         .label(format!("{:.2}%", sync.progress))
         .use_unicode(true);
     f.render_widget(gauge, rows[2]);
+}
+
+fn draw_rate_chart_compact(f: &mut Frame, app: &App, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(COLOR_BORDER))
+        .title(chart_title(app));
+
+    if app.rate_history.is_empty() {
+        let msg = Paragraph::new("Collecting data...")
+            .style(Style::default().fg(COLOR_MUTED))
+            .block(block);
+        f.render_widget(msg, area);
+        return;
+    }
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let chart_result = render_bar_chart(
+        &app.rate_history,
+        inner.width as usize,
+        inner.height as usize,
+    );
+
+    for (i, row) in chart_result.rows.iter().enumerate() {
+        if i < inner.height as usize {
+            let y = inner.y + i as u16;
+            let span = Span::styled(row.content.clone(), Style::default().fg(row.color));
+            let paragraph = Paragraph::new(Line::from(span));
+            let line_area = Rect {
+                x: inner.x,
+                y,
+                width: inner.width,
+                height: 1,
+            };
+            f.render_widget(paragraph, line_area);
+        }
+    }
+
+    let samples = app.rate_history.len();
+    let duration = if samples >= 3600 {
+        "1h".to_string()
+    } else if samples >= 60 {
+        format!("{}m", samples / 60)
+    } else {
+        format!("{}s", samples)
+    };
+
+    let axis_label = Span::styled(format!(" {} ", duration), Style::default().fg(COLOR_MUTED));
+    let label_para = Paragraph::new(Line::from(axis_label)).alignment(Alignment::Right);
+    let label_area = Rect {
+        x: inner.x,
+        y: inner.y,
+        width: inner.width,
+        height: 1,
+    };
+    f.render_widget(label_para, label_area);
 }
 
 fn draw_memory_stats(f: &mut Frame, app: &App, area: Rect) {
@@ -566,10 +820,6 @@ fn format_count(count: u64) -> String {
     }
 }
 
-fn draw_rate_chart(f: &mut Frame, app: &mut App, area: Rect) {
-    draw_rate_chart_blocks(f, app, area);
-}
-
 fn format_rate(rate: f64) -> String {
     if rate >= 1000.0 {
         format!("{:.1}K", rate / 1000.0)
@@ -607,65 +857,14 @@ fn chart_title(app: &App) -> Line<'static> {
     }
 }
 
-fn draw_rate_chart_blocks(f: &mut Frame, app: &App, area: Rect) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(COLOR_BORDER))
-        .title(chart_title(app));
-
-    if app.rate_history.is_empty() {
-        let msg = Paragraph::new("Collecting data...")
-            .style(Style::default().fg(COLOR_MUTED))
-            .block(block);
-        f.render_widget(msg, area);
-        return;
-    }
-
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
-    let chart_result = render_bar_chart(
-        &app.rate_history,
-        inner.width as usize,
-        inner.height as usize,
-    );
-
-    for (i, row) in chart_result.rows.iter().enumerate() {
-        if i < inner.height as usize {
-            let y = inner.y + i as u16;
-            let span = Span::styled(row.content.clone(), Style::default().fg(row.color));
-            let paragraph = Paragraph::new(Line::from(span));
-            let line_area = Rect {
-                x: inner.x,
-                y,
-                width: inner.width,
-                height: 1,
-            };
-            f.render_widget(paragraph, line_area);
-        }
-    }
-
-    let samples = app.rate_history.len();
-    let duration = if samples >= 3600 {
-        "1h".to_string()
-    } else if samples >= 60 {
-        format!("{}m", samples / 60)
-    } else {
-        format!("{}s", samples)
-    };
-
-    let axis_label = Span::styled(format!(" {} ", duration), Style::default().fg(COLOR_MUTED));
-    let label_para = Paragraph::new(Line::from(axis_label)).alignment(Alignment::Right);
-    let label_area = Rect {
-        x: inner.x,
-        y: inner.y,
-        width: inner.width,
-        height: 1,
-    };
-    f.render_widget(label_para, label_area);
-}
-
 fn draw_task_table(f: &mut Frame, app: &mut App, area: Rect) {
+    let is_focused = app.focused_panel == FocusedPanel::Tasks;
+    let border_color = if is_focused {
+        Color::Cyan
+    } else {
+        COLOR_BORDER
+    };
+
     let header_cells = ["ID", "Type", "Status", "Progress", "Rate", "ETA", "Created"]
         .iter()
         .map(|h| Cell::from(*h).style(Style::default().fg(Color::Yellow)));
@@ -727,8 +926,15 @@ fn draw_task_table(f: &mut Frame, app: &mut App, area: Rect) {
     .block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(COLOR_BORDER))
-            .title(Span::styled(title, Style::default().fg(Color::White))),
+            .border_style(Style::default().fg(border_color))
+            .title(Span::styled(
+                title,
+                Style::default().fg(if is_focused {
+                    Color::Cyan
+                } else {
+                    Color::White
+                }),
+            )),
     )
     .row_highlight_style(Style::default().bg(COLOR_BORDER));
 
@@ -795,14 +1001,89 @@ fn draw_task_detail(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(detail.block(block).wrap(Wrap { trim: true }), area);
 }
 
-fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
-    let help = if app.dialog.is_some() {
-        "Enter: Confirm │ Esc: Cancel │ Tab: Next option"
+fn draw_log(f: &mut Frame, app: &App, area: Rect) {
+    let is_focused = app.focused_panel == FocusedPanel::Log;
+    let border_color = if is_focused {
+        Color::Cyan
     } else {
-        "n: New │ c: Cancel │ p: Pause │ r: Resume/Retry │ d: Delete │ R: Refresh │ q: Quit"
+        COLOR_BORDER
     };
 
-    let status = app.status_message.as_deref().unwrap_or(help);
+    let scroll_indicator = if app.log_scroll > 0 {
+        format!(" ↑{}", app.log_scroll)
+    } else {
+        String::new()
+    };
+
+    let title = format!("Event Log ({}){}", app.log_entries.len(), scroll_indicator);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color))
+        .title(Span::styled(
+            title,
+            Style::default().fg(if is_focused {
+                Color::Cyan
+            } else {
+                Color::White
+            }),
+        ));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let visible_lines = inner.height as usize;
+    let total_entries = app.log_entries.len();
+
+    let end_idx = total_entries.saturating_sub(app.log_scroll);
+    let start_idx = end_idx.saturating_sub(visible_lines);
+
+    let entries: Vec<&LogEntry> = app
+        .log_entries
+        .iter()
+        .skip(start_idx)
+        .take(end_idx - start_idx)
+        .collect();
+
+    let lines: Vec<Line> = entries
+        .iter()
+        .map(|entry| {
+            Line::from(vec![
+                Span::styled(
+                    entry.timestamp.format("%H:%M:%S").to_string(),
+                    Style::default().fg(COLOR_MUTED),
+                ),
+                Span::styled(
+                    format!(" [{}] ", entry.level.prefix()),
+                    Style::default().fg(entry.level.color()),
+                ),
+                Span::raw(&entry.message),
+            ])
+        })
+        .collect();
+
+    let paragraph = Paragraph::new(lines);
+    f.render_widget(paragraph, inner);
+}
+
+fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
+    let help = if app.dialog.is_some() {
+        "Enter: Confirm │ Esc: Cancel │ Tab: Next option".to_string()
+    } else {
+        match app.focused_panel {
+            FocusedPanel::Tasks => {
+                "Tab: Log │ j/k: Navigate │ n: New │ c: Cancel │ p: Pause │ r: Retry │ d: Del │ q: Quit".to_string()
+            }
+            FocusedPanel::Log => {
+                "Tab: Tasks │ j/k: Scroll │ g: Bottom │ G: Top │ q: Quit".to_string()
+            }
+        }
+    };
+
+    let status = app
+        .status_message
+        .as_deref()
+        .map(|s| s.to_string())
+        .unwrap_or(help);
 
     let footer = Paragraph::new(status)
         .style(Style::default().fg(COLOR_MUTED))
