@@ -11,6 +11,10 @@
 -- Partitioning: intDiv(block_number, 1000000) for 1M block partitions
 -- ============================================
 
+
+CREATE DATABASE IF NOT EXISTS ckbadger;
+USE ckbadger;
+
 -- ===========================================
 -- 1. Canonical Chain Tracking
 -- Small table tracking which blocks are currently canonical.
@@ -280,14 +284,14 @@ COMMENT 'Unified activity feed for all blockchain events.';
 ALTER TABLE activities_all ADD PROJECTION prj_by_from_lock
 (
     SELECT *
-    ORDER BY (from_lock_hash, block_number DESC, activity_index DESC)
+    ORDER BY (from_lock_hash, block_number, activity_index)
 );
 
 -- Projection for to_lock_hash queries (receiver activity)
 ALTER TABLE activities_all ADD PROJECTION prj_by_to_lock
 (
     SELECT *
-    ORDER BY (to_lock_hash, block_number DESC, activity_index DESC)
+    ORDER BY (to_lock_hash, block_number, activity_index)
 );
 
 
@@ -338,12 +342,11 @@ ENGINE = ReplacingMergeTree(canon_version)
 ORDER BY (tx_hash, output_index)
 COMMENT 'Cell lifecycle state. Use FINAL to get current state.';
 
--- Projection for live cells by lock_script_hash (address)
-ALTER TABLE cell_state ADD PROJECTION prj_live_by_lock
+-- Projection for cells by lock_script_hash (address)
+ALTER TABLE cell_state ADD PROJECTION prj_by_lock
 (
     SELECT *
-    ORDER BY (lock_script_hash, created_at_block DESC)
-    WHERE is_present = 1 AND is_live = 1
+    ORDER BY (lock_script_hash, created_at_block)
 );
 
 
@@ -450,7 +453,7 @@ CREATE TABLE IF NOT EXISTS daily_stats
     total_live_cells SimpleAggregateFunction(max, UInt64),
     
     -- Block time stats
-    avg_block_time_ms SimpleAggregateFunction(avg, UInt32),
+    avg_block_time_ms SimpleAggregateFunction(sum, UInt64),  -- Store sum, divide by count for average
     
     -- Address activity
     new_addresses SimpleAggregateFunction(sum, UInt64),
@@ -1159,7 +1162,7 @@ CREATE TABLE IF NOT EXISTS reorg_events
     resolution_notes String DEFAULT '' CODEC(ZSTD(3))
 )
 ENGINE = MergeTree
-ORDER BY (detected_at DESC, id)
+ORDER BY (detected_at, id)
 COMMENT 'Chain reorganization events.';
 
 
@@ -1301,7 +1304,7 @@ CREATE TABLE IF NOT EXISTS tasks
     log_tail String DEFAULT '' CODEC(ZSTD(3))
 )
 ENGINE = MergeTree
-ORDER BY (status, created_at DESC, id)
+ORDER BY (status, created_at, id)
 COMMENT 'Background task management.';
 
 
