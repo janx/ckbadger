@@ -40,10 +40,10 @@ pub struct AppConfig {
     pub start_background_tasks: bool,
 }
 
-impl Default for AppConfig {
-    fn default() -> Self {
+impl AppConfig {
+    pub fn new(pool: DbPool) -> Self {
         Self {
-            pool: DbPool,
+            pool,
             redis_url: None,
             ckb_rpc_url: "http://localhost:8114".to_string(),
             ckb_network: "mainnet".to_string(),

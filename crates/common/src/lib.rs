@@ -1,4 +1,5 @@
 pub mod activity;
+pub mod clickhouse;
 pub mod cycles;
 pub mod dao;
 pub mod error;
@@ -9,6 +10,7 @@ pub mod task;
 pub mod types;
 
 pub use activity::*;
+pub use clickhouse::{ClickHouseClient, ClickHouseConfig};
 pub use error::{Error, Result};
 pub use hex::{parse_capacity, parse_hex_to_bytes, parse_hex_u32};
 pub use proposal::*;

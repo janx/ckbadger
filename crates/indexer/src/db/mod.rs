@@ -2,12 +2,11 @@
 
 use anyhow::Result;
 
-mod clickhouse_client;
 pub mod live_cell_storage;
 mod repository;
 pub mod writer;
 
-pub use clickhouse_client::{ClickHouseClient, ClickHouseConfig};
+pub use ckbadger_common::clickhouse::{ClickHouseClient, ClickHouseConfig};
 
 #[derive(Clone, Default)]
 pub struct DbPool;

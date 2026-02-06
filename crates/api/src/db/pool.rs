@@ -1,8 +1,9 @@
 use anyhow::Result;
+use ckbadger_common::ClickHouseClient;
 
-#[derive(Clone, Default)]
-pub struct DbPool;
+pub type DbPool = ClickHouseClient;
 
 pub async fn create_pool(_database_url: &str) -> Result<DbPool> {
-    Ok(DbPool)
+    // TODO: Initialize ClickHouseClient from environment or config
+    Err(anyhow::anyhow!("ClickHouseClient initialization not yet implemented"))
 }

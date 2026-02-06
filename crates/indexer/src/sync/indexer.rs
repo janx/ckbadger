@@ -7,7 +7,8 @@ use anyhow::{Context, Result};
 use crate::cache::{CacheInvalidator, CellInfoCache};
 use crate::config::Config;
 use crate::db::writer::{
-    BatchWriter, BlockRow, CellInputRow, CellOutputRow, CellStateRow, TransactionRow,
+    ActivityRow, BatchData, BatchWriter, BlockRow, CellInputRow, CellOutputRow, CellStateRow,
+    TransactionRow, u64_to_u256_bytes,
 };
 use crate::db::{ClickHouseClient, LiveCellInfo, MemoryStats};
 use crate::rpc::{BlockView, Script, TransactionView};
@@ -18,6 +19,44 @@ use super::SyncProgress;
 #[derive(Debug, Clone, clickhouse::Row, serde::Deserialize)]
 struct MaxVersionRow {
     max_version: u64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct DisconnectResult {
+    pub cells_restored: usize,
+    pub cells_invalidated: usize,
+}
+
+#[derive(Debug, Clone, clickhouse::Row, serde::Deserialize)]
+struct CellOutputQueryRow {
+    tx_hash: [u8; 32],
+    output_index: u16,
+    capacity: u64,
+    lock_script_hash: [u8; 32],
+    type_script_hash: [u8; 32],
+    lock_code_hash: [u8; 32],
+    type_code_hash: [u8; 32],
+    data_size: u32,
+    block_number: u64,
+}
+
+#[derive(Debug, Clone, clickhouse::Row, serde::Deserialize)]
+struct CellInputQueryRow {
+    previous_tx_hash: [u8; 32],
+    previous_output_index: u16,
+}
+
+#[derive(Debug, Clone, clickhouse::Row, serde::Deserialize)]
+struct CellStateQueryRow {
+    tx_hash: [u8; 32],
+    output_index: u16,
+    capacity: u64,
+    lock_script_hash: [u8; 32],
+    type_script_hash: [u8; 32],
+    lock_code_hash: [u8; 32],
+    type_code_hash: [u8; 32],
+    data_size: u32,
+    created_at_block: u64,
 }
 
 pub struct Indexer {
@@ -248,19 +287,414 @@ impl Indexer {
             }
         }
 
-        self.batch_writer.write_blocks(&[block_row]).await?;
-        self.batch_writer.write_transactions(&transaction_rows).await?;
-        self.batch_writer.write_cell_outputs(&cell_output_rows).await?;
-        self.batch_writer.write_cell_inputs(&cell_input_rows).await?;
-        self.batch_writer.write_cell_states(&cell_state_rows).await?;
+        let activities = self.generate_activities(block, block_number, &block_hash, block_timestamp_ms)?;
 
-        self.batch_writer
-            .write_canonical_blocks(&[(block_number, block_hash.to_vec(), canon_version)])
-            .await?;
+        let batch_data = BatchData {
+            blocks: vec![block_row],
+            transactions: transaction_rows,
+            cell_outputs: cell_output_rows,
+            cell_inputs: cell_input_rows,
+            activities,
+            cell_states: cell_state_rows,
+            canonical_mappings: vec![(block_number, block_hash.to_vec(), canon_version)],
+        };
 
+        self.batch_writer.write_batch(&batch_data).await?;
         self.progress.update_current(block_number);
 
         Ok(())
+    }
+
+    /// Sync multiple blocks in a single batch for improved throughput.
+    pub async fn sync_blocks_batch(&self, blocks: &[BlockView]) -> Result<()> {
+        if blocks.is_empty() {
+            return Ok(());
+        }
+
+        let canon_version = self.canon_version_mgr.next();
+
+        let mut all_block_rows = Vec::with_capacity(blocks.len());
+        let mut all_tx_rows = Vec::new();
+        let mut all_output_rows = Vec::new();
+        let mut all_input_rows = Vec::new();
+        let mut all_cell_state_rows = Vec::new();
+        let mut all_activities = Vec::new();
+        let mut all_canonical_mappings = Vec::with_capacity(blocks.len());
+
+        for block in blocks {
+            let block_number = parse_hex_u64(&block.header.number)?;
+            let block_hash = parse_hex_bytes32(&block.header.hash)?;
+            let block_timestamp_ms = parse_hex_u64(&block.header.timestamp)? as i64;
+
+            let block_row = self.extract_block_row(block, block_number, &block_hash, block_timestamp_ms)?;
+            all_block_rows.push(block_row);
+
+            for (tx_index, tx) in block.transactions.iter().enumerate() {
+                let tx_hash = parse_hex_bytes32(&tx.hash)?;
+                let is_cellbase = tx_index == 0;
+
+                let (tx_row, outputs, inputs) = self.extract_transaction_data(
+                    tx,
+                    &tx_hash,
+                    block_number,
+                    &block_hash,
+                    tx_index as u32,
+                    block_timestamp_ms,
+                    is_cellbase,
+                )?;
+
+                all_tx_rows.push(tx_row);
+                all_output_rows.extend(outputs);
+                all_input_rows.extend(inputs);
+
+                for (output_index, output) in tx.outputs.iter().enumerate() {
+                    let data = tx.outputs_data.get(output_index).map(|s| s.as_str()).unwrap_or("0x");
+                    let data_bytes = parse_hex_bytes(data)?;
+
+                    let lock_script_hash = compute_script_hash(&output.lock)?;
+                    let lock_code_hash = parse_hex_bytes32(&output.lock.code_hash)?;
+                    let type_script_hash = match &output.type_ {
+                        Some(type_script) => compute_script_hash(type_script)?,
+                        None => [0u8; 32],
+                    };
+                    let type_code_hash = match &output.type_ {
+                        Some(type_script) => parse_hex_bytes32(&type_script.code_hash)?,
+                        None => [0u8; 32],
+                    };
+                    let capacity = parse_hex_u64(&output.capacity)?;
+
+                    let live_state = CellStateRow::new_live(
+                        tx_hash,
+                        output_index as u16,
+                        canon_version,
+                        capacity,
+                        lock_script_hash,
+                        type_script_hash,
+                        lock_code_hash,
+                        type_code_hash,
+                        data_bytes.len() as u32,
+                        block_number,
+                    );
+                    all_cell_state_rows.push(live_state);
+
+                    let cell_info = LiveCellInfo {
+                        capacity: capacity as i64,
+                        created_at_block: block_number as i64,
+                        lock_script_hash: lock_script_hash.to_vec(),
+                        lock_code_hash: lock_code_hash.to_vec(),
+                        lock_args: parse_hex_bytes(&output.lock.args)?,
+                        type_script_hash: if type_script_hash == [0u8; 32] {
+                            None
+                        } else {
+                            Some(type_script_hash.to_vec())
+                        },
+                        type_code_hash: if type_code_hash == [0u8; 32] {
+                            None
+                        } else {
+                            Some(type_code_hash.to_vec())
+                        },
+                        data_size: data_bytes.len() as i32,
+                    };
+                    self.cell_cache.insert(tx_hash.to_vec(), output_index as i16, cell_info);
+                }
+
+                if !is_cellbase {
+                    for (input_index, input) in tx.inputs.iter().enumerate() {
+                        let prev_tx_hash = parse_hex_bytes32(&input.previous_output.tx_hash)?;
+                        let prev_output_index = parse_hex_u32(&input.previous_output.index)? as u16;
+
+                        if let Some(cell_info) = self.cell_cache.get(&prev_tx_hash, prev_output_index as i16) {
+                            let type_script_hash = cell_info.type_script_hash
+                                .as_ref()
+                                .map(|v| to_bytes32(v))
+                                .unwrap_or([0u8; 32]);
+                            let type_code_hash = cell_info.type_code_hash
+                                .as_ref()
+                                .map(|v| to_bytes32(v))
+                                .unwrap_or([0u8; 32]);
+
+                            let consumed_state = CellStateRow::new_consumed(
+                                prev_tx_hash,
+                                prev_output_index,
+                                canon_version,
+                                tx_hash,
+                                block_number,
+                                input_index as u16,
+                                cell_info.capacity as u64,
+                                to_bytes32(&cell_info.lock_script_hash),
+                                type_script_hash,
+                                to_bytes32(&cell_info.lock_code_hash),
+                                type_code_hash,
+                                cell_info.data_size as u32,
+                                cell_info.created_at_block as u64,
+                            );
+                            all_cell_state_rows.push(consumed_state);
+                        }
+                    }
+                }
+            }
+
+            let block_activities = self.generate_activities(block, block_number, &block_hash, block_timestamp_ms)?;
+            all_activities.extend(block_activities);
+
+            all_canonical_mappings.push((block_number, block_hash.to_vec(), canon_version));
+        }
+
+        let batch_data = BatchData {
+            blocks: all_block_rows,
+            transactions: all_tx_rows,
+            cell_outputs: all_output_rows,
+            cell_inputs: all_input_rows,
+            activities: all_activities,
+            cell_states: all_cell_state_rows,
+            canonical_mappings: all_canonical_mappings,
+        };
+
+        self.batch_writer.write_batch(&batch_data).await?;
+
+        if let Some(last_block) = blocks.last() {
+            let last_block_number = parse_hex_u64(&last_block.header.number)?;
+            self.progress.update_current(last_block_number);
+        }
+
+        Ok(())
+    }
+
+    pub async fn disconnect_block(&self, block_number: u64) -> Result<DisconnectResult> {
+        let mut cells_invalidated = 0usize;
+        let mut cells_restored = 0usize;
+        let mut cell_state_rows = Vec::new();
+
+        let outputs_query = format!(
+            "SELECT tx_hash, output_index, capacity, lock_script_hash, type_script_hash, \
+             lock_code_hash, type_code_hash, data_size, block_number \
+             FROM cell_outputs_all WHERE block_number = {}",
+            block_number
+        );
+        let outputs_created: Vec<CellOutputQueryRow> =
+            self.client.query_all(&outputs_query).await?;
+
+        for output in &outputs_created {
+            let canon_version = self.canon_version_mgr.next();
+
+            let invalidated_state = CellStateRow::new_invalidated(
+                output.tx_hash,
+                output.output_index,
+                canon_version,
+                output.capacity,
+                output.lock_script_hash,
+                output.type_script_hash,
+                output.lock_code_hash,
+                output.type_code_hash,
+                output.data_size,
+                output.block_number,
+            );
+            cell_state_rows.push(invalidated_state);
+
+            self.cell_cache
+                .invalidate(&output.tx_hash, output.output_index as i16);
+            cells_invalidated += 1;
+        }
+
+        let inputs_query = format!(
+            "SELECT previous_tx_hash, previous_output_index \
+             FROM cell_inputs_all WHERE tx_block_number = {}",
+            block_number
+        );
+        let inputs_consumed: Vec<CellInputQueryRow> =
+            self.client.query_all(&inputs_query).await?;
+
+        for input in &inputs_consumed {
+            let state_query = format!(
+                "SELECT tx_hash, output_index, capacity, lock_script_hash, type_script_hash, \
+                 lock_code_hash, type_code_hash, data_size, created_at_block \
+                 FROM cell_state FINAL \
+                 WHERE tx_hash = unhex('{}') AND output_index = {} \
+                 AND is_present = 1 \
+                 LIMIT 1",
+                hex::encode(input.previous_tx_hash),
+                input.previous_output_index
+            );
+            let cell_states: Vec<CellStateQueryRow> =
+                self.client.query_all(&state_query).await?;
+
+            if let Some(cell_state) = cell_states.first() {
+                let canon_version = self.canon_version_mgr.next();
+
+                let restored_state = CellStateRow::new_restored(
+                    cell_state.tx_hash,
+                    cell_state.output_index,
+                    canon_version,
+                    cell_state.capacity,
+                    cell_state.lock_script_hash,
+                    cell_state.type_script_hash,
+                    cell_state.lock_code_hash,
+                    cell_state.type_code_hash,
+                    cell_state.data_size,
+                    cell_state.created_at_block,
+                );
+                cell_state_rows.push(restored_state);
+
+                self.cell_cache
+                    .invalidate(&input.previous_tx_hash, input.previous_output_index as i16);
+                cells_restored += 1;
+            }
+        }
+
+        if !cell_state_rows.is_empty() {
+            self.batch_writer.write_cell_states(&cell_state_rows).await?;
+        }
+
+        Ok(DisconnectResult {
+            cells_restored,
+            cells_invalidated,
+        })
+    }
+
+    fn generate_activities(
+        &self,
+        block: &BlockView,
+        block_number: u64,
+        _block_hash: &[u8; 32],
+        timestamp_ms: i64,
+    ) -> Result<Vec<ActivityRow>> {
+        let mut activities = Vec::new();
+        let mut activity_index = 0u16;
+
+        for (tx_index, tx) in block.transactions.iter().enumerate() {
+            let tx_hash = parse_hex_bytes32(&tx.hash)?;
+            let is_cellbase = tx_index == 0;
+
+            if is_cellbase {
+                let cellbase_activity = self.generate_cellbase_activity(
+                    tx,
+                    &tx_hash,
+                    block_number,
+                    tx_index as u32,
+                    activity_index,
+                    timestamp_ms,
+                )?;
+                if let Some(activity) = cellbase_activity {
+                    activities.push(activity);
+                    activity_index += 1;
+                }
+            } else {
+                let transfer_activities = self.generate_transfer_activities(
+                    tx,
+                    &tx_hash,
+                    block_number,
+                    tx_index as u32,
+                    &mut activity_index,
+                    timestamp_ms,
+                )?;
+                activities.extend(transfer_activities);
+            }
+        }
+
+        Ok(activities)
+    }
+
+    fn generate_cellbase_activity(
+        &self,
+        tx: &TransactionView,
+        tx_hash: &[u8; 32],
+        block_number: u64,
+        tx_index: u32,
+        activity_index: u16,
+        timestamp_ms: i64,
+    ) -> Result<Option<ActivityRow>> {
+        if tx.outputs.is_empty() {
+            return Ok(None);
+        }
+
+        let first_output = &tx.outputs[0];
+        let capacity = parse_hex_u64(&first_output.capacity)?;
+        let to_lock_hash = compute_script_hash(&first_output.lock)?;
+
+        let activity_id = generate_activity_id(tx_hash, "CELLBASE_REWARD", activity_index);
+
+        Ok(Some(ActivityRow {
+            activity_id,
+            activity_type: "CELLBASE_REWARD".to_string(),
+            activity_category: "cellbase".to_string(),
+            block_number,
+            tx_hash: *tx_hash,
+            tx_index,
+            activity_index,
+            from_lock_hash: [0u8; 32],
+            to_lock_hash,
+            amount: u64_to_u256_bytes(capacity),
+            asset_id: [0u8; 32],
+            metadata: String::new(),
+            timestamp: timestamp_ms,
+        }))
+    }
+
+    fn generate_transfer_activities(
+        &self,
+        tx: &TransactionView,
+        tx_hash: &[u8; 32],
+        block_number: u64,
+        tx_index: u32,
+        activity_index: &mut u16,
+        timestamp_ms: i64,
+    ) -> Result<Vec<ActivityRow>> {
+        let mut activities = Vec::new();
+
+        let mut input_capacities: std::collections::HashMap<[u8; 32], u64> = std::collections::HashMap::new();
+        for input in &tx.inputs {
+            let prev_tx_hash = parse_hex_bytes32(&input.previous_output.tx_hash)?;
+            let prev_output_index = parse_hex_u32(&input.previous_output.index)? as i16;
+            
+            if let Some(cell_info) = self.cell_cache.get(&prev_tx_hash, prev_output_index) {
+                let lock_hash = to_bytes32(&cell_info.lock_script_hash);
+                *input_capacities.entry(lock_hash).or_insert(0) += cell_info.capacity as u64;
+            }
+        }
+
+        let mut output_capacities: std::collections::HashMap<[u8; 32], u64> = std::collections::HashMap::new();
+        for output in &tx.outputs {
+            let capacity = parse_hex_u64(&output.capacity)?;
+            let lock_hash = compute_script_hash(&output.lock)?;
+            *output_capacities.entry(lock_hash).or_insert(0) += capacity;
+        }
+
+        for (from_lock_hash, input_amount) in &input_capacities {
+            let output_amount = output_capacities.get(from_lock_hash).copied().unwrap_or(0);
+            
+            if output_amount < *input_amount {
+                let transfer_amount = input_amount - output_amount;
+                
+                for (to_lock_hash, to_amount) in &output_capacities {
+                    if to_lock_hash == from_lock_hash {
+                        continue;
+                    }
+
+                    let activity_id = generate_activity_id(tx_hash, "CKB_TRANSFER", *activity_index);
+                    
+                    activities.push(ActivityRow {
+                        activity_id,
+                        activity_type: "CKB_TRANSFER".to_string(),
+                        activity_category: "ckb".to_string(),
+                        block_number,
+                        tx_hash: *tx_hash,
+                        tx_index,
+                        activity_index: *activity_index,
+                        from_lock_hash: *from_lock_hash,
+                        to_lock_hash: *to_lock_hash,
+                        amount: u64_to_u256_bytes(transfer_amount.min(*to_amount)),
+                        asset_id: [0u8; 32],
+                        metadata: String::new(),
+                        timestamp: timestamp_ms,
+                    });
+                    
+                    *activity_index += 1;
+                    break;
+                }
+            }
+        }
+
+        Ok(activities)
     }
 
     fn extract_block_row(
@@ -497,4 +931,15 @@ fn truncate_data_preview(data: &str, max_bytes: usize) -> String {
     } else {
         format!("0x{}", &hex[..max_hex_chars])
     }
+}
+
+fn generate_activity_id(tx_hash: &[u8; 32], activity_type: &str, activity_index: u16) -> [u8; 32] {
+    use ckb_hash::new_blake2b;
+    let mut hasher = new_blake2b();
+    hasher.update(tx_hash);
+    hasher.update(activity_type.as_bytes());
+    hasher.update(&activity_index.to_le_bytes());
+    let mut result = [0u8; 32];
+    hasher.finalize(&mut result);
+    result
 }
