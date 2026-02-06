@@ -5,7 +5,7 @@ use anyhow::Result;
 mod clickhouse_client;
 pub mod live_cell_storage;
 mod repository;
-mod writer;
+pub mod writer;
 
 pub use clickhouse_client::{ClickHouseClient, ClickHouseConfig};
 

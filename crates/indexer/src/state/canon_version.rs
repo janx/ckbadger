@@ -59,6 +59,7 @@ impl CanonVersionManager {
     }
 
     /// Get the current version without incrementing.
+    #[allow(dead_code)]
     pub fn current(&self) -> u64 {
         self.counter.load(Ordering::SeqCst)
     }
