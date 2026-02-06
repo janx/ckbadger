@@ -1116,12 +1116,20 @@ impl Indexer {
                         } else {
                             ""
                         };
+                        let partition_range = format_partition_range(start_block, end_block);
+                        let boundary_info = if crosses_partition_boundary(start_block, end_block) {
+                            " (crosses boundary)"
+                        } else {
+                            ""
+                        };
                         info!(
-                            "Wrote blocks {} to {} ({} remaining, {:.2}s) {}",
+                            "Wrote blocks {} to {} ({} remaining, {:.2}s) {}{} {}",
                             start_block,
                             end_block,
                             self.progress.blocks_remaining(),
                             db_elapsed.as_secs_f64(),
+                            partition_range,
+                            boundary_info,
                             mode
                         );
 
@@ -1365,6 +1373,16 @@ impl Indexer {
                 self.progress.blocks_remaining(),
                 db_elapsed.as_secs_f64()
             );
+
+            if self.should_use_copy() {
+                if let Some(copy_router) = &self.copy_router {
+                    let pool_status = copy_router.pool_status();
+                    debug!(
+                        "Pool status after write: size={}, available={}, max_size={}",
+                        pool_status.size, pool_status.available, pool_status.max_size
+                    );
+                }
+            }
         }
         self.perf
             .blocks_count
