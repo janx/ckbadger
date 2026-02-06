@@ -1,8 +1,10 @@
 #![allow(dead_code)]
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use tracing::{info, warn};
 
 use crate::cache::{CacheInvalidator, CellInfoCache};
 use crate::config::Config;
@@ -11,7 +13,7 @@ use crate::db::writer::{
     CellStateRow, TransactionRow,
 };
 use crate::db::{ClickHouseClient, LiveCellInfo, MemoryStats};
-use crate::rpc::{BlockView, Script, TransactionView};
+use crate::rpc::{BlockView, CkbRpcClient, Script, TransactionView};
 use crate::state::CanonVersionManager;
 
 use super::SyncProgress;
@@ -19,6 +21,11 @@ use super::SyncProgress;
 #[derive(Debug, Clone, clickhouse::Row, serde::Deserialize)]
 struct MaxVersionRow {
     max_version: u64,
+}
+
+#[derive(Debug, Clone, clickhouse::Row, serde::Deserialize)]
+struct MaxBlockRow {
+    max_block: u64,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -68,6 +75,9 @@ pub struct Indexer {
     cache_invalidator: CacheInvalidator,
     memory_stats: MemoryStats,
     fast_sync_mode: bool,
+    rpc_client: CkbRpcClient,
+    poll_interval_ms: u64,
+    batch_size: usize,
 }
 
 pub struct IndexerConfig {
@@ -76,6 +86,9 @@ pub struct IndexerConfig {
     pub cell_cache_capacity: usize,
     pub fast_sync_mode: bool,
     pub redis_url: Option<String>,
+    pub ckb_rpc_url: String,
+    pub poll_interval_ms: u64,
+    pub batch_size: usize,
 }
 
 impl Default for IndexerConfig {
@@ -86,6 +99,9 @@ impl Default for IndexerConfig {
             cell_cache_capacity: 1_000_000,
             fast_sync_mode: true,
             redis_url: None,
+            ckb_rpc_url: "http://localhost:8114".to_string(),
+            poll_interval_ms: 1000,
+            batch_size: 100,
         }
     }
 }
@@ -107,6 +123,7 @@ impl Indexer {
         let batch_writer = BatchWriter::with_fast_sync_mode(client.clone(), config.fast_sync_mode);
         let cell_cache = CellInfoCache::new(config.cell_cache_capacity);
         let cache_invalidator = CacheInvalidator::new(config.redis_url.as_deref()).await;
+        let rpc_client = CkbRpcClient::new(&config.ckb_rpc_url);
 
         Ok(Self {
             client,
@@ -117,6 +134,9 @@ impl Indexer {
             cache_invalidator,
             memory_stats: MemoryStats::default(),
             fast_sync_mode: config.fast_sync_mode,
+            rpc_client,
+            poll_interval_ms: config.poll_interval_ms,
+            batch_size: config.batch_size,
         })
     }
 
@@ -136,6 +156,7 @@ impl Indexer {
 
         let batch_writer = BatchWriter::with_fast_sync_mode(client.clone(), config.fast_sync_mode);
         let cell_cache = CellInfoCache::new(1_000_000);
+        let rpc_client = CkbRpcClient::new(&config.ckb_rpc_url);
 
         Ok(Self {
             client,
@@ -146,6 +167,9 @@ impl Indexer {
             cache_invalidator,
             memory_stats: MemoryStats::default(),
             fast_sync_mode: config.fast_sync_mode,
+            rpc_client,
+            poll_interval_ms: config.poll_interval_ms,
+            batch_size: config.batch_size,
         })
     }
 
@@ -175,11 +199,217 @@ impl Indexer {
     }
 
     pub fn is_bulk_sync_active(&self) -> bool {
-        false
+        self.progress.blocks_remaining() > 72
     }
 
     pub async fn run(&self) -> Result<()> {
+        info!("Starting indexer sync loop");
+
+        let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let shutdown_clone = shutdown.clone();
+
+        ctrlc::set_handler(move || {
+            warn!("Received shutdown signal, stopping indexer...");
+            shutdown_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+        })
+        .context("Failed to set Ctrl-C handler")?;
+
+        let mut last_log_time = Instant::now();
+        let log_interval = Duration::from_secs(10);
+
+        loop {
+            if shutdown.load(std::sync::atomic::Ordering::SeqCst) {
+                info!("Shutdown signal received, stopping sync loop");
+                break;
+            }
+
+            let tip_block = match self.rpc_client.get_tip_block_number().await {
+                Ok(tip) => tip,
+                Err(e) => {
+                    warn!("Failed to get tip block number: {}", e);
+                    tokio::time::sleep(Duration::from_millis(self.poll_interval_ms)).await;
+                    continue;
+                }
+            };
+
+            self.progress.update_target(tip_block);
+
+            let synced_block = self.get_synced_block_number().await?;
+
+            if synced_block >= tip_block {
+                tokio::time::sleep(Duration::from_millis(self.poll_interval_ms)).await;
+                continue;
+            }
+
+            let start_block = synced_block + 1;
+
+            if start_block > 0 {
+                if let Err(e) = self.check_and_handle_reorg(start_block).await {
+                    warn!("Reorg handling failed: {}", e);
+                    tokio::time::sleep(Duration::from_millis(self.poll_interval_ms)).await;
+                    continue;
+                }
+            }
+
+            let end_block = std::cmp::min(start_block + self.batch_size as u64 - 1, tip_block);
+            let blocks_to_fetch: Vec<u64> = (start_block..=end_block).collect();
+
+            let block_responses = match self.rpc_client.get_blocks_batch(&blocks_to_fetch).await {
+                Ok(blocks) => blocks,
+                Err(e) => {
+                    warn!(
+                        "Failed to fetch blocks {}-{}: {}",
+                        start_block, end_block, e
+                    );
+                    tokio::time::sleep(Duration::from_millis(self.poll_interval_ms)).await;
+                    continue;
+                }
+            };
+
+            let blocks: Vec<_> = block_responses
+                .into_iter()
+                .filter_map(|r| r.map(|resp| resp.block))
+                .collect();
+
+            if blocks.is_empty() {
+                warn!(
+                    "No blocks returned for range {}..={}",
+                    start_block, end_block
+                );
+                tokio::time::sleep(Duration::from_millis(self.poll_interval_ms)).await;
+                continue;
+            }
+
+            let blocks_count = blocks.len();
+
+            if let Err(e) = self.sync_blocks_batch(&blocks).await {
+                warn!(
+                    "Failed to process batch {}-{}: {}",
+                    start_block, end_block, e
+                );
+                tokio::time::sleep(Duration::from_millis(self.poll_interval_ms)).await;
+                continue;
+            }
+
+            self.progress
+                .update_current_batch(end_block, blocks_count as u64);
+
+            if last_log_time.elapsed() >= log_interval {
+                let current = self.progress.current();
+                let target = self.progress.target();
+                let percentage = self.progress.progress_percentage();
+                let rate = self.progress.blocks_per_second();
+                let ema_rate = self.progress.ema_blocks_per_second();
+                let eta = self.progress.eta_formatted();
+
+                info!(
+                    "Progress: {:.2}% ({}/{}) - {:.1} blocks/sec (EMA: {:.1}) - ETA: {}",
+                    percentage, current, target, rate, ema_rate, eta
+                );
+
+                last_log_time = Instant::now();
+            }
+
+            info!(
+                "Wrote blocks {} to {} ({} blocks)",
+                start_block,
+                start_block + blocks_count as u64 - 1,
+                blocks_count
+            );
+        }
+
+        info!("Indexer sync loop stopped gracefully");
         Ok(())
+    }
+
+    async fn get_synced_block_number(&self) -> Result<u64> {
+        let rows: Vec<MaxBlockRow> = self
+            .client
+            .query_all("SELECT max(number) as max_block FROM blocks_all")
+            .await?;
+
+        Ok(rows.first().map(|r| r.max_block).unwrap_or(0))
+    }
+
+    async fn get_indexed_block_hash(&self, block_number: u64) -> Result<Option<[u8; 32]>> {
+        #[derive(Debug, Clone, clickhouse::Row, serde::Deserialize)]
+        struct BlockHashRow {
+            hash: [u8; 32],
+        }
+        let query = format!(
+            "SELECT hash FROM blocks_all WHERE number = {} LIMIT 1",
+            block_number
+        );
+        let rows: Vec<BlockHashRow> = self.client.query_all(&query).await?;
+        Ok(rows.first().map(|r| r.hash))
+    }
+
+    async fn check_and_handle_reorg(&self, next_block: u64) -> Result<()> {
+        let prev_block = next_block - 1;
+
+        let indexed_hash = match self.get_indexed_block_hash(prev_block).await? {
+            Some(h) => h,
+            None => return Ok(()),
+        };
+
+        let canonical_hash = match self.rpc_client.get_block_hash(prev_block).await? {
+            Some(h) => parse_hex_bytes32(&h)?,
+            None => return Ok(()),
+        };
+
+        if indexed_hash == canonical_hash {
+            return Ok(());
+        }
+
+        warn!(
+            "Reorg detected at block {}: indexed={}, canonical={}",
+            prev_block,
+            hex::encode(indexed_hash),
+            hex::encode(canonical_hash)
+        );
+
+        let fork_point = self.find_fork_point(prev_block).await?;
+        info!(
+            "Fork point at block {}, disconnecting {} blocks",
+            fork_point,
+            prev_block - fork_point
+        );
+
+        for block_num in (fork_point + 1..=prev_block).rev() {
+            let result = self.disconnect_block(block_num).await?;
+            info!(
+                "Disconnected block {}: {} invalidated, {} restored",
+                block_num, result.cells_invalidated, result.cells_restored
+            );
+        }
+
+        Ok(())
+    }
+
+    async fn find_fork_point(&self, start_block: u64) -> Result<u64> {
+        let min_block = start_block.saturating_sub(72);
+
+        for check_block in (min_block..start_block).rev() {
+            let indexed_hash = match self.get_indexed_block_hash(check_block).await? {
+                Some(h) => h,
+                None => return Ok(check_block),
+            };
+
+            let canonical_hash = match self.rpc_client.get_block_hash(check_block).await? {
+                Some(h) => parse_hex_bytes32(&h)?,
+                None => return Ok(check_block),
+            };
+
+            if indexed_hash == canonical_hash {
+                return Ok(check_block);
+            }
+        }
+
+        warn!(
+            "Fork point not found within 72 blocks, using block {}",
+            min_block
+        );
+        Ok(min_block)
     }
 
     pub async fn connect_block(&self, block: &BlockView) -> Result<()> {
@@ -904,7 +1134,9 @@ fn parse_hex_bytes32_with_default(hex: &str, default: [u8; 32]) -> [u8; 32] {
 
 fn parse_hex_bytes16(hex: &str) -> Result<[u8; 16]> {
     let hex = hex.strip_prefix("0x").unwrap_or(hex);
-    let bytes = hex::decode(hex).context("Invalid hex bytes16")?;
+    // Left-pad with zeros to 32 hex characters (16 bytes)
+    let padded = format!("{:0>32}", hex);
+    let bytes = hex::decode(&padded).context("Invalid hex bytes16")?;
     if bytes.len() != 16 {
         anyhow::bail!("Expected 16 bytes, got {}", bytes.len());
     }

@@ -46,6 +46,9 @@ dotenvy = { workspace = true }
 # CLI
 clap = { workspace = true }
 
+# Signal handling
+ctrlc = "3.4"
+
 # CKB types
 ckb-types = { workspace = true }
 ckb-jsonrpc-types = { workspace = true }

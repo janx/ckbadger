@@ -105,10 +105,13 @@ async fn get_network_stats(State(state): State<Arc<AppState>>) -> ApiResult<Netw
     let total_transactions = tx_row.map(|r| r.total_txs).unwrap_or(0);
 
     // Query 3: Get total live cells (latest version per cell)
-    let cells_query = "SELECT count() as total_live FROM cell_state \
-                       ORDER BY canon_version DESC \
-                       LIMIT 1 BY (tx_hash, output_index) \
-                       HAVING is_live = 1 AND is_present = 1";
+    // Use subquery to get latest version per cell, then filter for live cells
+    let cells_query = "SELECT count() as total_live FROM ( \
+                           SELECT tx_hash, output_index, is_live, is_present \
+                           FROM cell_state \
+                           ORDER BY canon_version DESC \
+                           LIMIT 1 BY (tx_hash, output_index) \
+                       ) WHERE is_live = 1 AND is_present = 1";
     let cells_row: Option<TotalLiveCellsRow> = state
         .pool
         .query_one(cells_query)

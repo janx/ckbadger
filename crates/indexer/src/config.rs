@@ -8,7 +8,10 @@ pub const DEEP_FORK_DEPTH: u64 = 36;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
-    pub database_url: String,
+    #[serde(default = "default_clickhouse_url")]
+    pub clickhouse_url: String,
+    #[serde(default = "default_clickhouse_database")]
+    pub clickhouse_database: String,
     pub ckb_rpc_url: String,
     #[serde(default = "default_batch_size")]
     pub batch_size: usize,
@@ -30,18 +33,17 @@ pub struct Config {
     pub bulk_sync_threshold: u64,
     #[serde(default = "default_fast_sync_mode")]
     pub fast_sync_mode: bool,
-    /// Enable PostgreSQL COPY for bulk sync (faster initial sync)
-    #[serde(default = "default_use_copy_bulk_sync")]
-    pub use_copy_bulk_sync: bool,
-    /// Number of connections in the COPY connection pool
-    #[serde(default = "default_copy_pool_size")]
-    pub copy_pool_size: usize,
     /// Max parallel connections for index rebuild task
     #[serde(default = "default_index_rebuild_parallel")]
     pub index_rebuild_parallel: usize,
-    /// Apply PostgreSQL tuning for bulk sync optimization
-    #[serde(default)]
-    pub apply_pg_tuning: bool,
+}
+
+fn default_clickhouse_url() -> String {
+    "http://localhost:8123".to_string()
+}
+
+fn default_clickhouse_database() -> String {
+    "ckbadger".to_string()
 }
 
 fn default_batch_size() -> usize {
@@ -82,14 +84,6 @@ fn default_fast_sync_mode() -> bool {
     true
 }
 
-fn default_use_copy_bulk_sync() -> bool {
-    true
-}
-
-fn default_copy_pool_size() -> usize {
-    24
-}
-
 fn default_index_rebuild_parallel() -> usize {
     10
 }
@@ -97,10 +91,26 @@ fn default_index_rebuild_parallel() -> usize {
 impl Config {
     pub fn from_env() -> Result<Self, config::ConfigError> {
         config::Config::builder()
-            .add_source(config::Environment::default().separator("_"))
+            .add_source(
+                config::Environment::default()
+                    .try_parsing(true)
+                    .separator("__"),
+            )
+            .set_default("clickhouse_url", default_clickhouse_url())?
+            .set_default("clickhouse_database", default_clickhouse_database())?
             .set_default("batch_size", default_batch_size() as i64)?
             .set_default("poll_interval_ms", default_poll_interval_ms() as i64)?
             .set_default("confirmations", default_confirmations() as i64)?
+            .set_default("parallel_fetch_size", default_parallel_fetch_size() as i64)?
+            .set_default("pipeline_enabled", default_pipeline_enabled())?
+            .set_default("pipeline_buffer", default_pipeline_buffer() as i64)?
+            .set_default("bulk_sync_threshold", default_bulk_sync_threshold() as i64)?
+            .set_default("fast_sync_mode", default_fast_sync_mode())?
+            .set_default(
+                "index_rebuild_parallel",
+                default_index_rebuild_parallel() as i64,
+            )?
+            .set_override_option("ckb_rpc_url", std::env::var("CKB_RPC_URL").ok())?
             .build()?
             .try_deserialize()
     }
@@ -111,6 +121,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_default_clickhouse_url() {
+        assert_eq!(default_clickhouse_url(), "http://localhost:8123");
+    }
+
+    #[test]
+    fn test_default_clickhouse_database() {
+        assert_eq!(default_clickhouse_database(), "ckbadger");
+    }
+
+    #[test]
     fn test_default_batch_size() {
         assert_eq!(default_batch_size(), 10000);
     }
@@ -118,11 +138,6 @@ mod tests {
     #[test]
     fn test_default_pipeline_buffer() {
         assert_eq!(default_pipeline_buffer(), 4);
-    }
-
-    #[test]
-    fn test_default_copy_pool_size() {
-        assert_eq!(default_copy_pool_size(), 24);
     }
 
     #[test]
