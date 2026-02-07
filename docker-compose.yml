@@ -35,6 +35,27 @@ services:
         soft: 262144
         hard: 262144
 
+  # Init container: ensures database and tables exist on every startup
+  clickhouse-init:
+    image: clickhouse/clickhouse-server:24.1
+    container_name: ckbadger-clickhouse-init
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    volumes:
+      - ./migrations/clickhouse/001_init.sql:/migrations/001_init.sql:ro
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        if clickhouse-client --host clickhouse --query "SELECT 1 FROM system.databases WHERE name = 'ckbadger'" | grep -q 1; then
+          echo "Database ckbadger already exists, skipping migration"
+        else
+          echo "Running migration..."
+          clickhouse-client --host clickhouse --multiquery --queries-file /migrations/001_init.sql
+        fi
+    restart: 'no'
+
   redis:
     image: redis:7-alpine
     container_name: ckbadger-redis
@@ -72,8 +93,8 @@ services:
       dockerfile: docker/Dockerfile.indexer
     container_name: ckbadger-indexer
     depends_on:
-      clickhouse:
-        condition: service_healthy
+      clickhouse-init:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     environment:
@@ -95,8 +116,8 @@ services:
       dockerfile: docker/Dockerfile.api
     container_name: ckbadger-api
     depends_on:
-      clickhouse:
-        condition: service_healthy
+      clickhouse-init:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     environment:
@@ -130,8 +151,8 @@ services:
       dockerfile: docker/Dockerfile.task-runner
     container_name: ckbadger-task-runner
     depends_on:
-      clickhouse:
-        condition: service_healthy
+      clickhouse-init:
+        condition: service_completed_successfully
     environment:
       # Always use Docker-internal URLs for ClickHouse
       DATABASE_URL: http://clickhouse:8123
