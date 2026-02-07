@@ -61,3 +61,36 @@ impl CacheBackend {
         0
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_cache_backend_none_get_returns_none() {
+        let cache = CacheBackend::None;
+        let result: Option<String> = cache.get("any_key").await;
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_cache_backend_none_set_does_not_panic() {
+        let cache = CacheBackend::None;
+        cache
+            .set("key", &"value".to_string(), Duration::from_secs(60))
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_cache_backend_none_delete_does_not_panic() {
+        let cache = CacheBackend::None;
+        cache.delete("key").await;
+    }
+
+    #[tokio::test]
+    async fn test_cache_backend_none_hgetall_returns_empty() {
+        let cache = CacheBackend::None;
+        let result: Vec<String> = cache.hgetall("any_key").await;
+        assert!(result.is_empty());
+    }
+}

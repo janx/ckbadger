@@ -760,3 +760,139 @@ async fn get_inflation_rate_chart(State(_state): State<Arc<AppState>>) -> ApiRes
         y_axis_label: "Percent".to_string(),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cache_ttl_chart_is_5_minutes() {
+        assert_eq!(CACHE_TTL_CHART_SECS, 300);
+    }
+
+    #[test]
+    fn test_cache_ttl_tx_stats_is_1_minute() {
+        assert_eq!(CACHE_TTL_TX_STATS_SECS, 60);
+    }
+
+    #[test]
+    fn test_cache_ttl_recent_blocks_is_10_seconds() {
+        assert_eq!(CACHE_TTL_RECENT_BLOCKS_SECS, 10);
+    }
+
+    #[test]
+    fn test_cache_keys_have_correct_prefixes() {
+        assert!(CACHE_KEY_TX_STATS.starts_with("stats:"));
+        assert!(CACHE_KEY_RECENT_BLOCKS.starts_with("stats:"));
+        assert!(CACHE_KEY_CHART_TX_COUNT.starts_with("chart:"));
+        assert!(CACHE_KEY_CHART_CELL_COUNT.starts_with("chart:"));
+        assert!(CACHE_KEY_CHART_AVG_BLOCK_TIME.starts_with("chart:"));
+        assert!(CACHE_KEY_CHART_HASH_RATE.starts_with("chart:"));
+    }
+
+    #[test]
+    fn test_format_hash_rate_units() {
+        assert_eq!(format_hash_rate(1.5e18), "1.50 EH/s");
+        assert_eq!(format_hash_rate(1.5e15), "1.50 PH/s");
+        assert_eq!(format_hash_rate(1.5e12), "1.50 TH/s");
+        assert_eq!(format_hash_rate(1.5e9), "1.50 GH/s");
+        assert_eq!(format_hash_rate(1.5e6), "1.50 MH/s");
+        assert_eq!(format_hash_rate(1.5e3), "1.50 KH/s");
+        assert_eq!(format_hash_rate(1.5), "1.50 H/s");
+    }
+
+    #[test]
+    fn test_format_difficulty_units() {
+        assert_eq!(format_difficulty(1_500_000_000_000_000_000), "1.50 E");
+        assert_eq!(format_difficulty(1_500_000_000_000_000), "1.50 P");
+        assert_eq!(format_difficulty(1_500_000_000_000), "1.50 T");
+        assert_eq!(format_difficulty(1_500_000_000), "1.50 G");
+        assert_eq!(format_difficulty(1_500_000), "1.50 M");
+        assert_eq!(format_difficulty(1_500), "1.50 K");
+        assert_eq!(format_difficulty(150), "150");
+    }
+
+    #[test]
+    fn test_compact_target_to_difficulty() {
+        let compact = 0x1a06d765u64;
+        let difficulty = compact_target_to_difficulty(compact);
+        assert!(difficulty > 0);
+    }
+
+    #[test]
+    fn test_difficulty_to_hash_rate() {
+        let difficulty = 1_000_000u64;
+        let hash_rate = difficulty_to_hash_rate(difficulty);
+        let expected = 1_000_000.0 * 2.0 / 1.4;
+        assert!((hash_rate - expected).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_parse_epoch() {
+        let epoch_hex = "0x708047a000001";
+        let (number, index, length) = parse_epoch(epoch_hex);
+        assert!(number > 0 || index > 0 || length > 0);
+    }
+
+    #[test]
+    fn test_format_duration() {
+        assert_eq!(format_duration(3600), "1h 0m");
+        assert_eq!(format_duration(3660), "1h 1m");
+        assert_eq!(format_duration(30), "0m");
+        assert_eq!(format_duration(90), "1m");
+    }
+
+    #[test]
+    fn test_chart_data_point_serialization() {
+        let point = ChartDataPoint {
+            date: "2024-01-01".to_string(),
+            value: "100".to_string(),
+        };
+        let json = serde_json::to_string(&point).unwrap();
+        assert!(json.contains("date"));
+        assert!(json.contains("value"));
+    }
+
+    #[test]
+    fn test_chart_response_serialization() {
+        let response = ChartResponse {
+            data: vec![ChartDataPoint {
+                date: "2024-01-01".to_string(),
+                value: "100".to_string(),
+            }],
+            title: "Test".to_string(),
+            y_axis_label: "Count".to_string(),
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("data"));
+        assert!(json.contains("title"));
+        assert!(json.contains("yAxisLabel"));
+    }
+
+    #[test]
+    fn test_tx_stats_response_serialization() {
+        let response = TxStatsResponse {
+            current_hour: 100,
+            current_day: 1000,
+            hourly_data: vec![],
+            daily_data: vec![],
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("currentHour"));
+        assert!(json.contains("currentDay"));
+    }
+
+    #[test]
+    fn test_recent_block_response_serialization() {
+        let response = RecentBlockResponse {
+            number: 12345,
+            hash: "0xabc".to_string(),
+            timestamp: 1704067200000,
+            transactions_count: 5,
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("number"));
+        assert!(json.contains("hash"));
+        assert!(json.contains("transactionsCount"));
+    }
+}

@@ -482,6 +482,56 @@ The indexer uses an in-memory LRU cache for O(1) cell lookups during blockchain 
 | ≥8GB        | Comfortable                     |
 | <8GB        | May need smaller cache capacity |
 
+## API Statistics Caching
+
+The API uses Redis caching to reduce ClickHouse query load for statistics endpoints.
+
+**Cache Configuration:**
+
+| Endpoint Type     | Cache Key Prefix      | TTL    | Description                     |
+| ----------------- | --------------------- | ------ | ------------------------------- |
+| Chart data        | `chart:*`             | 5 min  | Historical charts (30 days)     |
+| Transaction stats | `stats:tx_stats`      | 1 min  | Hourly/daily transaction counts |
+| Recent blocks     | `stats:recent_blocks` | 10 sec | Latest 10 blocks                |
+
+**Cached Endpoints:**
+
+- `GET /statistics/tx-stats` - Transaction count charts
+- `GET /statistics/recent-blocks` - Recent blocks list
+- `GET /charts/transaction-count` - Daily transaction counts
+- `GET /charts/cell-count` - Daily cell creation counts
+- `GET /charts/average-block-time` - Daily average block time
+- `GET /charts/hash-rate` - Daily hash rate
+
+**Cache Warmup:**
+
+On API startup, all chart caches are pre-populated via `warmup::warmup_chart_caches()`. This runs 5 seconds after startup to ensure ClickHouse is ready.
+
+**ClickHouse Memory Limits:**
+
+Configured in `docker/clickhouse-users.xml`:
+
+| Setting                     | Value | Description            |
+| --------------------------- | ----- | ---------------------- |
+| `max_memory_usage`          | 4GB   | Per-query memory limit |
+| `max_memory_usage_for_user` | 16GB  | Total memory per user  |
+| `max_concurrent_queries`    | 10    | Max concurrent queries |
+| `max_execution_time`        | 60s   | Query timeout          |
+
+**Query Optimizations:**
+
+1. **Window functions**: Average block time uses `leadInFrame()` instead of O(n²) self-join
+2. **Time range filters**: Chart queries limited to last 30 days (`- 2592000000` ms)
+3. **Materialized views**: `migrations/clickhouse/002_materialized_views.sql` defines pre-aggregated views
+
+```bash
+# Build API with Redis cache support
+cargo build -p ckbadger-api --features redis-cache
+
+# Run with Redis
+REDIS_URL=redis://localhost:6379 cargo run -p ckbadger-api --features redis-cache
+```
+
 ## Rust Style
 
 **Imports**: External → internal → stdlib inline:
