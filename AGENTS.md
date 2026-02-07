@@ -16,13 +16,13 @@ When solving problems or designing features:
 
 1. **Prefer optimal schema design** over backward compatibility
 2. **Feel free to restructure tables** if it produces a cleaner solution
-3. **Breaking changes are acceptable** — just update `migrations/postgres/001_init.sql`
+3. **Breaking changes are acceptable** — just update `migrations/clickhouse/001_init.sql`
 4. **If a bug fix requires schema change**, do it properly rather than working around bad structure
 5. **Re-sync is always an option** — don't let existing data constrain the right solution
 
 ```bash
 # Typical workflow after schema changes:
-# 1. Edit migrations/postgres/001_init.sql
+# 1. Edit migrations/clickhouse/001_init.sql
 # 2. Update indexer parser/writer code
 # 3. Drop and recreate database
 # 4. Re-run indexer to sync from genesis
@@ -76,7 +76,7 @@ crates/
   indexer/    # Blockchain sync daemon (three-stage pipeline)
   common/     # Shared types (block, cell, tx, script, error)
 frontend/     # Next.js 15 App Router + React 19
-migrations/postgres/001_init.sql  # Single consolidated schema
+migrations/clickhouse/001_init.sql  # ClickHouse schema
 docs/POSTMORTEM.md                # Historical bugs - READ BEFORE CKB/DAO WORK
 docs/INDEXER_PIPELINE.md          # Pipeline architecture documentation
 ```
@@ -167,19 +167,12 @@ pub struct SyncProgressData {
 }
 ```
 
-**`memory:stats`** - RocksDB and cell store memory usage:
+**`memory:stats`** - LRU cache memory usage:
 
 ```rust
 pub struct MemoryStatsData {
-    pub live_cells_count: u64,           // Live cells in RocksDB
-    pub consumed_cells_count: u64,       // Consumed cells cache count
-    pub consumed_cells_bytes: u64,       // Consumed cells cache size
-    pub rocksdb_memtable_bytes: u64,     // RocksDB memtable usage
-    pub rocksdb_block_cache_bytes: u64,  // RocksDB block cache usage
-    pub rocksdb_table_readers_bytes: u64,// RocksDB table readers
-    pub rocksdb_total_bytes: u64,        // Total RocksDB memory
-    pub block_headers_count: u64,        // Cached block headers
-    pub bulk_sync_cell_cache_enabled: bool, // Bulk sync cache flag
+    pub cell_cache_count: u64,           // Cells in LRU cache
+    pub cell_cache_capacity: u64,        // LRU cache capacity
     pub bulk_sync_mode: bool,            // Currently in bulk sync
     pub updated_at: i64,                 // Unix timestamp
 }
@@ -189,11 +182,10 @@ pub struct MemoryStatsData {
 
 1. Indexer updates `sync:status` after each batch write
 2. Indexer updates `sync:progress` every 10 seconds with ETA
-3. Indexer updates `memory:stats` every 10 seconds with RocksDB memory usage
+3. Indexer updates `memory:stats` every 10 seconds with cache stats
 4. API reads `sync:status` for totals (blocks, transactions, cells)
 5. API reads `sync:progress` for real-time progress display
-6. Task TUI reads `memory:stats` for Memory Usage panel
-7. WebSocket broadcaster uses both for `new_block` messages
+6. WebSocket broadcaster uses both for `new_block` messages
 
 **Fallback** (when Redis unavailable):
 
@@ -206,207 +198,47 @@ pub struct MemoryStatsData {
 
 **Requires**: `redis-cache` feature enabled on both indexer and API, plus `REDIS_URL` environment variable.
 
-## Deferred Index and Constraint Optimization
+## ClickHouse Architecture
 
-For fresh database syncs, the indexer automatically drops non-essential B-tree indexes and UNIQUE constraints to achieve ~3-4x faster write speeds. Both are rebuilt automatically via the task-runner when the sync catches up to the chain tip.
+The indexer uses ClickHouse as the sole data store with the following design principles:
 
-| Parameter                  | Default | Description                                                         |
-| -------------------------- | ------- | ------------------------------------------------------------------- |
-| `--no-auto-defer-indexes`  | `false` | Disable auto-optimization for fresh DB                              |
-| `--index-rebuild-parallel` | `10`    | Parallel connections per partitioned table (capped at 4 internally) |
+1. **Immutable Fact Tables**: All blockchain data (blocks, transactions, cells) is append-only
+2. **Versioned Canonical Mapping**: `canonical_blocks` table tracks the current chain with monotonic versions
+3. **Versioned Cell State**: `cell_state` table tracks live/consumed cells with version history
+4. **LRU Cell Cache**: In-memory cache (~1M entries) for O(1) cell lookups during sync
 
-**Note:** Deferred states are stored in `sync_status` table in the database, not in command line arguments. The indexer reads these flags from the database on startup.
+### Table Categories
 
-**Index Rebuild Lock Contention Handling:**
+| Category              | Tables                                                                          | Engine             | Purpose                               |
+| --------------------- | ------------------------------------------------------------------------------- | ------------------ | ------------------------------------- |
+| **Immutable Facts**   | blocks_all, transactions_all, cell_outputs_all, cell_inputs_all, activities_all | MergeTree          | Store ALL data (canonical + orphaned) |
+| **Canonical Mapping** | canonical_blocks                                                                | ReplacingMergeTree | Track current canonical chain         |
+| **State Snapshots**   | cell_state                                                                      | ReplacingMergeTree | Track current cell state              |
 
-When rebuilding indexes on partitioned tables, multiple `CREATE INDEX CONCURRENTLY` operations may compete for locks. The task-runner handles this with:
+### Sync Performance
 
-1. **Reduced Parallelism**: Effective parallelism capped at 4 connections per logical index (regardless of `--index-rebuild-parallel` setting) to reduce lock contention
-2. **Automatic Retry**: Lock timeout failures retry up to 3 times with 5-second delays
-3. **Error Detection**: Detects PostgreSQL lock timeout messages (`lock timeout`, `could not obtain lock`, `canceling statement due to lock timeout`)
+| Parameter    | Default | Description      |
+| ------------ | ------- | ---------------- |
+| `batch_size` | `10000` | Blocks per batch |
 
-**What Gets Deferred:**
+Current sync speed: ~2,500-3,000 blocks/sec.
 
-| Type               | Items                                           | Reason Safe to Drop                   |
-| ------------------ | ----------------------------------------------- | ------------------------------------- |
-| B-tree Indexes     | 26 indexes on blocks, transactions, cells, etc. | Query optimization only               |
-| UNIQUE Constraints | 5 constraints on cells, inputs, cell_deps, etc. | CKB node already validates uniqueness |
+### Bulk Sync Mode
 
-**Deferred UNIQUE Constraints:**
+When >1000 blocks behind tip:
 
-These constraints are redundant during bulk sync because CKB node validates:
+- Activities are written normally
+- All data goes to ClickHouse (no deferred writes)
+- LRU cache handles cell lookups
 
-- Cell uniqueness: `(tx_hash, output_index)` globally unique
-- Input/output indices: Sequential within transaction
-- Block structure: Proposals/uncles indexed correctly
+### Reorg Handling
 
-| Table                   | Constraint                                  | CKB Guarantee       |
-| ----------------------- | ------------------------------------------- | ------------------- |
-| `cells`                 | `(created_at_block, tx_hash, output_index)` | Cell outputs unique |
-| `transaction_inputs`    | `(tx_block_number, tx_hash, input_index)`   | Sequential indices  |
-| `transaction_cell_deps` | `(tx_block_number, tx_hash, dep_index)`     | Sequential indices  |
-| `block_proposals`       | `(block_number, proposal_index)`            | Block structure     |
-| `uncle_blocks`          | `(block_number, uncle_index)`               | Block structure     |
+Reorgs are handled by versioning, not deletion:
 
-**Behavior:**
-
-| Scenario                      | Auto-drop indexes/constraints | Auto-submit rebuild task |
-| ----------------------------- | ----------------------------- | ------------------------ |
-| Fresh DB (tip=0)              | Yes                           | Yes                      |
-| Fresh DB + `--no-auto-defer`  | No                            | No                       |
-| Resume sync, indexes exist    | No                            | No                       |
-| Resume sync, indexes deferred | No                            | Yes                      |
-
-**Task-Based Rebuild Flow:**
-
-When bulk sync completes (catches up to <=72 blocks behind tip), the indexer automatically submits tasks to the `tasks` table:
-
-1. Indexer detects bulk sync completion
-2. Submits `index_rebuild` task (priority 10) if indexes are deferred
-3. Submits `cells_status_rebuild` task (priority 9) to rebuild cells.status
-4. Submits `live_cells_populate` task (priority 8) to populate PostgreSQL from RocksDB
-5. Submits `statistics_rebuild` task (priority 5) to rebuild aggregate statistics
-6. Task-runner picks up `index_rebuild`, `cells_status_rebuild`, and `statistics_rebuild` tasks
-7. Indexer executes `live_cells_populate` during idle time (requires RocksDB access)
-8. Indexes rebuilt with `CREATE INDEX CONCURRENTLY`
-9. Cells status rebuilt from transaction_inputs table
-10. Statistics tables rebuilt (daily_statistics, hourly_statistics, miner_statistics, etc.)
-11. Tasks complete (status: `completed`)
-
-**Startup Recovery:**
-
-If the indexer restarts after bulk sync completed (or crashes during task submission), pending rebuild tasks are automatically recovered:
-
-1. On startup, if `blocks_remaining <= bulk_sync_threshold` (not in bulk sync)
-2. Indexer calls `maybe_submit_pending_rebuild_tasks()`
-3. Each `maybe_submit_*_task()` checks if deferred flag is set AND no pending/running task exists
-4. Missing tasks are submitted to ensure rebuild completes
-
-This handles edge cases:
-
-- Indexer crash after bulk sync but before task submission
-- Task submission failures that weren't retried
-- Manual indexer restart after bulk sync
-
-**Available Task Types:**
-
-| Task Type                     | Priority | Description                                                            |
-| ----------------------------- | -------- | ---------------------------------------------------------------------- |
-| `index_rebuild`               | 10       | Rebuild deferred indexes and constraints                               |
-| `cells_status_rebuild`        | 9        | Rebuild cells.status and consumed*at*\* from transaction_inputs        |
-| `address_balances_rebuild`    | 8        | Rebuild address_balances from cells GROUP BY                           |
-| `live_cells_populate`         | 8        | Populate live_cells table from RocksDB (indexer)                       |
-| `dao_rebuild`                 | 8        | Rebuild dao_deposits from RocksDB (indexer)                            |
-| `token_rebuild`               | 7        | Rebuild tokens/token_balances/udt_cells with UDT parsing               |
-| `secondary_issuance_backfill` | 7        | Backfill ALL blocks' secondary issuance data (exact)                   |
-| `activities_rebuild`          | 7        | Rebuild activities table from blocks/transactions                      |
-| `spore_rebuild`               | 6        | Rebuild spore_clusters and spore_cells from cells + RPC (full rebuild) |
-| `mnft_rebuild`                | 6        | Rebuild M-NFT issuers/classes/tokens from cells                        |
-| `dotbit_rebuild`              | 6        | Rebuild DotBit accounts from cells                                     |
-| `statistics_rebuild`          | 5        | Rebuild all 7 aggregate statistics tables (parallel, up to 4)          |
-| `cycles_backfill`             | 0        | Backfill transaction cycles from RPC                                   |
-| `label_import`                | 0        | Import UDT/script labels from token-labels repo                        |
-
-> **Note:** `consumed_at_backfill` has been merged into `cells_status_rebuild`. Existing pending tasks will be redirected automatically.
-
-**Bulk Sync Protection:**
-
-Tasks that require complete blockchain data are automatically deferred during bulk sync. The task-runner checks sync status before executing each task:
-
-| Task Type                     | Bulk Sync Safe | Reason                                     |
-| ----------------------------- | -------------- | ------------------------------------------ |
-| `cycles_backfill`             | ✅ Yes         | RPC-based, independent of sync state       |
-| `label_import`                | ✅ Yes         | File-based, independent of sync state      |
-| `index_rebuild`               | ❌ No          | Would slow down writes by 3-4x during sync |
-| `cells_status_rebuild`        | ❌ No          | Requires all transaction_inputs written    |
-| `address_balances_rebuild`    | ❌ No          | Requires all cells written                 |
-| `live_cells_populate`         | ❌ No          | Requires RocksDB fully populated           |
-| `dao_rebuild`                 | ❌ No          | Requires all DAO deposits in RocksDB       |
-| `token_rebuild`               | ❌ No          | Requires all cells with UDT type_script    |
-| `activities_rebuild`          | ❌ No          | Requires all transactions/cells written    |
-| `spore_rebuild`               | ❌ No          | Requires accurate cell status              |
-| `mnft_rebuild`                | ❌ No          | Requires all cells written                 |
-| `dotbit_rebuild`              | ❌ No          | Requires all cells written                 |
-| `statistics_rebuild`          | ❌ No          | Requires complete blockchain data          |
-| `secondary_issuance_backfill` | ❌ No          | Requires all blocks to exist               |
-
-When a bulk-sync-unsafe task is claimed during bulk sync:
-
-1. Task-runner checks `is_bulk_sync_active()` which queries `MAX(timestamp)` from the `blocks` table. If the latest block is older than 1 hour, bulk sync is considered active.
-2. Task status is set back to `pending`
-3. Reason is recorded in `error_message` field
-4. `run_once()` returns `false`, triggering a poll interval sleep before re-attempt
-
-**IMPORTANT**: `is_bulk_sync_active()` must NOT check deferred flags (`indexes_deferred`, etc.) because those flags are cleared by the rebuild tasks themselves, creating a circular dependency deadlock. See `docs/POSTMORTEM.md` TR-001.
-
-This prevents incomplete/incorrect results from tasks that depend on having all blockchain data available.
-
-**Label Import Auto-Trigger:**
-
-The `label_import` task is automatically submitted when the indexer starts, if:
-
-1. Token labels directory exists (checks `$TOKEN_LABELS_PATH/information/` or `docs/token-labels/information/`)
-2. No pending/running `label_import` task already exists
-
-The path is determined by `TOKEN_LABELS_PATH` environment variable, defaulting to `docs/token-labels` for local development. In Docker, this is set to `/app/token-labels` with a volume mount.
-
-This ensures token labels are refreshed at least once per indexer lifecycle without manual intervention.
-
-**Secondary Issuance Backfill Auto-Trigger:**
-
-The `secondary_issuance_backfill` task is automatically submitted when the indexer crosses the 1000-block threshold (from bulk sync to real-time sync).
-
-**Indexer behavior by sync state:**
-
-| Blocks Behind     | Secondary Issuance Tracking | On State Change      |
-| ----------------- | --------------------------- | -------------------- |
-| >1000 (bulk)      | Skipped entirely            | -                    |
-| ≤1000 (real-time) | Track every block           | Submit backfill task |
-
-The backfill task:
-
-1. Resets `block_secondary_issuance` table and cumulative values to 0
-2. Pre-loads all DAO deposit/withdrawal events to memory (eliminates per-batch DB queries)
-3. Processes blocks from block 1 to tip (genesis block 0 is skipped - CKB RPC returns null for it)
-4. Uses JSON-RPC batch requests (250 blocks per batch, 32 concurrent) to `get_block_economic_state`
-5. Writes using PostgreSQL COPY binary protocol (2-3x faster than INSERT)
-6. Calculates breakdown using RFC-0015 formula (exact, not sampled)
-7. Updates `dao_statistics.cumulative_burnt` with accurate totals
-
-**Performance Configuration:**
-
-| Parameter             | Default | Description                             |
-| --------------------- | ------- | --------------------------------------- |
-| `batch_size`          | 1000    | Blocks per DB write batch               |
-| `concurrent_requests` | 32      | Concurrent RPC batch requests           |
-| RPC batch size        | 250     | Blocks per JSON-RPC request (hardcoded) |
-| HTTP timeout          | 60s     | Request timeout for stability           |
-| HTTP connect timeout  | 10s     | Connection establishment timeout        |
-
-**Performance:** Optimized implementation reduces full-chain backfill time from ~10 hours to ~2-3 hours.
-
-**Why exact calculation matters:** Secondary issuance varies per block (~340-590 CKB). Sampling every N blocks and multiplying produces ~50x under-reporting of burnt amounts.
-
-**Statistics Tables Rebuilt:**
-
-- `daily_statistics` - Daily transaction/cell counts
-- `daily_block_stats` - Daily block metrics (uncle rate, block time)
-- `hourly_statistics` - Hourly transaction/cell counts
-- `miner_statistics` - Miner block counts by day
-- `block_time_distribution` - Block time histogram
-- `epoch_time_distribution` - Epoch duration histogram
-- `dao_daily_snapshots` - Daily DAO metrics
-
-**Token 24h Transfers Refresh:**
-
-The indexer refreshes `tokens.transfers_24h` every 10 minutes via `refresh_token_24h_transfers()`. The query is optimized using a single GROUP BY scan instead of N+1 correlated subqueries:
-
-1. Calculate block number from 24 hours ago (based on max timestamp)
-2. Single scan: `GROUP BY type_script_hash` to count all transfers
-3. Batch UPDATE via JOIN for active tokens
-4. Reset inactive tokens to 0
-
-This reduces query time from ~15s to <1s for 700+ tokens.
+1. Orphaned blocks remain in `blocks_all` (preserved for analysis)
+2. New `canonical_blocks` entries are written with higher `canon_version`
+3. `cell_state` entries are versioned to reflect the new canonical state
+4. Queries use `ORDER BY canon_version DESC LIMIT 1 BY (key)` pattern
 
 ## Deferred Activities Write Optimization
 
@@ -622,191 +454,33 @@ psql -c "SELECT spore_deferred FROM sync_status;"
 psql -c "SELECT id, task_type, status, progress_current, progress_total FROM tasks WHERE task_type = 'spore_rebuild';"
 ```
 
-## Deferred DAO Deposit Tables Optimization
+## LRU Cell Cache
 
-For fresh database syncs, the indexer can skip writing to the `dao_deposits` table and skip `dao_statistics` updates to achieve faster bulk sync speeds. DAO deposit data is cached in RocksDB instead, providing O(1) lookups. The PostgreSQL table is rebuilt via the indexer after sync completes.
+The indexer uses an in-memory LRU cache for O(1) cell lookups during blockchain synchronization.
 
-| Parameter             | Default | Description                            |
-| --------------------- | ------- | -------------------------------------- |
-| `--no-auto-defer-dao` | `false` | Disable auto-optimization for fresh DB |
+| Parameter      | Default     | Description            |
+| -------------- | ----------- | ---------------------- |
+| Cache capacity | ~1M entries | Maximum cells in cache |
+| Memory usage   | ~200MB      | Approximate RAM usage  |
 
-**What Gets Deferred:**
+**Cache Behavior:**
 
-- All `dao_deposits` table INSERT/UPDATE/SELECT operations during bulk sync
-- All `dao_statistics` UPDATE operations from DAO processing during bulk sync
-- DAO deposit data is written to RocksDB instead (O(1) lookups via primary and secondary indexes)
+- **On cell creation**: Cell info added to cache
+- **On cell consumption**: Cell info retrieved from cache (or ClickHouse if miss)
+- **Cache eviction**: LRU (Least Recently Used) policy
 
-**Behavior:**
+**Lookup Order:**
 
-| Scenario                     | Auto-defer | Auto-submit rebuild task |
-| ---------------------------- | ---------- | ------------------------ |
-| Fresh DB (tip=0)             | Yes        | Yes                      |
-| Fresh DB + `--no-auto-defer` | No         | No                       |
-| Resume sync, dao exists      | No         | No                       |
-| Resume sync, dao deferred    | No         | Yes                      |
-
-**DAO Rebuild Task:**
-
-When bulk sync completes, the indexer automatically submits a `dao_rebuild` task (priority 8). The **indexer** executes this task (not task-runner) because it requires direct RocksDB access. It:
-
-1. Truncates the `dao_deposits` table
-2. Streams all DAO deposits from RocksDB via `iter_dao_deposits_batched()`
-3. Writes to PostgreSQL using COPY binary protocol
-4. Updates `sync_status.dao_deferred = FALSE` on completion
-
-**API Fallback:**
-
-When `dao_deferred = TRUE`, DAO deposit counts show as zero. `recalculate_dao_extended_statistics` self-corrects at the first 1000-block boundary after rebuild populates the table.
-
-```bash
-# Check status
-psql -c "SELECT dao_deferred FROM sync_status;"
-psql -c "SELECT id, task_type, status, progress_current, progress_total FROM tasks WHERE task_type = 'dao_rebuild';"
-```
-
-## MNFT/DotBit Bulk Sync Skip
-
-During bulk sync, MNFT and DotBit table writes are skipped entirely to avoid slow individual UPSERT operations that block batch processing (4-5s per operation observed in profiling).
-
-**What Gets Skipped During Bulk Sync:**
-
-- All `mnft_issuers` INSERT/UPDATE operations
-- All `mnft_classes` INSERT/UPDATE operations
-- All `mnft_tokens` INSERT/UPDATE operations
-- All `dotbit_accounts` INSERT/UPDATE operations
-- Consumption lookups for MNFT/DotBit were already skipped (`!is_bulk_sync_active()` guard)
-
-**Behavior:**
-
-| Scenario                 | MNFT/DotBit writes | Consumption tracking |
-| ------------------------ | ------------------ | -------------------- |
-| Bulk sync (>1000 blocks) | Skipped            | Skipped              |
-| Real-time sync (≤1000)   | Active             | Active               |
-
-**Note:** Unlike activities/tokens/address_balances, there is no deferred flag or automatic rebuild task for MNFT/DotBit. Historical MNFT/DotBit data from before bulk sync completion will be missing. New data arriving after the indexer reaches real-time sync will be written normally.
-
-## DAO Statistics Recalculation Bulk Sync Skip
-
-During bulk sync, `recalculate_dao_extended_statistics()` is skipped entirely. This function normally runs every 1,000 blocks and scans ALL active DAO deposits (20,000+) with a JOIN to the blocks table to calculate unclaimed compensation, APC, and other DAO statistics.
-
-**Why skipped during bulk sync:**
-
-- The full-table scan takes 3-5 seconds when data is cold (evicted from shared_buffers by COPY writes)
-- Holding a connection for 5s causes pool contention, stalling subsequent COPY batches
-- Results in periodic 2x write time spikes (3s → 7-8s per batch)
-- Nobody reads DAO statistics during bulk sync
-
-**Behavior:**
-
-| Scenario                 | DAO recalculation  | DAO deposit/withdrawal writes |
-| ------------------------ | ------------------ | ----------------------------- |
-| Bulk sync (>1000 blocks) | Skipped            | Active (always written)       |
-| Real-time sync (≤1000)   | Every 1,000 blocks | Active                        |
-
-**Important:** Only the `recalculate_dao_extended_statistics()` call is skipped. DAO deposit and withdrawal INSERT/UPDATE operations continue normally during bulk sync — the data is always written, just the aggregate statistics recalculation is deferred.
-
-> **Note:** When `dao_deferred = TRUE` (see "Deferred DAO Deposit Tables Optimization"), both DAO deposit writes AND statistics recalculation are skipped during bulk sync. The statistics self-correct after the `dao_rebuild` task populates the `dao_deposits` table.
-
-**PostgreSQL bgwriter Tuning:** The bgwriter is already aggressively tuned in `docker/postgres/postgresql.conf`: `delay=10ms, maxpages=4000, multiplier=10.0, flush_after=512kB`. These settings are MORE aggressive than commonly suggested values (`delay=50ms, multiplier=4.0`). No changes needed.
-
-When the indexer transitions from bulk sync to real-time sync, the next 1,000-block boundary will trigger the first recalculation with all historical data, producing correct results.
-
-## Live Cell Store
-
-The LiveCellStore provides O(1) cell lookups during blockchain synchronization using RocksDB for persistent storage. This enables instant restart without rebuilding from database.
-
-| Parameter                    | Default             | Description                                       |
-| ---------------------------- | ------------------- | ------------------------------------------------- |
-| `--live-cell-db-path`        | `./data/live_cells` | RocksDB data directory                            |
-| `--live-cell-flush-interval` | `100`               | Flush dirty cells to database every N batches     |
-| `--no-bulk-sync-cell-cache`  | `false`             | Disable consumed cells retention during bulk sync |
-
-**RocksDB Column Families:**
-
-| Column Family                | Key                          | Value                | Purpose                               |
-| ---------------------------- | ---------------------------- | -------------------- | ------------------------------------- |
-| `live_cells`                 | tx_hash + output_index (34B) | LiveCellInfo         | O(1) lookup for unspent cells         |
-| `consumed_cells`             | tx_hash + output_index (34B) | LiveCellInfo         | Recently consumed cells (1000 blocks) |
-| `block_headers`              | block_number (8B)            | CachedBlockHeader    | Block header + DAO field cache        |
-| `block_hash_index`           | block_hash (32B)             | block_number (8B)    | Reverse lookup: hash → number         |
-| `dao_deposits`               | tx_hash + output_index (34B) | DaoDepositCacheEntry | DAO deposit lifecycle cache           |
-| `dao_deposit_by_withdraw_tx` | withdraw_request_tx (32B)    | outpoint key (34B)   | Reverse lookup: withdraw tx → deposit |
-
-**Cache Lookup Order:**
-
-1. `get_cells_info_batch(bulk_sync_mode)`: live_cells → consumed_cells → PostgreSQL (skipped if bulk_sync_mode=true)
-2. `get_cells_code_hashes_batch(bulk_sync_mode)`: live_cells → consumed_cells → PostgreSQL (skipped if bulk_sync_mode=true)
-3. `get_block_dao_field()`: block_headers → PostgreSQL
-4. `get_block_number_by_hash()`: block_hash_index → PostgreSQL
-
-**Behavior:**
-
-- **Bulk Sync Mode** (>1000 blocks behind tip): Skips ALL `live_cells` table operations (INSERT/DELETE), writing only to RocksDB for maximum throughput. The `cells` table still receives writes. Additionally, `get_cells_info_batch` and `get_cells_code_hashes_batch` skip PostgreSQL fallback queries when RocksDB is enabled, avoiding expensive partition scans that return 0 rows.
-- **Bulk Sync Cell Cache** (default enabled): Retains ALL consumed cells in RocksDB during bulk sync, eliminating PostgreSQL fallback queries. Requires ~15GB extra memory for full chain sync. Disabled automatically on sync completion.
-- **Consumed Cell Cache**: When a cell is spent, its info is preserved in `consumed_cells` CF for 1000 blocks (or indefinitely during bulk sync if cell cache enabled).
-- **Block Header Cache**: Automatically populated when blocks are written; enables O(1) DAO field lookups.
-- **Instant Recovery**: Data persisted to disk, indexer restarts in seconds instead of minutes
-- **Graceful Shutdown**: RocksDB data is flushed on shutdown
+1. Check LRU cache (O(1))
+2. If miss, batch query ClickHouse `cell_state` table
+3. Add result to cache for future lookups
 
 **Memory Considerations:**
 
-| Machine RAM | Bulk Sync Cell Cache | Expected Usage |
-| ----------- | -------------------- | -------------- |
-| ≥32GB       | Enabled (default)    | ~22GB peak     |
-| <32GB       | Disable recommended  | ~8GB peak      |
-
-```bash
-# For low-memory machines
-cargo run -p ckbadger-indexer -- --no-bulk-sync-cell-cache
-```
-
-**Example Usage:**
-
-```bash
-# Default: uses ./data/live_cells
-cargo run -p ckbadger-indexer
-
-# Custom path
-cargo run -p ckbadger-indexer -- --live-cell-db-path /ssd/live_cells
-```
-
-### Live Cells Populate Task
-
-During bulk sync, the indexer skips writing to the PostgreSQL `live_cells` table for performance (writes only to RocksDB). After bulk sync completes, the `live_cells_populate` task copies all live cells from RocksDB to PostgreSQL.
-
-**Why Indexer Executes (not task-runner):**
-
-- Requires direct access to RocksDB live cell store
-- Task-runner rejects this task type with error message
-
-**Execution Flow:**
-
-1. Task submitted when bulk sync completes (priority 8)
-2. Indexer checks for pending task during pipeline idle time
-3. Claims task with `FOR UPDATE SKIP LOCKED`
-4. Truncates PostgreSQL `live_cells` table
-5. Iterates RocksDB in batches (default 100,000 cells)
-6. Writes batches to PostgreSQL using COPY protocol
-7. Updates task progress every 5 seconds
-8. Marks task completed with `cells_populated` count
-
-**Configuration:**
-
-```rust
-LiveCellsPopulateConfig {
-    batch_size: 100_000,  // Cells per batch
-}
-```
-
-**Monitoring:**
-
-```bash
-# Check task status
-psql -c "SELECT id, status, progress_current, progress_total, rate_ema FROM tasks WHERE task_type = 'live_cells_populate';"
-
-# Monitor via TUI
-cargo run -p ckbadger-task-tui
-```
+| Machine RAM | Expected Usage                  |
+| ----------- | ------------------------------- |
+| ≥8GB        | Comfortable                     |
+| <8GB        | May need smaller cache capacity |
 
 ## Rust Style
 
@@ -894,8 +568,8 @@ const { data, isLoading } = useQuery({
 
 ### Database Changes
 
-1. Edit `migrations/postgres/001_init.sql` directly (single consolidated schema)
-2. Update `crates/indexer/src/parser/` and `db/writer.rs`
+1. Edit `migrations/clickhouse/001_init.sql` directly (ClickHouse schema)
+2. Update `crates/indexer/src/parser/` and `db/writer/`
 3. Update API queries in `crates/api/src/routes/`
 
 ## Testing Requirements (MANDATORY)

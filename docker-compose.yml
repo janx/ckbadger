@@ -1,11 +1,15 @@
 # CKB Node Mode Configuration:
-# - CKB_NODE_MODE=internal (default): Runs CKB node inside Docker
-# - CKB_NODE_MODE=external: Uses host machine's CKB node
 #
-# For external mode, set in .env:
-#   CKB_NODE_MODE=external
-#   CKB_RPC_URL=http://host.docker.internal:8114  (macOS/Windows)
-#   CKB_RPC_URL=http://172.17.0.1:8114            (Linux)
+# Option 1: Internal CKB Node (runs inside Docker)
+#   Set in .env:
+#     COMPOSE_PROFILES=internal
+#     CKB_RPC_URL=http://ckb-node:8114
+#
+# Option 2: External CKB Node (uses host machine's node)
+#   Set in .env:
+#     # COMPOSE_PROFILES=        (leave unset or empty)
+#     CKB_RPC_URL=http://host.docker.internal:8114  (macOS/Windows)
+#     CKB_RPC_URL=http://172.17.0.1:8114            (Linux)
 
 services:
   clickhouse:

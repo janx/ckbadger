@@ -60,14 +60,15 @@
                     ┌───────────┴───────────┐
                     ▼                       ▼
               ┌───────────┐           ┌──────────┐
-              │ PostgreSQL│           │  Redis   │
-              │  (Primary)│           │  (Cache) │
+              │ClickHouse │           │  Redis   │
+              │ (Primary) │           │  (Cache) │
               └───────────┘           └──────────┘
                     │
                     ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                       Rust Indexer                               │
 │     Block Fetcher → Cell Parser → Script Decoder → DB Writer     │
+│                    + LRU Cell Cache (~1M entries)                │
 └─────────────────────────────────────────────────────────────────┘
                                 │
                                 ▼
@@ -85,10 +86,9 @@
 | **UI**            | Tailwind CSS, Custom Components     | Responsive design               |
 | **Visualization** | react-force-graph-2d, D3.js         | Cell relationship graphs        |
 | **API**           | Rust (Axum)                         | High-performance REST/WebSocket |
-| **Indexer**       | Rust (3-stage pipeline + RocksDB)   | Block parsing, cell tracking    |
-| **Database**      | PostgreSQL 16                       | Primary data store              |
+| **Indexer**       | Rust + LRU cache                    | Block parsing, cell tracking    |
+| **Database**      | ClickHouse 24.1                     | Primary data store (OLAP)       |
 | **Cache**         | Redis                               | API cache + sync progress       |
-| **Cell Store**    | RocksDB                             | O(1) live cell lookups          |
 
 ## Quick Start
 
@@ -149,22 +149,23 @@ docker compose -f docker-compose.minimal.yml up -d
 ```bash
 # .env.example
 
-# CKB Node Configuration
-# For built-in node (--profile internal): uses http://ckb-node:8114 automatically
-# For external node: set your host's CKB RPC URL
-CKB_RPC_URL=http://host.docker.internal:8114  # macOS/Windows
-# CKB_RPC_URL=http://172.17.0.1:8114          # Linux
-CKB_NETWORK=mainnet  # mainnet | testnet | devnet
+# ClickHouse Configuration
+CLICKHOUSE_URL=http://localhost:8123
+CLICKHOUSE_DATABASE=ckbadger
 
-# Database
-DATABASE_URL=__SET_DATABASE_URL__
+# CKB Node Configuration
+# For internal node (Docker): set COMPOSE_PROFILES=internal
+# For external node (host):   leave COMPOSE_PROFILES unset
+COMPOSE_PROFILES=internal
+CKB_RPC_URL=http://ckb-node:8114
+CKB_NETWORK=mainnet
 
 # Redis (optional)
 REDIS_URL=redis://localhost:6379
 
 # API Server
 API_PORT=3001
-API_RATE_LIMIT=100  # requests per minute
+API_RATE_LIMIT=100
 
 # Frontend
 NEXT_PUBLIC_API_URL=http://localhost:3001
@@ -341,7 +342,8 @@ ckbadger/
 │   │   └── src/
 │   │       ├── rpc/        # CKB RPC client
 │   │       ├── parser/     # Block, cell, script parsers
-│   │       ├── db/         # Database + RocksDB operations
+│   │       ├── db/         # ClickHouse operations
+│   │       ├── cache/      # LRU cell cache
 │   │       └── sync/       # Synchronization logic
 │   ├── api/                # REST API server
 │   │   └── src/
@@ -357,8 +359,8 @@ ckbadger/
 │   ├── hooks/              # Custom hooks (WebSocket, etc.)
 │   └── lib/                # API client, utilities
 ├── migrations/             # Database schema
-│   └── postgres/
-│       └── 001_init.sql    # Single consolidated schema
+│   └── clickhouse/
+│       └── 001_init.sql    # ClickHouse schema
 ├── docs/                   # Documentation & references
 │   ├── rfcs/               # [submodule] CKB RFCs - protocol specs
 │   ├── docs.nervos.org/    # [submodule] Official Nervos docs
@@ -382,7 +384,7 @@ cd ckbadger
 git submodule update --init --recursive
 
 # Start dependencies
-docker compose up -d postgres redis ckb-node
+docker compose up -d clickhouse redis ckb-node
 
 # Run indexer (from project root)
 cargo run -p ckbadger-indexer --release
@@ -398,15 +400,14 @@ cd frontend && pnpm install && pnpm dev
 
 The `docker-compose.yml` includes the following services:
 
-| Service       | Description                                                  | Port |
-| ------------- | ------------------------------------------------------------ | ---- |
-| `postgres`    | PostgreSQL 16 database                                       | 5432 |
-| `redis`       | Redis cache for sync status                                  | 6379 |
-| `ckb-node`    | CKB node (profile: internal)                                 | 8114 |
-| `indexer`     | Blockchain sync daemon                                       | -    |
-| `api`         | REST/WebSocket API server                                    | 3001 |
-| `frontend`    | Next.js web application                                      | 3000 |
-| `task-runner` | Background task executor (label import, index rebuild, etc.) | -    |
+| Service      | Description                  | Port |
+| ------------ | ---------------------------- | ---- |
+| `clickhouse` | ClickHouse 24.1 database     | 8123 |
+| `redis`      | Redis cache for sync status  | 6379 |
+| `ckb-node`   | CKB node (profile: internal) | 8114 |
+| `indexer`    | Blockchain sync daemon       | -    |
+| `api`        | REST/WebSocket API server    | 3001 |
+| `frontend`   | Next.js web application      | 3000 |
 
 ```bash
 # View logs for specific service
@@ -424,11 +425,11 @@ cargo run -p ckbadger-task-runner
 A terminal-based UI for managing background tasks:
 
 ```bash
-# Run task TUI (requires DATABASE_URL in .env or as argument)
+# Run task TUI (requires CLICKHOUSE_URL in .env or as argument)
 cargo run -p ckbadger-task-tui
 
-# Or specify database URL directly
-cargo run -p ckbadger-task-tui -- --database-url postgres://ckbadger:changeme@localhost:5432/ckbadger
+# Or specify ClickHouse URL directly
+cargo run -p ckbadger-task-tui -- --clickhouse-url http://localhost:8123
 
 # Custom refresh interval (default: 1000ms)
 cargo run -p ckbadger-task-tui -- --refresh-ms 500

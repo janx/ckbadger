@@ -131,9 +131,6 @@ Block N arrives
 | `batch_size`          | `10000` | Blocks per batch                                                |
 | `parallel_fetch_size` | `64`    | Concurrent RPC requests                                         |
 | `bulk_sync_threshold` | `72`    | Blocks behind tip to auto-enable bulk sync (2x DEEP_FORK_DEPTH) |
-| `use_copy_bulk_sync`  | `true`  | Use PostgreSQL COPY for bulk sync (5-10x faster)                |
-| `copy_pool_size`      | `24`    | Number of COPY connection pool connections                      |
-| `fast_sync_mode`      | `true`  | Enable synchronous_commit=off for faster writes                 |
 
 ### Environment Variables
 
@@ -143,9 +140,6 @@ PIPELINE_BUFFER=4
 BATCH_SIZE=10000
 PARALLEL_FETCH_SIZE=64
 BULK_SYNC_THRESHOLD=72
-USE_COPY_BULK_SYNC=true
-COPY_POOL_SIZE=24
-FAST_SYNC_MODE=true
 ```
 
 ### CLI Arguments
@@ -156,9 +150,7 @@ cargo run -p ckbadger-indexer -- \
   --pipeline-buffer 4 \
   --batch-size 10000 \
   --parallel-fetch-size 64 \
-  --bulk-sync-threshold 72 \
-  --use-copy-bulk-sync \
-  --copy-pool-size 24
+  --bulk-sync-threshold 72
 ```
 
 ## Error Handling
@@ -251,7 +243,7 @@ With default settings on typical hardware:
    - inputs, cell_deps inserts (parallel)
    - address balances, script usage updates (parallel)
 
-2. **Binary COPY**: When bulk sync is active (blocks_remaining > threshold), the indexer automatically uses PostgreSQL Binary COPY for 5-10x faster writes. See [Binary COPY Infrastructure](#binary-copy-infrastructure) for details.
+2. **Batch Writes**: When bulk sync is active, the indexer uses optimized batch writes to ClickHouse for maximum throughput.
 
 ### Memory Usage
 
@@ -408,70 +400,18 @@ INFO All statistics rebuild completed
 - Detection: `check_bulk_sync_completion()` called after each batch
 - Rebuild entry point: `BatchWriter::rebuild_all_statistics()`
 
-## Binary COPY Infrastructure
-
-The indexer uses PostgreSQL Binary COPY for high-performance bulk data loading during initial sync.
-
-### Auto-Enabled Behavior
-
-COPY is **automatically enabled** when:
-
-- `blocks_remaining > bulk_sync_threshold` (default: 72 blocks behind, 2x DEEP_FORK_DEPTH)
-- `use_copy_bulk_sync = true` (default)
-
-When the indexer catches up to the chain tip, it automatically switches back to UNNEST inserts (which support conflict resolution for reorgs).
-
-### COPY Modules
-
-| Module                         | Table                 | Columns | Performance               |
-| ------------------------------ | --------------------- | ------- | ------------------------- |
-| `copy_format.rs`               | -                     | -       | Core binary serialization |
-| `copy_blocks.rs`               | blocks                | 19      | 5x faster than UNNEST     |
-| `copy_cells.rs`                | cells                 | 16      | 5-10x faster than UNNEST  |
-| `copy_transactions.rs`         | transactions          | 16      | 5-10x faster than UNNEST  |
-| `copy_inputs.rs`               | transaction_inputs    | 6       | 5-10x faster than UNNEST  |
-| `copy_inputs.rs`               | transaction_cell_deps | 6       | 5-10x faster than UNNEST  |
-| `copy_proposals.rs`            | block_proposals       | 3       | 5-10x faster than UNNEST  |
-| `copy_live_cells.rs`           | live_cells            | 10      | 5-10x faster than UNNEST  |
-| `copy_address_transactions.rs` | address_transactions  | 6       | 5x faster than UNNEST     |
-| `parallel_copy.rs`             | -                     | -       | Partition-aware routing   |
-
-### COPY Pool Configuration
-
-COPY operations use a dedicated `tokio-postgres` connection pool (separate from sqlx):
-
-```rust
-CopyConfig {
-    max_copy_connections: 24,  // --copy-pool-size
-    copy_batch_size: 100_000,
-    copy_enabled: true,
-}
-```
-
-### Log Messages
-
-```
-# COPY mode active
-INFO Starting indexer (pipeline=true, copy=true, 6000000 blocks behind, threshold=1000)
-INFO Bulk sync auto-enabled: 6000000 blocks behind > 1000 threshold, using COPY
-INFO Syncing blocks 0 to 999 (5999001 remaining, 450.00 blocks/sec) [COPY]
-
-# Switched to UNNEST (caught up)
-INFO Syncing blocks 5999000 to 5999500 (500 remaining, 320.00 blocks/sec)
-```
-
 ## Crash Recovery
 
-The indexer implements crash recovery to handle failures during batch writes. Since COPY operations run on independent connections without transaction wrapping, a crash mid-batch can leave partial data in the database.
+The indexer implements crash recovery to handle failures during batch writes.
 
 ### Write Ordering Strategy
 
 **Blocks are written LAST** as the "commit marker". The write order is:
 
-1. Transactions, cells, inputs, cell_deps (parallel COPY operations)
-2. Live cells, address transactions, script usage
+1. Transactions, cells, inputs, cell_deps (parallel batch writes)
+2. Cell state updates, activities
 3. DAO deposits, token transfers, NFT data
-4. Statistics updates
+4. Canonical block mapping
 5. **Blocks (LAST)** - only after all other data succeeds
 
 This ensures that if blocks exist for a range, all related data is complete.
