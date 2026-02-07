@@ -61,6 +61,11 @@ cd frontend && npx vitest run            # Non-interactive
 # E2E Testing (requires running services)
 pnpm test:e2e                            # Playwright tests
 
+# Performance Testing
+cargo bench -p ckbadger-indexer          # Run Criterion benchmarks
+cargo bench -p ckbadger-indexer -- cache # Run specific benchmark group
+k6 run perf/k6/smoke-test.js             # API smoke test (requires k6)
+
 # Pre-commit verification
 cargo check && cargo clippy && cd frontend && pnpm type-check && pnpm lint
 

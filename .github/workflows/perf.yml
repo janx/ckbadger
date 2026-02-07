@@ -1,0 +1,139 @@
+name: Performance Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  benchmarks:
+    name: Rust Benchmarks
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-bench-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-bench-
+
+      - name: Download baseline
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          workflow: perf.yml
+          branch: main
+          name: criterion-baseline
+          path: target/criterion
+        continue-on-error: true
+
+      - name: Run benchmarks
+        run: cargo bench -p ckbadger-indexer -- --noplot
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        if: github.ref == 'refs/heads/main'
+        with:
+          name: criterion-baseline
+          path: target/criterion
+          retention-days: 30
+
+  api-smoke-test:
+    name: API Smoke Test
+    runs-on: ubuntu-latest
+    needs: benchmarks
+    if: github.ref == 'refs/heads/main'
+
+    services:
+      clickhouse:
+        image: clickhouse/clickhouse-server:24.1
+        ports:
+          - 8123:8123
+        options: >-
+          --health-cmd "wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-release-
+
+      - name: Install k6
+        run: |
+          curl -s https://dl.k6.io/key.gpg | sudo apt-key add -
+          echo "deb https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update
+          sudo apt-get install k6
+
+      - name: Run ClickHouse migrations
+        run: |
+          curl -s "http://localhost:8123/" --data-binary @migrations/clickhouse/001_init.sql
+
+      - name: Build API
+        run: cargo build -p ckbadger-api --release --features redis-cache
+
+      - name: Start API server
+        run: |
+          ./target/release/ckbadger-api &
+          sleep 5
+        env:
+          CLICKHOUSE_URL: http://localhost:8123
+          REDIS_URL: redis://localhost:6379
+          CKB_RPC_URL: https://mainnet.ckbapp.dev
+          CKB_NETWORK: mainnet
+
+      - name: Run smoke test
+        run: k6 run --env API_URL=http://localhost:3001/api/v1 perf/k6/smoke-test.js
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-test-results
+          path: perf/results/
+          retention-days: 7
