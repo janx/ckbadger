@@ -376,4 +376,149 @@ export const handlers = [
       ],
     });
   }),
+
+  http.get(`${API_BASE}/scripts`, ({ request }) => {
+    const url = new URL(request.url);
+    const limit = parseInt(url.searchParams.get('limit') || '20');
+    const search = url.searchParams.get('search');
+
+    const scripts = [
+      {
+        codeHash: '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8',
+        name: 'Default Lock',
+        description: 'SECP256K1/blake160 is the default lock script.',
+        scriptKind: 'lock',
+        rfc: 'https://github.com/nervosnetwork/rfcs/...',
+        website: null,
+        sourceUrl: 'https://github.com/nervosnetwork/ckb-system-scripts/...',
+        decoderType: null,
+        network: 'mainnet',
+        hashType: 'type',
+        dataHash: '0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649',
+        typeHash: '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8',
+        tag: null,
+        deprecated: false,
+        isSystem: true,
+        codeCellTxHash: null,
+        codeCellOutputIndex: null,
+      },
+      {
+        codeHash: '0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e',
+        name: 'Nervos DAO',
+        description: 'Nervos DAO is a smart contract.',
+        scriptKind: 'type',
+        rfc: 'https://github.com/nervosnetwork/rfcs/...',
+        website: null,
+        sourceUrl: 'https://github.com/nervosnetwork/ckb-system-scripts/...',
+        decoderType: 'dao',
+        network: 'mainnet',
+        hashType: 'type',
+        dataHash: '0x32064a14ce10d95d4b7343054cc19d73b25b16ae61a6c681011ca781a60c7923',
+        typeHash: '0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e',
+        tag: null,
+        deprecated: false,
+        isSystem: true,
+        codeCellTxHash: null,
+        codeCellOutputIndex: null,
+      },
+    ];
+
+    const filtered = search
+      ? scripts.filter(
+          (s) => s.name.toLowerCase().includes(search.toLowerCase()) || s.codeHash.includes(search)
+        )
+      : scripts;
+
+    return HttpResponse.json({
+      data: filtered.slice(0, limit),
+      total: filtered.length,
+      limit,
+      hasMore: filtered.length > limit,
+      nextCursor: filtered.length > limit ? filtered[limit - 1].name : null,
+    });
+  }),
+
+  http.get(`${API_BASE}/scripts/:name`, ({ params }) => {
+    const { name } = params;
+    if (name === 'Default%20Lock' || name === 'Default Lock') {
+      return HttpResponse.json([
+        {
+          codeHash: '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8',
+          name: 'Default Lock',
+          description: 'SECP256K1/blake160 is the default lock script.',
+          scriptKind: 'lock',
+          rfc: 'https://github.com/nervosnetwork/rfcs/...',
+          website: null,
+          sourceUrl: 'https://github.com/nervosnetwork/ckb-system-scripts/...',
+          decoderType: null,
+          network: 'mainnet',
+          hashType: 'type',
+          dataHash: '0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649',
+          typeHash: '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8',
+          tag: null,
+          deprecated: false,
+          isSystem: true,
+          codeCellTxHash: null,
+          codeCellOutputIndex: null,
+        },
+      ]);
+    }
+    return HttpResponse.json({ error: 'not_found', message: 'Script not found' }, { status: 404 });
+  }),
+
+  http.get(`${API_BASE}/scripts/:name/usage`, ({ params }) => {
+    return HttpResponse.json({
+      name: params.name,
+      cellsCount: 1000000,
+      liveCellsCount: 500000,
+      capacitySum: '100000000000000',
+      liveCapacitySum: '50000000000000',
+      byDeployment: [
+        {
+          codeHash: '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8',
+          scriptKind: 'lock',
+          cellsCount: 1000000,
+          liveCellsCount: 500000,
+          capacitySum: '100000000000000',
+          liveCapacitySum: '50000000000000',
+        },
+      ],
+    });
+  }),
+
+  http.post(`${API_BASE}/scripts/lookup`, async ({ request }) => {
+    const body = (await request.json()) as { codeHashes: string[] };
+    const result: Record<string, object> = {};
+    for (const hash of body.codeHashes || []) {
+      if (hash === '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8') {
+        result[hash] = {
+          codeHash: hash,
+          name: 'Default Lock',
+          scriptKind: 'lock',
+          decoderType: null,
+          hashType: 'type',
+          codeCellTxHash: null,
+          codeCellOutputIndex: null,
+          liveCellsCount: 500000,
+          liveCapacitySum: '50000000000000',
+        };
+      }
+    }
+    return HttpResponse.json(result);
+  }),
+
+  http.get(`${API_BASE}/scripts/code-cell`, ({ request }) => {
+    const url = new URL(request.url);
+    const codeHash = url.searchParams.get('code_hash');
+    if (codeHash === '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8') {
+      return HttpResponse.json({
+        txHash: null,
+        outputIndex: null,
+      });
+    }
+    return HttpResponse.json({
+      txHash: null,
+      outputIndex: null,
+    });
+  }),
 ];

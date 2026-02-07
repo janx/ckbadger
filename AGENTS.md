@@ -580,6 +580,70 @@ cargo build -p ckbadger-api --features redis-cache
 REDIS_URL=redis://localhost:6379 cargo run -p ckbadger-api --features redis-cache
 ```
 
+## Known Scripts
+
+The explorer maintains a database of known CKB scripts (lock scripts and type scripts) imported from the `docs/token-labels` submodule.
+
+**Data Source:**
+
+- Script definitions: `docs/token-labels/information/script/*/index.json`
+- Name overrides: `docs/script-name-overrides.json`
+- Import script: `scripts/import-known-scripts.js`
+
+**Database Table:** `known_scripts` (ClickHouse)
+
+| Column                   | Type            | Description                           |
+| ------------------------ | --------------- | ------------------------------------- |
+| `code_hash`              | FixedString(32) | Script code hash (primary identifier) |
+| `network`                | String          | `mainnet` or `testnet`                |
+| `name`                   | String          | Human-readable script name            |
+| `script_kind`            | String          | `lock` or `type` (auto-detected)      |
+| `decoder_type`           | String          | `udt`, `spore`, `dao`, `ckbfs`, etc.  |
+| `deprecated`             | UInt8           | Whether the script is deprecated      |
+| `is_system`              | UInt8           | Genesis/system script flag            |
+| `code_cell_tx_hash`      | FixedString(32) | Transaction containing code cell      |
+| `code_cell_output_index` | Int16           | Output index of code cell             |
+
+**API Endpoints:**
+
+| Endpoint                    | Description                             |
+| --------------------------- | --------------------------------------- |
+| `GET /scripts`              | List scripts (paginated, searchable)    |
+| `GET /scripts/{name}`       | Get script by name (all deployments)    |
+| `GET /scripts/{name}/usage` | Get usage stats (cell counts, capacity) |
+| `POST /scripts/lookup`      | Batch lookup by code hashes             |
+| `GET /scripts/code-cell`    | Get code cell location for a script     |
+
+**Query Parameters for `GET /scripts`:**
+
+| Param          | Type   | Description                            |
+| -------------- | ------ | -------------------------------------- |
+| `limit`        | int    | Page size (default: 20)                |
+| `cursor`       | string | Pagination cursor (script name)        |
+| `network`      | string | Filter by network (default: `mainnet`) |
+| `decoder_type` | string | Filter by decoder type                 |
+| `search`       | string | Search by name or code hash            |
+
+**Importing/Updating Script Data:**
+
+```bash
+# Import all scripts from token-labels
+node scripts/import-known-scripts.js
+
+# Dry run (preview SQL without executing)
+node scripts/import-known-scripts.js --dry-run
+
+# Custom ClickHouse URL
+node scripts/import-known-scripts.js --clickhouse-url http://localhost:8123
+```
+
+**Script Kind Detection:**
+
+The import script auto-detects `script_kind` based on:
+
+1. `decoder_type` - `dao`, `udt`, `spore` → `type`
+2. Name patterns - `/lock/i`, `/secp256k1/i` → `lock`; `/udt/i`, `/nft/i` → `type`
+
 ## Rust Style
 
 **Imports**: External → internal → stdlib inline:
@@ -890,6 +954,7 @@ const DAO_OCCUPIED_CAPACITY: u64 = 102_00000000; // 102 CKB
 | ------------------- | ------------------------------------------ |
 | API routes          | `crates/api/src/routes/*.rs`               |
 | Activities API      | `crates/api/src/routes/activities.rs`      |
+| Scripts API         | `crates/api/src/routes/scripts.rs`         |
 | Response types      | `crates/api/src/response.rs`               |
 | WebSocket           | `crates/api/src/ws/`                       |
 | RPC client          | `crates/indexer/src/rpc/client.rs`         |

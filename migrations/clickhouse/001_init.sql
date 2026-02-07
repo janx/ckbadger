@@ -1013,6 +1013,12 @@ CREATE TABLE IF NOT EXISTS known_scripts
     
     -- Flags
     is_system UInt8 DEFAULT 0,
+    script_kind LowCardinality(String) DEFAULT '',
+    
+    -- Code cell location (optional)
+    code_cell_tx_hash FixedString(32) CODEC(ZSTD(1)),
+    code_cell_output_index Int16 DEFAULT -1,
+    
     label_source String DEFAULT 'token-labels',
     label_updated_at DateTime64(3, 'UTC') DEFAULT toDateTime64(0, 3, 'UTC'),
     
