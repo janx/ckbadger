@@ -3,7 +3,9 @@ mod redis_cache;
 #[cfg(feature = "redis-cache")]
 pub use redis_cache::*;
 
-use ckbadger_common::sync::{SyncStatusData, SYNC_STATUS_REDIS_KEY};
+use ckbadger_common::sync::{
+    SyncProgressData, SyncStatusData, SYNC_PROGRESS_REDIS_KEY, SYNC_STATUS_REDIS_KEY,
+};
 use serde::{de::DeserializeOwned, Serialize};
 use std::time::Duration;
 
@@ -55,6 +57,10 @@ impl CacheBackend {
         }
 
         SyncStatusData::default()
+    }
+
+    pub async fn get_sync_progress(&self) -> Option<SyncProgressData> {
+        self.get::<SyncProgressData>(SYNC_PROGRESS_REDIS_KEY).await
     }
 
     pub async fn get_sync_tip(&self, _pool: &DbPool) -> i64 {

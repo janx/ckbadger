@@ -68,7 +68,7 @@ ckb-hash = { workspace = true }
 clickhouse = { version = "0.14", features = ["lz4"] }
 
 [features]
-default = []
+default = ["redis-cache"]
 redis-cache = ["redis"]
 
 [dev-dependencies]

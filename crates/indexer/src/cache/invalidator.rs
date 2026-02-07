@@ -551,20 +551,8 @@ mod tests {
                 total_live_cells: 300,
                 total_addresses: 100,
                 last_synced_at: chrono::Utc::now().timestamp(),
-                sync_started_at: None,
-                sync_started_block: 0,
                 sync_ema_rate: Some(500.0),
-                bulk_sync_completed_at: None,
-                bulk_sync_completed_block: None,
-                indexes_deferred: false,
-                indexes_dropped_at: None,
-                indexes_rebuild_started_at: None,
-                indexes_rebuild_completed_at: None,
-                indexes_rebuild_progress: None,
-                activities_deferred: false,
-                activities_deferred_at: None,
-                activities_rebuild_started_at: None,
-                activities_rebuild_completed_at: None,
+                ..Default::default()
             };
 
             invalidator.set_sync_status(&status).await;

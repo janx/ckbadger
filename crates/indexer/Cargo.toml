@@ -61,7 +61,7 @@ redis = { workspace = true, optional = true }
 clickhouse = { version = "0.14", features = ["lz4", "inserter"] }
 
 [features]
-default = []
+default = ["redis-cache"]
 redis-cache = ["redis"]
 
 [dev-dependencies]

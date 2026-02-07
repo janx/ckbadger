@@ -303,6 +303,29 @@ async fn get_network_stats(State(state): State<Arc<AppState>>) -> ApiResult<Netw
         100.0
     };
 
+    let sync_progress = state.cache.get_sync_progress().await;
+    let sync_status_data = state.cache.get_sync_status(&state.pool).await;
+
+    let (ema_blocks_per_second, estimated_time, elapsed_time, started_at, total_time) =
+        if let Some(ref sp) = sync_progress {
+            let eta = sp.eta_formatted.clone();
+            let elapsed = sync_status_data
+                .bulk_sync_elapsed_seconds()
+                .map(|s| ckbadger_common::sync::format_duration_smart(s as f64));
+            let total = sync_status_data
+                .bulk_sync_total_seconds()
+                .map(|s| ckbadger_common::sync::format_duration_smart(s as f64));
+            (
+                Some(sp.ema_blocks_per_second),
+                if eta.is_empty() { None } else { Some(eta) },
+                elapsed,
+                sync_status_data.sync_started_at,
+                total,
+            )
+        } else {
+            (None, None, None, sync_status_data.sync_started_at, None)
+        };
+
     let response = NetworkStatsResponse {
         latest_block: tip_number,
         avg_block_time: "~8s".to_string(),
@@ -318,16 +341,16 @@ async fn get_network_stats(State(state): State<Arc<AppState>>) -> ApiResult<Netw
             synced_block: db_tip,
             tip_block: tip_number,
             progress,
-            estimated_time: None,
-            ema_blocks_per_second: None,
+            estimated_time,
+            ema_blocks_per_second,
             sync_mode: if is_syncing {
                 "bulk".to_string()
             } else {
                 "live".to_string()
             },
-            started_at: None,
-            elapsed_time: None,
-            total_time: None,
+            started_at,
+            elapsed_time,
+            total_time,
         },
         deep_fork_status: DeepForkStatusResponse {
             detected: false,

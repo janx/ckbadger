@@ -310,6 +310,20 @@ impl Indexer {
                     percentage, current, target, rate, ema_rate, eta
                 );
 
+                let sync_progress_data = ckbadger_common::SyncProgressData {
+                    current_block: current,
+                    target_block: target,
+                    blocks_per_second: rate,
+                    ema_blocks_per_second: ema_rate,
+                    eta_seconds: self.progress.eta_seconds(),
+                    eta_formatted: eta,
+                    progress_percentage: percentage,
+                    updated_at: chrono::Utc::now().timestamp(),
+                };
+                self.cache_invalidator
+                    .publish_sync_progress(&sync_progress_data)
+                    .await;
+
                 last_log_time = Instant::now();
             }
 

@@ -194,6 +194,32 @@ export function useRealtimeData() {
             data: [blockData],
           };
         });
+
+        queryClient.setQueryData(
+          ['mempool-summary'],
+          (
+            old:
+              | {
+                  pending?: unknown[];
+                  proposals?: unknown[];
+                  tipBlock?: { number: number; hash: string; timestamp: number };
+                  tipBlockTxs?: unknown[];
+                }
+              | undefined
+          ) => {
+            if (!old) return old;
+            return {
+              ...old,
+              tipBlock: {
+                number: blockData.number,
+                hash: blockData.hash,
+                timestamp: new Date(blockData.timestamp).getTime(),
+                transactionsCount: blockData.transactionsCount,
+              },
+              tipBlockTxs: [],
+            };
+          }
+        );
       } else if (message.type === 'new_transaction') {
         const txData = message.data as Transaction;
         setLatestTx(txData);

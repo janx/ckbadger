@@ -44,7 +44,20 @@ pub async fn start_block_broadcaster(
     loop {
         poll_interval.tick().await;
 
-        let query = r#"
+        let sync_status_data = _cache.get_sync_status(&pool).await;
+        let redis_tip = sync_status_data.tip_block_number as u64;
+
+        if last_block_number == Some(redis_tip) {
+            continue;
+        }
+
+        let hash_without_prefix = sync_status_data
+            .tip_block_hash
+            .strip_prefix("0x")
+            .unwrap_or(&sync_status_data.tip_block_hash);
+
+        let query = format!(
+            r#"
             SELECT 
                 b.number as number,
                 hex(b.hash) as hash,
@@ -54,15 +67,16 @@ pub async fn start_block_broadcaster(
                 b.epoch_index as epoch_index,
                 b.epoch_length as epoch_length
             FROM blocks_all b
-            INNER JOIN canonical_blocks c ON b.number = c.number AND b.hash = c.block_hash
-            ORDER BY b.number DESC
+            WHERE b.number = {} AND b.hash = unhex('{}')
             LIMIT 1
-        "#;
+            "#,
+            redis_tip, hash_without_prefix
+        );
 
-        let block_row: Option<BlockRow> = match pool.query_one(query).await {
+        let block_row: Option<BlockRow> = match pool.query_one(&query).await {
             Ok(row) => row,
             Err(e) => {
-                warn!("Failed to query latest block for broadcaster: {}", e);
+                warn!("Failed to query block {} for broadcaster: {}", redis_tip, e);
                 continue;
             }
         };
@@ -71,14 +85,13 @@ pub async fn start_block_broadcaster(
             continue;
         };
 
-        if last_block_number == Some(block.number) {
-            continue;
-        }
-
         debug!("Broadcasting new block: {}", block.number);
         last_block_number = Some(block.number);
 
         let rpc = CkbRpcClient::new(&ckb_rpc_url);
+        let sync_progress = _cache.get_sync_progress().await;
+        let sync_status_data = _cache.get_sync_status(&pool).await;
+
         let (tip_number, is_syncing, sync_status) = match rpc.get_tip_header().await {
             Ok(tip) => {
                 let tip_num = parse_hex_u64(&tip.number).unwrap_or(0);
@@ -89,23 +102,55 @@ pub async fn start_block_broadcaster(
                     100.0
                 };
 
+                let (ema_bps, bps, eta, elapsed, started, total) =
+                    if let Some(ref sp) = sync_progress {
+                        let eta_str = sp.eta_formatted.clone();
+                        let elapsed = sync_status_data
+                            .bulk_sync_elapsed_seconds()
+                            .map(|s| ckbadger_common::sync::format_duration_smart(s as f64));
+                        let total = sync_status_data
+                            .bulk_sync_total_seconds()
+                            .map(|s| ckbadger_common::sync::format_duration_smart(s as f64));
+                        (
+                            Some(sp.ema_blocks_per_second),
+                            Some(sp.blocks_per_second),
+                            if eta_str.is_empty() {
+                                None
+                            } else {
+                                Some(eta_str)
+                            },
+                            elapsed,
+                            sync_status_data.sync_started_at,
+                            total,
+                        )
+                    } else {
+                        (
+                            None,
+                            None,
+                            None,
+                            None,
+                            sync_status_data.sync_started_at,
+                            None,
+                        )
+                    };
+
                 let status = SyncStatus {
                     is_syncing: syncing,
                     synced_block: block.number as i64,
                     tip_block: tip_num as i64,
                     progress,
-                    estimated_time: None,
+                    estimated_time: eta,
                     chart_data_may_be_incomplete: syncing,
-                    blocks_per_second: None,
-                    ema_blocks_per_second: None,
+                    blocks_per_second: bps,
+                    ema_blocks_per_second: ema_bps,
                     sync_mode: if syncing {
                         "bulk".to_string()
                     } else {
                         "live".to_string()
                     },
-                    started_at: None,
-                    elapsed_time: None,
-                    total_time: None,
+                    started_at: started,
+                    elapsed_time: elapsed,
+                    total_time: total,
                 };
                 (tip_num, syncing, status)
             }
