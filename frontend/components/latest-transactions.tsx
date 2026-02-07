@@ -41,8 +41,8 @@ export function LatestTransactions({
           nextCursor: null,
         }
       : undefined,
-    initialDataUpdatedAt: 0,
-    refetchInterval: 10000,
+    staleTime: 5000,
+    refetchInterval: isRealtime ? 30000 : 10000,
   });
 
   const itemCount = txs?.data?.length ?? 0;

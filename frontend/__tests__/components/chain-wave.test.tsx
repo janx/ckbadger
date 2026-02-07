@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import { screen } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import { PackedContainer, TxItem } from '@/components/chain-wave/packed-container';
 import { EpochProgress } from '@/components/chain-wave/epoch-progress';
+import { ChainWave } from '@/components/chain-wave';
 
 // Mock ResizeObserver for PackedContainer tests
 beforeAll(() => {
@@ -120,5 +121,36 @@ describe('EpochProgress', () => {
   it('handles zero epoch length gracefully', () => {
     render(<EpochProgress epochNumber={1} epochIndex={0} epochLength={0} latestBlock={0} />);
     expect(screen.getByText('0.0%')).toBeInTheDocument();
+  });
+});
+
+describe('ChainWave', () => {
+  it('renders transaction flow header', async () => {
+    render(<ChainWave />);
+    expect(screen.getByText('Transaction Flow')).toBeInTheDocument();
+  });
+
+  it('renders all three containers', async () => {
+    render(<ChainWave />);
+    expect(screen.getByText('Mempool')).toBeInTheDocument();
+    expect(screen.getByText('Awaiting commit')).toBeInTheDocument();
+    expect(screen.getByText('Latest Committed')).toBeInTheDocument();
+  });
+
+  it('renders legend items', () => {
+    render(<ChainWave />);
+    const legendItems = screen.getAllByText(/Pending|Proposed|Committed|Cellbase/);
+    expect(legendItems.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it('fetches and displays mempool summary data', async () => {
+    render(<ChainWave />);
+
+    await waitFor(
+      () => {
+        expect(screen.getByText('Block #12,345')).toBeInTheDocument();
+      },
+      { timeout: 3000 }
+    );
   });
 });

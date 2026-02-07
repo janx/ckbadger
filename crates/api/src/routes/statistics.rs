@@ -11,10 +11,12 @@ use crate::AppState;
 const CACHE_TTL_CHART_SECS: u64 = 300; // 5 minutes for historical charts
 const CACHE_TTL_TX_STATS_SECS: u64 = 60; // 1 minute for tx stats
 const CACHE_TTL_RECENT_BLOCKS_SECS: u64 = 10; // 10 seconds for recent blocks
+const CACHE_TTL_NETWORK_STATS_SECS: u64 = 5; // 5 seconds for network stats
 
 // Cache key prefixes
 const CACHE_KEY_TX_STATS: &str = "stats:tx_stats";
 const CACHE_KEY_RECENT_BLOCKS: &str = "stats:recent_blocks";
+const CACHE_KEY_NETWORK_STATS: &str = "stats:network";
 const CACHE_KEY_CHART_TX_COUNT: &str = "chart:transaction_count";
 const CACHE_KEY_CHART_CELL_COUNT: &str = "chart:cell_count";
 const CACHE_KEY_CHART_AVG_BLOCK_TIME: &str = "chart:avg_block_time";
@@ -63,7 +65,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/charts/inflation-rate", get(get_inflation_rate_chart))
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NetworkStatsResponse {
     pub latest_block: u64,
@@ -79,7 +81,7 @@ pub struct NetworkStatsResponse {
     pub deep_fork_status: DeepForkStatusResponse,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncStatusResponse {
     pub is_syncing: bool,
@@ -94,7 +96,7 @@ pub struct SyncStatusResponse {
     pub total_time: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeepForkStatusResponse {
     pub detected: bool,
@@ -263,6 +265,14 @@ fn format_duration(seconds: u64) -> String {
 }
 
 async fn get_network_stats(State(state): State<Arc<AppState>>) -> ApiResult<NetworkStatsResponse> {
+    if let Some(cached) = state
+        .cache
+        .get::<NetworkStatsResponse>(CACHE_KEY_NETWORK_STATS)
+        .await
+    {
+        return ok(cached);
+    }
+
     let rpc = CkbRpcClient::new(&state.ckb_rpc_url);
 
     let tip_header = rpc
@@ -293,7 +303,7 @@ async fn get_network_stats(State(state): State<Arc<AppState>>) -> ApiResult<Netw
         100.0
     };
 
-    ok(NetworkStatsResponse {
+    let response = NetworkStatsResponse {
         latest_block: tip_number,
         avg_block_time: "~8s".to_string(),
         hash_rate: format_hash_rate(hash_rate),
@@ -327,7 +337,18 @@ async fn get_network_stats(State(state): State<Arc<AppState>>) -> ApiResult<Netw
             chain_tip: None,
             fork_point: None,
         },
-    })
+    };
+
+    state
+        .cache
+        .set(
+            CACHE_KEY_NETWORK_STATS,
+            &response,
+            Duration::from_secs(CACHE_TTL_NETWORK_STATS_SECS),
+        )
+        .await;
+
+    ok(response)
 }
 
 async fn get_tx_stats(State(state): State<Arc<AppState>>) -> ApiResult<TxStatsResponse> {
@@ -337,14 +358,12 @@ async fn get_tx_stats(State(state): State<Arc<AppState>>) -> ApiResult<TxStatsRe
 
     let hourly_query = r#"
         SELECT 
-            formatDateTime(fromUnixTimestamp64Milli(b.timestamp), '%H:%M') as hour_label,
-            count() as tx_count
-        FROM transactions_all t
-        INNER JOIN canonical_blocks c ON t.block_number = c.number AND t.block_hash = c.block_hash
-        INNER JOIN blocks_all b ON c.number = b.number AND c.block_hash = b.hash
-        WHERE b.timestamp >= (toUnixTimestamp64Milli(now64(3)) - 3600000)
-        GROUP BY toStartOfFiveMinutes(fromUnixTimestamp64Milli(b.timestamp)), hour_label
-        ORDER BY toStartOfFiveMinutes(fromUnixTimestamp64Milli(b.timestamp))
+            formatDateTime(five_min_bucket, '%H:%M') as hour_label,
+            sum(tx_count) as tx_count
+        FROM mv_five_min_tx_count
+        WHERE five_min_bucket >= now() - INTERVAL 1 HOUR
+        GROUP BY five_min_bucket, hour_label
+        ORDER BY five_min_bucket
     "#;
 
     let hourly_rows: Vec<HourlyTxRow> =
@@ -352,14 +371,12 @@ async fn get_tx_stats(State(state): State<Arc<AppState>>) -> ApiResult<TxStatsRe
 
     let daily_query = r#"
         SELECT 
-            formatDateTime(fromUnixTimestamp64Milli(b.timestamp), '%m/%d') as day_label,
-            count() as tx_count
-        FROM transactions_all t
-        INNER JOIN canonical_blocks c ON t.block_number = c.number AND t.block_hash = c.block_hash
-        INNER JOIN blocks_all b ON c.number = b.number AND c.block_hash = b.hash
-        WHERE b.timestamp >= (toUnixTimestamp64Milli(now64(3)) - 86400000)
-        GROUP BY toStartOfHour(fromUnixTimestamp64Milli(b.timestamp)), day_label
-        ORDER BY toStartOfHour(fromUnixTimestamp64Milli(b.timestamp))
+            formatDateTime(hour_bucket, '%m/%d') as day_label,
+            sum(tx_count) as tx_count
+        FROM mv_hourly_tx_count
+        WHERE hour_bucket >= now() - INTERVAL 24 HOUR
+        GROUP BY hour_bucket, day_label
+        ORDER BY hour_bucket
     "#;
 
     let daily_rows: Vec<DailyTxRow> = state.pool.query_all(daily_query).await.unwrap_or_default();
@@ -466,12 +483,10 @@ async fn get_transaction_count_chart(
 
     let query = r#"
         SELECT 
-            toString(toDate(fromUnixTimestamp64Milli(b.timestamp))) as date,
-            count() as count
-        FROM transactions_all t
-        INNER JOIN canonical_blocks c ON t.block_number = c.number AND t.block_hash = c.block_hash
-        INNER JOIN blocks_all b ON c.number = b.number AND c.block_hash = b.hash
-        WHERE b.timestamp >= toUnixTimestamp64Milli(now64(3)) - 2592000000
+            toString(date) as date,
+            sum(tx_count) as count
+        FROM mv_daily_tx_count
+        WHERE date >= today() - 30
         GROUP BY date
         ORDER BY date DESC
         LIMIT 30
@@ -516,12 +531,10 @@ async fn get_cell_count_chart(
 
     let query = r#"
         SELECT 
-            toString(toDate(fromUnixTimestamp64Milli(b.timestamp))) as date,
-            count() as count
-        FROM cell_outputs_all co
-        INNER JOIN canonical_blocks c ON co.block_number = c.number AND co.block_hash = c.block_hash
-        INNER JOIN blocks_all b ON c.number = b.number AND c.block_hash = b.hash
-        WHERE b.timestamp >= toUnixTimestamp64Milli(now64(3)) - 2592000000
+            toString(date) as date,
+            sum(cell_count) as count
+        FROM mv_daily_cell_count
+        WHERE date >= today() - 30
         GROUP BY date
         ORDER BY date DESC
         LIMIT 30
@@ -781,9 +794,15 @@ mod tests {
     }
 
     #[test]
+    fn test_cache_ttl_network_stats_is_5_seconds() {
+        assert_eq!(CACHE_TTL_NETWORK_STATS_SECS, 5);
+    }
+
+    #[test]
     fn test_cache_keys_have_correct_prefixes() {
         assert!(CACHE_KEY_TX_STATS.starts_with("stats:"));
         assert!(CACHE_KEY_RECENT_BLOCKS.starts_with("stats:"));
+        assert!(CACHE_KEY_NETWORK_STATS.starts_with("stats:"));
         assert!(CACHE_KEY_CHART_TX_COUNT.starts_with("chart:"));
         assert!(CACHE_KEY_CHART_CELL_COUNT.starts_with("chart:"));
         assert!(CACHE_KEY_CHART_AVG_BLOCK_TIME.starts_with("chart:"));

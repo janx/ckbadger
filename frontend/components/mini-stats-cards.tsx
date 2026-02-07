@@ -113,7 +113,7 @@ export function MiniStatsCards({ className }: MiniStatsCardsProps) {
   const { data: txStats } = useQuery({
     queryKey: ['tx-stats'],
     queryFn: () => api.getTxStats(),
-    staleTime: 10000,
+    staleTime: 15000,
     refetchInterval: 30000,
   });
 

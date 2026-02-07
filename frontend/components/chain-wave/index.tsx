@@ -2,20 +2,8 @@
 
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import {
-  api,
-  Block,
-  NetworkStats,
-  MempoolTransaction,
-  Transaction,
-  PendingProposal,
-} from '@/lib/api';
+import { api } from '@/lib/api';
 import { PackedContainer, TxItem, TxCategory } from './packed-container';
-
-interface ChainWaveProps {
-  initialBlocks?: Block[];
-  stats?: NetworkStats | null;
-}
 
 function FlowArrow() {
   return (
@@ -36,92 +24,51 @@ function FlowArrow() {
   );
 }
 
-function mempoolTxToItem(tx: MempoolTransaction): TxItem {
-  return {
-    id: tx.txHash,
-    size: tx.size,
-    fee: tx.fee,
-    feeRate: tx.feeRate,
-    category: 'normal' as TxCategory,
-  };
-}
-
-function blockTxToItem(tx: Transaction): TxItem {
-  const feeNum = parseFloat(tx.fee) || 0;
-  const feeRate = tx.txSize && tx.txSize > 0 ? feeNum / tx.txSize : undefined;
-  return {
-    id: tx.hash,
-    size: tx.txSize ?? 500,
-    fee: feeNum,
-    feeRate,
-    category: tx.isCellbase ? 'cellbase' : 'normal',
-  };
-}
-
-function proposalToItem(proposal: PendingProposal): TxItem {
-  return {
-    id: proposal.fullTxHash || proposal.proposalId,
-    size: proposal.size ?? 500,
-    fee: proposal.fee ?? undefined,
-    feeRate: proposal.feeRate ?? undefined,
-    category: 'normal' as TxCategory,
-  };
-}
-
-export function ChainWave({ initialBlocks }: ChainWaveProps) {
-  const { data: mempoolTxs } = useQuery({
-    queryKey: ['mempool-transactions'],
-    queryFn: () => api.getMempoolTransactions(),
+export function ChainWave() {
+  const { data: summary } = useQuery({
+    queryKey: ['mempool-summary'],
+    queryFn: () => api.getMempoolSummary(),
     refetchInterval: 5000,
+    staleTime: 3000,
   });
 
-  const { data: pendingProposalsData } = useQuery({
-    queryKey: ['pending-proposals'],
-    queryFn: () => api.getPendingProposals(),
-    refetchInterval: 5000,
-  });
+  const pendingItems = useMemo((): TxItem[] => {
+    if (!summary?.pending) return [];
+    return summary.pending
+      .filter((tx) => tx.status === 'pending')
+      .map((tx) => ({
+        id: tx.txHash,
+        size: tx.size,
+        fee: tx.fee,
+        feeRate: tx.feeRate,
+        category: 'normal' as TxCategory,
+      }));
+  }, [summary?.pending]);
 
-  const { data: blocksData } = useQuery({
-    queryKey: ['chain-wave-tip-block'],
-    queryFn: () => api.getBlocks({ limit: 1 }),
-    initialData: initialBlocks?.length
-      ? {
-          data: initialBlocks.slice(0, 1),
-          total: 1,
-          limit: 1,
-          hasMore: false,
-          nextCursor: null,
-        }
-      : undefined,
-    refetchInterval: 10000,
-  });
+  const proposalItems = useMemo((): TxItem[] => {
+    if (!summary?.proposals) return [];
+    return summary.proposals.map((proposal) => ({
+      id: proposal.fullTxHash || proposal.proposalId,
+      size: proposal.size ?? 500,
+      fee: proposal.fee ?? undefined,
+      feeRate: proposal.feeRate ?? undefined,
+      category: 'normal' as TxCategory,
+    }));
+  }, [summary?.proposals]);
 
-  const tipBlock = blocksData?.data?.[0];
-
-  const { data: tipBlockTxs } = useQuery({
-    queryKey: ['block-transactions', tipBlock?.number],
-    queryFn: () =>
-      tipBlock
-        ? api.getTransactions({ blockNumber: tipBlock.number, limit: 200 })
-        : Promise.resolve({ data: [], total: 0, limit: 200, hasMore: false, nextCursor: null }),
-    enabled: !!tipBlock,
-    refetchInterval: 10000,
-  });
-
-  const pendingItems = useMemo(() => {
-    if (!mempoolTxs) return [];
-    return mempoolTxs.filter((tx) => tx.status === 'pending').map(mempoolTxToItem);
-  }, [mempoolTxs]);
-
-  const proposalItems = useMemo(() => {
-    const proposals = pendingProposalsData?.proposals ?? [];
-    return proposals.map(proposalToItem);
-  }, [pendingProposalsData]);
-
-  const tipBlockItems = useMemo(() => {
-    if (!tipBlockTxs?.data) return [];
-    return tipBlockTxs.data.map(blockTxToItem);
-  }, [tipBlockTxs]);
+  const tipBlockItems = useMemo((): TxItem[] => {
+    if (!summary?.tipBlockTxs) return [];
+    return summary.tipBlockTxs.map((tx) => {
+      const feeRate = tx.txSize > 0 ? (tx.fee / tx.txSize) * 1000 : undefined;
+      return {
+        id: tx.hash,
+        size: tx.txSize || 500,
+        fee: tx.fee,
+        feeRate,
+        category: tx.isCellbase ? 'cellbase' : ('normal' as TxCategory),
+      };
+    });
+  }, [summary?.tipBlockTxs]);
 
   const globalMaxSize = useMemo(() => {
     const allSizes = [
@@ -132,6 +79,8 @@ export function ChainWave({ initialBlocks }: ChainWaveProps) {
     if (allSizes.length === 0) return 10000;
     return Math.max(...allSizes, 2000);
   }, [pendingItems, proposalItems, tipBlockItems]);
+
+  const tipBlock = summary?.tipBlock;
 
   return (
     <div className="rounded-2xl border border-slate-700/50 bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800 p-4 shadow-xl sm:p-6">
@@ -187,7 +136,7 @@ export function ChainWave({ initialBlocks }: ChainWaveProps) {
           subtitle="Latest Committed"
           type="tip"
           items={tipBlockItems}
-          totalCount={tipBlockTxs?.total ?? tipBlockItems.length}
+          totalCount={summary?.tipBlockTxs?.length ?? tipBlockItems.length}
           blockNumber={tipBlock?.number}
           emptyText="No transactions"
           globalMaxSize={globalMaxSize}

@@ -798,6 +798,28 @@ interface PendingProposalsResponse {
   totalCount: number;
 }
 
+interface MempoolSummaryBlock {
+  number: number;
+  hash: string;
+  timestamp: number;
+  transactionsCount: number;
+}
+
+interface MempoolSummaryTx {
+  hash: string;
+  txIndex: number;
+  fee: number;
+  txSize: number;
+  isCellbase: boolean;
+}
+
+export interface MempoolSummaryResponse {
+  pending: MempoolTransaction[];
+  proposals: PendingProposal[];
+  tipBlock: MempoolSummaryBlock | null;
+  tipBlockTxs: MempoolSummaryTx[];
+}
+
 interface BlockFeeStats {
   blockNumber: number;
   totalSize: number;
@@ -1324,6 +1346,10 @@ export const api = {
 
   getPendingProposals: (): Promise<PendingProposalsResponse> => {
     return fetchApi('/mempool/pending-proposals');
+  },
+
+  getMempoolSummary: (): Promise<MempoolSummaryResponse> => {
+    return fetchApi('/mempool/summary');
   },
 
   getActiveTasks: (): Promise<ActiveTasksResponse> => {

@@ -30,8 +30,8 @@ export function HomeContent({ initialData }: HomeContentProps) {
     queryKey: ['network-stats'],
     queryFn: () => api.getNetworkStats(),
     initialData: initialData.stats ?? undefined,
-    staleTime: 0,
-    refetchInterval: 10000,
+    staleTime: 5000,
+    refetchInterval: isConnected ? 30000 : 10000,
   });
 
   return (
@@ -59,7 +59,7 @@ export function HomeContent({ initialData }: HomeContentProps) {
       </div>
 
       <div className="mt-6">
-        <ChainWave initialBlocks={initialData.blocks} />
+        <ChainWave />
       </div>
 
       <div className="mt-8 grid gap-6 lg:grid-cols-2">

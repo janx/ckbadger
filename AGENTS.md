@@ -490,18 +490,26 @@ The API uses Redis caching to reduce ClickHouse query load for statistics endpoi
 
 | Endpoint Type     | Cache Key Prefix      | TTL    | Description                     |
 | ----------------- | --------------------- | ------ | ------------------------------- |
-| Chart data        | `chart:*`             | 5 min  | Historical charts (30 days)     |
+| Network stats     | `stats:network`       | 5 sec  | Network stats (hash rate, etc)  |
 | Transaction stats | `stats:tx_stats`      | 1 min  | Hourly/daily transaction counts |
 | Recent blocks     | `stats:recent_blocks` | 10 sec | Latest 10 blocks                |
+| Chart data        | `chart:*`             | 5 min  | Historical charts (30 days)     |
 
 **Cached Endpoints:**
 
+- `GET /statistics/network` - Network stats (cached 5s, reduces RPC calls)
 - `GET /statistics/tx-stats` - Transaction count charts
 - `GET /statistics/recent-blocks` - Recent blocks list
 - `GET /charts/transaction-count` - Daily transaction counts
 - `GET /charts/cell-count` - Daily cell creation counts
 - `GET /charts/average-block-time` - Daily average block time
 - `GET /charts/hash-rate` - Daily hash rate
+
+**Mempool Summary Endpoint:**
+
+- `GET /mempool/summary` - Combined endpoint for homepage ChainWave visualization
+  - Returns pending transactions, proposals, tip block, and tip block transactions
+  - Reduces 4 API calls to 1 for the ChainWave component
 
 **Cache Warmup:**
 
@@ -523,6 +531,16 @@ Configured in `docker/clickhouse-users.xml`:
 1. **Window functions**: Average block time uses `leadInFrame()` instead of O(n²) self-join
 2. **Time range filters**: Chart queries limited to last 30 days (`- 2592000000` ms)
 3. **Materialized views**: `migrations/clickhouse/002_materialized_views.sql` defines pre-aggregated views
+
+**Materialized Views:**
+
+| View                   | Purpose                       | Used By                 |
+| ---------------------- | ----------------------------- | ----------------------- |
+| `mv_daily_tx_count`    | Daily transaction counts      | Transaction count chart |
+| `mv_daily_cell_count`  | Daily cell creation counts    | Cell count chart        |
+| `mv_daily_block_stats` | Daily block stats (hash rate) | Hash rate/difficulty    |
+| `mv_hourly_tx_count`   | Hourly transaction counts     | TX Stats (24h chart)    |
+| `mv_five_min_tx_count` | 5-minute transaction counts   | TX Stats (hourly chart) |
 
 ```bash
 # Build API with Redis cache support

@@ -324,4 +324,56 @@ export const handlers = [
       indexRebuild: null,
     });
   }),
+
+  http.get(`${API_BASE}/mempool/summary`, () => {
+    return HttpResponse.json({
+      pending: [
+        {
+          txHash: '0xpending123',
+          fee: 1000,
+          size: 500,
+          cycles: 10000,
+          feeRate: 2.0,
+          ancestorsCount: 0,
+          timestamp: 1704067200,
+          status: 'pending',
+        },
+      ],
+      proposals: [
+        {
+          proposalId: '0xproposal',
+          fullTxHash: '0xfull123',
+          proposedAtBlock: 12345,
+          proposedAtIndex: 0,
+          blocksUntilExpiry: 10,
+          fee: 1000,
+          size: 500,
+          cycles: 10000,
+          feeRate: 2.0,
+        },
+      ],
+      tipBlock: {
+        number: 12345,
+        hash: '0xblockhash123',
+        timestamp: 1704067200000,
+        transactionsCount: 5,
+      },
+      tipBlockTxs: [
+        {
+          hash: '0xtx1',
+          txIndex: 0,
+          fee: 0,
+          txSize: 200,
+          isCellbase: true,
+        },
+        {
+          hash: '0xtx2',
+          txIndex: 1,
+          fee: 1000,
+          txSize: 500,
+          isCellbase: false,
+        },
+      ],
+    });
+  }),
 ];

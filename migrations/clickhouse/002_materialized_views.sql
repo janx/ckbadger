@@ -50,3 +50,33 @@ AS SELECT
 FROM blocks_all b
 INNER JOIN canonical_blocks c ON b.number = c.number AND b.hash = c.block_hash
 GROUP BY date;
+
+
+-- ---- mv_hourly_tx_count ----
+-- Materialized view for hourly transaction counts (for TX Stats)
+CREATE MATERIALIZED VIEW IF NOT EXISTS mv_hourly_tx_count
+ENGINE = SummingMergeTree()
+ORDER BY (hour_bucket)
+POPULATE
+AS SELECT
+    toStartOfHour(fromUnixTimestamp64Milli(b.timestamp)) as hour_bucket,
+    count() as tx_count
+FROM transactions_all t
+INNER JOIN canonical_blocks c ON t.block_number = c.number AND t.block_hash = c.block_hash
+INNER JOIN blocks_all b ON c.number = b.number AND c.block_hash = b.hash
+GROUP BY hour_bucket;
+
+
+-- ---- mv_five_min_tx_count ----
+-- Materialized view for 5-minute transaction counts (for TX Stats hourly chart)
+CREATE MATERIALIZED VIEW IF NOT EXISTS mv_five_min_tx_count
+ENGINE = SummingMergeTree()
+ORDER BY (five_min_bucket)
+POPULATE
+AS SELECT
+    toStartOfFiveMinutes(fromUnixTimestamp64Milli(b.timestamp)) as five_min_bucket,
+    count() as tx_count
+FROM transactions_all t
+INNER JOIN canonical_blocks c ON t.block_number = c.number AND t.block_hash = c.block_hash
+INNER JOIN blocks_all b ON c.number = b.number AND c.block_hash = b.hash
+GROUP BY five_min_bucket;
