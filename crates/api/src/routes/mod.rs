@@ -9,7 +9,7 @@ mod mempool;
 mod scripts;
 mod search;
 mod spore;
-mod statistics;
+pub mod statistics;
 mod tasks;
 mod tokens;
 mod transactions;

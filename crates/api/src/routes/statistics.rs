@@ -1,10 +1,24 @@
 use axum::{extract::State, routing::get, Router};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::response::{ok, ApiError, ApiResult};
 use crate::rpc::{parse_hex_u64, CkbRpcClient};
 use crate::AppState;
+
+// Cache TTLs for different data types
+const CACHE_TTL_CHART_SECS: u64 = 300; // 5 minutes for historical charts
+const CACHE_TTL_TX_STATS_SECS: u64 = 60; // 1 minute for tx stats
+const CACHE_TTL_RECENT_BLOCKS_SECS: u64 = 10; // 10 seconds for recent blocks
+
+// Cache key prefixes
+const CACHE_KEY_TX_STATS: &str = "stats:tx_stats";
+const CACHE_KEY_RECENT_BLOCKS: &str = "stats:recent_blocks";
+const CACHE_KEY_CHART_TX_COUNT: &str = "chart:transaction_count";
+const CACHE_KEY_CHART_CELL_COUNT: &str = "chart:cell_count";
+const CACHE_KEY_CHART_AVG_BLOCK_TIME: &str = "chart:avg_block_time";
+const CACHE_KEY_CHART_HASH_RATE: &str = "chart:hash_rate";
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -91,7 +105,7 @@ pub struct DeepForkStatusResponse {
     pub fork_point: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TxStatsResponse {
     pub current_hour: u64,
@@ -100,14 +114,14 @@ pub struct TxStatsResponse {
     pub daily_data: Vec<TxStatsDataPoint>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TxStatsDataPoint {
     pub label: String,
     pub value: u64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecentBlockResponse {
     pub number: u64,
@@ -116,14 +130,14 @@ pub struct RecentBlockResponse {
     pub transactions_count: u32,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChartDataPoint {
     pub date: String,
     pub value: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChartResponse {
     pub data: Vec<ChartDataPoint>,
@@ -317,6 +331,10 @@ async fn get_network_stats(State(state): State<Arc<AppState>>) -> ApiResult<Netw
 }
 
 async fn get_tx_stats(State(state): State<Arc<AppState>>) -> ApiResult<TxStatsResponse> {
+    if let Some(cached) = state.cache.get::<TxStatsResponse>(CACHE_KEY_TX_STATS).await {
+        return ok(cached);
+    }
+
     let hourly_query = r#"
         SELECT 
             formatDateTime(fromUnixTimestamp64Milli(b.timestamp), '%H:%M') as hour_label,
@@ -365,17 +383,36 @@ async fn get_tx_stats(State(state): State<Arc<AppState>>) -> ApiResult<TxStatsRe
         })
         .collect();
 
-    ok(TxStatsResponse {
+    let response = TxStatsResponse {
         current_hour,
         current_day,
         hourly_data,
         daily_data,
-    })
+    };
+
+    state
+        .cache
+        .set(
+            CACHE_KEY_TX_STATS,
+            &response,
+            Duration::from_secs(CACHE_TTL_TX_STATS_SECS),
+        )
+        .await;
+
+    ok(response)
 }
 
 async fn get_recent_blocks(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<Vec<RecentBlockResponse>> {
+    if let Some(cached) = state
+        .cache
+        .get::<Vec<RecentBlockResponse>>(CACHE_KEY_RECENT_BLOCKS)
+        .await
+    {
+        return ok(cached);
+    }
+
     let query = r#"
         SELECT 
             b.number as number,
@@ -404,12 +441,29 @@ async fn get_recent_blocks(
         })
         .collect();
 
+    state
+        .cache
+        .set(
+            CACHE_KEY_RECENT_BLOCKS,
+            &blocks,
+            Duration::from_secs(CACHE_TTL_RECENT_BLOCKS_SECS),
+        )
+        .await;
+
     ok(blocks)
 }
 
 async fn get_transaction_count_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<Vec<ChartDataPoint>> {
+    if let Some(cached) = state
+        .cache
+        .get::<Vec<ChartDataPoint>>(CACHE_KEY_CHART_TX_COUNT)
+        .await
+    {
+        return ok(cached);
+    }
+
     let query = r#"
         SELECT 
             toString(toDate(fromUnixTimestamp64Milli(b.timestamp))) as date,
@@ -417,6 +471,7 @@ async fn get_transaction_count_chart(
         FROM transactions_all t
         INNER JOIN canonical_blocks c ON t.block_number = c.number AND t.block_hash = c.block_hash
         INNER JOIN blocks_all b ON c.number = b.number AND c.block_hash = b.hash
+        WHERE b.timestamp >= toUnixTimestamp64Milli(now64(3)) - 2592000000
         GROUP BY date
         ORDER BY date DESC
         LIMIT 30
@@ -436,12 +491,29 @@ async fn get_transaction_count_chart(
         })
         .collect();
 
+    state
+        .cache
+        .set(
+            CACHE_KEY_CHART_TX_COUNT,
+            &data,
+            Duration::from_secs(CACHE_TTL_CHART_SECS),
+        )
+        .await;
+
     ok(data)
 }
 
 async fn get_cell_count_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<Vec<ChartDataPoint>> {
+    if let Some(cached) = state
+        .cache
+        .get::<Vec<ChartDataPoint>>(CACHE_KEY_CHART_CELL_COUNT)
+        .await
+    {
+        return ok(cached);
+    }
+
     let query = r#"
         SELECT 
             toString(toDate(fromUnixTimestamp64Milli(b.timestamp))) as date,
@@ -449,6 +521,7 @@ async fn get_cell_count_chart(
         FROM cell_outputs_all co
         INNER JOIN canonical_blocks c ON co.block_number = c.number AND co.block_hash = c.block_hash
         INNER JOIN blocks_all b ON c.number = b.number AND c.block_hash = b.hash
+        WHERE b.timestamp >= toUnixTimestamp64Milli(now64(3)) - 2592000000
         GROUP BY date
         ORDER BY date DESC
         LIMIT 30
@@ -467,6 +540,15 @@ async fn get_cell_count_chart(
             value: r.count.to_string(),
         })
         .collect();
+
+    state
+        .cache
+        .set(
+            CACHE_KEY_CHART_CELL_COUNT,
+            &data,
+            Duration::from_secs(CACHE_TTL_CHART_SECS),
+        )
+        .await;
 
     ok(data)
 }
@@ -512,14 +594,29 @@ async fn get_epoch_time_length_chart(
 async fn get_average_block_time_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<ChartResponse> {
+    if let Some(cached) = state
+        .cache
+        .get::<ChartResponse>(CACHE_KEY_CHART_AVG_BLOCK_TIME)
+        .await
+    {
+        return ok(cached);
+    }
+
+    // Optimized: use leadInFrame window function instead of self-join
+    // This reduces O(n²) to O(n) by computing next block's timestamp in single pass
     let query = r#"
         SELECT 
-            toString(toDate(fromUnixTimestamp64Milli(b2.timestamp))) as date,
-            avg(b2.timestamp - b1.timestamp) / 1000.0 as avg_time
-        FROM blocks_all b1
-        INNER JOIN canonical_blocks c1 ON b1.number = c1.number AND b1.hash = c1.block_hash
-        INNER JOIN blocks_all b2 ON b2.number = b1.number + 1
-        INNER JOIN canonical_blocks c2 ON b2.number = c2.number AND b2.hash = c2.block_hash
+            date,
+            avg(block_time) / 1000.0 as avg_time
+        FROM (
+            SELECT 
+                toString(toDate(fromUnixTimestamp64Milli(b.timestamp))) as date,
+                leadInFrame(b.timestamp, 1) OVER (ORDER BY b.number) - b.timestamp as block_time
+            FROM blocks_all b
+            INNER JOIN canonical_blocks c ON b.number = c.number AND b.hash = c.block_hash
+            WHERE b.timestamp >= toUnixTimestamp64Milli(now64(3)) - 2592000000
+        )
+        WHERE block_time > 0 AND block_time < 600000
         GROUP BY date
         ORDER BY date DESC
         LIMIT 30
@@ -536,20 +633,40 @@ async fn get_average_block_time_chart(
         })
         .collect();
 
-    ok(ChartResponse {
+    let response = ChartResponse {
         data,
         title: "Average Block Time".to_string(),
         y_axis_label: "Seconds".to_string(),
-    })
+    };
+
+    state
+        .cache
+        .set(
+            CACHE_KEY_CHART_AVG_BLOCK_TIME,
+            &response,
+            Duration::from_secs(CACHE_TTL_CHART_SECS),
+        )
+        .await;
+
+    ok(response)
 }
 
 async fn get_hash_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
+    if let Some(cached) = state
+        .cache
+        .get::<ChartResponse>(CACHE_KEY_CHART_HASH_RATE)
+        .await
+    {
+        return ok(cached);
+    }
+
     let query = r#"
         SELECT 
             toString(toDate(fromUnixTimestamp64Milli(b.timestamp))) as date,
             avg(b.difficulty) * 2.0 / 1.4 as hash_rate
         FROM blocks_all b
         INNER JOIN canonical_blocks c ON b.number = c.number AND b.hash = c.block_hash
+        WHERE b.timestamp >= toUnixTimestamp64Milli(now64(3)) - 2592000000
         GROUP BY date
         ORDER BY date DESC
         LIMIT 30
@@ -566,11 +683,22 @@ async fn get_hash_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<Ch
         })
         .collect();
 
-    ok(ChartResponse {
+    let response = ChartResponse {
         data,
         title: "Hash Rate".to_string(),
         y_axis_label: "H/s".to_string(),
-    })
+    };
+
+    state
+        .cache
+        .set(
+            CACHE_KEY_CHART_HASH_RATE,
+            &response,
+            Duration::from_secs(CACHE_TTL_CHART_SECS),
+        )
+        .await;
+
+    ok(response)
 }
 
 async fn get_difficulty_chart(State(_state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {

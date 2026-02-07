@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<clickhouse>
+    <profiles>
+        <default>
+            <!-- Memory limit per query: 4GB -->
+            <max_memory_usage>4000000000</max_memory_usage>
+            <!-- Memory limit for all queries by user: 16GB -->
+            <max_memory_usage_for_user>16000000000</max_memory_usage_for_user>
+            <!-- Max concurrent queries per user -->
+            <max_concurrent_queries_for_user>10</max_concurrent_queries_for_user>
+            <!-- Query timeout: 60 seconds -->
+            <max_execution_time>60</max_execution_time>
+            <!-- Background merges priority -->
+            <background_pool_size>16</background_pool_size>
+        </default>
+    </profiles>
+</clickhouse>

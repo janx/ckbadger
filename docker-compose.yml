@@ -21,7 +21,7 @@ services:
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
     volumes:
       - clickhouse-data:/var/lib/clickhouse
-      - ./migrations/clickhouse:/docker-entrypoint-initdb.d
+      - ./docker/clickhouse-users.xml:/etc/clickhouse-server/users.d/users.xml:ro
     ports:
       - '8123:8123'
       - '9000:9000'
