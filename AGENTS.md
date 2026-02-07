@@ -218,7 +218,7 @@ The indexer uses ClickHouse as the sole data store with the following design pri
 | --------------------- | ------------------------------------------------------------------------------- | ------------------ | ------------------------------------- |
 | **Immutable Facts**   | blocks_all, transactions_all, cell_outputs_all, cell_inputs_all, activities_all | MergeTree          | Store ALL data (canonical + orphaned) |
 | **Canonical Mapping** | canonical_blocks                                                                | ReplacingMergeTree | Track current canonical chain         |
-| **State Snapshots**   | cell_state                                                                      | ReplacingMergeTree | Track current cell state              |
+| **State Snapshots**   | cell_state, dao_deposits                                                        | ReplacingMergeTree | Track current cell/deposit state      |
 
 ### Sync Performance
 

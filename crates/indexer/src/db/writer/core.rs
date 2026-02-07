@@ -4,10 +4,9 @@ use crate::cache::CacheInvalidator;
 use crate::db::{ClickHouseClient, DynLiveCellStorage};
 
 use super::rows::{
-    ActivityRow, BlockRow, CellInputRow, CellOutputRow, CellStateRow, TransactionRow,
+    ActivityRow, BlockRow, CellInputRow, CellOutputRow, CellStateRow, DaoDepositRow, TransactionRow,
 };
 
-/// Batch data for writing to ClickHouse in a single operation.
 #[derive(Debug, Default)]
 pub struct BatchData {
     pub blocks: Vec<BlockRow>,
@@ -16,7 +15,8 @@ pub struct BatchData {
     pub cell_inputs: Vec<CellInputRow>,
     pub activities: Vec<ActivityRow>,
     pub cell_states: Vec<CellStateRow>,
-    pub canonical_mappings: Vec<(u64, Vec<u8>, u64)>, // (number, block_hash, canon_version)
+    pub dao_deposits: Vec<DaoDepositRow>,
+    pub canonical_mappings: Vec<(u64, Vec<u8>, u64)>,
 }
 
 impl BatchData {
@@ -24,7 +24,6 @@ impl BatchData {
         Self::default()
     }
 
-    /// Returns true if all vectors are empty.
     pub fn is_empty(&self) -> bool {
         self.blocks.is_empty()
             && self.transactions.is_empty()
@@ -32,10 +31,10 @@ impl BatchData {
             && self.cell_inputs.is_empty()
             && self.activities.is_empty()
             && self.cell_states.is_empty()
+            && self.dao_deposits.is_empty()
             && self.canonical_mappings.is_empty()
     }
 
-    /// Returns the total number of rows across all tables.
     pub fn total_rows(&self) -> usize {
         self.blocks.len()
             + self.transactions.len()
@@ -43,6 +42,7 @@ impl BatchData {
             + self.cell_inputs.len()
             + self.activities.len()
             + self.cell_states.len()
+            + self.dao_deposits.len()
             + self.canonical_mappings.len()
     }
 }
@@ -104,10 +104,6 @@ impl BatchWriter {
         self.fast_sync_mode
     }
 
-    /// Write all batch data to ClickHouse tables in parallel.
-    ///
-    /// Uses `tokio::try_join!` to execute writes to multiple tables concurrently.
-    /// Returns early if any write fails.
     pub async fn write_batch(&self, batch: &BatchData) -> Result<()> {
         if batch.is_empty() {
             return Ok(());
@@ -120,6 +116,7 @@ impl BatchWriter {
             self.write_cell_inputs(&batch.cell_inputs),
             self.write_activities(&batch.activities),
             self.write_cell_states(&batch.cell_states),
+            self.write_dao_deposits(&batch.dao_deposits),
             self.write_canonical_blocks(&batch.canonical_mappings),
         )
         .context("Failed to write batch to ClickHouse")?;

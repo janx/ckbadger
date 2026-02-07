@@ -1,7 +1,9 @@
 #![allow(dead_code)]
 
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 
+use super::rows::DaoDepositRow;
 use super::BatchWriter;
 
 pub trait DaoWithdrawalContextTrait {
@@ -20,4 +22,30 @@ pub struct SecondaryIssuanceBreakdown {
     pub burnt: i64,
 }
 
-impl BatchWriter {}
+impl BatchWriter {
+    pub async fn write_dao_deposits(&self, dao_deposits: &[DaoDepositRow]) -> Result<()> {
+        if dao_deposits.is_empty() {
+            return Ok(());
+        }
+
+        let mut insert = self
+            .client
+            .insert::<DaoDepositRow>("dao_deposits")
+            .await
+            .context("Failed to create dao_deposits insert")?;
+
+        for deposit in dao_deposits {
+            insert
+                .write(deposit)
+                .await
+                .context("Failed to write dao_deposit row")?;
+        }
+
+        insert
+            .end()
+            .await
+            .context("Failed to finalize dao_deposits insert")?;
+
+        Ok(())
+    }
+}

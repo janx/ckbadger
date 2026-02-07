@@ -10,9 +10,10 @@ use crate::cache::{CacheInvalidator, CellInfoCache};
 use crate::config::Config;
 use crate::db::writer::{
     u64_to_u256_bytes, ActivityRow, BatchData, BatchWriter, BlockRow, CellInputRow, CellOutputRow,
-    CellStateRow, TransactionRow,
+    CellStateRow, DaoDepositRow, TransactionRow,
 };
 use crate::db::{ClickHouseClient, LiveCellInfo, MemoryStats};
+use crate::parser::dao::{DaoParser, DAO_CODE_HASH};
 use crate::rpc::{BlockView, CkbRpcClient, Script, TransactionView};
 use crate::state::CanonVersionManager;
 
@@ -425,6 +426,11 @@ impl Indexer {
         let mut cell_output_rows = Vec::new();
         let mut cell_input_rows = Vec::new();
         let mut cell_state_rows = Vec::new();
+        let mut dao_deposits = Vec::new();
+
+        let dao_code_hash = parse_hex_bytes32(DAO_CODE_HASH)?;
+        let dao_field = parse_hex_bytes32(&block.header.dao)?;
+        let block_ar = DaoParser::extract_ar_from_dao_field(&dao_field).unwrap_or(0);
 
         for (tx_index, tx) in block.transactions.iter().enumerate() {
             let tx_hash = parse_hex_bytes32(&tx.hash)?;
@@ -498,6 +504,23 @@ impl Indexer {
                 };
                 self.cell_cache
                     .insert(tx_hash.to_vec(), output_index as i16, cell_info);
+
+                if type_code_hash == dao_code_hash
+                    && data_bytes.len() == 8
+                    && data_bytes == [0u8; 8]
+                {
+                    let dao_row = DaoDepositRow::new_deposit(
+                        tx_hash,
+                        output_index as u16,
+                        canon_version,
+                        lock_script_hash,
+                        capacity,
+                        block_number,
+                        block_timestamp_ms,
+                        block_ar,
+                    );
+                    dao_deposits.push(dao_row);
+                }
             }
 
             if !is_cellbase {
@@ -550,6 +573,7 @@ impl Indexer {
             cell_inputs: cell_input_rows,
             activities,
             cell_states: cell_state_rows,
+            dao_deposits,
             canonical_mappings: vec![(block_number, block_hash.to_vec(), canon_version)],
         };
 
@@ -573,7 +597,10 @@ impl Indexer {
         let mut all_input_rows = Vec::new();
         let mut all_cell_state_rows = Vec::new();
         let mut all_activities = Vec::new();
+        let mut all_dao_deposits = Vec::new();
         let mut all_canonical_mappings = Vec::with_capacity(blocks.len());
+
+        let dao_code_hash = parse_hex_bytes32(DAO_CODE_HASH)?;
 
         for block in blocks {
             let block_number = parse_hex_u64(&block.header.number)?;
@@ -656,6 +683,26 @@ impl Indexer {
                     };
                     self.cell_cache
                         .insert(tx_hash.to_vec(), output_index as i16, cell_info);
+
+                    if type_code_hash == dao_code_hash && data_bytes.len() == 8 {
+                        let dao_field = parse_hex_bytes32(&block.header.dao)?;
+                        let deposit_ar =
+                            DaoParser::extract_ar_from_dao_field(&dao_field).unwrap_or(0);
+
+                        if data_bytes == [0u8; 8] {
+                            let dao_row = DaoDepositRow::new_deposit(
+                                tx_hash,
+                                output_index as u16,
+                                canon_version,
+                                lock_script_hash,
+                                capacity,
+                                block_number,
+                                block_timestamp_ms,
+                                deposit_ar,
+                            );
+                            all_dao_deposits.push(dao_row);
+                        }
+                    }
                 }
 
                 if !is_cellbase {
@@ -712,6 +759,7 @@ impl Indexer {
             cell_inputs: all_input_rows,
             activities: all_activities,
             cell_states: all_cell_state_rows,
+            dao_deposits: all_dao_deposits,
             canonical_mappings: all_canonical_mappings,
         };
 

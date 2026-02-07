@@ -502,6 +502,132 @@ pub fn datetime_to_millis(dt: chrono::DateTime<chrono::Utc>) -> i64 {
     dt.timestamp_millis()
 }
 
+// =============================================================================
+// dao_deposits
+// =============================================================================
+
+/// Row for `dao_deposits` table (ReplacingMergeTree).
+/// Tracks DAO deposit lifecycle: deposit → withdraw_request → withdrawn.
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct DaoDepositRow {
+    pub tx_hash: [u8; 32],
+    pub output_index: u16,
+    pub canon_version: u64,
+    pub lock_script_hash: [u8; 32],
+    pub capacity: u64,
+    pub deposit_block_number: u64,
+    pub deposit_tx_hash: [u8; 32],
+    pub deposit_timestamp: i64,
+    pub deposit_ar: u64,
+    pub status: u8,
+    pub withdraw_request_block: u64,
+    pub withdraw_request_tx: [u8; 32],
+    pub withdraw_request_timestamp: i64,
+    pub withdraw_request_ar: u64,
+    pub withdraw_block: u64,
+    pub withdraw_tx: [u8; 32],
+    pub withdraw_timestamp: i64,
+    pub compensation: u64,
+    pub updated_at: i64,
+}
+
+impl Default for DaoDepositRow {
+    fn default() -> Self {
+        Self {
+            tx_hash: EMPTY_HASH,
+            output_index: 0,
+            canon_version: 0,
+            lock_script_hash: EMPTY_HASH,
+            capacity: 0,
+            deposit_block_number: 0,
+            deposit_tx_hash: EMPTY_HASH,
+            deposit_timestamp: 0,
+            deposit_ar: 0,
+            status: 0,
+            withdraw_request_block: 0,
+            withdraw_request_tx: EMPTY_HASH,
+            withdraw_request_timestamp: 0,
+            withdraw_request_ar: 0,
+            withdraw_block: 0,
+            withdraw_tx: EMPTY_HASH,
+            withdraw_timestamp: 0,
+            compensation: 0,
+            updated_at: 0,
+        }
+    }
+}
+
+impl DaoDepositRow {
+    pub fn new_deposit(
+        tx_hash: [u8; 32],
+        output_index: u16,
+        canon_version: u64,
+        lock_script_hash: [u8; 32],
+        capacity: u64,
+        deposit_block_number: u64,
+        deposit_timestamp: i64,
+        deposit_ar: u64,
+    ) -> Self {
+        Self {
+            tx_hash,
+            output_index,
+            canon_version,
+            lock_script_hash,
+            capacity,
+            deposit_block_number,
+            deposit_tx_hash: tx_hash,
+            deposit_timestamp,
+            deposit_ar,
+            status: 0,
+            withdraw_request_block: 0,
+            withdraw_request_tx: EMPTY_HASH,
+            withdraw_request_timestamp: 0,
+            withdraw_request_ar: 0,
+            withdraw_block: 0,
+            withdraw_tx: EMPTY_HASH,
+            withdraw_timestamp: 0,
+            compensation: 0,
+            updated_at: deposit_timestamp,
+        }
+    }
+
+    pub fn with_withdraw_request(
+        mut self,
+        canon_version: u64,
+        withdraw_request_block: u64,
+        withdraw_request_tx: [u8; 32],
+        withdraw_request_timestamp: i64,
+        withdraw_request_ar: u64,
+    ) -> Self {
+        self.canon_version = canon_version;
+        self.status = 1;
+        self.withdraw_request_block = withdraw_request_block;
+        self.withdraw_request_tx = withdraw_request_tx;
+        self.withdraw_request_timestamp = withdraw_request_timestamp;
+        self.withdraw_request_ar = withdraw_request_ar;
+        self.updated_at = withdraw_request_timestamp;
+        self
+    }
+
+    pub fn with_withdrawal_complete(
+        mut self,
+        canon_version: u64,
+        withdraw_block: u64,
+        withdraw_tx: [u8; 32],
+        withdraw_timestamp: i64,
+        compensation: u64,
+    ) -> Self {
+        self.canon_version = canon_version;
+        self.status = 2;
+        self.withdraw_block = withdraw_block;
+        self.withdraw_tx = withdraw_tx;
+        self.withdraw_timestamp = withdraw_timestamp;
+        self.compensation = compensation;
+        self.updated_at = withdraw_timestamp;
+        self
+    }
+}
+
 /// Convert Unix timestamp (seconds) to milliseconds.
 #[inline]
 pub fn secs_to_millis(secs: u64) -> i64 {
@@ -555,5 +681,101 @@ mod tests {
         assert_eq!(result[0], 0x08);
         assert_eq!(result[7], 0x01);
         assert_eq!(result[8], 0);
+    }
+
+    #[test]
+    fn test_dao_deposit_row_new_deposit() {
+        let tx_hash = [1u8; 32];
+        let lock_script_hash = [2u8; 32];
+        let row = DaoDepositRow::new_deposit(
+            tx_hash,
+            0,
+            1,
+            lock_script_hash,
+            200_00000000,
+            12345,
+            1704067200000,
+            10_000_000_000_000_000,
+        );
+
+        assert_eq!(row.tx_hash, tx_hash);
+        assert_eq!(row.output_index, 0);
+        assert_eq!(row.canon_version, 1);
+        assert_eq!(row.lock_script_hash, lock_script_hash);
+        assert_eq!(row.capacity, 200_00000000);
+        assert_eq!(row.deposit_block_number, 12345);
+        assert_eq!(row.deposit_tx_hash, tx_hash);
+        assert_eq!(row.deposit_ar, 10_000_000_000_000_000);
+        assert_eq!(row.status, 0);
+        assert_eq!(row.withdraw_request_block, 0);
+        assert_eq!(row.withdraw_request_tx, EMPTY_HASH);
+    }
+
+    #[test]
+    fn test_dao_deposit_row_with_withdraw_request() {
+        let tx_hash = [1u8; 32];
+        let lock_script_hash = [2u8; 32];
+        let withdraw_tx = [3u8; 32];
+
+        let row = DaoDepositRow::new_deposit(
+            tx_hash,
+            0,
+            1,
+            lock_script_hash,
+            200_00000000,
+            12345,
+            1704067200000,
+            10_000_000_000_000_000,
+        )
+        .with_withdraw_request(
+            2,
+            12400,
+            withdraw_tx,
+            1704153600000,
+            10_100_000_000_000_000,
+        );
+
+        assert_eq!(row.status, 1);
+        assert_eq!(row.canon_version, 2);
+        assert_eq!(row.withdraw_request_block, 12400);
+        assert_eq!(row.withdraw_request_tx, withdraw_tx);
+        assert_eq!(row.withdraw_request_ar, 10_100_000_000_000_000);
+        assert_eq!(row.withdraw_block, 0);
+    }
+
+    #[test]
+    fn test_dao_deposit_row_with_withdrawal_complete() {
+        let tx_hash = [1u8; 32];
+        let lock_script_hash = [2u8; 32];
+        let withdraw_tx = [3u8; 32];
+        let complete_tx = [4u8; 32];
+
+        let row = DaoDepositRow::new_deposit(
+            tx_hash,
+            0,
+            1,
+            lock_script_hash,
+            200_00000000,
+            12345,
+            1704067200000,
+            10_000_000_000_000_000,
+        )
+        .with_withdraw_request(2, 12400, withdraw_tx, 1704153600000, 10_100_000_000_000_000)
+        .with_withdrawal_complete(3, 12580, complete_tx, 1704240000000, 980000000);
+
+        assert_eq!(row.status, 2);
+        assert_eq!(row.canon_version, 3);
+        assert_eq!(row.withdraw_block, 12580);
+        assert_eq!(row.withdraw_tx, complete_tx);
+        assert_eq!(row.compensation, 980000000);
+    }
+
+    #[test]
+    fn test_dao_deposit_row_default() {
+        let row = DaoDepositRow::default();
+        assert_eq!(row.tx_hash, EMPTY_HASH);
+        assert_eq!(row.output_index, 0);
+        assert_eq!(row.status, 0);
+        assert_eq!(row.capacity, 0);
     }
 }
