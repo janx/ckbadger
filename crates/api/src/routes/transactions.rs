@@ -15,6 +15,8 @@ use crate::AppState;
 
 const CACHE_TTL_TX_LIST_SECS: u64 = 5;
 const CACHE_KEY_TX_LIST: &str = "transactions:list";
+const CACHE_TTL_TX_DETAIL_SECS: u64 = 60;
+const CACHE_KEY_TX_DETAIL: &str = "tx:detail";
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -125,7 +127,7 @@ impl From<TransactionQueryRow> for TransactionResponse {
 // Transaction Detail Types (inputs/outputs)
 // ============================================
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TransactionDetailResponse {
     #[serde(flatten)]
@@ -134,20 +136,19 @@ pub struct TransactionDetailResponse {
     pub outputs: Vec<TransactionOutputResponse>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TransactionInputResponse {
     pub input_index: u16,
     pub previous_tx_hash: String,
     pub previous_output_index: u16,
     pub since: String,
-    // Resolved cell info (if available)
     pub capacity: Option<u64>,
     pub lock_script_hash: Option<String>,
     pub type_script_hash: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TransactionOutputResponse {
     pub output_index: u16,
@@ -380,7 +381,7 @@ async fn list_transactions(
          t.total_input_capacity, t.total_output_capacity, t.fee, t.tx_size, t.cycles, t.is_cellbase, \
          t.timestamp \
          FROM transactions_all t \
-         INNER JOIN canonical_blocks c ON t.block_number = c.number AND t.block_hash = c.block_hash \
+         INNER JOIN canonical_blocks FINAL c ON t.block_number = c.number AND t.block_hash = c.block_hash \
          WHERE 1=1 {} \
          ORDER BY t.block_number DESC, t.tx_index DESC \
          LIMIT {}",
@@ -439,16 +440,22 @@ async fn get_transaction(
         return Err(ApiError::bad_request("Transaction hash must be 32 bytes"));
     }
 
+    // Check cache first
+    let cache_key = format!("{}:{}", CACHE_KEY_TX_DETAIL, hash.to_lowercase());
+    if let Some(cached) = state.cache.get::<TransactionResponse>(&cache_key).await {
+        return ok(cached);
+    }
+
     let query = format!(
         "SELECT t.hash, t.block_number, t.block_hash, t.tx_index, t.version, \
          t.inputs_count, t.outputs_count, t.witnesses_count, t.cell_deps_count, t.header_deps_count, \
          t.total_input_capacity, t.total_output_capacity, t.fee, t.tx_size, t.cycles, t.is_cellbase, \
          t.timestamp \
          FROM transactions_all t \
-         INNER JOIN canonical_blocks c ON t.block_number = c.number AND t.block_hash = c.block_hash \
+         INNER JOIN canonical_blocks FINAL c ON t.block_number = c.number AND t.block_hash = c.block_hash \
          WHERE t.hash = unhex('{}') \
          LIMIT 1",
-        hex::encode(hash_bytes)
+        hex::encode(&hash_bytes)
     );
 
     let row: Option<TransactionQueryRow> = state
@@ -458,7 +465,19 @@ async fn get_transaction(
         .map_err(|e| ApiError::internal(format!("Failed to query transaction: {}", e)))?;
 
     match row {
-        Some(r) => ok(r.into()),
+        Some(r) => {
+            let response: TransactionResponse = r.into();
+            // Cache the result
+            state
+                .cache
+                .set(
+                    &cache_key,
+                    &response,
+                    Duration::from_secs(CACHE_TTL_TX_DETAIL_SECS),
+                )
+                .await;
+            ok(response)
+        }
         None => Err(ApiError::not_found("Transaction not found")),
     }
 }
@@ -476,6 +495,16 @@ async fn get_transaction_detail(
     if hash_bytes.len() != 32 {
         return Err(ApiError::bad_request("Transaction hash must be 32 bytes"));
     }
+
+    let cache_key = format!("{}:detail:{}", CACHE_KEY_TX_DETAIL, hash.to_lowercase());
+    if let Some(cached) = state
+        .cache
+        .get::<TransactionDetailResponse>(&cache_key)
+        .await
+    {
+        return ok(cached);
+    }
+
     let hash_hex = hex::encode(&hash_bytes);
 
     let tx_query = format!(
@@ -484,7 +513,7 @@ async fn get_transaction_detail(
          t.total_input_capacity, t.total_output_capacity, t.fee, t.tx_size, t.cycles, t.is_cellbase, \
          t.timestamp \
          FROM transactions_all t \
-         INNER JOIN canonical_blocks c ON t.block_number = c.number AND t.block_hash = c.block_hash \
+         INNER JOIN canonical_blocks FINAL c ON t.block_number = c.number AND t.block_hash = c.block_hash \
          WHERE t.hash = unhex('{}') \
          LIMIT 1",
         hash_hex
@@ -505,7 +534,7 @@ async fn get_transaction_detail(
     let inputs_query = format!(
         "SELECT i.input_index, i.previous_tx_hash, i.previous_output_index, i.since \
          FROM cell_inputs_all i \
-         INNER JOIN canonical_blocks c ON i.tx_block_number = c.number \
+         INNER JOIN canonical_blocks FINAL c ON i.tx_block_number = c.number \
          INNER JOIN transactions_all t ON i.tx_hash = t.hash AND i.tx_block_number = t.block_number AND t.block_hash = c.block_hash \
          WHERE i.tx_hash = unhex('{}') \
          ORDER BY i.input_index",
@@ -522,7 +551,7 @@ async fn get_transaction_detail(
     let outputs_query = format!(
         "SELECT o.output_index, o.capacity, o.lock_script_hash, o.type_script_hash, o.data_size \
          FROM cell_outputs_all o \
-         INNER JOIN canonical_blocks c ON o.block_number = c.number AND o.block_hash = c.block_hash \
+         INNER JOIN canonical_blocks FINAL c ON o.block_number = c.number AND o.block_hash = c.block_hash \
          WHERE o.tx_hash = unhex('{}') \
          ORDER BY o.output_index",
         hash_hex
@@ -536,11 +565,22 @@ async fn get_transaction_detail(
     let outputs: Vec<TransactionOutputResponse> =
         output_rows.into_iter().map(|r| r.into()).collect();
 
-    ok(TransactionDetailResponse {
+    let response = TransactionDetailResponse {
         transaction,
         inputs,
         outputs,
-    })
+    };
+
+    state
+        .cache
+        .set(
+            &cache_key,
+            &response,
+            Duration::from_secs(CACHE_TTL_TX_DETAIL_SECS),
+        )
+        .await;
+
+    ok(response)
 }
 
 async fn get_cell_deps(
@@ -561,7 +601,7 @@ async fn get_cell_deps(
     let query = format!(
         "SELECT d.dep_index, d.out_point_tx_hash, d.out_point_index, d.dep_type \
          FROM transaction_cell_deps d \
-         INNER JOIN canonical_blocks c ON d.tx_block_number = c.number \
+         INNER JOIN canonical_blocks FINAL c ON d.tx_block_number = c.number \
          INNER JOIN transactions_all t ON d.tx_hash = t.hash AND d.tx_block_number = t.block_number AND t.block_hash = c.block_hash \
          WHERE d.tx_hash = unhex('{}') \
          ORDER BY d.dep_index",
@@ -626,7 +666,7 @@ async fn get_tx_activities(
         "SELECT a.activity_id, a.activity_type, a.activity_category, a.activity_index, \
          a.from_lock_hash, a.to_lock_hash, a.amount, a.asset_id, a.metadata \
          FROM activities_all a \
-         INNER JOIN canonical_blocks c ON a.block_number = c.number \
+         INNER JOIN canonical_blocks FINAL c ON a.block_number = c.number \
          INNER JOIN transactions_all t ON a.tx_hash = t.hash AND a.block_number = t.block_number AND t.block_hash = c.block_hash \
          WHERE a.tx_hash = unhex('{}') \
          ORDER BY a.activity_index",
@@ -655,6 +695,16 @@ mod tests {
     #[test]
     fn test_cache_key_tx_list_has_correct_prefix() {
         assert!(CACHE_KEY_TX_LIST.starts_with("transactions:"));
+    }
+
+    #[test]
+    fn test_cache_ttl_tx_detail_is_60_seconds() {
+        assert_eq!(CACHE_TTL_TX_DETAIL_SECS, 60);
+    }
+
+    #[test]
+    fn test_cache_key_tx_detail_has_correct_prefix() {
+        assert!(CACHE_KEY_TX_DETAIL.starts_with("tx:"));
     }
 
     #[test]

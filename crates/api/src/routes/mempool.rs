@@ -360,7 +360,7 @@ async fn get_mempool_summary(
             b.timestamp as timestamp,
             b.transactions_count as transactions_count
         FROM blocks_all b
-        INNER JOIN canonical_blocks c ON b.number = c.number AND b.hash = c.block_hash
+        INNER JOIN canonical_blocks FINAL c ON b.number = c.number AND b.hash = c.block_hash
         ORDER BY b.number DESC
         LIMIT 1
     "#;
@@ -388,7 +388,7 @@ async fn get_mempool_summary(
                 t.tx_size as tx_size,
                 t.is_cellbase as is_cellbase
             FROM transactions_all t
-            INNER JOIN canonical_blocks c ON t.block_number = c.number AND t.block_hash = c.block_hash
+            INNER JOIN canonical_blocks FINAL c ON t.block_number = c.number AND t.block_hash = c.block_hash
             WHERE t.block_number = {}
             ORDER BY t.tx_index ASC
             LIMIT 200

@@ -88,7 +88,7 @@ async fn warmup_tx_stats(state: &AppState) -> bool {
             formatDateTime(fromUnixTimestamp64Milli(b.timestamp), '%H:%M') as hour_label,
             count() as tx_count
         FROM transactions_all t
-        INNER JOIN canonical_blocks c ON t.block_number = c.number AND t.block_hash = c.block_hash
+        INNER JOIN canonical_blocks FINAL c ON t.block_number = c.number AND t.block_hash = c.block_hash
         INNER JOIN blocks_all b ON c.number = b.number AND c.block_hash = b.hash
         WHERE b.timestamp >= (toUnixTimestamp64Milli(now64(3)) - 3600000)
         GROUP BY toStartOfFiveMinutes(fromUnixTimestamp64Milli(b.timestamp)), hour_label
@@ -103,7 +103,7 @@ async fn warmup_tx_stats(state: &AppState) -> bool {
             formatDateTime(fromUnixTimestamp64Milli(b.timestamp), '%m/%d') as day_label,
             count() as tx_count
         FROM transactions_all t
-        INNER JOIN canonical_blocks c ON t.block_number = c.number AND t.block_hash = c.block_hash
+        INNER JOIN canonical_blocks FINAL c ON t.block_number = c.number AND t.block_hash = c.block_hash
         INNER JOIN blocks_all b ON c.number = b.number AND c.block_hash = b.hash
         WHERE b.timestamp >= (toUnixTimestamp64Milli(now64(3)) - 86400000)
         GROUP BY toStartOfHour(fromUnixTimestamp64Milli(b.timestamp)), day_label
@@ -152,7 +152,7 @@ async fn warmup_recent_blocks(state: &AppState) -> bool {
             b.timestamp as timestamp,
             b.transactions_count as transactions_count
         FROM blocks_all b
-        INNER JOIN canonical_blocks c ON b.number = c.number AND b.hash = c.block_hash
+        INNER JOIN canonical_blocks FINAL c ON b.number = c.number AND b.hash = c.block_hash
         ORDER BY b.number DESC
         LIMIT 10
     "#;
@@ -191,7 +191,7 @@ async fn warmup_tx_count_chart(state: &AppState) -> bool {
             toString(toDate(fromUnixTimestamp64Milli(b.timestamp))) as date,
             count() as count
         FROM transactions_all t
-        INNER JOIN canonical_blocks c ON t.block_number = c.number AND t.block_hash = c.block_hash
+        INNER JOIN canonical_blocks FINAL c ON t.block_number = c.number AND t.block_hash = c.block_hash
         INNER JOIN blocks_all b ON c.number = b.number AND c.block_hash = b.hash
         WHERE b.timestamp >= toUnixTimestamp64Milli(now64(3)) - 2592000000
         GROUP BY date
@@ -231,7 +231,7 @@ async fn warmup_cell_count_chart(state: &AppState) -> bool {
             toString(toDate(fromUnixTimestamp64Milli(b.timestamp))) as date,
             count() as count
         FROM cell_outputs_all co
-        INNER JOIN canonical_blocks c ON co.block_number = c.number AND co.block_hash = c.block_hash
+        INNER JOIN canonical_blocks FINAL c ON co.block_number = c.number AND co.block_hash = c.block_hash
         INNER JOIN blocks_all b ON c.number = b.number AND c.block_hash = b.hash
         WHERE b.timestamp >= toUnixTimestamp64Milli(now64(3)) - 2592000000
         GROUP BY date
@@ -275,7 +275,7 @@ async fn warmup_avg_block_time_chart(state: &AppState) -> bool {
                 toString(toDate(fromUnixTimestamp64Milli(b.timestamp))) as date,
                 leadInFrame(b.timestamp, 1) OVER (ORDER BY b.number) - b.timestamp as block_time
             FROM blocks_all b
-            INNER JOIN canonical_blocks c ON b.number = c.number AND b.hash = c.block_hash
+            INNER JOIN canonical_blocks FINAL c ON b.number = c.number AND b.hash = c.block_hash
             WHERE b.timestamp >= toUnixTimestamp64Milli(now64(3)) - 2592000000
         )
         WHERE block_time > 0 AND block_time < 600000
@@ -326,7 +326,7 @@ async fn warmup_hash_rate_chart(state: &AppState) -> bool {
             toString(toDate(fromUnixTimestamp64Milli(b.timestamp))) as date,
             avg(b.difficulty) * 2.0 / 1.4 as hash_rate
         FROM blocks_all b
-        INNER JOIN canonical_blocks c ON b.number = c.number AND b.hash = c.block_hash
+        INNER JOIN canonical_blocks FINAL c ON b.number = c.number AND b.hash = c.block_hash
         WHERE b.timestamp >= toUnixTimestamp64Milli(now64(3)) - 2592000000
         GROUP BY date
         ORDER BY date DESC

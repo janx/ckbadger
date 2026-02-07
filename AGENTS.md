@@ -245,6 +245,27 @@ Reorgs are handled by versioning, not deletion:
 3. `cell_state` entries are versioned to reflect the new canonical state
 4. Queries use `ORDER BY canon_version DESC LIMIT 1 BY (key)` pattern
 
+### Canonical Blocks Query Pattern (IMPORTANT)
+
+When joining with `canonical_blocks` (ReplacingMergeTree), **ALWAYS use FINAL**:
+
+```sql
+-- CORRECT: Use FINAL to get deduplicated results
+SELECT ... FROM transactions_all t
+INNER JOIN canonical_blocks FINAL c ON t.block_number = c.number AND t.block_hash = c.block_hash
+
+-- WRONG: May return duplicate rows during merge
+SELECT ... FROM transactions_all t
+INNER JOIN canonical_blocks c ON t.block_number = c.number AND t.block_hash = c.block_hash
+```
+
+**Why FINAL is required:**
+
+- `canonical_blocks` uses `ReplacingMergeTree(canon_version)` for reorg handling
+- Without FINAL, queries may see multiple versions of the same block number
+- FINAL forces ClickHouse to return only the latest version per key
+- Performance impact is negligible since `canonical_blocks` is small (~18M rows, <1ms overhead)
+
 ## Deferred Activities Write Optimization
 
 For fresh database syncs, the indexer can skip writing to the `activities` table to achieve ~10-20% faster bulk sync speeds. Activities are rebuilt via task-runner after sync completes.
@@ -493,12 +514,16 @@ The API uses Redis caching to reduce ClickHouse query load for statistics endpoi
 
 **Cache Configuration:**
 
-| Endpoint Type     | Cache Key Prefix      | TTL    | Description                     |
-| ----------------- | --------------------- | ------ | ------------------------------- |
-| Network stats     | `stats:network`       | 5 sec  | Network stats (hash rate, etc)  |
-| Transaction stats | `stats:tx_stats`      | 1 min  | Hourly/daily transaction counts |
-| Recent blocks     | `stats:recent_blocks` | 10 sec | Latest 10 blocks                |
-| Chart data        | `chart:*`             | 5 min  | Historical charts (30 days)     |
+| Endpoint Type      | Cache Key Prefix      | TTL    | Description                     |
+| ------------------ | --------------------- | ------ | ------------------------------- |
+| Network stats      | `stats:network`       | 5 sec  | Network stats (hash rate, etc)  |
+| Transaction stats  | `stats:tx_stats`      | 1 min  | Hourly/daily transaction counts |
+| Recent blocks      | `stats:recent_blocks` | 10 sec | Latest 10 blocks                |
+| Chart data         | `chart:*`             | 5 min  | Historical charts (30 days)     |
+| Transaction list   | `transactions:list`   | 5 sec  | First page of transactions      |
+| Transaction detail | `tx:detail`           | 60 sec | Individual transaction pages    |
+| Block list         | `blocks:list`         | 5 sec  | First page of blocks            |
+| Block detail       | `block:detail`        | 60 sec | Individual block pages          |
 
 **Cached Endpoints:**
 

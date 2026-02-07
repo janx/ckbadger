@@ -437,7 +437,7 @@ async fn get_recent_blocks(
             b.timestamp as timestamp,
             b.transactions_count as transactions_count
         FROM blocks_all b
-        INNER JOIN canonical_blocks c ON b.number = c.number AND b.hash = c.block_hash
+        INNER JOIN canonical_blocks FINAL c ON b.number = c.number AND b.hash = c.block_hash
         ORDER BY b.number DESC
         LIMIT 10
     "#;
@@ -626,7 +626,7 @@ async fn get_average_block_time_chart(
                 toString(toDate(fromUnixTimestamp64Milli(b.timestamp))) as date,
                 leadInFrame(b.timestamp, 1) OVER (ORDER BY b.number) - b.timestamp as block_time
             FROM blocks_all b
-            INNER JOIN canonical_blocks c ON b.number = c.number AND b.hash = c.block_hash
+            INNER JOIN canonical_blocks FINAL c ON b.number = c.number AND b.hash = c.block_hash
             WHERE b.timestamp >= toUnixTimestamp64Milli(now64(3)) - 2592000000
         )
         WHERE block_time > 0 AND block_time < 600000
@@ -678,7 +678,7 @@ async fn get_hash_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<Ch
             toString(toDate(fromUnixTimestamp64Milli(b.timestamp))) as date,
             avg(b.difficulty) * 2.0 / 1.4 as hash_rate
         FROM blocks_all b
-        INNER JOIN canonical_blocks c ON b.number = c.number AND b.hash = c.block_hash
+        INNER JOIN canonical_blocks FINAL c ON b.number = c.number AND b.hash = c.block_hash
         WHERE b.timestamp >= toUnixTimestamp64Milli(now64(3)) - 2592000000
         GROUP BY date
         ORDER BY date DESC
