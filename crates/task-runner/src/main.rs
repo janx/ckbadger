@@ -1,4 +1,5 @@
 use anyhow::Result;
+use ckbadger_common::ClickHouseClient;
 use ckbadger_task_runner::db::DbPool;
 use ckbadger_task_runner::executor::TaskExecutor;
 use clap::Parser;
@@ -57,7 +58,9 @@ async fn main() -> Result<()> {
         runner_id, args.poll_interval_secs
     );
 
-    let pool = DbPool;
+    let client = ClickHouseClient::from_env()?;
+    client.ping().await?;
+    let pool = DbPool::new(client);
 
     info!("Connected to database");
 

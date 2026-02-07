@@ -17,7 +17,7 @@ function formatSyncSpeed(blocksPerSecond: number | null): string | null {
 export function SyncBanner({ stats }: { stats: NetworkStats }) {
   const { syncStatus } = stats;
 
-  if (!syncStatus.isSyncing) {
+  if (!syncStatus || !syncStatus.isSyncing) {
     return null;
   }
 

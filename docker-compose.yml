@@ -77,7 +77,8 @@ services:
       redis:
         condition: service_healthy
     environment:
-      CLICKHOUSE_URL: ${CLICKHOUSE_URL:-http://clickhouse:8123}
+      # Always use Docker-internal URLs for ClickHouse/Redis
+      CLICKHOUSE_URL: http://clickhouse:8123
       CLICKHOUSE_DATABASE: ${CLICKHOUSE_DATABASE:-ckbadger}
       REDIS_URL: redis://redis:6379
       CKB_RPC_URL: ${CKB_RPC_URL:-http://ckb-node:8114}
@@ -99,7 +100,9 @@ services:
       redis:
         condition: service_healthy
     environment:
-      CLICKHOUSE_URL: ${CLICKHOUSE_URL:-http://clickhouse:8123}
+      # Always use Docker-internal URLs for ClickHouse/Redis
+      DATABASE_URL: http://clickhouse:8123
+      CLICKHOUSE_URL: http://clickhouse:8123
       CLICKHOUSE_DATABASE: ${CLICKHOUSE_DATABASE:-ckbadger}
       REDIS_URL: redis://redis:6379
       CKB_RPC_URL: ${CKB_RPC_URL:-http://ckb-node:8114}
@@ -130,7 +133,9 @@ services:
       clickhouse:
         condition: service_healthy
     environment:
-      CLICKHOUSE_URL: ${CLICKHOUSE_URL:-http://clickhouse:8123}
+      # Always use Docker-internal URLs for ClickHouse
+      DATABASE_URL: http://clickhouse:8123
+      CLICKHOUSE_URL: http://clickhouse:8123
       CLICKHOUSE_DATABASE: ${CLICKHOUSE_DATABASE:-ckbadger}
       CKB_RPC_URL: ${CKB_RPC_URL:-http://ckb-node:8114}
       TOKEN_LABELS_PATH: /app/token-labels

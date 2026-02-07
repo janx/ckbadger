@@ -1,4 +1,4 @@
-FROM rust:1.85-slim-bookworm AS builder
+FROM rust:slim-bookworm AS builder
 
 WORKDIR /app
 
@@ -11,11 +11,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY migrations ./migrations
 
-RUN cargo update home --precise 0.5.9 || true && \
-    cargo update darling --precise 0.20.11 || true && \
-    cargo update darling_core --precise 0.20.11 || true && \
-    cargo update darling_macro --precise 0.20.11 || true && \
-    cargo build --release --bin ckbadger-api --features redis-cache
+RUN cargo build --release --bin ckbadger-api --features redis-cache
 
 FROM debian:bookworm-slim
 
