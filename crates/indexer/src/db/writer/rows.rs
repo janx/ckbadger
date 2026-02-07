@@ -634,6 +634,392 @@ pub fn secs_to_millis(secs: u64) -> i64 {
     (secs as i64) * 1000
 }
 
+// =============================================================================
+// udt_cells
+// =============================================================================
+
+/// Row for `udt_cells` table (ReplacingMergeTree).
+/// Tracks UDT cell lifecycle and amounts.
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct UdtCellRow {
+    pub tx_hash: [u8; 32],
+    pub output_index: u16,
+    pub canon_version: u64,
+    pub type_script_hash: [u8; 32],
+    pub type_code_hash: [u8; 32],
+    pub type_hash_type: u8,
+    pub type_args: String,
+    pub lock_script_hash: [u8; 32],
+    pub amount: UInt256,
+    pub standard: String, // 'sudt' or 'xudt'
+    pub is_live: u8,
+    pub created_at_block: u64,
+    pub consumed_at_block: u64,
+    pub consumed_by_tx: [u8; 32],
+}
+
+impl Default for UdtCellRow {
+    fn default() -> Self {
+        Self {
+            tx_hash: EMPTY_HASH,
+            output_index: 0,
+            canon_version: 0,
+            type_script_hash: EMPTY_HASH,
+            type_code_hash: EMPTY_HASH,
+            type_hash_type: 0,
+            type_args: String::new(),
+            lock_script_hash: EMPTY_HASH,
+            amount: UInt256::from_le_bytes([0u8; 32]),
+            standard: String::new(),
+            is_live: 1,
+            created_at_block: 0,
+            consumed_at_block: 0,
+            consumed_by_tx: EMPTY_HASH,
+        }
+    }
+}
+
+impl UdtCellRow {
+    pub fn new_live(
+        tx_hash: [u8; 32],
+        output_index: u16,
+        canon_version: u64,
+        type_script_hash: [u8; 32],
+        type_code_hash: [u8; 32],
+        type_hash_type: u8,
+        type_args: String,
+        lock_script_hash: [u8; 32],
+        amount: u128,
+        standard: &str,
+        created_at_block: u64,
+    ) -> Self {
+        Self {
+            tx_hash,
+            output_index,
+            canon_version,
+            type_script_hash,
+            type_code_hash,
+            type_hash_type,
+            type_args,
+            lock_script_hash,
+            amount: UInt256::from_le_bytes(u128_to_u256_bytes(amount)),
+            standard: standard.to_string(),
+            is_live: 1,
+            created_at_block,
+            consumed_at_block: 0,
+            consumed_by_tx: EMPTY_HASH,
+        }
+    }
+}
+
+// =============================================================================
+// spore_clusters
+// =============================================================================
+
+/// Row for `spore_clusters` table (ReplacingMergeTree).
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct SporeClusterRow {
+    pub cluster_id: [u8; 32],
+    pub canon_version: u64,
+    pub type_script_hash: [u8; 32],
+    pub name: String,
+    pub description: String,
+    pub owner_lock_hash: [u8; 32],
+    pub spores_count: u32,
+    pub created_at_block: u64,
+    pub created_at_tx: [u8; 32],
+    pub created_at: i64, // DateTime64(3) as millis
+    pub updated_at: i64,
+}
+
+impl Default for SporeClusterRow {
+    fn default() -> Self {
+        Self {
+            cluster_id: EMPTY_HASH,
+            canon_version: 0,
+            type_script_hash: EMPTY_HASH,
+            name: String::new(),
+            description: String::new(),
+            owner_lock_hash: EMPTY_HASH,
+            spores_count: 0,
+            created_at_block: 0,
+            created_at_tx: EMPTY_HASH,
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+}
+
+impl SporeClusterRow {
+    pub fn new(
+        cluster_id: [u8; 32],
+        canon_version: u64,
+        type_script_hash: [u8; 32],
+        name: String,
+        description: String,
+        owner_lock_hash: [u8; 32],
+        created_at_block: u64,
+        created_at_tx: [u8; 32],
+        timestamp_ms: i64,
+    ) -> Self {
+        Self {
+            cluster_id,
+            canon_version,
+            type_script_hash,
+            name,
+            description,
+            owner_lock_hash,
+            spores_count: 0,
+            created_at_block,
+            created_at_tx,
+            created_at: timestamp_ms,
+            updated_at: timestamp_ms,
+        }
+    }
+}
+
+// =============================================================================
+// spore_cells
+// =============================================================================
+
+/// Row for `spore_cells` table (ReplacingMergeTree).
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct SporeCellRow {
+    pub spore_id: [u8; 32],
+    pub canon_version: u64,
+    pub type_script_hash: [u8; 32],
+    pub tx_hash: [u8; 32],
+    pub output_index: u16,
+    pub cluster_id: [u8; 32], // Empty if standalone
+    pub content_type: String,
+    pub content_size: u32,
+    pub owner_lock_hash: [u8; 32],
+    pub is_live: u8,
+    pub created_at_block: u64,
+    pub created_at_tx: [u8; 32],
+    pub consumed_at_block: u64,
+    pub consumed_by_tx: [u8; 32],
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+impl Default for SporeCellRow {
+    fn default() -> Self {
+        Self {
+            spore_id: EMPTY_HASH,
+            canon_version: 0,
+            type_script_hash: EMPTY_HASH,
+            tx_hash: EMPTY_HASH,
+            output_index: 0,
+            cluster_id: EMPTY_HASH,
+            content_type: String::new(),
+            content_size: 0,
+            owner_lock_hash: EMPTY_HASH,
+            is_live: 1,
+            created_at_block: 0,
+            created_at_tx: EMPTY_HASH,
+            consumed_at_block: 0,
+            consumed_by_tx: EMPTY_HASH,
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+}
+
+impl SporeCellRow {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_live(
+        spore_id: [u8; 32],
+        canon_version: u64,
+        type_script_hash: [u8; 32],
+        tx_hash: [u8; 32],
+        output_index: u16,
+        cluster_id: [u8; 32],
+        content_type: String,
+        content_size: u32,
+        owner_lock_hash: [u8; 32],
+        created_at_block: u64,
+        timestamp_ms: i64,
+    ) -> Self {
+        Self {
+            spore_id,
+            canon_version,
+            type_script_hash,
+            tx_hash,
+            output_index,
+            cluster_id,
+            content_type,
+            content_size,
+            owner_lock_hash,
+            is_live: 1,
+            created_at_block,
+            created_at_tx: tx_hash,
+            consumed_at_block: 0,
+            consumed_by_tx: EMPTY_HASH,
+            created_at: timestamp_ms,
+            updated_at: timestamp_ms,
+        }
+    }
+}
+
+// =============================================================================
+// mnft_issuers
+// =============================================================================
+
+/// Row for `mnft_issuers` table (ReplacingMergeTree).
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct MnftIssuerRow {
+    pub issuer_id: [u8; 20],
+    pub canon_version: u64,
+    pub type_script_hash: [u8; 32],
+    pub tx_hash: [u8; 32],
+    pub output_index: u16,
+    pub name: String,
+    pub info: String,
+    pub class_count: u32,
+    pub set_count: u32,
+    pub owner_lock_hash: [u8; 32],
+    pub is_live: u8,
+    pub created_at_block: u64,
+    pub created_at_tx: [u8; 32],
+    pub consumed_at_block: u64,
+    pub consumed_by_tx: [u8; 32],
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+impl Default for MnftIssuerRow {
+    fn default() -> Self {
+        Self {
+            issuer_id: [0u8; 20],
+            canon_version: 0,
+            type_script_hash: EMPTY_HASH,
+            tx_hash: EMPTY_HASH,
+            output_index: 0,
+            name: String::new(),
+            info: String::new(),
+            class_count: 0,
+            set_count: 0,
+            owner_lock_hash: EMPTY_HASH,
+            is_live: 1,
+            created_at_block: 0,
+            created_at_tx: EMPTY_HASH,
+            consumed_at_block: 0,
+            consumed_by_tx: EMPTY_HASH,
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+}
+
+// =============================================================================
+// mnft_classes
+// =============================================================================
+
+/// Row for `mnft_classes` table (ReplacingMergeTree).
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct MnftClassRow {
+    pub class_id: String, // Variable length: issuer_id + class_index
+    pub canon_version: u64,
+    pub type_script_hash: [u8; 32],
+    pub issuer_id: [u8; 20],
+    pub name: String,
+    pub description: String,
+    pub renderer: String,
+    pub total: u32,
+    pub issued: u32,
+    pub holders_count: u32,
+    pub transfers_count: u64,
+    pub transfers_24h: u32,
+    pub owner_lock_hash: [u8; 32],
+    pub is_live: u8,
+    pub created_at_block: u64,
+    pub created_at_tx: [u8; 32],
+    pub consumed_at_block: u64,
+    pub consumed_by_tx: [u8; 32],
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+impl Default for MnftClassRow {
+    fn default() -> Self {
+        Self {
+            class_id: String::new(),
+            canon_version: 0,
+            type_script_hash: EMPTY_HASH,
+            issuer_id: [0u8; 20],
+            name: String::new(),
+            description: String::new(),
+            renderer: String::new(),
+            total: 0,
+            issued: 0,
+            holders_count: 0,
+            transfers_count: 0,
+            transfers_24h: 0,
+            owner_lock_hash: EMPTY_HASH,
+            is_live: 1,
+            created_at_block: 0,
+            created_at_tx: EMPTY_HASH,
+            consumed_at_block: 0,
+            consumed_by_tx: EMPTY_HASH,
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+}
+
+// =============================================================================
+// mnft_tokens
+// =============================================================================
+
+/// Row for `mnft_tokens` table (ReplacingMergeTree).
+#[derive(Debug, Clone, Row, Serialize)]
+pub struct MnftTokenRow {
+    pub token_id: String, // class_id + token_index
+    pub canon_version: u64,
+    pub type_script_hash: [u8; 32],
+    pub tx_hash: [u8; 32],
+    pub output_index: u16,
+    pub class_id: String,
+    pub token_index: u32,
+    pub characteristic: String,
+    pub configure: u8,
+    pub state: u8,
+    pub owner_lock_hash: [u8; 32],
+    pub is_live: u8,
+    pub created_at_block: u64,
+    pub created_at_tx: [u8; 32],
+    pub consumed_at_block: u64,
+    pub consumed_by_tx: [u8; 32],
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+impl Default for MnftTokenRow {
+    fn default() -> Self {
+        Self {
+            token_id: String::new(),
+            canon_version: 0,
+            type_script_hash: EMPTY_HASH,
+            tx_hash: EMPTY_HASH,
+            output_index: 0,
+            class_id: String::new(),
+            token_index: 0,
+            characteristic: String::new(),
+            configure: 0,
+            state: 0,
+            owner_lock_hash: EMPTY_HASH,
+            is_live: 1,
+            created_at_block: 0,
+            created_at_tx: EMPTY_HASH,
+            consumed_at_block: 0,
+            consumed_by_tx: EMPTY_HASH,
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -777,5 +1163,186 @@ mod tests {
         assert_eq!(row.output_index, 0);
         assert_eq!(row.status, 0);
         assert_eq!(row.capacity, 0);
+    }
+
+    // =========================================================================
+    // UdtCellRow tests
+    // =========================================================================
+
+    #[test]
+    fn test_udt_cell_row_new_live() {
+        let tx_hash = [1u8; 32];
+        let type_script_hash = [2u8; 32];
+        let type_code_hash = [3u8; 32];
+        let lock_script_hash = [4u8; 32];
+
+        let row = UdtCellRow::new_live(
+            tx_hash,
+            0,
+            1,
+            type_script_hash,
+            type_code_hash,
+            1, // hash_type = type
+            "0xabcd".to_string(),
+            lock_script_hash,
+            1000_00000000_u128, // 1000 tokens
+            "sudt",
+            12345,
+        );
+
+        assert_eq!(row.tx_hash, tx_hash);
+        assert_eq!(row.output_index, 0);
+        assert_eq!(row.canon_version, 1);
+        assert_eq!(row.type_script_hash, type_script_hash);
+        assert_eq!(row.type_code_hash, type_code_hash);
+        assert_eq!(row.type_hash_type, 1);
+        assert_eq!(row.type_args, "0xabcd");
+        assert_eq!(row.lock_script_hash, lock_script_hash);
+        assert_eq!(row.standard, "sudt");
+        assert_eq!(row.is_live, 1);
+        assert_eq!(row.created_at_block, 12345);
+        assert_eq!(row.consumed_at_block, 0);
+        assert_eq!(row.consumed_by_tx, EMPTY_HASH);
+    }
+
+    #[test]
+    fn test_udt_cell_row_default() {
+        let row = UdtCellRow::default();
+        assert_eq!(row.tx_hash, EMPTY_HASH);
+        assert_eq!(row.output_index, 0);
+        assert_eq!(row.is_live, 1);
+        assert_eq!(row.standard, "");
+    }
+
+    // =========================================================================
+    // SporeClusterRow tests
+    // =========================================================================
+
+    #[test]
+    fn test_spore_cluster_row_new() {
+        let cluster_id = [1u8; 32];
+        let type_script_hash = [2u8; 32];
+        let owner_lock_hash = [3u8; 32];
+        let created_at_tx = [4u8; 32];
+
+        let row = SporeClusterRow::new(
+            cluster_id,
+            1,
+            type_script_hash,
+            "My Cluster".to_string(),
+            "A test cluster".to_string(),
+            owner_lock_hash,
+            12345,
+            created_at_tx,
+            1704067200000,
+        );
+
+        assert_eq!(row.cluster_id, cluster_id);
+        assert_eq!(row.canon_version, 1);
+        assert_eq!(row.type_script_hash, type_script_hash);
+        assert_eq!(row.name, "My Cluster");
+        assert_eq!(row.description, "A test cluster");
+        assert_eq!(row.owner_lock_hash, owner_lock_hash);
+        assert_eq!(row.spores_count, 0);
+        assert_eq!(row.created_at_block, 12345);
+        assert_eq!(row.created_at_tx, created_at_tx);
+        assert_eq!(row.created_at, 1704067200000);
+        assert_eq!(row.updated_at, 1704067200000);
+    }
+
+    #[test]
+    fn test_spore_cluster_row_default() {
+        let row = SporeClusterRow::default();
+        assert_eq!(row.cluster_id, EMPTY_HASH);
+        assert_eq!(row.name, "");
+        assert_eq!(row.spores_count, 0);
+    }
+
+    // =========================================================================
+    // SporeCellRow tests
+    // =========================================================================
+
+    #[test]
+    fn test_spore_cell_row_new_live() {
+        let spore_id = [1u8; 32];
+        let type_script_hash = [2u8; 32];
+        let tx_hash = [3u8; 32];
+        let cluster_id = [4u8; 32];
+        let owner_lock_hash = [5u8; 32];
+
+        let row = SporeCellRow::new_live(
+            spore_id,
+            1,
+            type_script_hash,
+            tx_hash,
+            0,
+            cluster_id,
+            "image/png".to_string(),
+            1024,
+            owner_lock_hash,
+            12345,
+            1704067200000,
+        );
+
+        assert_eq!(row.spore_id, spore_id);
+        assert_eq!(row.canon_version, 1);
+        assert_eq!(row.type_script_hash, type_script_hash);
+        assert_eq!(row.tx_hash, tx_hash);
+        assert_eq!(row.output_index, 0);
+        assert_eq!(row.cluster_id, cluster_id);
+        assert_eq!(row.content_type, "image/png");
+        assert_eq!(row.content_size, 1024);
+        assert_eq!(row.owner_lock_hash, owner_lock_hash);
+        assert_eq!(row.is_live, 1);
+        assert_eq!(row.created_at_block, 12345);
+        assert_eq!(row.created_at, 1704067200000);
+    }
+
+    #[test]
+    fn test_spore_cell_row_default() {
+        let row = SporeCellRow::default();
+        assert_eq!(row.spore_id, EMPTY_HASH);
+        assert_eq!(row.is_live, 1);
+        assert_eq!(row.content_type, "");
+        assert_eq!(row.content_size, 0);
+    }
+
+    // =========================================================================
+    // MnftIssuerRow tests
+    // =========================================================================
+
+    #[test]
+    fn test_mnft_issuer_row_default() {
+        let row = MnftIssuerRow::default();
+        assert_eq!(row.issuer_id, [0u8; 20]);
+        assert_eq!(row.name, "");
+        assert_eq!(row.info, "");
+        assert_eq!(row.class_count, 0);
+    }
+
+    // =========================================================================
+    // MnftClassRow tests
+    // =========================================================================
+
+    #[test]
+    fn test_mnft_class_row_default() {
+        let row = MnftClassRow::default();
+        assert_eq!(row.class_id, "");
+        assert_eq!(row.name, "");
+        assert_eq!(row.total, 0);
+        assert_eq!(row.issued, 0);
+    }
+
+    // =========================================================================
+    // MnftTokenRow tests
+    // =========================================================================
+
+    #[test]
+    fn test_mnft_token_row_default() {
+        let row = MnftTokenRow::default();
+        assert_eq!(row.token_id, "");
+        assert_eq!(row.is_live, 1);
+        assert_eq!(row.token_index, 0);
+        assert_eq!(row.characteristic, "");
     }
 }

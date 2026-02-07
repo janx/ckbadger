@@ -4,7 +4,8 @@ use crate::cache::CacheInvalidator;
 use crate::db::{ClickHouseClient, DynLiveCellStorage};
 
 use super::rows::{
-    ActivityRow, BlockRow, CellInputRow, CellOutputRow, CellStateRow, DaoDepositRow, TransactionRow,
+    ActivityRow, BlockRow, CellInputRow, CellOutputRow, CellStateRow, DaoDepositRow, MnftClassRow,
+    MnftIssuerRow, MnftTokenRow, SporeCellRow, SporeClusterRow, TransactionRow, UdtCellRow,
 };
 
 #[derive(Debug, Default)]
@@ -17,6 +18,12 @@ pub struct BatchData {
     pub cell_states: Vec<CellStateRow>,
     pub dao_deposits: Vec<DaoDepositRow>,
     pub canonical_mappings: Vec<(u64, Vec<u8>, u64)>,
+    pub udt_cells: Vec<UdtCellRow>,
+    pub spore_clusters: Vec<SporeClusterRow>,
+    pub spore_cells: Vec<SporeCellRow>,
+    pub mnft_issuers: Vec<MnftIssuerRow>,
+    pub mnft_classes: Vec<MnftClassRow>,
+    pub mnft_tokens: Vec<MnftTokenRow>,
 }
 
 impl BatchData {
@@ -33,6 +40,12 @@ impl BatchData {
             && self.cell_states.is_empty()
             && self.dao_deposits.is_empty()
             && self.canonical_mappings.is_empty()
+            && self.udt_cells.is_empty()
+            && self.spore_clusters.is_empty()
+            && self.spore_cells.is_empty()
+            && self.mnft_issuers.is_empty()
+            && self.mnft_classes.is_empty()
+            && self.mnft_tokens.is_empty()
     }
 
     pub fn total_rows(&self) -> usize {
@@ -44,6 +57,12 @@ impl BatchData {
             + self.cell_states.len()
             + self.dao_deposits.len()
             + self.canonical_mappings.len()
+            + self.udt_cells.len()
+            + self.spore_clusters.len()
+            + self.spore_cells.len()
+            + self.mnft_issuers.len()
+            + self.mnft_classes.len()
+            + self.mnft_tokens.len()
     }
 }
 
@@ -118,6 +137,12 @@ impl BatchWriter {
             self.write_cell_states(&batch.cell_states),
             self.write_dao_deposits(&batch.dao_deposits),
             self.write_canonical_blocks(&batch.canonical_mappings),
+            self.write_udt_cells(&batch.udt_cells),
+            self.write_spore_clusters(&batch.spore_clusters),
+            self.write_spore_cells(&batch.spore_cells),
+            self.write_mnft_issuers(&batch.mnft_issuers),
+            self.write_mnft_classes(&batch.mnft_classes),
+            self.write_mnft_tokens(&batch.mnft_tokens),
         )
         .context("Failed to write batch to ClickHouse")?;
 

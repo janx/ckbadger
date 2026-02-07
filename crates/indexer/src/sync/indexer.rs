@@ -10,10 +10,12 @@ use crate::cache::{CacheInvalidator, CellInfoCache};
 use crate::config::Config;
 use crate::db::writer::{
     u64_to_u256_bytes, ActivityRow, BatchData, BatchWriter, BlockRow, CellInputRow, CellOutputRow,
-    CellStateRow, DaoDepositRow, TransactionRow,
+    CellStateRow, DaoDepositRow, MnftClassRow, MnftIssuerRow, MnftTokenRow, SporeCellRow,
+    SporeClusterRow, TransactionRow, UdtCellRow, EMPTY_HASH,
 };
 use crate::db::{ClickHouseClient, LiveCellInfo, MemoryStats};
 use crate::parser::dao::{DaoParser, DAO_CODE_HASH};
+use crate::parser::{MnftParser, SporeParser, UdtParser};
 use crate::rpc::{BlockView, CkbRpcClient, Script, TransactionView};
 use crate::state::CanonVersionManager;
 
@@ -566,6 +568,15 @@ impl Indexer {
         let activities =
             self.generate_activities(block, block_number, &block_hash, block_timestamp_ms)?;
 
+        let (udt_cells, spore_clusters, spore_cells, mnft_issuers, mnft_classes, mnft_tokens) =
+            self.parse_asset_data(
+                block,
+                block_number,
+                &block_hash,
+                block_timestamp_ms,
+                canon_version,
+            )?;
+
         let batch_data = BatchData {
             blocks: vec![block_row],
             transactions: transaction_rows,
@@ -575,6 +586,12 @@ impl Indexer {
             cell_states: cell_state_rows,
             dao_deposits,
             canonical_mappings: vec![(block_number, block_hash.to_vec(), canon_version)],
+            udt_cells,
+            spore_clusters,
+            spore_cells,
+            mnft_issuers,
+            mnft_classes,
+            mnft_tokens,
         };
 
         self.batch_writer.write_batch(&batch_data).await?;
@@ -599,6 +616,12 @@ impl Indexer {
         let mut all_activities = Vec::new();
         let mut all_dao_deposits = Vec::new();
         let mut all_canonical_mappings = Vec::with_capacity(blocks.len());
+        let mut all_udt_cells = Vec::new();
+        let mut all_spore_clusters = Vec::new();
+        let mut all_spore_cells = Vec::new();
+        let mut all_mnft_issuers = Vec::new();
+        let mut all_mnft_classes = Vec::new();
+        let mut all_mnft_tokens = Vec::new();
 
         let dao_code_hash = parse_hex_bytes32(DAO_CODE_HASH)?;
 
@@ -749,6 +772,21 @@ impl Indexer {
                 self.generate_activities(block, block_number, &block_hash, block_timestamp_ms)?;
             all_activities.extend(block_activities);
 
+            let (udt_cells, spore_clusters, spore_cells, mnft_issuers, mnft_classes, mnft_tokens) =
+                self.parse_asset_data(
+                    block,
+                    block_number,
+                    &block_hash,
+                    block_timestamp_ms,
+                    canon_version,
+                )?;
+            all_udt_cells.extend(udt_cells);
+            all_spore_clusters.extend(spore_clusters);
+            all_spore_cells.extend(spore_cells);
+            all_mnft_issuers.extend(mnft_issuers);
+            all_mnft_classes.extend(mnft_classes);
+            all_mnft_tokens.extend(mnft_tokens);
+
             all_canonical_mappings.push((block_number, block_hash.to_vec(), canon_version));
         }
 
@@ -761,6 +799,12 @@ impl Indexer {
             cell_states: all_cell_state_rows,
             dao_deposits: all_dao_deposits,
             canonical_mappings: all_canonical_mappings,
+            udt_cells: all_udt_cells,
+            spore_clusters: all_spore_clusters,
+            spore_cells: all_spore_cells,
+            mnft_issuers: all_mnft_issuers,
+            mnft_classes: all_mnft_classes,
+            mnft_tokens: all_mnft_tokens,
         };
 
         self.batch_writer.write_batch(&batch_data).await?;
@@ -1146,6 +1190,201 @@ impl Indexer {
         };
 
         Ok((tx_row, outputs, inputs))
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn parse_asset_data(
+        &self,
+        block: &BlockView,
+        block_number: u64,
+        _block_hash: &[u8; 32],
+        timestamp_ms: i64,
+        canon_version: u64,
+    ) -> Result<(
+        Vec<UdtCellRow>,
+        Vec<SporeClusterRow>,
+        Vec<SporeCellRow>,
+        Vec<MnftIssuerRow>,
+        Vec<MnftClassRow>,
+        Vec<MnftTokenRow>,
+    )> {
+        let mut udt_cells = Vec::new();
+        let mut spore_clusters = Vec::new();
+        let mut spore_cells = Vec::new();
+        let mut mnft_issuers = Vec::new();
+        let mut mnft_classes = Vec::new();
+        let mut mnft_tokens = Vec::new();
+
+        for (tx_index, tx) in block.transactions.iter().enumerate() {
+            if tx_index == 0 {
+                continue;
+            }
+
+            let tx_hash = parse_hex_bytes32(&tx.hash)?;
+
+            for (output_index, output) in tx.outputs.iter().enumerate() {
+                let data_hex = tx
+                    .outputs_data
+                    .get(output_index)
+                    .map(|s| s.as_str())
+                    .unwrap_or("0x");
+
+                if let Some(udt) = UdtParser::parse_udt_cell(output, data_hex) {
+                    let lock_script_hash = to_bytes32(&udt.lock_script_hash);
+                    let type_script_hash = to_bytes32(&udt.type_script_hash);
+                    let type_code_hash = to_bytes32(&udt.type_code_hash);
+
+                    udt_cells.push(UdtCellRow::new_live(
+                        tx_hash,
+                        output_index as u16,
+                        canon_version,
+                        type_script_hash,
+                        type_code_hash,
+                        udt.type_hash_type as u8,
+                        format!("0x{}", hex::encode(&udt.type_args)),
+                        lock_script_hash,
+                        udt.amount,
+                        udt.standard.as_str(),
+                        block_number,
+                    ));
+                }
+
+                if let Some(cluster) = SporeParser::parse_cluster_cell(output, data_hex) {
+                    let cluster_id = to_bytes32(&cluster.cluster_id);
+                    let type_script_hash = to_bytes32(&cluster.type_script_hash);
+                    let owner_lock_hash = to_bytes32(&cluster.owner_lock_hash);
+
+                    spore_clusters.push(SporeClusterRow::new(
+                        cluster_id,
+                        canon_version,
+                        type_script_hash,
+                        cluster.name.unwrap_or_default(),
+                        cluster.description.unwrap_or_default(),
+                        owner_lock_hash,
+                        block_number,
+                        tx_hash,
+                        timestamp_ms,
+                    ));
+                }
+
+                if let Some(spore) = SporeParser::parse_spore_cell(output, data_hex) {
+                    let spore_id = to_bytes32(&spore.spore_id);
+                    let type_script_hash = to_bytes32(&spore.type_script_hash);
+                    let owner_lock_hash = to_bytes32(&spore.owner_lock_hash);
+                    let cluster_id = spore
+                        .cluster_id
+                        .as_ref()
+                        .map(|c| to_bytes32(c))
+                        .unwrap_or(EMPTY_HASH);
+
+                    spore_cells.push(SporeCellRow::new_live(
+                        spore_id,
+                        canon_version,
+                        type_script_hash,
+                        tx_hash,
+                        output_index as u16,
+                        cluster_id,
+                        spore.content_type,
+                        spore.content.len() as u32,
+                        owner_lock_hash,
+                        block_number,
+                        timestamp_ms,
+                    ));
+                }
+
+                if let Some(issuer) = MnftParser::parse_issuer_cell(output, data_hex) {
+                    let mut issuer_id = [0u8; 20];
+                    issuer_id.copy_from_slice(&issuer.issuer_id[..20.min(issuer.issuer_id.len())]);
+                    let type_script_hash = to_bytes32(&issuer.type_script_hash);
+                    let owner_lock_hash = to_bytes32(&issuer.owner_lock_hash);
+
+                    mnft_issuers.push(MnftIssuerRow {
+                        issuer_id,
+                        canon_version,
+                        type_script_hash,
+                        tx_hash,
+                        output_index: output_index as u16,
+                        name: issuer.name.unwrap_or_default(),
+                        info: issuer.info.map(|b| hex::encode(&b)).unwrap_or_default(),
+                        class_count: issuer.class_count,
+                        set_count: issuer.set_count,
+                        owner_lock_hash,
+                        is_live: 1,
+                        created_at_block: block_number,
+                        created_at_tx: tx_hash,
+                        consumed_at_block: 0,
+                        consumed_by_tx: EMPTY_HASH,
+                        created_at: timestamp_ms,
+                        updated_at: timestamp_ms,
+                    });
+                }
+
+                if let Some(class) = MnftParser::parse_class_cell(output, data_hex) {
+                    let mut issuer_id = [0u8; 20];
+                    issuer_id.copy_from_slice(&class.issuer_id[..20.min(class.issuer_id.len())]);
+                    let type_script_hash = to_bytes32(&class.type_script_hash);
+                    let owner_lock_hash = to_bytes32(&class.owner_lock_hash);
+
+                    mnft_classes.push(MnftClassRow {
+                        class_id: format!("0x{}", hex::encode(&class.class_id)),
+                        canon_version,
+                        type_script_hash,
+                        issuer_id,
+                        name: class.name.unwrap_or_default(),
+                        description: class.description.unwrap_or_default(),
+                        renderer: class.renderer.unwrap_or_default(),
+                        total: class.total,
+                        issued: class.issued,
+                        holders_count: 0,
+                        transfers_count: 0,
+                        transfers_24h: 0,
+                        owner_lock_hash,
+                        is_live: 1,
+                        created_at_block: block_number,
+                        created_at_tx: tx_hash,
+                        consumed_at_block: 0,
+                        consumed_by_tx: EMPTY_HASH,
+                        created_at: timestamp_ms,
+                        updated_at: timestamp_ms,
+                    });
+                }
+
+                if let Some(token) = MnftParser::parse_token_cell(output, data_hex) {
+                    let type_script_hash = to_bytes32(&token.type_script_hash);
+                    let owner_lock_hash = to_bytes32(&token.owner_lock_hash);
+
+                    mnft_tokens.push(MnftTokenRow {
+                        token_id: format!("0x{}", hex::encode(&token.token_id)),
+                        canon_version,
+                        type_script_hash,
+                        tx_hash,
+                        output_index: output_index as u16,
+                        class_id: format!("0x{}", hex::encode(&token.class_id)),
+                        token_index: token.token_index,
+                        characteristic: hex::encode(&token.characteristic),
+                        configure: token.configure,
+                        state: token.state,
+                        owner_lock_hash,
+                        is_live: 1,
+                        created_at_block: block_number,
+                        created_at_tx: tx_hash,
+                        consumed_at_block: 0,
+                        consumed_by_tx: EMPTY_HASH,
+                        created_at: timestamp_ms,
+                        updated_at: timestamp_ms,
+                    });
+                }
+            }
+        }
+
+        Ok((
+            udt_cells,
+            spore_clusters,
+            spore_cells,
+            mnft_issuers,
+            mnft_classes,
+            mnft_tokens,
+        ))
     }
 }
 
