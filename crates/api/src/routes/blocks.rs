@@ -6,7 +6,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::response::{ok, ApiError, ApiResult};
+use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -25,12 +25,11 @@ pub fn routes() -> Router<Arc<AppState>> {
 #[serde(rename_all = "camelCase")]
 struct ListBlocksParams {
     #[serde(default = "default_limit")]
-    limit: u64,
-    #[serde(default)]
-    offset: u64,
+    limit: i64,
+    cursor: Option<String>,
 }
 
-fn default_limit() -> u64 {
+fn default_limit() -> i64 {
     20
 }
 
@@ -191,7 +190,16 @@ impl From<BlockQueryRow> for BlockResponse {
 async fn list_blocks(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListBlocksParams>,
-) -> ApiResult<Vec<BlockResponse>> {
+) -> ApiResult<CursorPaginatedResponse<BlockResponse>> {
+    let cursor_condition = if let Some(ref cursor) = params.cursor {
+        let cursor_number: u64 = cursor
+            .parse()
+            .map_err(|_| ApiError::bad_request("Invalid cursor format"))?;
+        format!("AND b.number < {}", cursor_number)
+    } else {
+        String::new()
+    };
+
     let query = format!(
         "SELECT b.number, b.hash, b.parent_hash, b.timestamp, \
          b.version, b.compact_target, b.transactions_count, b.proposals_count, b.uncles_count, \
@@ -200,19 +208,50 @@ async fn list_blocks(
          b.miner_lock_hash, b.miner_message, toString(b.total_difficulty) as total_difficulty, b.reward \
          FROM blocks_all b \
          INNER JOIN canonical_blocks c ON b.number = c.number AND b.hash = c.block_hash \
+         WHERE 1=1 {} \
          ORDER BY b.number DESC \
-         LIMIT {} OFFSET {}",
-        params.limit, params.offset
+         LIMIT {}",
+        cursor_condition,
+        params.limit + 1
     );
 
-    let rows: Vec<BlockQueryRow> = state
+    let mut rows: Vec<BlockQueryRow> = state
         .pool
         .query_all(&query)
         .await
         .map_err(|e| ApiError::internal(format!("Failed to query blocks: {}", e)))?;
 
+    let has_more = rows.len() as i64 > params.limit;
+    if has_more {
+        rows.pop();
+    }
+
+    let total_query = "SELECT count() as cnt FROM canonical_blocks";
+    #[derive(Debug, Clone, clickhouse::Row, serde::Deserialize)]
+    struct CountRow {
+        cnt: u64,
+    }
+    let total: i64 = state
+        .pool
+        .query_one::<CountRow>(total_query)
+        .await
+        .map_err(|e| ApiError::internal(format!("Failed to count blocks: {}", e)))?
+        .map(|r| r.cnt as i64)
+        .unwrap_or(0);
+
+    let next_cursor = if has_more {
+        rows.last().map(|r| r.number.to_string())
+    } else {
+        None
+    };
+
     let blocks: Vec<BlockResponse> = rows.into_iter().map(|r| r.into()).collect();
-    ok(blocks)
+    ok(CursorPaginatedResponse::new(
+        blocks,
+        total,
+        params.limit,
+        next_cursor,
+    ))
 }
 
 async fn get_block(
