@@ -4,6 +4,7 @@ pub mod db;
 pub mod middleware;
 pub mod response;
 pub mod routes;
+pub mod rpc;
 pub mod tx_block_map;
 pub mod utils;
 pub mod warmup;
