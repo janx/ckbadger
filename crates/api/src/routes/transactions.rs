@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::response::{ok, ApiError, ApiResult};
+use crate::response::{
+    decode_cursor, encode_cursor, ok, ApiError, ApiResult, CursorPaginatedResponse,
+};
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -40,13 +42,17 @@ pub fn routes() -> Router<Arc<AppState>> {
 #[serde(rename_all = "camelCase")]
 struct ListTransactionsParams {
     #[serde(default = "default_limit")]
-    limit: u64,
-    #[serde(default)]
-    offset: u64,
+    limit: i64,
+    cursor: Option<String>,
 }
 
-fn default_limit() -> u64 {
+fn default_limit() -> i64 {
     20
+}
+
+#[derive(Debug, Clone, clickhouse::Row, serde::Deserialize)]
+struct CountRow {
+    count: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -343,17 +349,38 @@ fn u256_from_le_bytes(bytes: &[u8; 32]) -> String {
 async fn list_transactions(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListTransactionsParams>,
-) -> ApiResult<Vec<TransactionResponse>> {
+) -> ApiResult<CursorPaginatedResponse<TransactionResponse>> {
+    let limit = params.limit.min(100);
+
+    let cursor_filter = match params.cursor.as_ref().and_then(|c| decode_cursor(c)) {
+        Some((block_num, tx_idx)) => format!(
+            "AND (t.block_number < {} OR (t.block_number = {} AND t.tx_index < {}))",
+            block_num, block_num, tx_idx
+        ),
+        None => String::new(),
+    };
+
+    let count_query = "SELECT count() as count FROM transactions_all t \
+         INNER JOIN canonical_blocks c ON t.block_number = c.number AND t.block_hash = c.block_hash";
+    let count_row: Option<CountRow> = state
+        .pool
+        .query_one(count_query)
+        .await
+        .map_err(|e| ApiError::internal(format!("Failed to count transactions: {}", e)))?;
+    let total = count_row.map(|r| r.count as i64).unwrap_or(0);
+
     let query = format!(
         "SELECT t.hash, t.block_number, t.block_hash, t.tx_index, t.version, \
          t.inputs_count, t.outputs_count, t.witnesses_count, t.cell_deps_count, t.header_deps_count, \
          t.total_input_capacity, t.total_output_capacity, t.fee, t.tx_size, t.cycles, t.is_cellbase, \
-         toUnixTimestamp64Milli(t.timestamp) as timestamp \
+         t.timestamp \
          FROM transactions_all t \
          INNER JOIN canonical_blocks c ON t.block_number = c.number AND t.block_hash = c.block_hash \
+         WHERE 1=1 {} \
          ORDER BY t.block_number DESC, t.tx_index DESC \
-         LIMIT {} OFFSET {}",
-        params.limit, params.offset
+         LIMIT {}",
+        cursor_filter,
+        limit + 1
     );
 
     let rows: Vec<TransactionQueryRow> = state
@@ -362,8 +389,26 @@ async fn list_transactions(
         .await
         .map_err(|e| ApiError::internal(format!("Failed to query transactions: {}", e)))?;
 
-    let transactions: Vec<TransactionResponse> = rows.into_iter().map(|r| r.into()).collect();
-    ok(transactions)
+    let has_more = rows.len() as i64 > limit;
+    let data: Vec<TransactionResponse> = rows
+        .into_iter()
+        .take(limit as usize)
+        .map(|r| r.into())
+        .collect();
+
+    let next_cursor = if has_more {
+        data.last()
+            .map(|tx| encode_cursor(tx.block_number as i64, tx.tx_index as i32))
+    } else {
+        None
+    };
+
+    ok(CursorPaginatedResponse::new(
+        data,
+        total,
+        limit,
+        next_cursor,
+    ))
 }
 
 async fn get_transaction(
@@ -385,7 +430,7 @@ async fn get_transaction(
         "SELECT t.hash, t.block_number, t.block_hash, t.tx_index, t.version, \
          t.inputs_count, t.outputs_count, t.witnesses_count, t.cell_deps_count, t.header_deps_count, \
          t.total_input_capacity, t.total_output_capacity, t.fee, t.tx_size, t.cycles, t.is_cellbase, \
-         toUnixTimestamp64Milli(t.timestamp) as timestamp \
+         t.timestamp \
          FROM transactions_all t \
          INNER JOIN canonical_blocks c ON t.block_number = c.number AND t.block_hash = c.block_hash \
          WHERE t.hash = unhex('{}') \
@@ -424,7 +469,7 @@ async fn get_transaction_detail(
         "SELECT t.hash, t.block_number, t.block_hash, t.tx_index, t.version, \
          t.inputs_count, t.outputs_count, t.witnesses_count, t.cell_deps_count, t.header_deps_count, \
          t.total_input_capacity, t.total_output_capacity, t.fee, t.tx_size, t.cycles, t.is_cellbase, \
-         toUnixTimestamp64Milli(t.timestamp) as timestamp \
+         t.timestamp \
          FROM transactions_all t \
          INNER JOIN canonical_blocks c ON t.block_number = c.number AND t.block_hash = c.block_hash \
          WHERE t.hash = unhex('{}') \
