@@ -185,9 +185,9 @@ struct DailyAvgBlockTimeRow {
 }
 
 #[derive(Debug, Clone, clickhouse::Row, serde::Deserialize)]
-struct DailyHashRateRow {
+struct DailyCompactTargetRow {
     date: String,
-    hash_rate: f64,
+    avg_compact_target: f64,
 }
 
 fn format_hash_rate(hash_rate: f64) -> String {
@@ -227,7 +227,7 @@ fn format_difficulty(difficulty: u64) -> String {
     }
 }
 
-fn compact_target_to_difficulty(compact_target: u64) -> u64 {
+pub fn compact_target_to_difficulty(compact_target: u64) -> u64 {
     let exponent = (compact_target >> 24) & 0xff;
     let mantissa = compact_target & 0x00ffffff;
 
@@ -242,7 +242,7 @@ fn compact_target_to_difficulty(compact_target: u64) -> u64 {
     }
 }
 
-fn difficulty_to_hash_rate(difficulty: u64) -> f64 {
+pub fn difficulty_to_hash_rate(difficulty: u64) -> f64 {
     (difficulty as f64) * 2.0 / 1.4
 }
 
@@ -437,7 +437,7 @@ async fn get_recent_blocks(
             b.timestamp as timestamp,
             b.transactions_count as transactions_count
         FROM blocks_all b
-        INNER JOIN canonical_blocks FINAL c ON b.number = c.number AND b.hash = c.block_hash
+        INNER JOIN canonical_blocks AS c FINAL ON b.number = c.number AND b.hash = c.block_hash
         ORDER BY b.number DESC
         LIMIT 10
     "#;
@@ -472,16 +472,16 @@ async fn get_recent_blocks(
 
 async fn get_transaction_count_chart(
     State(state): State<Arc<AppState>>,
-) -> ApiResult<Vec<ChartDataPoint>> {
+) -> ApiResult<ChartResponse> {
     if let Some(cached) = state
         .cache
-        .get::<Vec<ChartDataPoint>>(CACHE_KEY_CHART_TX_COUNT)
+        .get::<ChartResponse>(CACHE_KEY_CHART_TX_COUNT)
         .await
     {
         return ok(cached);
     }
 
-    let query = r#"
+    let mv_query = r#"
         SELECT 
             toString(date) as date,
             sum(tx_count) as count
@@ -492,44 +492,64 @@ async fn get_transaction_count_chart(
         LIMIT 30
     "#;
 
-    let rows: Vec<DailyCountRow> = state
-        .pool
-        .query_all(query)
-        .await
-        .map_err(|e| ApiError::internal(format!("Failed to query transaction count: {}", e)))?;
+    let mut rows: Vec<DailyCountRow> = state.pool.query_all(mv_query).await.unwrap_or_default();
+
+    if rows.is_empty() {
+        let fallback_query = r#"
+            SELECT 
+                toString(toDate(fromUnixTimestamp64Milli(b.timestamp))) as date,
+                count() as count
+            FROM transactions_all t
+            INNER JOIN blocks_all b ON t.block_number = b.number AND t.block_hash = b.hash
+            WHERE t.block_number >= (SELECT max(number) - 324000 FROM canonical_blocks)
+            GROUP BY date
+            ORDER BY date DESC
+            LIMIT 30
+        "#;
+        rows = state
+            .pool
+            .query_all(fallback_query)
+            .await
+            .unwrap_or_default();
+    }
 
     let data: Vec<ChartDataPoint> = rows
         .into_iter()
+        .rev()
         .map(|r| ChartDataPoint {
             date: r.date,
             value: r.count.to_string(),
         })
         .collect();
 
+    let response = ChartResponse {
+        data,
+        title: "Transaction Count".to_string(),
+        y_axis_label: "Transactions".to_string(),
+    };
+
     state
         .cache
         .set(
             CACHE_KEY_CHART_TX_COUNT,
-            &data,
+            &response,
             Duration::from_secs(CACHE_TTL_CHART_SECS),
         )
         .await;
 
-    ok(data)
+    ok(response)
 }
 
-async fn get_cell_count_chart(
-    State(state): State<Arc<AppState>>,
-) -> ApiResult<Vec<ChartDataPoint>> {
+async fn get_cell_count_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
     if let Some(cached) = state
         .cache
-        .get::<Vec<ChartDataPoint>>(CACHE_KEY_CHART_CELL_COUNT)
+        .get::<ChartResponse>(CACHE_KEY_CHART_CELL_COUNT)
         .await
     {
         return ok(cached);
     }
 
-    let query = r#"
+    let mv_query = r#"
         SELECT 
             toString(date) as date,
             sum(cell_count) as count
@@ -540,30 +560,52 @@ async fn get_cell_count_chart(
         LIMIT 30
     "#;
 
-    let rows: Vec<DailyCountRow> = state
-        .pool
-        .query_all(query)
-        .await
-        .map_err(|e| ApiError::internal(format!("Failed to query cell count: {}", e)))?;
+    let mut rows: Vec<DailyCountRow> = state.pool.query_all(mv_query).await.unwrap_or_default();
+
+    if rows.is_empty() {
+        let fallback_query = r#"
+            SELECT 
+                toString(toDate(fromUnixTimestamp64Milli(b.timestamp))) as date,
+                count() as count
+            FROM cell_outputs_all co
+            INNER JOIN blocks_all b ON co.block_number = b.number AND co.block_hash = b.hash
+            WHERE co.block_number >= (SELECT max(number) - 324000 FROM canonical_blocks)
+            GROUP BY date
+            ORDER BY date DESC
+            LIMIT 30
+        "#;
+        rows = state
+            .pool
+            .query_all(fallback_query)
+            .await
+            .unwrap_or_default();
+    }
 
     let data: Vec<ChartDataPoint> = rows
         .into_iter()
+        .rev()
         .map(|r| ChartDataPoint {
             date: r.date,
             value: r.count.to_string(),
         })
         .collect();
 
+    let response = ChartResponse {
+        data,
+        title: "Cell Count".to_string(),
+        y_axis_label: "Cells".to_string(),
+    };
+
     state
         .cache
         .set(
             CACHE_KEY_CHART_CELL_COUNT,
-            &data,
+            &response,
             Duration::from_secs(CACHE_TTL_CHART_SECS),
         )
         .await;
 
-    ok(data)
+    ok(response)
 }
 
 async fn get_knowledge_size_chart(State(_state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
@@ -615,19 +657,20 @@ async fn get_average_block_time_chart(
         return ok(cached);
     }
 
-    // Optimized: use leadInFrame window function instead of self-join
-    // This reduces O(n²) to O(n) by computing next block's timestamp in single pass
     let query = r#"
         SELECT 
             date,
             avg(block_time) / 1000.0 as avg_time
         FROM (
             SELECT 
-                toString(toDate(fromUnixTimestamp64Milli(b.timestamp))) as date,
-                leadInFrame(b.timestamp, 1) OVER (ORDER BY b.number) - b.timestamp as block_time
-            FROM blocks_all b
-            INNER JOIN canonical_blocks FINAL c ON b.number = c.number AND b.hash = c.block_hash
-            WHERE b.timestamp >= toUnixTimestamp64Milli(now64(3)) - 2592000000
+                toString(toDate(fromUnixTimestamp64Milli(timestamp))) as date,
+                neighbor(timestamp, 1) - timestamp as block_time
+            FROM (
+                SELECT b.timestamp as timestamp
+                FROM blocks_all b
+                WHERE b.number >= (SELECT max(number) - 324000 FROM canonical_blocks)
+                ORDER BY b.number
+            )
         )
         WHERE block_time > 0 AND block_time < 600000
         GROUP BY date
@@ -673,26 +716,32 @@ async fn get_hash_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<Ch
         return ok(cached);
     }
 
+    // Query average compact_target per day, then calculate difficulty and hash rate in Rust
     let query = r#"
         SELECT 
             toString(toDate(fromUnixTimestamp64Milli(b.timestamp))) as date,
-            avg(b.difficulty) * 2.0 / 1.4 as hash_rate
+            avg(b.compact_target) as avg_compact_target
         FROM blocks_all b
-        INNER JOIN canonical_blocks FINAL c ON b.number = c.number AND b.hash = c.block_hash
+        INNER JOIN (SELECT number, block_hash FROM canonical_blocks FINAL) c 
+            ON b.number = c.number AND b.hash = c.block_hash
         WHERE b.timestamp >= toUnixTimestamp64Milli(now64(3)) - 2592000000
         GROUP BY date
         ORDER BY date DESC
         LIMIT 30
     "#;
 
-    let rows: Vec<DailyHashRateRow> = state.pool.query_all(query).await.unwrap_or_default();
+    let rows: Vec<DailyCompactTargetRow> = state.pool.query_all(query).await.unwrap_or_default();
 
     let data: Vec<ChartDataPoint> = rows
         .into_iter()
         .rev()
-        .map(|r| ChartDataPoint {
-            date: r.date,
-            value: format!("{:.0}", r.hash_rate),
+        .map(|r| {
+            let difficulty = compact_target_to_difficulty(r.avg_compact_target as u64);
+            let hash_rate = difficulty_to_hash_rate(difficulty);
+            ChartDataPoint {
+                date: r.date,
+                value: format!("{:.0}", hash_rate),
+            }
         })
         .collect();
 
@@ -836,6 +885,33 @@ mod tests {
         let compact = 0x1a06d765u64;
         let difficulty = compact_target_to_difficulty(compact);
         assert!(difficulty > 0);
+    }
+
+    #[test]
+    fn test_compact_target_to_difficulty_small_exponent() {
+        // exponent = 3, mantissa = 0x123456
+        let compact = 0x03123456u64;
+        let difficulty = compact_target_to_difficulty(compact);
+        // When exponent <= 3: mantissa >> (8 * (3 - exponent)) = 0x123456 >> 0 = 0x123456
+        assert_eq!(difficulty, 0x123456);
+    }
+
+    #[test]
+    fn test_compact_target_to_difficulty_large_exponent() {
+        // exponent = 25 (0x19), shift = 8 * (25-3) = 176 >= 64, should return u64::MAX
+        let compact = 0x190cd71du64;
+        let difficulty = compact_target_to_difficulty(compact);
+        assert_eq!(difficulty, u64::MAX);
+    }
+
+    #[test]
+    fn test_compact_target_to_difficulty_medium_exponent() {
+        // exponent = 5, mantissa = 0x00ff00
+        // shift = 8 * (5 - 3) = 16 < 64
+        // difficulty = 0xff00 << 16 = 0xff000000
+        let compact = 0x0500ff00u64;
+        let difficulty = compact_target_to_difficulty(compact);
+        assert_eq!(difficulty, 0xff00 << 16);
     }
 
     #[test]

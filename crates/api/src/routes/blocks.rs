@@ -254,7 +254,7 @@ async fn list_blocks(
     let query = format!(
         "SELECT b.number, b.hash, b.transactions_count, b.proposals_count, b.timestamp \
          FROM blocks_all b \
-         INNER JOIN canonical_blocks FINAL c ON b.number = c.number AND b.hash = c.block_hash \
+         INNER JOIN canonical_blocks AS c FINAL ON b.number = c.number AND b.hash = c.block_hash \
          WHERE 1=1 {} \
          ORDER BY b.number DESC \
          LIMIT {}",
@@ -323,7 +323,7 @@ async fn get_block(
              b.extension, b.proposals_hash, b.transactions_root, b.uncles_hash, \
              b.miner_lock_hash, b.miner_message, toString(b.total_difficulty) as total_difficulty, b.reward \
              FROM blocks_all b \
-             INNER JOIN canonical_blocks FINAL c ON b.number = c.number AND b.hash = c.block_hash \
+             INNER JOIN canonical_blocks AS c FINAL ON b.number = c.number AND b.hash = c.block_hash \
              WHERE b.hash = unhex('{}') \
              LIMIT 1",
             hex::encode(hash_bytes)
@@ -340,7 +340,7 @@ async fn get_block(
              b.extension, b.proposals_hash, b.transactions_root, b.uncles_hash, \
              b.miner_lock_hash, b.miner_message, toString(b.total_difficulty) as total_difficulty, b.reward \
              FROM blocks_all b \
-             INNER JOIN canonical_blocks FINAL c ON b.number = c.number AND b.hash = c.block_hash \
+             INNER JOIN canonical_blocks AS c FINAL ON b.number = c.number AND b.hash = c.block_hash \
              WHERE b.number = {} \
              LIMIT 1",
             block_number
@@ -384,7 +384,7 @@ async fn get_block_fee_stats(
         let query = format!(
             "SELECT b.number \
              FROM blocks_all b \
-             INNER JOIN canonical_blocks FINAL c ON b.number = c.number AND b.hash = c.block_hash \
+             INNER JOIN canonical_blocks AS c FINAL ON b.number = c.number AND b.hash = c.block_hash \
              WHERE b.hash = unhex('{}') \
              LIMIT 1",
             hex::encode(&hash_bytes)
@@ -412,7 +412,7 @@ async fn get_block_fee_stats(
             avg(t.fee) as avg_fee, \
             quantile(0.5)(t.fee) as median_fee \
          FROM transactions_all t \
-         INNER JOIN canonical_blocks FINAL c ON t.block_number = c.number AND t.block_hash = c.block_hash \
+         INNER JOIN canonical_blocks AS c FINAL ON t.block_number = c.number AND t.block_hash = c.block_hash \
          WHERE t.block_number = {} AND t.is_cellbase = 0",
         block_number
     );
@@ -457,7 +457,7 @@ async fn get_block_proposals(
         let query = format!(
             "SELECT b.number, b.proposals_count \
              FROM blocks_all b \
-             INNER JOIN canonical_blocks FINAL c ON b.number = c.number AND b.hash = c.block_hash \
+             INNER JOIN canonical_blocks AS c FINAL ON b.number = c.number AND b.hash = c.block_hash \
              WHERE b.hash = unhex('{}') \
              LIMIT 1",
             hex::encode(&hash_bytes)
@@ -479,7 +479,7 @@ async fn get_block_proposals(
         let query = format!(
             "SELECT b.number, b.proposals_count \
              FROM blocks_all b \
-             INNER JOIN canonical_blocks FINAL c ON b.number = c.number AND b.hash = c.block_hash \
+             INNER JOIN canonical_blocks AS c FINAL ON b.number = c.number AND b.hash = c.block_hash \
              WHERE b.number = {} \
              LIMIT 1",
             block_number

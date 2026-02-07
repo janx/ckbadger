@@ -381,7 +381,7 @@ async fn list_transactions(
          t.total_input_capacity, t.total_output_capacity, t.fee, t.tx_size, t.cycles, t.is_cellbase, \
          t.timestamp \
          FROM transactions_all t \
-         INNER JOIN canonical_blocks FINAL c ON t.block_number = c.number AND t.block_hash = c.block_hash \
+         INNER JOIN canonical_blocks AS c FINAL ON t.block_number = c.number AND t.block_hash = c.block_hash \
          WHERE 1=1 {} \
          ORDER BY t.block_number DESC, t.tx_index DESC \
          LIMIT {}",
@@ -452,7 +452,7 @@ async fn get_transaction(
          t.total_input_capacity, t.total_output_capacity, t.fee, t.tx_size, t.cycles, t.is_cellbase, \
          t.timestamp \
          FROM transactions_all t \
-         INNER JOIN canonical_blocks FINAL c ON t.block_number = c.number AND t.block_hash = c.block_hash \
+         INNER JOIN canonical_blocks AS c FINAL ON t.block_number = c.number AND t.block_hash = c.block_hash \
          WHERE t.hash = unhex('{}') \
          LIMIT 1",
         hex::encode(&hash_bytes)
@@ -513,7 +513,7 @@ async fn get_transaction_detail(
          t.total_input_capacity, t.total_output_capacity, t.fee, t.tx_size, t.cycles, t.is_cellbase, \
          t.timestamp \
          FROM transactions_all t \
-         INNER JOIN canonical_blocks FINAL c ON t.block_number = c.number AND t.block_hash = c.block_hash \
+         INNER JOIN canonical_blocks AS c FINAL ON t.block_number = c.number AND t.block_hash = c.block_hash \
          WHERE t.hash = unhex('{}') \
          LIMIT 1",
         hash_hex
@@ -534,7 +534,7 @@ async fn get_transaction_detail(
     let inputs_query = format!(
         "SELECT i.input_index, i.previous_tx_hash, i.previous_output_index, i.since \
          FROM cell_inputs_all i \
-         INNER JOIN canonical_blocks FINAL c ON i.tx_block_number = c.number \
+         INNER JOIN canonical_blocks AS c FINAL ON i.tx_block_number = c.number \
          INNER JOIN transactions_all t ON i.tx_hash = t.hash AND i.tx_block_number = t.block_number AND t.block_hash = c.block_hash \
          WHERE i.tx_hash = unhex('{}') \
          ORDER BY i.input_index",
@@ -551,7 +551,7 @@ async fn get_transaction_detail(
     let outputs_query = format!(
         "SELECT o.output_index, o.capacity, o.lock_script_hash, o.type_script_hash, o.data_size \
          FROM cell_outputs_all o \
-         INNER JOIN canonical_blocks FINAL c ON o.block_number = c.number AND o.block_hash = c.block_hash \
+         INNER JOIN canonical_blocks AS c FINAL ON o.block_number = c.number AND o.block_hash = c.block_hash \
          WHERE o.tx_hash = unhex('{}') \
          ORDER BY o.output_index",
         hash_hex
@@ -601,7 +601,7 @@ async fn get_cell_deps(
     let query = format!(
         "SELECT d.dep_index, d.out_point_tx_hash, d.out_point_index, d.dep_type \
          FROM transaction_cell_deps d \
-         INNER JOIN canonical_blocks FINAL c ON d.tx_block_number = c.number \
+         INNER JOIN canonical_blocks AS c FINAL ON d.tx_block_number = c.number \
          INNER JOIN transactions_all t ON d.tx_hash = t.hash AND d.tx_block_number = t.block_number AND t.block_hash = c.block_hash \
          WHERE d.tx_hash = unhex('{}') \
          ORDER BY d.dep_index",
@@ -666,7 +666,7 @@ async fn get_tx_activities(
         "SELECT a.activity_id, a.activity_type, a.activity_category, a.activity_index, \
          a.from_lock_hash, a.to_lock_hash, a.amount, a.asset_id, a.metadata \
          FROM activities_all a \
-         INNER JOIN canonical_blocks FINAL c ON a.block_number = c.number \
+         INNER JOIN canonical_blocks AS c FINAL ON a.block_number = c.number \
          INNER JOIN transactions_all t ON a.tx_hash = t.hash AND a.block_number = t.block_number AND t.block_hash = c.block_hash \
          WHERE a.tx_hash = unhex('{}') \
          ORDER BY a.activity_index",

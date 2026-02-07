@@ -250,9 +250,18 @@ Reorgs are handled by versioning, not deletion:
 When joining with `canonical_blocks` (ReplacingMergeTree), **ALWAYS use FINAL**:
 
 ```sql
--- CORRECT: Use FINAL to get deduplicated results
+-- CORRECT: Use FINAL with AS alias (the FINAL keyword must come AFTER the alias)
 SELECT ... FROM transactions_all t
-INNER JOIN canonical_blocks FINAL c ON t.block_number = c.number AND t.block_hash = c.block_hash
+INNER JOIN canonical_blocks AS c FINAL ON t.block_number = c.number AND t.block_hash = c.block_hash
+
+-- ALTERNATIVE: Use subquery with FINAL
+SELECT ... FROM transactions_all t
+INNER JOIN (SELECT number, block_hash FROM canonical_blocks FINAL) c
+  ON t.block_number = c.number AND t.block_hash = c.block_hash
+
+-- WRONG: FINAL before alias causes syntax error
+SELECT ... FROM transactions_all t
+INNER JOIN canonical_blocks FINAL c ON ...  -- SYNTAX ERROR!
 
 -- WRONG: May return duplicate rows during merge
 SELECT ... FROM transactions_all t

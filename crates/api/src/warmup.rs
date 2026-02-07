@@ -2,7 +2,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::routes::statistics::{
-    ChartDataPoint, ChartResponse, RecentBlockResponse, TxStatsDataPoint, TxStatsResponse,
+    compact_target_to_difficulty, difficulty_to_hash_rate, ChartDataPoint, ChartResponse,
+    RecentBlockResponse, TxStatsDataPoint, TxStatsResponse,
 };
 use crate::AppState;
 
@@ -50,9 +51,9 @@ struct DailyAvgBlockTimeRow {
 }
 
 #[derive(Debug, Clone, clickhouse::Row, serde::Deserialize)]
-struct DailyHashRateRow {
+struct DailyCompactTargetRow {
     date: String,
-    hash_rate: f64,
+    avg_compact_target: f64,
 }
 
 pub async fn warmup_chart_caches(state: Arc<AppState>) {
@@ -88,7 +89,7 @@ async fn warmup_tx_stats(state: &AppState) -> bool {
             formatDateTime(fromUnixTimestamp64Milli(b.timestamp), '%H:%M') as hour_label,
             count() as tx_count
         FROM transactions_all t
-        INNER JOIN canonical_blocks FINAL c ON t.block_number = c.number AND t.block_hash = c.block_hash
+        INNER JOIN canonical_blocks AS c FINAL ON t.block_number = c.number AND t.block_hash = c.block_hash
         INNER JOIN blocks_all b ON c.number = b.number AND c.block_hash = b.hash
         WHERE b.timestamp >= (toUnixTimestamp64Milli(now64(3)) - 3600000)
         GROUP BY toStartOfFiveMinutes(fromUnixTimestamp64Milli(b.timestamp)), hour_label
@@ -103,7 +104,7 @@ async fn warmup_tx_stats(state: &AppState) -> bool {
             formatDateTime(fromUnixTimestamp64Milli(b.timestamp), '%m/%d') as day_label,
             count() as tx_count
         FROM transactions_all t
-        INNER JOIN canonical_blocks FINAL c ON t.block_number = c.number AND t.block_hash = c.block_hash
+        INNER JOIN canonical_blocks AS c FINAL ON t.block_number = c.number AND t.block_hash = c.block_hash
         INNER JOIN blocks_all b ON c.number = b.number AND c.block_hash = b.hash
         WHERE b.timestamp >= (toUnixTimestamp64Milli(now64(3)) - 86400000)
         GROUP BY toStartOfHour(fromUnixTimestamp64Milli(b.timestamp)), day_label
@@ -152,7 +153,7 @@ async fn warmup_recent_blocks(state: &AppState) -> bool {
             b.timestamp as timestamp,
             b.transactions_count as transactions_count
         FROM blocks_all b
-        INNER JOIN canonical_blocks FINAL c ON b.number = c.number AND b.hash = c.block_hash
+        INNER JOIN canonical_blocks AS c FINAL ON b.number = c.number AND b.hash = c.block_hash
         ORDER BY b.number DESC
         LIMIT 10
     "#;
@@ -191,9 +192,8 @@ async fn warmup_tx_count_chart(state: &AppState) -> bool {
             toString(toDate(fromUnixTimestamp64Milli(b.timestamp))) as date,
             count() as count
         FROM transactions_all t
-        INNER JOIN canonical_blocks FINAL c ON t.block_number = c.number AND t.block_hash = c.block_hash
-        INNER JOIN blocks_all b ON c.number = b.number AND c.block_hash = b.hash
-        WHERE b.timestamp >= toUnixTimestamp64Milli(now64(3)) - 2592000000
+        INNER JOIN blocks_all b ON t.block_number = b.number AND t.block_hash = b.hash
+        WHERE t.block_number >= (SELECT max(number) - 324000 FROM canonical_blocks)
         GROUP BY date
         ORDER BY date DESC
         LIMIT 30
@@ -206,17 +206,24 @@ async fn warmup_tx_count_chart(state: &AppState) -> bool {
 
     let data: Vec<ChartDataPoint> = rows
         .into_iter()
+        .rev()
         .map(|r| ChartDataPoint {
             date: r.date,
             value: r.count.to_string(),
         })
         .collect();
 
+    let response = ChartResponse {
+        data,
+        title: "Transaction Count".to_string(),
+        y_axis_label: "Transactions".to_string(),
+    };
+
     state
         .cache
         .set(
             CACHE_KEY_CHART_TX_COUNT,
-            &data,
+            &response,
             Duration::from_secs(CACHE_TTL_CHART_SECS),
         )
         .await;
@@ -231,9 +238,8 @@ async fn warmup_cell_count_chart(state: &AppState) -> bool {
             toString(toDate(fromUnixTimestamp64Milli(b.timestamp))) as date,
             count() as count
         FROM cell_outputs_all co
-        INNER JOIN canonical_blocks FINAL c ON co.block_number = c.number AND co.block_hash = c.block_hash
-        INNER JOIN blocks_all b ON c.number = b.number AND c.block_hash = b.hash
-        WHERE b.timestamp >= toUnixTimestamp64Milli(now64(3)) - 2592000000
+        INNER JOIN blocks_all b ON co.block_number = b.number AND co.block_hash = b.hash
+        WHERE co.block_number >= (SELECT max(number) - 324000 FROM canonical_blocks)
         GROUP BY date
         ORDER BY date DESC
         LIMIT 30
@@ -246,17 +252,24 @@ async fn warmup_cell_count_chart(state: &AppState) -> bool {
 
     let data: Vec<ChartDataPoint> = rows
         .into_iter()
+        .rev()
         .map(|r| ChartDataPoint {
             date: r.date,
             value: r.count.to_string(),
         })
         .collect();
 
+    let response = ChartResponse {
+        data,
+        title: "Cell Count".to_string(),
+        y_axis_label: "Cells".to_string(),
+    };
+
     state
         .cache
         .set(
             CACHE_KEY_CHART_CELL_COUNT,
-            &data,
+            &response,
             Duration::from_secs(CACHE_TTL_CHART_SECS),
         )
         .await;
@@ -272,11 +285,14 @@ async fn warmup_avg_block_time_chart(state: &AppState) -> bool {
             avg(block_time) / 1000.0 as avg_time
         FROM (
             SELECT 
-                toString(toDate(fromUnixTimestamp64Milli(b.timestamp))) as date,
-                leadInFrame(b.timestamp, 1) OVER (ORDER BY b.number) - b.timestamp as block_time
-            FROM blocks_all b
-            INNER JOIN canonical_blocks FINAL c ON b.number = c.number AND b.hash = c.block_hash
-            WHERE b.timestamp >= toUnixTimestamp64Milli(now64(3)) - 2592000000
+                toString(toDate(fromUnixTimestamp64Milli(timestamp))) as date,
+                neighbor(timestamp, 1) - timestamp as block_time
+            FROM (
+                SELECT b.timestamp as timestamp
+                FROM blocks_all b
+                WHERE b.number >= (SELECT max(number) - 324000 FROM canonical_blocks)
+                ORDER BY b.number
+            )
         )
         WHERE block_time > 0 AND block_time < 600000
         GROUP BY date
@@ -324,16 +340,15 @@ async fn warmup_hash_rate_chart(state: &AppState) -> bool {
     let query = r#"
         SELECT 
             toString(toDate(fromUnixTimestamp64Milli(b.timestamp))) as date,
-            avg(b.difficulty) * 2.0 / 1.4 as hash_rate
+            avg(b.compact_target) as avg_compact_target
         FROM blocks_all b
-        INNER JOIN canonical_blocks FINAL c ON b.number = c.number AND b.hash = c.block_hash
-        WHERE b.timestamp >= toUnixTimestamp64Milli(now64(3)) - 2592000000
+        WHERE b.number >= (SELECT max(number) - 324000 FROM canonical_blocks)
         GROUP BY date
         ORDER BY date DESC
         LIMIT 30
     "#;
 
-    let rows: Vec<DailyHashRateRow> = match state.pool.query_all(query).await {
+    let rows: Vec<DailyCompactTargetRow> = match state.pool.query_all(query).await {
         Ok(r) => r,
         Err(_) => return false,
     };
@@ -341,9 +356,13 @@ async fn warmup_hash_rate_chart(state: &AppState) -> bool {
     let data: Vec<ChartDataPoint> = rows
         .into_iter()
         .rev()
-        .map(|r| ChartDataPoint {
-            date: r.date,
-            value: format!("{:.0}", r.hash_rate),
+        .map(|r| {
+            let difficulty = compact_target_to_difficulty(r.avg_compact_target as u64);
+            let hash_rate = difficulty_to_hash_rate(difficulty);
+            ChartDataPoint {
+                date: r.date,
+                value: format!("{:.0}", hash_rate),
+            }
         })
         .collect();
 
