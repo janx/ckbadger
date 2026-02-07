@@ -60,6 +60,9 @@ dotenvy = "0.15"
 # Cache
 redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
 
+# Database
+clickhouse = { version = "0.14", features = ["lz4"] }
+
 # CLI
 clap = { version = "4.5", features = ["derive", "env"] }
 

@@ -22,6 +22,7 @@ dotenvy = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 redis = { workspace = true }
+clickhouse = { workspace = true }
 
 ratatui = "0.29"
 crossterm = "0.28"

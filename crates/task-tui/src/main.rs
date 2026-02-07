@@ -21,8 +21,11 @@ use ui::{App, FocusedPanel};
 #[command(name = "ckbadger-task-tui")]
 #[command(about = "Terminal UI for ckbadger task management")]
 struct Args {
-    #[arg(long, env = "DATABASE_URL")]
-    database_url: String,
+    #[arg(long, env = "CLICKHOUSE_URL", default_value = "http://localhost:8123")]
+    clickhouse_url: String,
+
+    #[arg(long, env = "CLICKHOUSE_DATABASE", default_value = "ckbadger")]
+    clickhouse_database: String,
 
     #[arg(long, env = "REDIS_URL")]
     redis_url: Option<String>,
@@ -37,7 +40,10 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
 
-    let pool = DbPool;
+    let config =
+        ckbadger_common::ClickHouseConfig::new(&args.clickhouse_url, &args.clickhouse_database);
+    let client = ckbadger_common::ClickHouseClient::new(config);
+    let pool = DbPool::new(client);
 
     let db = TaskDb::new(pool, args.redis_url.as_deref()).await;
 
