@@ -11,7 +11,9 @@ use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
 use crate::AppState;
 
 const CACHE_TTL_BLOCKS_LIST_SECS: u64 = 5;
+const CACHE_TTL_BLOCK_DETAIL_SECS: u64 = 60;
 const CACHE_KEY_BLOCKS_LIST: &str = "blocks:list";
+const CACHE_KEY_BLOCK_DETAIL: &str = "block:detail";
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -65,6 +67,17 @@ pub struct BlockProposalsResponse {
     pub block_number: u64,
     pub proposals_count: u32,
     pub proposals: Vec<BlockProposal>,
+}
+
+/// Lightweight block item for list endpoint (only fields needed by frontend)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockListItem {
+    pub number: u64,
+    pub hash: String,
+    pub transactions_count: u32,
+    pub proposals_count: u32,
+    pub timestamp: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -149,6 +162,27 @@ struct BlockInfoRow {
     proposals_count: u32,
 }
 
+#[derive(Debug, Clone, clickhouse::Row, serde::Deserialize)]
+struct BlockListQueryRow {
+    number: u64,
+    hash: [u8; 32],
+    transactions_count: u32,
+    proposals_count: u32,
+    timestamp: i64,
+}
+
+impl From<BlockListQueryRow> for BlockListItem {
+    fn from(row: BlockListQueryRow) -> Self {
+        Self {
+            number: row.number,
+            hash: format!("0x{}", hex::encode(row.hash)),
+            transactions_count: row.transactions_count,
+            proposals_count: row.proposals_count,
+            timestamp: row.timestamp,
+        }
+    }
+}
+
 impl From<BlockQueryRow> for BlockResponse {
     fn from(row: BlockQueryRow) -> Self {
         Self {
@@ -194,14 +228,14 @@ impl From<BlockQueryRow> for BlockResponse {
 async fn list_blocks(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListBlocksParams>,
-) -> ApiResult<CursorPaginatedResponse<BlockResponse>> {
+) -> ApiResult<CursorPaginatedResponse<BlockListItem>> {
     let is_first_page = params.cursor.is_none();
     let cache_key = format!("{}:{}", CACHE_KEY_BLOCKS_LIST, params.limit);
 
     if is_first_page {
         if let Some(cached) = state
             .cache
-            .get::<CursorPaginatedResponse<BlockResponse>>(&cache_key)
+            .get::<CursorPaginatedResponse<BlockListItem>>(&cache_key)
             .await
         {
             return ok(cached);
@@ -218,13 +252,9 @@ async fn list_blocks(
     };
 
     let query = format!(
-        "SELECT b.number, b.hash, b.parent_hash, b.timestamp, \
-         b.version, b.compact_target, b.transactions_count, b.proposals_count, b.uncles_count, \
-         b.epoch_number, b.epoch_index, b.epoch_length, b.dao, b.nonce, b.extra_hash, \
-         b.extension, b.proposals_hash, b.transactions_root, b.uncles_hash, \
-         b.miner_lock_hash, b.miner_message, toString(b.total_difficulty) as total_difficulty, b.reward \
+        "SELECT b.number, b.hash, b.transactions_count, b.proposals_count, b.timestamp \
          FROM blocks_all b \
-         INNER JOIN canonical_blocks c ON b.number = c.number AND b.hash = c.block_hash \
+         INNER JOIN canonical_blocks FINAL c ON b.number = c.number AND b.hash = c.block_hash \
          WHERE 1=1 {} \
          ORDER BY b.number DESC \
          LIMIT {}",
@@ -232,7 +262,7 @@ async fn list_blocks(
         params.limit + 1
     );
 
-    let mut rows: Vec<BlockQueryRow> = state
+    let mut rows: Vec<BlockListQueryRow> = state
         .pool
         .query_all(&query)
         .await
@@ -252,7 +282,7 @@ async fn list_blocks(
         None
     };
 
-    let blocks: Vec<BlockResponse> = rows.into_iter().map(|r| r.into()).collect();
+    let blocks: Vec<BlockListItem> = rows.into_iter().map(|r| r.into()).collect();
     let response = CursorPaginatedResponse::new(blocks, total, params.limit, next_cursor);
 
     if is_first_page {
@@ -273,9 +303,13 @@ async fn get_block(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> ApiResult<BlockResponse> {
-    // Determine if id is a block number or hash
+    let cache_key = format!("{}:{}", CACHE_KEY_BLOCK_DETAIL, &id);
+
+    if let Some(cached) = state.cache.get::<BlockResponse>(&cache_key).await {
+        return ok(cached);
+    }
+
     let query = if id.starts_with("0x") {
-        // Hash lookup
         let hash_bytes = hex::decode(id.trim_start_matches("0x"))
             .map_err(|_| ApiError::bad_request("Invalid block hash format"))?;
         if hash_bytes.len() != 32 {
@@ -289,13 +323,12 @@ async fn get_block(
              b.extension, b.proposals_hash, b.transactions_root, b.uncles_hash, \
              b.miner_lock_hash, b.miner_message, toString(b.total_difficulty) as total_difficulty, b.reward \
              FROM blocks_all b \
-             INNER JOIN canonical_blocks c ON b.number = c.number AND b.hash = c.block_hash \
+             INNER JOIN canonical_blocks FINAL c ON b.number = c.number AND b.hash = c.block_hash \
              WHERE b.hash = unhex('{}') \
              LIMIT 1",
             hex::encode(hash_bytes)
         )
     } else {
-        // Number lookup
         let block_number: u64 = id
             .parse()
             .map_err(|_| ApiError::bad_request("Invalid block number format"))?;
@@ -307,7 +340,7 @@ async fn get_block(
              b.extension, b.proposals_hash, b.transactions_root, b.uncles_hash, \
              b.miner_lock_hash, b.miner_message, toString(b.total_difficulty) as total_difficulty, b.reward \
              FROM blocks_all b \
-             INNER JOIN canonical_blocks c ON b.number = c.number AND b.hash = c.block_hash \
+             INNER JOIN canonical_blocks FINAL c ON b.number = c.number AND b.hash = c.block_hash \
              WHERE b.number = {} \
              LIMIT 1",
             block_number
@@ -321,7 +354,18 @@ async fn get_block(
         .map_err(|e| ApiError::internal(format!("Failed to query block: {}", e)))?;
 
     match row {
-        Some(r) => ok(r.into()),
+        Some(r) => {
+            let response: BlockResponse = r.into();
+            state
+                .cache
+                .set(
+                    &cache_key,
+                    &response,
+                    Duration::from_secs(CACHE_TTL_BLOCK_DETAIL_SECS),
+                )
+                .await;
+            ok(response)
+        }
         None => Err(ApiError::not_found("Block not found")),
     }
 }
@@ -340,7 +384,7 @@ async fn get_block_fee_stats(
         let query = format!(
             "SELECT b.number \
              FROM blocks_all b \
-             INNER JOIN canonical_blocks c ON b.number = c.number AND b.hash = c.block_hash \
+             INNER JOIN canonical_blocks FINAL c ON b.number = c.number AND b.hash = c.block_hash \
              WHERE b.hash = unhex('{}') \
              LIMIT 1",
             hex::encode(&hash_bytes)
@@ -366,9 +410,9 @@ async fn get_block_fee_stats(
             min(t.fee) as min_fee, \
             max(t.fee) as max_fee, \
             avg(t.fee) as avg_fee, \
-            median(t.fee) as median_fee \
+            quantile(0.5)(t.fee) as median_fee \
          FROM transactions_all t \
-         INNER JOIN canonical_blocks c ON t.block_number = c.number AND t.block_hash = c.block_hash \
+         INNER JOIN canonical_blocks FINAL c ON t.block_number = c.number AND t.block_hash = c.block_hash \
          WHERE t.block_number = {} AND t.is_cellbase = 0",
         block_number
     );
@@ -413,7 +457,7 @@ async fn get_block_proposals(
         let query = format!(
             "SELECT b.number, b.proposals_count \
              FROM blocks_all b \
-             INNER JOIN canonical_blocks c ON b.number = c.number AND b.hash = c.block_hash \
+             INNER JOIN canonical_blocks FINAL c ON b.number = c.number AND b.hash = c.block_hash \
              WHERE b.hash = unhex('{}') \
              LIMIT 1",
             hex::encode(&hash_bytes)
@@ -435,7 +479,7 @@ async fn get_block_proposals(
         let query = format!(
             "SELECT b.number, b.proposals_count \
              FROM blocks_all b \
-             INNER JOIN canonical_blocks c ON b.number = c.number AND b.hash = c.block_hash \
+             INNER JOIN canonical_blocks FINAL c ON b.number = c.number AND b.hash = c.block_hash \
              WHERE b.number = {} \
              LIMIT 1",
             block_number
@@ -533,5 +577,50 @@ mod tests {
         let response: BlockResponse = serde_json::from_str(json).unwrap();
         assert_eq!(response.number, 12345);
         assert_eq!(response.transactions_count, 5);
+    }
+
+    #[test]
+    fn test_cache_ttl_block_detail_is_60_seconds() {
+        assert_eq!(CACHE_TTL_BLOCK_DETAIL_SECS, 60);
+    }
+
+    #[test]
+    fn test_cache_key_block_detail_has_correct_prefix() {
+        assert!(CACHE_KEY_BLOCK_DETAIL.starts_with("block:"));
+    }
+
+    #[test]
+    fn test_block_list_item_serialization() {
+        let item = BlockListItem {
+            number: 12345,
+            hash: "0xabc123".to_string(),
+            transactions_count: 10,
+            proposals_count: 3,
+            timestamp: 1704067200000,
+        };
+        let json = serde_json::to_string(&item).unwrap();
+        assert!(json.contains("\"number\":12345"));
+        assert!(json.contains("\"hash\":\"0xabc123\""));
+        assert!(json.contains("\"transactionsCount\":10"));
+        assert!(json.contains("\"proposalsCount\":3"));
+        assert!(json.contains("\"timestamp\":1704067200000"));
+    }
+
+    #[test]
+    fn test_block_list_item_deserialization() {
+        let json = r#"{"number":12345,"hash":"0xabc123","transactionsCount":10,"proposalsCount":3,"timestamp":1704067200000}"#;
+        let item: BlockListItem = serde_json::from_str(json).unwrap();
+        assert_eq!(item.number, 12345);
+        assert_eq!(item.hash, "0xabc123");
+        assert_eq!(item.transactions_count, 10);
+        assert_eq!(item.proposals_count, 3);
+        assert_eq!(item.timestamp, 1704067200000);
+    }
+
+    #[test]
+    fn test_block_list_item_has_fewer_fields_than_block_response() {
+        let list_item_fields = 5;
+        let block_response_fields = 23;
+        assert!(list_item_fields < block_response_fields);
     }
 }

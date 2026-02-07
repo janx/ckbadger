@@ -40,6 +40,14 @@ interface Block {
   version: number;
 }
 
+interface BlockListItem {
+  number: number;
+  hash: string;
+  transactionsCount: number;
+  proposalsCount: number;
+  timestamp: number;
+}
+
 interface Transaction {
   hash: string;
   blockNumber: number;
@@ -875,6 +883,7 @@ export type {
   CodeCellScript,
   Transaction,
   Block,
+  BlockListItem,
   NetworkStats,
   SyncStatus,
   Address,
@@ -965,7 +974,7 @@ export const api = {
     return fetchApi(`/forks/recent`);
   },
 
-  getBlocks: (params: CursorQueryParams = {}): Promise<CursorPaginatedResponse<Block>> => {
+  getBlocks: (params: CursorQueryParams = {}): Promise<CursorPaginatedResponse<BlockListItem>> => {
     const query = new URLSearchParams();
     if (params.limit) query.set('limit', String(params.limit));
     if (params.cursor) query.set('cursor', params.cursor);

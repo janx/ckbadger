@@ -1,7 +1,13 @@
 import { Header } from '@/components/layout/header';
 import { HomeContent } from '@/components/home-content';
 import { DeepForkAlert } from '@/components/deep-fork-alert';
-import { NetworkStats, Block, Transaction, ChartResponse } from '@/lib/api';
+import {
+  NetworkStats,
+  BlockListItem,
+  Transaction,
+  ChartResponse,
+  CursorPaginatedResponse,
+} from '@/lib/api';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api/v1';
 
@@ -27,7 +33,7 @@ interface PaginatedResponse<T> {
 export default async function Home() {
   const [stats, blocksRes, txRes, blockTimeChart, hashRateChart] = await Promise.all([
     fetchServerData<NetworkStats>('/statistics/network'),
-    fetchServerData<PaginatedResponse<Block>>('/blocks?limit=10'),
+    fetchServerData<CursorPaginatedResponse<BlockListItem>>('/blocks?limit=10'),
     fetchServerData<PaginatedResponse<Transaction>>('/transactions?limit=10'),
     fetchServerData<ChartResponse>('/charts/average-block-time'),
     fetchServerData<ChartResponse>('/charts/hash-rate'),

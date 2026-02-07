@@ -2,11 +2,11 @@
 
 import Link from 'next/link';
 import { useQuery, useQueries } from '@tanstack/react-query';
-import { api, MempoolBlock, Block, BlockFeeStats } from '@/lib/api';
+import { api, MempoolBlock, BlockListItem, BlockFeeStats } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
 interface MempoolBlocksProps {
-  latestBlocks?: Block[];
+  latestBlocks?: BlockListItem[];
 }
 
 function formatFeeRate(rate: number): string {
@@ -28,9 +28,9 @@ function formatBytes(bytes: number): string {
   return `${bytes}B`;
 }
 
-function formatTimeAgo(timestamp: string): string {
+function formatTimeAgo(timestamp: string | number): string {
   const now = Date.now();
-  const time = new Date(timestamp).getTime();
+  const time = typeof timestamp === 'number' ? timestamp : new Date(timestamp).getTime();
   const diff = Math.floor((now - time) / 1000);
 
   if (diff < 60) return `${diff}s`;
@@ -153,7 +153,13 @@ function PendingBlock({
   );
 }
 
-function MinedBlock({ block, feeStats }: { block: Block; feeStats?: BlockFeeStats | 'loading' }) {
+function MinedBlock({
+  block,
+  feeStats,
+}: {
+  block: BlockListItem;
+  feeStats?: BlockFeeStats | 'loading';
+}) {
   const isLoading = feeStats === 'loading';
   const stats = feeStats && feeStats !== 'loading' ? feeStats : null;
   const gradient = getBlockColors(0, false);

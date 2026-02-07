@@ -9,11 +9,11 @@ import { LatestBlocks } from '@/components/latest-blocks';
 import { LatestTransactions } from '@/components/latest-transactions';
 import { ChainWave } from '@/components/chain-wave';
 import { useRealtimeData } from '@/hooks/useRealtimeStore';
-import { api, NetworkStats, Block, Transaction, ChartResponse } from '@/lib/api';
+import { api, NetworkStats, BlockListItem, Transaction, ChartResponse } from '@/lib/api';
 
 interface InitialData {
   stats: NetworkStats | null;
-  blocks: Block[];
+  blocks: BlockListItem[];
   transactions: Transaction[];
   blockTimeChart: ChartResponse | null;
   hashRateChart: ChartResponse | null;

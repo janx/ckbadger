@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
-import { api, Block } from '@/lib/api';
+import { api, BlockListItem } from '@/lib/api';
 import { formatTimeAgo } from '@/lib/utils';
 import { cn } from '@/lib/utils';
 import {
@@ -16,7 +16,7 @@ import { HexDisplay } from '@/components/ui/hex-display';
 
 interface LatestBlocksProps {
   isRealtime?: boolean;
-  initialBlocks?: Block[];
+  initialBlocks?: BlockListItem[];
 }
 
 export function LatestBlocks({ isRealtime = false, initialBlocks }: LatestBlocksProps) {
