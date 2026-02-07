@@ -1,10 +1,17 @@
 use axum::{extract::State, routing::get, Router};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::response::{ok, ApiError, ApiResult};
 use crate::rpc::{parse_hex_u64, CkbRpcClient};
 use crate::AppState;
+
+// Cache TTLs
+const CACHE_TTL_MEMPOOL_SUMMARY_SECS: u64 = 3;
+
+// Cache key prefixes
+const CACHE_KEY_MEMPOOL_SUMMARY: &str = "mempool:summary";
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -57,7 +64,7 @@ async fn get_mempool_info(State(state): State<Arc<AppState>>) -> ApiResult<Mempo
     })
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct MempoolTransaction {
     tx_hash: String,
@@ -131,7 +138,7 @@ async fn get_mempool_transactions(
     ok(transactions)
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PendingProposal {
     proposal_id: String,
@@ -218,7 +225,7 @@ async fn get_pending_proposals(
     })
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SummaryBlock {
     number: u64,
@@ -227,7 +234,7 @@ struct SummaryBlock {
     transactions_count: u32,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SummaryTransaction {
     hash: String,
@@ -237,7 +244,7 @@ struct SummaryTransaction {
     is_cellbase: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct MempoolSummaryResponse {
     pending: Vec<MempoolTransaction>,
@@ -266,17 +273,21 @@ struct TxQueryRow {
 async fn get_mempool_summary(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<MempoolSummaryResponse> {
+    if let Some(cached) = state
+        .cache
+        .get::<MempoolSummaryResponse>(CACHE_KEY_MEMPOOL_SUMMARY)
+        .await
+    {
+        return ok(cached);
+    }
+
     let rpc = CkbRpcClient::new(&state.ckb_rpc_url);
 
-    let pool = rpc
-        .get_raw_tx_pool_verbose()
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let (pool_result, pool_info_result) =
+        tokio::join!(rpc.get_raw_tx_pool_verbose(), rpc.get_tx_pool_info());
 
-    let pool_info = rpc
-        .get_tx_pool_info()
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let pool = pool_result.map_err(|e| ApiError::internal(e.to_string()))?;
+    let pool_info = pool_info_result.map_err(|e| ApiError::internal(e.to_string()))?;
 
     let tip_number =
         parse_hex_u64(&pool_info.tip_number).map_err(|e| ApiError::internal(e.to_string()))?;
@@ -403,17 +414,38 @@ async fn get_mempool_summary(
         Vec::new()
     };
 
-    ok(MempoolSummaryResponse {
+    let response = MempoolSummaryResponse {
         pending,
         proposals,
         tip_block,
         tip_block_txs,
-    })
+    };
+
+    state
+        .cache
+        .set(
+            CACHE_KEY_MEMPOOL_SUMMARY,
+            &response,
+            Duration::from_secs(CACHE_TTL_MEMPOOL_SUMMARY_SECS),
+        )
+        .await;
+
+    ok(response)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_cache_ttl_mempool_summary_is_3_seconds() {
+        assert_eq!(CACHE_TTL_MEMPOOL_SUMMARY_SECS, 3);
+    }
+
+    #[test]
+    fn test_cache_key_mempool_summary_has_correct_prefix() {
+        assert!(CACHE_KEY_MEMPOOL_SUMMARY.starts_with("mempool:"));
+    }
 
     #[test]
     fn test_mempool_transaction_serialization() {

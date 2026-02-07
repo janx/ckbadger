@@ -5,9 +5,13 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
 use crate::AppState;
+
+const CACHE_TTL_BLOCKS_LIST_SECS: u64 = 5;
+const CACHE_KEY_BLOCKS_LIST: &str = "blocks:list";
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -63,7 +67,7 @@ pub struct BlockProposalsResponse {
     pub proposals: Vec<BlockProposal>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BlockResponse {
     pub number: u64,
@@ -191,6 +195,19 @@ async fn list_blocks(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListBlocksParams>,
 ) -> ApiResult<CursorPaginatedResponse<BlockResponse>> {
+    let is_first_page = params.cursor.is_none();
+    let cache_key = format!("{}:{}", CACHE_KEY_BLOCKS_LIST, params.limit);
+
+    if is_first_page {
+        if let Some(cached) = state
+            .cache
+            .get::<CursorPaginatedResponse<BlockResponse>>(&cache_key)
+            .await
+        {
+            return ok(cached);
+        }
+    }
+
     let cursor_condition = if let Some(ref cursor) = params.cursor {
         let cursor_number: u64 = cursor
             .parse()
@@ -226,18 +243,8 @@ async fn list_blocks(
         rows.pop();
     }
 
-    let total_query = "SELECT count() as cnt FROM canonical_blocks";
-    #[derive(Debug, Clone, clickhouse::Row, serde::Deserialize)]
-    struct CountRow {
-        cnt: u64,
-    }
-    let total: i64 = state
-        .pool
-        .query_one::<CountRow>(total_query)
-        .await
-        .map_err(|e| ApiError::internal(format!("Failed to count blocks: {}", e)))?
-        .map(|r| r.cnt as i64)
-        .unwrap_or(0);
+    let sync_status = state.cache.get_sync_status(&state.pool).await;
+    let total = sync_status.tip_block_number + 1;
 
     let next_cursor = if has_more {
         rows.last().map(|r| r.number.to_string())
@@ -246,12 +253,20 @@ async fn list_blocks(
     };
 
     let blocks: Vec<BlockResponse> = rows.into_iter().map(|r| r.into()).collect();
-    ok(CursorPaginatedResponse::new(
-        blocks,
-        total,
-        params.limit,
-        next_cursor,
-    ))
+    let response = CursorPaginatedResponse::new(blocks, total, params.limit, next_cursor);
+
+    if is_first_page {
+        state
+            .cache
+            .set(
+                &cache_key,
+                &response,
+                Duration::from_secs(CACHE_TTL_BLOCKS_LIST_SECS),
+            )
+            .await;
+    }
+
+    ok(response)
 }
 
 async fn get_block(
@@ -463,4 +478,60 @@ async fn get_block_proposals(
         proposals_count,
         proposals,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cache_ttl_blocks_list_is_5_seconds() {
+        assert_eq!(CACHE_TTL_BLOCKS_LIST_SECS, 5);
+    }
+
+    #[test]
+    fn test_cache_key_blocks_list_has_correct_prefix() {
+        assert!(CACHE_KEY_BLOCKS_LIST.starts_with("blocks:"));
+    }
+
+    #[test]
+    fn test_block_response_serialization() {
+        let response = BlockResponse {
+            number: 12345,
+            hash: "0xabc".to_string(),
+            parent_hash: "0xdef".to_string(),
+            timestamp: 1704067200000,
+            version: 0,
+            compact_target: 0x1a2d3e4f,
+            transactions_count: 5,
+            proposals_count: 2,
+            uncles_count: 0,
+            epoch_number: 100,
+            epoch_index: 50,
+            epoch_length: 1800,
+            dao: "0x00".to_string(),
+            nonce: "0x00".to_string(),
+            extra_hash: "0x00".to_string(),
+            extension: None,
+            proposals_hash: "0x00".to_string(),
+            transactions_root: "0x00".to_string(),
+            uncles_hash: "0x00".to_string(),
+            miner_lock_hash: None,
+            miner_message: "".to_string(),
+            total_difficulty: "12345".to_string(),
+            reward: 100000000,
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"number\":12345"));
+        assert!(json.contains("\"transactionsCount\":5"));
+        assert!(json.contains("\"epochNumber\":100"));
+    }
+
+    #[test]
+    fn test_block_response_deserialization() {
+        let json = r#"{"number":12345,"hash":"0xabc","parentHash":"0xdef","timestamp":1704067200000,"version":0,"compactTarget":439041615,"transactionsCount":5,"proposalsCount":2,"unclesCount":0,"epochNumber":100,"epochIndex":50,"epochLength":1800,"dao":"0x00","nonce":"0x00","extraHash":"0x00","extension":null,"proposalsHash":"0x00","transactionsRoot":"0x00","unclesHash":"0x00","minerLockHash":null,"minerMessage":"","totalDifficulty":"12345","reward":100000000}"#;
+        let response: BlockResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.number, 12345);
+        assert_eq!(response.transactions_count, 5);
+    }
 }

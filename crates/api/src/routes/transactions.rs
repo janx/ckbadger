@@ -6,11 +6,15 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::response::{
     decode_cursor, encode_cursor, ok, ApiError, ApiResult, CursorPaginatedResponse,
 };
 use crate::AppState;
+
+const CACHE_TTL_TX_LIST_SECS: u64 = 5;
+const CACHE_KEY_TX_LIST: &str = "transactions:list";
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -50,12 +54,7 @@ fn default_limit() -> i64 {
     20
 }
 
-#[derive(Debug, Clone, clickhouse::Row, serde::Deserialize)]
-struct CountRow {
-    count: u64,
-}
-
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TransactionResponse {
     pub hash: String,
@@ -351,6 +350,18 @@ async fn list_transactions(
     Query(params): Query<ListTransactionsParams>,
 ) -> ApiResult<CursorPaginatedResponse<TransactionResponse>> {
     let limit = params.limit.min(100);
+    let is_first_page = params.cursor.is_none();
+    let cache_key = format!("{}:{}", CACHE_KEY_TX_LIST, limit);
+
+    if is_first_page {
+        if let Some(cached) = state
+            .cache
+            .get::<CursorPaginatedResponse<TransactionResponse>>(&cache_key)
+            .await
+        {
+            return ok(cached);
+        }
+    }
 
     let cursor_filter = match params.cursor.as_ref().and_then(|c| decode_cursor(c)) {
         Some((block_num, tx_idx)) => format!(
@@ -360,14 +371,8 @@ async fn list_transactions(
         None => String::new(),
     };
 
-    let count_query = "SELECT count() as count FROM transactions_all t \
-         INNER JOIN canonical_blocks c ON t.block_number = c.number AND t.block_hash = c.block_hash";
-    let count_row: Option<CountRow> = state
-        .pool
-        .query_one(count_query)
-        .await
-        .map_err(|e| ApiError::internal(format!("Failed to count transactions: {}", e)))?;
-    let total = count_row.map(|r| r.count as i64).unwrap_or(0);
+    let sync_status = state.cache.get_sync_status(&state.pool).await;
+    let total = sync_status.total_transactions;
 
     let query = format!(
         "SELECT t.hash, t.block_number, t.block_hash, t.tx_index, t.version, \
@@ -403,12 +408,20 @@ async fn list_transactions(
         None
     };
 
-    ok(CursorPaginatedResponse::new(
-        data,
-        total,
-        limit,
-        next_cursor,
-    ))
+    let response = CursorPaginatedResponse::new(data, total, limit, next_cursor);
+
+    if is_first_page {
+        state
+            .cache
+            .set(
+                &cache_key,
+                &response,
+                Duration::from_secs(CACHE_TTL_TX_LIST_SECS),
+            )
+            .await;
+    }
+
+    ok(response)
 }
 
 async fn get_transaction(
@@ -628,4 +641,55 @@ async fn get_tx_activities(
 
     let activities: Vec<TransactionActivityResponse> = rows.into_iter().map(|r| r.into()).collect();
     ok(activities)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cache_ttl_tx_list_is_5_seconds() {
+        assert_eq!(CACHE_TTL_TX_LIST_SECS, 5);
+    }
+
+    #[test]
+    fn test_cache_key_tx_list_has_correct_prefix() {
+        assert!(CACHE_KEY_TX_LIST.starts_with("transactions:"));
+    }
+
+    #[test]
+    fn test_transaction_response_serialization() {
+        let response = TransactionResponse {
+            hash: "0xabc".to_string(),
+            block_number: 12345,
+            block_hash: "0xdef".to_string(),
+            tx_index: 1,
+            version: 0,
+            inputs_count: 2,
+            outputs_count: 3,
+            witnesses_count: 1,
+            cell_deps_count: 1,
+            header_deps_count: 0,
+            total_input_capacity: 100000000,
+            total_output_capacity: 99000000,
+            fee: 1000000,
+            tx_size: 500,
+            cycles: 10000,
+            is_cellbase: false,
+            timestamp: 1704067200000,
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"blockNumber\":12345"));
+        assert!(json.contains("\"inputsCount\":2"));
+        assert!(json.contains("\"isCellbase\":false"));
+    }
+
+    #[test]
+    fn test_transaction_response_deserialization() {
+        let json = r#"{"hash":"0xabc","blockNumber":12345,"blockHash":"0xdef","txIndex":1,"version":0,"inputsCount":2,"outputsCount":3,"witnessesCount":1,"cellDepsCount":1,"headerDepsCount":0,"totalInputCapacity":100000000,"totalOutputCapacity":99000000,"fee":1000000,"txSize":500,"cycles":10000,"isCellbase":false,"timestamp":1704067200000}"#;
+        let response: TransactionResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.block_number, 12345);
+        assert_eq!(response.inputs_count, 2);
+        assert!(!response.is_cellbase);
+    }
 }

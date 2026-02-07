@@ -28,8 +28,8 @@ export function ChainWave() {
   const { data: summary } = useQuery({
     queryKey: ['mempool-summary'],
     queryFn: () => api.getMempoolSummary(),
-    refetchInterval: 5000,
-    staleTime: 3000,
+    refetchInterval: 10000,
+    staleTime: 5000,
   });
 
   const pendingItems = useMemo((): TxItem[] => {
