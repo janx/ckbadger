@@ -1,0 +1,13 @@
+apiVersion: 1
+
+datasources:
+  - name: ClickHouse
+    type: clickhouse
+    access: proxy
+    url: http://clickhouse:8123
+    isDefault: true
+    editable: true
+    jsonData:
+      defaultDatabase: ckbadger
+      tlsSkipVerify: false
+    secureJsonData: {}
