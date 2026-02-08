@@ -46,38 +46,92 @@ pub async fn start_block_broadcaster(
 
         let sync_status_data = _cache.get_sync_status(&pool).await;
         let redis_tip = sync_status_data.tip_block_number as u64;
+        let redis_has_data = redis_tip > 0 && !sync_status_data.tip_block_hash.is_empty();
 
-        if last_block_number == Some(redis_tip) {
-            continue;
-        }
-
-        let hash_without_prefix = sync_status_data
-            .tip_block_hash
-            .strip_prefix("0x")
-            .unwrap_or(&sync_status_data.tip_block_hash);
-
-        let query = format!(
-            r#"
-            SELECT 
-                b.number as number,
-                hex(b.hash) as hash,
-                b.timestamp as timestamp,
-                b.transactions_count as transactions_count,
-                b.epoch_number as epoch_number,
-                b.epoch_index as epoch_index,
-                b.epoch_length as epoch_length
-            FROM blocks_all b
-            WHERE b.number = {} AND b.hash = unhex('{}')
-            LIMIT 1
-            "#,
-            redis_tip, hash_without_prefix
-        );
-
-        let block_row: Option<BlockRow> = match pool.query_one(&query).await {
-            Ok(row) => row,
-            Err(e) => {
-                warn!("Failed to query block {} for broadcaster: {}", redis_tip, e);
+        let block_row: Option<BlockRow> = if redis_has_data {
+            if last_block_number == Some(redis_tip) {
                 continue;
+            }
+
+            let hash_without_prefix = sync_status_data
+                .tip_block_hash
+                .strip_prefix("0x")
+                .unwrap_or(&sync_status_data.tip_block_hash);
+
+            let query = format!(
+                r#"
+                SELECT 
+                    b.number as number,
+                    hex(b.hash) as hash,
+                    b.timestamp as timestamp,
+                    b.transactions_count as transactions_count,
+                    b.epoch_number as epoch_number,
+                    b.epoch_index as epoch_index,
+                    b.epoch_length as epoch_length
+                FROM blocks_all b
+                WHERE b.number = {} AND b.hash = unhex('{}')
+                LIMIT 1
+                "#,
+                redis_tip, hash_without_prefix
+            );
+
+            match pool.query_one(&query).await {
+                Ok(row) => row,
+                Err(e) => {
+                    warn!("Failed to query block {} for broadcaster: {}", redis_tip, e);
+                    continue;
+                }
+            }
+        } else {
+            #[derive(Debug, Clone, clickhouse::Row, serde::Deserialize)]
+            struct TipRow {
+                number: u64,
+                block_hash: String,
+            }
+
+            let tip_query = "SELECT number, hex(block_hash) as block_hash FROM canonical_blocks FINAL ORDER BY number DESC LIMIT 1";
+            let tip: Option<TipRow> = match pool.query_one(tip_query).await {
+                Ok(row) => row,
+                Err(e) => {
+                    warn!("Failed to query tip for broadcaster: {}", e);
+                    continue;
+                }
+            };
+
+            let Some(tip) = tip else {
+                continue;
+            };
+
+            if last_block_number == Some(tip.number) {
+                continue;
+            }
+
+            let query = format!(
+                r#"
+                SELECT 
+                    b.number as number,
+                    hex(b.hash) as hash,
+                    b.timestamp as timestamp,
+                    b.transactions_count as transactions_count,
+                    b.epoch_number as epoch_number,
+                    b.epoch_index as epoch_index,
+                    b.epoch_length as epoch_length
+                FROM blocks_all b
+                WHERE b.number = {} AND b.hash = unhex('{}')
+                LIMIT 1
+                "#,
+                tip.number, tip.block_hash
+            );
+
+            match pool.query_one(&query).await {
+                Ok(row) => row,
+                Err(e) => {
+                    warn!(
+                        "Failed to query block {} for broadcaster: {}",
+                        tip.number, e
+                    );
+                    continue;
+                }
             }
         };
 

@@ -1286,6 +1286,7 @@ CREATE TABLE IF NOT EXISTS tasks
     progress_total UInt64 DEFAULT 0,
     progress_current UInt64 DEFAULT 0,
     progress_message String DEFAULT '',
+    progress_details String DEFAULT '',
     
     -- Result/error
     result String DEFAULT '' CODEC(ZSTD(3)),  -- JSON
