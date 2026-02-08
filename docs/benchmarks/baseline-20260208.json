@@ -1,0 +1,69 @@
+{
+  "timestamp": "2026-02-08T01:04:19Z",
+  "note": "INSERT timing metrics require active indexer. Parts count captured as baseline.",
+  "indexed_blocks": 17930000,
+  "blocks_analyzed": 10000,
+  "start_block": 17920001,
+  "end_block": 17930000,
+  "tables": {
+    "transactions_all": {
+      "insert_time_ms": null,
+      "memory_bytes": null,
+      "rows_written": null,
+      "note": "Heavy table - requires Inserter optimization"
+    },
+    "cell_outputs_all": {
+      "insert_time_ms": null,
+      "memory_bytes": null,
+      "rows_written": null,
+      "note": "Heavy table - requires Inserter optimization"
+    },
+    "cell_inputs_all": {
+      "insert_time_ms": null,
+      "memory_bytes": null,
+      "rows_written": null,
+      "note": "Heavy table - requires Inserter optimization"
+    },
+    "activities_all": {
+      "insert_time_ms": null,
+      "memory_bytes": null,
+      "rows_written": null,
+      "note": "Heavy table - requires Inserter optimization"
+    },
+    "cell_state": {
+      "insert_time_ms": null,
+      "memory_bytes": null,
+      "rows_written": null,
+      "note": "Heavy table - requires Inserter optimization"
+    }
+  },
+  "parts": {
+    "transactions_all": { "active_parts": 127, "target": 50, "status": "NEEDS_OPTIMIZATION" },
+    "cell_outputs_all": { "active_parts": 132, "target": 50, "status": "NEEDS_OPTIMIZATION" },
+    "cell_inputs_all": { "active_parts": 113, "target": 50, "status": "NEEDS_OPTIMIZATION" },
+    "activities_all": { "active_parts": 133, "target": 50, "status": "NEEDS_OPTIMIZATION" },
+    "blocks_all": { "active_parts": 115, "target": 50, "status": "NEEDS_OPTIMIZATION" },
+    "canonical_blocks": { "active_parts": 9, "target": 50, "status": "OK" },
+    "cell_state": { "active_parts": 10, "target": 50, "status": "OK" },
+    "dao_deposits": { "active_parts": 7, "target": 50, "status": "OK" },
+    "udt_cells": { "active_parts": 8, "target": 50, "status": "OK" },
+    "spore_cells": { "active_parts": 7, "target": 50, "status": "OK" },
+    "spore_clusters": { "active_parts": 5, "target": 50, "status": "OK" },
+    "mnft_tokens": { "active_parts": 3, "target": 50, "status": "OK" },
+    "mnft_classes": { "active_parts": 1, "target": 50, "status": "OK" }
+  },
+  "summary": {
+    "sync_speed_blocks_per_sec": null,
+    "total_insert_time_ms": null,
+    "total_memory_bytes": null,
+    "heavy_tables_needing_optimization": [
+      "transactions_all",
+      "cell_outputs_all",
+      "cell_inputs_all",
+      "activities_all",
+      "blocks_all"
+    ],
+    "parts_over_threshold": 5,
+    "target_parts_per_table": 50
+  }
+}

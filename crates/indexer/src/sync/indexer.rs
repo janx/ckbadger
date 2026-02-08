@@ -9,8 +9,8 @@ use tracing::{info, warn};
 use crate::cache::{CacheInvalidator, CellInfoCache};
 use crate::config::Config;
 use crate::db::writer::{
-    u64_to_u256_bytes, ActivityRow, BatchData, BatchWriter, BlockRow, CellInputRow, CellOutputRow,
-    CellStateRow, DaoDepositRow, MnftClassRow, MnftIssuerRow, MnftTokenRow, SporeCellRow,
+    u64_to_u256_bytes, ActivityRow, BatchData, BlockRow, CellInputRow, CellOutputRow, CellStateRow,
+    DaoDepositRow, DynBatchWriter, MnftClassRow, MnftIssuerRow, MnftTokenRow, SporeCellRow,
     SporeClusterRow, TransactionRow, UdtCellRow, EMPTY_HASH,
 };
 use crate::db::{ClickHouseClient, LiveCellInfo, MemoryStats};
@@ -71,7 +71,7 @@ struct CellStateQueryRow {
 
 pub struct Indexer {
     client: ClickHouseClient,
-    batch_writer: BatchWriter,
+    batch_writer: DynBatchWriter,
     canon_version_mgr: CanonVersionManager,
     cell_cache: CellInfoCache,
     progress: Arc<SyncProgress>,
@@ -92,6 +92,7 @@ pub struct IndexerConfig {
     pub ckb_rpc_url: String,
     pub poll_interval_ms: u64,
     pub batch_size: usize,
+    pub use_inserter_api: bool,
 }
 
 impl Default for IndexerConfig {
@@ -105,6 +106,7 @@ impl Default for IndexerConfig {
             ckb_rpc_url: "http://localhost:8114".to_string(),
             poll_interval_ms: 1000,
             batch_size: 100,
+            use_inserter_api: false,
         }
     }
 }
@@ -123,7 +125,13 @@ impl Indexer {
         let max_version = Self::fetch_max_canon_version(&client).await?;
         let canon_version_mgr = CanonVersionManager::recover_from_db(max_version);
 
-        let batch_writer = BatchWriter::with_fast_sync_mode(client.clone(), config.fast_sync_mode);
+        let batch_writer = if config.use_inserter_api {
+            info!("Using Inserter API for batch writes");
+            DynBatchWriter::inserter(client.clone(), config.fast_sync_mode)
+        } else {
+            info!("Using standard Insert API for batch writes");
+            DynBatchWriter::standard(client.clone(), config.fast_sync_mode)
+        };
         let cell_cache = CellInfoCache::new(config.cell_cache_capacity);
         let cache_invalidator = CacheInvalidator::new(config.redis_url.as_deref()).await;
         let rpc_client = CkbRpcClient::new(&config.ckb_rpc_url);
@@ -157,7 +165,13 @@ impl Indexer {
         let max_version = Self::fetch_max_canon_version(&client).await?;
         let canon_version_mgr = CanonVersionManager::recover_from_db(max_version);
 
-        let batch_writer = BatchWriter::with_fast_sync_mode(client.clone(), config.fast_sync_mode);
+        let batch_writer = if config.use_inserter_api {
+            info!("Using Inserter API for batch writes");
+            DynBatchWriter::inserter(client.clone(), config.fast_sync_mode)
+        } else {
+            info!("Using standard Insert API for batch writes");
+            DynBatchWriter::standard(client.clone(), config.fast_sync_mode)
+        };
         let cell_cache = CellInfoCache::new(1_000_000);
         let rpc_client = CkbRpcClient::new(&config.ckb_rpc_url);
 

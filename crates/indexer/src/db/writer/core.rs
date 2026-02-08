@@ -3,6 +3,7 @@ use anyhow::{Context, Result};
 use crate::cache::CacheInvalidator;
 use crate::db::{ClickHouseClient, DynLiveCellStorage};
 
+use super::inserter::InserterBatchWriter;
 use super::rows::{
     ActivityRow, BlockRow, CellInputRow, CellOutputRow, CellStateRow, DaoDepositRow, MnftClassRow,
     MnftIssuerRow, MnftTokenRow, SporeCellRow, SporeClusterRow, TransactionRow, UdtCellRow,
@@ -173,6 +174,46 @@ impl BatchWriter {
     /// Write only canonical block mappings (used after reorg).
     pub async fn write_canonical_only(&self, mappings: &[(u64, Vec<u8>, u64)]) -> Result<()> {
         self.write_canonical_blocks(mappings).await
+    }
+}
+
+#[derive(Clone)]
+pub enum DynBatchWriter {
+    Standard(BatchWriter),
+    Inserter(InserterBatchWriter),
+}
+
+impl DynBatchWriter {
+    pub fn standard(client: ClickHouseClient, fast_sync_mode: bool) -> Self {
+        Self::Standard(BatchWriter::with_fast_sync_mode(client, fast_sync_mode))
+    }
+
+    pub fn inserter(client: ClickHouseClient, fast_sync_mode: bool) -> Self {
+        Self::Inserter(InserterBatchWriter::with_fast_sync_mode(
+            client,
+            fast_sync_mode,
+        ))
+    }
+
+    pub async fn write_batch(&self, batch: &BatchData) -> Result<()> {
+        match self {
+            Self::Standard(w) => w.write_batch(batch).await,
+            Self::Inserter(w) => w.write_batch(batch).await,
+        }
+    }
+
+    pub async fn write_cell_states(&self, states: &[CellStateRow]) -> Result<()> {
+        match self {
+            Self::Standard(w) => w.write_cell_states(states).await,
+            Self::Inserter(w) => w.write_cell_states(states).await,
+        }
+    }
+
+    pub fn client(&self) -> &ClickHouseClient {
+        match self {
+            Self::Standard(w) => w.client(),
+            Self::Inserter(w) => w.client(),
+        }
     }
 }
 

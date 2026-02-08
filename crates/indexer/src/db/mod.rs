@@ -71,4 +71,7 @@ pub use live_cell_storage::{
     InMemoryLiveCellStore, LiveCellInfo, LiveCellStorage, LiveCellStorageAsync, MemoryStats,
 };
 pub use repository::{DeepForkInfo, Repository};
-pub use writer::{BatchWriter, DaoWithdrawalContextTrait, ReorgResult, SecondaryIssuanceBreakdown};
+pub use writer::{
+    BatchWriter, DaoWithdrawalContextTrait, InserterBatchWriter, ReorgResult,
+    SecondaryIssuanceBreakdown,
+};
