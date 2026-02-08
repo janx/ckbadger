@@ -1,0 +1,43 @@
+{
+  "timestamp": "2026-02-08T01:30:00Z",
+  "note": "Baseline INSERT metrics from live indexer sync (without Inserter API)",
+  "measurement_period": "1 hour",
+  "sync_speed_blocks_per_sec": 190,
+  "tables": {
+    "transactions_all": {
+      "insert_count": 25,
+      "avg_duration_ms": 34975,
+      "avg_memory_bytes": 6281478256,
+      "status": "BOTTLENECK"
+    },
+    "cell_outputs_all": {
+      "insert_count": 26,
+      "avg_duration_ms": 13387,
+      "avg_memory_bytes": 6298302407,
+      "status": "SLOW"
+    },
+    "cell_state": {
+      "insert_count": 123,
+      "avg_duration_ms": 181,
+      "avg_memory_bytes": 134918740,
+      "status": "OK"
+    },
+    "activities_all": {
+      "insert_count": 123,
+      "avg_duration_ms": 60,
+      "avg_memory_bytes": 39458659,
+      "status": "OK"
+    },
+    "cell_inputs_all": {
+      "insert_count": 123,
+      "avg_duration_ms": 38,
+      "avg_memory_bytes": 22002395,
+      "status": "OK"
+    }
+  },
+  "summary": {
+    "total_insert_time_ms": 874387,
+    "bottleneck_table": "transactions_all",
+    "target_improvement": "2x speed (>500 blocks/sec)"
+  }
+}

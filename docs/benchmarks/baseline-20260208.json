@@ -1,69 +1,55 @@
 {
-  "timestamp": "2026-02-08T01:04:19Z",
-  "note": "INSERT timing metrics require active indexer. Parts count captured as baseline.",
-  "indexed_blocks": 17930000,
-  "blocks_analyzed": 10000,
-  "start_block": 17920001,
-  "end_block": 17930000,
-  "tables": {
+  "timestamp": "2026-02-08T01:30:00Z",
+  "note": "Baseline performance from live indexer sync (BatchWriter, no Inserter API)",
+  "indexed_blocks": 18240000,
+  "sync_speed_blocks_per_sec": 190,
+  "insert_metrics": {
     "transactions_all": {
-      "insert_time_ms": null,
-      "memory_bytes": null,
-      "rows_written": null,
-      "note": "Heavy table - requires Inserter optimization"
+      "avg_duration_ms": 34975,
+      "avg_memory_bytes": 6281478256,
+      "status": "BOTTLENECK - 35s per INSERT, 6.3GB memory"
     },
     "cell_outputs_all": {
-      "insert_time_ms": null,
-      "memory_bytes": null,
-      "rows_written": null,
-      "note": "Heavy table - requires Inserter optimization"
+      "avg_duration_ms": 13387,
+      "avg_memory_bytes": 6298302407,
+      "status": "SLOW - 13s per INSERT"
     },
     "cell_inputs_all": {
-      "insert_time_ms": null,
-      "memory_bytes": null,
-      "rows_written": null,
-      "note": "Heavy table - requires Inserter optimization"
+      "avg_duration_ms": 38,
+      "avg_memory_bytes": 22002395,
+      "status": "OK"
     },
     "activities_all": {
-      "insert_time_ms": null,
-      "memory_bytes": null,
-      "rows_written": null,
-      "note": "Heavy table - requires Inserter optimization"
+      "avg_duration_ms": 60,
+      "avg_memory_bytes": 39458659,
+      "status": "OK"
     },
     "cell_state": {
-      "insert_time_ms": null,
-      "memory_bytes": null,
-      "rows_written": null,
-      "note": "Heavy table - requires Inserter optimization"
+      "avg_duration_ms": 181,
+      "avg_memory_bytes": 134918740,
+      "status": "OK"
     }
   },
   "parts": {
-    "transactions_all": { "active_parts": 127, "target": 50, "status": "NEEDS_OPTIMIZATION" },
-    "cell_outputs_all": { "active_parts": 132, "target": 50, "status": "NEEDS_OPTIMIZATION" },
-    "cell_inputs_all": { "active_parts": 113, "target": 50, "status": "NEEDS_OPTIMIZATION" },
-    "activities_all": { "active_parts": 133, "target": 50, "status": "NEEDS_OPTIMIZATION" },
-    "blocks_all": { "active_parts": 115, "target": 50, "status": "NEEDS_OPTIMIZATION" },
+    "cell_outputs_all": { "active_parts": 138, "target": 50, "status": "NEEDS_OPTIMIZATION" },
+    "activities_all": { "active_parts": 135, "target": 50, "status": "NEEDS_OPTIMIZATION" },
+    "transactions_all": { "active_parts": 134, "target": 50, "status": "NEEDS_OPTIMIZATION" },
+    "blocks_all": { "active_parts": 122, "target": 50, "status": "NEEDS_OPTIMIZATION" },
+    "cell_inputs_all": { "active_parts": 120, "target": 50, "status": "NEEDS_OPTIMIZATION" },
+    "udt_cells": { "active_parts": 14, "target": 50, "status": "OK" },
     "canonical_blocks": { "active_parts": 9, "target": 50, "status": "OK" },
-    "cell_state": { "active_parts": 10, "target": 50, "status": "OK" },
+    "cell_state": { "active_parts": 9, "target": 50, "status": "OK" },
     "dao_deposits": { "active_parts": 7, "target": 50, "status": "OK" },
-    "udt_cells": { "active_parts": 8, "target": 50, "status": "OK" },
-    "spore_cells": { "active_parts": 7, "target": 50, "status": "OK" },
-    "spore_clusters": { "active_parts": 5, "target": 50, "status": "OK" },
+    "spore_clusters": { "active_parts": 4, "target": 50, "status": "OK" },
+    "spore_cells": { "active_parts": 3, "target": 50, "status": "OK" },
     "mnft_tokens": { "active_parts": 3, "target": 50, "status": "OK" },
     "mnft_classes": { "active_parts": 1, "target": 50, "status": "OK" }
   },
   "summary": {
-    "sync_speed_blocks_per_sec": null,
-    "total_insert_time_ms": null,
-    "total_memory_bytes": null,
-    "heavy_tables_needing_optimization": [
-      "transactions_all",
-      "cell_outputs_all",
-      "cell_inputs_all",
-      "activities_all",
-      "blocks_all"
-    ],
+    "current_sync_speed": 190,
+    "target_sync_speed": 500,
+    "bottleneck": "transactions_all INSERT (35s avg)",
     "parts_over_threshold": 5,
-    "target_parts_per_table": 50
+    "optimization_ready": true
   }
 }

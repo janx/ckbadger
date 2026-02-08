@@ -1,0 +1,70 @@
+{
+  "timestamp": "2026-02-08T01:28:37Z",
+  "blocks_analyzed": 10000,
+  "start_block": 18230001,
+  "end_block": 18240000,
+  "duration_seconds": 0,
+  "tables": {},
+  "parts": {
+    ".inner_id.02b8a6ac-86e8-44c4-b1cb-18704d6821f2": {
+      "active_parts": "5"
+    },
+    ".inner_id.45b2cd9c-e7cc-4061-8766-c8c965565208": {
+      "active_parts": "2"
+    },
+    ".inner_id.65ef4edd-0077-40b5-a95a-6d8586deeac7": {
+      "active_parts": "5"
+    },
+    ".inner_id.d397d644-0c14-4ba6-ba1a-025e75899c37": {
+      "active_parts": "2"
+    },
+    ".inner_id.f58d7708-100c-471d-8eb8-e6907c64617d": {
+      "active_parts": "5"
+    },
+    "activities_all": {
+      "active_parts": "135"
+    },
+    "blocks_all": {
+      "active_parts": "122"
+    },
+    "canonical_blocks": {
+      "active_parts": "9"
+    },
+    "cell_inputs_all": {
+      "active_parts": "120"
+    },
+    "cell_outputs_all": {
+      "active_parts": "138"
+    },
+    "cell_state": {
+      "active_parts": "9"
+    },
+    "dao_deposits": {
+      "active_parts": "7"
+    },
+    "mnft_classes": {
+      "active_parts": "1"
+    },
+    "mnft_tokens": {
+      "active_parts": "3"
+    },
+    "spore_cells": {
+      "active_parts": "3"
+    },
+    "spore_clusters": {
+      "active_parts": "4"
+    },
+    "transactions_all": {
+      "active_parts": "134"
+    },
+    "udt_cells": {
+      "active_parts": "14"
+    }
+  },
+  "summary": {
+    "sync_speed_blocks_per_sec": 0,
+    "total_insert_time_ms": 0,
+    "total_memory_bytes": 0,
+    "total_rows_written": 0
+  }
+}

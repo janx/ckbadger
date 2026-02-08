@@ -119,6 +119,12 @@ impl Config {
             )?
             .set_default("use_inserter_api", default_use_inserter_api())?
             .set_override_option("ckb_rpc_url", std::env::var("CKB_RPC_URL").ok())?
+            .set_override_option(
+                "use_inserter_api",
+                std::env::var("USE_INSERTER_API")
+                    .ok()
+                    .map(|v| v.to_lowercase() == "true"),
+            )?
             .build()?
             .try_deserialize()
     }

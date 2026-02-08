@@ -1,0 +1,69 @@
+{
+  "timestamp": "2026-02-08T01:45:00Z",
+  "note": "Performance with Inserter API enabled (InserterBatchWriter)",
+  "indexed_blocks": 18470000,
+  "sync_speed_blocks_per_sec": 218,
+  "improvement_vs_baseline": "15% faster (218 vs 190 blocks/sec)",
+  "insert_metrics": {
+    "transactions_all": {
+      "note": "Now handled by materialized view inner tables",
+      "status": "IMPROVED - direct inserts now fast, MV overhead remains"
+    },
+    "cell_outputs_all": {
+      "note": "Now handled by materialized view inner tables",
+      "status": "IMPROVED - direct inserts now fast, MV overhead remains"
+    },
+    "cell_inputs_all": {
+      "avg_duration_ms": 25,
+      "avg_memory_bytes": 23330406,
+      "status": "OK - 25ms per INSERT"
+    },
+    "activities_all": {
+      "avg_duration_ms": 36,
+      "avg_memory_bytes": 36663296,
+      "status": "OK - 36ms per INSERT"
+    },
+    "cell_state": {
+      "avg_duration_ms": 107,
+      "avg_memory_bytes": 112246374,
+      "status": "OK - 107ms per INSERT"
+    },
+    "materialized_views": {
+      "mv_daily_tx_count_inner": {
+        "avg_duration_ms": 26610,
+        "avg_memory_bytes": 6291456000,
+        "status": "BOTTLENECK - MV processing takes 26s"
+      },
+      "mv_daily_cell_count_inner": {
+        "avg_duration_ms": 9789,
+        "avg_memory_bytes": 6316621824,
+        "status": "SLOW - MV processing takes 10s"
+      },
+      "mv_daily_block_stats_inner": {
+        "avg_duration_ms": 4461,
+        "avg_memory_bytes": 2748779069,
+        "status": "MODERATE - MV processing takes 4.5s"
+      }
+    }
+  },
+  "parts": {
+    "cell_outputs_all": { "active_parts": 139, "target": 50, "status": "HIGH" },
+    "transactions_all": { "active_parts": 137, "target": 50, "status": "HIGH" },
+    "activities_all": { "active_parts": 136, "target": 50, "status": "HIGH" },
+    "blocks_all": { "active_parts": 125, "target": 50, "status": "HIGH" },
+    "cell_inputs_all": { "active_parts": 123, "target": 50, "status": "HIGH" },
+    "udt_cells": { "active_parts": 14, "target": 50, "status": "OK" },
+    "canonical_blocks": { "active_parts": 10, "target": 50, "status": "OK" },
+    "cell_state": { "active_parts": 9, "target": 50, "status": "OK" },
+    "dao_deposits": { "active_parts": 7, "target": 50, "status": "OK" }
+  },
+  "summary": {
+    "current_sync_speed": 218,
+    "baseline_sync_speed": 190,
+    "improvement_percent": 15,
+    "target_sync_speed": 500,
+    "new_bottleneck": "Materialized views (mv_daily_tx_count takes 26s)",
+    "recommendation": "Consider disabling MVs during bulk sync or using async refresh",
+    "inserter_api_working": true
+  }
+}
