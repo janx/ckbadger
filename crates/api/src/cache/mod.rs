@@ -144,6 +144,10 @@ impl CacheKeys {
     pub fn mining_reward(hash: &str) -> String {
         format!("ckbadger:mining-reward:{}", hash)
     }
+
+    pub fn address_balance(lock_hash_hex: &str) -> String {
+        format!("ckbadger:addr:balance:{}", lock_hash_hex)
+    }
 }
 
 pub struct CacheTtl;
@@ -155,6 +159,7 @@ impl CacheTtl {
     pub const TRANSACTION: Duration = Duration::from_secs(300);
     pub const MEMPOOL_INFO: Duration = Duration::from_secs(2);
     pub const MINING_REWARD: Duration = Duration::from_secs(86400);
+    pub const ADDRESS_BALANCE: Duration = Duration::from_secs(30);
 }
 
 #[cfg(test)]
@@ -173,5 +178,49 @@ mod tests {
         let cache = CacheBackend::None;
         let result: Option<String> = cache.get("any_key").await;
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_cache_key_address_balance_format() {
+        let key = CacheKeys::address_balance("abc123");
+        assert_eq!(key, "ckbadger:addr:balance:abc123");
+    }
+
+    #[test]
+    fn test_cache_key_address_balance_with_hex_hash() {
+        let key = CacheKeys::address_balance("0xdeadbeef");
+        assert!(key.starts_with("ckbadger:addr:balance:"));
+        assert!(key.ends_with("0xdeadbeef"));
+    }
+
+    #[test]
+    fn test_cache_key_mining_reward_format() {
+        let key = CacheKeys::mining_reward("0xabc");
+        assert_eq!(key, "ckbadger:mining-reward:0xabc");
+    }
+
+    #[test]
+    fn test_cache_ttl_address_balance_is_short() {
+        // Address balance TTL should be short enough for responsiveness
+        // but long enough to avoid excessive DB queries
+        assert!(CacheTtl::ADDRESS_BALANCE.as_secs() >= 10);
+        assert!(CacheTtl::ADDRESS_BALANCE.as_secs() <= 120);
+    }
+
+    #[test]
+    fn test_cache_ttl_mining_reward_is_long() {
+        // Mining rewards are immutable once confirmed
+        assert!(CacheTtl::MINING_REWARD.as_secs() >= 3600);
+    }
+
+    #[test]
+    fn test_cache_keys_are_unique() {
+        // Ensure different key generators produce non-overlapping keys
+        let addr_key = CacheKeys::address_balance("test");
+        let block_key = CacheKeys::block_by_hash("test");
+        let tx_key = CacheKeys::transaction("test");
+        assert_ne!(addr_key, block_key);
+        assert_ne!(addr_key, tx_key);
+        assert_ne!(block_key, tx_key);
     }
 }

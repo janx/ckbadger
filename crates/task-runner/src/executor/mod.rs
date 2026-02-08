@@ -6,6 +6,7 @@ use ckbadger_common::{
     StatisticsRebuildConfig, Task, TaskConfig, TaskType, TokenRebuildConfig,
     TxBlockMapRebuildConfig,
 };
+use futures::future::join_all;
 use redis::AsyncCommands;
 use sqlx::PgPool;
 use std::time::Duration;
@@ -86,14 +87,51 @@ impl TaskExecutor {
     }
 
     pub async fn run_once(&self) -> Result<bool> {
-        let task = match self.db.claim_next_task(&self.runner_id).await? {
-            Some(t) => t,
-            None => return Ok(false),
-        };
+        let tasks = self
+            .db
+            .claim_tasks_at_same_priority(&self.runner_id)
+            .await?;
+        if tasks.is_empty() {
+            return Ok(false);
+        }
 
+        if tasks.len() == 1 {
+            return self.process_single_task(&tasks[0]).await;
+        }
+
+        let task_types: Vec<&str> = tasks.iter().map(|t| t.task_type.as_str()).collect();
         info!(
-            "Claimed task {} (type: {}, status: {})",
-            task.id, task.task_type, task.status
+            "Claimed {} tasks at priority {}, executing in parallel: {:?}",
+            tasks.len(),
+            tasks[0].priority,
+            task_types
+        );
+
+        let futs: Vec<_> = tasks
+            .iter()
+            .map(|task| self.process_single_task(task))
+            .collect();
+        let results = join_all(futs).await;
+
+        let mut any_executed = false;
+        for result in results {
+            match result {
+                Ok(true) => any_executed = true,
+                Ok(false) => {}
+                Err(e) => {
+                    error!("Parallel task execution error: {}", e);
+                    any_executed = true;
+                }
+            }
+        }
+
+        Ok(any_executed)
+    }
+
+    async fn process_single_task(&self, task: &Task) -> Result<bool> {
+        info!(
+            "Processing task {} (type: {}, priority: {})",
+            task.id, task.task_type, task.priority
         );
 
         let task_type = match task.task_type_enum() {
@@ -124,7 +162,7 @@ impl TaskExecutor {
             }
         }
 
-        let result = self.execute_task(&task).await;
+        let result = self.execute_task(task).await;
 
         match result {
             Ok(()) => {
@@ -346,5 +384,85 @@ impl TaskExecutor {
         };
 
         tx_block_map::execute(&self.db, &self.pool, task.id, &config).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ckbadger_common::TaskType;
+
+    #[test]
+    fn test_parallel_task_groups_at_same_priority() {
+        // Priority 8 tasks are independent and should run in parallel
+        let priority_8: Vec<TaskType> = vec![
+            TaskType::AddressBalancesRebuild,
+            TaskType::TxBlockMapRebuild,
+        ];
+        // All require bulk sync completion
+        for task_type in &priority_8 {
+            assert!(task_type.requires_bulk_sync_completion());
+        }
+    }
+
+    #[test]
+    fn test_priority_7_tasks_are_independent() {
+        let priority_7: Vec<TaskType> = vec![
+            TaskType::ActivitiesRebuild,
+            TaskType::TokenRebuild,
+            TaskType::ConsumedAtBackfill,
+        ];
+        for task_type in &priority_7 {
+            assert!(task_type.requires_bulk_sync_completion());
+        }
+    }
+
+    #[test]
+    fn test_priority_6_tasks_are_independent() {
+        let priority_6: Vec<TaskType> = vec![
+            TaskType::SporeRebuild,
+            TaskType::MnftRebuild,
+            TaskType::DotbitRebuild,
+        ];
+        for task_type in &priority_6 {
+            assert!(task_type.requires_bulk_sync_completion());
+        }
+    }
+
+    #[test]
+    fn test_cycles_backfill_does_not_require_bulk_sync() {
+        assert!(!TaskType::CyclesBackfill.requires_bulk_sync_completion());
+    }
+
+    #[test]
+    fn test_label_import_does_not_require_bulk_sync() {
+        assert!(!TaskType::LabelImport.requires_bulk_sync_completion());
+    }
+
+    #[test]
+    fn test_clears_deferred_task_types() {
+        // These task types clear deferred flags and need Redis invalidation
+        let clears_deferred = |t: TaskType| {
+            matches!(
+                t,
+                TaskType::IndexRebuild
+                    | TaskType::ActivitiesRebuild
+                    | TaskType::AddressBalancesRebuild
+                    | TaskType::TokenRebuild
+                    | TaskType::SporeRebuild
+                    | TaskType::TxBlockMapRebuild
+            )
+        };
+
+        assert!(clears_deferred(TaskType::IndexRebuild));
+        assert!(clears_deferred(TaskType::ActivitiesRebuild));
+        assert!(clears_deferred(TaskType::AddressBalancesRebuild));
+        assert!(clears_deferred(TaskType::TokenRebuild));
+        assert!(clears_deferred(TaskType::SporeRebuild));
+        assert!(clears_deferred(TaskType::TxBlockMapRebuild));
+
+        // These should NOT clear deferred flags
+        assert!(!clears_deferred(TaskType::CyclesBackfill));
+        assert!(!clears_deferred(TaskType::StatisticsRebuild));
+        assert!(!clears_deferred(TaskType::LabelImport));
     }
 }

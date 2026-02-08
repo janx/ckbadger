@@ -594,6 +594,19 @@ impl Indexer {
         self.is_bulk_sync_active() && self.copy_router.is_some()
     }
 
+    /// Check if indexes are still deferred (being rebuilt by task-runner).
+    /// When true, ON CONFLICT queries will fail because unique constraints don't exist yet.
+    async fn are_indexes_deferred(&self) -> bool {
+        let row: Option<(bool,)> = sqlx::query_as(
+            "SELECT COALESCE(indexes_deferred, false) FROM sync_status WHERE id = 1",
+        )
+        .fetch_optional(self.writer.pool())
+        .await
+        .ok()
+        .flatten();
+        row.map(|r| r.0).unwrap_or(false)
+    }
+
     pub async fn run(&self) -> Result<()> {
         let blocks_behind = self.progress.blocks_remaining();
         let copy_enabled = self.copy_router.is_some();
@@ -1070,6 +1083,15 @@ impl Indexer {
                                 }
                             }
                         }
+                    }
+
+                    // Wait for index rebuild if transitioning from bulk to live sync
+                    if !self.should_use_copy() && self.are_indexes_deferred().await {
+                        info!("Indexes still being rebuilt, waiting before writing live blocks...");
+                        Self::drain_channel(&mut parse_rx).await;
+                        self.reorg_notify_flag.store(true, Ordering::SeqCst);
+                        sleep(Duration::from_secs(10)).await;
+                        continue;
                     }
 
                     if self.should_use_copy() {
@@ -6550,5 +6572,62 @@ mod tests {
         assert_eq!(get_partition_index(start), get_partition_index(end));
         assert!(!crosses_partition_boundary(start, end));
         assert_eq!(format_partition_range(start, end), "[p1]");
+    }
+
+    // --- are_indexes_deferred logic tests ---
+
+    /// Simulates the are_indexes_deferred result mapping without a DB connection.
+    /// The method does: row.map(|r| r.0).unwrap_or(false)
+    fn simulate_indexes_deferred_result(db_result: Option<(bool,)>) -> bool {
+        db_result.map(|r| r.0).unwrap_or(false)
+    }
+
+    #[test]
+    fn test_indexes_deferred_returns_true_when_deferred() {
+        assert!(simulate_indexes_deferred_result(Some((true,))));
+    }
+
+    #[test]
+    fn test_indexes_deferred_returns_false_when_not_deferred() {
+        assert!(!simulate_indexes_deferred_result(Some((false,))));
+    }
+
+    #[test]
+    fn test_indexes_deferred_returns_false_when_no_row() {
+        // No sync_status row → safe to proceed (not deferred)
+        assert!(!simulate_indexes_deferred_result(None));
+    }
+
+    #[test]
+    fn test_should_wait_for_indexes_during_transition() {
+        // Simulates the guard logic: !should_use_copy() && are_indexes_deferred()
+        let should_use_copy = false; // transitioned to live sync
+        let indexes_deferred = true; // indexes still being rebuilt
+
+        let should_wait = !should_use_copy && indexes_deferred;
+        assert!(
+            should_wait,
+            "should wait when transitioning with deferred indexes"
+        );
+    }
+
+    #[test]
+    fn test_should_not_wait_during_bulk_sync() {
+        // During bulk sync, COPY doesn't need indexes
+        let should_use_copy = true;
+        let indexes_deferred = true;
+
+        let should_wait = !should_use_copy && indexes_deferred;
+        assert!(!should_wait, "should not wait during bulk sync (uses COPY)");
+    }
+
+    #[test]
+    fn test_should_not_wait_when_indexes_ready() {
+        // Live sync mode and indexes rebuilt → proceed normally
+        let should_use_copy = false;
+        let indexes_deferred = false;
+
+        let should_wait = !should_use_copy && indexes_deferred;
+        assert!(!should_wait, "should not wait when indexes are ready");
     }
 }

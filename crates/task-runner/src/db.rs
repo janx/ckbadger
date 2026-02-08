@@ -102,6 +102,34 @@ impl TaskDb {
         Ok(task)
     }
 
+    /// Claim all pending tasks at the highest available priority level.
+    /// This enables parallel execution of independent tasks at the same priority.
+    pub async fn claim_tasks_at_same_priority(&self, runner_id: &str) -> Result<Vec<Task>> {
+        let tasks: Vec<Task> = sqlx::query_as(
+            r#"
+            UPDATE tasks
+            SET status = 'running',
+                runner_id = $1,
+                started_at = COALESCE(started_at, NOW()),
+                heartbeat_at = NOW()
+            WHERE id = ANY(
+                SELECT id FROM tasks
+                WHERE status = 'pending'
+                AND priority = (
+                    SELECT MAX(priority) FROM tasks WHERE status = 'pending'
+                )
+                FOR UPDATE SKIP LOCKED
+            )
+            RETURNING *
+            "#,
+        )
+        .bind(runner_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(tasks)
+    }
+
     pub async fn update_progress(
         &self,
         task_id: Uuid,

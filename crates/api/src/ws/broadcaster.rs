@@ -29,6 +29,27 @@ pub(crate) fn determine_sync_mode(synced_block: i64, tip_block: i64) -> SyncMode
     }
 }
 
+/// Maximum gap before skipping intermediate blocks during WS broadcast.
+/// When transitioning from FastSync to Realtime, gaps larger than this threshold
+/// cause intermediate blocks to be skipped to avoid flooding clients.
+pub(crate) const BROADCAST_GAP_THRESHOLD: i64 = 20;
+
+/// Adjusts `last_block_number` to skip intermediate blocks when a large gap is detected
+/// during Realtime mode. Returns the adjusted value for `last_block_number`.
+pub(crate) fn adjust_for_broadcast_gap(
+    sync_mode: SyncMode,
+    last_block: i64,
+    current_block: i64,
+) -> Option<i64> {
+    if sync_mode == SyncMode::Realtime {
+        let gap = current_block - last_block;
+        if gap > BROADCAST_GAP_THRESHOLD {
+            return Some(current_block - 1);
+        }
+    }
+    None
+}
+
 pub async fn start_block_broadcaster(
     pool: PgPool,
     ws_manager: Arc<WsManager>,
@@ -83,6 +104,20 @@ pub async fn start_block_broadcaster(
         }
 
         let sync_mode = determine_sync_mode(number, tip_block);
+
+        // When transitioning from FastSync to Realtime, jump last_block_number forward
+        // to avoid replaying hundreds of historical blocks one by one
+        if let Some(last) = last_block_number {
+            if let Some(adjusted) = adjust_for_broadcast_gap(sync_mode, last, number) {
+                info!(
+                    "Skipping {} blocks for WS broadcast (fast-sync catchup: {} -> {})",
+                    number - last - 1,
+                    last,
+                    number
+                );
+                last_block_number = Some(adjusted);
+            }
+        }
 
         if sync_mode == SyncMode::FastSync {
             let sync_status = build_sync_status(&pool, &cache, tip_block).await;
@@ -625,5 +660,45 @@ mod tests {
         assert_eq!(format_duration(90000), "1d 1h");
         assert_eq!(format_duration(172800), "2d");
         assert_eq!(format_duration(259200), "3d");
+    }
+
+    #[test]
+    fn test_broadcast_gap_no_adjustment_in_fast_sync() {
+        // In FastSync mode, gaps are expected and should NOT be adjusted
+        let result = adjust_for_broadcast_gap(SyncMode::FastSync, 1000, 5000);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_broadcast_gap_no_adjustment_for_small_gap() {
+        // Small gaps in Realtime mode should not trigger adjustment
+        let result = adjust_for_broadcast_gap(SyncMode::Realtime, 1000, 1005);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_broadcast_gap_at_threshold_no_adjustment() {
+        // Exactly at threshold: no adjustment
+        let result = adjust_for_broadcast_gap(SyncMode::Realtime, 1000, 1020);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_broadcast_gap_above_threshold_adjusts() {
+        // Above threshold: should skip to current_block - 1
+        let result = adjust_for_broadcast_gap(SyncMode::Realtime, 1000, 1021);
+        assert_eq!(result, Some(1020));
+    }
+
+    #[test]
+    fn test_broadcast_gap_large_skip() {
+        // Large gap (2000 blocks) should skip forward
+        let result = adjust_for_broadcast_gap(SyncMode::Realtime, 16_000_000, 18_000_000);
+        assert_eq!(result, Some(17_999_999));
+    }
+
+    #[test]
+    fn test_broadcast_gap_threshold_value() {
+        assert_eq!(BROADCAST_GAP_THRESHOLD, 20);
     }
 }

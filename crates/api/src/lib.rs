@@ -12,6 +12,7 @@ pub mod ws;
 use axum::{routing::get, Router};
 use sqlx::PgPool;
 use std::sync::Arc;
+use tower_http::compression::CompressionLayer;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
@@ -143,6 +144,7 @@ pub async fn create_router(config: AppConfig) -> Router {
         .route("/ws", get(ws::ws_handler))
         .layer(rate_limit_layer)
         .layer(cors)
+        .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }

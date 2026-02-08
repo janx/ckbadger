@@ -343,19 +343,39 @@ impl BatchWriter {
             let tx_hashes: Vec<&[u8]> = missing.iter().map(|(h, _)| *h).collect();
             let indices: Vec<i16> = missing.iter().map(|(_, i)| *i).collect();
 
-            let rows = sqlx::query_as::<_, (Vec<u8>, i16, i64, i64, Vec<u8>, i32)>(
-                r#"
-                SELECT c.tx_hash, c.output_index, c.capacity, c.created_at_block, c.lock_script_hash, c.data_size
-                FROM cells c
-                JOIN UNNEST($1::bytea[], $2::smallint[]) AS t(tx_hash, output_index)
-                  ON c.tx_hash = t.tx_hash AND c.output_index = t.output_index
-                WHERE c.status = 0
-                "#,
+            // Use a query timeout to avoid blocking sync on slow cell lookups.
+            // During post-bulk-sync index rebuilds, these queries can take 15-20s
+            // scanning all partitions without indexes.
+            let rows = match tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                sqlx::query_as::<_, (Vec<u8>, i16, i64, i64, Vec<u8>, i32)>(
+                    r#"
+                    SELECT c.tx_hash, c.output_index, c.capacity, c.created_at_block, c.lock_script_hash, c.data_size
+                    FROM cells c
+                    JOIN UNNEST($1::bytea[], $2::smallint[]) AS t(tx_hash, output_index)
+                      ON c.tx_hash = t.tx_hash AND c.output_index = t.output_index
+                    WHERE c.status = 0
+                    "#,
+                )
+                .bind(&tx_hashes)
+                .bind(&indices)
+                .fetch_all(&self.pool),
             )
-            .bind(&tx_hashes)
-            .bind(&indices)
-            .fetch_all(&self.pool)
-            .await?;
+            .await
+            {
+                Ok(Ok(rows)) => rows,
+                Ok(Err(e)) => {
+                    tracing::warn!("Cell lookup query failed: {}", e);
+                    Vec::new()
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        "Cell lookup query timed out after 10s ({} missing cells)",
+                        missing.len()
+                    );
+                    Vec::new()
+                }
+            };
 
             for (tx_hash, idx, cap, block, lock_hash, data_size) in rows {
                 result.insert((tx_hash, idx), (cap, block, lock_hash, data_size));
@@ -415,19 +435,36 @@ impl BatchWriter {
             let tx_hashes: Vec<&[u8]> = missing.iter().map(|(h, _)| *h).collect();
             let indices: Vec<i16> = missing.iter().map(|(_, i)| *i).collect();
 
-            let rows = sqlx::query_as::<_, (Vec<u8>, i16, Vec<u8>, Option<Vec<u8>>)>(
-                r#"
-                SELECT c.tx_hash, c.output_index, c.lock_code_hash, c.type_code_hash
-                FROM cells c
-                JOIN UNNEST($1::bytea[], $2::smallint[]) AS t(tx_hash, output_index)
-                  ON c.tx_hash = t.tx_hash AND c.output_index = t.output_index
-                WHERE c.status = 0
-                "#,
+            let rows = match tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                sqlx::query_as::<_, (Vec<u8>, i16, Vec<u8>, Option<Vec<u8>>)>(
+                    r#"
+                    SELECT c.tx_hash, c.output_index, c.lock_code_hash, c.type_code_hash
+                    FROM cells c
+                    JOIN UNNEST($1::bytea[], $2::smallint[]) AS t(tx_hash, output_index)
+                      ON c.tx_hash = t.tx_hash AND c.output_index = t.output_index
+                    WHERE c.status = 0
+                    "#,
+                )
+                .bind(&tx_hashes)
+                .bind(&indices)
+                .fetch_all(&self.pool),
             )
-            .bind(&tx_hashes)
-            .bind(&indices)
-            .fetch_all(&self.pool)
-            .await?;
+            .await
+            {
+                Ok(Ok(rows)) => rows,
+                Ok(Err(e)) => {
+                    tracing::warn!("Code hash lookup query failed: {}", e);
+                    Vec::new()
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        "Code hash lookup query timed out after 10s ({} missing cells)",
+                        missing.len()
+                    );
+                    Vec::new()
+                }
+            };
 
             for (tx_hash, idx, lock_code_hash, type_code_hash) in rows {
                 result.insert((tx_hash, idx), (lock_code_hash, type_code_hash));

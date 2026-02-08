@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use std::sync::Arc;
 
+use crate::cache::{CacheKeys, CacheTtl};
 use crate::response::{
     decode_cursor, encode_cursor, ok, ApiError, ApiResult, CursorPaginatedResponse,
 };
@@ -162,7 +163,7 @@ pub struct CellResponse {
     pub udt_amount: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScriptResponse {
     pub code_hash: String,
@@ -238,7 +239,7 @@ pub struct CellDetailResponse {
     pub dao_info: Option<DaoInfo>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LockScriptInfo {
     pub code_hash: String,
@@ -247,7 +248,7 @@ pub struct LockScriptInfo {
     pub deprecated: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AddressResponse {
     pub lock_script_hash: String,
@@ -814,6 +815,12 @@ async fn get_address(
     State(state): State<Arc<AppState>>,
     axum::extract::Path(addr): axum::extract::Path<String>,
 ) -> ApiResult<AddressResponse> {
+    // Check cache first
+    let cache_key = CacheKeys::address_balance(&addr);
+    if let Some(cached) = state.cache.get::<AddressResponse>(&cache_key).await {
+        return ok(cached);
+    }
+
     let (lock_hash, input_address) = if is_ckb_address(&addr) {
         let hash = address_to_lock_script_hash(&addr)
             .map_err(|e| ApiError::bad_request(format!("Invalid CKB address: {}", e)))?;
@@ -870,6 +877,7 @@ async fn get_address(
                 SELECT lock_code_hash, lock_hash_type, lock_args
                 FROM cells
                 WHERE lock_script_hash = $1
+                ORDER BY created_at_block DESC
                 LIMIT 1
                 "#,
             )
@@ -939,7 +947,7 @@ async fn get_address(
     // Use transactions_count from address_balances (pre-aggregated) instead of expensive COUNT on activities
     let recent_activities_count = transactions_count;
 
-    ok(AddressResponse {
+    let response = AddressResponse {
         lock_script_hash: format!("0x{}", hex::encode(&lock_hash)),
         address,
         balance,
@@ -948,7 +956,15 @@ async fn get_address(
         recent_activities_count,
         lock_script,
         lock_script_info,
-    })
+    };
+
+    // Cache the response for 30 seconds
+    state
+        .cache
+        .set(&cache_key, &response, CacheTtl::ADDRESS_BALANCE)
+        .await;
+
+    ok(response)
 }
 
 async fn lookup_code_cell_scripts(
