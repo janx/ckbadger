@@ -113,7 +113,7 @@ Block N arrives
 │  2. Check for reorg                                           │
 │  3. Insert blocks, txs, cells (parallel)                      │
 │  4. Insert inputs, cell_deps (parallel)                       │
-│  5. Consume cells (update status, delete from live_cells)     │
+│  5. Consume cells (update status to consumed)                 │
 │  6. Update address balances, txs, script usage (parallel)     │
 │  7. Process DAO deposits/withdrawals                          │
 │  8. Process token transfers                                   │
@@ -432,7 +432,6 @@ When the indexer catches up to the chain tip, it automatically switches back to 
 | `copy_inputs.rs`               | transaction_inputs    | 6       | 5-10x faster than UNNEST  |
 | `copy_inputs.rs`               | transaction_cell_deps | 6       | 5-10x faster than UNNEST  |
 | `copy_proposals.rs`            | block_proposals       | 3       | 5-10x faster than UNNEST  |
-| `copy_live_cells.rs`           | live_cells            | 10      | 5-10x faster than UNNEST  |
 | `copy_address_transactions.rs` | address_transactions  | 6       | 5x faster than UNNEST     |
 | `parallel_copy.rs`             | -                     | -       | Partition-aware routing   |
 
@@ -469,7 +468,7 @@ The indexer implements crash recovery to handle failures during batch writes. Si
 **Blocks are written LAST** as the "commit marker". The write order is:
 
 1. Transactions, cells, inputs, cell_deps (parallel COPY operations)
-2. Live cells, address transactions, script usage
+2. Address transactions, script usage
 3. DAO deposits, token transfers, NFT data
 4. Statistics updates
 5. **Blocks (LAST)** - only after all other data succeeds
@@ -496,7 +495,6 @@ When a batch write fails, `cleanup_batch_range(start, end)` removes partial data
 | ----------------------- | ---------------------- |
 | `transactions`          | `block_number`         |
 | `cells`                 | `created_at_block`     |
-| `live_cells`            | `created_at_block`     |
 | `transaction_inputs`    | `tx_block_number`      |
 | `transaction_cell_deps` | `tx_block_number`      |
 | `block_proposals`       | `block_number`         |

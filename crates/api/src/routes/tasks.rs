@@ -13,7 +13,6 @@ use crate::AppState;
 pub struct ActiveTasksResponse {
     pub index_rebuild: Option<IndexRebuildStatus>,
     pub statistics_rebuild: Option<StatisticsRebuildStatus>,
-    pub live_cells_populate: Option<LiveCellsPopulateStatus>,
     pub activities_rebuild: Option<ActivitiesRebuildStatus>,
 }
 
@@ -37,16 +36,6 @@ pub struct StatisticsRebuildStatus {
     pub total: i64,
     pub completed: i64,
     pub current_table: Option<String>,
-    pub progress: f64,
-    pub started_at: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LiveCellsPopulateStatus {
-    pub status: String,
-    pub total: i64,
-    pub populated: i64,
     pub progress: f64,
     pub started_at: Option<String>,
 }
@@ -82,7 +71,7 @@ async fn get_active_tasks(State(state): State<Arc<AppState>>) -> ApiResult<Activ
             result,
             started_at
         FROM tasks
-        WHERE task_type IN ('index_rebuild', 'statistics_rebuild', 'live_cells_populate', 'activities_rebuild') 
+        WHERE task_type IN ('index_rebuild', 'statistics_rebuild', 'activities_rebuild')
           AND status IN ('pending', 'running')
         ORDER BY 
             CASE status WHEN 'running' THEN 0 ELSE 1 END,
@@ -95,7 +84,6 @@ async fn get_active_tasks(State(state): State<Arc<AppState>>) -> ApiResult<Activ
 
     let mut index_rebuild = None;
     let mut statistics_rebuild = None;
-    let mut live_cells_populate = None;
     let mut activities_rebuild = None;
 
     for (task_type, status, progress_total, progress_current, result_json, started_at) in rows {
@@ -145,15 +133,6 @@ async fn get_active_tasks(State(state): State<Arc<AppState>>) -> ApiResult<Activ
                     started_at: started_at.map(|t| t.to_rfc3339()),
                 });
             }
-            "live_cells_populate" if live_cells_populate.is_none() => {
-                live_cells_populate = Some(LiveCellsPopulateStatus {
-                    status,
-                    total: progress_total,
-                    populated: progress_current,
-                    progress,
-                    started_at: started_at.map(|t| t.to_rfc3339()),
-                });
-            }
             "activities_rebuild" if activities_rebuild.is_none() => {
                 activities_rebuild = Some(ActivitiesRebuildStatus {
                     status,
@@ -170,7 +149,6 @@ async fn get_active_tasks(State(state): State<Arc<AppState>>) -> ApiResult<Activ
     ok(ActiveTasksResponse {
         index_rebuild,
         statistics_rebuild,
-        live_cells_populate,
         activities_rebuild,
     })
 }

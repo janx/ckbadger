@@ -13,6 +13,7 @@ use crate::db::TaskDb;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PartitionType {
     Range,
+    #[allow(dead_code)]
     Hash,
 }
 
@@ -57,11 +58,6 @@ const DEFERRABLE_INDEXES: &[DeferrableIndex] = &[
     DeferrableIndex { name: "idx_cells_type_code_hash_live", table: "cells", definition: "CREATE INDEX {name} ON {table}(type_code_hash, type_hash_type, created_at_block DESC, output_index DESC) WHERE status = 0 AND type_code_hash IS NOT NULL", partition_type: PartitionType::Range, priority: 3 },
     DeferrableIndex { name: "idx_cells_list_covering", table: "cells", definition: "CREATE INDEX {name} ON {table}(lock_script_hash, created_at_block DESC) INCLUDE (tx_hash, output_index, capacity, type_script_hash, data_size) WHERE status = 0", partition_type: PartitionType::Range, priority: 3 },
     DeferrableIndex { name: "idx_uncles_hash", table: "uncle_blocks", definition: "CREATE INDEX {name} ON {table}(hash)", partition_type: PartitionType::Range, priority: 3 },
-    DeferrableIndex { name: "idx_live_cells_lock", table: "live_cells", definition: "CREATE INDEX {name} ON {table}(lock_script_hash)", partition_type: PartitionType::Hash, priority: 1 },
-    DeferrableIndex { name: "idx_live_cells_lock_code", table: "live_cells", definition: "CREATE INDEX {name} ON {table}(lock_code_hash)", partition_type: PartitionType::Hash, priority: 2 },
-    DeferrableIndex { name: "idx_live_cells_type", table: "live_cells", definition: "CREATE INDEX {name} ON {table}(type_script_hash) WHERE type_script_hash IS NOT NULL", partition_type: PartitionType::Hash, priority: 2 },
-    DeferrableIndex { name: "idx_live_cells_type_code", table: "live_cells", definition: "CREATE INDEX {name} ON {table}(type_code_hash) WHERE type_code_hash IS NOT NULL", partition_type: PartitionType::Hash, priority: 2 },
-    DeferrableIndex { name: "idx_live_cells_block", table: "live_cells", definition: "CREATE INDEX {name} ON {table}(created_at_block)", partition_type: PartitionType::Hash, priority: 3 },
 ];
 
 const DEFERRABLE_CONSTRAINTS: &[DeferrableConstraint] = &[

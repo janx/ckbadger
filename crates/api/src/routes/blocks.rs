@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use std::sync::Arc;
 
-use crate::cache::{CacheKeys, CacheTtl};
+use crate::cache::{CacheBackend, CacheKeys, CacheTtl};
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
 use crate::utils::script_to_address;
 use crate::AppState;
@@ -293,8 +293,10 @@ async fn get_block(
     match row {
         Some(r) => {
             let block_hash = format!("0x{}", hex::encode(&r.hash));
-            let miner_address = get_miner_address(&state.pool, r.number, &state.ckb_network).await;
-            let reward_info = get_mining_reward(&state.ckb_rpc_url, &block_hash, &state.pool).await;
+            let (miner_address, reward_info) = tokio::join!(
+                get_miner_address(&state.pool, r.number, &state.ckb_network),
+                get_mining_reward(&state.ckb_rpc_url, &block_hash, &state.pool, &state.cache),
+            );
             let (mining_reward, mining_reward_tx_hash) = match reward_info {
                 Some(info) => (Some(info.reward), info.cellbase_tx_hash),
                 None => (None, None),
@@ -355,6 +357,7 @@ struct MinerReward {
     proposal: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
 struct MiningRewardInfo {
     reward: String,
     cellbase_tx_hash: Option<String>,
@@ -369,7 +372,13 @@ async fn get_mining_reward(
     rpc_url: &str,
     block_hash: &str,
     pool: &sqlx::PgPool,
+    cache: &CacheBackend,
 ) -> Option<MiningRewardInfo> {
+    let cache_key = CacheKeys::mining_reward(block_hash);
+    if let Some(cached) = cache.get::<MiningRewardInfo>(&cache_key).await {
+        return Some(cached);
+    }
+
     let client = reqwest::Client::new();
     let response = client
         .post(rpc_url)
@@ -395,10 +404,14 @@ async fn get_mining_reward(
 
     let cellbase_tx_hash = get_cellbase_tx_hash(pool, &economic_state.finalized_at).await;
 
-    Some(MiningRewardInfo {
+    let info = MiningRewardInfo {
         reward: total.to_string(),
         cellbase_tx_hash,
-    })
+    };
+
+    cache.set(&cache_key, &info, CacheTtl::MINING_REWARD).await;
+
+    Some(info)
 }
 
 async fn get_cellbase_tx_hash(pool: &sqlx::PgPool, finalized_at_hash: &str) -> Option<String> {

@@ -12,6 +12,7 @@ enum PartitionType {
     /// Range partitioned by block number (10 partitions: _p00 to _p09)
     Range,
     /// Hash partitioned (16 partitions: _p00 to _p15)
+    #[allow(dead_code)]
     Hash,
 }
 
@@ -211,41 +212,6 @@ const DEFERRABLE_INDEXES: &[DeferrableIndex] = &[
         partition_type: PartitionType::Range,
         priority: 3,
     },
-    DeferrableIndex {
-        name: "idx_live_cells_lock",
-        table: "live_cells",
-        definition: "CREATE INDEX {name} ON {table}(lock_script_hash)",
-        partition_type: PartitionType::Hash,
-        priority: 1,
-    },
-    DeferrableIndex {
-        name: "idx_live_cells_lock_code",
-        table: "live_cells",
-        definition: "CREATE INDEX {name} ON {table}(lock_code_hash)",
-        partition_type: PartitionType::Hash,
-        priority: 2,
-    },
-    DeferrableIndex {
-        name: "idx_live_cells_type",
-        table: "live_cells",
-        definition: "CREATE INDEX {name} ON {table}(type_script_hash) WHERE type_script_hash IS NOT NULL",
-        partition_type: PartitionType::Hash,
-        priority: 2,
-    },
-    DeferrableIndex {
-        name: "idx_live_cells_type_code",
-        table: "live_cells",
-        definition: "CREATE INDEX {name} ON {table}(type_code_hash) WHERE type_code_hash IS NOT NULL",
-        partition_type: PartitionType::Hash,
-        priority: 2,
-    },
-    DeferrableIndex {
-        name: "idx_live_cells_block",
-        table: "live_cells",
-        definition: "CREATE INDEX {name} ON {table}(created_at_block)",
-        partition_type: PartitionType::Hash,
-        priority: 3,
-    },
 ];
 
 use crate::cache::CacheInvalidator;
@@ -417,7 +383,7 @@ mod tests {
 
     #[test]
     fn test_deferrable_indexes_count() {
-        assert!(DEFERRABLE_INDEXES.len() >= 20);
+        assert!(DEFERRABLE_INDEXES.len() >= 15);
     }
 
     #[test]
@@ -492,23 +458,16 @@ mod tests {
     }
 
     #[test]
-    fn test_hash_partitioned_indexes() {
+    fn test_no_hash_partitioned_indexes() {
         let hash_partitioned: Vec<_> = DEFERRABLE_INDEXES
             .iter()
             .filter(|idx| idx.partition_type == PartitionType::Hash)
             .collect();
 
         assert!(
-            !hash_partitioned.is_empty(),
-            "Should have some hash-partitioned indexes"
+            hash_partitioned.is_empty(),
+            "Should have no hash-partitioned indexes (live_cells removed)"
         );
-        for idx in hash_partitioned {
-            assert_eq!(
-                idx.table, "live_cells",
-                "Hash-partitioned index {} should be on live_cells",
-                idx.name
-            );
-        }
     }
 
     #[test]
@@ -518,16 +477,13 @@ mod tests {
     }
 
     #[test]
-    fn test_live_cells_indexes_are_hash_partitioned() {
+    fn test_no_live_cells_indexes() {
         for idx in DEFERRABLE_INDEXES {
-            if idx.table == "live_cells" {
-                assert_eq!(
-                    idx.partition_type,
-                    PartitionType::Hash,
-                    "live_cells index {} should be Hash partitioned",
-                    idx.name
-                );
-            }
+            assert_ne!(
+                idx.table, "live_cells",
+                "live_cells table removed, index {} should not exist",
+                idx.name
+            );
         }
     }
 

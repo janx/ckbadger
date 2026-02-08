@@ -197,12 +197,12 @@ pub struct MemoryStatsData {
 
 **Fallback** (when Redis unavailable):
 
-| Data                 | Fallback Query                      |
-| -------------------- | ----------------------------------- |
-| `tip_block_number`   | `SELECT MAX(number) FROM blocks`    |
-| `total_transactions` | `SELECT COUNT(*) FROM transactions` |
-| `total_live_cells`   | `SELECT COUNT(*) FROM live_cells`   |
-| `sync_ema_rate`      | None (ETA not displayed)            |
+| Data                 | Fallback Query                                |
+| -------------------- | --------------------------------------------- |
+| `tip_block_number`   | `SELECT MAX(number) FROM blocks`              |
+| `total_transactions` | `SELECT COUNT(*) FROM transactions`           |
+| `total_live_cells`   | `SELECT COUNT(*) FROM cells WHERE status = 0` |
+| `sync_ema_rate`      | None (ETA not displayed)                      |
 
 **Requires**: `redis-cache` feature enabled on both indexer and API, plus `REDIS_URL` environment variable.
 
@@ -264,14 +264,12 @@ When bulk sync completes (catches up to <=72 blocks behind tip), the indexer aut
 1. Indexer detects bulk sync completion
 2. Submits `index_rebuild` task (priority 10) if indexes are deferred
 3. Submits `cells_status_rebuild` task (priority 9) to rebuild cells.status
-4. Submits `live_cells_populate` task (priority 8) to populate PostgreSQL from RocksDB
-5. Submits `statistics_rebuild` task (priority 5) to rebuild aggregate statistics
-6. Task-runner picks up `index_rebuild`, `cells_status_rebuild`, and `statistics_rebuild` tasks
-7. Indexer executes `live_cells_populate` during idle time (requires RocksDB access)
-8. Indexes rebuilt with `CREATE INDEX CONCURRENTLY`
-9. Cells status rebuilt from transaction_inputs table
-10. Statistics tables rebuilt (daily_statistics, hourly_statistics, miner_statistics, etc.)
-11. Tasks complete (status: `completed`)
+4. Submits `statistics_rebuild` task (priority 5) to rebuild aggregate statistics
+5. Task-runner picks up `index_rebuild`, `cells_status_rebuild`, and `statistics_rebuild` tasks
+6. Indexes rebuilt with `CREATE INDEX CONCURRENTLY`
+7. Cells status rebuilt from transaction_inputs table
+8. Statistics tables rebuilt (daily_statistics, hourly_statistics, miner_statistics, etc.)
+9. Tasks complete (status: `completed`)
 
 **Startup Recovery:**
 
@@ -295,7 +293,6 @@ This handles edge cases:
 | `index_rebuild`               | 10       | Rebuild deferred indexes and constraints                               |
 | `cells_status_rebuild`        | 9        | Rebuild cells.status and consumed*at*\* from transaction_inputs        |
 | `address_balances_rebuild`    | 8        | Rebuild address_balances from cells GROUP BY                           |
-| `live_cells_populate`         | 8        | Populate live_cells table from RocksDB (indexer)                       |
 | `dao_rebuild`                 | 8        | Rebuild dao_deposits from RocksDB (indexer)                            |
 | `token_rebuild`               | 7        | Rebuild tokens/token_balances/udt_cells with UDT parsing               |
 | `secondary_issuance_backfill` | 7        | Backfill ALL blocks' secondary issuance data (exact)                   |
@@ -320,7 +317,6 @@ Tasks that require complete blockchain data are automatically deferred during bu
 | `index_rebuild`               | ❌ No          | Would slow down writes by 3-4x during sync |
 | `cells_status_rebuild`        | ❌ No          | Requires all transaction_inputs written    |
 | `address_balances_rebuild`    | ❌ No          | Requires all cells written                 |
-| `live_cells_populate`         | ❌ No          | Requires RocksDB fully populated           |
 | `dao_rebuild`                 | ❌ No          | Requires all DAO deposits in RocksDB       |
 | `token_rebuild`               | ❌ No          | Requires all cells with UDT type_script    |
 | `activities_rebuild`          | ❌ No          | Requires all transactions/cells written    |
@@ -734,14 +730,14 @@ The LiveCellStore provides O(1) cell lookups during blockchain synchronization u
 
 **Cache Lookup Order:**
 
-1. `get_cells_info_batch(bulk_sync_mode)`: live_cells → consumed_cells → PostgreSQL (skipped if bulk_sync_mode=true)
-2. `get_cells_code_hashes_batch(bulk_sync_mode)`: live_cells → consumed_cells → PostgreSQL (skipped if bulk_sync_mode=true)
+1. `get_cells_info_batch(bulk_sync_mode)`: RocksDB live_cells CF → consumed_cells → PostgreSQL `cells WHERE status=0` (skipped if bulk_sync_mode=true)
+2. `get_cells_code_hashes_batch(bulk_sync_mode)`: RocksDB live_cells CF → consumed_cells → PostgreSQL `cells WHERE status=0` (skipped if bulk_sync_mode=true)
 3. `get_block_dao_field()`: block_headers → PostgreSQL
 4. `get_block_number_by_hash()`: block_hash_index → PostgreSQL
 
 **Behavior:**
 
-- **Bulk Sync Mode** (>1000 blocks behind tip): Skips ALL `live_cells` table operations (INSERT/DELETE), writing only to RocksDB for maximum throughput. The `cells` table still receives writes. Additionally, `get_cells_info_batch` and `get_cells_code_hashes_batch` skip PostgreSQL fallback queries when RocksDB is enabled, avoiding expensive partition scans that return 0 rows.
+- **Bulk Sync Mode** (>1000 blocks behind tip): Writes cell data to RocksDB for maximum throughput. The `cells` table receives writes via COPY. `get_cells_info_batch` and `get_cells_code_hashes_batch` skip PostgreSQL fallback queries when RocksDB is enabled, avoiding expensive partition scans that return 0 rows.
 - **Bulk Sync Cell Cache** (default enabled): Retains ALL consumed cells in RocksDB during bulk sync, eliminating PostgreSQL fallback queries. Requires ~15GB extra memory for full chain sync. Disabled automatically on sync completion.
 - **Consumed Cell Cache**: When a cell is spent, its info is preserved in `consumed_cells` CF for 1000 blocks (or indefinitely during bulk sync if cell cache enabled).
 - **Block Header Cache**: Automatically populated when blocks are written; enables O(1) DAO field lookups.
@@ -768,44 +764,6 @@ cargo run -p ckbadger-indexer
 
 # Custom path
 cargo run -p ckbadger-indexer -- --live-cell-db-path /ssd/live_cells
-```
-
-### Live Cells Populate Task
-
-During bulk sync, the indexer skips writing to the PostgreSQL `live_cells` table for performance (writes only to RocksDB). After bulk sync completes, the `live_cells_populate` task copies all live cells from RocksDB to PostgreSQL.
-
-**Why Indexer Executes (not task-runner):**
-
-- Requires direct access to RocksDB live cell store
-- Task-runner rejects this task type with error message
-
-**Execution Flow:**
-
-1. Task submitted when bulk sync completes (priority 8)
-2. Indexer checks for pending task during pipeline idle time
-3. Claims task with `FOR UPDATE SKIP LOCKED`
-4. Truncates PostgreSQL `live_cells` table
-5. Iterates RocksDB in batches (default 100,000 cells)
-6. Writes batches to PostgreSQL using COPY protocol
-7. Updates task progress every 5 seconds
-8. Marks task completed with `cells_populated` count
-
-**Configuration:**
-
-```rust
-LiveCellsPopulateConfig {
-    batch_size: 100_000,  // Cells per batch
-}
-```
-
-**Monitoring:**
-
-```bash
-# Check task status
-psql -c "SELECT id, status, progress_current, progress_total, rate_ema FROM tasks WHERE task_type = 'live_cells_populate';"
-
-# Monitor via TUI
-cargo run -p ckbadger-task-tui
 ```
 
 ## Rust Style

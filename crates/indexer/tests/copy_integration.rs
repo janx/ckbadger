@@ -1,7 +1,6 @@
 use ckbadger_indexer::db::copy_cells::CopyCellsWriter;
 use ckbadger_indexer::db::copy_format::BinaryCopyBuffer;
 use ckbadger_indexer::db::copy_inputs::{CopyCellDepsWriter, CopyInputsWriter};
-use ckbadger_indexer::db::copy_live_cells::CopyLiveCellsWriter;
 use ckbadger_indexer::db::copy_proposals::CopyProposalsWriter;
 use ckbadger_indexer::db::copy_transactions::CopyTransactionsWriter;
 use ckbadger_indexer::parser::cell::ParsedCell;
@@ -114,19 +113,6 @@ fn test_cell_deps_writer_produces_valid_binary() {
 
     let mut writer = CopyCellDepsWriter::new();
     writer.add_cell_dep(&tx_hash, 1000, 0, &dep);
-    let data = writer.finish();
-
-    assert!(&data[0..11] == b"PGCOPY\n\xff\r\n\0");
-    assert!(data.len() > 50);
-}
-
-#[test]
-fn test_live_cells_writer_produces_valid_binary() {
-    let cell = create_test_cell();
-    let tx_hash = vec![0u8; 32];
-
-    let mut writer = CopyLiveCellsWriter::new();
-    writer.add_live_cell(&tx_hash, 0, &cell, 1000);
     let data = writer.finish();
 
     assert!(&data[0..11] == b"PGCOPY\n\xff\r\n\0");

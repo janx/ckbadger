@@ -514,47 +514,93 @@ async fn get_transaction_detail(
         cycles,
     ) = tx_row.ok_or_else(|| ApiError::not_found("Transaction not found"))?;
 
-    let tip_block = state.cache.get_sync_tip(&state.pool).await;
-    let confirmations = tip_block - block_number + 1;
-
     let tx_hash_hex = format!("0x{}", hex::encode(&tx_hash));
-    let final_tx_size = match tx_size {
-        Some(size) => Some(size),
-        None => fetch_tx_size_from_rpc(&state.ckb_rpc_url, &tx_hash_hex).await,
-    };
 
-    let input_rows = sqlx::query_as::<
-        _,
-        (
-            Vec<u8>,
-            i16,
-            String,
-            Option<String>,
-            Option<i32>,
-            Option<Vec<u8>>,
-            Option<i16>,
-            Option<Vec<u8>>,
-        ),
-    >(
-        r#"
-        SELECT ti.previous_tx_hash, ti.previous_output_index, ti.since::TEXT, c.capacity::TEXT,
-               CASE WHEN c.capacity IS NOT NULL THEN
-                   8 + 32 + 1 + LENGTH(c.lock_args) +
-                   CASE WHEN c.type_code_hash IS NOT NULL THEN 32 + 1 + COALESCE(LENGTH(c.type_args), 0) ELSE 0 END +
-                   c.data_size
-               ELSE NULL END::INT as occupied_capacity,
-               c.lock_code_hash, c.lock_hash_type, c.lock_args
-        FROM transaction_inputs ti
-        LEFT JOIN cells c ON c.tx_hash = ti.previous_tx_hash AND c.output_index = ti.previous_output_index
-        WHERE ti.tx_hash = $1 AND ti.tx_block_number = $2
-        ORDER BY ti.input_index ASC
-        "#,
-    )
-    .bind(&hash_bytes)
-    .bind(block_number)
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    // Parallelize independent queries
+    type TryJoinError = (axum::http::StatusCode, axum::Json<ApiError>);
+    let (tip_block, final_tx_size, input_rows, output_rows, activities) = tokio::try_join!(
+        async { Ok::<_, TryJoinError>(state.cache.get_sync_tip(&state.pool).await) },
+        async {
+            Ok::<_, TryJoinError>(match tx_size {
+                Some(size) => Some(size),
+                None => fetch_tx_size_from_rpc(&state.ckb_rpc_url, &tx_hash_hex).await,
+            })
+        },
+        async {
+            sqlx::query_as::<
+                _,
+                (
+                    Vec<u8>,
+                    i16,
+                    String,
+                    Option<String>,
+                    Option<i32>,
+                    Option<Vec<u8>>,
+                    Option<i16>,
+                    Option<Vec<u8>>,
+                ),
+            >(
+                r#"
+                SELECT ti.previous_tx_hash, ti.previous_output_index, ti.since::TEXT, c.capacity::TEXT,
+                       CASE WHEN c.capacity IS NOT NULL THEN
+                           8 + 32 + 1 + LENGTH(c.lock_args) +
+                           CASE WHEN c.type_code_hash IS NOT NULL THEN 32 + 1 + COALESCE(LENGTH(c.type_args), 0) ELSE 0 END +
+                           c.data_size
+                       ELSE NULL END::INT as occupied_capacity,
+                       c.lock_code_hash, c.lock_hash_type, c.lock_args
+                FROM transaction_inputs ti
+                LEFT JOIN cells c ON c.tx_hash = ti.previous_tx_hash AND c.output_index = ti.previous_output_index
+                WHERE ti.tx_hash = $1 AND ti.tx_block_number = $2
+                ORDER BY ti.input_index ASC
+                "#,
+            )
+            .bind(&hash_bytes)
+            .bind(block_number)
+            .fetch_all(&state.pool)
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))
+        },
+        async {
+            sqlx::query_as::<
+                _,
+                (
+                    String,
+                    Vec<u8>,
+                    i16,
+                    Vec<u8>,
+                    Option<Vec<u8>>,
+                    Option<i16>,
+                    Option<Vec<u8>>,
+                    i32,
+                    i64,
+                ),
+            >(
+                r#"
+                SELECT capacity::TEXT, lock_code_hash, lock_hash_type, lock_args,
+                       type_code_hash, type_hash_type, type_args,
+                       (8 + 32 + 1 + LENGTH(lock_args) +
+                       CASE WHEN type_code_hash IS NOT NULL THEN 32 + 1 + COALESCE(LENGTH(type_args), 0) ELSE 0 END +
+                       data_size)::INT as occupied_capacity,
+                       created_at_block
+                FROM cells
+                WHERE tx_hash = $1 AND created_at_block = $2
+                ORDER BY output_index ASC
+                "#,
+            )
+            .bind(&hash_bytes)
+            .bind(block_number)
+            .fetch_all(&state.pool)
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))
+        },
+        async {
+            fetch_transaction_activities(&state.pool, &hash_bytes)
+                .await
+                .map_err(ApiError::internal)
+        },
+    )?;
+
+    let confirmations = tip_block - block_number + 1;
 
     let mut inputs_capacity: u128 = 0;
     let mut inputs_occupied_capacity: u128 = 0;
@@ -606,38 +652,6 @@ async fn get_transaction_detail(
             },
         )
         .collect();
-
-    let output_rows = sqlx::query_as::<
-        _,
-        (
-            String,
-            Vec<u8>,
-            i16,
-            Vec<u8>,
-            Option<Vec<u8>>,
-            Option<i16>,
-            Option<Vec<u8>>,
-            i32,
-            i64,
-        ),
-    >(
-        r#"
-        SELECT capacity::TEXT, lock_code_hash, lock_hash_type, lock_args, 
-               type_code_hash, type_hash_type, type_args,
-               (8 + 32 + 1 + LENGTH(lock_args) +
-               CASE WHEN type_code_hash IS NOT NULL THEN 32 + 1 + COALESCE(LENGTH(type_args), 0) ELSE 0 END +
-               data_size)::INT as occupied_capacity,
-               created_at_block
-        FROM cells
-        WHERE tx_hash = $1 AND created_at_block = $2
-        ORDER BY output_index ASC
-        "#,
-    )
-    .bind(&hash_bytes)
-    .bind(block_number)
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let mut outputs_capacity: u128 = 0;
     let mut outputs_occupied_capacity: u128 = 0;
@@ -737,10 +751,6 @@ async fn get_transaction_detail(
             "0".to_string()
         }
     });
-
-    let activities = fetch_transaction_activities(&state.pool, &hash_bytes)
-        .await
-        .unwrap_or_default();
 
     ok(TransactionDetailResponse {
         hash: tx_hash_hex,

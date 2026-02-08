@@ -71,7 +71,7 @@ Bulk sync is **automatically enabled** when more than `bulk_sync_threshold` bloc
 **Always written:**
 
 - Blocks, transactions, cells, inputs (core data)
-- Address balances, live cells, address_transactions (address pages)
+- Address balances, address_transactions (address pages)
 - Daily statistics, epoch statistics (important aggregates)
 - DAO deposits/withdrawals (financial data)
 - Sync status (crash recovery)
@@ -102,7 +102,7 @@ Statistics updates (`hourly_statistics`, `daily_statistics`, etc.) are now writt
 
 ### Concurrent Cell Consumption
 
-Cell consumption (`UPDATE cells` + `DELETE live_cells`) now runs concurrently rather than sequentially.
+Cell consumption (`UPDATE cells SET status = 1`) uses partition-aware batch updates for efficient cross-partition operations.
 
 ### LRU Cache
 
@@ -247,7 +247,6 @@ Run periodic maintenance:
 ```sql
 VACUUM ANALYZE cells;
 VACUUM ANALYZE transactions;
-VACUUM ANALYZE live_cells;
 ```
 
 Or enable aggressive autovacuum (already configured in `postgresql.conf`).

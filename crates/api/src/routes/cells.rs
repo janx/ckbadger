@@ -397,9 +397,9 @@ async fn list_live_cells(
                 SELECT lc.tx_hash, lc.output_index, lc.capacity::TEXT, lc.lock_script_hash,
                        lc.type_script_hash, lc.type_code_hash, lc.data_size, lc.created_at_block, lc.lock_args,
                        uc.amount::TEXT
-                FROM live_cells lc
+                FROM cells lc
                 LEFT JOIN udt_cells uc ON lc.tx_hash = uc.tx_hash AND lc.output_index = uc.output_index
-                WHERE lc.lock_script_hash = $1 AND lc.type_code_hash = $2
+                WHERE lc.lock_script_hash = $1 AND lc.type_code_hash = $2 AND lc.status = 0
                   AND (lc.created_at_block, lc.output_index) < ($3, $4)
                 ORDER BY lc.created_at_block DESC, lc.output_index DESC
                 LIMIT $5
@@ -487,9 +487,9 @@ async fn list_live_cells(
                     SELECT lc.tx_hash, lc.output_index, lc.capacity::TEXT, lc.lock_script_hash,
                            lc.type_script_hash, lc.type_code_hash, lc.data_size, lc.created_at_block, lc.lock_args,
                            uc.amount::TEXT
-                    FROM live_cells lc
+                    FROM cells lc
                     LEFT JOIN udt_cells uc ON lc.tx_hash = uc.tx_hash AND lc.output_index = uc.output_index
-                    WHERE lc.lock_script_hash = $1 AND lc.type_script_hash = $2
+                    WHERE lc.lock_script_hash = $1 AND lc.type_script_hash = $2 AND lc.status = 0
                       AND (lc.created_at_block, lc.output_index) < ($3, $4)
                     ORDER BY lc.created_at_block DESC, lc.output_index DESC
                     LIMIT $5
@@ -510,8 +510,8 @@ async fn list_live_cells(
                     SELECT lc.tx_hash, lc.output_index, lc.capacity::TEXT, lc.lock_script_hash,
                            lc.type_script_hash, lc.type_code_hash, lc.data_size, lc.created_at_block, lc.lock_args,
                            NULL::TEXT
-                    FROM live_cells lc
-                    WHERE lc.lock_script_hash = $1
+                    FROM cells lc
+                    WHERE lc.lock_script_hash = $1 AND lc.status = 0
                       AND (lc.created_at_block, lc.output_index) < ($2, $3)
                     ORDER BY lc.created_at_block DESC, lc.output_index DESC
                     LIMIT $4
@@ -531,9 +531,9 @@ async fn list_live_cells(
                     SELECT lc.tx_hash, lc.output_index, lc.capacity::TEXT, lc.lock_script_hash,
                            lc.type_script_hash, lc.type_code_hash, lc.data_size, lc.created_at_block, lc.lock_args,
                            uc.amount::TEXT
-                    FROM live_cells lc
+                    FROM cells lc
                     LEFT JOIN udt_cells uc ON lc.tx_hash = uc.tx_hash AND lc.output_index = uc.output_index
-                    WHERE lc.type_script_hash = $1
+                    WHERE lc.type_script_hash = $1 AND lc.status = 0
                       AND (lc.created_at_block, lc.output_index) < ($2, $3)
                     ORDER BY lc.created_at_block DESC, lc.output_index DESC
                     LIMIT $4
@@ -553,8 +553,9 @@ async fn list_live_cells(
                     SELECT lc.tx_hash, lc.output_index, lc.capacity::TEXT, lc.lock_script_hash,
                            lc.type_script_hash, lc.type_code_hash, lc.data_size, lc.created_at_block, lc.lock_args,
                            NULL::TEXT
-                    FROM live_cells lc
-                    WHERE (lc.created_at_block, lc.output_index) < ($1, $2)
+                    FROM cells lc
+                    WHERE lc.status = 0
+                      AND (lc.created_at_block, lc.output_index) < ($1, $2)
                     ORDER BY lc.created_at_block DESC, lc.output_index DESC
                     LIMIT $3
                     "#,
@@ -823,55 +824,61 @@ async fn get_address(
         (hash, None)
     };
 
-    // Check if address_balances is deferred
-    let sync_status = state.cache.get_sync_status(&state.pool).await;
+    // Parallelize balance query and script lookup
+    let (row, script_row) = tokio::try_join!(
+        async {
+            // Check if address_balances is deferred
+            let sync_status = state.cache.get_sync_status(&state.pool).await;
 
-    let row = if sync_status.address_balances_deferred {
-        // Fallback: query cells table directly
-        sqlx::query_as::<_, (String, i32, i64)>(
-            r#"
-            SELECT 
-                COALESCE(SUM(capacity)::TEXT, '0'),
-                COALESCE(COUNT(*)::INT, 0),
-                0
-            FROM cells
-            WHERE lock_script_hash = $1 AND status = 0
-            "#,
-        )
-        .bind(&lock_hash)
-        .fetch_optional(&state.pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-    } else {
-        // Normal: query address_balances table
-        sqlx::query_as::<_, (String, i32, i64)>(
-            r#"
-            SELECT 
-                COALESCE(balance::TEXT, '0'),
-                COALESCE(live_cells_count, 0),
-                COALESCE(transactions_count, 0)
-            FROM address_balances
-            WHERE lock_script_hash = $1
-            "#,
-        )
-        .bind(&lock_hash)
-        .fetch_optional(&state.pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-    };
-
-    let script_row = sqlx::query_as::<_, (Vec<u8>, i16, Vec<u8>)>(
-        r#"
-        SELECT lock_code_hash, lock_hash_type, lock_args
-        FROM cells
-        WHERE lock_script_hash = $1
-        LIMIT 1
-        "#,
-    )
-    .bind(&lock_hash)
-    .fetch_optional(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+            if sync_status.address_balances_deferred {
+                // Fallback: query cells table directly
+                sqlx::query_as::<_, (String, i32, i64)>(
+                    r#"
+                    SELECT
+                        COALESCE(SUM(capacity)::TEXT, '0'),
+                        COALESCE(COUNT(*)::INT, 0),
+                        0
+                    FROM cells
+                    WHERE lock_script_hash = $1 AND status = 0
+                    "#,
+                )
+                .bind(&lock_hash)
+                .fetch_optional(&state.pool)
+                .await
+                .map_err(|e| ApiError::internal(e.to_string()))
+            } else {
+                // Normal: query address_balances table
+                sqlx::query_as::<_, (String, i32, i64)>(
+                    r#"
+                    SELECT
+                        COALESCE(balance::TEXT, '0'),
+                        COALESCE(live_cells_count, 0),
+                        COALESCE(transactions_count, 0)
+                    FROM address_balances
+                    WHERE lock_script_hash = $1
+                    "#,
+                )
+                .bind(&lock_hash)
+                .fetch_optional(&state.pool)
+                .await
+                .map_err(|e| ApiError::internal(e.to_string()))
+            }
+        },
+        async {
+            sqlx::query_as::<_, (Vec<u8>, i16, Vec<u8>)>(
+                r#"
+                SELECT lock_code_hash, lock_hash_type, lock_args
+                FROM cells
+                WHERE lock_script_hash = $1
+                LIMIT 1
+                "#,
+            )
+            .bind(&lock_hash)
+            .fetch_optional(&state.pool)
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))
+        },
+    )?;
 
     let (lock_script, address) = match &script_row {
         Some((code_hash, hash_type, args)) => {

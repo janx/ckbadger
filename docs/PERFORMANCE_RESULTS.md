@@ -89,8 +89,7 @@ The 5000+ blocks/sec target was not achieved. Analysis:
 
 ## Crash Recovery
 
-- LiveCellStore rebuilds from `live_cells` table on startup
-- Estimated rebuild time: <5 minutes for 50M cells (based on DB query performance)
+- LiveCellStore persists to RocksDB on disk, enabling instant restart
 - Periodic flush ensures durability (every 100 batches by default)
 
 ## Conclusion

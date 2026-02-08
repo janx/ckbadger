@@ -199,15 +199,6 @@ async fn test_same_batch_cell_consumption(pool: PgPool) {
 
     assert!(status.is_some());
     assert_eq!(status.unwrap().0, 1);
-
-    let live: Option<(i64,)> =
-        sqlx::query_as("SELECT capacity FROM live_cells WHERE tx_hash = $1 AND output_index = 0")
-            .bind(&creating_tx)
-            .fetch_optional(&pool)
-            .await
-            .unwrap();
-
-    assert!(live.is_none());
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]

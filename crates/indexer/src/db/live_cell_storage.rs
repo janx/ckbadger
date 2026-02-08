@@ -237,7 +237,7 @@ pub trait LiveCellStorage: Send + Sync {
 /// Async operations for database synchronization.
 #[async_trait::async_trait]
 pub trait LiveCellStorageAsync: LiveCellStorage {
-    /// Flush pending changes to PostgreSQL `live_cells` table.
+    /// Flush pending changes to PostgreSQL.
     /// Returns (inserts, deletes) count.
     async fn flush_to_db(&self, pool: &PgPool) -> anyhow::Result<(usize, usize)>;
 

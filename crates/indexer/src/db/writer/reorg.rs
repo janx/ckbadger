@@ -144,23 +144,6 @@ impl BatchWriter {
 
         sqlx::query(
             r#"
-            INSERT INTO live_cells (tx_hash, output_index, created_at_block, capacity, 
-                lock_script_hash, lock_code_hash, lock_args,
-                type_script_hash, type_code_hash, data_size)
-            SELECT tx_hash, output_index, created_at_block, capacity::bigint,
-                lock_script_hash, lock_code_hash, lock_args,
-                type_script_hash, type_code_hash, data_size
-            FROM cells
-            WHERE consumed_at_block >= $1
-            ON CONFLICT (tx_hash, output_index) DO NOTHING
-            "#,
-        )
-        .bind(rollback_from)
-        .execute(&mut *tx)
-        .await?;
-
-        sqlx::query(
-            r#"
             UPDATE cells SET
                 status = 0,
                 consumed_at_block = NULL,
@@ -172,11 +155,6 @@ impl BatchWriter {
         .bind(rollback_from)
         .execute(&mut *tx)
         .await?;
-
-        sqlx::query("DELETE FROM live_cells WHERE created_at_block >= $1")
-            .bind(rollback_from)
-            .execute(&mut *tx)
-            .await?;
 
         sqlx::query("DELETE FROM cells WHERE created_at_block >= $1")
             .bind(rollback_from)

@@ -17,29 +17,10 @@ fn looks_like_dep_group(data: &[u8]) -> bool {
 }
 
 impl BatchWriter {
-    pub async fn migrate_live_cells(&self) -> Result<u64> {
-        let result = sqlx::query(
-            r#"
-            INSERT INTO live_cells (tx_hash, output_index, created_at_block, capacity, 
-                lock_script_hash, lock_code_hash, lock_args,
-                type_script_hash, type_code_hash, data_size)
-            SELECT tx_hash, output_index, created_at_block, capacity::bigint,
-                lock_script_hash, lock_code_hash, lock_args,
-                type_script_hash, type_code_hash, data_size
-            FROM cells
-            WHERE status = 0
-            ON CONFLICT (tx_hash, output_index) DO NOTHING
-            "#,
-        )
-        .execute(&self.pool)
-        .await?;
-        Ok(result.rows_affected())
-    }
-
     pub async fn insert_cells_batch(
         &self,
         cells: &[(&[u8], i16, &ParsedCell, i64)],
-        bulk_sync_mode: bool,
+        _bulk_sync_mode: bool,
     ) -> Result<()> {
         if cells.is_empty() {
             return Ok(());
@@ -172,39 +153,7 @@ impl BatchWriter {
                 };
                 store.insert(tx_hash.to_vec(), *output_index, info);
             }
-
-            if bulk_sync_mode {
-                return Ok(());
-            }
         }
-
-        sqlx::query(
-            r#"
-            INSERT INTO live_cells (
-                tx_hash, output_index, created_at_block, capacity,
-                lock_script_hash, lock_code_hash, lock_args,
-                type_script_hash, type_code_hash, data_size
-            )
-            SELECT * FROM UNNEST(
-                $1::bytea[], $2::smallint[], $3::bigint[], $4::bigint[],
-                $5::bytea[], $6::bytea[], $7::bytea[],
-                $8::bytea[], $9::bytea[], $10::int[]
-            )
-            ON CONFLICT (tx_hash, output_index) DO NOTHING
-            "#,
-        )
-        .bind(&tx_hashes)
-        .bind(&output_indices)
-        .bind(&created_at_blocks)
-        .bind(&capacities)
-        .bind(&lock_script_hashes)
-        .bind(&lock_code_hashes)
-        .bind(&lock_args)
-        .bind(&type_script_hashes)
-        .bind(&type_code_hashes)
-        .bind(&data_sizes)
-        .execute(&self.pool)
-        .await?;
 
         Ok(())
     }
@@ -297,23 +246,6 @@ impl BatchWriter {
             fut.await?;
         }
 
-        let all_tx_hashes: Vec<&[u8]> = consumptions.iter().map(|(h, _, _, _, _, _)| *h).collect();
-        let all_output_indices: Vec<i16> =
-            consumptions.iter().map(|(_, i, _, _, _, _)| *i).collect();
-
-        sqlx::query(
-            r#"
-            DELETE FROM live_cells
-            WHERE (tx_hash, output_index) IN (
-                SELECT * FROM UNNEST($1::bytea[], $2::smallint[])
-            )
-            "#,
-        )
-        .bind(&all_tx_hashes)
-        .bind(&all_output_indices)
-        .execute(&self.pool)
-        .await?;
-
         Ok(())
     }
 
@@ -340,9 +272,8 @@ impl BatchWriter {
     /// Get cell info for a batch of outpoints.
     ///
     /// When `bulk_sync_mode` is true and RocksDB store is enabled, skips PostgreSQL
-    /// fallback queries entirely. During bulk sync, live_cells table is unpopulated
-    /// and the cells table query causes severe performance issues (2-7s per query
-    /// scanning all partitions for 0 rows).
+    /// fallback queries entirely. During bulk sync, the cells table query causes
+    /// severe performance issues (2-7s per query scanning all partitions for 0 rows).
     pub async fn get_cells_info_batch(
         &self,
         outpoints: &[(&[u8], i16)],
@@ -399,8 +330,8 @@ impl BatchWriter {
             }
 
             // In bulk sync mode with RocksDB enabled, skip PostgreSQL fallback.
-            // The live_cells table is unpopulated during bulk sync, and querying
-            // the cells table causes severe performance degradation.
+            // Querying the cells table during bulk sync causes severe performance
+            // degradation.
             if bulk_sync_mode {
                 return Ok(result);
             }
@@ -414,10 +345,11 @@ impl BatchWriter {
 
             let rows = sqlx::query_as::<_, (Vec<u8>, i16, i64, i64, Vec<u8>, i32)>(
                 r#"
-                SELECT lc.tx_hash, lc.output_index, lc.capacity, lc.created_at_block, lc.lock_script_hash, lc.data_size
-                FROM live_cells lc
+                SELECT c.tx_hash, c.output_index, c.capacity, c.created_at_block, c.lock_script_hash, c.data_size
+                FROM cells c
                 JOIN UNNEST($1::bytea[], $2::smallint[]) AS t(tx_hash, output_index)
-                  ON lc.tx_hash = t.tx_hash AND lc.output_index = t.output_index
+                  ON c.tx_hash = t.tx_hash AND c.output_index = t.output_index
+                WHERE c.status = 0
                 "#,
             )
             .bind(&tx_hashes)
@@ -427,45 +359,6 @@ impl BatchWriter {
 
             for (tx_hash, idx, cap, block, lock_hash, data_size) in rows {
                 result.insert((tx_hash, idx), (cap, block, lock_hash, data_size));
-            }
-
-            // STATS-007 fix: Fallback to cells table when live_cells is unpopulated
-            // (only used in non-bulk-sync mode, e.g., real-time sync after restart)
-            let still_missing: Vec<(&[u8], i16)> = missing
-                .iter()
-                .filter(|(h, i)| !result.contains_key(&(h.to_vec(), *i)))
-                .copied()
-                .collect();
-
-            if !still_missing.is_empty() {
-                let tx_hashes: Vec<&[u8]> = still_missing.iter().map(|(h, _)| *h).collect();
-                let indices: Vec<i16> = still_missing.iter().map(|(_, i)| *i).collect();
-
-                let fallback_rows = sqlx::query_as::<_, (Vec<u8>, i16, i64, i64, Vec<u8>, i32)>(
-                    r#"
-                    SELECT c.tx_hash, c.output_index, c.capacity, c.created_at_block, c.lock_script_hash, c.data_size
-                    FROM cells c
-                    JOIN UNNEST($1::bytea[], $2::smallint[]) AS t(tx_hash, output_index)
-                      ON c.tx_hash = t.tx_hash AND c.output_index = t.output_index
-                    WHERE c.status = 0
-                    "#,
-                )
-                .bind(&tx_hashes)
-                .bind(&indices)
-                .fetch_all(&self.pool)
-                .await?;
-
-                if !fallback_rows.is_empty() {
-                    tracing::debug!(
-                        "Cells table fallback found {}/{} cells not in live_cells",
-                        fallback_rows.len(),
-                        still_missing.len()
-                    );
-                }
-
-                for (tx_hash, idx, cap, block, lock_hash, data_size) in fallback_rows {
-                    result.insert((tx_hash, idx), (cap, block, lock_hash, data_size));
-                }
             }
         }
 
@@ -524,10 +417,11 @@ impl BatchWriter {
 
             let rows = sqlx::query_as::<_, (Vec<u8>, i16, Vec<u8>, Option<Vec<u8>>)>(
                 r#"
-                SELECT lc.tx_hash, lc.output_index, lc.lock_code_hash, lc.type_code_hash
-                FROM live_cells lc
+                SELECT c.tx_hash, c.output_index, c.lock_code_hash, c.type_code_hash
+                FROM cells c
                 JOIN UNNEST($1::bytea[], $2::smallint[]) AS t(tx_hash, output_index)
-                  ON lc.tx_hash = t.tx_hash AND lc.output_index = t.output_index
+                  ON c.tx_hash = t.tx_hash AND c.output_index = t.output_index
+                WHERE c.status = 0
                 "#,
             )
             .bind(&tx_hashes)

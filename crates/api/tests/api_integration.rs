@@ -215,72 +215,22 @@ async fn test_tasks_active_with_running_statistics_rebuild(pool: sqlx::PgPool) {
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
-async fn test_tasks_active_with_running_live_cells_populate(pool: sqlx::PgPool) {
-    let task_id = uuid::Uuid::new_v4();
-    let config = serde_json::json!({
-        "type": "live_cells_populate",
-        "batchSize": 100000
-    });
-
-    sqlx::query(
-        r#"
-        INSERT INTO tasks (
-            id, task_type, status, priority, config, 
-            progress_total, progress_current, started_at
-        ) VALUES ($1, 'live_cells_populate', 'running', 8, $2, 50000000, 25000000, NOW())
-        "#,
-    )
-    .bind(task_id)
-    .bind(&config)
-    .execute(&pool)
-    .await
-    .unwrap();
-
-    let app = create_router(test_config(pool)).await;
-
-    let request = Request::builder()
-        .uri("/api/v1/tasks/active")
-        .body(Body::empty())
-        .unwrap();
-
-    let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-
-    let body = BodyExt::collect(response.into_body())
-        .await
-        .unwrap()
-        .to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-
-    let populate = &json["liveCellsPopulate"];
-    assert_eq!(populate["status"], "running");
-    assert_eq!(populate["total"], 50000000);
-    assert_eq!(populate["populated"], 25000000);
-    assert!((populate["progress"].as_f64().unwrap() - 50.0).abs() < 0.1);
-    assert!(populate["startedAt"].is_string());
-}
-
-#[sqlx::test(migrator = "MIGRATOR")]
 async fn test_tasks_active_with_multiple_task_types(pool: sqlx::PgPool) {
     let config_index = serde_json::json!({"type": "index_rebuild"});
     let config_stats = serde_json::json!({"type": "statistics_rebuild"});
-    let config_live = serde_json::json!({"type": "live_cells_populate"});
 
     sqlx::query(
         r#"
         INSERT INTO tasks (id, task_type, status, priority, config, progress_total, progress_current, started_at)
-        VALUES 
+        VALUES
             ($1, 'index_rebuild', 'running', 10, $2, 26, 13, NOW()),
-            ($3, 'statistics_rebuild', 'pending', 5, $4, 7, 0, NULL),
-            ($5, 'live_cells_populate', 'running', 8, $6, 1000000, 500000, NOW())
+            ($3, 'statistics_rebuild', 'pending', 5, $4, 7, 0, NULL)
         "#,
     )
     .bind(uuid::Uuid::new_v4())
     .bind(&config_index)
     .bind(uuid::Uuid::new_v4())
     .bind(&config_stats)
-    .bind(uuid::Uuid::new_v4())
-    .bind(&config_live)
     .execute(&pool)
     .await
     .unwrap();
@@ -306,9 +256,6 @@ async fn test_tasks_active_with_multiple_task_types(pool: sqlx::PgPool) {
 
     assert!(json["statisticsRebuild"].is_object());
     assert_eq!(json["statisticsRebuild"]["status"], "pending");
-
-    assert!(json["liveCellsPopulate"].is_object());
-    assert_eq!(json["liveCellsPopulate"]["status"], "running");
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
@@ -1896,12 +1843,12 @@ async fn test_live_cells_combined_lock_and_type_filter(pool: sqlx::PgPool) {
 
     sqlx::query(
         r#"
-        INSERT INTO live_cells (tx_hash, output_index, created_at_block, capacity, lock_script_hash, lock_code_hash, lock_args, type_script_hash, data_size)
-        VALUES 
-            ($1, 0, 100, 10000000000, $5, $9, '', $7, 0),
-            ($2, 0, 101, 20000000000, $5, $9, '', $8, 0),
-            ($3, 0, 102, 30000000000, $6, $9, '', $7, 0),
-            ($4, 0, 103, 40000000000, $6, $9, '', NULL, 0)
+        INSERT INTO cells (tx_hash, output_index, created_at_block, capacity, lock_script_hash, lock_code_hash, lock_hash_type, lock_args, type_script_hash, data_hash, data_size, status)
+        VALUES
+            ($1, 0, 100, 10000000000, $5, $9, 0, '', $7, '\x00', 0, 0),
+            ($2, 0, 101, 20000000000, $5, $9, 0, '', $8, '\x00', 0, 0),
+            ($3, 0, 102, 30000000000, $6, $9, 0, '', $7, '\x00', 0, 0),
+            ($4, 0, 103, 40000000000, $6, $9, 0, '', NULL, '\x00', 0, 0)
         "#,
     )
     .bind(&tx_hash_1)
@@ -1963,10 +1910,10 @@ async fn test_live_cells_lock_only_filter(pool: sqlx::PgPool) {
 
     sqlx::query(
         r#"
-        INSERT INTO live_cells (tx_hash, output_index, created_at_block, capacity, lock_script_hash, lock_code_hash, lock_args, type_script_hash, data_size)
-        VALUES 
-            ($1, 0, 100, 10000000000, $3, $5, '', $4, 0),
-            ($2, 0, 101, 20000000000, $3, $5, '', NULL, 0)
+        INSERT INTO cells (tx_hash, output_index, created_at_block, capacity, lock_script_hash, lock_code_hash, lock_hash_type, lock_args, type_script_hash, data_hash, data_size, status)
+        VALUES
+            ($1, 0, 100, 10000000000, $3, $5, 0, '', $4, '\x00', 0, 0),
+            ($2, 0, 101, 20000000000, $3, $5, 0, '', NULL, '\x00', 0, 0)
         "#,
     )
     .bind(&tx_hash_1)
@@ -2018,10 +1965,10 @@ async fn test_live_cells_type_only_filter(pool: sqlx::PgPool) {
 
     sqlx::query(
         r#"
-        INSERT INTO live_cells (tx_hash, output_index, created_at_block, capacity, lock_script_hash, lock_code_hash, lock_args, type_script_hash, data_size)
-        VALUES 
-            ($1, 0, 100, 10000000000, $3, $6, '', $5, 0),
-            ($2, 0, 101, 20000000000, $4, $6, '', $5, 0)
+        INSERT INTO cells (tx_hash, output_index, created_at_block, capacity, lock_script_hash, lock_code_hash, lock_hash_type, lock_args, type_script_hash, data_hash, data_size, status)
+        VALUES
+            ($1, 0, 100, 10000000000, $3, $6, 0, '', $5, '\x00', 0, 0),
+            ($2, 0, 101, 20000000000, $4, $6, 0, '', $5, '\x00', 0, 0)
         "#,
     )
     .bind(&tx_hash_1)
@@ -2601,11 +2548,11 @@ async fn test_live_cells_type_code_hash_filter(pool: sqlx::PgPool) {
 
     sqlx::query(
         r#"
-        INSERT INTO live_cells (tx_hash, output_index, created_at_block, capacity, lock_script_hash, lock_code_hash, lock_args, type_script_hash, type_code_hash, data_size)
-        VALUES 
-            ($1, 0, 100, 10000000000, $4, $7, '', $5, $8, 8),
-            ($2, 0, 101, 20000000000, $4, $7, '', $5, $8, 8),
-            ($3, 0, 102, 30000000000, $4, $7, '', $6, $9, 0)
+        INSERT INTO cells (tx_hash, output_index, created_at_block, capacity, lock_script_hash, lock_code_hash, lock_hash_type, lock_args, type_script_hash, type_code_hash, data_hash, data_size, status)
+        VALUES
+            ($1, 0, 100, 10000000000, $4, $7, 0, '', $5, $8, '\x00', 8, 0),
+            ($2, 0, 101, 20000000000, $4, $7, 0, '', $5, $8, '\x00', 8, 0),
+            ($3, 0, 102, 30000000000, $4, $7, 0, '', $6, $9, '\x00', 0, 0)
         "#,
     )
     .bind(&tx_hash_1)

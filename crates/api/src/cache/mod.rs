@@ -65,7 +65,7 @@ impl CacheBackend {
                 r#"SELECT 
                     COALESCE((SELECT COUNT(*) FROM transactions), 0),
                     COALESCE((SELECT COUNT(*) FROM cells), 0),
-                    COALESCE((SELECT COUNT(*) FROM live_cells), 0),
+                    COALESCE((SELECT COUNT(*) FROM cells WHERE status = 0), 0),
                     COALESCE((SELECT COUNT(*) FROM addresses), 0)
                 "#,
             )
@@ -140,6 +140,10 @@ impl CacheKeys {
     pub fn transaction(hash: &str) -> String {
         format!("ckbadger:tx:{}", hash)
     }
+
+    pub fn mining_reward(hash: &str) -> String {
+        format!("ckbadger:mining-reward:{}", hash)
+    }
 }
 
 pub struct CacheTtl;
@@ -150,6 +154,7 @@ impl CacheTtl {
     pub const BLOCK: Duration = Duration::from_secs(300);
     pub const TRANSACTION: Duration = Duration::from_secs(300);
     pub const MEMPOOL_INFO: Duration = Duration::from_secs(2);
+    pub const MINING_REWARD: Duration = Duration::from_secs(86400);
 }
 
 #[cfg(test)]

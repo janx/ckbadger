@@ -4,7 +4,6 @@ pub mod copy_cells;
 pub mod copy_dao_deposits;
 pub mod copy_format;
 pub mod copy_inputs;
-pub mod copy_live_cells;
 pub mod copy_pool;
 pub mod copy_proposals;
 pub mod copy_transactions;

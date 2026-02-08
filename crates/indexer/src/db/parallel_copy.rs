@@ -7,7 +7,6 @@ use crate::db::copy_activities::CopyActivitiesWriter;
 use crate::db::copy_blocks::CopyBlocksWriter;
 use crate::db::copy_cells::CopyCellsWriter;
 use crate::db::copy_inputs::{CopyCellDepsWriter, CopyInputsWriter};
-use crate::db::copy_live_cells::CopyLiveCellsWriter;
 use crate::db::copy_pool::CopyPoolManager;
 use crate::db::copy_proposals::CopyProposalsWriter;
 use crate::db::copy_transactions::CopyTransactionsWriter;
@@ -99,6 +98,23 @@ impl ParallelCopyRouter {
             return Ok(0);
         }
 
+        // Populate RocksDB live cell store if available
+        if let Some(ref store) = self.live_cell_store {
+            for (tx_hash, output_index, cell, block_number) in cells {
+                let info = LiveCellInfo {
+                    capacity: cell.capacity,
+                    created_at_block: *block_number,
+                    lock_script_hash: cell.lock_script_hash.clone(),
+                    lock_code_hash: cell.lock_code_hash.clone(),
+                    lock_args: cell.lock_args.clone(),
+                    type_script_hash: cell.type_script_hash.clone(),
+                    type_code_hash: cell.type_code_hash.clone(),
+                    data_size: cell.data_size,
+                };
+                store.insert(tx_hash.to_vec(), *output_index, info);
+            }
+        }
+
         let mut partition_data: HashMap<usize, Vec<CellData<'_>>> = HashMap::new();
 
         for cell in cells {
@@ -135,42 +151,6 @@ impl ParallelCopyRouter {
         }
 
         Ok(total_rows)
-    }
-
-    pub async fn copy_live_cells_parallel(&self, cells: &[CellData<'_>]) -> Result<u64> {
-        if cells.is_empty() {
-            return Ok(0);
-        }
-
-        if let Some(ref store) = self.live_cell_store {
-            for (tx_hash, output_index, cell, block_number) in cells {
-                let info = LiveCellInfo {
-                    capacity: cell.capacity,
-                    created_at_block: *block_number,
-                    lock_script_hash: cell.lock_script_hash.clone(),
-                    lock_code_hash: cell.lock_code_hash.clone(),
-                    lock_args: cell.lock_args.clone(),
-                    type_script_hash: cell.type_script_hash.clone(),
-                    type_code_hash: cell.type_code_hash.clone(),
-                    data_size: cell.data_size,
-                };
-                store.insert(tx_hash.to_vec(), *output_index, info);
-            }
-        }
-
-        let conn = self.pool_manager.get_connection().await?;
-
-        let mut writer = CopyLiveCellsWriter::new();
-        for (tx_hash, output_index, cell, block_number) in cells {
-            writer.add_live_cell(tx_hash, *output_index, cell, *block_number);
-        }
-
-        let data = writer.finish();
-        execute_copy(
-            conn.as_ref(),
-            "COPY live_cells (tx_hash, output_index, created_at_block, capacity, lock_script_hash, lock_code_hash, lock_args, type_script_hash, type_code_hash, data_size) FROM STDIN WITH (FORMAT BINARY)",
-            data,
-        ).await
     }
 
     pub async fn copy_transactions_parallel(&self, txs: &[TxData<'_>]) -> Result<u64> {

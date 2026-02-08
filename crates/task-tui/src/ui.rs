@@ -2,8 +2,8 @@ use anyhow::Result;
 use chrono::{DateTime, Local};
 use ckbadger_common::{
     CyclesBackfillConfig, DotbitRebuildConfig, IndexRebuildConfig, LabelImportConfig,
-    LiveCellsPopulateConfig, MemoryStatsData, MnftRebuildConfig, SecondaryIssuanceBackfillConfig,
-    SporeRebuildConfig, StatisticsRebuildConfig, Task, TaskBuilder,
+    MemoryStatsData, MnftRebuildConfig, SecondaryIssuanceBackfillConfig, SporeRebuildConfig,
+    StatisticsRebuildConfig, Task, TaskBuilder,
 };
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -399,13 +399,12 @@ impl App {
                     1 => TaskBuilder::index_rebuild(IndexRebuildConfig::default()),
                     2 => TaskBuilder::label_import(LabelImportConfig::default()),
                     3 => TaskBuilder::statistics_rebuild(StatisticsRebuildConfig::default()),
-                    4 => TaskBuilder::live_cells_populate(LiveCellsPopulateConfig::default()),
-                    5 => TaskBuilder::spore_rebuild(SporeRebuildConfig::default()),
-                    6 => TaskBuilder::secondary_issuance_backfill(
+                    4 => TaskBuilder::spore_rebuild(SporeRebuildConfig::default()),
+                    5 => TaskBuilder::secondary_issuance_backfill(
                         SecondaryIssuanceBackfillConfig::default(),
                     ),
-                    7 => TaskBuilder::mnft_rebuild(MnftRebuildConfig::default()),
-                    8 => TaskBuilder::dotbit_rebuild(DotbitRebuildConfig::default()),
+                    6 => TaskBuilder::mnft_rebuild(MnftRebuildConfig::default()),
+                    7 => TaskBuilder::dotbit_rebuild(DotbitRebuildConfig::default()),
                     _ => return Ok(()),
                 };
                 let id = self.db.create_task(&builder).await?;
@@ -1417,7 +1416,6 @@ fn draw_dialog(f: &mut Frame, app: &App, dialog: &DialogType) {
                 ("Index Rebuild", "Rebuild deferred indexes and constraints"),
                 ("Label Import", "Import UDT/script labels from token-labels"),
                 ("Statistics Rebuild", "Rebuild all aggregate statistics"),
-                ("Live Cells Populate", "Populate live_cells from RocksDB"),
                 ("Spore Rebuild", "Rebuild Spore NFT data"),
                 (
                     "Secondary Issuance Backfill",

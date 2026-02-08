@@ -110,10 +110,6 @@ impl Repository {
     }
 
     pub async fn delete_cells_created_at_block(&self, block_number: i64) -> Result<()> {
-        sqlx::query("DELETE FROM live_cells WHERE created_at_block = $1")
-            .bind(block_number)
-            .execute(&self.pool)
-            .await?;
         sqlx::query("DELETE FROM cells WHERE created_at_block = $1")
             .bind(block_number)
             .execute(&self.pool)

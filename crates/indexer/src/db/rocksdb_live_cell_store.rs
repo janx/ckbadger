@@ -643,8 +643,7 @@ impl LiveCellStorage for RocksDbLiveCellStore {
 impl RocksDbLiveCellStore {
     /// Iterate over all live cells in batches.
     ///
-    /// This is used by the `LiveCellsPopulate` task to populate the PostgreSQL
-    /// `live_cells` table from RocksDB data. The callback is invoked for each
+    /// The callback is invoked for each
     /// batch with `(tx_hash, output_index, LiveCellInfo)` tuples.
     ///
     /// Returns the total number of cells iterated.

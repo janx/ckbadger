@@ -124,24 +124,6 @@ impl TaskExecutor {
             }
         }
 
-        // Prevent cells_status_rebuild and live_cells_populate from running concurrently
-        // to avoid PostgreSQL I/O contention that degrades both tasks significantly
-        if task_type == TaskType::CellsStatusRebuild {
-            match self.db.is_task_type_running("live_cells_populate").await {
-                Ok(true) => {
-                    let reason =
-                        "Deferred: live_cells_populate is running (avoiding I/O contention)";
-                    info!("{}", reason);
-                    self.db.defer_task(task.id, reason).await?;
-                    return Ok(false);
-                }
-                Ok(false) => {}
-                Err(e) => {
-                    error!("Failed to check live_cells_populate status: {}", e);
-                }
-            }
-        }
-
         let result = self.execute_task(&task).await;
 
         match result {
@@ -178,9 +160,6 @@ impl TaskExecutor {
             TaskType::IndexRebuild => self.execute_index_rebuild(task).await,
             TaskType::LabelImport => self.execute_label_import(task).await,
             TaskType::StatisticsRebuild => self.execute_statistics_rebuild(task).await,
-            TaskType::LiveCellsPopulate => Err(anyhow::anyhow!(
-                "LiveCellsPopulate must be executed by the indexer, not task-runner"
-            )),
             TaskType::SporeRebuild => self.execute_spore_rebuild(task).await,
             TaskType::ConsumedAtBackfill => {
                 warn!("ConsumedAtBackfill is deprecated, redirecting to cells_status_rebuild");

@@ -22,26 +22,16 @@ fn make_parsed_cell(capacity: i64) -> ParsedCell {
     }
 }
 
-async fn get_live_cells_count(pool: &PgPool) -> i64 {
-    sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM live_cells")
+async fn get_cells_count(pool: &PgPool, status: i16) -> i64 {
+    sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM cells WHERE status = $1")
+        .bind(status)
         .fetch_one(pool)
         .await
         .unwrap()
 }
 
-async fn get_live_cell(pool: &PgPool, tx_hash: &[u8], output_index: i16) -> Option<(i64, i64)> {
-    sqlx::query_as::<_, (i64, i64)>(
-        "SELECT capacity, created_at_block FROM live_cells WHERE tx_hash = $1 AND output_index = $2",
-    )
-    .bind(tx_hash)
-    .bind(output_index)
-    .fetch_optional(pool)
-    .await
-    .unwrap()
-}
-
 #[sqlx::test(migrator = "MIGRATOR")]
-async fn test_insert_cells_creates_live_cells(pool: PgPool) {
+async fn test_insert_cells_creates_live_cell(pool: PgPool) {
     let writer = BatchWriter::new(pool.clone());
     let tx_hash = vec![0x01u8; 32];
     let cell = make_parsed_cell(100_00000000);
@@ -51,35 +41,7 @@ async fn test_insert_cells_creates_live_cells(pool: PgPool) {
         .await
         .unwrap();
 
-    assert_eq!(get_live_cells_count(&pool).await, 1);
-
-    let (capacity, block) = get_live_cell(&pool, &tx_hash, 0).await.unwrap();
-    assert_eq!(capacity, 100_00000000);
-    assert_eq!(block, 1000);
-}
-
-#[sqlx::test(migrator = "MIGRATOR")]
-async fn test_live_cells_stores_lock_args(pool: PgPool) {
-    let writer = BatchWriter::new(pool.clone());
-    let tx_hash = vec![0x01u8; 32];
-    let cell = make_parsed_cell(100_00000000);
-
-    writer
-        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], false)
-        .await
-        .unwrap();
-
-    let lock_args: Option<Vec<u8>> = sqlx::query_scalar(
-        "SELECT lock_args FROM live_cells WHERE tx_hash = $1 AND output_index = $2",
-    )
-    .bind(&tx_hash)
-    .bind(0i16)
-    .fetch_optional(&pool)
-    .await
-    .unwrap();
-
-    assert!(lock_args.is_some());
-    assert_eq!(lock_args.unwrap(), vec![0x22u8; 20]);
+    assert_eq!(get_cells_count(&pool, 0).await, 1);
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
@@ -98,11 +60,11 @@ async fn test_insert_multiple_cells(pool: PgPool) {
         .await
         .unwrap();
 
-    assert_eq!(get_live_cells_count(&pool).await, 2);
+    assert_eq!(get_cells_count(&pool, 0).await, 2);
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
-async fn test_consume_cells_removes_from_live_cells(pool: PgPool) {
+async fn test_consume_cells_marks_consumed(pool: PgPool) {
     let writer = BatchWriter::new(pool.clone());
     let tx_hash = vec![0x01u8; 32];
     let consuming_tx = vec![0x02u8; 32];
@@ -113,19 +75,19 @@ async fn test_consume_cells_removes_from_live_cells(pool: PgPool) {
         .await
         .unwrap();
 
-    assert_eq!(get_live_cells_count(&pool).await, 1);
+    assert_eq!(get_cells_count(&pool, 0).await, 1);
 
     writer
         .consume_cells_batch(&[(&tx_hash, 0, 1000, &consuming_tx, 1001, 0)], false)
         .await
         .unwrap();
 
-    assert_eq!(get_live_cells_count(&pool).await, 0);
-    assert!(get_live_cell(&pool, &tx_hash, 0).await.is_none());
+    assert_eq!(get_cells_count(&pool, 0).await, 0);
+    assert_eq!(get_cells_count(&pool, 1).await, 1);
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
-async fn test_get_cells_info_batch_queries_live_cells(pool: PgPool) {
+async fn test_get_cells_info_batch_returns_live_cells(pool: PgPool) {
     let writer = BatchWriter::new(pool.clone());
     let tx_hash = vec![0x01u8; 32];
     let cell = make_parsed_cell(100_00000000);
@@ -174,91 +136,6 @@ async fn test_get_cells_info_batch_returns_empty_for_consumed(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
-async fn test_reorg_restores_live_cells(pool: PgPool) {
-    let writer = BatchWriter::new(pool.clone());
-
-    sqlx::query("INSERT INTO sync_status (id) VALUES (1) ON CONFLICT (id) DO NOTHING")
-        .execute(&pool)
-        .await
-        .unwrap();
-
-    let block_hash_99 = vec![0x99u8; 32];
-    let block_hash_100 = vec![0xAAu8; 32];
-    let block_hash_101 = vec![0xBBu8; 32];
-
-    for (num, hash, parent) in [
-        (99i64, &block_hash_99, &vec![0x98u8; 32]),
-        (100, &block_hash_100, &block_hash_99),
-        (101, &block_hash_101, &block_hash_100),
-    ] {
-        sqlx::query(
-            r#"INSERT INTO blocks (number, hash, parent_hash, timestamp, transactions_count, 
-               proposals_count, uncles_count, epoch_number, epoch_index, epoch_length,
-               nonce, transactions_root, proposals_hash, extra_hash, uncles_hash,
-               compact_target, version, dao)
-               VALUES ($1, $2, $3, NOW(), 1, 0, 0, 1, 1, 1800, '', '', '', '', '', 0, 0, '')"#,
-        )
-        .bind(num)
-        .bind(hash.as_slice())
-        .bind(parent.as_slice())
-        .execute(&pool)
-        .await
-        .unwrap();
-    }
-
-    let tx_hash_consumed = vec![0x01u8; 32];
-    let tx_hash_created = vec![0x02u8; 32];
-
-    sqlx::query(
-        r#"INSERT INTO cells (tx_hash, output_index, capacity, lock_code_hash, lock_hash_type, 
-           lock_args, lock_script_hash, data_hash, data_size, status, created_at_block, consumed_at_block)
-           VALUES ($1, 0, 100, '', 0, '', $2, '', 0, 1, 50, 100)"#,
-    )
-    .bind(&tx_hash_consumed)
-    .bind(vec![0x33u8; 32])
-    .execute(&pool)
-    .await
-    .unwrap();
-
-    sqlx::query(
-        r#"INSERT INTO cells (tx_hash, output_index, capacity, lock_code_hash, lock_hash_type, 
-           lock_args, lock_script_hash, data_hash, data_size, status, created_at_block)
-           VALUES ($1, 0, 200, '', 0, '', $2, '', 0, 0, 100)"#,
-    )
-    .bind(&tx_hash_created)
-    .bind(vec![0x44u8; 32])
-    .execute(&pool)
-    .await
-    .unwrap();
-
-    sqlx::query(
-        "INSERT INTO live_cells (tx_hash, output_index, created_at_block, capacity, lock_script_hash, lock_code_hash, lock_args, data_size) VALUES ($1, 0, 100, 200, $2, '', '', 0)",
-    )
-    .bind(&tx_hash_created)
-    .bind(vec![0x44u8; 32])
-    .execute(&pool)
-    .await
-    .unwrap();
-
-    assert_eq!(get_live_cells_count(&pool).await, 1);
-
-    let new_tip_hash = vec![0xCCu8; 32];
-    writer
-        .execute_reorg(99, &block_hash_99, 101, &block_hash_101, 101, &new_tip_hash)
-        .await
-        .unwrap();
-
-    let live_count = get_live_cells_count(&pool).await;
-    assert_eq!(live_count, 1);
-
-    let restored = get_live_cell(&pool, &tx_hash_consumed, 0).await;
-    assert!(restored.is_some());
-
-    let removed = get_live_cell(&pool, &tx_hash_created, 0).await;
-    assert!(removed.is_none());
-}
-
-#[sqlx::test(migrator = "MIGRATOR")]
 async fn test_consume_cells_across_partitions(pool: PgPool) {
     let writer = BatchWriter::new(pool.clone());
 
@@ -281,7 +158,7 @@ async fn test_consume_cells_across_partitions(pool: PgPool) {
         .await
         .unwrap();
 
-    assert_eq!(get_live_cells_count(&pool).await, 3);
+    assert_eq!(get_cells_count(&pool, 0).await, 3);
 
     writer
         .consume_cells_batch(
@@ -295,24 +172,12 @@ async fn test_consume_cells_across_partitions(pool: PgPool) {
         .await
         .unwrap();
 
-    assert_eq!(get_live_cells_count(&pool).await, 0);
-
-    let cells_status: Vec<(i16,)> = sqlx::query_as(
-        "SELECT status FROM cells WHERE tx_hash IN ($1, $2, $3) ORDER BY created_at_block",
-    )
-    .bind(&tx_p0)
-    .bind(&tx_p1)
-    .bind(&tx_p2)
-    .fetch_all(&pool)
-    .await
-    .unwrap();
-
-    assert_eq!(cells_status.len(), 3);
-    assert!(cells_status.iter().all(|(s,)| *s == 1));
+    assert_eq!(get_cells_count(&pool, 0).await, 0);
+    assert_eq!(get_cells_count(&pool, 1).await, 3);
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
-async fn test_bulk_sync_mode_skips_live_cells_db_write(pool: PgPool) {
+async fn test_bulk_sync_mode_stores_in_rocksdb(pool: PgPool) {
     use ckbadger_indexer::db::{LiveCellStorage, RocksDbLiveCellStore};
     use ckbadger_indexer::CacheInvalidator;
     use std::sync::Arc;
@@ -330,36 +195,9 @@ async fn test_bulk_sync_mode_skips_live_cells_db_write(pool: PgPool) {
         .await
         .unwrap();
 
-    assert_eq!(get_live_cells_count(&pool).await, 0);
-
     let in_store = store.get(&tx_hash, 0);
     assert!(in_store.is_some());
     assert_eq!(in_store.unwrap().capacity, 100_00000000);
-}
-
-#[sqlx::test(migrator = "MIGRATOR")]
-async fn test_non_bulk_sync_mode_writes_to_live_cells_db(pool: PgPool) {
-    use ckbadger_indexer::db::{LiveCellStorage, RocksDbLiveCellStore};
-    use ckbadger_indexer::CacheInvalidator;
-    use std::sync::Arc;
-
-    let tmp_dir = tempfile::TempDir::new().unwrap();
-    let store = Arc::new(RocksDbLiveCellStore::open(tmp_dir.path(), true).unwrap());
-    let cache = CacheInvalidator::new(None).await;
-    let writer = BatchWriter::with_live_cell_store(pool.clone(), true, store.clone(), cache);
-
-    let tx_hash = vec![0x01u8; 32];
-    let cell = make_parsed_cell(100_00000000);
-
-    writer
-        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], false)
-        .await
-        .unwrap();
-
-    assert_eq!(get_live_cells_count(&pool).await, 1);
-
-    let in_store = store.get(&tx_hash, 0);
-    assert!(in_store.is_some());
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
@@ -396,62 +234,6 @@ async fn test_rocksdb_store_persists_cells(pool: PgPool) {
     }
 }
 
-#[test]
-fn test_iter_and_copy_writer_integration() {
-    use ckbadger_indexer::db::{
-        copy_live_cells::CopyLiveCellsWriter, LiveCellInfo, LiveCellStorage, RocksDbLiveCellStore,
-    };
-
-    let tmp_dir = tempfile::TempDir::new().unwrap();
-    let store = RocksDbLiveCellStore::open(tmp_dir.path(), true).unwrap();
-
-    for i in 1..=50 {
-        let tx_hash = vec![i as u8; 32];
-        let info = LiveCellInfo {
-            capacity: i as i64 * 100_000_000,
-            created_at_block: 1000 + i as i64,
-            lock_script_hash: vec![0x11u8; 32],
-            lock_code_hash: vec![0x22u8; 32],
-            lock_args: vec![0x33u8; 20],
-            type_script_hash: if i % 2 == 0 {
-                Some(vec![0x44u8; 32])
-            } else {
-                None
-            },
-            type_code_hash: if i % 2 == 0 {
-                Some(vec![0x55u8; 32])
-            } else {
-                None
-            },
-            data_size: 100,
-        };
-        store.insert(tx_hash, 0, info);
-    }
-
-    assert_eq!(store.count_live_cells(), 50);
-
-    let mut all_batches: Vec<Vec<(Vec<u8>, i16, LiveCellInfo)>> = Vec::new();
-    let total_iterated = store.iter_live_cells_batched(20, |batch| {
-        all_batches.push(batch);
-    });
-
-    assert_eq!(total_iterated, 50);
-    assert_eq!(all_batches.len(), 3);
-
-    let mut total_rows = 0;
-    for batch in &all_batches {
-        let mut writer = CopyLiveCellsWriter::new();
-        for (tx_hash, output_index, info) in batch {
-            writer.add_from_rocksdb(tx_hash, *output_index, info);
-            total_rows += 1;
-        }
-        let data = writer.finish();
-        assert!(data.len() > 21);
-    }
-
-    assert_eq!(total_rows, 50);
-}
-
 #[sqlx::test(migrator = "MIGRATOR")]
 async fn test_get_cells_info_batch_falls_back_to_cells_table(pool: PgPool) {
     use ckbadger_indexer::db::RocksDbLiveCellStore;
@@ -470,8 +252,6 @@ async fn test_get_cells_info_batch_falls_back_to_cells_table(pool: PgPool) {
         .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], true)
         .await
         .unwrap();
-
-    assert_eq!(get_live_cells_count(&pool).await, 0);
 
     let cell_exists: bool =
         sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM cells WHERE tx_hash = $1)")

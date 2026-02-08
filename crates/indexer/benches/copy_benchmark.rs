@@ -4,7 +4,6 @@ use chrono::Utc;
 use ckbadger_indexer::db::copy_cells::CopyCellsWriter;
 use ckbadger_indexer::db::copy_format::BinaryCopyBuffer;
 use ckbadger_indexer::db::copy_inputs::CopyInputsWriter;
-use ckbadger_indexer::db::copy_live_cells::CopyLiveCellsWriter;
 use ckbadger_indexer::db::copy_transactions::CopyTransactionsWriter;
 use ckbadger_indexer::parser::cell::ParsedCell;
 use ckbadger_indexer::parser::transaction::ParsedInput;
@@ -110,21 +109,6 @@ fn benchmark_inputs_writer(c: &mut Criterion) {
     });
 }
 
-fn benchmark_live_cells_writer(c: &mut Criterion) {
-    let cell = create_test_cell();
-    let tx_hash = vec![0u8; 32];
-
-    c.bench_function("live_cells_writer_1000_cells", |b| {
-        b.iter(|| {
-            let mut writer = CopyLiveCellsWriter::new();
-            for i in 0..1000i16 {
-                writer.add_live_cell(black_box(&tx_hash), i, &cell, 1000);
-            }
-            writer.finish()
-        })
-    });
-}
-
 fn benchmark_batch_sizes(c: &mut Criterion) {
     let cell = create_test_cell();
     let tx_hash = vec![0u8; 32];
@@ -152,7 +136,6 @@ criterion_group!(
     benchmark_cells_writer,
     benchmark_transactions_writer,
     benchmark_inputs_writer,
-    benchmark_live_cells_writer,
     benchmark_batch_sizes,
 );
 criterion_main!(benches);

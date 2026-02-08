@@ -58,7 +58,6 @@ pub enum TaskType {
     IndexRebuild,
     LabelImport,
     StatisticsRebuild,
-    LiveCellsPopulate,
     SporeRebuild,
     ConsumedAtBackfill,
     SecondaryIssuanceBackfill,
@@ -79,7 +78,6 @@ impl std::fmt::Display for TaskType {
             TaskType::IndexRebuild => write!(f, "index_rebuild"),
             TaskType::LabelImport => write!(f, "label_import"),
             TaskType::StatisticsRebuild => write!(f, "statistics_rebuild"),
-            TaskType::LiveCellsPopulate => write!(f, "live_cells_populate"),
             TaskType::SporeRebuild => write!(f, "spore_rebuild"),
             TaskType::ConsumedAtBackfill => write!(f, "consumed_at_backfill"),
             TaskType::SecondaryIssuanceBackfill => write!(f, "secondary_issuance_backfill"),
@@ -104,7 +102,6 @@ impl std::str::FromStr for TaskType {
             "index_rebuild" => Ok(TaskType::IndexRebuild),
             "label_import" => Ok(TaskType::LabelImport),
             "statistics_rebuild" => Ok(TaskType::StatisticsRebuild),
-            "live_cells_populate" => Ok(TaskType::LiveCellsPopulate),
             "spore_rebuild" => Ok(TaskType::SporeRebuild),
             "consumed_at_backfill" => Ok(TaskType::ConsumedAtBackfill),
             "secondary_issuance_backfill" => Ok(TaskType::SecondaryIssuanceBackfill),
@@ -134,7 +131,6 @@ impl TaskType {
     /// Unsafe tasks (require bulk sync completion):
     /// - IndexRebuild: Would slow down writes by 3-4x during sync
     /// - CellsStatusRebuild: Requires all transaction_inputs written
-    /// - LiveCellsPopulate: Requires RocksDB fully populated
     /// - ConsumedAtBackfill: Requires complete transaction history
     /// - SporeRebuild: Requires accurate cell status
     /// - StatisticsRebuild: Requires complete blockchain data
@@ -144,7 +140,6 @@ impl TaskType {
             TaskType::CyclesBackfill | TaskType::LabelImport => false,
             TaskType::IndexRebuild
             | TaskType::CellsStatusRebuild
-            | TaskType::LiveCellsPopulate
             | TaskType::ConsumedAtBackfill
             | TaskType::SporeRebuild
             | TaskType::StatisticsRebuild
@@ -308,27 +303,6 @@ fn default_true() -> bool {
 pub struct StatisticsRebuildConfig {
     /// Tables to rebuild (None = all 7 tables)
     pub tables: Option<Vec<String>>,
-}
-
-/// Configuration for live cells populate task
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LiveCellsPopulateConfig {
-    /// Batch size for COPY operations (default: 100,000)
-    #[serde(default = "default_populate_batch_size")]
-    pub batch_size: usize,
-}
-
-impl Default for LiveCellsPopulateConfig {
-    fn default() -> Self {
-        Self {
-            batch_size: default_populate_batch_size(),
-        }
-    }
-}
-
-fn default_populate_batch_size() -> usize {
-    100_000
 }
 
 /// Configuration for spore rebuild task
@@ -534,7 +508,6 @@ pub enum TaskConfig {
     IndexRebuild(IndexRebuildConfig),
     LabelImport(LabelImportConfig),
     StatisticsRebuild(StatisticsRebuildConfig),
-    LiveCellsPopulate(LiveCellsPopulateConfig),
     SporeRebuild(SporeRebuildConfig),
     ConsumedAtBackfill(ConsumedAtBackfillConfig),
     SecondaryIssuanceBackfill(SecondaryIssuanceBackfillConfig),
@@ -555,7 +528,6 @@ impl TaskConfig {
             TaskConfig::IndexRebuild(_) => TaskType::IndexRebuild,
             TaskConfig::LabelImport(_) => TaskType::LabelImport,
             TaskConfig::StatisticsRebuild(_) => TaskType::StatisticsRebuild,
-            TaskConfig::LiveCellsPopulate(_) => TaskType::LiveCellsPopulate,
             TaskConfig::SporeRebuild(_) => TaskType::SporeRebuild,
             TaskConfig::ConsumedAtBackfill(_) => TaskType::ConsumedAtBackfill,
             TaskConfig::SecondaryIssuanceBackfill(_) => TaskType::SecondaryIssuanceBackfill,
@@ -643,13 +615,6 @@ pub struct StatisticsFailureInfo {
     pub error: String,
 }
 
-/// Progress details for live cells populate
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct LiveCellsPopulateResult {
-    pub cells_populated: i64,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SporeRebuildResult {
@@ -730,7 +695,6 @@ pub enum TaskResult {
     IndexRebuild(IndexRebuildResult),
     LabelImport(LabelImportResult),
     StatisticsRebuild(StatisticsRebuildResult),
-    LiveCellsPopulate(LiveCellsPopulateResult),
     SporeRebuild(SporeRebuildResult),
     ConsumedAtBackfill(ConsumedAtBackfillResult),
     SecondaryIssuanceBackfill(SecondaryIssuanceBackfillResult),
@@ -921,16 +885,6 @@ impl TaskBuilder {
                 .expect("StatisticsRebuildConfig should be serializable"),
             priority: 5,
             max_retries: 2,
-        }
-    }
-
-    pub fn live_cells_populate(config: LiveCellsPopulateConfig) -> Self {
-        Self {
-            task_type: TaskType::LiveCellsPopulate,
-            config: serde_json::to_value(TaskConfig::LiveCellsPopulate(config))
-                .expect("LiveCellsPopulateConfig should be serializable"),
-            priority: 8,
-            max_retries: 1,
         }
     }
 
@@ -1190,10 +1144,6 @@ mod tests {
             TaskType::StatisticsRebuild.to_string(),
             "statistics_rebuild"
         );
-        assert_eq!(
-            TaskType::LiveCellsPopulate.to_string(),
-            "live_cells_populate"
-        );
         assert_eq!(TaskType::SporeRebuild.to_string(), "spore_rebuild");
         assert_eq!(
             TaskType::SecondaryIssuanceBackfill.to_string(),
@@ -1298,17 +1248,7 @@ mod tests {
     }
 
     #[test]
-    fn test_live_cells_populate_builder() {
-        let builder = TaskBuilder::live_cells_populate(LiveCellsPopulateConfig::default());
-        assert_eq!(builder.task_type(), TaskType::LiveCellsPopulate);
-        assert_eq!(builder.get_priority(), 8);
-    }
-
-    #[test]
     fn test_config_defaults_match_serde_defaults() {
-        let live_cells = LiveCellsPopulateConfig::default();
-        assert_eq!(live_cells.batch_size, 100_000);
-
         let cycles = CyclesBackfillConfig::default();
         assert_eq!(cycles.batch_size, 50);
         assert_eq!(cycles.concurrent_requests, 32);
@@ -1320,14 +1260,6 @@ mod tests {
         let secondary = SecondaryIssuanceBackfillConfig::default();
         assert_eq!(secondary.batch_size, 1000);
         assert_eq!(secondary.concurrent_requests, 32);
-    }
-
-    #[test]
-    fn test_config_roundtrip_preserves_defaults() {
-        let config = LiveCellsPopulateConfig::default();
-        let json = serde_json::to_value(&config).unwrap();
-        let restored: LiveCellsPopulateConfig = serde_json::from_value(json).unwrap();
-        assert_eq!(restored.batch_size, 100_000);
     }
 
     #[test]
@@ -1450,7 +1382,6 @@ mod tests {
     fn test_requires_bulk_sync_completion_unsafe_tasks() {
         assert!(TaskType::IndexRebuild.requires_bulk_sync_completion());
         assert!(TaskType::CellsStatusRebuild.requires_bulk_sync_completion());
-        assert!(TaskType::LiveCellsPopulate.requires_bulk_sync_completion());
         assert!(TaskType::ConsumedAtBackfill.requires_bulk_sync_completion());
         assert!(TaskType::SporeRebuild.requires_bulk_sync_completion());
         assert!(TaskType::StatisticsRebuild.requires_bulk_sync_completion());

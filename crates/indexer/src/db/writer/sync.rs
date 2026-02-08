@@ -85,11 +85,6 @@ impl BatchWriter {
             .execute(&self.pool)
             .await?;
 
-        sqlx::query("DELETE FROM live_cells WHERE created_at_block >= $1")
-            .bind(next_block)
-            .execute(&self.pool)
-            .await?;
-
         sqlx::query("DELETE FROM cells WHERE created_at_block >= $1")
             .bind(next_block)
             .execute(&self.pool)
@@ -187,14 +182,6 @@ impl BatchWriter {
 
         sqlx::query(
             "DELETE FROM transaction_cell_deps WHERE tx_block_number >= $1 AND tx_block_number <= $2",
-        )
-        .bind(start_block)
-        .bind(end_block)
-        .execute(&self.pool)
-        .await?;
-
-        sqlx::query(
-            "DELETE FROM live_cells WHERE created_at_block >= $1 AND created_at_block <= $2",
         )
         .bind(start_block)
         .bind(end_block)
