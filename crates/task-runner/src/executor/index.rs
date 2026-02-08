@@ -257,6 +257,32 @@ pub async fn execute(
         result.completed_indexes, total_indexes, result.completed_constraints, total_constraints
     );
 
+    // Verify all required UNIQUE constraints exist before clearing deferred flag
+    let missing = verify_constraints_exist(pool).await?;
+    if !missing.is_empty() {
+        warn!(
+            "Found {} missing constraints after rebuild, attempting to create them",
+            missing.len()
+        );
+        for (table, constraint_name, columns) in &missing {
+            let sql = format!(
+                "ALTER TABLE {} ADD CONSTRAINT {} UNIQUE ({})",
+                table, constraint_name, columns
+            );
+            match sqlx::query(&sql).execute(pool).await {
+                Ok(_) => info!("Created missing constraint: {}", constraint_name),
+                Err(e) => {
+                    warn!("Failed to create constraint {}: {}", constraint_name, e);
+                    return Err(anyhow::anyhow!(
+                        "Cannot clear indexes_deferred: constraint {} is missing and could not be created: {}",
+                        constraint_name,
+                        e
+                    ));
+                }
+            }
+        }
+    }
+
     sqlx::query("UPDATE sync_status SET indexes_deferred = false, indexes_dropped_at = NULL")
         .execute(pool)
         .await?;
@@ -266,6 +292,58 @@ pub async fn execute(
         .await?;
 
     Ok(())
+}
+
+/// Verify that all required UNIQUE constraints exist on partition tables.
+/// Returns a list of (table_name, constraint_name, columns) for any missing constraints.
+async fn verify_constraints_exist(pool: &PgPool) -> Result<Vec<(String, String, String)>> {
+    let mut missing = Vec::new();
+
+    for constraint in DEFERRABLE_CONSTRAINTS {
+        for suffix in RANGE_PARTITION_SUFFIXES {
+            let table_name = format!("{}{}", constraint.table, suffix);
+            let constraint_name = format!("{}_{}", table_name, constraint.name);
+
+            let exists: Option<(i32,)> = sqlx::query_as(&format!(
+                "SELECT 1 FROM pg_constraint WHERE conname = '{}' AND conrelid = '{}'::regclass",
+                constraint_name, table_name
+            ))
+            .fetch_optional(pool)
+            .await?;
+
+            if exists.is_none() {
+                missing.push((table_name, constraint_name, constraint.columns.to_string()));
+            }
+        }
+
+        // Also check the parent table
+        let parent_constraint_name = format!("{}_{}", constraint.table, constraint.name);
+        let parent_exists: Option<(i32,)> = sqlx::query_as(&format!(
+            "SELECT 1 FROM pg_constraint WHERE conname = '{}' AND conrelid = '{}'::regclass",
+            parent_constraint_name, constraint.table
+        ))
+        .fetch_optional(pool)
+        .await?;
+
+        if parent_exists.is_none() {
+            missing.push((
+                constraint.table.to_string(),
+                parent_constraint_name,
+                constraint.columns.to_string(),
+            ));
+        }
+    }
+
+    if missing.is_empty() {
+        info!(
+            "All {} UNIQUE constraints verified",
+            DEFERRABLE_CONSTRAINTS.len() * (RANGE_PARTITION_SUFFIXES.len() + 1)
+        );
+    } else {
+        warn!("Missing {} UNIQUE constraints", missing.len());
+    }
+
+    Ok(missing)
 }
 
 const MAX_RETRIES: usize = 3;

@@ -43,7 +43,7 @@ tracing-subscriber = { workspace = true }
 chrono = { workspace = true }
 hex = { workspace = true }
 futures = { workspace = true }
-lru = { workspace = true }
+dashmap = "6.1"
 rayon = { workspace = true }
 async-trait = { workspace = true }
 uuid = { workspace = true }

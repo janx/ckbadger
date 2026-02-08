@@ -68,9 +68,8 @@ async fn list_clusters(
     let sync_status = state.cache.get_sync_status(&state.pool).await;
 
     if sync_status.spore_deferred {
-        return ok(CursorPaginatedResponse::new(
+        return ok(CursorPaginatedResponse::without_total(
             Vec::new(),
-            0,
             params.limit.clamp(1, 100),
             None,
         ));
@@ -78,11 +77,6 @@ async fn list_clusters(
 
     let limit = params.limit.clamp(1, 100);
     let cursor_block = params.cursor.unwrap_or(i64::MAX);
-
-    let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM spore_clusters")
-        .fetch_one(&state.pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     type ClusterRow = (
         Vec<u8>,
@@ -159,9 +153,8 @@ async fn list_clusters(
         )
         .collect();
 
-    ok(CursorPaginatedResponse::new(
+    ok(CursorPaginatedResponse::without_total(
         clusters,
-        total.0,
         limit,
         next_cursor,
     ))
@@ -175,9 +168,8 @@ async fn get_spores_by_cluster(
     let sync_status = state.cache.get_sync_status(&state.pool).await;
 
     if sync_status.spore_deferred {
-        return ok(CursorPaginatedResponse::new(
+        return ok(CursorPaginatedResponse::without_total(
             Vec::new(),
-            0,
             params.limit.clamp(1, 100),
             None,
         ));
@@ -203,13 +195,6 @@ async fn get_spores_by_cluster(
 
     let limit = params.limit.clamp(1, 100);
     let cursor_block = params.cursor.unwrap_or(i64::MAX);
-
-    let total: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM spore_cells WHERE cluster_id = $1 AND is_live = TRUE")
-            .bind(&id)
-            .fetch_one(&state.pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let rows = sqlx::query_as::<_, SporeRow>(
         r#"
@@ -279,9 +264,8 @@ async fn get_spores_by_cluster(
         )
         .collect();
 
-    ok(CursorPaginatedResponse::new(
+    ok(CursorPaginatedResponse::without_total(
         spores,
-        total.0,
         limit,
         next_cursor,
     ))
@@ -368,9 +352,8 @@ async fn list_spores(
     let sync_status = state.cache.get_sync_status(&state.pool).await;
 
     if sync_status.spore_deferred {
-        return ok(CursorPaginatedResponse::new(
+        return ok(CursorPaginatedResponse::without_total(
             Vec::new(),
-            0,
             params.limit.clamp(1, 100),
             None,
         ));
@@ -378,11 +361,6 @@ async fn list_spores(
 
     let limit = params.limit.clamp(1, 100);
     let cursor_block = params.cursor.unwrap_or(i64::MAX);
-
-    let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM spore_cells WHERE is_live = TRUE")
-        .fetch_one(&state.pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     type SporeRow = (
         Vec<u8>,
@@ -466,9 +444,8 @@ async fn list_spores(
         )
         .collect();
 
-    ok(CursorPaginatedResponse::new(
+    ok(CursorPaginatedResponse::without_total(
         spores,
-        total.0,
         limit,
         next_cursor,
     ))
@@ -564,9 +541,8 @@ async fn get_spores_by_owner(
     let sync_status = state.cache.get_sync_status(&state.pool).await;
 
     if sync_status.spore_deferred {
-        return ok(CursorPaginatedResponse::new(
+        return ok(CursorPaginatedResponse::without_total(
             Vec::new(),
-            0,
             params.limit.clamp(1, 100),
             None,
         ));
@@ -592,14 +568,6 @@ async fn get_spores_by_owner(
 
     let limit = params.limit.clamp(1, 100);
     let cursor_block = params.cursor.unwrap_or(i64::MAX);
-
-    let total: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM spore_cells WHERE owner_lock_hash = $1 AND is_live = TRUE",
-    )
-    .bind(&hash)
-    .fetch_one(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let rows = sqlx::query_as::<_, SporeRow>(
         r#"
@@ -669,9 +637,8 @@ async fn get_spores_by_owner(
         )
         .collect();
 
-    ok(CursorPaginatedResponse::new(
+    ok(CursorPaginatedResponse::without_total(
         spores,
-        total.0,
         limit,
         next_cursor,
     ))

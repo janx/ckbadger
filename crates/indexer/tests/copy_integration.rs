@@ -26,7 +26,7 @@ fn create_test_cell() -> ParsedCell {
 
 fn create_test_input() -> ParsedInput {
     ParsedInput {
-        previous_tx_hash: vec![0u8; 32],
+        previous_tx_hash: [0u8; 32],
         previous_output_index: 0,
         since: 0,
     }
@@ -34,7 +34,7 @@ fn create_test_input() -> ParsedInput {
 
 fn create_test_cell_dep() -> ParsedCellDep {
     ParsedCellDep {
-        out_point_tx_hash: vec![0u8; 32],
+        out_point_tx_hash: [0u8; 32],
         out_point_index: 0,
         dep_type: 0,
     }
@@ -72,6 +72,7 @@ fn test_transactions_writer_produces_valid_binary() {
     writer.add_transaction(
         &[0u8; 32],
         1000,
+        &[0u8; 32],
         0,
         0,
         1,

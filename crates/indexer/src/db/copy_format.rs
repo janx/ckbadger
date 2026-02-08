@@ -1,6 +1,11 @@
 use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, Utc};
 
+/// Pre-computed microsecond offset for PostgreSQL epoch (2000-01-01T00:00:00Z)
+/// relative to Unix epoch (1970-01-01T00:00:00Z).
+/// 946684800 seconds * 1_000_000 microseconds/second = 946_684_800_000_000
+const PG_EPOCH_USEC: i64 = 946_684_800_000_000;
+
 /// Binary COPY format buffer for PostgreSQL
 ///
 /// Provides zero-copy serialization of PostgreSQL binary COPY format.
@@ -104,11 +109,7 @@ impl BinaryCopyBuffer {
     /// * `dt` - DateTime in UTC
     pub fn write_timestamptz(&mut self, dt: DateTime<Utc>) {
         self.buf.put_i32(8);
-        let epoch = DateTime::parse_from_rfc3339("2000-01-01T00:00:00Z")
-            .expect("PostgreSQL epoch is a valid date")
-            .with_timezone(&Utc);
-        let duration = dt.signed_duration_since(epoch);
-        let usecs = duration.num_microseconds().unwrap_or(0);
+        let usecs = dt.timestamp_micros() - PG_EPOCH_USEC;
         self.buf.put_i64(usecs);
     }
 

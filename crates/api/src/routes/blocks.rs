@@ -413,8 +413,7 @@ async fn get_cellbase_tx_hash(pool: &sqlx::PgPool, finalized_at_hash: &str) -> O
         r#"
         SELECT t.hash
         FROM transactions t
-        JOIN blocks b ON t.block_number = b.number
-        WHERE b.hash = $1 AND t.tx_index = 0
+        WHERE t.block_hash = $1 AND t.tx_index = 0
         LIMIT 1
         "#,
     )

@@ -37,6 +37,7 @@ fn make_block(number: i64) -> ParsedBlock {
 type TxTuple<'a> = (
     &'a [u8],
     i64,
+    &'a [u8],
     i32,
     i32,
     i16,
@@ -53,10 +54,13 @@ type TxTuple<'a> = (
     DateTime<Utc>,
 );
 
+const ZERO_HASH: [u8; 32] = [0u8; 32];
+
 fn make_tx_tuple(hash: &[u8], block_number: i64) -> TxTuple<'_> {
     (
         hash,
         block_number,
+        &ZERO_HASH,
         0,
         0,
         0,

@@ -29,6 +29,9 @@ reqwest = { workspace = true }
 tokio-postgres = { workspace = true }
 bytes = { workspace = true }
 
+# Cache
+redis = { workspace = true }
+
 # Logging
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

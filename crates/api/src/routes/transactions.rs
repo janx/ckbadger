@@ -105,9 +105,8 @@ async fn list_transactions(
 
         sqlx::query_as::<_, (Vec<u8>, i64, Vec<u8>, i32, i32, i32, String, Option<i32>, Option<i64>, bool, chrono::DateTime<chrono::Utc>)>(
             r#"
-            SELECT t.hash, t.block_number, b.hash, t.tx_index, t.inputs_count::int4, t.outputs_count::int4, t.fee::text, t.tx_size, t.cycles, t.is_cellbase, t.timestamp
+            SELECT t.hash, t.block_number, t.block_hash, t.tx_index, t.inputs_count::int4, t.outputs_count::int4, t.fee::text, t.tx_size, t.cycles, t.is_cellbase, t.timestamp
             FROM transactions t
-            JOIN blocks b ON b.number = t.block_number
             WHERE t.block_number = $1 AND t.tx_index < $2
             ORDER BY t.tx_index ASC
             LIMIT $3
@@ -125,9 +124,8 @@ async fn list_transactions(
 
         sqlx::query_as::<_, (Vec<u8>, i64, Vec<u8>, i32, i32, i32, String, Option<i32>, Option<i64>, bool, chrono::DateTime<chrono::Utc>)>(
             r#"
-            SELECT t.hash, t.block_number, b.hash, t.tx_index, t.inputs_count::int4, t.outputs_count::int4, t.fee::text, t.tx_size, t.cycles, t.is_cellbase, t.timestamp
+            SELECT t.hash, t.block_number, t.block_hash, t.tx_index, t.inputs_count::int4, t.outputs_count::int4, t.fee::text, t.tx_size, t.cycles, t.is_cellbase, t.timestamp
             FROM transactions t
-            JOIN blocks b ON b.number = t.block_number
             WHERE (t.block_number, t.tx_index) < ($1, $2)
             ORDER BY t.block_number DESC, t.tx_index DESC
             LIMIT $3
@@ -142,9 +140,8 @@ async fn list_transactions(
     } else {
         sqlx::query_as::<_, (Vec<u8>, i64, Vec<u8>, i32, i32, i32, String, Option<i32>, Option<i64>, bool, chrono::DateTime<chrono::Utc>)>(
             r#"
-            SELECT t.hash, t.block_number, b.hash, t.tx_index, t.inputs_count::int4, t.outputs_count::int4, t.fee::text, t.tx_size, t.cycles, t.is_cellbase, t.timestamp
+            SELECT t.hash, t.block_number, t.block_hash, t.tx_index, t.inputs_count::int4, t.outputs_count::int4, t.fee::text, t.tx_size, t.cycles, t.is_cellbase, t.timestamp
             FROM transactions t
-            JOIN blocks b ON b.number = t.block_number
             ORDER BY t.block_number DESC, t.tx_index DESC
             LIMIT $1
             "#,
@@ -212,11 +209,10 @@ async fn get_transaction(
 
     let row = sqlx::query_as::<_, (Vec<u8>, i64, Vec<u8>, i32, i32, i32, String, String, String, Option<i32>, Option<i64>, bool, chrono::DateTime<chrono::Utc>)>(
         r#"
-        SELECT t.hash, t.block_number, b.hash, t.tx_index, t.inputs_count::int4, t.outputs_count::int4, 
+        SELECT t.hash, t.block_number, t.block_hash, t.tx_index, t.inputs_count::int4, t.outputs_count::int4,
                t.fee::text, t.total_input_capacity::text, t.total_output_capacity::text,
                t.tx_size, t.cycles, t.is_cellbase, t.timestamp
         FROM transactions t
-        JOIN blocks b ON b.number = t.block_number
         WHERE t.hash = $1
         "#,
     )
@@ -494,9 +490,8 @@ async fn get_transaction_detail(
 
     let tx_row = sqlx::query_as::<_, (Vec<u8>, i64, Vec<u8>, i32, i32, i32, String, bool, chrono::DateTime<chrono::Utc>, Option<i32>, Option<i64>)>(
         r#"
-        SELECT t.hash, t.block_number, b.hash, t.tx_index, t.inputs_count::int4, t.outputs_count::int4, t.fee::text, t.is_cellbase, t.timestamp, t.tx_size, t.cycles
+        SELECT t.hash, t.block_number, t.block_hash, t.tx_index, t.inputs_count::int4, t.outputs_count::int4, t.fee::text, t.is_cellbase, t.timestamp, t.tx_size, t.cycles
         FROM transactions t
-        JOIN blocks b ON b.number = t.block_number
         WHERE t.hash = $1
         "#,
     )
@@ -709,34 +704,27 @@ async fn get_transaction_detail(
         )
         .collect();
 
-    // Fee calculation for special transactions:
-    // 1. DAO withdrawals: outputs include compensation from secondary issuance
-    // 2. DAS/other protocols: type scripts can allow outputs > inputs
-    // We query DAO compensation and add it to effective inputs
-    let dao_compensation: u128 = sqlx::query_as::<_, (Option<String>,)>(
-        "SELECT SUM(compensation::numeric)::text FROM dao_deposits WHERE withdraw_tx = $1 AND status = 2",
-    )
-    .bind(&hash_bytes)
-    .fetch_one(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
-    .0
-    .and_then(|s| s.parse::<u128>().ok())
-    .unwrap_or(0);
-
+    // Fee calculation: only query DAO compensation when outputs > inputs (~1% of transactions)
     let fee = if outputs_capacity > inputs_capacity {
         // Outputs exceed inputs - could be DAO withdrawal or special protocol (DAS, etc.)
+        let dao_compensation: u128 = sqlx::query_as::<_, (Option<String>,)>(
+            "SELECT SUM(compensation::numeric)::text FROM dao_deposits WHERE withdraw_tx = $1 AND status = 2",
+        )
+        .bind(&hash_bytes)
+        .fetch_one(&state.pool)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .0
+        .and_then(|s| s.parse::<u128>().ok())
+        .unwrap_or(0);
+
         let effective_input = inputs_capacity + dao_compensation;
         if effective_input >= outputs_capacity {
-            // DAO case: compensation explains the difference
             (effective_input - outputs_capacity).to_string()
         } else {
-            // Special protocol (DAS, etc.): type script allows capacity creation
-            // Cannot calculate fee naively, return 0 as placeholder
             "0".to_string()
         }
     } else {
-        // Normal case: inputs >= outputs, fee = inputs - outputs
         (inputs_capacity - outputs_capacity).to_string()
     };
 
@@ -1032,9 +1020,8 @@ async fn get_transaction_lifecycle(
     // Query transaction info
     let tx_row: Option<(i64, Vec<u8>, bool, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
         r#"
-        SELECT t.block_number, b.hash, t.is_cellbase, t.timestamp
+        SELECT t.block_number, t.block_hash, t.is_cellbase, t.timestamp
         FROM transactions t
-        JOIN blocks b ON b.number = t.block_number
         WHERE t.hash = $1
         "#,
     )

@@ -4,6 +4,9 @@
 -- Partition size: 5M blocks (~1.5 years)
 -- ============================================
 
+-- Enable pg_stat_statements for query monitoring
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+
 -- ===========================================
 -- 1. Sync Status (Persistent State Only)
 -- High-frequency sync data is stored in Redis (sync:status key)
@@ -205,6 +208,7 @@ CREATE TABLE blocks_p09 PARTITION OF blocks FOR VALUES FROM (45000000) TO (50000
 CREATE TABLE transactions (
     hash BYTEA NOT NULL,
     block_number BIGINT NOT NULL,
+    block_hash BYTEA NOT NULL DEFAULT '\x00',
     tx_index INTEGER NOT NULL,
     version INTEGER NOT NULL,
     inputs_count SMALLINT NOT NULL DEFAULT 0,

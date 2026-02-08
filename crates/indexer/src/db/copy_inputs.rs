@@ -170,7 +170,7 @@ mod tests {
         let mut writer = CopyInputsWriter::new();
         let tx_hash = vec![0u8; 32];
         let input = ParsedInput {
-            previous_tx_hash: vec![1u8; 32],
+            previous_tx_hash: [1u8; 32],
             previous_output_index: 5,
             since: 12345,
         };
@@ -190,7 +190,7 @@ mod tests {
         let mut writer = CopyCellDepsWriter::new();
         let tx_hash = vec![0u8; 32];
         let dep = ParsedCellDep {
-            out_point_tx_hash: vec![1u8; 32],
+            out_point_tx_hash: [1u8; 32],
             out_point_index: 3,
             dep_type: 1,
         };
@@ -212,7 +212,7 @@ mod tests {
 
         for i in 0..3 {
             let input = ParsedInput {
-                previous_tx_hash: vec![i as u8; 32],
+                previous_tx_hash: [i as u8; 32],
                 previous_output_index: i,
                 since: i as i64 * 1000,
             };
@@ -231,7 +231,7 @@ mod tests {
 
         for i in 0..3 {
             let dep = ParsedCellDep {
-                out_point_tx_hash: vec![i as u8; 32],
+                out_point_tx_hash: [i as u8; 32],
                 out_point_index: i as i16,
                 dep_type: (i % 2) as i16,
             };

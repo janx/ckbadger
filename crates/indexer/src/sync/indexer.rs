@@ -1,15 +1,14 @@
 #![allow(clippy::type_complexity)]
 
 use std::collections::{HashMap, HashSet};
-use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use chrono::{DateTime, NaiveDate, Timelike, Utc};
+use dashmap::DashMap;
 use futures::stream::{FuturesOrdered, StreamExt};
-use lru::LruCache;
 use rayon::prelude::*;
 use sqlx::PgPool;
 use tokio::time::sleep;
@@ -212,8 +211,9 @@ fn truncate_to_hour(dt: DateTime<Utc>) -> DateTime<Utc> {
 }
 
 struct TxData {
-    hash: Vec<u8>,
+    hash: [u8; 32],
     block_number: i64,
+    block_hash: Vec<u8>,
     tx_index: i32,
     version: i32,
     inputs_count: i16,
@@ -279,6 +279,7 @@ fn parse_blocks_parallel(
                     TxData {
                         hash: parsed_tx.hash,
                         block_number: parsed.number,
+                        block_hash: parsed.hash.clone(),
                         tx_index: tx_index as i32,
                         version: parsed_tx.version,
                         inputs_count: parsed_tx.inputs_count as i16,
@@ -321,7 +322,7 @@ fn parse_blocks_parallel(
             if !tx_data.is_cellbase {
                 for input in &tx_data.inputs {
                     all_input_outpoints.push((
-                        input.previous_tx_hash.clone(),
+                        input.previous_tx_hash.to_vec(),
                         input.previous_output_index as i16,
                     ));
                 }
@@ -344,7 +345,7 @@ pub struct Indexer {
     writer: BatchWriter,
     copy_router: Option<ParallelCopyRouter>,
     progress: Arc<SyncProgress>,
-    cell_cache: Arc<tokio::sync::Mutex<LruCache<(Vec<u8>, i32), CachedCellInfo>>>,
+    cell_cache: Arc<DashMap<([u8; 32], i32), CachedCellInfo>>,
     perf: PerfStats,
     cache_invalidator: CacheInvalidator,
     last_cache_invalidation: tokio::sync::Mutex<u64>,
@@ -390,9 +391,7 @@ impl Indexer {
 
         let progress = Arc::new(SyncProgress::new(tip_number as u64, chain_tip));
 
-        let cell_cache = Arc::new(tokio::sync::Mutex::new(LruCache::new(
-            NonZeroUsize::new(CELL_CACHE_CAPACITY).expect("CELL_CACHE_CAPACITY must be non-zero"),
-        )));
+        let cell_cache = Arc::new(DashMap::with_capacity(CELL_CACHE_CAPACITY));
 
         let copy_router = if config.use_copy_bulk_sync {
             match CopyPoolManager::new(
@@ -733,12 +732,12 @@ impl Indexer {
     async fn run_pipeline(&self) -> Result<()> {
         use tokio::sync::mpsc;
 
-        type FetchedBatch = (u64, u64, u64, Vec<BlockResponseWithCycles>);
+        type FetchedBatch = (u64, u64, u64, Arc<Vec<BlockResponseWithCycles>>);
         type ParsedBatch = (
             u64,                                                 // start_block
             u64,                                                 // end_block
             u64,                                                 // chain_tip
-            Vec<BlockResponseWithCycles>,                        // raw blocks (for UDT parsing)
+            Arc<Vec<BlockResponseWithCycles>>,                   // raw blocks (for UDT parsing)
             Vec<crate::parser::block::ParsedBlock>,              // parsed blocks
             Vec<TxData>,                                         // parsed transactions
             HashMap<(Vec<u8>, i16), (i64, i64, Vec<u8>, i32)>,   // input_cell_info
@@ -845,7 +844,7 @@ impl Indexer {
                 };
 
                 if fetch_tx
-                    .send((start_block, end_block, chain_tip, blocks))
+                    .send((start_block, end_block, chain_tip, Arc::new(blocks)))
                     .await
                     .is_err()
                 {
@@ -866,9 +865,9 @@ impl Indexer {
 
         let parser = tokio::spawn(async move {
             while let Some((start_block, end_block, chain_tip, blocks)) = fetch_rx.recv().await {
-                let blocks_clone = blocks.clone();
+                let blocks_ref = Arc::clone(&blocks);
                 let (all_parsed_blocks, all_tx_data, all_input_outpoints) =
-                    tokio::task::spawn_blocking(move || parse_blocks_parallel(&blocks_clone))
+                    tokio::task::spawn_blocking(move || parse_blocks_parallel(&blocks_ref))
                         .await
                         .unwrap_or_else(|_| (vec![], vec![], vec![]));
 
@@ -879,27 +878,25 @@ impl Indexer {
                 let mut batch_cells: HashMap<(Vec<u8>, i16), ()> = HashMap::new();
                 for td in &all_tx_data {
                     for (idx, _) in td.cells.iter().enumerate() {
-                        batch_cells.insert((td.hash.clone(), idx as i16), ());
+                        batch_cells.insert((td.hash.to_vec(), idx as i16), ());
                     }
                 }
 
                 let mut input_cell_info: HashMap<(Vec<u8>, i16), (i64, i64, Vec<u8>, i32)> =
                     HashMap::new();
-                {
-                    let cache = cell_cache_for_parser.lock().await;
-                    for (tx_hash, idx) in &all_input_outpoints {
-                        let key = (tx_hash.clone(), *idx as i32);
-                        if let Some(cached) = cache.peek(&key) {
-                            input_cell_info.insert(
-                                (tx_hash.clone(), *idx),
-                                (
-                                    cached.capacity,
-                                    cached.created_at_block,
-                                    cached.lock_script_hash.clone(),
-                                    cached.data_size,
-                                ),
-                            );
-                        }
+                for (tx_hash, idx) in &all_input_outpoints {
+                    let hash_arr: [u8; 32] = tx_hash.as_slice().try_into().unwrap_or([0u8; 32]);
+                    let key = (hash_arr, *idx as i32);
+                    if let Some(cached) = cell_cache_for_parser.get(&key) {
+                        input_cell_info.insert(
+                            (tx_hash.clone(), *idx),
+                            (
+                                cached.capacity,
+                                cached.created_at_block,
+                                cached.lock_script_hash.clone(),
+                                cached.data_size,
+                            ),
+                        );
                     }
                 }
 
@@ -949,7 +946,7 @@ impl Indexer {
                     if !td.is_cellbase {
                         for input in &td.inputs {
                             let key = (
-                                input.previous_tx_hash.clone(),
+                                input.previous_tx_hash.to_vec(),
                                 input.previous_output_index as i16,
                             );
                             if input_cell_info.contains_key(&key) && !batch_cells.contains_key(&key)
@@ -2885,7 +2882,7 @@ impl Indexer {
         let mut input_cells = Vec::with_capacity(tx_data.inputs.len());
         for input in &tx_data.inputs {
             let key = (
-                input.previous_tx_hash.clone(),
+                input.previous_tx_hash.to_vec(),
                 input.previous_output_index as i16,
             );
             if let Some(cell) = batch_output_cells.get(&key) {
@@ -2940,7 +2937,7 @@ impl Indexer {
         for tx_data in all_tx_data {
             for (output_index, cell) in tx_data.cells.iter().enumerate() {
                 batch_output_cells.insert(
-                    (tx_data.hash.clone(), output_index as i16),
+                    (tx_data.hash.to_vec(), output_index as i16),
                     clone_parsed_cell(cell),
                 );
             }
@@ -2951,7 +2948,7 @@ impl Indexer {
         for tx_data in all_tx_data {
             for input in &tx_data.inputs {
                 let key = (
-                    input.previous_tx_hash.clone(),
+                    input.previous_tx_hash.to_vec(),
                     input.previous_output_index as i16,
                 );
                 if seen_outpoints.insert(key.clone()) {
@@ -3035,7 +3032,7 @@ impl Indexer {
                     activities.push(cellbase_reward);
                 }
 
-                if let Some(transfers) = udt_transfers_by_tx.get(&tx_data.hash) {
+                if let Some(transfers) = udt_transfers_by_tx.get(&tx_data.hash.to_vec()) {
                     activities.extend(ActivityParser::parse_token_activities(
                         &tx_data.hash,
                         tx_data.tx_index,
@@ -3049,7 +3046,7 @@ impl Indexer {
                     Vec::new();
                 for input in &tx_data.inputs {
                     let key = (
-                        input.previous_tx_hash.clone(),
+                        input.previous_tx_hash.to_vec(),
                         input.previous_output_index as i16,
                     );
                     if let Some(spore) = input_spores.get(&key) {
@@ -3068,7 +3065,7 @@ impl Indexer {
                 let mut input_mnfts_for_tx: Vec<crate::parser::mnft::ParsedMnftToken> = Vec::new();
                 for input in &tx_data.inputs {
                     let key = (
-                        input.previous_tx_hash.clone(),
+                        input.previous_tx_hash.to_vec(),
                         input.previous_output_index as i16,
                     );
                     if let Some(token) = input_mnfts.get(&key) {
@@ -3081,7 +3078,7 @@ impl Indexer {
                     Vec::new();
                 for input in &tx_data.inputs {
                     let key = (
-                        input.previous_tx_hash.clone(),
+                        input.previous_tx_hash.to_vec(),
                         input.previous_output_index as i16,
                     );
                     if let Some(account) = input_dotbits.get(&key) {
@@ -3248,7 +3245,7 @@ impl Indexer {
         for tx_data in &all_tx_data {
             for (output_index, cell) in tx_data.cells.iter().enumerate() {
                 batch_cells.insert(
-                    (tx_data.hash.clone(), output_index as i16),
+                    (tx_data.hash.to_vec(), output_index as i16),
                     (
                         cell.capacity,
                         tx_data.block_number,
@@ -3263,21 +3260,19 @@ impl Indexer {
 
         // (capacity, created_at_block, lock_script_hash, data_size)
         let mut input_cell_info: HashMap<(Vec<u8>, i16), (i64, i64, Vec<u8>, i32)> = HashMap::new();
-        {
-            let mut cache = self.cell_cache.lock().await;
-            for (tx_hash, idx) in &all_input_outpoints {
-                let key = (tx_hash.clone(), *idx as i32);
-                if let Some(cached) = cache.get(&key) {
-                    input_cell_info.insert(
-                        (tx_hash.clone(), *idx),
-                        (
-                            cached.capacity,
-                            cached.created_at_block,
-                            cached.lock_script_hash.clone(),
-                            cached.data_size,
-                        ),
-                    );
-                }
+        for (tx_hash, idx) in &all_input_outpoints {
+            let hash_arr: [u8; 32] = tx_hash.as_slice().try_into().unwrap_or([0u8; 32]);
+            let key = (hash_arr, *idx as i32);
+            if let Some(cached) = self.cell_cache.get(&key) {
+                input_cell_info.insert(
+                    (tx_hash.clone(), *idx),
+                    (
+                        cached.capacity,
+                        cached.created_at_block,
+                        cached.lock_script_hash.clone(),
+                        cached.data_size,
+                    ),
+                );
             }
         }
 
@@ -3315,7 +3310,7 @@ impl Indexer {
             if !tx_data.is_cellbase {
                 for input in &tx_data.inputs {
                     let key = (
-                        input.previous_tx_hash.clone(),
+                        input.previous_tx_hash.to_vec(),
                         input.previous_output_index as i16,
                     );
                     if let Some((cap, _, _, _)) = input_cell_info.get(&key) {
@@ -3330,21 +3325,22 @@ impl Indexer {
             }
         }
 
-        {
-            let mut cache = self.cell_cache.lock().await;
-            for tx_data in &all_tx_data {
-                for (output_index, cell) in tx_data.cells.iter().enumerate() {
-                    cache.put(
-                        (tx_data.hash.clone(), output_index as i32),
-                        CachedCellInfo {
-                            capacity: cell.capacity,
-                            created_at_block: tx_data.block_number,
-                            lock_script_hash: cell.lock_script_hash.clone(),
-                            data_size: cell.data_size,
-                        },
-                    );
-                }
+        for tx_data in &all_tx_data {
+            for (output_index, cell) in tx_data.cells.iter().enumerate() {
+                self.cell_cache.insert(
+                    (tx_data.hash, output_index as i32),
+                    CachedCellInfo {
+                        capacity: cell.capacity,
+                        created_at_block: tx_data.block_number,
+                        lock_script_hash: cell.lock_script_hash.clone(),
+                        data_size: cell.data_size,
+                    },
+                );
             }
+        }
+        // Periodic size-based cleanup (DashMap has no LRU eviction)
+        if self.cell_cache.len() > CELL_CACHE_CAPACITY * 2 {
+            self.cell_cache.clear();
         }
 
         // Prepare all data before parallel insertion
@@ -3357,6 +3353,7 @@ impl Indexer {
                 (
                     tx_data.hash.as_slice(),
                     tx_data.block_number,
+                    tx_data.block_hash.as_slice(),
                     tx_data.tx_index,
                     tx_data.version,
                     tx_data.inputs_count,
@@ -3484,7 +3481,7 @@ impl Indexer {
             if !tx_data.is_cellbase {
                 for (input_index, input) in tx_data.inputs.iter().enumerate() {
                     let key = (
-                        input.previous_tx_hash.clone(),
+                        input.previous_tx_hash.to_vec(),
                         input.previous_output_index as i16,
                     );
                     if let Some((_, created_block, _, _)) = input_cell_info.get(&key) {
@@ -3527,7 +3524,7 @@ impl Indexer {
             if !tx_data.is_cellbase {
                 for input in &tx_data.inputs {
                     let key = (
-                        input.previous_tx_hash.clone(),
+                        input.previous_tx_hash.to_vec(),
                         input.previous_output_index as i16,
                     );
                     if let Some((cap, _, lock_hash, _)) = input_cell_info.get(&key) {
@@ -3567,14 +3564,14 @@ impl Indexer {
                     0,
                     0,
                     tx_data.block_number,
-                    tx_data.hash.clone(),
+                    tx_data.hash.to_vec(),
                 ));
                 entry.0 += balance_change;
                 entry.1 += cells_created - cells_consumed;
                 entry.2 += cells_created;
                 entry.3 += 1;
                 entry.4 = tx_data.block_number;
-                entry.5 = tx_data.hash.clone();
+                entry.5 = tx_data.hash.to_vec();
             }
         }
 
@@ -3612,7 +3609,7 @@ impl Indexer {
             if !tx_data.is_cellbase {
                 for input in &tx_data.inputs {
                     let key = (
-                        input.previous_tx_hash.clone(),
+                        input.previous_tx_hash.to_vec(),
                         input.previous_output_index as i16,
                     );
                     if input_cell_info.contains_key(&key) && !batch_cells.contains_key(&key) {
@@ -3638,7 +3635,7 @@ impl Indexer {
             if !tx_data.is_cellbase {
                 for input in &tx_data.inputs {
                     let key = (
-                        input.previous_tx_hash.clone(),
+                        input.previous_tx_hash.to_vec(),
                         input.previous_output_index as i16,
                     );
                     if let Some((cap, _, _, _)) = input_cell_info.get(&key) {
@@ -3753,7 +3750,7 @@ impl Indexer {
                 .flat_map(|tx| tx.inputs.iter())
                 .filter_map(|input| {
                     let key = (
-                        input.previous_tx_hash.clone(),
+                        input.previous_tx_hash.to_vec(),
                         input.previous_output_index as i16,
                     );
                     input_cell_info
@@ -3952,7 +3949,7 @@ impl Indexer {
                                     DaoParser::parse_deposit_block_number(&data_bytes)
                                 {
                                     new_dao_outputs.push((
-                                        tx_data.hash.clone(),
+                                        tx_data.hash.to_vec(),
                                         idx as i16,
                                         cell.lock_script_hash.clone(),
                                         cell.capacity,
@@ -4030,7 +4027,7 @@ impl Indexer {
 
                 for (output_index, udt_cell) in output_udts.iter().enumerate() {
                     batch_udt_cells.insert(
-                        (tx_data.hash.clone(), output_index as i16),
+                        (tx_data.hash.to_vec(), output_index as i16),
                         udt_cell.clone(),
                     );
                 }
@@ -4038,14 +4035,14 @@ impl Indexer {
                 let input_outpoints: Vec<(Vec<u8>, i16)> = tx_data
                     .inputs
                     .iter()
-                    .map(|i| (i.previous_tx_hash.clone(), i.previous_output_index as i16))
+                    .map(|i| (i.previous_tx_hash.to_vec(), i.previous_output_index as i16))
                     .collect();
 
                 // Collect ALL input outpoints (to detect UDT consumption/burns)
                 all_input_outpoints_udt.extend(input_outpoints.iter().cloned());
 
                 all_tx_infos_for_udt.push(TxInfoForUdt {
-                    tx_hash: tx_data.hash.clone(),
+                    tx_hash: tx_data.hash.to_vec(),
                     block_number: parsed.number,
                     timestamp: parsed.timestamp,
                     output_udts,
@@ -4447,7 +4444,7 @@ impl Indexer {
         for tx_data in &all_tx_data {
             for (output_index, cell) in tx_data.cells.iter().enumerate() {
                 batch_cells.insert(
-                    (tx_data.hash.clone(), output_index as i16),
+                    (tx_data.hash.to_vec(), output_index as i16),
                     (
                         cell.capacity,
                         tx_data.block_number,
@@ -4464,7 +4461,7 @@ impl Indexer {
             if !tx_data.is_cellbase {
                 for input in &tx_data.inputs {
                     let key = (
-                        input.previous_tx_hash.clone(),
+                        input.previous_tx_hash.to_vec(),
                         input.previous_output_index as i16,
                     );
                     if let Some((cap, _, _, _)) = input_cell_info.get(&key) {
@@ -4479,21 +4476,21 @@ impl Indexer {
             }
         }
 
-        {
-            let mut cache = self.cell_cache.lock().await;
-            for tx_data in &all_tx_data {
-                for (output_index, cell) in tx_data.cells.iter().enumerate() {
-                    cache.put(
-                        (tx_data.hash.clone(), output_index as i32),
-                        CachedCellInfo {
-                            capacity: cell.capacity,
-                            created_at_block: tx_data.block_number,
-                            lock_script_hash: cell.lock_script_hash.clone(),
-                            data_size: cell.data_size,
-                        },
-                    );
-                }
+        for tx_data in &all_tx_data {
+            for (output_index, cell) in tx_data.cells.iter().enumerate() {
+                self.cell_cache.insert(
+                    (tx_data.hash, output_index as i32),
+                    CachedCellInfo {
+                        capacity: cell.capacity,
+                        created_at_block: tx_data.block_number,
+                        lock_script_hash: cell.lock_script_hash.clone(),
+                        data_size: cell.data_size,
+                    },
+                );
             }
+        }
+        if self.cell_cache.len() > CELL_CACHE_CAPACITY * 2 {
+            self.cell_cache.clear();
         }
 
         let mut all_proposals: Vec<(i64, i16, &[u8])> = Vec::new();
@@ -4520,6 +4517,7 @@ impl Indexer {
                 (
                     tx_data.hash.as_slice(),
                     tx_data.block_number,
+                    tx_data.block_hash.as_slice(),
                     tx_data.tx_index,
                     tx_data.version,
                     tx_data.inputs_count,
@@ -4723,7 +4721,7 @@ impl Indexer {
             if !tx_data.is_cellbase {
                 for (input_index, input) in tx_data.inputs.iter().enumerate() {
                     let key = (
-                        input.previous_tx_hash.clone(),
+                        input.previous_tx_hash.to_vec(),
                         input.previous_output_index as i16,
                     );
                     if let Some((_, created_block, _, _)) = input_cell_info.get(&key) {
@@ -4766,7 +4764,7 @@ impl Indexer {
             if !tx_data.is_cellbase {
                 for input in &tx_data.inputs {
                     let key = (
-                        input.previous_tx_hash.clone(),
+                        input.previous_tx_hash.to_vec(),
                         input.previous_output_index as i16,
                     );
                     if let Some((cap, _, lock_hash, _)) = input_cell_info.get(&key) {
@@ -4806,14 +4804,14 @@ impl Indexer {
                     0,
                     0,
                     tx_data.block_number,
-                    tx_data.hash.clone(),
+                    tx_data.hash.to_vec(),
                 ));
                 entry.0 += balance_change;
                 entry.1 += cells_created - cells_consumed;
                 entry.2 += cells_created;
                 entry.3 += 1;
                 entry.4 = tx_data.block_number;
-                entry.5 = tx_data.hash.clone();
+                entry.5 = tx_data.hash.to_vec();
             }
         }
 
@@ -4850,7 +4848,7 @@ impl Indexer {
             if !tx_data.is_cellbase {
                 for input in &tx_data.inputs {
                     let key = (
-                        input.previous_tx_hash.clone(),
+                        input.previous_tx_hash.to_vec(),
                         input.previous_output_index as i16,
                     );
                     if let Some((cap, _, _, _)) = input_cell_info.get(&key) {
@@ -4964,7 +4962,7 @@ impl Indexer {
                 .flat_map(|tx| tx.inputs.iter())
                 .filter_map(|input| {
                     let key = (
-                        input.previous_tx_hash.clone(),
+                        input.previous_tx_hash.to_vec(),
                         input.previous_output_index as i16,
                     );
                     input_cell_info
@@ -5126,7 +5124,7 @@ impl Indexer {
                 }
                 for input in &tx_data.inputs {
                     all_input_outpoints.push((
-                        input.previous_tx_hash.clone(),
+                        input.previous_tx_hash.to_vec(),
                         input.previous_output_index as i16,
                     ));
                 }
@@ -5202,7 +5200,7 @@ impl Indexer {
                         Vec::new();
                     for input in &tx_data.inputs {
                         let key = (
-                            input.previous_tx_hash.clone(),
+                            input.previous_tx_hash.to_vec(),
                             input.previous_output_index as i16,
                         );
                         if let Some(deposit_info) = consumed_dao_map.get(&key) {
@@ -5225,7 +5223,7 @@ impl Indexer {
                                         DaoParser::parse_deposit_block_number(&data_bytes)
                                     {
                                         new_dao_outputs.push((
-                                            tx_data.hash.clone(),
+                                            tx_data.hash.to_vec(),
                                             idx as i16,
                                             cell.lock_script_hash.clone(),
                                             cell.capacity,
@@ -5241,7 +5239,7 @@ impl Indexer {
                         consumed_deposits,
                         new_dao_outputs,
                         block_number: parsed.number,
-                        consuming_tx_hash: tx_data.hash.clone(),
+                        consuming_tx_hash: tx_data.hash.to_vec(),
                         timestamp: parsed.timestamp,
                     });
                 }
@@ -5310,7 +5308,7 @@ impl Indexer {
 
                 for (output_index, udt_cell) in output_udts.iter().enumerate() {
                     batch_udt_cells.insert(
-                        (tx_data.hash.clone(), output_index as i16),
+                        (tx_data.hash.to_vec(), output_index as i16),
                         udt_cell.clone(),
                     );
                 }
@@ -5318,14 +5316,14 @@ impl Indexer {
                 let input_outpoints: Vec<(Vec<u8>, i16)> = tx_data
                     .inputs
                     .iter()
-                    .map(|i| (i.previous_tx_hash.clone(), i.previous_output_index as i16))
+                    .map(|i| (i.previous_tx_hash.to_vec(), i.previous_output_index as i16))
                     .collect();
 
                 // Collect ALL input outpoints (to detect UDT consumption/burns)
                 all_input_outpoints_udt.extend(input_outpoints.iter().cloned());
 
                 all_tx_infos_for_udt.push(TxInfoForUdt {
-                    tx_hash: tx_data.hash.clone(),
+                    tx_hash: tx_data.hash.to_vec(),
                     block_number: parsed.number,
                     timestamp: parsed.timestamp,
                     output_udts,
@@ -5736,7 +5734,8 @@ impl Indexer {
         }
 
         struct TxData {
-            hash: Vec<u8>,
+            hash: [u8; 32],
+            block_hash: Vec<u8>,
             version: i32,
             inputs_count: i16,
             outputs_count: i16,
@@ -5778,6 +5777,7 @@ impl Indexer {
 
             tx_data_list.push(TxData {
                 hash: parsed_tx.hash,
+                block_hash: parsed.hash.clone(),
                 version: parsed_tx.version,
                 inputs_count: parsed_tx.inputs_count as i16,
                 outputs_count: parsed_tx.outputs_count as i16,
@@ -5802,7 +5802,7 @@ impl Indexer {
             .flat_map(|tx| {
                 tx.inputs.iter().map(|input| {
                     (
-                        input.previous_tx_hash.clone(),
+                        input.previous_tx_hash.to_vec(),
                         input.previous_output_index as i16,
                     )
                 })
@@ -5816,7 +5816,7 @@ impl Indexer {
         for tx_data in &tx_data_list {
             for (output_index, cell) in tx_data.cells.iter().enumerate() {
                 block_cells.insert(
-                    (tx_data.hash.clone(), output_index as i16),
+                    (tx_data.hash.to_vec(), output_index as i16),
                     (
                         cell.capacity,
                         parsed.number,
@@ -5830,21 +5830,19 @@ impl Indexer {
         }
 
         let mut input_cell_info: HashMap<(Vec<u8>, i16), (i64, i64, Vec<u8>, i32)> = HashMap::new();
-        {
-            let mut cache = self.cell_cache.lock().await;
-            for (tx_hash, idx) in &input_outpoints {
-                let key = (tx_hash.clone(), *idx as i32);
-                if let Some(cached) = cache.get(&key) {
-                    input_cell_info.insert(
-                        (tx_hash.clone(), *idx),
-                        (
-                            cached.capacity,
-                            cached.created_at_block,
-                            cached.lock_script_hash.clone(),
-                            cached.data_size,
-                        ),
-                    );
-                }
+        for (tx_hash, idx) in &input_outpoints {
+            let hash_arr: [u8; 32] = tx_hash.as_slice().try_into().unwrap_or([0u8; 32]);
+            let key = (hash_arr, *idx as i32);
+            if let Some(cached) = self.cell_cache.get(&key) {
+                input_cell_info.insert(
+                    (tx_hash.clone(), *idx),
+                    (
+                        cached.capacity,
+                        cached.created_at_block,
+                        cached.lock_script_hash.clone(),
+                        cached.data_size,
+                    ),
+                );
             }
         }
 
@@ -5875,7 +5873,7 @@ impl Indexer {
             if !tx_data.is_cellbase {
                 for input in &tx_data.inputs {
                     let key = (
-                        input.previous_tx_hash.clone(),
+                        input.previous_tx_hash.to_vec(),
                         input.previous_output_index as i16,
                     );
                     if let Some((cap, _, _, _)) = input_cell_info.get(&key) {
@@ -5890,20 +5888,17 @@ impl Indexer {
             }
         }
 
-        {
-            let mut cache = self.cell_cache.lock().await;
-            for tx_data in &tx_data_list {
-                for (output_index, cell) in tx_data.cells.iter().enumerate() {
-                    cache.put(
-                        (tx_data.hash.clone(), output_index as i32),
-                        CachedCellInfo {
-                            capacity: cell.capacity,
-                            created_at_block: parsed.number,
-                            lock_script_hash: cell.lock_script_hash.clone(),
-                            data_size: cell.data_size,
-                        },
-                    );
-                }
+        for tx_data in &tx_data_list {
+            for (output_index, cell) in tx_data.cells.iter().enumerate() {
+                self.cell_cache.insert(
+                    (tx_data.hash, output_index as i32),
+                    CachedCellInfo {
+                        capacity: cell.capacity,
+                        created_at_block: parsed.number,
+                        lock_script_hash: cell.lock_script_hash.clone(),
+                        data_size: cell.data_size,
+                    },
+                );
             }
         }
 
@@ -5914,6 +5909,7 @@ impl Indexer {
                 (
                     tx_data.hash.as_slice(),
                     parsed.number,
+                    tx_data.block_hash.as_slice(),
                     tx_index as i32,
                     tx_data.version,
                     tx_data.inputs_count,
@@ -5977,7 +5973,7 @@ impl Indexer {
             if !tx_data.is_cellbase {
                 for (input_index, input) in tx_data.inputs.iter().enumerate() {
                     let key = (
-                        input.previous_tx_hash.clone(),
+                        input.previous_tx_hash.to_vec(),
                         input.previous_output_index as i16,
                     );
                     if let Some((_, created_block, _, _)) = input_cell_info.get(&key) {
@@ -6020,7 +6016,7 @@ impl Indexer {
             if !tx_data.is_cellbase {
                 for input in &tx_data.inputs {
                     let key = (
-                        input.previous_tx_hash.clone(),
+                        input.previous_tx_hash.to_vec(),
                         input.previous_output_index as i16,
                     );
                     if let Some((cap, _, lock_hash, _)) = input_cell_info.get(&key) {
@@ -6102,7 +6098,7 @@ impl Indexer {
             .flat_map(|tx| tx.inputs.iter())
             .filter_map(|input| {
                 let key = (
-                    input.previous_tx_hash.clone(),
+                    input.previous_tx_hash.to_vec(),
                     input.previous_output_index as i16,
                 );
                 input_cell_info
@@ -6269,7 +6265,7 @@ impl Indexer {
                                 DaoParser::parse_deposit_block_number(&data_bytes)
                             {
                                 new_dao_outputs.push((
-                                    tx_data.hash.clone(),
+                                    tx_data.hash.to_vec(),
                                     idx as i16,
                                     cell.lock_script_hash.clone(),
                                     cell.capacity,

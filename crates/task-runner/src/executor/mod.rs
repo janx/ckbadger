@@ -6,6 +6,7 @@ use ckbadger_common::{
     StatisticsRebuildConfig, Task, TaskConfig, TaskType, TokenRebuildConfig,
     TxBlockMapRebuildConfig,
 };
+use redis::AsyncCommands;
 use sqlx::PgPool;
 use std::time::Duration;
 use tracing::{error, info, warn};
@@ -33,6 +34,7 @@ pub struct TaskExecutor {
     runner_id: String,
     ckb_rpc_url: String,
     token_labels_path: String,
+    redis_url: Option<String>,
     index_rebuild_parallel: usize,
     cycles_batch_size: i64,
     cycles_concurrent: usize,
@@ -46,6 +48,7 @@ impl TaskExecutor {
         runner_id: String,
         ckb_rpc_url: String,
         token_labels_path: String,
+        redis_url: Option<String>,
         index_rebuild_parallel: usize,
         cycles_batch_size: i64,
         cycles_concurrent: usize,
@@ -57,6 +60,7 @@ impl TaskExecutor {
             runner_id,
             ckb_rpc_url,
             token_labels_path,
+            redis_url,
             index_rebuild_parallel,
             cycles_batch_size,
             cycles_concurrent,
@@ -158,7 +162,18 @@ impl TaskExecutor {
             .task_type_enum()
             .ok_or_else(|| anyhow::anyhow!("Invalid task type: {}", task.task_type))?;
 
-        match task_type {
+        // Tasks that clear deferred flags need Redis sync:status invalidation
+        let clears_deferred = matches!(
+            task_type,
+            TaskType::IndexRebuild
+                | TaskType::ActivitiesRebuild
+                | TaskType::AddressBalancesRebuild
+                | TaskType::TokenRebuild
+                | TaskType::SporeRebuild
+                | TaskType::TxBlockMapRebuild
+        );
+
+        let result = match task_type {
             TaskType::CyclesBackfill => self.execute_cycles_backfill(task).await,
             TaskType::IndexRebuild => self.execute_index_rebuild(task).await,
             TaskType::LabelImport => self.execute_label_import(task).await,
@@ -184,6 +199,35 @@ impl TaskExecutor {
                 "DaoRebuild must be executed by the indexer, not task-runner"
             )),
             TaskType::TxBlockMapRebuild => self.execute_tx_block_map_rebuild(task).await,
+        };
+
+        // Invalidate Redis sync:status cache after tasks that clear deferred flags
+        if result.is_ok() && clears_deferred {
+            self.invalidate_sync_status_cache().await;
+        }
+
+        result
+    }
+
+    /// Delete the Redis sync:status key so the indexer regenerates it with correct deferred state.
+    async fn invalidate_sync_status_cache(&self) {
+        let Some(ref redis_url) = self.redis_url else {
+            warn!("No Redis URL configured, cannot invalidate sync:status cache");
+            return;
+        };
+
+        match redis::Client::open(redis_url.as_str()) {
+            Ok(client) => match client.get_multiplexed_async_connection().await {
+                Ok(mut conn) => {
+                    let result: Result<(), _> = conn.del("sync:status").await;
+                    match result {
+                        Ok(()) => info!("Invalidated Redis sync:status cache"),
+                        Err(e) => warn!("Failed to invalidate Redis sync:status: {}", e),
+                    }
+                }
+                Err(e) => warn!("Failed to connect to Redis for cache invalidation: {}", e),
+            },
+            Err(e) => warn!("Invalid Redis URL for cache invalidation: {}", e),
         }
     }
 

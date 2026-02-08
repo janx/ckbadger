@@ -9,7 +9,7 @@ use axum::{
 use ckbadger_common::dao::{
     is_genesis_special_burn_cell, GENESIS_SPECIAL_BURN_CELL_VIRTUAL_OCCUPIED,
 };
-use ckbadger_common::sync::{SyncStatusData, SYNC_STATUS_REDIS_KEY};
+
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use std::sync::Arc;
@@ -392,18 +392,9 @@ async fn list_live_cells(
 
     if let Some(type_code_bytes) = &type_code_hash_bytes {
         if let Some(lock_bytes) = &lock_hash_bytes {
-            let total: (i64,) = sqlx::query_as(
-                "SELECT COUNT(*) FROM live_cells WHERE lock_script_hash = $1 AND type_code_hash = $2",
-            )
-            .bind(lock_bytes)
-            .bind(type_code_bytes)
-            .fetch_one(&state.pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-
             let rows = sqlx::query_as::<_, LiveCellRow>(
                 r#"
-                SELECT lc.tx_hash, lc.output_index, lc.capacity::TEXT, lc.lock_script_hash, 
+                SELECT lc.tx_hash, lc.output_index, lc.capacity::TEXT, lc.lock_script_hash,
                        lc.type_script_hash, lc.type_code_hash, lc.data_size, lc.created_at_block, lc.lock_args,
                        uc.amount::TEXT
                 FROM live_cells lc
@@ -479,29 +470,21 @@ async fn list_live_cells(
                 )
                 .collect();
 
-            return ok(CursorPaginatedResponse::new(
+            return ok(CursorPaginatedResponse::without_total(
                 cells,
-                total.0,
                 limit,
                 next_cursor,
             ));
         }
     }
 
-    let (total, rows): (i64, Vec<LiveCellRow>) = match (&lock_hash_bytes, &type_hash_bytes) {
+    // For filtered queries, skip expensive COUNT(*) - use without_total
+    // For unfiltered, use pre-aggregated count from Redis sync:status
+    let rows: Vec<LiveCellRow> = match (&lock_hash_bytes, &type_hash_bytes) {
         (Some(lock_bytes), Some(type_bytes)) => {
-            let total: (i64,) = sqlx::query_as(
-                    "SELECT COUNT(*) FROM live_cells WHERE lock_script_hash = $1 AND type_script_hash = $2",
-                )
-                .bind(lock_bytes)
-                .bind(type_bytes)
-                .fetch_one(&state.pool)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?;
-
-            let rows = sqlx::query_as::<_, LiveCellRow>(
+            sqlx::query_as::<_, LiveCellRow>(
                     r#"
-                    SELECT lc.tx_hash, lc.output_index, lc.capacity::TEXT, lc.lock_script_hash, 
+                    SELECT lc.tx_hash, lc.output_index, lc.capacity::TEXT, lc.lock_script_hash,
                            lc.type_script_hash, lc.type_code_hash, lc.data_size, lc.created_at_block, lc.lock_args,
                            uc.amount::TEXT
                     FROM live_cells lc
@@ -519,25 +502,15 @@ async fn list_live_cells(
                 .bind(limit + 1)
                 .fetch_all(&state.pool)
                 .await
-                .map_err(|e| ApiError::internal(e.to_string()))?;
-
-            (total.0, rows)
+                .map_err(|e| ApiError::internal(e.to_string()))?
         }
         (Some(lock_bytes), None) => {
-            let total: (i64,) =
-                sqlx::query_as("SELECT COUNT(*) FROM live_cells WHERE lock_script_hash = $1")
-                    .bind(lock_bytes)
-                    .fetch_one(&state.pool)
-                    .await
-                    .map_err(|e| ApiError::internal(e.to_string()))?;
-
-            let rows = sqlx::query_as::<_, LiveCellRow>(
+            sqlx::query_as::<_, LiveCellRow>(
                     r#"
-                    SELECT lc.tx_hash, lc.output_index, lc.capacity::TEXT, lc.lock_script_hash, 
+                    SELECT lc.tx_hash, lc.output_index, lc.capacity::TEXT, lc.lock_script_hash,
                            lc.type_script_hash, lc.type_code_hash, lc.data_size, lc.created_at_block, lc.lock_args,
-                           uc.amount::TEXT
+                           NULL::TEXT
                     FROM live_cells lc
-                    LEFT JOIN udt_cells uc ON lc.tx_hash = uc.tx_hash AND lc.output_index = uc.output_index
                     WHERE lc.lock_script_hash = $1
                       AND (lc.created_at_block, lc.output_index) < ($2, $3)
                     ORDER BY lc.created_at_block DESC, lc.output_index DESC
@@ -550,21 +523,12 @@ async fn list_live_cells(
                 .bind(limit + 1)
                 .fetch_all(&state.pool)
                 .await
-                .map_err(|e| ApiError::internal(e.to_string()))?;
-
-            (total.0, rows)
+                .map_err(|e| ApiError::internal(e.to_string()))?
         }
         (None, Some(type_bytes)) => {
-            let total: (i64,) =
-                sqlx::query_as("SELECT COUNT(*) FROM live_cells WHERE type_script_hash = $1")
-                    .bind(type_bytes)
-                    .fetch_one(&state.pool)
-                    .await
-                    .map_err(|e| ApiError::internal(e.to_string()))?;
-
-            let rows = sqlx::query_as::<_, LiveCellRow>(
+            sqlx::query_as::<_, LiveCellRow>(
                     r#"
-                    SELECT lc.tx_hash, lc.output_index, lc.capacity::TEXT, lc.lock_script_hash, 
+                    SELECT lc.tx_hash, lc.output_index, lc.capacity::TEXT, lc.lock_script_hash,
                            lc.type_script_hash, lc.type_code_hash, lc.data_size, lc.created_at_block, lc.lock_args,
                            uc.amount::TEXT
                     FROM live_cells lc
@@ -581,30 +545,15 @@ async fn list_live_cells(
                 .bind(limit + 1)
                 .fetch_all(&state.pool)
                 .await
-                .map_err(|e| ApiError::internal(e.to_string()))?;
-
-            (total.0, rows)
+                .map_err(|e| ApiError::internal(e.to_string()))?
         }
         (None, None) => {
-            let total = match state
-                .cache
-                .get::<SyncStatusData>(SYNC_STATUS_REDIS_KEY)
-                .await
-            {
-                Some(status) => status.total_live_cells,
-                None => sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM live_cells")
-                    .fetch_one(&state.pool)
-                    .await
-                    .map_err(|e| ApiError::internal(e.to_string()))?,
-            };
-
-            let rows = sqlx::query_as::<_, LiveCellRow>(
+            sqlx::query_as::<_, LiveCellRow>(
                     r#"
-                    SELECT lc.tx_hash, lc.output_index, lc.capacity::TEXT, lc.lock_script_hash, 
+                    SELECT lc.tx_hash, lc.output_index, lc.capacity::TEXT, lc.lock_script_hash,
                            lc.type_script_hash, lc.type_code_hash, lc.data_size, lc.created_at_block, lc.lock_args,
-                           uc.amount::TEXT
+                           NULL::TEXT
                     FROM live_cells lc
-                    LEFT JOIN udt_cells uc ON lc.tx_hash = uc.tx_hash AND lc.output_index = uc.output_index
                     WHERE (lc.created_at_block, lc.output_index) < ($1, $2)
                     ORDER BY lc.created_at_block DESC, lc.output_index DESC
                     LIMIT $3
@@ -615,9 +564,7 @@ async fn list_live_cells(
                 .bind(limit + 1)
                 .fetch_all(&state.pool)
                 .await
-                .map_err(|e| ApiError::internal(e.to_string()))?;
-
-            (total, rows)
+                .map_err(|e| ApiError::internal(e.to_string()))?
         }
     };
 
@@ -674,9 +621,8 @@ async fn list_live_cells(
         )
         .collect();
 
-    ok(CursorPaginatedResponse::new(
+    ok(CursorPaginatedResponse::without_total(
         cells,
-        total,
         limit,
         next_cursor,
     ))
@@ -983,13 +929,8 @@ async fn get_address(
         .map(|(b, l, t)| (b, l as i64, t))
         .unwrap_or(("0".to_string(), 0, 0));
 
-    let recent_activities_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM activities WHERE from_lock_hash = $1 OR to_lock_hash = $1",
-    )
-    .bind(&lock_hash)
-    .fetch_one(&state.pool)
-    .await
-    .unwrap_or(0);
+    // Use transactions_count from address_balances (pre-aggregated) instead of expensive COUNT on activities
+    let recent_activities_count = transactions_count;
 
     ok(AddressResponse {
         lock_script_hash: format!("0x{}", hex::encode(&lock_hash)),
@@ -1459,27 +1400,6 @@ async fn get_address_transactions(
     let cursor = params.cursor.as_ref().and_then(|c| decode_cursor(c));
     let (cursor_block, cursor_idx) = cursor.unwrap_or((i64::MAX, i32::MAX));
 
-    let sync_status = state.cache.get_sync_status(&state.pool).await;
-
-    let total: (i64,) = if sync_status.address_balances_deferred {
-        sqlx::query_as(
-            "SELECT COUNT(*) FROM activities WHERE activity_category = 'ckb' AND (from_lock_hash = $1 OR to_lock_hash = $1)",
-        )
-        .bind(&lock_hash)
-        .fetch_one(&state.pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-    } else {
-        sqlx::query_as(
-            "SELECT COALESCE(transactions_count, 0) FROM address_balances WHERE lock_script_hash = $1",
-        )
-        .bind(&lock_hash)
-        .fetch_optional(&state.pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .unwrap_or((0,))
-    };
-
     // Query activities table for CKB transfers involving this address
     // Determine direction based on from/to lock hash
     type ActivityRow = (
@@ -1564,9 +1484,8 @@ async fn get_address_transactions(
         )
         .collect();
 
-    ok(CursorPaginatedResponse::new(
+    ok(CursorPaginatedResponse::without_total(
         txs,
-        total.0,
         limit,
         next_cursor,
     ))
@@ -1580,9 +1499,8 @@ async fn get_address_tokens(
     let sync_status = state.cache.get_sync_status(&state.pool).await;
 
     if sync_status.token_deferred {
-        return ok(CursorPaginatedResponse::new(
+        return ok(CursorPaginatedResponse::without_total(
             Vec::new(),
-            0,
             params.limit.clamp(1, 100),
             None,
         ));
@@ -1609,14 +1527,6 @@ async fn get_address_tokens(
             }
         })
         .unwrap_or_else(|| (String::new(), i64::MAX));
-
-    let total: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM token_balances WHERE lock_script_hash = $1 AND balance > 0",
-    )
-    .bind(&lock_hash)
-    .fetch_one(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
 
     type TokenBalanceRow = (
         i64,
@@ -1695,9 +1605,8 @@ async fn get_address_tokens(
         )
         .collect();
 
-    ok(CursorPaginatedResponse::new(
+    ok(CursorPaginatedResponse::without_total(
         tokens,
-        total.0,
         limit,
         next_cursor,
     ))
@@ -1803,26 +1712,6 @@ async fn get_address_asset_transfers(
     );
 
     let base_condition = "(from_lock_hash = $1 OR to_lock_hash = $1) AND activity_category IN ('token', 'dob', 'nft', 'dao')";
-
-    let total: i64 = if let Some(ref cat) = params.category {
-        let query = format!(
-            "SELECT COUNT(*) FROM activities WHERE {} AND activity_category = $2",
-            base_condition
-        );
-        sqlx::query_scalar(&query)
-            .bind(&lock_hash)
-            .bind(cat)
-            .fetch_one(&state.pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?
-    } else {
-        let query = format!("SELECT COUNT(*) FROM activities WHERE {}", base_condition);
-        sqlx::query_scalar(&query)
-            .bind(&lock_hash)
-            .fetch_one(&state.pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?
-    };
 
     let rows: Vec<ActivityRow> = if let Some(ref cat) = params.category {
         let query = format!(
@@ -1988,9 +1877,8 @@ async fn get_address_asset_transfers(
         )
         .collect();
 
-    ok(CursorPaginatedResponse::new(
+    ok(CursorPaginatedResponse::without_total(
         transfers,
-        total,
         limit,
         next_cursor,
     ))

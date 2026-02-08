@@ -37,6 +37,7 @@ type CellDepData<'a> = (&'a [u8], i64, i16, &'a ParsedCellDep);
 type TxData<'a> = (
     &'a [u8],      // hash
     i64,           // block_number
+    &'a [u8],      // block_hash
     i32,           // tx_index
     i32,           // version
     i16,           // inputs_count
@@ -194,14 +195,14 @@ impl ParallelCopyRouter {
                 for tx in partition_txs {
                     writer.add_transaction(
                         tx.0, tx.1, tx.2, tx.3, tx.4, tx.5, tx.6, tx.7, tx.8, tx.9, tx.10, tx.11,
-                        tx.12, tx.13, tx.14, tx.15,
+                        tx.12, tx.13, tx.14, tx.15, tx.16,
                     );
                 }
 
                 let data = writer.finish();
                 execute_copy(
                     conn.as_ref(),
-                    "COPY transactions (hash, block_number, tx_index, version, inputs_count, outputs_count, witnesses_count, cell_deps_count, header_deps_count, total_input_capacity, total_output_capacity, fee, tx_size, cycles, is_cellbase, timestamp) FROM STDIN WITH (FORMAT BINARY)",
+                    "COPY transactions (hash, block_number, block_hash, tx_index, version, inputs_count, outputs_count, witnesses_count, cell_deps_count, header_deps_count, total_input_capacity, total_output_capacity, fee, tx_size, cycles, is_cellbase, timestamp) FROM STDIN WITH (FORMAT BINARY)",
                     data,
                 ).await
             };

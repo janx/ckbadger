@@ -179,35 +179,6 @@ async fn list_activities(
         .and_then(|c| decode_activity_cursor(c));
     let (cursor_block, cursor_tx, cursor_idx) = cursor.unwrap_or((i64::MAX, i32::MAX, i16::MAX));
 
-    let total: i64 = match (&params.activity_type, &params.activity_category) {
-        (Some(typ), Some(cat)) => sqlx::query_scalar(
-            "SELECT COUNT(*) FROM activities WHERE activity_type = $1 AND activity_category = $2",
-        )
-        .bind(typ)
-        .bind(cat)
-        .fetch_one(&state.pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?,
-        (Some(typ), None) => {
-            sqlx::query_scalar("SELECT COUNT(*) FROM activities WHERE activity_type = $1")
-                .bind(typ)
-                .fetch_one(&state.pool)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?
-        }
-        (None, Some(cat)) => {
-            sqlx::query_scalar("SELECT COUNT(*) FROM activities WHERE activity_category = $1")
-                .bind(cat)
-                .fetch_one(&state.pool)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?
-        }
-        (None, None) => sqlx::query_scalar("SELECT COUNT(*) FROM activities")
-            .fetch_one(&state.pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?,
-    };
-
     let rows: Vec<ActivityRow> = match (&params.activity_type, &params.activity_category) {
         (Some(typ), Some(cat)) => sqlx::query_as(
             r#"
@@ -301,9 +272,8 @@ async fn list_activities(
 
     let data: Vec<ActivityResponse> = rows.into_iter().map(row_to_response).collect();
 
-    ok(CursorPaginatedResponse::new(
+    ok(CursorPaginatedResponse::without_total(
         data,
-        total,
         limit,
         next_cursor,
     ))
@@ -375,54 +345,6 @@ async fn get_address_activities(
         "in" => "to_lock_hash = $1",
         "out" => "from_lock_hash = $1",
         _ => "(from_lock_hash = $1 OR to_lock_hash = $1)",
-    };
-
-    let total: i64 = match (&params.activity_type, &params.activity_category) {
-        (Some(typ), Some(cat)) => {
-            let query = format!(
-                "SELECT COUNT(*) FROM activities WHERE {} AND activity_type = $2 AND activity_category = $3",
-                base_condition
-            );
-            sqlx::query_scalar(&query)
-                .bind(&lock_hash)
-                .bind(typ)
-                .bind(cat)
-                .fetch_one(&state.pool)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?
-        }
-        (Some(typ), None) => {
-            let query = format!(
-                "SELECT COUNT(*) FROM activities WHERE {} AND activity_type = $2",
-                base_condition
-            );
-            sqlx::query_scalar(&query)
-                .bind(&lock_hash)
-                .bind(typ)
-                .fetch_one(&state.pool)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?
-        }
-        (None, Some(cat)) => {
-            let query = format!(
-                "SELECT COUNT(*) FROM activities WHERE {} AND activity_category = $2",
-                base_condition
-            );
-            sqlx::query_scalar(&query)
-                .bind(&lock_hash)
-                .bind(cat)
-                .fetch_one(&state.pool)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?
-        }
-        (None, None) => {
-            let query = format!("SELECT COUNT(*) FROM activities WHERE {}", base_condition);
-            sqlx::query_scalar(&query)
-                .bind(&lock_hash)
-                .fetch_one(&state.pool)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?
-        }
     };
 
     let rows: Vec<ActivityRow> = match (&params.activity_type, &params.activity_category) {
@@ -539,9 +461,8 @@ async fn get_address_activities(
 
     let data: Vec<ActivityResponse> = rows.into_iter().map(row_to_response).collect();
 
-    ok(CursorPaginatedResponse::new(
+    ok(CursorPaginatedResponse::without_total(
         data,
-        total,
         limit,
         next_cursor,
     ))

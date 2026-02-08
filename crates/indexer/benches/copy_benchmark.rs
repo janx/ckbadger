@@ -28,7 +28,7 @@ fn create_test_cell() -> ParsedCell {
 
 fn create_test_input() -> ParsedInput {
     ParsedInput {
-        previous_tx_hash: vec![0u8; 32],
+        previous_tx_hash: [0u8; 32],
         previous_output_index: 0,
         since: 0,
     }
@@ -73,6 +73,7 @@ fn benchmark_transactions_writer(c: &mut Criterion) {
                 writer.add_transaction(
                     black_box(&tx_hash),
                     i,
+                    &[0u8; 32],
                     0,
                     0,
                     2,

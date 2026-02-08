@@ -491,7 +491,7 @@ export default function DaoPage() {
                 </div>
                 <div className="flex items-center justify-between border-t border-slate-800 px-4 py-3">
                   <span className="font-mono text-sm text-slate-500">
-                    Total: {deposits.total.toLocaleString()} deposits
+                    {deposits.total != null && `Total: ${deposits.total.toLocaleString()} deposits`}
                   </span>
                   <div className="flex gap-2">
                     <button

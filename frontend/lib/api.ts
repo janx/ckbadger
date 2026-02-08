@@ -11,7 +11,7 @@ interface PaginatedResponse<T> {
 
 interface CursorPaginatedResponse<T> {
   data: T[];
-  total: number;
+  total?: number;
   limit: number;
   hasMore: boolean;
   nextCursor: string | null;

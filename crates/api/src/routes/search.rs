@@ -75,13 +75,29 @@ async fn search(
 
     if hash_query.len() == 66 {
         if let Ok(hash_bytes) = hex::decode(&hash_query[2..]) {
-            let tx = sqlx::query_as::<_, (i64,)>(
+            let tx_fut = sqlx::query_as::<_, (i64,)>(
                 "SELECT block_number FROM transactions WHERE hash = $1",
             )
             .bind(&hash_bytes)
-            .fetch_optional(&state.pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+            .fetch_optional(&state.pool);
+
+            let block_fut =
+                sqlx::query_as::<_, (i64,)>("SELECT number FROM blocks WHERE hash = $1")
+                    .bind(&hash_bytes)
+                    .fetch_optional(&state.pool);
+
+            let cell_count_fut = sqlx::query_as::<_, (i64,)>(
+                "SELECT COUNT(*) FROM cells WHERE lock_script_hash = $1",
+            )
+            .bind(&hash_bytes)
+            .fetch_one(&state.pool);
+
+            let (tx_result, block_result, cell_count_result) =
+                tokio::join!(tx_fut, block_fut, cell_count_fut);
+
+            let tx = tx_result.map_err(|e| ApiError::internal(e.to_string()))?;
+            let block = block_result.map_err(|e| ApiError::internal(e.to_string()))?;
+            let cell_count = cell_count_result.map_err(|e| ApiError::internal(e.to_string()))?;
 
             if let Some((block_num,)) = tx {
                 results.push(SearchResult {
@@ -92,12 +108,6 @@ async fn search(
                 });
             }
 
-            let block = sqlx::query_as::<_, (i64,)>("SELECT number FROM blocks WHERE hash = $1")
-                .bind(&hash_bytes)
-                .fetch_optional(&state.pool)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?;
-
             if let Some((block_num,)) = block {
                 results.push(SearchResult {
                     result_type: "block".to_string(),
@@ -106,14 +116,6 @@ async fn search(
                     url: format!("/blocks/{}", block_num),
                 });
             }
-
-            let cell_count = sqlx::query_as::<_, (i64,)>(
-                "SELECT COUNT(*) FROM cells WHERE lock_script_hash = $1",
-            )
-            .bind(&hash_bytes)
-            .fetch_one(&state.pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
 
             if cell_count.0 > 0 {
                 results.push(SearchResult {

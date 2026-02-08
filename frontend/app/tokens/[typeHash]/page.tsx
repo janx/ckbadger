@@ -309,7 +309,7 @@ export default function TokenDetailPage() {
               {holders?.data?.length ? (
                 <TerminalPanelFooter className="flex items-center justify-between">
                   <span className="text-sm text-slate-500">
-                    Total: {formatNumber(holders.total)} holders
+                    {holders.total != null && `Total: ${formatNumber(holders.total)} holders`}
                   </span>
                   <div className="flex gap-2">
                     <button
@@ -409,7 +409,7 @@ export default function TokenDetailPage() {
               {transfers?.data?.length ? (
                 <TerminalPanelFooter className="flex items-center justify-between">
                   <span className="text-sm text-slate-500">
-                    Total: {formatNumber(transfers.total)} transfers
+                    {transfers.total != null && `Total: ${formatNumber(transfers.total)} transfers`}
                   </span>
                   <div className="flex gap-2">
                     <button

@@ -151,19 +151,13 @@ async fn list_deposits(
         Option<String>,
     );
 
-    let (total, rows) = if let Some(status) = params.status {
-        let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM dao_deposits WHERE status = $1")
-            .bind(status)
-            .fetch_one(&state.pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-
-        let rows = sqlx::query_as::<_, DaoRow>(
+    let rows = if let Some(status) = params.status {
+        sqlx::query_as::<_, DaoRow>(
             r#"
-            SELECT d.id, d.tx_hash, d.output_index, d.lock_script_hash, 
+            SELECT d.id, d.tx_hash, d.output_index, d.lock_script_hash,
                    c.lock_code_hash, c.lock_hash_type, c.lock_args,
                    CAST(d.capacity AS TEXT), d.deposit_block_number, d.deposit_timestamp,
-                   d.status, d.withdraw_request_block, d.withdraw_request_timestamp, 
+                   d.status, d.withdraw_request_block, d.withdraw_request_timestamp,
                    d.withdraw_block, d.withdraw_timestamp, CAST(d.compensation AS TEXT)
             FROM dao_deposits d
             LEFT JOIN cells c ON d.tx_hash = c.tx_hash AND d.output_index = c.output_index
@@ -177,21 +171,14 @@ async fn list_deposits(
         .bind(limit + 1)
         .fetch_all(&state.pool)
         .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-
-        (total.0, rows)
+        .map_err(|e| ApiError::internal(e.to_string()))?
     } else {
-        let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM dao_deposits")
-            .fetch_one(&state.pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-
-        let rows = sqlx::query_as::<_, DaoRow>(
+        sqlx::query_as::<_, DaoRow>(
             r#"
             SELECT d.id, d.tx_hash, d.output_index, d.lock_script_hash,
                    c.lock_code_hash, c.lock_hash_type, c.lock_args,
                    CAST(d.capacity AS TEXT), d.deposit_block_number, d.deposit_timestamp,
-                   d.status, d.withdraw_request_block, d.withdraw_request_timestamp, 
+                   d.status, d.withdraw_request_block, d.withdraw_request_timestamp,
                    d.withdraw_block, d.withdraw_timestamp, CAST(d.compensation AS TEXT)
             FROM dao_deposits d
             LEFT JOIN cells c ON d.tx_hash = c.tx_hash AND d.output_index = c.output_index
@@ -204,9 +191,7 @@ async fn list_deposits(
         .bind(limit + 1)
         .fetch_all(&state.pool)
         .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-
-        (total.0, rows)
+        .map_err(|e| ApiError::internal(e.to_string()))?
     };
 
     let has_more = rows.len() as i64 > limit;
@@ -267,9 +252,8 @@ async fn list_deposits(
         )
         .collect();
 
-    ok(CursorPaginatedResponse::new(
+    ok(CursorPaginatedResponse::without_total(
         deposits,
-        total,
         limit,
         next_cursor,
     ))
@@ -308,13 +292,6 @@ async fn get_deposits_by_address(
         .as_ref()
         .and_then(|c| decode_cursor_single(c))
         .unwrap_or(i64::MAX);
-
-    let total: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM dao_deposits WHERE lock_script_hash = $1")
-            .bind(&hash)
-            .fetch_one(&state.pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let rows = sqlx::query_as::<_, DaoRow>(
         r#"
@@ -395,9 +372,8 @@ async fn get_deposits_by_address(
         )
         .collect();
 
-    ok(CursorPaginatedResponse::new(
+    ok(CursorPaginatedResponse::without_total(
         deposits,
-        total.0,
         limit,
         next_cursor,
     ))

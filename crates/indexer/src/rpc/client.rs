@@ -3,7 +3,7 @@ use reqwest::Client;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-pub use ckbadger_common::{parse_capacity, parse_hex_to_bytes, parse_hex_u32};
+pub use ckbadger_common::{parse_capacity, parse_hex_to_bytes, parse_hex_to_hash, parse_hex_u32};
 
 use super::types::*;
 

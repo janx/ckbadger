@@ -128,9 +128,8 @@ async fn list_tokens(
     let sync_status = state.cache.get_sync_status(&state.pool).await;
 
     if sync_status.token_deferred {
-        return ok(CursorPaginatedResponse::new(
+        return ok(CursorPaginatedResponse::without_total(
             Vec::new(),
-            0,
             params.limit.clamp(1, 100),
             None,
         ));
@@ -163,25 +162,16 @@ async fn list_tokens(
         .as_ref()
         .map(|s| format!("%{}%", s.to_lowercase()));
 
-    let (total, rows): (i64, Vec<TokenRow>) = match (
+    let rows: Vec<TokenRow> = match (
         &params.standard,
         &search_hash,
         &search_pattern,
     ) {
         (Some(standard), Some(hash), _) => {
-            let total: (i64,) = sqlx::query_as(
-                "SELECT COUNT(*) FROM tokens WHERE standard = $1 AND type_script_hash = $2",
-            )
-            .bind(standard)
-            .bind(hash)
-            .fetch_one(&state.pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-
-            let rows = sqlx::query_as::<_, TokenRow>(
+            sqlx::query_as::<_, TokenRow>(
                 r#"
                 SELECT id, type_script_hash, type_code_hash, type_hash_type, type_args, standard,
-                       name, symbol, decimals, description, icon_url, 
+                       name, symbol, decimals, description, icon_url,
                        COALESCE(published, false) AS published, COALESCE(famous, false) AS famous,
                        tags, udt_type, manager, email, operator_website,
                        total_supply::text AS total_supply, holders_count, transfers_count, transfers_24h
@@ -199,21 +189,10 @@ async fn list_tokens(
             .bind(limit + 1)
             .fetch_all(&state.pool)
             .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-
-            (total.0, rows)
+            .map_err(|e| ApiError::internal(e.to_string()))?
         }
         (Some(standard), None, Some(pattern)) => {
-            let total: (i64,) = sqlx::query_as(
-                "SELECT COUNT(*) FROM tokens WHERE standard = $1 AND (LOWER(name) LIKE $2 OR LOWER(symbol) LIKE $2)",
-            )
-            .bind(standard)
-            .bind(pattern)
-            .fetch_one(&state.pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-
-            let rows = sqlx::query_as::<_, TokenRow>(
+            sqlx::query_as::<_, TokenRow>(
                 r#"
                 SELECT id, type_script_hash, type_code_hash, type_hash_type, type_args, standard,
                        name, symbol, decimals, description, icon_url,
@@ -234,18 +213,10 @@ async fn list_tokens(
             .bind(limit + 1)
             .fetch_all(&state.pool)
             .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-
-            (total.0, rows)
+            .map_err(|e| ApiError::internal(e.to_string()))?
         }
         (Some(standard), None, None) => {
-            let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM tokens WHERE standard = $1")
-                .bind(standard)
-                .fetch_one(&state.pool)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?;
-
-            let rows = sqlx::query_as::<_, TokenRow>(
+            sqlx::query_as::<_, TokenRow>(
                 r#"
                 SELECT id, type_script_hash, type_code_hash, type_hash_type, type_args, standard,
                        name, symbol, decimals, description, icon_url,
@@ -265,19 +236,10 @@ async fn list_tokens(
             .bind(limit + 1)
             .fetch_all(&state.pool)
             .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-
-            (total.0, rows)
+            .map_err(|e| ApiError::internal(e.to_string()))?
         }
         (None, Some(hash), _) => {
-            let total: (i64,) =
-                sqlx::query_as("SELECT COUNT(*) FROM tokens WHERE type_script_hash = $1")
-                    .bind(hash)
-                    .fetch_one(&state.pool)
-                    .await
-                    .map_err(|e| ApiError::internal(e.to_string()))?;
-
-            let rows = sqlx::query_as::<_, TokenRow>(
+            sqlx::query_as::<_, TokenRow>(
                 r#"
                 SELECT id, type_script_hash, type_code_hash, type_hash_type, type_args, standard,
                        name, symbol, decimals, description, icon_url,
@@ -297,20 +259,10 @@ async fn list_tokens(
             .bind(limit + 1)
             .fetch_all(&state.pool)
             .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-
-            (total.0, rows)
+            .map_err(|e| ApiError::internal(e.to_string()))?
         }
         (None, None, Some(pattern)) => {
-            let total: (i64,) = sqlx::query_as(
-                "SELECT COUNT(*) FROM tokens WHERE LOWER(name) LIKE $1 OR LOWER(symbol) LIKE $1",
-            )
-            .bind(pattern)
-            .fetch_one(&state.pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-
-            let rows = sqlx::query_as::<_, TokenRow>(
+            sqlx::query_as::<_, TokenRow>(
                 r#"
                 SELECT id, type_script_hash, type_code_hash, type_hash_type, type_args, standard,
                        name, symbol, decimals, description, icon_url,
@@ -330,17 +282,10 @@ async fn list_tokens(
             .bind(limit + 1)
             .fetch_all(&state.pool)
             .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-
-            (total.0, rows)
+            .map_err(|e| ApiError::internal(e.to_string()))?
         }
         (None, None, None) => {
-            let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM tokens")
-                .fetch_one(&state.pool)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?;
-
-            let rows = sqlx::query_as::<_, TokenRow>(
+            sqlx::query_as::<_, TokenRow>(
                 r#"
                 SELECT id, type_script_hash, type_code_hash, type_hash_type, type_args, standard,
                        name, symbol, decimals, description, icon_url,
@@ -359,9 +304,7 @@ async fn list_tokens(
             .bind(limit + 1)
             .fetch_all(&state.pool)
             .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-
-            (total.0, rows)
+            .map_err(|e| ApiError::internal(e.to_string()))?
         }
     };
 
@@ -402,9 +345,8 @@ async fn list_tokens(
         })
         .collect();
 
-    ok(CursorPaginatedResponse::new(
+    ok(CursorPaginatedResponse::without_total(
         tokens,
-        total,
         limit,
         next_cursor,
     ))
@@ -477,9 +419,8 @@ async fn get_token_holders(
     let sync_status = state.cache.get_sync_status(&state.pool).await;
 
     if sync_status.token_deferred {
-        return ok(CursorPaginatedResponse::new(
+        return ok(CursorPaginatedResponse::without_total(
             Vec::new(),
-            0,
             params.limit.clamp(1, 100),
             None,
         ));
@@ -618,9 +559,8 @@ async fn get_token_transfers(
     let sync_status = state.cache.get_sync_status(&state.pool).await;
 
     if sync_status.token_deferred {
-        return ok(CursorPaginatedResponse::new(
+        return ok(CursorPaginatedResponse::without_total(
             Vec::new(),
-            0,
             params.limit.clamp(1, 100),
             None,
         ));

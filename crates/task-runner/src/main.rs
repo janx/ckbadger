@@ -19,6 +19,9 @@ struct Args {
     #[arg(long, env = "TOKEN_LABELS_PATH", default_value = "docs/token-labels")]
     token_labels_path: String,
 
+    #[arg(long, env = "REDIS_URL")]
+    redis_url: Option<String>,
+
     #[arg(long, default_value = "10")]
     index_rebuild_parallel: usize,
 
@@ -70,6 +73,7 @@ async fn main() -> Result<()> {
         runner_id,
         args.ckb_rpc_url,
         args.token_labels_path,
+        args.redis_url,
         args.index_rebuild_parallel,
         args.cycles_batch_size,
         args.cycles_concurrent,

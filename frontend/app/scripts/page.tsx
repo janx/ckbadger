@@ -184,7 +184,7 @@ export default function ScriptsPage() {
           {data && data.data?.length > 0 && (
             <TerminalPanelFooter className="flex items-center justify-between">
               <span className="text-sm text-slate-500">
-                Total: {formatNumber(data.total)} scripts
+                {data.total != null && `Total: ${formatNumber(data.total)} scripts`}
               </span>
               <div className="flex gap-2">
                 <button

@@ -115,7 +115,7 @@ export default function TransactionsPage() {
           {data && (
             <TerminalPanelFooter className="flex items-center justify-between">
               <span className="text-sm text-slate-500">
-                Total: {data.total.toLocaleString()} transactions
+                {data.total != null && `Total: ${data.total.toLocaleString()} transactions`}
               </span>
               <div className="flex gap-2">
                 <button

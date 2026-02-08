@@ -10,36 +10,40 @@ const CHART_CACHE_TTL: Duration = Duration::from_secs(3600);
 pub async fn warmup_chart_caches(state: Arc<AppState>) {
     info!("Starting cache warmup for charts...");
 
-    macro_rules! warmup {
+    macro_rules! run_warmup {
         ($key:expr, $fn:ident) => {
-            if state.cache.get::<serde_json::Value>($key).await.is_none() {
-                match $fn(&state).await {
-                    Ok(_) => info!("Warmed up cache: {}", $key),
-                    Err(e) => tracing::warn!("Failed to warmup {}: {}", $key, e),
+            async {
+                if state.cache.get::<serde_json::Value>($key).await.is_none() {
+                    match $fn(&state).await {
+                        Ok(_) => info!("Warmed up cache: {}", $key),
+                        Err(e) => tracing::warn!("Failed to warmup {}: {}", $key, e),
+                    }
                 }
             }
         };
     }
 
-    warmup!("chart:average-block-time", warmup_average_block_time);
-    warmup!("chart:hash-rate", warmup_hash_rate);
-    warmup!("chart:difficulty", warmup_difficulty);
-    warmup!("chart:uncle-rate", warmup_uncle_rate);
-    warmup!(
-        "chart:block-time-distribution",
-        warmup_block_time_distribution
+    tokio::join!(
+        run_warmup!("chart:average-block-time", warmup_average_block_time),
+        run_warmup!("chart:hash-rate", warmup_hash_rate),
+        run_warmup!("chart:difficulty", warmup_difficulty),
+        run_warmup!("chart:uncle-rate", warmup_uncle_rate),
+        run_warmup!(
+            "chart:block-time-distribution",
+            warmup_block_time_distribution
+        ),
+        run_warmup!(
+            "chart:epoch-time-distribution",
+            warmup_epoch_time_distribution
+        ),
+        run_warmup!("chart:epoch-time-length", warmup_epoch_time_length),
+        run_warmup!(
+            "chart:miner-address-distribution",
+            warmup_miner_distribution
+        ),
+        run_warmup!("chart:total-supply", warmup_total_supply),
+        run_warmup!("chart:secondary-issuance", warmup_secondary_issuance),
     );
-    warmup!(
-        "chart:epoch-time-distribution",
-        warmup_epoch_time_distribution
-    );
-    warmup!("chart:epoch-time-length", warmup_epoch_time_length);
-    warmup!(
-        "chart:miner-address-distribution",
-        warmup_miner_distribution
-    );
-    warmup!("chart:total-supply", warmup_total_supply);
-    warmup!("chart:secondary-issuance", warmup_secondary_issuance);
 
     info!("Cache warmup completed");
 }
@@ -488,4 +492,38 @@ fn compact_to_difficulty(compact: i64) -> u64 {
     };
 
     difficulty as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_compact_to_difficulty_genesis() {
+        // Genesis compact target: 0x20010000
+        let difficulty = compact_to_difficulty(0x20010000);
+        assert_eq!(difficulty, 1);
+    }
+
+    #[test]
+    fn test_compact_to_difficulty_higher() {
+        // Halving mantissa doubles difficulty
+        let d1 = compact_to_difficulty(0x20010000);
+        let d2 = compact_to_difficulty(0x20008000);
+        assert_eq!(d2, d1 * 2);
+    }
+
+    #[test]
+    fn test_compact_to_difficulty_zero_mantissa() {
+        assert_eq!(compact_to_difficulty(0x20000000), 0);
+    }
+
+    #[test]
+    fn test_compact_to_difficulty_lower_exponent() {
+        // Lower exponent = higher difficulty
+        let d_high_exp = compact_to_difficulty(0x20010000);
+        let d_low_exp = compact_to_difficulty(0x1f010000);
+        assert!(d_low_exp > d_high_exp);
+        assert_eq!(d_low_exp, d_high_exp * 256);
+    }
 }

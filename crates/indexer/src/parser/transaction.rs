@@ -1,7 +1,7 @@
-use crate::rpc::{parse_hex_to_bytes, parse_hex_u32, TransactionView};
+use crate::rpc::{parse_hex_to_bytes, parse_hex_to_hash, parse_hex_u32, TransactionView};
 
 pub struct ParsedTransaction {
-    pub hash: Vec<u8>,
+    pub hash: [u8; 32],
     pub version: i32,
     pub inputs_count: i32,
     pub outputs_count: i32,
@@ -13,13 +13,13 @@ pub struct ParsedTransaction {
 }
 
 pub struct ParsedInput {
-    pub previous_tx_hash: Vec<u8>,
+    pub previous_tx_hash: [u8; 32],
     pub previous_output_index: i32,
     pub since: i64,
 }
 
 pub struct ParsedCellDep {
-    pub out_point_tx_hash: Vec<u8>,
+    pub out_point_tx_hash: [u8; 32],
     pub out_point_index: i16,
     pub dep_type: i16,
 }
@@ -34,7 +34,7 @@ impl TransactionParser {
         });
 
         ParsedTransaction {
-            hash: parse_hex_to_bytes(&tx.hash),
+            hash: parse_hex_to_hash(&tx.hash),
             version: parse_hex_u32(&tx.version) as i32,
             inputs_count: tx.inputs.len() as i32,
             outputs_count: tx.outputs.len() as i32,
@@ -116,7 +116,7 @@ impl TransactionParser {
         tx.inputs
             .iter()
             .map(|input| ParsedInput {
-                previous_tx_hash: parse_hex_to_bytes(&input.previous_output.tx_hash),
+                previous_tx_hash: parse_hex_to_hash(&input.previous_output.tx_hash),
                 previous_output_index: parse_hex_u32(&input.previous_output.index) as i32,
                 since: Self::parse_since(&input.since),
             })
@@ -127,7 +127,7 @@ impl TransactionParser {
         tx.cell_deps
             .iter()
             .map(|cell_dep| ParsedCellDep {
-                out_point_tx_hash: parse_hex_to_bytes(&cell_dep.out_point.tx_hash),
+                out_point_tx_hash: parse_hex_to_hash(&cell_dep.out_point.tx_hash),
                 out_point_index: parse_hex_u32(&cell_dep.out_point.index) as i16,
                 dep_type: match cell_dep.dep_type.as_str() {
                     "dep_group" => 1,

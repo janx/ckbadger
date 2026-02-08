@@ -1805,7 +1805,7 @@ async fn test_address_tokens_empty(pool: sqlx::PgPool) {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
     assert!(json["data"].as_array().unwrap().is_empty());
-    assert_eq!(json["total"], 0);
+    assert!(json.get("total").is_none() || json["total"].is_null());
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
@@ -1865,7 +1865,7 @@ async fn test_address_tokens_with_data(pool: sqlx::PgPool) {
         .to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-    assert_eq!(json["total"], 1);
+    assert!(json.get("total").is_none() || json["total"].is_null());
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 1);
     assert_eq!(data[0]["symbol"], "TEST");
@@ -1939,7 +1939,7 @@ async fn test_live_cells_combined_lock_and_type_filter(pool: sqlx::PgPool) {
         .to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-    assert_eq!(json["total"], 1);
+    assert!(json.get("total").is_none() || json["total"].is_null());
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 1);
     assert_eq!(
@@ -1996,7 +1996,7 @@ async fn test_live_cells_lock_only_filter(pool: sqlx::PgPool) {
         .to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-    assert_eq!(json["total"], 2);
+    assert!(json.get("total").is_none() || json["total"].is_null());
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 2);
 }
@@ -2052,7 +2052,7 @@ async fn test_live_cells_type_only_filter(pool: sqlx::PgPool) {
         .to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-    assert_eq!(json["total"], 2);
+    assert!(json.get("total").is_none() || json["total"].is_null());
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 2);
 }
@@ -2342,7 +2342,7 @@ async fn test_get_address_asset_transfers_empty(pool: sqlx::PgPool) {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-    assert_eq!(json["total"], 0);
+    assert!(json.get("total").is_none() || json["total"].is_null());
     assert!(json["data"].as_array().unwrap().is_empty());
 }
 
@@ -2400,7 +2400,7 @@ async fn test_get_address_asset_transfers_with_data(pool: sqlx::PgPool) {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-    assert_eq!(json["total"], 1);
+    assert!(json.get("total").is_none() || json["total"].is_null());
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 1);
     assert_eq!(data[0]["assetCategory"], "token");
@@ -2491,7 +2491,7 @@ async fn test_get_address_asset_transfers_category_filter(pool: sqlx::PgPool) {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-    assert_eq!(json["total"], 1);
+    assert!(json.get("total").is_none() || json["total"].is_null());
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 1);
     assert_eq!(data[0]["assetCategory"], "token");
@@ -2643,7 +2643,7 @@ async fn test_live_cells_type_code_hash_filter(pool: sqlx::PgPool) {
         .to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-    assert_eq!(json["total"], 2);
+    assert!(json.get("total").is_none() || json["total"].is_null());
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 2);
     assert!(data[0]["typeCodeHash"]

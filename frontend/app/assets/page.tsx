@@ -193,7 +193,9 @@ function AssetTable({ assetType, search }: { assetType: AssetTab; search: string
         </TerminalRow>
       ))}
       <TerminalPanelFooter className="flex items-center justify-between">
-        <span className="text-sm text-slate-500">Total: {formatNumber(data.total)} items</span>
+        <span className="text-sm text-slate-500">
+          {data.total != null && `Total: ${formatNumber(data.total)} items`}
+        </span>
         <div className="flex gap-2">
           <button
             onClick={handlePrevPage}
