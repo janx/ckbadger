@@ -74,6 +74,7 @@ impl RedisCache {
 }
 
 #[cfg(test)]
+#[cfg(not(feature = "redis-cache"))]
 mod tests {
     use super::*;
 
@@ -84,7 +85,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(not(feature = "redis-cache"))]
     async fn test_stub_cache_get_returns_none() {
         let cache = RedisCache::new("redis://localhost:6379").await.unwrap();
         let result: Option<String> = cache.get("nonexistent").await;
@@ -92,7 +92,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(not(feature = "redis-cache"))]
     async fn test_stub_cache_hgetall_returns_empty() {
         let cache = RedisCache::new("redis://localhost:6379").await.unwrap();
         let result: Vec<String> = cache.hgetall("nonexistent").await;
@@ -100,7 +99,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(not(feature = "redis-cache"))]
     async fn test_stub_cache_set_does_not_panic() {
         let cache = RedisCache::new("redis://localhost:6379").await.unwrap();
         cache
@@ -109,7 +107,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(not(feature = "redis-cache"))]
     async fn test_stub_cache_delete_does_not_panic() {
         let cache = RedisCache::new("redis://localhost:6379").await.unwrap();
         cache.delete("key").await;
