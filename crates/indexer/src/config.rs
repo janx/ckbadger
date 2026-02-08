@@ -36,6 +36,9 @@ pub struct Config {
     /// Max parallel connections for index rebuild task
     #[serde(default = "default_index_rebuild_parallel")]
     pub index_rebuild_parallel: usize,
+    /// Use Inserter API for cell writes instead of COPY statements
+    #[serde(default = "default_use_inserter_api")]
+    pub use_inserter_api: bool,
 }
 
 fn default_clickhouse_url() -> String {
@@ -88,6 +91,10 @@ fn default_index_rebuild_parallel() -> usize {
     10
 }
 
+fn default_use_inserter_api() -> bool {
+    false
+}
+
 impl Config {
     pub fn from_env() -> Result<Self, config::ConfigError> {
         config::Config::builder()
@@ -110,6 +117,7 @@ impl Config {
                 "index_rebuild_parallel",
                 default_index_rebuild_parallel() as i64,
             )?
+            .set_default("use_inserter_api", default_use_inserter_api())?
             .set_override_option("ckb_rpc_url", std::env::var("CKB_RPC_URL").ok())?
             .build()?
             .try_deserialize()
@@ -174,5 +182,10 @@ mod tests {
             default_bulk_sync_threshold(),
             CKB_FINALIZATION_DEPTH
         );
+    }
+
+    #[test]
+    fn test_default_use_inserter_api() {
+        assert!(!default_use_inserter_api());
     }
 }
