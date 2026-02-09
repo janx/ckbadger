@@ -105,10 +105,10 @@ async fn rebuild_activities_batch(pool: &PgPool, start_block: i64, end_block: i6
     //
     // This produces at most (unique receiver addresses) activities per transaction,
     // avoiding the cartesian product that the old JOIN approach caused (N inputs × M outputs).
-    let inserted = sqlx::query_scalar::<_, i64>(
+    let result = sqlx::query(
         r#"
         WITH block_txs AS (
-            SELECT 
+            SELECT
                 t.hash AS tx_hash,
                 t.block_number,
                 t.tx_index,
@@ -119,7 +119,7 @@ async fn rebuild_activities_batch(pool: &PgPool, start_block: i64, end_block: i6
             WHERE t.block_number >= $1 AND t.block_number < $2
         ),
         tx_outputs AS (
-            SELECT 
+            SELECT
                 c.tx_hash,
                 c.capacity,
                 c.lock_script_hash
@@ -127,20 +127,20 @@ async fn rebuild_activities_batch(pool: &PgPool, start_block: i64, end_block: i6
             WHERE c.created_at_block >= $1 AND c.created_at_block < $2
         ),
         tx_inputs AS (
-            SELECT 
+            SELECT
                 ti.tx_hash,
                 c.capacity AS input_capacity,
                 c.lock_script_hash AS input_lock_hash
             FROM transaction_inputs ti
             JOIN tx_block_map tbm ON tbm.tx_hash = ti.previous_tx_hash
-            JOIN cells c ON c.tx_hash = ti.previous_tx_hash 
+            JOIN cells c ON c.tx_hash = ti.previous_tx_hash
                         AND c.output_index = ti.previous_output_index
                         AND c.created_at_block = tbm.block_number
             WHERE ti.tx_block_number >= $1 AND ti.tx_block_number < $2
         ),
         -- Net balance change per address per transaction (include ALL cells for CKB capacity tracking)
         address_net AS (
-            SELECT 
+            SELECT
                 tx_hash,
                 lock_script_hash,
                 SUM(net) AS net_change
@@ -164,7 +164,7 @@ async fn rebuild_activities_batch(pool: &PgPool, start_block: i64, end_block: i6
         ),
         -- One CKB_TRANSFER per net receiver (matches Rust parser's net-balance approach)
         ckb_transfers AS (
-            SELECT 
+            SELECT
                 bt.block_number,
                 bt.tx_hash,
                 bt.tx_index,
@@ -178,7 +178,7 @@ async fn rebuild_activities_batch(pool: &PgPool, start_block: i64, end_block: i6
             WHERE an.net_change > 0
         ),
         cellbase_rewards AS (
-            SELECT 
+            SELECT
                 bt.block_number,
                 bt.tx_hash,
                 bt.tx_index,
@@ -191,7 +191,7 @@ async fn rebuild_activities_batch(pool: &PgPool, start_block: i64, end_block: i6
             GROUP BY bt.block_number, bt.tx_hash, bt.tx_index, bt.timestamp, o.lock_script_hash
         ),
         all_activities AS (
-            SELECT 
+            SELECT
                 encode(sha256(tx_hash || 'CKB_TRANSFER'::bytea || int2send((ROW_NUMBER() OVER (PARTITION BY tx_hash ORDER BY to_lock_hash))::int2)), 'hex')::bytea AS activity_id,
                 'CKB_TRANSFER' AS activity_type,
                 'ckb' AS activity_category,
@@ -207,10 +207,10 @@ async fn rebuild_activities_batch(pool: &PgPool, start_block: i64, end_block: i6
                 timestamp
             FROM ckb_transfers
             WHERE from_lock_hash IS NOT NULL
-            
+
             UNION ALL
-            
-            SELECT 
+
+            SELECT
                 encode(sha256(tx_hash || 'CELLBASE_REWARD'::bytea || int2send((ROW_NUMBER() OVER (PARTITION BY tx_hash ORDER BY to_lock_hash))::int2)), 'hex')::bytea AS activity_id,
                 'CELLBASE_REWARD' AS activity_type,
                 'cellbase' AS activity_category,
@@ -232,16 +232,14 @@ async fn rebuild_activities_batch(pool: &PgPool, start_block: i64, end_block: i6
             amount, asset_id, metadata, timestamp
         )
         SELECT * FROM all_activities
-        RETURNING 1::BIGINT
         "#,
     )
     .bind(start_block)
     .bind(end_block)
-    .fetch_all(pool)
-    .await?
-    .len() as i64;
+    .execute(pool)
+    .await?;
 
-    Ok(inserted)
+    Ok(result.rows_affected() as i64)
 }
 
 #[cfg(test)]

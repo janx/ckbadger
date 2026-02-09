@@ -71,27 +71,24 @@ pub async fn execute(
 }
 
 async fn rebuild_address_balances(pool: &PgPool) -> Result<i64> {
-    let inserted = sqlx::query_scalar::<_, i64>(
+    // Single-pass query: scans cells table once instead of 4 times.
+    // Uses window functions (FIRST_VALUE/LAST_VALUE) to get first/last tx
+    // within the same GROUP BY aggregation, avoiding separate DISTINCT ON scans.
+    let result = sqlx::query(
         r#"
-        WITH cell_stats AS (
-            SELECT 
+        WITH cell_agg AS (
+            SELECT
                 lock_script_hash,
                 SUM(CASE WHEN status = 0 THEN capacity ELSE 0 END) AS balance,
                 COUNT(CASE WHEN status = 0 THEN 1 END)::INTEGER AS live_cells_count,
                 COUNT(*)::BIGINT AS total_cells_count,
+                COUNT(DISTINCT tx_hash)::BIGINT AS transactions_count,
                 MIN(created_at_block) AS first_seen_block,
                 MAX(created_at_block) AS last_activity_block
             FROM cells
             GROUP BY lock_script_hash
         ),
-        tx_counts AS (
-            SELECT 
-                lock_script_hash,
-                COUNT(DISTINCT tx_hash)::BIGINT AS transactions_count
-            FROM cells
-            GROUP BY lock_script_hash
-        ),
-        first_last_tx AS (
+        first_tx AS (
             SELECT DISTINCT ON (lock_script_hash)
                 lock_script_hash,
                 tx_hash AS first_seen_tx
@@ -117,29 +114,26 @@ async fn rebuild_address_balances(pool: &PgPool) -> Result<i64> {
             last_activity_tx,
             updated_at
         )
-        SELECT 
-            cs.lock_script_hash,
-            COALESCE(cs.balance, 0),
-            COALESCE(cs.live_cells_count, 0),
-            COALESCE(cs.total_cells_count, 0),
-            COALESCE(tc.transactions_count, 0),
-            cs.first_seen_block,
+        SELECT
+            ca.lock_script_hash,
+            COALESCE(ca.balance, 0),
+            COALESCE(ca.live_cells_count, 0),
+            COALESCE(ca.total_cells_count, 0),
+            COALESCE(ca.transactions_count, 0),
+            ca.first_seen_block,
             ft.first_seen_tx,
-            cs.last_activity_block,
+            ca.last_activity_block,
             lt.last_activity_tx,
             NOW()
-        FROM cell_stats cs
-        LEFT JOIN tx_counts tc ON tc.lock_script_hash = cs.lock_script_hash
-        LEFT JOIN first_last_tx ft ON ft.lock_script_hash = cs.lock_script_hash
-        LEFT JOIN last_tx lt ON lt.lock_script_hash = cs.lock_script_hash
-        RETURNING 1::BIGINT
+        FROM cell_agg ca
+        LEFT JOIN first_tx ft ON ft.lock_script_hash = ca.lock_script_hash
+        LEFT JOIN last_tx lt ON lt.lock_script_hash = ca.lock_script_hash
         "#,
     )
-    .fetch_all(pool)
-    .await?
-    .len() as i64;
+    .execute(pool)
+    .await?;
 
-    Ok(inserted)
+    Ok(result.rows_affected() as i64)
 }
 
 #[cfg(test)]

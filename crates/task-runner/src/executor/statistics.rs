@@ -577,42 +577,62 @@ pub async fn rebuild_dao_daily_snapshots(pool: &PgPool) -> Result<()> {
             FROM depositor_daily
             WINDOW w AS (ORDER BY date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
         )
-        SELECT 
-            d.date,
-            COALESCE(dc_latest.total_deposit, 0) as total_deposit,
-            COALESCE(depc_latest.depositors_count, (
-                SELECT COUNT(DISTINCT lock_script_hash) FROM depositor_spans 
-                WHERE first_deposit <= d.date AND last_active >= d.date
-            ))::int as depositors_count,
-            COALESCE(dc.daily_deposit, 0) as daily_deposit,
-            COALESCE(dc.daily_deposit_count, 0) as daily_deposit_count,
+        -- Forward-fill: join dates to sparse cumulative data, then carry forward
+        -- the last known value to fill gaps. Uses the "count non-nulls" grouping
+        -- trick for correct forward-fill (handles both increasing and decreasing values).
+        -- This replaces LATERAL subqueries that caused O(n²) behavior.
+        ,
+        joined AS (
+            SELECT
+                d.date,
+                dc.total_deposit,
+                dc.daily_deposit,
+                dc.daily_deposit_count,
+                depc.depositors_count,
+                lb.dao,
+                sc.cumulative_burnt,
+                sc.cumulative_mining_reward,
+                sc.cumulative_deposit_compensation,
+                -- Group IDs for forward-fill: each non-NULL value starts a new group
+                COUNT(dc.total_deposit) OVER (ORDER BY d.date) AS deposit_grp,
+                COUNT(depc.depositors_count) OVER (ORDER BY d.date) AS depositor_grp
+            FROM dates d
+            LEFT JOIN deposit_cumulative dc ON d.date = dc.date
+            LEFT JOIN depositor_cumulative depc ON d.date = depc.date
+            LEFT JOIN last_blocks lb ON d.date = lb.date
+            LEFT JOIN secondary_cumulative sc ON d.date = sc.date
+        )
+        SELECT
+            date,
+            COALESCE(
+                total_deposit,
+                FIRST_VALUE(total_deposit) OVER (PARTITION BY deposit_grp ORDER BY date),
+                0
+            ) as total_deposit,
+            COALESCE(
+                depositors_count,
+                FIRST_VALUE(depositors_count) OVER (PARTITION BY depositor_grp ORDER BY date),
+                0
+            )::int as depositors_count,
+            COALESCE(daily_deposit, 0) as daily_deposit,
+            COALESCE(daily_deposit_count, 0) as daily_deposit_count,
             -- Extract total_issuance from DAO field bytes 0-7 (little-endian u64)
             COALESCE((
-                get_byte(lb.dao, 0)::bigint +
-                get_byte(lb.dao, 1)::bigint * 256 +
-                get_byte(lb.dao, 2)::bigint * 65536 +
-                get_byte(lb.dao, 3)::bigint * 16777216 +
-                get_byte(lb.dao, 4)::bigint * 4294967296::bigint +
-                get_byte(lb.dao, 5)::bigint * 1099511627776::bigint +
-                get_byte(lb.dao, 6)::bigint * 281474976710656::bigint +
-                get_byte(lb.dao, 7)::bigint * 72057594037927936::bigint
+                get_byte(dao, 0)::bigint +
+                get_byte(dao, 1)::bigint * 256 +
+                get_byte(dao, 2)::bigint * 65536 +
+                get_byte(dao, 3)::bigint * 16777216 +
+                get_byte(dao, 4)::bigint * 4294967296::bigint +
+                get_byte(dao, 5)::bigint * 1099511627776::bigint +
+                get_byte(dao, 6)::bigint * 281474976710656::bigint +
+                get_byte(dao, 7)::bigint * 72057594037927936::bigint
             )::numeric, 0) as total_issuance,
-            COALESCE(sc.cumulative_burnt::text, '0') as cumulative_burnt,
-            COALESCE(sc.cumulative_mining_reward::text, '0') as cumulative_mining_reward,
-            COALESCE(sc.cumulative_deposit_compensation::text, '0') as cumulative_deposit_compensation,
-            lb.dao as dao_data
-        FROM dates d
-        LEFT JOIN deposit_cumulative dc ON d.date = dc.date
-        LEFT JOIN LATERAL (
-            SELECT total_deposit FROM deposit_cumulative WHERE date <= d.date ORDER BY date DESC LIMIT 1
-        ) dc_latest ON true
-        LEFT JOIN depositor_cumulative depc ON d.date = depc.date
-        LEFT JOIN LATERAL (
-            SELECT depositors_count FROM depositor_cumulative WHERE date <= d.date ORDER BY date DESC LIMIT 1
-        ) depc_latest ON true
-        LEFT JOIN last_blocks lb ON d.date = lb.date
-        LEFT JOIN secondary_cumulative sc ON d.date = sc.date
-        ORDER BY d.date
+            COALESCE(cumulative_burnt::text, '0') as cumulative_burnt,
+            COALESCE(cumulative_mining_reward::text, '0') as cumulative_mining_reward,
+            COALESCE(cumulative_deposit_compensation::text, '0') as cumulative_deposit_compensation,
+            dao as dao_data
+        FROM joined
+        ORDER BY date
         "#,
     )
     .execute(pool)
