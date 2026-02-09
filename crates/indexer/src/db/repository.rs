@@ -52,7 +52,7 @@ impl Repository {
         }
 
         let row = sqlx::query_as::<_, (Option<i64>, Option<Vec<u8>>)>(
-            "SELECT number, hash FROM blocks ORDER BY number DESC LIMIT 1",
+            "SELECT number, hash FROM blocks_index ORDER BY number DESC LIMIT 1",
         )
         .fetch_optional(&self.pool)
         .await?;
@@ -84,10 +84,11 @@ impl Repository {
     }
 
     pub async fn get_block_hash_at_height(&self, height: i64) -> Result<Option<Vec<u8>>> {
-        let row = sqlx::query_as::<_, (Vec<u8>,)>("SELECT hash FROM blocks WHERE number = $1")
-            .bind(height)
-            .fetch_optional(&self.pool)
-            .await?;
+        let row =
+            sqlx::query_as::<_, (Vec<u8>,)>("SELECT hash FROM blocks_index WHERE number = $1")
+                .bind(height)
+                .fetch_optional(&self.pool)
+                .await?;
         Ok(row.map(|(hash,)| hash))
     }
 
@@ -119,7 +120,7 @@ impl Repository {
 
     pub async fn get_block_transaction_count(&self, block_number: i64) -> Result<Option<i32>> {
         let row =
-            sqlx::query_as::<_, (i32,)>("SELECT transactions_count FROM blocks WHERE number = $1")
+            sqlx::query_as::<_, (i32,)>("SELECT tx_count FROM blocks_index WHERE number = $1")
                 .bind(block_number)
                 .fetch_optional(&self.pool)
                 .await?;

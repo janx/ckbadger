@@ -67,7 +67,7 @@ async fn get_cell_graph(
 
     // Get block_number from transactions first for partition pruning
     let tx_info =
-        sqlx::query_as::<_, (i64,)>("SELECT block_number FROM transactions WHERE hash = $1")
+        sqlx::query_as::<_, (i64,)>("SELECT block_number FROM transactions_index WHERE hash = $1")
             .bind(&hash_bytes)
             .fetch_optional(&state.read_pool)
             .await
@@ -147,7 +147,7 @@ async fn get_cell_graph(
                     r#"
                     SELECT c.tx_hash, c.output_index, c.capacity::TEXT
                     FROM cells c
-                    JOIN transactions t ON t.hash = c.tx_hash AND t.block_number = c.created_at_block
+                    JOIN transactions_index t ON t.hash = c.tx_hash AND t.block_number = c.created_at_block
                     JOIN UNNEST($1::bytea[], $2::smallint[]) AS u(tx_hash, output_index)
                       ON c.tx_hash = u.tx_hash AND c.output_index = u.output_index
                     "#,
@@ -232,7 +232,7 @@ async fn get_tx_graph(
     let mut links = Vec::new();
 
     let tx = sqlx::query_as::<_, (Vec<u8>, i64, String, bool)>(
-        "SELECT hash, block_number, fee::TEXT, is_cellbase FROM transactions WHERE hash = $1",
+        "SELECT hash, block_number, fee::TEXT, is_cellbase FROM transactions_index WHERE hash = $1",
     )
     .bind(&hash_bytes)
     .fetch_optional(&state.read_pool)
@@ -273,7 +273,7 @@ async fn get_tx_graph(
                     r#"
                     SELECT c.tx_hash, c.output_index, c.capacity::TEXT
                     FROM cells c
-                    JOIN transactions t ON t.hash = c.tx_hash AND t.block_number = c.created_at_block
+                    JOIN transactions_index t ON t.hash = c.tx_hash AND t.block_number = c.created_at_block
                     JOIN UNNEST($1::bytea[], $2::smallint[]) AS u(tx_hash, output_index)
                       ON c.tx_hash = u.tx_hash AND c.output_index = u.output_index
                     "#,
@@ -398,7 +398,7 @@ async fn get_proposal_graph(
     Path(block_number): Path<i64>,
 ) -> ApiResult<ProposalGraphResponse> {
     let block_row: Option<(Vec<u8>, i32)> =
-        sqlx::query_as("SELECT hash, proposals_count FROM blocks WHERE number = $1")
+        sqlx::query_as("SELECT hash, proposals_count FROM blocks_index WHERE number = $1")
             .bind(block_number)
             .fetch_optional(&state.read_pool)
             .await

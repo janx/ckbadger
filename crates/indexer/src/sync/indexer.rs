@@ -27,6 +27,8 @@ use crate::parser::{
     BlockParser, CellParser, DaoParser, DotbitParser, MnftParser, SporeParser, TransactionParser,
     UdtParser,
 };
+use ckb_store_reader::CkbChainReader;
+
 use crate::rpc::{BlockResponseWithCycles, CkbRpcClient, DaoField};
 
 use super::SyncProgress;
@@ -368,12 +370,35 @@ pub struct Indexer {
     #[allow(dead_code)] // Used in Task 3 (DAO writer skip logic)
     dao_deferred: std::sync::atomic::AtomicBool,
     tx_block_map_deferred: std::sync::atomic::AtomicBool,
+    /// Direct RocksDB reader for CKB node data (when configured via ckb_data_path).
+    ckb_store: Option<Arc<CkbChainReader>>,
 }
 
 impl Indexer {
     pub async fn new(config: Config, pool: PgPool) -> Result<Self> {
         let rpc = CkbRpcClient::new(&config.ckb_rpc_url);
         let cache_invalidator = CacheInvalidator::new(config.redis_url.as_deref()).await;
+
+        let ckb_store =
+            config
+                .ckb_data_path
+                .as_deref()
+                .and_then(|path| match CkbChainReader::open(path) {
+                    Ok(reader) => {
+                        info!(
+                        "CKB direct RocksDB reader opened at {} — block fetching will bypass RPC",
+                        path
+                    );
+                        Some(Arc::new(reader))
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to open CKB RocksDB at {}: {}, falling back to RPC",
+                            path, e
+                        );
+                        None
+                    }
+                });
         let repo = Repository::with_cache(pool.clone(), cache_invalidator.clone());
 
         let rocksdb_store = Self::create_rocksdb_store(&config)?;
@@ -387,7 +412,11 @@ impl Indexer {
         );
 
         let (tip_number, _) = repo.get_sync_tip().await?;
-        let chain_tip = rpc.get_tip_block_number().await?;
+        let chain_tip = if let Some(ref store) = ckb_store {
+            store.tip_number().unwrap_or(0)
+        } else {
+            rpc.get_tip_block_number().await?
+        };
 
         let progress = Arc::new(SyncProgress::new(tip_number as u64, chain_tip));
 
@@ -507,6 +536,7 @@ impl Indexer {
             spore_deferred: std::sync::atomic::AtomicBool::new(spore_deferred),
             dao_deferred: std::sync::atomic::AtomicBool::new(dao_deferred),
             tx_block_map_deferred: std::sync::atomic::AtomicBool::new(tx_block_map_deferred),
+            ckb_store,
         })
     }
 
@@ -766,6 +796,7 @@ impl Indexer {
         let repo = self.repo.clone();
         let rebuild_pause = Arc::clone(&self.rebuild_pause_flag);
         let reorg_notify = Arc::clone(&self.reorg_notify_flag);
+        let ckb_store = self.ckb_store.clone();
 
         let fetcher = tokio::spawn(async move {
             let mut next_block: Option<u64> = None;
@@ -793,12 +824,23 @@ impl Indexer {
                     next_block = None;
                 }
 
-                let chain_tip = match rpc.get_tip_block_number().await {
-                    Ok(tip) => tip,
-                    Err(e) => {
-                        error!("Failed to get chain tip: {}", e);
-                        sleep(Duration::from_secs(5)).await;
-                        continue;
+                let chain_tip = if let Some(ref store) = ckb_store {
+                    match store.tip_number() {
+                        Some(tip) => tip,
+                        None => {
+                            error!("Failed to get chain tip from CKB RocksDB");
+                            sleep(Duration::from_secs(5)).await;
+                            continue;
+                        }
+                    }
+                } else {
+                    match rpc.get_tip_block_number().await {
+                        Ok(tip) => tip,
+                        Err(e) => {
+                            error!("Failed to get chain tip: {}", e);
+                            sleep(Duration::from_secs(5)).await;
+                            continue;
+                        }
                     }
                 };
                 progress.update_target(chain_tip);
@@ -839,20 +881,45 @@ impl Indexer {
                     start_block, end_block, chain_tip, next_block
                 );
 
-                let blocks = match Self::fetch_blocks_with_config(
-                    &rpc,
-                    start_block,
-                    end_block,
-                    config.parallel_fetch_size,
-                )
-                .await
-                {
-                    Ok(blocks) => blocks,
-                    Err(e) => {
-                        error!("Failed to fetch blocks: {}", e);
-                        sleep(Duration::from_secs(5)).await;
-                        next_block = None;
-                        continue;
+                let blocks = if let Some(ref store) = ckb_store {
+                    let store = Arc::clone(store);
+                    let sb = start_block;
+                    let eb = end_block;
+                    match tokio::task::spawn_blocking(move || {
+                        Self::fetch_blocks_direct(&store, sb, eb)
+                    })
+                    .await
+                    {
+                        Ok(Ok(blocks)) => blocks,
+                        Ok(Err(e)) => {
+                            error!("Failed to fetch blocks from RocksDB: {}", e);
+                            sleep(Duration::from_secs(5)).await;
+                            next_block = None;
+                            continue;
+                        }
+                        Err(e) => {
+                            error!("Block fetch task panicked: {}", e);
+                            sleep(Duration::from_secs(5)).await;
+                            next_block = None;
+                            continue;
+                        }
+                    }
+                } else {
+                    match Self::fetch_blocks_with_config(
+                        &rpc,
+                        start_block,
+                        end_block,
+                        config.parallel_fetch_size,
+                    )
+                    .await
+                    {
+                        Ok(blocks) => blocks,
+                        Err(e) => {
+                            error!("Failed to fetch blocks: {}", e);
+                            sleep(Duration::from_secs(5)).await;
+                            next_block = None;
+                            continue;
+                        }
                     }
                 };
 
@@ -1264,6 +1331,30 @@ impl Indexer {
         Ok(blocks)
     }
 
+    /// Fetch blocks directly from CKB's RocksDB (no network I/O).
+    /// Returns the same `BlockResponseWithCycles` format as the RPC fetcher.
+    fn fetch_blocks_direct(
+        store: &CkbChainReader,
+        start: u64,
+        end: u64,
+    ) -> Result<Vec<BlockResponseWithCycles>> {
+        let mut blocks = Vec::with_capacity((end - start + 1) as usize);
+
+        for num in start..=end {
+            let hash = store
+                .get_block_hash(num)
+                .ok_or_else(|| anyhow::anyhow!("Block {} hash not found in CKB RocksDB", num))?;
+            let block = store
+                .get_block(&hash)
+                .ok_or_else(|| anyhow::anyhow!("Block {} data not found in CKB RocksDB", num))?;
+
+            let rpc_block = ckb_store_reader::block_view_to_rpc(&block, store);
+            blocks.push(rpc_block.into());
+        }
+
+        Ok(blocks)
+    }
+
     async fn drain_channel<T>(rx: &mut tokio::sync::mpsc::Receiver<T>) {
         let mut drained = 0;
         while rx.try_recv().is_ok() {
@@ -1334,7 +1425,7 @@ impl Indexer {
     }
 
     async fn sync_batch(&self) -> Result<SyncAction> {
-        let chain_tip = self.rpc.get_tip_block_number().await?;
+        let chain_tip = self.get_chain_tip().await?;
         self.progress.update_target(chain_tip);
 
         let (db_tip, db_tip_hash) = self.repo.get_sync_tip().await?;
@@ -1383,7 +1474,7 @@ impl Indexer {
 
             while Instant::now() < deadline {
                 sleep(Duration::from_millis(200)).await;
-                if let Ok(new_tip) = self.rpc.get_tip_block_number().await {
+                if let Ok(new_tip) = self.get_chain_tip().await {
                     if new_tip > end_block {
                         end_block = std::cmp::min(
                             start_block + max_accumulate - 1,
@@ -2451,7 +2542,7 @@ impl Indexer {
         }
 
         let rows: Vec<(i64, chrono::DateTime<chrono::Utc>)> =
-            sqlx::query_as("SELECT number, timestamp FROM blocks WHERE number = ANY($1)")
+            sqlx::query_as("SELECT number, timestamp FROM blocks_index WHERE number = ANY($1)")
                 .bind(block_numbers)
                 .fetch_all(self.writer.pool())
                 .await?;
@@ -2489,7 +2580,15 @@ impl Indexer {
         start: u64,
         end: u64,
     ) -> Result<Vec<BlockResponseWithCycles>> {
-        Self::fetch_blocks_with_config(&self.rpc, start, end, self.config.parallel_fetch_size).await
+        if let Some(ref store) = self.ckb_store {
+            let store = Arc::clone(store);
+            tokio::task::spawn_blocking(move || Self::fetch_blocks_direct(&store, start, end))
+                .await
+                .map_err(|e| anyhow::anyhow!("Block fetch task panicked: {}", e))?
+        } else {
+            Self::fetch_blocks_with_config(&self.rpc, start, end, self.config.parallel_fetch_size)
+                .await
+        }
     }
 
     async fn fetch_spore_inputs_by_outpoints(
@@ -4547,6 +4646,16 @@ impl Indexer {
                     } else {
                         Ok(())
                     }
+                },
+                async {
+                    if !txs_for_batch.is_empty() {
+                        copy_router
+                            .copy_transactions_index_parallel(&txs_for_batch)
+                            .await
+                            .map(|_| ())
+                    } else {
+                        Ok(())
+                    }
                 }
             )?;
         } else {
@@ -6428,18 +6537,40 @@ impl Indexer {
         Ok(())
     }
 
+    /// Get the block hash for a given block number, using direct RocksDB reads when available.
+    async fn get_chain_block_hash(&self, number: u64) -> Result<Vec<u8>> {
+        if let Some(ref store) = self.ckb_store {
+            store
+                .get_block_hash(number)
+                .map(|h| h.to_vec())
+                .ok_or_else(|| anyhow::anyhow!("Block {} not found in CKB RocksDB", number))
+        } else {
+            let hash_hex = self
+                .rpc
+                .get_block_hash(number)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("Block {} not found on chain", number))?;
+            Ok(crate::rpc::parse_hex_to_bytes(&hash_hex))
+        }
+    }
+
+    /// Get the chain tip block number, using direct RocksDB reads when available.
+    async fn get_chain_tip(&self) -> Result<u64> {
+        if let Some(ref store) = self.ckb_store {
+            store
+                .tip_number()
+                .ok_or_else(|| anyhow::anyhow!("Failed to get chain tip from CKB RocksDB"))
+        } else {
+            self.rpc.get_tip_block_number().await
+        }
+    }
+
     async fn check_and_handle_reorg(
         &self,
         db_tip: u64,
         stored_hash: &[u8],
     ) -> Result<Option<ReorgAction>> {
-        let chain_hash = self
-            .rpc
-            .get_block_hash(db_tip)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Block {} not found on chain", db_tip))?;
-
-        let chain_hash_bytes = crate::rpc::parse_hex_to_bytes(&chain_hash);
+        let chain_hash_bytes = self.get_chain_block_hash(db_tip).await?;
 
         if chain_hash_bytes == stored_hash {
             return Ok(None);
@@ -6449,7 +6580,7 @@ impl Indexer {
             "Reorg detected at block {}: stored={} chain={}",
             db_tip,
             hex::encode(stored_hash),
-            chain_hash
+            hex::encode(&chain_hash_bytes)
         );
 
         let (fork_point, fork_hash) = self.find_fork_point(db_tip).await?;
@@ -6460,13 +6591,8 @@ impl Indexer {
             fork_point, depth
         );
 
-        let chain_tip = self.rpc.get_tip_block_number().await?;
-        let chain_tip_hash = self
-            .rpc
-            .get_block_hash(chain_tip)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Chain tip {} not found", chain_tip))?;
-        let chain_tip_hash_bytes = crate::rpc::parse_hex_to_bytes(&chain_tip_hash);
+        let chain_tip = self.get_chain_tip().await?;
+        let chain_tip_hash_bytes = self.get_chain_block_hash(chain_tip).await?;
 
         if depth > DEEP_FORK_DEPTH {
             error!(
@@ -6519,13 +6645,7 @@ impl Indexer {
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("Block {} not found in DB", height))?;
 
-            let chain_hash = self
-                .rpc
-                .get_block_hash(height)
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("Block {} not found on chain", height))?;
-
-            let chain_hash_bytes = crate::rpc::parse_hex_to_bytes(&chain_hash);
+            let chain_hash_bytes = self.get_chain_block_hash(height).await?;
 
             if db_hash == chain_hash_bytes {
                 return Ok((height, db_hash));

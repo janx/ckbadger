@@ -50,11 +50,12 @@ async fn search(
     }
 
     if let Ok(block_num) = query.parse::<i64>() {
-        let block = sqlx::query_as::<_, (Vec<u8>,)>("SELECT hash FROM blocks WHERE number = $1")
-            .bind(block_num)
-            .fetch_optional(&state.read_pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+        let block =
+            sqlx::query_as::<_, (Vec<u8>,)>("SELECT hash FROM blocks_index WHERE number = $1")
+                .bind(block_num)
+                .fetch_optional(&state.read_pool)
+                .await
+                .map_err(|e| ApiError::internal(e.to_string()))?;
 
         if let Some((_hash,)) = block {
             results.push(SearchResult {
@@ -76,13 +77,13 @@ async fn search(
     if hash_query.len() == 66 {
         if let Ok(hash_bytes) = hex::decode(&hash_query[2..]) {
             let tx_fut = sqlx::query_as::<_, (i64,)>(
-                "SELECT block_number FROM transactions WHERE hash = $1",
+                "SELECT block_number FROM transactions_index WHERE hash = $1",
             )
             .bind(&hash_bytes)
             .fetch_optional(&state.read_pool);
 
             let block_fut =
-                sqlx::query_as::<_, (i64,)>("SELECT number FROM blocks WHERE hash = $1")
+                sqlx::query_as::<_, (i64,)>("SELECT number FROM blocks_index WHERE hash = $1")
                     .bind(&hash_bytes)
                     .fetch_optional(&state.read_pool);
 

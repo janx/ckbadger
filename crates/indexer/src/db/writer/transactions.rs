@@ -83,6 +83,32 @@ impl BatchWriter {
         .execute(&self.pool)
         .await?;
 
+        // Also write to transactions_index (lightweight index table)
+        sqlx::query(
+            r#"
+            INSERT INTO transactions_index (
+                hash, block_number, tx_index, is_cellbase, timestamp,
+                inputs_count, outputs_count, fee, cycles
+            )
+            SELECT * FROM UNNEST(
+                $1::bytea[], $2::bigint[], $3::int[], $4::bool[], $5::timestamptz[],
+                $6::smallint[], $7::smallint[], $8::bigint[], $9::bigint[]
+            )
+            ON CONFLICT (block_number, hash) DO NOTHING
+            "#,
+        )
+        .bind(&hashes)
+        .bind(&block_numbers)
+        .bind(&tx_indices)
+        .bind(&is_cellbases)
+        .bind(&timestamps)
+        .bind(&inputs_counts)
+        .bind(&outputs_counts)
+        .bind(&fees)
+        .bind(&cycles)
+        .execute(&self.pool)
+        .await?;
+
         Ok(())
     }
 }

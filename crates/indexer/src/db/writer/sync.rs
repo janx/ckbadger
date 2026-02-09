@@ -37,8 +37,8 @@ impl BatchWriter {
         let row: Option<(Option<i64>, Option<i64>)> = sqlx::query_as(
             r#"
             SELECT 
-                (SELECT MAX(number) FROM blocks) as max_block,
-                (SELECT MAX(block_number) FROM transactions) as max_tx_block
+                (SELECT MAX(number) FROM blocks_index) as max_block,
+                (SELECT MAX(block_number) FROM transactions_index) as max_tx_block
             "#,
         )
         .fetch_optional(&self.pool)
@@ -95,12 +95,22 @@ impl BatchWriter {
             .execute(&self.pool)
             .await?;
 
+        sqlx::query("DELETE FROM transactions_index WHERE block_number >= $1")
+            .bind(next_block)
+            .execute(&self.pool)
+            .await?;
+
         sqlx::query("DELETE FROM block_proposals WHERE block_number >= $1")
             .bind(next_block)
             .execute(&self.pool)
             .await?;
 
         sqlx::query("DELETE FROM blocks WHERE number >= $1")
+            .bind(next_block)
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query("DELETE FROM blocks_index WHERE number >= $1")
             .bind(next_block)
             .execute(&self.pool)
             .await?;
@@ -199,6 +209,14 @@ impl BatchWriter {
             .bind(end_block)
             .execute(&self.pool)
             .await?;
+
+        sqlx::query(
+            "DELETE FROM transactions_index WHERE block_number >= $1 AND block_number <= $2",
+        )
+        .bind(start_block)
+        .bind(end_block)
+        .execute(&self.pool)
+        .await?;
 
         sqlx::query("DELETE FROM block_proposals WHERE block_number >= $1 AND block_number <= $2")
             .bind(start_block)

@@ -36,6 +36,13 @@ struct Args {
 
     #[arg(long, env = "API_RATE_LIMIT_BURST", default_value = "200")]
     rate_limit_burst: u32,
+
+    #[arg(
+        long,
+        env = "CKB_DATA_PATH",
+        help = "Path to CKB node's RocksDB data directory for direct reads"
+    )]
+    ckb_data_path: Option<String>,
 }
 
 #[tokio::main]
@@ -81,6 +88,7 @@ async fn main() -> Result<()> {
         rate_limit_per_second: Some(args.rate_limit),
         rate_limit_burst: Some(args.rate_limit_burst),
         start_background_tasks: true,
+        ckb_data_path: args.ckb_data_path,
     };
     let app = create_router(config).await;
 

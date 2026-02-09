@@ -1,0 +1,25 @@
+[package]
+name = "ckb-store-reader"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# CKB types for Molecule deserialization
+ckb-types = { workspace = true }
+ckb-hash = { workspace = true }
+
+# RocksDB (same version as workspace)
+rocksdb = { workspace = true }
+
+# Hex encoding for RPC type conversion
+hex = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

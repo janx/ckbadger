@@ -17,6 +17,7 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
 use cache::CacheBackend;
+use ckb_store_reader::CkbChainReader;
 use cycles::CyclesCalculator;
 use middleware::IpRateLimitLayer;
 use ws::WsManager;
@@ -35,6 +36,8 @@ pub struct AppState {
     pub ckb_rpc_url: String,
     pub ckb_network: String,
     pub cycles_calculator: Arc<CyclesCalculator>,
+    /// Direct read-only access to CKB node's RocksDB (when configured).
+    pub ckb_store: Option<Arc<CkbChainReader>>,
 }
 
 pub struct AppConfig {
@@ -47,6 +50,8 @@ pub struct AppConfig {
     pub rate_limit_per_second: Option<u32>,
     pub rate_limit_burst: Option<u32>,
     pub start_background_tasks: bool,
+    /// Path to CKB node's RocksDB data directory for direct reads.
+    pub ckb_data_path: Option<String>,
 }
 
 impl Default for AppConfig {
@@ -61,6 +66,7 @@ impl Default for AppConfig {
             rate_limit_per_second: Some(100),
             rate_limit_burst: Some(200),
             start_background_tasks: true,
+            ckb_data_path: None,
         }
     }
 }
@@ -99,6 +105,25 @@ pub async fn create_router(config: AppConfig) -> Router {
 
     let read_pool = config.read_pool.unwrap_or_else(|| config.pool.clone());
 
+    let ckb_store =
+        config
+            .ckb_data_path
+            .as_deref()
+            .and_then(|path| match CkbChainReader::open(path) {
+                Ok(reader) => {
+                    tracing::info!("CKB direct RocksDB reader opened at {}", path);
+                    Some(Arc::new(reader))
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to open CKB RocksDB at {}: {}, falling back to RPC",
+                        path,
+                        e
+                    );
+                    None
+                }
+            });
+
     let state = Arc::new(AppState {
         pool: config.pool,
         read_pool,
@@ -107,6 +132,7 @@ pub async fn create_router(config: AppConfig) -> Router {
         ckb_rpc_url: config.ckb_rpc_url,
         ckb_network: config.ckb_network,
         cycles_calculator,
+        ckb_store,
     });
 
     let cors = CorsLayer::new()

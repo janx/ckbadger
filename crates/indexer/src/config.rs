@@ -50,6 +50,10 @@ pub struct Config {
     /// Requires ~15GB extra memory for full sync. Disable on low-memory machines (<32GB RAM).
     #[serde(default = "default_bulk_sync_cell_cache")]
     pub bulk_sync_cell_cache: bool,
+    /// Path to CKB node's RocksDB data directory for direct reads.
+    /// When set, the indexer reads blocks directly from CKB's RocksDB instead of via JSON-RPC.
+    #[serde(default)]
+    pub ckb_data_path: Option<String>,
 }
 
 fn default_batch_size() -> usize {

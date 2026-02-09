@@ -73,7 +73,7 @@ pub async fn execute(
         config.ckb_rpc_url, config.batch_size, RPC_BATCH_SIZE, config.concurrent_requests
     );
 
-    let max_block: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(number), 0) FROM blocks")
+    let max_block: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(number), 0) FROM blocks_index")
         .fetch_one(pool)
         .await?;
 
@@ -249,7 +249,7 @@ async fn fetch_block_rows(pool: &PgPool, start: i64, end: i64) -> Result<Vec<Blo
     let rows = sqlx::query_as::<_, (i64, Vec<u8>, Vec<u8>, chrono::DateTime<chrono::Utc>)>(
         r#"
         SELECT number, hash, dao, timestamp
-        FROM blocks
+        FROM blocks_index
         WHERE number >= $1 AND number <= $2
         ORDER BY number
         "#,

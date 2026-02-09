@@ -97,7 +97,7 @@ impl BatchWriter {
             }
         }
 
-        let row = sqlx::query_as::<_, (Vec<u8>,)>("SELECT dao FROM blocks WHERE number = $1")
+        let row = sqlx::query_as::<_, (Vec<u8>,)>("SELECT dao FROM blocks_index WHERE number = $1")
             .bind(block_number)
             .fetch_optional(&self.pool)
             .await?;
@@ -850,7 +850,7 @@ impl BatchWriter {
 
             if !missing.is_empty() {
                 let rows: Vec<(i64, Vec<u8>)> =
-                    sqlx::query_as("SELECT number, dao FROM blocks WHERE number = ANY($1)")
+                    sqlx::query_as("SELECT number, dao FROM blocks_index WHERE number = ANY($1)")
                         .bind(&missing)
                         .fetch_all(&self.pool)
                         .await?;
@@ -1162,7 +1162,7 @@ impl BatchWriter {
 
     pub async fn recalculate_dao_extended_statistics(&self, _current_block: i64) -> Result<()> {
         let latest = sqlx::query_as::<_, (i64, Vec<u8>)>(
-            "SELECT number, dao FROM blocks WHERE dao IS NOT NULL ORDER BY number DESC LIMIT 1",
+            "SELECT number, dao FROM blocks_index WHERE dao IS NOT NULL ORDER BY number DESC LIMIT 1",
         )
         .fetch_optional(&self.pool)
         .await?;
@@ -1221,7 +1221,7 @@ impl BatchWriter {
                 CAST(d.capacity AS TEXT),
                 b.dao
             FROM dao_deposits d
-            JOIN blocks b ON d.deposit_block_number = b.number
+            JOIN blocks_index b ON d.deposit_block_number = b.number
             WHERE d.status = 0 AND b.dao IS NOT NULL AND d.deposit_block_number <= $1"#,
         )
         .bind(latest_block)

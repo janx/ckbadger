@@ -30,7 +30,7 @@ impl TaskDb {
                 WHEN MAX(timestamp) < NOW() - INTERVAL '1 hour' THEN TRUE
                 ELSE FALSE
             END
-            FROM blocks
+            FROM blocks_index
             "#,
         )
         .fetch_optional(&self.pool)

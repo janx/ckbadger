@@ -54,6 +54,10 @@ const DEFERRABLE_INDEXES: &[DeferrableIndex] = &[
     DeferrableIndex { name: "idx_cells_type_code_hash_live", table: "cells", definition: "CREATE INDEX {name} ON {table}(type_code_hash, type_hash_type, created_at_block DESC, output_index DESC) WHERE status = 0 AND type_code_hash IS NOT NULL", partition_type: PartitionType::Range, priority: 3 },
     DeferrableIndex { name: "idx_cells_list_covering", table: "cells", definition: "CREATE INDEX {name} ON {table}(lock_script_hash, created_at_block DESC) INCLUDE (tx_hash, output_index, capacity, type_script_hash, data_size) WHERE status = 0", partition_type: PartitionType::Range, priority: 3 },
     DeferrableIndex { name: "idx_uncles_hash", table: "uncle_blocks", definition: "CREATE INDEX {name} ON {table}(hash)", partition_type: PartitionType::Range, priority: 3 },
+    // Lightweight index tables (blocks_index is non-partitioned, indexes in migration)
+    DeferrableIndex { name: "idx_tx_index_timestamp", table: "transactions_index", definition: "CREATE INDEX {name} ON {table}(timestamp DESC)", partition_type: PartitionType::Range, priority: 2 },
+    DeferrableIndex { name: "idx_tx_index_cursor", table: "transactions_index", definition: "CREATE INDEX {name} ON {table}(block_number DESC, tx_index DESC)", partition_type: PartitionType::Range, priority: 2 },
+    DeferrableIndex { name: "idx_tx_index_cycles_null", table: "transactions_index", definition: "CREATE INDEX {name} ON {table}(block_number) WHERE cycles IS NULL AND NOT is_cellbase", partition_type: PartitionType::Range, priority: 3 },
 ];
 
 const DEFERRABLE_CONSTRAINTS: &[DeferrableConstraint] = &[

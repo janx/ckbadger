@@ -238,7 +238,7 @@ impl BatchWriter {
         .await?;
 
         let dao_data = sqlx::query_as::<_, (Vec<u8>,)>(
-            "SELECT dao FROM blocks WHERE timestamp::date = $1 ORDER BY number DESC LIMIT 1",
+            "SELECT dao FROM blocks_index WHERE timestamp::date = $1 ORDER BY number DESC LIMIT 1",
         )
         .bind(date)
         .fetch_optional(&self.pool)
@@ -345,11 +345,12 @@ impl BatchWriter {
             return Ok(None);
         }
 
-        let row =
-            sqlx::query_as::<_, (DateTime<Utc>,)>("SELECT timestamp FROM blocks WHERE number = $1")
-                .bind(block_number - 1)
-                .fetch_optional(&self.pool)
-                .await?;
+        let row = sqlx::query_as::<_, (DateTime<Utc>,)>(
+            "SELECT timestamp FROM blocks_index WHERE number = $1",
+        )
+        .bind(block_number - 1)
+        .fetch_optional(&self.pool)
+        .await?;
 
         Ok(row.map(|(ts,)| ts))
     }
@@ -664,8 +665,8 @@ impl BatchWriter {
             r#"
             WITH block_24h_ago AS (
                 SELECT COALESCE(
-                    (SELECT number FROM blocks 
-                     WHERE timestamp >= (SELECT MAX(timestamp) - INTERVAL '24 hours' FROM blocks)
+                    (SELECT number FROM blocks_index
+                     WHERE timestamp >= (SELECT MAX(timestamp) - INTERVAL '24 hours' FROM blocks_index)
                      ORDER BY number ASC LIMIT 1),
                     0
                 ) as block_num
@@ -694,8 +695,8 @@ impl BatchWriter {
             r#"
             WITH block_24h_ago AS (
                 SELECT COALESCE(
-                    (SELECT number FROM blocks 
-                     WHERE timestamp >= (SELECT MAX(timestamp) - INTERVAL '24 hours' FROM blocks)
+                    (SELECT number FROM blocks_index
+                     WHERE timestamp >= (SELECT MAX(timestamp) - INTERVAL '24 hours' FROM blocks_index)
                      ORDER BY number ASC LIMIT 1),
                     0
                 ) as block_num
@@ -727,8 +728,8 @@ impl BatchWriter {
             r#"
             WITH block_24h_ago AS (
                 SELECT COALESCE(
-                    (SELECT number FROM blocks 
-                     WHERE timestamp >= (SELECT MAX(timestamp) - INTERVAL '24 hours' FROM blocks)
+                    (SELECT number FROM blocks_index
+                     WHERE timestamp >= (SELECT MAX(timestamp) - INTERVAL '24 hours' FROM blocks_index)
                      ORDER BY number ASC LIMIT 1),
                     0
                 ) as block_num
@@ -759,8 +760,8 @@ impl BatchWriter {
             r#"
             WITH block_24h_ago AS (
                 SELECT COALESCE(
-                    (SELECT number FROM blocks 
-                     WHERE timestamp >= (SELECT MAX(timestamp) - INTERVAL '24 hours' FROM blocks)
+                    (SELECT number FROM blocks_index
+                     WHERE timestamp >= (SELECT MAX(timestamp) - INTERVAL '24 hours' FROM blocks_index)
                      ORDER BY number ASC LIMIT 1),
                     0
                 ) as block_num
@@ -861,32 +862,32 @@ impl BatchWriter {
                 total_data_size, avg_block_time_ms
             )
             WITH block_times AS (
-                SELECT 
+                SELECT
                     number,
                     timestamp,
                     timestamp::date as date,
-                    transactions_count,
+                    tx_count,
                     EXTRACT(EPOCH FROM (timestamp - LAG(timestamp) OVER (ORDER BY number))) * 1000 as block_time_ms
-                FROM blocks
+                FROM blocks_index
             ),
             daily_blocks AS (
-                SELECT 
+                SELECT
                     date,
                     COUNT(*) as blocks_count,
-                    SUM(transactions_count) as transactions_count,
+                    SUM(tx_count) as transactions_count,
                     AVG(block_time_ms)::int as avg_block_time_ms
                 FROM block_times
                 GROUP BY date
             ),
             daily_cells AS (
-                SELECT 
+                SELECT
                     b.timestamp::date as date,
                     SUM(CASE WHEN c.created_at_block = b.number THEN 1 ELSE 0 END) as cells_created,
                     SUM(CASE WHEN c.consumed_at_block = b.number THEN 1 ELSE 0 END) as cells_consumed,
                     SUM(CASE WHEN c.created_at_block = b.number THEN c.capacity ELSE 0 END) as capacity_transferred,
                     SUM(CASE WHEN c.created_at_block = b.number THEN c.data_size ELSE 0 END) as data_size_added,
                     SUM(CASE WHEN c.consumed_at_block = b.number THEN c.data_size ELSE 0 END) as data_size_consumed
-                FROM blocks b
+                FROM blocks_index b
                 LEFT JOIN cells c ON c.created_at_block = b.number OR c.consumed_at_block = b.number
                 GROUP BY b.timestamp::date
             )
@@ -929,14 +930,14 @@ impl BatchWriter {
                 date, avg_compact_target, block_count, total_uncles, avg_uncle_rate, avg_block_time_ms
             )
             WITH block_times AS (
-                SELECT 
+                SELECT
                     number,
                     timestamp,
                     timestamp::date as date,
                     compact_target,
                     uncles_count,
                     EXTRACT(EPOCH FROM (timestamp - LAG(timestamp) OVER (ORDER BY number))) * 1000 as block_time_ms
-                FROM blocks
+                FROM blocks_index
             )
             SELECT 
                 date,
@@ -968,20 +969,20 @@ impl BatchWriter {
                 hour, blocks_count, transactions_count, cells_created, cells_consumed, capacity_transferred
             )
             WITH hourly_blocks AS (
-                SELECT 
+                SELECT
                     date_trunc('hour', timestamp) as hour,
                     COUNT(*) as blocks_count,
-                    SUM(transactions_count) as transactions_count
-                FROM blocks
+                    SUM(tx_count) as transactions_count
+                FROM blocks_index
                 GROUP BY date_trunc('hour', timestamp)
             ),
             hourly_cells AS (
-                SELECT 
+                SELECT
                     date_trunc('hour', b.timestamp) as hour,
                     SUM(CASE WHEN c.created_at_block = b.number THEN 1 ELSE 0 END) as cells_created,
                     SUM(CASE WHEN c.consumed_at_block = b.number THEN 1 ELSE 0 END) as cells_consumed,
                     SUM(CASE WHEN c.created_at_block = b.number THEN c.capacity ELSE 0 END) as capacity_transferred
-                FROM blocks b
+                FROM blocks_index b
                 LEFT JOIN cells c ON c.created_at_block = b.number OR c.consumed_at_block = b.number
                 GROUP BY date_trunc('hour', b.timestamp)
             )
@@ -1017,8 +1018,8 @@ impl BatchWriter {
                 c.lock_script_hash as miner_lock_hash,
                 COUNT(*)::int as blocks_count,
                 MAX(b.number) as last_block_number
-            FROM blocks b
-            JOIN transactions t ON t.block_number = b.number AND t.tx_index = 0
+            FROM blocks_index b
+            JOIN transactions_index t ON t.block_number = b.number AND t.tx_index = 0
             JOIN cells c ON c.tx_hash = t.hash AND c.output_index = 0
             GROUP BY b.timestamp::date, c.lock_script_hash
             ORDER BY date, blocks_count DESC

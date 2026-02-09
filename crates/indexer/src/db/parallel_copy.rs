@@ -564,6 +564,94 @@ impl ParallelCopyRouter {
 
         Ok(total_rows)
     }
+
+    pub async fn copy_blocks_index_parallel(
+        &self,
+        blocks: &[(&ParsedBlock, Option<&[u8]>)],
+    ) -> Result<u64> {
+        if blocks.is_empty() {
+            return Ok(0);
+        }
+
+        // blocks_index is NOT partitioned, single COPY stream
+        let conn = self.pool_manager.get_connection().await?;
+
+        let mut writer = crate::db::copy_blocks_index::CopyBlocksIndexWriter::new();
+        for (block, miner_lock_hash) in blocks {
+            writer.add_block(block, *miner_lock_hash);
+        }
+
+        let data = writer.finish();
+        let rows = execute_copy(
+            conn.as_ref(),
+            "COPY blocks_index (number, hash, timestamp, tx_count, proposals_count, uncles_count, \
+             epoch_number, epoch_index, epoch_length, compact_target, miner_lock_hash, dao) \
+             FROM STDIN WITH (FORMAT BINARY)",
+            data,
+        )
+        .await?;
+
+        Ok(rows)
+    }
+
+    pub async fn copy_transactions_index_parallel(&self, txs: &[TxData<'_>]) -> Result<u64> {
+        if txs.is_empty() {
+            return Ok(0);
+        }
+
+        let mut partition_data: HashMap<usize, Vec<&TxData<'_>>> = HashMap::new();
+        for tx in txs {
+            let partition = get_partition_index(tx.1); // block_number
+            partition_data.entry(partition).or_default().push(tx);
+        }
+
+        let mut futures = Vec::new();
+        for (_partition, partition_txs) in partition_data {
+            let conn = self.pool_manager.get_connection().await?;
+
+            let future = async move {
+                let mut writer =
+                    crate::db::copy_transactions_index::CopyTransactionsIndexWriter::new();
+                for tx in partition_txs {
+                    // TxData tuple: (hash, block_number, block_hash, tx_index, version,
+                    //   inputs_count, outputs_count, witnesses_count, cell_deps_count,
+                    //   header_deps_count, total_input_capacity, total_output_capacity,
+                    //   fee, tx_size, cycles, is_cellbase, timestamp)
+                    writer.add_transaction(
+                        tx.0,  // hash
+                        tx.1,  // block_number
+                        tx.3,  // tx_index
+                        tx.15, // is_cellbase
+                        tx.16, // timestamp
+                        tx.5,  // inputs_count
+                        tx.6,  // outputs_count
+                        tx.12, // fee
+                        tx.14, // cycles
+                    );
+                }
+
+                let data = writer.finish();
+                execute_copy(
+                    conn.as_ref(),
+                    "COPY transactions_index (hash, block_number, tx_index, is_cellbase, \
+                     timestamp, inputs_count, outputs_count, fee, cycles) \
+                     FROM STDIN WITH (FORMAT BINARY)",
+                    data,
+                )
+                .await
+            };
+
+            futures.push(future);
+        }
+
+        let results = join_all(futures).await;
+        let mut total_rows = 0u64;
+        for result in results {
+            total_rows += result?;
+        }
+
+        Ok(total_rows)
+    }
 }
 
 async fn execute_copy(client: &Client, query: &str, data: bytes::Bytes) -> Result<u64> {

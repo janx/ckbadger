@@ -38,7 +38,7 @@ pub async fn execute(
 ) -> Result<()> {
     info!("Starting cells_status_rebuild task (unified with consumed_at_backfill)");
 
-    let total_blocks: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(number), 0) FROM blocks")
+    let total_blocks: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(number), 0) FROM blocks_index")
         .fetch_one(pool)
         .await?;
 

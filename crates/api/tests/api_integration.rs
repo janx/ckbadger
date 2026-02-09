@@ -15,6 +15,7 @@ fn test_config(pool: sqlx::PgPool) -> AppConfig {
         rate_limit_per_second: Some(1000),
         rate_limit_burst: Some(2000),
         start_background_tasks: false,
+        ckb_data_path: None,
     }
 }
 

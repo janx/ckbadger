@@ -79,7 +79,7 @@ async fn list_transactions(
     // Get total count - either for specific block or all transactions
     let total: i64 = if let Some(block_number) = params.block_number {
         let row: Option<(i32,)> =
-            sqlx::query_as("SELECT transactions_count FROM blocks WHERE number = $1")
+            sqlx::query_as("SELECT tx_count FROM blocks_index WHERE number = $1")
                 .bind(block_number)
                 .fetch_optional(&state.read_pool)
                 .await
@@ -92,7 +92,7 @@ async fn list_transactions(
             .await
         {
             Some(status) => status.total_transactions,
-            None => sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM transactions")
+            None => sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM transactions_index")
                 .fetch_one(&state.read_pool)
                 .await
                 .map_err(|e| ApiError::internal(e.to_string()))?,
@@ -853,7 +853,7 @@ async fn get_cycles_status(
         .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
 
     let row: Option<(Option<i64>, bool)> =
-        sqlx::query_as("SELECT cycles, is_cellbase FROM transactions WHERE hash = $1")
+        sqlx::query_as("SELECT cycles, is_cellbase FROM transactions_index WHERE hash = $1")
             .bind(&hash_bytes)
             .fetch_optional(&state.read_pool)
             .await
@@ -924,7 +924,7 @@ async fn trigger_cycles_calculation(
         .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
 
     let row: Option<(Option<i64>, bool)> =
-        sqlx::query_as("SELECT cycles, is_cellbase FROM transactions WHERE hash = $1")
+        sqlx::query_as("SELECT cycles, is_cellbase FROM transactions_index WHERE hash = $1")
             .bind(&hash_bytes)
             .fetch_optional(&state.read_pool)
             .await
@@ -1088,7 +1088,7 @@ async fn get_transaction_lifecycle(
         r#"
         SELECT bp.block_number, b.hash, b.timestamp
         FROM block_proposals bp
-        JOIN blocks b ON b.number = bp.block_number
+        JOIN blocks_index b ON b.number = bp.block_number
         WHERE bp.proposal_id = $1
           AND bp.block_number BETWEEN $2 - 10 AND $2 - 2
         ORDER BY bp.block_number ASC

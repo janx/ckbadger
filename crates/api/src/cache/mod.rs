@@ -56,7 +56,7 @@ impl CacheBackend {
             return status;
         }
 
-        let tip: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(number), 0) FROM blocks")
+        let tip: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(number), 0) FROM blocks_index")
             .fetch_one(pool)
             .await
             .unwrap_or(0);
@@ -127,7 +127,7 @@ impl CacheBackend {
             return status.tip_block_number;
         }
 
-        sqlx::query_scalar("SELECT COALESCE(MAX(number), 0) FROM blocks")
+        sqlx::query_scalar("SELECT COALESCE(MAX(number), 0) FROM blocks_index")
             .fetch_one(pool)
             .await
             .unwrap_or(0)

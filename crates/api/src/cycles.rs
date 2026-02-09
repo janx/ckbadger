@@ -178,7 +178,7 @@ impl CyclesWorker {
         };
 
         let current_cycles: Option<(Option<i64>,)> =
-            sqlx::query_as("SELECT cycles FROM transactions WHERE hash = $1")
+            sqlx::query_as("SELECT cycles FROM transactions_index WHERE hash = $1")
                 .bind(&hash_bytes)
                 .fetch_optional(&self.pool)
                 .await
@@ -207,7 +207,7 @@ impl CyclesWorker {
         }
 
         let is_cellbase: Option<(bool,)> =
-            sqlx::query_as("SELECT is_cellbase FROM transactions WHERE hash = $1")
+            sqlx::query_as("SELECT is_cellbase FROM transactions_index WHERE hash = $1")
                 .bind(&hash_bytes)
                 .fetch_optional(&self.pool)
                 .await
@@ -237,12 +237,21 @@ impl CyclesWorker {
                 {
                     warn!("Failed to update cycles in DB for {}: {}", tx_hash, e);
                 }
+                let _ = sqlx::query("UPDATE transactions_index SET cycles = $1 WHERE hash = $2")
+                    .bind(cycles)
+                    .bind(&hash_bytes)
+                    .execute(&self.pool)
+                    .await;
                 debug!("Calculated cycles for {}: {}", tx_hash, cycles);
                 self.calculator.mark_complete(tx_hash).await;
             }
             Err(e) => {
                 warn!("Failed to calculate cycles for {}: {}", tx_hash, e);
                 let _ = sqlx::query("UPDATE transactions SET cycles = -1 WHERE hash = $1")
+                    .bind(&hash_bytes)
+                    .execute(&self.pool)
+                    .await;
+                let _ = sqlx::query("UPDATE transactions_index SET cycles = -1 WHERE hash = $1")
                     .bind(&hash_bytes)
                     .execute(&self.pool)
                     .await;

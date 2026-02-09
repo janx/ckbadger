@@ -14,7 +14,7 @@ pub async fn execute(
 ) -> Result<()> {
     info!("Starting activities_rebuild task");
 
-    let total_blocks: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(number), 0) FROM blocks")
+    let total_blocks: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(number), 0) FROM blocks_index")
         .fetch_one(pool)
         .await?;
 
@@ -115,8 +115,8 @@ async fn rebuild_activities_batch(pool: &PgPool, start_block: i64, end_block: i6
             GROUP BY cf.tx_hash, cf.lock_script_hash
         ),
         block_txs AS (
-            SELECT t.hash AS tx_hash, t.block_number, t.tx_index, t.is_cellbase, b.timestamp
-            FROM transactions t JOIN blocks b ON b.number = t.block_number
+            SELECT t.hash AS tx_hash, t.block_number, t.tx_index, t.is_cellbase, t.timestamp
+            FROM transactions_index t
             WHERE t.block_number >= $1 AND t.block_number < $2
         ),
         -- Primary (largest) sender per transaction

@@ -76,8 +76,8 @@ pub async fn start_block_broadcaster(
                 i32,
             ),
         >(
-            "SELECT number, hash, timestamp, transactions_count, epoch_number, epoch_index, epoch_length 
-             FROM blocks ORDER BY number DESC LIMIT 1",
+            "SELECT number, hash, timestamp, tx_count, epoch_number, epoch_index, epoch_length
+             FROM blocks_index ORDER BY number DESC LIMIT 1",
         )
         .fetch_optional(&pool)
         .await;
@@ -161,8 +161,8 @@ pub async fn start_block_broadcaster(
                     i32,
                 ),
             >(
-                "SELECT number, hash, timestamp, transactions_count, epoch_number, epoch_index, epoch_length 
-                 FROM blocks WHERE number > $1 ORDER BY number ASC LIMIT 20",
+                "SELECT number, hash, timestamp, tx_count, epoch_number, epoch_index, epoch_length
+                 FROM blocks_index WHERE number > $1 ORDER BY number ASC LIMIT 20",
             )
             .bind(last)
             .fetch_all(&pool)
@@ -212,7 +212,7 @@ async fn broadcast_block_transactions(
     let txs = sqlx::query_as::<_, (Vec<u8>, i32, i32, String, chrono::DateTime<chrono::Utc>)>(
         r#"
         SELECT hash, inputs_count::int4, outputs_count::int4, fee::text, timestamp
-        FROM transactions 
+        FROM transactions_index
         WHERE block_number = $1 AND is_cellbase = false
         ORDER BY tx_index
         "#,
@@ -251,7 +251,7 @@ async fn calculate_epoch_stats(
     // Use last 2 blocks for avg time calculation (avoids expensive self-join on 100 blocks)
     let blocks_result = sqlx::query_as::<_, (DateTime<Utc>,)>(
         r#"
-        SELECT timestamp FROM blocks
+        SELECT timestamp FROM blocks_index
         WHERE number >= $1 - 1 AND number <= $1
         ORDER BY number ASC
         "#,
@@ -292,10 +292,11 @@ async fn build_sync_status(pool: &PgPool, cache: &CacheBackend, tip_block: i64) 
                 s.bulk_sync_completed_at,
             ),
             None => {
-                let tip: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(number), 0) FROM blocks")
-                    .fetch_one(pool)
-                    .await
-                    .unwrap_or(0);
+                let tip: i64 =
+                    sqlx::query_scalar("SELECT COALESCE(MAX(number), 0) FROM blocks_index")
+                        .fetch_one(pool)
+                        .await
+                        .unwrap_or(0);
                 (tip, None, None, None)
             }
         };

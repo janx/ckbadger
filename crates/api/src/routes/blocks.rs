@@ -106,10 +106,12 @@ async fn list_blocks(
         .await
     {
         Some(status) => status.tip_block_number + 1,
-        None => sqlx::query_scalar::<_, i64>("SELECT COALESCE(MAX(number), 0) + 1 FROM blocks")
-            .fetch_one(&state.read_pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?,
+        None => {
+            sqlx::query_scalar::<_, i64>("SELECT COALESCE(MAX(number), 0) + 1 FROM blocks_index")
+                .fetch_one(&state.read_pool)
+                .await
+                .map_err(|e| ApiError::internal(e.to_string()))?
+        }
     };
 
     let cursor_number = params.cursor.unwrap_or(i64::MAX);
@@ -328,7 +330,7 @@ async fn get_miner_address(
         r#"
         SELECT c.lock_code_hash, c.lock_hash_type, c.lock_args
         FROM cells c
-        JOIN transactions t ON c.tx_hash = t.hash AND c.created_at_block = t.block_number
+        JOIN transactions_index t ON c.tx_hash = t.hash AND c.created_at_block = t.block_number
         WHERE t.block_number = $1 AND t.tx_index = 0 AND c.output_index = 0
         LIMIT 1
         "#,
@@ -463,7 +465,7 @@ async fn get_block_fee_stats(
         let hash = hex::decode(id.strip_prefix("0x").unwrap_or(&id))
             .map_err(|_| ApiError::bad_request("Invalid block hash"))?;
 
-        let row: Option<(i64,)> = sqlx::query_as("SELECT number FROM blocks WHERE hash = $1")
+        let row: Option<(i64,)> = sqlx::query_as("SELECT number FROM blocks_index WHERE hash = $1")
             .bind(&hash)
             .fetch_optional(&state.read_pool)
             .await
@@ -527,7 +529,7 @@ async fn get_block_proposals(
         let hash = hex::decode(id.strip_prefix("0x").unwrap_or(&id))
             .map_err(|_| ApiError::bad_request("Invalid block hash"))?;
 
-        let row: Option<(i64,)> = sqlx::query_as("SELECT number FROM blocks WHERE hash = $1")
+        let row: Option<(i64,)> = sqlx::query_as("SELECT number FROM blocks_index WHERE hash = $1")
             .bind(&hash)
             .fetch_optional(&state.read_pool)
             .await

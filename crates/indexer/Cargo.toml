@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 ckbadger-common = { path = "../common" }
+ckb-store-reader = { path = "../ckb-store-reader" }
 
 # Async runtime
 tokio = { workspace = true }

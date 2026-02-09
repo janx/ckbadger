@@ -124,9 +124,10 @@ impl TaskDb {
         indexes_deferred: bool,
     ) -> Result<SyncStatusRow> {
         let tip_block = status.tip_block_number;
-        let chain_tip: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(number), 0) FROM blocks")
-            .fetch_one(&self.pool)
-            .await?;
+        let chain_tip: i64 =
+            sqlx::query_scalar("SELECT COALESCE(MAX(number), 0) FROM blocks_index")
+                .fetch_one(&self.pool)
+                .await?;
 
         let blocks_behind = chain_tip - tip_block;
         let is_syncing = blocks_behind > 100;
@@ -171,7 +172,7 @@ impl TaskDb {
     }
 
     async fn build_fallback(&self, indexes_deferred: bool) -> Result<SyncStatusRow> {
-        let tip: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(number), 0) FROM blocks")
+        let tip: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(number), 0) FROM blocks_index")
             .fetch_one(&self.pool)
             .await?;
 

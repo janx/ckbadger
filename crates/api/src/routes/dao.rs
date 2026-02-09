@@ -435,7 +435,7 @@ async fn get_address_dao_summary(
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let latest_block = sqlx::query_as::<_, (i64, Vec<u8>)>(
-        "SELECT number, dao FROM blocks WHERE dao IS NOT NULL ORDER BY number DESC LIMIT 1",
+        "SELECT number, dao FROM blocks_index WHERE dao IS NOT NULL ORDER BY number DESC LIMIT 1",
     )
     .fetch_optional(&state.read_pool)
     .await
@@ -453,7 +453,7 @@ async fn get_address_dao_summary(
     let deposits_with_ar = sqlx::query_as::<_, (String, Vec<u8>)>(
         r#"SELECT CAST(d.capacity AS TEXT), b.dao
         FROM dao_deposits d
-        JOIN blocks b ON d.deposit_block_number = b.number
+        JOIN blocks_index b ON d.deposit_block_number = b.number
         WHERE d.lock_script_hash = $1 AND d.status IN (0, 1) AND b.dao IS NOT NULL AND d.deposit_block_number <= $2"#,
     )
     .bind(&hash)
@@ -527,7 +527,7 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let latest_block = sqlx::query_as::<_, (i64, Vec<u8>)>(
-        "SELECT number, dao FROM blocks WHERE dao IS NOT NULL ORDER BY number DESC LIMIT 1",
+        "SELECT number, dao FROM blocks_index WHERE dao IS NOT NULL ORDER BY number DESC LIMIT 1",
     )
     .fetch_optional(&state.read_pool)
     .await
@@ -557,7 +557,7 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
             CAST(d.capacity AS TEXT),
             b.dao
         FROM dao_deposits d
-        JOIN blocks b ON d.deposit_block_number = b.number
+        JOIN blocks_index b ON d.deposit_block_number = b.number
         WHERE d.status = 0 AND b.dao IS NOT NULL AND d.deposit_block_number <= $1"#,
     )
     .bind(latest_block_number)
@@ -662,7 +662,7 @@ async fn calculate_compensation(
         .parse()
         .map_err(|_| ApiError::bad_request("Invalid capacity"))?;
 
-    let latest_block: (i64,) = sqlx::query_as("SELECT COALESCE(MAX(number), 0) FROM blocks")
+    let latest_block: (i64,) = sqlx::query_as("SELECT COALESCE(MAX(number), 0) FROM blocks_index")
         .fetch_one(&state.read_pool)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
@@ -670,14 +670,14 @@ async fn calculate_compensation(
     let withdraw_block = params.withdraw_block.unwrap_or(latest_block.0);
 
     let deposit_dao: Option<(Vec<u8>,)> =
-        sqlx::query_as("SELECT dao FROM blocks WHERE number = $1")
+        sqlx::query_as("SELECT dao FROM blocks_index WHERE number = $1")
             .bind(params.deposit_block)
             .fetch_optional(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let withdraw_dao: Option<(Vec<u8>,)> =
-        sqlx::query_as("SELECT dao FROM blocks WHERE number = $1")
+        sqlx::query_as("SELECT dao FROM blocks_index WHERE number = $1")
             .bind(withdraw_block)
             .fetch_optional(&state.read_pool)
             .await

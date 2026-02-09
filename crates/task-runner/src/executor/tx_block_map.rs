@@ -14,7 +14,7 @@ pub async fn execute(
 ) -> Result<()> {
     info!("Starting tx_block_map_rebuild task");
 
-    let total_txs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM transactions")
+    let total_txs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM transactions_index")
         .fetch_one(pool)
         .await?;
 
@@ -42,8 +42,8 @@ pub async fn execute(
 
     sqlx::query(
         r#"
-        CREATE TABLE tx_block_map_new AS 
-        SELECT hash AS tx_hash, block_number FROM transactions
+        CREATE TABLE tx_block_map_new AS
+        SELECT hash AS tx_hash, block_number FROM transactions_index
         "#,
     )
     .execute(pool)

@@ -130,7 +130,7 @@ async fn get_tx_stats(State(state): State<Arc<AppState>>) -> ApiResult<TxStatsRe
 
     // Use latest synced block timestamp as reference, not current time
     let latest_ts: Option<(DateTime<Utc>,)> =
-        sqlx::query_as("SELECT timestamp FROM blocks ORDER BY number DESC LIMIT 1")
+        sqlx::query_as("SELECT timestamp FROM blocks_index ORDER BY number DESC LIMIT 1")
             .fetch_optional(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?;
@@ -222,7 +222,7 @@ async fn get_recent_blocks(State(state): State<Arc<AppState>>) -> ApiResult<Rece
     }
 
     let latest_ts: Option<(DateTime<Utc>,)> =
-        sqlx::query_as("SELECT timestamp FROM blocks ORDER BY number DESC LIMIT 1")
+        sqlx::query_as("SELECT timestamp FROM blocks_index ORDER BY number DESC LIMIT 1")
             .fetch_optional(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?;
@@ -231,8 +231,8 @@ async fn get_recent_blocks(State(state): State<Arc<AppState>>) -> ApiResult<Rece
 
     let rows = sqlx::query_as::<_, (DateTime<Utc>, i32)>(
         r#"
-        SELECT timestamp, transactions_count
-        FROM blocks
+        SELECT timestamp, tx_count
+        FROM blocks_index
         WHERE timestamp > $1 - INTERVAL '24 hours'
         ORDER BY number ASC
         "#,
@@ -730,7 +730,7 @@ async fn fetch_network_stats_from_db(
     ),
 > {
     let latest: Option<(i64, i64, i32, i32, i64, DateTime<Utc>)> = sqlx::query_as(
-        "SELECT number, epoch_number, epoch_index, epoch_length, compact_target, timestamp FROM blocks ORDER BY number DESC LIMIT 1",
+        "SELECT number, epoch_number, epoch_index, epoch_length, compact_target, timestamp FROM blocks_index ORDER BY number DESC LIMIT 1",
     )
     .fetch_optional(&state.read_pool)
     .await
@@ -760,7 +760,7 @@ async fn fetch_network_stats_from_db(
         // Get timestamps of last 2 blocks for recent avg (much faster than self-join)
         sqlx::query_as::<_, (DateTime<Utc>,)>(
             r#"
-            SELECT timestamp FROM blocks
+            SELECT timestamp FROM blocks_index
             WHERE number >= $1 - 1 AND number <= $1
             ORDER BY number ASC
             "#,

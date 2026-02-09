@@ -143,6 +143,13 @@ struct Args {
         help = "Disable auto defer-tx-block-map optimization for fresh database sync"
     )]
     no_auto_defer_tx_block_map: bool,
+
+    #[arg(
+        long,
+        env = "CKB_DATA_PATH",
+        help = "Path to CKB node's RocksDB data directory for direct reads (e.g., /var/lib/ckb/data/db)"
+    )]
+    ckb_data_path: Option<String>,
 }
 
 #[tokio::main]
@@ -184,6 +191,7 @@ async fn main() -> Result<()> {
         live_cell_flush_interval: args.live_cell_flush_interval,
         live_cell_db_path: args.live_cell_db_path,
         bulk_sync_cell_cache: !args.no_bulk_sync_cell_cache,
+        ckb_data_path: args.ckb_data_path,
     };
 
     info!("Connecting to database: {}", config.database_url);
@@ -207,7 +215,7 @@ async fn main() -> Result<()> {
 
     let indexes_currently_deferred = index_manager.is_indexes_deferred().await?;
 
-    let db_tip: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(number), 0) FROM blocks")
+    let db_tip: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(number), 0) FROM blocks_index")
         .fetch_one(&pool)
         .await?;
 

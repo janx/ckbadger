@@ -124,6 +124,37 @@ impl BatchWriter {
         .execute(&self.pool)
         .await?;
 
+        // Also write to blocks_index (lightweight index table)
+        sqlx::query(
+            r#"
+            INSERT INTO blocks_index (
+                number, hash, timestamp, tx_count, proposals_count, uncles_count,
+                epoch_number, epoch_index, epoch_length, compact_target, dao
+            )
+            SELECT * FROM UNNEST(
+                $1::bigint[], $2::bytea[], $3::timestamptz[], $4::int[], $5::int[], $6::int[],
+                $7::bigint[], $8::int[], $9::int[], $10::bigint[], $11::bytea[]
+            )
+            ON CONFLICT (number) DO UPDATE SET
+                hash = EXCLUDED.hash,
+                timestamp = EXCLUDED.timestamp,
+                tx_count = EXCLUDED.tx_count
+            "#,
+        )
+        .bind(&numbers)
+        .bind(&hashes)
+        .bind(&timestamps)
+        .bind(&transactions_counts)
+        .bind(&proposals_counts)
+        .bind(&uncles_counts)
+        .bind(&epoch_numbers)
+        .bind(&epoch_indices)
+        .bind(&epoch_lengths)
+        .bind(&compact_targets)
+        .bind(&daos)
+        .execute(&self.pool)
+        .await?;
+
         if let Some(store) = &self.live_cell_store {
             for block in blocks {
                 store.insert_block_header(

@@ -278,6 +278,118 @@ pub struct TxPoolEntry {
     pub timestamp: String,
 }
 
+// ============ Conversions from ckb-store-reader types ============
+
+impl From<ckb_store_reader::RpcBlockResponseWithCycles> for BlockResponseWithCycles {
+    fn from(src: ckb_store_reader::RpcBlockResponseWithCycles) -> Self {
+        Self {
+            block: src.block.into(),
+            cycles: src.cycles,
+        }
+    }
+}
+
+impl From<ckb_store_reader::RpcBlockView> for BlockView {
+    fn from(src: ckb_store_reader::RpcBlockView) -> Self {
+        Self {
+            header: src.header.into(),
+            uncles: src.uncles.into_iter().map(Into::into).collect(),
+            transactions: src.transactions.into_iter().map(Into::into).collect(),
+            proposals: src.proposals,
+        }
+    }
+}
+
+impl From<ckb_store_reader::RpcHeaderView> for HeaderView {
+    fn from(src: ckb_store_reader::RpcHeaderView) -> Self {
+        Self {
+            version: src.version,
+            compact_target: src.compact_target,
+            timestamp: src.timestamp,
+            number: src.number,
+            epoch: src.epoch,
+            parent_hash: src.parent_hash,
+            transactions_root: src.transactions_root,
+            proposals_hash: src.proposals_hash,
+            extra_hash: src.extra_hash,
+            dao: src.dao,
+            nonce: src.nonce,
+            hash: src.hash,
+        }
+    }
+}
+
+impl From<ckb_store_reader::RpcUncleBlockView> for UncleBlockView {
+    fn from(src: ckb_store_reader::RpcUncleBlockView) -> Self {
+        Self {
+            header: src.header.into(),
+            proposals: src.proposals,
+        }
+    }
+}
+
+impl From<ckb_store_reader::RpcTransactionView> for TransactionView {
+    fn from(src: ckb_store_reader::RpcTransactionView) -> Self {
+        Self {
+            hash: src.hash,
+            version: src.version,
+            cell_deps: src.cell_deps.into_iter().map(Into::into).collect(),
+            header_deps: src.header_deps,
+            inputs: src.inputs.into_iter().map(Into::into).collect(),
+            outputs: src.outputs.into_iter().map(Into::into).collect(),
+            outputs_data: src.outputs_data,
+            witnesses: src.witnesses,
+        }
+    }
+}
+
+impl From<ckb_store_reader::RpcCellDep> for CellDep {
+    fn from(src: ckb_store_reader::RpcCellDep) -> Self {
+        Self {
+            out_point: src.out_point.into(),
+            dep_type: src.dep_type,
+        }
+    }
+}
+
+impl From<ckb_store_reader::RpcOutPoint> for OutPoint {
+    fn from(src: ckb_store_reader::RpcOutPoint) -> Self {
+        Self {
+            tx_hash: src.tx_hash,
+            index: src.index,
+        }
+    }
+}
+
+impl From<ckb_store_reader::RpcCellInput> for CellInput {
+    fn from(src: ckb_store_reader::RpcCellInput) -> Self {
+        Self {
+            since: src.since,
+            previous_output: src.previous_output.into(),
+        }
+    }
+}
+
+impl From<ckb_store_reader::RpcCellOutput> for CellOutput {
+    fn from(src: ckb_store_reader::RpcCellOutput) -> Self {
+        Self {
+            capacity: src.capacity,
+            lock: src.lock.into(),
+            type_: src.type_.map(Into::into),
+        }
+    }
+}
+
+impl From<ckb_store_reader::RpcScript> for Script {
+    fn from(src: ckb_store_reader::RpcScript) -> Self {
+        Self {
+            code_hash: src.code_hash,
+            hash_type: src.hash_type,
+            args: src.args,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -20,7 +20,7 @@ pub async fn execute(
     );
 
     let total_missing: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM transactions WHERE NOT is_cellbase AND (cycles IS NULL OR cycles = 0)",
+        "SELECT COUNT(*) FROM transactions_index WHERE NOT is_cellbase AND (cycles IS NULL OR cycles = 0)",
     )
     .fetch_one(pool)
     .await?;
@@ -52,8 +52,8 @@ pub async fn execute(
 
         let txs: Vec<(Vec<u8>,)> = sqlx::query_as(
             r#"
-            SELECT hash FROM transactions 
-            WHERE NOT is_cellbase 
+            SELECT hash FROM transactions_index
+            WHERE NOT is_cellbase
               AND (cycles IS NULL OR cycles = 0)
             ORDER BY block_number
             LIMIT $1
@@ -175,12 +175,21 @@ async fn update_cycles(pool: &PgPool, tx_hash: &str, result: Result<i64, String>
                 .bind(&hash_bytes)
                 .execute(pool)
                 .await?;
+            sqlx::query("UPDATE transactions_index SET cycles = $1 WHERE hash = $2")
+                .bind(cycles)
+                .bind(&hash_bytes)
+                .execute(pool)
+                .await?;
             debug!("Updated cycles for {}: {}", tx_hash, cycles);
             Ok(true)
         }
         Err(e) => {
             warn!("Failed to calculate cycles for {}: {}", tx_hash, e);
             sqlx::query("UPDATE transactions SET cycles = -1 WHERE hash = $1")
+                .bind(&hash_bytes)
+                .execute(pool)
+                .await?;
+            sqlx::query("UPDATE transactions_index SET cycles = -1 WHERE hash = $1")
                 .bind(&hash_bytes)
                 .execute(pool)
                 .await?;
