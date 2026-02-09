@@ -577,12 +577,19 @@ fn draw_sync_status_full(f: &mut Frame, app: &App, area: Rect) {
         ("SYNCING", Color::Cyan)
     };
 
+    let source_tag = if sync.is_direct_db_read {
+        Span::styled(" [DB]", Style::default().fg(Color::Green))
+    } else {
+        Span::styled(" [RPC]", Style::default().fg(Color::Cyan))
+    };
+
     let mut left_lines = vec![
         Line::from(vec![
             Span::styled(
                 format!(" {} ", mode),
                 Style::default().fg(Color::Black).bg(mode_color),
             ),
+            source_tag,
             if sync.indexes_deferred {
                 Span::styled(" [IDX]", Style::default().fg(Color::Yellow))
             } else {

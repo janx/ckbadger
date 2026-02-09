@@ -193,6 +193,9 @@ pub struct SyncProgressData {
     pub eta_formatted: String,
     pub progress_percentage: f64,
     pub updated_at: i64,
+    /// True when reading blocks directly from CKB's RocksDB instead of JSON-RPC.
+    #[serde(default)]
+    pub is_direct_db_read: bool,
 }
 
 pub fn format_duration_smart(total_secs: f64) -> String {

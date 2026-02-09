@@ -425,6 +425,7 @@ mod tests {
             eta_formatted: "1m 30s".to_string(),
             progress_percentage: 10.0,
             updated_at: 1234567890,
+            is_direct_db_read: false,
         };
         invalidator.publish_sync_progress(&data).await;
     }
@@ -514,6 +515,7 @@ mod tests {
                 eta_formatted: "27s".to_string(),
                 progress_percentage: 50.0,
                 updated_at: chrono::Utc::now().timestamp(),
+                is_direct_db_read: false,
             };
             invalidator.publish_sync_progress(&data).await;
 

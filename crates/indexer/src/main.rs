@@ -416,6 +416,7 @@ async fn main() -> Result<()> {
                 eta_formatted: eta.clone(),
                 progress_percentage: progress.progress_percentage(),
                 updated_at: chrono::Utc::now().timestamp(),
+                is_direct_db_read: data_source == "DB",
             };
             indexer_for_progress
                 .cache_invalidator()

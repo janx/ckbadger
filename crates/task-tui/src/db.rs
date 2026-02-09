@@ -21,6 +21,8 @@ pub struct SyncStatusRow {
     pub rate_realtime: Option<f64>,
     /// EMA rate (smoothed)
     pub rate_ema: Option<f64>,
+    /// True when indexer reads blocks directly from CKB's RocksDB.
+    pub is_direct_db_read: bool,
 }
 
 pub struct TaskDb {
@@ -115,6 +117,7 @@ impl TaskDb {
             eta: Some(progress.eta_formatted.clone()),
             rate_realtime: Some(progress.blocks_per_second),
             rate_ema: Some(progress.ema_blocks_per_second),
+            is_direct_db_read: progress.is_direct_db_read,
         }
     }
 
@@ -168,6 +171,7 @@ impl TaskDb {
             eta,
             rate_realtime: None,
             rate_ema: status.sync_ema_rate,
+            is_direct_db_read: false,
         })
     }
 
@@ -187,6 +191,7 @@ impl TaskDb {
             eta: None,
             rate_realtime: None,
             rate_ema: None,
+            is_direct_db_read: false,
         })
     }
 
