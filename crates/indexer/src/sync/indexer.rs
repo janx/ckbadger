@@ -1335,27 +1335,31 @@ impl Indexer {
     }
 
     /// Fetch blocks directly from CKB's RocksDB (no network I/O).
+    /// Uses rayon to read blocks in parallel across all CPU cores.
     /// Returns the same `BlockResponseWithCycles` format as the RPC fetcher.
     fn fetch_blocks_direct(
         store: &CkbChainReader,
         start: u64,
         end: u64,
     ) -> Result<Vec<BlockResponseWithCycles>> {
-        let mut blocks = Vec::with_capacity((end - start + 1) as usize);
+        let block_numbers: Vec<u64> = (start..=end).collect();
 
-        for num in start..=end {
-            let hash = store
-                .get_block_hash(num)
-                .ok_or_else(|| anyhow::anyhow!("Block {} hash not found in CKB RocksDB", num))?;
-            let block = store
-                .get_block(&hash)
-                .ok_or_else(|| anyhow::anyhow!("Block {} data not found in CKB RocksDB", num))?;
+        let results: Vec<Result<BlockResponseWithCycles>> = block_numbers
+            .par_iter()
+            .map(|&num| {
+                let hash = store.get_block_hash(num).ok_or_else(|| {
+                    anyhow::anyhow!("Block {} hash not found in CKB RocksDB", num)
+                })?;
+                let block = store.get_block(&hash).ok_or_else(|| {
+                    anyhow::anyhow!("Block {} data not found in CKB RocksDB", num)
+                })?;
 
-            let rpc_block = ckb_store_reader::block_view_to_rpc(&block, store);
-            blocks.push(rpc_block.into());
-        }
+                let rpc_block = ckb_store_reader::block_view_to_rpc(&block, store);
+                Ok(rpc_block.into())
+            })
+            .collect();
 
-        Ok(blocks)
+        results.into_iter().collect()
     }
 
     async fn drain_channel<T>(rx: &mut tokio::sync::mpsc::Receiver<T>) {
