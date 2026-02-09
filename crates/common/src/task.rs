@@ -231,7 +231,7 @@ impl Default for SecondaryIssuanceBackfillConfig {
 }
 
 fn default_secondary_issuance_batch_size() -> i64 {
-    1000
+    10_000
 }
 
 /// Configuration for index rebuild task
@@ -1305,7 +1305,7 @@ mod tests {
         assert!(index.rebuild_constraints);
 
         let secondary = SecondaryIssuanceBackfillConfig::default();
-        assert_eq!(secondary.batch_size, 1000);
+        assert_eq!(secondary.batch_size, 10_000);
         assert_eq!(secondary.concurrent_requests, 32);
     }
 

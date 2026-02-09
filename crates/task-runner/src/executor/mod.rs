@@ -32,7 +32,6 @@ mod tx_block_map;
 pub struct TaskExecutor {
     db: TaskDb,
     pool: PgPool,
-    database_url: String,
     runner_id: String,
     ckb_rpc_url: String,
     token_labels_path: String,
@@ -46,7 +45,6 @@ impl TaskExecutor {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         pool: PgPool,
-        database_url: String,
         runner_id: String,
         ckb_rpc_url: String,
         token_labels_path: String,
@@ -58,7 +56,6 @@ impl TaskExecutor {
         Self {
             db: TaskDb::new(pool.clone()),
             pool,
-            database_url,
             runner_id,
             ckb_rpc_url,
             token_labels_path,
@@ -336,8 +333,7 @@ impl TaskExecutor {
             config.ckb_rpc_url = self.ckb_rpc_url.clone();
         }
 
-        secondary_issuance::execute(&self.db, &self.pool, &self.database_url, task.id, &config)
-            .await
+        secondary_issuance::execute(&self.db, &self.pool, task.id, &config).await
     }
 
     async fn execute_cells_status_rebuild(&self, task: &Task) -> Result<()> {

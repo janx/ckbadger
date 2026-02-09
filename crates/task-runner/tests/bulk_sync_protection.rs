@@ -134,10 +134,8 @@ async fn test_is_bulk_sync_active_with_empty_blocks_table(pool: PgPool) {
 
 #[sqlx::test(migrator = "MIGRATOR")]
 async fn test_run_once_returns_false_when_task_deferred(pool: PgPool) {
-    let db_url = "unused".to_string();
     let executor = TaskExecutor::new(
         pool.clone(),
-        db_url,
         "test-runner".to_string(),
         "http://unused:8114".to_string(),
         "/nonexistent".to_string(),
@@ -173,10 +171,8 @@ async fn test_run_once_returns_false_when_task_deferred(pool: PgPool) {
 async fn test_run_once_returns_true_when_task_executes(pool: PgPool) {
     insert_block_with_timestamp(&pool, 18000000, 0.1).await;
 
-    let db_url = "unused".to_string();
     let executor = TaskExecutor::new(
         pool.clone(),
-        db_url,
         "test-runner".to_string(),
         "http://unused:8114".to_string(),
         "/nonexistent".to_string(),

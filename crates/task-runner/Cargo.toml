@@ -25,10 +25,6 @@ serde_json = { workspace = true }
 # HTTP client (for CKB RPC)
 reqwest = { workspace = true }
 
-# PostgreSQL COPY protocol
-tokio-postgres = { workspace = true }
-bytes = { workspace = true }
-
 # Cache
 redis = { workspace = true }
 

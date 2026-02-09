@@ -2,17 +2,13 @@ use anyhow::{anyhow, Result};
 use ckbadger_common::{
     RateCalculator, SecondaryIssuanceBackfillConfig, SecondaryIssuanceBackfillResult,
 };
-use futures::{
-    stream::{self, StreamExt},
-    SinkExt,
-};
+use futures::stream::{self, StreamExt};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::PgPool;
 use std::collections::HashMap;
 use std::time::Duration;
-use tokio_postgres::NoTls;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
@@ -20,7 +16,7 @@ use crate::db::TaskDb;
 
 const RETRY_ATTEMPTS: usize = 3;
 const RETRY_BACKOFF_MS: u64 = 500;
-const RPC_BATCH_SIZE: usize = 250;
+const RPC_BATCH_SIZE: usize = 1000;
 const HTTP_TIMEOUT_SECS: u64 = 60;
 const HTTP_CONNECT_TIMEOUT_SECS: u64 = 10;
 
@@ -69,7 +65,6 @@ struct BlockIssuanceRow {
 pub async fn execute(
     db: &TaskDb,
     pool: &PgPool,
-    database_url: &str,
     task_id: Uuid,
     config: &SecondaryIssuanceBackfillConfig,
 ) -> Result<()> {
@@ -136,13 +131,9 @@ pub async fn execute(
     let mut processed: i64 = 0;
     let mut current = start_block;
     let batch_size = config.batch_size.max(1);
+    let mut batch_count: u64 = 0;
 
     while current <= end_block {
-        if db.check_cancelled(task_id).await? {
-            info!("Task cancelled, stopping");
-            return Ok(());
-        }
-
         let batch_end = (current + batch_size - 1).min(end_block);
         let blocks = fetch_block_rows(pool, current, batch_end).await?;
         if blocks.is_empty() {
@@ -181,31 +172,37 @@ pub async fn execute(
             batch_rows.push(row);
         }
 
-        insert_secondary_issuance_rows_copy(database_url, &batch_rows).await?;
+        insert_secondary_issuance_rows(pool, &batch_rows).await?;
         update_secondary_issuance_totals(pool, &batch_rows, batch_end).await?;
 
         processed += batch_rows.len() as i64;
         result.blocks_processed = processed;
-        rate_calc.add_sample(processed);
+        batch_count += 1;
 
-        let msg = format!(
-            "Processed blocks {}-{} ({:.1}%)",
-            current,
-            batch_end,
-            (processed as f64 / total_blocks as f64) * 100.0
-        );
+        if batch_count.is_multiple_of(10) {
+            if db.check_cancelled(task_id).await? {
+                info!("Task cancelled, stopping");
+                return Ok(());
+            }
 
-        db.update_progress(
-            task_id,
-            processed,
-            total_blocks,
-            Some(&msg),
-            rate_calc.rate(),
-        )
-        .await?;
+            rate_calc.add_sample(processed);
 
-        db.update_result(task_id, &serde_json::to_value(&result)?)
+            let msg = format!(
+                "Processed blocks {}-{} ({:.1}%)",
+                current,
+                batch_end,
+                (processed as f64 / total_blocks as f64) * 100.0
+            );
+
+            db.update_progress(
+                task_id,
+                processed,
+                total_blocks,
+                Some(&msg),
+                rate_calc.rate(),
+            )
             .await?;
+        }
 
         current = batch_end + 1;
     }
@@ -554,58 +551,44 @@ fn u128_to_i64(value: u128) -> Result<i64> {
     i64::try_from(value).map_err(|_| anyhow!("Value too large for i64: {}", value))
 }
 
-async fn insert_secondary_issuance_rows_copy(
-    database_url: &str,
-    rows: &[BlockIssuanceRow],
-) -> Result<()> {
+async fn insert_secondary_issuance_rows(pool: &PgPool, rows: &[BlockIssuanceRow]) -> Result<()> {
     if rows.is_empty() {
         return Ok(());
     }
 
-    let (client, connection) = tokio_postgres::connect(database_url, NoTls)
-        .await
-        .map_err(|e| anyhow!("COPY connection failed: {}", e))?;
+    let mut numbers = Vec::with_capacity(rows.len());
+    let mut timestamps = Vec::with_capacity(rows.len());
+    let mut secondary_issuances = Vec::with_capacity(rows.len());
+    let mut miner_secondaries = Vec::with_capacity(rows.len());
+    let mut dao_compensations = Vec::with_capacity(rows.len());
+    let mut burnts = Vec::with_capacity(rows.len());
 
-    tokio::spawn(async move {
-        if let Err(e) = connection.await {
-            warn!("COPY connection error: {}", e);
-        }
-    });
-
-    let copy_stmt = r#"COPY block_secondary_issuance 
-        (block_number, block_timestamp, secondary_issuance, miner_secondary, dao_compensation, burnt) 
-        FROM STDIN WITH (FORMAT text, DELIMITER E'\t')"#;
-
-    let sink = client
-        .copy_in(copy_stmt)
-        .await
-        .map_err(|e| anyhow!("COPY IN failed: {}", e))?;
-    futures::pin_mut!(sink);
-
-    let mut text_data = String::with_capacity(rows.len() * 100);
     for row in rows {
-        use std::fmt::Write;
-        writeln!(
-            &mut text_data,
-            "{}\t{}\t{}\t{}\t{}\t{}",
-            row.number,
-            row.timestamp.format("%Y-%m-%d %H:%M:%S%.6f%:z"),
-            row.secondary_issuance,
-            row.miner_secondary,
-            row.dao_compensation,
-            row.burnt
-        )
-        .expect("String write should not fail");
+        numbers.push(row.number);
+        timestamps.push(row.timestamp);
+        secondary_issuances.push(row.secondary_issuance);
+        miner_secondaries.push(row.miner_secondary);
+        dao_compensations.push(row.dao_compensation);
+        burnts.push(row.burnt);
     }
 
-    sink.send(bytes::Bytes::from(text_data))
-        .await
-        .map_err(|e| anyhow!("COPY send failed: {}", e))?;
-    let rows_written = sink
-        .finish()
-        .await
-        .map_err(|e| anyhow!("COPY finish failed: {}", e))?;
-    debug!("COPY wrote {} rows", rows_written);
+    sqlx::query(
+        r#"
+        INSERT INTO block_secondary_issuance
+            (block_number, block_timestamp, secondary_issuance, miner_secondary, dao_compensation, burnt)
+        SELECT * FROM UNNEST($1::bigint[], $2::timestamptz[], $3::bigint[], $4::bigint[], $5::bigint[], $6::bigint[])
+        "#,
+    )
+    .bind(&numbers)
+    .bind(&timestamps)
+    .bind(&secondary_issuances)
+    .bind(&miner_secondaries)
+    .bind(&dao_compensations)
+    .bind(&burnts)
+    .execute(pool)
+    .await?;
+
+    debug!("Inserted {} rows via UNNEST", rows.len());
 
     Ok(())
 }
@@ -687,7 +670,7 @@ mod tests {
 
     #[test]
     fn test_rpc_batch_size_constant() {
-        assert_eq!(RPC_BATCH_SIZE, 250);
+        assert_eq!(RPC_BATCH_SIZE, 1000);
     }
 
     #[test]
