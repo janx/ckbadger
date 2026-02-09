@@ -131,7 +131,7 @@ async fn get_tx_stats(State(state): State<Arc<AppState>>) -> ApiResult<TxStatsRe
     // Use latest synced block timestamp as reference, not current time
     let latest_ts: Option<(DateTime<Utc>,)> =
         sqlx::query_as("SELECT timestamp FROM blocks ORDER BY number DESC LIMIT 1")
-            .fetch_optional(&state.pool)
+            .fetch_optional(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -148,7 +148,7 @@ async fn get_tx_stats(State(state): State<Arc<AppState>>) -> ApiResult<TxStatsRe
         "#,
     )
     .bind(reference_time)
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -162,7 +162,7 @@ async fn get_tx_stats(State(state): State<Arc<AppState>>) -> ApiResult<TxStatsRe
         "#,
     )
     .bind(reference_date)
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -223,7 +223,7 @@ async fn get_recent_blocks(State(state): State<Arc<AppState>>) -> ApiResult<Rece
 
     let latest_ts: Option<(DateTime<Utc>,)> =
         sqlx::query_as("SELECT timestamp FROM blocks ORDER BY number DESC LIMIT 1")
-            .fetch_optional(&state.pool)
+            .fetch_optional(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -238,7 +238,7 @@ async fn get_recent_blocks(State(state): State<Arc<AppState>>) -> ApiResult<Rece
         "#,
     )
     .bind(reference_time)
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -398,7 +398,7 @@ async fn get_transaction_count_chart(
         ORDER BY date ASC
         "#,
     )
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -430,7 +430,7 @@ async fn get_cell_count_chart(
         ORDER BY date ASC
         "#,
     )
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -482,7 +482,7 @@ async fn get_knowledge_size_chart(State(state): State<Arc<AppState>>) -> ApiResu
         ORDER BY date ASC
         "#,
     )
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -518,7 +518,7 @@ async fn get_block_time_distribution_chart(
         ORDER BY bucket_ms
         "#,
     )
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -568,7 +568,7 @@ async fn get_epoch_time_distribution_chart(
         ORDER BY bucket_minutes
         "#,
     )
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -615,7 +615,7 @@ async fn get_epoch_time_length_chart(
         ORDER BY epoch_number ASC
         "#,
     )
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -658,7 +658,7 @@ async fn get_average_block_time_chart(
         ORDER BY date ASC
         "#,
     )
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -732,7 +732,7 @@ async fn fetch_network_stats_from_db(
     let latest: Option<(i64, i64, i32, i32, i64, DateTime<Utc>)> = sqlx::query_as(
         "SELECT number, epoch_number, epoch_index, epoch_length, compact_target, timestamp FROM blocks ORDER BY number DESC LIMIT 1",
     )
-    .fetch_optional(&state.pool)
+    .fetch_optional(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -756,7 +756,7 @@ async fn fetch_network_stats_from_db(
             "#,
         )
         .bind(epoch_number)
-        .fetch_optional(&state.pool),
+        .fetch_optional(&state.read_pool),
         // Get timestamps of last 2 blocks for recent avg (much faster than self-join)
         sqlx::query_as::<_, (DateTime<Utc>,)>(
             r#"
@@ -766,7 +766,7 @@ async fn fetch_network_stats_from_db(
             "#,
         )
         .bind(latest_block)
-        .fetch_all(&state.pool),
+        .fetch_all(&state.read_pool),
         // Get 24h transaction count from daily_statistics (pre-computed)
         sqlx::query_as::<_, (i64,)>(
             r#"
@@ -776,7 +776,7 @@ async fn fetch_network_stats_from_db(
             "#,
         )
         .bind(yesterday)
-        .fetch_one(&state.pool),
+        .fetch_one(&state.read_pool),
         fetch_tip_block_from_ckb(&state.ckb_rpc_url)
     );
 
@@ -859,7 +859,7 @@ async fn fetch_network_stats_from_db(
             deep_fork_fork_point
         FROM sync_status WHERE id = 1"#,
     )
-    .fetch_optional(&state.pool)
+    .fetch_optional(&state.read_pool)
     .await
     .ok()
     .flatten();
@@ -1017,7 +1017,7 @@ async fn get_hash_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<Ch
     let rows = sqlx::query_as::<_, (chrono::NaiveDate, i64, i32)>(
         "SELECT date, COALESCE(avg_compact_target, 0), block_count FROM daily_block_stats WHERE avg_compact_target IS NOT NULL AND date < (SELECT MAX(date) FROM daily_block_stats) ORDER BY date ASC",
     )
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -1056,7 +1056,7 @@ async fn get_difficulty_chart(State(state): State<Arc<AppState>>) -> ApiResult<C
     let rows = sqlx::query_as::<_, (chrono::NaiveDate, i64)>(
         "SELECT date, COALESCE(avg_compact_target, 0) FROM daily_block_stats WHERE avg_compact_target IS NOT NULL AND date < (SELECT MAX(date) FROM daily_block_stats) ORDER BY date ASC",
     )
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -1093,7 +1093,7 @@ async fn get_uncle_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<C
     let rows = sqlx::query_as::<_, (chrono::NaiveDate, f64)>(
         "SELECT date, avg_uncle_rate FROM daily_block_stats WHERE date < (SELECT MAX(date) FROM daily_block_stats) ORDER BY date ASC",
     )
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -1149,7 +1149,7 @@ async fn get_miner_address_distribution_chart(
 
     let total_blocks: (i64,) =
         sqlx::query_as("SELECT COALESCE(SUM(blocks_count), 0)::bigint FROM miner_statistics")
-            .fetch_one(&state.pool)
+            .fetch_one(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -1176,7 +1176,7 @@ async fn get_miner_address_distribution_chart(
         ORDER BY mb.blocks_mined DESC
         "#,
     )
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -1236,7 +1236,7 @@ async fn get_total_supply_chart(
         ORDER BY date ASC
         "#,
     )
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -1375,7 +1375,7 @@ async fn get_secondary_issuance_chart(
         ORDER BY date ASC
         "#,
     )
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 

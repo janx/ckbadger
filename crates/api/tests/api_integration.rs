@@ -8,6 +8,7 @@ use ckbadger_api::{create_router, AppConfig, MIGRATOR};
 fn test_config(pool: sqlx::PgPool) -> AppConfig {
     AppConfig {
         pool,
+        read_pool: None,
         redis_url: None,
         ckb_rpc_url: "http://localhost:8114".to_string(),
         ckb_network: "mainnet".to_string(),

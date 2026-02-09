@@ -583,7 +583,7 @@ async fn get_pending_proposals(
     let cached_proposals: Vec<CachedProposal> =
         state.cache.hgetall(PENDING_PROPOSALS_REDIS_KEY).await;
 
-    let tip = state.cache.get_sync_tip(&state.pool).await;
+    let tip = state.cache.get_sync_tip(&state.read_pool).await;
 
     let mut proposals: Vec<PendingProposal> = cached_proposals
         .iter()

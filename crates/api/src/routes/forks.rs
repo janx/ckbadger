@@ -122,7 +122,7 @@ async fn list_forks(
     let offset = params.offset.unwrap_or(0);
 
     let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM reorg_events")
-        .fetch_one(&state.pool)
+        .fetch_one(&state.read_pool)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -159,7 +159,7 @@ async fn list_forks(
     )
     .bind(limit)
     .bind(offset)
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -223,7 +223,7 @@ async fn get_fork_detail(
         "#,
     )
     .bind(id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -264,7 +264,7 @@ async fn get_fork_detail(
             "#,
     )
     .bind(id)
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -279,7 +279,7 @@ async fn get_fork_detail(
             "#,
         )
         .bind(id)
-        .fetch_all(&state.pool)
+        .fetch_all(&state.read_pool)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -335,7 +335,7 @@ async fn get_recent_reorg(State(state): State<Arc<AppState>>) -> ApiResult<Recen
         FROM sync_status WHERE id = 1
         "#,
     )
-    .fetch_one(&state.pool)
+    .fetch_one(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -382,7 +382,7 @@ async fn get_recent_reorg(State(state): State<Arc<AppState>>) -> ApiResult<Recen
         LIMIT 1
         "#,
     )
-    .fetch_optional(&state.pool)
+    .fetch_optional(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -423,7 +423,7 @@ async fn resolve_deep_fork(
 
     let deep_fork_detected: (bool,) =
         sqlx::query_as("SELECT deep_fork_detected FROM sync_status WHERE id = 1")
-            .fetch_one(&state.pool)
+            .fetch_one(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?;
 

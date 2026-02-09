@@ -169,7 +169,7 @@ async fn list_deposits(
         .bind(status)
         .bind(cursor_id)
         .bind(limit + 1)
-        .fetch_all(&state.pool)
+        .fetch_all(&state.read_pool)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
     } else {
@@ -189,7 +189,7 @@ async fn list_deposits(
         )
         .bind(cursor_id)
         .bind(limit + 1)
-        .fetch_all(&state.pool)
+        .fetch_all(&state.read_pool)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
     };
@@ -310,7 +310,7 @@ async fn get_deposits_by_address(
     .bind(&hash)
     .bind(cursor_id)
     .bind(limit + 1)
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -396,7 +396,7 @@ async fn get_address_dao_summary(
         FROM dao_deposits WHERE lock_script_hash = $1"#,
     )
     .bind(&hash)
-    .fetch_one(&state.pool)
+    .fetch_one(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -422,7 +422,7 @@ async fn get_address_dao_summary(
         "SELECT CAST(COALESCE(SUM(capacity), 0) AS TEXT) FROM dao_deposits WHERE lock_script_hash = $1 AND status IN (0, 1)",
     )
     .bind(&hash)
-    .fetch_one(&state.pool)
+    .fetch_one(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -430,14 +430,14 @@ async fn get_address_dao_summary(
         "SELECT CAST(COALESCE(SUM(compensation), 0) AS TEXT) FROM dao_deposits WHERE lock_script_hash = $1 AND status = 2 AND compensation IS NOT NULL",
     )
     .bind(&hash)
-    .fetch_one(&state.pool)
+    .fetch_one(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let latest_block = sqlx::query_as::<_, (i64, Vec<u8>)>(
         "SELECT number, dao FROM blocks WHERE dao IS NOT NULL ORDER BY number DESC LIMIT 1",
     )
-    .fetch_optional(&state.pool)
+    .fetch_optional(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -458,7 +458,7 @@ async fn get_address_dao_summary(
     )
     .bind(&hash)
     .bind(latest_block_number)
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .unwrap_or_default();
 
@@ -478,7 +478,7 @@ async fn get_address_dao_summary(
     let secondary_burnt: u128 = sqlx::query_as::<_, (String,)>(
         "SELECT COALESCE(cumulative_burnt, '0') FROM dao_statistics WHERE id = 1",
     )
-    .fetch_optional(&state.pool)
+    .fetch_optional(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?
     .map(|(s,)| s.parse().unwrap_or(0))
@@ -514,7 +514,7 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
             COUNT(*) as active_deposits
         FROM dao_deposits WHERE status = 0"#,
     )
-    .fetch_one(&state.pool)
+    .fetch_one(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -522,14 +522,14 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
         r#"SELECT CAST(COALESCE(SUM(compensation), 0) AS TEXT) 
            FROM dao_deposits WHERE status = 2 AND compensation IS NOT NULL"#,
     )
-    .fetch_one(&state.pool)
+    .fetch_one(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let latest_block = sqlx::query_as::<_, (i64, Vec<u8>)>(
         "SELECT number, dao FROM blocks WHERE dao IS NOT NULL ORDER BY number DESC LIMIT 1",
     )
-    .fetch_optional(&state.pool)
+    .fetch_optional(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -548,7 +548,7 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
         WHERE status = 0 AND deposit_block_number <= $1"#,
     )
     .bind(latest_block_number)
-    .fetch_one(&state.pool)
+    .fetch_one(&state.read_pool)
     .await
     .unwrap_or((None,));
 
@@ -561,7 +561,7 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
         WHERE d.status = 0 AND b.dao IS NOT NULL AND d.deposit_block_number <= $1"#,
     )
     .bind(latest_block_number)
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .unwrap_or_default();
 
@@ -581,7 +581,7 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
     let secondary_burnt: u128 = sqlx::query_as::<_, (String,)>(
         "SELECT COALESCE(cumulative_burnt, '0') FROM dao_statistics WHERE id = 1",
     )
-    .fetch_optional(&state.pool)
+    .fetch_optional(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?
     .map(|(s,)| s.parse().unwrap_or(0))
@@ -601,7 +601,7 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
             COALESCE(cumulative_burnt, '0')
         FROM dao_statistics WHERE id = 1"#,
     )
-    .fetch_optional(&state.pool)
+    .fetch_optional(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -663,7 +663,7 @@ async fn calculate_compensation(
         .map_err(|_| ApiError::bad_request("Invalid capacity"))?;
 
     let latest_block: (i64,) = sqlx::query_as("SELECT COALESCE(MAX(number), 0) FROM blocks")
-        .fetch_one(&state.pool)
+        .fetch_one(&state.read_pool)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -672,14 +672,14 @@ async fn calculate_compensation(
     let deposit_dao: Option<(Vec<u8>,)> =
         sqlx::query_as("SELECT dao FROM blocks WHERE number = $1")
             .bind(params.deposit_block)
-            .fetch_optional(&state.pool)
+            .fetch_optional(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let withdraw_dao: Option<(Vec<u8>,)> =
         sqlx::query_as("SELECT dao FROM blocks WHERE number = $1")
             .bind(withdraw_block)
-            .fetch_optional(&state.pool)
+            .fetch_optional(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -831,7 +831,7 @@ async fn get_total_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResul
         ORDER BY date ASC
         "#,
     )
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -870,7 +870,7 @@ async fn get_daily_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResul
         ORDER BY date ASC
         "#,
     )
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -914,7 +914,7 @@ async fn get_circulation_ratio_chart(
         ORDER BY date ASC
         "#,
     )
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 

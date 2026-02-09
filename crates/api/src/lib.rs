@@ -27,6 +27,9 @@ pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations/
 #[derive(Clone)]
 pub struct AppState {
     pub pool: PgPool,
+    /// Read-optimized pool, backed by a read replica when configured.
+    /// Falls back to `pool` (primary) when no replica URL is provided.
+    pub read_pool: PgPool,
     pub ws_manager: Arc<WsManager>,
     pub cache: CacheBackend,
     pub ckb_rpc_url: String,
@@ -36,6 +39,8 @@ pub struct AppState {
 
 pub struct AppConfig {
     pub pool: PgPool,
+    /// Optional read replica pool. When `None`, all reads use the primary `pool`.
+    pub read_pool: Option<PgPool>,
     pub redis_url: Option<String>,
     pub ckb_rpc_url: String,
     pub ckb_network: String,
@@ -49,6 +54,7 @@ impl Default for AppConfig {
         Self {
             pool: PgPool::connect_lazy("postgres://localhost/ckbadger")
                 .expect("Failed to create lazy connection pool for default config"),
+            read_pool: None,
             redis_url: None,
             ckb_rpc_url: "http://localhost:8114".to_string(),
             ckb_network: "mainnet".to_string(),
@@ -91,8 +97,11 @@ pub async fn create_router(config: AppConfig) -> Router {
 
     let cycles_calculator = CyclesCalculator::new(config.pool.clone(), config.ckb_rpc_url.clone());
 
+    let read_pool = config.read_pool.unwrap_or_else(|| config.pool.clone());
+
     let state = Arc::new(AppState {
         pool: config.pool,
+        read_pool,
         ws_manager,
         cache,
         ckb_rpc_url: config.ckb_rpc_url,
@@ -147,4 +156,26 @@ pub async fn create_router(config: AppConfig) -> Router {
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_app_config_default_has_no_read_pool() {
+        let config = AppConfig::default();
+        assert!(config.read_pool.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_app_config_default_values() {
+        let config = AppConfig::default();
+        assert_eq!(config.ckb_rpc_url, "http://localhost:8114");
+        assert_eq!(config.ckb_network, "mainnet");
+        assert_eq!(config.rate_limit_per_second, Some(100));
+        assert_eq!(config.rate_limit_burst, Some(200));
+        assert!(config.start_background_tasks);
+        assert!(config.redis_url.is_none());
+    }
 }

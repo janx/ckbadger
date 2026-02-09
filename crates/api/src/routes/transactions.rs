@@ -81,7 +81,7 @@ async fn list_transactions(
         let row: Option<(i32,)> =
             sqlx::query_as("SELECT transactions_count FROM blocks WHERE number = $1")
                 .bind(block_number)
-                .fetch_optional(&state.pool)
+                .fetch_optional(&state.read_pool)
                 .await
                 .map_err(|e| ApiError::internal(e.to_string()))?;
         row.map(|r| r.0 as i64).unwrap_or(0)
@@ -93,7 +93,7 @@ async fn list_transactions(
         {
             Some(status) => status.total_transactions,
             None => sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM transactions")
-                .fetch_one(&state.pool)
+                .fetch_one(&state.read_pool)
                 .await
                 .map_err(|e| ApiError::internal(e.to_string()))?,
         }
@@ -115,7 +115,7 @@ async fn list_transactions(
         .bind(block_number)
         .bind(cursor_index)
         .bind(limit + 1)
-        .fetch_all(&state.pool)
+        .fetch_all(&state.read_pool)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
     } else if let Some(ref cursor_str) = params.cursor {
@@ -134,7 +134,7 @@ async fn list_transactions(
         .bind(cursor_block)
         .bind(cursor_index)
         .bind(limit + 1)
-        .fetch_all(&state.pool)
+        .fetch_all(&state.read_pool)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
     } else {
@@ -147,7 +147,7 @@ async fn list_transactions(
             "#,
         )
         .bind(limit + 1)
-        .fetch_all(&state.pool)
+        .fetch_all(&state.read_pool)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
     };
@@ -217,7 +217,7 @@ async fn get_transaction(
         "#,
     )
     .bind(&hash_bytes)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -245,7 +245,7 @@ async fn get_transaction(
                     "SELECT SUM(compensation::numeric)::text FROM dao_deposits WHERE withdraw_tx = $1 AND status = 2",
                 )
                 .bind(&hash_bytes)
-                .fetch_one(&state.pool)
+                .fetch_one(&state.read_pool)
                 .await
                 .map_err(|e| ApiError::internal(e.to_string()))?
                 .0
@@ -496,7 +496,7 @@ async fn get_transaction_detail(
         "#,
     )
     .bind(&hash_bytes)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -519,7 +519,7 @@ async fn get_transaction_detail(
     // Parallelize independent queries
     type TryJoinError = (axum::http::StatusCode, axum::Json<ApiError>);
     let (tip_block, final_tx_size, input_rows, output_rows, activities) = tokio::try_join!(
-        async { Ok::<_, TryJoinError>(state.cache.get_sync_tip(&state.pool).await) },
+        async { Ok::<_, TryJoinError>(state.cache.get_sync_tip(&state.read_pool).await) },
         async {
             Ok::<_, TryJoinError>(match tx_size {
                 Some(size) => Some(size),
@@ -556,7 +556,7 @@ async fn get_transaction_detail(
             )
             .bind(&hash_bytes)
             .bind(block_number)
-            .fetch_all(&state.pool)
+            .fetch_all(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))
         },
@@ -589,12 +589,12 @@ async fn get_transaction_detail(
             )
             .bind(&hash_bytes)
             .bind(block_number)
-            .fetch_all(&state.pool)
+            .fetch_all(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))
         },
         async {
-            fetch_transaction_activities(&state.pool, &hash_bytes)
+            fetch_transaction_activities(&state.read_pool, &hash_bytes)
                 .await
                 .map_err(ApiError::internal)
         },
@@ -725,7 +725,7 @@ async fn get_transaction_detail(
             "SELECT SUM(compensation::numeric)::text FROM dao_deposits WHERE withdraw_tx = $1 AND status = 2",
         )
         .bind(&hash_bytes)
-        .fetch_one(&state.pool)
+        .fetch_one(&state.read_pool)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
         .0
@@ -792,7 +792,7 @@ async fn get_cell_deps(
         .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
 
     // 2-phase lookup: get block_number from tx_block_map for partition pruning
-    let block_number = get_block_number_for_tx(&state.pool, &hash_bytes)
+    let block_number = get_block_number_for_tx(&state.read_pool, &hash_bytes)
         .await
         .ok()
         .flatten();
@@ -809,7 +809,7 @@ async fn get_cell_deps(
         )
         .bind(&hash_bytes)
         .bind(bn)
-        .fetch_all(&state.pool)
+        .fetch_all(&state.read_pool)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
     } else {
@@ -823,7 +823,7 @@ async fn get_cell_deps(
             "#,
         )
         .bind(&hash_bytes)
-        .fetch_all(&state.pool)
+        .fetch_all(&state.read_pool)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
     };
@@ -855,7 +855,7 @@ async fn get_cycles_status(
     let row: Option<(Option<i64>, bool)> =
         sqlx::query_as("SELECT cycles, is_cellbase FROM transactions WHERE hash = $1")
             .bind(&hash_bytes)
-            .fetch_optional(&state.pool)
+            .fetch_optional(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -926,7 +926,7 @@ async fn trigger_cycles_calculation(
     let row: Option<(Option<i64>, bool)> =
         sqlx::query_as("SELECT cycles, is_cellbase FROM transactions WHERE hash = $1")
             .bind(&hash_bytes)
-            .fetch_optional(&state.pool)
+            .fetch_optional(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -1036,7 +1036,7 @@ async fn get_transaction_lifecycle(
         "#,
     )
     .bind(&hash_bytes)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -1063,7 +1063,7 @@ async fn get_transaction_lifecycle(
 
     // Cellbase transactions don't go through proposal phase
     if is_cellbase {
-        let tip = state.cache.get_sync_tip(&state.pool).await;
+        let tip = state.cache.get_sync_tip(&state.read_pool).await;
 
         return ok(TransactionLifecycleResponse {
             hash: hash_hex,
@@ -1097,11 +1097,11 @@ async fn get_transaction_lifecycle(
     )
     .bind(&short_hash)
     .bind(commit_block_number)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let tip = state.cache.get_sync_tip(&state.pool).await;
+    let tip = state.cache.get_sync_tip(&state.read_pool).await;
 
     let (proposed_in, commitment_distance) = match proposal_row {
         Some((proposal_block, proposal_hash, proposal_timestamp)) => (
@@ -1182,7 +1182,7 @@ async fn get_transaction_asset_transfers(
         chrono::DateTime<chrono::Utc>, // timestamp
     );
 
-    let block_number = get_block_number_for_tx(&state.pool, &hash_bytes)
+    let block_number = get_block_number_for_tx(&state.read_pool, &hash_bytes)
         .await
         .ok()
         .flatten();
@@ -1200,7 +1200,7 @@ async fn get_transaction_asset_transfers(
         )
         .bind(&hash_bytes)
         .bind(bn)
-        .fetch_all(&state.pool)
+        .fetch_all(&state.read_pool)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
     } else {
@@ -1215,7 +1215,7 @@ async fn get_transaction_asset_transfers(
             "#,
         )
         .bind(&hash_bytes)
-        .fetch_all(&state.pool)
+        .fetch_all(&state.read_pool)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
     };
@@ -1239,7 +1239,7 @@ async fn get_transaction_asset_transfers(
                 "#,
             )
             .bind(&token_ids)
-            .fetch_all(&state.pool)
+            .fetch_all(&state.read_pool)
             .await
             .unwrap_or_default();
 
@@ -1360,7 +1360,7 @@ async fn get_tx_activities(
         ));
     }
 
-    let activities = fetch_transaction_activities(&state.pool, &hash_bytes)
+    let activities = fetch_transaction_activities(&state.read_pool, &hash_bytes)
         .await
         .map_err(ApiError::internal)?;
 

@@ -55,7 +55,7 @@ async fn list_assets(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<AssetResponse>> {
-    let sync_status = state.cache.get_sync_status(&state.pool).await;
+    let sync_status = state.cache.get_sync_status(&state.read_pool).await;
 
     if sync_status.token_deferred {
         return ok(CursorPaginatedResponse::new(
@@ -192,11 +192,11 @@ async fn fetch_assets(
             "SELECT COUNT(*) FROM tokens WHERE LOWER(name) LIKE $1 OR LOWER(symbol) LIKE $1",
         )
         .bind(pattern)
-        .fetch_one(&state.pool)
+        .fetch_one(&state.read_pool)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?,
         _ => sqlx::query_as("SELECT COUNT(*) FROM tokens")
-            .fetch_one(&state.pool)
+            .fetch_one(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?,
     };
@@ -209,12 +209,12 @@ async fn fetch_assets(
             (_, Some(pattern)) => {
                 sqlx::query_as(r#"SELECT COUNT(*) FROM spore_clusters WHERE LOWER(name) LIKE $1"#)
                     .bind(pattern)
-                    .fetch_one(&state.pool)
+                    .fetch_one(&state.read_pool)
                     .await
                     .map_err(|e| ApiError::internal(e.to_string()))?
             }
             _ => sqlx::query_as("SELECT COUNT(*) FROM spore_clusters")
-                .fetch_one(&state.pool)
+                .fetch_one(&state.read_pool)
                 .await
                 .map_err(|e| ApiError::internal(e.to_string()))?,
         }
@@ -225,12 +225,12 @@ async fn fetch_assets(
         (_, Some(pattern)) => {
             sqlx::query_as(r#"SELECT COUNT(*) FROM mnft_classes WHERE LOWER(name) LIKE $1"#)
                 .bind(pattern)
-                .fetch_one(&state.pool)
+                .fetch_one(&state.read_pool)
                 .await
                 .map_err(|e| ApiError::internal(e.to_string()))?
         }
         _ => sqlx::query_as("SELECT COUNT(*) FROM mnft_classes")
-            .fetch_one(&state.pool)
+            .fetch_one(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?,
     };
@@ -274,7 +274,7 @@ async fn fetch_assets(
             .bind(cursor_id)
             .bind(pattern)
             .bind(limit + 1)
-            .fetch_all(&state.pool)
+            .fetch_all(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?
     } else {
@@ -293,7 +293,7 @@ async fn fetch_assets(
             .bind(cursor_holders)
             .bind(cursor_id)
             .bind(limit + 1)
-            .fetch_all(&state.pool)
+            .fetch_all(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?
     };
@@ -349,7 +349,7 @@ async fn fetch_assets(
             .bind(cursor_id)
             .bind(pattern)
             .bind(limit + 1)
-            .fetch_all(&state.pool)
+            .fetch_all(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?
     } else {
@@ -386,7 +386,7 @@ async fn fetch_assets(
         sqlx::query_as::<_, ClusterRow>(query_str)
             .bind(cursor_id)
             .bind(limit + 1)
-            .fetch_all(&state.pool)
+            .fetch_all(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?
     };
@@ -421,7 +421,7 @@ async fn fetch_assets(
             .bind(cursor_id)
             .bind(pattern)
             .bind(limit + 1)
-            .fetch_all(&state.pool)
+            .fetch_all(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?
     } else {
@@ -437,7 +437,7 @@ async fn fetch_assets(
         sqlx::query_as::<_, MnftClassRow>(query_str)
             .bind(cursor_id)
             .bind(limit + 1)
-            .fetch_all(&state.pool)
+            .fetch_all(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?
     };

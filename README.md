@@ -159,6 +159,9 @@ CKB_NETWORK=mainnet  # mainnet | testnet | devnet
 # Database
 DATABASE_URL=__SET_DATABASE_URL__
 
+# Optional: read replica for API queries (reduces load on primary)
+# READ_DATABASE_URL=postgres://user:pass@replica:5432/ckbadger
+
 # Redis (optional)
 REDIS_URL=redis://localhost:6379
 

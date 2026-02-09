@@ -52,7 +52,7 @@ async fn warmup_average_block_time(state: &AppState) -> Result<(), String> {
     let rows = sqlx::query_as::<_, (chrono::NaiveDate, i32)>(
         "SELECT date, avg_block_time_ms FROM daily_statistics WHERE avg_block_time_ms IS NOT NULL ORDER BY date ASC",
     )
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| e.to_string())?;
 
@@ -84,7 +84,7 @@ async fn warmup_hash_rate(state: &AppState) -> Result<(), String> {
     let rows = sqlx::query_as::<_, (chrono::NaiveDate, i64, i32)>(
         "SELECT date, avg_compact_target, block_count FROM daily_block_stats WHERE date < (SELECT MAX(date) FROM daily_block_stats) ORDER BY date ASC",
     )
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| e.to_string())?;
 
@@ -119,7 +119,7 @@ async fn warmup_difficulty(state: &AppState) -> Result<(), String> {
     let rows = sqlx::query_as::<_, (chrono::NaiveDate, i64)>(
         "SELECT date, avg_compact_target FROM daily_block_stats WHERE date < (SELECT MAX(date) FROM daily_block_stats) ORDER BY date ASC",
     )
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| e.to_string())?;
 
@@ -152,7 +152,7 @@ async fn warmup_uncle_rate(state: &AppState) -> Result<(), String> {
     let rows = sqlx::query_as::<_, (chrono::NaiveDate, f64)>(
         "SELECT date, avg_uncle_rate FROM daily_block_stats WHERE date < (SELECT MAX(date) FROM daily_block_stats) ORDER BY date ASC",
     )
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| e.to_string())?;
 
@@ -184,7 +184,7 @@ async fn warmup_block_time_distribution(state: &AppState) -> Result<(), String> 
     let rows = sqlx::query_as::<_, (i32, i64)>(
         "SELECT bucket_ms, block_count FROM block_time_distribution ORDER BY bucket_ms",
     )
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| e.to_string())?;
 
@@ -224,7 +224,7 @@ async fn warmup_epoch_time_distribution(state: &AppState) -> Result<(), String> 
     let rows = sqlx::query_as::<_, (i32, i64)>(
         "SELECT bucket_minutes, epoch_count FROM epoch_time_distribution ORDER BY bucket_minutes",
     )
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| e.to_string())?;
 
@@ -266,7 +266,7 @@ async fn warmup_epoch_time_length(state: &AppState) -> Result<(), String> {
         ORDER BY epoch_number ASC
         "#,
     )
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| e.to_string())?;
 
@@ -299,14 +299,14 @@ async fn warmup_epoch_time_length(state: &AppState) -> Result<(), String> {
 async fn warmup_miner_distribution(state: &AppState) -> Result<(), String> {
     let total_blocks: (i64,) =
         sqlx::query_as("SELECT COALESCE(SUM(blocks_count), 0)::bigint FROM miner_statistics")
-            .fetch_one(&state.pool)
+            .fetch_one(&state.read_pool)
             .await
             .map_err(|e| e.to_string())?;
 
     let rows = sqlx::query_as::<_, (Vec<u8>, i64)>(
         "SELECT miner_lock_hash, blocks_count FROM miner_statistics ORDER BY blocks_count DESC LIMIT 100",
     )
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| e.to_string())?;
 
@@ -355,7 +355,7 @@ async fn warmup_total_supply(state: &AppState) -> Result<(), String> {
         ORDER BY date ASC
         "#,
     )
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| e.to_string())?;
 
@@ -423,7 +423,7 @@ async fn warmup_secondary_issuance(state: &AppState) -> Result<(), String> {
         ORDER BY date ASC
         "#,
     )
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| e.to_string())?;
 

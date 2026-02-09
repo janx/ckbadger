@@ -52,7 +52,7 @@ async fn search(
     if let Ok(block_num) = query.parse::<i64>() {
         let block = sqlx::query_as::<_, (Vec<u8>,)>("SELECT hash FROM blocks WHERE number = $1")
             .bind(block_num)
-            .fetch_optional(&state.pool)
+            .fetch_optional(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -79,18 +79,18 @@ async fn search(
                 "SELECT block_number FROM transactions WHERE hash = $1",
             )
             .bind(&hash_bytes)
-            .fetch_optional(&state.pool);
+            .fetch_optional(&state.read_pool);
 
             let block_fut =
                 sqlx::query_as::<_, (i64,)>("SELECT number FROM blocks WHERE hash = $1")
                     .bind(&hash_bytes)
-                    .fetch_optional(&state.pool);
+                    .fetch_optional(&state.read_pool);
 
             let cell_count_fut = sqlx::query_as::<_, (i64,)>(
                 "SELECT COUNT(*) FROM cells WHERE lock_script_hash = $1",
             )
             .bind(&hash_bytes)
-            .fetch_one(&state.pool);
+            .fetch_one(&state.read_pool);
 
             let (tx_result, block_result, cell_count_result) =
                 tokio::join!(tx_fut, block_fut, cell_count_fut);
@@ -141,7 +141,7 @@ async fn search(
 
                 if tx_hash_normalized.len() == 66 {
                     if let Ok(hash_bytes) = hex::decode(&tx_hash_normalized[2..]) {
-                        let block_number = get_block_number_for_tx(&state.pool, &hash_bytes)
+                        let block_number = get_block_number_for_tx(&state.read_pool, &hash_bytes)
                             .await
                             .ok()
                             .flatten();
@@ -153,7 +153,7 @@ async fn search(
                             .bind(&hash_bytes)
                             .bind(index)
                             .bind(bn)
-                            .fetch_optional(&state.pool)
+                            .fetch_optional(&state.read_pool)
                             .await
                             .map_err(|e| ApiError::internal(e.to_string()))?
                         } else {
@@ -162,7 +162,7 @@ async fn search(
                             )
                             .bind(&hash_bytes)
                             .bind(index)
-                            .fetch_optional(&state.pool)
+                            .fetch_optional(&state.read_pool)
                             .await
                             .map_err(|e| ApiError::internal(e.to_string()))?
                         };

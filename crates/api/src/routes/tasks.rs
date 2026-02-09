@@ -78,7 +78,7 @@ async fn get_active_tasks(State(state): State<Arc<AppState>>) -> ApiResult<Activ
             created_at DESC
         "#,
     )
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 

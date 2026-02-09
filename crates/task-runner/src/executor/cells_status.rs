@@ -183,4 +183,54 @@ mod tests {
         assert_eq!(json["cellsUpdated"], 999);
         assert_eq!(json["blocksProcessed"], 50);
     }
+
+    #[test]
+    fn test_cell_partitions_count() {
+        assert_eq!(CELL_PARTITIONS.len(), 10);
+    }
+
+    #[test]
+    fn test_cell_partitions_contiguous() {
+        // Each partition's end should equal the next partition's start
+        for i in 0..CELL_PARTITIONS.len() - 1 {
+            let (_, _, end) = CELL_PARTITIONS[i];
+            let (_, next_start, _) = CELL_PARTITIONS[i + 1];
+            assert_eq!(
+                end,
+                next_start,
+                "partition {} end ({}) != partition {} start ({})",
+                i,
+                end,
+                i + 1,
+                next_start
+            );
+        }
+    }
+
+    #[test]
+    fn test_cell_partitions_start_at_zero() {
+        let (_, start, _) = CELL_PARTITIONS[0];
+        assert_eq!(start, 0);
+    }
+
+    #[test]
+    fn test_cell_partitions_cover_50m_blocks() {
+        let (_, _, end) = CELL_PARTITIONS[CELL_PARTITIONS.len() - 1];
+        assert_eq!(end, 50_000_000);
+    }
+
+    #[test]
+    fn test_cell_partitions_5m_each() {
+        for &(_, start, end) in CELL_PARTITIONS {
+            assert_eq!(end - start, 5_000_000, "partition should span 5M blocks");
+        }
+    }
+
+    #[test]
+    fn test_cell_partitions_naming() {
+        for (i, &(name, _, _)) in CELL_PARTITIONS.iter().enumerate() {
+            let expected = format!("cells_p{:02}", i);
+            assert_eq!(name, expected.as_str());
+        }
+    }
 }

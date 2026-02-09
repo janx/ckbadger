@@ -12,6 +12,10 @@ struct Args {
     #[arg(long, env = "DATABASE_URL")]
     database_url: Option<String>,
 
+    /// Optional read replica URL. When set, read-only API queries use this pool.
+    #[arg(long, env = "READ_DATABASE_URL")]
+    read_database_url: Option<String>,
+
     #[arg(long, env = "REDIS_URL")]
     redis_url: Option<String>,
 
@@ -57,8 +61,20 @@ async fn main() -> Result<()> {
 
     let redis_url = args.redis_url.or_else(|| std::env::var("REDIS_URL").ok());
 
+    let read_pool = match args
+        .read_database_url
+        .or_else(|| std::env::var("READ_DATABASE_URL").ok())
+    {
+        Some(url) => {
+            info!("Connecting to read replica");
+            Some(create_pool(&url).await?)
+        }
+        None => None,
+    };
+
     let config = AppConfig {
         pool,
+        read_pool,
         redis_url,
         ckb_rpc_url: args.ckb_rpc_url,
         ckb_network: args.ckb_network,

@@ -65,7 +65,7 @@ async fn list_clusters(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<ClusterResponse>> {
-    let sync_status = state.cache.get_sync_status(&state.pool).await;
+    let sync_status = state.cache.get_sync_status(&state.read_pool).await;
 
     if sync_status.spore_deferred {
         return ok(CursorPaginatedResponse::without_total(
@@ -106,7 +106,7 @@ async fn list_clusters(
     )
     .bind(cursor_block)
     .bind(limit + 1)
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -165,7 +165,7 @@ async fn get_spores_by_cluster(
     Path(cluster_id): Path<String>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<SporeResponse>> {
-    let sync_status = state.cache.get_sync_status(&state.pool).await;
+    let sync_status = state.cache.get_sync_status(&state.read_pool).await;
 
     if sync_status.spore_deferred {
         return ok(CursorPaginatedResponse::without_total(
@@ -211,7 +211,7 @@ async fn get_spores_by_cluster(
     .bind(&id)
     .bind(cursor_block)
     .bind(limit + 1)
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -275,7 +275,7 @@ async fn get_cluster(
     State(state): State<Arc<AppState>>,
     Path(cluster_id): Path<String>,
 ) -> ApiResult<ClusterResponse> {
-    let sync_status = state.cache.get_sync_status(&state.pool).await;
+    let sync_status = state.cache.get_sync_status(&state.read_pool).await;
 
     if sync_status.spore_deferred {
         return Err(ApiError::not_found(
@@ -310,7 +310,7 @@ async fn get_cluster(
         "#,
     )
     .bind(&id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -349,7 +349,7 @@ async fn list_spores(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<SporeResponse>> {
-    let sync_status = state.cache.get_sync_status(&state.pool).await;
+    let sync_status = state.cache.get_sync_status(&state.read_pool).await;
 
     if sync_status.spore_deferred {
         return ok(CursorPaginatedResponse::without_total(
@@ -391,7 +391,7 @@ async fn list_spores(
     )
     .bind(cursor_block)
     .bind(limit + 1)
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -455,7 +455,7 @@ async fn get_spore(
     State(state): State<Arc<AppState>>,
     Path(spore_id): Path<String>,
 ) -> ApiResult<SporeResponse> {
-    let sync_status = state.cache.get_sync_status(&state.pool).await;
+    let sync_status = state.cache.get_sync_status(&state.read_pool).await;
 
     if sync_status.spore_deferred {
         return Err(ApiError::not_found(
@@ -492,7 +492,7 @@ async fn get_spore(
         "#,
     )
     .bind(&id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -538,7 +538,7 @@ async fn get_spores_by_owner(
     Path(lock_hash): Path<String>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<SporeResponse>> {
-    let sync_status = state.cache.get_sync_status(&state.pool).await;
+    let sync_status = state.cache.get_sync_status(&state.read_pool).await;
 
     if sync_status.spore_deferred {
         return ok(CursorPaginatedResponse::without_total(
@@ -584,7 +584,7 @@ async fn get_spores_by_owner(
     .bind(&hash)
     .bind(cursor_block)
     .bind(limit + 1)
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 

@@ -411,7 +411,7 @@ async fn list_live_cells(
             .bind(cursor_block)
             .bind(cursor_idx)
             .bind(limit + 1)
-            .fetch_all(&state.pool)
+            .fetch_all(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -501,7 +501,7 @@ async fn list_live_cells(
                 .bind(cursor_block)
                 .bind(cursor_idx)
                 .bind(limit + 1)
-                .fetch_all(&state.pool)
+                .fetch_all(&state.read_pool)
                 .await
                 .map_err(|e| ApiError::internal(e.to_string()))?
         }
@@ -522,7 +522,7 @@ async fn list_live_cells(
                 .bind(cursor_block)
                 .bind(cursor_idx)
                 .bind(limit + 1)
-                .fetch_all(&state.pool)
+                .fetch_all(&state.read_pool)
                 .await
                 .map_err(|e| ApiError::internal(e.to_string()))?
         }
@@ -544,7 +544,7 @@ async fn list_live_cells(
                 .bind(cursor_block)
                 .bind(cursor_idx)
                 .bind(limit + 1)
-                .fetch_all(&state.pool)
+                .fetch_all(&state.read_pool)
                 .await
                 .map_err(|e| ApiError::internal(e.to_string()))?
         }
@@ -564,7 +564,7 @@ async fn list_live_cells(
                 .bind(cursor_block)
                 .bind(cursor_idx)
                 .bind(limit + 1)
-                .fetch_all(&state.pool)
+                .fetch_all(&state.read_pool)
                 .await
                 .map_err(|e| ApiError::internal(e.to_string()))?
         }
@@ -669,7 +669,7 @@ async fn list_cells_by_script(
             )
             .bind(&code_hash_bytes)
             .bind(script_kind)
-            .fetch_optional(&state.pool)
+            .fetch_optional(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?;
             row.map(|(c,)| c).unwrap_or(0)
@@ -679,7 +679,7 @@ async fn list_cells_by_script(
                 "SELECT COALESCE(SUM(live_cells_count), 0) FROM script_usage_stats WHERE code_hash = $1",
             )
             .bind(&code_hash_bytes)
-            .fetch_one(&state.pool)
+            .fetch_one(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?;
             row.0
@@ -704,7 +704,7 @@ async fn list_cells_by_script(
                 .bind(cursor_block)
                 .bind(cursor_idx)
                 .bind(limit + 1)
-                .fetch_all(&state.pool)
+                .fetch_all(&state.read_pool)
                 .await
                 .map_err(|e| ApiError::internal(e.to_string()))?
             }
@@ -724,7 +724,7 @@ async fn list_cells_by_script(
                 .bind(cursor_block)
                 .bind(cursor_idx)
                 .bind(limit + 1)
-                .fetch_all(&state.pool)
+                .fetch_all(&state.read_pool)
                 .await
                 .map_err(|e| ApiError::internal(e.to_string()))?
             }
@@ -745,7 +745,7 @@ async fn list_cells_by_script(
                 .bind(cursor_block)
                 .bind(cursor_idx)
                 .bind(limit + 1)
-                .fetch_all(&state.pool)
+                .fetch_all(&state.read_pool)
                 .await
                 .map_err(|e| ApiError::internal(e.to_string()))?
             }
@@ -835,7 +835,7 @@ async fn get_address(
     let (row, script_row) = tokio::try_join!(
         async {
             // Check if address_balances is deferred
-            let sync_status = state.cache.get_sync_status(&state.pool).await;
+            let sync_status = state.cache.get_sync_status(&state.read_pool).await;
 
             if sync_status.address_balances_deferred {
                 // Fallback: query cells table directly
@@ -850,7 +850,7 @@ async fn get_address(
                     "#,
                 )
                 .bind(&lock_hash)
-                .fetch_optional(&state.pool)
+                .fetch_optional(&state.read_pool)
                 .await
                 .map_err(|e| ApiError::internal(e.to_string()))
             } else {
@@ -866,7 +866,7 @@ async fn get_address(
                     "#,
                 )
                 .bind(&lock_hash)
-                .fetch_optional(&state.pool)
+                .fetch_optional(&state.read_pool)
                 .await
                 .map_err(|e| ApiError::internal(e.to_string()))
             }
@@ -882,7 +882,7 @@ async fn get_address(
                 "#,
             )
             .bind(&lock_hash)
-            .fetch_optional(&state.pool)
+            .fetch_optional(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))
         },
@@ -926,7 +926,7 @@ async fn get_address(
         )
         .bind(code_hash)
         .bind(&state.ckb_network)
-        .fetch_optional(&state.pool)
+        .fetch_optional(&state.read_pool)
         .await
         .ok()
         .flatten()
@@ -1155,7 +1155,7 @@ async fn get_cell(
         full_data: Option<Vec<u8>>,
     }
 
-    let block_number = get_block_number_for_tx(&state.pool, &hash_bytes)
+    let block_number = get_block_number_for_tx(&state.read_pool, &hash_bytes)
         .await
         .ok()
         .flatten();
@@ -1178,7 +1178,7 @@ async fn get_cell(
         .bind(&hash_bytes)
         .bind(output_index)
         .bind(bn)
-        .fetch_optional(&state.pool)
+        .fetch_optional(&state.read_pool)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
     } else {
@@ -1198,7 +1198,7 @@ async fn get_cell(
         )
         .bind(&hash_bytes)
         .bind(output_index)
-        .fetch_optional(&state.pool)
+        .fetch_optional(&state.read_pool)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
     };
@@ -1236,7 +1236,7 @@ async fn get_cell(
                 });
 
             let code_cell_of = lookup_code_cell_scripts(
-                &state.pool,
+                &state.read_pool,
                 &state.ckb_network,
                 &r.data_hash,
                 r.type_script_hash.as_ref(),
@@ -1262,7 +1262,8 @@ async fn get_cell(
                 (None, None)
             };
 
-            let dao_info = lookup_dao_info(&state.pool, &hash_bytes, output_index as i16).await;
+            let dao_info =
+                lookup_dao_info(&state.read_pool, &hash_bytes, output_index as i16).await;
 
             ok(CellDetailResponse {
                 tx_hash: format!("0x{}", hex::encode(&r.tx_hash)),
@@ -1310,7 +1311,7 @@ async fn get_top_addresses(
     State(state): State<Arc<AppState>>,
     Query(params): Query<TopAddressesParams>,
 ) -> ApiResult<Vec<TopAddressResponse>> {
-    let sync_status = state.cache.get_sync_status(&state.pool).await;
+    let sync_status = state.cache.get_sync_status(&state.read_pool).await;
 
     if sync_status.address_balances_deferred {
         return ok(Vec::new());
@@ -1328,7 +1329,7 @@ async fn get_top_addresses(
         "#,
     )
     .bind(limit)
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -1353,7 +1354,7 @@ async fn get_active_addresses(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ActiveAddressesParams>,
 ) -> ApiResult<Vec<ActiveAddressResponse>> {
-    let sync_status = state.cache.get_sync_status(&state.pool).await;
+    let sync_status = state.cache.get_sync_status(&state.read_pool).await;
 
     if sync_status.address_balances_deferred {
         return ok(Vec::new());
@@ -1362,7 +1363,7 @@ async fn get_active_addresses(
     let limit = params.limit.clamp(1, 500);
     let days = params.days.clamp(1, 365);
 
-    let tip_block = state.cache.get_sync_tip(&state.pool).await;
+    let tip_block = state.cache.get_sync_tip(&state.read_pool).await;
 
     let blocks_per_day: i64 = 8640;
     let min_block = tip_block.saturating_sub(days * blocks_per_day);
@@ -1378,7 +1379,7 @@ async fn get_active_addresses(
     )
     .bind(min_block)
     .bind(limit)
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -1449,7 +1450,7 @@ async fn get_address_transactions(
     .bind(cursor_block)
     .bind(cursor_idx)
     .bind(limit + 1)
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -1519,7 +1520,7 @@ async fn get_address_tokens(
     axum::extract::Path(addr): axum::extract::Path<String>,
     Query(params): Query<AddressTokensParams>,
 ) -> ApiResult<CursorPaginatedResponse<AddressTokenResponse>> {
-    let sync_status = state.cache.get_sync_status(&state.pool).await;
+    let sync_status = state.cache.get_sync_status(&state.read_pool).await;
 
     if sync_status.token_deferred {
         return ok(CursorPaginatedResponse::without_total(
@@ -1576,7 +1577,7 @@ async fn get_address_tokens(
         )
         .bind(&lock_hash)
         .bind(limit + 1)
-        .fetch_all(&state.pool)
+        .fetch_all(&state.read_pool)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
     } else {
@@ -1596,7 +1597,7 @@ async fn get_address_tokens(
         .bind(&cursor_balance)
         .bind(cursor_token_id)
         .bind(limit + 1)
-        .fetch_all(&state.pool)
+        .fetch_all(&state.read_pool)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
     };
@@ -1757,7 +1758,7 @@ async fn get_address_asset_transfers(
             .bind(cursor_tx_idx)
             .bind(cursor_evt_idx)
             .bind(limit + 1)
-            .fetch_all(&state.pool)
+            .fetch_all(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?
     } else {
@@ -1780,7 +1781,7 @@ async fn get_address_asset_transfers(
             .bind(cursor_tx_idx)
             .bind(cursor_evt_idx)
             .bind(limit + 1)
-            .fetch_all(&state.pool)
+            .fetch_all(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?
     };
@@ -1816,7 +1817,7 @@ async fn get_address_asset_transfers(
                 "#,
             )
             .bind(&token_ids)
-            .fetch_all(&state.pool)
+            .fetch_all(&state.read_pool)
             .await
             .unwrap_or_default();
 

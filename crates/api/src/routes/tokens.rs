@@ -125,7 +125,7 @@ async fn list_tokens(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<TokenResponse>> {
-    let sync_status = state.cache.get_sync_status(&state.pool).await;
+    let sync_status = state.cache.get_sync_status(&state.read_pool).await;
 
     if sync_status.token_deferred {
         return ok(CursorPaginatedResponse::without_total(
@@ -187,7 +187,7 @@ async fn list_tokens(
             .bind(cursor_holders)
             .bind(cursor_id)
             .bind(limit + 1)
-            .fetch_all(&state.pool)
+            .fetch_all(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?
         }
@@ -211,7 +211,7 @@ async fn list_tokens(
             .bind(cursor_holders)
             .bind(cursor_id)
             .bind(limit + 1)
-            .fetch_all(&state.pool)
+            .fetch_all(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?
         }
@@ -234,7 +234,7 @@ async fn list_tokens(
             .bind(cursor_holders)
             .bind(cursor_id)
             .bind(limit + 1)
-            .fetch_all(&state.pool)
+            .fetch_all(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?
         }
@@ -257,7 +257,7 @@ async fn list_tokens(
             .bind(cursor_holders)
             .bind(cursor_id)
             .bind(limit + 1)
-            .fetch_all(&state.pool)
+            .fetch_all(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?
         }
@@ -280,7 +280,7 @@ async fn list_tokens(
             .bind(cursor_holders)
             .bind(cursor_id)
             .bind(limit + 1)
-            .fetch_all(&state.pool)
+            .fetch_all(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?
         }
@@ -302,7 +302,7 @@ async fn list_tokens(
             .bind(cursor_holders)
             .bind(cursor_id)
             .bind(limit + 1)
-            .fetch_all(&state.pool)
+            .fetch_all(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?
         }
@@ -356,7 +356,7 @@ async fn get_token(
     State(state): State<Arc<AppState>>,
     Path(type_hash): Path<String>,
 ) -> ApiResult<TokenResponse> {
-    let sync_status = state.cache.get_sync_status(&state.pool).await;
+    let sync_status = state.cache.get_sync_status(&state.read_pool).await;
 
     if sync_status.token_deferred {
         return Err(ApiError::not_found(
@@ -379,7 +379,7 @@ async fn get_token(
         "#,
     )
     .bind(&hash)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -416,7 +416,7 @@ async fn get_token_holders(
     Path(type_hash): Path<String>,
     Query(params): Query<HolderParams>,
 ) -> ApiResult<CursorPaginatedResponse<TokenHolderResponse>> {
-    let sync_status = state.cache.get_sync_status(&state.pool).await;
+    let sync_status = state.cache.get_sync_status(&state.read_pool).await;
 
     if sync_status.token_deferred {
         return ok(CursorPaginatedResponse::without_total(
@@ -432,7 +432,7 @@ async fn get_token_holders(
     let token_row: Option<(i64, i32)> =
         sqlx::query_as("SELECT id, holders_count FROM tokens WHERE type_script_hash = $1")
             .bind(&hash)
-            .fetch_optional(&state.pool)
+            .fetch_optional(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -470,7 +470,7 @@ async fn get_token_holders(
         )
         .bind(token_id)
         .bind(limit + 1)
-        .fetch_all(&state.pool)
+        .fetch_all(&state.read_pool)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
     } else {
@@ -488,7 +488,7 @@ async fn get_token_holders(
         .bind(&cursor_balance)
         .bind(&cursor_lock)
         .bind(limit + 1)
-        .fetch_all(&state.pool)
+        .fetch_all(&state.read_pool)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
     };
@@ -519,7 +519,7 @@ async fn get_token_holders(
             "#,
         )
         .bind(&lock_hashes)
-        .fetch_all(&state.pool)
+        .fetch_all(&state.read_pool)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -556,7 +556,7 @@ async fn get_token_transfers(
     Path(type_hash): Path<String>,
     Query(params): Query<TransferParams>,
 ) -> ApiResult<CursorPaginatedResponse<TokenTransferResponse>> {
-    let sync_status = state.cache.get_sync_status(&state.pool).await;
+    let sync_status = state.cache.get_sync_status(&state.read_pool).await;
 
     if sync_status.token_deferred {
         return ok(CursorPaginatedResponse::without_total(
@@ -572,7 +572,7 @@ async fn get_token_transfers(
     let token_row: Option<(i64, i64)> =
         sqlx::query_as("SELECT id, transfers_count FROM tokens WHERE type_script_hash = $1")
             .bind(&hash)
-            .fetch_optional(&state.pool)
+            .fetch_optional(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -622,7 +622,7 @@ async fn get_token_transfers(
     .bind(cursor_block)
     .bind(cursor_idx)
     .bind(limit + 1)
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -664,7 +664,7 @@ async fn get_token_transfers(
             "#,
         )
         .bind(&lock_hashes)
-        .fetch_all(&state.pool)
+        .fetch_all(&state.read_pool)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
 

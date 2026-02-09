@@ -107,7 +107,7 @@ async fn list_blocks(
     {
         Some(status) => status.tip_block_number + 1,
         None => sqlx::query_scalar::<_, i64>("SELECT COALESCE(MAX(number), 0) + 1 FROM blocks")
-            .fetch_one(&state.pool)
+            .fetch_one(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?,
     };
@@ -127,7 +127,7 @@ async fn list_blocks(
     )
     .bind(cursor_number)
     .bind(limit + 1)
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -268,7 +268,7 @@ async fn get_block(
             "#,
         )
         .bind(&hash)
-        .fetch_optional(&state.pool)
+        .fetch_optional(&state.read_pool)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
     } else {
@@ -285,7 +285,7 @@ async fn get_block(
             "#,
         )
         .bind(number)
-        .fetch_optional(&state.pool)
+        .fetch_optional(&state.read_pool)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
     };
@@ -294,8 +294,13 @@ async fn get_block(
         Some(r) => {
             let block_hash = format!("0x{}", hex::encode(&r.hash));
             let (miner_address, reward_info) = tokio::join!(
-                get_miner_address(&state.pool, r.number, &state.ckb_network),
-                get_mining_reward(&state.ckb_rpc_url, &block_hash, &state.pool, &state.cache),
+                get_miner_address(&state.read_pool, r.number, &state.ckb_network),
+                get_mining_reward(
+                    &state.ckb_rpc_url,
+                    &block_hash,
+                    &state.read_pool,
+                    &state.cache
+                ),
             );
             let (mining_reward, mining_reward_tx_hash) = match reward_info {
                 Some(info) => (Some(info.reward), info.cellbase_tx_hash),
@@ -460,7 +465,7 @@ async fn get_block_fee_stats(
 
         let row: Option<(i64,)> = sqlx::query_as("SELECT number FROM blocks WHERE hash = $1")
             .bind(&hash)
-            .fetch_optional(&state.pool)
+            .fetch_optional(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -485,7 +490,7 @@ async fn get_block_fee_stats(
         "#,
     )
     .bind(block_number)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -524,7 +529,7 @@ async fn get_block_proposals(
 
         let row: Option<(i64,)> = sqlx::query_as("SELECT number FROM blocks WHERE hash = $1")
             .bind(&hash)
-            .fetch_optional(&state.pool)
+            .fetch_optional(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -549,7 +554,7 @@ async fn get_block_proposals(
         "#,
     )
     .bind(block_number)
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 

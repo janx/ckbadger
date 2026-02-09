@@ -231,4 +231,18 @@ mod tests {
         assert_ne!(addr_key, tx_key);
         assert_ne!(block_key, tx_key);
     }
+
+    #[test]
+    fn test_cache_ttl_chart_is_six_hours() {
+        assert_eq!(CacheTtl::CHART.as_secs(), 21600);
+        assert_eq!(CacheTtl::CHART.as_secs() / 3600, 6);
+    }
+
+    #[test]
+    fn test_cache_ttl_chart_longer_than_block() {
+        // Chart data changes slowly, should cache much longer than block/tx data
+        assert!(CacheTtl::CHART > CacheTtl::BLOCK);
+        assert!(CacheTtl::CHART > CacheTtl::TRANSACTION);
+        assert!(CacheTtl::CHART > CacheTtl::NETWORK_STATS);
+    }
 }

@@ -198,7 +198,7 @@ async fn list_activities(
         .bind(cursor_tx)
         .bind(cursor_idx)
         .bind(limit + 1)
-        .fetch_all(&state.pool)
+        .fetch_all(&state.read_pool)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?,
         (Some(typ), None) => sqlx::query_as(
@@ -218,7 +218,7 @@ async fn list_activities(
         .bind(cursor_tx)
         .bind(cursor_idx)
         .bind(limit + 1)
-        .fetch_all(&state.pool)
+        .fetch_all(&state.read_pool)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?,
         (None, Some(cat)) => sqlx::query_as(
@@ -238,7 +238,7 @@ async fn list_activities(
         .bind(cursor_tx)
         .bind(cursor_idx)
         .bind(limit + 1)
-        .fetch_all(&state.pool)
+        .fetch_all(&state.read_pool)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?,
         (None, None) => sqlx::query_as(
@@ -256,7 +256,7 @@ async fn list_activities(
         .bind(cursor_tx)
         .bind(cursor_idx)
         .bind(limit + 1)
-        .fetch_all(&state.pool)
+        .fetch_all(&state.read_pool)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?,
     };
@@ -370,7 +370,7 @@ async fn get_address_activities(
                 .bind(cursor_tx)
                 .bind(cursor_idx)
                 .bind(limit + 1)
-                .fetch_all(&state.pool)
+                .fetch_all(&state.read_pool)
                 .await
                 .map_err(|e| ApiError::internal(e.to_string()))?
         }
@@ -395,7 +395,7 @@ async fn get_address_activities(
                 .bind(cursor_tx)
                 .bind(cursor_idx)
                 .bind(limit + 1)
-                .fetch_all(&state.pool)
+                .fetch_all(&state.read_pool)
                 .await
                 .map_err(|e| ApiError::internal(e.to_string()))?
         }
@@ -420,7 +420,7 @@ async fn get_address_activities(
                 .bind(cursor_tx)
                 .bind(cursor_idx)
                 .bind(limit + 1)
-                .fetch_all(&state.pool)
+                .fetch_all(&state.read_pool)
                 .await
                 .map_err(|e| ApiError::internal(e.to_string()))?
         }
@@ -444,7 +444,7 @@ async fn get_address_activities(
                 .bind(cursor_tx)
                 .bind(cursor_idx)
                 .bind(limit + 1)
-                .fetch_all(&state.pool)
+                .fetch_all(&state.read_pool)
                 .await
                 .map_err(|e| ApiError::internal(e.to_string()))?
         }
@@ -523,7 +523,7 @@ async fn get_transaction_activities(
         ));
     }
 
-    let block_number = get_block_number_for_tx(&state.pool, &tx_hash)
+    let block_number = get_block_number_for_tx(&state.read_pool, &tx_hash)
         .await
         .ok()
         .flatten();
@@ -541,7 +541,7 @@ async fn get_transaction_activities(
         )
         .bind(&tx_hash)
         .bind(bn)
-        .fetch_all(&state.pool)
+        .fetch_all(&state.read_pool)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
     } else {
@@ -556,7 +556,7 @@ async fn get_transaction_activities(
             "#,
         )
         .bind(&tx_hash)
-        .fetch_all(&state.pool)
+        .fetch_all(&state.read_pool)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
     };

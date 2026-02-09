@@ -173,7 +173,7 @@ async fn lookup_scripts(
     )
     .bind(&code_hash_bytes)
     .bind(&state.ckb_network)
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -200,7 +200,7 @@ async fn lookup_scripts(
             "#,
         )
         .bind(&data_hashes)
-        .fetch_all(&state.pool)
+        .fetch_all(&state.read_pool)
         .await
         .unwrap_or_default();
 
@@ -225,7 +225,7 @@ async fn lookup_scripts(
             "#,
         )
         .bind(&type_hashes)
-        .fetch_all(&state.pool)
+        .fetch_all(&state.read_pool)
         .await
         .unwrap_or_default();
 
@@ -310,7 +310,7 @@ async fn get_code_cell(
             "#,
         )
         .bind(&code_hash_bytes)
-        .fetch_optional(&state.pool)
+        .fetch_optional(&state.read_pool)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
     } else {
@@ -324,7 +324,7 @@ async fn get_code_cell(
             "#,
         )
         .bind(&code_hash_bytes)
-        .fetch_optional(&state.pool)
+        .fetch_optional(&state.read_pool)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
     };
@@ -401,7 +401,7 @@ async fn list_scripts(
             .bind(network)
             .bind(decoder)
             .bind(pattern)
-            .fetch_one(&state.pool)
+            .fetch_one(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -413,7 +413,7 @@ async fn list_scripts(
                 .bind(network)
                 .bind(decoder)
                 .bind(pattern)
-                .fetch_all(&state.pool)
+                .fetch_all(&state.read_pool)
                 .await
                 .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -425,7 +425,7 @@ async fn list_scripts(
             )
             .bind(network)
             .bind(decoder)
-            .fetch_one(&state.pool)
+            .fetch_one(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -436,7 +436,7 @@ async fn list_scripts(
             let rows = sqlx::query_as::<_, ScriptRow>(&query)
                 .bind(network)
                 .bind(decoder)
-                .fetch_all(&state.pool)
+                .fetch_all(&state.read_pool)
                 .await
                 .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -448,7 +448,7 @@ async fn list_scripts(
             )
             .bind(network)
             .bind(pattern)
-            .fetch_one(&state.pool)
+            .fetch_one(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -459,7 +459,7 @@ async fn list_scripts(
             let rows = sqlx::query_as::<_, ScriptRow>(&query)
                 .bind(network)
                 .bind(pattern)
-                .fetch_all(&state.pool)
+                .fetch_all(&state.read_pool)
                 .await
                 .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -469,7 +469,7 @@ async fn list_scripts(
             let total: (i64,) =
                 sqlx::query_as("SELECT COUNT(DISTINCT name) FROM known_scripts WHERE network = $1")
                     .bind(network)
-                    .fetch_one(&state.pool)
+                    .fetch_one(&state.read_pool)
                     .await
                     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -479,7 +479,7 @@ async fn list_scripts(
             );
             let rows = sqlx::query_as::<_, ScriptRow>(&query)
                 .bind(network)
-                .fetch_all(&state.pool)
+                .fetch_all(&state.read_pool)
                 .await
                 .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -516,7 +516,7 @@ async fn get_script(
     )
     .bind(&name)
     .bind(&state.ckb_network)
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -544,7 +544,7 @@ async fn get_script(
             "#,
         )
         .bind(&data_hashes)
-        .fetch_all(&state.pool)
+        .fetch_all(&state.read_pool)
         .await
         .unwrap_or_default();
 
@@ -570,7 +570,7 @@ async fn get_script(
             "#,
         )
         .bind(&type_hashes)
-        .fetch_all(&state.pool)
+        .fetch_all(&state.read_pool)
         .await
         .unwrap_or_default();
 
@@ -603,7 +603,7 @@ async fn get_script_usage(
     )
     .bind(&name)
     .bind(&state.ckb_network)
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -634,7 +634,7 @@ async fn get_script_usage(
         "#,
     )
     .bind(&hashes)
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 

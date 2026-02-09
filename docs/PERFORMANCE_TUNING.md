@@ -13,7 +13,7 @@ The `docker/postgres/postgresql.conf` is pre-optimized for write-heavy blockchai
 | Parameter              | Value | Purpose                                     |
 | ---------------------- | ----- | ------------------------------------------- |
 | `shared_buffers`       | 24GB  | 25% of RAM for buffer cache                 |
-| `work_mem`             | 512MB | Per-operation memory for complex queries    |
+| `work_mem`             | 64MB  | Per-operation memory for sorts/hashes       |
 | `maintenance_work_mem` | 4GB   | Memory for VACUUM, CREATE INDEX             |
 | `effective_cache_size` | 70GB  | Query planner's estimate of available cache |
 
@@ -25,12 +25,12 @@ The `docker/postgres/postgresql.conf` is pre-optimized for write-heavy blockchai
 | `commit_delay`                 | 10000 | Batch commits in 10ms window                          |
 | `wal_compression`              | lz4   | Reduce WAL volume by 30-50% for COPY workloads        |
 | `full_page_writes`             | off   | Eliminate 8KB page images (data is re-syncable)       |
-| `max_wal_size`                 | 8GB   | Trigger checkpoint every ~8GB of WAL                  |
-| `min_wal_size`                 | 4GB   | Keep WAL segments cached                              |
-| `checkpoint_timeout`           | 15min | Frequent small checkpoints prevent dirty page buildup |
+| `max_wal_size`                 | 4GB   | Trigger checkpoint every ~4GB of WAL                  |
+| `min_wal_size`                 | 2GB   | Keep WAL segments cached                              |
+| `checkpoint_timeout`           | 5min  | Frequent small checkpoints prevent dirty page buildup |
 | `checkpoint_completion_target` | 0.9   | Spread checkpoint I/O over time                       |
 
-> **Note:** With `wal_compression=lz4` + `full_page_writes=off`, WAL volume is ~3-4x smaller than default. This allows frequent small checkpoints (15min/8GB) without causing stalls. The key tradeoff: too-infrequent checkpoints cause dirty page accumulation in shared_buffers, forcing backends to evict dirty pages themselves (backend writes in `pg_stat_bgwriter`), which causes periodic 2x write time spikes.
+> **Note:** With `wal_compression=lz4` + `full_page_writes=off`, WAL volume is ~3-4x smaller than default. This allows frequent small checkpoints (5min/4GB) without causing stalls. The key tradeoff: too-infrequent checkpoints cause dirty page accumulation in shared_buffers, forcing backends to evict dirty pages themselves (backend writes in `pg_stat_bgwriter`), which causes periodic 2x write time spikes.
 
 ### 2. Indexer Parameters
 
@@ -176,13 +176,27 @@ docker exec ckbadger-postgres grep -i "checkpoint" \
 - Checkpoint write time should be < 5 minutes
 - No correlation between checkpoint times and PERF DB spikes
 
+## Read Replica Support
+
+The API supports an optional read replica to offload read queries from the primary database. This isolates API reads from indexer writes, improving both sync speed and API latency.
+
+```bash
+# Set via environment variable
+READ_DATABASE_URL=postgres://user:pass@replica:5432/ckbadger
+
+# Or via CLI argument
+cargo run -p ckbadger-api -- --read-database-url postgres://user:pass@replica:5432/ckbadger
+```
+
+When configured, all read-only API endpoints use the replica pool. Write operations (admin fork resolution, cycles calculation) always use the primary pool. When not configured, all queries go to the primary — no behavior change.
+
 ## Scaling Beyond Single Node
 
 For extreme scale (100M+ blocks), consider:
 
 1. **Citus** for distributed PostgreSQL
 2. **TimescaleDB** for automatic time-series partitioning
-3. **Read replicas** for API queries
+3. **Read replicas** for API queries (supported — see above)
 4. **Redis caching** for hot data (already supported via `--redis-url`)
 
 ## Troubleshooting
@@ -218,8 +232,8 @@ If `backend_written` is large (GBs), checkpoints are too infrequent.
 
 ```sql
 -- Apply without restart
-ALTER SYSTEM SET checkpoint_timeout = '15min';
-ALTER SYSTEM SET max_wal_size = '8GB';
+ALTER SYSTEM SET checkpoint_timeout = '5min';
+ALTER SYSTEM SET max_wal_size = '4GB';
 SELECT pg_reload_conf();
 ```
 

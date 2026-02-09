@@ -69,7 +69,7 @@ async fn get_cell_graph(
     let tx_info =
         sqlx::query_as::<_, (i64,)>("SELECT block_number FROM transactions WHERE hash = $1")
             .bind(&hash_bytes)
-            .fetch_optional(&state.pool)
+            .fetch_optional(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -87,7 +87,7 @@ async fn get_cell_graph(
     .bind(&hash_bytes)
     .bind(output_index)
     .bind(block_number)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -133,7 +133,7 @@ async fn get_cell_graph(
             )
             .bind(&hash_bytes)
             .bind(block_number)
-            .fetch_all(&state.pool)
+            .fetch_all(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -154,7 +154,7 @@ async fn get_cell_graph(
                 )
                 .bind(&prev_tx_hashes)
                 .bind(&prev_indices)
-                .fetch_all(&state.pool)
+                .fetch_all(&state.read_pool)
                 .await
                 .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -235,7 +235,7 @@ async fn get_tx_graph(
         "SELECT hash, block_number, fee::TEXT, is_cellbase FROM transactions WHERE hash = $1",
     )
     .bind(&hash_bytes)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -260,7 +260,7 @@ async fn get_tx_graph(
             )
             .bind(&hash_bytes)
             .bind(block_number)
-            .fetch_all(&state.pool)
+            .fetch_all(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -280,7 +280,7 @@ async fn get_tx_graph(
                 )
                 .bind(&prev_tx_hashes)
                 .bind(&prev_indices)
-                .fetch_all(&state.pool)
+                .fetch_all(&state.read_pool)
                 .await
                 .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -324,7 +324,7 @@ async fn get_tx_graph(
         )
         .bind(&hash_bytes)
         .bind(block_number)
-        .fetch_all(&state.pool)
+        .fetch_all(&state.read_pool)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -400,7 +400,7 @@ async fn get_proposal_graph(
     let block_row: Option<(Vec<u8>, i32)> =
         sqlx::query_as("SELECT hash, proposals_count FROM blocks WHERE number = $1")
             .bind(block_number)
-            .fetch_optional(&state.pool)
+            .fetch_optional(&state.read_pool)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -427,7 +427,7 @@ async fn get_proposal_graph(
         "#,
     )
     .bind(block_number)
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
