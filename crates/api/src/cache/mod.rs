@@ -62,22 +62,27 @@ impl CacheBackend {
             .unwrap_or(0);
 
         // Use pre-computed totals from daily_statistics (latest row) instead of COUNT(*)
-        // which would scan all partitions of transactions/cells tables (30s+)
-        let (total_tx, total_cells, total_live_cells, total_addresses): (i64, i64, i64, i64) =
-            sqlx::query_as(
-                r#"SELECT
-                    COALESCE(ds.total_transactions, 0)::bigint,
-                    COALESCE(ds.total_all_cells, 0)::bigint,
-                    COALESCE(ds.total_live_cells, 0)::bigint,
-                    COALESCE((SELECT COUNT(*) FROM address_balances WHERE balance > 0), 0)::bigint
-                FROM daily_statistics ds
-                ORDER BY ds.date DESC
-                LIMIT 1
-                "#,
-            )
-            .fetch_one(pool)
-            .await
-            .unwrap_or((0, 0, 0, 0));
+        // which would scan all partitions of transactions/cells tables (30s+).
+        // Address count query runs in parallel using the idx_address_balances_balance index.
+        let stats_fut = sqlx::query_as::<_, (i64, i64, i64)>(
+            r#"SELECT
+                COALESCE(ds.total_transactions, 0)::bigint,
+                COALESCE(ds.total_all_cells, 0)::bigint,
+                COALESCE(ds.total_live_cells, 0)::bigint
+            FROM daily_statistics ds
+            ORDER BY ds.date DESC
+            LIMIT 1
+            "#,
+        )
+        .fetch_one(pool);
+
+        let addr_count_fut =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM address_balances WHERE balance > 0")
+                .fetch_one(pool);
+
+        let (stats_result, addr_result) = tokio::join!(stats_fut, addr_count_fut);
+        let (total_tx, total_cells, total_live_cells) = stats_result.unwrap_or((0, 0, 0));
+        let total_addresses = addr_result.unwrap_or(0);
 
         SyncStatusData {
             tip_block_number: tip,

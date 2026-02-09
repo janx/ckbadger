@@ -86,18 +86,22 @@ async fn search(
                     .bind(&hash_bytes)
                     .fetch_optional(&state.read_pool);
 
+            // Use address_balances (single table, indexed) instead of COUNT(*) on
+            // partitioned cells table which requires scanning all partitions.
             let cell_count_fut = sqlx::query_as::<_, (i64,)>(
-                "SELECT COUNT(*) FROM cells WHERE lock_script_hash = $1",
+                "SELECT COALESCE(total_cells_count, 0) FROM address_balances WHERE lock_script_hash = $1",
             )
             .bind(&hash_bytes)
-            .fetch_one(&state.read_pool);
+            .fetch_optional(&state.read_pool);
 
             let (tx_result, block_result, cell_count_result) =
                 tokio::join!(tx_fut, block_fut, cell_count_fut);
 
             let tx = tx_result.map_err(|e| ApiError::internal(e.to_string()))?;
             let block = block_result.map_err(|e| ApiError::internal(e.to_string()))?;
-            let cell_count = cell_count_result.map_err(|e| ApiError::internal(e.to_string()))?;
+            let cell_count = cell_count_result
+                .map_err(|e| ApiError::internal(e.to_string()))?
+                .unwrap_or((0,));
 
             if let Some((block_num,)) = tx {
                 results.push(SearchResult {

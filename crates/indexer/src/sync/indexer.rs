@@ -1195,13 +1195,15 @@ impl Indexer {
                         let crossed_1000 = (start_block / 1000) != (end_block / 1000);
                         if crossed_1000 && !self.is_bulk_sync_active() {
                             let update_block = ((end_block / 1000) * 1000) as i64;
-                            if let Err(e) = self
-                                .writer
-                                .recalculate_dao_extended_statistics(update_block)
-                                .await
-                            {
-                                warn!("Failed to recalculate DAO statistics: {}", e);
-                            }
+                            let writer = self.writer.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = writer
+                                    .recalculate_dao_extended_statistics(update_block)
+                                    .await
+                                {
+                                    warn!("Failed to recalculate DAO statistics: {}", e);
+                                }
+                            });
                         }
 
                         self.maybe_invalidate_chart_caches(end_block).await;
@@ -1300,13 +1302,15 @@ impl Indexer {
         let crossed_1000 = (start_block / 1000) != (end_block / 1000);
         if crossed_1000 && !self.is_bulk_sync_active() {
             let update_block = ((end_block / 1000) * 1000) as i64;
-            if let Err(e) = self
-                .writer
-                .recalculate_dao_extended_statistics(update_block)
-                .await
-            {
-                warn!("Failed to recalculate DAO statistics: {}", e);
-            }
+            let writer = self.writer.clone();
+            tokio::spawn(async move {
+                if let Err(e) = writer
+                    .recalculate_dao_extended_statistics(update_block)
+                    .await
+                {
+                    warn!("Failed to recalculate DAO statistics: {}", e);
+                }
+            });
         }
 
         self.maybe_invalidate_chart_caches(end_block).await;
@@ -1362,10 +1366,36 @@ impl Indexer {
             }
         }
 
-        let end_block = std::cmp::min(start_block + self.config.batch_size as u64 - 1, chain_tip);
+        let mut end_block =
+            std::cmp::min(start_block + self.config.batch_size as u64 - 1, chain_tip);
 
         if start_block > end_block {
             return Ok(SyncAction::CaughtUp);
+        }
+
+        // Live sync accumulation: when near the chain tip and only 1 block is available,
+        // wait briefly for more blocks to arrive to amortize pipeline overhead.
+        // This reduces per-block overhead by batching 2-5 blocks together.
+        if end_block == start_block && blocks_behind <= self.config.bulk_sync_threshold {
+            let accumulation_timeout = Duration::from_secs(2);
+            let max_accumulate = 5u64;
+            let deadline = Instant::now() + accumulation_timeout;
+
+            while Instant::now() < deadline {
+                sleep(Duration::from_millis(200)).await;
+                if let Ok(new_tip) = self.rpc.get_tip_block_number().await {
+                    if new_tip > end_block {
+                        end_block = std::cmp::min(
+                            start_block + max_accumulate - 1,
+                            std::cmp::min(new_tip, start_block + self.config.batch_size as u64 - 1),
+                        );
+                        self.progress.update_target(new_tip);
+                        if end_block - start_block + 1 >= max_accumulate {
+                            break;
+                        }
+                    }
+                }
+            }
         }
 
         let fetch_start = Instant::now();
@@ -1451,13 +1481,15 @@ impl Indexer {
             let crossed_1000 = (start_block / 1000) != (end_block / 1000);
             if crossed_1000 && !self.is_bulk_sync_active() {
                 let update_block = ((end_block / 1000) * 1000) as i64;
-                if let Err(e) = self
-                    .writer
-                    .recalculate_dao_extended_statistics(update_block)
-                    .await
-                {
-                    warn!("Failed to recalculate DAO statistics: {}", e);
-                }
+                let writer = self.writer.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = writer
+                        .recalculate_dao_extended_statistics(update_block)
+                        .await
+                    {
+                        warn!("Failed to recalculate DAO statistics: {}", e);
+                    }
+                });
             }
 
             self.maybe_invalidate_chart_caches(end_block).await;
@@ -4825,181 +4857,6 @@ impl Indexer {
         let dao_deferred = self.dao_deferred.load(Ordering::Relaxed);
         let live_cell_store = Some(self.rocksdb_store.as_ref());
 
-        // Phase 1: Collect all DAO deposits from the batch
-        let mut all_dao_deposits: Vec<(crate::parser::ParsedDaoDeposit, i64, DateTime<Utc>, i64)> =
-            Vec::new();
-
-        let mut block_tx_idx = 0usize;
-        for parsed in all_parsed_blocks {
-            let tx_count_for_block = parsed.transactions_count as usize;
-            let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
-            block_tx_idx += tx_count_for_block;
-
-            let ar = DaoParser::extract_ar_from_dao_field(&parsed.dao).unwrap_or(0) as i64;
-
-            for tx_data in tx_slice {
-                let dao_deposits =
-                    DaoParser::parse_deposits_from_cells(&tx_data.hash, &tx_data.cells);
-                for deposit in dao_deposits {
-                    all_dao_deposits.push((deposit, parsed.number, parsed.timestamp, ar));
-                }
-            }
-        }
-
-        // Batch insert DAO deposits
-        if !all_dao_deposits.is_empty() {
-            self.writer
-                .insert_dao_deposits_batch(&all_dao_deposits, live_cell_store, dao_deferred)
-                .await?;
-        }
-
-        // Phase 2: Collect ALL input outpoints from non-cellbase transactions
-        let mut all_input_outpoints: Vec<(Vec<u8>, i16)> = Vec::new();
-
-        block_tx_idx = 0;
-        for parsed in all_parsed_blocks {
-            let tx_count_for_block = parsed.transactions_count as usize;
-            let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
-            block_tx_idx += tx_count_for_block;
-
-            for tx_data in tx_slice {
-                if tx_data.is_cellbase || tx_data.inputs.is_empty() {
-                    continue;
-                }
-                for input in &tx_data.inputs {
-                    all_input_outpoints.push((
-                        input.previous_tx_hash.to_vec(),
-                        input.previous_output_index as i16,
-                    ));
-                }
-            }
-        }
-
-        // Phase 3: Batch query all potentially consumed DAO deposits
-        let consumed_dao_map = if !all_input_outpoints.is_empty() {
-            let unique_outpoints: Vec<(Vec<u8>, i16)> = {
-                let mut seen = HashSet::new();
-                all_input_outpoints
-                    .into_iter()
-                    .filter(|x| seen.insert(x.clone()))
-                    .collect()
-            };
-            let outpoint_refs: Vec<(&[u8], i16)> = unique_outpoints
-                .iter()
-                .map(|(h, i)| (h.as_slice(), *i))
-                .collect();
-            self.writer
-                .find_consumed_dao_deposits_batch(&outpoint_refs, live_cell_store)
-                .await?
-        } else {
-            HashMap::new()
-        };
-
-        // Phase 4: Process DAO withdrawals in batch
-        if !consumed_dao_map.is_empty() {
-            use crate::db::DaoWithdrawalContextTrait;
-
-            #[derive(Clone)]
-            struct DaoWithdrawalContext {
-                consumed_deposits: Vec<(i64, Vec<u8>, i16, String, i64, i16)>,
-                new_dao_outputs: Vec<(Vec<u8>, i16, Vec<u8>, i64, u64)>,
-                block_number: i64,
-                consuming_tx_hash: Vec<u8>,
-                timestamp: DateTime<Utc>,
-            }
-
-            impl DaoWithdrawalContextTrait for DaoWithdrawalContext {
-                fn consumed_deposits(&self) -> &[(i64, Vec<u8>, i16, String, i64, i16)] {
-                    &self.consumed_deposits
-                }
-                fn new_dao_outputs(&self) -> &[(Vec<u8>, i16, Vec<u8>, i64, u64)] {
-                    &self.new_dao_outputs
-                }
-                fn block_number(&self) -> i64 {
-                    self.block_number
-                }
-                fn consuming_tx_hash(&self) -> &[u8] {
-                    &self.consuming_tx_hash
-                }
-                fn timestamp(&self) -> DateTime<Utc> {
-                    self.timestamp
-                }
-            }
-
-            let mut withdrawal_contexts: Vec<DaoWithdrawalContext> = Vec::new();
-
-            block_tx_idx = 0;
-            for parsed in all_parsed_blocks {
-                let tx_count_for_block = parsed.transactions_count as usize;
-                let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
-                block_tx_idx += tx_count_for_block;
-
-                for tx_data in tx_slice {
-                    if tx_data.is_cellbase || tx_data.inputs.is_empty() {
-                        continue;
-                    }
-
-                    // Check if any input matches a DAO deposit
-                    let mut consumed_deposits: Vec<(i64, Vec<u8>, i16, String, i64, i16)> =
-                        Vec::new();
-                    for input in &tx_data.inputs {
-                        let key = (
-                            input.previous_tx_hash.to_vec(),
-                            input.previous_output_index as i16,
-                        );
-                        if let Some(deposit_info) = consumed_dao_map.get(&key) {
-                            consumed_deposits.push(deposit_info.clone());
-                        }
-                    }
-
-                    if consumed_deposits.is_empty() {
-                        continue;
-                    }
-
-                    // Parse new DAO outputs (withdraw requests)
-                    let mut new_dao_outputs: Vec<(Vec<u8>, i16, Vec<u8>, i64, u64)> = Vec::new();
-                    for (idx, cell) in tx_data.cells.iter().enumerate() {
-                        if let Some(ref type_code_hash) = cell.type_code_hash {
-                            if type_code_hash == &dao_code_hash && cell.data_size == 8 {
-                                if let Some(data) = tx_data.outputs_data.get(idx) {
-                                    let data_bytes = crate::rpc::parse_hex_to_bytes(data);
-                                    if let Some(deposit_block) =
-                                        DaoParser::parse_deposit_block_number(&data_bytes)
-                                    {
-                                        new_dao_outputs.push((
-                                            tx_data.hash.to_vec(),
-                                            idx as i16,
-                                            cell.lock_script_hash.clone(),
-                                            cell.capacity,
-                                            deposit_block,
-                                        ));
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    withdrawal_contexts.push(DaoWithdrawalContext {
-                        consumed_deposits,
-                        new_dao_outputs,
-                        block_number: parsed.number,
-                        consuming_tx_hash: tx_data.hash.to_vec(),
-                        timestamp: parsed.timestamp,
-                    });
-                }
-            }
-
-            // Batch process all withdrawals
-            if !withdrawal_contexts.is_empty() {
-                self.writer
-                    .process_dao_withdrawals_batch_with_store(
-                        &withdrawal_contexts,
-                        live_cell_store,
-                        dao_deferred,
-                    )
-                    .await?;
-            }
-        }
         let skip_token = self
             .token_deferred
             .load(std::sync::atomic::Ordering::Relaxed)
@@ -5010,461 +4867,682 @@ impl Indexer {
             .load(std::sync::atomic::Ordering::Relaxed)
             && bulk_sync_mode;
 
-        struct UdtTxContext {
-            tx_hash: Vec<u8>,
-            block_number: i64,
-            timestamp: chrono::DateTime<Utc>,
-            output_udts: Vec<crate::parser::ParsedUdtCell>,
-            input_outpoints: Vec<(Vec<u8>, i16)>,
-        }
+        // Parallel Phase: Run DAO, UDT+Activities, and NFT/Spore processing concurrently.
+        // These groups are independent of each other and only share read access to
+        // all_tx_data, all_parsed_blocks, blocks, and self.writer.
+        let (_, _, _) = tokio::try_join!(
+            // Group A: DAO processing (independent)
+            async {
+                // Collect all DAO deposits from the batch
+                let mut all_dao_deposits: Vec<(
+                    crate::parser::ParsedDaoDeposit,
+                    i64,
+                    DateTime<Utc>,
+                    i64,
+                )> = Vec::new();
 
-        let mut udt_tx_contexts: Vec<UdtTxContext> = Vec::new();
-        let mut all_input_outpoints_udt: Vec<(Vec<u8>, i16)> = Vec::new();
-        let mut batch_udt_cells: HashMap<(Vec<u8>, i16), crate::parser::ParsedUdtCell> =
-            HashMap::new();
-        let mut udt_transfers_by_tx: HashMap<Vec<u8>, Vec<crate::parser::ParsedUdtTransfer>> =
-            HashMap::new();
+                let mut block_tx_idx = 0usize;
+                for parsed in all_parsed_blocks {
+                    let tx_count_for_block = parsed.transactions_count as usize;
+                    let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
+                    block_tx_idx += tx_count_for_block;
 
-        // Temp storage: we filter txs later based on whether they have UDT inputs
-        struct TxInfoForUdt {
-            tx_hash: Vec<u8>,
-            block_number: i64,
-            timestamp: chrono::DateTime<Utc>,
-            output_udts: Vec<crate::parser::ParsedUdtCell>,
-            input_outpoints: Vec<(Vec<u8>, i16)>,
-        }
-        let mut all_tx_infos_for_udt: Vec<TxInfoForUdt> = Vec::new();
+                    let ar = DaoParser::extract_ar_from_dao_field(&parsed.dao).unwrap_or(0) as i64;
 
-        let mut block_tx_idx = 0usize;
-        for (block_idx, block_response) in blocks.iter().enumerate() {
-            let parsed = &all_parsed_blocks[block_idx];
-            let tx_count_for_block = parsed.transactions_count as usize;
-            let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
-            block_tx_idx += tx_count_for_block;
-
-            for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
-                if tx_data.is_cellbase {
-                    continue;
-                }
-
-                let tx = &block_response.block.transactions[tx_idx];
-                let output_udts = UdtParser::parse_udt_cells(tx);
-
-                for (output_index, udt_cell) in output_udts.iter().enumerate() {
-                    batch_udt_cells.insert(
-                        (tx_data.hash.to_vec(), output_index as i16),
-                        udt_cell.clone(),
-                    );
-                }
-
-                let input_outpoints: Vec<(Vec<u8>, i16)> = tx_data
-                    .inputs
-                    .iter()
-                    .map(|i| (i.previous_tx_hash.to_vec(), i.previous_output_index as i16))
-                    .collect();
-
-                // Collect ALL input outpoints (to detect UDT consumption/burns)
-                all_input_outpoints_udt.extend(input_outpoints.iter().cloned());
-
-                all_tx_infos_for_udt.push(TxInfoForUdt {
-                    tx_hash: tx_data.hash.to_vec(),
-                    block_number: parsed.number,
-                    timestamp: parsed.timestamp,
-                    output_udts,
-                    input_outpoints,
-                });
-            }
-        }
-
-        // Fetch UDT info for ALL input outpoints to detect UDT consumption
-        // Skip when token deferred - no UDT cells in DB during bulk sync
-        // Skip when token deferred - no UDT cells in DB during bulk sync
-        let input_udt_info = if !skip_token && !all_input_outpoints_udt.is_empty() {
-            let unique_outpoints: Vec<(Vec<u8>, i16)> = {
-                let mut seen = HashSet::new();
-                all_input_outpoints_udt
-                    .into_iter()
-                    .filter(|x| seen.insert(x.clone()))
-                    .collect()
-            };
-            let outpoint_refs: Vec<(&[u8], i16)> = unique_outpoints
-                .iter()
-                .map(|(h, i)| (h.as_slice(), *i))
-                .collect();
-            self.writer.get_udt_cells_info_batch(&outpoint_refs).await?
-        } else {
-            HashMap::new()
-        };
-
-        // Filter: include txs with UDT outputs OR UDT inputs (fixes burn/send tracking)
-        for tx_info in all_tx_infos_for_udt {
-            let has_udt_outputs = !tx_info.output_udts.is_empty();
-            let has_udt_inputs = tx_info.input_outpoints.iter().any(|(tx_hash, idx)| {
-                input_udt_info.contains_key(&(tx_hash.clone(), *idx))
-                    || batch_udt_cells.contains_key(&(tx_hash.clone(), *idx))
-            });
-
-            if has_udt_outputs || has_udt_inputs {
-                udt_tx_contexts.push(UdtTxContext {
-                    tx_hash: tx_info.tx_hash,
-                    block_number: tx_info.block_number,
-                    timestamp: tx_info.timestamp,
-                    output_udts: tx_info.output_udts,
-                    input_outpoints: tx_info.input_outpoints,
-                });
-            }
-        }
-
-        if !skip_token && !udt_tx_contexts.is_empty() {
-            let mut all_transfers: Vec<(
-                crate::parser::ParsedUdtTransfer,
-                Vec<u8>,
-                i64,
-                chrono::DateTime<Utc>,
-            )> = Vec::new();
-
-            let mut consumed_udt_outpoints: Vec<(&[u8], i16, i64, &[u8])> = Vec::new();
-
-            for ctx in &udt_tx_contexts {
-                let mut input_udts: Vec<crate::parser::ParsedUdtCell> = Vec::new();
-                for (tx_hash, idx) in &ctx.input_outpoints {
-                    if let Some((
-                        type_script_hash,
-                        type_code_hash,
-                        type_hash_type,
-                        type_args,
-                        lock_script_hash,
-                        amount,
-                        standard,
-                    )) = input_udt_info.get(&(tx_hash.clone(), *idx))
-                    {
-                        input_udts.push(crate::parser::ParsedUdtCell {
-                            type_script_hash: type_script_hash.clone(),
-                            type_code_hash: type_code_hash.clone(),
-                            type_hash_type: *type_hash_type,
-                            type_args: type_args.clone(),
-                            lock_script_hash: lock_script_hash.clone(),
-                            amount: *amount,
-                            standard: crate::parser::UdtStandard::parse(standard),
-                        });
-                        consumed_udt_outpoints.push((
-                            tx_hash.as_slice(),
-                            *idx,
-                            ctx.block_number,
-                            ctx.tx_hash.as_slice(),
-                        ));
-                    } else if let Some(udt_cell) = batch_udt_cells.get(&(tx_hash.clone(), *idx)) {
-                        input_udts.push(udt_cell.clone());
+                    for tx_data in tx_slice {
+                        let dao_deposits =
+                            DaoParser::parse_deposits_from_cells(&tx_data.hash, &tx_data.cells);
+                        for deposit in dao_deposits {
+                            all_dao_deposits.push((deposit, parsed.number, parsed.timestamp, ar));
+                        }
                     }
                 }
 
-                for out_udt in &ctx.output_udts {
-                    let matching_input = input_udts
-                        .iter()
-                        .find(|inp| inp.type_script_hash == out_udt.type_script_hash);
-
-                    let is_mint = matching_input.is_none();
-                    let from_lock_hash = matching_input.map(|inp| inp.lock_script_hash.clone());
-
-                    all_transfers.push((
-                        crate::parser::ParsedUdtTransfer {
-                            type_script_hash: out_udt.type_script_hash.clone(),
-                            type_code_hash: out_udt.type_code_hash.clone(),
-                            type_hash_type: out_udt.type_hash_type,
-                            type_args: out_udt.type_args.clone(),
-                            from_lock_hash,
-                            to_lock_hash: out_udt.lock_script_hash.clone(),
-                            amount: out_udt.amount,
-                            standard: out_udt.standard.clone(),
-                            is_mint,
-                            is_burn: false,
-                        },
-                        ctx.tx_hash.clone(),
-                        ctx.block_number,
-                        ctx.timestamp,
-                    ));
-                }
-
-                for inp_udt in &input_udts {
-                    let has_matching_output = ctx
-                        .output_udts
-                        .iter()
-                        .any(|out| out.type_script_hash == inp_udt.type_script_hash);
-
-                    if !has_matching_output {
-                        all_transfers.push((
-                            crate::parser::ParsedUdtTransfer {
-                                type_script_hash: inp_udt.type_script_hash.clone(),
-                                type_code_hash: inp_udt.type_code_hash.clone(),
-                                type_hash_type: inp_udt.type_hash_type,
-                                type_args: inp_udt.type_args.clone(),
-                                from_lock_hash: Some(inp_udt.lock_script_hash.clone()),
-                                to_lock_hash: Vec::new(),
-                                amount: inp_udt.amount,
-                                standard: inp_udt.standard.clone(),
-                                is_mint: false,
-                                is_burn: true,
-                            },
-                            ctx.tx_hash.clone(),
-                            ctx.block_number,
-                            ctx.timestamp,
-                        ));
-                    }
-                }
-            }
-
-            if !all_transfers.is_empty() {
-                for (transfer, tx_hash, _, _) in &all_transfers {
-                    udt_transfers_by_tx
-                        .entry(tx_hash.clone())
-                        .or_default()
-                        .push(transfer.clone());
-                }
-
-                let transfer_refs: Vec<_> = all_transfers
-                    .iter()
-                    .map(|(t, h, b, ts)| (t, h.as_slice(), *b, *ts))
-                    .collect();
-                self.writer
-                    .process_udt_transfers_batch(&transfer_refs)
-                    .await?;
-            }
-
-            if !consumed_udt_outpoints.is_empty() {
-                self.writer
-                    .consume_udt_cells_batch(&consumed_udt_outpoints)
-                    .await?;
-            }
-        }
-
-        if !skip_token && !batch_udt_cells.is_empty() {
-            let tx_block_map: std::collections::HashMap<&[u8], i64> = udt_tx_contexts
-                .iter()
-                .map(|ctx| (ctx.tx_hash.as_slice(), ctx.block_number))
-                .collect();
-            let udt_cells_to_insert: Vec<_> = batch_udt_cells
-                .iter()
-                .map(|((tx_hash, idx), cell)| {
-                    let block_number = tx_block_map.get(tx_hash.as_slice()).copied().unwrap_or(0);
-                    (tx_hash.as_slice(), *idx, cell, block_number)
-                })
-                .collect();
-            if self.should_use_copy() {
-                let copy_router = self
-                    .copy_router
-                    .as_ref()
-                    .expect("copy_router must exist when should_use_copy() is true");
-                copy_router
-                    .copy_udt_cells_parallel(&udt_cells_to_insert)
-                    .await?;
-            } else {
-                self.writer
-                    .insert_udt_cells_batch(&udt_cells_to_insert)
-                    .await?;
-            }
-        }
-
-        let mut batch_spore_ids: HashSet<Vec<u8>> = HashSet::new();
-        let mut batch_mnft_class_ids: HashSet<Vec<u8>> = HashSet::new();
-        let mut batch_mnft_token_ids: HashSet<Vec<u8>> = HashSet::new();
-        let mut batch_dotbit_account_ids: HashSet<Vec<u8>> = HashSet::new();
-
-        let mut block_tx_idx = 0usize;
-        for (block_idx, block_response) in blocks.iter().enumerate() {
-            let parsed = &all_parsed_blocks[block_idx];
-            let tx_count_for_block = parsed.transactions_count as usize;
-            let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
-            block_tx_idx += tx_count_for_block;
-
-            for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
-                let tx = &block_response.block.transactions[tx_idx];
-
-                if !skip_spore {
-                    for cluster in SporeParser::parse_clusters(tx) {
-                        self.writer
-                            .insert_spore_cluster(&cluster, parsed.number, &tx_data.hash)
-                            .await?;
-                    }
-
-                    for (output_index, spore) in SporeParser::parse_spores(tx).iter().enumerate() {
-                        batch_spore_ids.insert(spore.spore_id.clone());
-                        self.writer
-                            .insert_spore_cell(
-                                spore,
-                                &tx_data.hash,
-                                output_index as i16,
-                                parsed.number,
-                            )
-                            .await?;
-                        self.writer
-                            .insert_spore_content(&spore.spore_id, &spore.content)
-                            .await?;
-                    }
-                }
-
-                if !bulk_sync_mode {
-                    for issuer in MnftParser::parse_issuers(tx) {
-                        self.writer
-                            .insert_mnft_issuer(&issuer, &tx_data.hash, 0, parsed.number)
-                            .await?;
-                    }
-
-                    for (output_index, class) in MnftParser::parse_classes(tx).iter().enumerate() {
-                        batch_mnft_class_ids.insert(class.class_id.clone());
-                        self.writer
-                            .insert_mnft_class(
-                                class,
-                                &tx_data.hash,
-                                output_index as i16,
-                                parsed.number,
-                            )
-                            .await?;
-                    }
-
-                    for (output_index, token) in MnftParser::parse_tokens(tx).iter().enumerate() {
-                        batch_mnft_token_ids.insert(token.token_id.clone());
-                        self.writer
-                            .insert_mnft_token(
-                                token,
-                                &tx_data.hash,
-                                output_index as i16,
-                                parsed.number,
-                            )
-                            .await?;
-                    }
-
-                    for (output_index, account) in
-                        DotbitParser::parse_accounts(tx).iter().enumerate()
-                    {
-                        batch_dotbit_account_ids.insert(account.account_id.clone());
-                        self.writer
-                            .insert_dotbit_account(
-                                account,
-                                &tx_data.hash,
-                                output_index as i16,
-                                parsed.number,
-                            )
-                            .await?;
-                    }
-                }
-            }
-        }
-
-        // Skip per-input NFT consumption lookups during bulk sync - too slow
-        // These will be processed by integrity service after bulk sync completes
-        if !self.is_bulk_sync_active() {
-            // Collect all input outpoints with their block/tx context in a single pass
-            let mut all_prev_tx_hashes: Vec<Vec<u8>> = Vec::new();
-            let mut all_prev_indices: Vec<i16> = Vec::new();
-            // Track (block_number, consuming_tx_hash) for each outpoint
-            let mut outpoint_context: Vec<(i64, Vec<u8>)> = Vec::new();
-
-            let mut block_tx_idx = 0usize;
-            for (block_idx, block_response) in blocks.iter().enumerate() {
-                let parsed = &all_parsed_blocks[block_idx];
-                let tx_count_for_block = parsed.transactions_count as usize;
-                let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
-                block_tx_idx += tx_count_for_block;
-
-                for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
-                    if tx_data.is_cellbase || tx_data.inputs.is_empty() {
-                        continue;
-                    }
-                    let tx = &block_response.block.transactions[tx_idx];
-                    for input in &tx.inputs {
-                        let prev_tx_hash =
-                            crate::rpc::parse_hex_to_bytes(&input.previous_output.tx_hash);
-                        let prev_index = input
-                            .previous_output
-                            .index
-                            .strip_prefix("0x")
-                            .and_then(|s| u32::from_str_radix(s, 16).ok())
-                            .unwrap_or(0) as i16;
-
-                        all_prev_tx_hashes.push(prev_tx_hash);
-                        all_prev_indices.push(prev_index);
-                        outpoint_context.push((parsed.number, tx_data.hash.to_vec()));
-                    }
-                }
-            }
-
-            if !all_prev_tx_hashes.is_empty() {
-                // 3 batch queries instead of 3×N individual queries
-                let (spore_results, mnft_results, dotbit_results) = tokio::try_join!(
+                // Batch insert DAO deposits
+                if !all_dao_deposits.is_empty() {
                     self.writer
-                        .get_spore_ids_by_outpoints_batch(&all_prev_tx_hashes, &all_prev_indices),
-                    self.writer.get_mnft_token_ids_by_outpoints_batch(
-                        &all_prev_tx_hashes,
-                        &all_prev_indices
-                    ),
-                    self.writer.get_dotbit_account_ids_by_outpoints_batch(
-                        &all_prev_tx_hashes,
-                        &all_prev_indices
-                    ),
-                )?;
+                        .insert_dao_deposits_batch(&all_dao_deposits, live_cell_store, dao_deferred)
+                        .await?;
+                }
 
-                // Build lookup maps: (tx_hash, output_index) -> entity_id
-                let spore_map: std::collections::HashMap<(Vec<u8>, i16), Vec<u8>> = spore_results
-                    .into_iter()
-                    .map(|(tx_hash, idx, spore_id)| ((tx_hash, idx), spore_id))
-                    .collect();
-                let mnft_map: std::collections::HashMap<(Vec<u8>, i16), Vec<u8>> = mnft_results
-                    .into_iter()
-                    .map(|(tx_hash, idx, token_id)| ((tx_hash, idx), token_id))
-                    .collect();
-                let dotbit_map: std::collections::HashMap<(Vec<u8>, i16), Vec<u8>> = dotbit_results
-                    .into_iter()
-                    .map(|(tx_hash, idx, account_id)| ((tx_hash, idx), account_id))
-                    .collect();
+                // Collect ALL input outpoints from non-cellbase transactions
+                let mut all_input_outpoints: Vec<(Vec<u8>, i16)> = Vec::new();
 
-                // Process consumption using the batch results
-                for (i, (block_number, consuming_tx_hash)) in outpoint_context.iter().enumerate() {
-                    let key = (all_prev_tx_hashes[i].clone(), all_prev_indices[i]);
+                let mut block_tx_idx = 0usize;
+                for parsed in all_parsed_blocks {
+                    let tx_count_for_block = parsed.transactions_count as usize;
+                    let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
+                    block_tx_idx += tx_count_for_block;
 
-                    if let Some(spore_id) = spore_map.get(&key) {
-                        if !batch_spore_ids.contains(spore_id) {
-                            self.writer
-                                .consume_spore(spore_id, *block_number, consuming_tx_hash)
-                                .await?;
+                    for tx_data in tx_slice {
+                        if tx_data.is_cellbase || tx_data.inputs.is_empty() {
+                            continue;
                         }
-                    }
-
-                    if let Some(token_id) = mnft_map.get(&key) {
-                        if !batch_mnft_token_ids.contains(token_id) {
-                            self.writer
-                                .consume_mnft_token(token_id, *block_number, consuming_tx_hash)
-                                .await?;
-                        }
-                    }
-
-                    if let Some(account_id) = dotbit_map.get(&key) {
-                        if !batch_dotbit_account_ids.contains(account_id) {
-                            self.writer
-                                .consume_dotbit_account(
-                                    account_id,
-                                    *block_number,
-                                    consuming_tx_hash,
-                                )
-                                .await?;
+                        for input in &tx_data.inputs {
+                            all_input_outpoints.push((
+                                input.previous_tx_hash.to_vec(),
+                                input.previous_output_index as i16,
+                            ));
                         }
                     }
                 }
-            }
-        }
 
-        let activities_by_block = self
-            .collect_activities_for_batch(
-                blocks,
-                all_parsed_blocks,
-                &all_tx_data,
-                &input_cell_info,
-                &consumed_code_hashes,
-                &udt_transfers_by_tx,
-                bulk_sync_mode,
-            )
-            .await?;
-        self.write_activities_batch(&activities_by_block, bulk_sync_mode)
-            .await?;
+                // Batch query all potentially consumed DAO deposits
+                let consumed_dao_map = if !all_input_outpoints.is_empty() {
+                    let unique_outpoints: Vec<(Vec<u8>, i16)> = {
+                        let mut seen = HashSet::new();
+                        all_input_outpoints
+                            .into_iter()
+                            .filter(|x| seen.insert(x.clone()))
+                            .collect()
+                    };
+                    let outpoint_refs: Vec<(&[u8], i16)> = unique_outpoints
+                        .iter()
+                        .map(|(h, i)| (h.as_slice(), *i))
+                        .collect();
+                    self.writer
+                        .find_consumed_dao_deposits_batch(&outpoint_refs, live_cell_store)
+                        .await?
+                } else {
+                    HashMap::new()
+                };
+
+                // Process DAO withdrawals in batch
+                if !consumed_dao_map.is_empty() {
+                    use crate::db::DaoWithdrawalContextTrait;
+
+                    #[derive(Clone)]
+                    struct DaoWithdrawalContext {
+                        consumed_deposits: Vec<(i64, Vec<u8>, i16, String, i64, i16)>,
+                        new_dao_outputs: Vec<(Vec<u8>, i16, Vec<u8>, i64, u64)>,
+                        block_number: i64,
+                        consuming_tx_hash: Vec<u8>,
+                        timestamp: DateTime<Utc>,
+                    }
+
+                    impl DaoWithdrawalContextTrait for DaoWithdrawalContext {
+                        fn consumed_deposits(&self) -> &[(i64, Vec<u8>, i16, String, i64, i16)] {
+                            &self.consumed_deposits
+                        }
+                        fn new_dao_outputs(&self) -> &[(Vec<u8>, i16, Vec<u8>, i64, u64)] {
+                            &self.new_dao_outputs
+                        }
+                        fn block_number(&self) -> i64 {
+                            self.block_number
+                        }
+                        fn consuming_tx_hash(&self) -> &[u8] {
+                            &self.consuming_tx_hash
+                        }
+                        fn timestamp(&self) -> DateTime<Utc> {
+                            self.timestamp
+                        }
+                    }
+
+                    let mut withdrawal_contexts: Vec<DaoWithdrawalContext> = Vec::new();
+
+                    let mut block_tx_idx = 0usize;
+                    for parsed in all_parsed_blocks {
+                        let tx_count_for_block = parsed.transactions_count as usize;
+                        let tx_slice =
+                            &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
+                        block_tx_idx += tx_count_for_block;
+
+                        for tx_data in tx_slice {
+                            if tx_data.is_cellbase || tx_data.inputs.is_empty() {
+                                continue;
+                            }
+
+                            // Check if any input matches a DAO deposit
+                            let mut consumed_deposits: Vec<(i64, Vec<u8>, i16, String, i64, i16)> =
+                                Vec::new();
+                            for input in &tx_data.inputs {
+                                let key = (
+                                    input.previous_tx_hash.to_vec(),
+                                    input.previous_output_index as i16,
+                                );
+                                if let Some(deposit_info) = consumed_dao_map.get(&key) {
+                                    consumed_deposits.push(deposit_info.clone());
+                                }
+                            }
+
+                            if consumed_deposits.is_empty() {
+                                continue;
+                            }
+
+                            // Parse new DAO outputs (withdraw requests)
+                            let mut new_dao_outputs: Vec<(Vec<u8>, i16, Vec<u8>, i64, u64)> =
+                                Vec::new();
+                            for (idx, cell) in tx_data.cells.iter().enumerate() {
+                                if let Some(ref type_code_hash) = cell.type_code_hash {
+                                    if type_code_hash == &dao_code_hash && cell.data_size == 8 {
+                                        if let Some(data) = tx_data.outputs_data.get(idx) {
+                                            let data_bytes = crate::rpc::parse_hex_to_bytes(data);
+                                            if let Some(deposit_block) =
+                                                DaoParser::parse_deposit_block_number(&data_bytes)
+                                            {
+                                                new_dao_outputs.push((
+                                                    tx_data.hash.to_vec(),
+                                                    idx as i16,
+                                                    cell.lock_script_hash.clone(),
+                                                    cell.capacity,
+                                                    deposit_block,
+                                                ));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            withdrawal_contexts.push(DaoWithdrawalContext {
+                                consumed_deposits,
+                                new_dao_outputs,
+                                block_number: parsed.number,
+                                consuming_tx_hash: tx_data.hash.to_vec(),
+                                timestamp: parsed.timestamp,
+                            });
+                        }
+                    }
+
+                    // Batch process all withdrawals
+                    if !withdrawal_contexts.is_empty() {
+                        self.writer
+                            .process_dao_withdrawals_batch_with_store(
+                                &withdrawal_contexts,
+                                live_cell_store,
+                                dao_deferred,
+                            )
+                            .await?;
+                    }
+                }
+
+                Ok::<(), anyhow::Error>(())
+            },
+            // Group B: UDT processing + Activities (sequential within, activities depends on UDT)
+            async {
+                struct UdtTxContext {
+                    tx_hash: Vec<u8>,
+                    block_number: i64,
+                    timestamp: chrono::DateTime<Utc>,
+                    output_udts: Vec<crate::parser::ParsedUdtCell>,
+                    input_outpoints: Vec<(Vec<u8>, i16)>,
+                }
+
+                let mut udt_tx_contexts: Vec<UdtTxContext> = Vec::new();
+                let mut all_input_outpoints_udt: Vec<(Vec<u8>, i16)> = Vec::new();
+                let mut batch_udt_cells: HashMap<(Vec<u8>, i16), crate::parser::ParsedUdtCell> =
+                    HashMap::new();
+                let mut udt_transfers_by_tx: HashMap<
+                    Vec<u8>,
+                    Vec<crate::parser::ParsedUdtTransfer>,
+                > = HashMap::new();
+
+                struct TxInfoForUdt {
+                    tx_hash: Vec<u8>,
+                    block_number: i64,
+                    timestamp: chrono::DateTime<Utc>,
+                    output_udts: Vec<crate::parser::ParsedUdtCell>,
+                    input_outpoints: Vec<(Vec<u8>, i16)>,
+                }
+                let mut all_tx_infos_for_udt: Vec<TxInfoForUdt> = Vec::new();
+
+                let mut block_tx_idx = 0usize;
+                for (block_idx, block_response) in blocks.iter().enumerate() {
+                    let parsed = &all_parsed_blocks[block_idx];
+                    let tx_count_for_block = parsed.transactions_count as usize;
+                    let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
+                    block_tx_idx += tx_count_for_block;
+
+                    for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
+                        if tx_data.is_cellbase {
+                            continue;
+                        }
+
+                        let tx = &block_response.block.transactions[tx_idx];
+                        let output_udts = UdtParser::parse_udt_cells(tx);
+
+                        for (output_index, udt_cell) in output_udts.iter().enumerate() {
+                            batch_udt_cells.insert(
+                                (tx_data.hash.to_vec(), output_index as i16),
+                                udt_cell.clone(),
+                            );
+                        }
+
+                        let input_outpoints: Vec<(Vec<u8>, i16)> = tx_data
+                            .inputs
+                            .iter()
+                            .map(|i| (i.previous_tx_hash.to_vec(), i.previous_output_index as i16))
+                            .collect();
+
+                        // Collect ALL input outpoints (to detect UDT consumption/burns)
+                        all_input_outpoints_udt.extend(input_outpoints.iter().cloned());
+
+                        all_tx_infos_for_udt.push(TxInfoForUdt {
+                            tx_hash: tx_data.hash.to_vec(),
+                            block_number: parsed.number,
+                            timestamp: parsed.timestamp,
+                            output_udts,
+                            input_outpoints,
+                        });
+                    }
+                }
+
+                // Fetch UDT info for ALL input outpoints to detect UDT consumption
+                // Skip when token deferred - no UDT cells in DB during bulk sync
+                let input_udt_info = if !skip_token && !all_input_outpoints_udt.is_empty() {
+                    let unique_outpoints: Vec<(Vec<u8>, i16)> = {
+                        let mut seen = HashSet::new();
+                        all_input_outpoints_udt
+                            .into_iter()
+                            .filter(|x| seen.insert(x.clone()))
+                            .collect()
+                    };
+                    let outpoint_refs: Vec<(&[u8], i16)> = unique_outpoints
+                        .iter()
+                        .map(|(h, i)| (h.as_slice(), *i))
+                        .collect();
+                    self.writer.get_udt_cells_info_batch(&outpoint_refs).await?
+                } else {
+                    HashMap::new()
+                };
+
+                // Filter: include txs with UDT outputs OR UDT inputs (fixes burn/send tracking)
+                for tx_info in all_tx_infos_for_udt {
+                    let has_udt_outputs = !tx_info.output_udts.is_empty();
+                    let has_udt_inputs = tx_info.input_outpoints.iter().any(|(tx_hash, idx)| {
+                        input_udt_info.contains_key(&(tx_hash.clone(), *idx))
+                            || batch_udt_cells.contains_key(&(tx_hash.clone(), *idx))
+                    });
+
+                    if has_udt_outputs || has_udt_inputs {
+                        udt_tx_contexts.push(UdtTxContext {
+                            tx_hash: tx_info.tx_hash,
+                            block_number: tx_info.block_number,
+                            timestamp: tx_info.timestamp,
+                            output_udts: tx_info.output_udts,
+                            input_outpoints: tx_info.input_outpoints,
+                        });
+                    }
+                }
+
+                if !skip_token && !udt_tx_contexts.is_empty() {
+                    let mut all_transfers: Vec<(
+                        crate::parser::ParsedUdtTransfer,
+                        Vec<u8>,
+                        i64,
+                        chrono::DateTime<Utc>,
+                    )> = Vec::new();
+
+                    let mut consumed_udt_outpoints: Vec<(&[u8], i16, i64, &[u8])> = Vec::new();
+
+                    for ctx in &udt_tx_contexts {
+                        let mut input_udts: Vec<crate::parser::ParsedUdtCell> = Vec::new();
+                        for (tx_hash, idx) in &ctx.input_outpoints {
+                            if let Some((
+                                type_script_hash,
+                                type_code_hash,
+                                type_hash_type,
+                                type_args,
+                                lock_script_hash,
+                                amount,
+                                standard,
+                            )) = input_udt_info.get(&(tx_hash.clone(), *idx))
+                            {
+                                input_udts.push(crate::parser::ParsedUdtCell {
+                                    type_script_hash: type_script_hash.clone(),
+                                    type_code_hash: type_code_hash.clone(),
+                                    type_hash_type: *type_hash_type,
+                                    type_args: type_args.clone(),
+                                    lock_script_hash: lock_script_hash.clone(),
+                                    amount: *amount,
+                                    standard: crate::parser::UdtStandard::parse(standard),
+                                });
+                                consumed_udt_outpoints.push((
+                                    tx_hash.as_slice(),
+                                    *idx,
+                                    ctx.block_number,
+                                    ctx.tx_hash.as_slice(),
+                                ));
+                            } else if let Some(udt_cell) =
+                                batch_udt_cells.get(&(tx_hash.clone(), *idx))
+                            {
+                                input_udts.push(udt_cell.clone());
+                            }
+                        }
+
+                        for out_udt in &ctx.output_udts {
+                            let matching_input = input_udts
+                                .iter()
+                                .find(|inp| inp.type_script_hash == out_udt.type_script_hash);
+
+                            let is_mint = matching_input.is_none();
+                            let from_lock_hash =
+                                matching_input.map(|inp| inp.lock_script_hash.clone());
+
+                            all_transfers.push((
+                                crate::parser::ParsedUdtTransfer {
+                                    type_script_hash: out_udt.type_script_hash.clone(),
+                                    type_code_hash: out_udt.type_code_hash.clone(),
+                                    type_hash_type: out_udt.type_hash_type,
+                                    type_args: out_udt.type_args.clone(),
+                                    from_lock_hash,
+                                    to_lock_hash: out_udt.lock_script_hash.clone(),
+                                    amount: out_udt.amount,
+                                    standard: out_udt.standard.clone(),
+                                    is_mint,
+                                    is_burn: false,
+                                },
+                                ctx.tx_hash.clone(),
+                                ctx.block_number,
+                                ctx.timestamp,
+                            ));
+                        }
+
+                        for inp_udt in &input_udts {
+                            let has_matching_output = ctx
+                                .output_udts
+                                .iter()
+                                .any(|out| out.type_script_hash == inp_udt.type_script_hash);
+
+                            if !has_matching_output {
+                                all_transfers.push((
+                                    crate::parser::ParsedUdtTransfer {
+                                        type_script_hash: inp_udt.type_script_hash.clone(),
+                                        type_code_hash: inp_udt.type_code_hash.clone(),
+                                        type_hash_type: inp_udt.type_hash_type,
+                                        type_args: inp_udt.type_args.clone(),
+                                        from_lock_hash: Some(inp_udt.lock_script_hash.clone()),
+                                        to_lock_hash: Vec::new(),
+                                        amount: inp_udt.amount,
+                                        standard: inp_udt.standard.clone(),
+                                        is_mint: false,
+                                        is_burn: true,
+                                    },
+                                    ctx.tx_hash.clone(),
+                                    ctx.block_number,
+                                    ctx.timestamp,
+                                ));
+                            }
+                        }
+                    }
+
+                    if !all_transfers.is_empty() {
+                        for (transfer, tx_hash, _, _) in &all_transfers {
+                            udt_transfers_by_tx
+                                .entry(tx_hash.clone())
+                                .or_default()
+                                .push(transfer.clone());
+                        }
+
+                        let transfer_refs: Vec<_> = all_transfers
+                            .iter()
+                            .map(|(t, h, b, ts)| (t, h.as_slice(), *b, *ts))
+                            .collect();
+                        self.writer
+                            .process_udt_transfers_batch(&transfer_refs)
+                            .await?;
+                    }
+
+                    if !consumed_udt_outpoints.is_empty() {
+                        self.writer
+                            .consume_udt_cells_batch(&consumed_udt_outpoints)
+                            .await?;
+                    }
+                }
+
+                if !skip_token && !batch_udt_cells.is_empty() {
+                    let tx_block_map: std::collections::HashMap<&[u8], i64> = udt_tx_contexts
+                        .iter()
+                        .map(|ctx| (ctx.tx_hash.as_slice(), ctx.block_number))
+                        .collect();
+                    let udt_cells_to_insert: Vec<_> = batch_udt_cells
+                        .iter()
+                        .map(|((tx_hash, idx), cell)| {
+                            let block_number =
+                                tx_block_map.get(tx_hash.as_slice()).copied().unwrap_or(0);
+                            (tx_hash.as_slice(), *idx, cell, block_number)
+                        })
+                        .collect();
+                    if self.should_use_copy() {
+                        let copy_router = self
+                            .copy_router
+                            .as_ref()
+                            .expect("copy_router must exist when should_use_copy() is true");
+                        copy_router
+                            .copy_udt_cells_parallel(&udt_cells_to_insert)
+                            .await?;
+                    } else {
+                        self.writer
+                            .insert_udt_cells_batch(&udt_cells_to_insert)
+                            .await?;
+                    }
+                }
+
+                // Activities depend on udt_transfers_by_tx, so run after UDT processing
+                let activities_by_block = self
+                    .collect_activities_for_batch(
+                        blocks,
+                        all_parsed_blocks,
+                        &all_tx_data,
+                        &input_cell_info,
+                        &consumed_code_hashes,
+                        &udt_transfers_by_tx,
+                        bulk_sync_mode,
+                    )
+                    .await?;
+                self.write_activities_batch(&activities_by_block, bulk_sync_mode)
+                    .await?;
+
+                Ok::<(), anyhow::Error>(())
+            },
+            // Group C: NFT/Spore/mNFT/dotbit processing (independent)
+            async {
+                let mut batch_spore_ids: HashSet<Vec<u8>> = HashSet::new();
+                let mut batch_mnft_class_ids: HashSet<Vec<u8>> = HashSet::new();
+                let mut batch_mnft_token_ids: HashSet<Vec<u8>> = HashSet::new();
+                let mut batch_dotbit_account_ids: HashSet<Vec<u8>> = HashSet::new();
+
+                let mut block_tx_idx = 0usize;
+                for (block_idx, block_response) in blocks.iter().enumerate() {
+                    let parsed = &all_parsed_blocks[block_idx];
+                    let tx_count_for_block = parsed.transactions_count as usize;
+                    let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
+                    block_tx_idx += tx_count_for_block;
+
+                    for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
+                        let tx = &block_response.block.transactions[tx_idx];
+
+                        if !skip_spore {
+                            for cluster in SporeParser::parse_clusters(tx) {
+                                self.writer
+                                    .insert_spore_cluster(&cluster, parsed.number, &tx_data.hash)
+                                    .await?;
+                            }
+
+                            for (output_index, spore) in
+                                SporeParser::parse_spores(tx).iter().enumerate()
+                            {
+                                batch_spore_ids.insert(spore.spore_id.clone());
+                                self.writer
+                                    .insert_spore_cell(
+                                        spore,
+                                        &tx_data.hash,
+                                        output_index as i16,
+                                        parsed.number,
+                                    )
+                                    .await?;
+                                self.writer
+                                    .insert_spore_content(&spore.spore_id, &spore.content)
+                                    .await?;
+                            }
+                        }
+
+                        if !bulk_sync_mode {
+                            for issuer in MnftParser::parse_issuers(tx) {
+                                self.writer
+                                    .insert_mnft_issuer(&issuer, &tx_data.hash, 0, parsed.number)
+                                    .await?;
+                            }
+
+                            for (output_index, class) in
+                                MnftParser::parse_classes(tx).iter().enumerate()
+                            {
+                                batch_mnft_class_ids.insert(class.class_id.clone());
+                                self.writer
+                                    .insert_mnft_class(
+                                        class,
+                                        &tx_data.hash,
+                                        output_index as i16,
+                                        parsed.number,
+                                    )
+                                    .await?;
+                            }
+
+                            for (output_index, token) in
+                                MnftParser::parse_tokens(tx).iter().enumerate()
+                            {
+                                batch_mnft_token_ids.insert(token.token_id.clone());
+                                self.writer
+                                    .insert_mnft_token(
+                                        token,
+                                        &tx_data.hash,
+                                        output_index as i16,
+                                        parsed.number,
+                                    )
+                                    .await?;
+                            }
+
+                            for (output_index, account) in
+                                DotbitParser::parse_accounts(tx).iter().enumerate()
+                            {
+                                batch_dotbit_account_ids.insert(account.account_id.clone());
+                                self.writer
+                                    .insert_dotbit_account(
+                                        account,
+                                        &tx_data.hash,
+                                        output_index as i16,
+                                        parsed.number,
+                                    )
+                                    .await?;
+                            }
+                        }
+                    }
+                }
+
+                // Skip per-input NFT consumption lookups during bulk sync - too slow
+                // These will be processed by integrity service after bulk sync completes
+                if !self.is_bulk_sync_active() {
+                    // Collect all input outpoints with their block/tx context in a single pass
+                    let mut all_prev_tx_hashes: Vec<Vec<u8>> = Vec::new();
+                    let mut all_prev_indices: Vec<i16> = Vec::new();
+                    let mut outpoint_context: Vec<(i64, Vec<u8>)> = Vec::new();
+
+                    let mut block_tx_idx = 0usize;
+                    for (block_idx, block_response) in blocks.iter().enumerate() {
+                        let parsed = &all_parsed_blocks[block_idx];
+                        let tx_count_for_block = parsed.transactions_count as usize;
+                        let tx_slice =
+                            &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
+                        block_tx_idx += tx_count_for_block;
+
+                        for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
+                            if tx_data.is_cellbase || tx_data.inputs.is_empty() {
+                                continue;
+                            }
+                            let tx = &block_response.block.transactions[tx_idx];
+                            for input in &tx.inputs {
+                                let prev_tx_hash =
+                                    crate::rpc::parse_hex_to_bytes(&input.previous_output.tx_hash);
+                                let prev_index = input
+                                    .previous_output
+                                    .index
+                                    .strip_prefix("0x")
+                                    .and_then(|s| u32::from_str_radix(s, 16).ok())
+                                    .unwrap_or(0)
+                                    as i16;
+
+                                all_prev_tx_hashes.push(prev_tx_hash);
+                                all_prev_indices.push(prev_index);
+                                outpoint_context.push((parsed.number, tx_data.hash.to_vec()));
+                            }
+                        }
+                    }
+
+                    if !all_prev_tx_hashes.is_empty() {
+                        // 3 batch queries instead of 3×N individual queries
+                        let (spore_results, mnft_results, dotbit_results) = tokio::try_join!(
+                            self.writer.get_spore_ids_by_outpoints_batch(
+                                &all_prev_tx_hashes,
+                                &all_prev_indices
+                            ),
+                            self.writer.get_mnft_token_ids_by_outpoints_batch(
+                                &all_prev_tx_hashes,
+                                &all_prev_indices
+                            ),
+                            self.writer.get_dotbit_account_ids_by_outpoints_batch(
+                                &all_prev_tx_hashes,
+                                &all_prev_indices
+                            ),
+                        )?;
+
+                        let spore_map: std::collections::HashMap<(Vec<u8>, i16), Vec<u8>> =
+                            spore_results
+                                .into_iter()
+                                .map(|(tx_hash, idx, spore_id)| ((tx_hash, idx), spore_id))
+                                .collect();
+                        let mnft_map: std::collections::HashMap<(Vec<u8>, i16), Vec<u8>> =
+                            mnft_results
+                                .into_iter()
+                                .map(|(tx_hash, idx, token_id)| ((tx_hash, idx), token_id))
+                                .collect();
+                        let dotbit_map: std::collections::HashMap<(Vec<u8>, i16), Vec<u8>> =
+                            dotbit_results
+                                .into_iter()
+                                .map(|(tx_hash, idx, account_id)| ((tx_hash, idx), account_id))
+                                .collect();
+
+                        for (i, (block_number, consuming_tx_hash)) in
+                            outpoint_context.iter().enumerate()
+                        {
+                            let key = (all_prev_tx_hashes[i].clone(), all_prev_indices[i]);
+
+                            if let Some(spore_id) = spore_map.get(&key) {
+                                if !batch_spore_ids.contains(spore_id) {
+                                    self.writer
+                                        .consume_spore(spore_id, *block_number, consuming_tx_hash)
+                                        .await?;
+                                }
+                            }
+
+                            if let Some(token_id) = mnft_map.get(&key) {
+                                if !batch_mnft_token_ids.contains(token_id) {
+                                    self.writer
+                                        .consume_mnft_token(
+                                            token_id,
+                                            *block_number,
+                                            consuming_tx_hash,
+                                        )
+                                        .await?;
+                                }
+                            }
+
+                            if let Some(account_id) = dotbit_map.get(&key) {
+                                if !batch_dotbit_account_ids.contains(account_id) {
+                                    self.writer
+                                        .consume_dotbit_account(
+                                            account_id,
+                                            *block_number,
+                                            consuming_tx_hash,
+                                        )
+                                        .await?;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Ok::<(), anyhow::Error>(())
+            },
+        )?;
 
         // Write blocks LAST - this is the "commit marker" for crash recovery.
         // All other data must be written successfully before blocks exist.
