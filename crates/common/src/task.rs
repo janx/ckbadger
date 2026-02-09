@@ -1040,7 +1040,7 @@ impl TaskBuilder {
             task_type: TaskType::CellFlowsRebuild,
             config: serde_json::to_value(TaskConfig::CellFlowsRebuild(config))
                 .expect("CellFlowsRebuildConfig should be serializable"),
-            priority: 8,
+            priority: 9,
             max_retries: 2,
         }
     }

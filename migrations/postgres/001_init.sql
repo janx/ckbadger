@@ -1316,6 +1316,7 @@ CREATE TABLE cell_flows (
     lock_script_hash BYTEA NOT NULL,
     capacity BIGINT NOT NULL,
     data_size INTEGER NOT NULL DEFAULT 0,
+    consumed_by_tx BYTEA,           -- consuming tx hash (only for flow_type=1)
     PRIMARY KEY (block_number, id)
 ) PARTITION BY RANGE (block_number);
 

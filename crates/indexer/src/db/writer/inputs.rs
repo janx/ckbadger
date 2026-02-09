@@ -122,29 +122,32 @@ impl BatchWriter {
     }
 
     /// Insert cell_flows batch using UNNEST
-    /// Tuple: (block_number, tx_hash, output_index, flow_type, lock_script_hash, capacity, data_size)
+    /// Tuple: (block_number, tx_hash, output_index, flow_type, lock_script_hash, capacity, data_size, consumed_by_tx)
     pub async fn insert_cell_flows_batch(
         &self,
-        flows: &[(i64, &[u8], i16, i16, &[u8], i64, i32)],
+        flows: &[(i64, &[u8], i16, i16, &[u8], i64, i32, Option<&[u8]>)],
     ) -> Result<()> {
         if flows.is_empty() {
             return Ok(());
         }
 
-        let block_numbers: Vec<i64> = flows.iter().map(|(b, _, _, _, _, _, _)| *b).collect();
-        let tx_hashes: Vec<&[u8]> = flows.iter().map(|(_, h, _, _, _, _, _)| *h).collect();
-        let output_indices: Vec<i16> = flows.iter().map(|(_, _, o, _, _, _, _)| *o).collect();
-        let flow_types: Vec<i16> = flows.iter().map(|(_, _, _, f, _, _, _)| *f).collect();
-        let lock_script_hashes: Vec<&[u8]> = flows.iter().map(|(_, _, _, _, l, _, _)| *l).collect();
-        let capacities: Vec<i64> = flows.iter().map(|(_, _, _, _, _, c, _)| *c).collect();
-        let data_sizes: Vec<i32> = flows.iter().map(|(_, _, _, _, _, _, d)| *d).collect();
+        let block_numbers: Vec<i64> = flows.iter().map(|(b, _, _, _, _, _, _, _)| *b).collect();
+        let tx_hashes: Vec<&[u8]> = flows.iter().map(|(_, h, _, _, _, _, _, _)| *h).collect();
+        let output_indices: Vec<i16> = flows.iter().map(|(_, _, o, _, _, _, _, _)| *o).collect();
+        let flow_types: Vec<i16> = flows.iter().map(|(_, _, _, f, _, _, _, _)| *f).collect();
+        let lock_script_hashes: Vec<&[u8]> =
+            flows.iter().map(|(_, _, _, _, l, _, _, _)| *l).collect();
+        let capacities: Vec<i64> = flows.iter().map(|(_, _, _, _, _, c, _, _)| *c).collect();
+        let data_sizes: Vec<i32> = flows.iter().map(|(_, _, _, _, _, _, d, _)| *d).collect();
+        let consumed_by_txs: Vec<Option<&[u8]>> =
+            flows.iter().map(|(_, _, _, _, _, _, _, t)| *t).collect();
 
         sqlx::query(
             r#"
             INSERT INTO cell_flows (
-                block_number, tx_hash, output_index, flow_type, lock_script_hash, capacity, data_size
+                block_number, tx_hash, output_index, flow_type, lock_script_hash, capacity, data_size, consumed_by_tx
             )
-            SELECT * FROM UNNEST($1::bigint[], $2::bytea[], $3::smallint[], $4::smallint[], $5::bytea[], $6::bigint[], $7::integer[])
+            SELECT * FROM UNNEST($1::bigint[], $2::bytea[], $3::smallint[], $4::smallint[], $5::bytea[], $6::bigint[], $7::integer[], $8::bytea[])
             "#,
         )
         .bind(&block_numbers)
@@ -154,6 +157,7 @@ impl BatchWriter {
         .bind(&lock_script_hashes)
         .bind(&capacities)
         .bind(&data_sizes)
+        .bind(&consumed_by_txs)
         .execute(&self.pool)
         .await?;
 

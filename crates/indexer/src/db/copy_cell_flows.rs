@@ -4,8 +4,8 @@ use tokio_postgres::Client;
 
 use crate::db::copy_format::BinaryCopyBuffer;
 
-/// 7 columns: block_number, tx_hash, output_index, flow_type, lock_script_hash, capacity, data_size
-const CELL_FLOWS_COLUMN_COUNT: i16 = 7;
+/// 8 columns: block_number, tx_hash, output_index, flow_type, lock_script_hash, capacity, data_size, consumed_by_tx
+const CELL_FLOWS_COLUMN_COUNT: i16 = 8;
 
 pub struct CopyCellFlowsWriter {
     buffer: BinaryCopyBuffer,
@@ -30,6 +30,7 @@ impl CopyCellFlowsWriter {
     /// * `lock_script_hash` - Lock script hash of the cell
     /// * `capacity` - Capacity in shannons
     /// * `data_size` - Size of cell data in bytes
+    /// * `consumed_by_tx` - Consuming tx hash (only for flow_type=1)
     #[allow(clippy::too_many_arguments)]
     pub fn add_flow(
         &mut self,
@@ -40,6 +41,7 @@ impl CopyCellFlowsWriter {
         lock_script_hash: &[u8],
         capacity: i64,
         data_size: i32,
+        consumed_by_tx: Option<&[u8]>,
     ) {
         self.buffer.start_row();
 
@@ -57,6 +59,8 @@ impl CopyCellFlowsWriter {
         self.buffer.write_i64(capacity);
         // data_size (INTEGER)
         self.buffer.write_i32(data_size);
+        // consumed_by_tx (BYTEA, nullable)
+        self.buffer.write_bytea_opt(consumed_by_tx);
 
         self.row_count += 1;
     }
@@ -84,15 +88,23 @@ impl Default for CopyCellFlowsWriter {
 #[allow(clippy::type_complexity)]
 pub async fn copy_cell_flows(
     client: &Client,
-    flows: &[(i64, &[u8], i16, i16, &[u8], i64, i32)],
+    flows: &[(i64, &[u8], i16, i16, &[u8], i64, i32, Option<&[u8]>)],
 ) -> Result<u64> {
     if flows.is_empty() {
         return Ok(0);
     }
 
     let mut writer = CopyCellFlowsWriter::new();
-    for &(block_number, tx_hash, output_index, flow_type, lock_script_hash, capacity, data_size) in
-        flows
+    for &(
+        block_number,
+        tx_hash,
+        output_index,
+        flow_type,
+        lock_script_hash,
+        capacity,
+        data_size,
+        consumed_by_tx,
+    ) in flows
     {
         writer.add_flow(
             block_number,
@@ -102,6 +114,7 @@ pub async fn copy_cell_flows(
             lock_script_hash,
             capacity,
             data_size,
+            consumed_by_tx,
         );
     }
 
@@ -110,7 +123,7 @@ pub async fn copy_cell_flows(
     let sink = client
         .copy_in(
             "COPY cell_flows (block_number, tx_hash, output_index, flow_type, \
-             lock_script_hash, capacity, data_size) FROM STDIN WITH (FORMAT BINARY)",
+             lock_script_hash, capacity, data_size, consumed_by_tx) FROM STDIN WITH (FORMAT BINARY)",
         )
         .await?;
 
@@ -166,6 +179,7 @@ mod tests {
             &[0xbb; 32],
             100_000_000,
             64,
+            None,
         );
 
         assert!(!writer.is_empty());
@@ -180,11 +194,29 @@ mod tests {
         let mut writer = CopyCellFlowsWriter::new();
 
         // Created flow
-        writer.add_flow(12345, &[0xaa; 32], 0, 0, &[0xbb; 32], 100_000_000, 64);
+        writer.add_flow(12345, &[0xaa; 32], 0, 0, &[0xbb; 32], 100_000_000, 64, None);
         // Consumed flow
-        writer.add_flow(12346, &[0xaa; 32], 0, 1, &[0xbb; 32], 100_000_000, 64);
+        writer.add_flow(
+            12346,
+            &[0xaa; 32],
+            0,
+            1,
+            &[0xbb; 32],
+            100_000_000,
+            64,
+            Some(&[0xee; 32]),
+        );
         // Another created flow
-        writer.add_flow(12345, &[0xcc; 32], 1, 0, &[0xdd; 32], 200_000_000, 128);
+        writer.add_flow(
+            12345,
+            &[0xcc; 32],
+            1,
+            0,
+            &[0xdd; 32],
+            200_000_000,
+            128,
+            None,
+        );
 
         assert_eq!(writer.row_count(), 3);
 

@@ -83,7 +83,7 @@ async fn rebuild_address_balances(pool: &PgPool) -> Result<i64> {
                 COUNT(CASE WHEN flow_type = 0 THEN 1 END)::INTEGER
                   - COUNT(CASE WHEN flow_type = 1 THEN 1 END)::INTEGER AS live_cells_count,
                 COUNT(CASE WHEN flow_type = 0 THEN 1 END)::BIGINT AS total_cells_count,
-                COUNT(DISTINCT tx_hash)::BIGINT AS transactions_count,
+                (COUNT(DISTINCT tx_hash) + COUNT(DISTINCT consumed_by_tx))::BIGINT AS transactions_count,
                 MIN(block_number) AS first_seen_block,
                 MAX(block_number) AS last_activity_block
             FROM cell_flows
@@ -100,7 +100,7 @@ async fn rebuild_address_balances(pool: &PgPool) -> Result<i64> {
         last_tx AS (
             SELECT DISTINCT ON (lock_script_hash)
                 lock_script_hash,
-                tx_hash AS last_activity_tx
+                COALESCE(consumed_by_tx, tx_hash) AS last_activity_tx
             FROM cell_flows
             ORDER BY lock_script_hash, block_number DESC, output_index DESC
         )

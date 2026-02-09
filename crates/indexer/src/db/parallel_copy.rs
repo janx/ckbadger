@@ -69,8 +69,17 @@ type BlockData<'a> = (&'a ParsedBlock, i64);
 /// Type alias for activity data tuple: (activity, block_number, timestamp)
 type ActivityData<'a> = (&'a ParsedActivity, i64, DateTime<Utc>);
 
-/// Type alias for cell flow data tuple: (block_number, tx_hash, output_index, flow_type, lock_script_hash, capacity, data_size)
-type CellFlowData<'a> = (i64, &'a [u8], i16, i16, &'a [u8], i64, i32);
+/// Type alias for cell flow data tuple: (block_number, tx_hash, output_index, flow_type, lock_script_hash, capacity, data_size, consumed_by_tx)
+type CellFlowData<'a> = (
+    i64,
+    &'a [u8],
+    i16,
+    i16,
+    &'a [u8],
+    i64,
+    i32,
+    Option<&'a [u8]>,
+);
 
 /// Type alias for UDT cell data tuple: (tx_hash, output_index, cell, block_number)
 type UdtCellData<'a> = (&'a [u8], i16, &'a ParsedUdtCell, i64);
@@ -431,6 +440,7 @@ impl ParallelCopyRouter {
                         lock_script_hash,
                         capacity,
                         data_size,
+                        consumed_by_tx,
                     ) in chunk
                     {
                         writer.add_flow(
@@ -441,6 +451,7 @@ impl ParallelCopyRouter {
                             lock_script_hash,
                             capacity,
                             data_size,
+                            consumed_by_tx,
                         );
                     }
 
@@ -448,7 +459,7 @@ impl ParallelCopyRouter {
                     execute_copy(
                         conn.as_ref(),
                         "COPY cell_flows (block_number, tx_hash, output_index, flow_type, \
-                         lock_script_hash, capacity, data_size) FROM STDIN WITH (FORMAT BINARY)",
+                         lock_script_hash, capacity, data_size, consumed_by_tx) FROM STDIN WITH (FORMAT BINARY)",
                         data,
                     )
                     .await

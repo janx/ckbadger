@@ -88,9 +88,9 @@ async fn rebuild_cell_flows_batch(pool: &PgPool, start_block: i64, end_block: i6
     // Insert created flows (flow_type=0) from cells
     let created = sqlx::query(
         r#"
-        INSERT INTO cell_flows (block_number, tx_hash, output_index, flow_type, lock_script_hash, capacity, data_size)
+        INSERT INTO cell_flows (block_number, tx_hash, output_index, flow_type, lock_script_hash, capacity, data_size, consumed_by_tx)
         SELECT c.created_at_block, c.tx_hash, c.output_index, 0,
-               c.lock_script_hash, c.capacity, c.data_size
+               c.lock_script_hash, c.capacity, c.data_size, NULL AS consumed_by_tx
         FROM cells c
         WHERE c.created_at_block >= $1 AND c.created_at_block < $2
         "#,
@@ -103,9 +103,9 @@ async fn rebuild_cell_flows_batch(pool: &PgPool, start_block: i64, end_block: i6
     // Insert consumed flows (flow_type=1) from transaction_inputs
     let consumed = sqlx::query(
         r#"
-        INSERT INTO cell_flows (block_number, tx_hash, output_index, flow_type, lock_script_hash, capacity, data_size)
+        INSERT INTO cell_flows (block_number, tx_hash, output_index, flow_type, lock_script_hash, capacity, data_size, consumed_by_tx)
         SELECT ti.tx_block_number, c.tx_hash, c.output_index, 1,
-               c.lock_script_hash, c.capacity, c.data_size
+               c.lock_script_hash, c.capacity, c.data_size, ti.tx_hash AS consumed_by_tx
         FROM transaction_inputs ti
         JOIN tx_block_map tbm ON tbm.tx_hash = ti.previous_tx_hash
         JOIN cells c ON c.tx_hash = ti.previous_tx_hash

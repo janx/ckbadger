@@ -3235,7 +3235,7 @@ impl Indexer {
         }
 
         // Collect cell_flows: created (outputs) and consumed (inputs)
-        let mut all_flows: Vec<(i64, &[u8], i16, i16, &[u8], i64, i32)> = Vec::new();
+        let mut all_flows: Vec<(i64, &[u8], i16, i16, &[u8], i64, i32, Option<&[u8]>)> = Vec::new();
 
         // Created cells (flow_type=0)
         for tx_data in &all_tx_data {
@@ -3248,6 +3248,7 @@ impl Indexer {
                     cell.lock_script_hash.as_slice(),
                     cell.capacity,
                     cell.data_size,
+                    None,
                 ));
             }
         }
@@ -3269,6 +3270,7 @@ impl Indexer {
                             lock_hash.as_slice(),
                             *cap,
                             *ds,
+                            Some(tx_data.hash.as_slice()),
                         ));
                     } else if let Some((cap, _, lock_hash, ds, _, _)) = batch_cells.get(&key) {
                         all_flows.push((
@@ -3279,6 +3281,7 @@ impl Indexer {
                             lock_hash.as_slice(),
                             *cap,
                             *ds,
+                            Some(tx_data.hash.as_slice()),
                         ));
                     }
                 }
@@ -4415,7 +4418,7 @@ impl Indexer {
         }
 
         // Collect cell_flows: created (outputs) and consumed (inputs)
-        let mut all_flows: Vec<(i64, &[u8], i16, i16, &[u8], i64, i32)> = Vec::new();
+        let mut all_flows: Vec<(i64, &[u8], i16, i16, &[u8], i64, i32, Option<&[u8]>)> = Vec::new();
 
         // Created cells (flow_type=0)
         for tx_data in &all_tx_data {
@@ -4428,6 +4431,7 @@ impl Indexer {
                     cell.lock_script_hash.as_slice(),
                     cell.capacity,
                     cell.data_size,
+                    None,
                 ));
             }
         }
@@ -4449,6 +4453,7 @@ impl Indexer {
                             lock_hash.as_slice(),
                             *cap,
                             *ds,
+                            Some(tx_data.hash.as_slice()),
                         ));
                     } else if let Some((cap, _, lock_hash, ds, _, _)) = batch_cells.get(&key) {
                         all_flows.push((
@@ -4459,6 +4464,7 @@ impl Indexer {
                             lock_hash.as_slice(),
                             *cap,
                             *ds,
+                            Some(tx_data.hash.as_slice()),
                         ));
                     }
                 }
