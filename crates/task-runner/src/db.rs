@@ -77,6 +77,27 @@ impl TaskDb {
         Ok(())
     }
 
+    /// Reset orphaned tasks that were left in 'running' state by a previous runner instance.
+    /// A task is considered orphaned if its heartbeat is older than the given timeout.
+    /// Returns the number of tasks recovered.
+    pub async fn recover_orphaned_tasks(&self, timeout_secs: i64) -> Result<u64> {
+        let result = sqlx::query(
+            r#"
+            UPDATE tasks
+            SET status = 'pending',
+                runner_id = NULL,
+                error_message = COALESCE(error_message || E'\n', '') || 'Recovered: runner died (stale heartbeat)'
+            WHERE status = 'running'
+              AND heartbeat_at < NOW() - make_interval(secs => $1)
+            "#,
+        )
+        .bind(timeout_secs as f64)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+
     pub async fn claim_next_task(&self, runner_id: &str) -> Result<Option<Task>> {
         let task: Option<Task> = sqlx::query_as(
             r#"

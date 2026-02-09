@@ -69,8 +69,23 @@ impl TaskExecutor {
         }
     }
 
+    /// Recover orphaned tasks left in 'running' state by a previous runner instance.
+    /// Called once at startup before entering the main loop.
+    pub async fn recover_orphaned_tasks(&self) -> Result<()> {
+        let recovered = self.db.recover_orphaned_tasks(5 * 60).await?;
+        if recovered > 0 {
+            warn!(
+                "Recovered {} orphaned task(s) with stale heartbeat (>5min)",
+                recovered
+            );
+        }
+        Ok(())
+    }
+
     pub async fn run_continuous(&self, poll_interval: Duration) -> Result<()> {
         info!("Task executor starting continuous mode");
+
+        self.recover_orphaned_tasks().await?;
 
         loop {
             match self.run_once().await {
