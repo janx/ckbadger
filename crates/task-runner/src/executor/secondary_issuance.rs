@@ -179,7 +179,8 @@ pub async fn execute(
         result.blocks_processed = processed;
         batch_count += 1;
 
-        if batch_count.is_multiple_of(10) {
+        #[allow(clippy::manual_is_multiple_of)]
+        if batch_count % 10 == 0 {
             if db.check_cancelled(task_id).await? {
                 info!("Task cancelled, stopping");
                 return Ok(());
