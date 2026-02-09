@@ -53,6 +53,10 @@ pub async fn execute(
     while current_block < total_blocks {
         let end_block = (current_block + config.batch_size).min(total_blocks);
 
+        // Acquire a single connection for the entire batch so the temp table
+        // is visible to all subsequent queries (temp tables are session-scoped).
+        let mut conn = pool.acquire().await?;
+
         // Materialize transaction_inputs for this batch into a temp table ONCE,
         // then each partition UPDATE joins from it. Without this, the CTE rescans
         // the same transaction_inputs range N times (once per partition).
@@ -73,11 +77,13 @@ pub async fn execute(
         )
         .bind(current_block)
         .bind(end_block)
-        .execute(pool)
+        .execute(&mut *conn)
         .await?;
 
         // Analyze the temp table so the planner knows its size for join decisions
-        sqlx::query("ANALYZE _batch_inputs").execute(pool).await?;
+        sqlx::query("ANALYZE _batch_inputs")
+            .execute(&mut *conn)
+            .await?;
 
         // Process each cell partition that could contain consumed cells for this batch.
         // Targeting partitions explicitly avoids cross-partition hash joins.
@@ -107,14 +113,14 @@ pub async fn execute(
                 partition
             );
 
-            let updated = sqlx::query(&sql).execute(pool).await?.rows_affected() as i64;
+            let updated = sqlx::query(&sql).execute(&mut *conn).await?.rows_affected() as i64;
 
             batch_updated += updated;
         }
 
         // Drop the temp table explicitly (also dropped on commit, but be explicit)
         sqlx::query("DROP TABLE IF EXISTS _batch_inputs")
-            .execute(pool)
+            .execute(&mut *conn)
             .await?;
 
         cells_updated += batch_updated;
