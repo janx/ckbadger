@@ -824,6 +824,15 @@ impl Indexer {
                     next_block = None;
                 }
 
+                // Refresh the secondary RocksDB instance to see new blocks from the CKB node
+                if let Some(ref store) = ckb_store {
+                    if let Err(e) = store.refresh() {
+                        error!("Failed to refresh CKB RocksDB secondary: {}", e);
+                        sleep(Duration::from_secs(5)).await;
+                        continue;
+                    }
+                }
+
                 let chain_tip = if let Some(ref store) = ckb_store {
                     match store.tip_number() {
                         Some(tip) => tip,
@@ -6540,6 +6549,7 @@ impl Indexer {
     /// Get the block hash for a given block number, using direct RocksDB reads when available.
     async fn get_chain_block_hash(&self, number: u64) -> Result<Vec<u8>> {
         if let Some(ref store) = self.ckb_store {
+            store.refresh()?;
             store
                 .get_block_hash(number)
                 .map(|h| h.to_vec())
@@ -6557,6 +6567,7 @@ impl Indexer {
     /// Get the chain tip block number, using direct RocksDB reads when available.
     async fn get_chain_tip(&self) -> Result<u64> {
         if let Some(ref store) = self.ckb_store {
+            store.refresh()?;
             store
                 .tip_number()
                 .ok_or_else(|| anyhow::anyhow!("Failed to get chain tip from CKB RocksDB"))

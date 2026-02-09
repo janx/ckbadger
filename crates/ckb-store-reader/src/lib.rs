@@ -1,7 +1,8 @@
 //! Direct read-only access to CKB node's RocksDB data.
 //!
-//! Opens the CKB node's data directory in read-only mode,
-//! allowing concurrent reads while the node is running.
+//! Opens the CKB node's data directory as a **secondary instance**,
+//! allowing concurrent reads while the node is running and seeing
+//! new blocks via periodic `refresh()` calls.
 //! Reads blocks at ~0.1ms instead of ~15ms via JSON-RPC.
 
 mod convert;
@@ -43,30 +44,41 @@ const META_TIP_HEADER_KEY: &[u8] = b"TIP_HEADER";
 
 /// Direct read-only access to the CKB node's RocksDB store.
 ///
-/// Opens the database in read-only mode, which is safe to use while the CKB node is running.
-/// RocksDB supports concurrent reads from multiple processes.
+/// Opens the database as a **secondary instance**, which is safe to use while the CKB node
+/// is running. Unlike read-only mode, a secondary instance can see new writes from the
+/// primary (CKB node) by calling [`refresh()`](Self::refresh).
 pub struct CkbChainReader {
     db: DB,
 }
 
-// Safety: DB is Send+Sync when opened read-only
+// Safety: DB is Send+Sync — RocksDB handles internal synchronization for secondary instances
 unsafe impl Send for CkbChainReader {}
 unsafe impl Sync for CkbChainReader {}
 
 impl CkbChainReader {
-    /// Open a CKB data directory in read-only mode.
+    /// Open a CKB data directory as a secondary RocksDB instance.
     ///
     /// `ckb_data_path` should point to the `data/db` subdirectory of the CKB node's
     /// data directory. For Docker, this is typically `/var/lib/ckb/data/db`.
+    ///
+    /// The secondary instance starts with a snapshot of the primary's state.
+    /// Call [`refresh()`](Self::refresh) periodically to see new blocks written by the node.
     pub fn open(ckb_data_path: &str) -> Result<Self> {
         let db_path = std::path::Path::new(ckb_data_path);
         if !db_path.exists() {
             return Err(anyhow!("CKB data path does not exist: {}", ckb_data_path));
         }
 
+        // Secondary instances need their own directory for manifest tracking.
+        // Use a per-process path to allow multiple consumers (indexer, api, task-runner).
+        let secondary_path = format!("/tmp/ckbadger-rocksdb-secondary-{}", std::process::id());
+        std::fs::create_dir_all(&secondary_path)
+            .map_err(|e| anyhow!("Failed to create secondary path {}: {}", secondary_path, e))?;
+
         let mut opts = Options::default();
         opts.set_compression_type(DBCompressionType::Lz4);
-        opts.set_max_open_files(256);
+        // Recommended for secondary instances: keep all files open for best IO performance
+        opts.set_max_open_files(-1);
 
         let cf_descriptors: Vec<ColumnFamilyDescriptor> = ALL_COLUMN_FAMILIES
             .iter()
@@ -77,12 +89,41 @@ impl CkbChainReader {
             })
             .collect();
 
-        let db = DB::open_cf_descriptors_read_only(&opts, ckb_data_path, cf_descriptors, false)
-            .map_err(|e| anyhow!("Failed to open CKB RocksDB at {}: {}", ckb_data_path, e))?;
+        let db = DB::open_cf_descriptors_as_secondary(
+            &opts,
+            ckb_data_path,
+            &secondary_path,
+            cf_descriptors,
+        )
+        .map_err(|e| {
+            anyhow!(
+                "Failed to open CKB RocksDB at {} as secondary: {}",
+                ckb_data_path,
+                e
+            )
+        })?;
 
-        info!("Opened CKB RocksDB at {} (read-only)", ckb_data_path);
+        // Initial catch-up to see the latest data from the primary
+        db.try_catch_up_with_primary()
+            .map_err(|e| anyhow!("Failed initial catch-up with CKB RocksDB primary: {}", e))?;
+
+        info!(
+            "Opened CKB RocksDB at {} (secondary instance, path: {})",
+            ckb_data_path, secondary_path
+        );
 
         Ok(Self { db })
+    }
+
+    /// Refresh the secondary instance to see the latest writes from the CKB node.
+    ///
+    /// This should be called periodically (e.g., before each poll cycle in the indexer)
+    /// to pick up new blocks. The operation is very fast (~microseconds) when there are
+    /// no new SST files to process.
+    pub fn refresh(&self) -> Result<()> {
+        self.db
+            .try_catch_up_with_primary()
+            .map_err(|e| anyhow!("Failed to catch up with CKB RocksDB primary: {}", e))
     }
 
     /// Get the tip block number from the chain.
