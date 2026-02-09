@@ -379,26 +379,14 @@ impl Indexer {
         let rpc = CkbRpcClient::new(&config.ckb_rpc_url);
         let cache_invalidator = CacheInvalidator::new(config.redis_url.as_deref()).await;
 
-        let ckb_store =
-            config
-                .ckb_data_path
-                .as_deref()
-                .and_then(|path| match CkbChainReader::open(path) {
-                    Ok(reader) => {
-                        info!(
-                        "CKB direct RocksDB reader opened at {} — block fetching will bypass RPC",
-                        path
-                    );
-                        Some(Arc::new(reader))
-                    }
-                    Err(e) => {
-                        warn!(
-                            "Failed to open CKB RocksDB at {}: {}, falling back to RPC",
-                            path, e
-                        );
-                        None
-                    }
-                });
+        let ckb_store = match config.ckb_data_path.as_deref() {
+            Some(path) => {
+                let reader = CkbChainReader::open(path)?;
+                info!("CKB direct RocksDB reader opened at {}", path);
+                Some(Arc::new(reader))
+            }
+            None => None,
+        };
         let repo = Repository::with_cache(pool.clone(), cache_invalidator.clone());
 
         let rocksdb_store = Self::create_rocksdb_store(&config)?;
@@ -576,6 +564,12 @@ impl Indexer {
     /// Auto-enabled when blocks_remaining > bulk_sync_threshold (no manual config needed)
     pub fn is_bulk_sync_active(&self) -> bool {
         self.progress.blocks_remaining() > self.config.bulk_sync_threshold
+    }
+
+    /// Returns true if the indexer is reading blocks directly from CKB's RocksDB
+    /// rather than via JSON-RPC.
+    pub fn is_direct_db_read(&self) -> bool {
+        self.ckb_store.is_some()
     }
 
     /// Get memory statistics for the live cell store.

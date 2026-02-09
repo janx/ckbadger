@@ -105,24 +105,15 @@ pub async fn create_router(config: AppConfig) -> Router {
 
     let read_pool = config.read_pool.unwrap_or_else(|| config.pool.clone());
 
-    let ckb_store =
-        config
-            .ckb_data_path
-            .as_deref()
-            .and_then(|path| match CkbChainReader::open(path) {
-                Ok(reader) => {
-                    tracing::info!("CKB direct RocksDB reader opened at {}", path);
-                    Some(Arc::new(reader))
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to open CKB RocksDB at {}: {}, falling back to RPC",
-                        path,
-                        e
-                    );
-                    None
-                }
-            });
+    let ckb_store = match config.ckb_data_path.as_deref() {
+        Some(path) => {
+            let reader = CkbChainReader::open(path)
+                .expect("Failed to open CKB RocksDB — check CKB_DATA_PATH");
+            tracing::info!("CKB direct RocksDB reader opened at {}", path);
+            Some(Arc::new(reader))
+        }
+        None => None,
+    };
 
     let state = Arc::new(AppState {
         pool: config.pool,

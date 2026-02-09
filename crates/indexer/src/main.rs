@@ -391,6 +391,12 @@ async fn main() -> Result<()> {
     let indexer = Indexer::new(config.clone(), pool.clone()).await?;
     let indexer = Arc::new(indexer);
 
+    let data_source = if indexer.is_direct_db_read() {
+        "DB"
+    } else {
+        "RPC"
+    };
+
     let indexer_for_progress = Arc::clone(&indexer);
     tokio::spawn(async move {
         loop {
@@ -433,7 +439,8 @@ async fn main() -> Result<()> {
                 };
 
                 eprintln!(
-                    "Progress: {:.2}% ({}/{}) - {}{:.2} blocks/sec{} (EMA: {}{:.2}{}) | ETA: {}",
+                    "[{}] Progress: {:.2}% ({}/{}) - {}{:.2} blocks/sec{} (EMA: {}{:.2}{}) | ETA: {}",
+                    data_source,
                     progress.progress_percentage(),
                     progress.current(),
                     progress.target(),
@@ -447,7 +454,8 @@ async fn main() -> Result<()> {
                 );
             } else {
                 info!(
-                    "Synced to block {} (tip: {}, {} behind)",
+                    "[{}] Synced to block {} (tip: {}, {} behind)",
+                    data_source,
                     progress.current(),
                     progress.target(),
                     progress.blocks_remaining()
