@@ -49,7 +49,8 @@ impl CacheBackend {
         }
     }
 
-    /// Get sync status from Redis, with fallback to database queries
+    /// Get sync status from Redis, with fallback to database queries.
+    /// Uses pre-computed totals from daily_statistics instead of expensive COUNT(*) scans.
     pub async fn get_sync_status(&self, pool: &PgPool) -> SyncStatusData {
         if let Some(status) = self.get::<SyncStatusData>(SYNC_STATUS_REDIS_KEY).await {
             return status;
@@ -60,13 +61,18 @@ impl CacheBackend {
             .await
             .unwrap_or(0);
 
+        // Use pre-computed totals from daily_statistics (latest row) instead of COUNT(*)
+        // which would scan all partitions of transactions/cells tables (30s+)
         let (total_tx, total_cells, total_live_cells, total_addresses): (i64, i64, i64, i64) =
             sqlx::query_as(
-                r#"SELECT 
-                    COALESCE((SELECT COUNT(*) FROM transactions), 0),
-                    COALESCE((SELECT COUNT(*) FROM cells), 0),
-                    COALESCE((SELECT COUNT(*) FROM cells WHERE status = 0), 0),
-                    COALESCE((SELECT COUNT(*) FROM addresses), 0)
+                r#"SELECT
+                    COALESCE(ds.total_transactions, 0)::bigint,
+                    COALESCE(ds.total_all_cells, 0)::bigint,
+                    COALESCE(ds.total_live_cells, 0)::bigint,
+                    COALESCE((SELECT COUNT(*) FROM address_balances WHERE balance > 0), 0)::bigint
+                FROM daily_statistics ds
+                ORDER BY ds.date DESC
+                LIMIT 1
                 "#,
             )
             .fetch_one(pool)
@@ -160,6 +166,8 @@ impl CacheTtl {
     pub const MEMPOOL_INFO: Duration = Duration::from_secs(2);
     pub const MINING_REWARD: Duration = Duration::from_secs(86400);
     pub const ADDRESS_BALANCE: Duration = Duration::from_secs(30);
+    /// Chart data is primarily historical and changes slowly (new data only at current day)
+    pub const CHART: Duration = Duration::from_secs(21600);
 }
 
 #[cfg(test)]

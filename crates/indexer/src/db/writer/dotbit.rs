@@ -87,4 +87,31 @@ impl BatchWriter {
 
         Ok(result.map(|(id,)| id))
     }
+
+    /// Batch lookup: find account_ids for multiple outpoints in a single query.
+    /// Returns (tx_hash, output_index, account_id) for matches.
+    pub async fn get_dotbit_account_ids_by_outpoints_batch(
+        &self,
+        tx_hashes: &[Vec<u8>],
+        output_indices: &[i16],
+    ) -> Result<Vec<(Vec<u8>, i16, Vec<u8>)>> {
+        if tx_hashes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = sqlx::query_as::<_, (Vec<u8>, i16, Vec<u8>)>(
+            r#"
+            SELECT d.tx_hash, d.output_index, d.account_id
+            FROM dotbit_accounts d
+            INNER JOIN UNNEST($1::bytea[], $2::smallint[]) AS t(tx_hash, output_index)
+              ON d.tx_hash = t.tx_hash AND d.output_index = t.output_index
+            WHERE d.is_live = true
+            "#,
+        )
+        .bind(tx_hashes)
+        .bind(output_indices)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows)
+    }
 }

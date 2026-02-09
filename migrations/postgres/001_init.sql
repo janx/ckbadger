@@ -1107,19 +1107,13 @@ CREATE INDEX idx_blocks_miner ON blocks(miner_lock_hash) WHERE miner_lock_hash I
 
 -- transactions
 CREATE INDEX idx_tx_timestamp ON transactions(timestamp DESC);
-CREATE INDEX idx_tx_short_hash ON transactions(short_hash, block_number);
+-- NOTE: idx_tx_short_hash removed (0 scans in pg_stat; API uses hash-based lookups)
 -- Cursor pagination
 CREATE INDEX idx_tx_cursor ON transactions(block_number DESC, tx_index DESC);
 
 -- cells
--- Live cells query (most important)
-CREATE INDEX idx_cells_lock_live ON cells(lock_script_hash, created_at_block DESC)
-    WHERE status = 0;
--- Lock script details lookup (for address encoding)
-CREATE INDEX idx_cells_lock_script_details ON cells(lock_script_hash)
-    INCLUDE (lock_code_hash, lock_hash_type, lock_args);
-CREATE INDEX idx_cells_type_live ON cells(type_script_hash, created_at_block DESC)
-    WHERE status = 0 AND type_script_hash IS NOT NULL;
+-- NOTE: idx_cells_lock_live, idx_cells_lock_script_details, idx_cells_type_live removed
+-- (redundant with idx_cells_list_covering and idx_cells_type_code_hash_live; 0 scans in pg_stat)
 -- Type script hash lookup (for UDT)
 CREATE INDEX idx_cells_type_script_hash ON cells(type_script_hash) WHERE type_script_hash IS NOT NULL;
 -- Code hash lookup (for script usage stats) - basic indexes

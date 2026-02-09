@@ -154,4 +154,31 @@ impl BatchWriter {
 
         Ok(result.map(|(id,)| id))
     }
+
+    /// Batch lookup: find spore_ids for multiple outpoints in a single query.
+    /// Returns (tx_hash, output_index, spore_id) for matches.
+    pub async fn get_spore_ids_by_outpoints_batch(
+        &self,
+        tx_hashes: &[Vec<u8>],
+        output_indices: &[i16],
+    ) -> Result<Vec<(Vec<u8>, i16, Vec<u8>)>> {
+        if tx_hashes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = sqlx::query_as::<_, (Vec<u8>, i16, Vec<u8>)>(
+            r#"
+            SELECT s.tx_hash, s.output_index, s.spore_id
+            FROM spore_cells s
+            INNER JOIN UNNEST($1::bytea[], $2::smallint[]) AS t(tx_hash, output_index)
+              ON s.tx_hash = t.tx_hash AND s.output_index = t.output_index
+            WHERE s.is_live = true
+            "#,
+        )
+        .bind(tx_hashes)
+        .bind(output_indices)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows)
+    }
 }

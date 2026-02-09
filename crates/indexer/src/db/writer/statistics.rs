@@ -256,14 +256,44 @@ impl BatchWriter {
             })
             .unwrap_or_else(|| "0".to_string());
 
+        // Incremental: get previous day's cumulative values and add today's delta.
+        // Falls back to full SUM if no previous snapshot exists (first run or rebuild).
         let secondary_issuance = sqlx::query_as::<_, (String, String, String)>(
             r#"
-            SELECT 
-                COALESCE(SUM(burnt), 0)::text,
-                COALESCE(SUM(miner_secondary), 0)::text,
-                COALESCE(SUM(dao_compensation), 0)::text
-            FROM block_secondary_issuance
-            WHERE block_timestamp::date <= $1
+            SELECT
+                CASE WHEN prev.cumulative_burnt IS NOT NULL
+                    THEN (prev.cumulative_burnt::numeric + COALESCE(today.daily_burnt, 0))::text
+                    ELSE COALESCE((
+                        SELECT SUM(burnt)::text FROM block_secondary_issuance WHERE block_timestamp::date <= $1
+                    ), '0')
+                END,
+                CASE WHEN prev.cumulative_mining_reward IS NOT NULL
+                    THEN (prev.cumulative_mining_reward::numeric + COALESCE(today.daily_miner, 0))::text
+                    ELSE COALESCE((
+                        SELECT SUM(miner_secondary)::text FROM block_secondary_issuance WHERE block_timestamp::date <= $1
+                    ), '0')
+                END,
+                CASE WHEN prev.cumulative_deposit_compensation IS NOT NULL
+                    THEN (prev.cumulative_deposit_compensation::numeric + COALESCE(today.daily_dao, 0))::text
+                    ELSE COALESCE((
+                        SELECT SUM(dao_compensation)::text FROM block_secondary_issuance WHERE block_timestamp::date <= $1
+                    ), '0')
+                END
+            FROM (SELECT 1) _dummy
+            LEFT JOIN LATERAL (
+                SELECT cumulative_burnt, cumulative_mining_reward, cumulative_deposit_compensation
+                FROM dao_daily_snapshots
+                WHERE date < $1
+                ORDER BY date DESC LIMIT 1
+            ) prev ON true
+            LEFT JOIN LATERAL (
+                SELECT
+                    SUM(burnt)::numeric as daily_burnt,
+                    SUM(miner_secondary)::numeric as daily_miner,
+                    SUM(dao_compensation)::numeric as daily_dao
+                FROM block_secondary_issuance
+                WHERE block_timestamp::date = $1
+            ) today ON true
             "#,
         )
         .bind(date)

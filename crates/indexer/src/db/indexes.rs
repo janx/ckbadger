@@ -122,13 +122,6 @@ const DEFERRABLE_INDEXES: &[DeferrableIndex] = &[
         priority: 2,
     },
     DeferrableIndex {
-        name: "idx_tx_short_hash",
-        table: "transactions",
-        definition: "CREATE INDEX {name} ON {table}(short_hash, block_number)",
-        partition_type: PartitionType::Range,
-        priority: 2,
-    },
-    DeferrableIndex {
         name: "idx_tx_cursor",
         table: "transactions",
         definition: "CREATE INDEX {name} ON {table}(block_number DESC, tx_index DESC)",
@@ -141,27 +134,6 @@ const DEFERRABLE_INDEXES: &[DeferrableIndex] = &[
         definition: "CREATE INDEX {name} ON {table}(block_number DESC, tx_index DESC) INCLUDE (hash, inputs_count, outputs_count, fee, is_cellbase, timestamp)",
         partition_type: PartitionType::Range,
         priority: 3,
-    },
-    DeferrableIndex {
-        name: "idx_cells_lock_live",
-        table: "cells",
-        definition: "CREATE INDEX {name} ON {table}(lock_script_hash, created_at_block DESC) WHERE status = 0",
-        partition_type: PartitionType::Range,
-        priority: 1,
-    },
-    DeferrableIndex {
-        name: "idx_cells_lock_script_details",
-        table: "cells",
-        definition: "CREATE INDEX {name} ON {table}(lock_script_hash) INCLUDE (lock_code_hash, lock_hash_type, lock_args)",
-        partition_type: PartitionType::Range,
-        priority: 2,
-    },
-    DeferrableIndex {
-        name: "idx_cells_type_live",
-        table: "cells",
-        definition: "CREATE INDEX {name} ON {table}(type_script_hash, created_at_block DESC) WHERE status = 0 AND type_script_hash IS NOT NULL",
-        partition_type: PartitionType::Range,
-        priority: 2,
     },
     DeferrableIndex {
         name: "idx_cells_type_script_hash",
@@ -383,7 +355,7 @@ mod tests {
 
     #[test]
     fn test_deferrable_indexes_count() {
-        assert!(DEFERRABLE_INDEXES.len() >= 15);
+        assert!(DEFERRABLE_INDEXES.len() >= 11);
     }
 
     #[test]

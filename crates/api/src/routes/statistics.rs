@@ -548,10 +548,7 @@ async fn get_block_time_distribution_chart(
         y2_axis_label: None,
     };
 
-    state
-        .cache
-        .set(cache_key, &response, std::time::Duration::from_secs(3600))
-        .await;
+    state.cache.set(cache_key, &response, CacheTtl::CHART).await;
 
     ok(response)
 }
@@ -594,10 +591,7 @@ async fn get_epoch_time_distribution_chart(
         y2_axis_label: None,
     };
 
-    state
-        .cache
-        .set(cache_key, &response, std::time::Duration::from_secs(3600))
-        .await;
+    state.cache.set(cache_key, &response, CacheTtl::CHART).await;
 
     ok(response)
 }
@@ -643,10 +637,7 @@ async fn get_epoch_time_length_chart(
         y2_axis_label: Some("Blocks".to_string()),
     };
 
-    state
-        .cache
-        .set(cache_key, &response, std::time::Duration::from_secs(3600))
-        .await;
+    state.cache.set(cache_key, &response, CacheTtl::CHART).await;
 
     ok(response)
 }
@@ -687,10 +678,7 @@ async fn get_average_block_time_chart(
         y2_axis_label: None,
     };
 
-    state
-        .cache
-        .set(cache_key, &response, std::time::Duration::from_secs(3600))
-        .await;
+    state.cache.set(cache_key, &response, CacheTtl::CHART).await;
 
     ok(response)
 }
@@ -1054,10 +1042,7 @@ async fn get_hash_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<Ch
         y2_axis_label: None,
     };
 
-    state
-        .cache
-        .set(cache_key, &response, std::time::Duration::from_secs(3600))
-        .await;
+    state.cache.set(cache_key, &response, CacheTtl::CHART).await;
 
     ok(response)
 }
@@ -1094,10 +1079,7 @@ async fn get_difficulty_chart(State(state): State<Arc<AppState>>) -> ApiResult<C
         y2_axis_label: None,
     };
 
-    state
-        .cache
-        .set(cache_key, &response, std::time::Duration::from_secs(3600))
-        .await;
+    state.cache.set(cache_key, &response, CacheTtl::CHART).await;
 
     ok(response)
 }
@@ -1131,10 +1113,7 @@ async fn get_uncle_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<C
         y2_axis_label: None,
     };
 
-    state
-        .cache
-        .set(cache_key, &response, std::time::Duration::from_secs(3600))
-        .await;
+    state.cache.set(cache_key, &response, CacheTtl::CHART).await;
 
     ok(response)
 }
@@ -1236,10 +1215,7 @@ async fn get_miner_address_distribution_chart(
         total_blocks: total_blocks.0,
     };
 
-    state
-        .cache
-        .set(cache_key, &response, std::time::Duration::from_secs(3600))
-        .await;
+    state.cache.set(cache_key, &response, CacheTtl::CHART).await;
 
     ok(response)
 }
@@ -1318,10 +1294,7 @@ async fn get_total_supply_chart(
         title: "Total Supply".to_string(),
     };
 
-    state
-        .cache
-        .set(cache_key, &response, std::time::Duration::from_secs(3600))
-        .await;
+    state.cache.set(cache_key, &response, CacheTtl::CHART).await;
 
     ok(response)
 }
@@ -1462,10 +1435,7 @@ async fn get_secondary_issuance_chart(
         title: "Secondary Issuance".to_string(),
     };
 
-    state
-        .cache
-        .set(cache_key, &response, std::time::Duration::from_secs(3600))
-        .await;
+    state.cache.set(cache_key, &response, CacheTtl::CHART).await;
 
     ok(response)
 }

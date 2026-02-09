@@ -277,4 +277,31 @@ impl BatchWriter {
 
         Ok(result.map(|(id,)| id))
     }
+
+    /// Batch lookup: find token_ids for multiple outpoints in a single query.
+    /// Returns (tx_hash, output_index, token_id) for matches.
+    pub async fn get_mnft_token_ids_by_outpoints_batch(
+        &self,
+        tx_hashes: &[Vec<u8>],
+        output_indices: &[i16],
+    ) -> Result<Vec<(Vec<u8>, i16, Vec<u8>)>> {
+        if tx_hashes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = sqlx::query_as::<_, (Vec<u8>, i16, Vec<u8>)>(
+            r#"
+            SELECT m.tx_hash, m.output_index, m.token_id
+            FROM mnft_tokens m
+            INNER JOIN UNNEST($1::bytea[], $2::smallint[]) AS t(tx_hash, output_index)
+              ON m.tx_hash = t.tx_hash AND m.output_index = t.output_index
+            WHERE m.is_live = true
+            "#,
+        )
+        .bind(tx_hashes)
+        .bind(output_indices)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows)
+    }
 }

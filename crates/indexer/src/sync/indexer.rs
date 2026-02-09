@@ -5350,9 +5350,15 @@ impl Indexer {
             }
         }
 
-        // Skip per-input NFT consumption lookups during bulk sync - too slow (3 queries per input)
+        // Skip per-input NFT consumption lookups during bulk sync - too slow
         // These will be processed by integrity service after bulk sync completes
         if !self.is_bulk_sync_active() {
+            // Collect all input outpoints with their block/tx context in a single pass
+            let mut all_prev_tx_hashes: Vec<Vec<u8>> = Vec::new();
+            let mut all_prev_indices: Vec<i16> = Vec::new();
+            // Track (block_number, consuming_tx_hash) for each outpoint
+            let mut outpoint_context: Vec<(i64, Vec<u8>)> = Vec::new();
+
             let mut block_tx_idx = 0usize;
             for (block_idx, block_response) in blocks.iter().enumerate() {
                 let parsed = &all_parsed_blocks[block_idx];
@@ -5364,9 +5370,7 @@ impl Indexer {
                     if tx_data.is_cellbase || tx_data.inputs.is_empty() {
                         continue;
                     }
-
                     let tx = &block_response.block.transactions[tx_idx];
-
                     for input in &tx.inputs {
                         let prev_tx_hash =
                             crate::rpc::parse_hex_to_bytes(&input.previous_output.tx_hash);
@@ -5375,49 +5379,73 @@ impl Indexer {
                             .index
                             .strip_prefix("0x")
                             .and_then(|s| u32::from_str_radix(s, 16).ok())
-                            .unwrap_or(0);
+                            .unwrap_or(0) as i16;
 
-                        let consumed_spore_id = self
-                            .writer
-                            .get_spore_id_by_outpoint(&prev_tx_hash, prev_index as i16)
-                            .await?;
+                        all_prev_tx_hashes.push(prev_tx_hash);
+                        all_prev_indices.push(prev_index);
+                        outpoint_context.push((parsed.number, tx_data.hash.to_vec()));
+                    }
+                }
+            }
 
-                        if let Some(spore_id) = consumed_spore_id {
-                            if !batch_spore_ids.contains(&spore_id) {
-                                self.writer
-                                    .consume_spore(&spore_id, parsed.number, &tx_data.hash)
-                                    .await?;
-                            }
+            if !all_prev_tx_hashes.is_empty() {
+                // 3 batch queries instead of 3×N individual queries
+                let (spore_results, mnft_results, dotbit_results) = tokio::try_join!(
+                    self.writer
+                        .get_spore_ids_by_outpoints_batch(&all_prev_tx_hashes, &all_prev_indices),
+                    self.writer.get_mnft_token_ids_by_outpoints_batch(
+                        &all_prev_tx_hashes,
+                        &all_prev_indices
+                    ),
+                    self.writer.get_dotbit_account_ids_by_outpoints_batch(
+                        &all_prev_tx_hashes,
+                        &all_prev_indices
+                    ),
+                )?;
+
+                // Build lookup maps: (tx_hash, output_index) -> entity_id
+                let spore_map: std::collections::HashMap<(Vec<u8>, i16), Vec<u8>> = spore_results
+                    .into_iter()
+                    .map(|(tx_hash, idx, spore_id)| ((tx_hash, idx), spore_id))
+                    .collect();
+                let mnft_map: std::collections::HashMap<(Vec<u8>, i16), Vec<u8>> = mnft_results
+                    .into_iter()
+                    .map(|(tx_hash, idx, token_id)| ((tx_hash, idx), token_id))
+                    .collect();
+                let dotbit_map: std::collections::HashMap<(Vec<u8>, i16), Vec<u8>> = dotbit_results
+                    .into_iter()
+                    .map(|(tx_hash, idx, account_id)| ((tx_hash, idx), account_id))
+                    .collect();
+
+                // Process consumption using the batch results
+                for (i, (block_number, consuming_tx_hash)) in outpoint_context.iter().enumerate() {
+                    let key = (all_prev_tx_hashes[i].clone(), all_prev_indices[i]);
+
+                    if let Some(spore_id) = spore_map.get(&key) {
+                        if !batch_spore_ids.contains(spore_id) {
+                            self.writer
+                                .consume_spore(spore_id, *block_number, consuming_tx_hash)
+                                .await?;
                         }
+                    }
 
-                        let consumed_mnft_token_id = self
-                            .writer
-                            .get_mnft_token_id_by_outpoint(&prev_tx_hash, prev_index as i16)
-                            .await?;
-
-                        if let Some(token_id) = consumed_mnft_token_id {
-                            if !batch_mnft_token_ids.contains(&token_id) {
-                                self.writer
-                                    .consume_mnft_token(&token_id, parsed.number, &tx_data.hash)
-                                    .await?;
-                            }
+                    if let Some(token_id) = mnft_map.get(&key) {
+                        if !batch_mnft_token_ids.contains(token_id) {
+                            self.writer
+                                .consume_mnft_token(token_id, *block_number, consuming_tx_hash)
+                                .await?;
                         }
+                    }
 
-                        let consumed_dotbit_account_id = self
-                            .writer
-                            .get_dotbit_account_id_by_outpoint(&prev_tx_hash, prev_index as i16)
-                            .await?;
-
-                        if let Some(account_id) = consumed_dotbit_account_id {
-                            if !batch_dotbit_account_ids.contains(&account_id) {
-                                self.writer
-                                    .consume_dotbit_account(
-                                        &account_id,
-                                        parsed.number,
-                                        &tx_data.hash,
-                                    )
-                                    .await?;
-                            }
+                    if let Some(account_id) = dotbit_map.get(&key) {
+                        if !batch_dotbit_account_ids.contains(account_id) {
+                            self.writer
+                                .consume_dotbit_account(
+                                    account_id,
+                                    *block_number,
+                                    consuming_tx_hash,
+                                )
+                                .await?;
                         }
                     }
                 }
@@ -6076,76 +6104,115 @@ impl Indexer {
         }
 
         if !bulk_sync_active && !self.is_stats_rebuild_in_progress().await {
-            for (
-                date,
-                (blocks, txs, created, consumed, capacity, data_size_added, data_size_consumed),
-            ) in &stats.daily_stats
-            {
-                let dao_field = stats.daily_dao_fields.get(date);
-                self.writer
-                    .update_daily_statistics(
-                        *date,
-                        *blocks,
-                        *txs,
-                        *created,
-                        *consumed,
-                        *capacity,
-                        *data_size_added,
-                        *data_size_consumed,
-                        dao_field.map(|v| v.as_slice()),
-                    )
-                    .await?;
-            }
+            // Group 1: Critical daily statistics (run in parallel)
+            tokio::try_join!(
+                async {
+                    for (
+                        date,
+                        (
+                            blocks,
+                            txs,
+                            created,
+                            consumed,
+                            capacity,
+                            data_size_added,
+                            data_size_consumed,
+                        ),
+                    ) in &stats.daily_stats
+                    {
+                        let dao_field = stats.daily_dao_fields.get(date);
+                        self.writer
+                            .update_daily_statistics(
+                                *date,
+                                *blocks,
+                                *txs,
+                                *created,
+                                *consumed,
+                                *capacity,
+                                *data_size_added,
+                                *data_size_consumed,
+                                dao_field.map(|v| v.as_slice()),
+                            )
+                            .await?;
+                    }
+                    Ok::<_, anyhow::Error>(())
+                },
+                async {
+                    for (date, (sum_target, count, uncles)) in &stats.daily_block_stats {
+                        let avg_target = if *count > 0 {
+                            (*sum_target / *count as i128) as i64
+                        } else {
+                            0
+                        };
+                        self.writer
+                            .update_daily_block_stats_batch(*date, avg_target, *count, *uncles)
+                            .await?;
+                    }
+                    Ok::<_, anyhow::Error>(())
+                },
+                async {
+                    for (date, (sum_ms, count)) in &stats.daily_block_times {
+                        if *count > 0 {
+                            let avg_ms = sum_ms / *count as i64;
+                            self.writer
+                                .update_daily_avg_block_time_batch(*date, avg_ms, *count)
+                                .await?;
+                        }
+                    }
+                    Ok::<_, anyhow::Error>(())
+                },
+                async {
+                    for (hour, (blocks, txs, created, consumed, capacity)) in &stats.hourly_stats {
+                        self.writer
+                            .update_hourly_statistics(
+                                *hour, *blocks, *txs, *created, *consumed, *capacity,
+                            )
+                            .await?;
+                    }
+                    Ok::<_, anyhow::Error>(())
+                },
+            )?;
 
-            for (date, (sum_target, count, uncles)) in &stats.daily_block_stats {
-                let avg_target = if *count > 0 {
-                    (*sum_target / *count as i128) as i64
-                } else {
-                    0
-                };
-                self.writer
-                    .update_daily_block_stats_batch(*date, avg_target, *count, *uncles)
-                    .await?;
-            }
-
-            for (date, (sum_ms, count)) in &stats.daily_block_times {
-                if *count > 0 {
-                    let avg_ms = sum_ms / *count as i64;
-                    self.writer
-                        .update_daily_avg_block_time_batch(*date, avg_ms, *count)
-                        .await?;
-                }
-            }
-
-            for (hour, (blocks, txs, created, consumed, capacity)) in &stats.hourly_stats {
-                self.writer
-                    .update_hourly_statistics(*hour, *blocks, *txs, *created, *consumed, *capacity)
-                    .await?;
-            }
-
-            for ((date, miner_hash), (blocks_count, last_block)) in &stats.miner_stats {
-                self.writer
-                    .update_miner_statistics_batch(miner_hash, *last_block, *date, *blocks_count)
-                    .await?;
-            }
-
-            for (bucket, count) in &stats.block_time_dist {
-                self.writer
-                    .update_block_time_distribution_batch(*bucket, *count)
-                    .await?;
-            }
-
-            for (bucket, count) in &stats.epoch_time_dist {
-                self.writer
-                    .update_epoch_time_distribution_batch(*bucket, *count)
-                    .await?;
-            }
-
-            let mut snapshot_dates: Vec<_> = stats.dao_snapshot_dates.iter().collect();
-            snapshot_dates.sort();
-            for date in snapshot_dates {
-                self.writer.update_dao_daily_snapshot(*date).await?;
-            }
+            // Group 2: Non-critical statistics (run in parallel, independent of Group 1)
+            tokio::try_join!(
+                async {
+                    for ((date, miner_hash), (blocks_count, last_block)) in &stats.miner_stats {
+                        self.writer
+                            .update_miner_statistics_batch(
+                                miner_hash,
+                                *last_block,
+                                *date,
+                                *blocks_count,
+                            )
+                            .await?;
+                    }
+                    Ok::<_, anyhow::Error>(())
+                },
+                async {
+                    for (bucket, count) in &stats.block_time_dist {
+                        self.writer
+                            .update_block_time_distribution_batch(*bucket, *count)
+                            .await?;
+                    }
+                    Ok::<_, anyhow::Error>(())
+                },
+                async {
+                    for (bucket, count) in &stats.epoch_time_dist {
+                        self.writer
+                            .update_epoch_time_distribution_batch(*bucket, *count)
+                            .await?;
+                    }
+                    Ok::<_, anyhow::Error>(())
+                },
+                async {
+                    let mut snapshot_dates: Vec<_> = stats.dao_snapshot_dates.iter().collect();
+                    snapshot_dates.sort();
+                    for date in snapshot_dates {
+                        self.writer.update_dao_daily_snapshot(*date).await?;
+                    }
+                    Ok::<_, anyhow::Error>(())
+                },
+            )?;
         }
 
         Ok(())
