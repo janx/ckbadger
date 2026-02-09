@@ -151,14 +151,6 @@ CREATE TABLE orphaned_transactions (
 CREATE INDEX idx_orphaned_txs_reorg ON orphaned_transactions(reorg_event_id);
 CREATE INDEX idx_orphaned_txs_hash ON orphaned_transactions(hash);
 
-CREATE TABLE integrity_recent_fixes (
-    id SERIAL PRIMARY KEY,
-    tx_hash BYTEA NOT NULL,
-    cycles BIGINT NOT NULL,
-    fixed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX idx_integrity_recent_fixes_fixed_at ON integrity_recent_fixes (fixed_at DESC);
 
 -- ===========================================
 -- 2. Core Tables (Partitioned by 5M blocks)
@@ -390,6 +382,63 @@ CREATE TABLE uncle_blocks_p07 PARTITION OF uncle_blocks FOR VALUES FROM (3500000
 CREATE TABLE uncle_blocks_p08 PARTITION OF uncle_blocks FOR VALUES FROM (40000000) TO (45000000);
 CREATE TABLE uncle_blocks_p09 PARTITION OF uncle_blocks FOR VALUES FROM (45000000) TO (50000000);
 
+-- ---- blocks_index ----
+-- Lightweight index table for block list/filter queries.
+-- Full block data is read from CKB's RocksDB on demand.
+CREATE TABLE blocks_index (
+    number          BIGINT PRIMARY KEY,
+    hash            BYTEA NOT NULL,
+    timestamp       TIMESTAMPTZ NOT NULL,
+    tx_count        INTEGER NOT NULL DEFAULT 0,
+    proposals_count INTEGER NOT NULL DEFAULT 0,
+    uncles_count    INTEGER NOT NULL DEFAULT 0,
+    epoch_number    BIGINT NOT NULL,
+    epoch_index     INTEGER NOT NULL,
+    epoch_length    INTEGER NOT NULL,
+    compact_target  BIGINT NOT NULL,
+    miner_lock_hash BYTEA,
+    dao             BYTEA NOT NULL   -- 32 bytes, needed for DAO stats
+);
+
+CREATE INDEX idx_blocks_index_hash ON blocks_index(hash);
+CREATE INDEX idx_blocks_index_timestamp ON blocks_index(timestamp);
+CREATE INDEX idx_blocks_index_epoch ON blocks_index(epoch_number);
+
+-- ---- transactions_index ----
+-- Lightweight index table for transaction list/filter queries.
+-- Full transaction data is read from CKB's RocksDB on demand.
+CREATE TABLE transactions_index (
+    hash          BYTEA NOT NULL,
+    block_number  BIGINT NOT NULL,
+    tx_index      INTEGER NOT NULL,
+    is_cellbase   BOOLEAN NOT NULL DEFAULT FALSE,
+    timestamp     TIMESTAMPTZ NOT NULL,
+    inputs_count  SMALLINT NOT NULL DEFAULT 0,
+    outputs_count SMALLINT NOT NULL DEFAULT 0,
+    fee           BIGINT NOT NULL DEFAULT 0,
+    cycles        BIGINT,
+    PRIMARY KEY (block_number, hash)
+) PARTITION BY RANGE (block_number);
+
+CREATE TABLE transactions_index_p00 PARTITION OF transactions_index FOR VALUES FROM (0) TO (5000000);
+CREATE TABLE transactions_index_p01 PARTITION OF transactions_index FOR VALUES FROM (5000000) TO (10000000);
+CREATE TABLE transactions_index_p02 PARTITION OF transactions_index FOR VALUES FROM (10000000) TO (15000000);
+CREATE TABLE transactions_index_p03 PARTITION OF transactions_index FOR VALUES FROM (15000000) TO (20000000);
+CREATE TABLE transactions_index_p04 PARTITION OF transactions_index FOR VALUES FROM (20000000) TO (25000000);
+CREATE TABLE transactions_index_p05 PARTITION OF transactions_index FOR VALUES FROM (25000000) TO (30000000);
+CREATE TABLE transactions_index_p06 PARTITION OF transactions_index FOR VALUES FROM (30000000) TO (35000000);
+CREATE TABLE transactions_index_p07 PARTITION OF transactions_index FOR VALUES FROM (35000000) TO (40000000);
+CREATE TABLE transactions_index_p08 PARTITION OF transactions_index FOR VALUES FROM (40000000) TO (45000000);
+CREATE TABLE transactions_index_p09 PARTITION OF transactions_index FOR VALUES FROM (45000000) TO (50000000);
+
+CREATE INDEX idx_transactions_index_short_hash
+    ON transactions_index (substring(hash, 1, 10));
+CREATE INDEX idx_transactions_index_timestamp
+    ON transactions_index (timestamp);
+CREATE INDEX idx_transactions_index_cycles_null
+    ON transactions_index (block_number)
+    WHERE NOT is_cellbase AND (cycles IS NULL OR cycles = 0);
+
 -- ---- cell_data ----
 CREATE TABLE cell_data (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -559,7 +608,6 @@ CREATE TABLE miner_statistics (
 
 CREATE INDEX idx_miner_stats_date ON miner_statistics(date DESC);
 CREATE INDEX idx_miner_stats_miner ON miner_statistics(miner_lock_hash);
-CREATE INDEX idx_miner_stats_lock_hash_only ON miner_statistics(miner_lock_hash);
 
 -- ===========================================
 -- 5. DAO Tables
@@ -726,7 +774,6 @@ CREATE TABLE token_balances (
     UNIQUE(token_id, lock_script_hash)
 );
 
-CREATE INDEX idx_token_balances_token ON token_balances(token_id);
 CREATE INDEX idx_token_balances_lock ON token_balances(lock_script_hash);
 CREATE INDEX idx_token_balances_balance ON token_balances(token_id, balance DESC);
 CREATE INDEX idx_token_balances_pagination ON token_balances(token_id, balance DESC, lock_script_hash DESC) WHERE balance > 0;
