@@ -1,22 +1,23 @@
 # Indexer Three-Stage Pipeline Architecture
 
-The CKB indexer uses a three-stage pipeline architecture to maximize sync throughput by parallelizing RPC I/O, CPU parsing, and database writes.
+The CKB indexer uses a three-stage pipeline architecture to maximize sync throughput by parallelizing block fetching, CPU parsing, and database writes.
 
 ## Overview
 
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
 │     FETCHER     │────▶│     PARSER      │────▶│     WRITER      │
-│   (Async I/O)   │     │  (CPU + Prefetch)│     │    (DB I/O)     │
+│  (RocksDB/RPC)  │     │  (CPU + Prefetch)│     │    (DB I/O)     │
 └─────────────────┘     └─────────────────┘     └─────────────────┘
         │                       │                       │
-   RPC requests           Rayon parallel          Batch INSERTs
-   to CKB node            block parsing           and UPDATEs
+   Direct RocksDB         Rayon parallel          Batch INSERTs
+   reads (~0.1ms)         block parsing           and UPDATEs
+   or RPC fallback
 ```
 
 ### Design Goals
 
-1. **Decouple I/O from computation** - RPC fetching doesn't block parsing; parsing doesn't block DB writes
+1. **Decouple I/O from computation** - Block fetching doesn't block parsing; parsing doesn't block DB writes
 2. **Maximize parallelism** - Each stage can work on different batches simultaneously
 3. **Maintain consistency** - Pipeline mode produces identical data to sequential mode
 4. **Handle failures gracefully** - Stale batches are drained on errors; periodic db_tip resync prevents drift
@@ -29,8 +30,8 @@ The CKB indexer uses a three-stage pipeline architecture to maximize sync throug
 
 **Responsibilities**:
 
-- Query chain tip from CKB RPC
-- Fetch blocks in parallel batches (`parallel_fetch_size` concurrent requests)
+- Query chain tip (from CKB RocksDB directly, or CKB RPC as fallback)
+- Read blocks from CKB's RocksDB (~0.1ms per block) when `CKB_DATA_PATH` is set, or fetch via JSON-RPC
 - Send raw blocks to parser channel
 
 **Key behaviors**:
@@ -129,11 +130,12 @@ Block N arrives
 | `pipeline_enabled`    | `true`  | Enable three-stage pipeline (vs sequential sync)                |
 | `pipeline_buffer`     | `4`     | Channel capacity between stages                                 |
 | `batch_size`          | `10000` | Blocks per batch                                                |
-| `parallel_fetch_size` | `64`    | Concurrent RPC requests                                         |
+| `parallel_fetch_size` | `64`    | Concurrent RPC requests (used only in RPC fallback mode)        |
 | `bulk_sync_threshold` | `72`    | Blocks behind tip to auto-enable bulk sync (2x DEEP_FORK_DEPTH) |
 | `use_copy_bulk_sync`  | `true`  | Use PostgreSQL COPY for bulk sync (5-10x faster)                |
 | `copy_pool_size`      | `24`    | Number of COPY connection pool connections                      |
 | `fast_sync_mode`      | `true`  | Enable synchronous_commit=off for faster writes                 |
+| `ckb_data_path`       | -       | Path to CKB node's RocksDB data dir for direct reads            |
 
 ### Environment Variables
 
@@ -146,6 +148,7 @@ BULK_SYNC_THRESHOLD=72
 USE_COPY_BULK_SYNC=true
 COPY_POOL_SIZE=24
 FAST_SYNC_MODE=true
+CKB_DATA_PATH=/var/lib/ckb/data/db
 ```
 
 ### CLI Arguments
@@ -268,7 +271,7 @@ Memory ≈ pipeline_buffer × batch_size × (block_size + parsed_data)
 When writer is slower than fetcher+parser:
 
 - Channels fill to capacity (`pipeline_buffer`)
-- Fetcher blocks on send, naturally throttling RPC calls
+- Fetcher blocks on send, naturally throttling reads
 - No unbounded memory growth
 
 ## Monitoring
@@ -298,7 +301,7 @@ WARN Deep fork unresolved, sync paused. Waiting for manual intervention...
 Key metrics to monitor:
 
 - `blocks/sec` - overall sync speed
-- `RPC time` - fetcher stage latency
+- `Fetch time` - fetcher stage latency (RocksDB or RPC)
 - `DB time` - writer stage latency
 - `stale batches drained` - indicates mismatch frequency
 
@@ -427,8 +430,10 @@ When the indexer catches up to the chain tip, it automatically switches back to 
 | ------------------------------ | --------------------- | ------- | ------------------------- |
 | `copy_format.rs`               | -                     | -       | Core binary serialization |
 | `copy_blocks.rs`               | blocks                | 19      | 5x faster than UNNEST     |
+| `copy_blocks_index.rs`         | blocks_index          | 12      | Lightweight block index   |
 | `copy_cells.rs`                | cells                 | 16      | 5-10x faster than UNNEST  |
 | `copy_transactions.rs`         | transactions          | 16      | 5-10x faster than UNNEST  |
+| `copy_transactions_index.rs`   | transactions_index    | 9       | Lightweight tx index      |
 | `copy_inputs.rs`               | transaction_inputs    | 6       | 5-10x faster than UNNEST  |
 | `copy_inputs.rs`               | transaction_cell_deps | 6       | 5-10x faster than UNNEST  |
 | `copy_proposals.rs`            | block_proposals       | 3       | 5-10x faster than UNNEST  |
@@ -480,7 +485,7 @@ This ensures that if blocks exist for a range, all related data is complete.
 On startup, `find_last_consistent_block()` validates database consistency:
 
 ```rust
-// Compares MAX(number) FROM blocks vs MAX(block_number) FROM transactions
+// Compares MAX(number) FROM blocks_index vs MAX(block_number) FROM transactions_index
 if max_block > max_tx_block {
     // Blocks exist without transactions = inconsistent state
     // Roll back to max_tx_block
@@ -493,6 +498,8 @@ When a batch write fails, `cleanup_batch_range(start, end)` removes partial data
 
 | Table                   | Block Column           |
 | ----------------------- | ---------------------- |
+| `blocks_index`          | `number`               |
+| `transactions_index`    | `block_number`         |
 | `transactions`          | `block_number`         |
 | `cells`                 | `created_at_block`     |
 | `transaction_inputs`    | `tx_block_number`      |
@@ -552,4 +559,4 @@ WARN Rolling back from block 2000 to 1500 due to data inconsistency
 
 ---
 
-_Last updated: 2026-01-30_
+_Last updated: 2026-02-09_

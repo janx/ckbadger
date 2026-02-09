@@ -46,11 +46,12 @@ cargo run -p ckbadger-indexer -- \
 | Parameter             | Default | Tuning Range | Notes                                                                          |
 | --------------------- | ------- | ------------ | ------------------------------------------------------------------------------ |
 | `batch_size`          | 1000    | 500-2000     | Higher = more work per DB round-trip                                           |
-| `parallel_fetch_size` | 32      | 16-64        | RPC is fast, prefetch more                                                     |
+| `parallel_fetch_size` | 32      | 16-64        | Concurrent RPC requests (only used in RPC fallback mode)                       |
 | `pipeline_buffer`     | 6       | 4-8          | DB is bottleneck, reduce memory                                                |
 | `bulk_sync_threshold` | 72      | 50-10000     | Blocks behind chain tip to auto-enable bulk sync (default: 2x DEEP_FORK_DEPTH) |
 | `use_copy_bulk_sync`  | true    | true/false   | Use PostgreSQL COPY during bulk sync (5-10x faster)                            |
 | `copy_pool_size`      | 8       | 4-16         | Number of COPY connection pool connections                                     |
+| `ckb_data_path`       | -       | -            | Path to CKB node's RocksDB data dir for direct reads (~150x faster than RPC)   |
 
 ### 3. Bulk Sync Mode (Auto-Enabled)
 
@@ -93,6 +94,23 @@ cargo run -p ckbadger-indexer -- --bulk-sync-threshold 5000
 # Disable COPY (use UNNEST only)
 cargo run -p ckbadger-indexer -- --use-copy-bulk-sync false
 ```
+
+## Direct CKB RocksDB Reads
+
+When `CKB_DATA_PATH` is set (pointing to the CKB node's `data/db` directory), the indexer reads blocks directly from CKB's RocksDB instead of via JSON-RPC. This eliminates HTTP + JSON serialization overhead entirely.
+
+| Method   | Latency per block | Notes                                     |
+| -------- | ----------------- | ----------------------------------------- |
+| JSON-RPC | ~15ms             | HTTP round-trip + JSON parse              |
+| RocksDB  | ~0.1ms            | Direct Molecule zero-copy deserialization |
+
+The CKB node's RocksDB is opened in **read-only mode**, which is safe to use while the node is running. RocksDB supports concurrent reads from multiple processes.
+
+**Docker setup**: The `ckb-data` volume is mounted read-only (`:ro`) to the indexer, API, and task-runner containers. `CKB_DATA_PATH` defaults to `/var/lib/ckb/data/db`.
+
+**External node**: Point `CKB_DATA_PATH` to your CKB node's `data/db` directory. The indexer, API, and task-runner all benefit from direct reads.
+
+**Fallback**: If `CKB_DATA_PATH` is not set or the directory doesn't exist, the indexer falls back to JSON-RPC automatically.
 
 ## Architecture Optimizations
 

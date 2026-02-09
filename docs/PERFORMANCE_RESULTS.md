@@ -24,6 +24,7 @@ This document tracks the performance of the CKB indexer with the in-memory LiveC
   - `--pipeline-enabled`: true
   - `--batch-size`: 10000
   - `--copy-pool-size`: 24
+  - `CKB_DATA_PATH`: not set (using JSON-RPC, not direct RocksDB reads)
 
 ## Benchmark Results (2026-01-28)
 
@@ -107,6 +108,7 @@ The remaining bottleneck is PostgreSQL COPY performance, which could be addresse
 - Server-level PostgreSQL tuning
 - Hardware improvements (faster storage)
 - Further parallelization of COPY operations
+- **Direct CKB RocksDB reads** (`CKB_DATA_PATH`): Eliminates RPC latency entirely (~0.1ms vs ~15ms per block). This was not enabled during the benchmark above but is expected to significantly improve fetch stage throughput.
 
 ---
 
