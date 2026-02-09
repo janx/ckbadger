@@ -199,7 +199,7 @@ async fn rebuild_daily_statistics(pool: &PgPool) -> Result<()> {
             total_data_size, avg_block_time_ms, knowledge_size
         )
         WITH block_times AS (
-            SELECT 
+            SELECT
                 number,
                 timestamp,
                 timestamp::date as date,
@@ -209,7 +209,7 @@ async fn rebuild_daily_statistics(pool: &PgPool) -> Result<()> {
             FROM blocks
         ),
         daily_blocks AS (
-            SELECT 
+            SELECT
                 date,
                 COUNT(*) as blocks_count,
                 SUM(transactions_count) as transactions_count,
@@ -224,47 +224,48 @@ async fn rebuild_daily_statistics(pool: &PgPool) -> Result<()> {
             FROM block_times
             ORDER BY date, number DESC
         ),
-        cells_created_agg AS (
-            SELECT 
-                b.timestamp::date as date,
-                COUNT(*) as cells_created,
-                SUM(c.capacity) as capacity_transferred,
-                SUM(c.data_size) as data_size_added
-            FROM cells c
-            JOIN blocks b ON b.number = c.created_at_block
-            GROUP BY b.timestamp::date
+        -- Single-pass over cells: UNION ALL created + consumed events, then aggregate.
+        -- This halves I/O vs two separate CTEs scanning all 10 cell partitions each.
+        cell_events AS (
+            SELECT created_at_block AS block_number, capacity, data_size, TRUE AS is_created
+            FROM cells
+            UNION ALL
+            SELECT consumed_at_block, capacity, data_size, FALSE
+            FROM cells
+            WHERE consumed_at_block IS NOT NULL
         ),
-        cells_consumed_agg AS (
-            SELECT 
-                b.timestamp::date as date,
-                COUNT(*) as cells_consumed,
-                SUM(c.data_size) as data_size_consumed
-            FROM cells c
-            JOIN blocks b ON b.number = c.consumed_at_block
-            WHERE c.consumed_at_block IS NOT NULL
+        cells_agg AS (
+            SELECT
+                b.timestamp::date AS date,
+                COUNT(*) FILTER (WHERE ce.is_created) AS cells_created,
+                SUM(ce.capacity) FILTER (WHERE ce.is_created) AS capacity_transferred,
+                SUM(ce.data_size) FILTER (WHERE ce.is_created) AS data_size_added,
+                COUNT(*) FILTER (WHERE NOT ce.is_created) AS cells_consumed,
+                SUM(ce.data_size) FILTER (WHERE NOT ce.is_created) AS data_size_consumed
+            FROM cell_events ce
+            JOIN blocks b ON b.number = ce.block_number
             GROUP BY b.timestamp::date
         )
-        SELECT 
+        SELECT
             db.date,
             db.blocks_count::int,
             db.transactions_count::int,
-            COALESCE(cc.cells_created, 0)::int,
-            COALESCE(cd.cells_consumed, 0)::int,
-            COALESCE(cc.capacity_transferred, 0),
-            SUM(COALESCE(cc.cells_created, 0) - COALESCE(cd.cells_consumed, 0)) 
+            COALESCE(ca.cells_created, 0)::int,
+            COALESCE(ca.cells_consumed, 0)::int,
+            COALESCE(ca.capacity_transferred, 0),
+            SUM(COALESCE(ca.cells_created, 0) - COALESCE(ca.cells_consumed, 0))
                 OVER (ORDER BY db.date) as total_live_cells,
-            SUM(COALESCE(cd.cells_consumed, 0)) 
+            SUM(COALESCE(ca.cells_consumed, 0))
                 OVER (ORDER BY db.date) as total_dead_cells,
-            SUM(COALESCE(cc.cells_created, 0)) 
+            SUM(COALESCE(ca.cells_created, 0))
                 OVER (ORDER BY db.date) as total_all_cells,
-            SUM(COALESCE(cc.data_size_added, 0) - COALESCE(cd.data_size_consumed, 0)) 
+            SUM(COALESCE(ca.data_size_added, 0) - COALESCE(ca.data_size_consumed, 0))
                 OVER (ORDER BY db.date) as total_data_size,
             db.avg_block_time_ms,
             (('x' || encode(reverse(substring(dd.dao from 25 for 8)), 'hex'))::bit(64)::bigint)::numeric - 504000000000000000
                 as knowledge_size
         FROM daily_blocks db
-        LEFT JOIN cells_created_agg cc ON db.date = cc.date
-        LEFT JOIN cells_consumed_agg cd ON db.date = cd.date
+        LEFT JOIN cells_agg ca ON db.date = ca.date
         LEFT JOIN daily_dao dd ON db.date = dd.date
         ORDER BY db.date
         "#,
@@ -326,41 +327,41 @@ async fn rebuild_hourly_statistics(pool: &PgPool) -> Result<()> {
             hour, blocks_count, transactions_count, cells_created, cells_consumed, capacity_transferred
         )
         WITH hourly_blocks AS (
-            SELECT 
+            SELECT
                 date_trunc('hour', timestamp) as hour,
                 COUNT(*) as blocks_count,
                 SUM(transactions_count) as transactions_count
             FROM blocks
             GROUP BY date_trunc('hour', timestamp)
         ),
-        cells_created_agg AS (
-            SELECT 
-                date_trunc('hour', b.timestamp) as hour,
-                COUNT(*) as cells_created,
-                SUM(c.capacity) as capacity_transferred
-            FROM cells c
-            JOIN blocks b ON b.number = c.created_at_block
-            GROUP BY date_trunc('hour', b.timestamp)
+        -- Single-pass over cells: UNION ALL created + consumed events, then aggregate.
+        cell_events AS (
+            SELECT created_at_block AS block_number, capacity, TRUE AS is_created
+            FROM cells
+            UNION ALL
+            SELECT consumed_at_block, capacity, FALSE
+            FROM cells
+            WHERE consumed_at_block IS NOT NULL
         ),
-        cells_consumed_agg AS (
-            SELECT 
-                date_trunc('hour', b.timestamp) as hour,
-                COUNT(*) as cells_consumed
-            FROM cells c
-            JOIN blocks b ON b.number = c.consumed_at_block
-            WHERE c.consumed_at_block IS NOT NULL
+        cells_agg AS (
+            SELECT
+                date_trunc('hour', b.timestamp) AS hour,
+                COUNT(*) FILTER (WHERE ce.is_created) AS cells_created,
+                SUM(ce.capacity) FILTER (WHERE ce.is_created) AS capacity_transferred,
+                COUNT(*) FILTER (WHERE NOT ce.is_created) AS cells_consumed
+            FROM cell_events ce
+            JOIN blocks b ON b.number = ce.block_number
             GROUP BY date_trunc('hour', b.timestamp)
         )
-        SELECT 
+        SELECT
             hb.hour,
             hb.blocks_count::int,
             hb.transactions_count::int,
-            COALESCE(cc.cells_created, 0)::int,
-            COALESCE(cd.cells_consumed, 0)::int,
-            COALESCE(cc.capacity_transferred, 0)
+            COALESCE(ca.cells_created, 0)::int,
+            COALESCE(ca.cells_consumed, 0)::int,
+            COALESCE(ca.capacity_transferred, 0)
         FROM hourly_blocks hb
-        LEFT JOIN cells_created_agg cc ON hb.hour = cc.hour
-        LEFT JOIN cells_consumed_agg cd ON hb.hour = cd.hour
+        LEFT JOIN cells_agg ca ON hb.hour = ca.hour
         ORDER BY hb.hour
         "#,
     )

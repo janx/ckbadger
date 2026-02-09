@@ -53,10 +53,34 @@ pub async fn execute(
     while current_block < total_blocks {
         let end_block = (current_block + config.batch_size).min(total_blocks);
 
+        // Materialize transaction_inputs for this batch into a temp table ONCE,
+        // then each partition UPDATE joins from it. Without this, the CTE rescans
+        // the same transaction_inputs range N times (once per partition).
+        sqlx::query(
+            r#"
+            CREATE TEMP TABLE _batch_inputs ON COMMIT DROP AS
+            SELECT
+                ti.previous_tx_hash,
+                ti.previous_output_index,
+                ti.tx_block_number AS consumed_at_block,
+                ti.tx_hash AS consumed_by_tx,
+                ti.input_index AS consumed_at_index
+            FROM transaction_inputs ti
+            WHERE ti.tx_block_number >= $1
+              AND ti.tx_block_number < $2
+              AND ti.previous_tx_hash IS NOT NULL
+            "#,
+        )
+        .bind(current_block)
+        .bind(end_block)
+        .execute(pool)
+        .await?;
+
+        // Analyze the temp table so the planner knows its size for join decisions
+        sqlx::query("ANALYZE _batch_inputs").execute(pool).await?;
+
         // Process each cell partition that could contain consumed cells for this batch.
-        // A cell consumed in block range [current_block, end_block) must have
-        // created_at_block < end_block. Targeting partitions explicitly avoids
-        // cross-partition hash joins (the main cause of 36s query times).
+        // Targeting partitions explicitly avoids cross-partition hash joins.
         let mut batch_updated: i64 = 0;
         for &(partition, part_start, part_end) in CELL_PARTITIONS {
             // Skip partitions that can't contain cells created before end_block
@@ -70,24 +94,12 @@ pub async fn execute(
 
             let sql = format!(
                 r#"
-                WITH input_consumption AS (
-                    SELECT
-                        ti.previous_tx_hash,
-                        ti.previous_output_index,
-                        ti.tx_block_number AS consumed_at_block,
-                        ti.tx_hash AS consumed_by_tx,
-                        ti.input_index AS consumed_at_index
-                    FROM transaction_inputs ti
-                    WHERE ti.tx_block_number >= $1
-                      AND ti.tx_block_number < $2
-                      AND ti.previous_tx_hash IS NOT NULL
-                )
                 UPDATE {} c SET
                     status = 1,
                     consumed_at_block = ic.consumed_at_block,
                     consumed_by_tx = ic.consumed_by_tx,
                     consumed_at_index = ic.consumed_at_index
-                FROM input_consumption ic
+                FROM _batch_inputs ic
                 WHERE c.tx_hash = ic.previous_tx_hash
                   AND c.output_index = ic.previous_output_index
                   AND (c.status = 0 OR c.consumed_at_block IS NULL)
@@ -95,15 +107,15 @@ pub async fn execute(
                 partition
             );
 
-            let updated = sqlx::query(&sql)
-                .bind(current_block)
-                .bind(end_block)
-                .execute(pool)
-                .await?
-                .rows_affected() as i64;
+            let updated = sqlx::query(&sql).execute(pool).await?.rows_affected() as i64;
 
             batch_updated += updated;
         }
+
+        // Drop the temp table explicitly (also dropped on commit, but be explicit)
+        sqlx::query("DROP TABLE IF EXISTS _batch_inputs")
+            .execute(pool)
+            .await?;
 
         cells_updated += batch_updated;
         blocks_processed = end_block;

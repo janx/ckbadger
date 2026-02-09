@@ -316,7 +316,10 @@ pub async fn execute(
 }
 
 async fn rebuild_tokens(pool: &PgPool) -> Result<i64> {
-    sqlx::query(
+    // Single-pass: merge first_seen, live_supply, and holders into fewer scans.
+    // first_seen uses DISTINCT ON (needs its own scan), but live_supply and holders
+    // are merged into one GROUP BY with FILTER aggregation.
+    let result = sqlx::query(
         r#"
         WITH first_seen AS (
             SELECT DISTINCT ON (type_script_hash)
@@ -330,14 +333,11 @@ async fn rebuild_tokens(pool: &PgPool) -> Result<i64> {
             FROM udt_cells
             ORDER BY type_script_hash, created_at_block, tx_hash
         ),
-        live_supply AS (
-            SELECT type_script_hash, SUM(amount)::numeric AS total_supply
-            FROM udt_cells
-            WHERE is_live = TRUE
-            GROUP BY type_script_hash
-        ),
-        holders AS (
-            SELECT type_script_hash, COUNT(DISTINCT lock_script_hash)::int AS holders_count
+        live_stats AS (
+            SELECT
+                type_script_hash,
+                SUM(amount)::numeric AS total_supply,
+                COUNT(DISTINCT lock_script_hash)::int AS holders_count
             FROM udt_cells
             WHERE is_live = TRUE
             GROUP BY type_script_hash
@@ -353,64 +353,55 @@ async fn rebuild_tokens(pool: &PgPool) -> Result<i64> {
             f.type_hash_type,
             f.type_args,
             f.standard,
-            COALESCE(s.total_supply, 0),
-            COALESCE(h.holders_count, 0),
+            COALESCE(ls.total_supply, 0),
+            COALESCE(ls.holders_count, 0),
             0,
             0,
             f.first_seen_block,
             f.first_seen_tx
         FROM first_seen f
-        LEFT JOIN live_supply s ON s.type_script_hash = f.type_script_hash
-        LEFT JOIN holders h ON h.type_script_hash = f.type_script_hash
+        LEFT JOIN live_stats ls ON ls.type_script_hash = f.type_script_hash
         "#,
     )
     .execute(pool)
     .await?;
 
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tokens")
-        .fetch_one(pool)
-        .await?;
-
-    Ok(count)
+    Ok(result.rows_affected() as i64)
 }
 
 async fn rebuild_token_balances(pool: &PgPool) -> Result<i64> {
-    sqlx::query(
+    // Consolidated query: balances + first/last tx in 3 CTEs instead of 3 separate
+    // scans that JOIN back. The first_tx and last_tx CTEs now use DISTINCT ON directly
+    // on udt_cells (no JOIN back to balances), reducing from 3 dependent scans to 3
+    // independent scans. Also uses rows_affected() instead of COUNT(*).
+    let result = sqlx::query(
         r#"
         WITH balances AS (
             SELECT
                 type_script_hash,
                 lock_script_hash,
-                SUM(amount)::numeric AS balance,
-                MIN(created_at_block) AS first_block,
-                MAX(created_at_block) AS last_block
+                SUM(amount)::numeric AS balance
             FROM udt_cells
             WHERE is_live = TRUE
             GROUP BY type_script_hash, lock_script_hash
         ),
         first_tx AS (
-            SELECT DISTINCT ON (uc.type_script_hash, uc.lock_script_hash)
-                uc.type_script_hash,
-                uc.lock_script_hash,
-                uc.tx_hash AS first_tx
-            FROM udt_cells uc
-            JOIN balances b
-              ON b.type_script_hash = uc.type_script_hash
-             AND b.lock_script_hash = uc.lock_script_hash
-            WHERE uc.created_at_block = b.first_block
-            ORDER BY uc.type_script_hash, uc.lock_script_hash, uc.tx_hash ASC
+            SELECT DISTINCT ON (type_script_hash, lock_script_hash)
+                type_script_hash,
+                lock_script_hash,
+                tx_hash AS first_tx
+            FROM udt_cells
+            WHERE is_live = TRUE
+            ORDER BY type_script_hash, lock_script_hash, created_at_block ASC, tx_hash ASC
         ),
         last_tx AS (
-            SELECT DISTINCT ON (uc.type_script_hash, uc.lock_script_hash)
-                uc.type_script_hash,
-                uc.lock_script_hash,
-                uc.tx_hash AS last_tx
-            FROM udt_cells uc
-            JOIN balances b
-              ON b.type_script_hash = uc.type_script_hash
-             AND b.lock_script_hash = uc.lock_script_hash
-            WHERE uc.created_at_block = b.last_block
-            ORDER BY uc.type_script_hash, uc.lock_script_hash, uc.tx_hash DESC
+            SELECT DISTINCT ON (type_script_hash, lock_script_hash)
+                type_script_hash,
+                lock_script_hash,
+                tx_hash AS last_tx
+            FROM udt_cells
+            WHERE is_live = TRUE
+            ORDER BY type_script_hash, lock_script_hash, created_at_block DESC, tx_hash DESC
         )
         INSERT INTO token_balances (token_id, lock_script_hash, balance, first_tx, last_tx)
         SELECT
@@ -421,10 +412,10 @@ async fn rebuild_token_balances(pool: &PgPool) -> Result<i64> {
             l.last_tx
         FROM balances b
         JOIN tokens t ON t.type_script_hash = b.type_script_hash
-        JOIN first_tx f
+        LEFT JOIN first_tx f
           ON f.type_script_hash = b.type_script_hash
          AND f.lock_script_hash = b.lock_script_hash
-        JOIN last_tx l
+        LEFT JOIN last_tx l
           ON l.type_script_hash = b.type_script_hash
          AND l.lock_script_hash = b.lock_script_hash
         "#,
@@ -432,11 +423,7 @@ async fn rebuild_token_balances(pool: &PgPool) -> Result<i64> {
     .execute(pool)
     .await?;
 
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM token_balances")
-        .fetch_one(pool)
-        .await?;
-
-    Ok(count)
+    Ok(result.rows_affected() as i64)
 }
 
 fn parse_udt_amount(data: &[u8]) -> Option<u128> {
