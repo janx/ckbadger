@@ -5,6 +5,7 @@ use tokio_postgres::Client;
 
 use crate::db::copy_activities::CopyActivitiesWriter;
 use crate::db::copy_blocks::CopyBlocksWriter;
+use crate::db::copy_cell_flows::CopyCellFlowsWriter;
 use crate::db::copy_cells::CopyCellsWriter;
 use crate::db::copy_inputs::{CopyCellDepsWriter, CopyInputsWriter};
 use crate::db::copy_pool::CopyPoolManager;
@@ -67,6 +68,9 @@ type BlockData<'a> = (&'a ParsedBlock, i64);
 
 /// Type alias for activity data tuple: (activity, block_number, timestamp)
 type ActivityData<'a> = (&'a ParsedActivity, i64, DateTime<Utc>);
+
+/// Type alias for cell flow data tuple: (block_number, tx_hash, output_index, flow_type, lock_script_hash, capacity, data_size)
+type CellFlowData<'a> = (i64, &'a [u8], i16, i16, &'a [u8], i64, i32);
 
 /// Type alias for UDT cell data tuple: (tx_hash, output_index, cell, block_number)
 type UdtCellData<'a> = (&'a [u8], i16, &'a ParsedUdtCell, i64);
@@ -388,6 +392,70 @@ impl ParallelCopyRouter {
             };
 
             futures.push(future);
+        }
+
+        let results = join_all(futures).await;
+        let mut total_rows = 0u64;
+        for result in results {
+            total_rows += result?;
+        }
+
+        Ok(total_rows)
+    }
+
+    pub async fn copy_cell_flows_parallel(&self, flows: &[CellFlowData<'_>]) -> Result<u64> {
+        if flows.is_empty() {
+            return Ok(0);
+        }
+
+        let mut partition_data: HashMap<usize, Vec<CellFlowData<'_>>> = HashMap::new();
+
+        for flow in flows {
+            let partition = get_partition_index(flow.0); // block_number is first element
+            partition_data.entry(partition).or_default().push(*flow);
+        }
+
+        let mut futures = Vec::new();
+
+        for (_partition, partition_flows) in partition_data {
+            for chunk in sub_chunk_partition(partition_flows) {
+                let conn = self.pool_manager.get_connection().await?;
+
+                let future = async move {
+                    let mut writer = CopyCellFlowsWriter::new();
+                    for (
+                        block_number,
+                        tx_hash,
+                        output_index,
+                        flow_type,
+                        lock_script_hash,
+                        capacity,
+                        data_size,
+                    ) in chunk
+                    {
+                        writer.add_flow(
+                            block_number,
+                            tx_hash,
+                            output_index,
+                            flow_type,
+                            lock_script_hash,
+                            capacity,
+                            data_size,
+                        );
+                    }
+
+                    let data = writer.finish();
+                    execute_copy(
+                        conn.as_ref(),
+                        "COPY cell_flows (block_number, tx_hash, output_index, flow_type, \
+                         lock_script_hash, capacity, data_size) FROM STDIN WITH (FORMAT BINARY)",
+                        data,
+                    )
+                    .await
+                };
+
+                futures.push(future);
+            }
         }
 
         let results = join_all(futures).await;

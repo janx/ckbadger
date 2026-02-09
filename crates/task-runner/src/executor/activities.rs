@@ -98,60 +98,26 @@ pub async fn execute(
 }
 
 async fn rebuild_activities_batch(pool: &PgPool, start_block: i64, end_block: i64) -> Result<i64> {
-    // Uses net-balance approach matching the Rust ActivityParser's greedy flow algorithm:
-    // 1. Compute net CKB balance change per address per transaction (ALL cells, not just plain CKB)
+    // Uses cell_flows table for net-balance approach matching the Rust ActivityParser:
+    // 1. Compute net CKB balance change per address per transaction from cell_flows
     // 2. Identify senders (net negative) and receivers (net positive)
     // 3. Pair each receiver with the primary (largest) sender
     //
-    // This produces at most (unique receiver addresses) activities per transaction,
-    // avoiding the cartesian product that the old JOIN approach caused (N inputs × M outputs).
+    // This eliminates the 4-table JOIN (cells + transaction_inputs + tx_block_map + transactions)
+    // and reads only from cell_flows (~90 bytes/row vs ~400 bytes/row in cells).
     let result = sqlx::query(
         r#"
-        WITH block_txs AS (
-            SELECT
-                t.hash AS tx_hash,
-                t.block_number,
-                t.tx_index,
-                t.is_cellbase,
-                b.timestamp
-            FROM transactions t
-            JOIN blocks b ON b.number = t.block_number
+        WITH address_net AS (
+            SELECT cf.tx_hash, cf.lock_script_hash,
+                   SUM(CASE WHEN cf.flow_type = 0 THEN cf.capacity ELSE -cf.capacity END) AS net_change
+            FROM cell_flows cf
+            WHERE cf.block_number >= $1 AND cf.block_number < $2
+            GROUP BY cf.tx_hash, cf.lock_script_hash
+        ),
+        block_txs AS (
+            SELECT t.hash AS tx_hash, t.block_number, t.tx_index, t.is_cellbase, b.timestamp
+            FROM transactions t JOIN blocks b ON b.number = t.block_number
             WHERE t.block_number >= $1 AND t.block_number < $2
-        ),
-        tx_outputs AS (
-            SELECT
-                c.tx_hash,
-                c.capacity,
-                c.lock_script_hash
-            FROM cells c
-            WHERE c.created_at_block >= $1 AND c.created_at_block < $2
-        ),
-        tx_inputs AS (
-            SELECT
-                ti.tx_hash,
-                c.capacity AS input_capacity,
-                c.lock_script_hash AS input_lock_hash
-            FROM transaction_inputs ti
-            JOIN tx_block_map tbm ON tbm.tx_hash = ti.previous_tx_hash
-            JOIN cells c ON c.tx_hash = ti.previous_tx_hash
-                        AND c.output_index = ti.previous_output_index
-                        AND c.created_at_block = tbm.block_number
-            WHERE ti.tx_block_number >= $1 AND ti.tx_block_number < $2
-        ),
-        -- Net balance change per address per transaction (include ALL cells for CKB capacity tracking)
-        address_net AS (
-            SELECT
-                tx_hash,
-                lock_script_hash,
-                SUM(net) AS net_change
-            FROM (
-                SELECT tx_hash, lock_script_hash, capacity AS net
-                FROM tx_outputs
-                UNION ALL
-                SELECT tx_hash, input_lock_hash, -input_capacity
-                FROM tx_inputs
-            ) flows
-            GROUP BY tx_hash, lock_script_hash
         ),
         -- Primary (largest) sender per transaction
         top_senders AS (
@@ -177,18 +143,25 @@ async fn rebuild_activities_batch(pool: &PgPool, start_block: i64, end_block: i6
             LEFT JOIN top_senders ts ON ts.tx_hash = an.tx_hash
             WHERE an.net_change > 0
         ),
+        cellbase_flows AS (
+            SELECT cf.tx_hash, cf.lock_script_hash AS to_lock_hash,
+                   SUM(cf.capacity) AS amount
+            FROM cell_flows cf
+            JOIN block_txs bt ON bt.tx_hash = cf.tx_hash AND bt.is_cellbase
+            WHERE cf.block_number >= $1 AND cf.block_number < $2
+              AND cf.flow_type = 0
+            GROUP BY cf.tx_hash, cf.lock_script_hash
+        ),
         cellbase_rewards AS (
             SELECT
                 bt.block_number,
                 bt.tx_hash,
                 bt.tx_index,
                 bt.timestamp,
-                o.lock_script_hash AS to_lock_hash,
-                SUM(o.capacity) AS amount
-            FROM block_txs bt
-            JOIN tx_outputs o ON o.tx_hash = bt.tx_hash
-            WHERE bt.is_cellbase
-            GROUP BY bt.block_number, bt.tx_hash, bt.tx_index, bt.timestamp, o.lock_script_hash
+                cf.to_lock_hash,
+                cf.amount
+            FROM cellbase_flows cf
+            JOIN block_txs bt ON bt.tx_hash = cf.tx_hash AND bt.is_cellbase
         ),
         all_activities AS (
             SELECT

@@ -184,6 +184,20 @@ const DEFERRABLE_INDEXES: &[DeferrableIndex] = &[
         partition_type: PartitionType::Range,
         priority: 3,
     },
+    DeferrableIndex {
+        name: "idx_cell_flows_tx",
+        table: "cell_flows",
+        definition: "CREATE INDEX {name} ON {table}(tx_hash)",
+        partition_type: PartitionType::Range,
+        priority: 2,
+    },
+    DeferrableIndex {
+        name: "idx_cell_flows_block_brin",
+        table: "cell_flows",
+        definition: "CREATE INDEX {name} ON {table} USING BRIN (block_number) WITH (pages_per_range = 128)",
+        partition_type: PartitionType::Range,
+        priority: 3,
+    },
 ];
 
 use crate::cache::CacheInvalidator;
@@ -355,7 +369,7 @@ mod tests {
 
     #[test]
     fn test_deferrable_indexes_count() {
-        assert!(DEFERRABLE_INDEXES.len() >= 11);
+        assert!(DEFERRABLE_INDEXES.len() >= 13);
     }
 
     #[test]
@@ -415,6 +429,7 @@ mod tests {
             "transaction_cell_deps",
             "uncle_blocks",
             "block_proposals",
+            "cell_flows",
         ];
 
         for idx in DEFERRABLE_INDEXES {

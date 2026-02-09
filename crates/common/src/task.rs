@@ -69,6 +69,7 @@ pub enum TaskType {
     DotbitRebuild,
     DaoRebuild,
     TxBlockMapRebuild,
+    CellFlowsRebuild,
 }
 
 impl std::fmt::Display for TaskType {
@@ -89,6 +90,7 @@ impl std::fmt::Display for TaskType {
             TaskType::DotbitRebuild => write!(f, "dotbit_rebuild"),
             TaskType::DaoRebuild => write!(f, "dao_rebuild"),
             TaskType::TxBlockMapRebuild => write!(f, "tx_block_map_rebuild"),
+            TaskType::CellFlowsRebuild => write!(f, "cell_flows_rebuild"),
         }
     }
 }
@@ -113,6 +115,7 @@ impl std::str::FromStr for TaskType {
             "dotbit_rebuild" => Ok(TaskType::DotbitRebuild),
             "dao_rebuild" => Ok(TaskType::DaoRebuild),
             "tx_block_map_rebuild" => Ok(TaskType::TxBlockMapRebuild),
+            "cell_flows_rebuild" => Ok(TaskType::CellFlowsRebuild),
             _ => Err(anyhow::anyhow!("Invalid task type: {}", s)),
         }
     }
@@ -150,7 +153,8 @@ impl TaskType {
             | TaskType::MnftRebuild
             | TaskType::DotbitRebuild
             | TaskType::DaoRebuild
-            | TaskType::TxBlockMapRebuild => true,
+            | TaskType::TxBlockMapRebuild
+            | TaskType::CellFlowsRebuild => true,
         }
     }
 }
@@ -483,6 +487,28 @@ impl Default for DaoRebuildConfig {
     }
 }
 
+/// Configuration for cell_flows rebuild task
+/// Rebuilds cell_flows table from cells + transaction_inputs
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CellFlowsRebuildConfig {
+    /// Batch size in blocks (default: 100,000)
+    #[serde(default = "default_cell_flows_batch_size")]
+    pub batch_size: i64,
+}
+
+fn default_cell_flows_batch_size() -> i64 {
+    100_000
+}
+
+impl Default for CellFlowsRebuildConfig {
+    fn default() -> Self {
+        Self {
+            batch_size: default_cell_flows_batch_size(),
+        }
+    }
+}
+
 /// Configuration for tx_block_map rebuild task
 /// Rebuilds tx_block_map lookup table from transactions table
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -498,6 +524,14 @@ pub struct TxBlockMapRebuildConfig {
 #[serde(rename_all = "camelCase")]
 pub struct TxBlockMapRebuildResult {
     pub rows_inserted: i64,
+}
+
+/// Result for cell_flows rebuild task
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CellFlowsRebuildResult {
+    pub flows_created: i64,
+    pub blocks_processed: i64,
 }
 
 /// Unified task configuration enum
@@ -519,6 +553,7 @@ pub enum TaskConfig {
     DotbitRebuild(DotbitRebuildConfig),
     DaoRebuild(DaoRebuildConfig),
     TxBlockMapRebuild(TxBlockMapRebuildConfig),
+    CellFlowsRebuild(CellFlowsRebuildConfig),
 }
 
 impl TaskConfig {
@@ -539,6 +574,7 @@ impl TaskConfig {
             TaskConfig::DotbitRebuild(_) => TaskType::DotbitRebuild,
             TaskConfig::DaoRebuild(_) => TaskType::DaoRebuild,
             TaskConfig::TxBlockMapRebuild(_) => TaskType::TxBlockMapRebuild,
+            TaskConfig::CellFlowsRebuild(_) => TaskType::CellFlowsRebuild,
         }
     }
 }
@@ -706,6 +742,7 @@ pub enum TaskResult {
     DotbitRebuild(DotbitRebuildResult),
     DaoRebuild(DaoRebuildResult),
     TxBlockMapRebuild(TxBlockMapRebuildResult),
+    CellFlowsRebuild(CellFlowsRebuildResult),
 }
 
 // ============================================
@@ -993,6 +1030,16 @@ impl TaskBuilder {
             task_type: TaskType::TxBlockMapRebuild,
             config: serde_json::to_value(TaskConfig::TxBlockMapRebuild(config))
                 .expect("TxBlockMapRebuildConfig should be serializable"),
+            priority: 8,
+            max_retries: 2,
+        }
+    }
+
+    pub fn cell_flows_rebuild(config: CellFlowsRebuildConfig) -> Self {
+        Self {
+            task_type: TaskType::CellFlowsRebuild,
+            config: serde_json::to_value(TaskConfig::CellFlowsRebuild(config))
+                .expect("CellFlowsRebuildConfig should be serializable"),
             priority: 8,
             max_retries: 2,
         }

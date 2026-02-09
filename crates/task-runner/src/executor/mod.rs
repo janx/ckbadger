@@ -1,8 +1,8 @@
 use anyhow::Result;
 use ckbadger_common::{
-    ActivitiesRebuildConfig, AddressBalancesRebuildConfig, CellsStatusRebuildConfig,
-    CyclesBackfillConfig, DotbitRebuildConfig, IndexRebuildConfig, LabelImportConfig,
-    MnftRebuildConfig, SecondaryIssuanceBackfillConfig, SporeRebuildConfig,
+    ActivitiesRebuildConfig, AddressBalancesRebuildConfig, CellFlowsRebuildConfig,
+    CellsStatusRebuildConfig, CyclesBackfillConfig, DotbitRebuildConfig, IndexRebuildConfig,
+    LabelImportConfig, MnftRebuildConfig, SecondaryIssuanceBackfillConfig, SporeRebuildConfig,
     StatisticsRebuildConfig, Task, TaskConfig, TaskType, TokenRebuildConfig,
     TxBlockMapRebuildConfig,
 };
@@ -16,6 +16,7 @@ use crate::db::TaskDb;
 
 mod activities;
 mod address_balances;
+mod cell_flows;
 mod cells_status;
 mod cycles;
 mod dotbit;
@@ -216,6 +217,7 @@ impl TaskExecutor {
                 "DaoRebuild must be executed by the indexer, not task-runner"
             )),
             TaskType::TxBlockMapRebuild => self.execute_tx_block_map_rebuild(task).await,
+            TaskType::CellFlowsRebuild => self.execute_cell_flows_rebuild(task).await,
         };
 
         // Invalidate Redis sync:status cache after tasks that clear deferred flags
@@ -384,6 +386,15 @@ impl TaskExecutor {
         };
 
         tx_block_map::execute(&self.db, &self.pool, task.id, &config).await
+    }
+
+    async fn execute_cell_flows_rebuild(&self, task: &Task) -> Result<()> {
+        let config: CellFlowsRebuildConfig = match task.config_typed() {
+            Some(TaskConfig::CellFlowsRebuild(c)) => c,
+            _ => CellFlowsRebuildConfig::default(),
+        };
+
+        cell_flows::execute(&self.db, &self.pool, task.id, &config).await
     }
 }
 

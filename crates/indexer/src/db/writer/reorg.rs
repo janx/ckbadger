@@ -166,6 +166,11 @@ impl BatchWriter {
             .execute(&mut *tx)
             .await?;
 
+        sqlx::query("DELETE FROM cell_flows WHERE block_number >= $1")
+            .bind(rollback_from)
+            .execute(&mut *tx)
+            .await?;
+
         sqlx::query("DELETE FROM transaction_inputs WHERE tx_block_number >= $1")
             .bind(rollback_from)
             .execute(&mut *tx)

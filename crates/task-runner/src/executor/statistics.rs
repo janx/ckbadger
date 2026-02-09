@@ -224,26 +224,16 @@ async fn rebuild_daily_statistics(pool: &PgPool) -> Result<()> {
             FROM block_times
             ORDER BY date, number DESC
         ),
-        -- Single-pass over cells: UNION ALL created + consumed events, then aggregate.
-        -- This halves I/O vs two separate CTEs scanning all 10 cell partitions each.
-        cell_events AS (
-            SELECT created_at_block AS block_number, capacity, data_size, TRUE AS is_created
-            FROM cells
-            UNION ALL
-            SELECT consumed_at_block, capacity, data_size, FALSE
-            FROM cells
-            WHERE consumed_at_block IS NOT NULL
-        ),
         cells_agg AS (
             SELECT
                 b.timestamp::date AS date,
-                COUNT(*) FILTER (WHERE ce.is_created) AS cells_created,
-                SUM(ce.capacity) FILTER (WHERE ce.is_created) AS capacity_transferred,
-                SUM(ce.data_size) FILTER (WHERE ce.is_created) AS data_size_added,
-                COUNT(*) FILTER (WHERE NOT ce.is_created) AS cells_consumed,
-                SUM(ce.data_size) FILTER (WHERE NOT ce.is_created) AS data_size_consumed
-            FROM cell_events ce
-            JOIN blocks b ON b.number = ce.block_number
+                COUNT(*) FILTER (WHERE cf.flow_type = 0) AS cells_created,
+                SUM(cf.capacity) FILTER (WHERE cf.flow_type = 0) AS capacity_transferred,
+                SUM(cf.data_size) FILTER (WHERE cf.flow_type = 0) AS data_size_added,
+                COUNT(*) FILTER (WHERE cf.flow_type = 1) AS cells_consumed,
+                SUM(cf.data_size) FILTER (WHERE cf.flow_type = 1) AS data_size_consumed
+            FROM cell_flows cf
+            JOIN blocks b ON b.number = cf.block_number
             GROUP BY b.timestamp::date
         )
         SELECT
@@ -334,23 +324,14 @@ async fn rebuild_hourly_statistics(pool: &PgPool) -> Result<()> {
             FROM blocks
             GROUP BY date_trunc('hour', timestamp)
         ),
-        -- Single-pass over cells: UNION ALL created + consumed events, then aggregate.
-        cell_events AS (
-            SELECT created_at_block AS block_number, capacity, TRUE AS is_created
-            FROM cells
-            UNION ALL
-            SELECT consumed_at_block, capacity, FALSE
-            FROM cells
-            WHERE consumed_at_block IS NOT NULL
-        ),
         cells_agg AS (
             SELECT
                 date_trunc('hour', b.timestamp) AS hour,
-                COUNT(*) FILTER (WHERE ce.is_created) AS cells_created,
-                SUM(ce.capacity) FILTER (WHERE ce.is_created) AS capacity_transferred,
-                COUNT(*) FILTER (WHERE NOT ce.is_created) AS cells_consumed
-            FROM cell_events ce
-            JOIN blocks b ON b.number = ce.block_number
+                COUNT(*) FILTER (WHERE cf.flow_type = 0) AS cells_created,
+                SUM(cf.capacity) FILTER (WHERE cf.flow_type = 0) AS capacity_transferred,
+                COUNT(*) FILTER (WHERE cf.flow_type = 1) AS cells_consumed
+            FROM cell_flows cf
+            JOIN blocks b ON b.number = cf.block_number
             GROUP BY date_trunc('hour', b.timestamp)
         )
         SELECT

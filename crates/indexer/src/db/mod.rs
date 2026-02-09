@@ -1,5 +1,6 @@
 pub mod copy_activities;
 pub mod copy_blocks;
+pub mod copy_cell_flows;
 pub mod copy_cells;
 pub mod copy_dao_deposits;
 pub mod copy_format;
@@ -21,6 +22,7 @@ pub use copy_activities::{
     copy_activities, copy_activities_batch, delete_activities_from, delete_activities_range,
     CopyActivitiesWriter,
 };
+pub use copy_cell_flows::{copy_cell_flows, delete_cell_flows_from, CopyCellFlowsWriter};
 pub use copy_pool::{CopyConfig, CopyPoolManager};
 pub use copy_tx_block_map::{copy_tx_block_map, CopyTxBlockMapWriter};
 pub use copy_udt_cells::{copy_udt_cells, CopyUdtCellsWriter};

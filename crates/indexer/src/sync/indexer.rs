@@ -3234,7 +3234,58 @@ impl Indexer {
             }
         }
 
-        // Parallel insert: inputs and cell_deps are independent
+        // Collect cell_flows: created (outputs) and consumed (inputs)
+        let mut all_flows: Vec<(i64, &[u8], i16, i16, &[u8], i64, i32)> = Vec::new();
+
+        // Created cells (flow_type=0)
+        for tx_data in &all_tx_data {
+            for (output_index, cell) in tx_data.cells.iter().enumerate() {
+                all_flows.push((
+                    tx_data.block_number,
+                    tx_data.hash.as_slice(),
+                    output_index as i16,
+                    0, // created
+                    cell.lock_script_hash.as_slice(),
+                    cell.capacity,
+                    cell.data_size,
+                ));
+            }
+        }
+
+        // Consumed cells (flow_type=1)
+        for tx_data in &all_tx_data {
+            if !tx_data.is_cellbase {
+                for input in &tx_data.inputs {
+                    let key = (
+                        input.previous_tx_hash.to_vec(),
+                        input.previous_output_index as i16,
+                    );
+                    if let Some((cap, _, lock_hash, ds)) = input_cell_info.get(&key) {
+                        all_flows.push((
+                            tx_data.block_number,
+                            input.previous_tx_hash.as_slice(),
+                            input.previous_output_index as i16,
+                            1, // consumed
+                            lock_hash.as_slice(),
+                            *cap,
+                            *ds,
+                        ));
+                    } else if let Some((cap, _, lock_hash, ds, _, _)) = batch_cells.get(&key) {
+                        all_flows.push((
+                            tx_data.block_number,
+                            input.previous_tx_hash.as_slice(),
+                            input.previous_output_index as i16,
+                            1, // consumed
+                            lock_hash.as_slice(),
+                            *cap,
+                            *ds,
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Parallel insert: inputs, cell_deps, and cell_flows are independent
         tokio::try_join!(
             async {
                 if !all_inputs.is_empty() {
@@ -3250,6 +3301,13 @@ impl Indexer {
                     self.writer
                         .insert_transaction_cell_deps_batch(&all_cell_deps)
                         .await
+                } else {
+                    Ok(())
+                }
+            },
+            async {
+                if !all_flows.is_empty() {
+                    self.writer.insert_cell_flows_batch(&all_flows).await
                 } else {
                     Ok(())
                 }
@@ -4356,6 +4414,57 @@ impl Indexer {
             }
         }
 
+        // Collect cell_flows: created (outputs) and consumed (inputs)
+        let mut all_flows: Vec<(i64, &[u8], i16, i16, &[u8], i64, i32)> = Vec::new();
+
+        // Created cells (flow_type=0)
+        for tx_data in &all_tx_data {
+            for (output_index, cell) in tx_data.cells.iter().enumerate() {
+                all_flows.push((
+                    tx_data.block_number,
+                    tx_data.hash.as_slice(),
+                    output_index as i16,
+                    0, // created
+                    cell.lock_script_hash.as_slice(),
+                    cell.capacity,
+                    cell.data_size,
+                ));
+            }
+        }
+
+        // Consumed cells (flow_type=1)
+        for tx_data in &all_tx_data {
+            if !tx_data.is_cellbase {
+                for input in &tx_data.inputs {
+                    let key = (
+                        input.previous_tx_hash.to_vec(),
+                        input.previous_output_index as i16,
+                    );
+                    if let Some((cap, _, lock_hash, ds)) = input_cell_info.get(&key) {
+                        all_flows.push((
+                            tx_data.block_number,
+                            input.previous_tx_hash.as_slice(),
+                            input.previous_output_index as i16,
+                            1, // consumed
+                            lock_hash.as_slice(),
+                            *cap,
+                            *ds,
+                        ));
+                    } else if let Some((cap, _, lock_hash, ds, _, _)) = batch_cells.get(&key) {
+                        all_flows.push((
+                            tx_data.block_number,
+                            input.previous_tx_hash.as_slice(),
+                            input.previous_output_index as i16,
+                            1, // consumed
+                            lock_hash.as_slice(),
+                            *cap,
+                            *ds,
+                        ));
+                    }
+                }
+            }
+        }
+
         if self.should_use_copy() {
             let copy_router = self
                 .copy_router
@@ -4417,6 +4526,16 @@ impl Indexer {
                     if !all_proposals.is_empty() {
                         copy_router
                             .copy_proposals_parallel(&all_proposals)
+                            .await
+                            .map(|_| ())
+                    } else {
+                        Ok(())
+                    }
+                },
+                async {
+                    if !all_flows.is_empty() {
+                        copy_router
+                            .copy_cell_flows_parallel(&all_flows)
                             .await
                             .map(|_| ())
                     } else {
@@ -4485,6 +4604,13 @@ impl Indexer {
                 async {
                     if !all_proposals.is_empty() {
                         self.writer.insert_proposals_batch(&all_proposals).await
+                    } else {
+                        Ok(())
+                    }
+                },
+                async {
+                    if !all_flows.is_empty() {
+                        self.writer.insert_cell_flows_batch(&all_flows).await
                     } else {
                         Ok(())
                     }

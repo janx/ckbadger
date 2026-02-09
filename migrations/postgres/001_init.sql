@@ -1299,3 +1299,43 @@ COMMENT ON COLUMN activities.activity_id IS 'Deterministic hash for deduplicatio
 COMMENT ON COLUMN activities.activity_type IS 'CKB_TRANSFER | CELLBASE_REWARD | TOKEN_MINT | TOKEN_TRANSFER | TOKEN_BURN | DOB_MINT | DOB_TRANSFER | DOB_BURN | NFT_MINT | NFT_TRANSFER | DAO_DEPOSIT | DAO_WITHDRAW_REQUEST | DAO_WITHDRAW_COMPLETE | SCRIPT_DEPLOY | RGBPP_TRANSFER | RGBPP_LEAP_IN | RGBPP_LEAP_OUT | RGBPP_ISSUANCE';
 COMMENT ON COLUMN activities.activity_category IS 'ckb | cellbase | token | dob | nft | dao | script | rgbpp';
 COMMENT ON COLUMN activities.metadata IS 'Type-specific JSONB data (token info, DAO compensation, RGB++ commitment, etc.)';
+
+-- ===========================================
+-- 14. Cell Flows Table (Lightweight capacity flow ledger)
+-- RANGE partitioned by block_number, same scheme as cells/activities
+-- Records per-cell capacity flows: created (output) and consumed (input)
+-- Eliminates need for multi-table JOINs in rebuild tasks
+-- ===========================================
+
+CREATE TABLE cell_flows (
+    id BIGINT GENERATED ALWAYS AS IDENTITY,
+    block_number BIGINT NOT NULL,
+    tx_hash BYTEA NOT NULL,
+    output_index SMALLINT NOT NULL,
+    flow_type SMALLINT NOT NULL,        -- 0=created (output), 1=consumed (input)
+    lock_script_hash BYTEA NOT NULL,
+    capacity BIGINT NOT NULL,
+    data_size INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (block_number, id)
+) PARTITION BY RANGE (block_number);
+
+-- 10 RANGE partitions: 0-50M blocks, matching cells/activities scheme
+CREATE TABLE cell_flows_p00 PARTITION OF cell_flows FOR VALUES FROM (0) TO (5000000);
+CREATE TABLE cell_flows_p01 PARTITION OF cell_flows FOR VALUES FROM (5000000) TO (10000000);
+CREATE TABLE cell_flows_p02 PARTITION OF cell_flows FOR VALUES FROM (10000000) TO (15000000);
+CREATE TABLE cell_flows_p03 PARTITION OF cell_flows FOR VALUES FROM (15000000) TO (20000000);
+CREATE TABLE cell_flows_p04 PARTITION OF cell_flows FOR VALUES FROM (20000000) TO (25000000);
+CREATE TABLE cell_flows_p05 PARTITION OF cell_flows FOR VALUES FROM (25000000) TO (30000000);
+CREATE TABLE cell_flows_p06 PARTITION OF cell_flows FOR VALUES FROM (30000000) TO (35000000);
+CREATE TABLE cell_flows_p07 PARTITION OF cell_flows FOR VALUES FROM (35000000) TO (40000000);
+CREATE TABLE cell_flows_p08 PARTITION OF cell_flows FOR VALUES FROM (40000000) TO (45000000);
+CREATE TABLE cell_flows_p09 PARTITION OF cell_flows FOR VALUES FROM (45000000) TO (50000000);
+
+-- Transaction lookup (for activity rebuild: group flows by tx_hash)
+CREATE INDEX idx_cell_flows_tx ON cell_flows(tx_hash);
+
+-- BRIN index for block range scans (statistics/address_balances rebuild)
+CREATE INDEX idx_cell_flows_block_brin ON cell_flows USING BRIN (block_number) WITH (pages_per_range = 128);
+
+COMMENT ON TABLE cell_flows IS 'Lightweight per-cell capacity flow ledger for fast rebuild tasks';
+COMMENT ON COLUMN cell_flows.flow_type IS '0=created (cell output), 1=consumed (cell input)';
