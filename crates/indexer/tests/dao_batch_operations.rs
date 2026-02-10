@@ -13,10 +13,9 @@ async fn insert_test_block_with_dao_ar(pool: &PgPool, number: i64, date: NaiveDa
 
     sqlx::query(
         r#"
-        INSERT INTO blocks (number, hash, parent_hash, timestamp, version, compact_target,
-            transactions_count, epoch_number, epoch_index, epoch_length, dao, nonce,
-            extra_hash, proposals_hash, transactions_root, uncles_hash)
-        VALUES ($1, $2, $2, $3, 0, 0, 0, 0, 0, 1, $4, $2, $2, $2, $2, $2)
+        INSERT INTO blocks_index (number, hash, timestamp, tx_count, proposals_count, uncles_count,
+            epoch_number, epoch_index, epoch_length, compact_target, dao)
+        VALUES ($1, $2, $3, 0, 0, 0, 0, 0, 1, 0, $4)
         "#,
     )
     .bind(number)

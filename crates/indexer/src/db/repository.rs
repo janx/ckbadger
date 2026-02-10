@@ -92,14 +92,6 @@ impl Repository {
         Ok(row.map(|(hash,)| hash))
     }
 
-    pub async fn delete_block(&self, block_number: i64) -> Result<()> {
-        sqlx::query("DELETE FROM blocks WHERE number = $1")
-            .bind(block_number)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
-
     pub async fn restore_cells_consumed_at_block(&self, block_number: i64) -> Result<()> {
         sqlx::query(
             "UPDATE cells SET status = 0, consumed_at_block = NULL, consumed_by_tx = NULL, consumed_at_index = NULL WHERE consumed_at_block = $1",

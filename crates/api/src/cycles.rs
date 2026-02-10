@@ -229,28 +229,20 @@ impl CyclesWorker {
 
         match ckbadger_common::cycles::calculate_cycles(&self.ckb_rpc_url, &formatted_hash).await {
             Ok(cycles) => {
-                if let Err(e) = sqlx::query("UPDATE transactions SET cycles = $1 WHERE hash = $2")
-                    .bind(cycles)
-                    .bind(&hash_bytes)
-                    .execute(&self.pool)
-                    .await
+                if let Err(e) =
+                    sqlx::query("UPDATE transactions_index SET cycles = $1 WHERE hash = $2")
+                        .bind(cycles)
+                        .bind(&hash_bytes)
+                        .execute(&self.pool)
+                        .await
                 {
                     warn!("Failed to update cycles in DB for {}: {}", tx_hash, e);
                 }
-                let _ = sqlx::query("UPDATE transactions_index SET cycles = $1 WHERE hash = $2")
-                    .bind(cycles)
-                    .bind(&hash_bytes)
-                    .execute(&self.pool)
-                    .await;
                 debug!("Calculated cycles for {}: {}", tx_hash, cycles);
                 self.calculator.mark_complete(tx_hash).await;
             }
             Err(e) => {
                 warn!("Failed to calculate cycles for {}: {}", tx_hash, e);
-                let _ = sqlx::query("UPDATE transactions SET cycles = -1 WHERE hash = $1")
-                    .bind(&hash_bytes)
-                    .execute(&self.pool)
-                    .await;
                 let _ = sqlx::query("UPDATE transactions_index SET cycles = -1 WHERE hash = $1")
                     .bind(&hash_bytes)
                     .execute(&self.pool)

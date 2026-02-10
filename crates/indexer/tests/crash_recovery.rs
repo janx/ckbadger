@@ -164,7 +164,7 @@ async fn test_cleanup_batch_range_cleans_transactions(pool: PgPool) {
         .await
         .unwrap();
 
-    let count_before: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM transactions")
+    let count_before: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM transactions_index")
         .fetch_one(&pool)
         .await
         .unwrap();
@@ -172,14 +172,14 @@ async fn test_cleanup_batch_range_cleans_transactions(pool: PgPool) {
 
     writer.cleanup_batch_range(101, 102).await.unwrap();
 
-    let count_after: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM transactions")
+    let count_after: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM transactions_index")
         .fetch_one(&pool)
         .await
         .unwrap();
     assert_eq!(count_after.0, 1);
 
     let remaining: (i64,) =
-        sqlx::query_as("SELECT block_number FROM transactions WHERE block_number = 100")
+        sqlx::query_as("SELECT block_number FROM transactions_index WHERE block_number = 100")
             .fetch_one(&pool)
             .await
             .unwrap();
@@ -232,7 +232,7 @@ async fn test_cleanup_batch_range_preserves_earlier_data(pool: PgPool) {
     writer.cleanup_batch_range(100, 150).await.unwrap();
 
     let remaining: Vec<(i64,)> =
-        sqlx::query_as("SELECT block_number FROM transactions ORDER BY block_number")
+        sqlx::query_as("SELECT block_number FROM transactions_index ORDER BY block_number")
             .fetch_all(&pool)
             .await
             .unwrap();
@@ -251,7 +251,7 @@ async fn test_cleanup_batch_range_empty_range(pool: PgPool) {
 
     writer.cleanup_batch_range(200, 300).await.unwrap();
 
-    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM transactions")
+    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM transactions_index")
         .fetch_one(&pool)
         .await
         .unwrap();

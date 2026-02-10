@@ -12,10 +12,9 @@ async fn insert_test_block(pool: &PgPool, number: i64, date: NaiveDate) {
 
     sqlx::query(
         r#"
-        INSERT INTO blocks (number, hash, parent_hash, timestamp, version, compact_target,
-            transactions_count, epoch_number, epoch_index, epoch_length, dao, nonce,
-            extra_hash, proposals_hash, transactions_root, uncles_hash)
-        VALUES ($1, $2, $2, $3, 0, 0, 1, 0, 0, 1, $4, $2, $2, $2, $2, $2)
+        INSERT INTO blocks_index (number, hash, timestamp, tx_count, proposals_count,
+            uncles_count, epoch_number, epoch_index, epoch_length, compact_target, dao)
+        VALUES ($1, $2, $3, 1, 0, 0, 0, 0, 1, 0, $4)
         "#,
     )
     .bind(number)
@@ -36,9 +35,9 @@ async fn insert_test_transaction(
 ) {
     sqlx::query(
         r#"
-        INSERT INTO transactions (hash, block_number, tx_index, version, witnesses_count,
-            inputs_count, outputs_count, total_output_capacity, is_cellbase, timestamp)
-        VALUES ($1, $2, $3, 0, 0, 0, 1, 100, $3 = 0, $4)
+        INSERT INTO transactions_index (hash, block_number, tx_index,
+            inputs_count, outputs_count, is_cellbase, timestamp)
+        VALUES ($1, $2, $3, 0, 1, $3 = 0, $4)
         "#,
     )
     .bind(tx_hash)
@@ -164,13 +163,13 @@ async fn test_rebuild_miner_statistics_with_null_miner_lock_hash_in_blocks(pool:
     insert_test_cell(&pool, &tx_hash, 0, 100_00000000, 1, &miner_hash).await;
 
     let miner_lock_in_blocks: Option<Vec<u8>> =
-        sqlx::query_scalar("SELECT miner_lock_hash FROM blocks WHERE number = 1")
+        sqlx::query_scalar("SELECT miner_lock_hash FROM blocks_index WHERE number = 1")
             .fetch_one(&pool)
             .await
             .unwrap();
     assert!(
         miner_lock_in_blocks.is_none(),
-        "blocks.miner_lock_hash should be NULL (simulating bulk sync)"
+        "blocks_index.miner_lock_hash should be NULL (simulating bulk sync)"
     );
 
     let task_id = create_pending_task(&pool).await;

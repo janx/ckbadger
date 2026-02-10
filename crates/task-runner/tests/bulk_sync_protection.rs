@@ -5,29 +5,18 @@ use sqlx::PgPool;
 
 async fn insert_block_with_timestamp(pool: &PgPool, number: i64, hours_ago: f64) {
     let hash = vec![0u8; 32];
-    let nonce = vec![0u8; 16];
     sqlx::query(
         r#"
-        INSERT INTO blocks (number, hash, parent_hash, timestamp, version, compact_target,
-                           transactions_count, proposals_count, uncles_count, epoch_number,
-                           epoch_index, epoch_length, dao, nonce, extra_hash,
-                           proposals_hash, transactions_root, uncles_hash,
-                           total_difficulty, miner_lock_hash)
-        VALUES ($1, $2, $3, NOW() - ($4 || ' hours')::INTERVAL, 0, 0, 1, 0, 0, $1, 0, 1000,
-                $5, $6, $7, $8, $9, $10, 0, $11)
+        INSERT INTO blocks_index (number, hash, timestamp, tx_count, proposals_count,
+                                  uncles_count, epoch_number, epoch_index, epoch_length,
+                                  compact_target, dao)
+        VALUES ($1, $2, NOW() - ($3 || ' hours')::INTERVAL, 1, 0, 0, $1, 0, 1000, 0, $4)
         "#,
     )
     .bind(number)
     .bind(&hash)
-    .bind(&hash)
     .bind(hours_ago.to_string())
     .bind(&hash) // dao
-    .bind(&nonce) // nonce
-    .bind(&hash) // extra_hash
-    .bind(&hash) // proposals_hash
-    .bind(&hash) // transactions_root
-    .bind(&hash) // uncles_hash
-    .bind(&hash) // miner_lock_hash
     .execute(pool)
     .await
     .unwrap();

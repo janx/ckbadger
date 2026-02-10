@@ -6,25 +6,19 @@ use sqlx::PgPool;
 async fn insert_test_block(pool: &PgPool, number: i64, timestamp: chrono::DateTime<Utc>) {
     sqlx::query(
         r#"
-        INSERT INTO blocks (
-            number, hash, parent_hash, timestamp, version, compact_target,
-            transactions_count, proposals_count, uncles_count, epoch_number,
-            epoch_index, epoch_length, dao, nonce, extra_hash,
-            proposals_hash, transactions_root, uncles_hash, extension
+        INSERT INTO blocks_index (
+            number, hash, timestamp, tx_count, proposals_count, uncles_count,
+            epoch_number, epoch_index, epoch_length, compact_target, dao
         ) VALUES (
-            $1, $2, $3, $4, 0, 100000,
-            1, 0, 0, 0,
-            0, 1800, $5, E'\\x0000000000000000', E'\\x0000000000000000',
-            $6, $6, $6, NULL
+            $1, $2, $3, 1, 0, 0,
+            0, 0, 1800, 100000, $4
         )
         "#,
     )
     .bind(number)
     .bind(format!("\\x{:064x}", number).as_bytes())
-    .bind(format!("\\x{:064x}", number.saturating_sub(1)).as_bytes())
     .bind(timestamp)
     .bind(vec![0u8; 32]) // dao
-    .bind(vec![0u8; 32]) // proposals_hash, transactions_root, uncles_hash
     .execute(pool)
     .await
     .unwrap();
@@ -33,14 +27,12 @@ async fn insert_test_block(pool: &PgPool, number: i64, timestamp: chrono::DateTi
 async fn insert_test_transaction(pool: &PgPool, hash: &[u8], block_number: i64, tx_index: i32) {
     sqlx::query(
         r#"
-        INSERT INTO transactions (
-            hash, block_number, tx_index, version, inputs_count, outputs_count,
-            witnesses_count, cell_deps_count, header_deps_count,
-            total_input_capacity, total_output_capacity, fee, tx_size, is_cellbase, timestamp
+        INSERT INTO transactions_index (
+            hash, block_number, tx_index, is_cellbase, timestamp,
+            inputs_count, outputs_count, fee, tx_size
         ) VALUES (
-            $1, $2, $3, 0, 0, 1,
-            0, 0, 0,
-            0, 100000000, 0, 100, $3 = 0, NOW()
+            $1, $2, $3, $3 = 0, NOW(),
+            0, 1, 0, 100
         )
         "#,
     )

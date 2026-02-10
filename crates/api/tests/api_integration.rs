@@ -74,26 +74,21 @@ async fn test_recent_blocks_returns_last_24h(pool: sqlx::PgPool) {
     let now = chrono::Utc::now();
     let hash_old: [u8; 32] = [1; 32];
     let hash_recent: [u8; 32] = [2; 32];
-    let parent_hash: [u8; 32] = [0; 32];
-    let nonce = vec![0u8; 16];
     let dao = vec![0u8; 32];
 
     sqlx::query(
         r#"
-        INSERT INTO blocks (
-            number, hash, parent_hash, timestamp, transactions_count, proposals_count,
+        INSERT INTO blocks_index (
+            number, hash, timestamp, tx_count, proposals_count,
             uncles_count, epoch_number, epoch_index, epoch_length,
-            nonce, transactions_root, proposals_hash, extra_hash, uncles_hash,
-            compact_target, version, dao
-        ) VALUES ($1, $2, $3, $4, $5, 0, 0, 1, 0, 1800, $6, $2, $2, $2, $2, 0, 0, $7)
+            compact_target, dao
+        ) VALUES ($1, $2, $3, $4, 0, 0, 1, 0, 1800, 0, $5)
         "#,
     )
     .bind(1i64)
     .bind(&hash_old[..])
-    .bind(&parent_hash[..])
     .bind(now - chrono::Duration::hours(25))
     .bind(10i32)
-    .bind(&nonce)
     .bind(&dao)
     .execute(&pool)
     .await
@@ -101,20 +96,17 @@ async fn test_recent_blocks_returns_last_24h(pool: sqlx::PgPool) {
 
     sqlx::query(
         r#"
-        INSERT INTO blocks (
-            number, hash, parent_hash, timestamp, transactions_count, proposals_count,
+        INSERT INTO blocks_index (
+            number, hash, timestamp, tx_count, proposals_count,
             uncles_count, epoch_number, epoch_index, epoch_length,
-            nonce, transactions_root, proposals_hash, extra_hash, uncles_hash,
-            compact_target, version, dao
-        ) VALUES ($1, $2, $3, $4, $5, 0, 0, 1, 1, 1800, $6, $2, $2, $2, $2, 0, 0, $7)
+            compact_target, dao
+        ) VALUES ($1, $2, $3, $4, 0, 0, 1, 1, 1800, 0, $5)
         "#,
     )
     .bind(2i64)
     .bind(&hash_recent[..])
-    .bind(&hash_old[..])
     .bind(now - chrono::Duration::hours(1))
     .bind(5i32)
-    .bind(&nonce)
     .bind(&dao)
     .execute(&pool)
     .await
@@ -914,26 +906,20 @@ async fn test_genesis_special_burn_cell_detection(pool: sqlx::PgPool) {
 
 async fn insert_test_block(pool: &sqlx::PgPool, number: i64, tx_count: i32) {
     let hash = vec![number as u8; 32];
-    let parent_hash = vec![(number - 1) as u8; 32];
     let dao = vec![0u8; 32];
-    let nonce = vec![0u8; 16];
 
     sqlx::query(
         r#"
-        INSERT INTO blocks (
-            number, hash, parent_hash, timestamp, transactions_count, proposals_count,
+        INSERT INTO blocks_index (
+            number, hash, timestamp, tx_count, proposals_count,
             uncles_count, epoch_number, epoch_index, epoch_length,
-            nonce, transactions_root, proposals_hash, extra_hash, uncles_hash,
-            compact_target, version, dao
-        ) VALUES ($1, $2, $3, NOW(), $4, 0, 0, 100, 50, 1800,
-            $5, $2, $2, $2, $2, 0, 0, $6)
+            compact_target, dao
+        ) VALUES ($1, $2, NOW(), $3, 0, 0, 100, 50, 1800, 0, $4)
         "#,
     )
     .bind(number)
     .bind(&hash)
-    .bind(&parent_hash)
     .bind(tx_count)
-    .bind(&nonce)
     .bind(&dao)
     .execute(pool)
     .await
@@ -948,10 +934,10 @@ async fn insert_test_transaction(
 ) {
     sqlx::query(
         r#"
-        INSERT INTO transactions (
-            hash, block_number, tx_index, version, inputs_count, outputs_count,
-            fee, total_input_capacity, total_output_capacity, is_cellbase, timestamp, tx_size, cycles
-        ) VALUES ($1, $2, $3, 0, 1, 1, 1000, 100000000, 99999000, false, NOW(), 500, 1000000)
+        INSERT INTO transactions_index (
+            hash, block_number, tx_index, inputs_count, outputs_count,
+            fee, is_cellbase, timestamp, tx_size, cycles
+        ) VALUES ($1, $2, $3, 1, 1, 1000, false, NOW(), 500, 1000000)
         "#,
     )
     .bind(hash)

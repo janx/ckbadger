@@ -5,25 +5,19 @@ use ckbadger_indexer::db::BatchWriter;
 use ckbadger_indexer::MIGRATOR;
 use sqlx::PgPool;
 
-async fn insert_test_block(pool: &PgPool, number: i64, hash: &[u8], parent_hash: &[u8]) {
+async fn insert_test_block(pool: &PgPool, number: i64, hash: &[u8], _parent_hash: &[u8]) {
     let dao = vec![0u8; 32];
-    let nonce = vec![0u8; 16];
 
     sqlx::query(
         r#"
-        INSERT INTO blocks (
-            number, hash, parent_hash, timestamp, transactions_count, proposals_count,
-            uncles_count, epoch_number, epoch_index, epoch_length,
-            nonce, transactions_root, proposals_hash, extra_hash, uncles_hash,
-            compact_target, version, dao
-        ) VALUES ($1, $2, $3, NOW(), 2, 0, 0, 100, 50, 1800,
-            $4, $2, $2, $2, $2, 0, 0, $5)
+        INSERT INTO blocks_index (
+            number, hash, timestamp, tx_count, proposals_count, uncles_count,
+            epoch_number, epoch_index, epoch_length, compact_target, dao
+        ) VALUES ($1, $2, NOW(), 2, 0, 0, 100, 50, 1800, 0, $3)
         "#,
     )
     .bind(number)
     .bind(hash)
-    .bind(parent_hash)
-    .bind(&nonce)
     .bind(&dao)
     .execute(pool)
     .await
@@ -33,10 +27,10 @@ async fn insert_test_block(pool: &PgPool, number: i64, hash: &[u8], parent_hash:
 async fn insert_test_transaction(pool: &PgPool, hash: &[u8], block_number: i64, tx_index: i32) {
     sqlx::query(
         r#"
-        INSERT INTO transactions (
-            hash, block_number, tx_index, version, inputs_count, outputs_count,
-            fee, total_input_capacity, total_output_capacity, is_cellbase, timestamp, tx_size, cycles
-        ) VALUES ($1, $2, $3, 0, 1, 1, 1000, 100000000, 99999000, false, NOW(), 500, 1000000)
+        INSERT INTO transactions_index (
+            hash, block_number, tx_index, inputs_count, outputs_count,
+            fee, is_cellbase, timestamp, tx_size, cycles
+        ) VALUES ($1, $2, $3, 1, 1, 1000, false, NOW(), 500, 1000000)
         "#,
     )
     .bind(hash)
@@ -82,14 +76,14 @@ async fn insert_test_cell(
 }
 
 async fn get_block_count(pool: &PgPool) -> i64 {
-    sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM blocks")
+    sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM blocks_index")
         .fetch_one(pool)
         .await
         .unwrap()
 }
 
 async fn get_transaction_count(pool: &PgPool) -> i64 {
-    sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM transactions")
+    sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM transactions_index")
         .fetch_one(pool)
         .await
         .unwrap()
@@ -242,7 +236,7 @@ async fn test_execute_reorg_rolls_back_blocks(pool: PgPool) {
 
     assert_eq!(get_block_count(&pool).await, 3);
 
-    let max_block: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(number), 0) FROM blocks")
+    let max_block: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(number), 0) FROM blocks_index")
         .fetch_one(&pool)
         .await
         .unwrap();
@@ -521,7 +515,7 @@ async fn test_execute_reorg_rolls_back_hourly_statistics(pool: PgPool) {
     .enumerate()
     {
         let block_num = 99 + i as i64;
-        let parent = if i == 0 {
+        let _parent = if i == 0 {
             vec![0x98u8; 32]
         } else {
             [&block_99_hash, &block_100_hash, &block_101_hash][i - 1].clone()
@@ -530,21 +524,16 @@ async fn test_execute_reorg_rolls_back_hourly_statistics(pool: PgPool) {
 
         sqlx::query(
             r#"
-            INSERT INTO blocks (
-                number, hash, parent_hash, timestamp, transactions_count, proposals_count,
-                uncles_count, epoch_number, epoch_index, epoch_length,
-                nonce, transactions_root, proposals_hash, extra_hash, uncles_hash,
-                compact_target, version, dao
-            ) VALUES ($1, $2, $3, $4, $5, 0, 0, 100, 50, 1800,
-                $6, $2, $2, $2, $2, 0, 0, $7)
+            INSERT INTO blocks_index (
+                number, hash, timestamp, tx_count, proposals_count, uncles_count,
+                epoch_number, epoch_index, epoch_length, compact_target, dao
+            ) VALUES ($1, $2, $3, $4, 0, 0, 100, 50, 1800, 0, $5)
             "#,
         )
         .bind(block_num)
         .bind(*hash)
-        .bind(&parent)
         .bind(timestamp)
         .bind(if block_num >= 101 { 5 } else { 2 })
-        .bind(vec![0u8; 16])
         .bind(vec![0u8; 32])
         .execute(&pool)
         .await
@@ -616,7 +605,7 @@ async fn test_execute_reorg_rolls_back_daily_statistics(pool: PgPool) {
     .enumerate()
     {
         let block_num = 99 + i as i64;
-        let parent = if i == 0 {
+        let _parent = if i == 0 {
             vec![0x98u8; 32]
         } else {
             [&block_99_hash, &block_100_hash][i - 1].clone()
@@ -624,21 +613,16 @@ async fn test_execute_reorg_rolls_back_daily_statistics(pool: PgPool) {
 
         sqlx::query(
             r#"
-            INSERT INTO blocks (
-                number, hash, parent_hash, timestamp, transactions_count, proposals_count,
-                uncles_count, epoch_number, epoch_index, epoch_length,
-                nonce, transactions_root, proposals_hash, extra_hash, uncles_hash,
-                compact_target, version, dao
-            ) VALUES ($1, $2, $3, $4, $5, 0, 0, 100, 50, 1800,
-                $6, $2, $2, $2, $2, 0, 0, $7)
+            INSERT INTO blocks_index (
+                number, hash, timestamp, tx_count, proposals_count, uncles_count,
+                epoch_number, epoch_index, epoch_length, compact_target, dao
+            ) VALUES ($1, $2, $3, $4, 0, 0, 100, 50, 1800, 0, $5)
             "#,
         )
         .bind(block_num)
         .bind(*hash)
-        .bind(&parent)
         .bind(base_time + chrono::Duration::seconds(i as i64 * 10))
         .bind(*tx_count)
-        .bind(vec![0u8; 16])
         .bind(vec![0u8; 32])
         .execute(&pool)
         .await
@@ -701,7 +685,7 @@ async fn test_execute_reorg_rolls_back_miner_statistics(pool: PgPool) {
         .enumerate()
     {
         let block_num = 99 + i as i64;
-        let parent = if i == 0 {
+        let _parent = if i == 0 {
             vec![0x98u8; 32]
         } else {
             [&block_99_hash, &block_100_hash][i - 1].clone()
@@ -709,20 +693,15 @@ async fn test_execute_reorg_rolls_back_miner_statistics(pool: PgPool) {
 
         sqlx::query(
             r#"
-            INSERT INTO blocks (
-                number, hash, parent_hash, timestamp, transactions_count, proposals_count,
-                uncles_count, epoch_number, epoch_index, epoch_length,
-                nonce, transactions_root, proposals_hash, extra_hash, uncles_hash,
-                compact_target, version, dao, miner_lock_hash
-            ) VALUES ($1, $2, $3, $4, 2, 0, 0, 100, 50, 1800,
-                $5, $2, $2, $2, $2, 0, 0, $6, $7)
+            INSERT INTO blocks_index (
+                number, hash, timestamp, tx_count, proposals_count, uncles_count,
+                epoch_number, epoch_index, epoch_length, compact_target, dao, miner_lock_hash
+            ) VALUES ($1, $2, $3, 2, 0, 0, 100, 50, 1800, 0, $4, $5)
             "#,
         )
         .bind(block_num)
         .bind(*hash)
-        .bind(&parent)
         .bind(base_time + chrono::Duration::seconds(i as i64 * 10))
-        .bind(vec![0u8; 16])
         .bind(vec![0u8; 32])
         .bind(&miner_hash)
         .execute(&pool)
