@@ -54,18 +54,24 @@ impl BatchWriter {
             return Ok(());
         }
 
-        for (
-            tx_hash,
-            output_index,
-            _created_at_block,
-            _consumed_by_tx,
-            _consumed_at_block,
-            _consumed_at_index,
-        ) in consumptions
-        {
-            // Get cell info before removing it
-            let outpoint_key = keys::encode_outpoint(tx_hash, *output_index);
-            if let Ok(Some(value)) = self.store.get_cf(self.store.cf_live_cells(), &outpoint_key) {
+        // Collect all outpoint keys for a single batch read
+        let encoded_keys: Vec<_> = consumptions
+            .iter()
+            .map(|(tx_hash, output_index, ..)| {
+                let key = keys::encode_outpoint(tx_hash, *output_index);
+                (self.store.cf_live_cells(), key)
+            })
+            .collect();
+
+        let key_refs: Vec<_> = encoded_keys
+            .iter()
+            .map(|(cf, k)| (*cf, k.as_slice()))
+            .collect();
+        let results = self.store.multi_get_cf(key_refs);
+
+        // Zip results with consumptions and process writes
+        for (res, (tx_hash, output_index, ..)) in results.into_iter().zip(consumptions.iter()) {
+            if let Ok(Some(value)) = res {
                 if let Ok(info) = bincode::deserialize::<LiveCellInfo>(&value) {
                     // Move to consumed cells
                     batch.put_consumed_cell(tx_hash, *output_index, &info);

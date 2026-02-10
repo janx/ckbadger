@@ -1653,11 +1653,11 @@ impl Indexer {
                 }
             }
         }
+        // Single batch for consume + address balances + script usage
+        let mut consume_addr_batch = StoreBatch::new(self.writer.store());
         if !all_consumptions.is_empty() {
-            let mut batch = StoreBatch::new(self.writer.store());
             self.writer
-                .consume_cells_batch(&all_consumptions, &mut batch)?;
-            batch.commit()?;
+                .consume_cells_batch(&all_consumptions, &mut consume_addr_batch)?;
         }
 
         // Address balances
@@ -1819,16 +1819,15 @@ impl Indexer {
             .load(std::sync::atomic::Ordering::Relaxed)
             && bulk_sync_mode;
         {
-            let mut batch = StoreBatch::new(self.writer.store());
             if !skip_address_balances && !changes_ref.is_empty() {
                 self.writer
-                    .update_address_balances_batch(&changes_ref, &mut batch)?;
+                    .update_address_balances_batch(&changes_ref, &mut consume_addr_batch)?;
             }
             if !script_usage_changes.is_empty() {
                 self.writer
-                    .update_script_usage_batch(&script_usage_changes, &mut batch)?;
+                    .update_script_usage_batch(&script_usage_changes, &mut consume_addr_batch)?;
             }
-            batch.commit()?;
+            consume_addr_batch.commit()?;
         }
 
         // Accumulate batch statistics
@@ -1994,28 +1993,40 @@ impl Indexer {
 
         // DAO processing
         let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
+        {
+            let mut all_dao_deposits: Vec<(
+                crate::parser::ParsedDaoDeposit,
+                i64,
+                chrono::DateTime<Utc>,
+                i64,
+            )> = Vec::new();
+            let mut block_tx_idx = 0usize;
+            for parsed in &all_parsed_blocks {
+                let tx_count_for_block = parsed.transactions_count as usize;
+                let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
+                block_tx_idx += tx_count_for_block;
+                let ar = DaoParser::extract_ar_from_dao_field(&parsed.dao).unwrap_or(0) as i64;
+                for tx_data in tx_slice {
+                    let dao_deposits =
+                        DaoParser::parse_deposits_from_cells(&tx_data.hash, &tx_data.cells);
+                    for deposit in dao_deposits {
+                        all_dao_deposits.push((deposit, parsed.number, parsed.timestamp, ar));
+                    }
+                }
+            }
+            if !all_dao_deposits.is_empty() {
+                let mut batch = StoreBatch::new(self.writer.store());
+                self.writer
+                    .insert_dao_deposits_batch(&all_dao_deposits, &mut batch)?;
+                batch.commit()?;
+            }
+        }
+
         let mut block_tx_idx = 0usize;
         for parsed in &all_parsed_blocks {
             let tx_count_for_block = parsed.transactions_count as usize;
             let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
             block_tx_idx += tx_count_for_block;
-
-            for tx_data in tx_slice {
-                let dao_deposits =
-                    DaoParser::parse_deposits_from_cells(&tx_data.hash, &tx_data.cells);
-                for deposit in &dao_deposits {
-                    let ar = DaoParser::extract_ar_from_dao_field(&parsed.dao).unwrap_or(0) as i64;
-                    let mut batch = StoreBatch::new(self.writer.store());
-                    self.writer.insert_dao_deposit(
-                        deposit,
-                        parsed.number,
-                        parsed.timestamp,
-                        ar,
-                        &mut batch,
-                    )?;
-                    batch.commit()?;
-                }
-            }
 
             for tx_data in tx_slice {
                 if tx_data.is_cellbase || tx_data.inputs.is_empty() {
@@ -2637,11 +2648,11 @@ impl Indexer {
                 }
             }
         }
+        // Single batch for consume + address balances + script usage
+        let mut consume_addr_batch = StoreBatch::new(self.writer.store());
         if !all_consumptions.is_empty() {
-            let mut batch = StoreBatch::new(self.writer.store());
             self.writer
-                .consume_cells_batch(&all_consumptions, &mut batch)?;
-            batch.commit()?;
+                .consume_cells_batch(&all_consumptions, &mut consume_addr_batch)?;
         }
 
         // Address balances
@@ -2775,16 +2786,15 @@ impl Indexer {
             .load(std::sync::atomic::Ordering::Relaxed)
             && bulk_sync_mode;
         {
-            let mut batch = StoreBatch::new(self.writer.store());
             if !skip_address_balances && !changes_ref.is_empty() {
                 self.writer
-                    .update_address_balances_batch(&changes_ref, &mut batch)?;
+                    .update_address_balances_batch(&changes_ref, &mut consume_addr_batch)?;
             }
             if !script_usage_changes.is_empty() {
                 self.writer
-                    .update_script_usage_batch(&script_usage_changes, &mut batch)?;
+                    .update_script_usage_batch(&script_usage_changes, &mut consume_addr_batch)?;
             }
-            batch.commit()?;
+            consume_addr_batch.commit()?;
         }
 
         // Stats accumulation

@@ -16,11 +16,23 @@ impl BatchWriter {
             return Ok(());
         }
 
-        for (lock_hash, (balance_delta, live_delta, total_delta, tx_delta, block_num, tx_hash)) in
-            changes
-        {
-            // Read-modify-write for each address
-            let existing = self.store.get_addr_balance(lock_hash)?;
+        // Collect all lock_hash keys for a single batch read
+        let keys_vec: Vec<&Vec<u8>> = changes.keys().collect();
+        let cf_keys: Vec<_> = keys_vec
+            .iter()
+            .map(|k| (self.store.cf_addr_balance(), k.as_slice()))
+            .collect();
+        let results = self.store.multi_get_cf(cf_keys);
+
+        // Zip results with keys and apply deltas
+        for (res, lock_hash) in results.into_iter().zip(keys_vec.iter()) {
+            let (balance_delta, live_delta, total_delta, tx_delta, block_num, tx_hash) =
+                &changes[*lock_hash];
+
+            let existing: Option<AddressBalance> = match res {
+                Ok(Some(value)) => bincode::deserialize(&value).ok(),
+                _ => None,
+            };
 
             let updated = match existing {
                 Some(mut bal) => {
@@ -59,46 +71,63 @@ impl BatchWriter {
             return Ok(());
         }
 
+        // Collect unique code_hashes for a single batch read
+        let unique_code_hashes: Vec<Vec<u8>> = {
+            let mut seen = std::collections::HashSet::new();
+            changes
+                .keys()
+                .filter_map(|(code_hash, _)| {
+                    if seen.insert(code_hash.clone()) {
+                        Some(code_hash.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
+
+        let cf_keys: Vec<_> = unique_code_hashes
+            .iter()
+            .map(|k| (self.store.cf_script_info(), k.as_slice()))
+            .collect();
+        let results = self.store.multi_get_cf(cf_keys);
+
+        // Build lookup from code_hash → existing ScriptInfo
+        let mut existing_map: HashMap<&Vec<u8>, ckbadger_store::types::ScriptInfo> =
+            HashMap::with_capacity(unique_code_hashes.len());
+        for (res, code_hash) in results.into_iter().zip(unique_code_hashes.iter()) {
+            if let Ok(Some(value)) = res {
+                if let Ok(info) = bincode::deserialize::<ckbadger_store::types::ScriptInfo>(&value)
+                {
+                    existing_map.insert(code_hash, info);
+                }
+            }
+        }
+
+        // Apply all deltas, potentially multiple per code_hash (lock + type)
+        let mut updated_map: HashMap<&Vec<u8>, ckbadger_store::types::ScriptInfo> =
+            HashMap::with_capacity(unique_code_hashes.len());
         for ((code_hash, is_type), (cells_delta, live_delta, cap_delta, live_cap_delta)) in changes
         {
-            let script_kind = if *is_type { "type" } else { "lock" };
+            let info = updated_map
+                .entry(code_hash)
+                .or_insert_with(|| existing_map.get(code_hash).cloned().unwrap_or_default());
 
-            // Read-modify-write for script usage stats
-            let existing = self.store.get_script_info(code_hash)?;
+            if *is_type {
+                info.type_cells_count += cells_delta;
+                info.type_live_cells_count += live_delta;
+                info.type_capacity_sum += cap_delta;
+                info.type_live_capacity_sum += live_cap_delta;
+            } else {
+                info.lock_cells_count += cells_delta;
+                info.lock_live_cells_count += live_delta;
+                info.lock_capacity_sum += cap_delta;
+                info.lock_live_capacity_sum += live_cap_delta;
+            }
+        }
 
-            let updated = match existing {
-                Some(mut info) => {
-                    if script_kind == "lock" {
-                        info.lock_cells_count += cells_delta;
-                        info.lock_live_cells_count += live_delta;
-                        info.lock_capacity_sum += cap_delta;
-                        info.lock_live_capacity_sum += live_cap_delta;
-                    } else {
-                        info.type_cells_count += cells_delta;
-                        info.type_live_cells_count += live_delta;
-                        info.type_capacity_sum += cap_delta;
-                        info.type_live_capacity_sum += live_cap_delta;
-                    }
-                    info
-                }
-                None => {
-                    let mut info = ckbadger_store::types::ScriptInfo::default();
-                    if script_kind == "lock" {
-                        info.lock_cells_count = *cells_delta;
-                        info.lock_live_cells_count = *live_delta;
-                        info.lock_capacity_sum = *cap_delta;
-                        info.lock_live_capacity_sum = *live_cap_delta;
-                    } else {
-                        info.type_cells_count = *cells_delta;
-                        info.type_live_cells_count = *live_delta;
-                        info.type_capacity_sum = *cap_delta;
-                        info.type_live_capacity_sum = *live_cap_delta;
-                    }
-                    info
-                }
-            };
-
-            batch.put_script_info(code_hash, &updated);
+        for (code_hash, info) in &updated_map {
+            batch.put_script_info(code_hash, info);
         }
 
         Ok(())
