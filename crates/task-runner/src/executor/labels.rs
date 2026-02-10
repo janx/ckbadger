@@ -229,10 +229,52 @@ fn load_token_labels(base_path: &str) -> Result<Vec<UdtLabelInfo>> {
     Ok(labels)
 }
 
-async fn upsert_token_label(_store: &CkbadgerStore, label: &UdtLabelInfo) -> Result<bool> {
-    // TODO: Implement store.update_token_label() API
-    tracing::debug!("Token label upsert pending store API: {}", label.type_hash);
-    Ok(false)
+fn parse_hash_type(hash_type: &str) -> u8 {
+    match hash_type {
+        "data" => 0,
+        "type" => 1,
+        "data1" => 2,
+        "data2" => 4,
+        _ => 0,
+    }
+}
+
+fn decode_hex(s: &str) -> Result<Vec<u8>> {
+    let s = s.strip_prefix("0x").unwrap_or(s);
+    hex::decode(s).map_err(|e| anyhow::anyhow!("invalid hex: {}", e))
+}
+
+async fn upsert_token_label(store: &CkbadgerStore, label: &UdtLabelInfo) -> Result<bool> {
+    let type_hash = decode_hex(&label.type_hash)?;
+
+    let mut info =
+        store
+            .get_token(&type_hash)?
+            .unwrap_or_else(|| ckbadger_store::types::TokenInfo {
+                type_code_hash: decode_hex(&label.type_script.code_hash).unwrap_or_default(),
+                hash_type: parse_hash_type(&label.type_script.hash_type),
+                type_args: decode_hex(&label.type_script.args).unwrap_or_default(),
+                standard: label.udt_type.clone(),
+                name: None,
+                symbol: None,
+                decimals: None,
+                total_supply: None,
+                holders_count: 0,
+                first_seen_block: 0,
+                icon_url: None,
+                description: None,
+            });
+
+    // Update label fields (preserve indexer-maintained stats like holders_count, total_supply)
+    info.name = label.name.clone().or(Some(label.symbol.clone()));
+    info.symbol = Some(label.symbol.clone());
+    info.decimals = Some(label.decimal as i32);
+    info.icon_url = label.icon.clone();
+    info.description = label.description.clone();
+    info.standard = label.udt_type.clone();
+
+    store.put_token_direct(&type_hash, &info)?;
+    Ok(true)
 }
 
 fn load_script_labels(base_path: &str) -> Result<Vec<ScriptLabelInfo>> {
@@ -315,8 +357,35 @@ fn load_script_overrides(base_path: &str) -> ScriptNameOverrides {
     }
 }
 
-async fn upsert_script_label(_store: &CkbadgerStore, script: &ScriptLabelInfo) -> Result<()> {
-    // TODO: Implement store.upsert_script_info() API
-    tracing::debug!("Script label upsert pending store API: {}", script.name);
+async fn upsert_script_label(store: &CkbadgerStore, script: &ScriptLabelInfo) -> Result<()> {
+    // Import each non-deprecated deployment as a script_info entry keyed by code_hash
+    let deployments = script
+        .deployments
+        .mainnet
+        .iter()
+        .chain(script.deployments.testnet.iter());
+
+    for deployment in deployments {
+        if deployment.deprecated {
+            continue;
+        }
+
+        let code_hash = decode_hex(&deployment.code_hash)?;
+
+        let mut info = store.get_script_info(&code_hash)?.unwrap_or_else(|| {
+            ckbadger_store::types::ScriptInfo {
+                code_hash: code_hash.clone(),
+                hash_type: parse_hash_type(&deployment.hash_type),
+                ..Default::default()
+            }
+        });
+
+        // Update label fields (preserve indexer-maintained stats)
+        info.name = Some(script.name.clone());
+        info.description = Some(script.description.clone());
+        info.website = Some(script.website.clone());
+
+        store.put_script_info_direct(&code_hash, &info)?;
+    }
     Ok(())
 }

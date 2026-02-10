@@ -1,11 +1,13 @@
 use anyhow::Result;
 use clap::Parser;
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use ckbadger_indexer::{sync::Indexer, Config};
 use ckbadger_store::CkbadgerStore;
+use ckbadger_task_runner::executor::TaskExecutor;
 
 #[derive(Parser, Debug)]
 #[command(name = "ckbadger-indexer")]
@@ -52,6 +54,16 @@ struct Args {
         help = "Path to CKB node's RocksDB data directory for direct reads (e.g., /var/lib/ckb/data/db)"
     )]
     ckb_data_path: Option<String>,
+
+    // Task runner settings (embedded)
+    #[arg(long, env = "TOKEN_LABELS_PATH", default_value = "docs/token-labels")]
+    token_labels_path: String,
+
+    #[arg(long, default_value = "5")]
+    task_poll_interval_secs: u64,
+
+    #[arg(long, default_value = "false", help = "Disable embedded task runner")]
+    no_task_runner: bool,
 }
 
 #[tokio::main]
@@ -184,6 +196,26 @@ async fn main() -> Result<()> {
             }
         }
     });
+
+    // Spawn embedded task runner
+    if !args.no_task_runner {
+        let runner_id = format!("indexer-runner-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let task_executor = TaskExecutor::new(
+            store.clone(),
+            runner_id.clone(),
+            config.ckb_rpc_url.clone(),
+            args.token_labels_path.clone(),
+            config.redis_url.clone(),
+        );
+        let poll_interval = Duration::from_secs(args.task_poll_interval_secs);
+        info!(
+            "Starting embedded task runner '{}' with poll interval {}s",
+            runner_id, args.task_poll_interval_secs
+        );
+        tokio::spawn(async move {
+            task_executor.run_continuous(poll_interval).await.ok();
+        });
+    }
 
     let indexer_for_shutdown = Arc::clone(&indexer);
     tokio::spawn(async move {

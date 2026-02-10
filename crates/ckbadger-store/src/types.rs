@@ -317,11 +317,13 @@ pub struct TaskEntry {
     pub task_type: String,
     pub status: String,
     pub priority: i32,
-    pub config: serde_json::Value,
+    /// JSON-encoded config string (bincode cannot round-trip serde_json::Value).
+    pub config: String,
     pub progress_total: Option<i64>,
     pub progress_current: Option<i64>,
     pub progress_message: Option<String>,
-    pub result: Option<serde_json::Value>,
+    /// JSON-encoded result string.
+    pub result: Option<String>,
     pub error_message: Option<String>,
     pub created_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>,
@@ -330,7 +332,8 @@ pub struct TaskEntry {
     pub runner_id: Option<String>,
     pub retry_count: i32,
     pub max_retries: i32,
-    pub rate_samples: Option<serde_json::Value>,
+    /// JSON-encoded rate samples string.
+    pub rate_samples: Option<String>,
     pub rate_ema: Option<f64>,
     pub log_tail: Option<String>,
 }

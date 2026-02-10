@@ -88,7 +88,7 @@ async fn get_active_tasks(State(state): State<Arc<AppState>>) -> ApiResult<Activ
             "index_rebuild" if index_rebuild.is_none() => {
                 let is_running = task.status == "running";
                 let (current_index, failed) = match task.result {
-                    Some(json) => match serde_json::from_value::<IndexRebuildResult>(json) {
+                    Some(ref json) => match serde_json::from_str::<IndexRebuildResult>(json) {
                         Ok(result) => (
                             result.current_index,
                             result.failed.into_iter().map(|f| f.name).collect(),
@@ -110,7 +110,7 @@ async fn get_active_tasks(State(state): State<Arc<AppState>>) -> ApiResult<Activ
             }
             "statistics_rebuild" if statistics_rebuild.is_none() => {
                 let current_table = match task.result {
-                    Some(json) => serde_json::from_value::<StatisticsRebuildResult>(json)
+                    Some(ref json) => serde_json::from_str::<StatisticsRebuildResult>(json)
                         .ok()
                         .and_then(|r| r.current_table),
                     None => None,

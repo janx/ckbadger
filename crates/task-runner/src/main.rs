@@ -27,12 +27,6 @@ struct Args {
     #[arg(long, env = "REDIS_URL")]
     redis_url: Option<String>,
 
-    #[arg(long, default_value = "50")]
-    cycles_batch_size: i64,
-
-    #[arg(long, default_value = "4")]
-    cycles_concurrent: usize,
-
     #[arg(long, default_value = "5")]
     poll_interval_secs: u64,
 
@@ -72,8 +66,6 @@ async fn main() -> Result<()> {
         args.ckb_rpc_url,
         args.token_labels_path,
         args.redis_url,
-        args.cycles_batch_size,
-        args.cycles_concurrent,
     );
 
     if args.once {

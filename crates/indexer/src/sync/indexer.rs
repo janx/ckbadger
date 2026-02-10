@@ -1249,16 +1249,11 @@ impl Indexer {
                     status.mark_bulk_sync_completed(chain_tip as i64);
                 })
                 .await;
-            if let Err(e) = self.maybe_submit_statistics_rebuild_task() {
-                warn!("Failed to submit statistics rebuild task: {}", e);
-            }
+            self.maybe_submit_pending_rebuild_tasks();
         }
 
         if was_secondary_bulk && !currently_secondary_bulk {
-            info!("Secondary issuance bulk sync completed, submitting backfill task...");
-            if let Err(e) = self.maybe_submit_secondary_issuance_backfill_task() {
-                warn!("Failed to submit secondary issuance backfill task: {}", e);
-            }
+            info!("Secondary issuance bulk sync completed");
         }
 
         self.was_bulk_sync_active
@@ -1268,12 +1263,6 @@ impl Indexer {
     }
 
     fn maybe_submit_pending_rebuild_tasks(&self) {
-        if let Err(e) = self.maybe_submit_statistics_rebuild_task() {
-            warn!("Failed to submit statistics rebuild task: {}", e);
-        }
-        if let Err(e) = self.maybe_submit_secondary_issuance_backfill_task() {
-            warn!("Failed to submit secondary issuance backfill task: {}", e);
-        }
         if let Err(e) = self.maybe_submit_label_import_task() {
             warn!("Failed to submit label import task: {}", e);
         }
@@ -1305,7 +1294,7 @@ impl Indexer {
             task_type: task_type.to_string(),
             status: "pending".to_string(),
             priority,
-            config,
+            config: serde_json::to_string(&config).unwrap_or_default(),
             progress_total: None,
             progress_current: None,
             progress_message: None,
@@ -1325,33 +1314,6 @@ impl Indexer {
         store.create_task(&entry)?;
         info!("Submitted {} task: {}", task_type, entry.id);
         Ok(())
-    }
-
-    fn maybe_submit_statistics_rebuild_task(&self) -> Result<()> {
-        use ckbadger_common::{StatisticsRebuildConfig, TaskBuilder};
-        let builder = TaskBuilder::statistics_rebuild(StatisticsRebuildConfig::default());
-        self.submit_task_if_not_exists(
-            &builder.task_type().to_string(),
-            builder.config().clone(),
-            builder.get_priority(),
-            builder.get_max_retries(),
-        )
-    }
-
-    fn maybe_submit_secondary_issuance_backfill_task(&self) -> Result<()> {
-        use ckbadger_common::{SecondaryIssuanceBackfillConfig, TaskBuilder};
-        let builder = TaskBuilder::secondary_issuance_backfill(SecondaryIssuanceBackfillConfig {
-            ckb_rpc_url: self.config.ckb_rpc_url.clone(),
-            start_block: None,
-            end_block: None,
-            ..Default::default()
-        });
-        self.submit_task_if_not_exists(
-            &builder.task_type().to_string(),
-            builder.config().clone(),
-            builder.get_priority(),
-            builder.get_max_retries(),
-        )
     }
 
     fn maybe_submit_label_import_task(&self) -> Result<()> {

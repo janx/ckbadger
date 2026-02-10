@@ -1,6 +1,5 @@
 pub mod cache;
 pub mod cycles;
-pub mod db;
 pub mod middleware;
 pub mod response;
 pub mod routes;

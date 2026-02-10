@@ -106,7 +106,7 @@ impl TaskDb {
 
     pub async fn update_result(&self, task_id: Uuid, result: &serde_json::Value) -> Result<()> {
         if let Some(mut task) = self.store.get_task(&task_id)? {
-            task.result = Some(result.clone());
+            task.result = Some(serde_json::to_string(result)?);
             task.heartbeat_at = Some(chrono::Utc::now());
             let value = bincode::serialize(&task)?;
             self.store
@@ -177,7 +177,7 @@ impl TaskDb {
                 task.progress_message = Some(msg);
             }
             if let Some(r) = result {
-                task.result = Some(r);
+                task.result = Some(serde_json::to_string(&r)?);
             }
             task.heartbeat_at = Some(chrono::Utc::now());
             self.store.update_task(&task, &old_status, old_priority)?;
@@ -223,7 +223,7 @@ impl TaskDb {
             task_type: builder.task_type().to_string(),
             status: "pending".to_string(),
             priority: builder.get_priority(),
-            config: builder.config().clone(),
+            config: serde_json::to_string(builder.config())?,
             progress_total: None,
             progress_current: None,
             progress_message: None,
@@ -364,11 +364,11 @@ fn task_entry_to_task(entry: ckbadger_store::types::TaskEntry) -> Task {
         task_type: entry.task_type,
         status: entry.status,
         priority: entry.priority,
-        config: entry.config,
+        config: serde_json::from_str(&entry.config).unwrap_or_default(),
         progress_total: entry.progress_total,
         progress_current: entry.progress_current,
         progress_message: entry.progress_message,
-        result: entry.result,
+        result: entry.result.and_then(|s| serde_json::from_str(&s).ok()),
         error_message: entry.error_message,
         created_at: entry.created_at,
         started_at: entry.started_at,

@@ -1,10 +1,6 @@
 use anyhow::Result;
 use chrono::{DateTime, Local};
-use ckbadger_common::{
-    CyclesBackfillConfig, DotbitRebuildConfig, IndexRebuildConfig, LabelImportConfig,
-    MemoryStatsData, MnftRebuildConfig, SecondaryIssuanceBackfillConfig, SporeRebuildConfig,
-    StatisticsRebuildConfig, Task, TaskBuilder,
-};
+use ckbadger_common::{LabelImportConfig, MemoryStatsData, Task, TaskBuilder};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -373,17 +369,13 @@ impl App {
 
     pub fn next_dialog_option(&mut self) {
         if let Some(DialogType::NewTask) = self.dialog {
-            self.dialog_selection = (self.dialog_selection + 1) % 9;
+            self.dialog_selection = 0;
         }
     }
 
     pub fn previous_dialog_option(&mut self) {
         if let Some(DialogType::NewTask) = self.dialog {
-            self.dialog_selection = if self.dialog_selection == 0 {
-                8
-            } else {
-                self.dialog_selection - 1
-            };
+            self.dialog_selection = 0;
         }
     }
 
@@ -395,16 +387,7 @@ impl App {
         match self.dialog {
             Some(DialogType::NewTask) => {
                 let builder = match self.dialog_selection {
-                    0 => TaskBuilder::cycles_backfill(CyclesBackfillConfig::default()),
-                    1 => TaskBuilder::index_rebuild(IndexRebuildConfig::default()),
-                    2 => TaskBuilder::label_import(LabelImportConfig::default()),
-                    3 => TaskBuilder::statistics_rebuild(StatisticsRebuildConfig::default()),
-                    4 => TaskBuilder::spore_rebuild(SporeRebuildConfig::default()),
-                    5 => TaskBuilder::secondary_issuance_backfill(
-                        SecondaryIssuanceBackfillConfig::default(),
-                    ),
-                    6 => TaskBuilder::mnft_rebuild(MnftRebuildConfig::default()),
-                    7 => TaskBuilder::dotbit_rebuild(DotbitRebuildConfig::default()),
+                    0 => TaskBuilder::label_import(LabelImportConfig::default()),
                     _ => return Ok(()),
                 };
                 let id = self.db.create_task(&builder).await?;
@@ -1416,19 +1399,7 @@ fn draw_dialog(f: &mut Frame, app: &App, dialog: &DialogType) {
 
     match dialog {
         DialogType::NewTask => {
-            let options = [
-                ("Cycles Backfill", "Backfill transaction cycles from RPC"),
-                ("Index Rebuild", "Rebuild deferred indexes and constraints"),
-                ("Label Import", "Import UDT/script labels from token-labels"),
-                ("Statistics Rebuild", "Rebuild all aggregate statistics"),
-                ("Spore Rebuild", "Rebuild Spore NFT data"),
-                (
-                    "Secondary Issuance Backfill",
-                    "Backfill secondary issuance data",
-                ),
-                ("MNFT Rebuild", "Rebuild M-NFT issuers/classes/tokens"),
-                ("DotBit Rebuild", "Rebuild DotBit accounts"),
-            ];
+            let options = [("Label Import", "Import UDT/script labels from token-labels")];
             let items: Vec<Line> = options
                 .iter()
                 .enumerate()

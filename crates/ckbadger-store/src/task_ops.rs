@@ -108,7 +108,7 @@ impl CkbadgerStore {
             let old_priority = task.priority;
             task.status = "completed".to_string();
             task.completed_at = Some(Utc::now());
-            task.result = result;
+            task.result = result.map(|v| serde_json::to_string(&v).unwrap_or_default());
             self.update_task(&task, &old_status, old_priority)?;
         }
         Ok(())
