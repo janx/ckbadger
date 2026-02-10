@@ -426,6 +426,8 @@ mod tests {
             progress_percentage: 10.0,
             updated_at: 1234567890,
             is_direct_db_read: false,
+            db_write_ms: None,
+            rpc_fetch_ms: None,
         };
         invalidator.publish_sync_progress(&data).await;
     }

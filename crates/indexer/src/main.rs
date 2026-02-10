@@ -140,6 +140,7 @@ async fn main() -> Result<()> {
             let eta = progress.eta_formatted();
             let bps = progress.blocks_per_second();
 
+            let (perf_rpc_ms, perf_db_ms) = indexer_for_progress.perf_snapshot_ms();
             let sync_data = ckbadger_common::SyncProgressData {
                 current_block: progress.current(),
                 target_block: progress.target(),
@@ -150,6 +151,16 @@ async fn main() -> Result<()> {
                 progress_percentage: progress.progress_percentage(),
                 updated_at: chrono::Utc::now().timestamp(),
                 is_direct_db_read: data_source == "DB",
+                db_write_ms: if perf_db_ms > 0.0 {
+                    Some(perf_db_ms)
+                } else {
+                    None
+                },
+                rpc_fetch_ms: if perf_rpc_ms > 0.0 {
+                    Some(perf_rpc_ms)
+                } else {
+                    None
+                },
             };
             indexer_for_progress
                 .cache_invalidator()

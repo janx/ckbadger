@@ -129,6 +129,13 @@ impl PerfStats {
             db as f64 / 1000.0,
         );
     }
+
+    /// Snapshot the current accumulated values (non-destructive read).
+    fn snapshot_ms(&self) -> (f64, f64) {
+        let rpc = self.rpc_fetch_us.load(Ordering::Relaxed);
+        let db = self.db_write_us.load(Ordering::Relaxed);
+        (rpc as f64 / 1000.0, db as f64 / 1000.0)
+    }
 }
 
 const CELL_CACHE_CAPACITY: usize = 200_000;
@@ -371,8 +378,14 @@ impl Indexer {
         self.ckb_store.is_some()
     }
 
+    /// Snapshot the current perf stats: (rpc_ms, db_ms).
+    pub fn perf_snapshot_ms(&self) -> (f64, f64) {
+        self.perf.snapshot_ms()
+    }
+
     pub fn get_memory_stats(&self) -> ckbadger_common::MemoryStatsData {
         let stats = self.writer.store().memory_stats();
+        let sync_status = self.writer.store().get_sync_status().unwrap_or_default();
         ckbadger_common::MemoryStatsData {
             live_cells_count: stats.cells_count as u64,
             consumed_cells_count: 0,
@@ -384,6 +397,14 @@ impl Indexer {
             block_headers_count: 0,
             bulk_sync_cell_cache_enabled: false,
             bulk_sync_mode: self.is_bulk_sync_active(),
+            compaction_pending_bytes: stats.compaction_pending_bytes,
+            num_running_compactions: stats.num_running_compactions,
+            sst_files_size: stats.sst_files_size,
+            top_cf_sizes: stats.top_cf_sizes,
+            total_transactions: sync_status.total_transactions,
+            total_cells: sync_status.total_cells_created,
+            total_live_cells: sync_status.total_cells_created - sync_status.total_cells_consumed,
+            total_addresses: 0,
             updated_at: chrono::Utc::now().timestamp(),
         }
     }

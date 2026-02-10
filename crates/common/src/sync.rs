@@ -196,6 +196,12 @@ pub struct SyncProgressData {
     /// True when reading blocks directly from CKB's RocksDB instead of JSON-RPC.
     #[serde(default)]
     pub is_direct_db_read: bool,
+    /// DB write time in ms for the last batch (from PerfStats).
+    #[serde(default)]
+    pub db_write_ms: Option<f64>,
+    /// RPC fetch time in ms for the last batch (from PerfStats).
+    #[serde(default)]
+    pub rpc_fetch_ms: Option<f64>,
 }
 
 pub fn format_duration_smart(total_secs: f64) -> String {
@@ -247,6 +253,29 @@ pub struct MemoryStatsData {
     pub bulk_sync_cell_cache_enabled: bool,
     /// Whether currently in bulk sync mode (>1000 blocks behind)
     pub bulk_sync_mode: bool,
+
+    /// Estimated bytes pending compaction
+    #[serde(default)]
+    pub compaction_pending_bytes: u64,
+    /// Number of currently running compactions
+    #[serde(default)]
+    pub num_running_compactions: u64,
+    /// Total SST file size on disk (all CFs)
+    #[serde(default)]
+    pub sst_files_size: u64,
+    /// Top column families by estimated live data size: (name, bytes)
+    #[serde(default)]
+    pub top_cf_sizes: Vec<(String, u64)>,
+
+    /// Chain-level statistics (from SyncStatusData)
+    #[serde(default)]
+    pub total_transactions: i64,
+    #[serde(default)]
+    pub total_cells: i64,
+    #[serde(default)]
+    pub total_live_cells: i64,
+    #[serde(default)]
+    pub total_addresses: i64,
 
     /// Unix timestamp when this data was collected
     pub updated_at: i64,
@@ -345,6 +374,17 @@ mod tests {
             block_headers_count: 6_000_000,
             bulk_sync_cell_cache_enabled: true,
             bulk_sync_mode: true,
+            compaction_pending_bytes: 500_000,
+            num_running_compactions: 2,
+            sst_files_size: 10_000_000_000,
+            top_cf_sizes: vec![
+                ("live_cells".to_string(), 3_000_000_000),
+                ("consumed_cells".to_string(), 2_500_000_000),
+            ],
+            total_transactions: 50_000_000,
+            total_cells: 100_000_000,
+            total_live_cells: 45_000_000,
+            total_addresses: 2_000_000,
             updated_at: 1700000000,
         };
 
@@ -354,5 +394,8 @@ mod tests {
         assert_eq!(parsed.live_cells_count, stats.live_cells_count);
         assert_eq!(parsed.rocksdb_total_bytes, stats.rocksdb_total_bytes);
         assert_eq!(parsed.bulk_sync_mode, stats.bulk_sync_mode);
+        assert_eq!(parsed.sst_files_size, stats.sst_files_size);
+        assert_eq!(parsed.top_cf_sizes.len(), 2);
+        assert_eq!(parsed.total_transactions, 50_000_000);
     }
 }

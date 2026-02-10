@@ -24,6 +24,30 @@ pub struct SyncStatusRow {
     pub rate_ema: Option<f64>,
     /// True when indexer reads blocks directly from CKB's RocksDB.
     pub is_direct_db_read: bool,
+    /// DB write time in ms for the last batch
+    pub db_write_ms: Option<f64>,
+    /// RPC fetch time in ms for the last batch
+    pub rpc_fetch_ms: Option<f64>,
+    /// Detailed deferred flags
+    pub activities_deferred: bool,
+    pub address_balances_deferred: bool,
+    pub token_deferred: bool,
+    pub spore_deferred: bool,
+    pub tx_block_map_deferred: bool,
+}
+
+struct DeferredFlags {
+    activities: bool,
+    address_balances: bool,
+    token: bool,
+    spore: bool,
+    tx_block_map: bool,
+}
+
+impl DeferredFlags {
+    fn any(&self) -> bool {
+        self.activities || self.address_balances || self.token || self.spore || self.tx_block_map
+    }
 }
 
 pub struct TaskDb {
@@ -60,17 +84,28 @@ impl TaskDb {
             self.get_redis_key(SYNC_PROGRESS_REDIS_KEY).await;
         let status_data: Option<SyncStatusData> = self.get_redis_key(SYNC_STATUS_REDIS_KEY).await;
 
-        let indexes_deferred: bool = self.store.get_sync_status()?.activities_deferred;
+        let store_status = self.store.get_sync_status()?;
+        let deferred = DeferredFlags {
+            activities: store_status.activities_deferred,
+            address_balances: store_status.address_balances_deferred,
+            // token/spore/tx_block_map are only in SyncStatusData (Redis), not in store SyncStatus
+            token: status_data.as_ref().is_some_and(|s| s.token_deferred),
+            spore: status_data.as_ref().is_some_and(|s| s.spore_deferred),
+            tx_block_map: status_data
+                .as_ref()
+                .is_some_and(|s| s.tx_block_map_deferred),
+        };
+        let _indexes_deferred = deferred.any();
 
         if let Some(ref progress) = progress_data {
-            return Ok(self.build_from_progress(progress, &status_data, indexes_deferred));
+            return Ok(self.build_from_progress(progress, &status_data, &deferred));
         }
 
         if let Some(ref status) = status_data {
-            return self.build_from_status(status, indexes_deferred).await;
+            return self.build_from_status(status, &deferred).await;
         }
 
-        self.build_fallback(indexes_deferred).await
+        self.build_fallback(&deferred).await
     }
 
     async fn get_redis_key<T: serde::de::DeserializeOwned>(&self, key: &str) -> Option<T> {
@@ -87,7 +122,7 @@ impl TaskDb {
         &self,
         progress: &SyncProgressData,
         status_data: &Option<SyncStatusData>,
-        indexes_deferred: bool,
+        deferred: &DeferredFlags,
     ) -> SyncStatusRow {
         let tip_block = progress.current_block as i64;
         let chain_tip = progress.target_block as i64;
@@ -108,19 +143,26 @@ impl TaskDb {
             is_syncing: blocks_behind > 100,
             is_bulk_sync: blocks_behind > 1000,
             progress: progress.progress_percentage,
-            indexes_deferred,
+            indexes_deferred: deferred.any(),
             elapsed_time,
             eta: Some(progress.eta_formatted.clone()),
             rate_realtime: Some(progress.blocks_per_second),
             rate_ema: Some(progress.ema_blocks_per_second),
             is_direct_db_read: progress.is_direct_db_read,
+            db_write_ms: progress.db_write_ms,
+            rpc_fetch_ms: progress.rpc_fetch_ms,
+            activities_deferred: deferred.activities,
+            address_balances_deferred: deferred.address_balances,
+            token_deferred: deferred.token,
+            spore_deferred: deferred.spore,
+            tx_block_map_deferred: deferred.tx_block_map,
         }
     }
 
     async fn build_from_status(
         &self,
         status: &SyncStatusData,
-        indexes_deferred: bool,
+        deferred: &DeferredFlags,
     ) -> Result<SyncStatusRow> {
         let tip_block = status.tip_block_number;
         let (chain_tip, _) = self.store.get_sync_tip()?;
@@ -159,16 +201,23 @@ impl TaskDb {
             is_syncing,
             is_bulk_sync: blocks_behind > 1000,
             progress,
-            indexes_deferred,
+            indexes_deferred: deferred.any(),
             elapsed_time,
             eta,
             rate_realtime: None,
             rate_ema: status.sync_ema_rate,
             is_direct_db_read: false,
+            db_write_ms: None,
+            rpc_fetch_ms: None,
+            activities_deferred: deferred.activities,
+            address_balances_deferred: deferred.address_balances,
+            token_deferred: deferred.token,
+            spore_deferred: deferred.spore,
+            tx_block_map_deferred: deferred.tx_block_map,
         })
     }
 
-    async fn build_fallback(&self, indexes_deferred: bool) -> Result<SyncStatusRow> {
+    async fn build_fallback(&self, deferred: &DeferredFlags) -> Result<SyncStatusRow> {
         let (tip, _) = self.store.get_sync_tip()?;
 
         Ok(SyncStatusRow {
@@ -177,12 +226,19 @@ impl TaskDb {
             is_syncing: false,
             is_bulk_sync: false,
             progress: 100.0,
-            indexes_deferred,
+            indexes_deferred: deferred.any(),
             elapsed_time: None,
             eta: None,
             rate_realtime: None,
             rate_ema: None,
             is_direct_db_read: false,
+            db_write_ms: None,
+            rpc_fetch_ms: None,
+            activities_deferred: deferred.activities,
+            address_balances_deferred: deferred.address_balances,
+            token_deferred: deferred.token,
+            spore_deferred: deferred.spore,
+            tx_block_map_deferred: deferred.tx_block_map,
         })
     }
 

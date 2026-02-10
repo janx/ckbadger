@@ -354,6 +354,14 @@ pub struct MemoryStats {
     pub memtable_bytes: usize,
     pub block_cache_bytes: usize,
     pub table_readers_bytes: usize,
+    /// Estimated bytes pending compaction across all CFs
+    pub compaction_pending_bytes: u64,
+    /// Number of currently running compactions
+    pub num_running_compactions: u64,
+    /// Total SST file size on disk (all CFs)
+    pub sst_files_size: u64,
+    /// Top column families by estimated live data size: (name, bytes)
+    pub top_cf_sizes: Vec<(String, u64)>,
 }
 
 impl MemoryStats {

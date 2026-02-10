@@ -128,14 +128,24 @@ impl CkbadgerStore {
         opts.create_if_missing(true);
         opts.create_missing_column_families(true);
 
-        opts.set_write_buffer_size(64 * 1024 * 1024);
+        // Write buffer: 128 MB per CF, up to 4 buffers
+        opts.set_write_buffer_size(128 * 1024 * 1024);
         opts.set_max_write_buffer_number(4);
+
+        // Compaction triggers: give L0 more headroom to avoid write stalls
         opts.set_level_zero_file_num_compaction_trigger(4);
+        opts.set_level_zero_slowdown_writes_trigger(12);
+        opts.set_level_zero_stop_writes_trigger(24);
         opts.set_max_bytes_for_level_base(512 * 1024 * 1024);
         opts.set_compression_type(DBCompressionType::Lz4);
-        opts.set_max_background_jobs(4);
 
-        let block_cache = rocksdb::Cache::new_lru_cache(512 * 1024 * 1024);
+        // Background jobs: 10 threads shared across 25 CFs for flush + compaction
+        opts.set_max_background_jobs(10);
+        // Allow large compaction jobs to use multiple threads
+        opts.set_max_subcompactions(3);
+
+        // 2 GB block cache (plenty of RAM available)
+        let block_cache = rocksdb::Cache::new_lru_cache(2 * 1024 * 1024 * 1024);
         let mut block_opts = rocksdb::BlockBasedOptions::default();
         block_opts.set_block_size(16 * 1024);
         block_opts.set_block_cache(&block_cache);
@@ -297,6 +307,10 @@ impl CkbadgerStore {
     pub fn memory_stats(&self) -> MemoryStats {
         let mut memtable_bytes = 0usize;
         let mut table_readers_bytes = 0usize;
+        let mut compaction_pending_bytes = 0u64;
+        let mut num_running_compactions = 0u64;
+        let mut sst_files_size = 0u64;
+        let mut cf_sizes: Vec<(String, u64)> = Vec::new();
 
         for cf_name in ALL_CFS {
             if let Some(cf) = self.db.cf_handle(cf_name) {
@@ -312,8 +326,39 @@ impl CkbadgerStore {
                 {
                     table_readers_bytes += v as usize;
                 }
+                if let Ok(Some(v)) = self
+                    .db
+                    .property_int_value_cf(cf, "rocksdb.estimate-pending-compaction-bytes")
+                {
+                    compaction_pending_bytes += v;
+                }
+                if let Ok(Some(v)) = self
+                    .db
+                    .property_int_value_cf(cf, "rocksdb.num-running-compactions")
+                {
+                    num_running_compactions += v;
+                }
+                if let Ok(Some(v)) = self
+                    .db
+                    .property_int_value_cf(cf, "rocksdb.total-sst-files-size")
+                {
+                    sst_files_size += v;
+                }
+                // Per-CF live data size for top-N display
+                if let Ok(Some(v)) = self
+                    .db
+                    .property_int_value_cf(cf, "rocksdb.estimate-live-data-size")
+                {
+                    if v > 0 {
+                        cf_sizes.push((cf_name.to_string(), v));
+                    }
+                }
             }
         }
+
+        // Sort by size descending and keep top 5
+        cf_sizes.sort_by(|a, b| b.1.cmp(&a.1));
+        cf_sizes.truncate(5);
 
         let block_cache_bytes = self.block_cache.get_usage();
         let memory_bytes = memtable_bytes + block_cache_bytes + table_readers_bytes;
@@ -324,6 +369,10 @@ impl CkbadgerStore {
             memtable_bytes,
             block_cache_bytes,
             table_readers_bytes,
+            compaction_pending_bytes,
+            num_running_compactions,
+            sst_files_size,
+            top_cf_sizes: cf_sizes,
         }
     }
 }

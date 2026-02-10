@@ -81,6 +81,8 @@ pub struct App {
     dialog_selection: usize,
     status_message: Option<String>,
     rate_history: VecDeque<f64>,
+    db_write_history: VecDeque<f64>,
+    chart_mode: ChartMode,
     log_entries: VecDeque<LogEntry>,
     log_scroll: usize,
     detail_scroll: usize,
@@ -92,6 +94,13 @@ pub struct App {
     prev_indexes_deferred: Option<bool>,
     #[allow(dead_code)]
     picker: Option<Picker>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum ChartMode {
+    #[default]
+    SyncRate,
+    DbWrite,
 }
 
 impl App {
@@ -115,6 +124,8 @@ impl App {
             dialog_selection: 0,
             status_message: None,
             rate_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
+            db_write_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
+            chart_mode: ChartMode::default(),
             log_entries,
             log_scroll: 0,
             detail_scroll: 0,
@@ -313,6 +324,23 @@ impl App {
             self.rate_history.pop_front();
         }
         self.rate_history.push_back(rate);
+
+        let db_ms = self
+            .sync_status
+            .as_ref()
+            .and_then(|s| s.db_write_ms)
+            .unwrap_or(0.0);
+        if self.db_write_history.len() >= RATE_HISTORY_SIZE {
+            self.db_write_history.pop_front();
+        }
+        self.db_write_history.push_back(db_ms);
+    }
+
+    pub fn toggle_chart_mode(&mut self) {
+        self.chart_mode = match self.chart_mode {
+            ChartMode::SyncRate => ChartMode::DbWrite,
+            ChartMode::DbWrite => ChartMode::SyncRate,
+        };
     }
 
     pub fn should_refresh(&self) -> bool {
@@ -461,7 +489,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             Constraint::Length(3),
             Constraint::Length(7),
             Constraint::Length(8),
-            Constraint::Length(5),
+            Constraint::Length(9),
             Constraint::Min(8),
             Constraint::Length(10),
             Constraint::Length(3),
@@ -566,18 +594,33 @@ fn draw_sync_status_full(f: &mut Frame, app: &App, area: Rect) {
         Span::styled("[RPC]", Style::default().fg(Color::Cyan))
     };
 
-    let idx_tag = if sync.indexes_deferred {
-        Span::styled(" [IDX]", Style::default().fg(Color::Yellow))
-    } else {
-        Span::raw("")
-    };
+    // Build detailed deferred tags
+    let mut deferred_tags: Vec<Span> = Vec::new();
+    if sync.activities_deferred {
+        deferred_tags.push(Span::styled(" [ACT]", Style::default().fg(Color::Yellow)));
+    }
+    if sync.address_balances_deferred {
+        deferred_tags.push(Span::styled(" [BAL]", Style::default().fg(Color::Yellow)));
+    }
+    if sync.token_deferred {
+        deferred_tags.push(Span::styled(" [TOK]", Style::default().fg(Color::Yellow)));
+    }
+    if sync.spore_deferred {
+        deferred_tags.push(Span::styled(" [SPR]", Style::default().fg(Color::Yellow)));
+    }
+    if sync.tx_block_map_deferred {
+        deferred_tags.push(Span::styled(" [TXM]", Style::default().fg(Color::Yellow)));
+    }
+
+    let mut tag_line = vec![source_tag];
+    tag_line.extend(deferred_tags);
 
     let mut left_lines = vec![
         Line::from(vec![Span::styled(
             format!(" {} ", mode),
             Style::default().fg(Color::Black).bg(mode_color),
         )]),
-        Line::from(vec![source_tag, idx_tag]),
+        Line::from(tag_line),
         Line::from(vec![
             Span::styled("Progress: ", Style::default().fg(COLOR_MUTED)),
             Span::styled(
@@ -680,6 +723,29 @@ fn draw_sync_status_full(f: &mut Frame, app: &App, area: Rect) {
             Span::raw(elapsed.clone()),
         ]));
     }
+    // DB/RPC batch performance
+    if let Some(db_ms) = sync.db_write_ms {
+        let db_color = if db_ms > 2000.0 {
+            Color::Red
+        } else if db_ms > 1000.0 {
+            Color::Yellow
+        } else {
+            Color::Green
+        };
+        right_lines.push(Line::from(vec![
+            Span::styled("DB Write: ", Style::default().fg(COLOR_MUTED)),
+            Span::styled(format!("{:.0}ms", db_ms), Style::default().fg(db_color)),
+            if let Some(rpc_ms) = sync.rpc_fetch_ms {
+                Span::styled(
+                    format!("  RPC: {:.0}ms", rpc_ms),
+                    Style::default().fg(COLOR_MUTED),
+                )
+            } else {
+                Span::raw("")
+            },
+        ]));
+    }
+
     if right_lines.is_empty() {
         right_lines.push(Line::from(Span::styled(
             "Real-time sync",
@@ -695,7 +761,12 @@ fn draw_rate_chart_full(f: &mut Frame, app: &App, area: Rect) {
         .border_style(Style::default().fg(COLOR_BORDER))
         .title(chart_title(app));
 
-    if app.rate_history.is_empty() {
+    let history = match app.chart_mode {
+        ChartMode::SyncRate => &app.rate_history,
+        ChartMode::DbWrite => &app.db_write_history,
+    };
+
+    if history.is_empty() {
         let msg = Paragraph::new("Collecting data...")
             .style(Style::default().fg(COLOR_MUTED))
             .block(block);
@@ -706,11 +777,7 @@ fn draw_rate_chart_full(f: &mut Frame, app: &App, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let chart_result = render_bar_chart(
-        &app.rate_history,
-        inner.width as usize,
-        inner.height as usize,
-    );
+    let chart_result = render_bar_chart(history, inner.width as usize, inner.height as usize);
 
     for (i, row) in chart_result.rows.iter().enumerate() {
         if i < inner.height as usize {
@@ -939,7 +1006,7 @@ fn draw_memory_stats(f: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(COLOR_BORDER))
         .title(Span::styled(
-            "Memory Usage",
+            "Database & Storage",
             Style::default().fg(Color::White),
         ));
 
@@ -954,7 +1021,11 @@ fn draw_memory_stats(f: &mut Frame, app: &App, area: Rect) {
 
     let cols = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .constraints([
+            Constraint::Percentage(33),
+            Constraint::Percentage(34),
+            Constraint::Percentage(33),
+        ])
         .split(inner);
 
     let bulk_indicator = if mem.bulk_sync_mode {
@@ -963,7 +1034,8 @@ fn draw_memory_stats(f: &mut Frame, app: &App, area: Rect) {
         Span::raw("")
     };
 
-    let left_lines = vec![
+    // Left column: RocksDB memory breakdown
+    let mut left_lines = vec![
         Line::from(vec![
             Span::styled(
                 format!("{:>14}", "RocksDB:"),
@@ -993,17 +1065,77 @@ fn draw_memory_stats(f: &mut Frame, app: &App, area: Rect) {
                 format_bytes(mem.rocksdb_block_cache_bytes)
             )),
         ]),
-    ];
-    f.render_widget(Paragraph::new(left_lines), cols[0]);
-
-    let right_lines = vec![
         Line::from(vec![
             Span::styled(
-                format!("{:>16}", "Live Cells:"),
+                format!("{:>14}", "Table Read:"),
+                Style::default().fg(Color::Gray),
+            ),
+            Span::raw(format!(
+                " {:>10}",
+                format_bytes(mem.rocksdb_table_readers_bytes)
+            )),
+        ]),
+    ];
+    // Disk usage
+    if mem.sst_files_size > 0 {
+        left_lines.push(Line::from(vec![
+            Span::styled(
+                format!("{:>14}", "Disk (SST):"),
                 Style::default().fg(Color::Gray),
             ),
             Span::styled(
-                format!(" {:>10}", format_count(mem.live_cells_count)),
+                format!(" {:>10}", format_bytes(mem.sst_files_size)),
+                Style::default().fg(Color::Magenta),
+            ),
+        ]));
+    }
+    // Compaction status
+    if mem.compaction_pending_bytes > 0 || mem.num_running_compactions > 0 {
+        left_lines.push(Line::from(vec![
+            Span::styled(
+                format!("{:>14}", "Compaction:"),
+                Style::default().fg(Color::Gray),
+            ),
+            Span::styled(
+                format!(
+                    " {} run, {} pend",
+                    mem.num_running_compactions,
+                    format_bytes(mem.compaction_pending_bytes)
+                ),
+                Style::default().fg(Color::Yellow),
+            ),
+        ]));
+    }
+    f.render_widget(Paragraph::new(left_lines), cols[0]);
+
+    // Middle column: Chain statistics
+    let mid_lines = vec![
+        Line::from(vec![
+            Span::styled(
+                format!("{:>14}", "Transactions:"),
+                Style::default().fg(Color::Gray),
+            ),
+            Span::styled(
+                format!(" {:>10}", format_count_i64(mem.total_transactions)),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled(
+                format!("{:>14}", "Total Cells:"),
+                Style::default().fg(Color::Gray),
+            ),
+            Span::raw(format!(" {:>10}", format_count_i64(mem.total_cells))),
+        ]),
+        Line::from(vec![
+            Span::styled(
+                format!("{:>14}", "Live Cells:"),
+                Style::default().fg(Color::Gray),
+            ),
+            Span::styled(
+                format!(" {:>10}", format_count_i64(mem.total_live_cells)),
                 Style::default()
                     .fg(Color::Green)
                     .add_modifier(Modifier::BOLD),
@@ -1012,24 +1144,38 @@ fn draw_memory_stats(f: &mut Frame, app: &App, area: Rect) {
         ]),
         Line::from(vec![
             Span::styled(
-                format!("{:>16}", "Consumed Cache:"),
+                format!("{:>14}", "Addresses:"),
                 Style::default().fg(Color::Gray),
             ),
-            Span::raw(format!(
-                " {:>10} ({})",
-                format_count(mem.consumed_cells_count),
-                format_bytes(mem.consumed_cells_bytes)
-            )),
-        ]),
-        Line::from(vec![
-            Span::styled(
-                format!("{:>16}", "Headers:"),
-                Style::default().fg(Color::Gray),
-            ),
-            Span::raw(format!(" {:>10}", format_count(mem.block_headers_count))),
+            Span::raw(format!(" {:>10}", format_count_i64(mem.total_addresses))),
         ]),
     ];
-    f.render_widget(Paragraph::new(right_lines), cols[1]);
+    f.render_widget(Paragraph::new(mid_lines), cols[1]);
+
+    // Right column: Top column families by size
+    let mut right_lines = vec![Line::from(Span::styled(
+        " Top Column Families",
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD),
+    ))];
+    if mem.top_cf_sizes.is_empty() {
+        right_lines.push(Line::from(Span::styled(
+            "   (no data)",
+            Style::default().fg(COLOR_MUTED),
+        )));
+    } else {
+        for (name, size) in &mem.top_cf_sizes {
+            right_lines.push(Line::from(vec![
+                Span::styled(format!("  {:<18}", name), Style::default().fg(Color::Gray)),
+                Span::styled(
+                    format!("{:>10}", format_bytes(*size)),
+                    Style::default().fg(Color::Cyan),
+                ),
+            ]));
+        }
+    }
+    f.render_widget(Paragraph::new(right_lines), cols[2]);
 }
 
 fn format_bytes(bytes: u64) -> String {
@@ -1044,6 +1190,7 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
+#[allow(dead_code)]
 fn format_count(count: u64) -> String {
     if count >= 1_000_000 {
         format!("{:.2}M", count as f64 / 1_000_000.0)
@@ -1051,6 +1198,18 @@ fn format_count(count: u64) -> String {
         format!("{:.1}K", count as f64 / 1_000.0)
     } else {
         format!("{}", count)
+    }
+}
+
+fn format_count_i64(count: i64) -> String {
+    let abs = count.unsigned_abs();
+    let prefix = if count < 0 { "-" } else { "" };
+    if abs >= 1_000_000 {
+        format!("{}{:.2}M", prefix, abs as f64 / 1_000_000.0)
+    } else if abs >= 1_000 {
+        format!("{}{:.1}K", prefix, abs as f64 / 1_000.0)
+    } else {
+        format!("{}{}", prefix, abs)
     }
 }
 
@@ -1063,31 +1222,46 @@ fn format_rate(rate: f64) -> String {
 }
 
 fn chart_title(app: &App) -> Line<'static> {
-    let stats = ChartStats::from_history(&app.rate_history);
+    let (history, label, unit) = match app.chart_mode {
+        ChartMode::SyncRate => (&app.rate_history, "Sync Rate", "blk/s"),
+        ChartMode::DbWrite => (&app.db_write_history, "DB Write", "ms"),
+    };
+    let stats = ChartStats::from_history(history);
+    let mode_hint = Span::styled(" [v] ", Style::default().fg(Color::Rgb(100, 100, 100)));
     match stats {
-        Some(s) => Line::from(vec![
-            Span::raw("Sync Rate "),
-            Span::styled(
-                format!("now:{}", format_rate(s.current)),
-                Style::default().fg(Color::Green),
-            ),
-            Span::styled(" │ ", Style::default().fg(COLOR_SEPARATOR)),
-            Span::styled(
-                format!("min:{}", format_rate(s.min)),
-                Style::default().fg(Color::Red),
-            ),
-            Span::styled(" │ ", Style::default().fg(COLOR_SEPARATOR)),
-            Span::styled(
-                format!("avg:{}", format_rate(s.avg)),
-                Style::default().fg(Color::Cyan),
-            ),
-            Span::styled(" │ ", Style::default().fg(COLOR_SEPARATOR)),
-            Span::styled(
-                format!("max:{}", format_rate(s.max)),
-                Style::default().fg(Color::Yellow),
-            ),
-        ]),
-        None => Line::from("Sync Rate (collecting...)"),
+        Some(s) => {
+            let fmt = |v: f64| -> String {
+                if unit == "ms" {
+                    format!("{:.0}{}", v, unit)
+                } else {
+                    format!("{}{}", format_rate(v), "")
+                }
+            };
+            Line::from(vec![
+                Span::raw(format!("{} ", label)),
+                mode_hint,
+                Span::styled(
+                    format!("now:{}", fmt(s.current)),
+                    Style::default().fg(Color::Green),
+                ),
+                Span::styled(" │ ", Style::default().fg(COLOR_SEPARATOR)),
+                Span::styled(
+                    format!("min:{}", fmt(s.min)),
+                    Style::default().fg(Color::Red),
+                ),
+                Span::styled(" │ ", Style::default().fg(COLOR_SEPARATOR)),
+                Span::styled(
+                    format!("avg:{}", fmt(s.avg)),
+                    Style::default().fg(Color::Cyan),
+                ),
+                Span::styled(" │ ", Style::default().fg(COLOR_SEPARATOR)),
+                Span::styled(
+                    format!("max:{}", fmt(s.max)),
+                    Style::default().fg(Color::Yellow),
+                ),
+            ])
+        }
+        None => Line::from(format!("{} (collecting...)", label)),
     }
 }
 

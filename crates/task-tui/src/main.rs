@@ -122,6 +122,7 @@ async fn run_app<B: ratatui::backend::Backend>(
                             KeyCode::Char('p') => app.pause_selected().await?,
                             KeyCode::Char('r') => app.resume_or_retry_selected().await?,
                             KeyCode::Char('d') => app.delete_selected().await?,
+                            KeyCode::Char('v') => app.toggle_chart_mode(),
                             KeyCode::Char('R') => app.refresh().await?,
                             KeyCode::Enter => app.confirm_dialog().await?,
                             KeyCode::Esc => app.cancel_dialog(),
