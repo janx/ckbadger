@@ -2,6 +2,7 @@
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
+use tracing::info;
 
 use rocksdb::{
     ColumnFamily, ColumnFamilyDescriptor, DBCompressionType, IteratorMode, Options, WriteBatch, DB,
@@ -296,6 +297,21 @@ impl CkbadgerStore {
 
     pub fn is_bulk_sync_mode(&self) -> bool {
         self.bulk_sync_mode.load(Ordering::Relaxed)
+    }
+
+    /// Log the key RocksDB tuning parameters at startup.
+    pub fn log_config() {
+        info!(
+            write_buffer_mb = 128,
+            max_write_buffers = 4,
+            l0_slowdown = 12,
+            l0_stop = 24,
+            max_background_jobs = 10,
+            max_subcompactions = 3,
+            block_cache_gb = 2,
+            column_families = ALL_CFS.len(),
+            "RocksDB configuration"
+        );
     }
 
     pub fn is_secondary(&self) -> bool {

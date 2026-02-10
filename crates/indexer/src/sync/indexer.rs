@@ -120,13 +120,13 @@ impl PerfStats {
         if blocks == 0 {
             return;
         }
-        let rpc = self.rpc_fetch_us.swap(0, Ordering::Relaxed);
-        let db = self.db_write_us.swap(0, Ordering::Relaxed);
+        let rpc_ms = self.rpc_fetch_us.swap(0, Ordering::Relaxed) as f64 / 1000.0;
+        let db_ms = self.db_write_us.swap(0, Ordering::Relaxed) as f64 / 1000.0;
         info!(
-            "PERF[{}blks] RPC={:.1}ms DB={:.1}ms",
             blocks,
-            rpc as f64 / 1000.0,
-            db as f64 / 1000.0,
+            rpc_ms = format!("{:.1}", rpc_ms),
+            db_ms = format!("{:.1}", db_ms),
+            "Batch perf"
         );
     }
 
@@ -950,6 +950,16 @@ impl Indexer {
                     let db_elapsed = db_start.elapsed();
                     self.perf.add(&self.perf.db_write_us, db_elapsed);
 
+                    if db_elapsed.as_secs() >= 5 {
+                        let stats = self.writer.store().memory_stats();
+                        warn!(
+                            db_ms = format!("{:.1}", db_elapsed.as_secs_f64() * 1000.0),
+                            compaction_pending_mb = stats.compaction_pending_bytes / (1024 * 1024),
+                            running_compactions = stats.num_running_compactions,
+                            "Slow DB write detected (possible write stall)"
+                        );
+                    }
+
                     if let Some(last_block) = all_parsed_blocks.last() {
                         self.progress.update_current_batch(
                             last_block.number as u64,
@@ -1185,6 +1195,16 @@ impl Indexer {
         let db_elapsed = db_start.elapsed();
         self.perf.add(&self.perf.db_write_us, db_elapsed);
 
+        if db_elapsed.as_secs() >= 5 {
+            let stats = self.writer.store().memory_stats();
+            warn!(
+                db_ms = format!("{:.1}", db_elapsed.as_secs_f64() * 1000.0),
+                compaction_pending_mb = stats.compaction_pending_bytes / (1024 * 1024),
+                running_compactions = stats.num_running_compactions,
+                "Slow DB write detected (possible write stall)"
+            );
+        }
+
         if let Some(last_block_response) = blocks.last() {
             let last_block_number = BlockParser::parse_block_number(&last_block_response.block);
             self.progress
@@ -1263,13 +1283,32 @@ impl Indexer {
             .load(Ordering::SeqCst);
 
         if was_bulk && !currently_bulk {
-            info!("Bulk sync completed, submitting post-sync tasks...");
+            let stats = self.writer.store().memory_stats();
+            let current = self.progress.current();
             let chain_tip = self.progress.target();
+            let sst_gb = stats.sst_files_size as f64 / (1024.0 * 1024.0 * 1024.0);
+
             self.cache_invalidator
                 .update_sync_status(|status| {
                     status.mark_bulk_sync_completed(chain_tip as i64);
                 })
                 .await;
+
+            let elapsed = self
+                .cache_invalidator
+                .get_sync_status()
+                .await
+                .and_then(|s| s.bulk_sync_total_seconds());
+            let avg_bps = elapsed
+                .filter(|&e| e > 0)
+                .map(|e| current as f64 / e as f64);
+            info!(
+                blocks_synced = current,
+                elapsed_secs = elapsed.unwrap_or(0),
+                avg_bps = format!("{:.1}", avg_bps.unwrap_or(0.0)),
+                sst_size_gb = format!("{:.1}", sst_gb),
+                "Bulk sync completed"
+            );
             self.maybe_submit_pending_rebuild_tasks();
         }
 
@@ -1544,6 +1583,7 @@ impl Indexer {
         }
 
         // Write blocks, txs, cells via StoreBatch
+        let t_headers = Instant::now();
         {
             let mut batch = StoreBatch::new(self.writer.store());
             if !block_refs.is_empty() {
@@ -1558,6 +1598,7 @@ impl Indexer {
             }
             batch.commit()?;
         }
+        let headers_ms = t_headers.elapsed().as_secs_f64() * 1000.0;
 
         // Block proposals (no-op in RocksDB but kept for API compatibility)
         for parsed_block in &all_parsed_blocks {
@@ -1644,6 +1685,7 @@ impl Indexer {
         }
 
         // Consume cells
+        let t_cells = Instant::now();
         let mut all_consumptions: Vec<(&[u8], i16, i64, &[u8], i64, i16)> = Vec::new();
         for tx_data in &all_tx_data {
             if !tx_data.is_cellbase {
@@ -1851,7 +1893,10 @@ impl Indexer {
             consume_addr_batch.commit()?;
         }
 
+        let cells_ms = t_cells.elapsed().as_secs_f64() * 1000.0;
+
         // Accumulate batch statistics
+        let t_stats = Instant::now();
         let mut batch_stats = BatchStats::default();
         let mut prev_timestamp: Option<chrono::DateTime<Utc>> =
             if let Some(first_block) = all_parsed_blocks.first() {
@@ -2465,6 +2510,14 @@ impl Indexer {
 
         self.flush_batch_stats(&batch_stats).await?;
 
+        let stats_ms = t_stats.elapsed().as_secs_f64() * 1000.0;
+        debug!(
+            headers_ms = format!("{:.1}", headers_ms),
+            cells_ms = format!("{:.1}", cells_ms),
+            stats_ms = format!("{:.1}", stats_ms),
+            "Batch write breakdown"
+        );
+
         Ok(())
     }
     // === write_parsed_batch (pipeline path) ===
@@ -2620,6 +2673,7 @@ impl Indexer {
         }
 
         // Write txs, cells, inputs, proposals via StoreBatch (blocks written LAST)
+        let t_headers = Instant::now();
         {
             let mut batch = StoreBatch::new(self.writer.store());
             if !txs_for_batch.is_empty() {
@@ -2637,8 +2691,10 @@ impl Indexer {
             }
             batch.commit()?;
         }
+        let headers_ms = t_headers.elapsed().as_secs_f64() * 1000.0;
 
         // Consume cells
+        let t_cells = Instant::now();
         let mut all_consumptions: Vec<(&[u8], i16, i64, &[u8], i64, i16)> = Vec::new();
         for tx_data in &all_tx_data {
             if !tx_data.is_cellbase {
@@ -2818,7 +2874,10 @@ impl Indexer {
             consume_addr_batch.commit()?;
         }
 
+        let cells_ms = t_cells.elapsed().as_secs_f64() * 1000.0;
+
         // Stats accumulation
+        let t_stats = Instant::now();
         let mut batch_stats = BatchStats::default();
         let mut prev_timestamp: Option<chrono::DateTime<Utc>> =
             if let Some(first_block) = all_parsed_blocks.first() {
@@ -3522,6 +3581,14 @@ impl Indexer {
         }
 
         self.flush_batch_stats(&batch_stats).await?;
+
+        let stats_ms = t_stats.elapsed().as_secs_f64() * 1000.0;
+        debug!(
+            headers_ms = format!("{:.1}", headers_ms),
+            cells_ms = format!("{:.1}", cells_ms),
+            stats_ms = format!("{:.1}", stats_ms),
+            "Batch write breakdown"
+        );
 
         Ok(())
     }

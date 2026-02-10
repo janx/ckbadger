@@ -100,6 +100,7 @@ async fn main() -> Result<()> {
 
     info!("Opening ckbadger-store at: {}", config.data_path);
     let store = Arc::new(CkbadgerStore::open(&config.data_path)?);
+    CkbadgerStore::log_config();
 
     let sync_status = store.get_sync_status()?;
     let db_tip = sync_status.tip_block_number;
@@ -173,28 +174,28 @@ async fn main() -> Result<()> {
                 .publish_memory_stats(&memory_stats)
                 .await;
 
-            if indexer_for_progress.is_bulk_sync_active() {
-                let (color_start, color_end) = if ema_rate >= 1000.0 {
-                    ("\x1b[32m", "\x1b[0m")
-                } else if ema_rate >= 100.0 {
-                    ("\x1b[33m", "\x1b[0m")
-                } else {
-                    ("\x1b[31m", "\x1b[0m")
-                };
+            info!(
+                memtable_mb = memory_stats.rocksdb_memtable_bytes / (1024 * 1024),
+                block_cache_mb = memory_stats.rocksdb_block_cache_bytes / (1024 * 1024),
+                compaction_pending_mb = memory_stats.compaction_pending_bytes / (1024 * 1024),
+                running_compactions = memory_stats.num_running_compactions,
+                sst_size_gb = format!(
+                    "{:.1}",
+                    memory_stats.sst_files_size as f64 / (1024.0 * 1024.0 * 1024.0)
+                ),
+                "RocksDB stats"
+            );
 
-                eprintln!(
-                    "[{}] Progress: {:.2}% ({}/{}) - {}{:.2} blocks/sec{} (EMA: {}{:.2}{}) | ETA: {}",
-                    data_source,
-                    progress.progress_percentage(),
-                    progress.current(),
-                    progress.target(),
-                    color_start,
-                    bps,
-                    color_end,
-                    color_start,
-                    ema_rate,
-                    color_end,
-                    eta
+            if indexer_for_progress.is_bulk_sync_active() {
+                info!(
+                    source = data_source,
+                    progress_pct = format!("{:.2}", progress.progress_percentage()),
+                    current = progress.current(),
+                    target = progress.target(),
+                    bps = format!("{:.1}", bps),
+                    ema_bps = format!("{:.1}", ema_rate),
+                    eta = %eta,
+                    "Bulk sync progress"
                 );
             } else {
                 info!(
