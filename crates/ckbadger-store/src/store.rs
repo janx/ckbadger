@@ -1,0 +1,428 @@
+//! Core RocksDB store with 25 column families.
+
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use rocksdb::{
+    ColumnFamily, ColumnFamilyDescriptor, DBCompressionType, IteratorMode, Options, WriteBatch, DB,
+};
+
+use crate::types::MemoryStats;
+
+/// Type alias for RocksDB iterator items to avoid complex type lint.
+pub type KvResult = Result<(Box<[u8]>, Box<[u8]>), rocksdb::Error>;
+
+// Column family name constants
+pub const CF_LIVE_CELLS: &str = "live_cells";
+pub const CF_CONSUMED_CELLS: &str = "consumed_cells";
+pub const CF_BLOCK_HEADERS: &str = "block_headers";
+pub const CF_BLOCK_HASH_INDEX: &str = "block_hash_index";
+pub const CF_CELL_BY_LOCK: &str = "cell_by_lock";
+pub const CF_CELL_BY_TYPE: &str = "cell_by_type";
+pub const CF_TX_INDEX: &str = "tx_index";
+pub const CF_TX_HASH_MAP: &str = "tx_hash_map";
+pub const CF_ADDR_BALANCE: &str = "addr_balance";
+pub const CF_ADDR_TXS: &str = "addr_txs";
+pub const CF_ACTIVITIES: &str = "activities";
+pub const CF_ACTIVITIES_BY_ADDR: &str = "activities_by_addr";
+pub const CF_DAO_DEPOSITS: &str = "dao_deposits";
+pub const CF_DAO_BY_WITHDRAW_TX: &str = "dao_by_withdraw_tx";
+pub const CF_DAO_STATS: &str = "dao_stats";
+pub const CF_BLOCK_ISSUANCE: &str = "block_issuance";
+pub const CF_TOKENS: &str = "tokens";
+pub const CF_TOKEN_HOLDERS: &str = "token_holders";
+pub const CF_SPORE_DATA: &str = "spore_data";
+pub const CF_NFT_DATA: &str = "nft_data";
+pub const CF_STATS: &str = "stats";
+pub const CF_SCRIPT_INFO: &str = "script_info";
+pub const CF_SYNC_META: &str = "sync_meta";
+pub const CF_TASKS: &str = "tasks";
+pub const CF_TASKS_INDEX: &str = "tasks_index";
+
+/// All column family names, used during DB open.
+pub const ALL_CFS: &[&str] = &[
+    CF_LIVE_CELLS,
+    CF_CONSUMED_CELLS,
+    CF_BLOCK_HEADERS,
+    CF_BLOCK_HASH_INDEX,
+    CF_CELL_BY_LOCK,
+    CF_CELL_BY_TYPE,
+    CF_TX_INDEX,
+    CF_TX_HASH_MAP,
+    CF_ADDR_BALANCE,
+    CF_ADDR_TXS,
+    CF_ACTIVITIES,
+    CF_ACTIVITIES_BY_ADDR,
+    CF_DAO_DEPOSITS,
+    CF_DAO_BY_WITHDRAW_TX,
+    CF_DAO_STATS,
+    CF_BLOCK_ISSUANCE,
+    CF_TOKENS,
+    CF_TOKEN_HOLDERS,
+    CF_SPORE_DATA,
+    CF_NFT_DATA,
+    CF_STATS,
+    CF_SCRIPT_INFO,
+    CF_SYNC_META,
+    CF_TASKS,
+    CF_TASKS_INDEX,
+];
+
+pub struct CkbadgerStore {
+    db: DB,
+    /// Keep block cache alive for the lifetime of the store.
+    #[allow(dead_code)]
+    block_cache: rocksdb::Cache,
+    bulk_sync_mode: AtomicBool,
+    is_secondary: bool,
+}
+
+impl CkbadgerStore {
+    /// Open as primary (read-write). Creates all column families.
+    pub fn open<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
+        let (opts, block_cache) = Self::default_options();
+
+        let cf_descriptors: Vec<ColumnFamilyDescriptor> = ALL_CFS
+            .iter()
+            .map(|name| ColumnFamilyDescriptor::new(*name, opts.clone()))
+            .collect();
+
+        let db = DB::open_cf_descriptors(&opts, path, cf_descriptors)?;
+
+        Ok(Self {
+            db,
+            block_cache,
+            bulk_sync_mode: AtomicBool::new(false),
+            is_secondary: false,
+        })
+    }
+
+    /// Open as secondary instance (read-only). Follows primary writes via `refresh()`.
+    pub fn open_secondary<P: AsRef<Path>>(
+        primary_path: P,
+        secondary_path: P,
+    ) -> anyhow::Result<Self> {
+        let (opts, block_cache) = Self::default_options();
+
+        let cf_names: Vec<&str> = ALL_CFS.to_vec();
+        let db = DB::open_cf_as_secondary(&opts, primary_path, secondary_path, cf_names)?;
+
+        Ok(Self {
+            db,
+            block_cache,
+            bulk_sync_mode: AtomicBool::new(false),
+            is_secondary: true,
+        })
+    }
+
+    /// Catch up with primary instance writes (secondary only).
+    pub fn refresh(&self) -> anyhow::Result<()> {
+        if self.is_secondary {
+            self.db.try_catch_up_with_primary()?;
+        }
+        Ok(())
+    }
+
+    fn default_options() -> (Options, rocksdb::Cache) {
+        let mut opts = Options::default();
+        opts.create_if_missing(true);
+        opts.create_missing_column_families(true);
+
+        opts.set_write_buffer_size(64 * 1024 * 1024);
+        opts.set_max_write_buffer_number(4);
+        opts.set_level_zero_file_num_compaction_trigger(4);
+        opts.set_max_bytes_for_level_base(512 * 1024 * 1024);
+        opts.set_compression_type(DBCompressionType::Lz4);
+        opts.set_max_background_jobs(4);
+
+        let block_cache = rocksdb::Cache::new_lru_cache(512 * 1024 * 1024);
+        let mut block_opts = rocksdb::BlockBasedOptions::default();
+        block_opts.set_block_size(16 * 1024);
+        block_opts.set_block_cache(&block_cache);
+        block_opts.set_cache_index_and_filter_blocks(true);
+        block_opts.set_bloom_filter(10.0, false);
+        opts.set_block_based_table_factory(&block_opts);
+
+        (opts, block_cache)
+    }
+
+    // ---- Column family accessors ----
+
+    pub fn cf(&self, name: &str) -> &ColumnFamily {
+        self.db
+            .cf_handle(name)
+            .unwrap_or_else(|| panic!("CF '{}' not found", name))
+    }
+
+    pub fn cf_live_cells(&self) -> &ColumnFamily {
+        self.cf(CF_LIVE_CELLS)
+    }
+    pub fn cf_consumed_cells(&self) -> &ColumnFamily {
+        self.cf(CF_CONSUMED_CELLS)
+    }
+    pub fn cf_block_headers(&self) -> &ColumnFamily {
+        self.cf(CF_BLOCK_HEADERS)
+    }
+    pub fn cf_block_hash_index(&self) -> &ColumnFamily {
+        self.cf(CF_BLOCK_HASH_INDEX)
+    }
+    pub fn cf_cell_by_lock(&self) -> &ColumnFamily {
+        self.cf(CF_CELL_BY_LOCK)
+    }
+    pub fn cf_cell_by_type(&self) -> &ColumnFamily {
+        self.cf(CF_CELL_BY_TYPE)
+    }
+    pub fn cf_tx_index(&self) -> &ColumnFamily {
+        self.cf(CF_TX_INDEX)
+    }
+    pub fn cf_tx_hash_map(&self) -> &ColumnFamily {
+        self.cf(CF_TX_HASH_MAP)
+    }
+    pub fn cf_addr_balance(&self) -> &ColumnFamily {
+        self.cf(CF_ADDR_BALANCE)
+    }
+    pub fn cf_addr_txs(&self) -> &ColumnFamily {
+        self.cf(CF_ADDR_TXS)
+    }
+    pub fn cf_activities(&self) -> &ColumnFamily {
+        self.cf(CF_ACTIVITIES)
+    }
+    pub fn cf_activities_by_addr(&self) -> &ColumnFamily {
+        self.cf(CF_ACTIVITIES_BY_ADDR)
+    }
+    pub fn cf_dao_deposits(&self) -> &ColumnFamily {
+        self.cf(CF_DAO_DEPOSITS)
+    }
+    pub fn cf_dao_by_withdraw_tx(&self) -> &ColumnFamily {
+        self.cf(CF_DAO_BY_WITHDRAW_TX)
+    }
+    pub fn cf_dao_stats(&self) -> &ColumnFamily {
+        self.cf(CF_DAO_STATS)
+    }
+    pub fn cf_block_issuance(&self) -> &ColumnFamily {
+        self.cf(CF_BLOCK_ISSUANCE)
+    }
+    pub fn cf_tokens(&self) -> &ColumnFamily {
+        self.cf(CF_TOKENS)
+    }
+    pub fn cf_token_holders(&self) -> &ColumnFamily {
+        self.cf(CF_TOKEN_HOLDERS)
+    }
+    pub fn cf_spore_data(&self) -> &ColumnFamily {
+        self.cf(CF_SPORE_DATA)
+    }
+    pub fn cf_nft_data(&self) -> &ColumnFamily {
+        self.cf(CF_NFT_DATA)
+    }
+    pub fn cf_stats(&self) -> &ColumnFamily {
+        self.cf(CF_STATS)
+    }
+    pub fn cf_script_info(&self) -> &ColumnFamily {
+        self.cf(CF_SCRIPT_INFO)
+    }
+    pub fn cf_sync_meta(&self) -> &ColumnFamily {
+        self.cf(CF_SYNC_META)
+    }
+    pub fn cf_tasks(&self) -> &ColumnFamily {
+        self.cf(CF_TASKS)
+    }
+    pub fn cf_tasks_index(&self) -> &ColumnFamily {
+        self.cf(CF_TASKS_INDEX)
+    }
+
+    // ---- Raw DB operations ----
+
+    pub fn get_cf(&self, cf: &ColumnFamily, key: &[u8]) -> anyhow::Result<Option<Vec<u8>>> {
+        Ok(self.db.get_cf(cf, key)?)
+    }
+
+    pub fn put_cf(&self, cf: &ColumnFamily, key: &[u8], value: &[u8]) -> anyhow::Result<()> {
+        Ok(self.db.put_cf(cf, key, value)?)
+    }
+
+    pub fn delete_cf(&self, cf: &ColumnFamily, key: &[u8]) -> anyhow::Result<()> {
+        Ok(self.db.delete_cf(cf, key)?)
+    }
+
+    pub fn multi_get_cf(
+        &self,
+        keys: Vec<(&ColumnFamily, &[u8])>,
+    ) -> Vec<Result<Option<Vec<u8>>, rocksdb::Error>> {
+        self.db.multi_get_cf(keys)
+    }
+
+    pub fn write_batch(&self, batch: WriteBatch) -> anyhow::Result<()> {
+        Ok(self.db.write(batch)?)
+    }
+
+    /// Iterate over a CF starting from a specific key.
+    pub fn iterator_cf(
+        &self,
+        cf: &ColumnFamily,
+        mode: IteratorMode,
+    ) -> impl Iterator<Item = KvResult> + '_ {
+        self.db.iterator_cf(cf, mode)
+    }
+
+    /// Iterate over a CF with a prefix.
+    pub fn prefix_iterator_cf(
+        &self,
+        cf: &ColumnFamily,
+        prefix: &[u8],
+    ) -> impl Iterator<Item = KvResult> + '_ {
+        self.db.prefix_iterator_cf(cf, prefix)
+    }
+
+    /// Get the underlying DB ref for WriteBatch operations.
+    pub fn raw_db(&self) -> &DB {
+        &self.db
+    }
+
+    // ---- Bulk sync mode ----
+
+    pub fn set_bulk_sync_mode(&self, enabled: bool) {
+        self.bulk_sync_mode.store(enabled, Ordering::Relaxed);
+    }
+
+    pub fn is_bulk_sync_mode(&self) -> bool {
+        self.bulk_sync_mode.load(Ordering::Relaxed)
+    }
+
+    pub fn is_secondary(&self) -> bool {
+        self.is_secondary
+    }
+
+    // ---- Memory stats ----
+
+    pub fn memory_stats(&self) -> MemoryStats {
+        let mut memtable_bytes = 0usize;
+        let mut table_readers_bytes = 0usize;
+
+        for cf_name in ALL_CFS {
+            if let Some(cf) = self.db.cf_handle(cf_name) {
+                if let Ok(Some(v)) = self
+                    .db
+                    .property_int_value_cf(cf, "rocksdb.cur-size-all-mem-tables")
+                {
+                    memtable_bytes += v as usize;
+                }
+                if let Ok(Some(v)) = self
+                    .db
+                    .property_int_value_cf(cf, "rocksdb.estimate-table-readers-mem")
+                {
+                    table_readers_bytes += v as usize;
+                }
+            }
+        }
+
+        let block_cache_bytes = self.block_cache.get_usage();
+        let memory_bytes = memtable_bytes + block_cache_bytes + table_readers_bytes;
+
+        MemoryStats {
+            cells_count: 0,
+            memory_bytes,
+            memtable_bytes,
+            block_cache_bytes,
+            table_readers_bytes,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_open_and_close() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        assert!(!store.is_secondary());
+        drop(store);
+    }
+
+    #[test]
+    fn test_all_cfs_accessible() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        for cf_name in ALL_CFS {
+            let _ = store.cf(cf_name);
+        }
+    }
+
+    #[test]
+    fn test_put_get_delete() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+
+        let cf = store.cf_sync_meta();
+        store.put_cf(cf, b"test_key", b"test_value").unwrap();
+
+        let val = store.get_cf(cf, b"test_key").unwrap();
+        assert_eq!(val.as_deref(), Some(b"test_value".as_slice()));
+
+        store.delete_cf(cf, b"test_key").unwrap();
+        let val = store.get_cf(cf, b"test_key").unwrap();
+        assert!(val.is_none());
+    }
+
+    #[test]
+    fn test_write_batch() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+
+        let cf = store.cf_sync_meta();
+        let mut batch = WriteBatch::default();
+        batch.put_cf(cf, b"k1", b"v1");
+        batch.put_cf(cf, b"k2", b"v2");
+        store.write_batch(batch).unwrap();
+
+        assert_eq!(
+            store.get_cf(cf, b"k1").unwrap().as_deref(),
+            Some(b"v1".as_slice())
+        );
+        assert_eq!(
+            store.get_cf(cf, b"k2").unwrap().as_deref(),
+            Some(b"v2".as_slice())
+        );
+    }
+
+    #[test]
+    fn test_secondary_instance() {
+        let primary_dir = TempDir::new().unwrap();
+        let secondary_dir = TempDir::new().unwrap();
+
+        let primary = CkbadgerStore::open(primary_dir.path()).unwrap();
+        let cf = primary.cf_sync_meta();
+        primary.put_cf(cf, b"key", b"value").unwrap();
+
+        let secondary =
+            CkbadgerStore::open_secondary(primary_dir.path(), secondary_dir.path()).unwrap();
+        assert!(secondary.is_secondary());
+        secondary.refresh().unwrap();
+
+        let cf = secondary.cf_sync_meta();
+        let val = secondary.get_cf(cf, b"key").unwrap();
+        assert_eq!(val.as_deref(), Some(b"value".as_slice()));
+    }
+
+    #[test]
+    fn test_bulk_sync_mode() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        assert!(!store.is_bulk_sync_mode());
+        store.set_bulk_sync_mode(true);
+        assert!(store.is_bulk_sync_mode());
+        store.set_bulk_sync_mode(false);
+        assert!(!store.is_bulk_sync_mode());
+    }
+
+    #[test]
+    fn test_memory_stats() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let stats = store.memory_stats();
+        // Just verify it doesn't panic and returns reasonable values
+        let _ = stats; // Just verify it doesn't panic
+    }
+}

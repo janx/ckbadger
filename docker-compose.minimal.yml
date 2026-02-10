@@ -5,7 +5,7 @@ services:
       dockerfile: docker/Dockerfile.minimal
     container_name: ckbadger-minimal
     environment:
-      DATABASE_URL: sqlite:///data/ckbadger.db
+      CKBADGER_DATA_PATH: /data/ckbadger-store
       CKB_RPC_URL: http://host.docker.internal:8114
       RUST_LOG: info
     volumes:

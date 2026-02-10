@@ -60,8 +60,8 @@
                     ┌───────────┴───────────┐
                     ▼                       ▼
               ┌───────────┐           ┌──────────┐
-              │ PostgreSQL│           │  Redis   │
-              │  (Primary)│           │  (Cache) │
+              │  RocksDB  │           │  Redis   │
+              │  (Store)  │           │  (Cache) │
               └───────────┘           └──────────┘
                     │
                     ▼
@@ -85,10 +85,9 @@
 | **UI**            | Tailwind CSS, Custom Components     | Responsive design               |
 | **Visualization** | react-force-graph-2d, D3.js         | Cell relationship graphs        |
 | **API**           | Rust (Axum)                         | High-performance REST/WebSocket |
-| **Indexer**       | Rust (3-stage pipeline + RocksDB)   | Block parsing, cell tracking    |
-| **Database**      | PostgreSQL 16                       | Primary data store              |
+| **Indexer**       | Rust (3-stage pipeline)             | Block parsing, cell tracking    |
+| **Storage**       | RocksDB (ckbadger-store)            | Embedded data store             |
 | **Cache**         | Redis                               | API cache + sync progress       |
-| **Cell Store**    | RocksDB                             | O(1) live cell lookups          |
 
 ## Quick Start
 
@@ -134,7 +133,7 @@ docker compose up -d
 open http://localhost:3000
 ```
 
-### Minimal Setup (SQLite Mode)
+### Minimal Setup
 
 For resource-constrained environments (4GB RAM):
 
@@ -156,11 +155,8 @@ CKB_RPC_URL=http://host.docker.internal:8114  # macOS/Windows
 # CKB_RPC_URL=http://172.17.0.1:8114          # Linux
 CKB_NETWORK=mainnet  # mainnet | testnet | devnet
 
-# Database
-DATABASE_URL=__SET_DATABASE_URL__
-
-# Optional: read replica for API queries (reduces load on primary)
-# READ_DATABASE_URL=postgres://user:pass@replica:5432/ckbadger
+# ckbadger-store RocksDB data path
+CKBADGER_DATA_PATH=./data/ckbadger-store
 
 # Redis (optional)
 REDIS_URL=redis://localhost:6379
@@ -190,7 +186,6 @@ spore = true              # Enable Spore NFT parsing
 dao = true                # Enable DAO deposit tracking
 
 [performance]
-db_pool_size = 10
 concurrent_requests = 4
 ```
 
@@ -344,12 +339,13 @@ ckbadger/
 │   │   └── src/
 │   │       ├── rpc/        # CKB RPC client
 │   │       ├── parser/     # Block, cell, script parsers
-│   │       ├── db/         # Database + RocksDB operations
+│   │       ├── db/         # RocksDB write operations
 │   │       └── sync/       # Synchronization logic
 │   ├── api/                # REST API server
 │   │   └── src/
 │   │       ├── routes/     # HTTP handlers (blocks, tx, cells, graph)
 │   │       └── ws/         # WebSocket handlers
+│   ├── ckbadger-store/     # Embedded RocksDB storage engine
 │   ├── task-runner/        # Background task executor
 │   └── task-tui/           # Terminal UI for task management
 ├── frontend/               # Next.js application
@@ -359,9 +355,6 @@ ckbadger/
 │   │   └── cell-graph.tsx  # Force-directed graph visualization
 │   ├── hooks/              # Custom hooks (WebSocket, etc.)
 │   └── lib/                # API client, utilities
-├── migrations/             # Database schema
-│   └── postgres/
-│       └── 001_init.sql    # Single consolidated schema
 ├── docs/                   # Documentation & references
 │   ├── rfcs/               # [submodule] CKB RFCs - protocol specs
 │   ├── docs.nervos.org/    # [submodule] Official Nervos docs
@@ -385,7 +378,7 @@ cd ckbadger
 git submodule update --init --recursive
 
 # Start dependencies
-docker compose up -d postgres redis ckb-node
+docker compose up -d redis ckb-node
 
 # Run indexer (from project root)
 cargo run -p ckbadger-indexer --release
@@ -401,15 +394,14 @@ cd frontend && pnpm install && pnpm dev
 
 The `docker-compose.yml` includes the following services:
 
-| Service       | Description                                                  | Port |
-| ------------- | ------------------------------------------------------------ | ---- |
-| `postgres`    | PostgreSQL 16 database                                       | 5432 |
-| `redis`       | Redis cache for sync status                                  | 6379 |
-| `ckb-node`    | CKB node (profile: internal)                                 | 8114 |
-| `indexer`     | Blockchain sync daemon                                       | -    |
-| `api`         | REST/WebSocket API server                                    | 3001 |
-| `frontend`    | Next.js web application                                      | 3000 |
-| `task-runner` | Background task executor (label import, index rebuild, etc.) | -    |
+| Service       | Description                                   | Port |
+| ------------- | --------------------------------------------- | ---- |
+| `redis`       | Redis cache for sync status                   | 6379 |
+| `ckb-node`    | CKB node (profile: internal)                  | 8114 |
+| `indexer`     | Blockchain sync daemon                        | -    |
+| `api`         | REST/WebSocket API server                     | 3001 |
+| `frontend`    | Next.js web application                       | 3000 |
+| `task-runner` | Background task executor (label import, etc.) | -    |
 
 ```bash
 # View logs for specific service
@@ -427,11 +419,8 @@ cargo run -p ckbadger-task-runner
 A terminal-based UI for managing background tasks:
 
 ```bash
-# Run task TUI (requires DATABASE_URL in .env or as argument)
+# Run task TUI (requires CKBADGER_DATA_PATH in .env)
 cargo run -p ckbadger-task-tui
-
-# Or specify database URL directly
-cargo run -p ckbadger-task-tui -- --database-url postgres://ckbadger:changeme@localhost:5432/ckbadger
 
 # Custom refresh interval (default: 1000ms)
 cargo run -p ckbadger-task-tui -- --refresh-ms 500
@@ -457,7 +446,7 @@ cargo run -p ckbadger-task-tui -- --refresh-ms 500
 ### Running Tests
 
 ```bash
-# Rust tests (259 tests)
+# Rust tests (542 tests)
 cargo test                               # All tests
 cargo test --lib                         # Unit tests only
 cargo test -p ckbadger-indexer           # Specific crate
@@ -477,11 +466,11 @@ pnpm test:e2e                            # Playwright tests
 
 ### Test Coverage
 
-| Area                    | Tests | Coverage                                       |
-| ----------------------- | ----- | ---------------------------------------------- |
-| **Rust Indexer**        | 259   | parsers, db, live cell store, rpc types, tasks |
-| **Frontend Components** | 195   | Hash, Capacity, Address, Pagination, Banners   |
-| **E2E**                 | 7     | Homepage, block detail, navigation             |
+| Area                    | Tests | Coverage                                     |
+| ----------------------- | ----- | -------------------------------------------- |
+| **Rust (all crates)**   | 542   | parsers, store, api, task-runner, task-tui   |
+| **Frontend Components** | 195   | Hash, Capacity, Address, Pagination, Banners |
+| **E2E**                 | 7     | Homepage, block detail, navigation           |
 
 ### CI/CD
 
@@ -489,7 +478,7 @@ GitHub Actions workflow runs on every push:
 
 - Rust: fmt check, clippy, unit tests, coverage (Codecov)
 - Frontend: type-check, lint, Vitest, coverage
-- E2E: Playwright with test database
+- E2E: Playwright with test store
 
 ## Comparison
 

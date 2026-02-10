@@ -1,6 +1,8 @@
 use anyhow::Result;
 use tracing::{info, warn};
 
+use ckbadger_store::keys;
+
 use super::BatchWriter;
 
 impl BatchWriter {
@@ -33,125 +35,66 @@ impl BatchWriter {
         Ok(())
     }
 
-    pub async fn find_last_consistent_block(&self) -> Result<Option<i64>> {
-        let row: Option<(Option<i64>, Option<i64>)> = sqlx::query_as(
-            r#"
-            SELECT 
-                (SELECT MAX(number) FROM blocks_index) as max_block,
-                (SELECT MAX(block_number) FROM transactions_index) as max_tx_block
-            "#,
-        )
-        .fetch_optional(&self.pool)
-        .await?;
+    pub fn find_last_consistent_block(&self) -> Result<Option<i64>> {
+        // Get max block from block_headers CF
+        let max_block = self.store.get_sync_tip_block()?.map(|(num, _)| num);
 
-        match row {
-            Some((Some(max_block), Some(max_tx_block))) => {
-                if max_block > max_tx_block {
+        // Get max block from tx_index CF
+        let iter = self
+            .store
+            .iterator_cf(self.store.cf_tx_index(), rocksdb::IteratorMode::End);
+        let mut max_tx_block: Option<i64> = None;
+        for item in iter.flatten().take(1) {
+            let (key, _) = item;
+            if key.len() >= 8 {
+                max_tx_block = Some(keys::decode_block_num(&key[..8]));
+            }
+        }
+
+        match (max_block, max_tx_block) {
+            (Some(mb), Some(mtb)) => {
+                if mb > mtb {
                     warn!(
                         "Data inconsistency detected: blocks up to {} but transactions only up to {}",
-                        max_block, max_tx_block
+                        mb, mtb
                     );
-                    Ok(Some(max_tx_block))
+                    Ok(Some(mtb))
                 } else {
-                    Ok(Some(max_block))
+                    Ok(Some(mb))
                 }
             }
-            Some((Some(max_block), None)) => {
+            (Some(mb), None) => {
                 warn!(
                     "Data inconsistency: blocks exist up to {} but no transactions found",
-                    max_block
+                    mb
                 );
                 Ok(Some(-1))
             }
-            Some((None, _)) => Ok(None),
-            None => Ok(None),
+            (None, _) => Ok(None),
         }
     }
 
-    pub async fn init_sync_start(&self, start_block: i64, is_bulk_sync: bool) -> Result<()> {
+    pub fn init_sync_start(&self, start_block: i64, is_bulk_sync: bool) -> Result<()> {
         let next_block = start_block + 1;
         info!(
             "Cleaning up any partial data from block {} onwards before sync start",
             next_block
         );
 
-        sqlx::query("DELETE FROM transaction_inputs WHERE tx_block_number >= $1")
-            .bind(next_block)
-            .execute(&self.pool)
-            .await?;
-
-        sqlx::query("DELETE FROM cells WHERE created_at_block >= $1")
-            .bind(next_block)
-            .execute(&self.pool)
-            .await?;
-
-        sqlx::query("DELETE FROM transactions_index WHERE block_number >= $1")
-            .bind(next_block)
-            .execute(&self.pool)
-            .await?;
-
-        sqlx::query("DELETE FROM block_proposals WHERE block_number >= $1")
-            .bind(next_block)
-            .execute(&self.pool)
-            .await?;
-
-        sqlx::query("DELETE FROM blocks_index WHERE number >= $1")
-            .bind(next_block)
-            .execute(&self.pool)
-            .await?;
-
-        // Clean up derived/parsed tables (must match cleanup_batch_range)
-        sqlx::query("DELETE FROM activities WHERE block_number >= $1")
-            .bind(next_block)
-            .execute(&self.pool)
-            .await?;
-
-        sqlx::query("DELETE FROM udt_cells WHERE created_at_block >= $1")
-            .bind(next_block)
-            .execute(&self.pool)
-            .await?;
-
-        sqlx::query("DELETE FROM dao_deposits WHERE deposit_block_number >= $1")
-            .bind(next_block)
-            .execute(&self.pool)
-            .await?;
-
-        sqlx::query("DELETE FROM spore_cells WHERE created_at_block >= $1")
-            .bind(next_block)
-            .execute(&self.pool)
-            .await?;
-
-        sqlx::query("DELETE FROM spore_clusters WHERE created_at_block >= $1")
-            .bind(next_block)
-            .execute(&self.pool)
-            .await?;
-
-        sqlx::query("DELETE FROM mnft_tokens WHERE created_at_block >= $1")
-            .bind(next_block)
-            .execute(&self.pool)
-            .await?;
-
-        sqlx::query("DELETE FROM mnft_classes WHERE created_at_block >= $1")
-            .bind(next_block)
-            .execute(&self.pool)
-            .await?;
-
-        sqlx::query("DELETE FROM mnft_issuers WHERE created_at_block >= $1")
-            .bind(next_block)
-            .execute(&self.pool)
-            .await?;
-
-        sqlx::query("DELETE FROM dotbit_accounts WHERE created_at_block >= $1")
-            .bind(next_block)
-            .execute(&self.pool)
-            .await?;
+        // Use the store's rollback mechanism to clean up everything
+        self.store.rollback_to_block(start_block)?;
 
         if let Some(cache) = &self.cache_invalidator {
-            cache
-                .update_sync_status(|status| {
-                    status.init_sync_start(start_block, is_bulk_sync);
-                })
-                .await;
+            let cache = cache.clone();
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    cache
+                        .update_sync_status(|status| {
+                            status.init_sync_start(start_block, is_bulk_sync);
+                        })
+                        .await;
+                });
+            });
         }
 
         info!(
@@ -161,109 +104,15 @@ impl BatchWriter {
         Ok(())
     }
 
-    pub async fn cleanup_batch_range(&self, start_block: i64, end_block: i64) -> Result<()> {
+    pub fn cleanup_batch_range(&self, start_block: i64, end_block: i64) -> Result<()> {
         info!(
             "Cleaning up partial batch data for blocks {} to {}",
             start_block, end_block
         );
 
-        sqlx::query(
-            "DELETE FROM transaction_inputs WHERE tx_block_number >= $1 AND tx_block_number <= $2",
-        )
-        .bind(start_block)
-        .bind(end_block)
-        .execute(&self.pool)
-        .await?;
-
-        sqlx::query("DELETE FROM cells WHERE created_at_block >= $1 AND created_at_block <= $2")
-            .bind(start_block)
-            .bind(end_block)
-            .execute(&self.pool)
-            .await?;
-
-        sqlx::query(
-            "DELETE FROM transactions_index WHERE block_number >= $1 AND block_number <= $2",
-        )
-        .bind(start_block)
-        .bind(end_block)
-        .execute(&self.pool)
-        .await?;
-
-        sqlx::query("DELETE FROM block_proposals WHERE block_number >= $1 AND block_number <= $2")
-            .bind(start_block)
-            .bind(end_block)
-            .execute(&self.pool)
-            .await?;
-
-        sqlx::query("DELETE FROM activities WHERE block_number >= $1 AND block_number <= $2")
-            .bind(start_block)
-            .bind(end_block)
-            .execute(&self.pool)
-            .await?;
-
-        sqlx::query(
-            "DELETE FROM udt_cells WHERE created_at_block >= $1 AND created_at_block <= $2",
-        )
-        .bind(start_block)
-        .bind(end_block)
-        .execute(&self.pool)
-        .await?;
-
-        sqlx::query(
-            "DELETE FROM dao_deposits WHERE deposit_block_number >= $1 AND deposit_block_number <= $2",
-        )
-        .bind(start_block)
-        .bind(end_block)
-        .execute(&self.pool)
-        .await?;
-
-        sqlx::query(
-            "DELETE FROM spore_cells WHERE created_at_block >= $1 AND created_at_block <= $2",
-        )
-        .bind(start_block)
-        .bind(end_block)
-        .execute(&self.pool)
-        .await?;
-
-        sqlx::query(
-            "DELETE FROM spore_clusters WHERE created_at_block >= $1 AND created_at_block <= $2",
-        )
-        .bind(start_block)
-        .bind(end_block)
-        .execute(&self.pool)
-        .await?;
-
-        sqlx::query(
-            "DELETE FROM mnft_tokens WHERE created_at_block >= $1 AND created_at_block <= $2",
-        )
-        .bind(start_block)
-        .bind(end_block)
-        .execute(&self.pool)
-        .await?;
-
-        sqlx::query(
-            "DELETE FROM mnft_classes WHERE created_at_block >= $1 AND created_at_block <= $2",
-        )
-        .bind(start_block)
-        .bind(end_block)
-        .execute(&self.pool)
-        .await?;
-
-        sqlx::query(
-            "DELETE FROM mnft_issuers WHERE created_at_block >= $1 AND created_at_block <= $2",
-        )
-        .bind(start_block)
-        .bind(end_block)
-        .execute(&self.pool)
-        .await?;
-
-        sqlx::query(
-            "DELETE FROM dotbit_accounts WHERE created_at_block >= $1 AND created_at_block <= $2",
-        )
-        .bind(start_block)
-        .bind(end_block)
-        .execute(&self.pool)
-        .await?;
+        // For range cleanup, we rollback to the block before the range
+        // then the caller will re-sync from start_block
+        self.store.rollback_to_block(start_block - 1)?;
 
         info!(
             "Batch cleanup complete for blocks {} to {}",

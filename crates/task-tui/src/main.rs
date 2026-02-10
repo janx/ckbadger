@@ -1,4 +1,5 @@
 use anyhow::Result;
+use ckbadger_store::CkbadgerStore;
 use clap::Parser;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
@@ -7,8 +8,8 @@ use crossterm::{
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use ratatui_image::picker::Picker;
-use sqlx::postgres::PgPoolOptions;
 use std::io;
+use std::sync::Arc;
 use std::time::Duration;
 
 mod chart;
@@ -22,8 +23,12 @@ use ui::{App, FocusedPanel};
 #[command(name = "ckbadger-task-tui")]
 #[command(about = "Terminal UI for ckbadger task management")]
 struct Args {
-    #[arg(long, env = "DATABASE_URL")]
-    database_url: String,
+    #[arg(
+        long,
+        env = "CKBADGER_DATA_PATH",
+        default_value = "./data/ckbadger-store"
+    )]
+    data_path: String,
 
     #[arg(long, env = "REDIS_URL")]
     redis_url: Option<String>,
@@ -38,12 +43,9 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
 
-    let pool = PgPoolOptions::new()
-        .max_connections(5)
-        .connect(&args.database_url)
-        .await?;
+    let store = Arc::new(CkbadgerStore::open(&args.data_path)?);
 
-    let db = TaskDb::new(pool, args.redis_url.as_deref()).await;
+    let db = TaskDb::new(store, args.redis_url.as_deref()).await;
 
     let picker = Picker::from_query_stdio().ok();
 

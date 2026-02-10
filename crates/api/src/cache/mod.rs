@@ -5,8 +5,8 @@ mod redis_cache;
 pub use redis_cache::*;
 
 use ckbadger_common::sync::{SyncStatusData, SYNC_STATUS_REDIS_KEY};
+use ckbadger_store::CkbadgerStore;
 use serde::{de::DeserializeOwned, Serialize};
-use sqlx::PgPool;
 use std::time::Duration;
 
 #[derive(Clone)]
@@ -49,49 +49,36 @@ impl CacheBackend {
         }
     }
 
-    /// Get sync status from Redis, with fallback to database queries.
-    /// Uses pre-computed totals from daily_statistics instead of expensive COUNT(*) scans.
-    pub async fn get_sync_status(&self, pool: &PgPool) -> SyncStatusData {
+    /// Get sync status from Redis, with fallback to store queries.
+    pub async fn get_sync_status_from_store(&self, store: &CkbadgerStore) -> SyncStatusData {
         if let Some(status) = self.get::<SyncStatusData>(SYNC_STATUS_REDIS_KEY).await {
             return status;
         }
 
-        let tip: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(number), 0) FROM blocks_index")
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0);
+        let sync = store.get_sync_status().unwrap_or_default();
+        let tip = sync.tip_block_number;
 
-        // Use pre-computed totals from daily_statistics (latest row) instead of COUNT(*)
-        // which would scan all partitions of transactions/cells tables (30s+).
-        // Address count query runs in parallel using the idx_address_balances_balance index.
-        let stats_fut = sqlx::query_as::<_, (i64, i64, i64)>(
-            r#"SELECT
-                COALESCE(ds.total_transactions, 0)::bigint,
-                COALESCE(ds.total_all_cells, 0)::bigint,
-                COALESCE(ds.total_live_cells, 0)::bigint
-            FROM daily_statistics ds
-            ORDER BY ds.date DESC
-            LIMIT 1
-            "#,
-        )
-        .fetch_one(pool);
-
-        let addr_count_fut =
-            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM address_balances WHERE balance > 0")
-                .fetch_one(pool);
-
-        let (stats_result, addr_result) = tokio::join!(stats_fut, addr_count_fut);
-        let (total_tx, total_cells, total_live_cells) = stats_result.unwrap_or((0, 0, 0));
-        let total_addresses = addr_result.unwrap_or(0);
+        // Get latest daily stats for totals
+        let daily_stats = store.list_daily_stats_with_dates().unwrap_or_default();
+        let (total_tx, total_cells, total_live_cells) = if let Some((_, stats)) = daily_stats.last()
+        {
+            (
+                sync.total_transactions,
+                stats.total_all_cells,
+                stats.total_live_cells,
+            )
+        } else {
+            (sync.total_transactions, 0, 0)
+        };
 
         SyncStatusData {
             tip_block_number: tip,
-            tip_block_hash: String::new(),
+            tip_block_hash: hex::encode(&sync.tip_block_hash),
             total_transactions: total_tx,
             total_cells,
             total_live_cells,
-            total_addresses,
-            last_synced_at: 0,
+            total_addresses: 0,
+            last_synced_at: sync.last_synced_at,
             sync_started_at: None,
             sync_started_block: 0,
             sync_ema_rate: None,
@@ -102,11 +89,11 @@ impl CacheBackend {
             indexes_rebuild_started_at: None,
             indexes_rebuild_completed_at: None,
             indexes_rebuild_progress: None,
-            activities_deferred: false,
+            activities_deferred: sync.activities_deferred,
             activities_deferred_at: None,
             activities_rebuild_started_at: None,
             activities_rebuild_completed_at: None,
-            address_balances_deferred: false,
+            address_balances_deferred: sync.address_balances_deferred,
             address_balances_deferred_at: None,
             address_balances_rebuild_completed_at: None,
             token_deferred: false,
@@ -121,15 +108,15 @@ impl CacheBackend {
         }
     }
 
-    /// Get sync status tip block (lightweight, Redis-first with DB fallback)
-    pub async fn get_sync_tip(&self, pool: &PgPool) -> i64 {
+    /// Get sync status tip block (lightweight, Redis-first with store fallback)
+    pub async fn get_sync_tip_from_store(&self, store: &CkbadgerStore) -> i64 {
         if let Some(status) = self.get::<SyncStatusData>(SYNC_STATUS_REDIS_KEY).await {
             return status.tip_block_number;
         }
 
-        sqlx::query_scalar("SELECT COALESCE(MAX(number), 0) FROM blocks_index")
-            .fetch_one(pool)
-            .await
+        store
+            .get_sync_status()
+            .map(|s| s.tip_block_number)
             .unwrap_or(0)
     }
 }

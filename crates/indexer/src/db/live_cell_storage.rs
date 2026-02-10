@@ -27,9 +27,6 @@
 //! - Block headers: Block number -> header info + hash index
 
 use std::collections::HashMap;
-use std::sync::Arc;
-
-use sqlx::PgPool;
 
 /// Metadata for a live (unspent) cell.
 ///
@@ -233,21 +230,6 @@ pub trait LiveCellStorage: Send + Sync {
         false
     }
 }
-
-/// Async operations for database synchronization.
-#[async_trait::async_trait]
-pub trait LiveCellStorageAsync: LiveCellStorage {
-    /// Flush pending changes to PostgreSQL.
-    /// Returns (inserts, deletes) count.
-    async fn flush_to_db(&self, pool: &PgPool) -> anyhow::Result<(usize, usize)>;
-
-    /// Rebuild storage from PostgreSQL (for in-memory backends).
-    /// RocksDB backend skips this as data is already persisted.
-    async fn rebuild_from_db(&self, pool: &PgPool) -> anyhow::Result<()>;
-}
-
-/// Type alias for dynamic dispatch of live cell storage.
-pub type DynLiveCellStorage = Arc<dyn LiveCellStorageAsync>;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CachedBlockHeader {

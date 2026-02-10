@@ -6,9 +6,10 @@ use ckbadger_common::{
     StatisticsRebuildConfig, Task, TaskConfig, TaskType, TokenRebuildConfig,
     TxBlockMapRebuildConfig,
 };
+use ckbadger_store::CkbadgerStore;
 use futures::future::join_all;
 use redis::AsyncCommands;
-use sqlx::PgPool;
+use std::sync::Arc;
 use std::time::Duration;
 use tracing::{error, info, warn};
 
@@ -31,12 +32,11 @@ mod tx_block_map;
 
 pub struct TaskExecutor {
     db: TaskDb,
-    pool: PgPool,
+    store: Arc<CkbadgerStore>,
     runner_id: String,
     ckb_rpc_url: String,
     token_labels_path: String,
     redis_url: Option<String>,
-    index_rebuild_parallel: usize,
     cycles_batch_size: i64,
     cycles_concurrent: usize,
 }
@@ -44,23 +44,21 @@ pub struct TaskExecutor {
 impl TaskExecutor {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        pool: PgPool,
+        store: Arc<CkbadgerStore>,
         runner_id: String,
         ckb_rpc_url: String,
         token_labels_path: String,
         redis_url: Option<String>,
-        index_rebuild_parallel: usize,
         cycles_batch_size: i64,
         cycles_concurrent: usize,
     ) -> Self {
         Self {
-            db: TaskDb::new(pool.clone()),
-            pool,
+            db: TaskDb::new(store.clone()),
+            store,
             runner_id,
             ckb_rpc_url,
             token_labels_path,
             redis_url,
-            index_rebuild_parallel,
             cycles_batch_size,
             cycles_concurrent,
         }
@@ -273,19 +271,16 @@ impl TaskExecutor {
             },
         };
 
-        cycles::execute(&self.db, &self.pool, task.id, &config).await
+        cycles::execute(&self.db, &self.store, task.id, &config).await
     }
 
     async fn execute_index_rebuild(&self, task: &Task) -> Result<()> {
         let config: IndexRebuildConfig = match task.config_typed() {
             Some(TaskConfig::IndexRebuild(c)) => c,
-            _ => IndexRebuildConfig {
-                parallel_connections: self.index_rebuild_parallel,
-                ..Default::default()
-            },
+            _ => IndexRebuildConfig::default(),
         };
 
-        index::execute(&self.db, &self.pool, task.id, &config).await
+        index::execute(&self.db, &self.store, task.id, &config).await
     }
 
     async fn execute_label_import(&self, task: &Task) -> Result<()> {
@@ -298,7 +293,7 @@ impl TaskExecutor {
             config.token_labels_path = self.token_labels_path.clone();
         }
 
-        labels::execute(&self.db, &self.pool, task.id, &config).await
+        labels::execute(&self.db, &self.store, task.id, &config).await
     }
 
     async fn execute_statistics_rebuild(&self, task: &Task) -> Result<()> {
@@ -307,20 +302,16 @@ impl TaskExecutor {
             _ => StatisticsRebuildConfig::default(),
         };
 
-        statistics::execute(&self.db, &self.pool, task.id, &config).await
+        statistics::execute(&self.db, &self.store, task.id, &config).await
     }
 
     async fn execute_spore_rebuild(&self, task: &Task) -> Result<()> {
-        let mut config: SporeRebuildConfig = match task.config_typed() {
+        let config: SporeRebuildConfig = match task.config_typed() {
             Some(TaskConfig::SporeRebuild(c)) => c,
             _ => SporeRebuildConfig::default(),
         };
 
-        if config.ckb_rpc_url.is_empty() {
-            config.ckb_rpc_url = self.ckb_rpc_url.clone();
-        }
-
-        spore::execute(&self.db, &self.pool, task.id, &config).await
+        spore::execute(&self.db, &self.store, task.id, &config).await
     }
 
     async fn execute_secondary_issuance_backfill(&self, task: &Task) -> Result<()> {
@@ -333,7 +324,7 @@ impl TaskExecutor {
             config.ckb_rpc_url = self.ckb_rpc_url.clone();
         }
 
-        secondary_issuance::execute(&self.db, &self.pool, task.id, &config).await
+        secondary_issuance::execute(&self.db, &self.store, task.id, &config).await
     }
 
     async fn execute_cells_status_rebuild(&self, task: &Task) -> Result<()> {
@@ -342,7 +333,7 @@ impl TaskExecutor {
             _ => CellsStatusRebuildConfig::default(),
         };
 
-        cells_status::execute(&self.db, &self.pool, task.id, &config).await
+        cells_status::execute(&self.db, &self.store, task.id, &config).await
     }
 
     async fn execute_activities_rebuild(&self, task: &Task) -> Result<()> {
@@ -351,7 +342,7 @@ impl TaskExecutor {
             _ => ActivitiesRebuildConfig::default(),
         };
 
-        activities::execute(&self.db, &self.pool, task.id, &config).await
+        activities::execute(&self.db, &self.store, task.id, &config).await
     }
 
     async fn execute_address_balances_rebuild(&self, task: &Task) -> Result<()> {
@@ -360,7 +351,7 @@ impl TaskExecutor {
             _ => AddressBalancesRebuildConfig::default(),
         };
 
-        address_balances::execute(&self.db, &self.pool, task.id, &config).await
+        address_balances::execute(&self.db, &self.store, task.id, &config).await
     }
 
     async fn execute_token_rebuild(&self, task: &Task) -> Result<()> {
@@ -369,7 +360,7 @@ impl TaskExecutor {
             _ => TokenRebuildConfig::default(),
         };
 
-        token::execute(&self.db, &self.pool, task.id, &config).await
+        token::execute(&self.db, &self.store, task.id, &config).await
     }
 
     async fn execute_mnft_rebuild(&self, task: &Task) -> Result<()> {
@@ -378,7 +369,7 @@ impl TaskExecutor {
             _ => MnftRebuildConfig::default(),
         };
 
-        mnft::execute(&self.db, &self.pool, task.id, &config).await
+        mnft::execute(&self.db, &self.store, task.id, &config).await
     }
 
     async fn execute_dotbit_rebuild(&self, task: &Task) -> Result<()> {
@@ -387,7 +378,7 @@ impl TaskExecutor {
             _ => DotbitRebuildConfig::default(),
         };
 
-        dotbit::execute(&self.db, &self.pool, task.id, &config).await
+        dotbit::execute(&self.db, &self.store, task.id, &config).await
     }
 
     async fn execute_tx_block_map_rebuild(&self, task: &Task) -> Result<()> {
@@ -396,7 +387,7 @@ impl TaskExecutor {
             _ => TxBlockMapRebuildConfig::default(),
         };
 
-        tx_block_map::execute(&self.db, &self.pool, task.id, &config).await
+        tx_block_map::execute(&self.db, &self.store, task.id, &config).await
     }
 
     async fn execute_cell_flows_rebuild(&self, task: &Task) -> Result<()> {
@@ -405,7 +396,7 @@ impl TaskExecutor {
             _ => CellFlowsRebuildConfig::default(),
         };
 
-        cell_flows::execute(&self.db, &self.pool, task.id, &config).await
+        cell_flows::execute(&self.db, &self.store, task.id, &config).await
     }
 }
 

@@ -10,8 +10,8 @@ The CKB indexer uses a three-stage pipeline architecture to maximize sync throug
 │  (RocksDB/RPC)  │     │  (CPU + Prefetch)│     │    (DB I/O)     │
 └─────────────────┘     └─────────────────┘     └─────────────────┘
         │                       │                       │
-   Direct RocksDB         Rayon parallel          Batch INSERTs
-   reads (~0.1ms)         block parsing           and UPDATEs
+   Direct RocksDB         Rayon parallel          RocksDB batch
+   reads (~0.1ms)         block parsing           writes
    or RPC fallback
 ```
 
@@ -132,9 +132,6 @@ Block N arrives
 | `batch_size`          | `10000` | Blocks per batch                                                |
 | `parallel_fetch_size` | `64`    | Concurrent RPC requests (used only in RPC fallback mode)        |
 | `bulk_sync_threshold` | `72`    | Blocks behind tip to auto-enable bulk sync (2x DEEP_FORK_DEPTH) |
-| `use_copy_bulk_sync`  | `true`  | Use PostgreSQL COPY for bulk sync (5-10x faster)                |
-| `copy_pool_size`      | `24`    | Number of COPY connection pool connections                      |
-| `fast_sync_mode`      | `true`  | Enable synchronous_commit=off for faster writes                 |
 | `ckb_data_path`       | -       | Path to CKB node's RocksDB data dir for direct reads            |
 
 ### Environment Variables
@@ -145,9 +142,7 @@ PIPELINE_BUFFER=4
 BATCH_SIZE=10000
 PARALLEL_FETCH_SIZE=64
 BULK_SYNC_THRESHOLD=72
-USE_COPY_BULK_SYNC=true
-COPY_POOL_SIZE=24
-FAST_SYNC_MODE=true
+CKBADGER_DATA_PATH=./data/ckbadger-store
 CKB_DATA_PATH=/var/lib/ckb/data/db
 ```
 
@@ -159,9 +154,7 @@ cargo run -p ckbadger-indexer -- \
   --pipeline-buffer 4 \
   --batch-size 10000 \
   --parallel-fetch-size 64 \
-  --bulk-sync-threshold 72 \
-  --use-copy-bulk-sync \
-  --copy-pool-size 24
+  --bulk-sync-threshold 72
 ```
 
 ## Error Handling
@@ -240,21 +233,21 @@ Both modes MUST produce identical database state. This is enforced by:
 
 With default settings on typical hardware:
 
-| Mode                 | Blocks/sec | Bottleneck |
-| -------------------- | ---------- | ---------- |
-| Sequential           | ~150-200   | DB writes  |
-| Pipeline (buffer=8)  | ~280-320   | DB writes  |
-| Pipeline (buffer=16) | ~400-500   | DB writes  |
-| Pipeline + COPY      | ~5000-7000 | DB writes  |
+| Mode                 | Blocks/sec | Bottleneck     |
+| -------------------- | ---------- | -------------- |
+| Sequential           | ~150-200   | RocksDB writes |
+| Pipeline (buffer=8)  | ~280-320   | RocksDB writes |
+| Pipeline (buffer=16) | ~400-500   | RocksDB writes |
+| Pipeline (optimized) | ~5000-7000 | RocksDB writes |
 
 **Optimizations**:
 
-1. **Parallel DB writes**: Within each batch, independent operations run concurrently:
-   - blocks, transactions, cells inserts (parallel)
-   - inputs, cell_deps inserts (parallel)
+1. **Parallel writes**: Within each batch, independent operations run concurrently:
+   - blocks, transactions, cells writes (parallel)
+   - inputs, cell_deps writes (parallel)
    - address balances, script usage updates (parallel)
 
-2. **Binary COPY**: When bulk sync is active (blocks_remaining > threshold), the indexer automatically uses PostgreSQL Binary COPY for 5-10x faster writes. See [Binary COPY Infrastructure](#binary-copy-infrastructure) for details.
+2. **RocksDB WriteBatch**: All writes within a batch are grouped into atomic WriteBatch operations for maximum throughput.
 
 ### Memory Usage
 
@@ -365,45 +358,33 @@ Same-batch consumptions get code_hashes from the creating transaction directly.
 
 ## Bulk Sync Statistics Optimization
 
-During bulk sync (when `blocks_remaining > bulk_sync_threshold`, default 72 = 2x DEEP_FORK_DEPTH), the indexer skips non-critical statistics updates to reduce DB write time by ~15%.
+During bulk sync (when `blocks_remaining > bulk_sync_threshold`, default 72 = 2x DEEP_FORK_DEPTH), the indexer skips non-critical statistics updates to maximize write throughput.
 
 ### Skipped Statistics (during bulk sync)
 
-| Table                     | Rebuilt After | Description                    |
-| ------------------------- | ------------- | ------------------------------ |
-| `daily_statistics`        | Yes           | Daily block/tx/cell counts     |
-| `daily_block_stats`       | Yes           | Daily difficulty/uncle stats   |
-| `hourly_statistics`       | Yes           | Hourly activity metrics        |
-| `miner_statistics`        | Yes           | Per-miner block counts         |
-| `block_time_distribution` | Yes           | Block time histogram           |
-| `epoch_time_distribution` | Yes           | Epoch duration histogram       |
-| `dao_daily_snapshots`     | Yes           | DAO deposit/issuance snapshots |
+| Column Family       | Rebuilt After | Description                  |
+| ------------------- | ------------- | ---------------------------- |
+| `daily_stats`       | Yes           | Daily block/tx/cell counts   |
+| `daily_block_stats` | Yes           | Daily difficulty/uncle stats |
+| `hourly_stats`      | Yes           | Hourly activity metrics      |
+| `miner_stats`       | Yes           | Per-miner block counts       |
+| `block_time_dist`   | Yes           | Block time histogram         |
+| `epoch_time_dist`   | Yes           | Epoch duration histogram     |
 
 ### Always Updated (even during bulk sync)
 
-| Table              | Reason                                          |
-| ------------------ | ----------------------------------------------- |
-| `sync_status`      | Critical for crash recovery                     |
-| `epoch_statistics` | Contains epoch metadata (start/end block, etc.) |
+| Column Family | Reason                                          |
+| ------------- | ----------------------------------------------- |
+| `sync_status` | Critical for crash recovery                     |
+| `epoch_stats` | Contains epoch metadata (start/end block, etc.) |
 
 ### Automatic Rebuild
 
 When bulk sync completes (transitions from `blocks_remaining > threshold` to `<= threshold`):
 
 1. Indexer detects state transition via `was_bulk_sync_active` flag
-2. Triggers `rebuild_all_statistics()` which:
-   - Truncates each statistics table
-   - Rebuilds from raw data (blocks, cells, transactions)
-3. Logs progress for each table
-
-```
-INFO Bulk sync completed, rebuilding skipped statistics...
-INFO Rebuilding daily_statistics...
-INFO daily_statistics rebuild completed
-INFO Rebuilding daily_block_stats...
-...
-INFO All statistics rebuild completed
-```
+2. Triggers `rebuild_all_statistics()` which rebuilds from raw data
+3. Logs progress for each statistics group
 
 ### Implementation Details
 
@@ -411,110 +392,25 @@ INFO All statistics rebuild completed
 - Detection: `check_bulk_sync_completion()` called after each batch
 - Rebuild entry point: `BatchWriter::rebuild_all_statistics()`
 
-## Binary COPY Infrastructure
-
-The indexer uses PostgreSQL Binary COPY for high-performance bulk data loading during initial sync.
-
-### Auto-Enabled Behavior
-
-COPY is **automatically enabled** when:
-
-- `blocks_remaining > bulk_sync_threshold` (default: 72 blocks behind, 2x DEEP_FORK_DEPTH)
-- `use_copy_bulk_sync = true` (default)
-
-When the indexer catches up to the chain tip, it automatically switches back to UNNEST inserts (which support conflict resolution for reorgs).
-
-### COPY Modules
-
-| Module                         | Table                 | Columns | Performance               |
-| ------------------------------ | --------------------- | ------- | ------------------------- |
-| `copy_format.rs`               | -                     | -       | Core binary serialization |
-| `copy_blocks.rs`               | blocks                | 19      | 5x faster than UNNEST     |
-| `copy_blocks_index.rs`         | blocks_index          | 12      | Lightweight block index   |
-| `copy_cells.rs`                | cells                 | 16      | 5-10x faster than UNNEST  |
-| `copy_transactions.rs`         | transactions          | 16      | 5-10x faster than UNNEST  |
-| `copy_transactions_index.rs`   | transactions_index    | 9       | Lightweight tx index      |
-| `copy_inputs.rs`               | transaction_inputs    | 6       | 5-10x faster than UNNEST  |
-| `copy_inputs.rs`               | transaction_cell_deps | 6       | 5-10x faster than UNNEST  |
-| `copy_proposals.rs`            | block_proposals       | 3       | 5-10x faster than UNNEST  |
-| `copy_address_transactions.rs` | address_transactions  | 6       | 5x faster than UNNEST     |
-| `parallel_copy.rs`             | -                     | -       | Partition-aware routing   |
-
-### COPY Pool Configuration
-
-COPY operations use a dedicated `tokio-postgres` connection pool (separate from sqlx):
-
-```rust
-CopyConfig {
-    max_copy_connections: 24,  // --copy-pool-size
-    copy_batch_size: 100_000,
-    copy_enabled: true,
-}
-```
-
-### Log Messages
-
-```
-# COPY mode active
-INFO Starting indexer (pipeline=true, copy=true, 6000000 blocks behind, threshold=1000)
-INFO Bulk sync auto-enabled: 6000000 blocks behind > 1000 threshold, using COPY
-INFO Syncing blocks 0 to 999 (5999001 remaining, 450.00 blocks/sec) [COPY]
-
-# Switched to UNNEST (caught up)
-INFO Syncing blocks 5999000 to 5999500 (500 remaining, 320.00 blocks/sec)
-```
-
 ## Crash Recovery
 
-The indexer implements crash recovery to handle failures during batch writes. Since COPY operations run on independent connections without transaction wrapping, a crash mid-batch can leave partial data in the database.
+The indexer implements crash recovery to handle failures during batch writes. RocksDB WriteBatch provides atomicity within a single batch, but a crash between batches can leave the store in an inconsistent state.
 
 ### Write Ordering Strategy
 
-**Blocks are written LAST** as the "commit marker". The write order is:
+**Sync status is written LAST** as the "commit marker". The write order is:
 
-1. Transactions, cells, inputs, cell_deps (parallel COPY operations)
-2. Address transactions, script usage
+1. Block headers, transactions, cells (WriteBatch)
+2. Cell consumptions, address balances, script usage
 3. DAO deposits, token transfers, NFT data
 4. Statistics updates
-5. **Blocks (LAST)** - only after all other data succeeds
+5. **Sync status (LAST)** - only after all other data succeeds
 
-This ensures that if blocks exist for a range, all related data is complete.
+This ensures that if sync_status indicates a block range, all related data is complete.
 
 ### Startup Consistency Check
 
-On startup, `find_last_consistent_block()` validates database consistency:
-
-```rust
-// Compares MAX(number) FROM blocks_index vs MAX(block_number) FROM transactions_index
-if max_block > max_tx_block {
-    // Blocks exist without transactions = inconsistent state
-    // Roll back to max_tx_block
-}
-```
-
-### Partial Batch Cleanup
-
-When a batch write fails, `cleanup_batch_range(start, end)` removes partial data:
-
-| Table                   | Block Column           |
-| ----------------------- | ---------------------- |
-| `blocks_index`          | `number`               |
-| `transactions_index`    | `block_number`         |
-| `transactions`          | `block_number`         |
-| `cells`                 | `created_at_block`     |
-| `transaction_inputs`    | `tx_block_number`      |
-| `transaction_cell_deps` | `tx_block_number`      |
-| `block_proposals`       | `block_number`         |
-| `address_transactions`  | `block_number`         |
-| `udt_cells`             | `created_at_block`     |
-| `token_transfers`       | `block_number`         |
-| `dao_deposits`          | `deposit_block_number` |
-| `spore_cells`           | `created_at_block`     |
-| `spore_clusters`        | `created_at_block`     |
-| `mnft_tokens`           | `created_at_block`     |
-| `mnft_classes`          | `created_at_block`     |
-| `mnft_issuers`          | `created_at_block`     |
-| `dotbit_accounts`       | `created_at_block`     |
+On startup, `find_last_consistent_block()` validates store consistency by comparing sync_status tip against actual stored data.
 
 ### Recovery Flow
 
@@ -522,12 +418,6 @@ When a batch write fails, `cleanup_batch_range(start, end)` removes partial data
                     ┌─────────────────┐
                     │  Batch Write    │
                     │    Fails        │
-                    └────────┬────────┘
-                             │
-                             ▼
-                    ┌─────────────────┐
-                    │ cleanup_batch   │
-                    │ _range()        │──▶ DELETE partial data
                     └────────┬────────┘
                              │
                              ▼
@@ -542,19 +432,6 @@ When a batch write fails, `cleanup_batch_range(start, end)` removes partial data
                     │ _consistent     │──▶ Detect & rollback if needed
                     │ _block()        │
                     └─────────────────┘
-```
-
-### Log Messages
-
-```
-# Cleanup on error
-ERROR Sync error: connection reset
-INFO Cleaning up partial batch data for blocks 1000 to 1999
-INFO Batch cleanup complete for blocks 1000 to 1999
-
-# Startup recovery
-WARN Data inconsistency detected: blocks up to 2000 but transactions only up to 1500
-WARN Rolling back from block 2000 to 1500 due to data inconsistency
 ```
 
 ---

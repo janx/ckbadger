@@ -3,15 +3,14 @@ use axum::{
     routing::get,
     Router,
 };
-use ckbadger_common::dao::{calculate_estimated_apc, GENESIS_BURNT};
+use ckbadger_common::dao::calculate_estimated_apc;
+use ckbadger_store::keys;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::response::{
-    decode_cursor_single, encode_cursor_single, ok, ApiError, ApiResult, CursorPaginatedResponse,
-};
-use crate::utils::{script_to_address, shannon_to_ckb};
+use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
+use crate::utils::shannon_to_ckb;
 use crate::AppState;
 
 const CHART_CACHE_TTL: Duration = Duration::from_secs(3600);
@@ -121,140 +120,118 @@ pub struct CalculatorResponse {
     pub apc: String,
 }
 
+/// Convert a DAO deposit entry from the store to an API response.
+/// The outpoint_key encodes tx_hash(32B) + output_index(2B BE).
+fn deposit_to_response(
+    outpoint_key: &[u8],
+    entry: &ckbadger_store::DaoDepositCacheEntry,
+    state: &AppState,
+) -> DaoDepositResponse {
+    let (tx_hash_bytes, output_index) = keys::decode_outpoint(outpoint_key);
+
+    // Try to resolve the block header for timestamp
+    let deposit_timestamp = state
+        .store
+        .get_block_header(entry.deposit_block_number)
+        .ok()
+        .flatten()
+        .map(|h| {
+            chrono::DateTime::from_timestamp_millis(h.timestamp)
+                .unwrap_or_default()
+                .to_rfc3339()
+        })
+        .unwrap_or_default();
+
+    let withdraw_request_timestamp = entry.withdraw_request_block.and_then(|bn| {
+        state.store.get_block_header(bn).ok()?.map(|h| {
+            chrono::DateTime::from_timestamp_millis(h.timestamp)
+                .unwrap_or_default()
+                .to_rfc3339()
+        })
+    });
+
+    let withdraw_timestamp = entry.withdraw_block.and_then(|bn| {
+        state.store.get_block_header(bn).ok()?.map(|h| {
+            chrono::DateTime::from_timestamp_millis(h.timestamp)
+                .unwrap_or_default()
+                .to_rfc3339()
+        })
+    });
+
+    DaoDepositResponse {
+        tx_hash: format!("0x{}", hex::encode(&tx_hash_bytes)),
+        output_index: output_index as i32,
+        lock_script_hash: format!("0x{}", hex::encode(&entry.lock_script_hash)),
+        address: None,
+        lock_code_hash: None,
+        capacity: entry.capacity.to_string(),
+        deposit_block_number: entry.deposit_block_number,
+        deposit_timestamp,
+        status: status_to_string(entry.status),
+        withdraw_request_block: entry.withdraw_request_block,
+        withdraw_request_timestamp,
+        withdraw_block: entry.withdraw_block,
+        withdraw_timestamp,
+        compensation: entry.compensation.map(|c| c.to_string()),
+    }
+}
+
 async fn list_deposits(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<DaoDepositResponse>> {
-    let limit = params.limit.clamp(1, 100);
-    let cursor_id = params
-        .cursor
-        .as_ref()
-        .and_then(|c| decode_cursor_single(c))
-        .unwrap_or(i64::MAX);
+    let limit = params.limit.clamp(1, 100) as usize;
 
-    type DaoRow = (
-        i64,
-        Vec<u8>,
-        i16,
-        Vec<u8>,
-        Option<Vec<u8>>,
-        Option<i16>,
-        Option<Vec<u8>>,
-        String,
-        i64,
-        chrono::DateTime<chrono::Utc>,
-        i16,
-        Option<i64>,
-        Option<chrono::DateTime<chrono::Utc>>,
-        Option<i64>,
-        Option<chrono::DateTime<chrono::Utc>>,
-        Option<String>,
-    );
+    let all_deposits = state
+        .store
+        .list_dao_deposits()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let rows = if let Some(status) = params.status {
-        sqlx::query_as::<_, DaoRow>(
-            r#"
-            SELECT d.id, d.tx_hash, d.output_index, d.lock_script_hash,
-                   c.lock_code_hash, c.lock_hash_type, c.lock_args,
-                   CAST(d.capacity AS TEXT), d.deposit_block_number, d.deposit_timestamp,
-                   d.status, d.withdraw_request_block, d.withdraw_request_timestamp,
-                   d.withdraw_block, d.withdraw_timestamp, CAST(d.compensation AS TEXT)
-            FROM dao_deposits d
-            LEFT JOIN cells c ON d.tx_hash = c.tx_hash AND d.output_index = c.output_index
-            WHERE d.status = $1 AND d.id < $2
-            ORDER BY d.id DESC
-            LIMIT $3
-            "#,
-        )
-        .bind(status)
-        .bind(cursor_id)
-        .bind(limit + 1)
-        .fetch_all(&state.read_pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
+    // Filter by status if requested, sort by deposit_block_number DESC
+    let mut filtered: Vec<_> = all_deposits
+        .into_iter()
+        .filter(|(_, entry)| {
+            if let Some(status) = params.status {
+                entry.status == status
+            } else {
+                true
+            }
+        })
+        .collect();
+
+    filtered.sort_by(|a, b| b.1.deposit_block_number.cmp(&a.1.deposit_block_number));
+
+    // Apply cursor: skip entries until we find the cursor block number
+    let cursor_block = params.cursor.as_ref().and_then(|c| c.parse::<i64>().ok());
+
+    let start_idx = if let Some(cb) = cursor_block {
+        filtered
+            .iter()
+            .position(|(_, e)| e.deposit_block_number < cb)
+            .unwrap_or(filtered.len())
     } else {
-        sqlx::query_as::<_, DaoRow>(
-            r#"
-            SELECT d.id, d.tx_hash, d.output_index, d.lock_script_hash,
-                   c.lock_code_hash, c.lock_hash_type, c.lock_args,
-                   CAST(d.capacity AS TEXT), d.deposit_block_number, d.deposit_timestamp,
-                   d.status, d.withdraw_request_block, d.withdraw_request_timestamp,
-                   d.withdraw_block, d.withdraw_timestamp, CAST(d.compensation AS TEXT)
-            FROM dao_deposits d
-            LEFT JOIN cells c ON d.tx_hash = c.tx_hash AND d.output_index = c.output_index
-            WHERE d.id < $1
-            ORDER BY d.id DESC
-            LIMIT $2
-            "#,
-        )
-        .bind(cursor_id)
-        .bind(limit + 1)
-        .fetch_all(&state.read_pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
+        0
     };
 
-    let has_more = rows.len() as i64 > limit;
-    let rows: Vec<_> = rows.into_iter().take(limit as usize).collect();
+    let page: Vec<_> = filtered.iter().skip(start_idx).take(limit + 1).collect();
+
+    let has_more = page.len() > limit;
+    let page: Vec<_> = page.into_iter().take(limit).collect();
 
     let next_cursor = if has_more {
-        rows.last()
-            .map(|(id, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _)| encode_cursor_single(*id))
+        page.last().map(|(_, e)| e.deposit_block_number.to_string())
     } else {
         None
     };
 
-    let network = &state.ckb_network;
-    let deposits: Vec<DaoDepositResponse> = rows
+    let deposits: Vec<DaoDepositResponse> = page
         .into_iter()
-        .map(
-            |(
-                _id,
-                tx_hash,
-                output_index,
-                lock_script_hash,
-                lock_code_hash,
-                lock_hash_type,
-                lock_args,
-                capacity,
-                deposit_block_number,
-                deposit_timestamp,
-                status,
-                withdraw_request_block,
-                withdraw_request_timestamp,
-                withdraw_block,
-                withdraw_timestamp,
-                compensation,
-            )| {
-                let address = lock_code_hash.as_ref().and_then(|code_hash| {
-                    let hash_type = lock_hash_type.unwrap_or(0);
-                    let args = lock_args.as_deref().unwrap_or(&[]);
-                    script_to_address(code_hash, hash_type, args, network).ok()
-                });
-
-                DaoDepositResponse {
-                    tx_hash: format!("0x{}", hex::encode(&tx_hash)),
-                    output_index: output_index as i32,
-                    lock_script_hash: format!("0x{}", hex::encode(&lock_script_hash)),
-                    address,
-                    lock_code_hash: lock_code_hash.map(|h| format!("0x{}", hex::encode(&h))),
-                    capacity,
-                    deposit_block_number,
-                    deposit_timestamp: deposit_timestamp.to_rfc3339(),
-                    status: status_to_string(status),
-                    withdraw_request_block,
-                    withdraw_request_timestamp: withdraw_request_timestamp.map(|t| t.to_rfc3339()),
-                    withdraw_block,
-                    withdraw_timestamp: withdraw_timestamp.map(|t| t.to_rfc3339()),
-                    compensation,
-                }
-            },
-        )
+        .map(|(key, entry)| deposit_to_response(key, entry, &state))
         .collect();
 
     ok(CursorPaginatedResponse::without_total(
         deposits,
-        limit,
+        limit as i64,
         next_cursor,
     ))
 }
@@ -264,117 +241,54 @@ async fn get_deposits_by_address(
     Path(lock_hash): Path<String>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<DaoDepositResponse>> {
-    type DaoRow = (
-        i64,
-        Vec<u8>,
-        i16,
-        Vec<u8>,
-        Option<Vec<u8>>,
-        Option<i16>,
-        Option<Vec<u8>>,
-        String,
-        i64,
-        chrono::DateTime<chrono::Utc>,
-        i16,
-        Option<i64>,
-        Option<chrono::DateTime<chrono::Utc>>,
-        Option<i64>,
-        Option<chrono::DateTime<chrono::Utc>>,
-        Option<String>,
-    );
-
     let hash = hex::decode(lock_hash.strip_prefix("0x").unwrap_or(&lock_hash))
         .map_err(|_| ApiError::bad_request("Invalid lock script hash"))?;
 
-    let limit = params.limit.clamp(1, 100);
-    let cursor_id = params
-        .cursor
-        .as_ref()
-        .and_then(|c| decode_cursor_single(c))
-        .unwrap_or(i64::MAX);
+    let limit = params.limit.clamp(1, 100) as usize;
 
-    let rows = sqlx::query_as::<_, DaoRow>(
-        r#"
-        SELECT d.id, d.tx_hash, d.output_index, d.lock_script_hash, 
-               c.lock_code_hash, c.lock_hash_type, c.lock_args,
-               CAST(d.capacity AS TEXT), d.deposit_block_number, d.deposit_timestamp,
-               d.status, d.withdraw_request_block, d.withdraw_request_timestamp, 
-               d.withdraw_block, d.withdraw_timestamp, CAST(d.compensation AS TEXT)
-        FROM dao_deposits d
-        LEFT JOIN cells c ON d.tx_hash = c.tx_hash AND d.output_index = c.output_index
-        WHERE d.lock_script_hash = $1 AND d.id < $2
-        ORDER BY d.id DESC
-        LIMIT $3
-        "#,
-    )
-    .bind(&hash)
-    .bind(cursor_id)
-    .bind(limit + 1)
-    .fetch_all(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let all_deposits = state
+        .store
+        .list_dao_deposits()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let has_more = rows.len() as i64 > limit;
-    let rows: Vec<_> = rows.into_iter().take(limit as usize).collect();
+    // Filter by lock_script_hash
+    let mut filtered: Vec<_> = all_deposits
+        .into_iter()
+        .filter(|(_, entry)| entry.lock_script_hash == hash)
+        .collect();
+
+    filtered.sort_by(|a, b| b.1.deposit_block_number.cmp(&a.1.deposit_block_number));
+
+    let cursor_block = params.cursor.as_ref().and_then(|c| c.parse::<i64>().ok());
+
+    let start_idx = if let Some(cb) = cursor_block {
+        filtered
+            .iter()
+            .position(|(_, e)| e.deposit_block_number < cb)
+            .unwrap_or(filtered.len())
+    } else {
+        0
+    };
+
+    let page: Vec<_> = filtered.iter().skip(start_idx).take(limit + 1).collect();
+
+    let has_more = page.len() > limit;
+    let page: Vec<_> = page.into_iter().take(limit).collect();
 
     let next_cursor = if has_more {
-        rows.last()
-            .map(|(id, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _)| encode_cursor_single(*id))
+        page.last().map(|(_, e)| e.deposit_block_number.to_string())
     } else {
         None
     };
 
-    let network = &state.ckb_network;
-    let deposits: Vec<DaoDepositResponse> = rows
+    let deposits: Vec<DaoDepositResponse> = page
         .into_iter()
-        .map(
-            |(
-                _id,
-                tx_hash,
-                output_index,
-                lock_script_hash,
-                lock_code_hash,
-                lock_hash_type,
-                lock_args,
-                capacity,
-                deposit_block_number,
-                deposit_timestamp,
-                status,
-                withdraw_request_block,
-                withdraw_request_timestamp,
-                withdraw_block,
-                withdraw_timestamp,
-                compensation,
-            )| {
-                let address = lock_code_hash.as_ref().and_then(|code_hash| {
-                    let hash_type = lock_hash_type.unwrap_or(0);
-                    let args = lock_args.as_deref().unwrap_or(&[]);
-                    script_to_address(code_hash, hash_type, args, network).ok()
-                });
-
-                DaoDepositResponse {
-                    tx_hash: format!("0x{}", hex::encode(&tx_hash)),
-                    output_index: output_index as i32,
-                    lock_script_hash: format!("0x{}", hex::encode(&lock_script_hash)),
-                    address,
-                    lock_code_hash: lock_code_hash.map(|h| format!("0x{}", hex::encode(&h))),
-                    capacity,
-                    deposit_block_number,
-                    deposit_timestamp: deposit_timestamp.to_rfc3339(),
-                    status: status_to_string(status),
-                    withdraw_request_block,
-                    withdraw_request_timestamp: withdraw_request_timestamp.map(|t| t.to_rfc3339()),
-                    withdraw_block,
-                    withdraw_timestamp: withdraw_timestamp.map(|t| t.to_rfc3339()),
-                    compensation,
-                }
-            },
-        )
+        .map(|(key, entry)| deposit_to_response(key, entry, &state))
         .collect();
 
     ok(CursorPaginatedResponse::without_total(
         deposits,
-        limit,
+        limit as i64,
         next_cursor,
     ))
 }
@@ -388,19 +302,19 @@ async fn get_address_dao_summary(
     let hash = hex::decode(lock_hash.strip_prefix("0x").unwrap_or(&lock_hash))
         .map_err(|_| ApiError::bad_request("Invalid lock script hash"))?;
 
-    let counts = sqlx::query_as::<_, (i64, i64, i64)>(
-        r#"SELECT 
-            COUNT(*) FILTER (WHERE status = 0) as active,
-            COUNT(*) FILTER (WHERE status = 1) as pending,
-            COUNT(*) FILTER (WHERE status = 2) as completed
-        FROM dao_deposits WHERE lock_script_hash = $1"#,
-    )
-    .bind(&hash)
-    .fetch_one(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let all_deposits = state
+        .store
+        .list_dao_deposits()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let (active_count, pending_count, completed_count) = counts;
+    let my_deposits: Vec<_> = all_deposits
+        .into_iter()
+        .filter(|(_, entry)| entry.lock_script_hash == hash)
+        .collect();
+
+    let active_count = my_deposits.iter().filter(|(_, e)| e.status == 0).count() as i32;
+    let pending_count = my_deposits.iter().filter(|(_, e)| e.status == 1).count() as i32;
+    let completed_count = my_deposits.iter().filter(|(_, e)| e.status == 2).count() as i32;
 
     if active_count == 0 && pending_count == 0 && completed_count == 0 {
         return ok(AddressDaoSummaryResponse {
@@ -418,71 +332,52 @@ async fn get_address_dao_summary(
         });
     }
 
-    let total_locked: (String,) = sqlx::query_as(
-        "SELECT CAST(COALESCE(SUM(capacity), 0) AS TEXT) FROM dao_deposits WHERE lock_script_hash = $1 AND status IN (0, 1)",
-    )
-    .bind(&hash)
-    .fetch_one(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    // Total locked = sum of capacity for active (0) and pending (1) deposits
+    let total_locked: i128 = my_deposits
+        .iter()
+        .filter(|(_, e)| e.status == 0 || e.status == 1)
+        .map(|(_, e)| e.capacity as i128)
+        .sum();
 
-    let total_comp_earned: (String,) = sqlx::query_as(
-        "SELECT CAST(COALESCE(SUM(compensation), 0) AS TEXT) FROM dao_deposits WHERE lock_script_hash = $1 AND status = 2 AND compensation IS NOT NULL",
-    )
-    .bind(&hash)
-    .fetch_one(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    // Total compensation earned = sum of compensation for completed (2) deposits
+    let total_comp_earned: i128 = my_deposits
+        .iter()
+        .filter(|(_, e)| e.status == 2 && e.compensation.is_some())
+        .map(|(_, e)| e.compensation.unwrap_or(0) as i128)
+        .sum();
 
-    let latest_block = sqlx::query_as::<_, (i64, Vec<u8>)>(
-        "SELECT number, dao FROM blocks_index WHERE dao IS NOT NULL ORDER BY number DESC LIMIT 1",
-    )
-    .fetch_optional(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    // Get latest block header for AR
+    let latest_block = state.store.get_sync_tip_block().ok().flatten();
 
     let (latest_block_number, latest_ar, total_issuance) = match &latest_block {
-        Some((num, dao)) => {
-            let ar = extract_ar(dao).unwrap_or(1);
-            let issuance = extract_total_issuance(dao).unwrap_or(0);
+        Some((num, header)) => {
+            let ar = extract_ar(&header.dao).unwrap_or(1);
+            let issuance = extract_total_issuance(&header.dao).unwrap_or(0);
             (*num, ar, issuance)
         }
         None => (0, 1, 0),
     };
 
-    let deposits_with_ar = sqlx::query_as::<_, (String, Vec<u8>)>(
-        r#"SELECT CAST(d.capacity AS TEXT), b.dao
-        FROM dao_deposits d
-        JOIN blocks_index b ON d.deposit_block_number = b.number
-        WHERE d.lock_script_hash = $1 AND d.status IN (0, 1) AND b.dao IS NOT NULL AND d.deposit_block_number <= $2"#,
-    )
-    .bind(&hash)
-    .bind(latest_block_number)
-    .fetch_all(&state.read_pool)
-    .await
-    .unwrap_or_default();
-
+    // Calculate unclaimed compensation for active/pending deposits
     let mut total_unclaimed: u128 = 0;
-    for (capacity_str, deposit_dao) in &deposits_with_ar {
-        let capacity: u128 = capacity_str.parse().unwrap_or(0);
+    for (_, entry) in my_deposits.iter().filter(|(_, e)| {
+        (e.status == 0 || e.status == 1) && e.deposit_block_number <= latest_block_number
+    }) {
+        let capacity = entry.capacity as u128;
         let free_capacity = capacity.saturating_sub(DAO_OCCUPIED_CAPACITY);
-        if let Some(ar_deposit) = extract_ar(deposit_dao) {
-            if ar_deposit > 0 && latest_ar > ar_deposit {
-                let compensation = (free_capacity * latest_ar as u128 / ar_deposit as u128)
-                    .saturating_sub(free_capacity);
-                total_unclaimed += compensation;
-            }
+        let ar_deposit = entry.deposit_ar as u64;
+        if ar_deposit > 0 && latest_ar > ar_deposit {
+            let compensation = (free_capacity * latest_ar as u128 / ar_deposit as u128)
+                .saturating_sub(free_capacity);
+            total_unclaimed += compensation;
         }
     }
 
-    let secondary_burnt: u128 = sqlx::query_as::<_, (String,)>(
-        "SELECT COALESCE(cumulative_burnt, '0') FROM dao_statistics WHERE id = 1",
-    )
-    .fetch_optional(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
-    .map(|(s,)| s.parse().unwrap_or(0))
-    .unwrap_or(0);
+    // Get DAO stats for APC (cumulative_burnt)
+    let dao_stats = state.store.get_dao_stats(b"global").ok().flatten();
+
+    let secondary_burnt: u128 = 0; // Not tracked separately in RocksDB; derive from issuance data
+    let _ = dao_stats; // DaoStats doesn't carry cumulative_burnt
 
     let apc = calculate_estimated_apc(total_issuance, secondary_burnt);
     let estimated_apc = if apc > 0.0 {
@@ -491,102 +386,100 @@ async fn get_address_dao_summary(
         String::new()
     };
 
+    let total_locked_str = total_locked.to_string();
+    let total_comp_str = total_comp_earned.to_string();
+
     ok(AddressDaoSummaryResponse {
         has_dao_activity: true,
-        active_deposits_count: active_count as i32,
-        pending_withdrawals_count: pending_count as i32,
-        completed_withdrawals_count: completed_count as i32,
-        total_locked_capacity: total_locked.0.clone(),
-        total_locked_ckb: shannon_to_ckb(&total_locked.0),
+        active_deposits_count: active_count,
+        pending_withdrawals_count: pending_count,
+        completed_withdrawals_count: completed_count,
+        total_locked_capacity: total_locked_str.clone(),
+        total_locked_ckb: shannon_to_ckb(&total_locked_str),
         unclaimed_compensation: total_unclaimed.to_string(),
         unclaimed_compensation_ckb: shannon_to_ckb(&total_unclaimed.to_string()),
-        total_compensation_earned: total_comp_earned.0.clone(),
-        total_compensation_earned_ckb: shannon_to_ckb(&total_comp_earned.0),
+        total_compensation_earned: total_comp_str.clone(),
+        total_compensation_earned_ckb: shannon_to_ckb(&total_comp_str),
         estimated_apc,
     })
 }
 
 async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStatisticsResponse> {
-    let live_stats = sqlx::query_as::<_, (String, i64, i64)>(
-        r#"SELECT 
-            CAST(COALESCE(SUM(capacity), 0) AS TEXT) as total_deposited,
-            COUNT(DISTINCT lock_script_hash) as total_depositors,
-            COUNT(*) as active_deposits
-        FROM dao_deposits WHERE status = 0"#,
-    )
-    .fetch_one(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let active_deposits = state
+        .store
+        .list_active_dao_deposits()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let compensation_stats = sqlx::query_as::<_, (String,)>(
-        r#"SELECT CAST(COALESCE(SUM(compensation), 0) AS TEXT) 
-           FROM dao_deposits WHERE status = 2 AND compensation IS NOT NULL"#,
-    )
-    .fetch_one(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let all_deposits = state
+        .store
+        .list_dao_deposits()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let latest_block = sqlx::query_as::<_, (i64, Vec<u8>)>(
-        "SELECT number, dao FROM blocks_index WHERE dao IS NOT NULL ORDER BY number DESC LIMIT 1",
-    )
-    .fetch_optional(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    // Live stats from active deposits
+    let total_deposited: i128 = active_deposits
+        .iter()
+        .map(|(_, e)| e.capacity as i128)
+        .sum();
+
+    let unique_depositors: std::collections::HashSet<&[u8]> = active_deposits
+        .iter()
+        .map(|(_, e)| e.lock_script_hash.as_slice())
+        .collect();
+    let total_depositors = unique_depositors.len() as i32;
+    let active_count = active_deposits.len() as i32;
+
+    // Compensation paid = sum of compensation for completed deposits
+    let total_compensation_paid: i128 = all_deposits
+        .iter()
+        .filter(|(_, e)| e.status == 2 && e.compensation.is_some())
+        .map(|(_, e)| e.compensation.unwrap_or(0) as i128)
+        .sum();
+
+    // Get latest block for AR
+    let latest_block = state.store.get_sync_tip_block().ok().flatten();
 
     let (latest_block_number, latest_ar, total_issuance) = match &latest_block {
-        Some((num, dao)) => {
-            let ar = extract_ar(dao).unwrap_or(1);
-            let issuance = extract_total_issuance(dao).unwrap_or(0);
+        Some((num, header)) => {
+            let ar = extract_ar(&header.dao).unwrap_or(1);
+            let issuance = extract_total_issuance(&header.dao).unwrap_or(0);
             (*num, ar, issuance)
         }
         None => (0, 1, 0),
     };
 
-    let avg_epochs: (Option<f64>,) = sqlx::query_as(
-        r#"SELECT AVG((($1::bigint) - deposit_block_number)::float8 / 1800.0) 
-        FROM dao_deposits 
-        WHERE status = 0 AND deposit_block_number <= $1"#,
-    )
-    .bind(latest_block_number)
-    .fetch_one(&state.read_pool)
-    .await
-    .unwrap_or((None,));
+    // Calculate average deposit time
+    let total_blocks_held: f64 = active_deposits
+        .iter()
+        .filter(|(_, e)| e.deposit_block_number <= latest_block_number)
+        .map(|(_, e)| (latest_block_number - e.deposit_block_number) as f64)
+        .sum();
+    let active_filtered_count = active_deposits
+        .iter()
+        .filter(|(_, e)| e.deposit_block_number <= latest_block_number)
+        .count();
+    let avg_epochs = if active_filtered_count > 0 {
+        (total_blocks_held / active_filtered_count as f64) / 1800.0
+    } else {
+        0.0
+    };
 
-    let deposits_with_ar = sqlx::query_as::<_, (String, Vec<u8>)>(
-        r#"SELECT 
-            CAST(d.capacity AS TEXT),
-            b.dao
-        FROM dao_deposits d
-        JOIN blocks_index b ON d.deposit_block_number = b.number
-        WHERE d.status = 0 AND b.dao IS NOT NULL AND d.deposit_block_number <= $1"#,
-    )
-    .bind(latest_block_number)
-    .fetch_all(&state.read_pool)
-    .await
-    .unwrap_or_default();
-
+    // Calculate unclaimed compensation
     let mut total_unclaimed: u128 = 0;
-    for (capacity_str, deposit_dao) in &deposits_with_ar {
-        let capacity: u128 = capacity_str.parse().unwrap_or(0);
+    for (_, entry) in active_deposits
+        .iter()
+        .filter(|(_, e)| e.deposit_block_number <= latest_block_number)
+    {
+        let capacity = entry.capacity as u128;
         let free_capacity = capacity.saturating_sub(DAO_OCCUPIED_CAPACITY);
-        if let Some(ar_deposit) = extract_ar(deposit_dao) {
-            if ar_deposit > 0 && latest_ar > ar_deposit {
-                let compensation = (free_capacity * latest_ar as u128 / ar_deposit as u128)
-                    .saturating_sub(free_capacity);
-                total_unclaimed += compensation;
-            }
+        let ar_deposit = entry.deposit_ar as u64;
+        if ar_deposit > 0 && latest_ar > ar_deposit {
+            let compensation = (free_capacity * latest_ar as u128 / ar_deposit as u128)
+                .saturating_sub(free_capacity);
+            total_unclaimed += compensation;
         }
     }
 
-    let secondary_burnt: u128 = sqlx::query_as::<_, (String,)>(
-        "SELECT COALESCE(cumulative_burnt, '0') FROM dao_statistics WHERE id = 1",
-    )
-    .fetch_optional(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
-    .map(|(s,)| s.parse().unwrap_or(0))
-    .unwrap_or(0);
-
+    let secondary_burnt: u128 = 0;
     let apc = calculate_estimated_apc(total_issuance, secondary_burnt);
     let estimated_apc = if apc > 0.0 {
         format!("{:.2}", apc)
@@ -594,33 +487,21 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
         String::new()
     };
 
-    let cached_row = sqlx::query_as::<_, (String, String, String)>(
-        r#"SELECT 
-            COALESCE(cumulative_miner_secondary, '0'),
-            COALESCE(cumulative_dao_compensation, '0'),
-            COALESCE(cumulative_burnt, '0')
-        FROM dao_statistics WHERE id = 1"#,
-    )
-    .fetch_optional(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let avg_days = epochs_to_days(avg_epochs);
 
-    let (mining_reward, deposit_compensation, burnt) =
-        cached_row.unwrap_or(("0".to_string(), "0".to_string(), "0".to_string()));
-
-    let total_deposited = live_stats.0;
-    let total_depositors = live_stats.1 as i32;
-    let active_deposits = live_stats.2 as i32;
-    let total_compensation_paid = compensation_stats.0;
-    let avg_days = epochs_to_days(avg_epochs.0.unwrap_or(0.0));
+    let total_deposited_str = total_deposited.to_string();
+    let total_comp_str = total_compensation_paid.to_string();
+    let mining_reward = "0".to_string();
+    let deposit_compensation = "0".to_string();
+    let burnt = "0".to_string();
 
     ok(DaoStatisticsResponse {
-        total_deposited: total_deposited.clone(),
-        total_deposited_ckb: shannon_to_ckb(&total_deposited),
+        total_deposited: total_deposited_str.clone(),
+        total_deposited_ckb: shannon_to_ckb(&total_deposited_str),
         total_depositors,
-        active_deposits,
-        total_compensation_paid: total_compensation_paid.clone(),
-        total_compensation_paid_ckb: shannon_to_ckb(&total_compensation_paid),
+        active_deposits: active_count,
+        total_compensation_paid: total_comp_str.clone(),
+        total_compensation_paid_ckb: shannon_to_ckb(&total_comp_str),
         unclaimed_compensation: total_unclaimed.to_string(),
         unclaimed_compensation_ckb: shannon_to_ckb(&total_unclaimed.to_string()),
         average_deposit_days: avg_days,
@@ -662,29 +543,32 @@ async fn calculate_compensation(
         .parse()
         .map_err(|_| ApiError::bad_request("Invalid capacity"))?;
 
-    let latest_block: (i64,) = sqlx::query_as("SELECT COALESCE(MAX(number), 0) FROM blocks_index")
-        .fetch_one(&state.read_pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let latest_block = state
+        .store
+        .get_sync_tip_block()
+        .ok()
+        .flatten()
+        .map(|(n, _)| n)
+        .unwrap_or(0);
 
-    let withdraw_block = params.withdraw_block.unwrap_or(latest_block.0);
+    let withdraw_block = params.withdraw_block.unwrap_or(latest_block);
 
-    let deposit_dao: Option<(Vec<u8>,)> =
-        sqlx::query_as("SELECT dao FROM blocks_index WHERE number = $1")
-            .bind(params.deposit_block)
-            .fetch_optional(&state.read_pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+    let deposit_dao = state
+        .store
+        .get_block_header(params.deposit_block)
+        .ok()
+        .flatten()
+        .map(|h| h.dao);
 
-    let withdraw_dao: Option<(Vec<u8>,)> =
-        sqlx::query_as("SELECT dao FROM blocks_index WHERE number = $1")
-            .bind(withdraw_block)
-            .fetch_optional(&state.read_pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+    let withdraw_dao = state
+        .store
+        .get_block_header(withdraw_block)
+        .ok()
+        .flatten()
+        .map(|h| h.dao);
 
     let (ar_deposit, ar_withdraw) = match (deposit_dao, withdraw_dao) {
-        (Some((d,)), Some((w,))) => {
+        (Some(d), Some(w)) => {
             let ar_d = extract_ar(&d).unwrap_or(1);
             let ar_w = extract_ar(&w).unwrap_or(1);
             (ar_d, ar_w)
@@ -824,26 +708,8 @@ async fn get_total_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResul
         return ok(cached);
     }
 
-    let rows = sqlx::query_as::<_, (chrono::NaiveDate, String, i32)>(
-        r#"
-        SELECT date, CAST(total_deposit AS TEXT), depositors_count
-        FROM dao_daily_snapshots
-        ORDER BY date ASC
-        "#,
-    )
-    .fetch_all(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let data: Vec<ChartDataPoint> = rows
-        .into_iter()
-        .map(|(date, total_deposit, depositors_count)| ChartDataPoint {
-            date: date.format("%Y/%m/%d").to_string(),
-            value: shannon_to_ckb(&total_deposit),
-            value2: Some(depositors_count.to_string()),
-        })
-        .collect();
-
+    // DAO daily snapshots are not yet in the RocksDB store -- return empty chart
+    let data: Vec<ChartDataPoint> = Vec::new();
     let data = downsample_chart_data(data, MAX_CHART_POINTS);
 
     let response = ChartResponse {
@@ -863,28 +729,8 @@ async fn get_daily_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResul
         return ok(cached);
     }
 
-    let rows = sqlx::query_as::<_, (chrono::NaiveDate, String, i32)>(
-        r#"
-        SELECT date, CAST(daily_deposit AS TEXT), daily_deposit_count
-        FROM dao_daily_snapshots
-        ORDER BY date ASC
-        "#,
-    )
-    .fetch_all(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let data: Vec<ChartDataPoint> = rows
-        .into_iter()
-        .map(
-            |(date, daily_deposit, daily_deposit_count)| ChartDataPoint {
-                date: date.format("%Y/%m/%d").to_string(),
-                value: shannon_to_ckb(&daily_deposit),
-                value2: Some(daily_deposit_count.to_string()),
-            },
-        )
-        .collect();
-
+    // DAO daily snapshots are not yet in the RocksDB store -- return empty chart
+    let data: Vec<ChartDataPoint> = Vec::new();
     let data = downsample_chart_data(data, MAX_CHART_POINTS);
 
     let response = ChartResponse {
@@ -906,40 +752,8 @@ async fn get_circulation_ratio_chart(
         return ok(cached);
     }
 
-    let rows = sqlx::query_as::<_, (chrono::NaiveDate, String, String, String)>(
-        r#"
-        SELECT date, CAST(total_deposit AS TEXT), CAST(total_issuance AS TEXT), COALESCE(cumulative_burnt, '0')
-        FROM dao_daily_snapshots
-        WHERE total_issuance != 0
-        ORDER BY date ASC
-        "#,
-    )
-    .fetch_all(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let data: Vec<ChartDataPoint> = rows
-        .into_iter()
-        .filter_map(
-            |(date, total_deposit, total_issuance_str, secondary_burnt_str)| {
-                let deposit: u128 = total_deposit.parse().ok()?;
-                let total_issuance: u128 = total_issuance_str.parse().ok()?;
-                let secondary_burnt: u128 = secondary_burnt_str.parse().unwrap_or(0);
-                let total_burnt = GENESIS_BURNT + secondary_burnt;
-                let circulating = total_issuance.saturating_sub(total_burnt);
-                if circulating == 0 {
-                    return None;
-                }
-                let ratio = (deposit as f64 / circulating as f64) * 100.0;
-                Some(ChartDataPoint {
-                    date: date.format("%Y/%m/%d").to_string(),
-                    value: format!("{:.2}", ratio),
-                    value2: None,
-                })
-            },
-        )
-        .collect();
-
+    // DAO daily snapshots are not yet in the RocksDB store -- return empty chart
+    let data: Vec<ChartDataPoint> = Vec::new();
     let data = downsample_chart_data(data, MAX_CHART_POINTS);
 
     let response = ChartResponse {

@@ -8,27 +8,6 @@
 #   CKB_RPC_URL=http://172.17.0.1:8114            (Linux)
 
 services:
-  postgres:
-    image: postgres:16-alpine
-    container_name: ckbadger-postgres
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-ckbadger}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
-      POSTGRES_DB: ${POSTGRES_DB:-ckbadger}
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-      - ./docker/postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
-    command: postgres -c config_file=/etc/postgresql/postgresql.conf
-    ports:
-      - '5432:5432'
-    healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U ckbadger']
-      interval: 2s
-      timeout: 5s
-      retries: 60
-      start_period: 10s
-    shm_size: 25gb
-
   redis:
     image: redis:7-alpine
     container_name: ckbadger-redis
@@ -66,12 +45,10 @@ services:
       dockerfile: docker/Dockerfile.indexer
     container_name: ckbadger-indexer
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-ckbadger}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-ckbadger}
+      CKBADGER_DATA_PATH: /data/ckbadger-store
       REDIS_URL: redis://redis:6379
       CKB_RPC_URL: ${CKB_RPC_URL:-http://ckb-node:8114}
       CKB_DATA_PATH: /var/lib/ckb/data/db
@@ -83,6 +60,7 @@ services:
         hard: 65536
     volumes:
       - ${CKB_HOST_DATA_DIR:-ckb-data}:/var/lib/ckb:ro
+      - ckbadger-data:/data/ckbadger-store
       - ./docs/token-labels:/app/token-labels:ro
       - ./docs/script-name-overrides.json:/app/script-name-overrides.json:ro
     restart: unless-stopped
@@ -93,14 +71,10 @@ services:
       dockerfile: docker/Dockerfile.api
     container_name: ckbadger-api
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-ckbadger}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-ckbadger}
-      # Optional: point read-only API queries at a streaming replica
-      # READ_DATABASE_URL: postgres://${POSTGRES_USER:-ckbadger}:${POSTGRES_PASSWORD:-changeme}@postgres-replica:5432/${POSTGRES_DB:-ckbadger}
+      CKBADGER_DATA_PATH: /data/ckbadger-store
       REDIS_URL: redis://redis:6379
       CKB_RPC_URL: ${CKB_RPC_URL:-http://ckb-node:8114}
       CKB_DATA_PATH: /var/lib/ckb/data/db
@@ -111,6 +85,7 @@ services:
         hard: 65536
     volumes:
       - ${CKB_HOST_DATA_DIR:-ckb-data}:/var/lib/ckb:ro
+      - ckbadger-data:/data/ckbadger-store:ro
     ports:
       - '3001:3001'
     restart: unless-stopped
@@ -133,11 +108,8 @@ services:
       context: .
       dockerfile: docker/Dockerfile.task-runner
     container_name: ckbadger-task-runner
-    depends_on:
-      postgres:
-        condition: service_healthy
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-ckbadger}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-ckbadger}
+      CKBADGER_DATA_PATH: /data/ckbadger-store
       CKB_RPC_URL: ${CKB_RPC_URL:-http://ckb-node:8114}
       CKB_DATA_PATH: /var/lib/ckb/data/db
       TOKEN_LABELS_PATH: /app/token-labels
@@ -148,11 +120,12 @@ services:
         hard: 65536
     volumes:
       - ${CKB_HOST_DATA_DIR:-ckb-data}:/var/lib/ckb:ro
+      - ckbadger-data:/data/ckbadger-store
       - ./docs/token-labels:/app/token-labels:ro
       - ./docs/script-name-overrides.json:/app/script-name-overrides.json:ro
     restart: unless-stopped
 
 volumes:
-  postgres-data:
+  ckbadger-data:
   redis-data:
   ckb-data:

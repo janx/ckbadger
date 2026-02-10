@@ -1,22 +1,22 @@
 use anyhow::Result;
 use clap::Parser;
-use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use ckbadger_indexer::{
-    db::{apply_pg_tuning, IndexManager},
-    sync::Indexer,
-    Config,
-};
+use ckbadger_indexer::{sync::Indexer, Config};
+use ckbadger_store::CkbadgerStore;
 
 #[derive(Parser, Debug)]
 #[command(name = "ckbadger-indexer")]
 #[command(about = "CKB blockchain indexer for ckbadger explorer")]
 struct Args {
-    #[arg(long, env = "DATABASE_URL")]
-    database_url: Option<String>,
+    #[arg(
+        long,
+        env = "CKBADGER_DATA_PATH",
+        default_value = "./data/ckbadger-store"
+    )]
+    data_path: String,
 
     #[arg(long, env = "CKB_RPC_URL")]
     ckb_rpc_url: Option<String>,
@@ -48,104 +48,6 @@ struct Args {
 
     #[arg(
         long,
-        default_value = "true",
-        help = "Use PostgreSQL COPY for bulk sync (5-10x faster)"
-    )]
-    use_copy_bulk_sync: bool,
-
-    #[arg(
-        long,
-        default_value = "24",
-        help = "Number of connections in the COPY connection pool"
-    )]
-    copy_pool_size: usize,
-
-    #[arg(
-        long,
-        default_value = "false",
-        help = "Disable auto defer-indexes optimization for fresh database sync"
-    )]
-    no_auto_defer_indexes: bool,
-
-    #[arg(
-        long,
-        default_value = "10",
-        help = "Max parallel connections for index rebuild task (per partitioned table)"
-    )]
-    index_rebuild_parallel: usize,
-
-    #[arg(
-        long,
-        default_value = "false",
-        help = "Apply PostgreSQL session-level tuning for bulk sync optimization"
-    )]
-    apply_pg_tuning: bool,
-
-    #[arg(
-        long,
-        default_value = "100",
-        help = "Flush LiveCellStore to database every N batches (default 100)"
-    )]
-    live_cell_flush_interval: u64,
-
-    #[arg(
-        long,
-        default_value = "./data/live_cells",
-        help = "Path to RocksDB live cell store directory"
-    )]
-    live_cell_db_path: String,
-
-    #[arg(
-        long,
-        default_value = "false",
-        help = "Disable bulk sync cell cache (saves ~15GB RAM, but slower sync)"
-    )]
-    no_bulk_sync_cell_cache: bool,
-
-    #[arg(
-        long,
-        default_value = "false",
-        help = "Disable auto defer-activities optimization for fresh database sync"
-    )]
-    no_auto_defer_activities: bool,
-
-    #[arg(
-        long,
-        default_value = "false",
-        help = "Disable auto defer-address-balances optimization for fresh database sync"
-    )]
-    no_auto_defer_address_balances: bool,
-
-    #[arg(
-        long,
-        default_value = "false",
-        help = "Disable auto defer-token optimization for fresh database sync"
-    )]
-    no_auto_defer_token: bool,
-
-    #[arg(
-        long,
-        default_value = "false",
-        help = "Disable auto defer-spore optimization for fresh database sync"
-    )]
-    no_auto_defer_spore: bool,
-
-    #[arg(
-        long,
-        default_value = "false",
-        help = "Disable auto defer-dao optimization for fresh database sync"
-    )]
-    no_auto_defer_dao: bool,
-
-    #[arg(
-        long,
-        default_value = "false",
-        help = "Disable auto defer-tx-block-map optimization for fresh database sync"
-    )]
-    no_auto_defer_tx_block_map: bool,
-
-    #[arg(
-        long,
         env = "CKB_DATA_PATH",
         help = "Path to CKB node's RocksDB data directory for direct reads (e.g., /var/lib/ckb/data/db)"
     )]
@@ -166,10 +68,7 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     let config = Config {
-        database_url: args
-            .database_url
-            .or_else(|| std::env::var("DATABASE_URL").ok())
-            .expect("DATABASE_URL is required"),
+        data_path: args.data_path.clone(),
         ckb_rpc_url: args
             .ckb_rpc_url
             .or_else(|| std::env::var("CKB_RPC_URL").ok())
@@ -184,211 +83,33 @@ async fn main() -> Result<()> {
         redis_url: args.redis_url.or_else(|| std::env::var("REDIS_URL").ok()),
         bulk_sync_threshold: args.bulk_sync_threshold,
         fast_sync_mode: true,
-        use_copy_bulk_sync: args.use_copy_bulk_sync,
-        copy_pool_size: args.copy_pool_size,
-        index_rebuild_parallel: args.index_rebuild_parallel,
-        apply_pg_tuning: args.apply_pg_tuning,
-        live_cell_flush_interval: args.live_cell_flush_interval,
-        live_cell_db_path: args.live_cell_db_path,
-        bulk_sync_cell_cache: !args.no_bulk_sync_cell_cache,
         ckb_data_path: args.ckb_data_path,
     };
 
-    info!("Connecting to database: {}", config.database_url);
-    let pool = PgPoolOptions::new()
-        .max_connections(32)
-        .connect(&config.database_url)
-        .await?;
+    info!("Opening ckbadger-store at: {}", config.data_path);
+    let store = Arc::new(CkbadgerStore::open(&config.data_path)?);
 
-    if config.apply_pg_tuning {
-        apply_pg_tuning(&pool).await?;
-    }
-
-    info!("Running migrations");
-    sqlx::migrate!("../../migrations/postgres")
-        .run(&pool)
-        .await?;
-
-    let cache_invalidator =
-        ckbadger_indexer::cache::CacheInvalidator::new(config.redis_url.as_deref()).await;
-    let index_manager = IndexManager::with_cache(pool.clone(), cache_invalidator.clone());
-
-    let indexes_currently_deferred = index_manager.is_indexes_deferred().await?;
-
-    let db_tip: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(number), 0) FROM blocks_index")
-        .fetch_one(&pool)
-        .await?;
-
+    let sync_status = store.get_sync_status()?;
+    let db_tip = sync_status.tip_block_number;
     let is_fresh_sync = db_tip == 0;
-    let should_auto_defer =
-        is_fresh_sync && !indexes_currently_deferred && !args.no_auto_defer_indexes;
 
-    if should_auto_defer {
-        info!(
-            "Fresh database detected (tip=0), auto-enabling deferred indexes/constraints for faster initial sync"
-        );
-        let dropped_indexes = index_manager.drop_deferrable_indexes().await?;
-        let dropped_constraints = index_manager.drop_deferrable_constraints().await?;
-        info!(
-            "Dropped {} indexes and {} constraints (will auto-rebuild when caught up)",
-            dropped_indexes, dropped_constraints
-        );
-    } else if is_fresh_sync && args.no_auto_defer_indexes {
-        info!("Fresh database detected, but auto-defer disabled via --no-auto-defer-indexes");
-    } else if indexes_currently_deferred {
-        info!("Indexes/constraints are deferred (from previous run), will auto-rebuild when caught up");
+    if is_fresh_sync {
+        info!("Fresh database detected (tip=0), starting initial sync");
+    } else {
+        info!("Resuming sync from block {}", db_tip);
     }
 
-    // Check and handle activities deferred state
-    let activities_currently_deferred: bool = sqlx::query_scalar(
-        "SELECT COALESCE(activities_deferred, false) FROM sync_status WHERE id = 1",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap_or(false);
-
-    let should_auto_defer_activities =
-        is_fresh_sync && !activities_currently_deferred && !args.no_auto_defer_activities;
-
-    if should_auto_defer_activities {
+    // Check deferred state
+    if sync_status.activities_deferred || sync_status.address_balances_deferred {
         info!(
-            "Enabling deferred activities for faster bulk sync (will auto-rebuild when caught up)"
+            "Deferred states: activities={}, address_balances={}",
+            sync_status.activities_deferred, sync_status.address_balances_deferred
         );
-        sqlx::query("UPDATE sync_status SET activities_deferred = TRUE, activities_deferred_at = NOW() WHERE id = 1")
-            .execute(&pool)
-            .await?;
-    } else if is_fresh_sync && args.no_auto_defer_activities {
-        info!("Fresh database detected, but auto-defer-activities disabled via --no-auto-defer-activities");
-    } else if activities_currently_deferred {
-        info!("Activities are deferred (from previous run), will auto-rebuild when caught up");
-    }
-
-    let address_balances_currently_deferred: bool = sqlx::query_scalar(
-        "SELECT COALESCE(address_balances_deferred, false) FROM sync_status WHERE id = 1",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap_or(false);
-
-    let should_auto_defer_address_balances = is_fresh_sync
-        && !address_balances_currently_deferred
-        && !args.no_auto_defer_address_balances;
-
-    if should_auto_defer_address_balances {
-        info!(
-            "Enabling deferred address_balances for faster bulk sync (will auto-rebuild when caught up)"
-        );
-        sqlx::query("UPDATE sync_status SET address_balances_deferred = TRUE, address_balances_deferred_at = NOW() WHERE id = 1")
-            .execute(&pool)
-            .await?;
-    } else if is_fresh_sync && args.no_auto_defer_address_balances {
-        info!("Fresh database detected, but auto-defer-address-balances disabled via --no-auto-defer-address-balances");
-    } else if address_balances_currently_deferred {
-        info!(
-            "Address balances are deferred (from previous run), will auto-rebuild when caught up"
-        );
-    }
-
-    let token_currently_deferred: bool =
-        sqlx::query_scalar("SELECT COALESCE(token_deferred, false) FROM sync_status WHERE id = 1")
-            .fetch_one(&pool)
-            .await
-            .unwrap_or(false);
-
-    let should_auto_defer_token =
-        is_fresh_sync && !token_currently_deferred && !args.no_auto_defer_token;
-
-    if should_auto_defer_token {
-        info!(
-            "Enabling deferred token writes for faster bulk sync (will auto-rebuild when caught up)"
-        );
-        sqlx::query(
-            "UPDATE sync_status SET token_deferred = TRUE, token_deferred_at = NOW() WHERE id = 1",
-        )
-        .execute(&pool)
-        .await?;
-    } else if is_fresh_sync && args.no_auto_defer_token {
-        info!("Fresh database detected, but auto-defer-token disabled via --no-auto-defer-token");
-    } else if token_currently_deferred {
-        info!("Token writes are deferred (from previous run), will auto-rebuild when caught up");
-    }
-
-    let spore_currently_deferred: bool =
-        sqlx::query_scalar("SELECT COALESCE(spore_deferred, false) FROM sync_status WHERE id = 1")
-            .fetch_one(&pool)
-            .await
-            .unwrap_or(false);
-
-    let should_auto_defer_spore =
-        is_fresh_sync && !spore_currently_deferred && !args.no_auto_defer_spore;
-
-    if should_auto_defer_spore {
-        info!(
-            "Enabling deferred spore writes for faster bulk sync (will auto-rebuild when caught up)"
-        );
-        sqlx::query(
-            "UPDATE sync_status SET spore_deferred = TRUE, spore_deferred_at = NOW() WHERE id = 1",
-        )
-        .execute(&pool)
-        .await?;
-    } else if is_fresh_sync && args.no_auto_defer_spore {
-        info!("Fresh database detected, but auto-defer-spore disabled via --no-auto-defer-spore");
-    } else if spore_currently_deferred {
-        info!("Spore writes are deferred (from previous run), will auto-rebuild when caught up");
-    }
-
-    let dao_currently_deferred: bool =
-        sqlx::query_scalar("SELECT COALESCE(dao_deferred, false) FROM sync_status WHERE id = 1")
-            .fetch_one(&pool)
-            .await
-            .unwrap_or(false);
-
-    let should_auto_defer_dao = is_fresh_sync && !dao_currently_deferred && !args.no_auto_defer_dao;
-
-    if should_auto_defer_dao {
-        info!(
-            "Enabling deferred DAO writes for faster bulk sync (will auto-rebuild when caught up)"
-        );
-        sqlx::query(
-            "UPDATE sync_status SET dao_deferred = TRUE, dao_deferred_at = NOW() WHERE id = 1",
-        )
-        .execute(&pool)
-        .await?;
-    } else if is_fresh_sync && args.no_auto_defer_dao {
-        info!("Fresh database detected, but auto-defer-dao disabled via --no-auto-defer-dao");
-    } else if dao_currently_deferred {
-        info!("DAO writes are deferred (from previous run), will auto-rebuild when caught up");
-    }
-
-    // Check and handle tx_block_map deferred state
-    let tx_block_map_currently_deferred: bool = sqlx::query_scalar(
-        "SELECT COALESCE(tx_block_map_deferred, false) FROM sync_status WHERE id = 1",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap_or(false);
-
-    let should_auto_defer_tx_block_map =
-        is_fresh_sync && !tx_block_map_currently_deferred && !args.no_auto_defer_tx_block_map;
-
-    if should_auto_defer_tx_block_map {
-        info!(
-            "Enabling deferred tx_block_map writes for faster bulk sync (will auto-rebuild when caught up)"
-        );
-        sqlx::query(
-            "UPDATE sync_status SET tx_block_map_deferred = TRUE, tx_block_map_deferred_at = NOW() WHERE id = 1",
-        )
-        .execute(&pool)
-        .await?;
-    } else if is_fresh_sync && args.no_auto_defer_tx_block_map {
-        info!("Fresh database detected, but auto-defer-tx-block-map disabled via --no-auto-defer-tx-block-map");
-    } else if tx_block_map_currently_deferred {
-        info!("tx_block_map writes are deferred (from previous run), will auto-rebuild when caught up");
     }
 
     info!("Connecting to CKB node: {}", config.ckb_rpc_url);
 
-    let indexer = Indexer::new(config.clone(), pool.clone()).await?;
+    let indexer = Indexer::new(config.clone(), store.clone()).await?;
     let indexer = Arc::new(indexer);
 
     let data_source = if indexer.is_direct_db_read() {
@@ -430,13 +151,12 @@ async fn main() -> Result<()> {
                 .await;
 
             if indexer_for_progress.is_bulk_sync_active() {
-                // ANSI color codes for speed: green (>=1000), yellow (>=100), red (<100)
                 let (color_start, color_end) = if ema_rate >= 1000.0 {
-                    ("\x1b[32m", "\x1b[0m") // green
+                    ("\x1b[32m", "\x1b[0m")
                 } else if ema_rate >= 100.0 {
-                    ("\x1b[33m", "\x1b[0m") // yellow
+                    ("\x1b[33m", "\x1b[0m")
                 } else {
-                    ("\x1b[31m", "\x1b[0m") // red
+                    ("\x1b[31m", "\x1b[0m")
                 };
 
                 eprintln!(
@@ -469,23 +189,9 @@ async fn main() -> Result<()> {
     tokio::spawn(async move {
         match tokio::signal::ctrl_c().await {
             Ok(()) => {
-                info!("Received shutdown signal, flushing LiveCellStore...");
-                if let Some(store) = indexer_for_shutdown.writer().live_cell_store() {
-                    match store
-                        .flush_to_db(indexer_for_shutdown.writer().pool())
-                        .await
-                    {
-                        Ok((inserts, removals)) => {
-                            info!(
-                                "Shutdown flush completed: {} inserts, {} removals",
-                                inserts, removals
-                            );
-                        }
-                        Err(e) => {
-                            tracing::error!("Failed to flush on shutdown: {}", e);
-                        }
-                    }
-                }
+                info!("Received shutdown signal, shutting down gracefully...");
+                // RocksDB handles durability automatically via WAL
+                let _ = indexer_for_shutdown; // keep alive until shutdown
                 std::process::exit(0);
             }
             Err(e) => {

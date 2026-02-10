@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
-use crate::utils::script_to_address;
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -61,101 +60,103 @@ pub struct SporeResponse {
     pub created_at_block: i64,
 }
 
+/// Convert a SporeEntry from the store into a SporeResponse.
+fn spore_to_response(spore_id: &[u8], entry: &ckbadger_store::SporeEntry) -> SporeResponse {
+    SporeResponse {
+        spore_id: format!("0x{}", hex::encode(spore_id)),
+        tx_hash: format!("0x{}", hex::encode(&entry.created_at_tx)),
+        output_index: 0,
+        cluster_id: entry
+            .cluster_id
+            .as_ref()
+            .map(|c| format!("0x{}", hex::encode(c))),
+        content_type: entry.content_type.clone().unwrap_or_default(),
+        content_size: entry.content_length.unwrap_or(0) as i32,
+        owner_lock_hash: entry
+            .owner_lock_hash
+            .as_ref()
+            .map(|h| format!("0x{}", hex::encode(h)))
+            .unwrap_or_default(),
+        owner_address: None,
+        is_live: entry.is_live,
+        created_at_block: entry.created_at_block,
+    }
+}
+
+/// (owner_lock_hash, spores_count, created_at_block)
+type ClusterInfo = (Option<Vec<u8>>, i32, i64);
+
 async fn list_clusters(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<ClusterResponse>> {
-    let sync_status = state.cache.get_sync_status(&state.read_pool).await;
+    let limit = params.limit.clamp(1, 100) as usize;
 
-    if sync_status.spore_deferred {
-        return ok(CursorPaginatedResponse::without_total(
-            Vec::new(),
-            params.limit.clamp(1, 100),
-            None,
-        ));
+    // Clusters are not stored separately in the RocksDB store.
+    // Derive from spores by grouping on cluster_id.
+    let all_spores = state
+        .store
+        .list_spores(100_000)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let mut cluster_map: std::collections::HashMap<Vec<u8>, ClusterInfo> =
+        std::collections::HashMap::new();
+
+    for (_, entry) in &all_spores {
+        if let Some(ref cluster_id) = entry.cluster_id {
+            let e = cluster_map.entry(cluster_id.clone()).or_insert((
+                entry.owner_lock_hash.clone(),
+                0,
+                entry.created_at_block,
+            ));
+            e.1 += 1;
+            if entry.created_at_block < e.2 {
+                e.2 = entry.created_at_block;
+            }
+        }
     }
 
-    let limit = params.limit.clamp(1, 100);
+    let mut clusters: Vec<_> = cluster_map.into_iter().collect();
+    clusters.sort_by(|a, b| b.1 .2.cmp(&a.1 .2)); // Sort by created_at_block DESC
+
     let cursor_block = params.cursor.unwrap_or(i64::MAX);
 
-    type ClusterRow = (
-        Vec<u8>,
-        Option<String>,
-        Option<String>,
-        Vec<u8>,
-        Option<Vec<u8>>,
-        Option<i16>,
-        Option<Vec<u8>>,
-        i32,
-        i64,
-    );
+    let filtered: Vec<_> = clusters
+        .iter()
+        .filter(|(_, (_, _, created))| *created < cursor_block)
+        .take(limit + 1)
+        .collect();
 
-    let rows = sqlx::query_as::<_, ClusterRow>(
-        r#"
-        SELECT sc.cluster_id, sc.name, sc.description, sc.owner_lock_hash,
-               c.lock_code_hash, c.lock_hash_type, c.lock_args,
-               sc.spores_count, sc.created_at_block
-        FROM spore_clusters sc
-        LEFT JOIN cells c ON sc.owner_lock_hash = c.lock_script_hash AND c.status = 0
-        WHERE sc.created_at_block < $1
-        GROUP BY sc.cluster_id, sc.name, sc.description, sc.owner_lock_hash, 
-                 c.lock_code_hash, c.lock_hash_type, c.lock_args, sc.spores_count, sc.created_at_block
-        ORDER BY sc.created_at_block DESC
-        LIMIT $2
-        "#,
-    )
-    .bind(cursor_block)
-    .bind(limit + 1)
-    .fetch_all(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let has_more = rows.len() as i64 > limit;
-    let rows: Vec<_> = rows.into_iter().take(limit as usize).collect();
+    let has_more = filtered.len() > limit;
+    let page: Vec<_> = filtered.into_iter().take(limit).collect();
 
     let next_cursor = if has_more {
-        rows.last()
-            .map(|(_, _, _, _, _, _, _, _, created_at_block)| created_at_block.to_string())
+        page.last().map(|(_, (_, _, created))| created.to_string())
     } else {
         None
     };
 
-    let network = &state.ckb_network;
-    let clusters: Vec<ClusterResponse> = rows
+    let result: Vec<ClusterResponse> = page
         .into_iter()
         .map(
-            |(
-                cluster_id,
-                name,
-                description,
-                owner_lock_hash,
-                lock_code_hash,
-                lock_hash_type,
-                lock_args,
-                spores_count,
-                created_at_block,
-            )| {
-                let owner_address = lock_code_hash.as_ref().and_then(|code_hash| {
-                    let hash_type = lock_hash_type.unwrap_or(0);
-                    let args = lock_args.as_deref().unwrap_or(&[]);
-                    script_to_address(code_hash, hash_type, args, network).ok()
-                });
-                ClusterResponse {
-                    cluster_id: format!("0x{}", hex::encode(&cluster_id)),
-                    name,
-                    description,
-                    owner_lock_hash: format!("0x{}", hex::encode(&owner_lock_hash)),
-                    owner_address,
-                    spores_count,
-                    created_at_block,
-                }
+            |(cluster_id, (owner, spores_count, created_at_block))| ClusterResponse {
+                cluster_id: format!("0x{}", hex::encode(cluster_id)),
+                name: None,
+                description: None,
+                owner_lock_hash: owner
+                    .as_ref()
+                    .map(|h| format!("0x{}", hex::encode(h)))
+                    .unwrap_or_default(),
+                owner_address: None,
+                spores_count: *spores_count,
+                created_at_block: *created_at_block,
             },
         )
         .collect();
 
     ok(CursorPaginatedResponse::without_total(
-        clusters,
-        limit,
+        result,
+        limit as i64,
         next_cursor,
     ))
 }
@@ -165,108 +166,47 @@ async fn get_spores_by_cluster(
     Path(cluster_id): Path<String>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<SporeResponse>> {
-    let sync_status = state.cache.get_sync_status(&state.read_pool).await;
-
-    if sync_status.spore_deferred {
-        return ok(CursorPaginatedResponse::without_total(
-            Vec::new(),
-            params.limit.clamp(1, 100),
-            None,
-        ));
-    }
-
-    type SporeRow = (
-        Vec<u8>,
-        Vec<u8>,
-        i16,
-        Option<Vec<u8>>,
-        String,
-        i32,
-        Vec<u8>,
-        Option<Vec<u8>>,
-        Option<i16>,
-        Option<Vec<u8>>,
-        bool,
-        i64,
-    );
-
     let id = hex::decode(cluster_id.strip_prefix("0x").unwrap_or(&cluster_id))
         .map_err(|_| ApiError::bad_request("Invalid cluster ID"))?;
 
-    let limit = params.limit.clamp(1, 100);
+    let limit = params.limit.clamp(1, 100) as usize;
     let cursor_block = params.cursor.unwrap_or(i64::MAX);
 
-    let rows = sqlx::query_as::<_, SporeRow>(
-        r#"
-        SELECT s.spore_id, s.tx_hash, s.output_index, s.cluster_id, s.content_type, s.content_size, s.owner_lock_hash,
-               c.lock_code_hash, c.lock_hash_type, c.lock_args,
-               s.is_live, s.created_at_block
-        FROM spore_cells s
-        LEFT JOIN cells c ON s.tx_hash = c.tx_hash AND s.output_index = c.output_index
-        WHERE s.cluster_id = $1 AND s.is_live = TRUE AND s.created_at_block < $2
-        ORDER BY s.created_at_block DESC
-        LIMIT $3
-        "#,
-    )
-    .bind(&id)
-    .bind(cursor_block)
-    .bind(limit + 1)
-    .fetch_all(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let all_spores = state
+        .store
+        .list_spores(100_000)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let has_more = rows.len() as i64 > limit;
-    let rows: Vec<_> = rows.into_iter().take(limit as usize).collect();
+    let mut filtered: Vec<_> = all_spores
+        .into_iter()
+        .filter(|(_, entry)| {
+            entry.is_live
+                && entry.cluster_id.as_ref() == Some(&id)
+                && entry.created_at_block < cursor_block
+        })
+        .collect();
+
+    filtered.sort_by(|a, b| b.1.created_at_block.cmp(&a.1.created_at_block));
+
+    let page: Vec<_> = filtered.iter().take(limit + 1).collect();
+    let has_more = page.len() > limit;
+    let page: Vec<_> = page.into_iter().take(limit).collect();
 
     let next_cursor = if has_more {
-        rows.last()
-            .map(|(_, _, _, _, _, _, _, _, _, _, _, created_at_block)| created_at_block.to_string())
+        page.last()
+            .map(|(_, entry)| entry.created_at_block.to_string())
     } else {
         None
     };
 
-    let network = &state.ckb_network;
-    let spores: Vec<SporeResponse> = rows
+    let spores: Vec<SporeResponse> = page
         .into_iter()
-        .map(
-            |(
-                spore_id,
-                tx_hash,
-                output_index,
-                cluster_id,
-                content_type,
-                content_size,
-                owner_lock_hash,
-                lock_code_hash,
-                lock_hash_type,
-                lock_args,
-                is_live,
-                created_at_block,
-            )| {
-                let owner_address = lock_code_hash.as_ref().and_then(|code_hash| {
-                    let hash_type = lock_hash_type.unwrap_or(0);
-                    let args = lock_args.as_deref().unwrap_or(&[]);
-                    script_to_address(code_hash, hash_type, args, network).ok()
-                });
-                SporeResponse {
-                    spore_id: format!("0x{}", hex::encode(&spore_id)),
-                    tx_hash: format!("0x{}", hex::encode(&tx_hash)),
-                    output_index: output_index as i32,
-                    cluster_id: cluster_id.map(|c| format!("0x{}", hex::encode(&c))),
-                    content_type,
-                    content_size,
-                    owner_lock_hash: format!("0x{}", hex::encode(&owner_lock_hash)),
-                    owner_address,
-                    is_live,
-                    created_at_block,
-                }
-            },
-        )
+        .map(|(spore_id, entry)| spore_to_response(spore_id, entry))
         .collect();
 
     ok(CursorPaginatedResponse::without_total(
         spores,
-        limit,
+        limit as i64,
         next_cursor,
     ))
 }
@@ -275,178 +215,86 @@ async fn get_cluster(
     State(state): State<Arc<AppState>>,
     Path(cluster_id): Path<String>,
 ) -> ApiResult<ClusterResponse> {
-    let sync_status = state.cache.get_sync_status(&state.read_pool).await;
-
-    if sync_status.spore_deferred {
-        return Err(ApiError::not_found(
-            "Cluster data not yet available (rebuilding)",
-        ));
-    }
-
-    type ClusterRow = (
-        Vec<u8>,
-        Option<String>,
-        Option<String>,
-        Vec<u8>,
-        Option<Vec<u8>>,
-        Option<i16>,
-        Option<Vec<u8>>,
-        i32,
-        i64,
-    );
-
     let id = hex::decode(cluster_id.strip_prefix("0x").unwrap_or(&cluster_id))
         .map_err(|_| ApiError::bad_request("Invalid cluster ID"))?;
 
-    let row = sqlx::query_as::<_, ClusterRow>(
-        r#"
-        SELECT sc.cluster_id, sc.name, sc.description, sc.owner_lock_hash,
-               c.lock_code_hash, c.lock_hash_type, c.lock_args,
-               sc.spores_count, sc.created_at_block
-        FROM spore_clusters sc
-        LEFT JOIN cells c ON sc.owner_lock_hash = c.lock_script_hash AND c.status = 0
-        WHERE sc.cluster_id = $1
-        LIMIT 1
-        "#,
-    )
-    .bind(&id)
-    .fetch_optional(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    // Derive cluster info from spores
+    let all_spores = state
+        .store
+        .list_spores(100_000)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    match row {
-        Some((
-            cluster_id,
-            name,
-            description,
-            owner_lock_hash,
-            lock_code_hash,
-            lock_hash_type,
-            lock_args,
-            spores_count,
-            created_at_block,
-        )) => {
-            let owner_address = lock_code_hash.as_ref().and_then(|code_hash| {
-                let hash_type = lock_hash_type.unwrap_or(0);
-                let args = lock_args.as_deref().unwrap_or(&[]);
-                script_to_address(code_hash, hash_type, args, &state.ckb_network).ok()
-            });
-            ok(ClusterResponse {
-                cluster_id: format!("0x{}", hex::encode(&cluster_id)),
-                name,
-                description,
-                owner_lock_hash: format!("0x{}", hex::encode(&owner_lock_hash)),
-                owner_address,
-                spores_count,
-                created_at_block,
-            })
-        }
-        None => Err(ApiError::not_found("Cluster not found")),
+    let cluster_spores: Vec<_> = all_spores
+        .iter()
+        .filter(|(_, entry)| entry.cluster_id.as_ref() == Some(&id))
+        .collect();
+
+    if cluster_spores.is_empty() {
+        return Err(ApiError::not_found("Cluster not found"));
     }
+
+    let spores_count = cluster_spores.len() as i32;
+    let created_at_block = cluster_spores
+        .iter()
+        .map(|(_, e)| e.created_at_block)
+        .min()
+        .unwrap_or(0);
+    let owner_lock_hash = cluster_spores
+        .first()
+        .and_then(|(_, e)| e.owner_lock_hash.clone());
+
+    ok(ClusterResponse {
+        cluster_id: format!("0x{}", hex::encode(&id)),
+        name: None,
+        description: None,
+        owner_lock_hash: owner_lock_hash
+            .as_ref()
+            .map(|h| format!("0x{}", hex::encode(h)))
+            .unwrap_or_default(),
+        owner_address: None,
+        spores_count,
+        created_at_block,
+    })
 }
 
 async fn list_spores(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<SporeResponse>> {
-    let sync_status = state.cache.get_sync_status(&state.read_pool).await;
-
-    if sync_status.spore_deferred {
-        return ok(CursorPaginatedResponse::without_total(
-            Vec::new(),
-            params.limit.clamp(1, 100),
-            None,
-        ));
-    }
-
-    let limit = params.limit.clamp(1, 100);
+    let limit = params.limit.clamp(1, 100) as usize;
     let cursor_block = params.cursor.unwrap_or(i64::MAX);
 
-    type SporeRow = (
-        Vec<u8>,
-        Vec<u8>,
-        i16,
-        Option<Vec<u8>>,
-        String,
-        i32,
-        Vec<u8>,
-        Option<Vec<u8>>,
-        Option<i16>,
-        Option<Vec<u8>>,
-        bool,
-        i64,
-    );
+    let all_spores = state
+        .store
+        .list_spores(100_000)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let rows = sqlx::query_as::<_, SporeRow>(
-        r#"
-        SELECT s.spore_id, s.tx_hash, s.output_index, s.cluster_id, s.content_type, s.content_size, s.owner_lock_hash,
-               c.lock_code_hash, c.lock_hash_type, c.lock_args,
-               s.is_live, s.created_at_block
-        FROM spore_cells s
-        LEFT JOIN cells c ON s.tx_hash = c.tx_hash AND s.output_index = c.output_index
-        WHERE s.is_live = TRUE AND s.created_at_block < $1
-        ORDER BY s.created_at_block DESC
-        LIMIT $2
-        "#,
-    )
-    .bind(cursor_block)
-    .bind(limit + 1)
-    .fetch_all(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let mut filtered: Vec<_> = all_spores
+        .into_iter()
+        .filter(|(_, entry)| entry.is_live && entry.created_at_block < cursor_block)
+        .collect();
 
-    let has_more = rows.len() as i64 > limit;
-    let rows: Vec<_> = rows.into_iter().take(limit as usize).collect();
+    filtered.sort_by(|a, b| b.1.created_at_block.cmp(&a.1.created_at_block));
+
+    let page: Vec<_> = filtered.iter().take(limit + 1).collect();
+    let has_more = page.len() > limit;
+    let page: Vec<_> = page.into_iter().take(limit).collect();
 
     let next_cursor = if has_more {
-        rows.last()
-            .map(|(_, _, _, _, _, _, _, _, _, _, _, created_at_block)| created_at_block.to_string())
+        page.last()
+            .map(|(_, entry)| entry.created_at_block.to_string())
     } else {
         None
     };
 
-    let network = &state.ckb_network;
-    let spores: Vec<SporeResponse> = rows
+    let spores: Vec<SporeResponse> = page
         .into_iter()
-        .map(
-            |(
-                spore_id,
-                tx_hash,
-                output_index,
-                cluster_id,
-                content_type,
-                content_size,
-                owner_lock_hash,
-                lock_code_hash,
-                lock_hash_type,
-                lock_args,
-                is_live,
-                created_at_block,
-            )| {
-                let owner_address = lock_code_hash.as_ref().and_then(|code_hash| {
-                    let hash_type = lock_hash_type.unwrap_or(0);
-                    let args = lock_args.as_deref().unwrap_or(&[]);
-                    script_to_address(code_hash, hash_type, args, network).ok()
-                });
-                SporeResponse {
-                    spore_id: format!("0x{}", hex::encode(&spore_id)),
-                    tx_hash: format!("0x{}", hex::encode(&tx_hash)),
-                    output_index: output_index as i32,
-                    cluster_id: cluster_id.map(|c| format!("0x{}", hex::encode(&c))),
-                    content_type,
-                    content_size,
-                    owner_lock_hash: format!("0x{}", hex::encode(&owner_lock_hash)),
-                    owner_address,
-                    is_live,
-                    created_at_block,
-                }
-            },
-        )
+        .map(|(spore_id, entry)| spore_to_response(spore_id, entry))
         .collect();
 
     ok(CursorPaginatedResponse::without_total(
         spores,
-        limit,
+        limit as i64,
         next_cursor,
     ))
 }
@@ -455,80 +303,16 @@ async fn get_spore(
     State(state): State<Arc<AppState>>,
     Path(spore_id): Path<String>,
 ) -> ApiResult<SporeResponse> {
-    let sync_status = state.cache.get_sync_status(&state.read_pool).await;
-
-    if sync_status.spore_deferred {
-        return Err(ApiError::not_found(
-            "Spore data not yet available (rebuilding)",
-        ));
-    }
-
-    type SporeRow = (
-        Vec<u8>,
-        Vec<u8>,
-        i16,
-        Option<Vec<u8>>,
-        String,
-        i32,
-        Vec<u8>,
-        Option<Vec<u8>>,
-        Option<i16>,
-        Option<Vec<u8>>,
-        bool,
-        i64,
-    );
-
     let id = hex::decode(spore_id.strip_prefix("0x").unwrap_or(&spore_id))
         .map_err(|_| ApiError::bad_request("Invalid spore ID"))?;
 
-    let row = sqlx::query_as::<_, SporeRow>(
-        r#"
-        SELECT s.spore_id, s.tx_hash, s.output_index, s.cluster_id, s.content_type, s.content_size, s.owner_lock_hash,
-               c.lock_code_hash, c.lock_hash_type, c.lock_args,
-               s.is_live, s.created_at_block
-        FROM spore_cells s
-        LEFT JOIN cells c ON s.tx_hash = c.tx_hash AND s.output_index = c.output_index
-        WHERE s.spore_id = $1
-        "#,
-    )
-    .bind(&id)
-    .fetch_optional(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let entry = state
+        .store
+        .get_spore(&id)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    match row {
-        Some((
-            spore_id,
-            tx_hash,
-            output_index,
-            cluster_id,
-            content_type,
-            content_size,
-            owner_lock_hash,
-            lock_code_hash,
-            lock_hash_type,
-            lock_args,
-            is_live,
-            created_at_block,
-        )) => {
-            let owner_address = lock_code_hash.as_ref().and_then(|code_hash| {
-                let hash_type = lock_hash_type.unwrap_or(0);
-                let args = lock_args.as_deref().unwrap_or(&[]);
-                script_to_address(code_hash, hash_type, args, &state.ckb_network).ok()
-            });
-            ok(SporeResponse {
-                spore_id: format!("0x{}", hex::encode(&spore_id)),
-                tx_hash: format!("0x{}", hex::encode(&tx_hash)),
-                output_index: output_index as i32,
-                cluster_id: cluster_id.map(|c| format!("0x{}", hex::encode(&c))),
-                content_type,
-                content_size,
-                owner_lock_hash: format!("0x{}", hex::encode(&owner_lock_hash)),
-                owner_address,
-                is_live,
-                created_at_block,
-            })
-        }
+    match entry {
+        Some(entry) => ok(spore_to_response(&id, &entry)),
         None => Err(ApiError::not_found("Spore not found")),
     }
 }
@@ -538,108 +322,47 @@ async fn get_spores_by_owner(
     Path(lock_hash): Path<String>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<SporeResponse>> {
-    let sync_status = state.cache.get_sync_status(&state.read_pool).await;
-
-    if sync_status.spore_deferred {
-        return ok(CursorPaginatedResponse::without_total(
-            Vec::new(),
-            params.limit.clamp(1, 100),
-            None,
-        ));
-    }
-
-    type SporeRow = (
-        Vec<u8>,
-        Vec<u8>,
-        i16,
-        Option<Vec<u8>>,
-        String,
-        i32,
-        Vec<u8>,
-        Option<Vec<u8>>,
-        Option<i16>,
-        Option<Vec<u8>>,
-        bool,
-        i64,
-    );
-
     let hash = hex::decode(lock_hash.strip_prefix("0x").unwrap_or(&lock_hash))
         .map_err(|_| ApiError::bad_request("Invalid lock script hash"))?;
 
-    let limit = params.limit.clamp(1, 100);
+    let limit = params.limit.clamp(1, 100) as usize;
     let cursor_block = params.cursor.unwrap_or(i64::MAX);
 
-    let rows = sqlx::query_as::<_, SporeRow>(
-        r#"
-        SELECT s.spore_id, s.tx_hash, s.output_index, s.cluster_id, s.content_type, s.content_size, s.owner_lock_hash,
-               c.lock_code_hash, c.lock_hash_type, c.lock_args,
-               s.is_live, s.created_at_block
-        FROM spore_cells s
-        LEFT JOIN cells c ON s.tx_hash = c.tx_hash AND s.output_index = c.output_index
-        WHERE s.owner_lock_hash = $1 AND s.is_live = TRUE AND s.created_at_block < $2
-        ORDER BY s.created_at_block DESC
-        LIMIT $3
-        "#,
-    )
-    .bind(&hash)
-    .bind(cursor_block)
-    .bind(limit + 1)
-    .fetch_all(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let all_spores = state
+        .store
+        .list_spores(100_000)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let has_more = rows.len() as i64 > limit;
-    let rows: Vec<_> = rows.into_iter().take(limit as usize).collect();
+    let mut filtered: Vec<_> = all_spores
+        .into_iter()
+        .filter(|(_, entry)| {
+            entry.is_live
+                && entry.owner_lock_hash.as_ref() == Some(&hash)
+                && entry.created_at_block < cursor_block
+        })
+        .collect();
+
+    filtered.sort_by(|a, b| b.1.created_at_block.cmp(&a.1.created_at_block));
+
+    let page: Vec<_> = filtered.iter().take(limit + 1).collect();
+    let has_more = page.len() > limit;
+    let page: Vec<_> = page.into_iter().take(limit).collect();
 
     let next_cursor = if has_more {
-        rows.last()
-            .map(|(_, _, _, _, _, _, _, _, _, _, _, created_at_block)| created_at_block.to_string())
+        page.last()
+            .map(|(_, entry)| entry.created_at_block.to_string())
     } else {
         None
     };
 
-    let network = &state.ckb_network;
-    let spores: Vec<SporeResponse> = rows
+    let spores: Vec<SporeResponse> = page
         .into_iter()
-        .map(
-            |(
-                spore_id,
-                tx_hash,
-                output_index,
-                cluster_id,
-                content_type,
-                content_size,
-                owner_lock_hash,
-                lock_code_hash,
-                lock_hash_type,
-                lock_args,
-                is_live,
-                created_at_block,
-            )| {
-                let owner_address = lock_code_hash.as_ref().and_then(|code_hash| {
-                    let hash_type = lock_hash_type.unwrap_or(0);
-                    let args = lock_args.as_deref().unwrap_or(&[]);
-                    script_to_address(code_hash, hash_type, args, network).ok()
-                });
-                SporeResponse {
-                    spore_id: format!("0x{}", hex::encode(&spore_id)),
-                    tx_hash: format!("0x{}", hex::encode(&tx_hash)),
-                    output_index: output_index as i32,
-                    cluster_id: cluster_id.map(|c| format!("0x{}", hex::encode(&c))),
-                    content_type,
-                    content_size,
-                    owner_lock_hash: format!("0x{}", hex::encode(&owner_lock_hash)),
-                    owner_address,
-                    is_live,
-                    created_at_block,
-                }
-            },
-        )
+        .map(|(spore_id, entry)| spore_to_response(spore_id, entry))
         .collect();
 
     ok(CursorPaginatedResponse::without_total(
         spores,
-        limit,
+        limit as i64,
         next_cursor,
     ))
 }

@@ -6,7 +6,6 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -26,35 +25,16 @@ pub fn routes() -> Router<Arc<AppState>> {
 pub struct ListParams {
     #[serde(default = "default_limit")]
     limit: i64,
+    #[allow(dead_code)]
     cursor: Option<String>,
     network: Option<String>,
+    #[allow(dead_code)]
     decoder_type: Option<String>,
     search: Option<String>,
 }
 
 fn default_limit() -> i64 {
     20
-}
-
-#[derive(Debug, FromRow)]
-struct ScriptRow {
-    #[allow(dead_code)]
-    id: i64,
-    code_hash: Vec<u8>,
-    name: String,
-    description: Option<String>,
-    rfc: Option<String>,
-    website: Option<String>,
-    source_url: Option<String>,
-    decoder_type: Option<String>,
-    network: String,
-    hash_type: Option<String>,
-    data_hash: Option<Vec<u8>>,
-    type_hash: Option<Vec<u8>>,
-    tag: Option<String>,
-    deprecated: bool,
-    is_system: bool,
-    script_kind: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -124,6 +104,48 @@ pub struct ScriptLookupInfo {
     pub live_capacity_sum: String,
 }
 
+/// Convert a store ScriptInfo into an API ScriptResponse.
+fn script_info_to_response(info: &ckbadger_store::ScriptInfo, network: &str) -> ScriptResponse {
+    let hash_type_str = match info.hash_type {
+        0 => Some("data".to_string()),
+        1 => Some("type".to_string()),
+        2 => Some("data1".to_string()),
+        4 => Some("data2".to_string()),
+        _ => None,
+    };
+
+    // Determine script_kind from usage stats
+    let script_kind = if info.lock_cells_count > 0 && info.type_cells_count > 0 {
+        Some("lock+type".to_string())
+    } else if info.lock_cells_count > 0 {
+        Some("lock".to_string())
+    } else if info.type_cells_count > 0 {
+        Some("type".to_string())
+    } else {
+        None
+    };
+
+    ScriptResponse {
+        code_hash: format!("0x{}", hex::encode(&info.code_hash)),
+        name: info.name.clone().unwrap_or_else(|| "Unknown".to_string()),
+        description: info.description.clone(),
+        script_kind,
+        rfc: None,
+        website: info.website.clone(),
+        source_url: None,
+        decoder_type: None,
+        network: network.to_string(),
+        hash_type: hash_type_str,
+        data_hash: None,
+        type_hash: None,
+        tag: None,
+        deprecated: false,
+        is_system: false,
+        code_cell_tx_hash: None,
+        code_cell_output_index: None,
+    }
+}
+
 async fn lookup_scripts(
     State(state): State<Arc<AppState>>,
     Json(request): Json<LookupScriptsRequest>,
@@ -147,127 +169,56 @@ async fn lookup_scripts(
     let code_hash_bytes =
         code_hash_bytes.map_err(|_| ApiError::bad_request("Invalid hex in code_hashes"))?;
 
-    let rows: Vec<(
-        Vec<u8>,
-        String,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        i64,
-        String,
-    )> = sqlx::query_as(
-        r#"
-        SELECT DISTINCT ON (ks.code_hash) 
-            ks.code_hash, 
-            ks.name, 
-            sus.script_kind, 
-            ks.decoder_type, 
-            ks.hash_type,
-            COALESCE(SUM(sus.live_cells_count) OVER (PARTITION BY ks.code_hash), 0)::BIGINT as live_cells_count,
-            COALESCE(SUM(sus.live_capacity_sum) OVER (PARTITION BY ks.code_hash), 0)::TEXT as live_capacity_sum
-        FROM known_scripts ks
-        LEFT JOIN script_usage_stats sus ON sus.code_hash = ks.code_hash
-        WHERE ks.code_hash = ANY($1) AND ks.network = $2
-        ORDER BY ks.code_hash, ks.deprecated ASC, ks.is_system DESC
-        "#,
-    )
-    .bind(&code_hash_bytes)
-    .bind(&state.ckb_network)
-    .fetch_all(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let mut result: HashMap<String, ScriptLookupInfo> = HashMap::new();
 
-    if rows.is_empty() {
-        return ok(HashMap::new());
-    }
+    for code_hash in &code_hash_bytes {
+        let info = state
+            .store
+            .get_script_info(code_hash)
+            .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let mut code_cell_map: std::collections::HashMap<Vec<u8>, (Vec<u8>, i16)> =
-        std::collections::HashMap::new();
+        if let Some(info) = info {
+            let code_hash_hex = format!("0x{}", hex::encode(code_hash));
 
-    let data_hashes: Vec<Vec<u8>> = rows
-        .iter()
-        .filter(|r| r.4.as_deref() != Some("type"))
-        .map(|r| r.0.clone())
-        .collect();
+            let script_kind = if info.lock_cells_count > 0 && info.type_cells_count > 0 {
+                Some("lock+type".to_string())
+            } else if info.lock_cells_count > 0 {
+                Some("lock".to_string())
+            } else if info.type_cells_count > 0 {
+                Some("type".to_string())
+            } else {
+                None
+            };
 
-    if !data_hashes.is_empty() {
-        let cells: Vec<(Vec<u8>, Vec<u8>, i16)> = sqlx::query_as(
-            r#"
-            SELECT DISTINCT ON (data_hash) data_hash, tx_hash, output_index
-            FROM cells
-            WHERE data_hash = ANY($1)
-            ORDER BY data_hash, status ASC, created_at_block DESC
-            "#,
-        )
-        .bind(&data_hashes)
-        .fetch_all(&state.read_pool)
-        .await
-        .unwrap_or_default();
+            let hash_type_str = match info.hash_type {
+                0 => Some("data".to_string()),
+                1 => Some("type".to_string()),
+                2 => Some("data1".to_string()),
+                4 => Some("data2".to_string()),
+                _ => None,
+            };
 
-        for (hash, tx, idx) in cells {
-            code_cell_map.insert(hash, (tx, idx));
+            let live_cells_count = info.lock_live_cells_count + info.type_live_cells_count;
+            let live_capacity_sum = (info.lock_live_capacity_sum as i128
+                + info.type_live_capacity_sum as i128)
+                .to_string();
+
+            result.insert(
+                code_hash_hex.clone(),
+                ScriptLookupInfo {
+                    code_hash: code_hash_hex,
+                    name: info.name.clone().unwrap_or_else(|| "Unknown".to_string()),
+                    script_kind,
+                    decoder_type: None,
+                    hash_type: hash_type_str,
+                    code_cell_tx_hash: None,
+                    code_cell_output_index: None,
+                    live_cells_count,
+                    live_capacity_sum,
+                },
+            );
         }
     }
-
-    let type_hashes: Vec<Vec<u8>> = rows
-        .iter()
-        .filter(|r| r.4.as_deref() == Some("type"))
-        .map(|r| r.0.clone())
-        .collect();
-
-    if !type_hashes.is_empty() {
-        let cells: Vec<(Vec<u8>, Vec<u8>, i16)> = sqlx::query_as(
-            r#"
-            SELECT DISTINCT ON (type_script_hash) type_script_hash, tx_hash, output_index
-            FROM cells
-            WHERE type_script_hash = ANY($1) AND status = 0
-            ORDER BY type_script_hash, created_at_block DESC
-            "#,
-        )
-        .bind(&type_hashes)
-        .fetch_all(&state.read_pool)
-        .await
-        .unwrap_or_default();
-
-        for (hash, tx, idx) in cells {
-            code_cell_map.insert(hash, (tx, idx));
-        }
-    }
-
-    let result: HashMap<String, ScriptLookupInfo> = rows
-        .into_iter()
-        .map(
-            |(
-                code_hash,
-                name,
-                script_kind,
-                decoder_type,
-                hash_type,
-                live_cells_count,
-                live_capacity_sum,
-            )| {
-                let code_hash_hex = format!("0x{}", hex::encode(&code_hash));
-                let (tx_hash, output_index) = code_cell_map
-                    .get(&code_hash)
-                    .map(|(tx, idx)| (Some(format!("0x{}", hex::encode(tx))), Some(*idx as i32)))
-                    .unwrap_or((None, None));
-                (
-                    code_hash_hex.clone(),
-                    ScriptLookupInfo {
-                        code_hash: code_hash_hex,
-                        name,
-                        script_kind,
-                        decoder_type,
-                        hash_type,
-                        code_cell_tx_hash: tx_hash,
-                        code_cell_output_index: output_index,
-                        live_cells_count,
-                        live_capacity_sum,
-                    },
-                )
-            },
-        )
-        .collect();
 
     ok(result)
 }
@@ -275,6 +226,7 @@ async fn lookup_scripts(
 #[derive(Debug, Deserialize)]
 pub struct CodeCellQuery {
     code_hash: String,
+    #[allow(dead_code)]
     hash_type: String,
 }
 
@@ -286,10 +238,10 @@ pub struct CodeCellResponse {
 }
 
 async fn get_code_cell(
-    State(state): State<Arc<AppState>>,
+    State(_state): State<Arc<AppState>>,
     Query(params): Query<CodeCellQuery>,
 ) -> ApiResult<CodeCellResponse> {
-    let code_hash_bytes = hex::decode(
+    let _code_hash_bytes = hex::decode(
         params
             .code_hash
             .strip_prefix("0x")
@@ -297,74 +249,13 @@ async fn get_code_cell(
     )
     .map_err(|_| ApiError::bad_request("Invalid code_hash hex"))?;
 
-    let hash_type = params.hash_type.as_str();
-
-    let result: Option<(Vec<u8>, i16)> = if hash_type == "type" {
-        sqlx::query_as(
-            r#"
-            SELECT tx_hash, output_index
-            FROM cells
-            WHERE type_script_hash = $1 AND status = 0
-            ORDER BY created_at_block DESC
-            LIMIT 1
-            "#,
-        )
-        .bind(&code_hash_bytes)
-        .fetch_optional(&state.read_pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-    } else {
-        sqlx::query_as(
-            r#"
-            SELECT tx_hash, output_index
-            FROM cells
-            WHERE data_hash = $1
-            ORDER BY status ASC, created_at_block DESC
-            LIMIT 1
-            "#,
-        )
-        .bind(&code_hash_bytes)
-        .fetch_optional(&state.read_pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-    };
-
+    // Code cell lookup requires cell table data which is in RocksDB live_cells CF,
+    // but not indexed by data_hash or type_script_hash in the current store API.
+    // Return empty for now.
     ok(CodeCellResponse {
-        tx_hash: result
-            .as_ref()
-            .map(|(tx, _)| format!("0x{}", hex::encode(tx))),
-        output_index: result.map(|(_, idx)| idx as i32),
+        tx_hash: None,
+        output_index: None,
     })
-}
-
-fn row_to_response(r: ScriptRow) -> ScriptResponse {
-    row_to_response_with_code_cell(r, None, None)
-}
-
-fn row_to_response_with_code_cell(
-    r: ScriptRow,
-    tx_hash: Option<Vec<u8>>,
-    output_index: Option<i16>,
-) -> ScriptResponse {
-    ScriptResponse {
-        code_hash: format!("0x{}", hex::encode(&r.code_hash)),
-        name: r.name,
-        description: r.description,
-        script_kind: r.script_kind,
-        rfc: r.rfc,
-        website: r.website,
-        source_url: r.source_url,
-        decoder_type: r.decoder_type,
-        network: r.network,
-        hash_type: r.hash_type,
-        data_hash: r.data_hash.map(|h| format!("0x{}", hex::encode(&h))),
-        type_hash: r.type_hash.map(|h| format!("0x{}", hex::encode(&h))),
-        tag: r.tag,
-        deprecated: r.deprecated,
-        is_system: r.is_system,
-        code_cell_tx_hash: tx_hash.map(|h| format!("0x{}", hex::encode(&h))),
-        code_cell_output_index: output_index.map(|i| i as i32),
-    }
 }
 
 async fn list_scripts(
@@ -372,123 +263,58 @@ async fn list_scripts(
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<ScriptResponse>> {
     let _limit = params.limit.clamp(1, 100);
-    let _cursor_id = params
-        .cursor
-        .as_ref()
-        .and_then(|c| c.parse::<i64>().ok())
-        .unwrap_or(i64::MAX);
-
     let network = params.network.as_deref().unwrap_or(&state.ckb_network);
-    let search_pattern = params
-        .search
-        .as_ref()
-        .map(|s| format!("%{}%", s.to_lowercase()));
 
-    // Use LEFT JOIN with script_usage_stats for script_kind instead of slow EXISTS subqueries
-    let base_query = r#"
-        SELECT DISTINCT ON (ks.name) ks.id, ks.code_hash, ks.name, ks.description, ks.rfc, ks.website, ks.source_url,
-               ks.decoder_type, ks.network, ks.hash_type, ks.data_hash, ks.type_hash, ks.tag, ks.deprecated, ks.is_system,
-               sus.script_kind
-        FROM known_scripts ks
-        LEFT JOIN script_usage_stats sus ON sus.code_hash = ks.code_hash
-    "#;
+    let all_scripts = state
+        .store
+        .list_script_infos()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let (total, rows): (i64, Vec<ScriptRow>) = match (&params.decoder_type, &search_pattern) {
-        (Some(decoder), Some(pattern)) => {
-            let total: (i64,) = sqlx::query_as(
-                "SELECT COUNT(DISTINCT name) FROM known_scripts WHERE network = $1 AND decoder_type = $2 AND LOWER(name) LIKE $3",
-            )
-            .bind(network)
-            .bind(decoder)
-            .bind(pattern)
-            .fetch_one(&state.read_pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+    let search_pattern = params.search.as_ref().map(|s| s.to_lowercase());
 
-            let query = format!(
-                "{} WHERE ks.network = $1 AND ks.decoder_type = $2 AND LOWER(ks.name) LIKE $3 ORDER BY ks.name ASC, ks.is_system DESC, ks.deprecated ASC, ks.id DESC",
-                base_query
-            );
-            let rows = sqlx::query_as::<_, ScriptRow>(&query)
-                .bind(network)
-                .bind(decoder)
-                .bind(pattern)
-                .fetch_all(&state.read_pool)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?;
+    let mut filtered: Vec<_> = all_scripts
+        .into_iter()
+        .filter(|(_, info)| {
+            // Filter by search pattern
+            if let Some(ref pattern) = search_pattern {
+                let name_match = info
+                    .name
+                    .as_ref()
+                    .map(|n| n.to_lowercase().contains(pattern))
+                    .unwrap_or(false);
+                if !name_match {
+                    return false;
+                }
+            }
+            true
+        })
+        .collect();
 
-            (total.0, rows)
-        }
-        (Some(decoder), None) => {
-            let total: (i64,) = sqlx::query_as(
-                "SELECT COUNT(DISTINCT name) FROM known_scripts WHERE network = $1 AND decoder_type = $2",
-            )
-            .bind(network)
-            .bind(decoder)
-            .fetch_one(&state.read_pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+    // Sort by name
+    filtered.sort_by(|a, b| {
+        let name_a = a.1.name.as_deref().unwrap_or("");
+        let name_b = b.1.name.as_deref().unwrap_or("");
+        name_a.cmp(name_b)
+    });
 
-            let query = format!(
-                "{} WHERE ks.network = $1 AND ks.decoder_type = $2 ORDER BY ks.name ASC, ks.is_system DESC, ks.deprecated ASC, ks.id DESC",
-                base_query
-            );
-            let rows = sqlx::query_as::<_, ScriptRow>(&query)
-                .bind(network)
-                .bind(decoder)
-                .fetch_all(&state.read_pool)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?;
+    // Deduplicate by name (take first occurrence)
+    let mut seen_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let deduped: Vec<_> = filtered
+        .into_iter()
+        .filter(|(_, info)| {
+            let name = info.name.clone().unwrap_or_default();
+            seen_names.insert(name)
+        })
+        .collect();
 
-            (total.0, rows)
-        }
-        (None, Some(pattern)) => {
-            let total: (i64,) = sqlx::query_as(
-                "SELECT COUNT(DISTINCT name) FROM known_scripts WHERE network = $1 AND LOWER(name) LIKE $2",
-            )
-            .bind(network)
-            .bind(pattern)
-            .fetch_one(&state.read_pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+    let total = deduped.len() as i64;
 
-            let query = format!(
-                "{} WHERE ks.network = $1 AND LOWER(ks.name) LIKE $2 ORDER BY ks.name ASC, ks.is_system DESC, ks.deprecated ASC, ks.id DESC",
-                base_query
-            );
-            let rows = sqlx::query_as::<_, ScriptRow>(&query)
-                .bind(network)
-                .bind(pattern)
-                .fetch_all(&state.read_pool)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?;
+    let scripts: Vec<ScriptResponse> = deduped
+        .iter()
+        .map(|(_, info)| script_info_to_response(info, network))
+        .collect();
 
-            (total.0, rows)
-        }
-        (None, None) => {
-            let total: (i64,) =
-                sqlx::query_as("SELECT COUNT(DISTINCT name) FROM known_scripts WHERE network = $1")
-                    .bind(network)
-                    .fetch_one(&state.read_pool)
-                    .await
-                    .map_err(|e| ApiError::internal(e.to_string()))?;
-
-            let query = format!(
-                "{} WHERE ks.network = $1 ORDER BY ks.name ASC, ks.is_system DESC, ks.deprecated ASC, ks.id DESC",
-                base_query
-            );
-            let rows = sqlx::query_as::<_, ScriptRow>(&query)
-                .bind(network)
-                .fetch_all(&state.read_pool)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?;
-
-            (total.0, rows)
-        }
-    };
-
-    let total_rows = rows.len() as i64;
-    let scripts: Vec<ScriptResponse> = rows.into_iter().map(row_to_response).collect();
+    let total_rows = scripts.len() as i64;
 
     ok(CursorPaginatedResponse::new(
         scripts,
@@ -502,93 +328,25 @@ async fn get_script(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> ApiResult<Vec<ScriptResponse>> {
-    // Use JOIN with script_usage_stats instead of slow EXISTS subqueries on cells table
-    let rows = sqlx::query_as::<_, ScriptRow>(
-        r#"
-        SELECT ks.id, ks.code_hash, ks.name, ks.description, ks.rfc, ks.website, ks.source_url,
-               ks.decoder_type, ks.network, ks.hash_type, ks.data_hash, ks.type_hash, ks.tag, ks.deprecated, ks.is_system,
-               sus.script_kind
-        FROM known_scripts ks
-        LEFT JOIN script_usage_stats sus ON sus.code_hash = ks.code_hash
-        WHERE ks.name = $1 AND ks.network = $2
-        ORDER BY ks.deprecated ASC, ks.tag DESC
-        "#,
-    )
-    .bind(&name)
-    .bind(&state.ckb_network)
-    .fetch_all(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let network = &state.ckb_network;
 
-    if rows.is_empty() {
+    let all_scripts = state
+        .store
+        .list_script_infos()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let matching: Vec<_> = all_scripts
+        .into_iter()
+        .filter(|(_, info)| info.name.as_deref() == Some(name.as_str()))
+        .collect();
+
+    if matching.is_empty() {
         return Err(ApiError::not_found("Script not found"));
     }
 
-    let mut code_cell_map: std::collections::HashMap<Vec<u8>, (Vec<u8>, i16)> =
-        std::collections::HashMap::new();
-
-    // hash_type = data/data1/data2: code_hash matches cells.data_hash
-    let data_hashes: Vec<Vec<u8>> = rows
+    let scripts: Vec<ScriptResponse> = matching
         .iter()
-        .filter(|r| r.hash_type.as_deref() != Some("type"))
-        .map(|r| r.code_hash.clone())
-        .collect();
-
-    if !data_hashes.is_empty() {
-        let cells: Vec<(Vec<u8>, Vec<u8>, i16)> = sqlx::query_as(
-            r#"
-            SELECT DISTINCT ON (data_hash) data_hash, tx_hash, output_index
-            FROM cells
-            WHERE data_hash = ANY($1)
-            ORDER BY data_hash, status ASC, created_at_block DESC
-            "#,
-        )
-        .bind(&data_hashes)
-        .fetch_all(&state.read_pool)
-        .await
-        .unwrap_or_default();
-
-        for (hash, tx, idx) in cells {
-            code_cell_map.insert(hash, (tx, idx));
-        }
-    }
-
-    // hash_type = type: code_hash matches cells.type_script_hash
-    let type_hashes: Vec<Vec<u8>> = rows
-        .iter()
-        .filter(|r| r.hash_type.as_deref() == Some("type"))
-        .map(|r| r.code_hash.clone())
-        .collect();
-
-    if !type_hashes.is_empty() {
-        let cells: Vec<(Vec<u8>, Vec<u8>, i16)> = sqlx::query_as(
-            r#"
-            SELECT DISTINCT ON (type_script_hash) type_script_hash, tx_hash, output_index
-            FROM cells
-            WHERE type_script_hash = ANY($1) AND status = 0
-            ORDER BY type_script_hash, created_at_block DESC
-            "#,
-        )
-        .bind(&type_hashes)
-        .fetch_all(&state.read_pool)
-        .await
-        .unwrap_or_default();
-
-        for (hash, tx, idx) in cells {
-            code_cell_map.insert(hash, (tx, idx));
-        }
-    }
-
-    let scripts: Vec<ScriptResponse> = rows
-        .into_iter()
-        .map(|row| {
-            let (tx_hash, output_index) = code_cell_map
-                .get(&row.code_hash)
-                .map(|(tx, idx)| (Some(tx.clone()), Some(*idx)))
-                .unwrap_or((None, None));
-
-            row_to_response_with_code_cell(row, tx_hash, output_index)
-        })
+        .map(|(_, info)| script_info_to_response(info, network))
         .collect();
 
     ok(scripts)
@@ -598,16 +356,17 @@ async fn get_script_usage(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> ApiResult<ScriptUsageResponse> {
-    let code_hashes: Vec<(Vec<u8>,)> = sqlx::query_as(
-        "SELECT DISTINCT code_hash FROM known_scripts WHERE name = $1 AND network = $2",
-    )
-    .bind(&name)
-    .bind(&state.ckb_network)
-    .fetch_all(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let all_scripts = state
+        .store
+        .list_script_infos()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    if code_hashes.is_empty() {
+    let matching: Vec<_> = all_scripts
+        .into_iter()
+        .filter(|(_, info)| info.name.as_deref() == Some(name.as_str()))
+        .collect();
+
+    if matching.is_empty() {
         return ok(ScriptUsageResponse {
             name,
             cells_count: 0,
@@ -618,57 +377,45 @@ async fn get_script_usage(
         });
     }
 
-    let hashes: Vec<Vec<u8>> = code_hashes.into_iter().map(|(h,)| h).collect();
-
-    let per_deployment: Vec<(Vec<u8>, String, i64, i64, String, String)> = sqlx::query_as(
-        r#"
-        SELECT 
-            code_hash,
-            script_kind,
-            cells_count,
-            live_cells_count,
-            capacity_sum::text,
-            live_capacity_sum::text
-        FROM script_usage_stats
-        WHERE code_hash = ANY($1)
-        "#,
-    )
-    .bind(&hashes)
-    .fetch_all(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
-
     let mut total_cells: i64 = 0;
     let mut total_live: i64 = 0;
     let mut total_cap: u128 = 0;
     let mut total_live_cap: u128 = 0;
 
-    let by_deployment: Vec<DeploymentUsage> = per_deployment
+    let by_deployment: Vec<DeploymentUsage> = matching
         .into_iter()
-        .map(
-            |(
-                code_hash,
+        .map(|(_, info)| {
+            let cells_count = info.lock_cells_count + info.type_cells_count;
+            let live_cells_count = info.lock_live_cells_count + info.type_live_cells_count;
+            let capacity_sum =
+                (info.lock_capacity_sum as i128 + info.type_capacity_sum as i128) as u128;
+            let live_capacity_sum =
+                (info.lock_live_capacity_sum as i128 + info.type_live_capacity_sum as i128) as u128;
+
+            total_cells += cells_count;
+            total_live += live_cells_count;
+            total_cap += capacity_sum;
+            total_live_cap += live_capacity_sum;
+
+            let script_kind = if info.lock_cells_count > 0 && info.type_cells_count > 0 {
+                Some("lock+type".to_string())
+            } else if info.lock_cells_count > 0 {
+                Some("lock".to_string())
+            } else if info.type_cells_count > 0 {
+                Some("type".to_string())
+            } else {
+                None
+            };
+
+            DeploymentUsage {
+                code_hash: format!("0x{}", hex::encode(&info.code_hash)),
                 script_kind,
                 cells_count,
                 live_cells_count,
-                capacity_sum,
-                live_capacity_sum,
-            )| {
-                total_cells += cells_count;
-                total_live += live_cells_count;
-                total_cap += capacity_sum.parse::<u128>().unwrap_or(0);
-                total_live_cap += live_capacity_sum.parse::<u128>().unwrap_or(0);
-
-                DeploymentUsage {
-                    code_hash: format!("0x{}", hex::encode(&code_hash)),
-                    script_kind: Some(script_kind),
-                    cells_count,
-                    live_cells_count,
-                    capacity_sum,
-                    live_capacity_sum,
-                }
-            },
-        )
+                capacity_sum: capacity_sum.to_string(),
+                live_capacity_sum: live_capacity_sum.to_string(),
+            }
+        })
         .collect();
 
     ok(ScriptUsageResponse {

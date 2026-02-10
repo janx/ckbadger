@@ -4,12 +4,10 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
 use uuid::Uuid;
 
 /// Task status enum matching database values
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
-#[sqlx(type_name = "VARCHAR", rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskStatus {
     Pending,
@@ -50,8 +48,7 @@ impl std::str::FromStr for TaskStatus {
 }
 
 /// Task type enum matching database values
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
-#[sqlx(type_name = "VARCHAR", rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskType {
     CyclesBackfill,
@@ -759,7 +756,7 @@ pub struct RateSample {
 }
 
 /// Task entity matching the database schema
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone)]
 pub struct Task {
     pub id: Uuid,
     pub task_type: String,

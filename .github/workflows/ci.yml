@@ -33,7 +33,6 @@ jobs:
               - 'crates/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
-              - 'migrations/**'
             frontend:
               - 'frontend/**'
             e2e:
@@ -80,20 +79,6 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: test
-          POSTGRES_PASSWORD: test
-          POSTGRES_DB: ckbadger_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
 
     steps:
       - uses: actions/checkout@v4
@@ -112,13 +97,10 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-test-
 
-      - name: Run migrations
-        run: psql -U test "postgresql://test:test@localhost:5432/ckbadger_test" -f migrations/postgres/001_init.sql
-
       - name: Run tests
         run: cargo test --all
         env:
-          DATABASE_URL: postgresql://test:test@localhost:5432/ckbadger_test
+          CKBADGER_DATA_PATH: /tmp/ckbadger-test-store
 
   frontend-check:
     name: Frontend Check & Lint
@@ -206,21 +188,6 @@ jobs:
       needs.changes.outputs.e2e == 'true' &&
       (needs.rust-check.result == 'success' || needs.rust-check.result == 'skipped') &&
       (needs.frontend-check.result == 'success' || needs.frontend-check.result == 'skipped')
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: test
-          POSTGRES_PASSWORD: test
-          POSTGRES_DB: ckbadger_test
-        ports:
-          - 5433:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
     steps:
       - uses: actions/checkout@v4
 
@@ -256,9 +223,6 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install chromium
 
-      - name: Run migrations
-        run: psql -U test "postgresql://test:test@localhost:5433/ckbadger_test" -f migrations/postgres/001_init.sql
-
       - name: Build API (release)
         run: cargo build -p ckbadger-api --release
 
@@ -266,7 +230,7 @@ jobs:
         run: pnpm test:e2e
         env:
           CI: true
-          DATABASE_URL: postgresql://test:test@localhost:5433/ckbadger_test
+          CKBADGER_DATA_PATH: /tmp/ckbadger-e2e-store
           CKB_RPC_URL: https://mainnet.ckbapp.dev
           CKB_NETWORK: mainnet
 

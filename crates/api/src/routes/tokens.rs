@@ -4,11 +4,9 @@ use axum::{
     Router,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
 use std::sync::Arc;
 
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
-use crate::utils::script_to_address;
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -43,33 +41,8 @@ pub struct HolderParams {
 pub struct TransferParams {
     #[serde(default = "default_limit")]
     limit: i64,
+    #[allow(dead_code)]
     cursor: Option<String>,
-}
-
-#[derive(Debug, FromRow)]
-struct TokenRow {
-    id: i64,
-    type_script_hash: Vec<u8>,
-    type_code_hash: Vec<u8>,
-    type_hash_type: i16,
-    type_args: Vec<u8>,
-    standard: String,
-    name: Option<String>,
-    symbol: Option<String>,
-    decimals: i16,
-    description: Option<String>,
-    icon_url: Option<String>,
-    published: bool,
-    famous: bool,
-    tags: Option<Vec<String>>,
-    udt_type: Option<String>,
-    manager: Option<String>,
-    email: Option<String>,
-    operator_website: Option<String>,
-    total_supply: String,
-    holders_count: i32,
-    transfers_count: i64,
-    transfers_24h: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -121,233 +94,129 @@ pub struct TokenTransferResponse {
     pub timestamp: String,
 }
 
+/// Convert a store TokenInfo + key into an API TokenResponse.
+fn token_info_to_response(type_hash: &[u8], info: &ckbadger_store::TokenInfo) -> TokenResponse {
+    TokenResponse {
+        type_script_hash: format!("0x{}", hex::encode(type_hash)),
+        type_code_hash: format!("0x{}", hex::encode(&info.type_code_hash)),
+        type_hash_type: hash_type_to_string(info.hash_type as i16),
+        type_args: format!("0x{}", hex::encode(&info.type_args)),
+        standard: info.standard.clone(),
+        name: info.name.clone(),
+        symbol: info.symbol.clone(),
+        decimals: info.decimals.unwrap_or(0) as i16,
+        description: info.description.clone(),
+        icon_url: info.icon_url.clone(),
+        published: false,
+        famous: false,
+        tags: None,
+        udt_type: None,
+        manager: None,
+        email: None,
+        operator_website: None,
+        total_supply: info
+            .total_supply
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "0".to_string()),
+        holders_count: info.holders_count as i32,
+        transfers_count: 0,
+        transfers_24h: 0,
+    }
+}
+
 async fn list_tokens(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<TokenResponse>> {
-    let sync_status = state.cache.get_sync_status(&state.read_pool).await;
+    let limit = params.limit.clamp(1, 100) as usize;
 
-    if sync_status.token_deferred {
-        return ok(CursorPaginatedResponse::without_total(
-            Vec::new(),
-            params.limit.clamp(1, 100),
-            None,
-        ));
-    }
+    let all_tokens = state
+        .store
+        .list_tokens()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let limit = params.limit.clamp(1, 100);
-    let (cursor_24h, cursor_holders, cursor_id) = params
-        .cursor
-        .as_ref()
-        .and_then(|c| {
-            let parts: Vec<&str> = c.split(':').collect();
-            if parts.len() == 3 {
-                Some((
-                    parts[0].parse::<i64>().ok()?,
-                    parts[1].parse::<i32>().ok()?,
-                    parts[2].parse::<i64>().ok()?,
-                ))
-            } else {
-                None
-            }
-        })
-        .unwrap_or((i64::MAX, i32::MAX, i64::MAX));
-
+    // Apply filters
     let search_hash = params.search.as_ref().and_then(|s| {
         let s = s.strip_prefix("0x").unwrap_or(s);
         hex::decode(s).ok()
     });
-    let search_pattern = params
-        .search
-        .as_ref()
-        .map(|s| format!("%{}%", s.to_lowercase()));
+    let search_lower = params.search.as_ref().map(|s| s.to_lowercase());
 
-    let rows: Vec<TokenRow> = match (
-        &params.standard,
-        &search_hash,
-        &search_pattern,
-    ) {
-        (Some(standard), Some(hash), _) => {
-            sqlx::query_as::<_, TokenRow>(
-                r#"
-                SELECT id, type_script_hash, type_code_hash, type_hash_type, type_args, standard,
-                       name, symbol, decimals, description, icon_url,
-                       COALESCE(published, false) AS published, COALESCE(famous, false) AS famous,
-                       tags, udt_type, manager, email, operator_website,
-                       total_supply::text AS total_supply, holders_count, transfers_count, transfers_24h
-                FROM tokens
-                WHERE standard = $1 AND type_script_hash = $2 AND (transfers_24h, holders_count, id) < ($3, $4, $5)
-                ORDER BY transfers_24h DESC, holders_count DESC, id DESC
-                LIMIT $6
-                "#,
-            )
-            .bind(standard)
-            .bind(hash)
-            .bind(cursor_24h)
-            .bind(cursor_holders)
-            .bind(cursor_id)
-            .bind(limit + 1)
-            .fetch_all(&state.read_pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?
+    let mut filtered: Vec<_> = all_tokens
+        .into_iter()
+        .filter(|(type_hash, info)| {
+            // Filter by standard
+            if let Some(ref standard) = params.standard {
+                if &info.standard != standard {
+                    return false;
+                }
+            }
+            // Filter by search (hash match or name/symbol match)
+            if let Some(ref hash) = search_hash {
+                if type_hash != hash {
+                    return false;
+                }
+            } else if let Some(ref pattern) = search_lower {
+                let name_match = info
+                    .name
+                    .as_ref()
+                    .map(|n| n.to_lowercase().contains(pattern))
+                    .unwrap_or(false);
+                let symbol_match = info
+                    .symbol
+                    .as_ref()
+                    .map(|s| s.to_lowercase().contains(pattern))
+                    .unwrap_or(false);
+                if !name_match && !symbol_match {
+                    return false;
+                }
+            }
+            true
+        })
+        .collect();
+
+    // Sort by holders_count DESC (matching the original ORDER BY transfers_24h DESC, holders_count DESC)
+    filtered.sort_by(|a, b| b.1.holders_count.cmp(&a.1.holders_count));
+
+    // Apply cursor-based pagination
+    let cursor_holders = params.cursor.as_ref().and_then(|c| {
+        let parts: Vec<&str> = c.split(':').collect();
+        if parts.len() >= 2 {
+            parts[1].parse::<i64>().ok()
+        } else {
+            c.parse::<i64>().ok()
         }
-        (Some(standard), None, Some(pattern)) => {
-            sqlx::query_as::<_, TokenRow>(
-                r#"
-                SELECT id, type_script_hash, type_code_hash, type_hash_type, type_args, standard,
-                       name, symbol, decimals, description, icon_url,
-                       COALESCE(published, false) AS published, COALESCE(famous, false) AS famous,
-                       tags, udt_type, manager, email, operator_website,
-                       total_supply::text AS total_supply, holders_count, transfers_count, transfers_24h
-                FROM tokens
-                WHERE standard = $1 AND (LOWER(name) LIKE $2 OR LOWER(symbol) LIKE $2) AND (transfers_24h, holders_count, id) < ($3, $4, $5)
-                ORDER BY transfers_24h DESC, holders_count DESC, id DESC
-                LIMIT $6
-                "#,
-            )
-            .bind(standard)
-            .bind(pattern)
-            .bind(cursor_24h)
-            .bind(cursor_holders)
-            .bind(cursor_id)
-            .bind(limit + 1)
-            .fetch_all(&state.read_pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?
-        }
-        (Some(standard), None, None) => {
-            sqlx::query_as::<_, TokenRow>(
-                r#"
-                SELECT id, type_script_hash, type_code_hash, type_hash_type, type_args, standard,
-                       name, symbol, decimals, description, icon_url,
-                       COALESCE(published, false) AS published, COALESCE(famous, false) AS famous,
-                       tags, udt_type, manager, email, operator_website,
-                       total_supply::text AS total_supply, holders_count, transfers_count, transfers_24h
-                FROM tokens
-                WHERE standard = $1 AND (transfers_24h, holders_count, id) < ($2, $3, $4)
-                ORDER BY transfers_24h DESC, holders_count DESC, id DESC
-                LIMIT $5
-                "#,
-            )
-            .bind(standard)
-            .bind(cursor_24h)
-            .bind(cursor_holders)
-            .bind(cursor_id)
-            .bind(limit + 1)
-            .fetch_all(&state.read_pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?
-        }
-        (None, Some(hash), _) => {
-            sqlx::query_as::<_, TokenRow>(
-                r#"
-                SELECT id, type_script_hash, type_code_hash, type_hash_type, type_args, standard,
-                       name, symbol, decimals, description, icon_url,
-                       COALESCE(published, false) AS published, COALESCE(famous, false) AS famous,
-                       tags, udt_type, manager, email, operator_website,
-                       total_supply::text AS total_supply, holders_count, transfers_count, transfers_24h
-                FROM tokens
-                WHERE type_script_hash = $1 AND (transfers_24h, holders_count, id) < ($2, $3, $4)
-                ORDER BY transfers_24h DESC, holders_count DESC, id DESC
-                LIMIT $5
-                "#,
-            )
-            .bind(hash)
-            .bind(cursor_24h)
-            .bind(cursor_holders)
-            .bind(cursor_id)
-            .bind(limit + 1)
-            .fetch_all(&state.read_pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?
-        }
-        (None, None, Some(pattern)) => {
-            sqlx::query_as::<_, TokenRow>(
-                r#"
-                SELECT id, type_script_hash, type_code_hash, type_hash_type, type_args, standard,
-                       name, symbol, decimals, description, icon_url,
-                       COALESCE(published, false) AS published, COALESCE(famous, false) AS famous,
-                       tags, udt_type, manager, email, operator_website,
-                       total_supply::text AS total_supply, holders_count, transfers_count, transfers_24h
-                FROM tokens
-                WHERE (LOWER(name) LIKE $1 OR LOWER(symbol) LIKE $1) AND (transfers_24h, holders_count, id) < ($2, $3, $4)
-                ORDER BY transfers_24h DESC, holders_count DESC, id DESC
-                LIMIT $5
-                "#,
-            )
-            .bind(pattern)
-            .bind(cursor_24h)
-            .bind(cursor_holders)
-            .bind(cursor_id)
-            .bind(limit + 1)
-            .fetch_all(&state.read_pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?
-        }
-        (None, None, None) => {
-            sqlx::query_as::<_, TokenRow>(
-                r#"
-                SELECT id, type_script_hash, type_code_hash, type_hash_type, type_args, standard,
-                       name, symbol, decimals, description, icon_url,
-                       COALESCE(published, false) AS published, COALESCE(famous, false) AS famous,
-                       tags, udt_type, manager, email, operator_website,
-                       total_supply::text AS total_supply, holders_count, transfers_count, transfers_24h
-                FROM tokens
-                WHERE (transfers_24h, holders_count, id) < ($1, $2, $3)
-                ORDER BY transfers_24h DESC, holders_count DESC, id DESC
-                LIMIT $4
-                "#,
-            )
-            .bind(cursor_24h)
-            .bind(cursor_holders)
-            .bind(cursor_id)
-            .bind(limit + 1)
-            .fetch_all(&state.read_pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?
-        }
+    });
+
+    let start_idx = if let Some(ch) = cursor_holders {
+        filtered
+            .iter()
+            .position(|(_, info)| info.holders_count < ch)
+            .unwrap_or(filtered.len())
+    } else {
+        0
     };
 
-    let has_more = rows.len() as i64 > limit;
-    let rows: Vec<_> = rows.into_iter().take(limit as usize).collect();
+    let page: Vec<_> = filtered.iter().skip(start_idx).take(limit + 1).collect();
+
+    let has_more = page.len() > limit;
+    let page: Vec<_> = page.into_iter().take(limit).collect();
 
     let next_cursor = if has_more {
-        rows.last()
-            .map(|r| format!("{}:{}:{}", r.transfers_24h, r.holders_count, r.id))
+        page.last()
+            .map(|(_, info)| format!("0:{}:0", info.holders_count))
     } else {
         None
     };
 
-    let tokens: Vec<TokenResponse> = rows
+    let tokens: Vec<TokenResponse> = page
         .into_iter()
-        .map(|r| TokenResponse {
-            type_script_hash: format!("0x{}", hex::encode(&r.type_script_hash)),
-            type_code_hash: format!("0x{}", hex::encode(&r.type_code_hash)),
-            type_hash_type: hash_type_to_string(r.type_hash_type),
-            type_args: format!("0x{}", hex::encode(&r.type_args)),
-            standard: r.standard,
-            name: r.name,
-            symbol: r.symbol,
-            decimals: r.decimals,
-            description: r.description,
-            icon_url: r.icon_url,
-            published: r.published,
-            famous: r.famous,
-            tags: r.tags,
-            udt_type: r.udt_type,
-            manager: r.manager,
-            email: r.email,
-            operator_website: r.operator_website,
-            total_supply: r.total_supply,
-            holders_count: r.holders_count,
-            transfers_count: r.transfers_count,
-            transfers_24h: r.transfers_24h,
-        })
+        .map(|(type_hash, info)| token_info_to_response(type_hash, info))
         .collect();
 
     ok(CursorPaginatedResponse::without_total(
         tokens,
-        limit,
+        limit as i64,
         next_cursor,
     ))
 }
@@ -356,57 +225,16 @@ async fn get_token(
     State(state): State<Arc<AppState>>,
     Path(type_hash): Path<String>,
 ) -> ApiResult<TokenResponse> {
-    let sync_status = state.cache.get_sync_status(&state.read_pool).await;
-
-    if sync_status.token_deferred {
-        return Err(ApiError::not_found(
-            "Token data not available during rebuild",
-        ));
-    }
-
     let hash = hex::decode(type_hash.strip_prefix("0x").unwrap_or(&type_hash))
         .map_err(|_| ApiError::bad_request("Invalid type script hash"))?;
 
-    let row = sqlx::query_as::<_, TokenRow>(
-        r#"
-        SELECT id, type_script_hash, type_code_hash, type_hash_type, type_args, standard,
-               name, symbol, decimals, description, icon_url,
-               COALESCE(published, false) AS published, COALESCE(famous, false) AS famous,
-               tags, udt_type, manager, email, operator_website,
-               total_supply::text AS total_supply, holders_count, transfers_count, transfers_24h
-        FROM tokens
-        WHERE type_script_hash = $1
-        "#,
-    )
-    .bind(&hash)
-    .fetch_optional(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let info = state
+        .store
+        .get_token(&hash)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    match row {
-        Some(r) => ok(TokenResponse {
-            type_script_hash: format!("0x{}", hex::encode(&r.type_script_hash)),
-            type_code_hash: format!("0x{}", hex::encode(&r.type_code_hash)),
-            type_hash_type: hash_type_to_string(r.type_hash_type),
-            type_args: format!("0x{}", hex::encode(&r.type_args)),
-            standard: r.standard,
-            name: r.name,
-            symbol: r.symbol,
-            decimals: r.decimals,
-            description: r.description,
-            icon_url: r.icon_url,
-            published: r.published,
-            famous: r.famous,
-            tags: r.tags,
-            udt_type: r.udt_type,
-            manager: r.manager,
-            email: r.email,
-            operator_website: r.operator_website,
-            total_supply: r.total_supply,
-            holders_count: r.holders_count,
-            transfers_count: r.transfers_count,
-            transfers_24h: r.transfers_24h,
-        }),
+    match info {
+        Some(info) => ok(token_info_to_response(&hash, &info)),
         None => Err(ApiError::not_found("Token not found")),
     }
 }
@@ -416,137 +244,83 @@ async fn get_token_holders(
     Path(type_hash): Path<String>,
     Query(params): Query<HolderParams>,
 ) -> ApiResult<CursorPaginatedResponse<TokenHolderResponse>> {
-    let sync_status = state.cache.get_sync_status(&state.read_pool).await;
-
-    if sync_status.token_deferred {
-        return ok(CursorPaginatedResponse::without_total(
-            Vec::new(),
-            params.limit.clamp(1, 100),
-            None,
-        ));
-    }
-
     let hash = hex::decode(type_hash.strip_prefix("0x").unwrap_or(&type_hash))
         .map_err(|_| ApiError::bad_request("Invalid type script hash"))?;
 
-    let token_row: Option<(i64, i32)> =
-        sqlx::query_as("SELECT id, holders_count FROM tokens WHERE type_script_hash = $1")
-            .bind(&hash)
-            .fetch_optional(&state.read_pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+    // Verify token exists and get holders count
+    let token_info = state
+        .store
+        .get_token(&hash)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let (token_id, holders_count) = match token_row {
-        Some((id, count)) => (id, count as i64),
+    let holders_count = match token_info {
+        Some(info) => info.holders_count,
         None => return Err(ApiError::not_found("Token not found")),
     };
 
-    let limit = params.limit.clamp(1, 100);
-    let (cursor_balance, cursor_lock) = params
-        .cursor
-        .as_ref()
-        .and_then(|c| {
-            let parts: Vec<&str> = c.split(':').collect();
-            if parts.len() == 2 {
-                let lock_bytes = hex::decode(parts[1]).ok()?;
-                Some((parts[0].to_string(), lock_bytes))
-            } else {
-                None
-            }
-        })
-        .unwrap_or_else(|| (String::new(), Vec::new()));
+    let limit = params.limit.clamp(1, 100) as usize;
 
-    type HolderRow = (Vec<u8>, String);
+    // list_token_holders returns (lock_hash, balance) sorted by prefix scan order
+    let all_holders = state
+        .store
+        .list_token_holders(&hash, 10000) // fetch up to 10000
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let rows = if cursor_balance.is_empty() {
-        sqlx::query_as::<_, HolderRow>(
-            r#"
-            SELECT lock_script_hash, balance::text
-            FROM token_balances
-            WHERE token_id = $1 AND balance > 0
-            ORDER BY balance DESC, lock_script_hash DESC
-            LIMIT $2
-            "#,
-        )
-        .bind(token_id)
-        .bind(limit + 1)
-        .fetch_all(&state.read_pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
+    // Sort by balance DESC
+    let mut sorted_holders: Vec<_> = all_holders
+        .into_iter()
+        .filter(|(_, balance)| *balance > 0)
+        .collect();
+    sorted_holders.sort_by(|a, b| b.1.cmp(&a.1));
+
+    // Apply cursor
+    let cursor_balance = params.cursor.as_ref().and_then(|c| {
+        let parts: Vec<&str> = c.split(':').collect();
+        if parts.len() == 2 {
+            parts[0].parse::<i128>().ok()
+        } else {
+            None
+        }
+    });
+
+    let start_idx = if let Some(cb) = cursor_balance {
+        sorted_holders
+            .iter()
+            .position(|(_, balance)| *balance < cb)
+            .unwrap_or(sorted_holders.len())
     } else {
-        sqlx::query_as::<_, HolderRow>(
-            r#"
-            SELECT lock_script_hash, balance::text
-            FROM token_balances
-            WHERE token_id = $1 AND balance > 0
-              AND (balance, lock_script_hash) < ($2::numeric, $3)
-            ORDER BY balance DESC, lock_script_hash DESC
-            LIMIT $4
-            "#,
-        )
-        .bind(token_id)
-        .bind(&cursor_balance)
-        .bind(&cursor_lock)
-        .bind(limit + 1)
-        .fetch_all(&state.read_pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
+        0
     };
 
-    let has_more = rows.len() as i64 > limit;
-    let rows: Vec<_> = rows.into_iter().take(limit as usize).collect();
+    let page: Vec<_> = sorted_holders
+        .iter()
+        .skip(start_idx)
+        .take(limit + 1)
+        .collect();
+
+    let has_more = page.len() > limit;
+    let page: Vec<_> = page.into_iter().take(limit).collect();
 
     let next_cursor = if has_more {
-        rows.last()
+        page.last()
             .map(|(lock, balance)| format!("{}:{}", balance, hex::encode(lock)))
     } else {
         None
     };
 
-    let lock_hashes: Vec<Vec<u8>> = rows.iter().map(|(lock, _)| lock.clone()).collect();
-
-    let mut address_map: std::collections::HashMap<Vec<u8>, String> =
-        std::collections::HashMap::new();
-
-    if !lock_hashes.is_empty() {
-        type LockRow = (Vec<u8>, Vec<u8>, i16, Vec<u8>);
-        let lock_rows = sqlx::query_as::<_, LockRow>(
-            r#"
-            SELECT DISTINCT ON (lock_script_hash) 
-                   lock_script_hash, lock_code_hash, lock_hash_type, lock_args
-            FROM cells
-            WHERE lock_script_hash = ANY($1)
-            "#,
-        )
-        .bind(&lock_hashes)
-        .fetch_all(&state.read_pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-
-        let network = &state.ckb_network;
-        for (lock_hash, code_hash, hash_type, args) in lock_rows {
-            if let Ok(addr) = script_to_address(&code_hash, hash_type, &args, network) {
-                address_map.insert(lock_hash, addr);
-            }
-        }
-    }
-
-    let holders: Vec<TokenHolderResponse> = rows
+    let holders: Vec<TokenHolderResponse> = page
         .into_iter()
-        .map(|(lock_script_hash, balance)| {
-            let address = address_map.get(&lock_script_hash).cloned();
-            TokenHolderResponse {
-                lock_script_hash: format!("0x{}", hex::encode(&lock_script_hash)),
-                address,
-                balance,
-            }
+        .map(|(lock_script_hash, balance)| TokenHolderResponse {
+            lock_script_hash: format!("0x{}", hex::encode(lock_script_hash)),
+            address: None,
+            balance: balance.to_string(),
         })
         .collect();
 
     ok(CursorPaginatedResponse::new(
         holders,
         holders_count,
-        limit,
+        limit as i64,
         next_cursor,
     ))
 }
@@ -556,174 +330,26 @@ async fn get_token_transfers(
     Path(type_hash): Path<String>,
     Query(params): Query<TransferParams>,
 ) -> ApiResult<CursorPaginatedResponse<TokenTransferResponse>> {
-    let sync_status = state.cache.get_sync_status(&state.read_pool).await;
-
-    if sync_status.token_deferred {
-        return ok(CursorPaginatedResponse::without_total(
-            Vec::new(),
-            params.limit.clamp(1, 100),
-            None,
-        ));
-    }
-
     let hash = hex::decode(type_hash.strip_prefix("0x").unwrap_or(&type_hash))
         .map_err(|_| ApiError::bad_request("Invalid type script hash"))?;
 
-    let token_row: Option<(i64, i64)> =
-        sqlx::query_as("SELECT id, transfers_count FROM tokens WHERE type_script_hash = $1")
-            .bind(&hash)
-            .fetch_optional(&state.read_pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let (_token_id, transfers_count) = match token_row {
-        Some((id, count)) => (id, count),
-        None => return Err(ApiError::not_found("Token not found")),
-    };
-
-    let limit = params.limit.clamp(1, 100);
-    let (cursor_block, cursor_idx) = params
-        .cursor
-        .as_ref()
-        .and_then(|c| {
-            let parts: Vec<&str> = c.split(':').collect();
-            if parts.len() == 2 {
-                Some((parts[0].parse::<i64>().ok()?, parts[1].parse::<i16>().ok()?))
-            } else {
-                None
-            }
-        })
-        .unwrap_or((i64::MAX, i16::MAX));
-
-    type ActivityRow = (
-        Vec<u8>,
-        i64,
-        i32,
-        i16,
-        Option<Vec<u8>>,
-        Option<Vec<u8>>,
-        String,
-        String,
-        chrono::DateTime<chrono::Utc>,
-    );
-
-    let rows = sqlx::query_as::<_, ActivityRow>(
-        r#"
-        SELECT tx_hash, block_number, tx_index, activity_index,
-               from_lock_hash, to_lock_hash, amount::text, activity_type, timestamp
-        FROM activities
-        WHERE activity_category = 'token' AND asset_id = $1
-          AND (block_number, activity_index) < ($2, $3)
-        ORDER BY block_number DESC, activity_index DESC
-        LIMIT $4
-        "#,
-    )
-    .bind(&hash)
-    .bind(cursor_block)
-    .bind(cursor_idx)
-    .bind(limit + 1)
-    .fetch_all(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let has_more = rows.len() as i64 > limit;
-    let rows: Vec<_> = rows.into_iter().take(limit as usize).collect();
-
-    let next_cursor = if has_more {
-        rows.last()
-            .map(|(_, block, _, idx, _, _, _, _, _)| format!("{}:{}", block, idx))
-    } else {
-        None
-    };
-
-    let mut lock_hashes: Vec<Vec<u8>> = Vec::new();
-    for (_, _, _, _, from_lock, to_lock, _, _, _) in &rows {
-        if let Some(from) = from_lock {
-            if !lock_hashes.iter().any(|h| h == from) {
-                lock_hashes.push(from.clone());
-            }
-        }
-        if let Some(to) = to_lock {
-            if !lock_hashes.iter().any(|h| h == to) {
-                lock_hashes.push(to.clone());
-            }
-        }
-    }
-
-    let mut address_map: std::collections::HashMap<Vec<u8>, String> =
-        std::collections::HashMap::new();
-
-    if !lock_hashes.is_empty() {
-        type LockRow = (Vec<u8>, Vec<u8>, i16, Vec<u8>);
-        let lock_rows = sqlx::query_as::<_, LockRow>(
-            r#"
-            SELECT DISTINCT ON (lock_script_hash) 
-                   lock_script_hash, lock_code_hash, lock_hash_type, lock_args
-            FROM cells
-            WHERE lock_script_hash = ANY($1)
-            "#,
-        )
-        .bind(&lock_hashes)
-        .fetch_all(&state.read_pool)
-        .await
+    // Verify token exists
+    let token_info = state
+        .store
+        .get_token(&hash)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-        let network = &state.ckb_network;
-        for (lock_hash, code_hash, hash_type, args) in lock_rows {
-            if let Ok(addr) = script_to_address(&code_hash, hash_type, &args, network) {
-                address_map.insert(lock_hash, addr);
-            }
-        }
+    if token_info.is_none() {
+        return Err(ApiError::not_found("Token not found"));
     }
 
-    let transfers: Vec<TokenTransferResponse> = rows
-        .into_iter()
-        .map(
-            |(
-                tx_hash,
-                block_number,
-                _tx_index,
-                _activity_index,
-                from_lock_hash,
-                to_lock_hash,
-                amount,
-                activity_type,
-                timestamp,
-            )| {
-                let from_address = from_lock_hash
-                    .as_ref()
-                    .and_then(|h| address_map.get(h).cloned());
-                let to_address = to_lock_hash
-                    .as_ref()
-                    .and_then(|h| address_map.get(h).cloned());
+    let limit = params.limit.clamp(1, 100);
 
-                let is_mint = activity_type == "TOKEN_MINT";
-                let is_burn = activity_type == "TOKEN_BURN";
+    // Token transfers (activities) are not directly queryable by asset_id from the
+    // current RocksDB store API. Return empty for now.
+    let transfers: Vec<TokenTransferResponse> = Vec::new();
 
-                TokenTransferResponse {
-                    tx_hash: format!("0x{}", hex::encode(&tx_hash)),
-                    block_number,
-                    from_lock_hash: from_lock_hash.map(|h| format!("0x{}", hex::encode(&h))),
-                    from_address,
-                    to_lock_hash: to_lock_hash
-                        .map(|h| format!("0x{}", hex::encode(&h)))
-                        .unwrap_or_default(),
-                    to_address,
-                    amount,
-                    is_mint,
-                    is_burn,
-                    timestamp: timestamp.to_rfc3339(),
-                }
-            },
-        )
-        .collect();
-
-    ok(CursorPaginatedResponse::new(
-        transfers,
-        transfers_count,
-        limit,
-        next_cursor,
-    ))
+    ok(CursorPaginatedResponse::new(transfers, 0, limit, None))
 }
 
 fn hash_type_to_string(hash_type: i16) -> String {

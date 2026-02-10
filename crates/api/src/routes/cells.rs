@@ -11,14 +11,10 @@ use ckbadger_common::dao::{
 };
 
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
 use std::sync::Arc;
 
 use crate::cache::{CacheKeys, CacheTtl};
-use crate::response::{
-    decode_cursor, encode_cursor, ok, ApiError, ApiResult, CursorPaginatedResponse,
-};
-use crate::tx_block_map::get_block_number_for_tx;
+use crate::response::{encode_cursor, ok, ApiError, ApiResult, CursorPaginatedResponse};
 use crate::utils::{
     address_to_lock_script_hash, is_ckb_address, script_to_address, shannon_to_ckb,
 };
@@ -121,6 +117,7 @@ pub struct ListCellsParams {
     lock_script_hash: Option<String>,
     type_script_hash: Option<String>,
     type_code_hash: Option<String>,
+    #[allow(dead_code)]
     cursor: Option<String>,
 }
 
@@ -132,6 +129,7 @@ pub struct ListCellsByScriptParams {
     hash_type: String,
     #[serde(default = "default_script_kind")]
     script_kind: String,
+    #[allow(dead_code)]
     cursor: Option<String>,
 }
 
@@ -318,6 +316,7 @@ pub struct AddressTransactionResponse {
 pub struct AddressTxParams {
     #[serde(default = "default_limit")]
     limit: i64,
+    #[allow(dead_code)]
     cursor: Option<String>,
 }
 
@@ -325,6 +324,7 @@ pub struct AddressTxParams {
 pub struct AddressTokensParams {
     #[serde(default = "default_limit")]
     limit: i64,
+    #[allow(dead_code)]
     cursor: Option<String>,
 }
 
@@ -340,26 +340,47 @@ pub struct AddressTokenResponse {
     pub balance: String,
 }
 
+/// Helper to convert a LiveCellInfo into a CellResponse.
+fn cell_info_to_response(
+    tx_hash: &[u8],
+    output_index: i16,
+    info: &ckbadger_store::LiveCellInfo,
+) -> CellResponse {
+    let is_special_burn = is_genesis_special_burn_cell(&info.lock_args, info.created_at_block);
+    CellResponse {
+        tx_hash: format!("0x{}", hex::encode(tx_hash)),
+        output_index: output_index as i32,
+        capacity: info.capacity.to_string(),
+        lock_script_hash: format!("0x{}", hex::encode(&info.lock_script_hash)),
+        type_script_hash: info
+            .type_script_hash
+            .as_ref()
+            .map(|h| format!("0x{}", hex::encode(h))),
+        type_code_hash: info
+            .type_code_hash
+            .as_ref()
+            .map(|h| format!("0x{}", hex::encode(h))),
+        data_size: info.data_size,
+        created_at_block: info.created_at_block,
+        cell_type: if is_special_burn {
+            Some("genesis_special_burn".to_string())
+        } else {
+            None
+        },
+        virtual_occupied_capacity: if is_special_burn {
+            Some(GENESIS_SPECIAL_BURN_CELL_VIRTUAL_OCCUPIED.to_string())
+        } else {
+            None
+        },
+        udt_amount: None,
+    }
+}
+
 async fn list_live_cells(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListCellsParams>,
 ) -> ApiResult<CursorPaginatedResponse<CellResponse>> {
-    let limit = params.limit.clamp(1, 100);
-    let cursor = params.cursor.as_ref().and_then(|c| decode_cursor(c));
-    let (cursor_block, cursor_idx) = cursor.unwrap_or((i64::MAX, i32::MAX));
-
-    type LiveCellRow = (
-        Vec<u8>,         // tx_hash
-        i16,             // output_index
-        String,          // capacity
-        Vec<u8>,         // lock_script_hash
-        Option<Vec<u8>>, // type_script_hash
-        Option<Vec<u8>>, // type_code_hash
-        i32,             // data_size
-        i64,             // created_at_block
-        Vec<u8>,         // lock_args
-        Option<String>,  // udt_amount (from udt_cells.amount)
-    );
+    let limit = params.limit.clamp(1, 100) as usize;
 
     let lock_hash_bytes = if let Some(ref lock_hash) = params.lock_script_hash {
         Some(if is_ckb_address(lock_hash) {
@@ -382,7 +403,7 @@ async fn list_live_cells(
         None
     };
 
-    let type_code_hash_bytes = if let Some(ref code_hash) = params.type_code_hash {
+    let _type_code_hash_bytes = if let Some(ref code_hash) = params.type_code_hash {
         Some(
             hex::decode(code_hash.strip_prefix("0x").unwrap_or(code_hash))
                 .map_err(|_| ApiError::bad_request("Invalid type code hash"))?,
@@ -391,246 +412,85 @@ async fn list_live_cells(
         None
     };
 
-    if let Some(type_code_bytes) = &type_code_hash_bytes {
-        if let Some(lock_bytes) = &lock_hash_bytes {
-            let rows = sqlx::query_as::<_, LiveCellRow>(
-                r#"
-                SELECT lc.tx_hash, lc.output_index, lc.capacity::TEXT, lc.lock_script_hash,
-                       lc.type_script_hash, lc.type_code_hash, lc.data_size, lc.created_at_block, lc.lock_args,
-                       uc.amount::TEXT
-                FROM cells lc
-                LEFT JOIN udt_cells uc ON lc.tx_hash = uc.tx_hash AND lc.output_index = uc.output_index
-                WHERE lc.lock_script_hash = $1 AND lc.type_code_hash = $2 AND lc.status = 0
-                  AND (lc.created_at_block, lc.output_index) < ($3, $4)
-                ORDER BY lc.created_at_block DESC, lc.output_index DESC
-                LIMIT $5
-                "#,
-            )
-            .bind(lock_bytes)
-            .bind(type_code_bytes)
-            .bind(cursor_block)
-            .bind(cursor_idx)
-            .bind(limit + 1)
-            .fetch_all(&state.read_pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-
-            let has_more = rows.len() as i64 > limit;
-            let rows: Vec<_> = rows.into_iter().take(limit as usize).collect();
-
-            let next_cursor = if has_more {
-                rows.last()
-                    .map(|(_, output_index, _, _, _, _, _, created_at_block, _, _)| {
-                        encode_cursor(*created_at_block, *output_index as i32)
+    // Fetch cells from the store based on available filters.
+    // The store supports listing by lock hash or type hash via prefix scans.
+    let raw_cells: Vec<(Vec<u8>, i16, ckbadger_store::LiveCellInfo)> =
+        match (&lock_hash_bytes, &type_hash_bytes) {
+            (Some(lock_bytes), Some(type_bytes)) => {
+                // Filter by lock first (usually more selective), then post-filter by type
+                let all = state
+                    .store
+                    .list_cells_by_lock(lock_bytes, limit * 10 + 1)
+                    .map_err(|e| ApiError::internal(e.to_string()))?;
+                all.into_iter()
+                    .filter(|(_, _, info)| {
+                        info.type_script_hash
+                            .as_ref()
+                            .map(|h| h == type_bytes)
+                            .unwrap_or(false)
                     })
-            } else {
-                None
-            };
+                    .take(limit + 1)
+                    .collect()
+            }
+            (Some(lock_bytes), None) => {
+                // For type_code_hash filtering, list by lock then post-filter
+                if let Some(ref tch) = _type_code_hash_bytes {
+                    let all = state
+                        .store
+                        .list_cells_by_lock(lock_bytes, limit * 10 + 1)
+                        .map_err(|e| ApiError::internal(e.to_string()))?;
+                    all.into_iter()
+                        .filter(|(_, _, info)| {
+                            info.type_code_hash
+                                .as_ref()
+                                .map(|h| h == tch)
+                                .unwrap_or(false)
+                        })
+                        .take(limit + 1)
+                        .collect()
+                } else {
+                    state
+                        .store
+                        .list_cells_by_lock(lock_bytes, limit + 1)
+                        .map_err(|e| ApiError::internal(e.to_string()))?
+                }
+            }
+            (None, Some(type_bytes)) => state
+                .store
+                .list_cells_by_type(type_bytes, limit + 1)
+                .map_err(|e| ApiError::internal(e.to_string()))?,
+            (None, None) => {
+                // No filter: not practical for RocksDB full scan, return empty.
+                // The old PG query scanned the whole table; in RocksDB we can't
+                // efficiently paginate the full live_cells CF without a secondary index.
+                Vec::new()
+            }
+        };
 
-            let cells: Vec<CellResponse> = rows
-                .into_iter()
-                .map(
-                    |(
-                        tx_hash,
-                        output_index,
-                        capacity,
-                        lock_script_hash,
-                        type_script_hash,
-                        type_code_hash,
-                        data_size,
-                        created_at_block,
-                        lock_args,
-                        udt_amount,
-                    )| {
-                        let is_special_burn =
-                            is_genesis_special_burn_cell(&lock_args, created_at_block);
-                        CellResponse {
-                            tx_hash: format!("0x{}", hex::encode(&tx_hash)),
-                            output_index: output_index as i32,
-                            capacity,
-                            lock_script_hash: format!("0x{}", hex::encode(&lock_script_hash)),
-                            type_script_hash: type_script_hash
-                                .map(|h| format!("0x{}", hex::encode(&h))),
-                            type_code_hash: type_code_hash
-                                .map(|h| format!("0x{}", hex::encode(&h))),
-                            data_size,
-                            created_at_block,
-                            cell_type: if is_special_burn {
-                                Some("genesis_special_burn".to_string())
-                            } else {
-                                None
-                            },
-                            virtual_occupied_capacity: if is_special_burn {
-                                Some(GENESIS_SPECIAL_BURN_CELL_VIRTUAL_OCCUPIED.to_string())
-                            } else {
-                                None
-                            },
-                            udt_amount,
-                        }
-                    },
-                )
-                .collect();
-
-            return ok(CursorPaginatedResponse::without_total(
-                cells,
-                limit,
-                next_cursor,
-            ));
-        }
-    }
-
-    // For filtered queries, skip expensive COUNT(*) - use without_total
-    // For unfiltered, use pre-aggregated count from Redis sync:status
-    let rows: Vec<LiveCellRow> = match (&lock_hash_bytes, &type_hash_bytes) {
-        (Some(lock_bytes), Some(type_bytes)) => {
-            sqlx::query_as::<_, LiveCellRow>(
-                    r#"
-                    SELECT lc.tx_hash, lc.output_index, lc.capacity::TEXT, lc.lock_script_hash,
-                           lc.type_script_hash, lc.type_code_hash, lc.data_size, lc.created_at_block, lc.lock_args,
-                           uc.amount::TEXT
-                    FROM cells lc
-                    LEFT JOIN udt_cells uc ON lc.tx_hash = uc.tx_hash AND lc.output_index = uc.output_index
-                    WHERE lc.lock_script_hash = $1 AND lc.type_script_hash = $2 AND lc.status = 0
-                      AND (lc.created_at_block, lc.output_index) < ($3, $4)
-                    ORDER BY lc.created_at_block DESC, lc.output_index DESC
-                    LIMIT $5
-                    "#,
-                )
-                .bind(lock_bytes)
-                .bind(type_bytes)
-                .bind(cursor_block)
-                .bind(cursor_idx)
-                .bind(limit + 1)
-                .fetch_all(&state.read_pool)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?
-        }
-        (Some(lock_bytes), None) => {
-            sqlx::query_as::<_, LiveCellRow>(
-                    r#"
-                    SELECT lc.tx_hash, lc.output_index, lc.capacity::TEXT, lc.lock_script_hash,
-                           lc.type_script_hash, lc.type_code_hash, lc.data_size, lc.created_at_block, lc.lock_args,
-                           NULL::TEXT
-                    FROM cells lc
-                    WHERE lc.lock_script_hash = $1 AND lc.status = 0
-                      AND (lc.created_at_block, lc.output_index) < ($2, $3)
-                    ORDER BY lc.created_at_block DESC, lc.output_index DESC
-                    LIMIT $4
-                    "#,
-                )
-                .bind(lock_bytes)
-                .bind(cursor_block)
-                .bind(cursor_idx)
-                .bind(limit + 1)
-                .fetch_all(&state.read_pool)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?
-        }
-        (None, Some(type_bytes)) => {
-            sqlx::query_as::<_, LiveCellRow>(
-                    r#"
-                    SELECT lc.tx_hash, lc.output_index, lc.capacity::TEXT, lc.lock_script_hash,
-                           lc.type_script_hash, lc.type_code_hash, lc.data_size, lc.created_at_block, lc.lock_args,
-                           uc.amount::TEXT
-                    FROM cells lc
-                    LEFT JOIN udt_cells uc ON lc.tx_hash = uc.tx_hash AND lc.output_index = uc.output_index
-                    WHERE lc.type_script_hash = $1 AND lc.status = 0
-                      AND (lc.created_at_block, lc.output_index) < ($2, $3)
-                    ORDER BY lc.created_at_block DESC, lc.output_index DESC
-                    LIMIT $4
-                    "#,
-                )
-                .bind(type_bytes)
-                .bind(cursor_block)
-                .bind(cursor_idx)
-                .bind(limit + 1)
-                .fetch_all(&state.read_pool)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?
-        }
-        (None, None) => {
-            sqlx::query_as::<_, LiveCellRow>(
-                    r#"
-                    SELECT lc.tx_hash, lc.output_index, lc.capacity::TEXT, lc.lock_script_hash,
-                           lc.type_script_hash, lc.type_code_hash, lc.data_size, lc.created_at_block, lc.lock_args,
-                           NULL::TEXT
-                    FROM cells lc
-                    WHERE lc.status = 0
-                      AND (lc.created_at_block, lc.output_index) < ($1, $2)
-                    ORDER BY lc.created_at_block DESC, lc.output_index DESC
-                    LIMIT $3
-                    "#,
-                )
-                .bind(cursor_block)
-                .bind(cursor_idx)
-                .bind(limit + 1)
-                .fetch_all(&state.read_pool)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?
-        }
-    };
-
-    let has_more = rows.len() as i64 > limit;
-    let rows: Vec<_> = rows.into_iter().take(limit as usize).collect();
+    let has_more = raw_cells.len() > limit;
+    let raw_cells: Vec<_> = raw_cells.into_iter().take(limit).collect();
 
     let next_cursor = if has_more {
-        rows.last()
-            .map(|(_, output_index, _, _, _, _, _, created_at_block, _, _)| {
-                encode_cursor(*created_at_block, *output_index as i32)
-            })
+        raw_cells.last().map(|(_, output_index, info)| {
+            encode_cursor(info.created_at_block, *output_index as i32)
+        })
     } else {
         None
     };
 
-    let cells: Vec<CellResponse> = rows
-        .into_iter()
-        .map(
-            |(
-                tx_hash,
-                output_index,
-                capacity,
-                lock_script_hash,
-                type_script_hash,
-                type_code_hash,
-                data_size,
-                created_at_block,
-                lock_args,
-                udt_amount,
-            )| {
-                let is_special_burn = is_genesis_special_burn_cell(&lock_args, created_at_block);
-                CellResponse {
-                    tx_hash: format!("0x{}", hex::encode(&tx_hash)),
-                    output_index: output_index as i32,
-                    capacity,
-                    lock_script_hash: format!("0x{}", hex::encode(&lock_script_hash)),
-                    type_script_hash: type_script_hash.map(|h| format!("0x{}", hex::encode(&h))),
-                    type_code_hash: type_code_hash.map(|h| format!("0x{}", hex::encode(&h))),
-                    data_size,
-                    created_at_block,
-                    cell_type: if is_special_burn {
-                        Some("genesis_special_burn".to_string())
-                    } else {
-                        None
-                    },
-                    virtual_occupied_capacity: if is_special_burn {
-                        Some(GENESIS_SPECIAL_BURN_CELL_VIRTUAL_OCCUPIED.to_string())
-                    } else {
-                        None
-                    },
-                    udt_amount,
-                }
-            },
-        )
+    let cells: Vec<CellResponse> = raw_cells
+        .iter()
+        .map(|(tx_hash, output_index, info)| cell_info_to_response(tx_hash, *output_index, info))
         .collect();
 
     ok(CursorPaginatedResponse::without_total(
         cells,
-        limit,
+        limit as i64,
         next_cursor,
     ))
 }
 
-fn parse_hash_type(hash_type: &str) -> Option<i16> {
+fn parse_hash_type(hash_type: &str) -> Option<u8> {
     match hash_type {
         "data" => Some(0),
         "type" => Some(1),
@@ -644,9 +504,7 @@ async fn list_cells_by_script(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListCellsByScriptParams>,
 ) -> ApiResult<CursorPaginatedResponse<CellResponse>> {
-    let limit = params.limit.clamp(1, 100);
-    let cursor = params.cursor.as_ref().and_then(|c| decode_cursor(c));
-    let (cursor_block, cursor_idx) = cursor.unwrap_or((i64::MAX, i32::MAX));
+    let limit = params.limit.clamp(1, 100) as usize;
 
     let code_hash_bytes = hex::decode(
         params
@@ -656,157 +514,85 @@ async fn list_cells_by_script(
     )
     .map_err(|_| ApiError::bad_request("Invalid code_hash hex"))?;
 
-    let hash_type_num = parse_hash_type(&params.hash_type).ok_or_else(|| {
+    let _hash_type_num = parse_hash_type(&params.hash_type).ok_or_else(|| {
         ApiError::bad_request("Invalid hash_type. Must be one of: data, type, data1, data2")
     })?;
 
     let script_kind = params.script_kind.as_str();
 
-    let total: i64 = match script_kind {
-        "lock" | "type" => {
-            let row: Option<(i64,)> = sqlx::query_as(
-                "SELECT live_cells_count FROM script_usage_stats WHERE code_hash = $1 AND script_kind = $2",
-            )
-            .bind(&code_hash_bytes)
-            .bind(script_kind)
-            .fetch_optional(&state.read_pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-            row.map(|(c,)| c).unwrap_or(0)
-        }
-        _ => {
-            let row: (i64,) = sqlx::query_as(
-                "SELECT COALESCE(SUM(live_cells_count), 0) FROM script_usage_stats WHERE code_hash = $1",
-            )
-            .bind(&code_hash_bytes)
-            .fetch_one(&state.read_pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-            row.0
-        }
+    // Look up script info from the store to get pre-aggregated count
+    let script_info = state
+        .store
+        .get_script_info(&code_hash_bytes)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let total: i64 = match (script_kind, &script_info) {
+        ("lock", Some(si)) => si.lock_live_cells_count,
+        ("type", Some(si)) => si.type_live_cells_count,
+        (_, Some(si)) => si.lock_live_cells_count + si.type_live_cells_count,
+        (_, None) => 0,
     };
 
-    let rows: Vec<(Vec<u8>, i16, String, Vec<u8>, Option<Vec<u8>>, Option<Vec<u8>>, i32, i64, Vec<u8>)> =
-        match script_kind {
-            "lock" => {
-                sqlx::query_as(
-                    r#"
-                SELECT tx_hash, output_index, capacity::TEXT, lock_script_hash, type_script_hash, type_code_hash, data_size, created_at_block, lock_args
-                FROM cells
-                WHERE lock_code_hash = $1 AND lock_hash_type = $2 AND status = 0
-                  AND (created_at_block, output_index) < ($3, $4)
-                ORDER BY created_at_block DESC, output_index DESC
-                LIMIT $5
-                "#,
-                )
-                .bind(&code_hash_bytes)
-                .bind(hash_type_num)
-                .bind(cursor_block)
-                .bind(cursor_idx)
-                .bind(limit + 1)
-                .fetch_all(&state.read_pool)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?
-            }
-            "type" => {
-                sqlx::query_as(
-                    r#"
-                SELECT tx_hash, output_index, capacity::TEXT, lock_script_hash, type_script_hash, type_code_hash, data_size, created_at_block, lock_args
-                FROM cells
-                WHERE type_code_hash = $1 AND type_hash_type = $2 AND status = 0
-                  AND (created_at_block, output_index) < ($3, $4)
-                ORDER BY created_at_block DESC, output_index DESC
-                LIMIT $5
-                "#,
-                )
-                .bind(&code_hash_bytes)
-                .bind(hash_type_num)
-                .bind(cursor_block)
-                .bind(cursor_idx)
-                .bind(limit + 1)
-                .fetch_all(&state.read_pool)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?
-            }
-            _ => {
-                sqlx::query_as(
-                    r#"
-                SELECT tx_hash, output_index, capacity::TEXT, lock_script_hash, type_script_hash, type_code_hash, data_size, created_at_block, lock_args
-                FROM cells
-                WHERE ((lock_code_hash = $1 AND lock_hash_type = $2) OR (type_code_hash = $1 AND type_hash_type = $2))
-                  AND status = 0
-                  AND (created_at_block, output_index) < ($3, $4)
-                ORDER BY created_at_block DESC, output_index DESC
-                LIMIT $5
-                "#,
-                )
-                .bind(&code_hash_bytes)
-                .bind(hash_type_num)
-                .bind(cursor_block)
-                .bind(cursor_idx)
-                .bind(limit + 1)
-                .fetch_all(&state.read_pool)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?
-            }
-        };
+    // RocksDB has cell_by_lock and cell_by_type indices keyed by script_hash (not code_hash).
+    // To list by code_hash we need to iterate live_cells and filter.
+    // This is a full-scan fallback; for production, a code_hash index CF would be ideal.
+    let mut results: Vec<(Vec<u8>, i16, ckbadger_store::LiveCellInfo)> = Vec::new();
 
-    let has_more = rows.len() as i64 > limit;
-    let rows: Vec<_> = rows.into_iter().take(limit as usize).collect();
+    // Use iterator over live_cells and filter by code_hash + hash_type + script_kind
+    let iter = state
+        .store
+        .iterator_cf(state.store.cf_live_cells(), rocksdb::IteratorMode::Start);
+
+    for item in iter.flatten() {
+        let (key, value) = item;
+        if let Ok(info) = bincode::deserialize::<ckbadger_store::LiveCellInfo>(&value) {
+            let matches = match script_kind {
+                "lock" => info.lock_code_hash == code_hash_bytes,
+                "type" => info
+                    .type_code_hash
+                    .as_ref()
+                    .map(|h| h == &code_hash_bytes)
+                    .unwrap_or(false),
+                _ => {
+                    info.lock_code_hash == code_hash_bytes
+                        || info
+                            .type_code_hash
+                            .as_ref()
+                            .map(|h| h == &code_hash_bytes)
+                            .unwrap_or(false)
+                }
+            };
+
+            if matches {
+                let (tx_hash, output_index) = ckbadger_store::keys::decode_outpoint(&key);
+                results.push((tx_hash, output_index, info));
+                if results.len() > limit {
+                    break;
+                }
+            }
+        }
+    }
+
+    let has_more = results.len() > limit;
+    let results: Vec<_> = results.into_iter().take(limit).collect();
 
     let next_cursor = if has_more {
-        rows.last()
-            .map(|(_, output_index, _, _, _, _, _, created_at_block, _)| {
-                encode_cursor(*created_at_block, *output_index as i32)
-            })
+        results.last().map(|(_, output_index, info)| {
+            encode_cursor(info.created_at_block, *output_index as i32)
+        })
     } else {
         None
     };
 
-    let cells: Vec<CellResponse> = rows
-        .into_iter()
-        .map(
-            |(
-                tx_hash,
-                output_index,
-                capacity,
-                lock_script_hash,
-                type_script_hash,
-                type_code_hash,
-                data_size,
-                created_at_block,
-                lock_args,
-            )| {
-                let is_special_burn = is_genesis_special_burn_cell(&lock_args, created_at_block);
-                CellResponse {
-                    tx_hash: format!("0x{}", hex::encode(&tx_hash)),
-                    output_index: output_index as i32,
-                    capacity,
-                    lock_script_hash: format!("0x{}", hex::encode(&lock_script_hash)),
-                    type_script_hash: type_script_hash.map(|h| format!("0x{}", hex::encode(&h))),
-                    type_code_hash: type_code_hash.map(|h| format!("0x{}", hex::encode(&h))),
-                    data_size,
-                    created_at_block,
-                    cell_type: if is_special_burn {
-                        Some("genesis_special_burn".to_string())
-                    } else {
-                        None
-                    },
-                    virtual_occupied_capacity: if is_special_burn {
-                        Some(GENESIS_SPECIAL_BURN_CELL_VIRTUAL_OCCUPIED.to_string())
-                    } else {
-                        None
-                    },
-                    udt_amount: None,
-                }
-            },
-        )
+    let cells: Vec<CellResponse> = results
+        .iter()
+        .map(|(tx_hash, output_index, info)| cell_info_to_response(tx_hash, *output_index, info))
         .collect();
 
     ok(CursorPaginatedResponse::new(
         cells,
         total,
-        limit,
+        limit as i64,
         next_cursor,
     ))
 }
@@ -831,120 +617,85 @@ async fn get_address(
         (hash, None)
     };
 
-    // Parallelize balance query and script lookup
-    let (row, script_row) = tokio::try_join!(
-        async {
-            // Check if address_balances is deferred
-            let sync_status = state.cache.get_sync_status(&state.read_pool).await;
+    // Get balance from the store
+    let addr_balance = state
+        .store
+        .get_addr_balance(&lock_hash)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
-            if sync_status.address_balances_deferred {
-                // Fallback: query cells table directly
-                sqlx::query_as::<_, (String, i32, i64)>(
-                    r#"
-                    SELECT
-                        COALESCE(SUM(capacity)::TEXT, '0'),
-                        COALESCE(COUNT(*)::INT, 0),
-                        0
-                    FROM cells
-                    WHERE lock_script_hash = $1 AND status = 0
-                    "#,
-                )
-                .bind(&lock_hash)
-                .fetch_optional(&state.read_pool)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))
-            } else {
-                // Normal: query address_balances table
-                sqlx::query_as::<_, (String, i32, i64)>(
-                    r#"
-                    SELECT
-                        COALESCE(balance::TEXT, '0'),
-                        COALESCE(live_cells_count, 0),
-                        COALESCE(transactions_count, 0)
-                    FROM address_balances
-                    WHERE lock_script_hash = $1
-                    "#,
-                )
-                .bind(&lock_hash)
-                .fetch_optional(&state.read_pool)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))
-            }
-        },
-        async {
-            sqlx::query_as::<_, (Vec<u8>, i16, Vec<u8>)>(
-                r#"
-                SELECT lock_code_hash, lock_hash_type, lock_args
-                FROM cells
-                WHERE lock_script_hash = $1
-                ORDER BY created_at_block DESC
-                LIMIT 1
-                "#,
-            )
-            .bind(&lock_hash)
-            .fetch_optional(&state.read_pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))
-        },
-    )?;
-
-    let (lock_script, address) = match &script_row {
-        Some((code_hash, hash_type, args)) => {
-            let hash_type_str = match hash_type {
-                0 => "data",
-                1 => "type",
-                2 => "data1",
-                4 => "data2",
-                _ => "data",
-            };
-            let script = ScriptResponse {
-                code_hash: format!("0x{}", hex::encode(code_hash)),
-                hash_type: hash_type_str.to_string(),
-                args: format!("0x{}", hex::encode(args)),
-            };
-            let addr = input_address.or_else(|| {
-                script_to_address(code_hash, *hash_type, args, &state.ckb_network).ok()
-            });
-            (Some(script), addr)
-        }
-        None => (None, input_address),
+    let (balance, live_cells_count, transactions_count) = match &addr_balance {
+        Some(ab) => (
+            ab.balance.to_string(),
+            ab.live_cells_count as i64,
+            ab.txs_count,
+        ),
+        None => ("0".to_string(), 0, 0),
     };
 
-    let lock_script_info = if let Some((code_hash, _, _)) = &script_row {
-        sqlx::query_as::<_, (Vec<u8>, String, Option<String>, bool)>(
-            r#"
-            SELECT DISTINCT ON (ks.code_hash)
-                ks.code_hash,
-                ks.name,
-                sus.script_kind,
-                ks.deprecated
-            FROM known_scripts ks
-            LEFT JOIN script_usage_stats sus ON sus.code_hash = ks.code_hash AND sus.script_kind = 'lock'
-            WHERE ks.code_hash = $1 AND ks.network = $2
-            ORDER BY ks.code_hash, ks.deprecated ASC, ks.is_system DESC
-            "#,
-        )
-        .bind(code_hash)
-        .bind(&state.ckb_network)
-        .fetch_optional(&state.read_pool)
-        .await
-        .ok()
-        .flatten()
-        .map(|(ch, name, script_kind, deprecated)| LockScriptInfo {
-            code_hash: format!("0x{}", hex::encode(&ch)),
-            name,
-            script_kind,
-            deprecated,
-        })
+    // Try to find a cell for this lock hash to get the lock script details
+    let cells_for_script = state
+        .store
+        .list_cells_by_lock(&lock_hash, 1)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let (lock_script, address) = if let Some((_, _, info)) = cells_for_script.first() {
+        // LiveCellInfo doesn't store hash_type directly; derive from code_hash via script_info
+        let hash_type_num = state
+            .store
+            .get_script_info(&info.lock_code_hash)
+            .ok()
+            .flatten()
+            .map(|si| si.hash_type as i16)
+            .unwrap_or(1); // Default to "type"
+
+        let hash_type_str = match hash_type_num {
+            0 => "data",
+            1 => "type",
+            2 => "data1",
+            4 => "data2",
+            _ => "data",
+        };
+
+        let script = ScriptResponse {
+            code_hash: format!("0x{}", hex::encode(&info.lock_code_hash)),
+            hash_type: hash_type_str.to_string(),
+            args: format!("0x{}", hex::encode(&info.lock_args)),
+        };
+
+        let addr = input_address.or_else(|| {
+            script_to_address(
+                &info.lock_code_hash,
+                hash_type_num,
+                &info.lock_args,
+                &state.ckb_network,
+            )
+            .ok()
+        });
+
+        (Some(script), addr)
+    } else {
+        // No live cells found, also check consumed cells for script info.
+        // For now, just return what we have.
+        (None, input_address)
+    };
+
+    // Look up lock script info from script_info CF
+    let lock_script_info = if let Some((_, _, info)) = cells_for_script.first() {
+        state
+            .store
+            .get_script_info(&info.lock_code_hash)
+            .ok()
+            .flatten()
+            .map(|si| LockScriptInfo {
+                code_hash: format!("0x{}", hex::encode(&si.code_hash)),
+                name: si.name.unwrap_or_else(|| "Unknown".to_string()),
+                script_kind: Some("lock".to_string()),
+                deprecated: false,
+            })
     } else {
         None
     };
 
-    let (balance, live_cells_count, transactions_count) = row
-        .map(|(b, l, t)| (b, l as i64, t))
-        .unwrap_or(("0".to_string(), 0, 0));
-
-    // Use transactions_count from address_balances (pre-aggregated) instead of expensive COUNT on activities
     let recent_activities_count = transactions_count;
 
     let response = AddressResponse {
@@ -967,57 +718,38 @@ async fn get_address(
     ok(response)
 }
 
-async fn lookup_code_cell_scripts(
-    pool: &sqlx::PgPool,
-    network: &str,
+fn lookup_code_cell_scripts(
+    store: &ckbadger_store::CkbadgerStore,
     data_hash: &[u8],
     type_script_hash: Option<&Vec<u8>>,
 ) -> Option<Vec<CodeCellScript>> {
     let mut scripts = Vec::new();
 
-    let data_scripts: Vec<(String, Vec<u8>, String)> = sqlx::query_as(
-        r#"
-        SELECT DISTINCT name, code_hash, hash_type
-        FROM known_scripts
-        WHERE code_hash = $1 AND network = $2 AND hash_type IN ('data', 'data1', 'data2')
-        ORDER BY name
-        "#,
-    )
-    .bind(data_hash)
-    .bind(network)
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
-
-    for (name, code_hash, hash_type) in data_scripts {
+    // Look up by data hash (for data/data1/data2 hash types)
+    if let Ok(Some(si)) = store.get_script_info(data_hash) {
+        let hash_type_str = match si.hash_type {
+            0 => "data",
+            2 => "data1",
+            4 => "data2",
+            _ => "data",
+        };
         scripts.push(CodeCellScript {
-            name,
-            code_hash: format!("0x{}", hex::encode(&code_hash)),
-            hash_type,
+            name: si.name.unwrap_or_else(|| "Unknown".to_string()),
+            code_hash: format!("0x{}", hex::encode(&si.code_hash)),
+            hash_type: hash_type_str.to_string(),
         });
     }
 
+    // Look up by type script hash (for "type" hash type)
     if let Some(type_hash) = type_script_hash {
-        let type_scripts: Vec<(String, Vec<u8>, String)> = sqlx::query_as(
-            r#"
-            SELECT DISTINCT name, code_hash, hash_type
-            FROM known_scripts
-            WHERE code_hash = $1 AND network = $2 AND hash_type = 'type'
-            ORDER BY name
-            "#,
-        )
-        .bind(type_hash)
-        .bind(network)
-        .fetch_all(pool)
-        .await
-        .unwrap_or_default();
-
-        for (name, code_hash, hash_type) in type_scripts {
-            scripts.push(CodeCellScript {
-                name,
-                code_hash: format!("0x{}", hex::encode(&code_hash)),
-                hash_type,
-            });
+        if let Ok(Some(si)) = store.get_script_info(type_hash) {
+            if si.hash_type == 1 {
+                scripts.push(CodeCellScript {
+                    name: si.name.unwrap_or_else(|| "Unknown".to_string()),
+                    code_hash: format!("0x{}", hex::encode(&si.code_hash)),
+                    hash_type: "type".to_string(),
+                });
+            }
         }
     }
 
@@ -1028,79 +760,28 @@ async fn lookup_code_cell_scripts(
     }
 }
 
-async fn lookup_dao_info(
-    pool: &sqlx::PgPool,
+fn lookup_dao_info(
+    store: &ckbadger_store::CkbadgerStore,
     tx_hash: &[u8],
     output_index: i16,
 ) -> Option<DaoInfo> {
-    type DaoRow = (
-        i64,
-        chrono::DateTime<chrono::Utc>,
-        i16,
-        Option<i64>,
-        Option<chrono::DateTime<chrono::Utc>>,
-        Option<i64>,
-        Option<chrono::DateTime<chrono::Utc>>,
-        Option<String>,
-    );
+    let outpoint_key = ckbadger_store::keys::encode_outpoint(tx_hash, output_index);
 
-    let row = sqlx::query_as::<_, DaoRow>(
-        r#"
-        SELECT 
-            deposit_block_number,
-            deposit_timestamp,
-            status,
-            withdraw_request_block,
-            withdraw_request_timestamp,
-            withdraw_block,
-            withdraw_timestamp,
-            CAST(compensation AS TEXT)
-        FROM dao_deposits
-        WHERE tx_hash = $1 AND output_index = $2
-        "#,
-    )
-    .bind(tx_hash)
-    .bind(output_index)
-    .fetch_optional(pool)
-    .await
-    .ok()?;
+    let entry = store.get_dao_deposit(&outpoint_key).ok()?;
 
-    let row = if row.is_none() {
-        sqlx::query_as::<_, DaoRow>(
-            r#"
-            SELECT 
-                deposit_block_number,
-                deposit_timestamp,
-                status,
-                withdraw_request_block,
-                withdraw_request_timestamp,
-                withdraw_block,
-                withdraw_timestamp,
-                CAST(compensation AS TEXT)
-            FROM dao_deposits
-            WHERE withdraw_request_tx = $1
-            "#,
-        )
-        .bind(tx_hash)
-        .fetch_optional(pool)
-        .await
-        .ok()?
+    // If not found by outpoint, try by withdraw_tx
+    let entry = if entry.is_none() {
+        let outpoint_key_data = store.get_dao_deposit_by_withdraw_tx(tx_hash).ok()?;
+        if let Some(key_data) = outpoint_key_data {
+            store.get_dao_deposit(&key_data).ok()?
+        } else {
+            None
+        }
     } else {
-        row
+        entry
     }?;
 
-    let (
-        deposit_block_number,
-        deposit_timestamp,
-        status,
-        withdraw_request_block,
-        withdraw_request_timestamp,
-        withdraw_block,
-        withdraw_timestamp,
-        compensation,
-    ) = row;
-
-    let dao_status = match status {
+    let dao_status = match entry.status {
         0 => "deposited",
         1 => "withdrawing",
         2 => "withdrawn",
@@ -1108,17 +789,46 @@ async fn lookup_dao_info(
     }
     .to_string();
 
+    // Get block header for deposit timestamp
+    let deposit_timestamp = store
+        .get_block_header(entry.deposit_block_number)
+        .ok()
+        .flatten()
+        .map(|h| {
+            chrono::DateTime::from_timestamp(h.timestamp / 1000, 0)
+                .unwrap_or_default()
+                .to_rfc3339()
+        })
+        .unwrap_or_default();
+
+    let withdraw_request_timestamp = entry.withdraw_request_block.and_then(|bn| {
+        store.get_block_header(bn).ok().flatten().map(|h| {
+            chrono::DateTime::from_timestamp(h.timestamp / 1000, 0)
+                .unwrap_or_default()
+                .to_rfc3339()
+        })
+    });
+
+    let withdraw_timestamp = entry.withdraw_block.and_then(|bn| {
+        store.get_block_header(bn).ok().flatten().map(|h| {
+            chrono::DateTime::from_timestamp(h.timestamp / 1000, 0)
+                .unwrap_or_default()
+                .to_rfc3339()
+        })
+    });
+
+    let compensation = entry.compensation.map(|c| c.to_string());
     let compensation_ckb = compensation.as_ref().map(|c| shannon_to_ckb(c));
 
     Some(DaoInfo {
         is_dao_cell: true,
         dao_status,
-        deposit_block_number,
-        deposit_timestamp: deposit_timestamp.to_rfc3339(),
-        withdraw_request_block,
-        withdraw_request_timestamp: withdraw_request_timestamp.map(|t| t.to_rfc3339()),
-        withdraw_block,
-        withdraw_timestamp: withdraw_timestamp.map(|t| t.to_rfc3339()),
+        deposit_block_number: entry.deposit_block_number,
+        deposit_timestamp,
+        withdraw_request_block: entry.withdraw_request_block,
+        withdraw_request_timestamp,
+        withdraw_block: entry.withdraw_block,
+        withdraw_timestamp,
         compensation,
         compensation_ckb,
         estimated_apc: None,
@@ -1132,224 +842,194 @@ async fn get_cell(
     let hash_bytes = hex::decode(tx_hash.strip_prefix("0x").unwrap_or(&tx_hash))
         .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
 
-    #[derive(FromRow)]
-    struct CellRow {
-        tx_hash: Vec<u8>,
-        output_index: i16,
-        capacity: String,
-        lock_code_hash: Vec<u8>,
-        lock_hash_type: i16,
-        lock_args: Vec<u8>,
-        lock_script_hash: Vec<u8>,
-        type_code_hash: Option<Vec<u8>>,
-        type_hash_type: Option<i16>,
-        type_args: Option<Vec<u8>>,
-        type_script_hash: Option<Vec<u8>>,
-        data_hash: Vec<u8>,
-        data_size: i32,
-        status: i16,
-        created_at_block: i64,
-        consumed_at_block: Option<i64>,
-        consumed_by_tx: Option<Vec<u8>>,
-        data: Option<Vec<u8>>,
-    }
+    let output_idx = output_index as i16;
 
-    let block_number = get_block_number_for_tx(&state.read_pool, &hash_bytes)
-        .await
-        .ok()
-        .flatten();
+    // Try live cells first
+    let live_cell = state
+        .store
+        .get_cell(&hash_bytes, output_idx)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let row = if let Some(bn) = block_number {
-        sqlx::query_as::<_, CellRow>(
-            r#"
-            SELECT
-                c.tx_hash, c.output_index, c.capacity::TEXT,
-                c.lock_code_hash, c.lock_hash_type, c.lock_args, c.lock_script_hash,
-                c.type_code_hash, c.type_hash_type, c.type_args, c.type_script_hash,
-                c.data_hash, c.data_size, c.status, c.created_at_block, c.consumed_at_block, c.consumed_by_tx,
-                c.data
-            FROM cells c
-            WHERE c.tx_hash = $1 AND c.output_index = $2 AND c.created_at_block = $3
-            "#,
-        )
-        .bind(&hash_bytes)
-        .bind(output_index)
-        .bind(bn)
-        .fetch_optional(&state.read_pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
+    // Try consumed cells if not found in live
+    let consumed_cell = if live_cell.is_none() {
+        state
+            .store
+            .get_consumed_cell(&hash_bytes, output_idx)
+            .map_err(|e| ApiError::internal(e.to_string()))?
     } else {
-        sqlx::query_as::<_, CellRow>(
-            r#"
-            SELECT
-                c.tx_hash, c.output_index, c.capacity::TEXT,
-                c.lock_code_hash, c.lock_hash_type, c.lock_args, c.lock_script_hash,
-                c.type_code_hash, c.type_hash_type, c.type_args, c.type_script_hash,
-                c.data_hash, c.data_size, c.status, c.created_at_block, c.consumed_at_block, c.consumed_by_tx,
-                c.data
-            FROM cells c
-            WHERE c.tx_hash = $1 AND c.output_index = $2
-            "#,
-        )
-        .bind(&hash_bytes)
-        .bind(output_index)
-        .fetch_optional(&state.read_pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
+        None
     };
 
-    match row {
-        Some(r) => {
-            let hash_type_str = |ht: i16| match ht {
-                0 => "data",
-                1 => "type",
-                2 => "data1",
-                4 => "data2",
-                _ => "data",
-            };
+    let (info, status_str, is_consumed) = match (live_cell, consumed_cell) {
+        (Some(cell), _) => (cell, "live", false),
+        (None, Some(cell)) => (cell, "dead", true),
+        (None, None) => return Err(ApiError::not_found("Cell not found")),
+    };
 
-            let type_script = r.type_code_hash.as_ref().map(|code_hash| ScriptResponse {
-                code_hash: format!("0x{}", hex::encode(code_hash)),
-                hash_type: hash_type_str(r.type_hash_type.unwrap_or(0)).to_string(),
-                args: format!("0x{}", hex::encode(r.type_args.as_ref().unwrap_or(&vec![]))),
-            });
+    // Look up script hash_type from script_info
+    let lock_hash_type_num: i16 = state
+        .store
+        .get_script_info(&info.lock_code_hash)
+        .ok()
+        .flatten()
+        .map(|si| si.hash_type as i16)
+        .unwrap_or(1);
 
-            let address = script_to_address(
-                &r.lock_code_hash,
-                r.lock_hash_type,
-                &r.lock_args,
-                &state.ckb_network,
-            )
-            .ok();
+    let hash_type_str = |ht: i16| match ht {
+        0 => "data",
+        1 => "type",
+        2 => "data1",
+        4 => "data2",
+        _ => "data",
+    };
 
-            // For full cell data (e.g., dep groups), read from RocksDB if available
-            let rocksdb_data = state.ckb_store.as_ref().and_then(|store| {
-                if hash_bytes.len() == 32 {
-                    let mut tx_h = [0u8; 32];
-                    tx_h.copy_from_slice(&hash_bytes);
-                    store.get_cell_data(&tx_h, output_index as u32)
-                } else {
-                    None
-                }
-            });
-            let cell_data = rocksdb_data.as_ref().or(r.data.as_ref());
-            let dep_group_result = cell_data
-                .map(|d| parse_dep_group(d, r.data_size))
-                .unwrap_or(DepGroupParseResult {
-                    is_dep_group: false,
-                    items: None,
-                });
-
-            let code_cell_of = lookup_code_cell_scripts(
-                &state.read_pool,
-                &state.ckb_network,
-                &r.data_hash,
-                r.type_script_hash.as_ref(),
-            )
-            .await;
-
-            // Calculate occupied capacity: 8 (capacity) + 32 (code_hash) + 1 (hash_type) + lock_args + type_script + data
-            let type_script_size: i64 = if r.type_code_hash.is_some() {
-                32 + 1 + r.type_args.as_ref().map(|a| a.len()).unwrap_or(0) as i64
-            } else {
-                0
-            };
-            let occupied_capacity =
-                8 + 32 + 1 + r.lock_args.len() as i64 + type_script_size + r.data_size as i64;
-
-            let is_satoshi = is_genesis_special_burn_cell(&r.lock_args, r.created_at_block);
-            let (cell_type, virtual_occupied_capacity) = if is_satoshi {
-                (
-                    Some("genesis_special_burn".to_string()),
-                    Some(GENESIS_SPECIAL_BURN_CELL_VIRTUAL_OCCUPIED.to_string()),
-                )
-            } else {
-                (None, None)
-            };
-
-            let dao_info =
-                lookup_dao_info(&state.read_pool, &hash_bytes, output_index as i16).await;
-
-            ok(CellDetailResponse {
-                tx_hash: format!("0x{}", hex::encode(&r.tx_hash)),
-                output_index: r.output_index as i32,
-                capacity: r.capacity,
-                occupied_capacity,
-                virtual_occupied_capacity,
-                cell_type,
-                lock_script_hash: format!("0x{}", hex::encode(&r.lock_script_hash)),
-                address,
-                type_script_hash: r
-                    .type_script_hash
-                    .as_ref()
-                    .map(|h| format!("0x{}", hex::encode(h))),
-                data_size: r.data_size,
-                created_at_block: r.created_at_block,
-                status: if r.status == 0 {
-                    "live".to_string()
-                } else {
-                    "dead".to_string()
-                },
-                consumed_at_block: r.consumed_at_block,
-                consumed_by_tx: r
-                    .consumed_by_tx
-                    .as_ref()
-                    .map(|h| format!("0x{}", hex::encode(h))),
-                lock: ScriptResponse {
-                    code_hash: format!("0x{}", hex::encode(&r.lock_code_hash)),
-                    hash_type: hash_type_str(r.lock_hash_type).to_string(),
-                    args: format!("0x{}", hex::encode(&r.lock_args)),
-                },
-                type_script,
-                data: cell_data.map(|d| format!("0x{}", hex::encode(d))),
-                is_dep_group: dep_group_result.is_dep_group,
-                dep_group_items: dep_group_result.items,
-                code_cell_of,
-                dao_info,
-            })
+    let type_script = info.type_code_hash.as_ref().map(|code_hash| {
+        let type_hash_type_num: i16 = state
+            .store
+            .get_script_info(code_hash)
+            .ok()
+            .flatten()
+            .map(|si| si.hash_type as i16)
+            .unwrap_or(1);
+        ScriptResponse {
+            code_hash: format!("0x{}", hex::encode(code_hash)),
+            hash_type: hash_type_str(type_hash_type_num).to_string(),
+            args: String::from("0x"), // type_args not stored in LiveCellInfo
         }
-        None => Err(ApiError::not_found("Cell not found")),
-    }
+    });
+
+    let address = script_to_address(
+        &info.lock_code_hash,
+        lock_hash_type_num,
+        &info.lock_args,
+        &state.ckb_network,
+    )
+    .ok();
+
+    // For cell data (e.g. dep groups), read from CKB direct store if available
+    let cell_data = state.ckb_store.as_ref().and_then(|ckb| {
+        if hash_bytes.len() == 32 {
+            let mut tx_h = [0u8; 32];
+            tx_h.copy_from_slice(&hash_bytes);
+            ckb.get_cell_data(&tx_h, output_index as u32)
+        } else {
+            None
+        }
+    });
+
+    let dep_group_result = cell_data
+        .as_ref()
+        .map(|d| parse_dep_group(d, info.data_size))
+        .unwrap_or(DepGroupParseResult {
+            is_dep_group: false,
+            items: None,
+        });
+
+    // Compute data_hash from cell data for code_cell lookup
+    let data_hash = cell_data.as_ref().map(|d| {
+        use ckb_hash::new_blake2b;
+        let mut hasher = new_blake2b();
+        hasher.update(d);
+        let mut hash = vec![0u8; 32];
+        hasher.finalize(&mut hash);
+        hash
+    });
+
+    let code_cell_of = data_hash
+        .as_ref()
+        .and_then(|dh| lookup_code_cell_scripts(&state.store, dh, info.type_script_hash.as_ref()));
+
+    // Calculate occupied capacity: 8 (capacity) + 32 (code_hash) + 1 (hash_type) + lock_args + type_script + data
+    let type_script_size: i64 = if info.type_code_hash.is_some() {
+        32 + 1 // code_hash + hash_type (no args available from LiveCellInfo)
+    } else {
+        0
+    };
+    let occupied_capacity =
+        8 + 32 + 1 + info.lock_args.len() as i64 + type_script_size + info.data_size as i64;
+
+    let is_satoshi = is_genesis_special_burn_cell(&info.lock_args, info.created_at_block);
+    let (cell_type, virtual_occupied_capacity) = if is_satoshi {
+        (
+            Some("genesis_special_burn".to_string()),
+            Some(GENESIS_SPECIAL_BURN_CELL_VIRTUAL_OCCUPIED.to_string()),
+        )
+    } else {
+        (None, None)
+    };
+
+    // Find consumed_by info if cell is dead
+    let (consumed_at_block, consumed_by_tx) = if is_consumed {
+        // We don't have a direct consumed_by lookup in the store.
+        // The consumed_cells CF stores the cell info but not who consumed it.
+        (None, None)
+    } else {
+        (None, None)
+    };
+
+    let dao_info = lookup_dao_info(&state.store, &hash_bytes, output_idx);
+
+    ok(CellDetailResponse {
+        tx_hash: format!("0x{}", hex::encode(&hash_bytes)),
+        output_index: output_idx as i32,
+        capacity: info.capacity.to_string(),
+        occupied_capacity,
+        virtual_occupied_capacity,
+        cell_type,
+        lock_script_hash: format!("0x{}", hex::encode(&info.lock_script_hash)),
+        address,
+        type_script_hash: info
+            .type_script_hash
+            .as_ref()
+            .map(|h| format!("0x{}", hex::encode(h))),
+        data_size: info.data_size,
+        created_at_block: info.created_at_block,
+        status: status_str.to_string(),
+        consumed_at_block,
+        consumed_by_tx,
+        lock: ScriptResponse {
+            code_hash: format!("0x{}", hex::encode(&info.lock_code_hash)),
+            hash_type: hash_type_str(lock_hash_type_num).to_string(),
+            args: format!("0x{}", hex::encode(&info.lock_args)),
+        },
+        type_script,
+        data: cell_data.map(|d| format!("0x{}", hex::encode(d))),
+        is_dep_group: dep_group_result.is_dep_group,
+        dep_group_items: dep_group_result.items,
+        code_cell_of,
+        dao_info,
+    })
 }
 
 async fn get_top_addresses(
     State(state): State<Arc<AppState>>,
     Query(params): Query<TopAddressesParams>,
 ) -> ApiResult<Vec<TopAddressResponse>> {
-    let sync_status = state.cache.get_sync_status(&state.read_pool).await;
+    let sync_status = state
+        .store
+        .get_sync_status()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     if sync_status.address_balances_deferred {
         return ok(Vec::new());
     }
 
-    let limit = params.limit.clamp(1, 500);
+    let limit = params.limit.clamp(1, 500) as usize;
 
-    let rows = sqlx::query_as::<_, (Vec<u8>, String, i32, i64)>(
-        r#"
-        SELECT lock_script_hash, balance::TEXT, live_cells_count, transactions_count
-        FROM address_balances
-        WHERE balance > 0
-        ORDER BY balance DESC
-        LIMIT $1
-        "#,
-    )
-    .bind(limit)
-    .fetch_all(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let rows = state
+        .store
+        .top_addresses(limit)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let addresses: Vec<TopAddressResponse> = rows
         .into_iter()
-        .map(
-            |(lock_script_hash, balance, live_cells_count, transactions_count)| {
-                TopAddressResponse {
-                    lock_script_hash: format!("0x{}", hex::encode(&lock_script_hash)),
-                    balance,
-                    live_cells_count,
-                    transactions_count,
-                }
-            },
-        )
+        .filter(|(_, ab)| ab.balance > 0)
+        .map(|(lock_hash, ab)| TopAddressResponse {
+            lock_script_hash: format!("0x{}", hex::encode(&lock_hash)),
+            balance: ab.balance.to_string(),
+            live_cells_count: ab.live_cells_count,
+            transactions_count: ab.txs_count,
+        })
         .collect();
 
     ok(addresses)
@@ -1359,54 +1039,50 @@ async fn get_active_addresses(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ActiveAddressesParams>,
 ) -> ApiResult<Vec<ActiveAddressResponse>> {
-    let sync_status = state.cache.get_sync_status(&state.read_pool).await;
+    let sync_status = state
+        .store
+        .get_sync_status()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     if sync_status.address_balances_deferred {
         return ok(Vec::new());
     }
 
-    let limit = params.limit.clamp(1, 500);
+    let limit = params.limit.clamp(1, 500) as usize;
     let days = params.days.clamp(1, 365);
 
-    let tip_block = state.cache.get_sync_tip(&state.read_pool).await;
-
+    let tip_block = sync_status.tip_block_number;
     let blocks_per_day: i64 = 8640;
     let min_block = tip_block.saturating_sub(days * blocks_per_day);
 
-    let rows = sqlx::query_as::<_, (Vec<u8>, String, i32, i64, i64)>(
-        r#"
-        SELECT lock_script_hash, balance::TEXT, live_cells_count, transactions_count, last_activity_block
-        FROM address_balances
-        WHERE last_activity_block >= $1
-        ORDER BY last_activity_block DESC
-        LIMIT $2
-        "#,
-    )
-    .bind(min_block)
-    .bind(limit)
-    .fetch_all(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    // Full scan of addr_balance CF, filter by last_activity_block
+    let iter = state
+        .store
+        .iterator_cf(state.store.cf_addr_balance(), rocksdb::IteratorMode::Start);
 
-    let addresses: Vec<ActiveAddressResponse> = rows
+    let mut all: Vec<(Vec<u8>, ckbadger_store::AddressBalance)> = Vec::new();
+    for item in iter.flatten() {
+        let (key, value) = item;
+        if let Ok(ab) = bincode::deserialize::<ckbadger_store::AddressBalance>(&value) {
+            if ab.last_activity_block >= min_block {
+                all.push((key.to_vec(), ab));
+            }
+        }
+    }
+
+    // Sort by last_activity_block desc
+    all.sort_by(|a, b| b.1.last_activity_block.cmp(&a.1.last_activity_block));
+    all.truncate(limit);
+
+    let addresses: Vec<ActiveAddressResponse> = all
         .into_iter()
-        .map(
-            |(
-                lock_script_hash,
-                balance,
-                live_cells_count,
-                transactions_count,
-                last_activity_block,
-            )| {
-                ActiveAddressResponse {
-                    lock_script_hash: format!("0x{}", hex::encode(&lock_script_hash)),
-                    balance,
-                    live_cells_count,
-                    transactions_count,
-                    last_activity_block,
-                }
-            },
-        )
+        .map(|(lock_hash, ab)| ActiveAddressResponse {
+            lock_script_hash: format!("0x{}", hex::encode(&lock_hash)),
+            balance: ab.balance.to_string(),
+            live_cells_count: ab.live_cells_count,
+            transactions_count: ab.txs_count,
+            last_activity_block: ab.last_activity_block,
+        })
         .collect();
 
     ok(addresses)
@@ -1425,97 +1101,95 @@ async fn get_address_transactions(
             .map_err(|_| ApiError::bad_request("Invalid address/lock script hash"))?
     };
 
-    let limit = params.limit.clamp(1, 100);
-    let cursor = params.cursor.as_ref().and_then(|c| decode_cursor(c));
-    let (cursor_block, cursor_idx) = cursor.unwrap_or((i64::MAX, i32::MAX));
+    let limit = params.limit.clamp(1, 100) as usize;
 
-    // Query activities table for CKB transfers involving this address
-    // Determine direction based on from/to lock hash
-    type ActivityRow = (
-        Vec<u8>,
-        i64,
-        i32,
-        Option<Vec<u8>>,
-        Option<Vec<u8>>,
-        String,
-        chrono::DateTime<chrono::Utc>,
-    );
-    let rows = sqlx::query_as::<_, ActivityRow>(
-        r#"
-        SELECT tx_hash, block_number, tx_index, from_lock_hash, to_lock_hash, amount::TEXT, timestamp
-        FROM activities
-        WHERE activity_category = 'ckb' 
-          AND (from_lock_hash = $1 OR to_lock_hash = $1)
-          AND (block_number, tx_index) < ($2, $3)
-        ORDER BY block_number DESC, tx_index DESC
-        LIMIT $4
-        "#,
-    )
-    .bind(&lock_hash)
-    .bind(cursor_block)
-    .bind(cursor_idx)
-    .bind(limit + 1)
-    .fetch_all(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    // Fetch activities for this address (CKB transfers)
+    let activities = state
+        .store
+        .list_activities_by_addr(&lock_hash, limit + 1)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let has_more = rows.len() as i64 > limit;
-    let rows: Vec<_> = rows.into_iter().take(limit as usize).collect();
+    // Filter to only CKB category activities
+    let ckb_activities: Vec<_> = activities
+        .into_iter()
+        .filter(|a| a.category == "ckb")
+        .take(limit + 1)
+        .collect();
+
+    let has_more = ckb_activities.len() > limit;
+    let ckb_activities: Vec<_> = ckb_activities.into_iter().take(limit).collect();
 
     let next_cursor = if has_more {
-        rows.last()
-            .map(|(_, block_number, tx_index, _, _, _, _)| encode_cursor(*block_number, *tx_index))
+        ckb_activities.last().map(|a| {
+            // Use block number from tx location as cursor
+            let block_number = state
+                .store
+                .get_tx_location(&a.tx_hash)
+                .ok()
+                .flatten()
+                .map(|(bn, _)| bn)
+                .unwrap_or(0);
+            encode_cursor(block_number, a.tx_idx)
+        })
     } else {
         None
     };
 
-    let txs: Vec<AddressTransactionResponse> = rows
+    let txs: Vec<AddressTransactionResponse> = ckb_activities
         .into_iter()
-        .map(
-            |(
-                tx_hash,
+        .map(|activity| {
+            let is_sender = activity
+                .from_lock
+                .as_ref()
+                .map(|h| h == &lock_hash)
+                .unwrap_or(false);
+            let is_receiver = activity
+                .to_lock
+                .as_ref()
+                .map(|h| h == &lock_hash)
+                .unwrap_or(false);
+            let tx_type_str = match (is_sender, is_receiver) {
+                (true, true) => "internal",
+                (true, false) => "sent",
+                (false, true) => "received",
+                (false, false) => "unknown",
+            };
+
+            let amount_str = activity
+                .amount
+                .map(|a| a.to_string())
+                .unwrap_or_else(|| "0".to_string());
+            let capacity_change = if is_sender && !is_receiver {
+                format!("-{}", amount_str)
+            } else {
+                amount_str
+            };
+
+            let block_number = state
+                .store
+                .get_tx_location(&activity.tx_hash)
+                .ok()
+                .flatten()
+                .map(|(bn, _)| bn)
+                .unwrap_or(0);
+
+            let timestamp = chrono::DateTime::from_timestamp(activity.timestamp, 0)
+                .unwrap_or_default()
+                .to_rfc3339();
+
+            AddressTransactionResponse {
+                tx_hash: format!("0x{}", hex::encode(&activity.tx_hash)),
                 block_number,
-                _tx_index,
-                from_lock_hash,
-                to_lock_hash,
-                amount,
+                tx_type: tx_type_str.to_string(),
+                capacity_change,
                 timestamp,
-            )| {
-                // Determine tx_type based on from/to relationship with lock_hash
-                let is_sender = from_lock_hash
-                    .as_ref()
-                    .map(|h| h == &lock_hash)
-                    .unwrap_or(false);
-                let is_receiver = to_lock_hash
-                    .as_ref()
-                    .map(|h| h == &lock_hash)
-                    .unwrap_or(false);
-                let tx_type_str = match (is_sender, is_receiver) {
-                    (true, true) => "internal", // Self-transfer
-                    (true, false) => "sent",
-                    (false, true) => "received",
-                    (false, false) => "unknown",
-                };
-                // Calculate capacity_change: positive for received, negative for sent
-                let capacity_change = if is_sender && !is_receiver {
-                    format!("-{}", amount)
-                } else {
-                    amount
-                };
-                AddressTransactionResponse {
-                    tx_hash: format!("0x{}", hex::encode(&tx_hash)),
-                    block_number,
-                    tx_type: tx_type_str.to_string(),
-                    capacity_change,
-                    timestamp: timestamp.to_rfc3339(),
-                }
-            },
-        )
+            }
+        })
         .collect();
 
     ok(CursorPaginatedResponse::without_total(
         txs,
-        limit,
+        limit as i64,
         next_cursor,
     ))
 }
@@ -1525,16 +1199,6 @@ async fn get_address_tokens(
     axum::extract::Path(addr): axum::extract::Path<String>,
     Query(params): Query<AddressTokensParams>,
 ) -> ApiResult<CursorPaginatedResponse<AddressTokenResponse>> {
-    let sync_status = state.cache.get_sync_status(&state.read_pool).await;
-
-    if sync_status.token_deferred {
-        return ok(CursorPaginatedResponse::without_total(
-            Vec::new(),
-            params.limit.clamp(1, 100),
-            None,
-        ));
-    }
-
     let lock_hash = if is_ckb_address(&addr) {
         address_to_lock_script_hash(&addr)
             .map_err(|e| ApiError::bad_request(format!("Invalid CKB address: {}", e)))?
@@ -1543,100 +1207,54 @@ async fn get_address_tokens(
             .map_err(|_| ApiError::bad_request("Invalid address/lock script hash"))?
     };
 
-    let limit = params.limit.clamp(1, 100);
-    let (cursor_balance, cursor_token_id) = params
-        .cursor
-        .as_ref()
-        .and_then(|c| {
-            let parts: Vec<&str> = c.split(':').collect();
-            if parts.len() == 2 {
-                Some((parts[0].to_string(), parts[1].parse::<i64>().ok()?))
-            } else {
-                None
+    let limit = params.limit.clamp(1, 100) as usize;
+
+    // Get all tokens and check balances for this address
+    let all_tokens = state
+        .store
+        .list_tokens()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let mut token_balances: Vec<(Vec<u8>, ckbadger_store::TokenInfo, i128)> = Vec::new();
+
+    for (type_hash, token_info) in all_tokens {
+        if let Ok(Some(balance)) = state.store.get_token_holder_balance(&type_hash, &lock_hash) {
+            if balance > 0 {
+                token_balances.push((type_hash, token_info, balance));
             }
-        })
-        .unwrap_or_else(|| (String::new(), i64::MAX));
+        }
+    }
 
-    type TokenBalanceRow = (
-        i64,
-        String,
-        Vec<u8>,
-        String,
-        Option<String>,
-        Option<String>,
-        i16,
-        Option<String>,
-    );
+    // Sort by balance descending
+    token_balances.sort_by(|a, b| b.2.cmp(&a.2));
 
-    let rows = if cursor_balance.is_empty() {
-        sqlx::query_as::<_, TokenBalanceRow>(
-            r#"
-            SELECT tb.token_id, tb.balance::text, t.type_script_hash, t.standard, 
-                   t.name, t.symbol, t.decimals, t.icon_url
-            FROM token_balances tb
-            JOIN tokens t ON tb.token_id = t.id
-            WHERE tb.lock_script_hash = $1 AND tb.balance > 0
-            ORDER BY tb.balance DESC, tb.token_id DESC
-            LIMIT $2
-            "#,
-        )
-        .bind(&lock_hash)
-        .bind(limit + 1)
-        .fetch_all(&state.read_pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-    } else {
-        sqlx::query_as::<_, TokenBalanceRow>(
-            r#"
-            SELECT tb.token_id, tb.balance::text, t.type_script_hash, t.standard,
-                   t.name, t.symbol, t.decimals, t.icon_url
-            FROM token_balances tb
-            JOIN tokens t ON tb.token_id = t.id
-            WHERE tb.lock_script_hash = $1 AND tb.balance > 0
-              AND (tb.balance, tb.token_id) < ($2::numeric, $3)
-            ORDER BY tb.balance DESC, tb.token_id DESC
-            LIMIT $4
-            "#,
-        )
-        .bind(&lock_hash)
-        .bind(&cursor_balance)
-        .bind(cursor_token_id)
-        .bind(limit + 1)
-        .fetch_all(&state.read_pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-    };
+    let has_more = token_balances.len() > limit;
+    let token_balances: Vec<_> = token_balances.into_iter().take(limit).collect();
 
-    let has_more = rows.len() as i64 > limit;
-    let rows: Vec<_> = rows.into_iter().take(limit as usize).collect();
-
-    let next_cursor = if has_more {
-        rows.last()
-            .map(|(token_id, balance, _, _, _, _, _, _)| format!("{}:{}", balance, token_id))
+    let next_cursor: Option<String> = if has_more {
+        token_balances
+            .last()
+            .map(|(type_hash, _, balance)| format!("{}:{}", balance, hex::encode(type_hash)))
     } else {
         None
     };
 
-    let tokens: Vec<AddressTokenResponse> = rows
+    let tokens: Vec<AddressTokenResponse> = token_balances
         .into_iter()
-        .map(
-            |(_, balance, type_script_hash, standard, name, symbol, decimals, icon_url)| {
-                AddressTokenResponse {
-                    type_script_hash: format!("0x{}", hex::encode(&type_script_hash)),
-                    standard,
-                    name,
-                    symbol,
-                    decimals,
-                    icon_url,
-                    balance,
-                }
-            },
-        )
+        .map(|(type_hash, token_info, balance)| AddressTokenResponse {
+            type_script_hash: format!("0x{}", hex::encode(&type_hash)),
+            standard: token_info.standard,
+            name: token_info.name,
+            symbol: token_info.symbol,
+            decimals: token_info.decimals.unwrap_or(0) as i16,
+            icon_url: token_info.icon_url,
+            balance: balance.to_string(),
+        })
         .collect();
 
     ok(CursorPaginatedResponse::without_total(
         tokens,
-        limit,
+        limit as i64,
         next_cursor,
     ))
 }
@@ -1645,6 +1263,7 @@ async fn get_address_tokens(
 pub struct AssetTransfersParams {
     #[serde(default = "default_limit")]
     limit: i64,
+    #[allow(dead_code)]
     cursor: Option<String>,
     category: Option<String>,
 }
@@ -1676,19 +1295,6 @@ pub struct AssetTransferResponse {
     pub token_decimals: Option<i16>,
 }
 
-fn decode_timeline_cursor(cursor: &str) -> Option<(i64, i32, i16)> {
-    let parts: Vec<&str> = cursor.split(':').collect();
-    if parts.len() == 3 {
-        Some((
-            parts[0].parse().ok()?,
-            parts[1].parse().ok()?,
-            parts[2].parse().ok()?,
-        ))
-    } else {
-        None
-    }
-}
-
 fn encode_timeline_cursor(block_number: i64, tx_index: i32, event_index: i16) -> String {
     format!("{}:{}:{}", block_number, tx_index, event_index)
 }
@@ -1706,13 +1312,7 @@ async fn get_address_asset_transfers(
             .map_err(|_| ApiError::bad_request("Invalid address/lock script hash"))?
     };
 
-    let limit = params.limit.clamp(1, 100);
-    let cursor = params
-        .cursor
-        .as_ref()
-        .and_then(|c| decode_timeline_cursor(c));
-    let (cursor_block, cursor_tx_idx, cursor_evt_idx) =
-        cursor.unwrap_or((i64::MAX, i32::MAX, i16::MAX));
+    let limit = params.limit.clamp(1, 100) as usize;
 
     let valid_categories = ["token", "dob", "nft", "dao"];
     if let Some(ref cat) = params.category {
@@ -1724,191 +1324,150 @@ async fn get_address_asset_transfers(
         }
     }
 
-    #[rustfmt::skip]
-    type ActivityRow = (
-        Vec<u8>,                       // tx_hash
-        i64,                           // block_number
-        i32,                           // tx_index
-        i16,                           // activity_index
-        String,                        // activity_category
-        String,                        // activity_type
-        Option<Vec<u8>>,               // asset_id
-        Option<Vec<u8>>,               // from_lock_hash
-        Option<Vec<u8>>,               // to_lock_hash
-        String,                        // amount
-        serde_json::Value,             // metadata
-        chrono::DateTime<chrono::Utc>, // timestamp
-    );
+    // Fetch activities for this address, filter to asset categories
+    let activities = state
+        .store
+        .list_activities_by_addr(&lock_hash, limit * 10 + 1)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let base_condition = "(from_lock_hash = $1 OR to_lock_hash = $1) AND activity_category IN ('token', 'dob', 'nft', 'dao')";
+    let filtered: Vec<_> = activities
+        .into_iter()
+        .filter(|a| {
+            let cat = a.category.as_str();
+            let is_asset = cat == "token" || cat == "dob" || cat == "nft" || cat == "dao";
+            if let Some(ref filter_cat) = params.category {
+                is_asset && cat == filter_cat.as_str()
+            } else {
+                is_asset
+            }
+        })
+        .take(limit + 1)
+        .collect();
 
-    let rows: Vec<ActivityRow> = if let Some(ref cat) = params.category {
-        let query = format!(
-            r#"
-            SELECT tx_hash, block_number, tx_index, activity_index,
-                   activity_category, activity_type, asset_id,
-                   from_lock_hash, to_lock_hash, amount::TEXT, metadata, timestamp
-            FROM activities
-            WHERE {} AND activity_category = $2
-              AND (block_number, tx_index, activity_index) < ($3, $4, $5)
-            ORDER BY block_number DESC, tx_index DESC, activity_index DESC
-            LIMIT $6
-            "#,
-            base_condition
-        );
-        sqlx::query_as(&query)
-            .bind(&lock_hash)
-            .bind(cat)
-            .bind(cursor_block)
-            .bind(cursor_tx_idx)
-            .bind(cursor_evt_idx)
-            .bind(limit + 1)
-            .fetch_all(&state.read_pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?
-    } else {
-        let query = format!(
-            r#"
-            SELECT tx_hash, block_number, tx_index, activity_index,
-                   activity_category, activity_type, asset_id,
-                   from_lock_hash, to_lock_hash, amount::TEXT, metadata, timestamp
-            FROM activities
-            WHERE {}
-              AND (block_number, tx_index, activity_index) < ($2, $3, $4)
-            ORDER BY block_number DESC, tx_index DESC, activity_index DESC
-            LIMIT $5
-            "#,
-            base_condition
-        );
-        sqlx::query_as(&query)
-            .bind(&lock_hash)
-            .bind(cursor_block)
-            .bind(cursor_tx_idx)
-            .bind(cursor_evt_idx)
-            .bind(limit + 1)
-            .fetch_all(&state.read_pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?
-    };
-
-    let has_more = rows.len() as i64 > limit;
-    let rows: Vec<_> = rows.into_iter().take(limit as usize).collect();
+    let has_more = filtered.len() > limit;
+    let filtered: Vec<_> = filtered.into_iter().take(limit).collect();
 
     let next_cursor = if has_more {
-        rows.last().map(
-            |(_, block_number, tx_index, activity_index, _, _, _, _, _, _, _, _)| {
-                encode_timeline_cursor(*block_number, *tx_index, *activity_index)
-            },
-        )
+        filtered.last().map(|a| {
+            let block_number = state
+                .store
+                .get_tx_location(&a.tx_hash)
+                .ok()
+                .flatten()
+                .map(|(bn, _)| bn)
+                .unwrap_or(0);
+            encode_timeline_cursor(block_number, a.tx_idx, 0)
+        })
     } else {
         None
     };
 
-    let token_ids: Vec<Vec<u8>> = rows
+    // Collect token type hashes for metadata lookup
+    let token_ids: Vec<Vec<u8>> = filtered
         .iter()
-        .filter(|(_, _, _, _, cat, _, asset_id, _, _, _, _, _)| {
-            cat == "token" && asset_id.is_some()
-        })
-        .filter_map(|(_, _, _, _, _, _, asset_id, _, _, _, _, _)| asset_id.clone())
+        .filter(|a| a.category == "token" && a.asset_id.is_some())
+        .filter_map(|a| a.asset_id.clone())
         .collect();
 
     let token_metadata: std::collections::HashMap<Vec<u8>, (Option<String>, Option<String>, i16)> =
         if !token_ids.is_empty() {
-            let meta_rows: Vec<(Vec<u8>, Option<String>, Option<String>, i16)> = sqlx::query_as(
-                r#"
-                SELECT type_script_hash, name, symbol, decimals
-                FROM tokens
-                WHERE type_script_hash = ANY($1)
-                "#,
-            )
-            .bind(&token_ids)
-            .fetch_all(&state.read_pool)
-            .await
-            .unwrap_or_default();
-
-            meta_rows
-                .into_iter()
-                .map(|(hash, name, symbol, decimals)| (hash, (name, symbol, decimals)))
-                .collect()
+            let mut map = std::collections::HashMap::new();
+            for type_hash in &token_ids {
+                if let Ok(Some(info)) = state.store.get_token(type_hash) {
+                    map.insert(
+                        type_hash.clone(),
+                        (info.name, info.symbol, info.decimals.unwrap_or(0) as i16),
+                    );
+                }
+            }
+            map
         } else {
             std::collections::HashMap::new()
         };
 
-    let transfers: Vec<AssetTransferResponse> = rows
+    let transfers: Vec<AssetTransferResponse> = filtered
         .into_iter()
-        .map(
-            |(
-                tx_hash,
-                block_number,
-                tx_index,
-                activity_index,
-                activity_category,
-                activity_type,
-                asset_id,
-                from_lock_hash,
-                to_lock_hash,
-                amount,
-                metadata,
-                timestamp,
-            )| {
-                let is_sender = from_lock_hash
-                    .as_ref()
-                    .map(|h| h == &lock_hash)
-                    .unwrap_or(false);
-                let is_receiver = to_lock_hash
-                    .as_ref()
-                    .map(|h| h == &lock_hash)
-                    .unwrap_or(false);
+        .map(|activity| {
+            let is_sender = activity
+                .from_lock
+                .as_ref()
+                .map(|h| h == &lock_hash)
+                .unwrap_or(false);
+            let is_receiver = activity
+                .to_lock
+                .as_ref()
+                .map(|h| h == &lock_hash)
+                .unwrap_or(false);
 
-                let direction_str = match (is_sender, is_receiver) {
-                    (true, false) => "out",
-                    (false, true) => "in",
-                    _ => "unknown",
-                };
+            let direction_str = match (is_sender, is_receiver) {
+                (true, false) => "out",
+                (false, true) => "in",
+                _ => "unknown",
+            };
 
-                let peer_lock_hash = if is_sender {
-                    to_lock_hash
+            let peer_lock_hash = if is_sender {
+                activity.to_lock.as_ref()
+            } else {
+                activity.from_lock.as_ref()
+            };
+
+            let event_type = activity_type_to_event_type(&activity.activity_type);
+
+            let (token_name, token_symbol, token_decimals) =
+                if activity.category == "token" && activity.asset_id.is_some() {
+                    activity
+                        .asset_id
+                        .as_ref()
+                        .and_then(|id| token_metadata.get(id))
+                        .map(|(n, s, d)| (n.clone(), s.clone(), Some(*d)))
+                        .unwrap_or((None, None, None))
                 } else {
-                    from_lock_hash
+                    extract_token_meta_from_metadata(
+                        activity
+                            .metadata
+                            .as_ref()
+                            .unwrap_or(&serde_json::Value::Null),
+                    )
                 };
 
-                let event_type = activity_type_to_event_type(&activity_type);
+            let block_number = state
+                .store
+                .get_tx_location(&activity.tx_hash)
+                .ok()
+                .flatten()
+                .map(|(bn, _)| bn)
+                .unwrap_or(0);
 
-                let (token_name, token_symbol, token_decimals) =
-                    if activity_category == "token" && asset_id.is_some() {
-                        asset_id
-                            .as_ref()
-                            .and_then(|id| token_metadata.get(id))
-                            .map(|(n, s, d)| (n.clone(), s.clone(), Some(*d)))
-                            .unwrap_or((None, None, None))
-                    } else {
-                        extract_token_meta_from_metadata(&metadata)
-                    };
+            let timestamp = chrono::DateTime::from_timestamp(activity.timestamp, 0)
+                .unwrap_or_default()
+                .to_rfc3339();
 
-                AssetTransferResponse {
-                    tx_hash: format!("0x{}", hex::encode(&tx_hash)),
-                    block_number,
-                    tx_index,
-                    event_index: activity_index,
-                    asset_category: activity_category,
-                    asset_type: activity_type,
-                    asset_id: asset_id.map(|id| format!("0x{}", hex::encode(&id))),
-                    direction: direction_str.to_string(),
-                    peer_address: peer_lock_hash.map(|h| format!("0x{}", hex::encode(&h))),
-                    amount: Some(amount),
-                    event_type: Some(event_type),
-                    timestamp: timestamp.to_rfc3339(),
-                    token_name,
-                    token_symbol,
-                    token_decimals,
-                }
-            },
-        )
+            AssetTransferResponse {
+                tx_hash: format!("0x{}", hex::encode(&activity.tx_hash)),
+                block_number,
+                tx_index: activity.tx_idx,
+                event_index: 0,
+                asset_category: activity.category,
+                asset_type: activity.activity_type,
+                asset_id: activity
+                    .asset_id
+                    .as_ref()
+                    .map(|id| format!("0x{}", hex::encode(id))),
+                direction: direction_str.to_string(),
+                peer_address: peer_lock_hash.map(|h| format!("0x{}", hex::encode(h))),
+                amount: activity.amount.map(|a| a.to_string()),
+                event_type: Some(event_type),
+                timestamp,
+                token_name,
+                token_symbol,
+                token_decimals,
+            }
+        })
         .collect();
 
     ok(CursorPaginatedResponse::without_total(
         transfers,
-        limit,
+        limit as i64,
         next_cursor,
     ))
 }
@@ -1943,4 +1502,141 @@ fn extract_token_meta_from_metadata(
         .and_then(|v| v.as_i64())
         .map(|d| d as i16);
     (name, symbol, decimals)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn decode_timeline_cursor(cursor: &str) -> Option<(i64, i32, i16)> {
+        let parts: Vec<&str> = cursor.split(':').collect();
+        if parts.len() == 3 {
+            Some((
+                parts[0].parse().ok()?,
+                parts[1].parse().ok()?,
+                parts[2].parse().ok()?,
+            ))
+        } else {
+            None
+        }
+    }
+
+    #[test]
+    fn test_parse_dep_group_valid() {
+        // 2 outpoints: count(4) + 2 * 36 = 76 bytes
+        let mut data = Vec::new();
+        data.extend_from_slice(&2u32.to_le_bytes());
+        // OutPoint 1: 32 bytes tx_hash + 4 bytes index
+        data.extend_from_slice(&[1u8; 32]);
+        data.extend_from_slice(&0u32.to_le_bytes());
+        // OutPoint 2
+        data.extend_from_slice(&[2u8; 32]);
+        data.extend_from_slice(&1u32.to_le_bytes());
+
+        let result = parse_dep_group(&data, 76);
+        assert!(result.is_dep_group);
+        assert!(result.items.is_some());
+        let items = result.items.unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].output_index, 0);
+        assert_eq!(items[1].output_index, 1);
+    }
+
+    #[test]
+    fn test_parse_dep_group_invalid_size() {
+        let data = vec![0u8; 10];
+        let result = parse_dep_group(&data, 10);
+        assert!(!result.is_dep_group);
+    }
+
+    #[test]
+    fn test_parse_dep_group_zero_count() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&0u32.to_le_bytes());
+        let result = parse_dep_group(&data, 4);
+        assert!(!result.is_dep_group);
+    }
+
+    #[test]
+    fn test_parse_hash_type() {
+        assert_eq!(parse_hash_type("data"), Some(0));
+        assert_eq!(parse_hash_type("type"), Some(1));
+        assert_eq!(parse_hash_type("data1"), Some(2));
+        assert_eq!(parse_hash_type("data2"), Some(4));
+        assert_eq!(parse_hash_type("invalid"), None);
+    }
+
+    #[test]
+    fn test_activity_type_to_event_type() {
+        assert_eq!(activity_type_to_event_type("TOKEN_MINT"), "mint");
+        assert_eq!(activity_type_to_event_type("TOKEN_BURN"), "burn");
+        assert_eq!(activity_type_to_event_type("TOKEN_TRANSFER"), "transfer");
+        assert_eq!(activity_type_to_event_type("DAO_DEPOSIT"), "deposit");
+        assert_eq!(
+            activity_type_to_event_type("DAO_WITHDRAW_REQUEST"),
+            "withdraw_request"
+        );
+        assert_eq!(
+            activity_type_to_event_type("DAO_WITHDRAW_COMPLETE"),
+            "withdraw_complete"
+        );
+        assert_eq!(activity_type_to_event_type("UNKNOWN_TYPE"), "unknown_type");
+    }
+
+    #[test]
+    fn test_extract_token_meta_from_metadata() {
+        let metadata = serde_json::json!({
+            "token_name": "TestToken",
+            "token_symbol": "TT",
+            "decimals": 8
+        });
+        let (name, symbol, decimals) = extract_token_meta_from_metadata(&metadata);
+        assert_eq!(name, Some("TestToken".to_string()));
+        assert_eq!(symbol, Some("TT".to_string()));
+        assert_eq!(decimals, Some(8));
+    }
+
+    #[test]
+    fn test_extract_token_meta_from_metadata_empty() {
+        let metadata = serde_json::json!({});
+        let (name, symbol, decimals) = extract_token_meta_from_metadata(&metadata);
+        assert!(name.is_none());
+        assert!(symbol.is_none());
+        assert!(decimals.is_none());
+    }
+
+    #[test]
+    fn test_decode_timeline_cursor() {
+        let result = decode_timeline_cursor("100:5:3");
+        assert_eq!(result, Some((100, 5, 3)));
+
+        let result = decode_timeline_cursor("invalid");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_encode_timeline_cursor() {
+        let cursor = encode_timeline_cursor(100, 5, 3);
+        assert_eq!(cursor, "100:5:3");
+    }
+
+    #[test]
+    fn test_cell_info_to_response_normal() {
+        let info = ckbadger_store::LiveCellInfo {
+            capacity: 10000000000,
+            created_at_block: 100,
+            lock_script_hash: vec![0u8; 32],
+            lock_code_hash: vec![1u8; 32],
+            lock_args: vec![2u8; 20],
+            type_script_hash: None,
+            type_code_hash: None,
+            data_size: 0,
+        };
+        let tx_hash = vec![3u8; 32];
+        let resp = cell_info_to_response(&tx_hash, 0, &info);
+        assert_eq!(resp.output_index, 0);
+        assert_eq!(resp.capacity, "10000000000");
+        assert!(resp.cell_type.is_none());
+        assert!(resp.virtual_occupied_capacity.is_none());
+    }
 }

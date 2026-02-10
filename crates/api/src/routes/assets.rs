@@ -1,6 +1,5 @@
 use axum::{
     extract::{Query, State},
-    http::StatusCode,
     routing::get,
     Json, Router,
 };
@@ -20,6 +19,7 @@ pub struct ListParams {
     limit: i64,
     #[serde(rename = "type")]
     asset_type: Option<String>,
+    #[allow(dead_code)]
     cursor: Option<String>,
     search: Option<String>,
 }
@@ -55,56 +55,12 @@ async fn list_assets(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<AssetResponse>> {
-    let sync_status = state.cache.get_sync_status(&state.read_pool).await;
-
-    if sync_status.token_deferred {
-        return ok(CursorPaginatedResponse::new(
-            Vec::new(),
-            0,
-            params.limit.clamp(1, 100),
-            None,
-        ));
-    }
-
     let limit = params.limit.clamp(1, 100);
 
-    let (cursor_24h, cursor_holders, cursor_id, cursor_type) = params
-        .cursor
-        .as_ref()
-        .and_then(|c| {
-            let parts: Vec<&str> = c.split(':').collect();
-            if parts.len() == 4 {
-                Some((
-                    parts[0].parse::<i64>().ok()?,
-                    parts[1].parse::<i64>().ok()?,
-                    parts[2].parse::<i64>().ok()?,
-                    parts[3].to_string(),
-                ))
-            } else {
-                None
-            }
-        })
-        .unwrap_or((i64::MAX, i64::MAX, i64::MAX, "z".to_string()));
-
-    let search_pattern = params
-        .search
-        .as_ref()
-        .map(|s| format!("%{}%", s.to_lowercase()));
-
+    let search_lower = params.search.as_ref().map(|s| s.to_lowercase());
     let filter_type = params.asset_type.as_deref();
 
-    let (total, rows) = fetch_assets(
-        &state,
-        filter_type,
-        search_pattern.as_deref(),
-        cursor_24h,
-        cursor_holders,
-        cursor_id,
-        &cursor_type,
-        limit,
-        sync_status.spore_deferred,
-    )
-    .await?;
+    let (total, rows) = fetch_assets(&state, filter_type, search_lower.as_deref(), limit)?;
 
     let has_more = rows.len() as i64 > limit;
     let rows: Vec<_> = rows.into_iter().take(limit as usize).collect();
@@ -174,394 +130,184 @@ struct AssetRow {
     cluster_name: Option<String>,
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn fetch_assets(
+fn fetch_assets(
     state: &Arc<AppState>,
     filter_type: Option<&str>,
-    search_pattern: Option<&str>,
-    cursor_24h: i64,
-    cursor_holders: i64,
-    cursor_id: i64,
-    _cursor_type: &str,
+    search: Option<&str>,
     limit: i64,
-    spore_deferred: bool,
-) -> Result<(i64, Vec<AssetRow>), (StatusCode, Json<ApiError>)> {
-    let token_count: (i64,) = match (filter_type, search_pattern) {
-        (Some("nft") | Some("dob"), _) => (0,),
-        (_, Some(pattern)) => sqlx::query_as(
-            "SELECT COUNT(*) FROM tokens WHERE LOWER(name) LIKE $1 OR LOWER(symbol) LIKE $1",
-        )
-        .bind(pattern)
-        .fetch_one(&state.read_pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?,
-        _ => sqlx::query_as("SELECT COUNT(*) FROM tokens")
-            .fetch_one(&state.read_pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?,
-    };
-
-    let dob_count: (i64,) = if spore_deferred {
-        (0,)
-    } else {
-        match (filter_type, search_pattern) {
-            (Some("token") | Some("nft"), _) => (0,),
-            (_, Some(pattern)) => {
-                sqlx::query_as(r#"SELECT COUNT(*) FROM spore_clusters WHERE LOWER(name) LIKE $1"#)
-                    .bind(pattern)
-                    .fetch_one(&state.read_pool)
-                    .await
-                    .map_err(|e| ApiError::internal(e.to_string()))?
-            }
-            _ => sqlx::query_as("SELECT COUNT(*) FROM spore_clusters")
-                .fetch_one(&state.read_pool)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?,
-        }
-    };
-
-    let nft_count: (i64,) = match (filter_type, search_pattern) {
-        (Some("token") | Some("dob"), _) => (0,),
-        (_, Some(pattern)) => {
-            sqlx::query_as(r#"SELECT COUNT(*) FROM mnft_classes WHERE LOWER(name) LIKE $1"#)
-                .bind(pattern)
-                .fetch_one(&state.read_pool)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?
-        }
-        _ => sqlx::query_as("SELECT COUNT(*) FROM mnft_classes")
-            .fetch_one(&state.read_pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?,
-    };
-
-    let total = token_count.0 + dob_count.0 + nft_count.0;
-
-    type TokenRow = (
-        i64,
-        Vec<u8>,
-        String,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        bool,
-        bool,
-        Option<Vec<String>>,
-        i32,
-        i64,
-        i64,
-        i16,
-        String,
-    );
-
-    let tokens: Vec<TokenRow> = if matches!(filter_type, Some("nft") | Some("dob")) {
-        vec![]
-    } else if let Some(pattern) = search_pattern {
-        let query_str = r#"
-            SELECT id, type_script_hash, standard, name, symbol, icon_url,
-                   COALESCE(published, false) AS published, COALESCE(famous, false) AS famous,
-                   tags, holders_count, transfers_count, transfers_24h,
-                   decimals, total_supply::text
-            FROM tokens
-            WHERE (transfers_24h, holders_count, id) < ($1, $2, $3)
-              AND (LOWER(name) LIKE $4 OR LOWER(symbol) LIKE $4)
-            ORDER BY transfers_24h DESC, holders_count DESC, id DESC
-            LIMIT $5
-        "#;
-        sqlx::query_as::<_, TokenRow>(query_str)
-            .bind(cursor_24h)
-            .bind(cursor_holders)
-            .bind(cursor_id)
-            .bind(pattern)
-            .bind(limit + 1)
-            .fetch_all(&state.read_pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?
-    } else {
-        let query_str = r#"
-            SELECT id, type_script_hash, standard, name, symbol, icon_url,
-                   COALESCE(published, false) AS published, COALESCE(famous, false) AS famous,
-                   tags, holders_count, transfers_count, transfers_24h,
-                   decimals, total_supply::text
-            FROM tokens
-            WHERE (transfers_24h, holders_count, id) < ($1, $2, $3)
-            ORDER BY transfers_24h DESC, holders_count DESC, id DESC
-            LIMIT $4
-        "#;
-        sqlx::query_as::<_, TokenRow>(query_str)
-            .bind(cursor_24h)
-            .bind(cursor_holders)
-            .bind(cursor_id)
-            .bind(limit + 1)
-            .fetch_all(&state.read_pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?
-    };
-
-    // ClusterRow: (id, cluster_id, name, description, spores_count, holders_count, transfers_count, transfers_24h)
-    type ClusterRow = (
-        i64,
-        Vec<u8>,
-        Option<String>,
-        Option<String>,
-        i32,
-        i64,
-        i64,
-        i64,
-    );
-
-    let clusters: Vec<ClusterRow> = if spore_deferred
-        || matches!(filter_type, Some("token") | Some("nft"))
-    {
-        vec![]
-    } else if let Some(pattern) = search_pattern {
-        let query_str = r#"
-            SELECT 
-                sc.id, 
-                sc.cluster_id, 
-                sc.name, 
-                sc.description, 
-                sc.spores_count,
-                COALESCE(h.holders_count, 0) AS holders_count,
-                COALESCE(t.transfers_count, 0) AS transfers_count,
-                COALESCE(t.transfers_24h, 0) AS transfers_24h
-            FROM spore_clusters sc
-            LEFT JOIN (
-                SELECT cluster_id, COUNT(DISTINCT owner_lock_hash) AS holders_count
-                FROM spore_cells
-                WHERE cluster_id IS NOT NULL AND is_live = TRUE
-                GROUP BY cluster_id
-            ) h ON h.cluster_id = sc.cluster_id
-            LEFT JOIN (
-                SELECT 
-                    DECODE(SUBSTRING(metadata->>'clusterId' FROM 3), 'hex') AS cluster_id,
-                    COUNT(*) AS transfers_count,
-                    COUNT(*) FILTER (WHERE timestamp > NOW() - INTERVAL '24 hours') AS transfers_24h
-                FROM activities
-                WHERE activity_category = 'dob' AND metadata->>'clusterId' IS NOT NULL
-                GROUP BY metadata->>'clusterId'
-            ) t ON t.cluster_id = sc.cluster_id
-            WHERE sc.id < $1 AND LOWER(sc.name) LIKE $2
-            ORDER BY COALESCE(t.transfers_24h, 0) DESC, COALESCE(h.holders_count, 0) DESC, sc.id DESC
-            LIMIT $3
-        "#;
-        sqlx::query_as::<_, ClusterRow>(query_str)
-            .bind(cursor_id)
-            .bind(pattern)
-            .bind(limit + 1)
-            .fetch_all(&state.read_pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?
-    } else {
-        let query_str = r#"
-            SELECT 
-                sc.id, 
-                sc.cluster_id, 
-                sc.name, 
-                sc.description, 
-                sc.spores_count,
-                COALESCE(h.holders_count, 0) AS holders_count,
-                COALESCE(t.transfers_count, 0) AS transfers_count,
-                COALESCE(t.transfers_24h, 0) AS transfers_24h
-            FROM spore_clusters sc
-            LEFT JOIN (
-                SELECT cluster_id, COUNT(DISTINCT owner_lock_hash) AS holders_count
-                FROM spore_cells
-                WHERE cluster_id IS NOT NULL AND is_live = TRUE
-                GROUP BY cluster_id
-            ) h ON h.cluster_id = sc.cluster_id
-            LEFT JOIN (
-                SELECT 
-                    DECODE(SUBSTRING(metadata->>'clusterId' FROM 3), 'hex') AS cluster_id,
-                    COUNT(*) AS transfers_count,
-                    COUNT(*) FILTER (WHERE timestamp > NOW() - INTERVAL '24 hours') AS transfers_24h
-                FROM activities
-                WHERE activity_category = 'dob' AND metadata->>'clusterId' IS NOT NULL
-                GROUP BY metadata->>'clusterId'
-            ) t ON t.cluster_id = sc.cluster_id
-            WHERE sc.id < $1
-            ORDER BY COALESCE(t.transfers_24h, 0) DESC, COALESCE(h.holders_count, 0) DESC, sc.id DESC
-            LIMIT $2
-        "#;
-        sqlx::query_as::<_, ClusterRow>(query_str)
-            .bind(cursor_id)
-            .bind(limit + 1)
-            .fetch_all(&state.read_pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?
-    };
-
-    // MnftClassRow: (id, class_id, issuer_id, name, description, total, issued, holders_count, transfers_count, transfers_24h)
-    type MnftClassRow = (
-        i64,
-        Vec<u8>,
-        Vec<u8>,
-        Option<String>,
-        Option<String>,
-        i32,
-        i32,
-        i64,
-        i64,
-        i64,
-    );
-
-    let mnft_classes: Vec<MnftClassRow> = if matches!(filter_type, Some("token") | Some("dob")) {
-        vec![]
-    } else if let Some(pattern) = search_pattern {
-        let query_str = r#"
-            SELECT 
-                id, class_id, issuer_id, name, description, total, issued,
-                holders_count::bigint, transfers_count, transfers_24h::bigint
-            FROM mnft_classes
-            WHERE id < $1 AND LOWER(name) LIKE $2 AND is_live = TRUE
-            ORDER BY transfers_24h DESC, holders_count DESC, id DESC
-            LIMIT $3
-        "#;
-        sqlx::query_as::<_, MnftClassRow>(query_str)
-            .bind(cursor_id)
-            .bind(pattern)
-            .bind(limit + 1)
-            .fetch_all(&state.read_pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?
-    } else {
-        let query_str = r#"
-            SELECT 
-                id, class_id, issuer_id, name, description, total, issued,
-                holders_count::bigint, transfers_count, transfers_24h::bigint
-            FROM mnft_classes
-            WHERE id < $1 AND is_live = TRUE
-            ORDER BY transfers_24h DESC, holders_count DESC, id DESC
-            LIMIT $2
-        "#;
-        sqlx::query_as::<_, MnftClassRow>(query_str)
-            .bind(cursor_id)
-            .bind(limit + 1)
-            .fetch_all(&state.read_pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?
-    };
-
+) -> Result<(i64, Vec<AssetRow>), (axum::http::StatusCode, Json<ApiError>)> {
     let mut assets: Vec<AssetRow> = Vec::new();
 
-    for (
-        _id,
-        hash,
-        standard,
-        name,
-        symbol,
-        icon_url,
-        published,
-        famous,
-        tags,
-        holders,
-        transfers,
-        transfers_24h,
-        decimals,
-        supply,
-    ) in tokens
-    {
-        assets.push(AssetRow {
-            id: format!("0x{}", hex::encode(&hash)),
-            asset_type: "token".to_string(),
-            standard,
-            name,
-            symbol,
-            icon_url,
-            published,
-            famous,
-            tags,
-            holders_count: holders as i64,
-            transfers_count: transfers,
-            transfers_24h,
-            decimals: Some(decimals),
-            total_supply: Some(supply),
-            content_type: None,
-            content_size: None,
-            cluster_id: None,
-            cluster_name: None,
-        });
+    // -- Tokens --
+    if !matches!(filter_type, Some("nft") | Some("dob")) {
+        let tokens = state
+            .store
+            .list_tokens()
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+
+        for (hash, info) in &tokens {
+            let name_lower = info.name.as_deref().unwrap_or("").to_lowercase();
+            let symbol_lower = info.symbol.as_deref().unwrap_or("").to_lowercase();
+
+            if let Some(s) = search {
+                if !name_lower.contains(s) && !symbol_lower.contains(s) {
+                    continue;
+                }
+            }
+
+            assets.push(AssetRow {
+                id: format!("0x{}", hex::encode(hash)),
+                asset_type: "token".to_string(),
+                standard: info.standard.clone(),
+                name: info.name.clone(),
+                symbol: info.symbol.clone(),
+                icon_url: info.icon_url.clone(),
+                published: false,
+                famous: false,
+                tags: None,
+                holders_count: info.holders_count,
+                transfers_count: 0,
+                transfers_24h: 0,
+                decimals: info.decimals.map(|d| d as i16),
+                total_supply: info.total_supply.map(|s| s.to_string()),
+                content_type: None,
+                content_size: None,
+                cluster_id: None,
+                cluster_name: None,
+            });
+        }
     }
 
-    for (
-        _id,
-        cluster_id,
-        name,
-        _description,
-        spores_count,
-        holders_count,
-        transfers_count,
-        transfers_24h,
-    ) in clusters
-    {
-        assets.push(AssetRow {
-            id: format!("0x{}", hex::encode(&cluster_id)),
-            asset_type: "dob".to_string(),
-            standard: "spore".to_string(),
-            name: name.clone(),
-            symbol: None,
-            icon_url: None,
-            published: false,
-            famous: false,
-            tags: None,
-            holders_count,
-            transfers_count,
-            transfers_24h,
-            decimals: None,
-            total_supply: Some(spores_count.to_string()),
-            content_type: None,
-            content_size: None,
-            cluster_id: Some(format!("0x{}", hex::encode(&cluster_id))),
-            cluster_name: name,
-        });
-    }
+    // -- Spores (DOB) --
+    if !matches!(filter_type, Some("token") | Some("nft")) {
+        let spores = state
+            .store
+            .list_spores(10_000)
+            .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    for (
-        _id,
-        class_id,
-        _issuer_id,
-        name,
-        _description,
-        total,
-        issued,
-        holders_count,
-        transfers_count,
-        transfers_24h,
-    ) in mnft_classes
-    {
-        assets.push(AssetRow {
-            id: format!("0x{}", hex::encode(&class_id)),
-            asset_type: "nft".to_string(),
-            standard: "m-nft".to_string(),
-            name: name.clone(),
-            symbol: None,
-            icon_url: None,
-            published: false,
-            famous: false,
-            tags: None,
-            holders_count: if holders_count > 0 {
-                holders_count
-            } else {
-                issued as i64
-            },
-            transfers_count: if transfers_count > 0 {
-                transfers_count
-            } else {
-                issued as i64
-            },
-            transfers_24h,
-            decimals: None,
-            total_supply: if total > 0 {
-                Some(total.to_string())
-            } else {
+        // Group spores by cluster_id to produce DOB asset rows
+        let mut cluster_map: std::collections::HashMap<String, (String, i64)> =
+            std::collections::HashMap::new();
+
+        for (id, entry) in &spores {
+            let cluster_hex = entry
+                .cluster_id
+                .as_ref()
+                .map(|c| format!("0x{}", hex::encode(c)))
+                .unwrap_or_else(|| format!("0x{}", hex::encode(id)));
+
+            let counter = cluster_map
+                .entry(cluster_hex)
+                .or_insert_with(|| (String::new(), 0));
+
+            counter.1 += 1;
+
+            // Use content_type as a name stand-in if we don't have one
+            if counter.0.is_empty() {
+                if let Some(ct) = &entry.content_type {
+                    counter.0 = ct.clone();
+                }
+            }
+        }
+
+        for (cluster_hex, (content_type, count)) in &cluster_map {
+            let name = if content_type.is_empty() {
                 None
-            },
-            content_type: None,
-            content_size: None,
-            cluster_id: Some(format!("0x{}", hex::encode(&class_id))),
-            cluster_name: name,
-        });
+            } else {
+                Some(content_type.clone())
+            };
+
+            if let Some(s) = search {
+                let n = name.as_deref().unwrap_or("").to_lowercase();
+                if !n.contains(s) {
+                    continue;
+                }
+            }
+
+            assets.push(AssetRow {
+                id: cluster_hex.clone(),
+                asset_type: "dob".to_string(),
+                standard: "spore".to_string(),
+                name: name.clone(),
+                symbol: None,
+                icon_url: None,
+                published: false,
+                famous: false,
+                tags: None,
+                holders_count: 0,
+                transfers_count: 0,
+                transfers_24h: 0,
+                decimals: None,
+                total_supply: Some(count.to_string()),
+                content_type: None,
+                content_size: None,
+                cluster_id: Some(cluster_hex.clone()),
+                cluster_name: name,
+            });
+        }
     }
+
+    // -- NFTs --
+    if !matches!(filter_type, Some("token") | Some("dob")) {
+        let nfts = state
+            .store
+            .list_nfts(10_000)
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+
+        // Group NFTs by collection_id
+        let mut collection_map: std::collections::HashMap<String, (Option<String>, i64, bool)> =
+            std::collections::HashMap::new();
+
+        for (id, entry) in &nfts {
+            let collection_hex = entry
+                .collection_id
+                .as_ref()
+                .map(|c| format!("0x{}", hex::encode(c)))
+                .unwrap_or_else(|| format!("0x{}", hex::encode(id)));
+
+            let counter = collection_map
+                .entry(collection_hex)
+                .or_insert_with(|| (entry.name.clone(), 0, entry.is_live));
+
+            counter.1 += 1;
+        }
+
+        for (collection_hex, (name, count, is_live)) in &collection_map {
+            if !is_live {
+                continue;
+            }
+
+            if let Some(s) = search {
+                let n = name.as_deref().unwrap_or("").to_lowercase();
+                if !n.contains(s) {
+                    continue;
+                }
+            }
+
+            assets.push(AssetRow {
+                id: collection_hex.clone(),
+                asset_type: "nft".to_string(),
+                standard: "m-nft".to_string(),
+                name: name.clone(),
+                symbol: None,
+                icon_url: None,
+                published: false,
+                famous: false,
+                tags: None,
+                holders_count: *count,
+                transfers_count: *count,
+                transfers_24h: 0,
+                decimals: None,
+                total_supply: Some(count.to_string()),
+                content_type: None,
+                content_size: None,
+                cluster_id: Some(collection_hex.clone()),
+                cluster_name: name.clone(),
+            });
+        }
+    }
+
+    let total = assets.len() as i64;
 
     assets.sort_by(|a, b| {
         b.transfers_24h

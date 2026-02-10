@@ -1,31 +1,26 @@
-use sqlx::PgPool;
+use ckbadger_store::CkbadgerStore;
 use std::collections::HashMap;
 
 /// Look up block_number for a single transaction hash.
-/// Returns None if tx_hash not found in tx_block_map (fallback needed).
-pub async fn get_block_number_for_tx(
-    pool: &PgPool,
+pub fn get_block_number_for_tx(
+    store: &CkbadgerStore,
     tx_hash: &[u8],
-) -> Result<Option<i64>, sqlx::Error> {
-    sqlx::query_scalar("SELECT block_number FROM tx_block_map WHERE tx_hash = $1")
-        .bind(tx_hash)
-        .fetch_optional(pool)
-        .await
+) -> anyhow::Result<Option<i64>> {
+    Ok(store
+        .get_tx_location(tx_hash)?
+        .map(|(block_num, _)| block_num))
 }
 
 /// Look up block_numbers for multiple transaction hashes.
-/// Returns a HashMap mapping tx_hash -> block_number for found entries.
-pub async fn get_block_numbers_for_txs(
-    pool: &PgPool,
+pub fn get_block_numbers_for_txs(
+    store: &CkbadgerStore,
     tx_hashes: &[Vec<u8>],
-) -> Result<HashMap<Vec<u8>, i64>, sqlx::Error> {
-    if tx_hashes.is_empty() {
-        return Ok(HashMap::new());
+) -> anyhow::Result<HashMap<Vec<u8>, i64>> {
+    let mut result = HashMap::with_capacity(tx_hashes.len());
+    for tx_hash in tx_hashes {
+        if let Some((block_num, _)) = store.get_tx_location(tx_hash)? {
+            result.insert(tx_hash.clone(), block_num);
+        }
     }
-    let rows: Vec<(Vec<u8>, i64)> =
-        sqlx::query_as("SELECT tx_hash, block_number FROM tx_block_map WHERE tx_hash = ANY($1)")
-            .bind(tx_hashes)
-            .fetch_all(pool)
-            .await?;
-    Ok(rows.into_iter().collect())
+    Ok(result)
 }

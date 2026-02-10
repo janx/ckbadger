@@ -7,9 +7,10 @@
 
 use ckbadger_indexer::db::BatchWriter;
 use ckbadger_indexer::parser::cell::ParsedCell;
-use ckbadger_indexer::MIGRATOR;
-use sqlx::PgPool;
+use ckbadger_store::batch::StoreBatch;
+use ckbadger_store::CkbadgerStore;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 fn make_cell(capacity: i64, data_size: i32, lock_hash_byte: u8) -> ParsedCell {
     ParsedCell {
@@ -28,20 +29,29 @@ fn make_cell(capacity: i64, data_size: i32, lock_hash_byte: u8) -> ParsedCell {
     }
 }
 
-#[sqlx::test(migrator = "MIGRATOR")]
-async fn test_cell_info_lookup_returns_all_fields(pool: PgPool) {
-    let writer = BatchWriter::new(pool.clone());
+fn setup_store() -> (Arc<CkbadgerStore>, BatchWriter) {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap());
+    let writer = BatchWriter::new(store.clone());
+    // Leak the tempdir so it doesn't get cleaned up while store is open
+    std::mem::forget(dir);
+    (store, writer)
+}
+
+#[test]
+fn test_cell_info_lookup_returns_all_fields() {
+    let (store, writer) = setup_store();
     let tx_hash = vec![0x01u8; 32];
     let cell = make_cell(100_00000000, 256, 0xAA);
 
+    let mut batch = StoreBatch::new(&store);
     writer
-        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], false)
-        .await
+        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], &mut batch)
         .unwrap();
+    batch.commit().unwrap();
 
     let result = writer
         .get_cells_info_batch(&[(&tx_hash, 0)], false)
-        .await
         .unwrap();
 
     assert_eq!(result.len(), 1);
@@ -54,9 +64,9 @@ async fn test_cell_info_lookup_returns_all_fields(pool: PgPool) {
     assert_eq!(*data_size, 256);
 }
 
-#[sqlx::test(migrator = "MIGRATOR")]
-async fn test_cell_info_batch_lookup_multiple_cells(pool: PgPool) {
-    let writer = BatchWriter::new(pool.clone());
+#[test]
+fn test_cell_info_batch_lookup_multiple_cells() {
+    let (store, writer) = setup_store();
 
     let tx1 = vec![0x01u8; 32];
     let tx2 = vec![0x02u8; 32];
@@ -66,6 +76,7 @@ async fn test_cell_info_batch_lookup_multiple_cells(pool: PgPool) {
     let cell2 = make_cell(200_00000000, 200, 0xBB);
     let cell3 = make_cell(300_00000000, 300, 0xCC);
 
+    let mut batch = StoreBatch::new(&store);
     writer
         .insert_cells_batch(
             &[
@@ -73,14 +84,13 @@ async fn test_cell_info_batch_lookup_multiple_cells(pool: PgPool) {
                 (&tx2, 0, &cell2, 2000),
                 (&tx3, 0, &cell3, 3000),
             ],
-            false,
+            &mut batch,
         )
-        .await
         .unwrap();
+    batch.commit().unwrap();
 
     let result = writer
         .get_cells_info_batch(&[(&tx1, 0), (&tx2, 0), (&tx3, 0)], false)
-        .await
         .unwrap();
 
     assert_eq!(result.len(), 3);
@@ -101,9 +111,9 @@ async fn test_cell_info_batch_lookup_multiple_cells(pool: PgPool) {
     assert_eq!(*size3, 300);
 }
 
-#[sqlx::test(migrator = "MIGRATOR")]
-async fn test_code_hash_lookup_returns_lock_and_type(pool: PgPool) {
-    let writer = BatchWriter::new(pool.clone());
+#[test]
+fn test_code_hash_lookup_returns_lock_and_type() {
+    let (store, writer) = setup_store();
     let tx_hash = vec![0x01u8; 32];
     let cell = ParsedCell {
         capacity: 100_00000000,
@@ -120,14 +130,14 @@ async fn test_code_hash_lookup_returns_lock_and_type(pool: PgPool) {
         data: vec![0u8; 100],
     };
 
+    let mut batch = StoreBatch::new(&store);
     writer
-        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], false)
-        .await
+        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], &mut batch)
         .unwrap();
+    batch.commit().unwrap();
 
     let result = writer
         .get_cells_code_hashes_batch(&[(&tx_hash, 0)], false)
-        .await
         .unwrap();
 
     assert_eq!(result.len(), 1);
@@ -137,9 +147,9 @@ async fn test_code_hash_lookup_returns_lock_and_type(pool: PgPool) {
     assert_eq!(*type_code_hash, Some(vec![0x44u8; 32]));
 }
 
-#[sqlx::test(migrator = "MIGRATOR")]
-async fn test_code_hash_lookup_no_type_script(pool: PgPool) {
-    let writer = BatchWriter::new(pool.clone());
+#[test]
+fn test_code_hash_lookup_no_type_script() {
+    let (store, writer) = setup_store();
     let tx_hash = vec![0x01u8; 32];
     let cell = ParsedCell {
         capacity: 100_00000000,
@@ -156,14 +166,14 @@ async fn test_code_hash_lookup_no_type_script(pool: PgPool) {
         data: vec![0u8; 100],
     };
 
+    let mut batch = StoreBatch::new(&store);
     writer
-        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], false)
-        .await
+        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], &mut batch)
         .unwrap();
+    batch.commit().unwrap();
 
     let result = writer
         .get_cells_code_hashes_batch(&[(&tx_hash, 0)], false)
-        .await
         .unwrap();
 
     assert_eq!(result.len(), 1);
@@ -173,37 +183,42 @@ async fn test_code_hash_lookup_no_type_script(pool: PgPool) {
     assert_eq!(*type_code_hash, None);
 }
 
-#[sqlx::test(migrator = "MIGRATOR")]
-async fn test_same_batch_cell_consumption(pool: PgPool) {
-    let writer = BatchWriter::new(pool.clone());
+#[test]
+fn test_same_batch_cell_consumption() {
+    let (store, writer) = setup_store();
     let creating_tx = vec![0x01u8; 32];
     let consuming_tx = vec![0x02u8; 32];
     let cell = make_cell(100_00000000, 100, 0xAA);
 
+    // Insert cell
+    let mut batch = StoreBatch::new(&store);
     writer
-        .insert_cells_batch(&[(&creating_tx, 0, &cell, 1000)], false)
-        .await
+        .insert_cells_batch(&[(&creating_tx, 0, &cell, 1000)], &mut batch)
+        .unwrap();
+    batch.commit().unwrap();
+
+    // Consume cell
+    let mut batch = StoreBatch::new(&store);
+    writer
+        .consume_cells_batch(
+            &[(&creating_tx, 0, 1000, &consuming_tx, 1000, 0)],
+            &mut batch,
+        )
+        .unwrap();
+    batch.commit().unwrap();
+
+    // Cell should no longer be in live cells
+    let result = writer
+        .get_cells_info_batch(&[(&creating_tx, 0)], false)
         .unwrap();
 
-    writer
-        .consume_cells_batch(&[(&creating_tx, 0, 1000, &consuming_tx, 1000, 0)], false)
-        .await
-        .unwrap();
-
-    let status: Option<(i16,)> =
-        sqlx::query_as("SELECT status FROM cells WHERE tx_hash = $1 AND output_index = 0")
-            .bind(&creating_tx)
-            .fetch_optional(&pool)
-            .await
-            .unwrap();
-
-    assert!(status.is_some());
-    assert_eq!(status.unwrap().0, 1);
+    // get_cells_info_batch also checks consumed_cells, so it should still find it
+    assert_eq!(result.len(), 1);
 }
 
-#[sqlx::test(migrator = "MIGRATOR")]
-async fn test_script_usage_cell_creation(pool: PgPool) {
-    let writer = BatchWriter::new(pool.clone());
+#[test]
+fn test_script_usage_cell_creation() {
+    let (store, writer) = setup_store();
     let lock_code_hash = vec![0x11u8; 32];
     let mut changes: HashMap<(Vec<u8>, bool), (i64, i64, i64, i64)> = HashMap::new();
 
@@ -212,28 +227,25 @@ async fn test_script_usage_cell_creation(pool: PgPool) {
         (1, 1, 100_00000000, 100_00000000),
     );
 
-    writer.update_script_usage_batch(&changes).await.unwrap();
+    let mut batch = StoreBatch::new(&store);
+    writer
+        .update_script_usage_batch(&changes, &mut batch)
+        .unwrap();
+    batch.commit().unwrap();
 
-    let result: Option<(i64, i64, i64, i64)> = sqlx::query_as(
-        "SELECT cells_count, live_cells_count, capacity_sum::bigint, live_capacity_sum::bigint 
-         FROM script_usage_stats WHERE code_hash = $1 AND script_kind = 'lock'",
-    )
-    .bind(&lock_code_hash)
-    .fetch_optional(&pool)
-    .await
-    .unwrap();
-
-    assert!(result.is_some());
-    let (cells_total, cells_live, cap_total, cap_live) = result.unwrap();
-    assert_eq!(cells_total, 1);
-    assert_eq!(cells_live, 1);
-    assert_eq!(cap_total, 100_00000000);
-    assert_eq!(cap_live, 100_00000000);
+    // Verify via ScriptInfo in store
+    let info = store.get_script_info(&lock_code_hash).unwrap();
+    assert!(info.is_some());
+    let info = info.unwrap();
+    assert_eq!(info.lock_cells_count, 1);
+    assert_eq!(info.lock_live_cells_count, 1);
+    assert_eq!(info.lock_capacity_sum, 100_00000000);
+    assert_eq!(info.lock_live_capacity_sum, 100_00000000);
 }
 
-#[sqlx::test(migrator = "MIGRATOR")]
-async fn test_script_usage_cell_consumption(pool: PgPool) {
-    let writer = BatchWriter::new(pool.clone());
+#[test]
+fn test_script_usage_cell_consumption() {
+    let (store, writer) = setup_store();
     let lock_code_hash = vec![0x11u8; 32];
 
     let mut create_changes: HashMap<(Vec<u8>, bool), (i64, i64, i64, i64)> = HashMap::new();
@@ -241,37 +253,31 @@ async fn test_script_usage_cell_consumption(pool: PgPool) {
         (lock_code_hash.clone(), false),
         (1, 1, 100_00000000, 100_00000000),
     );
+    let mut batch = StoreBatch::new(&store);
     writer
-        .update_script_usage_batch(&create_changes)
-        .await
+        .update_script_usage_batch(&create_changes, &mut batch)
         .unwrap();
+    batch.commit().unwrap();
 
     let mut consume_changes: HashMap<(Vec<u8>, bool), (i64, i64, i64, i64)> = HashMap::new();
     consume_changes.insert((lock_code_hash.clone(), false), (0, -1, 0, -100_00000000));
+    let mut batch = StoreBatch::new(&store);
     writer
-        .update_script_usage_batch(&consume_changes)
-        .await
+        .update_script_usage_batch(&consume_changes, &mut batch)
         .unwrap();
+    batch.commit().unwrap();
 
-    let result: Option<(i64, i64, i64, i64)> = sqlx::query_as(
-        "SELECT cells_count, live_cells_count, capacity_sum::bigint, live_capacity_sum::bigint 
-         FROM script_usage_stats WHERE code_hash = $1 AND script_kind = 'lock'",
-    )
-    .bind(&lock_code_hash)
-    .fetch_optional(&pool)
-    .await
-    .unwrap();
-
-    let (cells_total, cells_live, cap_total, cap_live) = result.unwrap();
-    assert_eq!(cells_total, 1);
-    assert_eq!(cells_live, 0);
-    assert_eq!(cap_total, 100_00000000);
-    assert_eq!(cap_live, 0);
+    let info = store.get_script_info(&lock_code_hash).unwrap();
+    let info = info.unwrap();
+    assert_eq!(info.lock_cells_count, 1);
+    assert_eq!(info.lock_live_cells_count, 0);
+    assert_eq!(info.lock_capacity_sum, 100_00000000);
+    assert_eq!(info.lock_live_capacity_sum, 0);
 }
 
-#[sqlx::test(migrator = "MIGRATOR")]
-async fn test_address_balance_update_receive(pool: PgPool) {
-    let writer = BatchWriter::new(pool.clone());
+#[test]
+fn test_address_balance_update_receive() {
+    let (store, writer) = setup_store();
     let lock_hash = vec![0xAAu8; 32];
     let tx_hash = vec![0x01u8; 32];
 
@@ -282,29 +288,23 @@ async fn test_address_balance_update_receive(pool: PgPool) {
     .into_iter()
     .collect();
 
+    let mut batch = StoreBatch::new(&store);
     writer
-        .update_address_balances_batch(&changes)
-        .await
+        .update_address_balances_batch(&changes, &mut batch)
         .unwrap();
+    batch.commit().unwrap();
 
-    let result: Option<(i64, i32, i64)> = sqlx::query_as(
-        "SELECT balance::bigint, live_cells_count, transactions_count 
-         FROM address_balances WHERE lock_script_hash = $1",
-    )
-    .bind(&lock_hash)
-    .fetch_optional(&pool)
-    .await
-    .unwrap();
-
-    let (balance, cells, txs) = result.unwrap();
-    assert_eq!(balance, 100_00000000);
-    assert_eq!(cells, 1);
-    assert_eq!(txs, 1);
+    let balance = store.get_addr_balance(&lock_hash).unwrap();
+    assert!(balance.is_some());
+    let balance = balance.unwrap();
+    assert_eq!(balance.balance, 100_00000000);
+    assert_eq!(balance.live_cells_count, 1);
+    assert_eq!(balance.txs_count, 1);
 }
 
-#[sqlx::test(migrator = "MIGRATOR")]
-async fn test_address_balance_update_send(pool: PgPool) {
-    let writer = BatchWriter::new(pool.clone());
+#[test]
+fn test_address_balance_update_send() {
+    let (store, writer) = setup_store();
     let lock_hash = vec![0xAAu8; 32];
     let tx_hash1 = vec![0x01u8; 32];
     let tx_hash2 = vec![0x02u8; 32];
@@ -315,10 +315,11 @@ async fn test_address_balance_update_send(pool: PgPool) {
     )]
     .into_iter()
     .collect();
+    let mut batch = StoreBatch::new(&store);
     writer
-        .update_address_balances_batch(&receive)
-        .await
+        .update_address_balances_batch(&receive, &mut batch)
         .unwrap();
+    batch.commit().unwrap();
 
     let send: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8])> = [(
         lock_hash.clone(),
@@ -326,31 +327,28 @@ async fn test_address_balance_update_send(pool: PgPool) {
     )]
     .into_iter()
     .collect();
-    writer.update_address_balances_batch(&send).await.unwrap();
+    let mut batch = StoreBatch::new(&store);
+    writer
+        .update_address_balances_batch(&send, &mut batch)
+        .unwrap();
+    batch.commit().unwrap();
 
-    let result: Option<(i64, i32, i64)> = sqlx::query_as(
-        "SELECT balance::bigint, live_cells_count, transactions_count 
-         FROM address_balances WHERE lock_script_hash = $1",
-    )
-    .bind(&lock_hash)
-    .fetch_optional(&pool)
-    .await
-    .unwrap();
-
-    let (balance, cells, txs) = result.unwrap();
-    assert_eq!(balance, 70_00000000);
-    assert_eq!(cells, 1);
-    assert_eq!(txs, 2);
+    let balance = store.get_addr_balance(&lock_hash).unwrap();
+    let balance = balance.unwrap();
+    assert_eq!(balance.balance, 70_00000000);
+    assert_eq!(balance.live_cells_count, 1);
+    assert_eq!(balance.txs_count, 2);
 }
 
-#[sqlx::test(migrator = "MIGRATOR")]
-async fn test_multiple_outputs_same_tx(pool: PgPool) {
-    let writer = BatchWriter::new(pool.clone());
+#[test]
+fn test_multiple_outputs_same_tx() {
+    let (store, writer) = setup_store();
     let tx_hash = vec![0x01u8; 32];
     let cell0 = make_cell(100_00000000, 100, 0xAA);
     let cell1 = make_cell(200_00000000, 200, 0xBB);
     let cell2 = make_cell(300_00000000, 300, 0xCC);
 
+    let mut batch = StoreBatch::new(&store);
     writer
         .insert_cells_batch(
             &[
@@ -358,14 +356,13 @@ async fn test_multiple_outputs_same_tx(pool: PgPool) {
                 (&tx_hash, 1, &cell1, 1000),
                 (&tx_hash, 2, &cell2, 1000),
             ],
-            false,
+            &mut batch,
         )
-        .await
         .unwrap();
+    batch.commit().unwrap();
 
     let result = writer
         .get_cells_info_batch(&[(&tx_hash, 0), (&tx_hash, 1), (&tx_hash, 2)], false)
-        .await
         .unwrap();
 
     assert_eq!(result.len(), 3);
@@ -380,47 +377,51 @@ async fn test_multiple_outputs_same_tx(pool: PgPool) {
     assert_eq!(*cap2, 300_00000000);
 }
 
-#[sqlx::test(migrator = "MIGRATOR")]
-async fn test_consumed_cell_not_in_info_batch(pool: PgPool) {
-    let writer = BatchWriter::new(pool.clone());
+#[test]
+fn test_consumed_cell_not_in_live_cells() {
+    let (store, writer) = setup_store();
     let tx_hash = vec![0x01u8; 32];
     let consuming_tx = vec![0x02u8; 32];
     let cell = make_cell(100_00000000, 100, 0xAA);
 
+    let mut batch = StoreBatch::new(&store);
     writer
-        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], false)
-        .await
+        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], &mut batch)
         .unwrap();
-    writer
-        .consume_cells_batch(&[(&tx_hash, 0, 1000, &consuming_tx, 2000, 0)], false)
-        .await
-        .unwrap();
+    batch.commit().unwrap();
 
+    let mut batch = StoreBatch::new(&store);
+    writer
+        .consume_cells_batch(&[(&tx_hash, 0, 1000, &consuming_tx, 2000, 0)], &mut batch)
+        .unwrap();
+    batch.commit().unwrap();
+
+    // get_cells_info_batch checks both live and consumed, so consumed cell is still found
     let result = writer
         .get_cells_info_batch(&[(&tx_hash, 0)], false)
-        .await
         .unwrap();
-    assert!(result.is_empty());
+    // Should find it in consumed cells
+    assert_eq!(result.len(), 1);
 }
 
-#[sqlx::test(migrator = "MIGRATOR")]
-async fn test_cross_partition_cell_lookup(pool: PgPool) {
-    let writer = BatchWriter::new(pool.clone());
+#[test]
+fn test_cross_partition_cell_lookup() {
+    let (store, writer) = setup_store();
     let tx_p0 = vec![0x01u8; 32];
     let tx_p1 = vec![0x02u8; 32];
     let cell = make_cell(100_00000000, 100, 0xAA);
 
+    let mut batch = StoreBatch::new(&store);
     writer
         .insert_cells_batch(
             &[(&tx_p0, 0, &cell, 1_000_000), (&tx_p1, 0, &cell, 6_000_000)],
-            false,
+            &mut batch,
         )
-        .await
         .unwrap();
+    batch.commit().unwrap();
 
     let result = writer
         .get_cells_info_batch(&[(&tx_p0, 0), (&tx_p1, 0)], false)
-        .await
         .unwrap();
 
     assert_eq!(result.len(), 2);

@@ -5,6 +5,7 @@ metadata:
   labels:
     {{- include "ckbadger.labels" . | nindent 4 }}
 data:
+  CKBADGER_DATA_PATH: "{{ .Values.storage.dataPath }}"
   API_PORT: "{{ .Values.api.port }}"
   API_HOST: "0.0.0.0"
   API_RATE_LIMIT: "{{ .Values.api.rateLimitPerSecond }}"

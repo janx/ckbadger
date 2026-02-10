@@ -10,20 +10,17 @@ use chrono::{DateTime, NaiveDate, Timelike, Utc};
 use dashmap::DashMap;
 use futures::stream::{FuturesOrdered, StreamExt};
 use rayon::prelude::*;
-use sqlx::PgPool;
 use tokio::time::sleep;
-use tokio_postgres::NoTls;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
+use ckbadger_store::batch::StoreBatch;
+use ckbadger_store::CkbadgerStore;
+
 use crate::cache::CacheInvalidator;
 use crate::config::{Config, DEEP_FORK_DEPTH};
-use crate::db::{
-    BatchWriter, CopyConfig, CopyPoolManager, LiveCellInfo, LiveCellStorage, ParallelCopyRouter,
-    ReorgResult, Repository, SecondaryIssuanceBreakdown,
-};
+use crate::db::{BatchWriter, ReorgResult, Repository, SecondaryIssuanceBreakdown};
 use crate::parser::{
-    activity::{ActivityParser, ParsedActivity},
     BlockParser, CellParser, DaoParser, DotbitParser, MnftParser, SporeParser, TransactionParser,
     UdtParser,
 };
@@ -45,7 +42,6 @@ fn get_partition_index(block_number: u64) -> usize {
 fn format_partition_range(start_block: u64, end_block: u64) -> String {
     let start_partition = get_partition_index(start_block);
     let end_partition = get_partition_index(end_block);
-
     if start_partition == end_partition {
         format!("[p{}]", start_partition)
     } else {
@@ -74,29 +70,17 @@ enum ReorgAction {
 /// Accumulated statistics across a batch of blocks (avoids per-block DB writes)
 #[derive(Default)]
 struct BatchStats {
-    /// (total_tx, cells_created, cells_consumed) for sync_status
     sync_totals: (i64, i64, i64),
-    /// Last block info for sync_status update
     last_block: Option<(i64, Vec<u8>)>,
-    /// Per-hour hourly statistics: (blocks, txs, cells_created, cells_consumed, capacity)
     hourly_stats: HashMap<DateTime<Utc>, (i32, i32, i32, i32, i64)>,
-    /// Per-date daily statistics: (blocks, txs, cells_created, cells_consumed, capacity, data_size_added, data_size_consumed)
     daily_stats: HashMap<NaiveDate, (i32, i32, i32, i32, i64, i64, i64)>,
-    /// Per-date daily block stats: (sum_compact_target, block_count, total_uncles)
     daily_block_stats: HashMap<NaiveDate, (i128, i32, i32)>,
-    /// Per-(date, miner_hash) -> (blocks_count, last_block_number)
     miner_stats: HashMap<(NaiveDate, Vec<u8>), (i32, i64)>,
-    /// Per-epoch -> (start_block, end_block, length, start_ts, end_ts, tx_count, is_new)
     epoch_stats: HashMap<i64, EpochAccum>,
-    /// Block time distribution: bucket_seconds -> count
     block_time_dist: HashMap<i32, i32>,
-    /// Epoch time distribution: bucket_minutes -> count  
     epoch_time_dist: HashMap<i32, i32>,
-    /// Dates that need DAO daily snapshot update
     dao_snapshot_dates: HashSet<NaiveDate>,
-    /// Per-date block time totals: (sum_ms, count) for avg calculation
     daily_block_times: HashMap<NaiveDate, (i64, i32)>,
-    /// Per-date DAO field from the last block of each date (for knowledge_size calculation)
     daily_dao_fields: HashMap<NaiveDate, Vec<u8>>,
 }
 
@@ -136,10 +120,8 @@ impl PerfStats {
         if blocks == 0 {
             return;
         }
-
         let rpc = self.rpc_fetch_us.swap(0, Ordering::Relaxed);
         let db = self.db_write_us.swap(0, Ordering::Relaxed);
-
         info!(
             "PERF[{}blks] RPC={:.1}ms DB={:.1}ms",
             blocks,
@@ -151,11 +133,6 @@ impl PerfStats {
 
 const CELL_CACHE_CAPACITY: usize = 200_000;
 
-/// Convert block time in seconds to a bucket for block_time_distribution.
-/// Matches the bucketing logic used in rebuild:
-/// - block_time < 1s → bucket 0
-/// - 1s <= block_time < 30s → floor(block_time)
-/// - block_time >= 30s → bucket 30
 fn block_time_to_bucket(block_time_seconds: i64) -> i32 {
     if block_time_seconds < 1 {
         0
@@ -163,45 +140,6 @@ fn block_time_to_bucket(block_time_seconds: i64) -> i32 {
         block_time_seconds as i32
     } else {
         30
-    }
-}
-
-fn infer_is_mainnet(rpc_url: &str) -> bool {
-    let lowered = rpc_url.to_lowercase();
-    !(lowered.contains("testnet") || lowered.contains("devnet"))
-}
-
-fn clone_parsed_cell(cell: &crate::parser::cell::ParsedCell) -> crate::parser::cell::ParsedCell {
-    crate::parser::cell::ParsedCell {
-        capacity: cell.capacity,
-        lock_code_hash: cell.lock_code_hash.clone(),
-        lock_hash_type: cell.lock_hash_type,
-        lock_args: cell.lock_args.clone(),
-        lock_script_hash: cell.lock_script_hash.clone(),
-        type_code_hash: cell.type_code_hash.clone(),
-        type_hash_type: cell.type_hash_type,
-        type_args: cell.type_args.clone(),
-        type_script_hash: cell.type_script_hash.clone(),
-        data_hash: cell.data_hash.clone(),
-        data_size: cell.data_size,
-        data: cell.data.clone(),
-    }
-}
-
-fn parsed_cell_from_live_info(info: &LiveCellInfo) -> crate::parser::cell::ParsedCell {
-    crate::parser::cell::ParsedCell {
-        capacity: info.capacity,
-        lock_code_hash: info.lock_code_hash.clone(),
-        lock_hash_type: 0,
-        lock_args: info.lock_args.clone(),
-        lock_script_hash: info.lock_script_hash.clone(),
-        type_code_hash: info.type_code_hash.clone(),
-        type_hash_type: None,
-        type_args: None,
-        type_script_hash: info.type_script_hash.clone(),
-        data_hash: vec![0u8; 32],
-        data_size: info.data_size,
-        data: Vec::new(),
     }
 }
 
@@ -242,15 +180,12 @@ fn parse_blocks_parallel(
     Vec<TxData>,
     Vec<(Vec<u8>, i16)>,
 ) {
-    // Use indexed parallel iteration to preserve block order
     let mut parsed_results: Vec<(usize, crate::parser::block::ParsedBlock, Vec<TxData>)> = blocks
         .par_iter()
         .enumerate()
         .map(|(block_idx, block_response)| {
             let block = &block_response.block;
             let parsed = BlockParser::parse(block);
-
-            // Parse transactions in parallel but sort by tx_index afterward
             let mut tx_data_for_block: Vec<TxData> = block
                 .transactions
                 .par_iter()
@@ -261,7 +196,6 @@ fn parse_blocks_parallel(
                     let cells = CellParser::parse_outputs(tx);
                     let outputs_data: Vec<String> = tx.outputs_data.clone();
                     let total_output_capacity: i64 = cells.iter().map(|c| c.capacity).sum();
-
                     let cycles = if tx_index == 0 {
                         None
                     } else {
@@ -274,7 +208,6 @@ fn parse_blocks_parallel(
                                 u64::from_str_radix(hex, 16).ok().map(|v| v as i64)
                             })
                     };
-
                     TxData {
                         hash: parsed_tx.hash,
                         block_number: parsed.number,
@@ -299,22 +232,15 @@ fn parse_blocks_parallel(
                     }
                 })
                 .collect();
-
-            // Sort transactions by tx_index to restore order
             tx_data_for_block.sort_by_key(|td| td.tx_index);
-
             (block_idx, parsed, tx_data_for_block)
         })
         .collect();
-
-    // Sort by block index to restore block order
     parsed_results.sort_by_key(|(idx, _, _)| *idx);
 
-    let mut all_parsed_blocks: Vec<crate::parser::block::ParsedBlock> =
-        Vec::with_capacity(parsed_results.len());
-    let mut all_tx_data: Vec<TxData> = Vec::new();
-    let mut all_input_outpoints: Vec<(Vec<u8>, i16)> = Vec::new();
-
+    let mut all_parsed_blocks = Vec::with_capacity(parsed_results.len());
+    let mut all_tx_data = Vec::new();
+    let mut all_input_outpoints = Vec::new();
     for (_, parsed, tx_data_list) in parsed_results {
         for tx_data in &tx_data_list {
             if !tx_data.is_cellbase {
@@ -329,7 +255,6 @@ fn parse_blocks_parallel(
         all_tx_data.extend(tx_data_list);
         all_parsed_blocks.push(parsed);
     }
-
     (all_parsed_blocks, all_tx_data, all_input_outpoints)
 }
 
@@ -341,37 +266,21 @@ pub struct Indexer {
     rpc: CkbRpcClient,
     repo: Repository,
     writer: BatchWriter,
-    copy_router: Option<ParallelCopyRouter>,
     progress: Arc<SyncProgress>,
     cell_cache: Arc<DashMap<([u8; 32], i32), CachedCellInfo>>,
     perf: PerfStats,
     cache_invalidator: CacheInvalidator,
     last_cache_invalidation: tokio::sync::Mutex<u64>,
-    /// Track previous bulk sync state to detect transition from bulk -> live sync
     was_bulk_sync_active: std::sync::atomic::AtomicBool,
-    /// Track previous secondary issuance bulk state (>1000 blocks behind)
     was_secondary_issuance_bulk_active: std::sync::atomic::AtomicBool,
-    /// Track batches processed since last LiveCellStore flush
-    batches_since_flush: std::sync::atomic::AtomicU64,
-    /// Shared flag to pause sync during index rebuild
     rebuild_pause_flag: Arc<std::sync::atomic::AtomicBool>,
-    /// Flag to notify fetcher that a reorg/mismatch occurred and it should reset next_block
     reorg_notify_flag: Arc<std::sync::atomic::AtomicBool>,
-    rocksdb_store: Arc<crate::db::RocksDbLiveCellStore>,
-    /// Deferred state flags (loaded from database sync_status table)
-    activities_deferred: std::sync::atomic::AtomicBool,
     address_balances_deferred: std::sync::atomic::AtomicBool,
-    token_deferred: std::sync::atomic::AtomicBool,
-    spore_deferred: std::sync::atomic::AtomicBool,
-    #[allow(dead_code)] // Used in Task 3 (DAO writer skip logic)
-    dao_deferred: std::sync::atomic::AtomicBool,
-    tx_block_map_deferred: std::sync::atomic::AtomicBool,
-    /// Direct RocksDB reader for CKB node data (when configured via ckb_data_path).
     ckb_store: Option<Arc<CkbChainReader>>,
 }
 
 impl Indexer {
-    pub async fn new(config: Config, pool: PgPool) -> Result<Self> {
+    pub async fn new(config: Config, store: Arc<CkbadgerStore>) -> Result<Self> {
         let rpc = CkbRpcClient::new(&config.ckb_rpc_url);
         let cache_invalidator = CacheInvalidator::new(config.redis_url.as_deref()).await;
 
@@ -383,15 +292,10 @@ impl Indexer {
             }
             None => None,
         };
-        let repo = Repository::with_cache(pool.clone(), cache_invalidator.clone());
-
-        let rocksdb_store = Self::create_rocksdb_store(&config)?;
-        let live_cell_store: crate::db::DynLiveCellStorage = Arc::clone(&rocksdb_store) as _;
-
-        let writer = BatchWriter::with_live_cell_store(
-            pool.clone(),
+        let repo = Repository::with_cache(store.clone(), cache_invalidator.clone());
+        let writer = BatchWriter::with_cache(
+            store.clone(),
             config.fast_sync_mode,
-            live_cell_store,
             cache_invalidator.clone(),
         );
 
@@ -403,93 +307,20 @@ impl Indexer {
         };
 
         let progress = Arc::new(SyncProgress::new(tip_number as u64, chain_tip));
-
         let cell_cache = Arc::new(DashMap::with_capacity(CELL_CACHE_CAPACITY));
-
-        let copy_router = if config.use_copy_bulk_sync {
-            match CopyPoolManager::new(
-                &config.database_url,
-                CopyConfig {
-                    max_copy_connections: config.copy_pool_size,
-                    copy_batch_size: 100_000,
-                    copy_enabled: true,
-                },
-            ) {
-                Ok(pool_manager) => {
-                    info!(
-                        "COPY bulk sync enabled with {} connections",
-                        config.copy_pool_size
-                    );
-                    Some(ParallelCopyRouter::with_live_cell_store(
-                        pool_manager,
-                        Arc::clone(&rocksdb_store) as _,
-                    ))
-                }
-                Err(e) => {
-                    warn!("Failed to create COPY pool, falling back to UNNEST: {}", e);
-                    None
-                }
-            }
-        } else {
-            None
-        };
 
         let was_bulk = progress.blocks_remaining() > config.bulk_sync_threshold;
         let was_secondary_bulk =
             progress.blocks_remaining() > SECONDARY_ISSUANCE_BACKFILL_THRESHOLD;
 
-        let activities_deferred: bool = sqlx::query_scalar(
-            "SELECT COALESCE(activities_deferred, false) FROM sync_status WHERE id = 1",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap_or(false);
+        let sync_status = store.get_sync_status()?;
+        let activities_deferred = sync_status.activities_deferred;
+        let address_balances_deferred = sync_status.address_balances_deferred;
 
-        let address_balances_deferred: bool = sqlx::query_scalar(
-            "SELECT COALESCE(address_balances_deferred, false) FROM sync_status WHERE id = 1",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap_or(false);
-
-        let token_deferred: bool = sqlx::query_scalar(
-            "SELECT COALESCE(token_deferred, false) FROM sync_status WHERE id = 1",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap_or(false);
-
-        let spore_deferred: bool = sqlx::query_scalar(
-            "SELECT COALESCE(spore_deferred, false) FROM sync_status WHERE id = 1",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap_or(false);
-
-        let dao_deferred: bool = sqlx::query_scalar(
-            "SELECT COALESCE(dao_deferred, false) FROM sync_status WHERE id = 1",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap_or(false);
-
-        let tx_block_map_deferred: bool = sqlx::query_scalar(
-            "SELECT COALESCE(tx_block_map_deferred, false) FROM sync_status WHERE id = 1",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap_or(false);
-
-        if activities_deferred
-            || address_balances_deferred
-            || token_deferred
-            || spore_deferred
-            || dao_deferred
-            || tx_block_map_deferred
-        {
+        if activities_deferred || address_balances_deferred {
             info!(
-                "Loaded deferred states from database: activities={}, address_balances={}, token={}, spore={}, dao={}, tx_block_map={}",
-                activities_deferred, address_balances_deferred, token_deferred, spore_deferred, dao_deferred, tx_block_map_deferred
+                "Loaded deferred states: activities={}, address_balances={}",
+                activities_deferred, address_balances_deferred
             );
         }
 
@@ -498,7 +329,6 @@ impl Indexer {
             rpc,
             repo,
             writer,
-            copy_router,
             progress,
             cell_cache,
             perf: PerfStats::default(),
@@ -508,18 +338,11 @@ impl Indexer {
             was_secondary_issuance_bulk_active: std::sync::atomic::AtomicBool::new(
                 was_secondary_bulk,
             ),
-            batches_since_flush: std::sync::atomic::AtomicU64::new(0),
             rebuild_pause_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             reorg_notify_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            rocksdb_store,
-            activities_deferred: std::sync::atomic::AtomicBool::new(activities_deferred),
             address_balances_deferred: std::sync::atomic::AtomicBool::new(
                 address_balances_deferred,
             ),
-            token_deferred: std::sync::atomic::AtomicBool::new(token_deferred),
-            spore_deferred: std::sync::atomic::AtomicBool::new(spore_deferred),
-            dao_deferred: std::sync::atomic::AtomicBool::new(dao_deferred),
-            tx_block_map_deferred: std::sync::atomic::AtomicBool::new(tx_block_map_deferred),
             ckb_store,
         })
     }
@@ -540,56 +363,27 @@ impl Indexer {
         Arc::clone(&self.rebuild_pause_flag)
     }
 
-    fn create_rocksdb_store(config: &Config) -> Result<Arc<crate::db::RocksDbLiveCellStore>> {
-        info!(
-            "Using RocksDB live cell store at: {} (bulk_sync_cell_cache={})",
-            config.live_cell_db_path, config.bulk_sync_cell_cache
-        );
-        let store = crate::db::RocksDbLiveCellStore::open(
-            &config.live_cell_db_path,
-            config.bulk_sync_cell_cache,
-        )?;
-        let count = store.len();
-        if count > 0 {
-            info!("Loaded {} live cells from RocksDB", count);
-        }
-        Ok(Arc::new(store))
-    }
-
-    /// Check if bulk sync mode is active (for skipping non-critical statistics).
-    /// Auto-enabled when blocks_remaining > bulk_sync_threshold (no manual config needed)
     pub fn is_bulk_sync_active(&self) -> bool {
         self.progress.blocks_remaining() > self.config.bulk_sync_threshold
     }
 
-    /// Returns true if the indexer is reading blocks directly from CKB's RocksDB
-    /// rather than via JSON-RPC.
     pub fn is_direct_db_read(&self) -> bool {
         self.ckb_store.is_some()
     }
 
-    /// Get memory statistics for the live cell store.
-    /// Returns MemoryStatsData suitable for publishing to Redis.
     pub fn get_memory_stats(&self) -> ckbadger_common::MemoryStatsData {
-        use crate::db::LiveCellStorage;
-
-        let stats = self.rocksdb_store.memory_stats();
-        let (consumed_count, consumed_bytes) = self.rocksdb_store.consumed_cells_stats();
-        let block_headers_count = self.rocksdb_store.block_headers_count();
-        let bulk_sync_cell_cache_enabled = self.rocksdb_store.is_bulk_sync_cell_cache_enabled();
-        let bulk_sync_mode = self.rocksdb_store.is_bulk_sync_mode();
-
+        let stats = self.writer.store().memory_stats();
         ckbadger_common::MemoryStatsData {
             live_cells_count: stats.cells_count as u64,
-            consumed_cells_count: consumed_count as u64,
-            consumed_cells_bytes: consumed_bytes as u64,
+            consumed_cells_count: 0,
+            consumed_cells_bytes: 0,
             rocksdb_memtable_bytes: stats.memtable_bytes as u64,
             rocksdb_block_cache_bytes: stats.block_cache_bytes as u64,
             rocksdb_table_readers_bytes: stats.table_readers_bytes as u64,
             rocksdb_total_bytes: stats.memory_bytes as u64,
-            block_headers_count: block_headers_count as u64,
-            bulk_sync_cell_cache_enabled,
-            bulk_sync_mode,
+            block_headers_count: 0,
+            bulk_sync_cell_cache_enabled: false,
+            bulk_sync_mode: self.is_bulk_sync_active(),
             updated_at: chrono::Utc::now().timestamp(),
         }
     }
@@ -598,70 +392,27 @@ impl Indexer {
         self.progress.blocks_remaining() > SECONDARY_ISSUANCE_BACKFILL_THRESHOLD
     }
 
-    async fn is_stats_rebuild_in_progress(&self) -> bool {
-        let result: Option<(bool,)> = sqlx::query_as(
-            "SELECT COALESCE(stats_rebuild_in_progress, false) FROM sync_status WHERE id = 1",
-        )
-        .fetch_optional(self.writer.pool())
-        .await
-        .ok()
-        .flatten();
-
-        result.map(|r| r.0).unwrap_or(false)
+    fn is_stats_rebuild_in_progress(&self) -> bool {
+        false
     }
-
-    fn should_use_copy(&self) -> bool {
-        self.is_bulk_sync_active() && self.copy_router.is_some()
-    }
-
-    /// Check if indexes are still deferred (being rebuilt by task-runner).
-    /// When true, ON CONFLICT queries will fail because unique constraints don't exist yet.
-    async fn are_indexes_deferred(&self) -> bool {
-        let row: Option<(bool,)> = sqlx::query_as(
-            "SELECT COALESCE(indexes_deferred, false) FROM sync_status WHERE id = 1",
-        )
-        .fetch_optional(self.writer.pool())
-        .await
-        .ok()
-        .flatten();
-        row.map(|r| r.0).unwrap_or(false)
-    }
+    // === run / run_sequential / run_pipeline ===
 
     pub async fn run(&self) -> Result<()> {
         let blocks_behind = self.progress.blocks_remaining();
-        let copy_enabled = self.copy_router.is_some();
         info!(
-            "Starting indexer (pipeline={}, copy={}, {} blocks behind, threshold={})",
-            self.config.pipeline_enabled,
-            copy_enabled,
-            blocks_behind,
-            self.config.bulk_sync_threshold
+            "Starting indexer (pipeline={}, {} blocks behind, threshold={})",
+            self.config.pipeline_enabled, blocks_behind, self.config.bulk_sync_threshold
         );
 
         if blocks_behind > self.config.bulk_sync_threshold {
             info!(
-                "Bulk sync auto-enabled: {} blocks behind > {} threshold{}",
-                blocks_behind,
-                self.config.bulk_sync_threshold,
-                if copy_enabled { ", using COPY" } else { "" }
+                "Bulk sync auto-enabled: {} blocks behind > {} threshold",
+                blocks_behind, self.config.bulk_sync_threshold,
             );
-
-            if let Some(store) = self.writer.live_cell_store() {
-                store.set_bulk_sync_mode(true);
-                if self.config.bulk_sync_cell_cache {
-                    let (count, bytes) = store.consumed_cells_stats();
-                    info!(
-                        "Bulk sync cell cache: {} consumed cells ({:.2} MB) retained",
-                        count,
-                        bytes as f64 / 1024.0 / 1024.0
-                    );
-                }
-            }
         }
 
         let (start_block, _) = self.repo.get_sync_tip().await?;
-
-        let consistent_block = self.writer.find_last_consistent_block().await?;
+        let consistent_block = self.writer.find_last_consistent_block()?;
         let actual_start = match consistent_block {
             Some(cb) if cb < start_block => {
                 warn!(
@@ -673,26 +424,22 @@ impl Indexer {
             _ => start_block,
         };
 
-        self.writer
-            .init_sync_start(
-                actual_start,
-                blocks_behind > self.config.bulk_sync_threshold,
-            )
-            .await?;
+        self.writer.init_sync_start(
+            actual_start,
+            blocks_behind > self.config.bulk_sync_threshold,
+        )?;
 
-        if let Err(e) = self.maybe_submit_label_import_task().await {
+        if let Err(e) = self.maybe_submit_label_import_task() {
             warn!("Failed to submit label import task: {}", e);
         }
 
-        // Recovery: If not in bulk sync but deferred flags are set, submit pending rebuild tasks.
-        // This handles cases where indexer crashed/restarted after bulk sync completed but before
-        // tasks were submitted, or if task submission failed previously.
         if !self.is_bulk_sync_active() {
             info!("Not in bulk sync - checking for pending rebuild tasks from previous run...");
-            self.maybe_submit_pending_rebuild_tasks().await;
+            self.maybe_submit_pending_rebuild_tasks();
         }
 
-        let writer_for_task = self.writer.pool().clone();
+        // Periodic 24h transfer refresh
+        let store_for_task = Arc::clone(self.writer.store());
         let fast_sync_mode = self.config.fast_sync_mode;
         let progress_for_task = Arc::clone(&self.progress);
         let bulk_sync_threshold = self.config.bulk_sync_threshold;
@@ -709,12 +456,12 @@ impl Indexer {
                     continue;
                 }
                 let writer =
-                    BatchWriter::with_fast_sync_mode(writer_for_task.clone(), fast_sync_mode);
-                match writer.refresh_token_24h_transfers().await {
+                    BatchWriter::with_fast_sync_mode(store_for_task.clone(), fast_sync_mode);
+                match writer.refresh_token_24h_transfers() {
                     Ok(count) => info!("Refreshed 24h transfers for {} tokens", count),
                     Err(e) => warn!("Failed to refresh token 24h transfers: {}", e),
                 }
-                match writer.refresh_mnft_24h_transfers().await {
+                match writer.refresh_mnft_24h_transfers() {
                     Ok(count) => info!("Refreshed 24h transfers for {} NFT classes", count),
                     Err(e) => warn!("Failed to refresh NFT 24h transfers: {}", e),
                 }
@@ -736,7 +483,7 @@ impl Indexer {
                 continue;
             }
 
-            if self.repo.has_unresolved_deep_fork().await.unwrap_or(false) {
+            if self.repo.has_unresolved_deep_fork().unwrap_or(false) {
                 warn!("Deep fork unresolved, sync paused. Waiting for manual intervention...");
                 sleep(Duration::from_secs(30)).await;
                 continue;
@@ -767,14 +514,14 @@ impl Indexer {
 
         type FetchedBatch = (u64, u64, u64, Arc<Vec<BlockResponseWithCycles>>);
         type ParsedBatch = (
-            u64,                                                 // start_block
-            u64,                                                 // end_block
-            u64,                                                 // chain_tip
-            Arc<Vec<BlockResponseWithCycles>>,                   // raw blocks (for UDT parsing)
-            Vec<crate::parser::block::ParsedBlock>,              // parsed blocks
-            Vec<TxData>,                                         // parsed transactions
-            HashMap<(Vec<u8>, i16), (i64, i64, Vec<u8>, i32)>,   // input_cell_info
-            HashMap<(Vec<u8>, i16), (Vec<u8>, Option<Vec<u8>>)>, // consumed_code_hashes
+            u64,
+            u64,
+            u64,
+            Arc<Vec<BlockResponseWithCycles>>,
+            Vec<crate::parser::block::ParsedBlock>,
+            Vec<TxData>,
+            HashMap<(Vec<u8>, i16), (i64, i64, Vec<u8>, i32)>,
+            HashMap<(Vec<u8>, i16), (Vec<u8>, Option<Vec<u8>>)>,
         );
 
         let (fetch_tx, mut fetch_rx) = mpsc::channel::<FetchedBatch>(self.config.pipeline_buffer);
@@ -788,6 +535,7 @@ impl Indexer {
         let reorg_notify = Arc::clone(&self.reorg_notify_flag);
         let ckb_store = self.ckb_store.clone();
 
+        // === Fetcher task ===
         let fetcher = tokio::spawn(async move {
             let mut next_block: Option<u64> = None;
             let mut was_paused = false;
@@ -799,22 +547,16 @@ impl Indexer {
                     sleep(Duration::from_millis(500)).await;
                     continue;
                 }
-
-                // Reset next_block after pause to re-query DB state
-                // This prevents stale next_block from causing batch mismatches
                 if was_paused {
                     info!("Fetcher resuming from pause, resetting next_block to re-query DB state");
                     next_block = None;
                     was_paused = false;
                 }
-
-                // Check if writer signaled a reorg/mismatch - reset next_block to re-query DB
                 if reorg_notify.swap(false, Ordering::SeqCst) {
                     info!("Fetcher received reorg notification, resetting next_block");
                     next_block = None;
                 }
 
-                // Refresh the secondary RocksDB instance to see new blocks from the CKB node
                 if let Some(ref store) = ckb_store {
                     if let Err(e) = store.refresh() {
                         error!("Failed to refresh CKB RocksDB secondary: {}", e);
@@ -931,14 +673,13 @@ impl Indexer {
                 }
 
                 next_block = Some(end_block + 1);
-
-                // Periodically re-check db_tip to handle writer failures/reorgs
                 if end_block % 1000 == 0 {
                     next_block = None;
                 }
             }
         });
 
+        // === Parser task ===
         let writer_for_parser = self.writer.clone();
         let cell_cache_for_parser = Arc::clone(&self.cell_cache);
 
@@ -996,20 +737,28 @@ impl Indexer {
                             .filter(|x| seen.insert(x.clone()))
                             .collect()
                     };
-                    let missing_refs: Vec<(&[u8], i16)> = unique_missing
-                        .iter()
-                        .map(|(h, i)| (h.as_slice(), *i))
-                        .collect();
                     let bulk_sync_mode = chain_tip.saturating_sub(end_block) > 1000;
-                    // Add timeout to prevent parser from blocking indefinitely on DB query
-                    let db_query =
-                        writer_for_parser.get_cells_info_batch(&missing_refs, bulk_sync_mode);
+                    let wr = writer_for_parser.clone();
+                    let missing_owned: Vec<(Vec<u8>, i16)> = unique_missing
+                        .iter()
+                        .map(|(h, i)| (h.clone(), *i))
+                        .collect();
+                    let db_query = tokio::task::spawn_blocking(move || {
+                        let refs: Vec<(&[u8], i16)> = missing_owned
+                            .iter()
+                            .map(|(h, i)| (h.as_slice(), *i))
+                            .collect();
+                        wr.get_cells_info_batch(&refs, bulk_sync_mode)
+                    });
                     match tokio::time::timeout(Duration::from_secs(30), db_query).await {
-                        Ok(Ok(db_info)) => {
+                        Ok(Ok(Ok(db_info))) => {
                             for ((tx_hash, idx), (cap, block, lock_hash, data_size)) in db_info {
                                 input_cell_info
                                     .insert((tx_hash, idx), (cap, block, lock_hash, data_size));
                             }
+                        }
+                        Ok(Ok(Err(e))) => {
+                            error!("Parser: DB error fetching cell info: {}", e);
                         }
                         Ok(Err(e)) => {
                             error!("Parser: Failed to fetch cell info from DB: {}", e);
@@ -1037,16 +786,25 @@ impl Indexer {
                 }
 
                 let consumed_code_hashes = if !consumed_from_db.is_empty() {
-                    let refs: Vec<(&[u8], i16)> = consumed_from_db
-                        .iter()
-                        .map(|(h, i)| (h.as_slice(), *i))
-                        .collect();
                     let bulk_sync_mode = chain_tip.saturating_sub(end_block) > 1000;
-                    // Add timeout to prevent parser from blocking indefinitely on DB query
-                    let db_query =
-                        writer_for_parser.get_cells_code_hashes_batch(&refs, bulk_sync_mode);
+                    let wr2 = writer_for_parser.clone();
+                    let consumed_owned: Vec<(Vec<u8>, i16)> = consumed_from_db
+                        .iter()
+                        .map(|(h, i)| (h.clone(), *i))
+                        .collect();
+                    let db_query = tokio::task::spawn_blocking(move || {
+                        let refs: Vec<(&[u8], i16)> = consumed_owned
+                            .iter()
+                            .map(|(h, i)| (h.as_slice(), *i))
+                            .collect();
+                        wr2.get_cells_code_hashes_batch(&refs, bulk_sync_mode)
+                    });
                     match tokio::time::timeout(Duration::from_secs(30), db_query).await {
-                        Ok(Ok(hashes)) => hashes,
+                        Ok(Ok(Ok(hashes))) => hashes,
+                        Ok(Ok(Err(e))) => {
+                            error!("Parser: DB error fetching code hashes: {}", e);
+                            HashMap::new()
+                        }
                         Ok(Err(e)) => {
                             error!("Parser: Failed to fetch code hashes from DB: {}", e);
                             HashMap::new()
@@ -1079,17 +837,15 @@ impl Indexer {
             }
         });
 
-        // Writer loop - receives pre-parsed batches
+        // === Writer loop ===
         loop {
-            if self.repo.has_unresolved_deep_fork().await.unwrap_or(false) {
+            if self.repo.has_unresolved_deep_fork().unwrap_or(false) {
                 warn!("Deep fork unresolved, sync paused. Waiting for manual intervention...");
                 Self::drain_channel(&mut parse_rx).await;
                 sleep(Duration::from_secs(30)).await;
                 continue;
             }
 
-            // Use timeout to detect "caught up" state - if no batch arrives within poll interval,
-            // we're likely caught up and can trigger idle tasks like integrity checks
             let recv_timeout = Duration::from_millis(self.config.poll_interval_ms * 2);
             match tokio::time::timeout(recv_timeout, parse_rx.recv()).await {
                 Ok(Some((
@@ -1103,8 +859,6 @@ impl Indexer {
                     consumed_code_hashes,
                 ))) => {
                     let (db_tip, db_tip_hash) = self.repo.get_sync_tip().await?;
-
-                    // Validate batch is still valid (no reorg happened)
                     let expected_start = if db_tip == 0 && db_tip_hash.is_none() {
                         0
                     } else {
@@ -1121,9 +875,6 @@ impl Indexer {
                         continue;
                     }
 
-                    // Check for reorg before processing - skip during bulk sync
-                    // Historical blocks are already finalized (CKB finalizes after 24 blocks),
-                    // so reorg checks are only needed when approaching the chain tip.
                     let blocks_behind = chain_tip.saturating_sub(db_tip as u64);
                     if blocks_behind <= self.config.bulk_sync_threshold {
                         if let Some(ref stored_hash) = db_tip_hash {
@@ -1151,25 +902,6 @@ impl Indexer {
                         }
                     }
 
-                    // Wait for index rebuild if transitioning from bulk to live sync
-                    if !self.should_use_copy() && self.are_indexes_deferred().await {
-                        info!("Indexes still being rebuilt, waiting before writing live blocks...");
-                        Self::drain_channel(&mut parse_rx).await;
-                        self.reorg_notify_flag.store(true, Ordering::SeqCst);
-                        sleep(Duration::from_secs(10)).await;
-                        continue;
-                    }
-
-                    if self.should_use_copy() {
-                        if let Some(copy_router) = &self.copy_router {
-                            let pool_status = copy_router.pool_status();
-                            info!(
-                                "Pool status before write: size={}, available={}, max_size={}",
-                                pool_status.size, pool_status.available, pool_status.max_size
-                            );
-                        }
-                    }
-
                     let db_start = Instant::now();
                     if let Err(e) = self
                         .write_parsed_batch(
@@ -1186,7 +918,6 @@ impl Indexer {
                         if let Err(cleanup_err) = self
                             .writer
                             .cleanup_batch_range(start_block as i64, end_block as i64)
-                            .await
                         {
                             error!("Failed to cleanup partial batch: {:?}", cleanup_err);
                         }
@@ -1204,9 +935,7 @@ impl Indexer {
                             all_parsed_blocks.len() as u64,
                         );
 
-                        let mode = if self.should_use_copy() {
-                            "[COPY]"
-                        } else if self.is_bulk_sync_active() {
+                        let mode = if self.is_bulk_sync_active() {
                             "[BULK]"
                         } else {
                             ""
@@ -1228,17 +957,6 @@ impl Indexer {
                             mode
                         );
 
-                        if self.should_use_copy() {
-                            if let Some(copy_router) = &self.copy_router {
-                                let pool_status = copy_router.pool_status();
-                                info!(
-                                    "Pool status after write: size={}, available={}, max_size={}",
-                                    pool_status.size, pool_status.available, pool_status.max_size
-                                );
-                            }
-                        }
-
-                        // Handle periodic updates (secondary issuance, DAO stats)
                         if !self.is_secondary_issuance_bulk_active() {
                             for block in &all_parsed_blocks {
                                 if let Err(e) = self
@@ -1263,9 +981,8 @@ impl Indexer {
                             let update_block = ((end_block / 1000) * 1000) as i64;
                             let writer = self.writer.clone();
                             tokio::spawn(async move {
-                                if let Err(e) = writer
-                                    .recalculate_dao_extended_statistics(update_block)
-                                    .await
+                                if let Err(e) =
+                                    writer.recalculate_dao_extended_statistics(update_block)
                                 {
                                     warn!("Failed to recalculate DAO statistics: {}", e);
                                 }
@@ -1280,8 +997,6 @@ impl Indexer {
                         .blocks_count
                         .fetch_add(all_parsed_blocks.len() as u64, Ordering::Relaxed);
                     self.perf.report_and_reset();
-
-                    self.maybe_flush_live_cell_store().await;
                 }
                 Ok(None) => {
                     fetcher.abort();
@@ -1289,9 +1004,7 @@ impl Indexer {
                     return Err(anyhow::anyhow!("Pipeline channel closed"));
                 }
                 Err(_timeout) => {
-                    if let Err(e) = self.check_and_execute_dao_rebuild_task().await {
-                        warn!("Failed to execute dao_rebuild task: {}", e);
-                    }
+                    // Idle timeout - no pending batches
                 }
             }
         }
@@ -1305,17 +1018,14 @@ impl Indexer {
     ) -> Result<Vec<BlockResponseWithCycles>> {
         let mut blocks = Vec::with_capacity((end - start + 1) as usize);
         let mut current = start;
-
         while current <= end {
             let batch_end = std::cmp::min(current + parallel_fetch_size as u64 - 1, end);
-
             let mut futures = FuturesOrdered::new();
             for block_num in current..=batch_end {
                 futures.push_back(
                     async move { (block_num, rpc.get_block_by_number(block_num).await) },
                 );
             }
-
             while let Some((block_num, result)) = futures.next().await {
                 match result {
                     Ok(Some(block)) => blocks.push(block),
@@ -1323,23 +1033,17 @@ impl Indexer {
                     Err(e) => return Err(e),
                 }
             }
-
             current = batch_end + 1;
         }
-
         Ok(blocks)
     }
 
-    /// Fetch blocks directly from CKB's RocksDB (no network I/O).
-    /// Uses rayon to read blocks in parallel across all CPU cores.
-    /// Returns the same `BlockResponseWithCycles` format as the RPC fetcher.
     fn fetch_blocks_direct(
         store: &CkbChainReader,
         start: u64,
         end: u64,
     ) -> Result<Vec<BlockResponseWithCycles>> {
         let block_numbers: Vec<u64> = (start..=end).collect();
-
         let results: Vec<Result<BlockResponseWithCycles>> = block_numbers
             .par_iter()
             .map(|&num| {
@@ -1349,12 +1053,10 @@ impl Indexer {
                 let block = store.get_block(&hash).ok_or_else(|| {
                     anyhow::anyhow!("Block {} data not found in CKB RocksDB", num)
                 })?;
-
                 let rpc_block = ckb_store_reader::block_view_to_rpc(&block, store);
                 Ok(rpc_block.into())
             })
             .collect();
-
         results.into_iter().collect()
     }
 
@@ -1368,64 +1070,21 @@ impl Indexer {
         }
     }
 
-    #[allow(dead_code)]
-    async fn handle_periodic_updates(
-        &self,
-        start_block: u64,
-        end_block: u64,
-        last_block_response: &BlockResponseWithCycles,
-    ) {
-        let last_block_number = BlockParser::parse_block_number(&last_block_response.block);
-
-        if !self.is_secondary_issuance_bulk_active() {
-            let block_timestamp =
-                BlockParser::parse_timestamp(&last_block_response.block.header.timestamp);
-            if let Err(e) = self
-                .update_secondary_issuance(
-                    &last_block_response.block.header.hash,
-                    &last_block_response.block.header.dao,
-                    last_block_number as i64,
-                    block_timestamp,
-                )
-                .await
-            {
-                warn!("Failed to update secondary issuance: {}", e);
-            }
-        }
-
-        let crossed_1000 = (start_block / 1000) != (end_block / 1000);
-        if crossed_1000 && !self.is_bulk_sync_active() {
-            let update_block = ((end_block / 1000) * 1000) as i64;
-            let writer = self.writer.clone();
-            tokio::spawn(async move {
-                if let Err(e) = writer
-                    .recalculate_dao_extended_statistics(update_block)
-                    .await
-                {
-                    warn!("Failed to recalculate DAO statistics: {}", e);
-                }
-            });
-        }
-
-        self.maybe_invalidate_chart_caches(end_block).await;
-    }
-
     async fn maybe_invalidate_chart_caches(&self, current_block: u64) {
         if !self.cache_invalidator.is_enabled() {
             return;
         }
-
         let blocks_remaining = self.progress.blocks_remaining();
         if blocks_remaining < 100 {
             return;
         }
-
         let mut last_invalidation = self.last_cache_invalidation.lock().await;
         if current_block >= *last_invalidation + CACHE_INVALIDATION_INTERVAL {
             self.cache_invalidator.invalidate_chart_caches().await;
             *last_invalidation = current_block;
         }
     }
+    // === sync_batch, check_bulk_sync_completion, task submission ===
 
     async fn sync_batch(&self) -> Result<SyncAction> {
         let chain_tip = self.get_chain_tip().await?;
@@ -1442,8 +1101,6 @@ impl Indexer {
             return Ok(SyncAction::CaughtUp);
         }
 
-        // Check for reorg - skip during bulk sync since historical blocks are finalized
-        // (CKB finalizes after 24 blocks, bulk_sync_threshold is 72)
         let blocks_behind = chain_tip.saturating_sub(start_block);
         if blocks_behind <= self.config.bulk_sync_threshold {
             if let Some(ref stored_hash) = db_tip_hash {
@@ -1467,14 +1124,11 @@ impl Indexer {
             return Ok(SyncAction::CaughtUp);
         }
 
-        // Live sync accumulation: when near the chain tip and only 1 block is available,
-        // wait briefly for more blocks to arrive to amortize pipeline overhead.
-        // This reduces per-block overhead by batching 2-5 blocks together.
+        // Live sync accumulation
         if end_block == start_block && blocks_behind <= self.config.bulk_sync_threshold {
             let accumulation_timeout = Duration::from_secs(2);
             let max_accumulate = 5u64;
             let deadline = Instant::now() + accumulation_timeout;
-
             while Instant::now() < deadline {
                 sleep(Duration::from_millis(200)).await;
                 if let Ok(new_tip) = self.get_chain_tip().await {
@@ -1502,7 +1156,6 @@ impl Indexer {
             if let Err(cleanup_err) = self
                 .writer
                 .cleanup_batch_range(start_block as i64, end_block as i64)
-                .await
             {
                 error!("Failed to cleanup partial batch: {:?}", cleanup_err);
             }
@@ -1531,21 +1184,10 @@ impl Indexer {
                 partition_range,
                 boundary_info
             );
-
-            if self.should_use_copy() {
-                if let Some(copy_router) = &self.copy_router {
-                    let pool_status = copy_router.pool_status();
-                    info!(
-                        "Pool status after write: size={}, available={}, max_size={}",
-                        pool_status.size, pool_status.available, pool_status.max_size
-                    );
-                }
-            }
         }
         self.perf
             .blocks_count
             .fetch_add(blocks.len() as u64, Ordering::Relaxed);
-
         self.perf.report_and_reset();
 
         if !blocks.is_empty() {
@@ -1577,10 +1219,7 @@ impl Indexer {
                 let update_block = ((end_block / 1000) * 1000) as i64;
                 let writer = self.writer.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = writer
-                        .recalculate_dao_extended_statistics(update_block)
-                        .await
-                    {
+                    if let Err(e) = writer.recalculate_dao_extended_statistics(update_block) {
                         warn!("Failed to recalculate DAO statistics: {}", e);
                     }
                 });
@@ -1590,14 +1229,11 @@ impl Indexer {
         }
 
         self.check_bulk_sync_completion().await;
-        self.maybe_flush_live_cell_store().await;
 
         Ok(SyncAction::Continue)
     }
 
     async fn check_bulk_sync_completion(&self) {
-        use std::sync::atomic::Ordering;
-
         let currently_bulk = self.is_bulk_sync_active();
         let was_bulk = self.was_bulk_sync_active.load(Ordering::SeqCst);
         let currently_secondary_bulk = self.is_secondary_issuance_bulk_active();
@@ -1607,70 +1243,20 @@ impl Indexer {
 
         if was_bulk && !currently_bulk {
             info!("Bulk sync completed, submitting post-sync tasks...");
-
-            if let Some(store) = self.writer.live_cell_store() {
-                store.set_bulk_sync_mode(false);
-                if self.config.bulk_sync_cell_cache {
-                    let cleaned = store.cleanup_consumed_cells();
-                    info!(
-                        "Bulk sync cell cache: cleaned up {} consumed cells",
-                        cleaned
-                    );
-                }
-            }
-
             let chain_tip = self.progress.target();
             self.cache_invalidator
                 .update_sync_status(|status| {
                     status.mark_bulk_sync_completed(chain_tip as i64);
                 })
                 .await;
-
-            if let Err(e) = self.maybe_submit_index_rebuild_task().await {
-                warn!("Failed to submit index rebuild task: {}", e);
-            }
-
-            if let Err(e) = self.maybe_submit_cells_status_rebuild_task().await {
-                warn!("Failed to submit cells status rebuild task: {}", e);
-            }
-
-            if let Err(e) = self.maybe_submit_statistics_rebuild_task().await {
+            if let Err(e) = self.maybe_submit_statistics_rebuild_task() {
                 warn!("Failed to submit statistics rebuild task: {}", e);
-            }
-
-            if let Err(e) = self.maybe_submit_spore_rebuild_task().await {
-                warn!("Failed to submit spore rebuild task: {}", e);
-            }
-
-            if let Err(e) = self.maybe_submit_activities_rebuild_task().await {
-                warn!("Failed to submit activities rebuild task: {}", e);
-            }
-
-            if let Err(e) = self.maybe_submit_address_balances_rebuild_task().await {
-                warn!("Failed to submit address balances rebuild task: {}", e);
-            }
-
-            if let Err(e) = self.maybe_submit_token_rebuild_task().await {
-                warn!("Failed to submit token rebuild task: {}", e);
-            }
-
-            if let Err(e) = self.maybe_submit_mnft_rebuild_task().await {
-                warn!("Failed to submit mnft rebuild task: {}", e);
-            }
-
-            if let Err(e) = self.maybe_submit_dotbit_rebuild_task().await {
-                warn!("Failed to submit dotbit rebuild task: {}", e);
-            }
-
-            if let Err(e) = self.maybe_submit_dao_rebuild_task().await {
-                warn!("Failed to submit dao rebuild task: {}", e);
             }
         }
 
         if was_secondary_bulk && !currently_secondary_bulk {
             info!("Secondary issuance bulk sync completed, submitting backfill task...");
-
-            if let Err(e) = self.maybe_submit_secondary_issuance_backfill_task().await {
+            if let Err(e) = self.maybe_submit_secondary_issuance_backfill_task() {
                 warn!("Failed to submit secondary issuance backfill task: {}", e);
             }
         }
@@ -1681,576 +1267,95 @@ impl Indexer {
             .store(currently_secondary_bulk, Ordering::SeqCst);
     }
 
-    async fn maybe_submit_pending_rebuild_tasks(&self) {
-        if let Err(e) = self.maybe_submit_index_rebuild_task().await {
-            warn!("Failed to submit index rebuild task: {}", e);
-        }
-        if let Err(e) = self.maybe_submit_cells_status_rebuild_task().await {
-            warn!("Failed to submit cells status rebuild task: {}", e);
-        }
-        if let Err(e) = self.maybe_submit_statistics_rebuild_task().await {
+    fn maybe_submit_pending_rebuild_tasks(&self) {
+        if let Err(e) = self.maybe_submit_statistics_rebuild_task() {
             warn!("Failed to submit statistics rebuild task: {}", e);
         }
-        if let Err(e) = self.maybe_submit_spore_rebuild_task().await {
-            warn!("Failed to submit spore rebuild task: {}", e);
-        }
-        if let Err(e) = self.maybe_submit_activities_rebuild_task().await {
-            warn!("Failed to submit activities rebuild task: {}", e);
-        }
-        if let Err(e) = self.maybe_submit_address_balances_rebuild_task().await {
-            warn!("Failed to submit address balances rebuild task: {}", e);
-        }
-        if let Err(e) = self.maybe_submit_token_rebuild_task().await {
-            warn!("Failed to submit token rebuild task: {}", e);
-        }
-        if let Err(e) = self.maybe_submit_mnft_rebuild_task().await {
-            warn!("Failed to submit mnft rebuild task: {}", e);
-        }
-        if let Err(e) = self.maybe_submit_dotbit_rebuild_task().await {
-            warn!("Failed to submit dotbit rebuild task: {}", e);
-        }
-        if let Err(e) = self.maybe_submit_dao_rebuild_task().await {
-            warn!("Failed to submit dao rebuild task: {}", e);
-        }
-        if let Err(e) = self.maybe_submit_tx_block_map_rebuild_task().await {
-            warn!("Failed to submit tx_block_map rebuild task: {}", e);
-        }
-        if let Err(e) = self.maybe_submit_secondary_issuance_backfill_task().await {
+        if let Err(e) = self.maybe_submit_secondary_issuance_backfill_task() {
             warn!("Failed to submit secondary issuance backfill task: {}", e);
         }
+        if let Err(e) = self.maybe_submit_label_import_task() {
+            warn!("Failed to submit label import task: {}", e);
+        }
     }
 
-    async fn maybe_submit_index_rebuild_task(&self) -> Result<()> {
-        use ckbadger_common::{IndexRebuildConfig, TaskBuilder};
+    fn submit_task_if_not_exists(
+        &self,
+        task_type: &str,
+        config: serde_json::Value,
+        priority: i32,
+        max_retries: i32,
+    ) -> Result<()> {
+        use ckbadger_store::TaskEntry;
 
-        // Check if indexes are deferred
-        let row: Option<(bool,)> = sqlx::query_as(
-            "SELECT COALESCE(indexes_deferred, false) FROM sync_status WHERE id = 1",
-        )
-        .fetch_optional(self.writer.pool())
-        .await?;
-
-        let indexes_deferred = row.map(|r| r.0).unwrap_or(false);
-        if !indexes_deferred {
-            debug!("Indexes are not deferred, skipping rebuild task submission");
+        let store = self.writer.store();
+        let pending = store.list_tasks_by_status("pending")?;
+        if pending.iter().any(|t| t.task_type == task_type) {
+            info!("{} task already pending, skipping submission", task_type);
+            return Ok(());
+        }
+        let running = store.list_tasks_by_status("running")?;
+        if running.iter().any(|t| t.task_type == task_type) {
+            info!("{} task already running, skipping submission", task_type);
             return Ok(());
         }
 
-        // Check if there's already a pending or running index_rebuild task
-        let existing: Option<(i64,)> = sqlx::query_as(
-            "SELECT COUNT(*) FROM tasks WHERE task_type = 'index_rebuild' AND status IN ('pending', 'running')",
-        )
-        .fetch_optional(self.writer.pool())
-        .await?;
-
-        if existing.map(|r| r.0).unwrap_or(0) > 0 {
-            info!("Index rebuild task already pending/running, skipping submission");
-            return Ok(());
-        }
-
-        // Submit new index rebuild task
-        let builder = TaskBuilder::index_rebuild(IndexRebuildConfig {
-            parallel_connections: self.config.index_rebuild_parallel,
-            indexes: None,
-            rebuild_constraints: true,
-        });
-
-        let task_id: (Uuid,) = sqlx::query_as(
-            r#"
-            INSERT INTO tasks (task_type, config, priority, max_retries)
-            VALUES ($1, $2, $3, $4)
-            RETURNING id
-            "#,
-        )
-        .bind(builder.task_type().to_string())
-        .bind(builder.config())
-        .bind(builder.get_priority())
-        .bind(builder.get_max_retries())
-        .fetch_one(self.writer.pool())
-        .await?;
-
-        info!(
-            "Submitted index rebuild task: {} (parallel={})",
-            task_id.0, self.config.index_rebuild_parallel
-        );
-
+        let entry = TaskEntry {
+            id: Uuid::new_v4(),
+            task_type: task_type.to_string(),
+            status: "pending".to_string(),
+            priority,
+            config,
+            progress_total: None,
+            progress_current: None,
+            progress_message: None,
+            result: None,
+            error_message: None,
+            created_at: Utc::now(),
+            started_at: None,
+            completed_at: None,
+            heartbeat_at: None,
+            runner_id: None,
+            retry_count: 0,
+            max_retries,
+            rate_samples: None,
+            rate_ema: None,
+            log_tail: None,
+        };
+        store.create_task(&entry)?;
+        info!("Submitted {} task: {}", task_type, entry.id);
         Ok(())
     }
 
-    async fn maybe_submit_statistics_rebuild_task(&self) -> Result<()> {
+    fn maybe_submit_statistics_rebuild_task(&self) -> Result<()> {
         use ckbadger_common::{StatisticsRebuildConfig, TaskBuilder};
-
-        let existing: Option<(i64,)> = sqlx::query_as(
-            "SELECT COUNT(*) FROM tasks WHERE task_type = 'statistics_rebuild' AND status IN ('pending', 'running')",
-        )
-        .fetch_optional(self.writer.pool())
-        .await?;
-
-        if existing.map(|r| r.0).unwrap_or(0) > 0 {
-            info!("Statistics rebuild task already pending/running, skipping submission");
-            return Ok(());
-        }
-
         let builder = TaskBuilder::statistics_rebuild(StatisticsRebuildConfig::default());
-
-        let task_id: (Uuid,) = sqlx::query_as(
-            r#"
-            INSERT INTO tasks (task_type, config, priority, max_retries)
-            VALUES ($1, $2, $3, $4)
-            RETURNING id
-            "#,
+        self.submit_task_if_not_exists(
+            &builder.task_type().to_string(),
+            builder.config().clone(),
+            builder.get_priority(),
+            builder.get_max_retries(),
         )
-        .bind(builder.task_type().to_string())
-        .bind(builder.config())
-        .bind(builder.get_priority())
-        .bind(builder.get_max_retries())
-        .fetch_one(self.writer.pool())
-        .await?;
-
-        info!("Submitted statistics rebuild task: {}", task_id.0);
-
-        Ok(())
     }
 
-    async fn maybe_submit_spore_rebuild_task(&self) -> Result<()> {
-        use ckbadger_common::{SporeRebuildConfig, TaskBuilder};
-
-        let spore_deferred: bool = sqlx::query_scalar(
-            "SELECT COALESCE(spore_deferred, false) FROM sync_status WHERE id = 1",
-        )
-        .fetch_one(self.writer.pool())
-        .await
-        .unwrap_or(false);
-
-        if !spore_deferred {
-            debug!("Spore writes are not deferred, skipping rebuild task submission");
-            return Ok(());
-        }
-
-        let existing: Option<(i64,)> = sqlx::query_as(
-            "SELECT COUNT(*) FROM tasks WHERE task_type = 'spore_rebuild' AND status IN ('pending', 'running')",
-        )
-        .fetch_optional(self.writer.pool())
-        .await?;
-
-        if existing.map(|r| r.0).unwrap_or(0) > 0 {
-            info!("Spore rebuild task already pending/running, skipping submission");
-            return Ok(());
-        }
-
-        let builder = TaskBuilder::spore_rebuild(SporeRebuildConfig::default());
-
-        let task_id: (Uuid,) = sqlx::query_as(
-            r#"
-            INSERT INTO tasks (task_type, config, priority, max_retries)
-            VALUES ($1, $2, $3, $4)
-            RETURNING id
-            "#,
-        )
-        .bind(builder.task_type().to_string())
-        .bind(builder.config())
-        .bind(builder.get_priority())
-        .bind(builder.get_max_retries())
-        .fetch_one(self.writer.pool())
-        .await?;
-
-        info!("Submitted spore rebuild task: {}", task_id.0);
-
-        Ok(())
-    }
-
-    async fn maybe_submit_mnft_rebuild_task(&self) -> Result<()> {
-        use ckbadger_common::{MnftRebuildConfig, TaskBuilder};
-
-        let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM mnft_issuers")
-            .fetch_one(self.writer.pool())
-            .await?;
-        if count > 0 {
-            debug!("M-NFT data exists, skipping rebuild task submission");
-            return Ok(());
-        }
-
-        let existing: Option<(i64,)> = sqlx::query_as(
-            "SELECT COUNT(*) FROM tasks WHERE task_type = 'mnft_rebuild' AND status IN ('pending', 'running')",
-        )
-        .fetch_optional(self.writer.pool())
-        .await?;
-
-        if existing.map(|r| r.0).unwrap_or(0) > 0 {
-            info!("M-NFT rebuild task already pending/running, skipping submission");
-            return Ok(());
-        }
-
-        info!("Submitting mnft_rebuild task (M-NFT tables empty after bulk sync)");
-
-        let builder = TaskBuilder::mnft_rebuild(MnftRebuildConfig::default());
-
-        let task_id: (Uuid,) = sqlx::query_as(
-            r#"
-            INSERT INTO tasks (task_type, config, priority, max_retries)
-            VALUES ($1, $2, $3, $4)
-            RETURNING id
-            "#,
-        )
-        .bind(builder.task_type().to_string())
-        .bind(builder.config())
-        .bind(builder.get_priority())
-        .bind(builder.get_max_retries())
-        .fetch_one(self.writer.pool())
-        .await?;
-
-        info!("Submitted mnft_rebuild task: {}", task_id.0);
-
-        Ok(())
-    }
-
-    async fn maybe_submit_dotbit_rebuild_task(&self) -> Result<()> {
-        use ckbadger_common::{DotbitRebuildConfig, TaskBuilder};
-
-        let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM dotbit_accounts")
-            .fetch_one(self.writer.pool())
-            .await?;
-        if count > 0 {
-            debug!("DotBit data exists, skipping rebuild task submission");
-            return Ok(());
-        }
-
-        let existing: Option<(i64,)> = sqlx::query_as(
-            "SELECT COUNT(*) FROM tasks WHERE task_type = 'dotbit_rebuild' AND status IN ('pending', 'running')",
-        )
-        .fetch_optional(self.writer.pool())
-        .await?;
-
-        if existing.map(|r| r.0).unwrap_or(0) > 0 {
-            info!("DotBit rebuild task already pending/running, skipping submission");
-            return Ok(());
-        }
-
-        info!("Submitting dotbit_rebuild task (DotBit tables empty after bulk sync)");
-
-        let builder = TaskBuilder::dotbit_rebuild(DotbitRebuildConfig::default());
-
-        let task_id: (Uuid,) = sqlx::query_as(
-            r#"
-            INSERT INTO tasks (task_type, config, priority, max_retries)
-            VALUES ($1, $2, $3, $4)
-            RETURNING id
-            "#,
-        )
-        .bind(builder.task_type().to_string())
-        .bind(builder.config())
-        .bind(builder.get_priority())
-        .bind(builder.get_max_retries())
-        .fetch_one(self.writer.pool())
-        .await?;
-
-        info!("Submitted dotbit_rebuild task: {}", task_id.0);
-
-        Ok(())
-    }
-
-    async fn maybe_submit_dao_rebuild_task(&self) -> Result<()> {
-        use ckbadger_common::{DaoRebuildConfig, TaskBuilder};
-
-        let dao_deferred: bool = sqlx::query_scalar(
-            "SELECT COALESCE(dao_deferred, false) FROM sync_status WHERE id = 1",
-        )
-        .fetch_one(self.writer.pool())
-        .await
-        .unwrap_or(false);
-
-        if !dao_deferred {
-            debug!("DAO writes are not deferred, skipping rebuild task submission");
-            return Ok(());
-        }
-
-        let existing: Option<(i64,)> = sqlx::query_as(
-            "SELECT COUNT(*) FROM tasks WHERE task_type = 'dao_rebuild' AND status IN ('pending', 'running')",
-        )
-        .fetch_optional(self.writer.pool())
-        .await?;
-
-        if existing.map(|r| r.0).unwrap_or(0) > 0 {
-            info!("DAO rebuild task already pending/running, skipping submission");
-            return Ok(());
-        }
-
-        let builder = TaskBuilder::dao_rebuild(DaoRebuildConfig::default());
-
-        let task_id: (Uuid,) = sqlx::query_as(
-            r#"
-            INSERT INTO tasks (task_type, config, priority, max_retries)
-            VALUES ($1, $2, $3, $4)
-            RETURNING id
-            "#,
-        )
-        .bind(builder.task_type().to_string())
-        .bind(builder.config())
-        .bind(builder.get_priority())
-        .bind(builder.get_max_retries())
-        .fetch_one(self.writer.pool())
-        .await?;
-
-        info!("Submitted dao_rebuild task: {}", task_id.0);
-
-        Ok(())
-    }
-
-    async fn maybe_submit_tx_block_map_rebuild_task(&self) -> Result<()> {
-        use ckbadger_common::{TaskBuilder, TxBlockMapRebuildConfig};
-
-        // Check if tx_block_map is deferred
-        let row: Option<(bool,)> = sqlx::query_as(
-            "SELECT COALESCE(tx_block_map_deferred, false) FROM sync_status WHERE id = 1",
-        )
-        .fetch_optional(self.writer.pool())
-        .await?;
-
-        let tx_block_map_deferred = row.map(|r| r.0).unwrap_or(false);
-        if !tx_block_map_deferred {
-            debug!("tx_block_map is not deferred, skipping rebuild task submission");
-            return Ok(());
-        }
-
-        // Check if there's already a pending or running tx_block_map_rebuild task
-        let existing: Option<(i64,)> = sqlx::query_as(
-            "SELECT COUNT(*) FROM tasks WHERE task_type = 'tx_block_map_rebuild' AND status IN ('pending', 'running')",
-        )
-        .fetch_optional(self.writer.pool())
-        .await?;
-
-        if existing.map(|r| r.0).unwrap_or(0) > 0 {
-            info!("tx_block_map rebuild task already pending/running, skipping submission");
-            return Ok(());
-        }
-
-        // Submit new tx_block_map rebuild task
-        let builder = TaskBuilder::tx_block_map_rebuild(TxBlockMapRebuildConfig::default());
-
-        let task_id: (Uuid,) = sqlx::query_as(
-            r#"
-            INSERT INTO tasks (task_type, config, priority, max_retries)
-            VALUES ($1, $2, $3, $4)
-            RETURNING id
-            "#,
-        )
-        .bind(builder.task_type().to_string())
-        .bind(builder.config())
-        .bind(builder.get_priority())
-        .bind(builder.get_max_retries())
-        .fetch_one(self.writer.pool())
-        .await?;
-
-        info!("Submitted tx_block_map rebuild task: {}", task_id.0);
-
-        Ok(())
-    }
-
-    async fn maybe_submit_secondary_issuance_backfill_task(&self) -> Result<()> {
+    fn maybe_submit_secondary_issuance_backfill_task(&self) -> Result<()> {
         use ckbadger_common::{SecondaryIssuanceBackfillConfig, TaskBuilder};
-
-        let existing: Option<(i64,)> = sqlx::query_as(
-            "SELECT COUNT(*) FROM tasks WHERE task_type = 'secondary_issuance_backfill' AND status IN ('pending', 'running')",
-        )
-        .fetch_optional(self.writer.pool())
-        .await?;
-
-        if existing.map(|r| r.0).unwrap_or(0) > 0 {
-            info!("Secondary issuance backfill task already pending/running, skipping submission");
-            return Ok(());
-        }
-
         let builder = TaskBuilder::secondary_issuance_backfill(SecondaryIssuanceBackfillConfig {
             ckb_rpc_url: self.config.ckb_rpc_url.clone(),
             start_block: None,
             end_block: None,
             ..Default::default()
         });
-
-        let task_id: (Uuid,) = sqlx::query_as(
-            r#"
-            INSERT INTO tasks (task_type, config, priority, max_retries)
-            VALUES ($1, $2, $3, $4)
-            RETURNING id
-            "#,
+        self.submit_task_if_not_exists(
+            &builder.task_type().to_string(),
+            builder.config().clone(),
+            builder.get_priority(),
+            builder.get_max_retries(),
         )
-        .bind(builder.task_type().to_string())
-        .bind(builder.config())
-        .bind(builder.get_priority())
-        .bind(builder.get_max_retries())
-        .fetch_one(self.writer.pool())
-        .await?;
-
-        info!("Submitted secondary issuance backfill task: {}", task_id.0);
-
-        Ok(())
     }
 
-    async fn maybe_submit_cells_status_rebuild_task(&self) -> Result<()> {
-        use ckbadger_common::{CellsStatusRebuildConfig, TaskBuilder};
-
-        let existing: Option<(i64,)> = sqlx::query_as(
-            "SELECT COUNT(*) FROM tasks WHERE task_type = 'cells_status_rebuild' AND status IN ('pending', 'running')",
-        )
-        .fetch_optional(self.writer.pool())
-        .await?;
-
-        if existing.map(|r| r.0).unwrap_or(0) > 0 {
-            info!("Cells status rebuild task already pending/running, skipping submission");
-            return Ok(());
-        }
-
-        let builder = TaskBuilder::cells_status_rebuild(CellsStatusRebuildConfig::default());
-
-        let task_id: (Uuid,) = sqlx::query_as(
-            r#"
-            INSERT INTO tasks (task_type, config, priority, max_retries)
-            VALUES ($1, $2, $3, $4)
-            RETURNING id
-            "#,
-        )
-        .bind(builder.task_type().to_string())
-        .bind(builder.config())
-        .bind(builder.get_priority())
-        .bind(builder.get_max_retries())
-        .fetch_one(self.writer.pool())
-        .await?;
-
-        info!("Submitted cells status rebuild task: {}", task_id.0);
-
-        Ok(())
-    }
-
-    async fn maybe_submit_activities_rebuild_task(&self) -> Result<()> {
-        use ckbadger_common::{ActivitiesRebuildConfig, TaskBuilder};
-
-        let activities_deferred: bool = sqlx::query_scalar(
-            "SELECT COALESCE(activities_deferred, false) FROM sync_status WHERE id = 1",
-        )
-        .fetch_one(self.writer.pool())
-        .await
-        .unwrap_or(false);
-
-        if !activities_deferred {
-            debug!("Activities are not deferred, skipping rebuild task submission");
-            return Ok(());
-        }
-
-        let existing: Option<(i64,)> = sqlx::query_as(
-            "SELECT COUNT(*) FROM tasks WHERE task_type = 'activities_rebuild' AND status IN ('pending', 'running')",
-        )
-        .fetch_optional(self.writer.pool())
-        .await?;
-
-        if existing.map(|r| r.0).unwrap_or(0) > 0 {
-            info!("Activities rebuild task already pending/running, skipping submission");
-            return Ok(());
-        }
-
-        let builder = TaskBuilder::activities_rebuild(ActivitiesRebuildConfig::default());
-
-        let task_id: (Uuid,) = sqlx::query_as(
-            r#"
-            INSERT INTO tasks (task_type, config, priority, max_retries)
-            VALUES ($1, $2, $3, $4)
-            RETURNING id
-            "#,
-        )
-        .bind(builder.task_type().to_string())
-        .bind(builder.config())
-        .bind(builder.get_priority())
-        .bind(builder.get_max_retries())
-        .fetch_one(self.writer.pool())
-        .await?;
-
-        info!("Submitted activities rebuild task: {}", task_id.0);
-
-        Ok(())
-    }
-
-    async fn maybe_submit_address_balances_rebuild_task(&self) -> Result<()> {
-        let address_balances_deferred: bool = sqlx::query_scalar(
-            "SELECT COALESCE(address_balances_deferred, false) FROM sync_status WHERE id = 1",
-        )
-        .fetch_one(self.writer.pool())
-        .await
-        .unwrap_or(false);
-
-        if !address_balances_deferred {
-            debug!("Address balances are not deferred, skipping rebuild task submission");
-            return Ok(());
-        }
-
-        let existing: Option<(i64,)> = sqlx::query_as(
-            "SELECT COUNT(*) FROM tasks WHERE task_type = 'address_balances_rebuild' AND status IN ('pending', 'running')",
-        )
-        .fetch_optional(self.writer.pool())
-        .await?;
-
-        if existing.map(|r| r.0).unwrap_or(0) > 0 {
-            info!("Address balances rebuild task already pending/running, skipping submission");
-            return Ok(());
-        }
-
-        let task_id: (uuid::Uuid,) = sqlx::query_as(
-            r#"
-            INSERT INTO tasks (task_type, config, priority, max_retries)
-            VALUES ('address_balances_rebuild', '{}', 6, 2)
-            RETURNING id
-            "#,
-        )
-        .fetch_one(self.writer.pool())
-        .await?;
-
-        info!("Submitted address_balances_rebuild task: {}", task_id.0);
-
-        Ok(())
-    }
-
-    async fn maybe_submit_token_rebuild_task(&self) -> Result<()> {
-        let token_deferred: bool = sqlx::query_scalar(
-            "SELECT COALESCE(token_deferred, false) FROM sync_status WHERE id = 1",
-        )
-        .fetch_one(self.writer.pool())
-        .await
-        .unwrap_or(false);
-
-        if !token_deferred {
-            debug!("Token writes are not deferred, skipping rebuild task submission");
-            return Ok(());
-        }
-
-        let existing: Option<(i64,)> = sqlx::query_as(
-            "SELECT COUNT(*) FROM tasks WHERE task_type = 'token_rebuild' AND status IN ('pending', 'running')",
-        )
-        .fetch_optional(self.writer.pool())
-        .await?;
-
-        if existing.map(|r| r.0).unwrap_or(0) > 0 {
-            info!("Token rebuild task already pending/running, skipping submission");
-            return Ok(());
-        }
-
-        let task_id: (uuid::Uuid,) = sqlx::query_as(
-            r#"
-            INSERT INTO tasks (task_type, config, priority, max_retries)
-            VALUES ('token_rebuild', '{}', 5, 2)
-            RETURNING id
-            "#,
-        )
-        .fetch_one(self.writer.pool())
-        .await?;
-
-        info!("Submitted token_rebuild task: {}", task_id.0);
-
-        Ok(())
-    }
-
-    async fn maybe_submit_label_import_task(&self) -> Result<()> {
+    fn maybe_submit_label_import_task(&self) -> Result<()> {
         use ckbadger_common::{LabelImportConfig, TaskBuilder};
-
-        // Check if token-labels directory exists
-        // Use TOKEN_LABELS_PATH env var (for Docker) or fall back to relative path (for local dev)
         let token_labels_path =
             std::env::var("TOKEN_LABELS_PATH").unwrap_or_else(|_| "docs/token-labels".to_string());
         if !std::path::Path::new(&token_labels_path)
@@ -2263,319 +1368,16 @@ impl Indexer {
             );
             return Ok(());
         }
-
-        // Check if there's already a pending or running label_import task
-        let existing: Option<(i64,)> = sqlx::query_as(
-            "SELECT COUNT(*) FROM tasks WHERE task_type = 'label_import' AND status IN ('pending', 'running')",
-        )
-        .fetch_optional(self.writer.pool())
-        .await?;
-
-        if existing.map(|r| r.0).unwrap_or(0) > 0 {
-            debug!("Label import task already pending/running, skipping submission");
-            return Ok(());
-        }
-
         let builder = TaskBuilder::label_import(LabelImportConfig {
-            token_labels_path: token_labels_path.clone(),
+            token_labels_path,
             ..Default::default()
         });
-
-        let task_id: (Uuid,) = sqlx::query_as(
-            r#"
-            INSERT INTO tasks (task_type, config, priority, max_retries)
-            VALUES ($1, $2, $3, $4)
-            RETURNING id
-            "#,
+        self.submit_task_if_not_exists(
+            &builder.task_type().to_string(),
+            builder.config().clone(),
+            builder.get_priority(),
+            builder.get_max_retries(),
         )
-        .bind(builder.task_type().to_string())
-        .bind(builder.config())
-        .bind(builder.get_priority())
-        .bind(builder.get_max_retries())
-        .fetch_one(self.writer.pool())
-        .await?;
-
-        info!(
-            "Submitted label import task: {} (path: {})",
-            task_id.0, token_labels_path
-        );
-
-        Ok(())
-    }
-
-    async fn check_and_execute_dao_rebuild_task(&self) -> Result<bool> {
-        use ckbadger_common::{DaoRebuildConfig, DaoRebuildResult, TaskConfig};
-
-        let runner_id = format!("indexer-{}", std::process::id());
-        let task: Option<ckbadger_common::Task> = sqlx::query_as(
-            r#"
-            UPDATE tasks
-            SET status = 'running',
-                runner_id = $1,
-                started_at = COALESCE(started_at, NOW()),
-                heartbeat_at = NOW()
-            WHERE id = (
-                SELECT id FROM tasks
-                WHERE task_type = 'dao_rebuild'
-                  AND status = 'pending'
-                ORDER BY priority DESC, created_at ASC
-                LIMIT 1
-                FOR UPDATE SKIP LOCKED
-            )
-            RETURNING *
-            "#,
-        )
-        .bind(&runner_id)
-        .fetch_optional(self.writer.pool())
-        .await?;
-
-        let task = match task {
-            Some(t) => t,
-            None => return Ok(false),
-        };
-
-        info!(
-            "Claimed dao_rebuild task {} (runner: {})",
-            task.id, runner_id
-        );
-
-        let batch_size = match task.config_typed() {
-            Some(TaskConfig::DaoRebuild(c)) => c.batch_size as usize,
-            _ => DaoRebuildConfig::default().batch_size as usize,
-        };
-
-        let result = self.execute_dao_rebuild(task.id, batch_size).await;
-
-        match result {
-            Ok(deposits_populated) => {
-                let result_json = serde_json::to_value(DaoRebuildResult { deposits_populated })?;
-                sqlx::query(
-                    r#"
-                    UPDATE tasks
-                    SET status = 'completed',
-                        completed_at = NOW(),
-                        progress_current = progress_total,
-                        result = $2,
-                        heartbeat_at = NOW()
-                    WHERE id = $1
-                    "#,
-                )
-                .bind(task.id)
-                .bind(&result_json)
-                .execute(self.writer.pool())
-                .await?;
-
-                info!(
-                    "Completed dao_rebuild task {}: {} deposits populated",
-                    task.id, deposits_populated
-                );
-                Ok(true)
-            }
-            Err(e) => {
-                error!("Failed dao_rebuild task {}: {}", task.id, e);
-                sqlx::query(
-                    r#"
-                    UPDATE tasks
-                    SET status = CASE 
-                        WHEN retry_count < max_retries THEN 'pending'
-                        ELSE 'failed'
-                    END,
-                    error_message = $2,
-                    retry_count = retry_count + 1,
-                    runner_id = NULL,
-                    heartbeat_at = NOW()
-                    WHERE id = $1
-                    "#,
-                )
-                .bind(task.id)
-                .bind(e.to_string())
-                .execute(self.writer.pool())
-                .await?;
-
-                Err(e)
-            }
-        }
-    }
-
-    async fn execute_dao_rebuild(&self, task_id: Uuid, batch_size: usize) -> Result<i64> {
-        use crate::db::copy_dao_deposits::{collect_block_numbers, copy_dao_deposits_from_rocksdb};
-        use crate::db::copy_pool::{CopyConfig, CopyPoolManager};
-
-        info!("Starting dao_rebuild: counting deposits in RocksDB...");
-
-        let total_deposits = self.rocksdb_store.count_dao_deposits() as i64;
-        info!(
-            "Found {} DAO deposits in RocksDB, batch_size={}",
-            total_deposits, batch_size
-        );
-
-        sqlx::query(
-            r#"
-            UPDATE tasks
-            SET progress_total = $2,
-                progress_current = 0,
-                progress_message = 'Truncating dao_deposits table...',
-                heartbeat_at = NOW()
-            WHERE id = $1
-            "#,
-        )
-        .bind(task_id)
-        .bind(total_deposits)
-        .execute(self.writer.pool())
-        .await?;
-
-        info!("Truncating dao_deposits table...");
-        sqlx::query("TRUNCATE dao_deposits")
-            .execute(self.writer.pool())
-            .await?;
-
-        let copy_pool = CopyPoolManager::new(
-            &self.config.database_url,
-            CopyConfig {
-                max_copy_connections: 4,
-                copy_batch_size: batch_size,
-                copy_enabled: true,
-            },
-        )?;
-
-        sqlx::query(
-            r#"
-            UPDATE tasks
-            SET progress_message = 'Populating dao_deposits from RocksDB...',
-                heartbeat_at = NOW()
-            WHERE id = $1
-            "#,
-        )
-        .bind(task_id)
-        .execute(self.writer.pool())
-        .await?;
-
-        let mut deposits_written: i64 = 0;
-        let mut last_progress_update = std::time::Instant::now();
-        let pool = self.writer.pool().clone();
-        let start_time = std::time::Instant::now();
-
-        let mut all_batches: Vec<Vec<(Vec<u8>, i16, crate::db::DaoDepositCacheEntry)>> = Vec::new();
-
-        self.rocksdb_store
-            .iter_dao_deposits_batched(batch_size, |batch| {
-                all_batches.push(batch);
-            });
-
-        info!("Collected {} batches from RocksDB", all_batches.len());
-
-        for (batch_idx, batch) in all_batches.into_iter().enumerate() {
-            let block_numbers = collect_block_numbers(&batch);
-            let timestamps = self.fetch_block_timestamps(&block_numbers).await?;
-
-            let conn = copy_pool.get_connection().await?;
-            let rows = copy_dao_deposits_from_rocksdb(&conn, &batch, &timestamps).await?;
-            deposits_written += rows as i64;
-
-            if last_progress_update.elapsed() > std::time::Duration::from_secs(5)
-                || batch_idx % 10 == 0
-            {
-                let elapsed = start_time.elapsed().as_secs_f64();
-                let rate = if elapsed > 0.0 {
-                    deposits_written as f64 / elapsed
-                } else {
-                    0.0
-                };
-
-                sqlx::query(
-                    r#"
-                    UPDATE tasks
-                    SET progress_current = $2,
-                        rate_ema = $3,
-                        heartbeat_at = NOW()
-                    WHERE id = $1
-                    "#,
-                )
-                .bind(task_id)
-                .bind(deposits_written)
-                .bind(rate)
-                .execute(&pool)
-                .await?;
-
-                last_progress_update = std::time::Instant::now();
-
-                info!(
-                    "dao_rebuild progress: {}/{} ({:.1}%), {:.0} deposits/sec",
-                    deposits_written,
-                    total_deposits,
-                    if total_deposits > 0 {
-                        (deposits_written as f64 / total_deposits as f64) * 100.0
-                    } else {
-                        100.0
-                    },
-                    rate
-                );
-            }
-
-            drop(conn);
-        }
-
-        sqlx::query("UPDATE sync_status SET dao_deferred = FALSE WHERE id = 1")
-            .execute(self.writer.pool())
-            .await?;
-
-        let elapsed = start_time.elapsed();
-        info!(
-            "dao_rebuild completed: {} deposits in {:.2}s ({:.0} deposits/sec)",
-            deposits_written,
-            elapsed.as_secs_f64(),
-            if elapsed.as_secs_f64() > 0.0 {
-                deposits_written as f64 / elapsed.as_secs_f64()
-            } else {
-                0.0
-            }
-        );
-
-        Ok(deposits_written)
-    }
-
-    async fn fetch_block_timestamps(
-        &self,
-        block_numbers: &[i64],
-    ) -> Result<std::collections::HashMap<i64, chrono::DateTime<chrono::Utc>>> {
-        use std::collections::HashMap;
-
-        if block_numbers.is_empty() {
-            return Ok(HashMap::new());
-        }
-
-        let rows: Vec<(i64, chrono::DateTime<chrono::Utc>)> =
-            sqlx::query_as("SELECT number, timestamp FROM blocks_index WHERE number = ANY($1)")
-                .bind(block_numbers)
-                .fetch_all(self.writer.pool())
-                .await?;
-
-        Ok(rows.into_iter().collect())
-    }
-
-    async fn maybe_flush_live_cell_store(&self) {
-        use std::sync::atomic::Ordering;
-
-        let batches = self.batches_since_flush.fetch_add(1, Ordering::Relaxed) + 1;
-
-        if batches >= self.config.live_cell_flush_interval {
-            if let Some(store) = self.writer.live_cell_store() {
-                match store.flush_to_db(self.writer.pool()).await {
-                    Ok((inserts, removals)) => {
-                        if inserts > 0 || removals > 0 {
-                            info!(
-                                "LiveCellStore flushed: {} inserts, {} removals",
-                                inserts, removals
-                            );
-                        }
-                        self.batches_since_flush.store(0, Ordering::Relaxed);
-                    }
-                    Err(e) => {
-                        warn!("Failed to flush LiveCellStore: {}", e);
-                    }
-                }
-            }
-        }
     }
 
     async fn fetch_blocks_parallel(
@@ -2594,511 +1396,7 @@ impl Indexer {
         }
     }
 
-    async fn fetch_spore_inputs_by_outpoints(
-        &self,
-        outpoints: &[(Vec<u8>, i16)],
-    ) -> Result<HashMap<(Vec<u8>, i16), crate::parser::spore::ParsedSporeCell>> {
-        if outpoints.is_empty() {
-            return Ok(HashMap::new());
-        }
-
-        let tx_hashes: Vec<&[u8]> = outpoints.iter().map(|(h, _)| h.as_slice()).collect();
-        let indices: Vec<i16> = outpoints.iter().map(|(_, i)| *i).collect();
-        let rows = sqlx::query_as::<_, (Vec<u8>, i16, Vec<u8>, Vec<u8>, String, Option<Vec<u8>>, Vec<u8>)>(
-            r#"
-            SELECT tx_hash, output_index, spore_id, type_script_hash, content_type, cluster_id, owner_lock_hash
-            FROM spore_cells
-            WHERE (tx_hash, output_index) IN (SELECT * FROM UNNEST($1::bytea[], $2::smallint[]))
-            "#,
-        )
-        .bind(&tx_hashes)
-        .bind(&indices)
-        .fetch_all(self.writer.pool())
-        .await?;
-
-        let mut map = HashMap::new();
-        for (
-            tx_hash,
-            output_index,
-            spore_id,
-            type_script_hash,
-            content_type,
-            cluster_id,
-            owner_lock_hash,
-        ) in rows
-        {
-            map.insert(
-                (tx_hash, output_index),
-                crate::parser::spore::ParsedSporeCell {
-                    spore_id,
-                    type_script_hash,
-                    content_type,
-                    content: Vec::new(),
-                    cluster_id,
-                    owner_lock_hash,
-                },
-            );
-        }
-
-        Ok(map)
-    }
-
-    async fn fetch_mnft_inputs_by_outpoints(
-        &self,
-        outpoints: &[(Vec<u8>, i16)],
-    ) -> Result<HashMap<(Vec<u8>, i16), crate::parser::mnft::ParsedMnftToken>> {
-        if outpoints.is_empty() {
-            return Ok(HashMap::new());
-        }
-
-        let tx_hashes: Vec<&[u8]> = outpoints.iter().map(|(h, _)| h.as_slice()).collect();
-        let indices: Vec<i16> = outpoints.iter().map(|(_, i)| *i).collect();
-        let rows = sqlx::query_as::<
-            _,
-            (
-                Vec<u8>,
-                i16,
-                Vec<u8>,
-                Vec<u8>,
-                Vec<u8>,
-                i32,
-                Option<Vec<u8>>,
-                i16,
-                i16,
-                Vec<u8>,
-            ),
-        >(
-            r#"
-            SELECT tx_hash, output_index, token_id, type_script_hash, class_id, token_index,
-                   characteristic, configure, state, owner_lock_hash
-            FROM mnft_tokens
-            WHERE (tx_hash, output_index) IN (SELECT * FROM UNNEST($1::bytea[], $2::smallint[]))
-            "#,
-        )
-        .bind(&tx_hashes)
-        .bind(&indices)
-        .fetch_all(self.writer.pool())
-        .await?;
-
-        let mut map = HashMap::new();
-        for (
-            tx_hash,
-            output_index,
-            token_id,
-            type_script_hash,
-            class_id,
-            token_index,
-            characteristic,
-            configure,
-            state,
-            owner_lock_hash,
-        ) in rows
-        {
-            map.insert(
-                (tx_hash, output_index),
-                crate::parser::mnft::ParsedMnftToken {
-                    token_id,
-                    type_script_hash,
-                    class_id,
-                    token_index: token_index as u32,
-                    characteristic: characteristic.unwrap_or_default(),
-                    configure: configure as u8,
-                    state: state as u8,
-                    owner_lock_hash,
-                },
-            );
-        }
-
-        Ok(map)
-    }
-
-    async fn fetch_dotbit_inputs_by_outpoints(
-        &self,
-        outpoints: &[(Vec<u8>, i16)],
-    ) -> Result<HashMap<(Vec<u8>, i16), crate::parser::dotbit::ParsedDotbitAccount>> {
-        if outpoints.is_empty() {
-            return Ok(HashMap::new());
-        }
-
-        let tx_hashes: Vec<&[u8]> = outpoints.iter().map(|(h, _)| h.as_slice()).collect();
-        let indices: Vec<i16> = outpoints.iter().map(|(_, i)| *i).collect();
-        let rows = sqlx::query_as::<_, (Vec<u8>, i16, Vec<u8>, Vec<u8>, Option<i64>, Vec<u8>)>(
-            r#"
-            SELECT tx_hash, output_index, account_id, type_script_hash, expired_at, owner_lock_hash
-            FROM dotbit_accounts
-            WHERE (tx_hash, output_index) IN (SELECT * FROM UNNEST($1::bytea[], $2::smallint[]))
-            "#,
-        )
-        .bind(&tx_hashes)
-        .bind(&indices)
-        .fetch_all(self.writer.pool())
-        .await?;
-
-        let mut map = HashMap::new();
-        for (tx_hash, output_index, account_id, type_script_hash, expired_at, owner_lock_hash) in
-            rows
-        {
-            map.insert(
-                (tx_hash, output_index),
-                crate::parser::dotbit::ParsedDotbitAccount {
-                    account_id,
-                    type_script_hash,
-                    next_account_id: None,
-                    expired_at: expired_at.map(|value| value as u64),
-                    owner_lock_hash,
-                },
-            );
-        }
-
-        Ok(map)
-    }
-
-    fn build_input_cells_for_tx(
-        &self,
-        tx_data: &TxData,
-        batch_output_cells: &HashMap<(Vec<u8>, i16), crate::parser::cell::ParsedCell>,
-        live_cell_infos: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
-        input_cell_info: &HashMap<(Vec<u8>, i16), (i64, i64, Vec<u8>, i32)>,
-        consumed_code_hashes: &HashMap<(Vec<u8>, i16), (Vec<u8>, Option<Vec<u8>>)>,
-    ) -> Vec<crate::parser::cell::ParsedCell> {
-        let mut input_cells = Vec::with_capacity(tx_data.inputs.len());
-        for input in &tx_data.inputs {
-            let key = (
-                input.previous_tx_hash.to_vec(),
-                input.previous_output_index as i16,
-            );
-            if let Some(cell) = batch_output_cells.get(&key) {
-                input_cells.push(clone_parsed_cell(cell));
-                continue;
-            }
-            if let Some(info) = live_cell_infos.get(&key) {
-                input_cells.push(parsed_cell_from_live_info(info));
-                continue;
-            }
-            if let Some((capacity, _, lock_script_hash, data_size)) = input_cell_info.get(&key) {
-                let (lock_code_hash, type_code_hash) = consumed_code_hashes
-                    .get(&key)
-                    .map(|(lock, type_hash)| (lock.clone(), type_hash.clone()))
-                    .unwrap_or_default();
-                input_cells.push(crate::parser::cell::ParsedCell {
-                    capacity: *capacity,
-                    lock_code_hash,
-                    lock_hash_type: 0,
-                    lock_args: Vec::new(),
-                    lock_script_hash: lock_script_hash.clone(),
-                    type_code_hash,
-                    type_hash_type: None,
-                    type_args: None,
-                    type_script_hash: None,
-                    data_hash: vec![0u8; 32],
-                    data_size: *data_size,
-                    data: Vec::new(),
-                });
-            }
-        }
-        input_cells
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn collect_activities_for_batch(
-        &self,
-        blocks: &[BlockResponseWithCycles],
-        all_parsed_blocks: &[crate::parser::block::ParsedBlock],
-        all_tx_data: &[TxData],
-        input_cell_info: &HashMap<(Vec<u8>, i16), (i64, i64, Vec<u8>, i32)>,
-        consumed_code_hashes: &HashMap<(Vec<u8>, i16), (Vec<u8>, Option<Vec<u8>>)>,
-        udt_transfers_by_tx: &HashMap<Vec<u8>, Vec<crate::parser::ParsedUdtTransfer>>,
-        bulk_sync_mode: bool,
-    ) -> Result<Vec<(i64, DateTime<Utc>, Vec<ParsedActivity>)>> {
-        if blocks.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let mut batch_output_cells: HashMap<(Vec<u8>, i16), crate::parser::cell::ParsedCell> =
-            HashMap::new();
-        for tx_data in all_tx_data {
-            for (output_index, cell) in tx_data.cells.iter().enumerate() {
-                batch_output_cells.insert(
-                    (tx_data.hash.to_vec(), output_index as i16),
-                    clone_parsed_cell(cell),
-                );
-            }
-        }
-
-        let mut unique_outpoints: Vec<(Vec<u8>, i16)> = Vec::new();
-        let mut seen_outpoints: HashSet<(Vec<u8>, i16)> = HashSet::new();
-        for tx_data in all_tx_data {
-            for input in &tx_data.inputs {
-                let key = (
-                    input.previous_tx_hash.to_vec(),
-                    input.previous_output_index as i16,
-                );
-                if seen_outpoints.insert(key.clone()) {
-                    unique_outpoints.push(key);
-                }
-            }
-        }
-
-        let mut live_cell_infos: HashMap<(Vec<u8>, i16), LiveCellInfo> = HashMap::new();
-        if let Some(store) = self.writer.live_cell_store() {
-            let outpoint_refs: Vec<(&[u8], i16)> = unique_outpoints
-                .iter()
-                .map(|(h, i)| (h.as_slice(), *i))
-                .collect();
-            let cached = store.get_batch(&outpoint_refs);
-            for (key, info) in cached {
-                live_cell_infos.insert(key, info);
-            }
-            let consumed = store.get_consumed_cells_batch(&outpoint_refs);
-            for (key, info) in consumed {
-                live_cell_infos.entry(key).or_insert(info);
-            }
-        }
-
-        let (input_spores, input_mnfts, input_dotbits) = if bulk_sync_mode {
-            (HashMap::new(), HashMap::new(), HashMap::new())
-        } else {
-            let spore_inputs = self
-                .fetch_spore_inputs_by_outpoints(&unique_outpoints)
-                .await?;
-            let mnft_inputs = self
-                .fetch_mnft_inputs_by_outpoints(&unique_outpoints)
-                .await?;
-            let dotbit_inputs = self
-                .fetch_dotbit_inputs_by_outpoints(&unique_outpoints)
-                .await?;
-            (spore_inputs, mnft_inputs, dotbit_inputs)
-        };
-
-        let is_mainnet = infer_is_mainnet(&self.config.ckb_rpc_url);
-        let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
-
-        let mut activities_by_block: Vec<(i64, DateTime<Utc>, Vec<ParsedActivity>)> = Vec::new();
-        let mut block_tx_idx = 0usize;
-        for (block_idx, block_response) in blocks.iter().enumerate() {
-            let parsed = &all_parsed_blocks[block_idx];
-            let tx_count_for_block = parsed.transactions_count as usize;
-            let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
-            block_tx_idx += tx_count_for_block;
-
-            let mut block_activities: Vec<ParsedActivity> = Vec::new();
-
-            for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
-                let tx = &block_response.block.transactions[tx_idx];
-                let input_cells = self.build_input_cells_for_tx(
-                    tx_data,
-                    &batch_output_cells,
-                    &live_cell_infos,
-                    input_cell_info,
-                    consumed_code_hashes,
-                );
-
-                let mut activities: Vec<ParsedActivity> = Vec::new();
-
-                activities.extend(ActivityParser::parse_ckb_transfers(
-                    tx,
-                    &tx_data.hash,
-                    tx_data.tx_index,
-                    &tx_data.cells,
-                    &input_cells,
-                ));
-
-                if let Some(cellbase_reward) = ActivityParser::parse_cellbase_reward(
-                    tx,
-                    &tx_data.hash,
-                    tx_data.tx_index,
-                    &tx_data.cells,
-                    0,
-                    0,
-                ) {
-                    activities.push(cellbase_reward);
-                }
-
-                if let Some(transfers) = udt_transfers_by_tx.get(&tx_data.hash.to_vec()) {
-                    activities.extend(ActivityParser::parse_token_activities(
-                        &tx_data.hash,
-                        tx_data.tx_index,
-                        transfers,
-                        0,
-                    ));
-                }
-
-                let output_spores = SporeParser::parse_spores(tx);
-                let mut input_spores_for_tx: Vec<crate::parser::spore::ParsedSporeCell> =
-                    Vec::new();
-                for input in &tx_data.inputs {
-                    let key = (
-                        input.previous_tx_hash.to_vec(),
-                        input.previous_output_index as i16,
-                    );
-                    if let Some(spore) = input_spores.get(&key) {
-                        input_spores_for_tx.push(spore.clone());
-                    }
-                }
-                activities.extend(ActivityParser::parse_dob_activities(
-                    &tx_data.hash,
-                    tx_data.tx_index,
-                    &output_spores,
-                    &input_spores_for_tx,
-                    0,
-                ));
-
-                let output_mnfts = MnftParser::parse_tokens(tx);
-                let mut input_mnfts_for_tx: Vec<crate::parser::mnft::ParsedMnftToken> = Vec::new();
-                for input in &tx_data.inputs {
-                    let key = (
-                        input.previous_tx_hash.to_vec(),
-                        input.previous_output_index as i16,
-                    );
-                    if let Some(token) = input_mnfts.get(&key) {
-                        input_mnfts_for_tx.push(token.clone());
-                    }
-                }
-
-                let output_dotbits = DotbitParser::parse_accounts(tx);
-                let mut input_dotbits_for_tx: Vec<crate::parser::dotbit::ParsedDotbitAccount> =
-                    Vec::new();
-                for input in &tx_data.inputs {
-                    let key = (
-                        input.previous_tx_hash.to_vec(),
-                        input.previous_output_index as i16,
-                    );
-                    if let Some(account) = input_dotbits.get(&key) {
-                        input_dotbits_for_tx.push(account.clone());
-                    }
-                }
-
-                activities.extend(ActivityParser::parse_nft_activities(
-                    &tx_data.hash,
-                    tx_data.tx_index,
-                    &output_mnfts,
-                    &input_mnfts_for_tx,
-                    &output_dotbits,
-                    &input_dotbits_for_tx,
-                    0,
-                ));
-
-                let output_dao_cells: Vec<crate::parser::dao::ParsedDaoCell> = tx
-                    .outputs
-                    .iter()
-                    .zip(tx.outputs_data.iter())
-                    .filter_map(|(output, data_hex)| DaoParser::parse_dao_cell(output, data_hex))
-                    .collect();
-
-                let mut input_dao_cells: Vec<crate::parser::dao::ParsedDaoCell> = Vec::new();
-                for input in &input_cells {
-                    let type_code_hash = match &input.type_code_hash {
-                        Some(hash) => hash,
-                        None => continue,
-                    };
-                    if type_code_hash != &dao_code_hash {
-                        continue;
-                    }
-                    if input.data.is_empty() {
-                        continue;
-                    }
-                    let state = DaoParser::parse_dao_state(&input.data)
-                        .unwrap_or(crate::parser::dao::DaoState::WithdrawRequest);
-                    let deposit_block_number = DaoParser::parse_deposit_block_number(&input.data);
-                    input_dao_cells.push(crate::parser::dao::ParsedDaoCell {
-                        lock_script_hash: input.lock_script_hash.clone(),
-                        capacity: input.capacity,
-                        state,
-                        deposit_block_number,
-                    });
-                }
-
-                activities.extend(ActivityParser::parse_dao_activities(
-                    &tx_data.hash,
-                    tx_data.tx_index,
-                    &output_dao_cells,
-                    &input_dao_cells,
-                    0,
-                ));
-
-                activities.extend(ActivityParser::parse_script_deployments(
-                    &tx_data.hash,
-                    tx_data.tx_index,
-                    &tx_data.cells,
-                    0,
-                ));
-
-                activities.extend(ActivityParser::parse_rgbpp_activities(
-                    &tx_data.hash,
-                    tx_data.tx_index,
-                    &tx_data.cells,
-                    &input_cells,
-                    is_mainnet,
-                    0,
-                ));
-
-                if !activities.is_empty() {
-                    block_activities.extend(activities);
-                }
-            }
-
-            if !block_activities.is_empty() {
-                let original_count = block_activities.len();
-                let mut seen_ids: HashSet<Vec<u8>> = HashSet::new();
-                block_activities.retain(|a| seen_ids.insert(a.activity_id.clone()));
-
-                if block_activities.len() < original_count {
-                    debug!(
-                        "Block {}: Removed {} duplicate activity_ids",
-                        parsed.number,
-                        original_count - block_activities.len()
-                    );
-                }
-
-                activities_by_block.push((parsed.number, parsed.timestamp, block_activities));
-            }
-        }
-
-        Ok(activities_by_block)
-    }
-
-    async fn write_activities_batch(
-        &self,
-        activities_by_block: &[(i64, DateTime<Utc>, Vec<ParsedActivity>)],
-        bulk_sync_mode: bool,
-    ) -> Result<()> {
-        if activities_by_block.is_empty() {
-            return Ok(());
-        }
-
-        if self
-            .activities_deferred
-            .load(std::sync::atomic::Ordering::Relaxed)
-            && bulk_sync_mode
-        {
-            return Ok(());
-        }
-
-        if self.should_use_copy() {
-            let copy_router = self
-                .copy_router
-                .as_ref()
-                .expect("copy_router must exist when should_use_copy() is true");
-            let mut activity_data: Vec<(&ParsedActivity, i64, DateTime<Utc>)> = Vec::new();
-            for (block_number, timestamp, activities) in activities_by_block {
-                for activity in activities {
-                    activity_data.push((activity, *block_number, *timestamp));
-                }
-            }
-            copy_router.copy_activities_parallel(&activity_data).await?;
-        } else {
-            let (client, connection) =
-                tokio_postgres::connect(&self.config.database_url, NoTls).await?;
-            tokio::spawn(async move {
-                if let Err(e) = connection.await {
-                    warn!("activities COPY connection error: {}", e);
-                }
-            });
-            crate::db::copy_activities_batch(&client, activities_by_block).await?;
-        }
-
-        Ok(())
-    }
+    // === sync_blocks_batch (sequential path) ===
 
     async fn sync_blocks_batch(
         &self,
@@ -3109,7 +1407,6 @@ impl Indexer {
             return Ok(());
         }
 
-        // Parse blocks and transactions in parallel using rayon
         let blocks_clone: Vec<BlockResponseWithCycles> = blocks.to_vec();
         let (all_parsed_blocks, mut all_tx_data, all_input_outpoints) =
             tokio::task::spawn_blocking(move || parse_blocks_parallel(&blocks_clone)).await?;
@@ -3140,7 +1437,6 @@ impl Indexer {
             }
         }
 
-        // (capacity, created_at_block, lock_script_hash, data_size)
         let mut input_cell_info: HashMap<(Vec<u8>, i16), (i64, i64, Vec<u8>, i32)> = HashMap::new();
         for (tx_hash, idx) in &all_input_outpoints {
             let hash_arr: [u8; 32] = tx_hash.as_slice().try_into().unwrap_or([0u8; 32]);
@@ -3181,8 +1477,7 @@ impl Indexer {
                 .collect();
             let db_info = self
                 .writer
-                .get_cells_info_batch(&missing_refs, bulk_sync_mode)
-                .await?;
+                .get_cells_info_batch(&missing_refs, bulk_sync_mode)?;
             for ((tx_hash, idx), (cap, block, lock_hash, data_size)) in db_info {
                 input_cell_info.insert((tx_hash, idx), (cap, block, lock_hash, data_size));
             }
@@ -3220,12 +1515,11 @@ impl Indexer {
                 );
             }
         }
-        // Periodic size-based cleanup (DashMap has no LRU eviction)
         if self.cell_cache.len() > CELL_CACHE_CAPACITY * 2 {
             self.cell_cache.clear();
         }
 
-        // Prepare all data before parallel insertion
+        // Prepare all data for insertion
         let block_refs: Vec<&crate::parser::block::ParsedBlock> =
             all_parsed_blocks.iter().collect();
 
@@ -3266,41 +1560,27 @@ impl Indexer {
             }
         }
 
-        // Parallel insert: blocks, transactions, and cells are independent (no FK constraints)
-        tokio::try_join!(
-            async {
-                if !block_refs.is_empty() {
-                    self.writer.insert_blocks_batch(&block_refs).await
-                } else {
-                    Ok(())
-                }
-            },
-            async {
-                if !txs_for_batch.is_empty() {
-                    self.writer.insert_transactions_batch(&txs_for_batch).await
-                } else {
-                    Ok(())
-                }
-            },
-            async {
-                if !all_cells.is_empty() {
-                    self.writer
-                        .insert_cells_batch(&all_cells, bulk_sync_mode)
-                        .await
-                } else {
-                    Ok(())
-                }
+        // Write blocks, txs, cells via StoreBatch
+        {
+            let mut batch = StoreBatch::new(self.writer.store());
+            if !block_refs.is_empty() {
+                self.writer.insert_blocks_batch(&block_refs, &mut batch)?;
             }
-        )?;
+            if !txs_for_batch.is_empty() {
+                self.writer
+                    .insert_transactions_batch(&txs_for_batch, &mut batch)?;
+            }
+            if !all_cells.is_empty() {
+                self.writer.insert_cells_batch(&all_cells, &mut batch)?;
+            }
+            batch.commit()?;
+        }
 
-        // Block proposals must be inserted after blocks (references block_number)
+        // Block proposals (no-op in RocksDB but kept for API compatibility)
         for parsed_block in &all_parsed_blocks {
             if !parsed_block.proposals.is_empty() {
                 self.writer
-                    .insert_block_proposals_batch(parsed_block.number, &parsed_block.proposals)
-                    .await?;
-
-                // Cache proposals in Redis during live sync for frontend display
+                    .insert_block_proposals_batch(parsed_block.number, &parsed_block.proposals)?;
                 if !self.is_bulk_sync_active() {
                     self.cache_block_proposals(&parsed_block.proposals, parsed_block.number)
                         .await;
@@ -3308,6 +1588,7 @@ impl Indexer {
             }
         }
 
+        // Inputs and flows (no-ops in RocksDB model)
         let mut all_inputs: Vec<(&[u8], i64, i16, &crate::parser::transaction::ParsedInput)> =
             Vec::new();
         for tx_data in &all_tx_data {
@@ -3323,17 +1604,14 @@ impl Indexer {
             }
         }
 
-        // Collect cell_flows: created (outputs) and consumed (inputs)
         let mut all_flows: Vec<(i64, &[u8], i16, i16, &[u8], i64, i32, Option<&[u8]>)> = Vec::new();
-
-        // Created cells (flow_type=0)
         for tx_data in &all_tx_data {
             for (output_index, cell) in tx_data.cells.iter().enumerate() {
                 all_flows.push((
                     tx_data.block_number,
                     tx_data.hash.as_slice(),
                     output_index as i16,
-                    0, // created
+                    0,
                     cell.lock_script_hash.as_slice(),
                     cell.capacity,
                     cell.data_size,
@@ -3341,8 +1619,6 @@ impl Indexer {
                 ));
             }
         }
-
-        // Consumed cells (flow_type=1)
         for tx_data in &all_tx_data {
             if !tx_data.is_cellbase {
                 for input in &tx_data.inputs {
@@ -3355,7 +1631,7 @@ impl Indexer {
                             tx_data.block_number,
                             input.previous_tx_hash.as_slice(),
                             input.previous_output_index as i16,
-                            1, // consumed
+                            1,
                             lock_hash.as_slice(),
                             *cap,
                             *ds,
@@ -3366,7 +1642,7 @@ impl Indexer {
                             tx_data.block_number,
                             input.previous_tx_hash.as_slice(),
                             input.previous_output_index as i16,
-                            1, // consumed
+                            1,
                             lock_hash.as_slice(),
                             *cap,
                             *ds,
@@ -3377,26 +1653,14 @@ impl Indexer {
             }
         }
 
-        // Parallel insert: inputs and cell_flows are independent
-        tokio::try_join!(
-            async {
-                if !all_inputs.is_empty() {
-                    self.writer
-                        .insert_transaction_inputs_batch(&all_inputs)
-                        .await
-                } else {
-                    Ok(())
-                }
-            },
-            async {
-                if !all_flows.is_empty() {
-                    self.writer.insert_cell_flows_batch(&all_flows).await
-                } else {
-                    Ok(())
-                }
-            }
-        )?;
+        if !all_inputs.is_empty() {
+            self.writer.insert_transaction_inputs_batch(&all_inputs)?;
+        }
+        if !all_flows.is_empty() {
+            self.writer.insert_cell_flows_batch(&all_flows)?;
+        }
 
+        // Consume cells
         let mut all_consumptions: Vec<(&[u8], i16, i64, &[u8], i64, i16)> = Vec::new();
         for tx_data in &all_tx_data {
             if !tx_data.is_cellbase {
@@ -3428,20 +1692,19 @@ impl Indexer {
             }
         }
         if !all_consumptions.is_empty() {
-            let bulk_sync_mode = chain_tip.saturating_sub(end_block) > 1000;
+            let mut batch = StoreBatch::new(self.writer.store());
             self.writer
-                .consume_cells_batch(&all_consumptions, bulk_sync_mode)
-                .await?;
+                .consume_cells_batch(&all_consumptions, &mut batch)?;
+            batch.commit()?;
         }
 
+        // Address balances
         let mut address_balance_changes: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, Vec<u8>)> =
             HashMap::new();
-
         for tx_data in &all_tx_data {
             let mut tx_balance_changes: HashMap<Vec<u8>, i64> = HashMap::new();
             let mut tx_cells_created: HashMap<Vec<u8>, i32> = HashMap::new();
             let mut tx_cells_consumed: HashMap<Vec<u8>, i32> = HashMap::new();
-
             if !tx_data.is_cellbase {
                 for input in &tx_data.inputs {
                     let key = (
@@ -3457,7 +1720,6 @@ impl Indexer {
                     }
                 }
             }
-
             for cell in &tx_data.cells {
                 *tx_balance_changes
                     .entry(cell.lock_script_hash.clone())
@@ -3466,19 +1728,16 @@ impl Indexer {
                     .entry(cell.lock_script_hash.clone())
                     .or_default() += 1;
             }
-
             let all_addresses: HashSet<Vec<u8>> = tx_balance_changes
                 .keys()
                 .chain(tx_cells_created.keys())
                 .chain(tx_cells_consumed.keys())
                 .cloned()
                 .collect();
-
             for lock_hash in all_addresses {
                 let balance_change = tx_balance_changes.get(&lock_hash).copied().unwrap_or(0);
                 let cells_created = tx_cells_created.get(&lock_hash).copied().unwrap_or(0);
                 let cells_consumed = tx_cells_consumed.get(&lock_hash).copied().unwrap_or(0);
-
                 let entry = address_balance_changes.entry(lock_hash.clone()).or_insert((
                     0,
                     0,
@@ -3502,9 +1761,9 @@ impl Indexer {
                 .map(|(k, (a, b, c, d, e, f))| (k.clone(), (*a, *b, *c, *d, *e, f.as_slice())))
                 .collect();
 
+        // Script usage
         let mut script_usage_changes: HashMap<(Vec<u8>, bool), (i64, i64, i64, i64)> =
             HashMap::new();
-
         for tx_data in &all_tx_data {
             for cell in &tx_data.cells {
                 let lock_key = (cell.lock_code_hash.clone(), false);
@@ -3513,7 +1772,6 @@ impl Indexer {
                 entry.1 += 1;
                 entry.2 += cell.capacity;
                 entry.3 += cell.capacity;
-
                 if let Some(ref type_code_hash) = cell.type_code_hash {
                     let type_key = (type_code_hash.clone(), true);
                     let entry = script_usage_changes.entry(type_key).or_insert((0, 0, 0, 0));
@@ -3546,8 +1804,7 @@ impl Indexer {
                 .map(|(h, i)| (h.as_slice(), *i))
                 .collect();
             self.writer
-                .get_cells_code_hashes_batch(&refs, bulk_sync_mode)
-                .await?
+                .get_cells_code_hashes_batch(&refs, bulk_sync_mode)?
         } else {
             HashMap::new()
         };
@@ -3568,7 +1825,6 @@ impl Indexer {
                                 script_usage_changes.entry(lock_key).or_insert((0, 0, 0, 0));
                             entry.1 -= 1;
                             entry.3 -= cap;
-
                             if let Some(type_code_hash) = type_code_hash {
                                 let type_key = (type_code_hash.clone(), true);
                                 let entry =
@@ -3584,7 +1840,6 @@ impl Indexer {
                         let entry = script_usage_changes.entry(lock_key).or_insert((0, 0, 0, 0));
                         entry.1 -= 1;
                         entry.3 -= cap;
-
                         if let Some(type_code_hash) = type_code_hash {
                             let type_key = (type_code_hash.clone(), true);
                             let entry =
@@ -3601,41 +1856,32 @@ impl Indexer {
             .address_balances_deferred
             .load(std::sync::atomic::Ordering::Relaxed)
             && bulk_sync_mode;
-        tokio::try_join!(
-            async {
-                if !skip_address_balances && !changes_ref.is_empty() {
-                    self.writer
-                        .update_address_balances_batch(&changes_ref)
-                        .await
-                } else {
-                    Ok(())
-                }
-            },
-            async {
-                if !script_usage_changes.is_empty() {
-                    self.writer
-                        .update_script_usage_batch(&script_usage_changes)
-                        .await
-                } else {
-                    Ok(())
-                }
+        {
+            let mut batch = StoreBatch::new(self.writer.store());
+            if !skip_address_balances && !changes_ref.is_empty() {
+                self.writer
+                    .update_address_balances_batch(&changes_ref, &mut batch)?;
             }
-        )?;
+            if !script_usage_changes.is_empty() {
+                self.writer
+                    .update_script_usage_batch(&script_usage_changes, &mut batch)?;
+            }
+            batch.commit()?;
+        }
 
+        // Accumulate batch statistics
         let mut batch_stats = BatchStats::default();
         let mut prev_timestamp: Option<chrono::DateTime<Utc>> =
             if let Some(first_block) = all_parsed_blocks.first() {
                 self.writer
-                    .get_previous_block_timestamp(first_block.number)
-                    .await?
+                    .get_previous_block_timestamp(first_block.number)?
             } else {
                 None
             };
         let mut prev_epoch: Option<(i64, chrono::DateTime<Utc>, f64)> =
             if let Some(first_block) = all_parsed_blocks.first() {
                 self.writer
-                    .get_last_epoch_start(first_block.number)
-                    .await?
+                    .get_last_epoch_start(first_block.number)?
                     .map(|(epoch_num, ts)| (epoch_num, ts, 0.0))
             } else {
                 None
@@ -3644,7 +1890,6 @@ impl Indexer {
         let mut block_tx_idx = 0usize;
         for parsed in &all_parsed_blocks {
             let block_date = parsed.timestamp.date_naive();
-
             let tx_count_for_block = parsed.transactions_count as usize;
             let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
             block_tx_idx += tx_count_for_block;
@@ -3730,34 +1975,6 @@ impl Indexer {
             }
 
             {
-                let block_hour = truncate_to_hour(parsed.timestamp);
-                let entry = batch_stats.hourly_stats.entry(block_hour).or_default();
-                entry.0 += 1;
-                entry.1 += parsed.transactions_count;
-                entry.2 += cells_created;
-                entry.3 += cells_consumed;
-                entry.4 += capacity_transferred;
-            }
-
-            {
-                let entry = batch_stats.daily_block_stats.entry(block_date).or_default();
-                entry.0 += parsed.compact_target as i128;
-                entry.1 += 1;
-                entry.2 += parsed.uncles_count;
-            }
-
-            if let Some(first_tx) = tx_slice.first() {
-                if first_tx.is_cellbase {
-                    if let Some(first_cell) = first_tx.cells.first() {
-                        let key = (block_date, first_cell.lock_script_hash.clone());
-                        let entry = batch_stats.miner_stats.entry(key).or_insert((0, 0));
-                        entry.0 += 1;
-                        entry.1 = parsed.number;
-                    }
-                }
-            }
-
-            {
                 let entry = batch_stats
                     .epoch_stats
                     .entry(parsed.epoch_number)
@@ -3798,7 +2015,6 @@ impl Indexer {
                     if prev_epoch_num == parsed.epoch_number - 1 {
                         let epoch_duration_minutes =
                             (parsed.timestamp - prev_start_ts).num_seconds() as f64 / 60.0;
-                        // Use 1-minute buckets to match official CKB Explorer
                         let bucket_minutes = epoch_duration_minutes.round() as i32;
                         *batch_stats
                             .epoch_time_dist
@@ -3814,9 +2030,8 @@ impl Indexer {
             batch_stats.dao_snapshot_dates.insert(block_date);
         }
 
+        // DAO processing
         let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
-        let dao_deferred = self.dao_deferred.load(Ordering::Relaxed);
-        let live_cell_store = Some(self.rocksdb_store.as_ref());
         let mut block_tx_idx = 0usize;
         for parsed in &all_parsed_blocks {
             let tx_count_for_block = parsed.transactions_count as usize;
@@ -3828,16 +2043,15 @@ impl Indexer {
                     DaoParser::parse_deposits_from_cells(&tx_data.hash, &tx_data.cells);
                 for deposit in &dao_deposits {
                     let ar = DaoParser::extract_ar_from_dao_field(&parsed.dao).unwrap_or(0) as i64;
-                    self.writer
-                        .insert_dao_deposit(
-                            deposit,
-                            parsed.number,
-                            parsed.timestamp,
-                            ar,
-                            live_cell_store,
-                            dao_deferred,
-                        )
-                        .await?;
+                    let mut batch = StoreBatch::new(self.writer.store());
+                    self.writer.insert_dao_deposit(
+                        deposit,
+                        parsed.number,
+                        parsed.timestamp,
+                        ar,
+                        &mut batch,
+                    )?;
+                    batch.commit()?;
                 }
             }
 
@@ -3852,10 +2066,7 @@ impl Indexer {
                     .map(|i| (i.previous_tx_hash.as_slice(), i.previous_output_index))
                     .collect();
 
-                let consumed_dao = self
-                    .writer
-                    .find_consumed_dao_deposits(&input_outpoints, live_cell_store)
-                    .await?;
+                let consumed_dao = self.writer.find_consumed_dao_deposits(&input_outpoints)?;
                 if consumed_dao.is_empty() {
                     continue;
                 }
@@ -3882,33 +2093,29 @@ impl Indexer {
                     }
                 }
 
-                self.writer
-                    .process_dao_withdrawals(
+                {
+                    let mut batch = StoreBatch::new(self.writer.store());
+                    self.writer.process_dao_withdrawals(
                         &consumed_dao,
                         &new_dao_outputs,
                         parsed.number,
                         &tx_data.hash,
                         parsed.timestamp,
-                        live_cell_store,
-                        dao_deferred,
-                    )
-                    .await?;
+                        &mut batch,
+                    )?;
+                    batch.commit()?;
+                }
             }
         }
 
-        let skip_token = self
-            .token_deferred
-            .load(std::sync::atomic::Ordering::Relaxed)
-            && bulk_sync_mode;
-
-        let skip_spore = self
-            .spore_deferred
-            .load(std::sync::atomic::Ordering::Relaxed)
-            && bulk_sync_mode;
+        // UDT processing
+        let skip_token = false;
+        let skip_spore = false;
 
         struct UdtTxContext {
             tx_hash: Vec<u8>,
             block_number: i64,
+            #[allow(dead_code)]
             timestamp: chrono::DateTime<Utc>,
             output_udts: Vec<crate::parser::ParsedUdtCell>,
             input_outpoints: Vec<(Vec<u8>, i16)>,
@@ -3921,7 +2128,6 @@ impl Indexer {
         let mut udt_transfers_by_tx: HashMap<Vec<u8>, Vec<crate::parser::ParsedUdtTransfer>> =
             HashMap::new();
 
-        // Temp storage: we filter txs later based on whether they have UDT inputs
         struct TxInfoForUdt {
             tx_hash: Vec<u8>,
             block_number: i64,
@@ -3942,26 +2148,20 @@ impl Indexer {
                 if tx_data.is_cellbase {
                     continue;
                 }
-
                 let tx = &block_response.block.transactions[tx_idx];
                 let output_udts = UdtParser::parse_udt_cells(tx);
-
                 for (output_index, udt_cell) in output_udts.iter().enumerate() {
                     batch_udt_cells.insert(
                         (tx_data.hash.to_vec(), output_index as i16),
                         udt_cell.clone(),
                     );
                 }
-
                 let input_outpoints: Vec<(Vec<u8>, i16)> = tx_data
                     .inputs
                     .iter()
                     .map(|i| (i.previous_tx_hash.to_vec(), i.previous_output_index as i16))
                     .collect();
-
-                // Collect ALL input outpoints (to detect UDT consumption/burns)
                 all_input_outpoints_udt.extend(input_outpoints.iter().cloned());
-
                 all_tx_infos_for_udt.push(TxInfoForUdt {
                     tx_hash: tx_data.hash.to_vec(),
                     block_number: parsed.number,
@@ -3972,8 +2172,6 @@ impl Indexer {
             }
         }
 
-        // Fetch UDT info for ALL input outpoints to detect UDT consumption
-        // Skip when token deferred - no UDT cells in DB during bulk sync
         let input_udt_info = if !skip_token && !all_input_outpoints_udt.is_empty() {
             let unique_outpoints: Vec<(Vec<u8>, i16)> = {
                 let mut seen = HashSet::new();
@@ -3986,19 +2184,17 @@ impl Indexer {
                 .iter()
                 .map(|(h, i)| (h.as_slice(), *i))
                 .collect();
-            self.writer.get_udt_cells_info_batch(&outpoint_refs).await?
+            self.writer.get_udt_cells_info_batch(&outpoint_refs)?
         } else {
             HashMap::new()
         };
 
-        // Filter: include txs with UDT outputs OR UDT inputs (fixes burn/send tracking)
         for tx_info in all_tx_infos_for_udt {
             let has_udt_outputs = !tx_info.output_udts.is_empty();
             let has_udt_inputs = tx_info.input_outpoints.iter().any(|(tx_hash, idx)| {
                 input_udt_info.contains_key(&(tx_hash.clone(), *idx))
                     || batch_udt_cells.contains_key(&(tx_hash.clone(), *idx))
             });
-
             if has_udt_outputs || has_udt_inputs {
                 udt_tx_contexts.push(UdtTxContext {
                     tx_hash: tx_info.tx_hash,
@@ -4011,13 +2207,8 @@ impl Indexer {
         }
 
         if !skip_token && !udt_tx_contexts.is_empty() {
-            let mut all_transfers: Vec<(
-                crate::parser::ParsedUdtTransfer,
-                Vec<u8>,
-                i64,
-                chrono::DateTime<Utc>,
-            )> = Vec::new();
-
+            let mut all_transfers: Vec<(crate::parser::ParsedUdtTransfer, Vec<u8>, i64)> =
+                Vec::new();
             let mut consumed_udt_outpoints: Vec<(&[u8], i16, i64, &[u8])> = Vec::new();
 
             for ctx in &udt_tx_contexts {
@@ -4057,10 +2248,8 @@ impl Indexer {
                     let matching_input = input_udts
                         .iter()
                         .find(|inp| inp.type_script_hash == out_udt.type_script_hash);
-
                     let is_mint = matching_input.is_none();
                     let from_lock_hash = matching_input.map(|inp| inp.lock_script_hash.clone());
-
                     all_transfers.push((
                         crate::parser::ParsedUdtTransfer {
                             type_script_hash: out_udt.type_script_hash.clone(),
@@ -4076,7 +2265,6 @@ impl Indexer {
                         },
                         ctx.tx_hash.clone(),
                         ctx.block_number,
-                        ctx.timestamp,
                     ));
                 }
 
@@ -4085,7 +2273,6 @@ impl Indexer {
                         .output_udts
                         .iter()
                         .any(|out| out.type_script_hash == inp_udt.type_script_hash);
-
                     if !has_matching_output {
                         all_transfers.push((
                             crate::parser::ParsedUdtTransfer {
@@ -4102,14 +2289,13 @@ impl Indexer {
                             },
                             ctx.tx_hash.clone(),
                             ctx.block_number,
-                            ctx.timestamp,
                         ));
                     }
                 }
             }
 
             if !all_transfers.is_empty() {
-                for (transfer, tx_hash, _, _) in &all_transfers {
+                for (transfer, tx_hash, _) in &all_transfers {
                     udt_transfers_by_tx
                         .entry(tx_hash.clone())
                         .or_default()
@@ -4118,17 +2304,19 @@ impl Indexer {
 
                 let transfer_refs: Vec<_> = all_transfers
                     .iter()
-                    .map(|(t, h, b, ts)| (t, h.as_slice(), *b, *ts))
+                    .map(|(t, h, b)| (t, h.as_slice(), *b))
                     .collect();
-                self.writer
-                    .process_udt_transfers_batch(&transfer_refs)
-                    .await?;
+                {
+                    let mut batch = StoreBatch::new(self.writer.store());
+                    self.writer
+                        .process_udt_transfers_batch(&transfer_refs, &mut batch)?;
+                    batch.commit()?;
+                }
             }
 
             if !consumed_udt_outpoints.is_empty() {
                 self.writer
-                    .consume_udt_cells_batch(&consumed_udt_outpoints)
-                    .await?;
+                    .consume_udt_cells_batch(&consumed_udt_outpoints)?;
             }
         }
 
@@ -4144,111 +2332,100 @@ impl Indexer {
                     (tx_hash.as_slice(), *idx, cell, block_number)
                 })
                 .collect();
-            if self.should_use_copy() {
-                let copy_router = self
-                    .copy_router
-                    .as_ref()
-                    .expect("copy_router must exist when should_use_copy() is true");
-                copy_router
-                    .copy_udt_cells_parallel(&udt_cells_to_insert)
-                    .await?;
-            } else {
-                self.writer
-                    .insert_udt_cells_batch(&udt_cells_to_insert)
-                    .await?;
-            }
+            self.writer.insert_udt_cells_batch(&udt_cells_to_insert)?;
         }
 
+        // NFT/Spore processing
         let mut batch_spore_ids: HashSet<Vec<u8>> = HashSet::new();
-        let mut batch_mnft_class_ids: HashSet<Vec<u8>> = HashSet::new();
-        let mut batch_mnft_token_ids: HashSet<Vec<u8>> = HashSet::new();
-        let mut batch_dotbit_account_ids: HashSet<Vec<u8>> = HashSet::new();
 
-        let mut block_tx_idx = 0usize;
-        for (block_idx, block_response) in blocks.iter().enumerate() {
-            let parsed = &all_parsed_blocks[block_idx];
-            let tx_count_for_block = parsed.transactions_count as usize;
-            let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
-            block_tx_idx += tx_count_for_block;
+        {
+            let mut nft_batch = StoreBatch::new(self.writer.store());
+            let mut block_tx_idx = 0usize;
+            for (block_idx, block_response) in blocks.iter().enumerate() {
+                let parsed = &all_parsed_blocks[block_idx];
+                let tx_count_for_block = parsed.transactions_count as usize;
+                let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
+                block_tx_idx += tx_count_for_block;
 
-            for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
-                let tx = &block_response.block.transactions[tx_idx];
+                for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
+                    let tx = &block_response.block.transactions[tx_idx];
 
-                if !skip_spore {
-                    for cluster in SporeParser::parse_clusters(tx) {
-                        self.writer
-                            .insert_spore_cluster(&cluster, parsed.number, &tx_data.hash)
-                            .await?;
-                    }
-
-                    for (output_index, spore) in SporeParser::parse_spores(tx).iter().enumerate() {
-                        batch_spore_ids.insert(spore.spore_id.clone());
-                        self.writer
-                            .insert_spore_cell(
+                    if !skip_spore {
+                        for cluster in SporeParser::parse_clusters(tx) {
+                            self.writer.insert_spore_cluster(
+                                &cluster,
+                                parsed.number,
+                                &tx_data.hash,
+                                &mut nft_batch,
+                            )?;
+                        }
+                        for (output_index, spore) in
+                            SporeParser::parse_spores(tx).iter().enumerate()
+                        {
+                            batch_spore_ids.insert(spore.spore_id.clone());
+                            self.writer.insert_spore_cell(
                                 spore,
                                 &tx_data.hash,
                                 output_index as i16,
                                 parsed.number,
-                            )
-                            .await?;
-                        self.writer
-                            .insert_spore_content(&spore.spore_id, &spore.content)
-                            .await?;
-                    }
-                }
-
-                // Skip MNFT/DotBit writes during bulk sync - too slow (individual upserts)
-                // These will need to be rebuilt after bulk sync completes
-                if !bulk_sync_mode {
-                    for issuer in MnftParser::parse_issuers(tx) {
-                        self.writer
-                            .insert_mnft_issuer(&issuer, &tx_data.hash, 0, parsed.number)
-                            .await?;
+                                &mut nft_batch,
+                            )?;
+                            self.writer
+                                .insert_spore_content(&spore.spore_id, &spore.content)?;
+                        }
                     }
 
-                    for (output_index, class) in MnftParser::parse_classes(tx).iter().enumerate() {
-                        batch_mnft_class_ids.insert(class.class_id.clone());
-                        self.writer
-                            .insert_mnft_class(
+                    if !bulk_sync_mode {
+                        for issuer in MnftParser::parse_issuers(tx) {
+                            self.writer.insert_mnft_issuer(
+                                &issuer,
+                                &tx_data.hash,
+                                0,
+                                parsed.number,
+                                &mut nft_batch,
+                            )?;
+                        }
+                        for (output_index, class) in
+                            MnftParser::parse_classes(tx).iter().enumerate()
+                        {
+                            self.writer.insert_mnft_class(
                                 class,
                                 &tx_data.hash,
                                 output_index as i16,
                                 parsed.number,
-                            )
-                            .await?;
-                    }
-
-                    for (output_index, token) in MnftParser::parse_tokens(tx).iter().enumerate() {
-                        batch_mnft_token_ids.insert(token.token_id.clone());
-                        self.writer
-                            .insert_mnft_token(
+                                &mut nft_batch,
+                            )?;
+                        }
+                        for (output_index, token) in MnftParser::parse_tokens(tx).iter().enumerate()
+                        {
+                            self.writer.insert_mnft_token(
                                 token,
                                 &tx_data.hash,
                                 output_index as i16,
                                 parsed.number,
-                            )
-                            .await?;
-                    }
-
-                    for (output_index, account) in
-                        DotbitParser::parse_accounts(tx).iter().enumerate()
-                    {
-                        batch_dotbit_account_ids.insert(account.account_id.clone());
-                        self.writer
-                            .insert_dotbit_account(
+                                &mut nft_batch,
+                            )?;
+                        }
+                        for (output_index, account) in
+                            DotbitParser::parse_accounts(tx).iter().enumerate()
+                        {
+                            self.writer.insert_dotbit_account(
                                 account,
                                 &tx_data.hash,
                                 output_index as i16,
                                 parsed.number,
-                            )
-                            .await?;
+                                &mut nft_batch,
+                            )?;
+                        }
                     }
                 }
             }
+            nft_batch.commit()?;
         }
 
-        // Skip per-input NFT consumption lookups during bulk sync - too slow (3 queries per input)
+        // Spore consumption (live sync only)
         if !self.is_bulk_sync_active() {
+            let mut consume_batch = StoreBatch::new(self.writer.store());
             let mut block_tx_idx = 0usize;
             for (block_idx, block_response) in blocks.iter().enumerate() {
                 let parsed = &all_parsed_blocks[block_idx];
@@ -4260,9 +2437,7 @@ impl Indexer {
                     if tx_data.is_cellbase || tx_data.inputs.is_empty() {
                         continue;
                     }
-
                     let tx = &block_response.block.transactions[tx_idx];
-
                     for input in &tx.inputs {
                         let prev_tx_hash =
                             crate::rpc::parse_hex_to_bytes(&input.previous_output.tx_hash);
@@ -4272,72 +2447,35 @@ impl Indexer {
                             .strip_prefix("0x")
                             .and_then(|s| u32::from_str_radix(s, 16).ok())
                             .unwrap_or(0);
-
                         let consumed_spore_id = self
                             .writer
-                            .get_spore_id_by_outpoint(&prev_tx_hash, prev_index as i16)
-                            .await?;
-
+                            .get_spore_id_by_outpoint(&prev_tx_hash, prev_index as i16)?;
                         if let Some(spore_id) = consumed_spore_id {
                             if !batch_spore_ids.contains(&spore_id) {
-                                self.writer
-                                    .consume_spore(&spore_id, parsed.number, &tx_data.hash)
-                                    .await?;
-                            }
-                        }
-
-                        let consumed_mnft_token_id = self
-                            .writer
-                            .get_mnft_token_id_by_outpoint(&prev_tx_hash, prev_index as i16)
-                            .await?;
-
-                        if let Some(token_id) = consumed_mnft_token_id {
-                            if !batch_mnft_token_ids.contains(&token_id) {
-                                self.writer
-                                    .consume_mnft_token(&token_id, parsed.number, &tx_data.hash)
-                                    .await?;
-                            }
-                        }
-
-                        let consumed_dotbit_account_id = self
-                            .writer
-                            .get_dotbit_account_id_by_outpoint(&prev_tx_hash, prev_index as i16)
-                            .await?;
-
-                        if let Some(account_id) = consumed_dotbit_account_id {
-                            if !batch_dotbit_account_ids.contains(&account_id) {
-                                self.writer
-                                    .consume_dotbit_account(
-                                        &account_id,
-                                        parsed.number,
-                                        &tx_data.hash,
-                                    )
-                                    .await?;
+                                self.writer.consume_spore(
+                                    &spore_id,
+                                    parsed.number,
+                                    &tx_data.hash,
+                                    &mut consume_batch,
+                                )?;
                             }
                         }
                     }
                 }
             }
+            consume_batch.commit()?;
         }
 
-        let activities_by_block = self
-            .collect_activities_for_batch(
-                blocks,
-                &all_parsed_blocks,
-                &all_tx_data,
-                &input_cell_info,
-                &consumed_code_hashes,
-                &udt_transfers_by_tx,
-                bulk_sync_mode,
-            )
-            .await?;
-        self.write_activities_batch(&activities_by_block, bulk_sync_mode)
-            .await?;
+        // Activities (no-op in RocksDB model)
+        let _ = &udt_transfers_by_tx;
 
         self.flush_batch_stats(&batch_stats).await?;
 
         Ok(())
     }
+    // === write_parsed_batch (pipeline path) ===
+    // This is largely identical to sync_blocks_batch but receives pre-parsed data
+    // from the pipeline parser stage and writes blocks LAST as a commit marker.
 
     async fn write_parsed_batch(
         &self,
@@ -4414,23 +2552,8 @@ impl Indexer {
             self.cell_cache.clear();
         }
 
-        let mut all_proposals: Vec<(i64, i16, &[u8])> = Vec::new();
-        for parsed_block in all_parsed_blocks {
-            if !parsed_block.proposals.is_empty() {
-                for (proposal_index, proposal_id) in parsed_block.proposals.iter().enumerate() {
-                    all_proposals.push((
-                        parsed_block.number,
-                        proposal_index as i16,
-                        proposal_id.as_slice(),
-                    ));
-                }
-
-                if !self.is_bulk_sync_active() {
-                    self.cache_block_proposals(&parsed_block.proposals, parsed_block.number)
-                        .await;
-                }
-            }
-        }
+        let block_refs: Vec<&crate::parser::block::ParsedBlock> =
+            all_parsed_blocks.iter().collect();
 
         let txs_for_batch: Vec<_> = all_tx_data
             .iter()
@@ -4469,6 +2592,7 @@ impl Indexer {
             }
         }
 
+        // No-op calls kept for API compatibility
         let mut all_inputs: Vec<(&[u8], i64, i16, &crate::parser::transaction::ParsedInput)> =
             Vec::new();
         for tx_data in &all_tx_data {
@@ -4484,194 +2608,43 @@ impl Indexer {
             }
         }
 
-        // Collect cell_flows: created (outputs) and consumed (inputs)
-        let mut all_flows: Vec<(i64, &[u8], i16, i16, &[u8], i64, i32, Option<&[u8]>)> = Vec::new();
-
-        // Created cells (flow_type=0)
-        for tx_data in &all_tx_data {
-            for (output_index, cell) in tx_data.cells.iter().enumerate() {
-                all_flows.push((
-                    tx_data.block_number,
-                    tx_data.hash.as_slice(),
-                    output_index as i16,
-                    0, // created
-                    cell.lock_script_hash.as_slice(),
-                    cell.capacity,
-                    cell.data_size,
-                    None,
-                ));
-            }
-        }
-
-        // Consumed cells (flow_type=1)
-        for tx_data in &all_tx_data {
-            if !tx_data.is_cellbase {
-                for input in &tx_data.inputs {
-                    let key = (
-                        input.previous_tx_hash.to_vec(),
-                        input.previous_output_index as i16,
-                    );
-                    if let Some((cap, _, lock_hash, ds)) = input_cell_info.get(&key) {
-                        all_flows.push((
-                            tx_data.block_number,
-                            input.previous_tx_hash.as_slice(),
-                            input.previous_output_index as i16,
-                            1, // consumed
-                            lock_hash.as_slice(),
-                            *cap,
-                            *ds,
-                            Some(tx_data.hash.as_slice()),
-                        ));
-                    } else if let Some((cap, _, lock_hash, ds, _, _)) = batch_cells.get(&key) {
-                        all_flows.push((
-                            tx_data.block_number,
-                            input.previous_tx_hash.as_slice(),
-                            input.previous_output_index as i16,
-                            1, // consumed
-                            lock_hash.as_slice(),
-                            *cap,
-                            *ds,
-                            Some(tx_data.hash.as_slice()),
-                        ));
-                    }
+        let mut all_proposals: Vec<(i64, i16, &[u8])> = Vec::new();
+        for parsed_block in all_parsed_blocks {
+            if !parsed_block.proposals.is_empty() {
+                for (proposal_index, proposal_id) in parsed_block.proposals.iter().enumerate() {
+                    all_proposals.push((
+                        parsed_block.number,
+                        proposal_index as i16,
+                        proposal_id.as_slice(),
+                    ));
+                }
+                if !self.is_bulk_sync_active() {
+                    self.cache_block_proposals(&parsed_block.proposals, parsed_block.number)
+                        .await;
                 }
             }
         }
 
-        if self.should_use_copy() {
-            let copy_router = self
-                .copy_router
-                .as_ref()
-                .expect("copy_router must exist when should_use_copy() is true");
-            let tx_block_map_deferred = self.tx_block_map_deferred.load(Ordering::Relaxed);
-            tokio::try_join!(
-                async {
-                    if !tx_block_map_deferred && !txs_for_batch.is_empty() {
-                        copy_router
-                            .copy_tx_block_map(&txs_for_batch)
-                            .await
-                            .map(|_| ())
-                    } else {
-                        Ok(())
-                    }
-                },
-                async {
-                    if !all_cells.is_empty() {
-                        copy_router
-                            .copy_cells_parallel(&all_cells)
-                            .await
-                            .map(|_| ())
-                    } else {
-                        Ok(())
-                    }
-                },
-                async {
-                    if !all_inputs.is_empty() {
-                        copy_router
-                            .copy_inputs_parallel(&all_inputs)
-                            .await
-                            .map(|_| ())
-                    } else {
-                        Ok(())
-                    }
-                },
-                async {
-                    if !all_proposals.is_empty() {
-                        copy_router
-                            .copy_proposals_parallel(&all_proposals)
-                            .await
-                            .map(|_| ())
-                    } else {
-                        Ok(())
-                    }
-                },
-                async {
-                    if !all_flows.is_empty() {
-                        copy_router
-                            .copy_cell_flows_parallel(&all_flows)
-                            .await
-                            .map(|_| ())
-                    } else {
-                        Ok(())
-                    }
-                },
-                async {
-                    if !txs_for_batch.is_empty() {
-                        copy_router
-                            .copy_transactions_index_parallel(&txs_for_batch)
-                            .await
-                            .map(|_| ())
-                    } else {
-                        Ok(())
-                    }
-                }
-            )?;
-        } else {
-            let tx_block_map_deferred = self.tx_block_map_deferred.load(Ordering::Relaxed);
-            tokio::try_join!(
-                async {
-                    if !txs_for_batch.is_empty() {
-                        self.writer.insert_transactions_batch(&txs_for_batch).await
-                    } else {
-                        Ok(())
-                    }
-                },
-                async {
-                    if !tx_block_map_deferred && !txs_for_batch.is_empty() {
-                        let hashes: Vec<&[u8]> = txs_for_batch.iter().map(|t| t.0).collect();
-                        let block_numbers: Vec<i64> = txs_for_batch.iter().map(|t| t.1).collect();
-                        sqlx::query(
-                            r#"
-                            INSERT INTO tx_block_map (tx_hash, block_number)
-                            SELECT * FROM UNNEST($1::bytea[], $2::bigint[])
-                            ON CONFLICT (tx_hash) DO NOTHING
-                            "#,
-                        )
-                        .bind(&hashes)
-                        .bind(&block_numbers)
-                        .execute(self.writer.pool())
-                        .await
-                        .map(|_| ())
-                        .map_err(|e| anyhow::anyhow!("Failed to insert tx_block_map: {}", e))
-                    } else {
-                        Ok(())
-                    }
-                },
-                async {
-                    if !all_cells.is_empty() {
-                        self.writer
-                            .insert_cells_batch(&all_cells, bulk_sync_mode)
-                            .await
-                    } else {
-                        Ok(())
-                    }
-                },
-                async {
-                    if !all_inputs.is_empty() {
-                        self.writer
-                            .insert_transaction_inputs_batch(&all_inputs)
-                            .await
-                    } else {
-                        Ok(())
-                    }
-                },
-                async {
-                    if !all_proposals.is_empty() {
-                        self.writer.insert_proposals_batch(&all_proposals).await
-                    } else {
-                        Ok(())
-                    }
-                },
-                async {
-                    if !all_flows.is_empty() {
-                        self.writer.insert_cell_flows_batch(&all_flows).await
-                    } else {
-                        Ok(())
-                    }
-                }
-            )?;
+        // Write txs, cells, inputs, proposals via StoreBatch (blocks written LAST)
+        {
+            let mut batch = StoreBatch::new(self.writer.store());
+            if !txs_for_batch.is_empty() {
+                self.writer
+                    .insert_transactions_batch(&txs_for_batch, &mut batch)?;
+            }
+            if !all_cells.is_empty() {
+                self.writer.insert_cells_batch(&all_cells, &mut batch)?;
+            }
+            if !all_inputs.is_empty() {
+                self.writer.insert_transaction_inputs_batch(&all_inputs)?;
+            }
+            if !all_proposals.is_empty() {
+                self.writer.insert_proposals_batch(&all_proposals)?;
+            }
+            batch.commit()?;
         }
 
+        // Consume cells
         let mut all_consumptions: Vec<(&[u8], i16, i64, &[u8], i64, i16)> = Vec::new();
         for tx_data in &all_tx_data {
             if !tx_data.is_cellbase {
@@ -4703,20 +2676,19 @@ impl Indexer {
             }
         }
         if !all_consumptions.is_empty() {
-            let bulk_sync_mode = chain_tip.saturating_sub(end_block) > 1000;
+            let mut batch = StoreBatch::new(self.writer.store());
             self.writer
-                .consume_cells_batch(&all_consumptions, bulk_sync_mode)
-                .await?;
+                .consume_cells_batch(&all_consumptions, &mut batch)?;
+            batch.commit()?;
         }
 
+        // Address balances
         let mut address_balance_changes: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, Vec<u8>)> =
             HashMap::new();
-
         for tx_data in &all_tx_data {
             let mut tx_balance_changes: HashMap<Vec<u8>, i64> = HashMap::new();
             let mut tx_cells_created: HashMap<Vec<u8>, i32> = HashMap::new();
             let mut tx_cells_consumed: HashMap<Vec<u8>, i32> = HashMap::new();
-
             if !tx_data.is_cellbase {
                 for input in &tx_data.inputs {
                     let key = (
@@ -4732,7 +2704,6 @@ impl Indexer {
                     }
                 }
             }
-
             for cell in &tx_data.cells {
                 *tx_balance_changes
                     .entry(cell.lock_script_hash.clone())
@@ -4741,19 +2712,16 @@ impl Indexer {
                     .entry(cell.lock_script_hash.clone())
                     .or_default() += 1;
             }
-
             let all_addresses: HashSet<Vec<u8>> = tx_balance_changes
                 .keys()
                 .chain(tx_cells_created.keys())
                 .chain(tx_cells_consumed.keys())
                 .cloned()
                 .collect();
-
             for lock_hash in all_addresses {
                 let balance_change = tx_balance_changes.get(&lock_hash).copied().unwrap_or(0);
                 let cells_created = tx_cells_created.get(&lock_hash).copied().unwrap_or(0);
                 let cells_consumed = tx_cells_consumed.get(&lock_hash).copied().unwrap_or(0);
-
                 let entry = address_balance_changes.entry(lock_hash.clone()).or_insert((
                     0,
                     0,
@@ -4770,16 +2738,15 @@ impl Indexer {
                 entry.5 = tx_data.hash.to_vec();
             }
         }
-
         let changes_ref: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8])> =
             address_balance_changes
                 .iter()
                 .map(|(k, (a, b, c, d, e, f))| (k.clone(), (*a, *b, *c, *d, *e, f.as_slice())))
                 .collect();
 
+        // Script usage
         let mut script_usage_changes: HashMap<(Vec<u8>, bool), (i64, i64, i64, i64)> =
             HashMap::new();
-
         for tx_data in &all_tx_data {
             for cell in &tx_data.cells {
                 let lock_key = (cell.lock_code_hash.clone(), false);
@@ -4788,7 +2755,6 @@ impl Indexer {
                 entry.1 += 1;
                 entry.2 += cell.capacity;
                 entry.3 += cell.capacity;
-
                 if let Some(ref type_code_hash) = cell.type_code_hash {
                     let type_key = (type_code_hash.clone(), true);
                     let entry = script_usage_changes.entry(type_key).or_insert((0, 0, 0, 0));
@@ -4799,7 +2765,6 @@ impl Indexer {
                 }
             }
         }
-
         for tx_data in &all_tx_data {
             if !tx_data.is_cellbase {
                 for input in &tx_data.inputs {
@@ -4816,7 +2781,6 @@ impl Indexer {
                                 script_usage_changes.entry(lock_key).or_insert((0, 0, 0, 0));
                             entry.1 -= 1;
                             entry.3 -= cap;
-
                             if let Some(type_code_hash) = type_code_hash {
                                 let type_key = (type_code_hash.clone(), true);
                                 let entry =
@@ -4832,7 +2796,6 @@ impl Indexer {
                         let entry = script_usage_changes.entry(lock_key).or_insert((0, 0, 0, 0));
                         entry.1 -= 1;
                         entry.3 -= cap;
-
                         if let Some(type_code_hash) = type_code_hash {
                             let type_key = (type_code_hash.clone(), true);
                             let entry =
@@ -4849,41 +2812,32 @@ impl Indexer {
             .address_balances_deferred
             .load(std::sync::atomic::Ordering::Relaxed)
             && bulk_sync_mode;
-        tokio::try_join!(
-            async {
-                if !skip_address_balances && !changes_ref.is_empty() {
-                    self.writer
-                        .update_address_balances_batch(&changes_ref)
-                        .await
-                } else {
-                    Ok(())
-                }
-            },
-            async {
-                if !script_usage_changes.is_empty() {
-                    self.writer
-                        .update_script_usage_batch(&script_usage_changes)
-                        .await
-                } else {
-                    Ok(())
-                }
+        {
+            let mut batch = StoreBatch::new(self.writer.store());
+            if !skip_address_balances && !changes_ref.is_empty() {
+                self.writer
+                    .update_address_balances_batch(&changes_ref, &mut batch)?;
             }
-        )?;
+            if !script_usage_changes.is_empty() {
+                self.writer
+                    .update_script_usage_batch(&script_usage_changes, &mut batch)?;
+            }
+            batch.commit()?;
+        }
 
+        // Stats accumulation
         let mut batch_stats = BatchStats::default();
         let mut prev_timestamp: Option<chrono::DateTime<Utc>> =
             if let Some(first_block) = all_parsed_blocks.first() {
                 self.writer
-                    .get_previous_block_timestamp(first_block.number)
-                    .await?
+                    .get_previous_block_timestamp(first_block.number)?
             } else {
                 None
             };
         let mut prev_epoch: Option<(i64, chrono::DateTime<Utc>, f64)> =
             if let Some(first_block) = all_parsed_blocks.first() {
                 self.writer
-                    .get_last_epoch_start(first_block.number)
-                    .await?
+                    .get_last_epoch_start(first_block.number)?
                     .map(|(epoch_num, ts)| (epoch_num, ts, 0.0))
             } else {
                 None
@@ -4943,11 +2897,9 @@ impl Indexer {
                 entry.5 += data_size_added;
                 entry.6 += data_size_consumed;
             }
-
             batch_stats
                 .daily_dao_fields
                 .insert(block_date, parsed.dao.clone());
-
             {
                 let block_hour = truncate_to_hour(parsed.timestamp);
                 let entry = batch_stats.hourly_stats.entry(block_hour).or_default();
@@ -4957,14 +2909,12 @@ impl Indexer {
                 entry.3 += cells_consumed;
                 entry.4 += capacity_transferred;
             }
-
             {
                 let entry = batch_stats.daily_block_stats.entry(block_date).or_default();
                 entry.0 += parsed.compact_target as i128;
                 entry.1 += 1;
                 entry.2 += parsed.uncles_count;
             }
-
             if let Some(first_tx) = tx_slice.first() {
                 if first_tx.is_cellbase {
                     if let Some(first_cell) = first_tx.cells.first() {
@@ -4975,7 +2925,6 @@ impl Indexer {
                     }
                 }
             }
-
             {
                 let entry = batch_stats
                     .epoch_stats
@@ -5017,7 +2966,6 @@ impl Indexer {
                     if prev_epoch_num == parsed.epoch_number - 1 {
                         let epoch_duration_minutes =
                             (parsed.timestamp - prev_start_ts).num_seconds() as f64 / 60.0;
-                        // Use 1-minute buckets to match official CKB Explorer
                         let bucket_minutes = epoch_duration_minutes.round() as i32;
                         *batch_stats
                             .epoch_time_dist
@@ -5029,1301 +2977,562 @@ impl Indexer {
             if parsed.epoch_index == 0 {
                 prev_epoch = Some((parsed.epoch_number, parsed.timestamp, 0.0));
             }
-
             batch_stats.dao_snapshot_dates.insert(block_date);
         }
 
+        // DAO, UDT, NFT processing (same as sync_blocks_batch)
         let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
-        let dao_deferred = self.dao_deferred.load(Ordering::Relaxed);
-        let live_cell_store = Some(self.rocksdb_store.as_ref());
+        let skip_token = false;
+        let skip_spore = false;
 
-        let skip_token = self
-            .token_deferred
-            .load(std::sync::atomic::Ordering::Relaxed)
-            && bulk_sync_mode;
+        // Group A: DAO processing
+        {
+            let mut all_dao_deposits: Vec<(
+                crate::parser::ParsedDaoDeposit,
+                i64,
+                DateTime<Utc>,
+                i64,
+            )> = Vec::new();
+            let mut block_tx_idx = 0usize;
+            for parsed in all_parsed_blocks {
+                let tx_count_for_block = parsed.transactions_count as usize;
+                let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
+                block_tx_idx += tx_count_for_block;
+                let ar = DaoParser::extract_ar_from_dao_field(&parsed.dao).unwrap_or(0) as i64;
+                for tx_data in tx_slice {
+                    let dao_deposits =
+                        DaoParser::parse_deposits_from_cells(&tx_data.hash, &tx_data.cells);
+                    for deposit in dao_deposits {
+                        all_dao_deposits.push((deposit, parsed.number, parsed.timestamp, ar));
+                    }
+                }
+            }
+            if !all_dao_deposits.is_empty() {
+                let mut batch = StoreBatch::new(self.writer.store());
+                self.writer
+                    .insert_dao_deposits_batch(&all_dao_deposits, &mut batch)?;
+                batch.commit()?;
+            }
 
-        let skip_spore = self
-            .spore_deferred
-            .load(std::sync::atomic::Ordering::Relaxed)
-            && bulk_sync_mode;
+            // Batch query consumed DAO deposits
+            let mut all_input_outpoints_dao: Vec<(Vec<u8>, i16)> = Vec::new();
+            let mut block_tx_idx = 0usize;
+            for parsed in all_parsed_blocks {
+                let tx_count_for_block = parsed.transactions_count as usize;
+                let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
+                block_tx_idx += tx_count_for_block;
+                for tx_data in tx_slice {
+                    if tx_data.is_cellbase || tx_data.inputs.is_empty() {
+                        continue;
+                    }
+                    for input in &tx_data.inputs {
+                        all_input_outpoints_dao.push((
+                            input.previous_tx_hash.to_vec(),
+                            input.previous_output_index as i16,
+                        ));
+                    }
+                }
+            }
 
-        // Parallel Phase: Run DAO, UDT+Activities, and NFT/Spore processing concurrently.
-        // These groups are independent of each other and only share read access to
-        // all_tx_data, all_parsed_blocks, blocks, and self.writer.
-        let (_, _, _) = tokio::try_join!(
-            // Group A: DAO processing (independent)
-            async {
-                // Collect all DAO deposits from the batch
-                let mut all_dao_deposits: Vec<(
-                    crate::parser::ParsedDaoDeposit,
-                    i64,
-                    DateTime<Utc>,
-                    i64,
-                )> = Vec::new();
+            let consumed_dao_map = if !all_input_outpoints_dao.is_empty() {
+                let unique_outpoints: Vec<(Vec<u8>, i16)> = {
+                    let mut seen = HashSet::new();
+                    all_input_outpoints_dao
+                        .into_iter()
+                        .filter(|x| seen.insert(x.clone()))
+                        .collect()
+                };
+                let outpoint_refs: Vec<(&[u8], i16)> = unique_outpoints
+                    .iter()
+                    .map(|(h, i)| (h.as_slice(), *i))
+                    .collect();
+                self.writer
+                    .find_consumed_dao_deposits_batch(&outpoint_refs)?
+            } else {
+                HashMap::new()
+            };
 
-                let mut block_tx_idx = 0usize;
-                for parsed in all_parsed_blocks {
-                    let tx_count_for_block = parsed.transactions_count as usize;
-                    let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
-                    block_tx_idx += tx_count_for_block;
-
-                    let ar = DaoParser::extract_ar_from_dao_field(&parsed.dao).unwrap_or(0) as i64;
-
-                    for tx_data in tx_slice {
-                        let dao_deposits =
-                            DaoParser::parse_deposits_from_cells(&tx_data.hash, &tx_data.cells);
-                        for deposit in dao_deposits {
-                            all_dao_deposits.push((deposit, parsed.number, parsed.timestamp, ar));
-                        }
+            if !consumed_dao_map.is_empty() {
+                use crate::db::DaoWithdrawalContextTrait;
+                #[derive(Clone)]
+                struct DaoWithdrawalContext {
+                    consumed_deposits: Vec<(i64, Vec<u8>, i16, String, i64, i16)>,
+                    new_dao_outputs: Vec<(Vec<u8>, i16, Vec<u8>, i64, u64)>,
+                    block_number: i64,
+                    consuming_tx_hash: Vec<u8>,
+                    timestamp: DateTime<Utc>,
+                }
+                impl DaoWithdrawalContextTrait for DaoWithdrawalContext {
+                    fn consumed_deposits(&self) -> &[(i64, Vec<u8>, i16, String, i64, i16)] {
+                        &self.consumed_deposits
+                    }
+                    fn new_dao_outputs(&self) -> &[(Vec<u8>, i16, Vec<u8>, i64, u64)] {
+                        &self.new_dao_outputs
+                    }
+                    fn block_number(&self) -> i64 {
+                        self.block_number
+                    }
+                    fn consuming_tx_hash(&self) -> &[u8] {
+                        &self.consuming_tx_hash
+                    }
+                    fn timestamp(&self) -> DateTime<Utc> {
+                        self.timestamp
                     }
                 }
 
-                // Batch insert DAO deposits
-                if !all_dao_deposits.is_empty() {
-                    self.writer
-                        .insert_dao_deposits_batch(&all_dao_deposits, live_cell_store, dao_deferred)
-                        .await?;
-                }
-
-                // Collect ALL input outpoints from non-cellbase transactions
-                let mut all_input_outpoints: Vec<(Vec<u8>, i16)> = Vec::new();
-
+                let mut withdrawal_contexts: Vec<DaoWithdrawalContext> = Vec::new();
                 let mut block_tx_idx = 0usize;
                 for parsed in all_parsed_blocks {
                     let tx_count_for_block = parsed.transactions_count as usize;
                     let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
                     block_tx_idx += tx_count_for_block;
-
                     for tx_data in tx_slice {
                         if tx_data.is_cellbase || tx_data.inputs.is_empty() {
                             continue;
                         }
+                        let mut consumed_deposits: Vec<(i64, Vec<u8>, i16, String, i64, i16)> =
+                            Vec::new();
                         for input in &tx_data.inputs {
-                            all_input_outpoints.push((
+                            let key = (
                                 input.previous_tx_hash.to_vec(),
                                 input.previous_output_index as i16,
-                            ));
-                        }
-                    }
-                }
-
-                // Batch query all potentially consumed DAO deposits
-                let consumed_dao_map = if !all_input_outpoints.is_empty() {
-                    let unique_outpoints: Vec<(Vec<u8>, i16)> = {
-                        let mut seen = HashSet::new();
-                        all_input_outpoints
-                            .into_iter()
-                            .filter(|x| seen.insert(x.clone()))
-                            .collect()
-                    };
-                    let outpoint_refs: Vec<(&[u8], i16)> = unique_outpoints
-                        .iter()
-                        .map(|(h, i)| (h.as_slice(), *i))
-                        .collect();
-                    self.writer
-                        .find_consumed_dao_deposits_batch(&outpoint_refs, live_cell_store)
-                        .await?
-                } else {
-                    HashMap::new()
-                };
-
-                // Process DAO withdrawals in batch
-                if !consumed_dao_map.is_empty() {
-                    use crate::db::DaoWithdrawalContextTrait;
-
-                    #[derive(Clone)]
-                    struct DaoWithdrawalContext {
-                        consumed_deposits: Vec<(i64, Vec<u8>, i16, String, i64, i16)>,
-                        new_dao_outputs: Vec<(Vec<u8>, i16, Vec<u8>, i64, u64)>,
-                        block_number: i64,
-                        consuming_tx_hash: Vec<u8>,
-                        timestamp: DateTime<Utc>,
-                    }
-
-                    impl DaoWithdrawalContextTrait for DaoWithdrawalContext {
-                        fn consumed_deposits(&self) -> &[(i64, Vec<u8>, i16, String, i64, i16)] {
-                            &self.consumed_deposits
-                        }
-                        fn new_dao_outputs(&self) -> &[(Vec<u8>, i16, Vec<u8>, i64, u64)] {
-                            &self.new_dao_outputs
-                        }
-                        fn block_number(&self) -> i64 {
-                            self.block_number
-                        }
-                        fn consuming_tx_hash(&self) -> &[u8] {
-                            &self.consuming_tx_hash
-                        }
-                        fn timestamp(&self) -> DateTime<Utc> {
-                            self.timestamp
-                        }
-                    }
-
-                    let mut withdrawal_contexts: Vec<DaoWithdrawalContext> = Vec::new();
-
-                    let mut block_tx_idx = 0usize;
-                    for parsed in all_parsed_blocks {
-                        let tx_count_for_block = parsed.transactions_count as usize;
-                        let tx_slice =
-                            &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
-                        block_tx_idx += tx_count_for_block;
-
-                        for tx_data in tx_slice {
-                            if tx_data.is_cellbase || tx_data.inputs.is_empty() {
-                                continue;
+                            );
+                            if let Some(deposit_info) = consumed_dao_map.get(&key) {
+                                consumed_deposits.push(deposit_info.clone());
                             }
-
-                            // Check if any input matches a DAO deposit
-                            let mut consumed_deposits: Vec<(i64, Vec<u8>, i16, String, i64, i16)> =
-                                Vec::new();
-                            for input in &tx_data.inputs {
-                                let key = (
-                                    input.previous_tx_hash.to_vec(),
-                                    input.previous_output_index as i16,
-                                );
-                                if let Some(deposit_info) = consumed_dao_map.get(&key) {
-                                    consumed_deposits.push(deposit_info.clone());
-                                }
-                            }
-
-                            if consumed_deposits.is_empty() {
-                                continue;
-                            }
-
-                            // Parse new DAO outputs (withdraw requests)
-                            let mut new_dao_outputs: Vec<(Vec<u8>, i16, Vec<u8>, i64, u64)> =
-                                Vec::new();
-                            for (idx, cell) in tx_data.cells.iter().enumerate() {
-                                if let Some(ref type_code_hash) = cell.type_code_hash {
-                                    if type_code_hash == &dao_code_hash && cell.data_size == 8 {
-                                        if let Some(data) = tx_data.outputs_data.get(idx) {
-                                            let data_bytes = crate::rpc::parse_hex_to_bytes(data);
-                                            if let Some(deposit_block) =
-                                                DaoParser::parse_deposit_block_number(&data_bytes)
-                                            {
-                                                new_dao_outputs.push((
-                                                    tx_data.hash.to_vec(),
-                                                    idx as i16,
-                                                    cell.lock_script_hash.clone(),
-                                                    cell.capacity,
-                                                    deposit_block,
-                                                ));
-                                            }
+                        }
+                        if consumed_deposits.is_empty() {
+                            continue;
+                        }
+                        let mut new_dao_outputs: Vec<(Vec<u8>, i16, Vec<u8>, i64, u64)> =
+                            Vec::new();
+                        for (idx, cell) in tx_data.cells.iter().enumerate() {
+                            if let Some(ref type_code_hash) = cell.type_code_hash {
+                                if type_code_hash == &dao_code_hash && cell.data_size == 8 {
+                                    if let Some(data) = tx_data.outputs_data.get(idx) {
+                                        let data_bytes = crate::rpc::parse_hex_to_bytes(data);
+                                        if let Some(deposit_block) =
+                                            DaoParser::parse_deposit_block_number(&data_bytes)
+                                        {
+                                            new_dao_outputs.push((
+                                                tx_data.hash.to_vec(),
+                                                idx as i16,
+                                                cell.lock_script_hash.clone(),
+                                                cell.capacity,
+                                                deposit_block,
+                                            ));
                                         }
                                     }
                                 }
                             }
-
-                            withdrawal_contexts.push(DaoWithdrawalContext {
-                                consumed_deposits,
-                                new_dao_outputs,
-                                block_number: parsed.number,
-                                consuming_tx_hash: tx_data.hash.to_vec(),
-                                timestamp: parsed.timestamp,
-                            });
                         }
-                    }
-
-                    // Batch process all withdrawals
-                    if !withdrawal_contexts.is_empty() {
-                        self.writer
-                            .process_dao_withdrawals_batch_with_store(
-                                &withdrawal_contexts,
-                                live_cell_store,
-                                dao_deferred,
-                            )
-                            .await?;
-                    }
-                }
-
-                Ok::<(), anyhow::Error>(())
-            },
-            // Group B: UDT processing + Activities (sequential within, activities depends on UDT)
-            async {
-                struct UdtTxContext {
-                    tx_hash: Vec<u8>,
-                    block_number: i64,
-                    timestamp: chrono::DateTime<Utc>,
-                    output_udts: Vec<crate::parser::ParsedUdtCell>,
-                    input_outpoints: Vec<(Vec<u8>, i16)>,
-                }
-
-                let mut udt_tx_contexts: Vec<UdtTxContext> = Vec::new();
-                let mut all_input_outpoints_udt: Vec<(Vec<u8>, i16)> = Vec::new();
-                let mut batch_udt_cells: HashMap<(Vec<u8>, i16), crate::parser::ParsedUdtCell> =
-                    HashMap::new();
-                let mut udt_transfers_by_tx: HashMap<
-                    Vec<u8>,
-                    Vec<crate::parser::ParsedUdtTransfer>,
-                > = HashMap::new();
-
-                struct TxInfoForUdt {
-                    tx_hash: Vec<u8>,
-                    block_number: i64,
-                    timestamp: chrono::DateTime<Utc>,
-                    output_udts: Vec<crate::parser::ParsedUdtCell>,
-                    input_outpoints: Vec<(Vec<u8>, i16)>,
-                }
-                let mut all_tx_infos_for_udt: Vec<TxInfoForUdt> = Vec::new();
-
-                let mut block_tx_idx = 0usize;
-                for (block_idx, block_response) in blocks.iter().enumerate() {
-                    let parsed = &all_parsed_blocks[block_idx];
-                    let tx_count_for_block = parsed.transactions_count as usize;
-                    let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
-                    block_tx_idx += tx_count_for_block;
-
-                    for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
-                        if tx_data.is_cellbase {
-                            continue;
-                        }
-
-                        let tx = &block_response.block.transactions[tx_idx];
-                        let output_udts = UdtParser::parse_udt_cells(tx);
-
-                        for (output_index, udt_cell) in output_udts.iter().enumerate() {
-                            batch_udt_cells.insert(
-                                (tx_data.hash.to_vec(), output_index as i16),
-                                udt_cell.clone(),
-                            );
-                        }
-
-                        let input_outpoints: Vec<(Vec<u8>, i16)> = tx_data
-                            .inputs
-                            .iter()
-                            .map(|i| (i.previous_tx_hash.to_vec(), i.previous_output_index as i16))
-                            .collect();
-
-                        // Collect ALL input outpoints (to detect UDT consumption/burns)
-                        all_input_outpoints_udt.extend(input_outpoints.iter().cloned());
-
-                        all_tx_infos_for_udt.push(TxInfoForUdt {
-                            tx_hash: tx_data.hash.to_vec(),
+                        withdrawal_contexts.push(DaoWithdrawalContext {
+                            consumed_deposits,
+                            new_dao_outputs,
                             block_number: parsed.number,
+                            consuming_tx_hash: tx_data.hash.to_vec(),
                             timestamp: parsed.timestamp,
-                            output_udts,
-                            input_outpoints,
                         });
                     }
                 }
+                if !withdrawal_contexts.is_empty() {
+                    let mut batch = StoreBatch::new(self.writer.store());
+                    self.writer
+                        .process_dao_withdrawals_batch(&withdrawal_contexts, &mut batch)?;
+                    batch.commit()?;
+                }
+            }
+        }
 
-                // Fetch UDT info for ALL input outpoints to detect UDT consumption
-                // Skip when token deferred - no UDT cells in DB during bulk sync
-                let input_udt_info = if !skip_token && !all_input_outpoints_udt.is_empty() {
-                    let unique_outpoints: Vec<(Vec<u8>, i16)> = {
-                        let mut seen = HashSet::new();
-                        all_input_outpoints_udt
-                            .into_iter()
-                            .filter(|x| seen.insert(x.clone()))
-                            .collect()
-                    };
-                    let outpoint_refs: Vec<(&[u8], i16)> = unique_outpoints
+        // Group B: UDT processing
+        {
+            struct UdtTxContext {
+                tx_hash: Vec<u8>,
+                block_number: i64,
+                #[allow(dead_code)]
+                timestamp: chrono::DateTime<Utc>,
+                output_udts: Vec<crate::parser::ParsedUdtCell>,
+                input_outpoints: Vec<(Vec<u8>, i16)>,
+            }
+            let mut udt_tx_contexts: Vec<UdtTxContext> = Vec::new();
+            let mut all_input_outpoints_udt: Vec<(Vec<u8>, i16)> = Vec::new();
+            let mut batch_udt_cells: HashMap<(Vec<u8>, i16), crate::parser::ParsedUdtCell> =
+                HashMap::new();
+            struct TxInfoForUdt {
+                tx_hash: Vec<u8>,
+                block_number: i64,
+                timestamp: chrono::DateTime<Utc>,
+                output_udts: Vec<crate::parser::ParsedUdtCell>,
+                input_outpoints: Vec<(Vec<u8>, i16)>,
+            }
+            let mut all_tx_infos_for_udt: Vec<TxInfoForUdt> = Vec::new();
+
+            let mut block_tx_idx = 0usize;
+            for (block_idx, block_response) in blocks.iter().enumerate() {
+                let parsed = &all_parsed_blocks[block_idx];
+                let tx_count_for_block = parsed.transactions_count as usize;
+                let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
+                block_tx_idx += tx_count_for_block;
+                for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
+                    if tx_data.is_cellbase {
+                        continue;
+                    }
+                    let tx = &block_response.block.transactions[tx_idx];
+                    let output_udts = UdtParser::parse_udt_cells(tx);
+                    for (output_index, udt_cell) in output_udts.iter().enumerate() {
+                        batch_udt_cells.insert(
+                            (tx_data.hash.to_vec(), output_index as i16),
+                            udt_cell.clone(),
+                        );
+                    }
+                    let input_outpoints: Vec<(Vec<u8>, i16)> = tx_data
+                        .inputs
                         .iter()
-                        .map(|(h, i)| (h.as_slice(), *i))
+                        .map(|i| (i.previous_tx_hash.to_vec(), i.previous_output_index as i16))
                         .collect();
-                    self.writer.get_udt_cells_info_batch(&outpoint_refs).await?
-                } else {
-                    HashMap::new()
-                };
-
-                // Filter: include txs with UDT outputs OR UDT inputs (fixes burn/send tracking)
-                for tx_info in all_tx_infos_for_udt {
-                    let has_udt_outputs = !tx_info.output_udts.is_empty();
-                    let has_udt_inputs = tx_info.input_outpoints.iter().any(|(tx_hash, idx)| {
-                        input_udt_info.contains_key(&(tx_hash.clone(), *idx))
-                            || batch_udt_cells.contains_key(&(tx_hash.clone(), *idx))
+                    all_input_outpoints_udt.extend(input_outpoints.iter().cloned());
+                    all_tx_infos_for_udt.push(TxInfoForUdt {
+                        tx_hash: tx_data.hash.to_vec(),
+                        block_number: parsed.number,
+                        timestamp: parsed.timestamp,
+                        output_udts,
+                        input_outpoints,
                     });
-
-                    if has_udt_outputs || has_udt_inputs {
-                        udt_tx_contexts.push(UdtTxContext {
-                            tx_hash: tx_info.tx_hash,
-                            block_number: tx_info.block_number,
-                            timestamp: tx_info.timestamp,
-                            output_udts: tx_info.output_udts,
-                            input_outpoints: tx_info.input_outpoints,
-                        });
-                    }
                 }
+            }
 
-                if !skip_token && !udt_tx_contexts.is_empty() {
-                    let mut all_transfers: Vec<(
-                        crate::parser::ParsedUdtTransfer,
-                        Vec<u8>,
-                        i64,
-                        chrono::DateTime<Utc>,
-                    )> = Vec::new();
+            let input_udt_info = if !skip_token && !all_input_outpoints_udt.is_empty() {
+                let unique_outpoints: Vec<(Vec<u8>, i16)> = {
+                    let mut seen = HashSet::new();
+                    all_input_outpoints_udt
+                        .into_iter()
+                        .filter(|x| seen.insert(x.clone()))
+                        .collect()
+                };
+                let outpoint_refs: Vec<(&[u8], i16)> = unique_outpoints
+                    .iter()
+                    .map(|(h, i)| (h.as_slice(), *i))
+                    .collect();
+                self.writer.get_udt_cells_info_batch(&outpoint_refs)?
+            } else {
+                HashMap::new()
+            };
 
-                    let mut consumed_udt_outpoints: Vec<(&[u8], i16, i64, &[u8])> = Vec::new();
+            for tx_info in all_tx_infos_for_udt {
+                let has_udt_outputs = !tx_info.output_udts.is_empty();
+                let has_udt_inputs = tx_info.input_outpoints.iter().any(|(tx_hash, idx)| {
+                    input_udt_info.contains_key(&(tx_hash.clone(), *idx))
+                        || batch_udt_cells.contains_key(&(tx_hash.clone(), *idx))
+                });
+                if has_udt_outputs || has_udt_inputs {
+                    udt_tx_contexts.push(UdtTxContext {
+                        tx_hash: tx_info.tx_hash,
+                        block_number: tx_info.block_number,
+                        timestamp: tx_info.timestamp,
+                        output_udts: tx_info.output_udts,
+                        input_outpoints: tx_info.input_outpoints,
+                    });
+                }
+            }
 
-                    for ctx in &udt_tx_contexts {
-                        let mut input_udts: Vec<crate::parser::ParsedUdtCell> = Vec::new();
-                        for (tx_hash, idx) in &ctx.input_outpoints {
-                            if let Some((
-                                type_script_hash,
-                                type_code_hash,
-                                type_hash_type,
-                                type_args,
-                                lock_script_hash,
-                                amount,
-                                standard,
-                            )) = input_udt_info.get(&(tx_hash.clone(), *idx))
-                            {
-                                input_udts.push(crate::parser::ParsedUdtCell {
-                                    type_script_hash: type_script_hash.clone(),
-                                    type_code_hash: type_code_hash.clone(),
-                                    type_hash_type: *type_hash_type,
-                                    type_args: type_args.clone(),
-                                    lock_script_hash: lock_script_hash.clone(),
-                                    amount: *amount,
-                                    standard: crate::parser::UdtStandard::parse(standard),
-                                });
-                                consumed_udt_outpoints.push((
-                                    tx_hash.as_slice(),
-                                    *idx,
-                                    ctx.block_number,
-                                    ctx.tx_hash.as_slice(),
-                                ));
-                            } else if let Some(udt_cell) =
-                                batch_udt_cells.get(&(tx_hash.clone(), *idx))
-                            {
-                                input_udts.push(udt_cell.clone());
-                            }
+            if !skip_token && !udt_tx_contexts.is_empty() {
+                let mut all_transfers: Vec<(crate::parser::ParsedUdtTransfer, Vec<u8>, i64)> =
+                    Vec::new();
+                let mut consumed_udt_outpoints: Vec<(&[u8], i16, i64, &[u8])> = Vec::new();
+
+                for ctx in &udt_tx_contexts {
+                    let mut input_udts: Vec<crate::parser::ParsedUdtCell> = Vec::new();
+                    for (tx_hash, idx) in &ctx.input_outpoints {
+                        if let Some((tsh, tch, tht, ta, lsh, am, std)) =
+                            input_udt_info.get(&(tx_hash.clone(), *idx))
+                        {
+                            input_udts.push(crate::parser::ParsedUdtCell {
+                                type_script_hash: tsh.clone(),
+                                type_code_hash: tch.clone(),
+                                type_hash_type: *tht,
+                                type_args: ta.clone(),
+                                lock_script_hash: lsh.clone(),
+                                amount: *am,
+                                standard: crate::parser::UdtStandard::parse(std),
+                            });
+                            consumed_udt_outpoints.push((
+                                tx_hash.as_slice(),
+                                *idx,
+                                ctx.block_number,
+                                ctx.tx_hash.as_slice(),
+                            ));
+                        } else if let Some(udt_cell) = batch_udt_cells.get(&(tx_hash.clone(), *idx))
+                        {
+                            input_udts.push(udt_cell.clone());
                         }
-
-                        for out_udt in &ctx.output_udts {
-                            let matching_input = input_udts
-                                .iter()
-                                .find(|inp| inp.type_script_hash == out_udt.type_script_hash);
-
-                            let is_mint = matching_input.is_none();
-                            let from_lock_hash =
-                                matching_input.map(|inp| inp.lock_script_hash.clone());
-
+                    }
+                    for out_udt in &ctx.output_udts {
+                        let matching_input = input_udts
+                            .iter()
+                            .find(|inp| inp.type_script_hash == out_udt.type_script_hash);
+                        let is_mint = matching_input.is_none();
+                        let from_lock_hash = matching_input.map(|inp| inp.lock_script_hash.clone());
+                        all_transfers.push((
+                            crate::parser::ParsedUdtTransfer {
+                                type_script_hash: out_udt.type_script_hash.clone(),
+                                type_code_hash: out_udt.type_code_hash.clone(),
+                                type_hash_type: out_udt.type_hash_type,
+                                type_args: out_udt.type_args.clone(),
+                                from_lock_hash,
+                                to_lock_hash: out_udt.lock_script_hash.clone(),
+                                amount: out_udt.amount,
+                                standard: out_udt.standard.clone(),
+                                is_mint,
+                                is_burn: false,
+                            },
+                            ctx.tx_hash.clone(),
+                            ctx.block_number,
+                        ));
+                    }
+                    for inp_udt in &input_udts {
+                        let has_matching_output = ctx
+                            .output_udts
+                            .iter()
+                            .any(|out| out.type_script_hash == inp_udt.type_script_hash);
+                        if !has_matching_output {
                             all_transfers.push((
                                 crate::parser::ParsedUdtTransfer {
-                                    type_script_hash: out_udt.type_script_hash.clone(),
-                                    type_code_hash: out_udt.type_code_hash.clone(),
-                                    type_hash_type: out_udt.type_hash_type,
-                                    type_args: out_udt.type_args.clone(),
-                                    from_lock_hash,
-                                    to_lock_hash: out_udt.lock_script_hash.clone(),
-                                    amount: out_udt.amount,
-                                    standard: out_udt.standard.clone(),
-                                    is_mint,
-                                    is_burn: false,
+                                    type_script_hash: inp_udt.type_script_hash.clone(),
+                                    type_code_hash: inp_udt.type_code_hash.clone(),
+                                    type_hash_type: inp_udt.type_hash_type,
+                                    type_args: inp_udt.type_args.clone(),
+                                    from_lock_hash: Some(inp_udt.lock_script_hash.clone()),
+                                    to_lock_hash: Vec::new(),
+                                    amount: inp_udt.amount,
+                                    standard: inp_udt.standard.clone(),
+                                    is_mint: false,
+                                    is_burn: true,
                                 },
                                 ctx.tx_hash.clone(),
                                 ctx.block_number,
-                                ctx.timestamp,
                             ));
                         }
-
-                        for inp_udt in &input_udts {
-                            let has_matching_output = ctx
-                                .output_udts
-                                .iter()
-                                .any(|out| out.type_script_hash == inp_udt.type_script_hash);
-
-                            if !has_matching_output {
-                                all_transfers.push((
-                                    crate::parser::ParsedUdtTransfer {
-                                        type_script_hash: inp_udt.type_script_hash.clone(),
-                                        type_code_hash: inp_udt.type_code_hash.clone(),
-                                        type_hash_type: inp_udt.type_hash_type,
-                                        type_args: inp_udt.type_args.clone(),
-                                        from_lock_hash: Some(inp_udt.lock_script_hash.clone()),
-                                        to_lock_hash: Vec::new(),
-                                        amount: inp_udt.amount,
-                                        standard: inp_udt.standard.clone(),
-                                        is_mint: false,
-                                        is_burn: true,
-                                    },
-                                    ctx.tx_hash.clone(),
-                                    ctx.block_number,
-                                    ctx.timestamp,
-                                ));
-                            }
-                        }
-                    }
-
-                    if !all_transfers.is_empty() {
-                        for (transfer, tx_hash, _, _) in &all_transfers {
-                            udt_transfers_by_tx
-                                .entry(tx_hash.clone())
-                                .or_default()
-                                .push(transfer.clone());
-                        }
-
-                        let transfer_refs: Vec<_> = all_transfers
-                            .iter()
-                            .map(|(t, h, b, ts)| (t, h.as_slice(), *b, *ts))
-                            .collect();
-                        self.writer
-                            .process_udt_transfers_batch(&transfer_refs)
-                            .await?;
-                    }
-
-                    if !consumed_udt_outpoints.is_empty() {
-                        self.writer
-                            .consume_udt_cells_batch(&consumed_udt_outpoints)
-                            .await?;
                     }
                 }
 
-                if !skip_token && !batch_udt_cells.is_empty() {
-                    let tx_block_map: std::collections::HashMap<&[u8], i64> = udt_tx_contexts
+                if !all_transfers.is_empty() {
+                    let transfer_refs: Vec<_> = all_transfers
                         .iter()
-                        .map(|ctx| (ctx.tx_hash.as_slice(), ctx.block_number))
+                        .map(|(t, h, b)| (t, h.as_slice(), *b))
                         .collect();
-                    let udt_cells_to_insert: Vec<_> = batch_udt_cells
-                        .iter()
-                        .map(|((tx_hash, idx), cell)| {
-                            let block_number =
-                                tx_block_map.get(tx_hash.as_slice()).copied().unwrap_or(0);
-                            (tx_hash.as_slice(), *idx, cell, block_number)
-                        })
-                        .collect();
-                    if self.should_use_copy() {
-                        let copy_router = self
-                            .copy_router
-                            .as_ref()
-                            .expect("copy_router must exist when should_use_copy() is true");
-                        copy_router
-                            .copy_udt_cells_parallel(&udt_cells_to_insert)
-                            .await?;
-                    } else {
-                        self.writer
-                            .insert_udt_cells_batch(&udt_cells_to_insert)
-                            .await?;
+                    let mut batch = StoreBatch::new(self.writer.store());
+                    self.writer
+                        .process_udt_transfers_batch(&transfer_refs, &mut batch)?;
+                    batch.commit()?;
+                }
+                if !consumed_udt_outpoints.is_empty() {
+                    self.writer
+                        .consume_udt_cells_batch(&consumed_udt_outpoints)?;
+                }
+            }
+
+            if !skip_token && !batch_udt_cells.is_empty() {
+                let tx_block_map: std::collections::HashMap<&[u8], i64> = udt_tx_contexts
+                    .iter()
+                    .map(|ctx| (ctx.tx_hash.as_slice(), ctx.block_number))
+                    .collect();
+                let udt_cells_to_insert: Vec<_> = batch_udt_cells
+                    .iter()
+                    .map(|((tx_hash, idx), cell)| {
+                        let block_number =
+                            tx_block_map.get(tx_hash.as_slice()).copied().unwrap_or(0);
+                        (tx_hash.as_slice(), *idx, cell, block_number)
+                    })
+                    .collect();
+                self.writer.insert_udt_cells_batch(&udt_cells_to_insert)?;
+            }
+        }
+
+        // Group C: NFT/Spore processing
+        {
+            let mut batch_spore_ids: HashSet<Vec<u8>> = HashSet::new();
+            let mut nft_batch = StoreBatch::new(self.writer.store());
+            let mut block_tx_idx = 0usize;
+            for (block_idx, block_response) in blocks.iter().enumerate() {
+                let parsed = &all_parsed_blocks[block_idx];
+                let tx_count_for_block = parsed.transactions_count as usize;
+                let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
+                block_tx_idx += tx_count_for_block;
+                for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
+                    let tx = &block_response.block.transactions[tx_idx];
+                    if !skip_spore {
+                        for cluster in SporeParser::parse_clusters(tx) {
+                            self.writer.insert_spore_cluster(
+                                &cluster,
+                                parsed.number,
+                                &tx_data.hash,
+                                &mut nft_batch,
+                            )?;
+                        }
+                        for (output_index, spore) in
+                            SporeParser::parse_spores(tx).iter().enumerate()
+                        {
+                            batch_spore_ids.insert(spore.spore_id.clone());
+                            self.writer.insert_spore_cell(
+                                spore,
+                                &tx_data.hash,
+                                output_index as i16,
+                                parsed.number,
+                                &mut nft_batch,
+                            )?;
+                            self.writer
+                                .insert_spore_content(&spore.spore_id, &spore.content)?;
+                        }
+                    }
+                    if !bulk_sync_mode {
+                        for issuer in MnftParser::parse_issuers(tx) {
+                            self.writer.insert_mnft_issuer(
+                                &issuer,
+                                &tx_data.hash,
+                                0,
+                                parsed.number,
+                                &mut nft_batch,
+                            )?;
+                        }
+                        for (output_index, class) in
+                            MnftParser::parse_classes(tx).iter().enumerate()
+                        {
+                            self.writer.insert_mnft_class(
+                                class,
+                                &tx_data.hash,
+                                output_index as i16,
+                                parsed.number,
+                                &mut nft_batch,
+                            )?;
+                        }
+                        for (output_index, token) in MnftParser::parse_tokens(tx).iter().enumerate()
+                        {
+                            self.writer.insert_mnft_token(
+                                token,
+                                &tx_data.hash,
+                                output_index as i16,
+                                parsed.number,
+                                &mut nft_batch,
+                            )?;
+                        }
+                        for (output_index, account) in
+                            DotbitParser::parse_accounts(tx).iter().enumerate()
+                        {
+                            self.writer.insert_dotbit_account(
+                                account,
+                                &tx_data.hash,
+                                output_index as i16,
+                                parsed.number,
+                                &mut nft_batch,
+                            )?;
+                        }
                     }
                 }
+            }
 
-                // Activities depend on udt_transfers_by_tx, so run after UDT processing
-                let activities_by_block = self
-                    .collect_activities_for_batch(
-                        blocks,
-                        all_parsed_blocks,
-                        &all_tx_data,
-                        &input_cell_info,
-                        &consumed_code_hashes,
-                        &udt_transfers_by_tx,
-                        bulk_sync_mode,
-                    )
-                    .await?;
-                self.write_activities_batch(&activities_by_block, bulk_sync_mode)
-                    .await?;
-
-                Ok::<(), anyhow::Error>(())
-            },
-            // Group C: NFT/Spore/mNFT/dotbit processing (independent)
-            async {
-                let mut batch_spore_ids: HashSet<Vec<u8>> = HashSet::new();
-                let mut batch_mnft_class_ids: HashSet<Vec<u8>> = HashSet::new();
-                let mut batch_mnft_token_ids: HashSet<Vec<u8>> = HashSet::new();
-                let mut batch_dotbit_account_ids: HashSet<Vec<u8>> = HashSet::new();
-
+            // NFT consumption (live sync only)
+            if !self.is_bulk_sync_active() {
+                let mut all_prev_tx_hashes: Vec<Vec<u8>> = Vec::new();
+                let mut all_prev_indices: Vec<i16> = Vec::new();
+                let mut outpoint_context: Vec<(i64, Vec<u8>)> = Vec::new();
                 let mut block_tx_idx = 0usize;
                 for (block_idx, block_response) in blocks.iter().enumerate() {
                     let parsed = &all_parsed_blocks[block_idx];
                     let tx_count_for_block = parsed.transactions_count as usize;
                     let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
                     block_tx_idx += tx_count_for_block;
-
                     for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
+                        if tx_data.is_cellbase || tx_data.inputs.is_empty() {
+                            continue;
+                        }
                         let tx = &block_response.block.transactions[tx_idx];
-
-                        if !skip_spore {
-                            for cluster in SporeParser::parse_clusters(tx) {
-                                self.writer
-                                    .insert_spore_cluster(&cluster, parsed.number, &tx_data.hash)
-                                    .await?;
-                            }
-
-                            for (output_index, spore) in
-                                SporeParser::parse_spores(tx).iter().enumerate()
-                            {
-                                batch_spore_ids.insert(spore.spore_id.clone());
-                                self.writer
-                                    .insert_spore_cell(
-                                        spore,
-                                        &tx_data.hash,
-                                        output_index as i16,
-                                        parsed.number,
-                                    )
-                                    .await?;
-                                self.writer
-                                    .insert_spore_content(&spore.spore_id, &spore.content)
-                                    .await?;
-                            }
-                        }
-
-                        if !bulk_sync_mode {
-                            for issuer in MnftParser::parse_issuers(tx) {
-                                self.writer
-                                    .insert_mnft_issuer(&issuer, &tx_data.hash, 0, parsed.number)
-                                    .await?;
-                            }
-
-                            for (output_index, class) in
-                                MnftParser::parse_classes(tx).iter().enumerate()
-                            {
-                                batch_mnft_class_ids.insert(class.class_id.clone());
-                                self.writer
-                                    .insert_mnft_class(
-                                        class,
-                                        &tx_data.hash,
-                                        output_index as i16,
-                                        parsed.number,
-                                    )
-                                    .await?;
-                            }
-
-                            for (output_index, token) in
-                                MnftParser::parse_tokens(tx).iter().enumerate()
-                            {
-                                batch_mnft_token_ids.insert(token.token_id.clone());
-                                self.writer
-                                    .insert_mnft_token(
-                                        token,
-                                        &tx_data.hash,
-                                        output_index as i16,
-                                        parsed.number,
-                                    )
-                                    .await?;
-                            }
-
-                            for (output_index, account) in
-                                DotbitParser::parse_accounts(tx).iter().enumerate()
-                            {
-                                batch_dotbit_account_ids.insert(account.account_id.clone());
-                                self.writer
-                                    .insert_dotbit_account(
-                                        account,
-                                        &tx_data.hash,
-                                        output_index as i16,
-                                        parsed.number,
-                                    )
-                                    .await?;
-                            }
+                        for input in &tx.inputs {
+                            let prev_tx_hash =
+                                crate::rpc::parse_hex_to_bytes(&input.previous_output.tx_hash);
+                            let prev_index = input
+                                .previous_output
+                                .index
+                                .strip_prefix("0x")
+                                .and_then(|s| u32::from_str_radix(s, 16).ok())
+                                .unwrap_or(0) as i16;
+                            all_prev_tx_hashes.push(prev_tx_hash);
+                            all_prev_indices.push(prev_index);
+                            outpoint_context.push((parsed.number, tx_data.hash.to_vec()));
                         }
                     }
                 }
-
-                // Skip per-input NFT consumption lookups during bulk sync - too slow
-                // These will be processed by integrity service after bulk sync completes
-                if !self.is_bulk_sync_active() {
-                    // Collect all input outpoints with their block/tx context in a single pass
-                    let mut all_prev_tx_hashes: Vec<Vec<u8>> = Vec::new();
-                    let mut all_prev_indices: Vec<i16> = Vec::new();
-                    let mut outpoint_context: Vec<(i64, Vec<u8>)> = Vec::new();
-
-                    let mut block_tx_idx = 0usize;
-                    for (block_idx, block_response) in blocks.iter().enumerate() {
-                        let parsed = &all_parsed_blocks[block_idx];
-                        let tx_count_for_block = parsed.transactions_count as usize;
-                        let tx_slice =
-                            &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
-                        block_tx_idx += tx_count_for_block;
-
-                        for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
-                            if tx_data.is_cellbase || tx_data.inputs.is_empty() {
-                                continue;
-                            }
-                            let tx = &block_response.block.transactions[tx_idx];
-                            for input in &tx.inputs {
-                                let prev_tx_hash =
-                                    crate::rpc::parse_hex_to_bytes(&input.previous_output.tx_hash);
-                                let prev_index = input
-                                    .previous_output
-                                    .index
-                                    .strip_prefix("0x")
-                                    .and_then(|s| u32::from_str_radix(s, 16).ok())
-                                    .unwrap_or(0)
-                                    as i16;
-
-                                all_prev_tx_hashes.push(prev_tx_hash);
-                                all_prev_indices.push(prev_index);
-                                outpoint_context.push((parsed.number, tx_data.hash.to_vec()));
+                if !all_prev_tx_hashes.is_empty() {
+                    let spore_results = self
+                        .writer
+                        .get_spore_ids_by_outpoints_batch(&all_prev_tx_hashes, &all_prev_indices)?;
+                    let mnft_results = self.writer.get_mnft_token_ids_by_outpoints_batch(
+                        &all_prev_tx_hashes,
+                        &all_prev_indices,
+                    )?;
+                    let dotbit_results = self.writer.get_dotbit_account_ids_by_outpoints_batch(
+                        &all_prev_tx_hashes,
+                        &all_prev_indices,
+                    )?;
+                    let spore_map: HashMap<(Vec<u8>, i16), Vec<u8>> = spore_results
+                        .into_iter()
+                        .map(|(h, i, id)| ((h, i), id))
+                        .collect();
+                    let mnft_map: HashMap<(Vec<u8>, i16), Vec<u8>> = mnft_results
+                        .into_iter()
+                        .map(|(h, i, id)| ((h, i), id))
+                        .collect();
+                    let dotbit_map: HashMap<(Vec<u8>, i16), Vec<u8>> = dotbit_results
+                        .into_iter()
+                        .map(|(h, i, id)| ((h, i), id))
+                        .collect();
+                    for (i, (block_number, consuming_tx_hash)) in
+                        outpoint_context.iter().enumerate()
+                    {
+                        let key = (all_prev_tx_hashes[i].clone(), all_prev_indices[i]);
+                        if let Some(spore_id) = spore_map.get(&key) {
+                            if !batch_spore_ids.contains(spore_id) {
+                                self.writer.consume_spore(
+                                    spore_id,
+                                    *block_number,
+                                    consuming_tx_hash,
+                                    &mut nft_batch,
+                                )?;
                             }
                         }
-                    }
-
-                    if !all_prev_tx_hashes.is_empty() {
-                        // 3 batch queries instead of 3×N individual queries
-                        let (spore_results, mnft_results, dotbit_results) = tokio::try_join!(
-                            self.writer.get_spore_ids_by_outpoints_batch(
-                                &all_prev_tx_hashes,
-                                &all_prev_indices
-                            ),
-                            self.writer.get_mnft_token_ids_by_outpoints_batch(
-                                &all_prev_tx_hashes,
-                                &all_prev_indices
-                            ),
-                            self.writer.get_dotbit_account_ids_by_outpoints_batch(
-                                &all_prev_tx_hashes,
-                                &all_prev_indices
-                            ),
-                        )?;
-
-                        let spore_map: std::collections::HashMap<(Vec<u8>, i16), Vec<u8>> =
-                            spore_results
-                                .into_iter()
-                                .map(|(tx_hash, idx, spore_id)| ((tx_hash, idx), spore_id))
-                                .collect();
-                        let mnft_map: std::collections::HashMap<(Vec<u8>, i16), Vec<u8>> =
-                            mnft_results
-                                .into_iter()
-                                .map(|(tx_hash, idx, token_id)| ((tx_hash, idx), token_id))
-                                .collect();
-                        let dotbit_map: std::collections::HashMap<(Vec<u8>, i16), Vec<u8>> =
-                            dotbit_results
-                                .into_iter()
-                                .map(|(tx_hash, idx, account_id)| ((tx_hash, idx), account_id))
-                                .collect();
-
-                        for (i, (block_number, consuming_tx_hash)) in
-                            outpoint_context.iter().enumerate()
-                        {
-                            let key = (all_prev_tx_hashes[i].clone(), all_prev_indices[i]);
-
-                            if let Some(spore_id) = spore_map.get(&key) {
-                                if !batch_spore_ids.contains(spore_id) {
-                                    self.writer
-                                        .consume_spore(spore_id, *block_number, consuming_tx_hash)
-                                        .await?;
-                                }
-                            }
-
-                            if let Some(token_id) = mnft_map.get(&key) {
-                                if !batch_mnft_token_ids.contains(token_id) {
-                                    self.writer
-                                        .consume_mnft_token(
-                                            token_id,
-                                            *block_number,
-                                            consuming_tx_hash,
-                                        )
-                                        .await?;
-                                }
-                            }
-
-                            if let Some(account_id) = dotbit_map.get(&key) {
-                                if !batch_dotbit_account_ids.contains(account_id) {
-                                    self.writer
-                                        .consume_dotbit_account(
-                                            account_id,
-                                            *block_number,
-                                            consuming_tx_hash,
-                                        )
-                                        .await?;
-                                }
-                            }
+                        if let Some(token_id) = mnft_map.get(&key) {
+                            self.writer.consume_mnft_token(
+                                token_id,
+                                *block_number,
+                                consuming_tx_hash,
+                                &mut nft_batch,
+                            )?;
+                        }
+                        if let Some(account_id) = dotbit_map.get(&key) {
+                            self.writer.consume_dotbit_account(
+                                account_id,
+                                *block_number,
+                                consuming_tx_hash,
+                                &mut nft_batch,
+                            )?;
                         }
                     }
                 }
+            }
+            nft_batch.commit()?;
+        }
 
-                Ok::<(), anyhow::Error>(())
-            },
-        )?;
-
-        // Write blocks LAST - this is the "commit marker" for crash recovery.
-        // All other data must be written successfully before blocks exist.
-        let block_refs: Vec<&crate::parser::block::ParsedBlock> =
-            all_parsed_blocks.iter().collect();
-        self.writer.insert_blocks_batch(&block_refs).await?;
+        // Write blocks LAST - commit marker for crash recovery
+        {
+            let mut batch = StoreBatch::new(self.writer.store());
+            self.writer.insert_blocks_batch(&block_refs, &mut batch)?;
+            batch.commit()?;
+        }
 
         self.flush_batch_stats(&batch_stats).await?;
 
         Ok(())
     }
-
-    #[allow(dead_code)]
-    async fn sync_block_optimized(
-        &self,
-        block_response: &BlockResponseWithCycles,
-        batch_stats: &mut BatchStats,
-        prev_timestamp: &mut Option<chrono::DateTime<Utc>>,
-        prev_epoch: &mut Option<(i64, chrono::DateTime<Utc>, f64)>,
-        chain_tip: u64,
-    ) -> Result<()> {
-        let block = &block_response.block;
-        let parsed = BlockParser::parse(block);
-        let db_start = Instant::now();
-        let end_block = parsed.number as u64;
-        let bulk_sync_mode = chain_tip.saturating_sub(end_block) > 1000;
-
-        self.writer.insert_block(&parsed, 0).await?;
-
-        if !parsed.proposals.is_empty() {
-            self.writer
-                .insert_block_proposals_batch(parsed.number, &parsed.proposals)
-                .await?;
-
-            if !self.is_bulk_sync_active() {
-                self.cache_block_proposals(&parsed.proposals, parsed.number)
-                    .await;
-            }
-        }
-
-        struct TxData {
-            hash: [u8; 32],
-            block_hash: Vec<u8>,
-            version: i32,
-            inputs_count: i16,
-            outputs_count: i16,
-            witnesses_count: i16,
-            cell_deps_count: i16,
-            header_deps_count: i16,
-            is_cellbase: bool,
-            inputs: Vec<crate::parser::transaction::ParsedInput>,
-            cells: Vec<crate::parser::cell::ParsedCell>,
-            outputs_data: Vec<String>,
-            total_input_capacity: i64,
-            total_output_capacity: i64,
-            fee: i64,
-            tx_size: i32,
-            cycles: Option<i64>,
-        }
-
-        let mut tx_data_list: Vec<TxData> = Vec::with_capacity(block.transactions.len());
-
-        for (tx_index, tx) in block.transactions.iter().enumerate() {
-            let parsed_tx = TransactionParser::parse(tx);
-            let inputs = TransactionParser::parse_inputs(tx);
-            let cells = CellParser::parse_outputs(tx);
-            let outputs_data: Vec<String> = tx.outputs_data.clone();
-            let total_output_capacity: i64 = cells.iter().map(|c| c.capacity).sum();
-
-            let cycles = if tx_index == 0 {
-                None
-            } else {
-                block_response
-                    .cycles
-                    .as_ref()
-                    .and_then(|c| c.get(tx_index - 1))
-                    .and_then(|hex| {
-                        let hex = hex.strip_prefix("0x").unwrap_or(hex);
-                        u64::from_str_radix(hex, 16).ok().map(|v| v as i64)
-                    })
-            };
-
-            tx_data_list.push(TxData {
-                hash: parsed_tx.hash,
-                block_hash: parsed.hash.clone(),
-                version: parsed_tx.version,
-                inputs_count: parsed_tx.inputs_count as i16,
-                outputs_count: parsed_tx.outputs_count as i16,
-                witnesses_count: parsed_tx.witnesses_count as i16,
-                cell_deps_count: parsed_tx.cell_deps_count as i16,
-                header_deps_count: parsed_tx.header_deps_count as i16,
-                is_cellbase: parsed_tx.is_cellbase,
-                inputs,
-                cells,
-                outputs_data,
-                total_input_capacity: 0,
-                total_output_capacity,
-                fee: 0,
-                tx_size: parsed_tx.tx_size,
-                cycles,
-            });
-        }
-
-        let input_outpoints: Vec<(Vec<u8>, i16)> = tx_data_list
-            .iter()
-            .filter(|tx| !tx.is_cellbase)
-            .flat_map(|tx| {
-                tx.inputs.iter().map(|input| {
-                    (
-                        input.previous_tx_hash.to_vec(),
-                        input.previous_output_index as i16,
-                    )
-                })
-            })
-            .collect();
-
-        let mut block_cells: HashMap<
-            (Vec<u8>, i16),
-            (i64, i64, Vec<u8>, i32, Vec<u8>, Option<Vec<u8>>),
-        > = HashMap::new();
-        for tx_data in &tx_data_list {
-            for (output_index, cell) in tx_data.cells.iter().enumerate() {
-                block_cells.insert(
-                    (tx_data.hash.to_vec(), output_index as i16),
-                    (
-                        cell.capacity,
-                        parsed.number,
-                        cell.lock_script_hash.clone(),
-                        cell.data_size,
-                        cell.lock_code_hash.clone(),
-                        cell.type_code_hash.clone(),
-                    ),
-                );
-            }
-        }
-
-        let mut input_cell_info: HashMap<(Vec<u8>, i16), (i64, i64, Vec<u8>, i32)> = HashMap::new();
-        for (tx_hash, idx) in &input_outpoints {
-            let hash_arr: [u8; 32] = tx_hash.as_slice().try_into().unwrap_or([0u8; 32]);
-            let key = (hash_arr, *idx as i32);
-            if let Some(cached) = self.cell_cache.get(&key) {
-                input_cell_info.insert(
-                    (tx_hash.clone(), *idx),
-                    (
-                        cached.capacity,
-                        cached.created_at_block,
-                        cached.lock_script_hash.clone(),
-                        cached.data_size,
-                    ),
-                );
-            }
-        }
-
-        let missing_outpoints: Vec<(Vec<u8>, i16)> = input_outpoints
-            .iter()
-            .filter(|(h, i)| {
-                let key = (h.clone(), *i);
-                !input_cell_info.contains_key(&key) && !block_cells.contains_key(&key)
-            })
-            .cloned()
-            .collect();
-
-        if !missing_outpoints.is_empty() {
-            let missing_refs: Vec<(&[u8], i16)> = missing_outpoints
-                .iter()
-                .map(|(h, i)| (h.as_slice(), *i))
-                .collect();
-            let db_info = self
-                .writer
-                .get_cells_info_batch(&missing_refs, bulk_sync_mode)
-                .await?;
-            for ((tx_hash, idx), (cap, block, lock_hash, data_size)) in db_info {
-                input_cell_info.insert((tx_hash, idx), (cap, block, lock_hash, data_size));
-            }
-        }
-
-        for tx_data in &mut tx_data_list {
-            if !tx_data.is_cellbase {
-                for input in &tx_data.inputs {
-                    let key = (
-                        input.previous_tx_hash.to_vec(),
-                        input.previous_output_index as i16,
-                    );
-                    if let Some((cap, _, _, _)) = input_cell_info.get(&key) {
-                        tx_data.total_input_capacity += cap;
-                    } else if let Some((cap, _, _, _, _, _)) = block_cells.get(&key) {
-                        tx_data.total_input_capacity += cap;
-                    }
-                }
-                tx_data.fee = tx_data
-                    .total_input_capacity
-                    .saturating_sub(tx_data.total_output_capacity);
-            }
-        }
-
-        for tx_data in &tx_data_list {
-            for (output_index, cell) in tx_data.cells.iter().enumerate() {
-                self.cell_cache.insert(
-                    (tx_data.hash, output_index as i32),
-                    CachedCellInfo {
-                        capacity: cell.capacity,
-                        created_at_block: parsed.number,
-                        lock_script_hash: cell.lock_script_hash.clone(),
-                        data_size: cell.data_size,
-                    },
-                );
-            }
-        }
-
-        let txs_for_batch: Vec<_> = tx_data_list
-            .iter()
-            .enumerate()
-            .map(|(tx_index, tx_data)| {
-                (
-                    tx_data.hash.as_slice(),
-                    parsed.number,
-                    tx_data.block_hash.as_slice(),
-                    tx_index as i32,
-                    tx_data.version,
-                    tx_data.inputs_count,
-                    tx_data.outputs_count,
-                    tx_data.witnesses_count,
-                    tx_data.cell_deps_count,
-                    tx_data.header_deps_count,
-                    tx_data.total_input_capacity,
-                    tx_data.total_output_capacity,
-                    tx_data.fee,
-                    Some(tx_data.tx_size),
-                    tx_data.cycles,
-                    tx_data.is_cellbase,
-                    parsed.timestamp,
-                )
-            })
-            .collect();
-        self.writer
-            .insert_transactions_batch(&txs_for_batch)
-            .await?;
-
-        let mut all_cells: Vec<(&[u8], i16, &crate::parser::cell::ParsedCell, i64)> = Vec::new();
-        for tx_data in &tx_data_list {
-            for (output_index, cell) in tx_data.cells.iter().enumerate() {
-                all_cells.push((
-                    tx_data.hash.as_slice(),
-                    output_index as i16,
-                    cell,
-                    parsed.number,
-                ));
-            }
-        }
-        if !all_cells.is_empty() {
-            self.writer
-                .insert_cells_batch(&all_cells, bulk_sync_mode)
-                .await?;
-        }
-
-        let mut all_inputs: Vec<(&[u8], i64, i16, &crate::parser::transaction::ParsedInput)> =
-            Vec::new();
-        for tx_data in &tx_data_list {
-            if !tx_data.is_cellbase {
-                for (input_index, input) in tx_data.inputs.iter().enumerate() {
-                    all_inputs.push((
-                        tx_data.hash.as_slice(),
-                        parsed.number,
-                        input_index as i16,
-                        input,
-                    ));
-                }
-            }
-        }
-        if !all_inputs.is_empty() {
-            self.writer
-                .insert_transaction_inputs_batch(&all_inputs)
-                .await?;
-        }
-
-        let mut all_consumptions: Vec<(&[u8], i16, i64, &[u8], i64, i16)> = Vec::new();
-        for tx_data in &tx_data_list {
-            if !tx_data.is_cellbase {
-                for (input_index, input) in tx_data.inputs.iter().enumerate() {
-                    let key = (
-                        input.previous_tx_hash.to_vec(),
-                        input.previous_output_index as i16,
-                    );
-                    if let Some((_, created_block, _, _)) = input_cell_info.get(&key) {
-                        all_consumptions.push((
-                            input.previous_tx_hash.as_slice(),
-                            input.previous_output_index as i16,
-                            *created_block,
-                            tx_data.hash.as_slice(),
-                            parsed.number,
-                            input_index as i16,
-                        ));
-                    } else if block_cells.contains_key(&key) {
-                        all_consumptions.push((
-                            input.previous_tx_hash.as_slice(),
-                            input.previous_output_index as i16,
-                            parsed.number,
-                            tx_data.hash.as_slice(),
-                            parsed.number,
-                            input_index as i16,
-                        ));
-                    }
-                }
-            }
-        }
-        if !all_consumptions.is_empty() {
-            let bulk_sync_mode = chain_tip.saturating_sub(end_block) > 1000;
-            self.writer
-                .consume_cells_batch(&all_consumptions, bulk_sync_mode)
-                .await?;
-        }
-
-        let mut address_balance_changes: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8])> =
-            HashMap::new();
-
-        for tx_data in &tx_data_list {
-            let mut tx_balance_changes: HashMap<Vec<u8>, i64> = HashMap::new();
-            let mut tx_cells_created: HashMap<Vec<u8>, i32> = HashMap::new();
-            let mut tx_cells_consumed: HashMap<Vec<u8>, i32> = HashMap::new();
-
-            if !tx_data.is_cellbase {
-                for input in &tx_data.inputs {
-                    let key = (
-                        input.previous_tx_hash.to_vec(),
-                        input.previous_output_index as i16,
-                    );
-                    if let Some((cap, _, lock_hash, _)) = input_cell_info.get(&key) {
-                        *tx_balance_changes.entry(lock_hash.clone()).or_default() -= cap;
-                        *tx_cells_consumed.entry(lock_hash.clone()).or_default() += 1;
-                    } else if let Some((cap, _, lock_hash, _, _, _)) = block_cells.get(&key) {
-                        *tx_balance_changes.entry(lock_hash.clone()).or_default() -= cap;
-                        *tx_cells_consumed.entry(lock_hash.clone()).or_default() += 1;
-                    }
-                }
-            }
-
-            for cell in &tx_data.cells {
-                *tx_balance_changes
-                    .entry(cell.lock_script_hash.clone())
-                    .or_default() += cell.capacity;
-                *tx_cells_created
-                    .entry(cell.lock_script_hash.clone())
-                    .or_default() += 1;
-            }
-
-            let all_addresses: HashSet<Vec<u8>> = tx_balance_changes
-                .keys()
-                .chain(tx_cells_created.keys())
-                .chain(tx_cells_consumed.keys())
-                .cloned()
-                .collect();
-
-            for lock_hash in all_addresses {
-                let balance_change = tx_balance_changes.get(&lock_hash).copied().unwrap_or(0);
-                let cells_created = tx_cells_created.get(&lock_hash).copied().unwrap_or(0);
-                let cells_consumed = tx_cells_consumed.get(&lock_hash).copied().unwrap_or(0);
-
-                let entry = address_balance_changes.entry(lock_hash.clone()).or_insert((
-                    0,
-                    0,
-                    0,
-                    0,
-                    parsed.number,
-                    tx_data.hash.as_slice(),
-                ));
-                entry.0 += balance_change;
-                entry.1 += cells_created - cells_consumed;
-                entry.2 += cells_created;
-                entry.3 += 1;
-            }
-        }
-
-        let skip_address_balances = self
-            .address_balances_deferred
-            .load(std::sync::atomic::Ordering::Relaxed)
-            && bulk_sync_mode;
-        if !skip_address_balances && !address_balance_changes.is_empty() {
-            self.writer
-                .update_address_balances_batch(&address_balance_changes)
-                .await?;
-        }
-
-        let block_date = parsed.timestamp.date_naive();
-        let cells_created: i32 = tx_data_list.iter().map(|tx| tx.cells.len() as i32).sum();
-        let cells_consumed: i32 = tx_data_list
-            .iter()
-            .filter(|tx| !tx.is_cellbase)
-            .map(|tx| tx.inputs.len() as i32)
-            .sum();
-        let capacity_transferred: i64 = tx_data_list
-            .iter()
-            .filter(|tx| !tx.is_cellbase)
-            .map(|tx| tx.total_output_capacity)
-            .sum();
-        let data_size_added: i64 = tx_data_list
-            .iter()
-            .flat_map(|tx| tx.cells.iter())
-            .map(|cell| cell.data_size as i64)
-            .sum();
-        let data_size_consumed: i64 = tx_data_list
-            .iter()
-            .filter(|tx| !tx.is_cellbase)
-            .flat_map(|tx| tx.inputs.iter())
-            .filter_map(|input| {
-                let key = (
-                    input.previous_tx_hash.to_vec(),
-                    input.previous_output_index as i16,
-                );
-                input_cell_info
-                    .get(&key)
-                    .map(|(_, _, _, ds)| *ds as i64)
-                    .or_else(|| block_cells.get(&key).map(|(_, _, _, ds, _, _)| *ds as i64))
-            })
-            .sum();
-
-        batch_stats.sync_totals.0 += parsed.transactions_count as i64;
-        batch_stats.sync_totals.1 += cells_created as i64;
-        batch_stats.sync_totals.2 += cells_consumed as i64;
-        batch_stats.last_block = Some((parsed.number, parsed.hash.clone()));
-
-        {
-            let entry = batch_stats.daily_stats.entry(block_date).or_default();
-            entry.0 += 1;
-            entry.1 += parsed.transactions_count;
-            entry.2 += cells_created;
-            entry.3 += cells_consumed;
-            entry.4 += capacity_transferred;
-            entry.5 += data_size_added;
-            entry.6 += data_size_consumed;
-        }
-
-        batch_stats
-            .daily_dao_fields
-            .insert(block_date, parsed.dao.clone());
-
-        {
-            let block_hour = truncate_to_hour(parsed.timestamp);
-            let entry = batch_stats.hourly_stats.entry(block_hour).or_default();
-            entry.0 += 1;
-            entry.1 += parsed.transactions_count;
-            entry.2 += cells_created;
-            entry.3 += cells_consumed;
-            entry.4 += capacity_transferred;
-        }
-
-        {
-            let entry = batch_stats.daily_block_stats.entry(block_date).or_default();
-            entry.0 += parsed.compact_target as i128;
-            entry.1 += 1;
-            entry.2 += parsed.uncles_count;
-        }
-
-        if let Some(first_tx) = tx_data_list.first() {
-            if first_tx.is_cellbase {
-                if let Some(first_cell) = first_tx.cells.first() {
-                    let key = (block_date, first_cell.lock_script_hash.clone());
-                    let entry = batch_stats.miner_stats.entry(key).or_insert((0, 0));
-                    entry.0 += 1;
-                    entry.1 = parsed.number;
-                }
-            }
-        }
-
-        {
-            let entry = batch_stats
-                .epoch_stats
-                .entry(parsed.epoch_number)
-                .or_insert_with(|| EpochAccum {
-                    start_block: parsed.number,
-                    end_block: parsed.number,
-                    length: parsed.epoch_length,
-                    start_ts: parsed.timestamp,
-                    end_ts: parsed.timestamp,
-                    tx_count: 0,
-                    is_new: parsed.epoch_index == 0,
-                });
-            entry.end_block = parsed.number;
-            entry.end_ts = parsed.timestamp;
-            entry.tx_count += parsed.transactions_count;
-        }
-
-        if let Some(prev_ts) = prev_timestamp {
-            let block_time_seconds = (parsed.timestamp - *prev_ts).num_seconds();
-            if block_time_seconds >= 0 {
-                let bucket = block_time_to_bucket(block_time_seconds);
-                *batch_stats.block_time_dist.entry(bucket).or_default() += 1;
-                let block_time_ms = block_time_seconds * 1000;
-                let entry = batch_stats
-                    .daily_block_times
-                    .entry(block_date)
-                    .or_insert((0, 0));
-                entry.0 += block_time_ms;
-                entry.1 += 1;
-            }
-        }
-        *prev_timestamp = Some(parsed.timestamp);
-
-        if parsed.epoch_index == 0 && parsed.epoch_number > 0 {
-            if let Some((prev_epoch_num, prev_start_ts, _)) = prev_epoch {
-                if *prev_epoch_num == parsed.epoch_number - 1 {
-                    let epoch_duration_minutes =
-                        (parsed.timestamp - *prev_start_ts).num_seconds() as f64 / 60.0;
-                    // Use 1-minute buckets to match official CKB Explorer
-                    let bucket_minutes = epoch_duration_minutes.round() as i32;
-                    *batch_stats
-                        .epoch_time_dist
-                        .entry(bucket_minutes)
-                        .or_default() += 1;
-                }
-            }
-        }
-        if parsed.epoch_index == 0 {
-            *prev_epoch = Some((parsed.epoch_number, parsed.timestamp, 0.0));
-        }
-
-        batch_stats.dao_snapshot_dates.insert(block_date);
-
-        let dao_deferred = self.dao_deferred.load(Ordering::Relaxed);
-        let live_cell_store = Some(self.rocksdb_store.as_ref());
-
-        for tx_data in &tx_data_list {
-            let dao_deposits = DaoParser::parse_deposits_from_cells(&tx_data.hash, &tx_data.cells);
-            for deposit in &dao_deposits {
-                let ar = self
-                    .writer
-                    .get_block_dao_field(parsed.number)
-                    .await?
-                    .and_then(|dao| DaoParser::extract_ar_from_dao_field(&dao))
-                    .unwrap_or(0) as i64;
-                self.writer
-                    .insert_dao_deposit(
-                        deposit,
-                        parsed.number,
-                        parsed.timestamp,
-                        ar,
-                        live_cell_store,
-                        dao_deferred,
-                    )
-                    .await?;
-            }
-        }
-
-        let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
-        for tx_data in &tx_data_list {
-            if tx_data.is_cellbase || tx_data.inputs.is_empty() {
-                continue;
-            }
-
-            let input_outpoints: Vec<(&[u8], i32)> = tx_data
-                .inputs
-                .iter()
-                .map(|i| (i.previous_tx_hash.as_slice(), i.previous_output_index))
-                .collect();
-
-            let consumed_dao = self
-                .writer
-                .find_consumed_dao_deposits(&input_outpoints, live_cell_store)
-                .await?;
-            if consumed_dao.is_empty() {
-                continue;
-            }
-
-            let mut new_dao_outputs: Vec<(Vec<u8>, i16, Vec<u8>, i64, u64)> = Vec::new();
-            for (idx, cell) in tx_data.cells.iter().enumerate() {
-                if let Some(ref type_code_hash) = cell.type_code_hash {
-                    if type_code_hash == &dao_code_hash && cell.data_size == 8 {
-                        if let Some(data) = tx_data.outputs_data.get(idx) {
-                            let data_bytes = crate::rpc::parse_hex_to_bytes(data);
-                            if let Some(deposit_block) =
-                                DaoParser::parse_deposit_block_number(&data_bytes)
-                            {
-                                new_dao_outputs.push((
-                                    tx_data.hash.to_vec(),
-                                    idx as i16,
-                                    cell.lock_script_hash.clone(),
-                                    cell.capacity,
-                                    deposit_block,
-                                ));
-                            }
-                        }
-                    }
-                }
-            }
-
-            self.writer
-                .process_dao_withdrawals(
-                    &consumed_dao,
-                    &new_dao_outputs,
-                    parsed.number,
-                    &tx_data.hash,
-                    parsed.timestamp,
-                    live_cell_store,
-                    dao_deferred,
-                )
-                .await?;
-        }
-
-        self.perf.add(&self.perf.db_write_us, db_start.elapsed());
-
-        Ok(())
-    }
+    // === flush_batch_stats ===
 
     async fn flush_batch_stats(&self, stats: &BatchStats) -> Result<()> {
         let bulk_sync_active = self.is_bulk_sync_active();
@@ -6346,9 +3555,10 @@ impl Indexer {
         }
 
         // Epoch statistics - always written (contains epoch metadata needed for queries)
-        for (epoch_number, accum) in &stats.epoch_stats {
-            self.writer
-                .upsert_epoch_statistics_batch(
+        {
+            let mut batch = StoreBatch::new(self.writer.store());
+            for (epoch_number, accum) in &stats.epoch_stats {
+                self.writer.upsert_epoch_statistics_batch(
                     *epoch_number,
                     accum.start_block,
                     accum.end_block,
@@ -6357,124 +3567,104 @@ impl Indexer {
                     accum.end_ts,
                     accum.tx_count,
                     accum.is_new,
-                )
-                .await?;
+                    &mut batch,
+                )?;
+            }
+            batch.commit()?;
         }
 
-        if !bulk_sync_active && !self.is_stats_rebuild_in_progress().await {
-            // Group 1: Critical daily statistics (run in parallel)
-            tokio::try_join!(
-                async {
-                    for (
-                        date,
-                        (
-                            blocks,
-                            txs,
-                            created,
-                            consumed,
-                            capacity,
-                            data_size_added,
-                            data_size_consumed,
-                        ),
-                    ) in &stats.daily_stats
-                    {
-                        let dao_field = stats.daily_dao_fields.get(date);
-                        self.writer
-                            .update_daily_statistics(
-                                *date,
-                                *blocks,
-                                *txs,
-                                *created,
-                                *consumed,
-                                *capacity,
-                                *data_size_added,
-                                *data_size_consumed,
-                                dao_field.map(|v| v.as_slice()),
-                            )
-                            .await?;
-                    }
-                    Ok::<_, anyhow::Error>(())
-                },
-                async {
-                    for (date, (sum_target, count, uncles)) in &stats.daily_block_stats {
-                        let avg_target = if *count > 0 {
-                            (*sum_target / *count as i128) as i64
-                        } else {
-                            0
-                        };
-                        self.writer
-                            .update_daily_block_stats_batch(*date, avg_target, *count, *uncles)
-                            .await?;
-                    }
-                    Ok::<_, anyhow::Error>(())
-                },
-                async {
-                    for (date, (sum_ms, count)) in &stats.daily_block_times {
-                        if *count > 0 {
-                            let avg_ms = sum_ms / *count as i64;
-                            self.writer
-                                .update_daily_avg_block_time_batch(*date, avg_ms, *count)
-                                .await?;
-                        }
-                    }
-                    Ok::<_, anyhow::Error>(())
-                },
-                async {
-                    for (hour, (blocks, txs, created, consumed, capacity)) in &stats.hourly_stats {
-                        self.writer
-                            .update_hourly_statistics(
-                                *hour, *blocks, *txs, *created, *consumed, *capacity,
-                            )
-                            .await?;
-                    }
-                    Ok::<_, anyhow::Error>(())
-                },
-            )?;
+        if !bulk_sync_active && !self.is_stats_rebuild_in_progress() {
+            // All statistics methods are sync and take &mut StoreBatch
+            let mut batch = StoreBatch::new(self.writer.store());
 
-            // Group 2: Non-critical statistics (run in parallel, independent of Group 1)
-            tokio::try_join!(
-                async {
-                    for ((date, miner_hash), (blocks_count, last_block)) in &stats.miner_stats {
-                        self.writer
-                            .update_miner_statistics_batch(
-                                miner_hash,
-                                *last_block,
-                                *date,
-                                *blocks_count,
-                            )
-                            .await?;
-                    }
-                    Ok::<_, anyhow::Error>(())
-                },
-                async {
-                    for (bucket, count) in &stats.block_time_dist {
-                        self.writer
-                            .update_block_time_distribution_batch(*bucket, *count)
-                            .await?;
-                    }
-                    Ok::<_, anyhow::Error>(())
-                },
-                async {
-                    for (bucket, count) in &stats.epoch_time_dist {
-                        self.writer
-                            .update_epoch_time_distribution_batch(*bucket, *count)
-                            .await?;
-                    }
-                    Ok::<_, anyhow::Error>(())
-                },
-                async {
-                    let mut snapshot_dates: Vec<_> = stats.dao_snapshot_dates.iter().collect();
-                    snapshot_dates.sort();
-                    for date in snapshot_dates {
-                        self.writer.update_dao_daily_snapshot(*date).await?;
-                    }
-                    Ok::<_, anyhow::Error>(())
-                },
-            )?;
+            // Daily statistics
+            for (
+                date,
+                (blocks, txs, created, consumed, capacity, data_size_added, data_size_consumed),
+            ) in &stats.daily_stats
+            {
+                let dao_field = stats.daily_dao_fields.get(date);
+                self.writer.update_daily_statistics(
+                    *date,
+                    *blocks,
+                    *txs,
+                    *created,
+                    *consumed,
+                    *capacity,
+                    *data_size_added,
+                    *data_size_consumed,
+                    dao_field.map(|v| v.as_slice()),
+                    &mut batch,
+                )?;
+            }
+
+            // Daily block stats
+            for (date, (sum_target, count, uncles)) in &stats.daily_block_stats {
+                let avg_target = if *count > 0 {
+                    (*sum_target / *count as i128) as i64
+                } else {
+                    0
+                };
+                self.writer.update_daily_block_stats_batch(
+                    *date, avg_target, *count, *uncles, &mut batch,
+                )?;
+            }
+
+            // Daily avg block time
+            for (date, (sum_ms, count)) in &stats.daily_block_times {
+                if *count > 0 {
+                    let avg_ms = sum_ms / *count as i64;
+                    self.writer
+                        .update_daily_avg_block_time_batch(*date, avg_ms, *count, &mut batch)?;
+                }
+            }
+
+            // Hourly statistics
+            for (hour, (blocks, txs, created, consumed, capacity)) in &stats.hourly_stats {
+                self.writer.update_hourly_statistics(
+                    *hour, *blocks, *txs, *created, *consumed, *capacity, &mut batch,
+                )?;
+            }
+
+            // Miner statistics
+            for ((date, miner_hash), (blocks_count, last_block)) in &stats.miner_stats {
+                self.writer.update_miner_statistics_batch(
+                    miner_hash,
+                    *last_block,
+                    *date,
+                    *blocks_count,
+                    &mut batch,
+                )?;
+            }
+
+            // Block time distribution (no-op, no batch param)
+            for (bucket, count) in &stats.block_time_dist {
+                self.writer
+                    .update_block_time_distribution_batch(*bucket, *count)?;
+            }
+
+            // Epoch time distribution (no-op, no batch param)
+            for (bucket, count) in &stats.epoch_time_dist {
+                self.writer
+                    .update_epoch_time_distribution_batch(*bucket, *count)?;
+            }
+
+            // DAO daily snapshots (no-op, takes _batch)
+            {
+                let mut snapshot_dates: Vec<_> = stats.dao_snapshot_dates.iter().collect();
+                snapshot_dates.sort();
+                for date in snapshot_dates {
+                    self.writer.update_dao_daily_snapshot(*date, &mut batch)?;
+                }
+            }
+
+            batch.commit()?;
         }
 
         Ok(())
     }
+
+    // === get_chain_block_hash, get_chain_tip ===
 
     /// Get the block hash for a given block number, using direct RocksDB reads when available.
     async fn get_chain_block_hash(&self, number: u64) -> Result<Vec<u8>> {
@@ -6505,6 +3695,8 @@ impl Indexer {
             self.rpc.get_tip_block_number().await
         }
     }
+
+    // === check_and_handle_reorg, find_fork_point ===
 
     async fn check_and_handle_reorg(
         &self,
@@ -6541,17 +3733,15 @@ impl Indexer {
                 depth, DEEP_FORK_DEPTH
             );
 
-            self.writer
-                .record_deep_fork(
-                    fork_point as i64,
-                    &fork_hash,
-                    db_tip as i64,
-                    stored_hash,
-                    chain_tip as i64,
-                    &chain_tip_hash_bytes,
-                    depth as i64,
-                )
-                .await?;
+            self.writer.record_deep_fork(
+                fork_point as i64,
+                &fork_hash,
+                db_tip as i64,
+                stored_hash,
+                chain_tip as i64,
+                &chain_tip_hash_bytes,
+                depth as i64,
+            )?;
 
             return Ok(Some(ReorgAction::DeepForkPaused));
         }
@@ -6582,8 +3772,7 @@ impl Indexer {
         loop {
             let db_hash = self
                 .repo
-                .get_block_hash_at_height(height as i64)
-                .await?
+                .get_block_hash_at_height(height as i64)?
                 .ok_or_else(|| anyhow::anyhow!("Block {} not found in DB", height))?;
 
             let chain_hash_bytes = self.get_chain_block_hash(height).await?;
@@ -6602,6 +3791,8 @@ impl Indexer {
         }
     }
 
+    // === update_secondary_issuance ===
+
     async fn update_secondary_issuance(
         &self,
         block_hash: &str,
@@ -6609,8 +3800,13 @@ impl Indexer {
         block_number: i64,
         block_timestamp: DateTime<Utc>,
     ) -> Result<()> {
-        let (_, _, _, _, last_processed) = self.writer.get_secondary_issuance_state().await?;
-        if block_number <= last_processed {
+        // Check if we already have issuance data for this block
+        if self
+            .writer
+            .store()
+            .get_block_issuance(block_number)?
+            .is_some()
+        {
             return Ok(());
         }
 
@@ -6648,8 +3844,7 @@ impl Indexer {
         let denominator = total_issuance.saturating_sub(occupied);
 
         let (dao_compensation, burnt) = if denominator > 0 {
-            let total_dao_deposits: u128 =
-                self.writer.get_dao_deposits_at_block(block_number).await?;
+            let total_dao_deposits: u128 = self.writer.get_dao_deposits_at_block(block_number)?;
 
             let dao_share = (non_miner_secondary * total_dao_deposits) / denominator;
             let burnt_share = non_miner_secondary.saturating_sub(dao_share);
@@ -6665,12 +3860,19 @@ impl Indexer {
             burnt: burnt as i64,
         };
 
-        self.writer
-            .accumulate_secondary_issuance(&breakdown, block_number, block_timestamp)
-            .await?;
+        let mut batch = StoreBatch::new(self.writer.store());
+        self.writer.accumulate_secondary_issuance(
+            &breakdown,
+            block_number,
+            block_timestamp,
+            &mut batch,
+        )?;
+        batch.commit()?;
 
         Ok(())
     }
+
+    // === cache_block_proposals ===
 
     async fn cache_block_proposals(&self, proposals: &[Vec<u8>], block_number: i64) {
         use ckbadger_common::CachedProposal;
@@ -6750,36 +3952,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_infer_is_mainnet() {
-        assert!(infer_is_mainnet("http://localhost:8114"));
-        assert!(!infer_is_mainnet("https://testnet.ckb.node"));
-        assert!(!infer_is_mainnet("https://devnet.ckb.node"));
-    }
-
-    #[test]
-    fn test_parsed_cell_from_live_info() {
-        let info = LiveCellInfo {
-            capacity: 42,
-            created_at_block: 7,
-            lock_script_hash: vec![1, 2, 3],
-            lock_code_hash: vec![4, 5, 6],
-            lock_args: vec![7, 8],
-            type_script_hash: Some(vec![9, 10, 11]),
-            type_code_hash: Some(vec![12, 13, 14]),
-            data_size: 123,
-        };
-
-        let cell = parsed_cell_from_live_info(&info);
-        assert_eq!(cell.capacity, 42);
-        assert_eq!(cell.lock_script_hash, vec![1, 2, 3]);
-        assert_eq!(cell.lock_code_hash, vec![4, 5, 6]);
-        assert_eq!(cell.lock_args, vec![7, 8]);
-        assert_eq!(cell.type_script_hash, Some(vec![9, 10, 11]));
-        assert_eq!(cell.type_code_hash, Some(vec![12, 13, 14]));
-        assert_eq!(cell.data_size, 123);
-    }
-
-    #[test]
     fn test_secondary_issuance_backfill_threshold_is_1000() {
         assert_eq!(SECONDARY_ISSUANCE_BACKFILL_THRESHOLD, 1000);
     }
@@ -6808,7 +3980,6 @@ mod tests {
 
     #[test]
     fn test_crossed_1000_within_same_thousand() {
-        // Batch 6330000..6339999 — start and end in same 1000-block range
         assert!(!crosses_1000_boundary(6330000, 6330999));
         assert!(!crosses_1000_boundary(0, 999));
         assert!(!crosses_1000_boundary(5000, 5999));
@@ -6816,7 +3987,6 @@ mod tests {
 
     #[test]
     fn test_crossed_1000_across_boundary() {
-        // Batch that spans a 1000-block boundary
         assert!(crosses_1000_boundary(6330000, 6339999));
         assert!(crosses_1000_boundary(999, 1000));
         assert!(crosses_1000_boundary(0, 9999));
@@ -6825,20 +3995,14 @@ mod tests {
 
     #[test]
     fn test_crossed_1000_exact_boundary() {
-        // 999/1000=0, 1000/1000=1 → crosses boundary
         assert!(crosses_1000_boundary(999, 1000));
-        // 1000/1000=1, 1001/1000=1 → same range, no crossing
         assert!(!crosses_1000_boundary(1000, 1001));
-        // 1999/1000=1, 2000/1000=2 → crosses boundary
         assert!(crosses_1000_boundary(1999, 2000));
     }
 
     #[test]
     fn test_dao_recalc_skipped_during_bulk_sync() {
-        // Simulates the guard: crossed_1000 && !is_bulk_sync_active()
         let bulk_sync_threshold = 1000u64;
-
-        // During bulk sync (10M blocks remaining) - should NOT recalculate
         let blocks_remaining = 10_000_000u64;
         let is_bulk = blocks_remaining > bulk_sync_threshold;
         let crossed = crosses_1000_boundary(6330000, 6339999);
@@ -6852,9 +4016,7 @@ mod tests {
 
     #[test]
     fn test_dao_recalc_runs_in_realtime_sync() {
-        // During real-time sync (500 blocks remaining) - should recalculate
         let bulk_sync_threshold = 1000u64;
-
         let blocks_remaining = 500u64;
         let is_bulk = blocks_remaining > bulk_sync_threshold;
         let crossed = crosses_1000_boundary(18545999, 18546999);
@@ -6868,9 +4030,7 @@ mod tests {
 
     #[test]
     fn test_dao_recalc_not_triggered_without_boundary_crossing() {
-        // Real-time sync but no boundary crossing - should NOT recalculate
         let bulk_sync_threshold = 1000u64;
-
         let blocks_remaining = 100u64;
         let is_bulk = blocks_remaining > bulk_sync_threshold;
         let crossed = crosses_1000_boundary(18546500, 18546800);
@@ -6883,89 +4043,28 @@ mod tests {
 
     #[test]
     fn test_partition_boundary_detection() {
-        // Same partition
         let start = 4_000_000u64;
         let end = 4_999_999u64;
         assert_eq!(get_partition_index(start), get_partition_index(end));
         assert!(!crosses_partition_boundary(start, end));
         assert_eq!(format_partition_range(start, end), "[p0]");
 
-        // Crosses boundary
         let start = 4_999_990u64;
         let end = 5_000_009u64;
         assert_ne!(get_partition_index(start), get_partition_index(end));
         assert!(crosses_partition_boundary(start, end));
         assert_eq!(format_partition_range(start, end), "[p0->p1]");
 
-        // Multiple partitions
         let start = 9_999_999u64;
         let end = 10_000_001u64;
         assert_ne!(get_partition_index(start), get_partition_index(end));
         assert!(crosses_partition_boundary(start, end));
         assert_eq!(format_partition_range(start, end), "[p1->p2]");
 
-        // Same partition, different blocks
         let start = 5_000_000u64;
         let end = 5_100_000u64;
         assert_eq!(get_partition_index(start), get_partition_index(end));
         assert!(!crosses_partition_boundary(start, end));
         assert_eq!(format_partition_range(start, end), "[p1]");
-    }
-
-    // --- are_indexes_deferred logic tests ---
-
-    /// Simulates the are_indexes_deferred result mapping without a DB connection.
-    /// The method does: row.map(|r| r.0).unwrap_or(false)
-    fn simulate_indexes_deferred_result(db_result: Option<(bool,)>) -> bool {
-        db_result.map(|r| r.0).unwrap_or(false)
-    }
-
-    #[test]
-    fn test_indexes_deferred_returns_true_when_deferred() {
-        assert!(simulate_indexes_deferred_result(Some((true,))));
-    }
-
-    #[test]
-    fn test_indexes_deferred_returns_false_when_not_deferred() {
-        assert!(!simulate_indexes_deferred_result(Some((false,))));
-    }
-
-    #[test]
-    fn test_indexes_deferred_returns_false_when_no_row() {
-        // No sync_status row → safe to proceed (not deferred)
-        assert!(!simulate_indexes_deferred_result(None));
-    }
-
-    #[test]
-    fn test_should_wait_for_indexes_during_transition() {
-        // Simulates the guard logic: !should_use_copy() && are_indexes_deferred()
-        let should_use_copy = false; // transitioned to live sync
-        let indexes_deferred = true; // indexes still being rebuilt
-
-        let should_wait = !should_use_copy && indexes_deferred;
-        assert!(
-            should_wait,
-            "should wait when transitioning with deferred indexes"
-        );
-    }
-
-    #[test]
-    fn test_should_not_wait_during_bulk_sync() {
-        // During bulk sync, COPY doesn't need indexes
-        let should_use_copy = true;
-        let indexes_deferred = true;
-
-        let should_wait = !should_use_copy && indexes_deferred;
-        assert!(!should_wait, "should not wait during bulk sync (uses COPY)");
-    }
-
-    #[test]
-    fn test_should_not_wait_when_indexes_ready() {
-        // Live sync mode and indexes rebuilt → proceed normally
-        let should_use_copy = false;
-        let indexes_deferred = false;
-
-        let should_wait = !should_use_copy && indexes_deferred;
-        assert!(!should_wait, "should not wait when indexes are ready");
     }
 }

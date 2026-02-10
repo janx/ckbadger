@@ -15,12 +15,13 @@ ckbadger-common = { path = "../common" }
 tokio = { workspace = true }
 futures = { workspace = true }
 
-# Database
-sqlx = { workspace = true }
+# Store
+ckbadger-store = { path = "../ckbadger-store" }
 
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
+bincode = { workspace = true }
 
 # HTTP client (for CKB RPC)
 reqwest = { workspace = true }

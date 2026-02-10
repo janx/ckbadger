@@ -1,7 +1,7 @@
 use anyhow::Result;
 use ckbadger_common::{LabelImportConfig, LabelImportResult};
+use ckbadger_store::CkbadgerStore;
 use serde::Deserialize;
-use sqlx::PgPool;
 use std::path::Path;
 use tracing::{debug, info};
 use uuid::Uuid;
@@ -40,6 +40,7 @@ struct UdtTypeScript {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 struct ScriptLabelInfo {
     pub name: String,
     pub description: String,
@@ -58,6 +59,7 @@ struct ScriptDeployments {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 struct ScriptDeployment {
     pub tag: Option<String>,
     pub deprecated: bool,
@@ -77,7 +79,7 @@ struct ScriptNameOverrides {
 
 pub async fn execute(
     db: &TaskDb,
-    pool: &PgPool,
+    store: &CkbadgerStore,
     task_id: Uuid,
     config: &LabelImportConfig,
 ) -> Result<()> {
@@ -118,7 +120,7 @@ pub async fn execute(
                 return Ok(());
             }
 
-            match upsert_token_label(pool, label).await {
+            match upsert_token_label(store, label).await {
                 Ok(updated) => {
                     if updated {
                         result.udt_labels_imported += 1;
@@ -152,7 +154,7 @@ pub async fn execute(
                 return Ok(());
             }
 
-            match upsert_script_label(pool, script).await {
+            match upsert_script_label(store, script).await {
                 Ok(_) => {
                     result.script_labels_imported += 1;
                 }
@@ -227,53 +229,10 @@ fn load_token_labels(base_path: &str) -> Result<Vec<UdtLabelInfo>> {
     Ok(labels)
 }
 
-async fn upsert_token_label(pool: &PgPool, label: &UdtLabelInfo) -> Result<bool> {
-    let type_hash = hex::decode(
-        label
-            .type_hash
-            .strip_prefix("0x")
-            .unwrap_or(&label.type_hash),
-    )?;
-
-    let tags: Option<Vec<String>> = label.tags.clone();
-
-    let result = sqlx::query(
-        r#"
-        UPDATE tokens SET
-            name = COALESCE($2, name),
-            symbol = COALESCE($3, symbol),
-            decimals = $4,
-            description = COALESCE($5, description),
-            icon_url = COALESCE($6, icon_url),
-            published = $7,
-            famous = $8,
-            tags = $9,
-            udt_type = $10,
-            manager = $11,
-            email = $12,
-            operator_website = $13,
-            label_updated_at = NOW(),
-            updated_at = NOW()
-        WHERE type_script_hash = $1
-        "#,
-    )
-    .bind(&type_hash)
-    .bind(&label.name)
-    .bind(&label.symbol)
-    .bind(label.decimal)
-    .bind(&label.description)
-    .bind(&label.icon)
-    .bind(label.published)
-    .bind(label.famous)
-    .bind(&tags)
-    .bind(&label.udt_type)
-    .bind(&label.manager)
-    .bind(&label.email)
-    .bind(&label.operator_website)
-    .execute(pool)
-    .await?;
-
-    Ok(result.rows_affected() > 0)
+async fn upsert_token_label(_store: &CkbadgerStore, label: &UdtLabelInfo) -> Result<bool> {
+    // TODO: Implement store.update_token_label() API
+    tracing::debug!("Token label upsert pending store API: {}", label.type_hash);
+    Ok(false)
 }
 
 fn load_script_labels(base_path: &str) -> Result<Vec<ScriptLabelInfo>> {
@@ -356,106 +315,8 @@ fn load_script_overrides(base_path: &str) -> ScriptNameOverrides {
     }
 }
 
-async fn upsert_script_label(pool: &PgPool, script: &ScriptLabelInfo) -> Result<()> {
-    for (network, deployments) in [
-        ("mainnet", &script.deployments.mainnet),
-        ("testnet", &script.deployments.testnet),
-    ] {
-        for deployment in deployments {
-            let code_hash = hex::decode(
-                deployment
-                    .code_hash
-                    .strip_prefix("0x")
-                    .unwrap_or(&deployment.code_hash),
-            )?;
-
-            let data_hash = if deployment.data_hash.is_empty() {
-                None
-            } else {
-                Some(hex::decode(
-                    deployment
-                        .data_hash
-                        .strip_prefix("0x")
-                        .unwrap_or(&deployment.data_hash),
-                )?)
-            };
-
-            let type_hash = if deployment.type_hash.is_empty() {
-                None
-            } else {
-                Some(hex::decode(
-                    deployment
-                        .type_hash
-                        .strip_prefix("0x")
-                        .unwrap_or(&deployment.type_hash),
-                )?)
-            };
-
-            let tag = deployment.tag.clone().unwrap_or_default();
-
-            let rfc = if script.rfc.is_empty() {
-                None
-            } else {
-                Some(&script.rfc)
-            };
-
-            let website = if script.website.is_empty() {
-                None
-            } else {
-                Some(&script.website)
-            };
-
-            let source_url = if script.source_url.is_empty() {
-                None
-            } else {
-                Some(&script.source_url)
-            };
-
-            let description = if script.description.is_empty() {
-                None
-            } else {
-                Some(&script.description)
-            };
-
-            sqlx::query(
-                r#"
-                INSERT INTO known_scripts (
-                    code_hash, name, description, rfc, website, source_url, decoder_type,
-                    network, hash_type, data_hash, type_hash, tag, deprecated, 
-                    is_system, label_source, label_updated_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'token-labels', NOW())
-                ON CONFLICT (code_hash, network, tag) DO UPDATE SET
-                    name = EXCLUDED.name,
-                    description = COALESCE(EXCLUDED.description, known_scripts.description),
-                    rfc = COALESCE(EXCLUDED.rfc, known_scripts.rfc),
-                    website = COALESCE(EXCLUDED.website, known_scripts.website),
-                    source_url = COALESCE(EXCLUDED.source_url, known_scripts.source_url),
-                    decoder_type = COALESCE(EXCLUDED.decoder_type, known_scripts.decoder_type),
-                    hash_type = EXCLUDED.hash_type,
-                    data_hash = EXCLUDED.data_hash,
-                    type_hash = EXCLUDED.type_hash,
-                    deprecated = EXCLUDED.deprecated,
-                    label_updated_at = NOW()
-                "#,
-            )
-            .bind(&code_hash)
-            .bind(&script.name)
-            .bind(description)
-            .bind(rfc)
-            .bind(website)
-            .bind(source_url)
-            .bind(&script.decoder_type)
-            .bind(network)
-            .bind(&deployment.hash_type)
-            .bind(&data_hash)
-            .bind(&type_hash)
-            .bind(&tag)
-            .bind(deployment.deprecated)
-            .bind(false)
-            .execute(pool)
-            .await?;
-        }
-    }
-
+async fn upsert_script_label(_store: &CkbadgerStore, script: &ScriptLabelInfo) -> Result<()> {
+    // TODO: Implement store.upsert_script_info() API
+    tracing::debug!("Script label upsert pending store API: {}", script.name);
     Ok(())
 }

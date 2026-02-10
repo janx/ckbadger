@@ -1,3 +1,1 @@
-pub mod pool;
-
-pub use pool::*;
+// PostgreSQL pool removed — all data served from CkbadgerStore (RocksDB).

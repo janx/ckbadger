@@ -1,7 +1,8 @@
 use anyhow::Result;
+use ckbadger_store::CkbadgerStore;
 use ckbadger_task_runner::executor::TaskExecutor;
 use clap::Parser;
-use sqlx::postgres::PgPoolOptions;
+use std::sync::Arc;
 use std::time::Duration;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -10,8 +11,12 @@ use tracing_subscriber::EnvFilter;
 #[command(name = "ckbadger-task-runner")]
 #[command(about = "Background task runner for ckbadger")]
 struct Args {
-    #[arg(long, env = "DATABASE_URL")]
-    database_url: String,
+    #[arg(
+        long,
+        env = "CKBADGER_DATA_PATH",
+        default_value = "./data/ckbadger-store"
+    )]
+    data_path: String,
 
     #[arg(long, env = "CKB_RPC_URL", default_value = "http://localhost:8114")]
     ckb_rpc_url: String,
@@ -21,9 +26,6 @@ struct Args {
 
     #[arg(long, env = "REDIS_URL")]
     redis_url: Option<String>,
-
-    #[arg(long, default_value = "10")]
-    index_rebuild_parallel: usize,
 
     #[arg(long, default_value = "50")]
     cycles_batch_size: i64,
@@ -60,20 +62,16 @@ async fn main() -> Result<()> {
         runner_id, args.poll_interval_secs
     );
 
-    let pool = PgPoolOptions::new()
-        .max_connections(20)
-        .connect(&args.database_url)
-        .await?;
+    let store = Arc::new(CkbadgerStore::open(&args.data_path)?);
 
-    info!("Connected to database");
+    info!("Opened ckbadger-store at {}", args.data_path);
 
     let executor = TaskExecutor::new(
-        pool,
+        store,
         runner_id,
         args.ckb_rpc_url,
         args.token_labels_path,
         args.redis_url,
-        args.index_rebuild_parallel,
         args.cycles_batch_size,
         args.cycles_concurrent,
     );

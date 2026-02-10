@@ -87,6 +87,7 @@ pub struct RecentReorgResponse {
 #[derive(Debug, Deserialize)]
 pub struct ListForksParams {
     pub limit: Option<i64>,
+    #[allow(dead_code)]
     pub offset: Option<i64>,
 }
 
@@ -95,6 +96,7 @@ pub struct ListForksParams {
 pub struct ResolveDeepForkRequest {
     pub action: String,
     pub admin_token: String,
+    #[allow(dead_code)]
     pub notes: Option<String>,
 }
 
@@ -114,296 +116,156 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/admin/resolve-deep-fork", post(resolve_deep_fork))
 }
 
+/// List forks.
+///
+/// With the migration to RocksDB, we no longer have a `reorg_events` table.
+/// Reorg data is now derived from the sync status deep_fork_info. We return
+/// the deep fork as a single-element list if one is detected, or an empty list.
 async fn list_forks(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListForksParams>,
 ) -> ApiResult<CursorPaginatedResponse<ReorgEventResponse>> {
     let limit = params.limit.unwrap_or(20).min(100);
-    let offset = params.offset.unwrap_or(0);
 
-    let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM reorg_events")
-        .fetch_one(&state.read_pool)
-        .await
+    let sync_status = state
+        .store
+        .get_sync_status()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let rows: Vec<(
-        i32,
-        chrono::DateTime<chrono::Utc>,
-        i64,
-        Vec<u8>,
-        i64,
-        Vec<u8>,
-        i64,
-        Vec<u8>,
-        i32,
-        i32,
-        i32,
-        String,
-        Option<chrono::DateTime<chrono::Utc>>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-    )> = sqlx::query_as(
-        r#"
-        SELECT 
-            id, detected_at, 
-            fork_point_number, fork_point_hash,
-            old_tip_number, old_tip_hash,
-            new_tip_number, new_tip_hash,
-            depth, orphaned_blocks_count, orphaned_txs_count,
-            event_type, resolved_at, resolved_by, resolution_action, resolution_notes
-        FROM reorg_events
-        ORDER BY detected_at DESC
-        LIMIT $1 OFFSET $2
-        "#,
-    )
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let mut events = Vec::new();
 
-    let events: Vec<ReorgEventResponse> = rows
-        .into_iter()
-        .map(|r| ReorgEventResponse {
-            id: r.0,
-            detected_at: r.1.to_rfc3339(),
-            fork_point_number: r.2,
-            fork_point_hash: format!("0x{}", hex::encode(&r.3)),
-            old_tip_number: r.4,
-            old_tip_hash: format!("0x{}", hex::encode(&r.5)),
-            new_tip_number: r.6,
-            new_tip_hash: format!("0x{}", hex::encode(&r.7)),
-            depth: r.8,
-            orphaned_blocks_count: r.9,
-            orphaned_txs_count: r.10,
-            event_type: r.11,
-            resolved_at: r.12.map(|t| t.to_rfc3339()),
-            resolved_by: r.13,
-            resolution_action: r.14,
-            resolution_notes: r.15,
-        })
-        .collect();
+    if sync_status.deep_fork_detected {
+        if let Some(ref info) = sync_status.deep_fork_info {
+            events.push(ReorgEventResponse {
+                id: 1,
+                detected_at: chrono::Utc::now().to_rfc3339(),
+                fork_point_number: info.fork_point,
+                fork_point_hash: String::new(),
+                old_tip_number: info.db_tip,
+                old_tip_hash: format!("0x{}", hex::encode(&info.db_tip_hash)),
+                new_tip_number: info.chain_tip,
+                new_tip_hash: format!("0x{}", hex::encode(&info.chain_tip_hash)),
+                depth: info.depth,
+                orphaned_blocks_count: 0,
+                orphaned_txs_count: 0,
+                event_type: "deep".to_string(),
+                resolved_at: None,
+                resolved_by: None,
+                resolution_action: None,
+                resolution_notes: None,
+            });
+        }
+    }
 
-    ok(CursorPaginatedResponse::new(events, total.0, limit, None))
+    let total = events.len() as i64;
+
+    ok(CursorPaginatedResponse::new(events, total, limit, None))
 }
 
+/// Get fork detail by ID.
+///
+/// Since reorg_events / orphaned_blocks / orphaned_transactions tables are gone,
+/// we derive this from the deep fork info if id == 1 and a deep fork is active.
 async fn get_fork_detail(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i32>,
 ) -> ApiResult<ReorgDetailResponse> {
-    let event_row: Option<(
-        i32,
-        chrono::DateTime<chrono::Utc>,
-        i64,
-        Vec<u8>,
-        i64,
-        Vec<u8>,
-        i64,
-        Vec<u8>,
-        i32,
-        i32,
-        i32,
-        String,
-        Option<chrono::DateTime<chrono::Utc>>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-    )> = sqlx::query_as(
-        r#"
-        SELECT 
-            id, detected_at, 
-            fork_point_number, fork_point_hash,
-            old_tip_number, old_tip_hash,
-            new_tip_number, new_tip_hash,
-            depth, orphaned_blocks_count, orphaned_txs_count,
-            event_type, resolved_at, resolved_by, resolution_action, resolution_notes
-        FROM reorg_events
-        WHERE id = $1
-        "#,
-    )
-    .bind(id)
-    .fetch_optional(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let sync_status = state
+        .store
+        .get_sync_status()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let r = event_row.ok_or_else(|| ApiError::not_found("Reorg event not found"))?;
+    if id != 1 || !sync_status.deep_fork_detected {
+        return Err(ApiError::not_found("Reorg event not found"));
+    }
+
+    let info = sync_status
+        .deep_fork_info
+        .ok_or_else(|| ApiError::not_found("Reorg event not found"))?;
 
     let event = ReorgEventResponse {
-        id: r.0,
-        detected_at: r.1.to_rfc3339(),
-        fork_point_number: r.2,
-        fork_point_hash: format!("0x{}", hex::encode(&r.3)),
-        old_tip_number: r.4,
-        old_tip_hash: format!("0x{}", hex::encode(&r.5)),
-        new_tip_number: r.6,
-        new_tip_hash: format!("0x{}", hex::encode(&r.7)),
-        depth: r.8,
-        orphaned_blocks_count: r.9,
-        orphaned_txs_count: r.10,
-        event_type: r.11,
-        resolved_at: r.12.map(|t| t.to_rfc3339()),
-        resolved_by: r.13,
-        resolution_action: r.14,
-        resolution_notes: r.15,
+        id: 1,
+        detected_at: chrono::Utc::now().to_rfc3339(),
+        fork_point_number: info.fork_point,
+        fork_point_hash: String::new(),
+        old_tip_number: info.db_tip,
+        old_tip_hash: format!("0x{}", hex::encode(&info.db_tip_hash)),
+        new_tip_number: info.chain_tip,
+        new_tip_hash: format!("0x{}", hex::encode(&info.chain_tip_hash)),
+        depth: info.depth,
+        orphaned_blocks_count: 0,
+        orphaned_txs_count: 0,
+        event_type: "deep".to_string(),
+        resolved_at: None,
+        resolved_by: None,
+        resolution_action: None,
+        resolution_notes: None,
     };
-
-    let orphaned_blocks: Vec<(
-        i64,
-        Vec<u8>,
-        Vec<u8>,
-        chrono::DateTime<chrono::Utc>,
-        i32,
-        Option<Vec<u8>>,
-    )> = sqlx::query_as(
-        r#"
-            SELECT number, hash, parent_hash, timestamp, transactions_count, miner_lock_hash
-            FROM orphaned_blocks
-            WHERE reorg_event_id = $1
-            ORDER BY number DESC
-            "#,
-    )
-    .bind(id)
-    .fetch_all(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let orphaned_txs: Vec<(Vec<u8>, i64, Vec<u8>, i32, Option<i16>, Option<i16>, Option<i64>)> =
-        sqlx::query_as(
-            r#"
-            SELECT hash, block_number, block_hash, tx_index, inputs_count, outputs_count, total_capacity::bigint
-            FROM orphaned_transactions
-            WHERE reorg_event_id = $1
-            ORDER BY block_number DESC, tx_index
-            LIMIT 100
-            "#,
-        )
-        .bind(id)
-        .fetch_all(&state.read_pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     ok(ReorgDetailResponse {
         event,
-        orphaned_blocks: orphaned_blocks
-            .into_iter()
-            .map(|b| OrphanedBlockResponse {
-                number: b.0,
-                hash: format!("0x{}", hex::encode(&b.1)),
-                parent_hash: format!("0x{}", hex::encode(&b.2)),
-                timestamp: b.3.to_rfc3339(),
-                transactions_count: b.4,
-                miner_lock_hash: b.5.map(|h| format!("0x{}", hex::encode(&h))),
-            })
-            .collect(),
-        orphaned_transactions: orphaned_txs
-            .into_iter()
-            .map(|t| OrphanedTransactionResponse {
-                hash: format!("0x{}", hex::encode(&t.0)),
-                block_number: t.1,
-                block_hash: format!("0x{}", hex::encode(&t.2)),
-                tx_index: t.3,
-                inputs_count: t.4,
-                outputs_count: t.5,
-                total_capacity: t.6.map(|c| c.to_string()),
-            })
-            .collect(),
+        orphaned_blocks: Vec::new(),
+        orphaned_transactions: Vec::new(),
     })
 }
 
 async fn get_recent_reorg(State(state): State<Arc<AppState>>) -> ApiResult<RecentReorgResponse> {
-    let deep_fork_row: (
-        bool,
-        Option<chrono::DateTime<chrono::Utc>>,
-        Option<i64>,
-        Option<Vec<u8>>,
-        Option<i64>,
-        Option<Vec<u8>>,
-        Option<i32>,
-        Option<i64>,
-    ) = sqlx::query_as(
-        r#"
-        SELECT 
-            deep_fork_detected,
-            deep_fork_at,
-            deep_fork_db_tip,
-            deep_fork_db_tip_hash,
-            deep_fork_chain_tip,
-            deep_fork_chain_tip_hash,
-            deep_fork_depth,
-            deep_fork_fork_point
-        FROM sync_status WHERE id = 1
-        "#,
-    )
-    .fetch_one(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let sync_status = state
+        .store
+        .get_sync_status()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let deep_fork = DeepForkStatusResponse {
-        detected: deep_fork_row.0,
-        detected_at: deep_fork_row.1.map(|t| t.to_rfc3339()),
-        db_tip: deep_fork_row.2,
-        db_tip_hash: deep_fork_row.3.map(|h| format!("0x{}", hex::encode(&h))),
-        chain_tip: deep_fork_row.4,
-        chain_tip_hash: deep_fork_row.5.map(|h| format!("0x{}", hex::encode(&h))),
-        depth: deep_fork_row.6,
-        fork_point: deep_fork_row.7,
+    let deep_fork = if let Some(ref info) = sync_status.deep_fork_info {
+        DeepForkStatusResponse {
+            detected: sync_status.deep_fork_detected,
+            detected_at: None,
+            db_tip: Some(info.db_tip),
+            db_tip_hash: Some(format!("0x{}", hex::encode(&info.db_tip_hash))),
+            chain_tip: Some(info.chain_tip),
+            chain_tip_hash: Some(format!("0x{}", hex::encode(&info.chain_tip_hash))),
+            depth: Some(info.depth),
+            fork_point: Some(info.fork_point),
+        }
+    } else {
+        DeepForkStatusResponse {
+            detected: false,
+            detected_at: None,
+            db_tip: None,
+            db_tip_hash: None,
+            chain_tip: None,
+            chain_tip_hash: None,
+            depth: None,
+            fork_point: None,
+        }
     };
 
-    let recent_reorg: Option<(
-        i32,
-        chrono::DateTime<chrono::Utc>,
-        i64,
-        Vec<u8>,
-        i64,
-        Vec<u8>,
-        i64,
-        Vec<u8>,
-        i32,
-        i32,
-        i32,
-        String,
-        Option<chrono::DateTime<chrono::Utc>>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-    )> = sqlx::query_as(
-        r#"
-        SELECT 
-            id, detected_at, 
-            fork_point_number, fork_point_hash,
-            old_tip_number, old_tip_hash,
-            new_tip_number, new_tip_hash,
-            depth, orphaned_blocks_count, orphaned_txs_count,
-            event_type, resolved_at, resolved_by, resolution_action, resolution_notes
-        FROM reorg_events
-        WHERE detected_at >= NOW() - INTERVAL '24 hours'
-        ORDER BY detected_at DESC
-        LIMIT 1
-        "#,
-    )
-    .fetch_optional(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let reorg = recent_reorg.map(|r| ReorgEventResponse {
-        id: r.0,
-        detected_at: r.1.to_rfc3339(),
-        fork_point_number: r.2,
-        fork_point_hash: format!("0x{}", hex::encode(&r.3)),
-        old_tip_number: r.4,
-        old_tip_hash: format!("0x{}", hex::encode(&r.5)),
-        new_tip_number: r.6,
-        new_tip_hash: format!("0x{}", hex::encode(&r.7)),
-        depth: r.8,
-        orphaned_blocks_count: r.9,
-        orphaned_txs_count: r.10,
-        event_type: r.11,
-        resolved_at: r.12.map(|t| t.to_rfc3339()),
-        resolved_by: r.13,
-        resolution_action: r.14,
-        resolution_notes: r.15,
-    });
+    // With RocksDB we don't have a reorg_events table with timestamps, so we
+    // only surface the deep fork if one is currently detected.
+    let reorg = if sync_status.deep_fork_detected {
+        sync_status
+            .deep_fork_info
+            .as_ref()
+            .map(|info| ReorgEventResponse {
+                id: 1,
+                detected_at: chrono::Utc::now().to_rfc3339(),
+                fork_point_number: info.fork_point,
+                fork_point_hash: String::new(),
+                old_tip_number: info.db_tip,
+                old_tip_hash: format!("0x{}", hex::encode(&info.db_tip_hash)),
+                new_tip_number: info.chain_tip,
+                new_tip_hash: format!("0x{}", hex::encode(&info.chain_tip_hash)),
+                depth: info.depth,
+                orphaned_blocks_count: 0,
+                orphaned_txs_count: 0,
+                event_type: "deep".to_string(),
+                resolved_at: None,
+                resolved_by: None,
+                resolution_action: None,
+                resolution_notes: None,
+            })
+    } else {
+        None
+    };
 
     ok(RecentReorgResponse {
         has_recent_reorg: reorg.is_some() || deep_fork.detected,
@@ -421,51 +283,21 @@ async fn resolve_deep_fork(
         return Err(ApiError::unauthorized("Invalid admin token"));
     }
 
-    let deep_fork_detected: (bool,) =
-        sqlx::query_as("SELECT deep_fork_detected FROM sync_status WHERE id = 1")
-            .fetch_one(&state.read_pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+    let sync_status = state
+        .store
+        .get_sync_status()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    if !deep_fork_detected.0 {
+    if !sync_status.deep_fork_detected {
         return Err(ApiError::bad_request("No deep fork to resolve"));
     }
 
     match req.action.as_str() {
         "dismiss" => {
-            sqlx::query(
-                r#"
-                UPDATE reorg_events SET
-                    event_type = 'resolved',
-                    resolved_at = NOW(),
-                    resolved_by = 'admin',
-                    resolution_action = 'dismissed',
-                    resolution_notes = $1
-                WHERE event_type = 'deep' AND resolved_at IS NULL
-                "#,
-            )
-            .bind(&req.notes)
-            .execute(&state.pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-
-            sqlx::query(
-                r#"
-                UPDATE sync_status SET
-                    deep_fork_detected = FALSE,
-                    deep_fork_at = NULL,
-                    deep_fork_db_tip = NULL,
-                    deep_fork_db_tip_hash = NULL,
-                    deep_fork_chain_tip = NULL,
-                    deep_fork_chain_tip_hash = NULL,
-                    deep_fork_depth = NULL,
-                    deep_fork_fork_point = NULL
-                WHERE id = 1
-                "#,
-            )
-            .execute(&state.pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+            state
+                .store
+                .clear_deep_fork()
+                .map_err(|e| ApiError::internal(e.to_string()))?;
 
             ok(ResolveDeepForkResponse {
                 success: true,

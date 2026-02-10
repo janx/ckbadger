@@ -93,23 +93,11 @@ ingress:
           service: frontend
   tls: []
 
-postgresql:
-  enabled: true
-  auth:
-    username: ckbadger
-    password: ckbadger
-    database: ckbadger
-  primary:
-    persistence:
-      enabled: true
-      size: 50Gi
-    resources:
-      limits:
-        cpu: 2000m
-        memory: 4Gi
-      requests:
-        cpu: 500m
-        memory: 1Gi
+storage:
+  dataPath: /data/ckbadger-store
+  persistence:
+    enabled: true
+    size: 50Gi
 
 redis:
   enabled: true
@@ -127,15 +115,6 @@ redis:
       requests:
         cpu: 100m
         memory: 128Mi
-
-externalDatabase:
-  host: ''
-  port: 5432
-  user: ckbadger
-  password: ''
-  database: ckbadger
-  existingSecret: ''
-  existingSecretPasswordKey: 'password'
 
 externalRedis:
   host: ''

@@ -3,6 +3,7 @@ use axum::{
     routing::get,
     Router,
 };
+use ckbadger_store::CkbadgerStore;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -55,22 +56,6 @@ pub struct ActivityResponse {
     pub timestamp: String,
 }
 
-type ActivityRow = (
-    Vec<u8>,                       // activity_id
-    String,                        // activity_type
-    String,                        // activity_category
-    i64,                           // block_number
-    Vec<u8>,                       // tx_hash
-    i32,                           // tx_index
-    i16,                           // activity_index
-    Option<Vec<u8>>,               // from_lock_hash
-    Option<Vec<u8>>,               // to_lock_hash
-    String,                        // amount (as text from NUMERIC)
-    Option<Vec<u8>>,               // asset_id
-    serde_json::Value,             // metadata
-    chrono::DateTime<chrono::Utc>, // timestamp
-);
-
 fn encode_activity_cursor(block_number: i64, tx_index: i32, activity_index: i16) -> String {
     format!("{}:{}:{}", block_number, tx_index, activity_index)
 }
@@ -86,39 +71,50 @@ fn decode_activity_cursor(cursor: &str) -> Option<(i64, i32, i16)> {
     Some((block_number, tx_index, activity_index))
 }
 
-fn row_to_response(row: ActivityRow) -> ActivityResponse {
-    let (
-        activity_id,
-        activity_type,
-        activity_category,
-        block_number,
-        tx_hash,
-        tx_index,
-        activity_index,
-        from_lock_hash,
-        to_lock_hash,
-        amount,
-        asset_id,
-        metadata,
-        timestamp,
-    ) = row;
+/// Build an activity_id from block_number and activity_index.
+fn make_activity_id(block_num: i64, idx: i32) -> String {
+    let mut id = Vec::with_capacity(12);
+    id.extend_from_slice(&block_num.to_be_bytes());
+    id.extend_from_slice(&idx.to_be_bytes());
+    format!("0x{}", hex::encode(&id))
+}
+
+/// Convert an ActivityEntry (from store) + its block_num and idx into an API response.
+fn entry_to_response(
+    block_num: i64,
+    idx: i32,
+    entry: &ckbadger_store::ActivityEntry,
+) -> ActivityResponse {
+    let timestamp_dt = chrono::DateTime::from_timestamp_millis(entry.timestamp).unwrap_or_default();
 
     ActivityResponse {
-        activity_id: format!("0x{}", hex::encode(&activity_id)),
-        activity_type,
-        activity_category,
-        block_number,
-        tx_hash: format!("0x{}", hex::encode(&tx_hash)),
-        tx_index,
-        activity_index,
+        activity_id: make_activity_id(block_num, idx),
+        activity_type: entry.activity_type.clone(),
+        activity_category: entry.category.clone(),
+        block_number: block_num,
+        tx_hash: format!("0x{}", hex::encode(&entry.tx_hash)),
+        tx_index: entry.tx_idx,
+        activity_index: idx as i16,
         from_address: None,
         to_address: None,
-        from_lock_hash: from_lock_hash.map(|h| format!("0x{}", hex::encode(&h))),
-        to_lock_hash: to_lock_hash.map(|h| format!("0x{}", hex::encode(&h))),
-        amount,
-        asset_id: asset_id.map(|h| format!("0x{}", hex::encode(&h))),
-        metadata,
-        timestamp: timestamp.to_rfc3339(),
+        from_lock_hash: entry
+            .from_lock
+            .as_ref()
+            .map(|h| format!("0x{}", hex::encode(h))),
+        to_lock_hash: entry
+            .to_lock
+            .as_ref()
+            .map(|h| format!("0x{}", hex::encode(h))),
+        amount: entry
+            .amount
+            .map(|a| a.to_string())
+            .unwrap_or_else(|| "0".to_string()),
+        asset_id: entry
+            .asset_id
+            .as_ref()
+            .map(|h| format!("0x{}", hex::encode(h))),
+        metadata: entry.metadata.clone().unwrap_or(serde_json::Value::Null),
+        timestamp: timestamp_dt.to_rfc3339(),
     }
 }
 
@@ -146,6 +142,69 @@ const VALID_TYPES: [&str; 18] = [
     "RGBPP_LEAP_OUT",
     "RGBPP_ISSUANCE",
 ];
+
+/// Collect recent activities from the store by scanning blocks in reverse order.
+/// Applies optional type/category filters and cursor-based pagination.
+fn collect_activities_from_store(
+    store: &CkbadgerStore,
+    limit: usize,
+    cursor: Option<(i64, i32, i16)>,
+    activity_type: Option<&str>,
+    activity_category: Option<&str>,
+) -> Result<Vec<(i64, i32, ckbadger_store::ActivityEntry)>, String> {
+    // Start scanning from cursor block or from the tip
+    let start_block = cursor.map(|(b, _, _)| b).unwrap_or_else(|| {
+        store
+            .get_sync_status()
+            .map(|s| s.tip_block_number)
+            .unwrap_or(0)
+    });
+
+    let mut results = Vec::new();
+    // We need limit+1 to know if there are more results
+    let target = limit;
+
+    // Scan blocks in reverse order
+    let blocks = store
+        .list_blocks_desc(Some(start_block), 10000)
+        .map_err(|e| e.to_string())?;
+
+    for (block_num, _header) in &blocks {
+        let activities = store
+            .list_block_activities(*block_num)
+            .map_err(|e| e.to_string())?;
+
+        for (idx, entry) in activities.iter().rev() {
+            // Apply cursor filter
+            if let Some((cb, ct, ci)) = cursor {
+                if (*block_num, entry.tx_idx, *idx as i16) >= (cb, ct, ci) {
+                    continue;
+                }
+            }
+
+            // Apply type filter
+            if let Some(typ) = activity_type {
+                if entry.activity_type != typ {
+                    continue;
+                }
+            }
+
+            // Apply category filter
+            if let Some(cat) = activity_category {
+                if entry.category != cat {
+                    continue;
+                }
+            }
+
+            results.push((*block_num, *idx, entry.clone()));
+            if results.len() > target {
+                return Ok(results);
+            }
+        }
+    }
+
+    Ok(results)
+}
 
 async fn list_activities(
     State(state): State<Arc<AppState>>,
@@ -177,100 +236,30 @@ async fn list_activities(
         .cursor
         .as_ref()
         .and_then(|c| decode_activity_cursor(c));
-    let (cursor_block, cursor_tx, cursor_idx) = cursor.unwrap_or((i64::MAX, i32::MAX, i16::MAX));
 
-    let rows: Vec<ActivityRow> = match (&params.activity_type, &params.activity_category) {
-        (Some(typ), Some(cat)) => sqlx::query_as(
-            r#"
-                SELECT activity_id, activity_type, activity_category, block_number, tx_hash,
-                       tx_index, activity_index, from_lock_hash, to_lock_hash, amount::TEXT,
-                       asset_id, metadata, timestamp
-                FROM activities
-                WHERE activity_type = $1 AND activity_category = $2
-                  AND (block_number, tx_index, activity_index) < ($3, $4, $5)
-                ORDER BY block_number DESC, tx_index DESC, activity_index DESC
-                LIMIT $6
-                "#,
-        )
-        .bind(typ)
-        .bind(cat)
-        .bind(cursor_block)
-        .bind(cursor_tx)
-        .bind(cursor_idx)
-        .bind(limit + 1)
-        .fetch_all(&state.read_pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?,
-        (Some(typ), None) => sqlx::query_as(
-            r#"
-                SELECT activity_id, activity_type, activity_category, block_number, tx_hash,
-                       tx_index, activity_index, from_lock_hash, to_lock_hash, amount::TEXT,
-                       asset_id, metadata, timestamp
-                FROM activities
-                WHERE activity_type = $1
-                  AND (block_number, tx_index, activity_index) < ($2, $3, $4)
-                ORDER BY block_number DESC, tx_index DESC, activity_index DESC
-                LIMIT $5
-                "#,
-        )
-        .bind(typ)
-        .bind(cursor_block)
-        .bind(cursor_tx)
-        .bind(cursor_idx)
-        .bind(limit + 1)
-        .fetch_all(&state.read_pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?,
-        (None, Some(cat)) => sqlx::query_as(
-            r#"
-                SELECT activity_id, activity_type, activity_category, block_number, tx_hash,
-                       tx_index, activity_index, from_lock_hash, to_lock_hash, amount::TEXT,
-                       asset_id, metadata, timestamp
-                FROM activities
-                WHERE activity_category = $1
-                  AND (block_number, tx_index, activity_index) < ($2, $3, $4)
-                ORDER BY block_number DESC, tx_index DESC, activity_index DESC
-                LIMIT $5
-                "#,
-        )
-        .bind(cat)
-        .bind(cursor_block)
-        .bind(cursor_tx)
-        .bind(cursor_idx)
-        .bind(limit + 1)
-        .fetch_all(&state.read_pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?,
-        (None, None) => sqlx::query_as(
-            r#"
-                SELECT activity_id, activity_type, activity_category, block_number, tx_hash,
-                       tx_index, activity_index, from_lock_hash, to_lock_hash, amount::TEXT,
-                       asset_id, metadata, timestamp
-                FROM activities
-                WHERE (block_number, tx_index, activity_index) < ($1, $2, $3)
-                ORDER BY block_number DESC, tx_index DESC, activity_index DESC
-                LIMIT $4
-                "#,
-        )
-        .bind(cursor_block)
-        .bind(cursor_tx)
-        .bind(cursor_idx)
-        .bind(limit + 1)
-        .fetch_all(&state.read_pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?,
-    };
+    let rows = collect_activities_from_store(
+        &state.store,
+        (limit + 1) as usize,
+        cursor,
+        params.activity_type.as_deref(),
+        params.activity_category.as_deref(),
+    )
+    .map_err(ApiError::internal)?;
 
     let has_more = rows.len() as i64 > limit;
     let rows: Vec<_> = rows.into_iter().take(limit as usize).collect();
 
     let next_cursor = if has_more {
-        rows.last().map(|r| encode_activity_cursor(r.3, r.5, r.6))
+        rows.last()
+            .map(|(bn, idx, entry)| encode_activity_cursor(*bn, entry.tx_idx, *idx as i16))
     } else {
         None
     };
 
-    let data: Vec<ActivityResponse> = rows.into_iter().map(row_to_response).collect();
+    let data: Vec<ActivityResponse> = rows
+        .iter()
+        .map(|(bn, idx, entry)| entry_to_response(*bn, *idx, entry))
+        .collect();
 
     ok(CursorPaginatedResponse::without_total(
         data,
@@ -333,133 +322,97 @@ async fn get_address_activities(
         }
     }
 
+    let direction = params.direction.as_deref().unwrap_or("all");
+
+    // Fetch more than needed so we can filter and still have enough
+    let fetch_limit = (limit as usize + 1) * 4;
+    let all_activities = state
+        .store
+        .list_activities_by_addr(&lock_hash, fetch_limit)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
     let cursor = params
         .cursor
         .as_ref()
         .and_then(|c| decode_activity_cursor(c));
-    let (cursor_block, cursor_tx, cursor_idx) = cursor.unwrap_or((i64::MAX, i32::MAX, i16::MAX));
 
-    let direction = params.direction.as_deref().unwrap_or("all");
+    // Filter, apply cursor, direction, type, category
+    let mut filtered: Vec<(i64, i32, ckbadger_store::ActivityEntry)> = Vec::new();
 
-    let base_condition = match direction {
-        "in" => "to_lock_hash = $1",
-        "out" => "from_lock_hash = $1",
-        _ => "(from_lock_hash = $1 OR to_lock_hash = $1)",
-    };
+    for entry in &all_activities {
+        // The store returns entries but doesn't include block_num directly.
+        // We get the block number from the tx_location.
+        let block_num = state
+            .store
+            .get_tx_location(&entry.tx_hash)
+            .ok()
+            .flatten()
+            .map(|(bn, _)| bn)
+            .unwrap_or(0);
 
-    let rows: Vec<ActivityRow> = match (&params.activity_type, &params.activity_category) {
-        (Some(typ), Some(cat)) => {
-            let query = format!(
-                r#"
-                SELECT activity_id, activity_type, activity_category, block_number, tx_hash,
-                       tx_index, activity_index, from_lock_hash, to_lock_hash, amount::TEXT,
-                       asset_id, metadata, timestamp
-                FROM activities
-                WHERE {} AND activity_type = $2 AND activity_category = $3
-                  AND (block_number, tx_index, activity_index) < ($4, $5, $6)
-                ORDER BY block_number DESC, tx_index DESC, activity_index DESC
-                LIMIT $7
-                "#,
-                base_condition
-            );
-            sqlx::query_as(&query)
-                .bind(&lock_hash)
-                .bind(typ)
-                .bind(cat)
-                .bind(cursor_block)
-                .bind(cursor_tx)
-                .bind(cursor_idx)
-                .bind(limit + 1)
-                .fetch_all(&state.read_pool)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?
-        }
-        (Some(typ), None) => {
-            let query = format!(
-                r#"
-                SELECT activity_id, activity_type, activity_category, block_number, tx_hash,
-                       tx_index, activity_index, from_lock_hash, to_lock_hash, amount::TEXT,
-                       asset_id, metadata, timestamp
-                FROM activities
-                WHERE {} AND activity_type = $2
-                  AND (block_number, tx_index, activity_index) < ($3, $4, $5)
-                ORDER BY block_number DESC, tx_index DESC, activity_index DESC
-                LIMIT $6
-                "#,
-                base_condition
-            );
-            sqlx::query_as(&query)
-                .bind(&lock_hash)
-                .bind(typ)
-                .bind(cursor_block)
-                .bind(cursor_tx)
-                .bind(cursor_idx)
-                .bind(limit + 1)
-                .fetch_all(&state.read_pool)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?
-        }
-        (None, Some(cat)) => {
-            let query = format!(
-                r#"
-                SELECT activity_id, activity_type, activity_category, block_number, tx_hash,
-                       tx_index, activity_index, from_lock_hash, to_lock_hash, amount::TEXT,
-                       asset_id, metadata, timestamp
-                FROM activities
-                WHERE {} AND activity_category = $2
-                  AND (block_number, tx_index, activity_index) < ($3, $4, $5)
-                ORDER BY block_number DESC, tx_index DESC, activity_index DESC
-                LIMIT $6
-                "#,
-                base_condition
-            );
-            sqlx::query_as(&query)
-                .bind(&lock_hash)
-                .bind(cat)
-                .bind(cursor_block)
-                .bind(cursor_tx)
-                .bind(cursor_idx)
-                .bind(limit + 1)
-                .fetch_all(&state.read_pool)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?
-        }
-        (None, None) => {
-            let query = format!(
-                r#"
-                SELECT activity_id, activity_type, activity_category, block_number, tx_hash,
-                       tx_index, activity_index, from_lock_hash, to_lock_hash, amount::TEXT,
-                       asset_id, metadata, timestamp
-                FROM activities
-                WHERE {}
-                  AND (block_number, tx_index, activity_index) < ($2, $3, $4)
-                ORDER BY block_number DESC, tx_index DESC, activity_index DESC
-                LIMIT $5
-                "#,
-                base_condition
-            );
-            sqlx::query_as(&query)
-                .bind(&lock_hash)
-                .bind(cursor_block)
-                .bind(cursor_tx)
-                .bind(cursor_idx)
-                .bind(limit + 1)
-                .fetch_all(&state.read_pool)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?
-        }
-    };
+        // Compute a synthetic activity_index: use tx_idx as the ordering key
+        // since each entry has a unique tx_idx in the block context.
+        let idx = entry.tx_idx;
 
-    let has_more = rows.len() as i64 > limit;
-    let rows: Vec<_> = rows.into_iter().take(limit as usize).collect();
+        // Apply cursor
+        if let Some((cb, ct, ci)) = cursor {
+            if (block_num, entry.tx_idx, idx as i16) >= (cb, ct, ci) {
+                continue;
+            }
+        }
+
+        // Apply direction filter
+        match direction {
+            "in" => {
+                if entry.to_lock.as_deref() != Some(&lock_hash[..]) {
+                    continue;
+                }
+            }
+            "out" => {
+                if entry.from_lock.as_deref() != Some(&lock_hash[..]) {
+                    continue;
+                }
+            }
+            _ => {
+                // "all" - either from or to matches (already filtered by store)
+            }
+        }
+
+        // Apply type filter
+        if let Some(ref typ) = params.activity_type {
+            if entry.activity_type != *typ {
+                continue;
+            }
+        }
+
+        // Apply category filter
+        if let Some(ref cat) = params.activity_category {
+            if entry.category != *cat {
+                continue;
+            }
+        }
+
+        filtered.push((block_num, idx, entry.clone()));
+        if filtered.len() > limit as usize {
+            break;
+        }
+    }
+
+    let has_more = filtered.len() as i64 > limit;
+    let filtered: Vec<_> = filtered.into_iter().take(limit as usize).collect();
 
     let next_cursor = if has_more {
-        rows.last().map(|r| encode_activity_cursor(r.3, r.5, r.6))
+        filtered
+            .last()
+            .map(|(bn, idx, entry)| encode_activity_cursor(*bn, entry.tx_idx, *idx as i16))
     } else {
         None
     };
 
-    let data: Vec<ActivityResponse> = rows.into_iter().map(row_to_response).collect();
+    let data: Vec<ActivityResponse> = filtered
+        .iter()
+        .map(|(bn, idx, entry)| entry_to_response(*bn, *idx, entry))
+        .collect();
 
     ok(CursorPaginatedResponse::without_total(
         data,
@@ -468,46 +421,28 @@ async fn get_address_activities(
     ))
 }
 
-pub async fn fetch_transaction_activities(
-    pool: &sqlx::PgPool,
+/// Fetch activities for a transaction, used by both the /activities/transaction endpoint
+/// and from transactions.rs.
+pub fn fetch_transaction_activities(
+    store: &CkbadgerStore,
     tx_hash: &[u8],
 ) -> Result<Vec<ActivityResponse>, String> {
-    let block_number = get_block_number_for_tx(pool, tx_hash).await.ok().flatten();
+    let block_number = get_block_number_for_tx(store, tx_hash).ok().flatten();
 
-    let rows: Vec<ActivityRow> = if let Some(bn) = block_number {
-        sqlx::query_as(
-            r#"
-            SELECT activity_id, activity_type, activity_category, block_number, tx_hash,
-                   tx_index, activity_index, from_lock_hash, to_lock_hash, amount::TEXT,
-                   asset_id, metadata, timestamp
-            FROM activities
-            WHERE tx_hash = $1 AND block_number = $2
-            ORDER BY activity_index ASC
-            "#,
-        )
-        .bind(tx_hash)
-        .bind(bn)
-        .fetch_all(pool)
-        .await
-        .map_err(|e| e.to_string())?
+    if let Some(bn) = block_number {
+        let activities = store.list_block_activities(bn).map_err(|e| e.to_string())?;
+
+        let data: Vec<ActivityResponse> = activities
+            .iter()
+            .filter(|(_, entry)| entry.tx_hash == tx_hash)
+            .map(|(idx, entry)| entry_to_response(bn, *idx, entry))
+            .collect();
+
+        Ok(data)
     } else {
-        sqlx::query_as(
-            r#"
-            SELECT activity_id, activity_type, activity_category, block_number, tx_hash,
-                   tx_index, activity_index, from_lock_hash, to_lock_hash, amount::TEXT,
-                   asset_id, metadata, timestamp
-            FROM activities
-            WHERE tx_hash = $1
-            ORDER BY activity_index ASC
-            "#,
-        )
-        .bind(tx_hash)
-        .fetch_all(pool)
-        .await
-        .map_err(|e| e.to_string())?
-    };
-
-    Ok(rows.into_iter().map(row_to_response).collect())
+        // Transaction not found or not indexed yet
+        Ok(Vec::new())
+    }
 }
 
 async fn get_transaction_activities(
@@ -523,45 +458,7 @@ async fn get_transaction_activities(
         ));
     }
 
-    let block_number = get_block_number_for_tx(&state.read_pool, &tx_hash)
-        .await
-        .ok()
-        .flatten();
-
-    let rows: Vec<ActivityRow> = if let Some(bn) = block_number {
-        sqlx::query_as(
-            r#"
-            SELECT activity_id, activity_type, activity_category, block_number, tx_hash,
-                   tx_index, activity_index, from_lock_hash, to_lock_hash, amount::TEXT,
-                   asset_id, metadata, timestamp
-            FROM activities
-            WHERE tx_hash = $1 AND block_number = $2
-            ORDER BY activity_index ASC
-            "#,
-        )
-        .bind(&tx_hash)
-        .bind(bn)
-        .fetch_all(&state.read_pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-    } else {
-        sqlx::query_as(
-            r#"
-            SELECT activity_id, activity_type, activity_category, block_number, tx_hash,
-                   tx_index, activity_index, from_lock_hash, to_lock_hash, amount::TEXT,
-                   asset_id, metadata, timestamp
-            FROM activities
-            WHERE tx_hash = $1
-            ORDER BY activity_index ASC
-            "#,
-        )
-        .bind(&tx_hash)
-        .fetch_all(&state.read_pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-    };
-
-    let data: Vec<ActivityResponse> = rows.into_iter().map(row_to_response).collect();
+    let data = fetch_transaction_activities(&state.store, &tx_hash).map_err(ApiError::internal)?;
 
     ok(data)
 }

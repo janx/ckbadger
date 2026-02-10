@@ -1,154 +1,84 @@
 use anyhow::Result;
 use ckbadger_common::{Task, TaskBuilder};
-use sqlx::PgPool;
+use ckbadger_store::CkbadgerStore;
+use std::sync::Arc;
 use uuid::Uuid;
 
 pub struct TaskDb {
-    pool: PgPool,
+    store: Arc<CkbadgerStore>,
 }
 
 #[allow(dead_code)]
 impl TaskDb {
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+    pub fn new(store: Arc<CkbadgerStore>) -> Self {
+        Self { store }
     }
 
     /// Check if bulk sync is still in progress by looking at actual block data.
-    ///
-    /// Uses the latest block timestamp to determine if the indexer has caught up
-    /// to the chain tip. If the latest block is within 1 hour of current time,
-    /// bulk sync is considered complete.
-    ///
-    /// This avoids a circular dependency: deferred flags (indexes_deferred, etc.)
-    /// are cleared BY rebuild tasks, so checking them here would prevent those
-    /// same tasks from ever running.
     pub async fn is_bulk_sync_active(&self) -> Result<bool> {
-        let row: Option<(bool,)> = sqlx::query_as(
-            r#"
-            SELECT CASE
-                WHEN MAX(timestamp) IS NULL THEN TRUE
-                WHEN MAX(timestamp) < NOW() - INTERVAL '1 hour' THEN TRUE
-                ELSE FALSE
-            END
-            FROM blocks_index
-            "#,
-        )
-        .fetch_optional(&self.pool)
-        .await?;
-
-        match row {
-            Some((is_bulk,)) => Ok(is_bulk),
-            None => Ok(true),
-        }
+        self.store.is_bulk_sync_active_by_timestamp()
     }
 
     /// Check if a specific task type is currently running.
-    /// Used to prevent I/O-heavy tasks from running concurrently.
     pub async fn is_task_type_running(&self, task_type: &str) -> Result<bool> {
-        let row: Option<(i64,)> = sqlx::query_as(
-            r#"
-            SELECT COUNT(*) FROM tasks
-            WHERE task_type = $1 AND status = 'running'
-            "#,
-        )
-        .bind(task_type)
-        .fetch_optional(&self.pool)
-        .await?;
-
-        Ok(row.map(|r| r.0).unwrap_or(0) > 0)
+        self.store.is_task_type_running(task_type)
     }
 
     pub async fn defer_task(&self, task_id: Uuid, reason: &str) -> Result<()> {
-        sqlx::query(
-            r#"
-            UPDATE tasks
-            SET status = 'pending',
-                runner_id = NULL,
-                error_message = $2,
-                heartbeat_at = NOW()
-            WHERE id = $1
-            "#,
-        )
-        .bind(task_id)
-        .bind(reason)
-        .execute(&self.pool)
-        .await?;
-
+        if let Some(mut task) = self.store.get_task(&task_id)? {
+            let old_status = task.status.clone();
+            let old_priority = task.priority;
+            task.status = "pending".to_string();
+            task.runner_id = None;
+            task.error_message = Some(reason.to_string());
+            task.heartbeat_at = Some(chrono::Utc::now());
+            self.store.update_task(&task, &old_status, old_priority)?;
+        }
         Ok(())
     }
 
-    /// Reset orphaned tasks that were left in 'running' state by a previous runner instance.
-    /// A task is considered orphaned if its heartbeat is older than the given timeout.
-    /// Returns the number of tasks recovered.
     pub async fn recover_orphaned_tasks(&self, timeout_secs: i64) -> Result<u64> {
-        let result = sqlx::query(
-            r#"
-            UPDATE tasks
-            SET status = 'pending',
-                runner_id = NULL,
-                error_message = COALESCE(error_message || E'\n', '') || 'Recovered: runner died (stale heartbeat)'
-            WHERE status = 'running'
-              AND heartbeat_at < NOW() - make_interval(secs => $1)
-            "#,
-        )
-        .bind(timeout_secs as f64)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(result.rows_affected())
+        self.store.recover_orphaned_tasks(timeout_secs)
     }
 
     pub async fn claim_next_task(&self, runner_id: &str) -> Result<Option<Task>> {
-        let task: Option<Task> = sqlx::query_as(
-            r#"
-            UPDATE tasks
-            SET status = 'running',
-                runner_id = $1,
-                started_at = COALESCE(started_at, NOW()),
-                heartbeat_at = NOW()
-            WHERE id = (
-                SELECT id FROM tasks
-                WHERE status = 'pending'
-                ORDER BY priority DESC, created_at ASC
-                LIMIT 1
-                FOR UPDATE SKIP LOCKED
-            )
-            RETURNING *
-            "#,
-        )
-        .bind(runner_id)
-        .fetch_optional(&self.pool)
-        .await?;
-
-        Ok(task)
+        let entry = self.store.claim_next_task(runner_id)?;
+        Ok(entry.map(task_entry_to_task))
     }
 
     /// Claim all pending tasks at the highest available priority level.
-    /// This enables parallel execution of independent tasks at the same priority.
     pub async fn claim_tasks_at_same_priority(&self, runner_id: &str) -> Result<Vec<Task>> {
-        let tasks: Vec<Task> = sqlx::query_as(
-            r#"
-            UPDATE tasks
-            SET status = 'running',
-                runner_id = $1,
-                started_at = COALESCE(started_at, NOW()),
-                heartbeat_at = NOW()
-            WHERE id = ANY(
-                SELECT id FROM tasks
-                WHERE status = 'pending'
-                AND priority = (
-                    SELECT MAX(priority) FROM tasks WHERE status = 'pending'
-                )
-                FOR UPDATE SKIP LOCKED
-            )
-            RETURNING *
-            "#,
-        )
-        .bind(runner_id)
-        .fetch_all(&self.pool)
-        .await?;
+        // Get all pending tasks, find the highest priority, claim all at that level
+        let pending = self.store.list_tasks_by_status("pending")?;
+        if pending.is_empty() {
+            return Ok(vec![]);
+        }
 
-        Ok(tasks)
+        let max_priority = pending.iter().map(|t| t.priority).max().unwrap_or(0);
+
+        let mut claimed = Vec::new();
+        for entry in pending {
+            if entry.priority == max_priority {
+                let id = entry.id;
+                let old_status = entry.status.clone();
+                let old_priority = entry.priority;
+                let mut entry = entry;
+                entry.status = "running".to_string();
+                entry.runner_id = Some(runner_id.to_string());
+                entry.started_at = Some(chrono::Utc::now());
+                entry.heartbeat_at = Some(chrono::Utc::now());
+                self.store.update_task(&entry, &old_status, old_priority)?;
+                claimed.push(task_entry_to_task(entry));
+
+                // Verify it was claimed (re-read)
+                if let Some(task) = self.store.get_task(&id)? {
+                    if task.status == "running" && task.runner_id.as_deref() == Some(runner_id) {
+                        continue;
+                    }
+                }
+            }
+        }
+        Ok(claimed)
     }
 
     pub async fn update_progress(
@@ -159,69 +89,52 @@ impl TaskDb {
         message: Option<&str>,
         rate_ema: Option<f64>,
     ) -> Result<()> {
-        sqlx::query(
-            r#"
-            UPDATE tasks
-            SET progress_current = $2,
-                progress_total = $3,
-                progress_message = $4,
-                rate_ema = $5,
-                heartbeat_at = NOW()
-            WHERE id = $1
-            "#,
-        )
-        .bind(task_id)
-        .bind(current)
-        .bind(total)
-        .bind(message)
-        .bind(rate_ema)
-        .execute(&self.pool)
-        .await?;
-
+        if let Some(mut task) = self.store.get_task(&task_id)? {
+            task.progress_current = Some(current);
+            task.progress_total = Some(total);
+            task.progress_message = message.map(String::from);
+            if let Some(ema) = rate_ema {
+                task.rate_ema = Some(ema);
+            }
+            task.heartbeat_at = Some(chrono::Utc::now());
+            let value = bincode::serialize(&task)?;
+            self.store
+                .put_cf(self.store.cf_tasks(), task_id.as_bytes(), &value)?;
+        }
         Ok(())
     }
 
     pub async fn update_result(&self, task_id: Uuid, result: &serde_json::Value) -> Result<()> {
-        sqlx::query(
-            r#"
-            UPDATE tasks
-            SET result = $2,
-                heartbeat_at = NOW()
-            WHERE id = $1
-            "#,
-        )
-        .bind(task_id)
-        .bind(result)
-        .execute(&self.pool)
-        .await?;
-
+        if let Some(mut task) = self.store.get_task(&task_id)? {
+            task.result = Some(result.clone());
+            task.heartbeat_at = Some(chrono::Utc::now());
+            let value = bincode::serialize(&task)?;
+            self.store
+                .put_cf(self.store.cf_tasks(), task_id.as_bytes(), &value)?;
+        }
         Ok(())
     }
 
     pub async fn append_log(&self, task_id: Uuid, line: &str) -> Result<()> {
-        sqlx::query(
-            r#"
-            UPDATE tasks
-            SET log_tail = CASE 
-                WHEN log_tail IS NULL THEN $2
-                ELSE (
-                    SELECT string_agg(line, E'\n')
-                    FROM (
-                        SELECT unnest(string_to_array(log_tail || E'\n' || $2, E'\n')) AS line
-                        ORDER BY ctid DESC
-                        LIMIT 100
-                    ) sub
-                )
-            END,
-            heartbeat_at = NOW()
-            WHERE id = $1
-            "#,
-        )
-        .bind(task_id)
-        .bind(line)
-        .execute(&self.pool)
-        .await?;
-
+        if let Some(mut task) = self.store.get_task(&task_id)? {
+            let new_log = match &task.log_tail {
+                Some(existing) => {
+                    // Keep last 100 lines
+                    let mut lines: Vec<&str> = existing.lines().collect();
+                    lines.push(line);
+                    if lines.len() > 100 {
+                        lines = lines[lines.len() - 100..].to_vec();
+                    }
+                    lines.join("\n")
+                }
+                None => line.to_string(),
+            };
+            task.log_tail = Some(new_log);
+            task.heartbeat_at = Some(chrono::Utc::now());
+            let value = bincode::serialize(&task)?;
+            self.store
+                .put_cf(self.store.cf_tasks(), task_id.as_bytes(), &value)?;
+        }
         Ok(())
     }
 
@@ -252,193 +165,220 @@ impl TaskDb {
             }
         });
 
-        sqlx::query(
-            r#"
-            UPDATE tasks
-            SET status = 'completed',
-                completed_at = NOW(),
-                progress_current = progress_total,
-                progress_message = COALESCE($3, progress_message),
-                result = COALESCE($2, result),
-                heartbeat_at = NOW()
-            WHERE id = $1
-            "#,
-        )
-        .bind(task_id)
-        .bind(result)
-        .bind(completion_message)
-        .execute(&self.pool)
-        .await?;
-
+        if let Some(mut task) = self.store.get_task(&task_id)? {
+            let old_status = task.status.clone();
+            let old_priority = task.priority;
+            task.status = "completed".to_string();
+            task.completed_at = Some(chrono::Utc::now());
+            if let Some(total) = task.progress_total {
+                task.progress_current = Some(total);
+            }
+            if let Some(msg) = completion_message {
+                task.progress_message = Some(msg);
+            }
+            if let Some(r) = result {
+                task.result = Some(r);
+            }
+            task.heartbeat_at = Some(chrono::Utc::now());
+            self.store.update_task(&task, &old_status, old_priority)?;
+        }
         Ok(())
     }
 
     pub async fn fail_task(&self, task_id: Uuid, error: &str) -> Result<()> {
-        sqlx::query(
-            r#"
-            UPDATE tasks
-            SET status = CASE 
-                WHEN retry_count < max_retries THEN 'pending'
-                ELSE 'failed'
-            END,
-            error_message = $2,
-            retry_count = retry_count + 1,
-            runner_id = NULL,
-            heartbeat_at = NOW()
-            WHERE id = $1
-            "#,
-        )
-        .bind(task_id)
-        .bind(error)
-        .execute(&self.pool)
-        .await?;
-
+        if let Some(mut task) = self.store.get_task(&task_id)? {
+            let old_status = task.status.clone();
+            let old_priority = task.priority;
+            if task.retry_count < task.max_retries {
+                task.status = "pending".to_string();
+            } else {
+                task.status = "failed".to_string();
+            }
+            task.error_message = Some(error.to_string());
+            task.retry_count += 1;
+            task.runner_id = None;
+            task.heartbeat_at = Some(chrono::Utc::now());
+            self.store.update_task(&task, &old_status, old_priority)?;
+        }
         Ok(())
     }
 
     pub async fn heartbeat(&self, task_id: Uuid) -> Result<()> {
-        sqlx::query("UPDATE tasks SET heartbeat_at = NOW() WHERE id = $1")
-            .bind(task_id)
-            .execute(&self.pool)
-            .await?;
-
+        self.store.heartbeat_task(&task_id)?;
         Ok(())
     }
 
     pub async fn check_cancelled(&self, task_id: Uuid) -> Result<bool> {
-        let row: (String,) = sqlx::query_as("SELECT status FROM tasks WHERE id = $1")
-            .bind(task_id)
-            .fetch_one(&self.pool)
-            .await?;
-
-        Ok(row.0 == "cancelled")
+        if let Some(task) = self.store.get_task(&task_id)? {
+            Ok(task.status == "cancelled")
+        } else {
+            Ok(false)
+        }
     }
 
     pub async fn create_task(&self, builder: &TaskBuilder) -> Result<Uuid> {
-        let row: (Uuid,) = sqlx::query_as(
-            r#"
-            INSERT INTO tasks (task_type, config, priority, max_retries)
-            VALUES ($1, $2, $3, $4)
-            RETURNING id
-            "#,
-        )
-        .bind(builder.task_type().to_string())
-        .bind(builder.config())
-        .bind(builder.get_priority())
-        .bind(builder.get_max_retries())
-        .fetch_one(&self.pool)
-        .await?;
-
-        Ok(row.0)
+        let id = Uuid::new_v4();
+        let entry = ckbadger_store::types::TaskEntry {
+            id,
+            task_type: builder.task_type().to_string(),
+            status: "pending".to_string(),
+            priority: builder.get_priority(),
+            config: builder.config().clone(),
+            progress_total: None,
+            progress_current: None,
+            progress_message: None,
+            result: None,
+            error_message: None,
+            created_at: chrono::Utc::now(),
+            started_at: None,
+            completed_at: None,
+            heartbeat_at: None,
+            runner_id: None,
+            retry_count: 0,
+            max_retries: builder.get_max_retries(),
+            rate_samples: None,
+            rate_ema: None,
+            log_tail: None,
+        };
+        self.store.create_task(&entry)?;
+        Ok(id)
     }
 
     pub async fn list_tasks(&self, limit: i64) -> Result<Vec<Task>> {
-        let tasks: Vec<Task> = sqlx::query_as(
-            r#"
-            SELECT * FROM tasks
-            ORDER BY 
-                CASE status 
-                    WHEN 'running' THEN 1 
-                    WHEN 'pending' THEN 2
-                    WHEN 'paused' THEN 3
-                    WHEN 'failed' THEN 4
-                    WHEN 'completed' THEN 5
-                    WHEN 'cancelled' THEN 6
-                END,
-                created_at DESC
-            LIMIT $1
-            "#,
-        )
-        .bind(limit)
-        .fetch_all(&self.pool)
-        .await?;
+        let mut all = self.store.list_all_tasks()?;
 
-        Ok(tasks)
+        // Sort: running first, then pending, paused, failed, completed, cancelled
+        all.sort_by(|a, b| {
+            let status_order = |s: &str| -> u8 {
+                match s {
+                    "running" => 1,
+                    "pending" => 2,
+                    "paused" => 3,
+                    "failed" => 4,
+                    "completed" => 5,
+                    "cancelled" => 6,
+                    _ => 7,
+                }
+            };
+            let ord = status_order(&a.status).cmp(&status_order(&b.status));
+            if ord != std::cmp::Ordering::Equal {
+                return ord;
+            }
+            // Within same status, newest first
+            b.created_at.cmp(&a.created_at)
+        });
+
+        all.truncate(limit as usize);
+        Ok(all.into_iter().map(task_entry_to_task).collect())
     }
 
     pub async fn get_task(&self, task_id: Uuid) -> Result<Option<Task>> {
-        let task: Option<Task> = sqlx::query_as("SELECT * FROM tasks WHERE id = $1")
-            .bind(task_id)
-            .fetch_optional(&self.pool)
-            .await?;
-
-        Ok(task)
+        Ok(self.store.get_task(&task_id)?.map(task_entry_to_task))
     }
 
     pub async fn cancel_task(&self, task_id: Uuid) -> Result<bool> {
-        let result = sqlx::query(
-            r#"
-            UPDATE tasks
-            SET status = 'cancelled'
-            WHERE id = $1 AND status IN ('pending', 'running', 'paused')
-            "#,
-        )
-        .bind(task_id)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(result.rows_affected() > 0)
+        if let Some(mut task) = self.store.get_task(&task_id)? {
+            if task.status == "pending" || task.status == "running" || task.status == "paused" {
+                let old_status = task.status.clone();
+                let old_priority = task.priority;
+                task.status = "cancelled".to_string();
+                self.store.update_task(&task, &old_status, old_priority)?;
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     pub async fn pause_task(&self, task_id: Uuid) -> Result<bool> {
-        let result = sqlx::query(
-            r#"
-            UPDATE tasks
-            SET status = 'paused'
-            WHERE id = $1 AND status = 'running'
-            "#,
-        )
-        .bind(task_id)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(result.rows_affected() > 0)
+        if let Some(mut task) = self.store.get_task(&task_id)? {
+            if task.status == "running" {
+                let old_status = task.status.clone();
+                let old_priority = task.priority;
+                task.status = "paused".to_string();
+                self.store.update_task(&task, &old_status, old_priority)?;
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     pub async fn resume_task(&self, task_id: Uuid) -> Result<bool> {
-        let result = sqlx::query(
-            r#"
-            UPDATE tasks
-            SET status = 'pending', runner_id = NULL
-            WHERE id = $1 AND status = 'paused'
-            "#,
-        )
-        .bind(task_id)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(result.rows_affected() > 0)
+        if let Some(mut task) = self.store.get_task(&task_id)? {
+            if task.status == "paused" {
+                let old_status = task.status.clone();
+                let old_priority = task.priority;
+                task.status = "pending".to_string();
+                task.runner_id = None;
+                self.store.update_task(&task, &old_status, old_priority)?;
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     pub async fn retry_task(&self, task_id: Uuid) -> Result<bool> {
-        let result = sqlx::query(
-            r#"
-            UPDATE tasks
-            SET status = 'pending', 
-                runner_id = NULL,
-                error_message = NULL,
-                retry_count = 0
-            WHERE id = $1 AND status = 'failed'
-            "#,
-        )
-        .bind(task_id)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(result.rows_affected() > 0)
+        if let Some(mut task) = self.store.get_task(&task_id)? {
+            if task.status == "failed" {
+                let old_status = task.status.clone();
+                let old_priority = task.priority;
+                task.status = "pending".to_string();
+                task.runner_id = None;
+                task.error_message = None;
+                task.retry_count = 0;
+                self.store.update_task(&task, &old_status, old_priority)?;
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     pub async fn delete_task(&self, task_id: Uuid) -> Result<bool> {
-        let result = sqlx::query(
-            r#"
-            DELETE FROM tasks
-            WHERE id = $1 AND status IN ('completed', 'failed', 'cancelled')
-            "#,
-        )
-        .bind(task_id)
-        .execute(&self.pool)
-        .await?;
+        if let Some(task) = self.store.get_task(&task_id)? {
+            if task.status == "completed" || task.status == "failed" || task.status == "cancelled" {
+                // Delete from both CFs
+                self.store
+                    .delete_cf(self.store.cf_tasks(), task_id.as_bytes())?;
+                let idx_key = ckbadger_store::keys::encode_task_index_key(
+                    match task.status.as_str() {
+                        "completed" => 0x03,
+                        "failed" => 0x04,
+                        "cancelled" => 0x05,
+                        _ => 0xFF,
+                    },
+                    task.priority,
+                    &task.id,
+                );
+                self.store
+                    .delete_cf(self.store.cf_tasks_index(), &idx_key)?;
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+}
 
-        Ok(result.rows_affected() > 0)
+/// Convert TaskEntry from ckbadger-store to common Task.
+fn task_entry_to_task(entry: ckbadger_store::types::TaskEntry) -> Task {
+    Task {
+        id: entry.id,
+        task_type: entry.task_type,
+        status: entry.status,
+        priority: entry.priority,
+        config: entry.config,
+        progress_total: entry.progress_total,
+        progress_current: entry.progress_current,
+        progress_message: entry.progress_message,
+        result: entry.result,
+        error_message: entry.error_message,
+        created_at: entry.created_at,
+        started_at: entry.started_at,
+        completed_at: entry.completed_at,
+        heartbeat_at: entry.heartbeat_at,
+        runner_id: entry.runner_id,
+        retry_count: entry.retry_count,
+        max_retries: entry.max_retries,
+        rate_samples: None,
+        rate_ema: entry.rate_ema,
+        log_tail: entry.log_tail,
     }
 }

@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::response::{ok, ApiError, ApiResult};
-use crate::tx_block_map::get_block_number_for_tx;
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -49,15 +48,14 @@ async fn search(
         });
     }
 
+    // Search by block number
     if let Ok(block_num) = query.parse::<i64>() {
-        let block =
-            sqlx::query_as::<_, (Vec<u8>,)>("SELECT hash FROM blocks_index WHERE number = $1")
-                .bind(block_num)
-                .fetch_optional(&state.read_pool)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?;
+        let block = state
+            .store
+            .get_block_header(block_num)
+            .map_err(|e| ApiError::internal(e.to_string()))?;
 
-        if let Some((_hash,)) = block {
+        if block.is_some() {
             results.push(SearchResult {
                 result_type: "block".to_string(),
                 id: block_num.to_string(),
@@ -67,6 +65,7 @@ async fn search(
         }
     }
 
+    // Search by hash (32 bytes = 64 hex chars + "0x" = 66)
     let query_lower = query.to_lowercase();
     let hash_query = if query_lower.starts_with("0x") {
         query_lower.clone()
@@ -76,35 +75,25 @@ async fn search(
 
     if hash_query.len() == 66 {
         if let Ok(hash_bytes) = hex::decode(&hash_query[2..]) {
-            let tx_fut = sqlx::query_as::<_, (i64,)>(
-                "SELECT block_number FROM transactions_index WHERE hash = $1",
-            )
-            .bind(&hash_bytes)
-            .fetch_optional(&state.read_pool);
+            // Search for transaction by hash
+            let tx_result = state
+                .store
+                .get_tx_location(&hash_bytes)
+                .map_err(|e| ApiError::internal(e.to_string()))?;
 
-            let block_fut =
-                sqlx::query_as::<_, (i64,)>("SELECT number FROM blocks_index WHERE hash = $1")
-                    .bind(&hash_bytes)
-                    .fetch_optional(&state.read_pool);
+            // Search for block by hash
+            let block_result = state
+                .store
+                .get_block_number_by_hash(&hash_bytes)
+                .map_err(|e| ApiError::internal(e.to_string()))?;
 
-            // Use address_balances (single table, indexed) instead of COUNT(*) on
-            // partitioned cells table which requires scanning all partitions.
-            let cell_count_fut = sqlx::query_as::<_, (i64,)>(
-                "SELECT COALESCE(total_cells_count, 0) FROM address_balances WHERE lock_script_hash = $1",
-            )
-            .bind(&hash_bytes)
-            .fetch_optional(&state.read_pool);
+            // Search for address by lock_script_hash
+            let addr_balance = state
+                .store
+                .get_addr_balance(&hash_bytes)
+                .map_err(|e| ApiError::internal(e.to_string()))?;
 
-            let (tx_result, block_result, cell_count_result) =
-                tokio::join!(tx_fut, block_fut, cell_count_fut);
-
-            let tx = tx_result.map_err(|e| ApiError::internal(e.to_string()))?;
-            let block = block_result.map_err(|e| ApiError::internal(e.to_string()))?;
-            let cell_count = cell_count_result
-                .map_err(|e| ApiError::internal(e.to_string()))?
-                .unwrap_or((0,));
-
-            if let Some((block_num,)) = tx {
+            if let Some((block_num, _)) = tx_result {
                 results.push(SearchResult {
                     result_type: "transaction".to_string(),
                     id: hash_query.clone(),
@@ -113,7 +102,7 @@ async fn search(
                 });
             }
 
-            if let Some((block_num,)) = block {
+            if let Some(block_num) = block_result {
                 results.push(SearchResult {
                     result_type: "block".to_string(),
                     id: block_num.to_string(),
@@ -122,17 +111,20 @@ async fn search(
                 });
             }
 
-            if cell_count.0 > 0 {
-                results.push(SearchResult {
-                    result_type: "address".to_string(),
-                    id: hash_query.clone(),
-                    label: format!("Address ({} cells)", cell_count.0),
-                    url: format!("/address/{}", hash_query),
-                });
+            if let Some(ab) = addr_balance {
+                if ab.total_cells_count > 0 {
+                    results.push(SearchResult {
+                        result_type: "address".to_string(),
+                        id: hash_query.clone(),
+                        label: format!("Address ({} cells)", ab.total_cells_count),
+                        url: format!("/address/{}", hash_query),
+                    });
+                }
             }
         }
     }
 
+    // Search for cell outpoint: <tx_hash>-<output_index>
     if query.contains('-') && !query.starts_with("ckb") && !query.starts_with("ckt") {
         let parts: Vec<&str> = query.split('-').collect();
         if parts.len() == 2 {
@@ -146,44 +138,52 @@ async fn search(
 
                 if tx_hash_normalized.len() == 66 {
                     if let Ok(hash_bytes) = hex::decode(&tx_hash_normalized[2..]) {
-                        let block_number = get_block_number_for_tx(&state.read_pool, &hash_bytes)
-                            .await
-                            .ok()
-                            .flatten();
+                        let output_idx = index as i16;
 
-                        let cell = if let Some(bn) = block_number {
-                            sqlx::query_as::<_, (String, i16)>(
-                                "SELECT capacity::TEXT, status FROM cells WHERE tx_hash = $1 AND output_index = $2 AND created_at_block = $3",
-                            )
-                            .bind(&hash_bytes)
-                            .bind(index)
-                            .bind(bn)
-                            .fetch_optional(&state.read_pool)
-                            .await
-                            .map_err(|e| ApiError::internal(e.to_string()))?
+                        // Try live cell first
+                        let live = state
+                            .store
+                            .get_cell(&hash_bytes, output_idx)
+                            .map_err(|e| ApiError::internal(e.to_string()))?;
+
+                        // Try consumed cell
+                        let consumed = if live.is_none() {
+                            state
+                                .store
+                                .get_consumed_cell(&hash_bytes, output_idx)
+                                .map_err(|e| ApiError::internal(e.to_string()))?
                         } else {
-                            sqlx::query_as::<_, (String, i16)>(
-                                "SELECT capacity::TEXT, status FROM cells WHERE tx_hash = $1 AND output_index = $2",
-                            )
-                            .bind(&hash_bytes)
-                            .bind(index)
-                            .fetch_optional(&state.read_pool)
-                            .await
-                            .map_err(|e| ApiError::internal(e.to_string()))?
+                            None
                         };
 
-                        if let Some((capacity, status)) = cell {
-                            let status_str = if status == 0 { "Live" } else { "Dead" };
-                            results.push(SearchResult {
-                                result_type: "cell".to_string(),
-                                id: format!("{}-{}", tx_hash_normalized, index),
-                                label: format!(
-                                    "Cell ({}, {} CKB)",
-                                    status_str,
-                                    parse_capacity(&capacity)
-                                ),
-                                url: format!("/cell/{}-{}", tx_hash_normalized, index),
-                            });
+                        match (live, consumed) {
+                            (Some(cell), _) => {
+                                let status_str = "Live";
+                                results.push(SearchResult {
+                                    result_type: "cell".to_string(),
+                                    id: format!("{}-{}", tx_hash_normalized, index),
+                                    label: format!(
+                                        "Cell ({}, {} CKB)",
+                                        status_str,
+                                        parse_capacity(&cell.capacity.to_string())
+                                    ),
+                                    url: format!("/cell/{}-{}", tx_hash_normalized, index),
+                                });
+                            }
+                            (None, Some(cell)) => {
+                                let status_str = "Dead";
+                                results.push(SearchResult {
+                                    result_type: "cell".to_string(),
+                                    id: format!("{}-{}", tx_hash_normalized, index),
+                                    label: format!(
+                                        "Cell ({}, {} CKB)",
+                                        status_str,
+                                        parse_capacity(&cell.capacity.to_string())
+                                    ),
+                                    url: format!("/cell/{}-{}", tx_hash_normalized, index),
+                                });
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -205,5 +205,65 @@ fn parse_capacity(capacity: &str) -> String {
         format!("{:.2}K", ckb / 1_000.0)
     } else {
         format!("{:.2}", ckb)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_capacity_small() {
+        assert_eq!(parse_capacity("10000000000"), "100.00");
+    }
+
+    #[test]
+    fn test_parse_capacity_thousands() {
+        // 100_000_000_000_000 shannon = 1_000_000 CKB = 1.00M
+        assert_eq!(parse_capacity("100000000000000"), "1.00M");
+    }
+
+    #[test]
+    fn test_parse_capacity_millions() {
+        assert_eq!(parse_capacity("100000000000000000"), "1000.00M");
+    }
+
+    #[test]
+    fn test_parse_capacity_zero() {
+        assert_eq!(parse_capacity("0"), "0.00");
+    }
+
+    #[test]
+    fn test_parse_capacity_invalid() {
+        assert_eq!(parse_capacity("not_a_number"), "0.00");
+    }
+
+    #[test]
+    fn test_search_response_serialization() {
+        let resp = SearchResponse {
+            results: vec![SearchResult {
+                result_type: "block".to_string(),
+                id: "100".to_string(),
+                label: "Block #100".to_string(),
+                url: "/blocks/100".to_string(),
+            }],
+            query: "100".to_string(),
+        };
+
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["query"], "100");
+        assert_eq!(json["results"][0]["resultType"], "block");
+        assert_eq!(json["results"][0]["id"], "100");
+    }
+
+    #[test]
+    fn test_search_response_empty() {
+        let resp = SearchResponse {
+            results: vec![],
+            query: "".to_string(),
+        };
+
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["results"].as_array().unwrap().len(), 0);
     }
 }

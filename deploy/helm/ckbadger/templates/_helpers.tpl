@@ -60,17 +60,6 @@ Create the name of the service account to use
 {{- end }}
 
 {{/*
-Database URL
-*/}}
-{{- define "ckbadger.databaseUrl" -}}
-{{- if .Values.postgresql.enabled }}
-postgres://{{ .Values.postgresql.auth.username }}:{{ .Values.postgresql.auth.password }}@{{ include "ckbadger.fullname" . }}-postgresql:5432/{{ .Values.postgresql.auth.database }}
-{{- else }}
-postgres://{{ .Values.externalDatabase.user }}:{{ .Values.externalDatabase.password }}@{{ .Values.externalDatabase.host }}:{{ .Values.externalDatabase.port }}/{{ .Values.externalDatabase.database }}
-{{- end }}
-{{- end }}
-
-{{/*
 Redis URL
 */}}
 {{- define "ckbadger.redisUrl" -}}

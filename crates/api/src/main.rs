@@ -1,20 +1,22 @@
 use anyhow::Result;
 use clap::Parser;
+use std::sync::Arc;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use ckbadger_api::{create_router, db::create_pool, AppConfig};
+use ckbadger_api::{create_router, AppConfig};
+use ckbadger_store::CkbadgerStore;
 
 #[derive(Parser, Debug)]
 #[command(name = "ckbadger-api")]
 #[command(about = "API server for ckbadger CKB explorer")]
 struct Args {
-    #[arg(long, env = "DATABASE_URL")]
-    database_url: Option<String>,
-
-    /// Optional read replica URL. When set, read-only API queries use this pool.
-    #[arg(long, env = "READ_DATABASE_URL")]
-    read_database_url: Option<String>,
+    #[arg(
+        long,
+        env = "CKBADGER_DATA_PATH",
+        default_value = "./data/ckbadger-store"
+    )]
+    data_path: String,
 
     #[arg(long, env = "REDIS_URL")]
     redis_url: Option<String>,
@@ -58,30 +60,20 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
 
-    let database_url = args
-        .database_url
-        .or_else(|| std::env::var("DATABASE_URL").ok())
-        .expect("DATABASE_URL is required");
-
-    info!("Connecting to database");
-    let pool = create_pool(&database_url).await?;
-
     let redis_url = args.redis_url.or_else(|| std::env::var("REDIS_URL").ok());
 
-    let read_pool = match args
-        .read_database_url
-        .or_else(|| std::env::var("READ_DATABASE_URL").ok())
-    {
-        Some(url) => {
-            info!("Connecting to read replica");
-            Some(create_pool(&url).await?)
-        }
-        None => None,
-    };
+    let secondary_path = format!("{}-api-secondary", args.data_path);
+    info!(
+        "Opening ckbadger-store (secondary) at: {} -> {}",
+        args.data_path, secondary_path
+    );
+    let store = Arc::new(CkbadgerStore::open_secondary(
+        &args.data_path,
+        &secondary_path,
+    )?);
 
     let config = AppConfig {
-        pool,
-        read_pool,
+        store,
         redis_url,
         ckb_rpc_url: args.ckb_rpc_url,
         ckb_network: args.ckb_network,

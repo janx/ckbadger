@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 ckbadger-common = { path = "../common" }
 ckb-store-reader = { path = "../ckb-store-reader" }
+ckbadger-store = { path = "../ckbadger-store" }
 
 # Async runtime
 tokio = { workspace = true }
@@ -24,12 +25,10 @@ tower-http = { workspace = true }
 tokio-tungstenite = "0.24"
 futures = "0.3"
 
-# Database
-sqlx = { workspace = true }
-
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
+bincode = { workspace = true }
 
 # Error handling
 thiserror = { workspace = true }
@@ -43,7 +42,6 @@ tracing-subscriber = { workspace = true }
 chrono = { workspace = true }
 hex = { workspace = true }
 uuid = { workspace = true }
-rust_decimal = { workspace = true }
 
 # Configuration
 config = { workspace = true }
@@ -68,7 +66,11 @@ bech32 = "0.11"
 # CKB hashing
 ckb-hash = { workspace = true }
 
+# CKB types (for transaction graph unpacking)
+ckb-types = { workspace = true }
 
+# RocksDB (for iterator mode in direct store access)
+rocksdb = { workspace = true }
 
 [features]
 default = []
@@ -79,3 +81,4 @@ tokio-test = { workspace = true }
 wiremock = { workspace = true }
 http-body-util = { workspace = true }
 fake = { workspace = true }
+tempfile = { workspace = true }

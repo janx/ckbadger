@@ -3,6 +3,7 @@ use axum::{
     routing::get,
     Router,
 };
+use ckb_types::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -51,6 +52,66 @@ pub struct GraphResponse {
     pub links: Vec<GraphLink>,
 }
 
+/// Get the inputs for a transaction by reading the raw CKB block data.
+/// Returns Vec<(prev_tx_hash, prev_output_index)> for non-cellbase transactions.
+fn get_tx_inputs_from_ckb_store(
+    ckb_store: &ckb_store_reader::CkbChainReader,
+    tx_hash: &[u8],
+) -> Vec<(Vec<u8>, i16)> {
+    if tx_hash.len() != 32 {
+        return Vec::new();
+    }
+    let mut hash = [0u8; 32];
+    hash.copy_from_slice(tx_hash);
+
+    let tx_view = match ckb_store.get_transaction(&hash) {
+        Some(tv) => tv,
+        None => return Vec::new(),
+    };
+
+    let inputs = tx_view.inputs();
+    let mut result = Vec::with_capacity(inputs.len());
+    for i in 0..inputs.len() {
+        let input = inputs.get(i).unwrap();
+        let prev_outpoint = input.previous_output();
+        let prev_tx_hash: [u8; 32] = prev_outpoint.tx_hash().unpack();
+        let prev_index: u32 = prev_outpoint.index().unpack();
+        // Skip null outpoints (cellbase inputs)
+        if prev_tx_hash == [0u8; 32] {
+            continue;
+        }
+        result.push((prev_tx_hash.to_vec(), prev_index as i16));
+    }
+    result
+}
+
+/// Get the outputs for a transaction by reading the raw CKB block data.
+/// Returns Vec<(output_index, capacity)>.
+fn get_tx_outputs_from_ckb_store(
+    ckb_store: &ckb_store_reader::CkbChainReader,
+    tx_hash: &[u8],
+) -> Vec<(i16, i64)> {
+    if tx_hash.len() != 32 {
+        return Vec::new();
+    }
+    let mut hash = [0u8; 32];
+    hash.copy_from_slice(tx_hash);
+
+    let tx_view = match ckb_store.get_transaction(&hash) {
+        Some(tv) => tv,
+        None => return Vec::new(),
+    };
+
+    let outputs = tx_view.outputs();
+    let mut result = Vec::with_capacity(outputs.len());
+    for i in 0..outputs.len() {
+        let output = outputs.get(i).unwrap();
+        let capacity: u64 = output.capacity().unpack();
+        result.push((i as i16, capacity as i64));
+    }
+    result
+}
+
 async fn get_cell_graph(
     State(state): State<Arc<AppState>>,
     Path((tx_hash, output_index)): Path<(String, i32)>,
@@ -65,156 +126,125 @@ async fn get_cell_graph(
 
     let cell_id = format!("cell-{}-{}", tx_hash, output_index);
 
-    // Get block_number from transactions first for partition pruning
-    let tx_info =
-        sqlx::query_as::<_, (i64,)>("SELECT block_number FROM transactions_index WHERE hash = $1")
-            .bind(&hash_bytes)
-            .fetch_optional(&state.read_pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+    // Look up the transaction to verify it exists
+    let tx_info = state
+        .store
+        .get_tx_location(&hash_bytes)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let block_number = match tx_info {
-        Some((bn,)) => bn,
+        Some((bn, _)) => bn,
         None => return Err(ApiError::not_found("Transaction not found")),
     };
 
-    let cell = sqlx::query_as::<_, (Vec<u8>, i16, String, i16, i64, Option<i64>, Option<Vec<u8>>)>(
-        r#"
-        SELECT tx_hash, output_index, capacity::TEXT, status, created_at_block, consumed_at_block, consumed_by_tx
-        FROM cells WHERE tx_hash = $1 AND output_index = $2 AND created_at_block = $3
-        "#,
-    )
-    .bind(&hash_bytes)
-    .bind(output_index)
-    .bind(block_number)
-    .fetch_optional(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    // Get the cell info (live or consumed)
+    let output_idx = output_index as i16;
+    let live_cell = state
+        .store
+        .get_cell(&hash_bytes, output_idx)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    if let Some((_, _, capacity, status, created_at_block, consumed_at_block, consumed_by_tx)) =
-        cell
-    {
-        nodes.push(GraphNode {
-            id: cell_id.clone(),
-            node_type: "cell".to_string(),
-            label: format!("{} CKB", parse_capacity(&capacity)),
-            data: serde_json::json!({
-                "txHash": format!("0x{}", hex::encode(&hash_bytes)),
-                "outputIndex": output_index,
-                "capacity": capacity,
-                "status": if status == 0 { "live" } else { "dead" },
-                "createdAtBlock": created_at_block,
-            }),
-        });
+    let consumed_cell = if live_cell.is_none() {
+        state
+            .store
+            .get_consumed_cell(&hash_bytes, output_idx)
+            .map_err(|e| ApiError::internal(e.to_string()))?
+    } else {
+        None
+    };
 
-        let created_tx_id = format!("tx-{}", tx_hash);
-        nodes.push(GraphNode {
-            id: created_tx_id.clone(),
-            node_type: "transaction".to_string(),
-            label: format!("TX ...{}", &tx_hash[tx_hash.len().saturating_sub(8)..]),
-            data: serde_json::json!({
-                "hash": tx_hash,
-                "blockNumber": created_at_block,
-            }),
-        });
+    let (cell_info, status_str) = match (&live_cell, &consumed_cell) {
+        (Some(info), _) => (info, "live"),
+        (None, Some(info)) => (info, "dead"),
+        (None, None) => return Err(ApiError::not_found("Cell not found")),
+    };
 
-        links.push(GraphLink {
-            source: created_tx_id.clone(),
-            target: cell_id.clone(),
-            link_type: "creates".to_string(),
-        });
+    let capacity_str = cell_info.capacity.to_string();
 
-        if depth > 1 {
-            let inputs = sqlx::query_as::<_, (Vec<u8>, i16, Vec<u8>, i16)>(
-                r#"
-                SELECT tx_hash, input_index, previous_tx_hash, previous_output_index
-                FROM transaction_inputs WHERE tx_hash = $1 AND tx_block_number = $2
-                "#,
-            )
-            .bind(&hash_bytes)
-            .bind(block_number)
-            .fetch_all(&state.read_pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+    nodes.push(GraphNode {
+        id: cell_id.clone(),
+        node_type: "cell".to_string(),
+        label: format!("{} CKB", parse_capacity(&capacity_str)),
+        data: serde_json::json!({
+            "txHash": format!("0x{}", hex::encode(&hash_bytes)),
+            "outputIndex": output_index,
+            "capacity": capacity_str,
+            "status": status_str,
+            "createdAtBlock": cell_info.created_at_block,
+        }),
+    });
+
+    let created_tx_id = format!("tx-{}", tx_hash);
+    nodes.push(GraphNode {
+        id: created_tx_id.clone(),
+        node_type: "transaction".to_string(),
+        label: format!("TX ...{}", &tx_hash[tx_hash.len().saturating_sub(8)..]),
+        data: serde_json::json!({
+            "hash": tx_hash,
+            "blockNumber": block_number,
+        }),
+    });
+
+    links.push(GraphLink {
+        source: created_tx_id.clone(),
+        target: cell_id.clone(),
+        link_type: "creates".to_string(),
+    });
+
+    // Get inputs of the creating transaction (depth > 1)
+    if depth > 1 {
+        if let Some(ref ckb_store) = state.ckb_store {
+            let inputs = get_tx_inputs_from_ckb_store(ckb_store, &hash_bytes);
 
             if !inputs.is_empty() {
-                let prev_tx_hashes: Vec<&[u8]> =
-                    inputs.iter().map(|(_, _, h, _)| h.as_slice()).collect();
-                let prev_indices: Vec<i16> = inputs.iter().map(|(_, _, _, i)| *i).collect();
+                let outpoints: Vec<(&[u8], i16)> =
+                    inputs.iter().map(|(h, i)| (h.as_slice(), *i)).collect();
+                let cell_map = state.store.get_cells_batch(&outpoints);
 
-                // Join with transactions to get created_at_block for partition pruning
-                let prev_cells = sqlx::query_as::<_, (Vec<u8>, i16, String)>(
-                    r#"
-                    SELECT c.tx_hash, c.output_index, c.capacity::TEXT
-                    FROM cells c
-                    JOIN transactions_index t ON t.hash = c.tx_hash AND t.block_number = c.created_at_block
-                    JOIN UNNEST($1::bytea[], $2::smallint[]) AS u(tx_hash, output_index)
-                      ON c.tx_hash = u.tx_hash AND c.output_index = u.output_index
-                    "#,
-                )
-                .bind(&prev_tx_hashes)
-                .bind(&prev_indices)
-                .fetch_all(&state.read_pool)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?;
+                for (prev_tx_hash, prev_idx) in &inputs {
+                    let prev_cell_id = format!("cell-0x{}-{}", hex::encode(prev_tx_hash), prev_idx);
 
-                let cell_map: HashMap<(Vec<u8>, i16), String> = prev_cells
-                    .into_iter()
-                    .map(|(tx_hash, idx, cap)| ((tx_hash, idx), cap))
-                    .collect();
-
-                for (_, _, prev_tx_hash, prev_idx) in inputs {
-                    let prev_cell_id =
-                        format!("cell-0x{}-{}", hex::encode(&prev_tx_hash), prev_idx);
-
-                    if let Some(cap) = cell_map.get(&(prev_tx_hash.clone(), prev_idx)) {
-                        nodes.push(GraphNode {
-                            id: prev_cell_id.clone(),
-                            node_type: "cell".to_string(),
-                            label: format!("{} CKB", parse_capacity(cap)),
-                            data: serde_json::json!({
-                                "txHash": format!("0x{}", hex::encode(&prev_tx_hash)),
-                                "outputIndex": prev_idx,
-                                "capacity": cap,
-                                "status": "dead",
-                            }),
+                    let label = cell_map
+                        .get(&(prev_tx_hash.clone(), *prev_idx))
+                        .map(|c| format!("{} CKB", parse_capacity(&c.capacity.to_string())))
+                        .unwrap_or_else(|| {
+                            // Try consumed cells
+                            state
+                                .store
+                                .get_consumed_cell(prev_tx_hash, *prev_idx)
+                                .ok()
+                                .flatten()
+                                .map(|c| format!("{} CKB", parse_capacity(&c.capacity.to_string())))
+                                .unwrap_or_else(|| "?".to_string())
                         });
 
-                        links.push(GraphLink {
-                            source: prev_cell_id,
-                            target: created_tx_id.clone(),
-                            link_type: "consumed_by".to_string(),
-                        });
-                    }
+                    nodes.push(GraphNode {
+                        id: prev_cell_id.clone(),
+                        node_type: "cell".to_string(),
+                        label,
+                        data: serde_json::json!({
+                            "txHash": format!("0x{}", hex::encode(prev_tx_hash)),
+                            "outputIndex": prev_idx,
+                            "status": "dead",
+                        }),
+                    });
+
+                    links.push(GraphLink {
+                        source: prev_cell_id,
+                        target: created_tx_id.clone(),
+                        link_type: "consumed_by".to_string(),
+                    });
                 }
             }
         }
+    }
 
-        if let Some(consuming_tx) = consumed_by_tx {
-            let consuming_tx_hex = format!("0x{}", hex::encode(&consuming_tx));
-            let consuming_tx_id = format!("tx-{}", consuming_tx_hex);
-
-            nodes.push(GraphNode {
-                id: consuming_tx_id.clone(),
-                node_type: "transaction".to_string(),
-                label: format!(
-                    "TX ...{}",
-                    &consuming_tx_hex[consuming_tx_hex.len().saturating_sub(8)..]
-                ),
-                data: serde_json::json!({
-                    "hash": consuming_tx_hex,
-                    "blockNumber": consumed_at_block,
-                }),
-            });
-
-            links.push(GraphLink {
-                source: cell_id,
-                target: consuming_tx_id,
-                link_type: "consumed_by".to_string(),
-            });
-        }
-    } else {
-        return Err(ApiError::not_found("Cell not found"));
+    // If the cell is consumed, show the consuming transaction
+    // We don't have a direct consumed_by_tx lookup in the store,
+    // but for dead cells we can note it's consumed.
+    if status_str == "dead" {
+        // Without a consumed_by index, we can't identify the consuming tx.
+        // This is a known limitation of the RocksDB migration.
     }
 
     ok(GraphResponse { nodes, links })
@@ -231,71 +261,52 @@ async fn get_tx_graph(
     let mut nodes = Vec::new();
     let mut links = Vec::new();
 
-    let tx = sqlx::query_as::<_, (Vec<u8>, i64, String, bool)>(
-        "SELECT hash, block_number, fee::TEXT, is_cellbase FROM transactions_index WHERE hash = $1",
-    )
-    .bind(&hash_bytes)
-    .fetch_optional(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    // Look up transaction
+    let tx_result = state
+        .store
+        .get_tx_by_hash(&hash_bytes)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    if let Some((_, block_number, fee, is_cellbase)) = tx {
-        let tx_id = format!("tx-{}", hash);
+    let (block_number, _tx_idx, tx_entry) = match tx_result {
+        Some(info) => info,
+        None => return Err(ApiError::not_found("Transaction not found")),
+    };
 
-        nodes.push(GraphNode {
-            id: tx_id.clone(),
-            node_type: "transaction".to_string(),
-            label: format!("TX ...{}", &hash[hash.len().saturating_sub(8)..]),
-            data: serde_json::json!({
-                "hash": hash,
-                "blockNumber": block_number,
-                "fee": fee,
-                "isCellbase": is_cellbase,
-            }),
-        });
+    let tx_id = format!("tx-{}", hash);
 
-        if !is_cellbase {
-            let inputs = sqlx::query_as::<_, (Vec<u8>, i16)>(
-                "SELECT previous_tx_hash, previous_output_index FROM transaction_inputs WHERE tx_hash = $1 AND tx_block_number = $2",
-            )
-            .bind(&hash_bytes)
-            .bind(block_number)
-            .fetch_all(&state.read_pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+    nodes.push(GraphNode {
+        id: tx_id.clone(),
+        node_type: "transaction".to_string(),
+        label: format!("TX ...{}", &hash[hash.len().saturating_sub(8)..]),
+        data: serde_json::json!({
+            "hash": hash,
+            "blockNumber": block_number,
+            "fee": tx_entry.fee.to_string(),
+            "isCellbase": tx_entry.is_cellbase,
+        }),
+    });
+
+    // Get inputs (unless cellbase)
+    if !tx_entry.is_cellbase {
+        if let Some(ref ckb_store) = state.ckb_store {
+            let inputs = get_tx_inputs_from_ckb_store(ckb_store, &hash_bytes);
 
             if !inputs.is_empty() {
-                let prev_tx_hashes: Vec<&[u8]> = inputs.iter().map(|(h, _)| h.as_slice()).collect();
-                let prev_indices: Vec<i16> = inputs.iter().map(|(_, i)| *i).collect();
+                // Batch lookup cells
+                let outpoints: Vec<(&[u8], i16)> =
+                    inputs.iter().map(|(h, i)| (h.as_slice(), *i)).collect();
 
-                // Join with transactions to get created_at_block for partition pruning
-                let prev_cells = sqlx::query_as::<_, (Vec<u8>, i16, String)>(
-                    r#"
-                    SELECT c.tx_hash, c.output_index, c.capacity::TEXT
-                    FROM cells c
-                    JOIN transactions_index t ON t.hash = c.tx_hash AND t.block_number = c.created_at_block
-                    JOIN UNNEST($1::bytea[], $2::smallint[]) AS u(tx_hash, output_index)
-                      ON c.tx_hash = u.tx_hash AND c.output_index = u.output_index
-                    "#,
-                )
-                .bind(&prev_tx_hashes)
-                .bind(&prev_indices)
-                .fetch_all(&state.read_pool)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?;
-
-                let cell_map: HashMap<(Vec<u8>, i16), String> = prev_cells
-                    .into_iter()
-                    .map(|(tx_hash, idx, cap)| ((tx_hash, idx), cap))
-                    .collect();
+                let live_map = state.store.get_cells_batch(&outpoints);
+                let consumed_map = state.store.get_consumed_cells_batch(&outpoints);
 
                 for (prev_tx_hash, prev_idx) in inputs {
                     let prev_tx_hex = format!("0x{}", hex::encode(&prev_tx_hash));
                     let input_cell_id = format!("cell-{}-{}", prev_tx_hex, prev_idx);
 
-                    let label = cell_map
+                    let label = live_map
                         .get(&(prev_tx_hash.clone(), prev_idx))
-                        .map(|c| format!("{} CKB", parse_capacity(c)))
+                        .or_else(|| consumed_map.get(&(prev_tx_hash.clone(), prev_idx)))
+                        .map(|c| format!("{} CKB", parse_capacity(&c.capacity.to_string())))
                         .unwrap_or_else(|| "?".to_string());
 
                     nodes.push(GraphNode {
@@ -317,29 +328,33 @@ async fn get_tx_graph(
                 }
             }
         }
+    }
 
-        // Query outputs - use created_at_block for partition pruning
-        let outputs = sqlx::query_as::<_, (i16, String, i16)>(
-            "SELECT output_index, capacity::TEXT, status FROM cells WHERE tx_hash = $1 AND created_at_block = $2",
-        )
-        .bind(&hash_bytes)
-        .bind(block_number)
-        .fetch_all(&state.read_pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    // Get outputs from CKB store (most accurate) or from ckbadger-store cells
+    if let Some(ref ckb_store) = state.ckb_store {
+        let outputs = get_tx_outputs_from_ckb_store(ckb_store, &hash_bytes);
 
-        for (output_index, capacity, status) in outputs {
+        for (output_index, capacity) in outputs {
             let output_cell_id = format!("cell-{}-{}", hash, output_index);
+            let capacity_str = capacity.to_string();
+
+            // Check if cell is live or dead
+            let is_live = state
+                .store
+                .get_cell(&hash_bytes, output_index)
+                .ok()
+                .flatten()
+                .is_some();
 
             nodes.push(GraphNode {
                 id: output_cell_id.clone(),
                 node_type: "cell".to_string(),
-                label: format!("{} CKB", parse_capacity(&capacity)),
+                label: format!("{} CKB", parse_capacity(&capacity_str)),
                 data: serde_json::json!({
                     "txHash": hash,
                     "outputIndex": output_index,
-                    "capacity": capacity,
-                    "status": if status == 0 { "live" } else { "dead" },
+                    "capacity": capacity_str,
+                    "status": if is_live { "live" } else { "dead" },
                 }),
             });
 
@@ -350,7 +365,40 @@ async fn get_tx_graph(
             });
         }
     } else {
-        return Err(ApiError::not_found("Transaction not found"));
+        // Fallback: look up live cells created by this tx from the store.
+        // This won't show consumed outputs.
+        let iter = state
+            .store
+            .iterator_cf(state.store.cf_live_cells(), rocksdb::IteratorMode::Start);
+
+        for item in iter.flatten() {
+            let (key, value) = item;
+            if key.len() >= 34 && &key[..32] == hash_bytes.as_slice() {
+                let output_index = i16::from_be_bytes([key[32], key[33]]);
+                if let Ok(info) = bincode::deserialize::<ckbadger_store::LiveCellInfo>(&value) {
+                    let output_cell_id = format!("cell-{}-{}", hash, output_index);
+                    let capacity_str = info.capacity.to_string();
+
+                    nodes.push(GraphNode {
+                        id: output_cell_id.clone(),
+                        node_type: "cell".to_string(),
+                        label: format!("{} CKB", parse_capacity(&capacity_str)),
+                        data: serde_json::json!({
+                            "txHash": hash,
+                            "outputIndex": output_index,
+                            "capacity": capacity_str,
+                            "status": "live",
+                        }),
+                    });
+
+                    links.push(GraphLink {
+                        source: tx_id.clone(),
+                        target: output_cell_id,
+                        link_type: "output".to_string(),
+                    });
+                }
+            }
+        }
     }
 
     ok(GraphResponse { nodes, links })
@@ -397,15 +445,13 @@ async fn get_proposal_graph(
     State(state): State<Arc<AppState>>,
     Path(block_number): Path<i64>,
 ) -> ApiResult<ProposalGraphResponse> {
-    let block_row: Option<(Vec<u8>, i32)> =
-        sqlx::query_as("SELECT hash, proposals_count FROM blocks_index WHERE number = $1")
-            .bind(block_number)
-            .fetch_optional(&state.read_pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+    let block_header = state
+        .store
+        .get_block_header(block_number)
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found("Block not found"))?;
 
-    let (block_hash, proposals_count) =
-        block_row.ok_or_else(|| ApiError::not_found("Block not found"))?;
+    let block_hash = block_header.hash;
 
     // NC-Max: w_close=2, w_far=10 (proposals can commit 2-10 blocks later)
     const W_CLOSE: i64 = 2;
@@ -413,23 +459,21 @@ async fn get_proposal_graph(
     let earliest_commit = block_number + W_CLOSE;
     let latest_commit = block_number + W_FAR;
 
-    let rows: Vec<(Vec<u8>, Vec<u8>, i64)> = sqlx::query_as(
-        r#"
-        SELECT
-            bp.proposal_id,
-            t.hash as tx_hash,
-            t.block_number as commit_block
-        FROM block_proposals bp
-        INNER JOIN transactions_index t ON substring(t.hash, 1, 10) = bp.proposal_id
-            AND t.block_number BETWEEN $1 + 2 AND $1 + 10
-        WHERE bp.block_number = $1
-        ORDER BY t.block_number, bp.proposal_index
-        "#,
-    )
-    .bind(block_number)
-    .fetch_all(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    // Get proposal short IDs from CKB store
+    let proposals: Vec<Vec<u8>> = if let Some(ref ckb_store) = state.ckb_store {
+        if let Some(block_view) = ckb_store.get_block_by_number(block_number as u64) {
+            let proposal_ids = block_view.data().proposals();
+            (0..proposal_ids.len())
+                .map(|i| proposal_ids.get(i).unwrap().raw_data().to_vec())
+                .collect()
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+
+    let proposals_count = proposals.len() as i32;
 
     let mut nodes = Vec::new();
     let mut links = Vec::new();
@@ -448,42 +492,72 @@ async fn get_proposal_graph(
     });
 
     let mut commit_blocks_seen: HashMap<i64, i32> = HashMap::new();
+    let mut committed_count = 0;
 
-    for (proposal_id, tx_hash, commit_block) in &rows {
+    // For each proposal, try to find the committed transaction
+    // Proposal short ID is the first 10 bytes of the tx hash
+    for proposal_id in &proposals {
         let proposal_id_hex = format!("0x{}", hex::encode(proposal_id));
-        let tx_hash_hex = format!("0x{}", hex::encode(tx_hash));
-        let distance = commit_block - block_number;
 
-        let proposal_node_id = format!("proposal-{}", proposal_id_hex);
-        nodes.push(GraphNode {
-            id: proposal_node_id.clone(),
-            node_type: "proposal".to_string(),
-            label: format!(
-                "...{}",
-                &proposal_id_hex[proposal_id_hex.len().saturating_sub(8)..]
-            ),
-            data: serde_json::json!({
-                "proposalId": proposal_id_hex,
-                "txHash": tx_hash_hex,
-                "commitBlock": commit_block,
-                "distance": distance
-            }),
-        });
+        // Search for the transaction that matches this proposal ID
+        // by checking block transactions in the commitment window
+        let mut found_tx: Option<(Vec<u8>, i64)> = None;
 
-        links.push(GraphLink {
-            source: source_block_id.clone(),
-            target: proposal_node_id.clone(),
-            link_type: "proposes".to_string(),
-        });
+        if let Some(ref ckb_store) = state.ckb_store {
+            for commit_block_num in earliest_commit..=latest_commit {
+                if let Some(commit_block) = ckb_store.get_block_by_number(commit_block_num as u64) {
+                    let txs = commit_block.transactions();
+                    for tx in txs {
+                        let tx_hash_bytes: [u8; 32] = tx.hash().unpack();
+                        if tx_hash_bytes[..proposal_id.len()] == proposal_id[..] {
+                            found_tx = Some((tx_hash_bytes.to_vec(), commit_block_num));
+                            break;
+                        }
+                    }
+                }
+                if found_tx.is_some() {
+                    break;
+                }
+            }
+        }
 
-        *commit_blocks_seen.entry(*commit_block).or_insert(0) += 1;
+        if let Some((tx_hash, commit_block)) = found_tx {
+            let tx_hash_hex = format!("0x{}", hex::encode(&tx_hash));
+            let distance = commit_block - block_number;
 
-        let commit_block_id = format!("commit-block-{}", commit_block);
-        links.push(GraphLink {
-            source: proposal_node_id,
-            target: commit_block_id,
-            link_type: "commits".to_string(),
-        });
+            let proposal_node_id = format!("proposal-{}", proposal_id_hex);
+            nodes.push(GraphNode {
+                id: proposal_node_id.clone(),
+                node_type: "proposal".to_string(),
+                label: format!(
+                    "...{}",
+                    &proposal_id_hex[proposal_id_hex.len().saturating_sub(8)..]
+                ),
+                data: serde_json::json!({
+                    "proposalId": proposal_id_hex,
+                    "txHash": tx_hash_hex,
+                    "commitBlock": commit_block,
+                    "distance": distance
+                }),
+            });
+
+            links.push(GraphLink {
+                source: source_block_id.clone(),
+                target: proposal_node_id.clone(),
+                link_type: "proposes".to_string(),
+            });
+
+            *commit_blocks_seen.entry(commit_block).or_insert(0) += 1;
+
+            let commit_block_id = format!("commit-block-{}", commit_block);
+            links.push(GraphLink {
+                source: proposal_node_id,
+                target: commit_block_id,
+                link_type: "commits".to_string(),
+            });
+
+            committed_count += 1;
+        }
     }
 
     for (commit_block, commit_count) in commit_blocks_seen {
@@ -512,8 +586,6 @@ async fn get_proposal_graph(
         });
     }
 
-    let committed_count = rows.len() as i32;
-
     ok(ProposalGraphResponse {
         nodes,
         links,
@@ -529,4 +601,73 @@ async fn get_proposal_graph(
             },
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_capacity_small() {
+        assert_eq!(parse_capacity("10000000000"), "100.00");
+    }
+
+    #[test]
+    fn test_parse_capacity_thousands() {
+        // 100_000_000_000_000 shannon = 1_000_000 CKB = 1.00M
+        assert_eq!(parse_capacity("100000000000000"), "1.00M");
+    }
+
+    #[test]
+    fn test_parse_capacity_millions() {
+        assert_eq!(parse_capacity("100000000000000000"), "1000.00M");
+    }
+
+    #[test]
+    fn test_parse_capacity_zero() {
+        assert_eq!(parse_capacity("0"), "0.00");
+    }
+
+    #[test]
+    fn test_graph_response_serialization() {
+        let resp = GraphResponse {
+            nodes: vec![GraphNode {
+                id: "tx-0xabc".to_string(),
+                node_type: "transaction".to_string(),
+                label: "TX ...abc".to_string(),
+                data: serde_json::json!({"hash": "0xabc"}),
+            }],
+            links: vec![GraphLink {
+                source: "tx-0xabc".to_string(),
+                target: "cell-0xabc-0".to_string(),
+                link_type: "output".to_string(),
+            }],
+        };
+
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["nodes"][0]["nodeType"], "transaction");
+        assert_eq!(json["links"][0]["linkType"], "output");
+    }
+
+    #[test]
+    fn test_proposal_graph_metadata_serialization() {
+        let metadata = ProposalGraphMetadata {
+            source_block: 100,
+            total_proposals: 10,
+            committed_count: 8,
+            commitment_window: ProposalCommitmentWindow {
+                close: 2,
+                far: 10,
+                earliest_commit_block: 102,
+                latest_commit_block: 110,
+            },
+        };
+
+        let json = serde_json::to_value(&metadata).unwrap();
+        assert_eq!(json["sourceBlock"], 100);
+        assert_eq!(json["totalProposals"], 10);
+        assert_eq!(json["committedCount"], 8);
+        assert_eq!(json["commitmentWindow"]["close"], 2);
+        assert_eq!(json["commitmentWindow"]["far"], 10);
+    }
 }

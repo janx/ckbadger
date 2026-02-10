@@ -15,10 +15,16 @@ use crate::cycles::{CyclesStatus, CyclesStatusResponse};
 use crate::response::{
     decode_cursor, encode_cursor, ok, ApiError, ApiResult, CursorPaginatedResponse,
 };
-use crate::routes::activities::{fetch_transaction_activities, ActivityResponse};
 use crate::tx_block_map::get_block_number_for_tx;
 use crate::utils::script_to_address;
 use crate::AppState;
+
+/// (block_number, tx_hash, tx_index, tx_index_entry, block_hash)
+type TxListEntry = (i64, Vec<u8>, i32, ckbadger_store::TxIndexEntry, Vec<u8>);
+
+/// token_id -> (name, symbol, decimals)
+type TokenMetadataMap =
+    std::collections::HashMap<Vec<u8>, (Option<String>, Option<String>, Option<i32>)>;
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -70,21 +76,39 @@ pub struct TransactionResponse {
     pub timestamp: String,
 }
 
+/// Helper: get the tx hash for a (block_num, tx_idx) from the CKB node's RocksDB.
+fn get_tx_hash_from_ckb_store(
+    ckb_store: &Option<Arc<ckb_store_reader::CkbChainReader>>,
+    block_num: i64,
+    tx_idx: i32,
+) -> Option<Vec<u8>> {
+    let store = ckb_store.as_ref()?;
+    let block_hash_bytes = store.get_block_hash(block_num as u64)?;
+    let block = store.get_block(&block_hash_bytes)?;
+    let txs = block.transactions();
+    let tx = txs.get(tx_idx as usize)?;
+    Some(tx.hash().raw_data().to_vec())
+}
+
 async fn list_transactions(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<TransactionResponse>> {
     let limit = params.limit.clamp(1, 100);
 
-    // Get total count - either for specific block or all transactions
+    // Get total count
     let total: i64 = if let Some(block_number) = params.block_number {
-        let row: Option<(i32,)> =
-            sqlx::query_as("SELECT tx_count FROM blocks_index WHERE number = $1")
-                .bind(block_number)
-                .fetch_optional(&state.read_pool)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?;
-        row.map(|r| r.0 as i64).unwrap_or(0)
+        let store = state.store.clone();
+        tokio::task::spawn_blocking(move || -> i64 {
+            store
+                .get_block_header(block_number)
+                .ok()
+                .flatten()
+                .map(|h| h.transactions_count as i64)
+                .unwrap_or(0)
+        })
+        .await
+        .unwrap_or(0)
     } else {
         match state
             .cache
@@ -92,115 +116,172 @@ async fn list_transactions(
             .await
         {
             Some(status) => status.total_transactions,
-            None => sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM transactions_index")
-                .fetch_one(&state.read_pool)
+            None => {
+                let store = state.store.clone();
+                tokio::task::spawn_blocking(move || {
+                    store
+                        .get_sync_status()
+                        .map(|s| s.total_transactions)
+                        .unwrap_or(0)
+                })
                 .await
-                .map_err(|e| ApiError::internal(e.to_string()))?,
+                .unwrap_or(0)
+            }
         }
     };
 
-    let rows = if let Some(block_number) = params.block_number {
+    let store = state.store.clone();
+    let ckb_store = state.ckb_store.clone();
+
+    if let Some(block_number) = params.block_number {
+        // List transactions for a specific block
         let cursor = params.cursor.as_ref().and_then(|c| decode_cursor(c));
         let (_cursor_block, cursor_index) = cursor.unwrap_or((i64::MAX, i32::MAX));
 
-        sqlx::query_as::<_, (Vec<u8>, i64, Vec<u8>, i32, i32, i32, String, Option<i32>, Option<i64>, bool, chrono::DateTime<chrono::Utc>)>(
-            r#"
-            SELECT t.hash, t.block_number, b.hash, t.tx_index, t.inputs_count::int4, t.outputs_count::int4, t.fee::text, t.tx_size, t.cycles, t.is_cellbase, t.timestamp
-            FROM transactions_index t
-            JOIN blocks_index b ON b.number = t.block_number
-            WHERE t.block_number = $1 AND t.tx_index < $2
-            ORDER BY t.tx_index ASC
-            LIMIT $3
-            "#,
-        )
-        .bind(block_number)
-        .bind(cursor_index)
-        .bind(limit + 1)
-        .fetch_all(&state.read_pool)
+        let store_c = store.clone();
+        let ckb_store_c = ckb_store.clone();
+        let all_txs = tokio::task::spawn_blocking(move || store_c.list_block_txs(block_number))
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+
+        // Get block hash for responses
+        let store_c = store.clone();
+        let block_hash = tokio::task::spawn_blocking(move || {
+            store_c
+                .get_block_header(block_number)
+                .ok()
+                .flatten()
+                .map(|h| h.hash)
+                .unwrap_or_default()
+        })
         .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-    } else if let Some(ref cursor_str) = params.cursor {
-        let (cursor_block, cursor_index) = decode_cursor(cursor_str)
-            .ok_or_else(|| ApiError::bad_request("Invalid cursor format"))?;
+        .unwrap_or_default();
 
-        sqlx::query_as::<_, (Vec<u8>, i64, Vec<u8>, i32, i32, i32, String, Option<i32>, Option<i64>, bool, chrono::DateTime<chrono::Utc>)>(
-            r#"
-            SELECT t.hash, t.block_number, b.hash, t.tx_index, t.inputs_count::int4, t.outputs_count::int4, t.fee::text, t.tx_size, t.cycles, t.is_cellbase, t.timestamp
-            FROM transactions_index t
-            JOIN blocks_index b ON b.number = t.block_number
-            WHERE (t.block_number, t.tx_index) < ($1, $2)
-            ORDER BY t.block_number DESC, t.tx_index DESC
-            LIMIT $3
-            "#,
-        )
-        .bind(cursor_block)
-        .bind(cursor_index)
-        .bind(limit + 1)
-        .fetch_all(&state.read_pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-    } else {
-        sqlx::query_as::<_, (Vec<u8>, i64, Vec<u8>, i32, i32, i32, String, Option<i32>, Option<i64>, bool, chrono::DateTime<chrono::Utc>)>(
-            r#"
-            SELECT t.hash, t.block_number, b.hash, t.tx_index, t.inputs_count::int4, t.outputs_count::int4, t.fee::text, t.tx_size, t.cycles, t.is_cellbase, t.timestamp
-            FROM transactions_index t
-            JOIN blocks_index b ON b.number = t.block_number
-            ORDER BY t.block_number DESC, t.tx_index DESC
-            LIMIT $1
-            "#,
-        )
-        .bind(limit + 1)
-        .fetch_all(&state.read_pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-    };
+        // Filter by cursor (tx_index < cursor_index), take limit + 1 for has_more check
+        let filtered: Vec<_> = all_txs
+            .into_iter()
+            .filter(|(tx_idx, _)| *tx_idx < cursor_index)
+            .take((limit + 1) as usize)
+            .collect();
 
-    let has_more = rows.len() as i64 > limit;
-    let rows: Vec<_> = rows.into_iter().take(limit as usize).collect();
+        let has_more = filtered.len() as i64 > limit;
+        let page: Vec<_> = filtered.into_iter().take(limit as usize).collect();
 
-    let next_cursor = if has_more {
-        rows.last()
-            .map(|(_, block_number, _, tx_index, _, _, _, _, _, _, _)| {
-                encode_cursor(*block_number, *tx_index)
-            })
-    } else {
-        None
-    };
+        let next_cursor = if has_more {
+            page.last()
+                .map(|(tx_idx, _)| encode_cursor(block_number, *tx_idx))
+        } else {
+            None
+        };
 
-    let txs: Vec<TransactionResponse> = rows
-        .into_iter()
-        .map(
-            |(
-                hash,
-                block_number,
-                block_hash,
-                index,
-                inputs_count,
-                outputs_count,
-                fee,
-                tx_size,
-                cycles,
-                is_cellbase,
-                timestamp,
-            )| {
+        let txs: Vec<TransactionResponse> = page
+            .into_iter()
+            .map(|(tx_idx, entry)| {
+                let tx_hash = get_tx_hash_from_ckb_store(&ckb_store_c, block_number, tx_idx)
+                    .map(|h| format!("0x{}", hex::encode(&h)))
+                    .unwrap_or_else(|| "0x".to_string());
+
+                let timestamp = chrono::DateTime::from_timestamp_millis(entry.timestamp)
+                    .map(|dt| dt.to_rfc3339())
+                    .unwrap_or_default();
+
                 TransactionResponse {
-                    hash: format!("0x{}", hex::encode(&hash)),
+                    hash: tx_hash,
                     block_number,
                     block_hash: format!("0x{}", hex::encode(&block_hash)),
-                    index,
-                    inputs_count,
-                    outputs_count,
-                    fee,
-                    tx_size,
-                    cycles,
-                    is_cellbase,
-                    timestamp: timestamp.to_rfc3339(),
+                    index: tx_idx,
+                    inputs_count: entry.inputs_count as i32,
+                    outputs_count: entry.outputs_count as i32,
+                    fee: entry.fee.to_string(),
+                    tx_size: Some(entry.tx_size),
+                    cycles: entry.cycles,
+                    is_cellbase: entry.is_cellbase,
+                    timestamp,
                 }
-            },
-        )
-        .collect();
+            })
+            .collect();
 
-    ok(CursorPaginatedResponse::new(txs, total, limit, next_cursor))
+        ok(CursorPaginatedResponse::new(txs, total, limit, next_cursor))
+    } else {
+        // List latest transactions (DESC order across blocks)
+        let cursor = params.cursor.as_ref().and_then(|c| decode_cursor(c));
+        let (cursor_block, cursor_index) = cursor.unwrap_or((i64::MAX, i32::MAX));
+
+        let store_c = store.clone();
+        let ckb_store_c = ckb_store.clone();
+        let fetch_limit = (limit + 1) as usize;
+
+        let txs_result =
+            tokio::task::spawn_blocking(move || -> Result<Vec<TxListEntry>, anyhow::Error> {
+                let mut results = Vec::with_capacity(fetch_limit);
+                // Start from cursor_block and go backwards
+                let blocks = store_c.list_blocks_desc(Some(cursor_block), fetch_limit * 2)?;
+
+                for (block_num, header) in &blocks {
+                    let block_txs = store_c.list_block_txs(*block_num)?;
+                    // For the first block (cursor_block), filter by cursor_index
+                    for (tx_idx, entry) in block_txs.into_iter().rev() {
+                        if *block_num == cursor_block && tx_idx >= cursor_index {
+                            continue;
+                        }
+                        // Look up tx hash from CKB store
+                        let tx_hash = get_tx_hash_from_ckb_store(&ckb_store_c, *block_num, tx_idx)
+                            .unwrap_or_default();
+                        results.push((*block_num, header.hash.clone(), tx_idx, entry, tx_hash));
+                        if results.len() >= fetch_limit {
+                            break;
+                        }
+                    }
+                    if results.len() >= fetch_limit {
+                        break;
+                    }
+                }
+                Ok(results)
+            })
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+
+        let has_more = txs_result.len() as i64 > limit;
+        let page: Vec<_> = txs_result.into_iter().take(limit as usize).collect();
+
+        let next_cursor = if has_more {
+            page.last()
+                .map(|(block_num, _, tx_idx, _, _)| encode_cursor(*block_num, *tx_idx))
+        } else {
+            None
+        };
+
+        let txs: Vec<TransactionResponse> = page
+            .into_iter()
+            .map(|(block_num, block_hash, tx_idx, entry, tx_hash)| {
+                let timestamp = chrono::DateTime::from_timestamp_millis(entry.timestamp)
+                    .map(|dt| dt.to_rfc3339())
+                    .unwrap_or_default();
+
+                TransactionResponse {
+                    hash: if tx_hash.is_empty() {
+                        "0x".to_string()
+                    } else {
+                        format!("0x{}", hex::encode(&tx_hash))
+                    },
+                    block_number: block_num,
+                    block_hash: format!("0x{}", hex::encode(&block_hash)),
+                    index: tx_idx,
+                    inputs_count: entry.inputs_count as i32,
+                    outputs_count: entry.outputs_count as i32,
+                    fee: entry.fee.to_string(),
+                    tx_size: Some(entry.tx_size),
+                    cycles: entry.cycles,
+                    is_cellbase: entry.is_cellbase,
+                    timestamp,
+                }
+            })
+            .collect();
+
+        ok(CursorPaginatedResponse::new(txs, total, limit, next_cursor))
+    }
 }
 
 async fn get_transaction(
@@ -210,46 +291,46 @@ async fn get_transaction(
     let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap_or(&hash))
         .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
 
-    let row = sqlx::query_as::<_, (Vec<u8>, i64, Vec<u8>, i32, i32, i32, String, Option<i32>, Option<i64>, bool, chrono::DateTime<chrono::Utc>)>(
-        r#"
-        SELECT t.hash, t.block_number, b.hash, t.tx_index, t.inputs_count::int4, t.outputs_count::int4,
-               t.fee::text, t.tx_size, t.cycles, t.is_cellbase, t.timestamp
-        FROM transactions_index t
-        JOIN blocks_index b ON b.number = t.block_number
-        WHERE t.hash = $1
-        "#,
-    )
-    .bind(&hash_bytes)
-    .fetch_optional(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let store = state.store.clone();
+    let hash_c = hash_bytes.clone();
+    let tx_result = tokio::task::spawn_blocking(move || store.get_tx_by_hash(&hash_c))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    match row {
-        Some((
-            hash,
-            block_number,
-            block_hash,
-            index,
-            inputs_count,
-            outputs_count,
-            fee,
-            tx_size,
-            cycles,
-            is_cellbase,
-            timestamp,
-        )) => ok(TransactionResponse {
-            hash: format!("0x{}", hex::encode(&hash)),
-            block_number,
-            block_hash: format!("0x{}", hex::encode(&block_hash)),
-            index,
-            inputs_count,
-            outputs_count,
-            fee,
-            tx_size,
-            cycles,
-            is_cellbase,
-            timestamp: timestamp.to_rfc3339(),
-        }),
+    match tx_result {
+        Some((block_num, tx_idx, entry)) => {
+            // Get block hash
+            let store = state.store.clone();
+            let block_hash = tokio::task::spawn_blocking(move || {
+                store
+                    .get_block_header(block_num)
+                    .ok()
+                    .flatten()
+                    .map(|h| h.hash)
+                    .unwrap_or_default()
+            })
+            .await
+            .unwrap_or_default();
+
+            let timestamp = chrono::DateTime::from_timestamp_millis(entry.timestamp)
+                .map(|dt| dt.to_rfc3339())
+                .unwrap_or_default();
+
+            ok(TransactionResponse {
+                hash: format!("0x{}", hex::encode(&hash_bytes)),
+                block_number: block_num,
+                block_hash: format!("0x{}", hex::encode(&block_hash)),
+                index: tx_idx,
+                inputs_count: entry.inputs_count as i32,
+                outputs_count: entry.outputs_count as i32,
+                fee: entry.fee.to_string(),
+                tx_size: Some(entry.tx_size),
+                cycles: entry.cycles,
+                is_cellbase: entry.is_cellbase,
+                timestamp,
+            })
+        }
         None => Err(ApiError::not_found("Transaction not found")),
     }
 }
@@ -325,6 +406,16 @@ fn hash_type_to_string(hash_type: i16) -> String {
         2 => "data1".to_string(),
         4 => "data2".to_string(),
         _ => "unknown".to_string(),
+    }
+}
+
+fn hash_type_byte_to_i16(byte: u8) -> i16 {
+    match byte {
+        0 => 0,
+        1 => 1,
+        2 => 2,
+        4 => 4,
+        _ => 0,
     }
 }
 
@@ -455,6 +546,73 @@ async fn fetch_tx_size_from_rpc(rpc_url: &str, tx_hash: &str) -> Option<i32> {
     Some(size as i32)
 }
 
+/// Activity response type (matches the activities module shape).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivityResponse {
+    pub activity_id: String,
+    pub activity_type: String,
+    pub activity_category: String,
+    pub block_number: i64,
+    pub tx_hash: String,
+    pub tx_index: i32,
+    pub activity_index: i16,
+    pub from_address: Option<String>,
+    pub to_address: Option<String>,
+    pub from_lock_hash: Option<String>,
+    pub to_lock_hash: Option<String>,
+    pub amount: String,
+    pub asset_id: Option<String>,
+    pub metadata: serde_json::Value,
+    pub timestamp: String,
+}
+
+/// Fetch activities for a transaction from the store.
+fn fetch_tx_activities_from_store(
+    store: &ckbadger_store::CkbadgerStore,
+    tx_hash: &[u8],
+) -> Vec<ActivityResponse> {
+    let block_num = match get_block_number_for_tx(store, tx_hash) {
+        Ok(Some(bn)) => bn,
+        _ => return vec![],
+    };
+
+    let all_activities = match store.list_block_activities(block_num) {
+        Ok(acts) => acts,
+        Err(_) => return vec![],
+    };
+
+    // Filter to activities for this transaction
+    let mut result = Vec::new();
+    for (idx, entry) in all_activities {
+        if entry.tx_hash == tx_hash {
+            let timestamp = chrono::DateTime::from_timestamp_millis(entry.timestamp * 1000)
+                .or_else(|| chrono::DateTime::from_timestamp(entry.timestamp, 0))
+                .map(|dt| dt.to_rfc3339())
+                .unwrap_or_default();
+
+            result.push(ActivityResponse {
+                activity_id: format!("{}:{}", block_num, idx),
+                activity_type: entry.activity_type,
+                activity_category: entry.category,
+                block_number: block_num,
+                tx_hash: format!("0x{}", hex::encode(&entry.tx_hash)),
+                tx_index: entry.tx_idx,
+                activity_index: idx as i16,
+                from_address: None,
+                to_address: None,
+                from_lock_hash: entry.from_lock.map(|h| format!("0x{}", hex::encode(&h))),
+                to_lock_hash: entry.to_lock.map(|h| format!("0x{}", hex::encode(&h))),
+                amount: entry.amount.unwrap_or(0).to_string(),
+                asset_id: entry.asset_id.map(|id| format!("0x{}", hex::encode(&id))),
+                metadata: entry.metadata.unwrap_or(serde_json::Value::Null),
+                timestamp,
+            });
+        }
+    }
+    result
+}
+
 async fn get_transaction_detail(
     State(state): State<Arc<AppState>>,
     Path(hash): Path<String>,
@@ -462,259 +620,104 @@ async fn get_transaction_detail(
     let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap_or(&hash))
         .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
 
-    let tx_row = sqlx::query_as::<_, (Vec<u8>, i64, Vec<u8>, i32, i32, i32, String, bool, chrono::DateTime<chrono::Utc>, Option<i32>, Option<i64>)>(
-        r#"
-        SELECT t.hash, t.block_number, b.hash, t.tx_index, t.inputs_count::int4, t.outputs_count::int4, t.fee::text, t.is_cellbase, t.timestamp, t.tx_size, t.cycles
-        FROM transactions_index t
-        JOIN blocks_index b ON b.number = t.block_number
-        WHERE t.hash = $1
-        "#,
-    )
-    .bind(&hash_bytes)
-    .fetch_optional(&state.read_pool)
+    let store = state.store.clone();
+    let hash_c = hash_bytes.clone();
+    let tx_result = tokio::task::spawn_blocking(move || store.get_tx_by_hash(&hash_c))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let (block_number, tx_idx, entry) =
+        tx_result.ok_or_else(|| ApiError::not_found("Transaction not found"))?;
+
+    let tx_hash_hex = format!("0x{}", hex::encode(&hash_bytes));
+    let is_cellbase = entry.is_cellbase;
+    let tx_size = entry.tx_size;
+    let cycles = entry.cycles;
+    let inputs_count = entry.inputs_count as i32;
+    let outputs_count = entry.outputs_count as i32;
+
+    // Get block hash
+    let store = state.store.clone();
+    let block_hash = tokio::task::spawn_blocking(move || {
+        store
+            .get_block_header(block_number)
+            .ok()
+            .flatten()
+            .map(|h| h.hash)
+            .unwrap_or_default()
+    })
     .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    .unwrap_or_default();
 
-    let (
-        tx_hash,
-        block_number,
-        block_hash,
-        index,
-        inputs_count,
-        outputs_count,
-        _stored_fee,
-        is_cellbase,
-        timestamp,
-        tx_size,
-        cycles,
-    ) = tx_row.ok_or_else(|| ApiError::not_found("Transaction not found"))?;
+    let timestamp = chrono::DateTime::from_timestamp_millis(entry.timestamp)
+        .map(|dt| dt.to_rfc3339())
+        .unwrap_or_default();
 
-    let tx_hash_hex = format!("0x{}", hex::encode(&tx_hash));
-
-    // Parallelize independent queries
-    type TryJoinError = (axum::http::StatusCode, axum::Json<ApiError>);
-    let (tip_block, final_tx_size, input_rows, output_rows, activities) = tokio::try_join!(
-        async { Ok::<_, TryJoinError>(state.cache.get_sync_tip(&state.read_pool).await) },
-        async {
-            Ok::<_, TryJoinError>(match tx_size {
-                Some(size) => Some(size),
-                None => fetch_tx_size_from_rpc(&state.ckb_rpc_url, &tx_hash_hex).await,
+    // Get tip block for confirmations
+    let tip_block = match state
+        .cache
+        .get::<SyncStatusData>(SYNC_STATUS_REDIS_KEY)
+        .await
+    {
+        Some(status) => status.tip_block_number,
+        None => {
+            let store = state.store.clone();
+            tokio::task::spawn_blocking(move || {
+                store
+                    .get_sync_status()
+                    .map(|s| s.tip_block_number)
+                    .unwrap_or(0)
             })
-        },
-        async {
-            sqlx::query_as::<
-                _,
-                (
-                    Vec<u8>,
-                    i16,
-                    String,
-                    Option<String>,
-                    Option<i32>,
-                    Option<Vec<u8>>,
-                    Option<i16>,
-                    Option<Vec<u8>>,
-                ),
-            >(
-                r#"
-                SELECT ti.previous_tx_hash, ti.previous_output_index, ti.since::TEXT, c.capacity::TEXT,
-                       CASE WHEN c.capacity IS NOT NULL THEN
-                           8 + 32 + 1 + LENGTH(c.lock_args) +
-                           CASE WHEN c.type_code_hash IS NOT NULL THEN 32 + 1 + COALESCE(LENGTH(c.type_args), 0) ELSE 0 END +
-                           c.data_size
-                       ELSE NULL END::INT as occupied_capacity,
-                       c.lock_code_hash, c.lock_hash_type, c.lock_args
-                FROM transaction_inputs ti
-                LEFT JOIN cells c ON c.tx_hash = ti.previous_tx_hash AND c.output_index = ti.previous_output_index
-                WHERE ti.tx_hash = $1 AND ti.tx_block_number = $2
-                ORDER BY ti.input_index ASC
-                "#,
-            )
-            .bind(&hash_bytes)
-            .bind(block_number)
-            .fetch_all(&state.read_pool)
             .await
-            .map_err(|e| ApiError::internal(e.to_string()))
-        },
-        async {
-            sqlx::query_as::<
-                _,
-                (
-                    String,
-                    Vec<u8>,
-                    i16,
-                    Vec<u8>,
-                    Option<Vec<u8>>,
-                    Option<i16>,
-                    Option<Vec<u8>>,
-                    i32,
-                    i64,
-                ),
-            >(
-                r#"
-                SELECT capacity::TEXT, lock_code_hash, lock_hash_type, lock_args,
-                       type_code_hash, type_hash_type, type_args,
-                       (8 + 32 + 1 + LENGTH(lock_args) +
-                       CASE WHEN type_code_hash IS NOT NULL THEN 32 + 1 + COALESCE(LENGTH(type_args), 0) ELSE 0 END +
-                       data_size)::INT as occupied_capacity,
-                       created_at_block
-                FROM cells
-                WHERE tx_hash = $1 AND created_at_block = $2
-                ORDER BY output_index ASC
-                "#,
-            )
-            .bind(&hash_bytes)
-            .bind(block_number)
-            .fetch_all(&state.read_pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))
-        },
-        async {
-            fetch_transaction_activities(&state.read_pool, &hash_bytes)
-                .await
-                .map_err(ApiError::internal)
-        },
-    )?;
+            .unwrap_or(0)
+        }
+    };
 
     let confirmations = tip_block - block_number + 1;
 
-    let mut inputs_capacity: u128 = 0;
-    let mut inputs_occupied_capacity: u128 = 0;
-    let inputs: Vec<TransactionInputResponse> = input_rows
-        .into_iter()
-        .map(
-            |(
-                prev_tx_hash,
-                prev_index,
-                since,
-                capacity,
-                occupied,
-                lock_code_hash,
-                lock_hash_type,
-                lock_args,
-            )| {
-                if let Some(ref cap) = capacity {
-                    inputs_capacity += cap.parse::<u128>().unwrap_or(0);
-                }
-                if let Some(occ) = occupied {
-                    inputs_occupied_capacity += occ as u128;
-                }
+    // Get tx_size: use stored value or fallback to RPC
+    let final_tx_size = match tx_size {
+        s if s > 0 => Some(s),
+        _ => fetch_tx_size_from_rpc(&state.ckb_rpc_url, &tx_hash_hex).await,
+    };
 
-                let (lock, address) = match (lock_code_hash, lock_hash_type, lock_args) {
-                    (Some(code_hash), Some(hash_type), Some(args)) => {
-                        let lock = ScriptResponse {
-                            code_hash: format!("0x{}", hex::encode(&code_hash)),
-                            hash_type: hash_type_to_string(hash_type),
-                            args: format!("0x{}", hex::encode(&args)),
-                        };
-                        let address =
-                            script_to_address(&code_hash, hash_type, &args, &state.ckb_network)
-                                .ok();
-                        (Some(lock), address)
-                    }
-                    _ => (None, None),
-                };
-
-                TransactionInputResponse {
-                    previous_output: Some(PreviousOutput {
-                        tx_hash: format!("0x{}", hex::encode(&prev_tx_hash)),
-                        index: prev_index as i32,
-                    }),
-                    since,
-                    capacity,
-                    lock,
-                    address,
-                }
-            },
-        )
-        .collect();
-
-    let mut outputs_capacity: u128 = 0;
-    let mut outputs_occupied_capacity: u128 = 0;
-    let outputs: Vec<TransactionOutputResponse> = output_rows
-        .into_iter()
-        .map(
-            |(
-                capacity,
-                lock_code_hash,
-                lock_hash_type,
-                lock_args,
-                type_code_hash,
-                type_hash_type,
-                type_args,
-                occupied,
-                created_at_block,
-            )| {
-                outputs_capacity += capacity.parse::<u128>().unwrap_or(0);
-                outputs_occupied_capacity += occupied as u128;
-
-                let lock = Some(ScriptResponse {
-                    code_hash: format!("0x{}", hex::encode(&lock_code_hash)),
-                    hash_type: hash_type_to_string(lock_hash_type),
-                    args: format!("0x{}", hex::encode(&lock_args)),
-                });
-
-                let address = script_to_address(
-                    &lock_code_hash,
-                    lock_hash_type,
-                    &lock_args,
+    // Read full transaction from CKB node's RocksDB for inputs/outputs
+    let (
+        inputs,
+        outputs,
+        inputs_capacity,
+        outputs_capacity,
+        inputs_occupied_capacity,
+        outputs_occupied_capacity,
+        computed_fee,
+    ) = if let Some(ref ckb_store) = state.ckb_store {
+        if hash_bytes.len() == 32 {
+            let mut tx_hash_arr = [0u8; 32];
+            tx_hash_arr.copy_from_slice(&hash_bytes);
+            if let Some(tx_view) = ckb_store.get_transaction(&tx_hash_arr) {
+                build_inputs_outputs_from_ckb(
+                    &tx_view,
+                    ckb_store,
+                    &state.store,
                     &state.ckb_network,
+                    block_number,
                 )
-                .ok();
-
-                let type_script = match (&type_code_hash, type_hash_type, &type_args) {
-                    (Some(code_hash), Some(hash_type), Some(args)) => Some(ScriptResponse {
-                        code_hash: format!("0x{}", hex::encode(code_hash)),
-                        hash_type: hash_type_to_string(hash_type),
-                        args: format!("0x{}", hex::encode(args)),
-                    }),
-                    _ => None,
-                };
-
-                let is_satoshi = is_genesis_special_burn_cell(&lock_args, created_at_block);
-                let (cell_type, virtual_occupied_capacity) = if is_satoshi {
-                    (
-                        Some("genesis_special_burn".to_string()),
-                        Some(GENESIS_SPECIAL_BURN_CELL_VIRTUAL_OCCUPIED.to_string()),
-                    )
-                } else {
-                    (None, None)
-                };
-
-                TransactionOutputResponse {
-                    capacity,
-                    occupied_capacity: occupied as i64,
-                    virtual_occupied_capacity,
-                    cell_type,
-                    lock,
-                    r#type: type_script,
-                    address,
-                }
-            },
-        )
-        .collect();
-
-    // Fee calculation: only query DAO compensation when outputs > inputs (~1% of transactions)
-    let fee = if outputs_capacity > inputs_capacity {
-        // Outputs exceed inputs - could be DAO withdrawal or special protocol (DAS, etc.)
-        let dao_compensation: u128 = sqlx::query_as::<_, (Option<String>,)>(
-            "SELECT SUM(compensation::numeric)::text FROM dao_deposits WHERE withdraw_tx = $1 AND status = 2",
-        )
-        .bind(&hash_bytes)
-        .fetch_one(&state.read_pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .0
-        .and_then(|s| s.parse::<u128>().ok())
-        .unwrap_or(0);
-
-        let effective_input = inputs_capacity + dao_compensation;
-        if effective_input >= outputs_capacity {
-            (effective_input - outputs_capacity).to_string()
+            } else {
+                empty_inputs_outputs()
+            }
         } else {
-            "0".to_string()
+            empty_inputs_outputs()
         }
     } else {
-        (inputs_capacity - outputs_capacity).to_string()
+        empty_inputs_outputs()
+    };
+
+    // Use computed fee from inputs/outputs if available, otherwise use stored fee
+    let fee = if computed_fee > 0 {
+        computed_fee.to_string()
+    } else {
+        entry.fee.to_string()
     };
 
     let fee_rate = final_tx_size.map(|size| {
@@ -727,11 +730,19 @@ async fn get_transaction_detail(
         }
     });
 
+    // Fetch activities from the store
+    let store = state.store.clone();
+    let hash_c = hash_bytes.clone();
+    let activities =
+        tokio::task::spawn_blocking(move || fetch_tx_activities_from_store(&store, &hash_c))
+            .await
+            .unwrap_or_default();
+
     ok(TransactionDetailResponse {
         hash: tx_hash_hex,
         block_number,
         block_hash: format!("0x{}", hex::encode(&block_hash)),
-        index,
+        index: tx_idx,
         inputs_count,
         outputs_count,
         fee,
@@ -740,7 +751,7 @@ async fn get_transaction_detail(
         cycles,
         confirmations,
         is_cellbase,
-        timestamp: timestamp.to_rfc3339(),
+        timestamp,
         inputs_capacity: inputs_capacity.to_string(),
         outputs_capacity: outputs_capacity.to_string(),
         inputs_occupied_capacity: inputs_occupied_capacity.to_string(),
@@ -749,6 +760,253 @@ async fn get_transaction_detail(
         outputs,
         activities,
     })
+}
+
+fn empty_inputs_outputs() -> (
+    Vec<TransactionInputResponse>,
+    Vec<TransactionOutputResponse>,
+    u128,
+    u128,
+    u128,
+    u128,
+    u128,
+) {
+    (vec![], vec![], 0, 0, 0, 0, 0)
+}
+
+/// Build inputs/outputs from CKB node's RocksDB transaction view.
+fn build_inputs_outputs_from_ckb(
+    tx_view: &ckb_types::core::TransactionView,
+    ckb_store: &ckb_store_reader::CkbChainReader,
+    store: &ckbadger_store::CkbadgerStore,
+    network: &str,
+    block_number: i64,
+) -> (
+    Vec<TransactionInputResponse>,
+    Vec<TransactionOutputResponse>,
+    u128,
+    u128,
+    u128,
+    u128,
+    u128,
+) {
+    use ckb_types::prelude::*;
+
+    let rpc_tx = ckb_store_reader::convert_transaction_view(tx_view);
+
+    let mut inputs_capacity: u128 = 0;
+    let mut inputs_occupied_capacity: u128 = 0;
+
+    let inputs: Vec<TransactionInputResponse> = rpc_tx
+        .inputs
+        .iter()
+        .map(|input| {
+            let prev_tx_hash_hex = &input.previous_output.tx_hash;
+            let prev_index_hex = &input.previous_output.index;
+            let prev_index = u32::from_str_radix(
+                prev_index_hex.strip_prefix("0x").unwrap_or(prev_index_hex),
+                16,
+            )
+            .unwrap_or(0);
+
+            let since = &input.since;
+
+            // Try to look up the previous output cell for capacity/lock info
+            let prev_tx_hash_bytes = hex::decode(
+                prev_tx_hash_hex
+                    .strip_prefix("0x")
+                    .unwrap_or(prev_tx_hash_hex),
+            )
+            .unwrap_or_default();
+
+            let (capacity, lock, address) = if prev_tx_hash_bytes.len() == 32 {
+                // Try live cells first, then consumed cells in our store
+                let cell_info = store
+                    .get_cell(&prev_tx_hash_bytes, prev_index as i16)
+                    .ok()
+                    .flatten()
+                    .or_else(|| {
+                        store
+                            .get_consumed_cell(&prev_tx_hash_bytes, prev_index as i16)
+                            .ok()
+                            .flatten()
+                    });
+
+                match cell_info {
+                    Some(info) => {
+                        let cap = info.capacity as u128;
+                        inputs_capacity += cap;
+
+                        let lock_args_len = info.lock_args.len();
+                        let lock_size = 8 + 32 + 1 + lock_args_len + info.data_size as usize;
+                        inputs_occupied_capacity += lock_size as u128;
+
+                        let lock_resp = ScriptResponse {
+                            code_hash: format!("0x{}", hex::encode(&info.lock_code_hash)),
+                            hash_type: "unknown".to_string(), // hash_type not in LiveCellInfo
+                            args: format!("0x{}", hex::encode(&info.lock_args)),
+                        };
+
+                        (
+                            Some(cap.to_string()),
+                            Some(lock_resp),
+                            None, // Need hash_type for address derivation
+                        )
+                    }
+                    None => {
+                        // Fallback: read from CKB node's RocksDB
+                        let mut prev_hash = [0u8; 32];
+                        prev_hash.copy_from_slice(&prev_tx_hash_bytes);
+                        if let Some(prev_tx) = ckb_store.get_transaction(&prev_hash) {
+                            if let Some(output) = prev_tx.output(prev_index as usize) {
+                                let cap: u64 = output.capacity().unpack();
+                                inputs_capacity += cap as u128;
+
+                                let lock = output.lock();
+                                let code_hash: Vec<u8> = lock.code_hash().raw_data().to_vec();
+                                let ht_byte = lock.hash_type().as_bytes()[0];
+                                let ht = hash_type_byte_to_i16(ht_byte);
+                                let args: Vec<u8> = lock.args().raw_data().to_vec();
+
+                                let lock_resp = ScriptResponse {
+                                    code_hash: format!("0x{}", hex::encode(&code_hash)),
+                                    hash_type: hash_type_to_string(ht),
+                                    args: format!("0x{}", hex::encode(&args)),
+                                };
+
+                                let addr = script_to_address(&code_hash, ht, &args, network).ok();
+
+                                let data_len = ckb_store
+                                    .get_cell_data(&prev_hash, prev_index)
+                                    .map(|d| d.len())
+                                    .unwrap_or(0);
+                                let occ = 8 + 32 + 1 + args.len() + data_len;
+                                inputs_occupied_capacity += occ as u128;
+
+                                (Some(cap.to_string()), Some(lock_resp), addr)
+                            } else {
+                                (None, None, None)
+                            }
+                        } else {
+                            (None, None, None)
+                        }
+                    }
+                }
+            } else {
+                (None, None, None)
+            };
+
+            TransactionInputResponse {
+                previous_output: Some(PreviousOutput {
+                    tx_hash: prev_tx_hash_hex.clone(),
+                    index: prev_index as i32,
+                }),
+                since: since.clone(),
+                capacity,
+                lock,
+                address,
+            }
+        })
+        .collect();
+
+    let mut outputs_capacity: u128 = 0;
+    let mut outputs_occupied_capacity: u128 = 0;
+
+    let outputs: Vec<TransactionOutputResponse> = rpc_tx
+        .outputs
+        .iter()
+        .enumerate()
+        .map(|(output_idx, output)| {
+            let cap_hex = &output.capacity;
+            let cap =
+                u64::from_str_radix(cap_hex.strip_prefix("0x").unwrap_or(cap_hex), 16).unwrap_or(0);
+            outputs_capacity += cap as u128;
+
+            let lock = &output.lock;
+            let code_hash_bytes =
+                hex::decode(lock.code_hash.strip_prefix("0x").unwrap_or(&lock.code_hash))
+                    .unwrap_or_default();
+            let ht = match lock.hash_type.as_str() {
+                "data" => 0i16,
+                "type" => 1i16,
+                "data1" => 2i16,
+                "data2" => 4i16,
+                _ => 0i16,
+            };
+            let args_bytes =
+                hex::decode(lock.args.strip_prefix("0x").unwrap_or(&lock.args)).unwrap_or_default();
+
+            let lock_resp = ScriptResponse {
+                code_hash: lock.code_hash.clone(),
+                hash_type: lock.hash_type.clone(),
+                args: lock.args.clone(),
+            };
+
+            let address = script_to_address(&code_hash_bytes, ht, &args_bytes, network).ok();
+
+            let type_resp = output.type_.as_ref().map(|t| ScriptResponse {
+                code_hash: t.code_hash.clone(),
+                hash_type: t.hash_type.clone(),
+                args: t.args.clone(),
+            });
+
+            // Calculate occupied capacity
+            let type_size = output.type_.as_ref().map_or(0, |t| {
+                let type_args =
+                    hex::decode(t.args.strip_prefix("0x").unwrap_or(&t.args)).unwrap_or_default();
+                32 + 1 + type_args.len()
+            });
+
+            // Get data size from CKB store
+            let tx_hash: Vec<u8> = tx_view.hash().raw_data().to_vec();
+            let data_size = if tx_hash.len() == 32 {
+                let mut th = [0u8; 32];
+                th.copy_from_slice(&tx_hash);
+                ckb_store
+                    .get_cell_data(&th, output_idx as u32)
+                    .map(|d| d.len())
+                    .unwrap_or(0)
+            } else {
+                0
+            };
+
+            let occ = 8 + 32 + 1 + args_bytes.len() + type_size + data_size;
+            outputs_occupied_capacity += occ as u128;
+
+            let is_satoshi = is_genesis_special_burn_cell(&args_bytes, block_number);
+            let (cell_type, virtual_occupied_capacity) = if is_satoshi {
+                (
+                    Some("genesis_special_burn".to_string()),
+                    Some(GENESIS_SPECIAL_BURN_CELL_VIRTUAL_OCCUPIED.to_string()),
+                )
+            } else {
+                (None, None)
+            };
+
+            TransactionOutputResponse {
+                capacity: cap.to_string(),
+                occupied_capacity: occ as i64,
+                virtual_occupied_capacity,
+                cell_type,
+                lock: Some(lock_resp),
+                r#type: type_resp,
+                address,
+            }
+        })
+        .collect();
+
+    // Compute fee
+    let computed_fee = inputs_capacity.saturating_sub(outputs_capacity);
+
+    (
+        inputs,
+        outputs,
+        inputs_capacity,
+        outputs_capacity,
+        inputs_occupied_capacity,
+        outputs_occupied_capacity,
+        computed_fee,
+    )
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -794,7 +1052,7 @@ async fn get_cell_deps(
         }
     }
 
-    // Fallback: RocksDB not available or tx not found — return empty
+    // Fallback: RocksDB not available or tx not found
     ok(vec![])
 }
 
@@ -805,15 +1063,15 @@ async fn get_cycles_status(
     let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap_or(&hash))
         .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
 
-    let row: Option<(Option<i64>, bool)> =
-        sqlx::query_as("SELECT cycles, is_cellbase FROM transactions_index WHERE hash = $1")
-            .bind(&hash_bytes)
-            .fetch_optional(&state.read_pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+    let store = state.store.clone();
+    let hash_c = hash_bytes.clone();
+    let row = tokio::task::spawn_blocking(move || store.get_tx_by_hash(&hash_c))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let (db_cycles, is_cellbase) = match row {
-        Some((cycles, cellbase)) => (cycles, cellbase),
+        Some((_, _, entry)) => (entry.cycles, entry.is_cellbase),
         None => {
             return ok(CyclesStatusResponse {
                 status: CyclesStatus::NotFound,
@@ -876,15 +1134,15 @@ async fn trigger_cycles_calculation(
     let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap_or(&hash))
         .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
 
-    let row: Option<(Option<i64>, bool)> =
-        sqlx::query_as("SELECT cycles, is_cellbase FROM transactions_index WHERE hash = $1")
-            .bind(&hash_bytes)
-            .fetch_optional(&state.read_pool)
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+    let store = state.store.clone();
+    let hash_c = hash_bytes.clone();
+    let row = tokio::task::spawn_blocking(move || store.get_tx_by_hash(&hash_c))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let (db_cycles, is_cellbase) = match row {
-        Some((cycles, cellbase)) => (cycles, cellbase),
+        Some((_, _, entry)) => (entry.cycles, entry.is_cellbase),
         None => {
             return ok(CyclesStatusResponse {
                 status: CyclesStatus::NotFound,
@@ -973,31 +1231,23 @@ async fn get_transaction_lifecycle(
     let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap_or(&hash))
         .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
 
-    // Get the short_hash (proposal_id) - first 10 bytes
     let short_hash = if hash_bytes.len() >= 10 {
         hash_bytes[..10].to_vec()
     } else {
         return Err(ApiError::bad_request("Transaction hash too short"));
     };
 
-    // Query transaction info
-    let tx_row: Option<(i64, Vec<u8>, bool, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
-        r#"
-        SELECT t.block_number, b.hash, t.is_cellbase, t.timestamp
-        FROM transactions_index t
-        JOIN blocks_index b ON b.number = t.block_number
-        WHERE t.hash = $1
-        "#,
-    )
-    .bind(&hash_bytes)
-    .fetch_optional(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    // Query transaction info from store
+    let store = state.store.clone();
+    let hash_c = hash_bytes.clone();
+    let tx_result = tokio::task::spawn_blocking(move || store.get_tx_by_hash(&hash_c))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let (commit_block_number, commit_block_hash, is_cellbase, commit_timestamp) = match tx_row {
-        Some(row) => row,
+    let (commit_block_number, is_cellbase, commit_timestamp) = match tx_result {
+        Some((block_num, _, entry)) => (block_num, entry.is_cellbase, entry.timestamp),
         None => {
-            // Transaction not found - might be pending in mempool
             return ok(TransactionLifecycleResponse {
                 hash: format!("0x{}", hex::encode(&hash_bytes)),
                 phase: LifecyclePhase::Pending,
@@ -1012,13 +1262,47 @@ async fn get_transaction_lifecycle(
         }
     };
 
+    // Get block hash
+    let store = state.store.clone();
+    let commit_block_hash = tokio::task::spawn_blocking(move || {
+        store
+            .get_block_header(commit_block_number)
+            .ok()
+            .flatten()
+            .map(|h| h.hash)
+            .unwrap_or_default()
+    })
+    .await
+    .unwrap_or_default();
+
     let hash_hex = format!("0x{}", hex::encode(&hash_bytes));
     let proposal_id_hex = format!("0x{}", hex::encode(&short_hash));
 
-    // Cellbase transactions don't go through proposal phase
-    if is_cellbase {
-        let tip = state.cache.get_sync_tip(&state.read_pool).await;
+    let commit_ts_str = chrono::DateTime::from_timestamp_millis(commit_timestamp)
+        .map(|dt| dt.to_rfc3339())
+        .unwrap_or_default();
 
+    // Get sync tip
+    let tip = match state
+        .cache
+        .get::<SyncStatusData>(SYNC_STATUS_REDIS_KEY)
+        .await
+    {
+        Some(status) => status.tip_block_number,
+        None => {
+            let store = state.store.clone();
+            tokio::task::spawn_blocking(move || {
+                store
+                    .get_sync_status()
+                    .map(|s| s.tip_block_number)
+                    .unwrap_or(0)
+            })
+            .await
+            .unwrap_or(0)
+        }
+    };
+
+    if is_cellbase {
         return ok(TransactionLifecycleResponse {
             hash: hash_hex,
             phase: LifecyclePhase::Committed,
@@ -1027,7 +1311,7 @@ async fn get_transaction_lifecycle(
             committed_in: Some(LifecycleBlockInfo {
                 block_number: commit_block_number,
                 block_hash: format!("0x{}", hex::encode(&commit_block_hash)),
-                timestamp: commit_timestamp.to_rfc3339(),
+                timestamp: commit_ts_str,
             }),
             commitment_distance: None,
             commitment_window: CommitmentWindow::default(),
@@ -1036,36 +1320,53 @@ async fn get_transaction_lifecycle(
         });
     }
 
-    // Find proposal block - look in the valid proposal window before commit
-    // A transaction committed in block C must be proposed in block P where: C - 10 <= P <= C - 2
-    let proposal_row: Option<(i64, Vec<u8>, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
-        r#"
-        SELECT bp.block_number, b.hash, b.timestamp
-        FROM block_proposals bp
-        JOIN blocks_index b ON b.number = bp.block_number
-        WHERE bp.proposal_id = $1
-          AND bp.block_number BETWEEN $2 - 10 AND $2 - 2
-        ORDER BY bp.block_number ASC
-        LIMIT 1
-        "#,
-    )
-    .bind(&short_hash)
-    .bind(commit_block_number)
-    .fetch_optional(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    // Look for proposal block in CKB node's RocksDB
+    // A tx committed in block C must be proposed in block P where: C - 10 <= P <= C - 2
+    let proposed_in = if let Some(ref ckb_store) = state.ckb_store {
+        let store_c = state.store.clone();
+        let ckb_store_c = ckb_store.clone();
+        let short_hash_c = short_hash.clone();
+        tokio::task::spawn_blocking(move || -> Option<(i64, Vec<u8>, i64)> {
+            let start = (commit_block_number - 10).max(0);
+            let end = (commit_block_number - 2).max(0);
+            for bn in start..=end {
+                if let Ok(Some(header)) = store_c.get_block_header(bn) {
+                    if header.hash.len() == 32 {
+                        let mut hash = [0u8; 32];
+                        hash.copy_from_slice(&header.hash);
+                        if let Some(block) = ckb_store_c.get_block(&hash) {
+                            for proposal_id in block.data().proposals().into_iter() {
+                                let proposal_bytes: Vec<u8> = proposal_id.raw_data().to_vec();
+                                if proposal_bytes == short_hash_c {
+                                    return Some((bn, header.hash.clone(), header.timestamp));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            None
+        })
+        .await
+        .unwrap_or(None)
+    } else {
+        None
+    };
 
-    let tip = state.cache.get_sync_tip(&state.read_pool).await;
-
-    let (proposed_in, commitment_distance) = match proposal_row {
-        Some((proposal_block, proposal_hash, proposal_timestamp)) => (
-            Some(LifecycleBlockInfo {
-                block_number: proposal_block,
-                block_hash: format!("0x{}", hex::encode(&proposal_hash)),
-                timestamp: proposal_timestamp.to_rfc3339(),
-            }),
-            Some(commit_block_number - proposal_block),
-        ),
+    let (proposed_in_info, commitment_distance) = match proposed_in {
+        Some((proposal_block, proposal_hash, proposal_ts)) => {
+            let ts = chrono::DateTime::from_timestamp_millis(proposal_ts)
+                .map(|dt| dt.to_rfc3339())
+                .unwrap_or_default();
+            (
+                Some(LifecycleBlockInfo {
+                    block_number: proposal_block,
+                    block_hash: format!("0x{}", hex::encode(&proposal_hash)),
+                    timestamp: ts,
+                }),
+                Some(commit_block_number - proposal_block),
+            )
+        }
         None => (None, None),
     };
 
@@ -1073,11 +1374,11 @@ async fn get_transaction_lifecycle(
         hash: hash_hex,
         phase: LifecyclePhase::Committed,
         proposal_id: proposal_id_hex,
-        proposed_in,
+        proposed_in: proposed_in_info,
         committed_in: Some(LifecycleBlockInfo {
             block_number: commit_block_number,
             block_hash: format!("0x{}", hex::encode(&commit_block_hash)),
-            timestamp: commit_timestamp.to_rfc3339(),
+            timestamp: commit_ts_str,
         }),
         commitment_distance,
         commitment_window: CommitmentWindow::default(),
@@ -1120,170 +1421,138 @@ async fn get_transaction_asset_transfers(
     let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap_or(&hash))
         .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
 
-    #[rustfmt::skip]
-    type ActivityRow = (
-        Vec<u8>,                       // tx_hash
-        i64,                           // block_number
-        i32,                           // tx_index
-        i16,                           // activity_index
-        String,                        // activity_category
-        String,                        // activity_type
-        Option<Vec<u8>>,               // asset_id
-        Option<Vec<u8>>,               // from_lock_hash
-        Option<Vec<u8>>,               // to_lock_hash
-        String,                        // amount
-        serde_json::Value,             // metadata
-        chrono::DateTime<chrono::Utc>, // timestamp
-    );
+    let store = state.store.clone();
+    let hash_c = hash_bytes.clone();
 
-    let block_number = get_block_number_for_tx(&state.read_pool, &hash_bytes)
-        .await
-        .ok()
-        .flatten();
+    let transfers = tokio::task::spawn_blocking(
+        move || -> Result<Vec<TxAssetTransferResponse>, anyhow::Error> {
+            let block_num = match get_block_number_for_tx(&store, &hash_c)? {
+                Some(bn) => bn,
+                None => return Ok(vec![]),
+            };
 
-    let rows: Vec<ActivityRow> = if let Some(bn) = block_number {
-        sqlx::query_as(
-            r#"
-            SELECT tx_hash, block_number, tx_index, activity_index,
-                   activity_category, activity_type, asset_id,
-                   from_lock_hash, to_lock_hash, amount::TEXT, metadata, timestamp
-            FROM activities
-            WHERE tx_hash = $1 AND block_number = $2 AND activity_category IN ('token', 'dob', 'nft', 'dao')
-            ORDER BY activity_index ASC
-            "#,
-        )
-        .bind(&hash_bytes)
-        .bind(bn)
-        .fetch_all(&state.read_pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-    } else {
-        sqlx::query_as(
-            r#"
-            SELECT tx_hash, block_number, tx_index, activity_index,
-                   activity_category, activity_type, asset_id,
-                   from_lock_hash, to_lock_hash, amount::TEXT, metadata, timestamp
-            FROM activities
-            WHERE tx_hash = $1 AND activity_category IN ('token', 'dob', 'nft', 'dao')
-            ORDER BY activity_index ASC
-            "#,
-        )
-        .bind(&hash_bytes)
-        .fetch_all(&state.read_pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-    };
+            let all_activities = store.list_block_activities(block_num)?;
 
-    let token_ids: Vec<Vec<u8>> = rows
-        .iter()
-        .filter(|(_, _, _, _, cat, _, asset_id, _, _, _, _, _)| {
-            cat == "token" && asset_id.is_some()
-        })
-        .filter_map(|(_, _, _, _, _, _, asset_id, _, _, _, _, _)| asset_id.clone())
-        .collect();
+            // Filter to asset-related activities for this tx
+            let asset_categories = ["token", "dob", "nft", "dao"];
+            let mut token_ids_to_lookup: Vec<Vec<u8>> = Vec::new();
 
-    type TokenMeta = (Vec<u8>, Option<String>, Option<String>, i16);
-    let token_metadata: std::collections::HashMap<Vec<u8>, (Option<String>, Option<String>, i16)> =
-        if !token_ids.is_empty() {
-            let meta_rows: Vec<TokenMeta> = sqlx::query_as(
-                r#"
-                SELECT type_script_hash, name, symbol, decimals
-                FROM tokens
-                WHERE type_script_hash = ANY($1)
-                "#,
-            )
-            .bind(&token_ids)
-            .fetch_all(&state.read_pool)
-            .await
-            .unwrap_or_default();
+            for (_idx, entry) in &all_activities {
+                if entry.tx_hash != hash_c {
+                    continue;
+                }
+                if !asset_categories.contains(&entry.category.as_str()) {
+                    continue;
+                }
+                if entry.category == "token" {
+                    if let Some(ref asset_id) = entry.asset_id {
+                        token_ids_to_lookup.push(asset_id.clone());
+                    }
+                }
+            }
 
-            meta_rows
-                .into_iter()
-                .map(|(hash, name, symbol, decimals)| (hash, (name, symbol, decimals)))
-                .collect()
-        } else {
-            std::collections::HashMap::new()
-        };
+            // Batch lookup token metadata
+            let mut token_metadata: TokenMetadataMap = std::collections::HashMap::new();
+            for token_id in &token_ids_to_lookup {
+                if let Ok(Some(token_info)) = store.get_token(token_id) {
+                    token_metadata.insert(
+                        token_id.clone(),
+                        (token_info.name, token_info.symbol, token_info.decimals),
+                    );
+                }
+            }
 
-    let transfers: Vec<TxAssetTransferResponse> = rows
-        .into_iter()
-        .map(
-            |(
-                tx_hash,
-                block_number,
-                tx_index,
-                activity_index,
-                activity_category,
-                activity_type,
-                asset_id,
-                from_lock_hash,
-                to_lock_hash,
-                amount,
-                metadata,
-                timestamp,
-            )| {
-                let direction_str = if from_lock_hash.is_some() && to_lock_hash.is_none() {
+            let mut results = Vec::new();
+            for (idx, entry) in &all_activities {
+                if entry.tx_hash != hash_c {
+                    continue;
+                }
+                if !asset_categories.contains(&entry.category.as_str()) {
+                    continue;
+                }
+
+                let direction_str = if entry.from_lock.is_some() && entry.to_lock.is_none() {
                     "out"
-                } else if from_lock_hash.is_none() && to_lock_hash.is_some() {
+                } else if entry.from_lock.is_none() && entry.to_lock.is_some() {
                     "in"
                 } else {
                     "transfer"
                 };
 
-                let peer_lock_hash = if from_lock_hash.is_some() {
-                    to_lock_hash
+                let peer_lock_hash = if entry.from_lock.is_some() {
+                    &entry.to_lock
                 } else {
-                    from_lock_hash
+                    &entry.from_lock
                 };
 
-                let event_type = match activity_type.as_str() {
+                let event_type = match entry.activity_type.as_str() {
                     "TOKEN_MINT" | "DOB_MINT" | "NFT_MINT" => "mint",
                     "TOKEN_BURN" | "DOB_BURN" => "burn",
                     "TOKEN_TRANSFER" | "DOB_TRANSFER" | "NFT_TRANSFER" => "transfer",
                     "DAO_DEPOSIT" => "deposit",
                     "DAO_WITHDRAW_REQUEST" => "withdraw_request",
                     "DAO_WITHDRAW_COMPLETE" => "withdraw_complete",
-                    _ => &activity_type.to_lowercase(),
+                    other => other,
                 };
 
                 let (token_name, token_symbol, token_decimals) =
-                    if activity_category == "token" && asset_id.is_some() {
-                        asset_id
+                    if entry.category == "token" && entry.asset_id.is_some() {
+                        entry
+                            .asset_id
                             .as_ref()
                             .and_then(|id| token_metadata.get(id))
-                            .map(|(n, s, d)| (n.clone(), s.clone(), Some(*d)))
-                            .unwrap_or_else(|| extract_token_meta(&metadata))
+                            .map(|(n, s, d)| (n.clone(), s.clone(), d.map(|d| d as i16)))
+                            .unwrap_or_else(|| extract_token_meta(entry.metadata.as_ref()))
                     } else {
-                        extract_token_meta(&metadata)
+                        extract_token_meta(entry.metadata.as_ref())
                     };
 
-                TxAssetTransferResponse {
-                    tx_hash: format!("0x{}", hex::encode(&tx_hash)),
-                    block_number,
-                    tx_index,
-                    event_index: activity_index,
-                    asset_category: activity_category,
-                    asset_type: activity_type,
-                    asset_id: asset_id.map(|id| format!("0x{}", hex::encode(&id))),
+                let timestamp = chrono::DateTime::from_timestamp_millis(entry.timestamp * 1000)
+                    .or_else(|| chrono::DateTime::from_timestamp(entry.timestamp, 0))
+                    .map(|dt| dt.to_rfc3339())
+                    .unwrap_or_default();
+
+                results.push(TxAssetTransferResponse {
+                    tx_hash: format!("0x{}", hex::encode(&entry.tx_hash)),
+                    block_number: block_num,
+                    tx_index: entry.tx_idx,
+                    event_index: *idx as i16,
+                    asset_category: entry.category.clone(),
+                    asset_type: entry.activity_type.clone(),
+                    asset_id: entry
+                        .asset_id
+                        .as_ref()
+                        .map(|id| format!("0x{}", hex::encode(id))),
                     direction: direction_str.to_string(),
-                    peer_address: peer_lock_hash.map(|h| format!("0x{}", hex::encode(&h))),
-                    amount: Some(amount),
+                    peer_address: peer_lock_hash
+                        .as_ref()
+                        .map(|h| format!("0x{}", hex::encode(h))),
+                    amount: entry.amount.map(|a| a.to_string()),
                     event_type: Some(event_type.to_string()),
-                    timestamp: timestamp.to_rfc3339(),
+                    timestamp,
                     token_name,
                     token_symbol,
                     token_decimals,
-                }
-            },
-        )
-        .collect();
+                });
+            }
+
+            Ok(results)
+        },
+    )
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))?;
 
     ok(transfers)
 }
 
 fn extract_token_meta(
-    metadata: &serde_json::Value,
+    metadata: Option<&serde_json::Value>,
 ) -> (Option<String>, Option<String>, Option<i16>) {
+    let metadata = match metadata {
+        Some(m) => m,
+        None => return (None, None, None),
+    };
     let name = metadata
         .get("token_name")
         .or_else(|| metadata.get("name"))
@@ -1314,9 +1583,150 @@ async fn get_tx_activities(
         ));
     }
 
-    let activities = fetch_transaction_activities(&state.read_pool, &hash_bytes)
-        .await
-        .map_err(ApiError::internal)?;
+    let store = state.store.clone();
+    let activities =
+        tokio::task::spawn_blocking(move || fetch_tx_activities_from_store(&store, &hash_bytes))
+            .await
+            .unwrap_or_default();
 
     ok(activities)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_transaction_response_serialization() {
+        let resp = TransactionResponse {
+            hash: "0xabc".to_string(),
+            block_number: 100,
+            block_hash: "0xdef".to_string(),
+            index: 0,
+            inputs_count: 1,
+            outputs_count: 2,
+            fee: "1000".to_string(),
+            tx_size: Some(200),
+            cycles: Some(5000),
+            is_cellbase: false,
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["blockNumber"], 100);
+        assert_eq!(json["inputsCount"], 1);
+        assert_eq!(json["outputsCount"], 2);
+        assert_eq!(json["isCellbase"], false);
+    }
+
+    #[test]
+    fn test_list_params_defaults() {
+        let params: ListParams = serde_json::from_str("{}").unwrap();
+        assert_eq!(params.limit, 20);
+        assert!(params.block_number.is_none());
+        assert!(params.cursor.is_none());
+    }
+
+    #[test]
+    fn test_hash_type_to_string() {
+        assert_eq!(hash_type_to_string(0), "data");
+        assert_eq!(hash_type_to_string(1), "type");
+        assert_eq!(hash_type_to_string(2), "data1");
+        assert_eq!(hash_type_to_string(4), "data2");
+        assert_eq!(hash_type_to_string(99), "unknown");
+    }
+
+    #[test]
+    fn test_hash_type_byte_to_i16() {
+        assert_eq!(hash_type_byte_to_i16(0), 0);
+        assert_eq!(hash_type_byte_to_i16(1), 1);
+        assert_eq!(hash_type_byte_to_i16(2), 2);
+        assert_eq!(hash_type_byte_to_i16(4), 4);
+        assert_eq!(hash_type_byte_to_i16(255), 0);
+    }
+
+    #[test]
+    fn test_commitment_window_default() {
+        let window = CommitmentWindow::default();
+        assert_eq!(window.close, 2);
+        assert_eq!(window.far, 10);
+    }
+
+    #[test]
+    fn test_extract_token_meta_from_metadata() {
+        let metadata = serde_json::json!({
+            "token_name": "TestToken",
+            "token_symbol": "TT",
+            "decimals": 8
+        });
+        let (name, symbol, decimals) = extract_token_meta(Some(&metadata));
+        assert_eq!(name, Some("TestToken".to_string()));
+        assert_eq!(symbol, Some("TT".to_string()));
+        assert_eq!(decimals, Some(8));
+    }
+
+    #[test]
+    fn test_extract_token_meta_none() {
+        let (name, symbol, decimals) = extract_token_meta(None);
+        assert!(name.is_none());
+        assert!(symbol.is_none());
+        assert!(decimals.is_none());
+    }
+
+    #[test]
+    fn test_extract_token_meta_alt_keys() {
+        let metadata = serde_json::json!({
+            "name": "AltToken",
+            "symbol": "AT"
+        });
+        let (name, symbol, decimals) = extract_token_meta(Some(&metadata));
+        assert_eq!(name, Some("AltToken".to_string()));
+        assert_eq!(symbol, Some("AT".to_string()));
+        assert!(decimals.is_none());
+    }
+
+    #[test]
+    fn test_cell_dep_response_serialization() {
+        let resp = CellDepResponse {
+            out_point_tx_hash: "0xabc".to_string(),
+            out_point_index: 0,
+            dep_type: "code".to_string(),
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["outPointTxHash"], "0xabc");
+        assert_eq!(json["depType"], "code");
+    }
+
+    #[test]
+    fn test_lifecycle_phase_serialization() {
+        let pending = serde_json::to_value(&LifecyclePhase::Pending).unwrap();
+        assert_eq!(pending, "pending");
+        let committed = serde_json::to_value(&LifecyclePhase::Committed).unwrap();
+        assert_eq!(committed, "committed");
+    }
+
+    #[test]
+    fn test_tx_asset_transfer_response_serialization() {
+        let resp = TxAssetTransferResponse {
+            tx_hash: "0xabc".to_string(),
+            block_number: 100,
+            tx_index: 1,
+            event_index: 0,
+            asset_category: "token".to_string(),
+            asset_type: "TOKEN_TRANSFER".to_string(),
+            asset_id: Some("0xdef".to_string()),
+            direction: "transfer".to_string(),
+            peer_address: None,
+            amount: Some("1000".to_string()),
+            event_type: Some("transfer".to_string()),
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            token_name: Some("Test".to_string()),
+            token_symbol: Some("TST".to_string()),
+            token_decimals: Some(8),
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["assetCategory"], "token");
+        assert_eq!(json["tokenDecimals"], 8);
+        // peer_address should not be in output since it's None
+        assert!(json.get("peerAddress").is_none());
+    }
 }

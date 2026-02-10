@@ -51,52 +51,43 @@ pub struct ActivitiesRebuildStatus {
 }
 
 async fn get_active_tasks(State(state): State<Arc<AppState>>) -> ApiResult<ActiveTasksResponse> {
-    let rows = sqlx::query_as::<
-        _,
-        (
-            String,
-            String,
-            i64,
-            i64,
-            Option<serde_json::Value>,
-            Option<chrono::DateTime<chrono::Utc>>,
-        ),
-    >(
-        r#"
-        SELECT 
-            task_type,
-            status,
-            COALESCE(progress_total, 0),
-            COALESCE(progress_current, 0),
-            result,
-            started_at
-        FROM tasks
-        WHERE task_type IN ('index_rebuild', 'statistics_rebuild', 'activities_rebuild')
-          AND status IN ('pending', 'running')
-        ORDER BY 
-            CASE status WHEN 'running' THEN 0 ELSE 1 END,
-            created_at DESC
-        "#,
-    )
-    .fetch_all(&state.read_pool)
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    // Fetch pending and running tasks from the store
+    let mut all_tasks = state
+        .store
+        .list_tasks_by_status("running")
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let pending_tasks = state
+        .store
+        .list_tasks_by_status("pending")
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    all_tasks.extend(pending_tasks);
+
+    // Filter to the task types we care about
+    let relevant_types = ["index_rebuild", "statistics_rebuild", "activities_rebuild"];
+    let rows: Vec<_> = all_tasks
+        .into_iter()
+        .filter(|t| relevant_types.contains(&t.task_type.as_str()))
+        .collect();
 
     let mut index_rebuild = None;
     let mut statistics_rebuild = None;
     let mut activities_rebuild = None;
 
-    for (task_type, status, progress_total, progress_current, result_json, started_at) in rows {
+    for task in rows {
+        let progress_total = task.progress_total.unwrap_or(0);
+        let progress_current = task.progress_current.unwrap_or(0);
         let progress = if progress_total > 0 {
             (progress_current as f64 / progress_total as f64) * 100.0
         } else {
             0.0
         };
 
-        match task_type.as_str() {
+        match task.task_type.as_str() {
             "index_rebuild" if index_rebuild.is_none() => {
-                let is_running = status == "running";
-                let (current_index, failed) = match result_json {
+                let is_running = task.status == "running";
+                let (current_index, failed) = match task.result {
                     Some(json) => match serde_json::from_value::<IndexRebuildResult>(json) {
                         Ok(result) => (
                             result.current_index,
@@ -107,39 +98,39 @@ async fn get_active_tasks(State(state): State<Arc<AppState>>) -> ApiResult<Activ
                     None => (None, vec![]),
                 };
                 index_rebuild = Some(IndexRebuildStatus {
-                    status,
+                    status: task.status,
                     is_rebuilding: is_running,
                     total: progress_total,
                     completed: progress_current,
                     current_index,
                     failed,
                     progress,
-                    started_at: started_at.map(|t| t.to_rfc3339()),
+                    started_at: task.started_at.map(|t| t.to_rfc3339()),
                 });
             }
             "statistics_rebuild" if statistics_rebuild.is_none() => {
-                let current_table = match result_json {
+                let current_table = match task.result {
                     Some(json) => serde_json::from_value::<StatisticsRebuildResult>(json)
                         .ok()
                         .and_then(|r| r.current_table),
                     None => None,
                 };
                 statistics_rebuild = Some(StatisticsRebuildStatus {
-                    status,
+                    status: task.status,
                     total: progress_total,
                     completed: progress_current,
                     current_table,
                     progress,
-                    started_at: started_at.map(|t| t.to_rfc3339()),
+                    started_at: task.started_at.map(|t| t.to_rfc3339()),
                 });
             }
             "activities_rebuild" if activities_rebuild.is_none() => {
                 activities_rebuild = Some(ActivitiesRebuildStatus {
-                    status,
+                    status: task.status,
                     total: progress_total,
                     processed: progress_current,
                     progress,
-                    started_at: started_at.map(|t| t.to_rfc3339()),
+                    started_at: task.started_at.map(|t| t.to_rfc3339()),
                 });
             }
             _ => {}
