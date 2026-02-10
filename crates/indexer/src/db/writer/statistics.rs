@@ -378,7 +378,7 @@ impl BatchWriter {
         let row = sqlx::query_as::<_, (f64,)>(
             r#"
             SELECT (EXTRACT(EPOCH FROM (MAX(timestamp) - MIN(timestamp))) / 60.0)::float8
-            FROM blocks
+            FROM blocks_index
             WHERE epoch_number = $1
             "#,
         )
@@ -396,7 +396,7 @@ impl BatchWriter {
         let row = sqlx::query_as::<_, (i64, DateTime<Utc>)>(
             r#"
             SELECT epoch_number, timestamp
-            FROM blocks
+            FROM blocks_index
             WHERE number < $1 AND epoch_index = 0
             ORDER BY number DESC
             LIMIT 1
@@ -1041,7 +1041,7 @@ impl BatchWriter {
             r#"
             WITH recent_blocks AS (
                 SELECT number, timestamp
-                FROM blocks
+                FROM blocks_index
                 WHERE number > 0
                 ORDER BY number DESC
                 LIMIT 50000
@@ -1112,7 +1112,7 @@ impl BatchWriter {
             )
             WITH 
             dates AS (
-                SELECT DISTINCT timestamp::date as date FROM blocks
+                SELECT DISTINCT timestamp::date as date FROM blocks_index
             ),
             secondary_daily AS (
                 SELECT 
@@ -1136,7 +1136,7 @@ impl BatchWriter {
                 SELECT DISTINCT ON (timestamp::date)
                     timestamp::date as date,
                     dao
-                FROM blocks
+                FROM blocks_index
                 ORDER BY timestamp::date, number DESC
             ),
             deposit_events AS (

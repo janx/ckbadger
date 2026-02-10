@@ -4,20 +4,18 @@ use std::collections::HashMap;
 use tokio_postgres::Client;
 
 use crate::db::copy_activities::CopyActivitiesWriter;
-use crate::db::copy_blocks::CopyBlocksWriter;
 use crate::db::copy_cell_flows::CopyCellFlowsWriter;
 use crate::db::copy_cells::CopyCellsWriter;
-use crate::db::copy_inputs::{CopyCellDepsWriter, CopyInputsWriter};
+use crate::db::copy_inputs::CopyInputsWriter;
 use crate::db::copy_pool::CopyPoolManager;
 use crate::db::copy_proposals::CopyProposalsWriter;
-use crate::db::copy_transactions::CopyTransactionsWriter;
 use crate::db::copy_tx_block_map::CopyTxBlockMapWriter;
 use crate::db::copy_udt_cells::CopyUdtCellsWriter;
 use crate::db::live_cell_storage::{DynLiveCellStorage, LiveCellInfo};
 use crate::parser::activity::ParsedActivity;
 use crate::parser::block::ParsedBlock;
 use crate::parser::cell::ParsedCell;
-use crate::parser::transaction::{ParsedCellDep, ParsedInput};
+use crate::parser::transaction::ParsedInput;
 use crate::parser::ParsedUdtCell;
 use chrono::{DateTime, Utc};
 
@@ -37,9 +35,6 @@ type CellData<'a> = (&'a [u8], i16, &'a ParsedCell, i64);
 
 /// Type alias for input data tuple: (tx_hash, block_number, input_index, input)
 type InputData<'a> = (&'a [u8], i64, i16, &'a ParsedInput);
-
-/// Type alias for cell dep data tuple: (tx_hash, block_number, dep_index, cell_dep)
-type CellDepData<'a> = (&'a [u8], i64, i16, &'a ParsedCellDep);
 
 /// Type alias for transaction data tuple
 #[allow(clippy::type_complexity)]
@@ -62,9 +57,6 @@ type TxData<'a> = (
     bool,          // is_cellbase
     DateTime<Utc>, // timestamp
 );
-
-/// Type alias for block data tuple: (block, total_difficulty)
-type BlockData<'a> = (&'a ParsedBlock, i64);
 
 /// Type alias for activity data tuple: (activity, block_number, timestamp)
 type ActivityData<'a> = (&'a ParsedActivity, i64, DateTime<Utc>);
@@ -188,54 +180,6 @@ impl ParallelCopyRouter {
         Ok(total_rows)
     }
 
-    pub async fn copy_transactions_parallel(&self, txs: &[TxData<'_>]) -> Result<u64> {
-        if txs.is_empty() {
-            return Ok(0);
-        }
-
-        let mut partition_data: HashMap<usize, Vec<TxData<'_>>> = HashMap::new();
-
-        for tx in txs {
-            let partition = get_partition_index(tx.1);
-            partition_data.entry(partition).or_default().push(*tx);
-        }
-
-        let mut futures = Vec::new();
-
-        for (_partition, partition_txs) in partition_data {
-            for chunk in sub_chunk_partition(partition_txs) {
-                let conn = self.pool_manager.get_connection().await?;
-
-                let future = async move {
-                    let mut writer = CopyTransactionsWriter::new();
-                    for tx in chunk {
-                        writer.add_transaction(
-                            tx.0, tx.1, tx.2, tx.3, tx.4, tx.5, tx.6, tx.7, tx.8, tx.9, tx.10,
-                            tx.11, tx.12, tx.13, tx.14, tx.15, tx.16,
-                        );
-                    }
-
-                    let data = writer.finish();
-                    execute_copy(
-                        conn.as_ref(),
-                        "COPY transactions (hash, block_number, block_hash, tx_index, version, inputs_count, outputs_count, witnesses_count, cell_deps_count, header_deps_count, total_input_capacity, total_output_capacity, fee, tx_size, cycles, is_cellbase, timestamp) FROM STDIN WITH (FORMAT BINARY)",
-                        data,
-                    ).await
-                };
-
-                futures.push(future);
-            }
-        }
-
-        let results = join_all(futures).await;
-        let mut total_rows = 0u64;
-        for result in results {
-            total_rows += result?;
-        }
-
-        Ok(total_rows)
-    }
-
     pub async fn copy_inputs_parallel(&self, inputs: &[InputData<'_>]) -> Result<u64> {
         if inputs.is_empty() {
             return Ok(0);
@@ -270,92 +214,6 @@ impl ParallelCopyRouter {
 
                 futures.push(future);
             }
-        }
-
-        let results = join_all(futures).await;
-        let mut total_rows = 0u64;
-        for result in results {
-            total_rows += result?;
-        }
-
-        Ok(total_rows)
-    }
-
-    pub async fn copy_cell_deps_parallel(&self, cell_deps: &[CellDepData<'_>]) -> Result<u64> {
-        if cell_deps.is_empty() {
-            return Ok(0);
-        }
-
-        let mut partition_data: HashMap<usize, Vec<CellDepData<'_>>> = HashMap::new();
-
-        for dep in cell_deps {
-            let partition = get_partition_index(dep.1);
-            partition_data.entry(partition).or_default().push(*dep);
-        }
-
-        let mut futures = Vec::new();
-
-        for (_partition, partition_deps) in partition_data {
-            let conn = self.pool_manager.get_connection().await?;
-
-            let future = async move {
-                let mut writer = CopyCellDepsWriter::new();
-                for (tx_hash, block_number, dep_index, dep) in partition_deps {
-                    writer.add_cell_dep(tx_hash, block_number, dep_index, dep);
-                }
-
-                let data = writer.finish();
-                execute_copy(
-                    conn.as_ref(),
-                    "COPY transaction_cell_deps (tx_hash, tx_block_number, dep_index, out_point_tx_hash, out_point_index, dep_type) FROM STDIN WITH (FORMAT BINARY)",
-                    data,
-                ).await
-            };
-
-            futures.push(future);
-        }
-
-        let results = join_all(futures).await;
-        let mut total_rows = 0u64;
-        for result in results {
-            total_rows += result?;
-        }
-
-        Ok(total_rows)
-    }
-
-    pub async fn copy_blocks_parallel(&self, blocks: &[BlockData<'_>]) -> Result<u64> {
-        if blocks.is_empty() {
-            return Ok(0);
-        }
-
-        let mut partition_data: HashMap<usize, Vec<BlockData<'_>>> = HashMap::new();
-
-        for block in blocks {
-            let partition = get_partition_index(block.0.number);
-            partition_data.entry(partition).or_default().push(*block);
-        }
-
-        let mut futures = Vec::new();
-
-        for (_partition, partition_blocks) in partition_data {
-            let conn = self.pool_manager.get_connection().await?;
-
-            let future = async move {
-                let mut writer = CopyBlocksWriter::new();
-                for (block, total_difficulty) in partition_blocks {
-                    writer.add_block(block, total_difficulty);
-                }
-
-                let data = writer.finish();
-                execute_copy(
-                    conn.as_ref(),
-                    "COPY blocks (number, hash, parent_hash, timestamp, version, compact_target, transactions_count, proposals_count, uncles_count, epoch_number, epoch_index, epoch_length, dao, nonce, extra_hash, proposals_hash, transactions_root, uncles_hash, total_difficulty) FROM STDIN WITH (FORMAT BINARY)",
-                    data,
-                ).await
-            };
-
-            futures.push(future);
         }
 
         let results = join_all(futures).await;

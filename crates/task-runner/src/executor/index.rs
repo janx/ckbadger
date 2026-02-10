@@ -41,19 +41,12 @@ const HASH_PARTITION_SUFFIXES: &[&str] = &[
 ];
 
 const DEFERRABLE_INDEXES: &[DeferrableIndex] = &[
-    DeferrableIndex { name: "idx_blocks_hash", table: "blocks", definition: "CREATE INDEX {name} ON {table}(hash)", partition_type: PartitionType::Range, priority: 1 },
-    DeferrableIndex { name: "idx_blocks_epoch", table: "blocks", definition: "CREATE INDEX {name} ON {table}(epoch_number)", partition_type: PartitionType::Range, priority: 2 },
-    DeferrableIndex { name: "idx_blocks_miner", table: "blocks", definition: "CREATE INDEX {name} ON {table}(miner_lock_hash) WHERE miner_lock_hash IS NOT NULL", partition_type: PartitionType::Range, priority: 3 },
-    DeferrableIndex { name: "idx_tx_timestamp", table: "transactions", definition: "CREATE INDEX {name} ON {table}(timestamp DESC)", partition_type: PartitionType::Range, priority: 2 },
-    DeferrableIndex { name: "idx_tx_cursor", table: "transactions", definition: "CREATE INDEX {name} ON {table}(block_number DESC, tx_index DESC)", partition_type: PartitionType::Range, priority: 2 },
-    DeferrableIndex { name: "idx_tx_list_covering", table: "transactions", definition: "CREATE INDEX {name} ON {table}(block_number DESC, tx_index DESC) INCLUDE (hash, inputs_count, outputs_count, fee, is_cellbase, timestamp)", partition_type: PartitionType::Range, priority: 3 },
     DeferrableIndex { name: "idx_cells_type_script_hash", table: "cells", definition: "CREATE INDEX {name} ON {table}(type_script_hash) WHERE type_script_hash IS NOT NULL", partition_type: PartitionType::Range, priority: 2 },
     DeferrableIndex { name: "idx_cells_lock_code_hash", table: "cells", definition: "CREATE INDEX {name} ON {table}(lock_code_hash)", partition_type: PartitionType::Range, priority: 3 },
     DeferrableIndex { name: "idx_cells_type_code_hash", table: "cells", definition: "CREATE INDEX {name} ON {table}(type_code_hash) WHERE type_code_hash IS NOT NULL", partition_type: PartitionType::Range, priority: 3 },
     DeferrableIndex { name: "idx_cells_lock_code_hash_live", table: "cells", definition: "CREATE INDEX {name} ON {table}(lock_code_hash, lock_hash_type, created_at_block DESC, output_index DESC) WHERE status = 0", partition_type: PartitionType::Range, priority: 3 },
     DeferrableIndex { name: "idx_cells_type_code_hash_live", table: "cells", definition: "CREATE INDEX {name} ON {table}(type_code_hash, type_hash_type, created_at_block DESC, output_index DESC) WHERE status = 0 AND type_code_hash IS NOT NULL", partition_type: PartitionType::Range, priority: 3 },
     DeferrableIndex { name: "idx_cells_list_covering", table: "cells", definition: "CREATE INDEX {name} ON {table}(lock_script_hash, created_at_block DESC) INCLUDE (tx_hash, output_index, capacity, type_script_hash, data_size) WHERE status = 0", partition_type: PartitionType::Range, priority: 3 },
-    DeferrableIndex { name: "idx_uncles_hash", table: "uncle_blocks", definition: "CREATE INDEX {name} ON {table}(hash)", partition_type: PartitionType::Range, priority: 3 },
     // Lightweight index tables (blocks_index is non-partitioned, indexes in migration)
     DeferrableIndex { name: "idx_tx_index_timestamp", table: "transactions_index", definition: "CREATE INDEX {name} ON {table}(timestamp DESC)", partition_type: PartitionType::Range, priority: 2 },
     DeferrableIndex { name: "idx_tx_index_cursor", table: "transactions_index", definition: "CREATE INDEX {name} ON {table}(block_number DESC, tx_index DESC)", partition_type: PartitionType::Range, priority: 2 },
@@ -72,19 +65,9 @@ const DEFERRABLE_CONSTRAINTS: &[DeferrableConstraint] = &[
         columns: "tx_block_number, tx_hash, input_index",
     },
     DeferrableConstraint {
-        name: "tx_block_number_tx_hash_dep_index_key",
-        table: "transaction_cell_deps",
-        columns: "tx_block_number, tx_hash, dep_index",
-    },
-    DeferrableConstraint {
         name: "block_number_proposal_index_key",
         table: "block_proposals",
         columns: "block_number, proposal_index",
-    },
-    DeferrableConstraint {
-        name: "block_number_uncle_index_key",
-        table: "uncle_blocks",
-        columns: "block_number, uncle_index",
     },
 ];
 

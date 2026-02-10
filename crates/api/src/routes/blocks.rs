@@ -5,8 +5,8 @@ use axum::{
     routing::get,
     Router,
 };
+use ckb_store_reader::CkbChainReader;
 use ckbadger_common::sync::{SyncStatusData, SYNC_STATUS_REDIS_KEY};
-use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use std::sync::Arc;
@@ -60,26 +60,21 @@ pub struct BlockResponse {
     pub version: i32,
 }
 
+/// Row from the `blocks_index` lightweight table.
 #[derive(Debug, FromRow)]
-struct BlockRow {
+struct BlockIndexRow {
     number: i64,
     hash: Vec<u8>,
-    parent_hash: Vec<u8>,
     timestamp: chrono::DateTime<chrono::Utc>,
-    transactions_count: i32,
+    tx_count: i32,
     proposals_count: i32,
     uncles_count: i32,
     epoch_number: i64,
     epoch_index: i32,
     epoch_length: i32,
-    nonce: Vec<u8>,
-    transactions_root: Vec<u8>,
+    compact_target: i64,
     #[allow(dead_code)]
     miner_lock_hash: Option<Vec<u8>>,
-    miner_message: Option<Vec<u8>>,
-    reward: Option<Decimal>,
-    compact_target: i64,
-    version: i32,
 }
 
 async fn list_blocks(
@@ -116,12 +111,11 @@ async fn list_blocks(
 
     let cursor_number = params.cursor.unwrap_or(i64::MAX);
 
-    let rows: Vec<BlockRow> = sqlx::query_as(
+    let rows: Vec<BlockIndexRow> = sqlx::query_as(
         r#"
-        SELECT number, hash, parent_hash, timestamp, transactions_count, proposals_count, uncles_count, 
-               epoch_number, epoch_index, epoch_length, nonce, transactions_root, miner_lock_hash, 
-               miner_message, reward, compact_target, version
-        FROM blocks
+        SELECT number, hash, timestamp, tx_count, proposals_count, uncles_count,
+               epoch_number, epoch_index, epoch_length, compact_target, miner_lock_hash
+        FROM blocks_index
         WHERE number < $1
         ORDER BY number DESC
         LIMIT $2
@@ -142,13 +136,17 @@ async fn list_blocks(
         None
     };
 
+    // Batch-enrich from RocksDB for fields not in blocks_index
     let blocks: Vec<BlockResponse> = rows
         .into_iter()
         .map(|r| {
-            row_to_block_response(
+            let header_info = enrich_from_rocksdb(&state.ckb_store, &r.hash);
+            index_row_to_block_response(
                 r,
+                header_info,
                 BlockExtra {
                     miner_address: None,
+                    miner_message: None,
                     mining_reward: None,
                     mining_reward_tx_hash: None,
                 },
@@ -220,19 +218,48 @@ fn compact_target_to_difficulty(compact: u32) -> String {
 
 struct BlockExtra {
     miner_address: Option<String>,
+    miner_message: Option<Vec<u8>>,
     mining_reward: Option<String>,
     mining_reward_tx_hash: Option<String>,
 }
 
-fn row_to_block_response(row: BlockRow, extra: BlockExtra) -> BlockResponse {
+/// Try to read header info from RocksDB for fields not in blocks_index.
+fn enrich_from_rocksdb(
+    ckb_store: &Option<Arc<CkbChainReader>>,
+    block_hash: &[u8],
+) -> Option<ckb_store_reader::BlockHeaderInfo> {
+    let store = ckb_store.as_ref()?;
+    if block_hash.len() != 32 {
+        return None;
+    }
+    let mut hash = [0u8; 32];
+    hash.copy_from_slice(block_hash);
+    store.get_block_header_info(&hash)
+}
+
+fn index_row_to_block_response(
+    row: BlockIndexRow,
+    header_info: Option<ckb_store_reader::BlockHeaderInfo>,
+    extra: BlockExtra,
+) -> BlockResponse {
     let difficulty = compact_target_to_difficulty(row.compact_target as u32);
+
+    let (parent_hash, nonce, transactions_root, version) = match header_info {
+        Some(info) => (
+            format!("0x{}", hex::encode(info.parent_hash)),
+            format!("0x{}", hex::encode(info.nonce.to_le_bytes())),
+            format!("0x{}", hex::encode(info.transactions_root)),
+            info.version as i32,
+        ),
+        None => ("0x".to_string(), "0x0".to_string(), "0x".to_string(), 0),
+    };
 
     BlockResponse {
         number: row.number,
         hash: format!("0x{}", hex::encode(&row.hash)),
-        parent_hash: format!("0x{}", hex::encode(&row.parent_hash)),
+        parent_hash,
         timestamp: row.timestamp.to_rfc3339(),
-        transactions_count: row.transactions_count,
+        transactions_count: row.tx_count,
         proposals_count: row.proposals_count,
         uncles_count: row.uncles_count,
         epoch: format!("{}/{}", row.epoch_index, row.epoch_length),
@@ -240,16 +267,16 @@ fn row_to_block_response(row: BlockRow, extra: BlockExtra) -> BlockResponse {
         epoch_index: row.epoch_index,
         epoch_length: row.epoch_length,
         difficulty,
-        nonce: format!("0x{}", hex::encode(&row.nonce)),
-        transactions_root: format!("0x{}", hex::encode(&row.transactions_root)),
+        nonce,
+        transactions_root,
         miner_address: extra.miner_address,
-        miner_message: row.miner_message.map(|m| format!("0x{}", hex::encode(&m))),
-        mining_reward: extra
-            .mining_reward
-            .or_else(|| row.reward.map(|r| r.to_string())),
+        miner_message: extra
+            .miner_message
+            .map(|m| format!("0x{}", hex::encode(&m))),
+        mining_reward: extra.mining_reward,
         mining_reward_tx_hash: extra.mining_reward_tx_hash,
         compact_target: format!("0x{:x}", row.compact_target),
-        version: row.version,
+        version,
     }
 }
 
@@ -257,16 +284,15 @@ async fn get_block(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> ApiResult<BlockResponse> {
-    let row: Option<BlockRow> = if id.starts_with("0x") {
+    let row: Option<BlockIndexRow> = if id.starts_with("0x") {
         let hash = hex::decode(id.strip_prefix("0x").unwrap_or(&id))
             .map_err(|_| ApiError::bad_request("Invalid block hash"))?;
 
         sqlx::query_as(
             r#"
-            SELECT number, hash, parent_hash, timestamp, transactions_count, proposals_count, uncles_count,
-                   epoch_number, epoch_index, epoch_length, nonce, transactions_root, miner_lock_hash,
-                   miner_message, reward, compact_target, version
-            FROM blocks WHERE hash = $1
+            SELECT number, hash, timestamp, tx_count, proposals_count, uncles_count,
+                   epoch_number, epoch_index, epoch_length, compact_target, miner_lock_hash
+            FROM blocks_index WHERE hash = $1
             "#,
         )
         .bind(&hash)
@@ -280,10 +306,9 @@ async fn get_block(
 
         sqlx::query_as(
             r#"
-            SELECT number, hash, parent_hash, timestamp, transactions_count, proposals_count, uncles_count,
-                   epoch_number, epoch_index, epoch_length, nonce, transactions_root, miner_lock_hash,
-                   miner_message, reward, compact_target, version
-            FROM blocks WHERE number = $1
+            SELECT number, hash, timestamp, tx_count, proposals_count, uncles_count,
+                   epoch_number, epoch_index, epoch_length, compact_target, miner_lock_hash
+            FROM blocks_index WHERE number = $1
             "#,
         )
         .bind(number)
@@ -295,6 +320,15 @@ async fn get_block(
     match row {
         Some(r) => {
             let block_hash = format!("0x{}", hex::encode(&r.hash));
+            let header_info = enrich_from_rocksdb(&state.ckb_store, &r.hash);
+
+            // Get miner message from RocksDB
+            let miner_message = state.ckb_store.as_ref().and_then(|store| {
+                let mut hash = [0u8; 32];
+                hash.copy_from_slice(&r.hash);
+                store.get_miner_message(&hash)
+            });
+
             let (miner_address, reward_info) = tokio::join!(
                 get_miner_address(&state.read_pool, r.number, &state.ckb_network),
                 get_mining_reward(
@@ -308,10 +342,12 @@ async fn get_block(
                 Some(info) => (Some(info.reward), info.cellbase_tx_hash),
                 None => (None, None),
             };
-            ok(row_to_block_response(
+            ok(index_row_to_block_response(
                 r,
+                header_info,
                 BlockExtra {
                     miner_address,
+                    miner_message,
                     mining_reward,
                     mining_reward_tx_hash,
                 },
@@ -421,6 +457,8 @@ async fn get_mining_reward(
     Some(info)
 }
 
+/// Get cellbase tx hash by looking up the block hash in blocks_index, then finding
+/// the cellbase (tx_index=0) in transactions_index.
 async fn get_cellbase_tx_hash(pool: &sqlx::PgPool, finalized_at_hash: &str) -> Option<String> {
     let hash_bytes = hex::decode(
         finalized_at_hash
@@ -431,9 +469,10 @@ async fn get_cellbase_tx_hash(pool: &sqlx::PgPool, finalized_at_hash: &str) -> O
 
     let result: Option<(Vec<u8>,)> = sqlx::query_as(
         r#"
-        SELECT t.hash
-        FROM transactions t
-        WHERE t.block_hash = $1 AND t.tx_index = 0
+        SELECT ti.hash
+        FROM transactions_index ti
+        JOIN blocks_index bi ON bi.number = ti.block_number
+        WHERE bi.hash = $1 AND ti.tx_index = 0
         LIMIT 1
         "#,
     )
@@ -487,7 +526,7 @@ async fn get_block_fee_stats(
             MIN(CASE WHEN NOT is_cellbase AND tx_size > 0 THEN (fee::float8 / tx_size::float8) END) as min_fee_rate,
             MAX(CASE WHEN NOT is_cellbase AND tx_size > 0 THEN (fee::float8 / tx_size::float8) END) as max_fee_rate,
             COUNT(*) FILTER (WHERE NOT is_cellbase)::bigint as tx_count
-        FROM transactions
+        FROM transactions_index
         WHERE block_number = $1
         "#,
     )
@@ -543,13 +582,13 @@ async fn get_block_proposals(
 
     let rows: Vec<(i16, Vec<u8>, Option<Vec<u8>>, Option<i64>)> = sqlx::query_as(
         r#"
-        SELECT 
-            bp.proposal_index, 
+        SELECT
+            bp.proposal_index,
             bp.proposal_id,
             t.hash as committed_tx_hash,
             t.block_number as committed_block_number
         FROM block_proposals bp
-        LEFT JOIN transactions t ON t.short_hash = bp.proposal_id
+        LEFT JOIN transactions_index t ON substring(t.hash, 1, 10) = bp.proposal_id
             AND t.block_number BETWEEN $1 + 2 AND $1 + 10
         WHERE bp.block_number = $1
         ORDER BY bp.proposal_index

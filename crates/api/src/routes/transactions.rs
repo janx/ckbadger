@@ -105,8 +105,9 @@ async fn list_transactions(
 
         sqlx::query_as::<_, (Vec<u8>, i64, Vec<u8>, i32, i32, i32, String, Option<i32>, Option<i64>, bool, chrono::DateTime<chrono::Utc>)>(
             r#"
-            SELECT t.hash, t.block_number, t.block_hash, t.tx_index, t.inputs_count::int4, t.outputs_count::int4, t.fee::text, t.tx_size, t.cycles, t.is_cellbase, t.timestamp
-            FROM transactions t
+            SELECT t.hash, t.block_number, b.hash, t.tx_index, t.inputs_count::int4, t.outputs_count::int4, t.fee::text, t.tx_size, t.cycles, t.is_cellbase, t.timestamp
+            FROM transactions_index t
+            JOIN blocks_index b ON b.number = t.block_number
             WHERE t.block_number = $1 AND t.tx_index < $2
             ORDER BY t.tx_index ASC
             LIMIT $3
@@ -124,8 +125,9 @@ async fn list_transactions(
 
         sqlx::query_as::<_, (Vec<u8>, i64, Vec<u8>, i32, i32, i32, String, Option<i32>, Option<i64>, bool, chrono::DateTime<chrono::Utc>)>(
             r#"
-            SELECT t.hash, t.block_number, t.block_hash, t.tx_index, t.inputs_count::int4, t.outputs_count::int4, t.fee::text, t.tx_size, t.cycles, t.is_cellbase, t.timestamp
-            FROM transactions t
+            SELECT t.hash, t.block_number, b.hash, t.tx_index, t.inputs_count::int4, t.outputs_count::int4, t.fee::text, t.tx_size, t.cycles, t.is_cellbase, t.timestamp
+            FROM transactions_index t
+            JOIN blocks_index b ON b.number = t.block_number
             WHERE (t.block_number, t.tx_index) < ($1, $2)
             ORDER BY t.block_number DESC, t.tx_index DESC
             LIMIT $3
@@ -140,8 +142,9 @@ async fn list_transactions(
     } else {
         sqlx::query_as::<_, (Vec<u8>, i64, Vec<u8>, i32, i32, i32, String, Option<i32>, Option<i64>, bool, chrono::DateTime<chrono::Utc>)>(
             r#"
-            SELECT t.hash, t.block_number, t.block_hash, t.tx_index, t.inputs_count::int4, t.outputs_count::int4, t.fee::text, t.tx_size, t.cycles, t.is_cellbase, t.timestamp
-            FROM transactions t
+            SELECT t.hash, t.block_number, b.hash, t.tx_index, t.inputs_count::int4, t.outputs_count::int4, t.fee::text, t.tx_size, t.cycles, t.is_cellbase, t.timestamp
+            FROM transactions_index t
+            JOIN blocks_index b ON b.number = t.block_number
             ORDER BY t.block_number DESC, t.tx_index DESC
             LIMIT $1
             "#,
@@ -207,12 +210,12 @@ async fn get_transaction(
     let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap_or(&hash))
         .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
 
-    let row = sqlx::query_as::<_, (Vec<u8>, i64, Vec<u8>, i32, i32, i32, String, String, String, Option<i32>, Option<i64>, bool, chrono::DateTime<chrono::Utc>)>(
+    let row = sqlx::query_as::<_, (Vec<u8>, i64, Vec<u8>, i32, i32, i32, String, Option<i32>, Option<i64>, bool, chrono::DateTime<chrono::Utc>)>(
         r#"
-        SELECT t.hash, t.block_number, t.block_hash, t.tx_index, t.inputs_count::int4, t.outputs_count::int4,
-               t.fee::text, t.total_input_capacity::text, t.total_output_capacity::text,
-               t.tx_size, t.cycles, t.is_cellbase, t.timestamp
-        FROM transactions t
+        SELECT t.hash, t.block_number, b.hash, t.tx_index, t.inputs_count::int4, t.outputs_count::int4,
+               t.fee::text, t.tx_size, t.cycles, t.is_cellbase, t.timestamp
+        FROM transactions_index t
+        JOIN blocks_index b ON b.number = t.block_number
         WHERE t.hash = $1
         "#,
     )
@@ -229,53 +232,24 @@ async fn get_transaction(
             index,
             inputs_count,
             outputs_count,
-            _stored_fee,
-            input_cap,
-            output_cap,
+            fee,
             tx_size,
             cycles,
             is_cellbase,
             timestamp,
-        )) => {
-            let input: u128 = input_cap.parse().unwrap_or(0);
-            let output: u128 = output_cap.parse().unwrap_or(0);
-
-            let fee = if output > input {
-                let dao_compensation: u128 = sqlx::query_as::<_, (Option<String>,)>(
-                    "SELECT SUM(compensation::numeric)::text FROM dao_deposits WHERE withdraw_tx = $1 AND status = 2",
-                )
-                .bind(&hash_bytes)
-                .fetch_one(&state.read_pool)
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?
-                .0
-                .and_then(|s| s.parse::<u128>().ok())
-                .unwrap_or(0);
-
-                let effective_input = input + dao_compensation;
-                if effective_input >= output {
-                    (effective_input - output).to_string()
-                } else {
-                    "0".to_string()
-                }
-            } else {
-                (input - output).to_string()
-            };
-
-            ok(TransactionResponse {
-                hash: format!("0x{}", hex::encode(&hash)),
-                block_number,
-                block_hash: format!("0x{}", hex::encode(&block_hash)),
-                index,
-                inputs_count,
-                outputs_count,
-                fee,
-                tx_size,
-                cycles,
-                is_cellbase,
-                timestamp: timestamp.to_rfc3339(),
-            })
-        }
+        )) => ok(TransactionResponse {
+            hash: format!("0x{}", hex::encode(&hash)),
+            block_number,
+            block_hash: format!("0x{}", hex::encode(&block_hash)),
+            index,
+            inputs_count,
+            outputs_count,
+            fee,
+            tx_size,
+            cycles,
+            is_cellbase,
+            timestamp: timestamp.to_rfc3339(),
+        }),
         None => Err(ApiError::not_found("Transaction not found")),
     }
 }
@@ -490,8 +464,9 @@ async fn get_transaction_detail(
 
     let tx_row = sqlx::query_as::<_, (Vec<u8>, i64, Vec<u8>, i32, i32, i32, String, bool, chrono::DateTime<chrono::Utc>, Option<i32>, Option<i64>)>(
         r#"
-        SELECT t.hash, t.block_number, t.block_hash, t.tx_index, t.inputs_count::int4, t.outputs_count::int4, t.fee::text, t.is_cellbase, t.timestamp, t.tx_size, t.cycles
-        FROM transactions t
+        SELECT t.hash, t.block_number, b.hash, t.tx_index, t.inputs_count::int4, t.outputs_count::int4, t.fee::text, t.is_cellbase, t.timestamp, t.tx_size, t.cycles
+        FROM transactions_index t
+        JOIN blocks_index b ON b.number = t.block_number
         WHERE t.hash = $1
         "#,
     )
@@ -791,58 +766,36 @@ async fn get_cell_deps(
     let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap_or(&hash))
         .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
 
-    // 2-phase lookup: get block_number from tx_block_map for partition pruning
-    let block_number = get_block_number_for_tx(&state.read_pool, &hash_bytes)
-        .await
-        .ok()
-        .flatten();
+    // Read cell_deps directly from CKB's RocksDB
+    if let Some(ref store) = state.ckb_store {
+        if hash_bytes.len() == 32 {
+            let mut tx_hash = [0u8; 32];
+            tx_hash.copy_from_slice(&hash_bytes);
+            if let Some(tx_view) = store.get_transaction(&tx_hash) {
+                let rpc_tx = ckb_store_reader::convert_transaction_view(&tx_view);
+                let cell_deps: Vec<CellDepResponse> = rpc_tx
+                    .cell_deps
+                    .into_iter()
+                    .map(|dep| CellDepResponse {
+                        out_point_tx_hash: dep.out_point.tx_hash,
+                        out_point_index: {
+                            let idx_str = dep
+                                .out_point
+                                .index
+                                .strip_prefix("0x")
+                                .unwrap_or(&dep.out_point.index);
+                            i32::from_str_radix(idx_str, 16).unwrap_or(0)
+                        },
+                        dep_type: dep.dep_type,
+                    })
+                    .collect();
+                return ok(cell_deps);
+            }
+        }
+    }
 
-    let rows = if let Some(bn) = block_number {
-        // Fast path: partition-pruned query
-        sqlx::query_as::<_, (Vec<u8>, i16, i16)>(
-            r#"
-            SELECT out_point_tx_hash, out_point_index, dep_type
-            FROM transaction_cell_deps
-            WHERE tx_hash = $1 AND tx_block_number = $2
-            ORDER BY dep_index ASC
-            "#,
-        )
-        .bind(&hash_bytes)
-        .bind(bn)
-        .fetch_all(&state.read_pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-    } else {
-        // Fallback: full scan (tx_block_map not populated)
-        sqlx::query_as::<_, (Vec<u8>, i16, i16)>(
-            r#"
-            SELECT out_point_tx_hash, out_point_index, dep_type
-            FROM transaction_cell_deps
-            WHERE tx_hash = $1
-            ORDER BY dep_index ASC
-            "#,
-        )
-        .bind(&hash_bytes)
-        .fetch_all(&state.read_pool)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-    };
-
-    let cell_deps: Vec<CellDepResponse> = rows
-        .into_iter()
-        .map(
-            |(out_point_tx_hash, out_point_index, dep_type)| CellDepResponse {
-                out_point_tx_hash: format!("0x{}", hex::encode(&out_point_tx_hash)),
-                out_point_index: out_point_index as i32,
-                dep_type: match dep_type {
-                    1 => "dep_group".to_string(),
-                    _ => "code".to_string(),
-                },
-            },
-        )
-        .collect();
-
-    ok(cell_deps)
+    // Fallback: RocksDB not available or tx not found — return empty
+    ok(vec![])
 }
 
 async fn get_cycles_status(
@@ -1030,8 +983,9 @@ async fn get_transaction_lifecycle(
     // Query transaction info
     let tx_row: Option<(i64, Vec<u8>, bool, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
         r#"
-        SELECT t.block_number, t.block_hash, t.is_cellbase, t.timestamp
-        FROM transactions t
+        SELECT t.block_number, b.hash, t.is_cellbase, t.timestamp
+        FROM transactions_index t
+        JOIN blocks_index b ON b.number = t.block_number
         WHERE t.hash = $1
         "#,
     )

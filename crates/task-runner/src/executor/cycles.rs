@@ -170,11 +170,6 @@ async fn update_cycles(pool: &PgPool, tx_hash: &str, result: Result<i64, String>
 
     match result {
         Ok(cycles) => {
-            sqlx::query("UPDATE transactions SET cycles = $1 WHERE hash = $2")
-                .bind(cycles)
-                .bind(&hash_bytes)
-                .execute(pool)
-                .await?;
             sqlx::query("UPDATE transactions_index SET cycles = $1 WHERE hash = $2")
                 .bind(cycles)
                 .bind(&hash_bytes)
@@ -185,10 +180,6 @@ async fn update_cycles(pool: &PgPool, tx_hash: &str, result: Result<i64, String>
         }
         Err(e) => {
             warn!("Failed to calculate cycles for {}: {}", tx_hash, e);
-            sqlx::query("UPDATE transactions SET cycles = -1 WHERE hash = $1")
-                .bind(&hash_bytes)
-                .execute(pool)
-                .await?;
             sqlx::query("UPDATE transactions_index SET cycles = -1 WHERE hash = $1")
                 .bind(&hash_bytes)
                 .execute(pool)

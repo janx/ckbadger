@@ -225,7 +225,6 @@ struct TxData {
     header_deps_count: i16,
     is_cellbase: bool,
     inputs: Vec<crate::parser::transaction::ParsedInput>,
-    cell_deps: Vec<crate::parser::transaction::ParsedCellDep>,
     cells: Vec<crate::parser::cell::ParsedCell>,
     outputs_data: Vec<String>,
     total_input_capacity: i64,
@@ -276,8 +275,6 @@ fn parse_blocks_parallel(
                             })
                     };
 
-                    let cell_deps = TransactionParser::parse_cell_deps(tx);
-
                     TxData {
                         hash: parsed_tx.hash,
                         block_number: parsed.number,
@@ -291,7 +288,6 @@ fn parse_blocks_parallel(
                         header_deps_count: parsed_tx.header_deps_count as i16,
                         is_cellbase: parsed_tx.is_cellbase,
                         inputs,
-                        cell_deps,
                         cells,
                         outputs_data,
                         total_input_capacity: 0,
@@ -3327,19 +3323,6 @@ impl Indexer {
             }
         }
 
-        let mut all_cell_deps: Vec<(&[u8], i64, i16, &crate::parser::transaction::ParsedCellDep)> =
-            Vec::new();
-        for tx_data in &all_tx_data {
-            for (dep_index, cell_dep) in tx_data.cell_deps.iter().enumerate() {
-                all_cell_deps.push((
-                    tx_data.hash.as_slice(),
-                    tx_data.block_number,
-                    dep_index as i16,
-                    cell_dep,
-                ));
-            }
-        }
-
         // Collect cell_flows: created (outputs) and consumed (inputs)
         let mut all_flows: Vec<(i64, &[u8], i16, i16, &[u8], i64, i32, Option<&[u8]>)> = Vec::new();
 
@@ -3394,21 +3377,12 @@ impl Indexer {
             }
         }
 
-        // Parallel insert: inputs, cell_deps, and cell_flows are independent
+        // Parallel insert: inputs and cell_flows are independent
         tokio::try_join!(
             async {
                 if !all_inputs.is_empty() {
                     self.writer
                         .insert_transaction_inputs_batch(&all_inputs)
-                        .await
-                } else {
-                    Ok(())
-                }
-            },
-            async {
-                if !all_cell_deps.is_empty() {
-                    self.writer
-                        .insert_transaction_cell_deps_batch(&all_cell_deps)
                         .await
                 } else {
                     Ok(())
@@ -4510,19 +4484,6 @@ impl Indexer {
             }
         }
 
-        let mut all_cell_deps: Vec<(&[u8], i64, i16, &crate::parser::transaction::ParsedCellDep)> =
-            Vec::new();
-        for tx_data in &all_tx_data {
-            for (dep_index, cell_dep) in tx_data.cell_deps.iter().enumerate() {
-                all_cell_deps.push((
-                    tx_data.hash.as_slice(),
-                    tx_data.block_number,
-                    dep_index as i16,
-                    cell_dep,
-                ));
-            }
-        }
-
         // Collect cell_flows: created (outputs) and consumed (inputs)
         let mut all_flows: Vec<(i64, &[u8], i16, i16, &[u8], i64, i32, Option<&[u8]>)> = Vec::new();
 
@@ -4585,16 +4546,6 @@ impl Indexer {
             let tx_block_map_deferred = self.tx_block_map_deferred.load(Ordering::Relaxed);
             tokio::try_join!(
                 async {
-                    if !txs_for_batch.is_empty() {
-                        copy_router
-                            .copy_transactions_parallel(&txs_for_batch)
-                            .await
-                            .map(|_| ())
-                    } else {
-                        Ok(())
-                    }
-                },
-                async {
                     if !tx_block_map_deferred && !txs_for_batch.is_empty() {
                         copy_router
                             .copy_tx_block_map(&txs_for_batch)
@@ -4618,16 +4569,6 @@ impl Indexer {
                     if !all_inputs.is_empty() {
                         copy_router
                             .copy_inputs_parallel(&all_inputs)
-                            .await
-                            .map(|_| ())
-                    } else {
-                        Ok(())
-                    }
-                },
-                async {
-                    if !all_cell_deps.is_empty() {
-                        copy_router
-                            .copy_cell_deps_parallel(&all_cell_deps)
                             .await
                             .map(|_| ())
                     } else {
@@ -4709,15 +4650,6 @@ impl Indexer {
                     if !all_inputs.is_empty() {
                         self.writer
                             .insert_transaction_inputs_batch(&all_inputs)
-                            .await
-                    } else {
-                        Ok(())
-                    }
-                },
-                async {
-                    if !all_cell_deps.is_empty() {
-                        self.writer
-                            .insert_transaction_cell_deps_batch(&all_cell_deps)
                             .await
                     } else {
                         Ok(())

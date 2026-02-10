@@ -1,10 +1,8 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
-use chrono::Utc;
 use ckbadger_indexer::db::copy_cells::CopyCellsWriter;
 use ckbadger_indexer::db::copy_format::BinaryCopyBuffer;
 use ckbadger_indexer::db::copy_inputs::CopyInputsWriter;
-use ckbadger_indexer::db::copy_transactions::CopyTransactionsWriter;
 use ckbadger_indexer::parser::cell::ParsedCell;
 use ckbadger_indexer::parser::transaction::ParsedInput;
 
@@ -61,39 +59,6 @@ fn benchmark_cells_writer(c: &mut Criterion) {
     });
 }
 
-fn benchmark_transactions_writer(c: &mut Criterion) {
-    let tx_hash = vec![0u8; 32];
-    let timestamp = Utc::now();
-
-    c.bench_function("transactions_writer_1000_txs", |b| {
-        b.iter(|| {
-            let mut writer = CopyTransactionsWriter::new();
-            for i in 0..1000i64 {
-                writer.add_transaction(
-                    black_box(&tx_hash),
-                    i,
-                    &[0u8; 32],
-                    0,
-                    0,
-                    2,
-                    3,
-                    1,
-                    2,
-                    0,
-                    100_00000000,
-                    99_00000000,
-                    1_00000000,
-                    Some(500),
-                    Some(1000000),
-                    false,
-                    timestamp,
-                );
-            }
-            writer.finish()
-        })
-    });
-}
-
 fn benchmark_inputs_writer(c: &mut Criterion) {
     let input = create_test_input();
     let tx_hash = vec![0u8; 32];
@@ -134,7 +99,6 @@ criterion_group!(
     benches,
     benchmark_copy_format_basic,
     benchmark_cells_writer,
-    benchmark_transactions_writer,
     benchmark_inputs_writer,
     benchmark_batch_sizes,
 );

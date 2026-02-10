@@ -1,5 +1,4 @@
 pub mod copy_activities;
-pub mod copy_blocks;
 pub mod copy_blocks_index;
 pub mod copy_cell_flows;
 pub mod copy_cells;
@@ -8,7 +7,6 @@ pub mod copy_format;
 pub mod copy_inputs;
 pub mod copy_pool;
 pub mod copy_proposals;
-pub mod copy_transactions;
 pub mod copy_transactions_index;
 pub mod copy_tx_block_map;
 pub mod copy_udt_cells;

@@ -6,16 +6,6 @@ use crate::parser::cell::ParsedCell;
 
 use super::BatchWriter;
 
-/// Dep group format: 4-byte count (u32 LE) + N × 36-byte OutPoints (32 tx_hash + 4 index)
-fn looks_like_dep_group(data: &[u8]) -> bool {
-    let size = data.len();
-    if !(40..=10000).contains(&size) || (size - 4) % 36 != 0 {
-        return false;
-    }
-    let count = u32::from_le_bytes(data[0..4].try_into().unwrap_or([0; 4])) as usize;
-    count > 0 && count <= 256 && count == (size - 4) / 36
-}
-
 impl BatchWriter {
     pub async fn insert_cells_batch(
         &self,
@@ -109,35 +99,6 @@ impl BatchWriter {
         .bind(&created_at_blocks)
         .execute(&self.pool)
         .await?;
-
-        let dep_group_cells: Vec<_> = cells
-            .iter()
-            .filter(|(_, _, c, _)| {
-                c.data.len() > CELL_DATA_PREVIEW_SIZE && looks_like_dep_group(&c.data)
-            })
-            .collect();
-
-        if !dep_group_cells.is_empty() {
-            let dg_tx_hashes: Vec<&[u8]> = dep_group_cells.iter().map(|(h, _, _, _)| *h).collect();
-            let dg_indices: Vec<i16> = dep_group_cells.iter().map(|(_, i, _, _)| *i).collect();
-            let dg_data: Vec<&[u8]> = dep_group_cells
-                .iter()
-                .map(|(_, _, c, _)| c.data.as_slice())
-                .collect();
-
-            sqlx::query(
-                r#"
-                INSERT INTO cell_data (tx_hash, output_index, data)
-                SELECT * FROM UNNEST($1::bytea[], $2::smallint[], $3::bytea[])
-                ON CONFLICT (tx_hash, output_index) DO NOTHING
-                "#,
-            )
-            .bind(&dg_tx_hashes)
-            .bind(&dg_indices)
-            .bind(&dg_data)
-            .execute(&self.pool)
-            .await?;
-        }
 
         if let Some(store) = &self.live_cell_store {
             for (tx_hash, output_index, cell, created_at_block) in cells {

@@ -100,12 +100,12 @@ impl BatchWriter {
             r#"
             WITH archived AS (
                 INSERT INTO orphaned_blocks (
-                    reorg_event_id, number, hash, parent_hash,
+                    reorg_event_id, number, hash,
                     timestamp, transactions_count, miner_lock_hash
                 )
-                SELECT $1, number, hash, parent_hash,
-                       timestamp, transactions_count, miner_lock_hash
-                FROM blocks
+                SELECT $1, number, hash,
+                       timestamp, tx_count, miner_lock_hash
+                FROM blocks_index
                 WHERE number >= $2
                 RETURNING 1
             )
@@ -125,9 +125,9 @@ impl BatchWriter {
                     tx_index, inputs_count, outputs_count, total_capacity
                 )
                 SELECT $1, t.hash, t.block_number, b.hash,
-                       t.tx_index, t.inputs_count, t.outputs_count, t.total_output_capacity
-                FROM transactions t
-                JOIN blocks b ON t.block_number = b.number
+                       t.tx_index, t.inputs_count, t.outputs_count, NULL
+                FROM transactions_index t
+                JOIN blocks_index b ON t.block_number = b.number
                 WHERE t.block_number >= $2
                 RETURNING 1
             )
@@ -176,16 +176,6 @@ impl BatchWriter {
             .execute(&mut *tx)
             .await?;
 
-        sqlx::query("DELETE FROM transaction_cell_deps WHERE tx_block_number >= $1")
-            .bind(rollback_from)
-            .execute(&mut *tx)
-            .await?;
-
-        sqlx::query("DELETE FROM transactions WHERE block_number >= $1")
-            .bind(rollback_from)
-            .execute(&mut *tx)
-            .await?;
-
         sqlx::query("DELETE FROM transactions_index WHERE block_number >= $1")
             .bind(rollback_from)
             .execute(&mut *tx)
@@ -197,11 +187,6 @@ impl BatchWriter {
             .await?;
 
         sqlx::query("DELETE FROM block_proposals WHERE block_number >= $1")
-            .bind(rollback_from)
-            .execute(&mut *tx)
-            .await?;
-
-        sqlx::query("DELETE FROM blocks WHERE number >= $1")
             .bind(rollback_from)
             .execute(&mut *tx)
             .await?;
@@ -331,8 +316,8 @@ impl BatchWriter {
                 SELECT 
                     date_trunc('hour', timestamp) AS hour,
                     COUNT(*)::int AS blocks_count,
-                    SUM(transactions_count)::int AS transactions_count
-                FROM blocks 
+                    SUM(tx_count)::int AS transactions_count
+                FROM blocks_index
                 WHERE number >= $1
                 GROUP BY date_trunc('hour', timestamp)
             )
@@ -355,7 +340,7 @@ impl BatchWriter {
                     date_trunc('hour', b.timestamp) AS hour,
                     COUNT(*) FILTER (WHERE c.created_at_block >= $1)::int AS cells_created,
                     COUNT(*) FILTER (WHERE c.consumed_at_block >= $1)::int AS cells_consumed
-                FROM blocks b
+                FROM blocks_index b
                 LEFT JOIN cells c ON c.created_at_block = b.number OR c.consumed_at_block = b.number
                 WHERE b.number >= $1
                 GROUP BY date_trunc('hour', b.timestamp)
@@ -377,8 +362,8 @@ impl BatchWriter {
                 SELECT 
                     timestamp::date AS date,
                     COUNT(*)::int AS blocks_count,
-                    SUM(transactions_count)::int AS transactions_count
-                FROM blocks 
+                    SUM(tx_count)::int AS transactions_count
+                FROM blocks_index
                 WHERE number >= $1
                 GROUP BY timestamp::date
             )
@@ -403,7 +388,7 @@ impl BatchWriter {
                     COUNT(*) FILTER (WHERE c.consumed_at_block >= $1)::int AS cells_consumed,
                     COALESCE(SUM(c.data_size) FILTER (WHERE c.created_at_block >= $1), 0)::bigint AS data_created,
                     COALESCE(SUM(c.data_size) FILTER (WHERE c.consumed_at_block >= $1), 0)::bigint AS data_consumed
-                FROM blocks b
+                FROM blocks_index b
                 LEFT JOIN cells c ON c.created_at_block = b.number OR c.consumed_at_block = b.number
                 WHERE b.number >= $1
                 GROUP BY b.timestamp::date
@@ -428,7 +413,7 @@ impl BatchWriter {
                     timestamp::date AS date,
                     miner_lock_hash,
                     COUNT(*)::int AS blocks_count
-                FROM blocks 
+                FROM blocks_index
                 WHERE number >= $1 AND miner_lock_hash IS NOT NULL
                 GROUP BY timestamp::date, miner_lock_hash
             )

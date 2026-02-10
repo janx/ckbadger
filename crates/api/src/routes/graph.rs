@@ -415,12 +415,12 @@ async fn get_proposal_graph(
 
     let rows: Vec<(Vec<u8>, Vec<u8>, i64)> = sqlx::query_as(
         r#"
-        SELECT 
+        SELECT
             bp.proposal_id,
             t.hash as tx_hash,
             t.block_number as commit_block
         FROM block_proposals bp
-        INNER JOIN transactions t ON t.short_hash = bp.proposal_id
+        INNER JOIN transactions_index t ON substring(t.hash, 1, 10) = bp.proposal_id
             AND t.block_number BETWEEN $1 + 2 AND $1 + 10
         WHERE bp.block_number = $1
         ORDER BY t.block_number, bp.proposal_index

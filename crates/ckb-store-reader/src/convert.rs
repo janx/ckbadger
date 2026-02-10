@@ -177,6 +177,11 @@ fn convert_header(header: &core::HeaderView) -> RpcHeaderView {
     }
 }
 
+/// Convert a CKB core TransactionView to RPC-compatible format.
+pub fn convert_transaction_view(tx: &core::TransactionView) -> RpcTransactionView {
+    convert_transaction(tx)
+}
+
 fn convert_transaction(tx: &core::TransactionView) -> RpcTransactionView {
     let raw = tx.data().raw();
 

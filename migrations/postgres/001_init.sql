@@ -15,7 +15,7 @@ CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
 
 CREATE TABLE sync_status (
     id INTEGER PRIMARY KEY DEFAULT 1,
-    
+
     -- Deep fork detection (reorg depth > REORG_LIMIT)
     deep_fork_detected BOOLEAN NOT NULL DEFAULT FALSE,
     deep_fork_at TIMESTAMPTZ,
@@ -25,11 +25,11 @@ CREATE TABLE sync_status (
     deep_fork_chain_tip_hash BYTEA,
     deep_fork_depth INT,
     deep_fork_fork_point BIGINT,
-    
+
     -- Last reorg tracking
     last_reorg_at TIMESTAMPTZ,
     last_reorg_depth INT,
-    
+
     -- Deferred index optimization (tracks actual DB state)
     indexes_deferred BOOLEAN NOT NULL DEFAULT FALSE,
     indexes_dropped_at TIMESTAMPTZ,
@@ -79,27 +79,27 @@ INSERT INTO sync_status (id) VALUES (1);
 CREATE TABLE reorg_events (
     id SERIAL PRIMARY KEY,
     detected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    
+
     -- Fork point (common ancestor)
     fork_point_number BIGINT NOT NULL,
     fork_point_hash BYTEA NOT NULL,
-    
+
     -- Old chain tip (replaced)
     old_tip_number BIGINT NOT NULL,
     old_tip_hash BYTEA NOT NULL,
-    
+
     -- New chain tip (after reorg)
     new_tip_number BIGINT NOT NULL,
     new_tip_hash BYTEA NOT NULL,
-    
+
     -- Statistics
     depth INT NOT NULL,  -- old_tip - fork_point
     orphaned_blocks_count INT NOT NULL DEFAULT 0,
     orphaned_txs_count INT NOT NULL DEFAULT 0,
-    
+
     -- Type: 'auto' = automatic reorg, 'deep' = deep fork pending, 'resolved' = manually resolved
     event_type VARCHAR(20) NOT NULL DEFAULT 'auto',
-    
+
     -- Manual resolution tracking
     resolved_at TIMESTAMPTZ,
     resolved_by VARCHAR(100),
@@ -114,7 +114,7 @@ CREATE INDEX idx_reorg_events_type ON reorg_events(event_type) WHERE event_type 
 CREATE TABLE orphaned_blocks (
     id SERIAL PRIMARY KEY,
     reorg_event_id INT NOT NULL REFERENCES reorg_events(id) ON DELETE CASCADE,
-    
+
     -- Original block info
     number BIGINT NOT NULL,
     hash BYTEA NOT NULL,
@@ -122,7 +122,7 @@ CREATE TABLE orphaned_blocks (
     timestamp TIMESTAMPTZ NOT NULL,
     transactions_count INT NOT NULL,
     miner_lock_hash BYTEA,
-    
+
     orphaned_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -134,17 +134,17 @@ CREATE INDEX idx_orphaned_blocks_number ON orphaned_blocks(number);
 CREATE TABLE orphaned_transactions (
     id SERIAL PRIMARY KEY,
     reorg_event_id INT NOT NULL REFERENCES reorg_events(id) ON DELETE CASCADE,
-    
+
     hash BYTEA NOT NULL,
     block_number BIGINT NOT NULL,
     block_hash BYTEA NOT NULL,
     tx_index INT NOT NULL,
-    
+
     -- Key transaction data for display
     inputs_count SMALLINT,
     outputs_count SMALLINT,
     total_capacity NUMERIC(20,0),
-    
+
     orphaned_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -154,81 +154,9 @@ CREATE INDEX idx_orphaned_txs_hash ON orphaned_transactions(hash);
 
 -- ===========================================
 -- 2. Core Tables (Partitioned by 5M blocks)
+-- Raw block/transaction data is read from CKB node's RocksDB via CkbChainReader.
+-- Only lightweight index tables and relational data are stored in PostgreSQL.
 -- ===========================================
-
--- ---- blocks ----
-CREATE TABLE blocks (
-    number BIGINT NOT NULL,
-    hash BYTEA NOT NULL,
-    parent_hash BYTEA NOT NULL,
-    timestamp TIMESTAMPTZ NOT NULL,
-    version INTEGER NOT NULL,
-    compact_target BIGINT NOT NULL,
-    transactions_count INTEGER NOT NULL DEFAULT 0,
-    proposals_count INTEGER NOT NULL DEFAULT 0,
-    uncles_count INTEGER NOT NULL DEFAULT 0,
-    epoch_number BIGINT NOT NULL,
-    epoch_index INTEGER NOT NULL,
-    epoch_length INTEGER NOT NULL,
-    dao BYTEA NOT NULL,  -- 32 bytes
-    nonce BYTEA NOT NULL,
-    extra_hash BYTEA NOT NULL,
-    extension BYTEA,
-    proposals_hash BYTEA NOT NULL,
-    transactions_root BYTEA NOT NULL,
-    uncles_hash BYTEA NOT NULL,
-    miner_lock_hash BYTEA,
-    miner_message BYTEA,
-    total_difficulty NUMERIC(40,0) NOT NULL DEFAULT 0,
-    reward NUMERIC(20,0),
-    PRIMARY KEY (number)
-) PARTITION BY RANGE (number);
-
--- 10 partitions: 0-50M blocks (~15 years)
-CREATE TABLE blocks_p00 PARTITION OF blocks FOR VALUES FROM (0) TO (5000000);
-CREATE TABLE blocks_p01 PARTITION OF blocks FOR VALUES FROM (5000000) TO (10000000);
-CREATE TABLE blocks_p02 PARTITION OF blocks FOR VALUES FROM (10000000) TO (15000000);
-CREATE TABLE blocks_p03 PARTITION OF blocks FOR VALUES FROM (15000000) TO (20000000);
-CREATE TABLE blocks_p04 PARTITION OF blocks FOR VALUES FROM (20000000) TO (25000000);
-CREATE TABLE blocks_p05 PARTITION OF blocks FOR VALUES FROM (25000000) TO (30000000);
-CREATE TABLE blocks_p06 PARTITION OF blocks FOR VALUES FROM (30000000) TO (35000000);
-CREATE TABLE blocks_p07 PARTITION OF blocks FOR VALUES FROM (35000000) TO (40000000);
-CREATE TABLE blocks_p08 PARTITION OF blocks FOR VALUES FROM (40000000) TO (45000000);
-CREATE TABLE blocks_p09 PARTITION OF blocks FOR VALUES FROM (45000000) TO (50000000);
-
--- ---- transactions ----
-CREATE TABLE transactions (
-    hash BYTEA NOT NULL,
-    block_number BIGINT NOT NULL,
-    block_hash BYTEA NOT NULL DEFAULT '\x00',
-    tx_index INTEGER NOT NULL,
-    version INTEGER NOT NULL,
-    inputs_count SMALLINT NOT NULL DEFAULT 0,
-    outputs_count SMALLINT NOT NULL DEFAULT 0,
-    witnesses_count SMALLINT NOT NULL DEFAULT 0,
-    cell_deps_count SMALLINT NOT NULL DEFAULT 0,
-    header_deps_count SMALLINT NOT NULL DEFAULT 0,
-    total_input_capacity BIGINT NOT NULL DEFAULT 0,
-    total_output_capacity BIGINT NOT NULL DEFAULT 0,
-    fee BIGINT NOT NULL DEFAULT 0,
-    tx_size INTEGER,
-    cycles BIGINT,
-    is_cellbase BOOLEAN NOT NULL DEFAULT FALSE,
-    timestamp TIMESTAMPTZ NOT NULL,
-    short_hash BYTEA GENERATED ALWAYS AS (substring(hash, 1, 10)) STORED,
-    PRIMARY KEY (block_number, hash)
-) PARTITION BY RANGE (block_number);
-
-CREATE TABLE transactions_p00 PARTITION OF transactions FOR VALUES FROM (0) TO (5000000);
-CREATE TABLE transactions_p01 PARTITION OF transactions FOR VALUES FROM (5000000) TO (10000000);
-CREATE TABLE transactions_p02 PARTITION OF transactions FOR VALUES FROM (10000000) TO (15000000);
-CREATE TABLE transactions_p03 PARTITION OF transactions FOR VALUES FROM (15000000) TO (20000000);
-CREATE TABLE transactions_p04 PARTITION OF transactions FOR VALUES FROM (20000000) TO (25000000);
-CREATE TABLE transactions_p05 PARTITION OF transactions FOR VALUES FROM (25000000) TO (30000000);
-CREATE TABLE transactions_p06 PARTITION OF transactions FOR VALUES FROM (30000000) TO (35000000);
-CREATE TABLE transactions_p07 PARTITION OF transactions FOR VALUES FROM (35000000) TO (40000000);
-CREATE TABLE transactions_p08 PARTITION OF transactions FOR VALUES FROM (40000000) TO (45000000);
-CREATE TABLE transactions_p09 PARTITION OF transactions FOR VALUES FROM (45000000) TO (50000000);
 
 -- ---- cells ----
 CREATE TABLE cells (
@@ -290,20 +218,6 @@ CREATE TABLE transaction_inputs (
     UNIQUE (tx_block_number, tx_hash, input_index)
 ) PARTITION BY RANGE (tx_block_number);
 
--- ---- transaction_cell_deps ----
-CREATE TABLE transaction_cell_deps (
-    id BIGINT GENERATED ALWAYS AS IDENTITY,
-    tx_hash BYTEA NOT NULL,
-    tx_block_number BIGINT NOT NULL,  -- redundant, for partition alignment
-    dep_index SMALLINT NOT NULL,
-    out_point_tx_hash BYTEA NOT NULL,
-    out_point_index SMALLINT NOT NULL,
-    dep_type SMALLINT NOT NULL,  -- 0=code, 1=dep_group
-
-    PRIMARY KEY (tx_block_number, id),
-    UNIQUE (tx_block_number, tx_hash, dep_index)
-) PARTITION BY RANGE (tx_block_number);
-
 CREATE TABLE transaction_inputs_p00 PARTITION OF transaction_inputs FOR VALUES FROM (0) TO (5000000);
 CREATE TABLE transaction_inputs_p01 PARTITION OF transaction_inputs FOR VALUES FROM (5000000) TO (10000000);
 CREATE TABLE transaction_inputs_p02 PARTITION OF transaction_inputs FOR VALUES FROM (10000000) TO (15000000);
@@ -314,17 +228,6 @@ CREATE TABLE transaction_inputs_p06 PARTITION OF transaction_inputs FOR VALUES F
 CREATE TABLE transaction_inputs_p07 PARTITION OF transaction_inputs FOR VALUES FROM (35000000) TO (40000000);
 CREATE TABLE transaction_inputs_p08 PARTITION OF transaction_inputs FOR VALUES FROM (40000000) TO (45000000);
 CREATE TABLE transaction_inputs_p09 PARTITION OF transaction_inputs FOR VALUES FROM (45000000) TO (50000000);
-
-CREATE TABLE transaction_cell_deps_p00 PARTITION OF transaction_cell_deps FOR VALUES FROM (0) TO (5000000);
-CREATE TABLE transaction_cell_deps_p01 PARTITION OF transaction_cell_deps FOR VALUES FROM (5000000) TO (10000000);
-CREATE TABLE transaction_cell_deps_p02 PARTITION OF transaction_cell_deps FOR VALUES FROM (10000000) TO (15000000);
-CREATE TABLE transaction_cell_deps_p03 PARTITION OF transaction_cell_deps FOR VALUES FROM (15000000) TO (20000000);
-CREATE TABLE transaction_cell_deps_p04 PARTITION OF transaction_cell_deps FOR VALUES FROM (20000000) TO (25000000);
-CREATE TABLE transaction_cell_deps_p05 PARTITION OF transaction_cell_deps FOR VALUES FROM (25000000) TO (30000000);
-CREATE TABLE transaction_cell_deps_p06 PARTITION OF transaction_cell_deps FOR VALUES FROM (30000000) TO (35000000);
-CREATE TABLE transaction_cell_deps_p07 PARTITION OF transaction_cell_deps FOR VALUES FROM (35000000) TO (40000000);
-CREATE TABLE transaction_cell_deps_p08 PARTITION OF transaction_cell_deps FOR VALUES FROM (40000000) TO (45000000);
-CREATE TABLE transaction_cell_deps_p09 PARTITION OF transaction_cell_deps FOR VALUES FROM (45000000) TO (50000000);
 
 -- ---- block_proposals ----
 -- Stores proposal short IDs (10 bytes) for each block
@@ -348,39 +251,6 @@ CREATE TABLE block_proposals_p06 PARTITION OF block_proposals FOR VALUES FROM (3
 CREATE TABLE block_proposals_p07 PARTITION OF block_proposals FOR VALUES FROM (35000000) TO (40000000);
 CREATE TABLE block_proposals_p08 PARTITION OF block_proposals FOR VALUES FROM (40000000) TO (45000000);
 CREATE TABLE block_proposals_p09 PARTITION OF block_proposals FOR VALUES FROM (45000000) TO (50000000);
-
--- ---- uncle_blocks ----
-CREATE TABLE uncle_blocks (
-    id BIGINT GENERATED ALWAYS AS IDENTITY,
-    block_number BIGINT NOT NULL,
-    uncle_index INTEGER NOT NULL,
-    hash BYTEA NOT NULL,
-    proposals_hash BYTEA NOT NULL,
-    timestamp TIMESTAMPTZ NOT NULL,
-    compact_target BIGINT NOT NULL,
-    epoch_number BIGINT NOT NULL,
-    epoch_index INTEGER NOT NULL,
-    epoch_length INTEGER NOT NULL,
-    parent_hash BYTEA NOT NULL,
-    transactions_root BYTEA NOT NULL,
-    extra_hash BYTEA NOT NULL,
-    dao BYTEA NOT NULL,
-    nonce BYTEA NOT NULL,
-
-    PRIMARY KEY (block_number, id),
-    UNIQUE (block_number, uncle_index)
-) PARTITION BY RANGE (block_number);
-
-CREATE TABLE uncle_blocks_p00 PARTITION OF uncle_blocks FOR VALUES FROM (0) TO (5000000);
-CREATE TABLE uncle_blocks_p01 PARTITION OF uncle_blocks FOR VALUES FROM (5000000) TO (10000000);
-CREATE TABLE uncle_blocks_p02 PARTITION OF uncle_blocks FOR VALUES FROM (10000000) TO (15000000);
-CREATE TABLE uncle_blocks_p03 PARTITION OF uncle_blocks FOR VALUES FROM (15000000) TO (20000000);
-CREATE TABLE uncle_blocks_p04 PARTITION OF uncle_blocks FOR VALUES FROM (20000000) TO (25000000);
-CREATE TABLE uncle_blocks_p05 PARTITION OF uncle_blocks FOR VALUES FROM (25000000) TO (30000000);
-CREATE TABLE uncle_blocks_p06 PARTITION OF uncle_blocks FOR VALUES FROM (30000000) TO (35000000);
-CREATE TABLE uncle_blocks_p07 PARTITION OF uncle_blocks FOR VALUES FROM (35000000) TO (40000000);
-CREATE TABLE uncle_blocks_p08 PARTITION OF uncle_blocks FOR VALUES FROM (40000000) TO (45000000);
-CREATE TABLE uncle_blocks_p09 PARTITION OF uncle_blocks FOR VALUES FROM (45000000) TO (50000000);
 
 -- ---- blocks_index ----
 -- Lightweight index table for block list/filter queries.
@@ -417,6 +287,7 @@ CREATE TABLE transactions_index (
     outputs_count SMALLINT NOT NULL DEFAULT 0,
     fee           BIGINT NOT NULL DEFAULT 0,
     cycles        BIGINT,
+    tx_size       INTEGER,
     PRIMARY KEY (block_number, hash)
 ) PARTITION BY RANGE (block_number);
 
@@ -438,16 +309,6 @@ CREATE INDEX idx_transactions_index_timestamp
 CREATE INDEX idx_transactions_index_cycles_null
     ON transactions_index (block_number)
     WHERE NOT is_cellbase AND (cycles IS NULL OR cycles = 0);
-
--- ---- cell_data ----
-CREATE TABLE cell_data (
-    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    tx_hash BYTEA NOT NULL,
-    output_index SMALLINT NOT NULL,
-    data BYTEA NOT NULL,
-
-    UNIQUE(tx_hash, output_index)
-);
 
 -- ---- tx_block_map (non-partitioned lookup table for partition pruning) ----
 -- Maps tx_hash to block_number, enabling 2-phase queries for partition pruning
@@ -602,7 +463,7 @@ CREATE TABLE miner_statistics (
     total_reward NUMERIC(20,0) NOT NULL DEFAULT 0,
     last_block_number BIGINT,
     created_at TIMESTAMPTZ DEFAULT NOW(),
-    
+
     UNIQUE(date, miner_lock_hash)
 );
 
@@ -667,7 +528,7 @@ CREATE TABLE dao_statistics (
     secondary_issuance NUMERIC(20,0) NOT NULL DEFAULT 0,
     last_processed_block BIGINT NOT NULL DEFAULT 0,
     updated_at TIMESTAMPTZ DEFAULT NOW(),
-    
+
     CONSTRAINT dao_single_row CHECK (id = 1)
 );
 
@@ -688,7 +549,7 @@ CREATE INDEX idx_block_secondary_issuance_timestamp ON block_secondary_issuance(
 -- ---- dao_daily_snapshots ----
 CREATE TABLE dao_daily_snapshots (
     date DATE PRIMARY KEY,
-    
+
     total_deposit NUMERIC(20,0) NOT NULL DEFAULT 0,
     depositors_count INTEGER NOT NULL DEFAULT 0,
     daily_deposit NUMERIC(20,0) NOT NULL DEFAULT 0,
@@ -702,7 +563,7 @@ CREATE TABLE dao_daily_snapshots (
     cumulative_burnt TEXT,
     cumulative_mining_reward TEXT,
     cumulative_deposit_compensation TEXT,
-    
+
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -719,14 +580,14 @@ CREATE TABLE tokens (
     type_code_hash BYTEA NOT NULL,
     type_hash_type SMALLINT NOT NULL,
     type_args BYTEA NOT NULL,
-    
+
     standard TEXT NOT NULL,  -- 'sudt' or 'xudt'
     name TEXT,
     symbol TEXT,
     decimals SMALLINT NOT NULL DEFAULT 8,
     description TEXT,
     icon_url TEXT,
-    
+
     -- Label info from token-labels (docs/token-labels)
     published BOOLEAN NOT NULL DEFAULT FALSE,
     famous BOOLEAN NOT NULL DEFAULT FALSE,
@@ -736,15 +597,15 @@ CREATE TABLE tokens (
     email TEXT,
     operator_website TEXT,
     label_updated_at TIMESTAMPTZ,  -- when label info was last synced
-    
+
     total_supply NUMERIC(40,0) NOT NULL DEFAULT 0,
     holders_count INTEGER NOT NULL DEFAULT 0,
     transfers_count BIGINT NOT NULL DEFAULT 0,
     transfers_24h BIGINT NOT NULL DEFAULT 0,
-    
+
     first_seen_block BIGINT NOT NULL,
     first_seen_tx BYTEA NOT NULL,
-    
+
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -762,15 +623,15 @@ CREATE TABLE token_balances (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     token_id BIGINT NOT NULL REFERENCES tokens(id) ON DELETE CASCADE,
     lock_script_hash BYTEA NOT NULL,
-    
+
     balance NUMERIC(40,0) NOT NULL DEFAULT 0,
-    
+
     first_tx BYTEA NOT NULL,
     last_tx BYTEA NOT NULL,
-    
+
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
-    
+
     UNIQUE(token_id, lock_script_hash)
 );
 
@@ -783,22 +644,22 @@ CREATE TABLE udt_cells (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     tx_hash BYTEA NOT NULL,
     output_index SMALLINT NOT NULL,
-    
+
     type_script_hash BYTEA NOT NULL,
     type_code_hash BYTEA NOT NULL,
     type_hash_type SMALLINT NOT NULL,
     type_args BYTEA NOT NULL,
-    
+
     lock_script_hash BYTEA NOT NULL,
     amount NUMERIC(40,0) NOT NULL,
     standard TEXT NOT NULL,
-    
+
     is_live BOOLEAN NOT NULL DEFAULT TRUE,
-    
+
     created_at_block BIGINT NOT NULL,
     consumed_at_block BIGINT,
     consumed_by_tx BYTEA,
-    
+
     UNIQUE(tx_hash, output_index)
 );
 
@@ -816,16 +677,16 @@ CREATE INDEX idx_udt_cells_lookup ON udt_cells(tx_hash, output_index);
 CREATE TABLE spore_clusters (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     cluster_id BYTEA NOT NULL UNIQUE,
-    
+
     type_script_hash BYTEA NOT NULL,
-    
+
     name TEXT,
     description TEXT,
-    
+
     owner_lock_hash BYTEA NOT NULL,
-    
+
     spores_count INTEGER NOT NULL DEFAULT 0,
-    
+
     created_at_block BIGINT NOT NULL,
     created_at_tx BYTEA NOT NULL,
     created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -839,29 +700,29 @@ CREATE INDEX idx_spore_clusters_name ON spore_clusters(name) WHERE name IS NOT N
 CREATE TABLE spore_cells (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     spore_id BYTEA NOT NULL UNIQUE,
-    
+
     type_script_hash BYTEA NOT NULL,
     tx_hash BYTEA NOT NULL,
     output_index SMALLINT NOT NULL,
-    
+
     cluster_id BYTEA,
-    
+
     content_type TEXT NOT NULL,
     content_size INTEGER NOT NULL,
-    
+
     owner_lock_hash BYTEA NOT NULL,
-    
+
     is_live BOOLEAN NOT NULL DEFAULT TRUE,
-    
+
     created_at_block BIGINT NOT NULL,
     created_at_tx BYTEA NOT NULL,
-    
+
     consumed_at_block BIGINT,
     consumed_by_tx BYTEA,
-    
+
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
-    
+
     UNIQUE(tx_hash, output_index)
 );
 
@@ -889,22 +750,22 @@ CREATE TABLE mnft_issuers (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     issuer_id BYTEA NOT NULL UNIQUE,  -- type_script.args (first 20 bytes of lock hash)
     type_script_hash BYTEA NOT NULL,
-    
+
     name TEXT,
     info BYTEA,  -- Raw info data from cell
-    
+
     owner_lock_hash BYTEA NOT NULL,
-    
+
     classes_count INTEGER NOT NULL DEFAULT 0,
-    
+
     is_live BOOLEAN NOT NULL DEFAULT TRUE,
-    
+
     created_at_block BIGINT NOT NULL,
     created_at_tx BYTEA NOT NULL,
-    
+
     consumed_at_block BIGINT,
     consumed_by_tx BYTEA,
-    
+
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -918,31 +779,31 @@ CREATE TABLE mnft_classes (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     class_id BYTEA NOT NULL UNIQUE,  -- type_script.args (issuer_id + class_index)
     type_script_hash BYTEA NOT NULL,
-    
+
     issuer_id BYTEA NOT NULL,
-    
+
     name TEXT,
     description TEXT,
     renderer TEXT,  -- URL to renderer
-    
+
     total INTEGER NOT NULL DEFAULT 0,  -- Max supply (0 = unlimited)
     issued INTEGER NOT NULL DEFAULT 0,  -- Currently minted count
-    
+
     -- Pre-computed statistics (like tokens table)
     holders_count INTEGER NOT NULL DEFAULT 0,
     transfers_count BIGINT NOT NULL DEFAULT 0,
     transfers_24h INTEGER NOT NULL DEFAULT 0,
-    
+
     owner_lock_hash BYTEA NOT NULL,
-    
+
     is_live BOOLEAN NOT NULL DEFAULT TRUE,
-    
+
     created_at_block BIGINT NOT NULL,
     created_at_tx BYTEA NOT NULL,
-    
+
     consumed_at_block BIGINT,
     consumed_by_tx BYTEA,
-    
+
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -961,27 +822,27 @@ CREATE TABLE mnft_tokens (
     type_script_hash BYTEA NOT NULL,
     tx_hash BYTEA NOT NULL,
     output_index SMALLINT NOT NULL,
-    
+
     class_id BYTEA NOT NULL,
     token_index INTEGER NOT NULL,  -- Index within the class
-    
+
     characteristic BYTEA,  -- Token-specific data
     configure SMALLINT NOT NULL DEFAULT 0,  -- Configuration flags
     state SMALLINT NOT NULL DEFAULT 0,  -- Token state
-    
+
     owner_lock_hash BYTEA NOT NULL,
-    
+
     is_live BOOLEAN NOT NULL DEFAULT TRUE,
-    
+
     created_at_block BIGINT NOT NULL,
     created_at_tx BYTEA NOT NULL,
-    
+
     consumed_at_block BIGINT,
     consumed_by_tx BYTEA,
-    
+
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
-    
+
     UNIQUE(tx_hash, output_index)
 );
 
@@ -1001,28 +862,28 @@ CREATE TABLE dotbit_accounts (
     type_script_hash BYTEA NOT NULL,
     tx_hash BYTEA NOT NULL,
     output_index SMALLINT NOT NULL,
-    
+
     account_name TEXT NOT NULL,  -- e.g. "alice.bit"
-    
+
     owner_lock_hash BYTEA NOT NULL,
     manager_lock_hash BYTEA,
-    
+
     registered_at BIGINT,  -- Registration timestamp
     expired_at BIGINT,  -- Expiration timestamp
-    
+
     status SMALLINT NOT NULL DEFAULT 0,  -- Account status
-    
+
     is_live BOOLEAN NOT NULL DEFAULT TRUE,
-    
+
     created_at_block BIGINT NOT NULL,
     created_at_tx BYTEA NOT NULL,
-    
+
     consumed_at_block BIGINT,
     consumed_by_tx BYTEA,
-    
+
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
-    
+
     UNIQUE(tx_hash, output_index)
 );
 
@@ -1064,13 +925,13 @@ CREATE TABLE known_scripts (
     description TEXT,
     -- NOTE: script_kind (lock/type) is NOT stored here - it's dynamically inferred
     -- from cells table at query time since upstream token-labels doesn't have this data
-    
+
     -- Extended metadata from token-labels
     rfc TEXT,  -- RFC documentation URL
     website TEXT,  -- Project website
     source_url TEXT,  -- Source code URL
     decoder_type VARCHAR(50),  -- 'udt', 'spore', 'spore-cluster', 'dao', 'ckbfs'
-    
+
     -- Deployment info
     network VARCHAR(20) NOT NULL DEFAULT 'mainnet',  -- 'mainnet' or 'testnet'
     hash_type VARCHAR(20),  -- 'type', 'data', 'data1', 'data2'
@@ -1078,13 +939,13 @@ CREATE TABLE known_scripts (
     type_hash BYTEA,
     tag VARCHAR(100),  -- Version tag like 'v1', 'v2', '@0000'
     deprecated BOOLEAN NOT NULL DEFAULT FALSE,
-    
+
     -- System flag and tracking
     is_system BOOLEAN NOT NULL DEFAULT FALSE,
     label_source VARCHAR(100) DEFAULT 'token-labels',
     label_updated_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT NOW(),
-    
+
     -- Unique constraint per code_hash + network + tag combination
     UNIQUE(code_hash, network, tag)
 );
@@ -1112,16 +973,16 @@ CREATE TABLE script_usage_stats (
 -- NOTE: tag must be '' (empty string) not NULL to work correctly with UNIQUE constraint
 -- and to match the upsert logic in integrity/mod.rs which uses empty string for empty tags
 INSERT INTO known_scripts (code_hash, name, description, network, hash_type, is_system, rfc, tag) VALUES
-(decode('9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8', 'hex'), 
+(decode('9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8', 'hex'),
  'Default Lock', 'Default lock script to verify CKB transaction signature', 'mainnet', 'type', true,
  'https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0024-ckb-genesis-script-list/0024-ckb-genesis-script-list.md', ''),
-(decode('5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8', 'hex'), 
+(decode('5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8', 'hex'),
  'Default Multisig', 'Multi-signature lock script', 'mainnet', 'type', true,
  'https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0024-ckb-genesis-script-list/0024-ckb-genesis-script-list.md', '@5c5069eb'),
-(decode('82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e', 'hex'), 
+(decode('82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e', 'hex'),
  'Nervos DAO', 'Nervos DAO type script for deposits and withdrawals', 'mainnet', 'type', true,
  'https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0024-ckb-genesis-script-list/0024-ckb-genesis-script-list.md', ''),
-(decode('5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5', 'hex'), 
+(decode('5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5', 'hex'),
  'Simple UDT', 'Simple UDT type script for fungible tokens', 'mainnet', 'type', true,
  'https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0025-simple-udt/0025-simple-udt.md', ''),
 (decode('50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95', 'hex'),
@@ -1133,13 +994,6 @@ ON CONFLICT (code_hash, network, tag) DO NOTHING;
 -- 9. BRIN Indexes (Time-series data)
 -- ===========================================
 
--- blocks: inserted in number order
-CREATE INDEX idx_blocks_number_brin ON blocks USING BRIN (number) WITH (pages_per_range = 128);
-CREATE INDEX idx_blocks_timestamp_brin ON blocks USING BRIN (timestamp) WITH (pages_per_range = 128);
-
--- transactions: inserted in block_number order
-CREATE INDEX idx_tx_block_brin ON transactions USING BRIN (block_number) WITH (pages_per_range = 128);
-
 -- cells: inserted in created_at_block order
 CREATE INDEX idx_cells_created_brin ON cells USING BRIN (created_at_block) WITH (pages_per_range = 128);
 
@@ -1147,20 +1001,7 @@ CREATE INDEX idx_cells_created_brin ON cells USING BRIN (created_at_block) WITH 
 -- 10. B-tree Indexes (Lookups)
 -- ===========================================
 
--- blocks
-CREATE INDEX idx_blocks_hash ON blocks(hash);
-CREATE INDEX idx_blocks_epoch ON blocks(epoch_number);
-CREATE INDEX idx_blocks_miner ON blocks(miner_lock_hash) WHERE miner_lock_hash IS NOT NULL;
-
--- transactions
-CREATE INDEX idx_tx_timestamp ON transactions(timestamp DESC);
--- NOTE: idx_tx_short_hash removed (0 scans in pg_stat; API uses hash-based lookups)
--- Cursor pagination
-CREATE INDEX idx_tx_cursor ON transactions(block_number DESC, tx_index DESC);
-
 -- cells
--- NOTE: idx_cells_lock_live, idx_cells_lock_script_details, idx_cells_type_live removed
--- (redundant with idx_cells_list_covering and idx_cells_type_code_hash_live; 0 scans in pg_stat)
 -- Type script hash lookup (for UDT)
 CREATE INDEX idx_cells_type_script_hash ON cells(type_script_hash) WHERE type_script_hash IS NOT NULL;
 -- Code hash lookup (for script usage stats) - basic indexes
@@ -1174,16 +1015,9 @@ CREATE INDEX idx_cells_lock_code_hash_live ON cells(lock_code_hash, lock_hash_ty
 CREATE INDEX idx_cells_type_code_hash_live ON cells(type_code_hash, type_hash_type, created_at_block DESC, output_index DESC)
     WHERE status = 0 AND type_code_hash IS NOT NULL;
 
--- uncle_blocks
-CREATE INDEX idx_uncles_hash ON uncle_blocks(hash);
-
 -- ===========================================
 -- 11. Covering Indexes (Avoid table lookups)
 -- ===========================================
-
--- Transaction list page common fields
-CREATE INDEX idx_tx_list_covering ON transactions(block_number DESC, tx_index DESC)
-    INCLUDE (hash, inputs_count, outputs_count, fee, is_cellbase, timestamp);
 
 -- Cell list page common fields
 CREATE INDEX idx_cells_list_covering ON cells(lock_script_hash, created_at_block DESC)
@@ -1200,34 +1034,34 @@ CREATE TABLE tasks (
     task_type VARCHAR(50) NOT NULL,  -- 'cycles_backfill', 'index_rebuild', 'label_import'
     status VARCHAR(20) NOT NULL DEFAULT 'pending',  -- 'pending', 'running', 'completed', 'failed', 'cancelled', 'paused'
     priority INTEGER DEFAULT 0,
-    
+
     -- Configuration (task-specific JSON)
     config JSONB NOT NULL DEFAULT '{}',
-    
+
     -- Progress tracking
     progress_total BIGINT DEFAULT 0,
     progress_current BIGINT DEFAULT 0,
     progress_message TEXT,
-    
+
     -- Result/error
     result JSONB,
     error_message TEXT,
-    
+
     -- Timestamps
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     started_at TIMESTAMPTZ,
     completed_at TIMESTAMPTZ,
     heartbeat_at TIMESTAMPTZ,
-    
+
     -- Runtime metadata
     runner_id VARCHAR(100),  -- Identifies which runner instance is executing
     retry_count INTEGER DEFAULT 0,
     max_retries INTEGER DEFAULT 3,
-    
+
     -- Rate tracking for ETA calculation
     rate_samples JSONB DEFAULT '[]',  -- Recent samples: [{ts: epoch, v: progress_current}, ...]
     rate_ema DOUBLE PRECISION,  -- Exponential moving average (items/sec)
-    
+
     -- Log tail for TUI display
     log_tail TEXT  -- Last N lines of log output
 );
@@ -1253,35 +1087,35 @@ COMMENT ON COLUMN tasks.rate_ema IS 'Exponential moving average rate for ETA cal
 CREATE TABLE activities (
     -- Identity
     id BIGINT GENERATED ALWAYS AS IDENTITY,
-    
+
     -- Deterministic unique key: hash of (tx_hash, activity_type, activity_index)
     -- Used for deduplication and idempotent writes
     activity_id BYTEA NOT NULL,
-    
+
     -- Classification
     activity_type VARCHAR(30) NOT NULL,  -- CKB_TRANSFER, TOKEN_MINT, DAO_DEPOSIT, etc.
     activity_category VARCHAR(15) NOT NULL,  -- ckb, cellbase, token, dob, nft, dao, script, rgbpp
-    
+
     -- Transaction context
     block_number BIGINT NOT NULL,
     tx_hash BYTEA NOT NULL,
     tx_index INTEGER NOT NULL,
     activity_index SMALLINT NOT NULL DEFAULT 0,  -- Order within tx for multiple activities
-    
+
     -- Participants (lock_script_hash, not address encoding)
     from_lock_hash BYTEA,  -- NULL for mint, cellbase
     to_lock_hash BYTEA,    -- NULL for burn
-    
+
     -- Value (semantic meaning depends on activity_type)
     -- CKB: capacity in shannons
     -- Token: amount in token's smallest unit
     -- NFT/DOB: 1 (always)
     -- DAO: deposited capacity
     amount NUMERIC(40,0) NOT NULL DEFAULT 0,
-    
+
     -- Asset reference (type_script_hash for tokens, spore_id for DOB, etc.)
     asset_id BYTEA,
-    
+
     -- Type-specific metadata (JSONB for flexibility)
     -- CKB_TRANSFER: {}
     -- CELLBASE_REWARD: { "totalReward": 123, "blockReward": 100, "proposalReward": 23 }
@@ -1290,13 +1124,13 @@ CREATE TABLE activities (
     -- DAO_*: { "depositAr": "0x...", "withdrawAr": "0x...", "compensation": 123 }
     -- RGBPP_*: { "btcTxid": "0x...", "commitment": "0x..." }
     metadata JSONB NOT NULL DEFAULT '{}',
-    
+
     -- Timestamp (denormalized from block for efficient queries)
     timestamp TIMESTAMPTZ NOT NULL,
-    
+
     -- Partition key included in PK for partition pruning
     PRIMARY KEY (block_number, id),
-    
+
     -- Ensure unique activities per transaction
     UNIQUE (block_number, activity_id)
 ) PARTITION BY RANGE (block_number);

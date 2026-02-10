@@ -15,8 +15,9 @@ use rocksdb::{ColumnFamilyDescriptor, DBCompressionType, Options, DB};
 use tracing::{debug, info};
 
 pub use convert::{
-    block_view_to_rpc, RpcBlockResponseWithCycles, RpcBlockView, RpcCellDep, RpcCellInput,
-    RpcCellOutput, RpcHeaderView, RpcOutPoint, RpcScript, RpcTransactionView, RpcUncleBlockView,
+    block_view_to_rpc, convert_transaction_view, RpcBlockResponseWithCycles, RpcBlockView,
+    RpcCellDep, RpcCellInput, RpcCellOutput, RpcHeaderView, RpcOutPoint, RpcScript,
+    RpcTransactionView, RpcUncleBlockView,
 };
 
 /// CKB RocksDB column family names (from ckb-db-schema).
@@ -41,6 +42,16 @@ const ALL_COLUMN_FAMILIES: &[&str] = &[
 
 /// CKB meta key for tip header hash.
 const META_TIP_HEADER_KEY: &[u8] = b"TIP_HEADER";
+
+/// Lightweight block header info extracted from RocksDB.
+/// Provides fields not stored in `blocks_index` PostgreSQL table.
+#[derive(Debug, Clone)]
+pub struct BlockHeaderInfo {
+    pub parent_hash: [u8; 32],
+    pub nonce: u128,
+    pub transactions_root: [u8; 32],
+    pub version: u32,
+}
 
 /// Direct read-only access to the CKB node's RocksDB store.
 ///
@@ -169,6 +180,68 @@ impl CkbChainReader {
             return None;
         }
         Some(u64::from_le_bytes(raw[..8].try_into().ok()?))
+    }
+
+    /// Get a full block by number.
+    ///
+    /// Looks up the block hash for the given number, then reads the full block.
+    pub fn get_block_by_number(&self, number: u64) -> Option<BlockView> {
+        let hash = self.get_block_hash(number)?;
+        self.get_block(&hash)
+    }
+
+    /// Get lightweight header info for a block (fields not stored in `blocks_index`).
+    ///
+    /// Returns `parent_hash`, `nonce`, `transactions_root`, and `version` without
+    /// reading the full block body.
+    pub fn get_block_header_info(&self, hash: &[u8; 32]) -> Option<BlockHeaderInfo> {
+        let packed_hv = self.get_block_header_packed(hash)?;
+        // packed::HeaderView -> packed::Header -> core::HeaderView
+        let view = packed_hv.data().into_view();
+        Some(BlockHeaderInfo {
+            parent_hash: view.parent_hash().unpack(),
+            nonce: view.nonce(),
+            transactions_root: view.transactions_root().unpack(),
+            version: view.version(),
+        })
+    }
+
+    /// Get lightweight header info by block number.
+    pub fn get_block_header_info_by_number(&self, number: u64) -> Option<BlockHeaderInfo> {
+        let hash = self.get_block_hash(number)?;
+        self.get_block_header_info(&hash)
+    }
+
+    /// Get the miner message (first 4 bytes of first witness of cellbase tx).
+    /// This extracts the "miner message" that miners embed in the cellbase witness.
+    pub fn get_miner_message(&self, hash: &[u8; 32]) -> Option<Vec<u8>> {
+        // Read just the cellbase transaction (index 0) from block body
+        let cf = self.db.cf_handle(COLUMN_BLOCK_BODY)?;
+        let mut key = Vec::with_capacity(36);
+        key.extend_from_slice(hash);
+        key.extend_from_slice(&0u32.to_be_bytes());
+        let raw = self.db.get_cf(&cf, &key).ok()??;
+        let tv = packed::TransactionViewReader::from_slice(&raw).ok()?;
+        let witnesses = tv.data().witnesses();
+        if witnesses.is_empty() {
+            return None;
+        }
+        let first_witness = witnesses.get(0)?;
+        let data = first_witness.raw_data();
+        if data.len() < 4 {
+            return None;
+        }
+        // CKB cellbase witness: first 4 bytes are length prefix, then WitnessArgs molecule
+        // The miner message is typically embedded in the input_type field of WitnessArgs.
+        // For simplicity, we parse the WitnessArgs and extract input_type.
+        if let Ok(witness_args) = packed::WitnessArgsReader::from_slice(data) {
+            witness_args
+                .input_type()
+                .to_opt()
+                .map(|bytes| bytes.raw_data().to_vec())
+        } else {
+            None
+        }
     }
 
     /// Get a full block by hash, returned as ckb_types::core::BlockView.

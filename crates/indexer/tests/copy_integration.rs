@@ -1,10 +1,9 @@
 use ckbadger_indexer::db::copy_cells::CopyCellsWriter;
 use ckbadger_indexer::db::copy_format::BinaryCopyBuffer;
-use ckbadger_indexer::db::copy_inputs::{CopyCellDepsWriter, CopyInputsWriter};
+use ckbadger_indexer::db::copy_inputs::CopyInputsWriter;
 use ckbadger_indexer::db::copy_proposals::CopyProposalsWriter;
-use ckbadger_indexer::db::copy_transactions::CopyTransactionsWriter;
 use ckbadger_indexer::parser::cell::ParsedCell;
-use ckbadger_indexer::parser::transaction::{ParsedCellDep, ParsedInput};
+use ckbadger_indexer::parser::transaction::ParsedInput;
 
 fn create_test_cell() -> ParsedCell {
     ParsedCell {
@@ -28,14 +27,6 @@ fn create_test_input() -> ParsedInput {
         previous_tx_hash: [0u8; 32],
         previous_output_index: 0,
         since: 0,
-    }
-}
-
-fn create_test_cell_dep() -> ParsedCellDep {
-    ParsedCellDep {
-        out_point_tx_hash: [0u8; 32],
-        out_point_index: 0,
-        dep_type: 0,
     }
 }
 
@@ -64,55 +55,12 @@ fn test_cells_writer_produces_valid_binary() {
 }
 
 #[test]
-fn test_transactions_writer_produces_valid_binary() {
-    use chrono::Utc;
-
-    let mut writer = CopyTransactionsWriter::new();
-    writer.add_transaction(
-        &[0u8; 32],
-        1000,
-        &[0u8; 32],
-        0,
-        0,
-        1,
-        2,
-        1,
-        1,
-        0,
-        100_00000000,
-        99_00000000,
-        1_00000000,
-        Some(500),
-        Some(1000000),
-        false,
-        Utc::now(),
-    );
-    let data = writer.finish();
-
-    assert!(&data[0..11] == b"PGCOPY\n\xff\r\n\0");
-    assert!(data.len() > 50);
-}
-
-#[test]
 fn test_inputs_writer_produces_valid_binary() {
     let input = create_test_input();
     let tx_hash = vec![0u8; 32];
 
     let mut writer = CopyInputsWriter::new();
     writer.add_input(&tx_hash, 1000, 0, &input);
-    let data = writer.finish();
-
-    assert!(&data[0..11] == b"PGCOPY\n\xff\r\n\0");
-    assert!(data.len() > 50);
-}
-
-#[test]
-fn test_cell_deps_writer_produces_valid_binary() {
-    let dep = create_test_cell_dep();
-    let tx_hash = vec![0u8; 32];
-
-    let mut writer = CopyCellDepsWriter::new();
-    writer.add_cell_dep(&tx_hash, 1000, 0, &dep);
     let data = writer.finish();
 
     assert!(&data[0..11] == b"PGCOPY\n\xff\r\n\0");

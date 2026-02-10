@@ -69,13 +69,6 @@ const DEFERRABLE_CONSTRAINTS: &[DeferrableConstraint] = &[
         columns: "tx_block_number, tx_hash, input_index",
         is_partitioned: true,
     },
-    // transaction_cell_deps: (tx_block_number, tx_hash, dep_index) - sequential indices
-    DeferrableConstraint {
-        name: "tx_block_number_tx_hash_dep_index_key",
-        table: "transaction_cell_deps",
-        columns: "tx_block_number, tx_hash, dep_index",
-        is_partitioned: true,
-    },
     // block_proposals: (block_number, proposal_index) - sequential indices
     DeferrableConstraint {
         name: "block_number_proposal_index_key",
@@ -83,58 +76,9 @@ const DEFERRABLE_CONSTRAINTS: &[DeferrableConstraint] = &[
         columns: "block_number, proposal_index",
         is_partitioned: true,
     },
-    // uncle_blocks: (block_number, uncle_index) - sequential indices
-    DeferrableConstraint {
-        name: "block_number_uncle_index_key",
-        table: "uncle_blocks",
-        columns: "block_number, uncle_index",
-        is_partitioned: true,
-    },
 ];
 
 const DEFERRABLE_INDEXES: &[DeferrableIndex] = &[
-    DeferrableIndex {
-        name: "idx_blocks_hash",
-        table: "blocks",
-        definition: "CREATE INDEX {name} ON {table}(hash)",
-        partition_type: PartitionType::Range,
-        priority: 1,
-    },
-    DeferrableIndex {
-        name: "idx_blocks_epoch",
-        table: "blocks",
-        definition: "CREATE INDEX {name} ON {table}(epoch_number)",
-        partition_type: PartitionType::Range,
-        priority: 2,
-    },
-    DeferrableIndex {
-        name: "idx_blocks_miner",
-        table: "blocks",
-        definition: "CREATE INDEX {name} ON {table}(miner_lock_hash) WHERE miner_lock_hash IS NOT NULL",
-        partition_type: PartitionType::Range,
-        priority: 3,
-    },
-    DeferrableIndex {
-        name: "idx_tx_timestamp",
-        table: "transactions",
-        definition: "CREATE INDEX {name} ON {table}(timestamp DESC)",
-        partition_type: PartitionType::Range,
-        priority: 2,
-    },
-    DeferrableIndex {
-        name: "idx_tx_cursor",
-        table: "transactions",
-        definition: "CREATE INDEX {name} ON {table}(block_number DESC, tx_index DESC)",
-        partition_type: PartitionType::Range,
-        priority: 2,
-    },
-    DeferrableIndex {
-        name: "idx_tx_list_covering",
-        table: "transactions",
-        definition: "CREATE INDEX {name} ON {table}(block_number DESC, tx_index DESC) INCLUDE (hash, inputs_count, outputs_count, fee, is_cellbase, timestamp)",
-        partition_type: PartitionType::Range,
-        priority: 3,
-    },
     DeferrableIndex {
         name: "idx_cells_type_script_hash",
         table: "cells",
@@ -174,13 +118,6 @@ const DEFERRABLE_INDEXES: &[DeferrableIndex] = &[
         name: "idx_cells_list_covering",
         table: "cells",
         definition: "CREATE INDEX {name} ON {table}(lock_script_hash, created_at_block DESC) INCLUDE (tx_hash, output_index, capacity, type_script_hash, data_size) WHERE status = 0",
-        partition_type: PartitionType::Range,
-        priority: 3,
-    },
-    DeferrableIndex {
-        name: "idx_uncles_hash",
-        table: "uncle_blocks",
-        definition: "CREATE INDEX {name} ON {table}(hash)",
         partition_type: PartitionType::Range,
         priority: 3,
     },
@@ -369,7 +306,7 @@ mod tests {
 
     #[test]
     fn test_deferrable_indexes_count() {
-        assert!(DEFERRABLE_INDEXES.len() >= 13);
+        assert!(DEFERRABLE_INDEXES.len() >= 7);
     }
 
     #[test]
@@ -422,14 +359,11 @@ mod tests {
     #[test]
     fn test_partitioned_indexes_have_correct_tables() {
         let range_partitioned_tables = [
-            "blocks",
-            "transactions",
             "cells",
             "transaction_inputs",
-            "transaction_cell_deps",
-            "uncle_blocks",
             "block_proposals",
             "cell_flows",
+            "transactions_index",
         ];
 
         for idx in DEFERRABLE_INDEXES {
@@ -516,7 +450,7 @@ mod tests {
 
     #[test]
     fn test_deferrable_constraints_count() {
-        assert_eq!(DEFERRABLE_CONSTRAINTS.len(), 5);
+        assert_eq!(DEFERRABLE_CONSTRAINTS.len(), 3);
     }
 
     #[test]
@@ -532,13 +466,7 @@ mod tests {
 
     #[test]
     fn test_deferrable_constraints_have_valid_tables() {
-        let partitioned_tables = [
-            "cells",
-            "transaction_inputs",
-            "transaction_cell_deps",
-            "block_proposals",
-            "uncle_blocks",
-        ];
+        let partitioned_tables = ["cells", "transaction_inputs", "block_proposals"];
 
         for constraint in DEFERRABLE_CONSTRAINTS {
             assert!(

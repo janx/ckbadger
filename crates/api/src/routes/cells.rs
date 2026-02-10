@@ -1152,7 +1152,6 @@ async fn get_cell(
         consumed_at_block: Option<i64>,
         consumed_by_tx: Option<Vec<u8>>,
         data: Option<Vec<u8>>,
-        full_data: Option<Vec<u8>>,
     }
 
     let block_number = get_block_number_for_tx(&state.read_pool, &hash_bytes)
@@ -1163,15 +1162,13 @@ async fn get_cell(
     let row = if let Some(bn) = block_number {
         sqlx::query_as::<_, CellRow>(
             r#"
-            SELECT 
+            SELECT
                 c.tx_hash, c.output_index, c.capacity::TEXT,
                 c.lock_code_hash, c.lock_hash_type, c.lock_args, c.lock_script_hash,
                 c.type_code_hash, c.type_hash_type, c.type_args, c.type_script_hash,
-                c.data_hash, c.data_size, c.status, c.created_at_block, c.consumed_at_block, c.consumed_by_tx, 
-                c.data,
-                cd.data AS full_data
+                c.data_hash, c.data_size, c.status, c.created_at_block, c.consumed_at_block, c.consumed_by_tx,
+                c.data
             FROM cells c
-            LEFT JOIN cell_data cd ON cd.tx_hash = c.tx_hash AND cd.output_index = c.output_index
             WHERE c.tx_hash = $1 AND c.output_index = $2 AND c.created_at_block = $3
             "#,
         )
@@ -1184,15 +1181,13 @@ async fn get_cell(
     } else {
         sqlx::query_as::<_, CellRow>(
             r#"
-            SELECT 
+            SELECT
                 c.tx_hash, c.output_index, c.capacity::TEXT,
                 c.lock_code_hash, c.lock_hash_type, c.lock_args, c.lock_script_hash,
                 c.type_code_hash, c.type_hash_type, c.type_args, c.type_script_hash,
-                c.data_hash, c.data_size, c.status, c.created_at_block, c.consumed_at_block, c.consumed_by_tx, 
-                c.data,
-                cd.data AS full_data
+                c.data_hash, c.data_size, c.status, c.created_at_block, c.consumed_at_block, c.consumed_by_tx,
+                c.data
             FROM cells c
-            LEFT JOIN cell_data cd ON cd.tx_hash = c.tx_hash AND cd.output_index = c.output_index
             WHERE c.tx_hash = $1 AND c.output_index = $2
             "#,
         )
@@ -1227,7 +1222,17 @@ async fn get_cell(
             )
             .ok();
 
-            let cell_data = r.full_data.as_ref().or(r.data.as_ref());
+            // For full cell data (e.g., dep groups), read from RocksDB if available
+            let rocksdb_data = state.ckb_store.as_ref().and_then(|store| {
+                if hash_bytes.len() == 32 {
+                    let mut tx_h = [0u8; 32];
+                    tx_h.copy_from_slice(&hash_bytes);
+                    store.get_cell_data(&tx_h, output_index as u32)
+                } else {
+                    None
+                }
+            });
+            let cell_data = rocksdb_data.as_ref().or(r.data.as_ref());
             let dep_group_result = cell_data
                 .map(|d| parse_dep_group(d, r.data_size))
                 .unwrap_or(DepGroupParseResult {

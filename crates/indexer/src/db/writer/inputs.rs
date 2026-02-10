@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use crate::parser::transaction::{ParsedCellDep, ParsedInput};
+use crate::parser::transaction::ParsedInput;
 
 use super::BatchWriter;
 
@@ -41,51 +41,6 @@ impl BatchWriter {
         .bind(&prev_tx_hashes)
         .bind(&prev_output_indices)
         .bind(&sinces)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(())
-    }
-
-    pub async fn insert_transaction_cell_deps_batch(
-        &self,
-        cell_deps: &[(&[u8], i64, i16, &ParsedCellDep)],
-    ) -> Result<()> {
-        if cell_deps.is_empty() {
-            return Ok(());
-        }
-
-        let tx_hashes: Vec<&[u8]> = cell_deps.iter().map(|(h, _, _, _)| *h).collect();
-        let tx_block_numbers: Vec<i64> = cell_deps.iter().map(|(_, b, _, _)| *b).collect();
-        let dep_indices: Vec<i16> = cell_deps.iter().map(|(_, _, i, _)| *i).collect();
-        let out_point_tx_hashes: Vec<&[u8]> = cell_deps
-            .iter()
-            .map(|(_, _, _, dep)| dep.out_point_tx_hash.as_slice())
-            .collect();
-        let out_point_indices: Vec<i16> = cell_deps
-            .iter()
-            .map(|(_, _, _, dep)| dep.out_point_index)
-            .collect();
-        let dep_types: Vec<i16> = cell_deps
-            .iter()
-            .map(|(_, _, _, dep)| dep.dep_type)
-            .collect();
-
-        sqlx::query(
-            r#"
-            INSERT INTO transaction_cell_deps (
-                tx_hash, tx_block_number, dep_index, out_point_tx_hash, out_point_index, dep_type
-            )
-            SELECT * FROM UNNEST($1::bytea[], $2::bigint[], $3::smallint[], $4::bytea[], $5::smallint[], $6::smallint[])
-            ON CONFLICT (tx_block_number, tx_hash, dep_index) DO NOTHING
-            "#,
-        )
-        .bind(&tx_hashes)
-        .bind(&tx_block_numbers)
-        .bind(&dep_indices)
-        .bind(&out_point_tx_hashes)
-        .bind(&out_point_indices)
-        .bind(&dep_types)
         .execute(&self.pool)
         .await?;
 
