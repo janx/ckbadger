@@ -205,38 +205,22 @@ New RGB++ asset created.
 - **asset_id**: New asset type script hash
 - **metadata**: `{ btcTxid, commitment, assetId }`
 
-## Database Schema
+## Storage (RocksDB)
 
-The `activities` table uses RANGE partitioning by `block_number` for efficient queries and rollback:
+Activities are stored in the `activities` column family in RocksDB, keyed by `block_number + activity_index` for efficient range queries and rollback.
 
-```sql
-CREATE TABLE activities (
-    id BIGSERIAL,
-    block_number BIGINT NOT NULL,
-    activity_id BYTEA NOT NULL,           -- Deterministic hash
-    activity_type VARCHAR(32) NOT NULL,
-    activity_category VARCHAR(16) NOT NULL,
-    tx_hash BYTEA NOT NULL,
-    tx_index INTEGER NOT NULL,
-    activity_index SMALLINT NOT NULL,
-    from_lock_hash BYTEA,
-    to_lock_hash BYTEA,
-    amount TEXT NOT NULL,
-    asset_id BYTEA,
-    metadata JSONB NOT NULL DEFAULT '{}',
-    timestamp TIMESTAMPTZ NOT NULL,
-    PRIMARY KEY (block_number, id)
-) PARTITION BY RANGE (block_number);
-```
+Each `ActivityEntry` is bincode-serialized and contains:
 
-### Indexes
+- `activity_id` - Deterministic blake2b hash
+- `activity_type` / `activity_category` - Type and category strings
+- `tx_hash`, `tx_index`, `activity_index` - Transaction reference
+- `from_lock_hash`, `to_lock_hash` - Address references
+- `amount` - Amount as string (shannons)
+- `asset_id` - Optional asset identifier
+- `metadata` - JSON-encoded metadata string
+- `timestamp` - Block timestamp
 
-- `idx_activities_from_lock` - Queries by sender address
-- `idx_activities_to_lock` - Queries by recipient address
-- `idx_activities_tx_hash` - Queries by transaction
-- `idx_activities_type` - Queries by activity type
-- `idx_activities_category` - Queries by category
-- `idx_activities_asset_id` - Queries by asset
+Prefix scans by block number enable efficient queries and rollback.
 
 ## API Endpoints
 
@@ -328,15 +312,8 @@ During bulk sync (>1000 blocks behind tip), some activity parsing is simplified:
 
 ### Rollback Handling
 
-On chain reorganization, activities are deleted by block_number range:
+On chain reorganization, activities are deleted by block_number prefix scan in RocksDB, removing all entries at or above the fork point.
 
-```sql
-DELETE FROM activities WHERE block_number >= $1
-```
+### Write Performance
 
-### Parallel Writing
-
-Activities use the COPY protocol for high-throughput writes during sync:
-
-- `copy_activities_parallel()` - Multi-connection parallel COPY
-- ~100k activities/second throughput
+Activities are written as part of atomic `StoreBatch` commits to RocksDB, alongside all other block data. No separate write path is needed.

@@ -1,5 +1,7 @@
 # Performance Benchmark Results
 
+> **Note (2026-02)**: This document records historical benchmarks from the PostgreSQL-based indexer (Jan 2026). The storage engine has since been replaced with embedded RocksDB (`ckbadger-store`), which eliminated the PostgreSQL COPY bottleneck described below. These results are preserved for historical reference only and do not reflect current architecture or performance.
+
 ## Overview
 
 This document tracks the performance of the CKB indexer with the in-memory LiveCellStore optimization.

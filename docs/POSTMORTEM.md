@@ -2,6 +2,8 @@
 
 Historical fixes and their root causes. Reference this before implementing similar features.
 
+> **Note (2026-02)**: The storage engine was migrated from PostgreSQL to embedded RocksDB (`ckbadger-store`). SQL queries, table schemas, partition strategies, and file paths referencing PostgreSQL-specific code (e.g., `executor/statistics.rs`, `executor/index.rs`, `db/writer_v2.rs`) are historical. The lessons and domain knowledge (DAO calculations, CKB protocol rules, off-by-one errors) remain fully relevant.
+
 ---
 
 ## Category: NervosDAO
@@ -1557,4 +1559,4 @@ sqlx::query(&add_parent_sql).execute(pool).await?;
 
 ---
 
-_Last updated: 2026-02-05_
+_Last updated: 2026-02-10_

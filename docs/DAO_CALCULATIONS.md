@@ -189,40 +189,32 @@ Where:
 - `occupied_capacity`: DAO field bytes 24-31 (U)
 - `dao_deposits`: Sum of active deposits **at that block** (not current deposits!)
 
-**CRITICAL**: When calculating historical secondary issuance breakdown, `dao_deposits` must be queried for that specific block number:
-
-```sql
-SELECT SUM(capacity) FROM dao_deposits
-WHERE deposit_block_number <= $block_number
-  AND (withdraw_block IS NULL OR withdraw_block > $block_number)
-```
-
-Using current deposits (`WHERE status = 0`) will produce incorrect historical values.
+**CRITICAL**: When calculating historical secondary issuance breakdown, `dao_deposits` must be queried for that specific block number. Using current deposits will produce incorrect historical values. The indexer maintains point-in-time deposit tracking in RocksDB's `dao_deposits` column family.
 
 **Update frequency**: Every 50 blocks
 
 **Implementation**: `crates/indexer/src/sync/indexer.rs::update_secondary_issuance()`
 
-## 4. Database Schema
+## 4. Storage Schema (RocksDB)
 
-### dao_statistics table
+DAO statistics are stored in the `dao_stats` column family in RocksDB, keyed by metric name. Key fields:
 
-| Column                        | Type    | Description                                         |
-| ----------------------------- | ------- | --------------------------------------------------- |
-| `total_deposited`             | NUMERIC | Total CKB in active DAO deposits (shannons)         |
-| `total_depositors`            | INTEGER | Unique addresses with active deposits               |
-| `active_deposits`             | INTEGER | Count of active deposit cells                       |
-| `total_compensation_paid`     | NUMERIC | Cumulative compensation claimed (shannons)          |
-| `unclaimed_compensation`      | NUMERIC | Current unclaimed compensation (shannons)           |
-| `estimated_apc`               | TEXT    | Annualized percentage compensation (e.g., "4.86")   |
-| `cumulative_miner_secondary`  | TEXT    | Cumulative mining reward from secondary issuance    |
-| `cumulative_dao_compensation` | TEXT    | Cumulative DAO compensation from secondary issuance |
-| `cumulative_burnt`            | TEXT    | Cumulative burnt secondary issuance                 |
-| `last_processed_block`        | INTEGER | Last block processed for secondary issuance         |
+| Field                         | Description                                         |
+| ----------------------------- | --------------------------------------------------- |
+| `total_deposited`             | Total CKB in active DAO deposits (shannons)         |
+| `total_depositors`            | Unique addresses with active deposits               |
+| `active_deposits`             | Count of active deposit cells                       |
+| `total_compensation_paid`     | Cumulative compensation claimed (shannons)          |
+| `unclaimed_compensation`      | Current unclaimed compensation (shannons)           |
+| `estimated_apc`               | Annualized percentage compensation (e.g., "4.86")   |
+| `cumulative_miner_secondary`  | Cumulative mining reward from secondary issuance    |
+| `cumulative_dao_compensation` | Cumulative DAO compensation from secondary issuance |
+| `cumulative_burnt`            | Cumulative burnt secondary issuance                 |
+| `last_processed_block`        | Last block processed for secondary issuance         |
 
 ### API Response Mapping
 
-| API Field                | DB Column                     | Conversion       |
+| API Field                | Store Field                   | Conversion       |
 | ------------------------ | ----------------------------- | ---------------- |
 | `miningRewardCkb`        | `cumulative_miner_secondary`  | shannon_to_ckb() |
 | `depositCompensationCkb` | `cumulative_dao_compensation` | shannon_to_ckb() |
@@ -237,7 +229,7 @@ Using current deposits (`WHERE status = 0`) will produce incorrect historical va
 | APC, unclaimed compensation  | Every 1,000 blocks (non-bulk) | `recalculate_dao_extended_statistics()` |
 | Daily snapshots              | Daily                         | `update_dao_daily_snapshot()`           |
 
-> **Note:** `recalculate_dao_extended_statistics()` is skipped during bulk sync (`is_bulk_sync_active()` guard) because the full-table scan of active deposits causes connection pool contention and 2x write time spikes. The first recalculation after bulk sync completion produces correct results from all historical data.
+> **Note:** `recalculate_dao_extended_statistics()` is skipped during bulk sync (`is_bulk_sync_active()` guard) to avoid expensive scans during high-throughput indexing. The first recalculation after bulk sync completion produces correct results from all historical data.
 
 ## 6. Charts Data
 
@@ -427,10 +419,6 @@ pub fn calculate_knowledge_size(dao_field: &[u8]) -> Option<i128> {
     Some(u_field as i128 - BURN_ADJUSTMENT)
 }
 ```
-
-**Task Runner** (`crates/task-runner/src/executor/statistics.rs`):
-
-- Uses embedded SQL constant `504000000000000000` for rebuild
 
 **API** (`crates/api/src/routes/statistics.rs`):
 

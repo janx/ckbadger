@@ -36,7 +36,7 @@ cargo check                              # Type check all crates
 cargo build -p ckbadger-api              # Build specific crate
 cargo clippy                             # Lint
 
-# Rust Testing (213 indexer tests)
+# Rust Testing (533 tests across all crates)
 cargo test                               # Run all tests
 cargo test --lib                         # Unit tests only (fast)
 cargo test test_name                     # Single test (partial match)
@@ -216,14 +216,13 @@ For fresh syncs, the indexer defers certain non-critical writes to RocksDB durin
 | Task Type                  | Priority | Description                                     |
 | -------------------------- | -------- | ----------------------------------------------- |
 | `label_import`             | 0        | Import UDT/script labels from token-labels repo |
-| `cycles_backfill`          | 0        | Backfill transaction cycles from RPC            |
 | `statistics_rebuild`       | 5        | No-op (statistics maintained inline by indexer) |
 | `activities_rebuild`       | 7        | No-op (activities maintained inline by indexer) |
 | `token_rebuild`            | 7        | No-op (tokens maintained inline by indexer)     |
 | `spore_rebuild`            | 6        | No-op (spore data maintained inline by indexer) |
 | `address_balances_rebuild` | 8        | No-op (balances maintained inline by indexer)   |
 
-> **Note:** Most rebuild tasks are now no-ops because the RocksDB indexer maintains all data inline during sync. Only `label_import` and `cycles_backfill` perform actual work.
+> **Note:** Most rebuild tasks are now no-ops because the RocksDB indexer maintains all data inline during sync. Only `label_import` performs actual work.
 
 **Bulk Sync Protection:**
 

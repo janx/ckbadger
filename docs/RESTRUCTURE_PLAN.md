@@ -1,6 +1,6 @@
 # ckbadger 数据库重构计划
 
-> **Note (2026-02)**: This plan has been partially superseded by the "Zero-RPC Architecture" work on the `ckbdb-direct` branch. The `blocks` and `transactions` full tables described below still exist, but lightweight index tables (`blocks_index`, `transactions_index`) now handle most read queries. API detail endpoints read raw blockchain data directly from CKB's RocksDB instead of PostgreSQL, eliminating the need to store full block/transaction data for detail views. See `INDEXER_PIPELINE.md` and `PERFORMANCE_TUNING.md` for current architecture.
+> **Note (2026-02)**: This plan is **fully superseded**. PostgreSQL has been replaced by embedded RocksDB (`ckbadger-store` crate) with 25 column families. All data — blocks, transactions, cells, balances, statistics, DAO, tokens, activities — is stored in a single RocksDB instance. The partitioning, SQL schemas, and migration strategies described below no longer apply. This document is preserved for historical reference only.
 
 > 目标: 在单台PC上支持2-5x当前CKB主网数据量,实现所有页面 <200ms 响应
 
@@ -809,4 +809,4 @@ INSERT INTO dao_statistics (id) VALUES (1);
 
 ---
 
-_Last updated: 2025-01-13 (partially superseded by Zero-RPC Architecture, 2026-02)_
+_Last updated: 2025-01-13 (fully superseded by RocksDB migration, 2026-02)_
