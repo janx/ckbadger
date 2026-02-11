@@ -124,6 +124,20 @@ impl CkbadgerStore {
         Ok(())
     }
 
+    /// Mega-write CFs: T1's 8 CFs that receive the most data per batch.
+    /// 256MB write buffers prevent memtable flush stalls during mega-blocks
+    /// (block 12M has ~1.31M txs → ~162MB per CF).
+    const MEGA_WRITE_CFS: &'static [&'static str] = &[
+        CF_LIVE_CELLS,
+        CF_CONSUMED_CELLS,
+        CF_CELL_BY_LOCK,
+        CF_CELL_BY_TYPE,
+        CF_TX_INDEX,
+        CF_TX_HASH_MAP,
+        CF_ADDR_BALANCE,
+        CF_SCRIPT_INFO,
+    ];
+
     /// High-write column families that benefit from large write buffers (128 MB).
     const HIGH_WRITE_CFS: &'static [&'static str] = &[
         CF_LIVE_CELLS,
@@ -140,6 +154,10 @@ impl CkbadgerStore {
         CF_ACTIVITIES_BY_ADDR,
         CF_DAO_DEPOSITS,
     ];
+
+    fn is_mega_write_cf(name: &str) -> bool {
+        Self::MEGA_WRITE_CFS.contains(&name)
+    }
 
     fn is_high_write_cf(name: &str) -> bool {
         Self::HIGH_WRITE_CFS.contains(&name)
@@ -193,12 +211,17 @@ impl CkbadgerStore {
         (opts, block_cache)
     }
 
-    /// Per-CF options: low-write CFs get smaller write buffers (32 MB) to reduce
-    /// memtable overhead and free memory for the block cache.
+    /// Per-CF options with 3 tiers:
+    /// - Mega-write (8 CFs): 256MB × 4 buffers = 1GB per CF
+    /// - High-write (5 remaining CFs): 128MB × 4 buffers = 512MB per CF
+    /// - Everything else (12 CFs): 32MB × 2 buffers = 64MB per CF
     fn cf_options(name: &str, block_cache: &rocksdb::Cache) -> Options {
         let mut opts = Options::default();
 
-        if Self::is_high_write_cf(name) {
+        if Self::is_mega_write_cf(name) {
+            opts.set_write_buffer_size(256 * 1024 * 1024);
+            opts.set_max_write_buffer_number(4);
+        } else if Self::is_high_write_cf(name) {
             opts.set_write_buffer_size(128 * 1024 * 1024);
             opts.set_max_write_buffer_number(4);
         } else {
@@ -371,6 +394,7 @@ impl CkbadgerStore {
     /// Log the key RocksDB tuning parameters at startup.
     pub fn log_config() {
         info!(
+            write_buffer_mega_mb = 256,
             write_buffer_high_mb = 128,
             write_buffer_low_mb = 32,
             max_write_buffers_high = 4,
@@ -384,6 +408,7 @@ impl CkbadgerStore {
             block_cache_gb = 8,
             direct_io_compaction = true,
             pipelined_write = true,
+            mega_write_cfs = Self::MEGA_WRITE_CFS.len(),
             high_write_cfs = Self::HIGH_WRITE_CFS.len(),
             column_families = ALL_CFS.len(),
             "RocksDB configuration"

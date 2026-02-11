@@ -55,6 +55,13 @@ struct Args {
     )]
     ckb_data_path: Option<String>,
 
+    #[arg(
+        long,
+        default_value = "300000",
+        help = "Maximum transactions per fetcher sub-batch (splits mega-blocks)"
+    )]
+    max_batch_txs: usize,
+
     // Task runner settings (embedded)
     #[arg(long, env = "TOKEN_LABELS_PATH", default_value = "docs/token-labels")]
     token_labels_path: String,
@@ -96,6 +103,7 @@ async fn main() -> Result<()> {
         bulk_sync_threshold: args.bulk_sync_threshold,
         fast_sync_mode: true,
         ckb_data_path: args.ckb_data_path,
+        max_batch_txs: args.max_batch_txs,
     };
 
     info!("Opening ckbadger-store at: {}", config.data_path);

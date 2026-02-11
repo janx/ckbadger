@@ -40,6 +40,11 @@ impl<'a> StoreBatch<'a> {
         self.batch.is_empty()
     }
 
+    /// Get the approximate size of the batch in bytes.
+    pub fn size_in_bytes(&self) -> usize {
+        self.batch.size_in_bytes()
+    }
+
     // ---- Live cells ----
 
     pub fn put_cell(&mut self, tx_hash: &[u8], output_index: i16, info: &LiveCellInfo) {
