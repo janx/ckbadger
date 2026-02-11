@@ -431,19 +431,47 @@ impl BatchWriter {
 
     pub fn update_block_time_distribution_batch(
         &self,
-        _bucket_seconds: i32,
-        _count: i32,
+        bucket_seconds: i32,
+        count: i32,
+        batch: &mut StoreBatch,
     ) -> Result<()> {
-        // No-op: rebuilt periodically via statistics_rebuild task
+        let key = keys::encode_stats_key(
+            keys::STATS_PREFIX_BLOCK_TIME_DIST,
+            &bucket_seconds.to_be_bytes(),
+        );
+        let existing = self.store.get_cf(self.store.cf_stats(), &key)?;
+
+        let new_count = match existing {
+            Some(val) if val.len() == 4 => {
+                i32::from_le_bytes(val.try_into().unwrap_or([0; 4])) + count
+            }
+            _ => count,
+        };
+
+        batch.put_stats(&key, &new_count.to_le_bytes());
         Ok(())
     }
 
     pub fn update_epoch_time_distribution_batch(
         &self,
-        _bucket_minutes: i32,
-        _count: i32,
+        bucket_minutes: i32,
+        count: i32,
+        batch: &mut StoreBatch,
     ) -> Result<()> {
-        // No-op during bulk sync; rebuilt via task
+        let key = keys::encode_stats_key(
+            keys::STATS_PREFIX_EPOCH_TIME_DIST,
+            &bucket_minutes.to_be_bytes(),
+        );
+        let existing = self.store.get_cf(self.store.cf_stats(), &key)?;
+
+        let new_count = match existing {
+            Some(val) if val.len() == 4 => {
+                i32::from_le_bytes(val.try_into().unwrap_or([0; 4])) + count
+            }
+            _ => count,
+        };
+
+        batch.put_stats(&key, &new_count.to_le_bytes());
         Ok(())
     }
 
@@ -464,10 +492,38 @@ impl BatchWriter {
 
     pub fn update_dao_daily_snapshot(
         &self,
-        _date: NaiveDate,
-        _batch: &mut StoreBatch,
+        date: NaiveDate,
+        dao_field: Option<&[u8]>,
+        batch: &mut StoreBatch,
     ) -> Result<()> {
-        // DAO daily snapshots are rebuilt by the statistics task
+        let date_str = date.format("%Y%m%d").to_string();
+        let key =
+            keys::encode_stats_key(keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT, date_str.as_bytes());
+
+        // Extract total_deposited from DAO header field (bytes 8-15, little-endian u64)
+        let total_deposited_from_header: Option<i128> = dao_field.and_then(|field| {
+            if field.len() >= 16 {
+                let bytes: [u8; 8] = field[8..16].try_into().ok()?;
+                Some(u64::from_le_bytes(bytes) as i128)
+            } else {
+                None
+            }
+        });
+
+        // Read current global DAO stats for depositor/deposit/withdrawal counts
+        let dao_stats = self.store.get_dao_stats(b"global")?.unwrap_or_default();
+
+        let snapshot = DaoDailySnapshot {
+            date: date.format("%Y-%m-%d").to_string(),
+            total_deposited: total_deposited_from_header.unwrap_or(dao_stats.total_deposited),
+            depositors_count: dao_stats.total_depositors,
+            new_deposits: dao_stats.total_deposits,
+            withdrawals: dao_stats.total_withdrawals,
+            compensation: dao_stats.total_compensation,
+        };
+
+        let value = bincode::serialize(&snapshot)?;
+        batch.put_stats(&key, &value);
         Ok(())
     }
 

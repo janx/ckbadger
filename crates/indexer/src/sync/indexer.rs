@@ -419,9 +419,6 @@ impl Indexer {
         self.progress.blocks_remaining() > SECONDARY_ISSUANCE_BACKFILL_THRESHOLD
     }
 
-    fn is_stats_rebuild_in_progress(&self) -> bool {
-        false
-    }
     // === run / run_sequential / run_pipeline ===
 
     pub async fn run(&self) -> Result<()> {
@@ -4115,8 +4112,6 @@ impl Indexer {
     // === flush_batch_stats ===
 
     async fn flush_batch_stats(&self, stats: &BatchStats, bulk_sync_mode: bool) -> Result<()> {
-        let bulk_sync_active = self.is_bulk_sync_active();
-
         // Critical: sync_status must always be updated (crash recovery)
         if let Some((block_number, ref block_hash)) = stats.last_block {
             let ema_rate = self.progress.ema_blocks_per_second();
@@ -4152,86 +4147,85 @@ impl Indexer {
             )?;
         }
 
-        if !bulk_sync_active && !self.is_stats_rebuild_in_progress() {
-            // Daily statistics
-            for (
-                date,
-                (blocks, txs, created, consumed, capacity, data_size_added, data_size_consumed),
-            ) in &stats.daily_stats
-            {
-                let dao_field = stats.daily_dao_fields.get(date);
-                self.writer.update_daily_statistics(
-                    *date,
-                    *blocks,
-                    *txs,
-                    *created,
-                    *consumed,
-                    *capacity,
-                    *data_size_added,
-                    *data_size_consumed,
-                    dao_field.map(|v| v.as_slice()),
-                    &mut batch,
-                )?;
-            }
+        // Daily statistics
+        for (
+            date,
+            (blocks, txs, created, consumed, capacity, data_size_added, data_size_consumed),
+        ) in &stats.daily_stats
+        {
+            let dao_field = stats.daily_dao_fields.get(date);
+            self.writer.update_daily_statistics(
+                *date,
+                *blocks,
+                *txs,
+                *created,
+                *consumed,
+                *capacity,
+                *data_size_added,
+                *data_size_consumed,
+                dao_field.map(|v| v.as_slice()),
+                &mut batch,
+            )?;
+        }
 
-            // Daily block stats
-            for (date, (sum_target, count, uncles)) in &stats.daily_block_stats {
-                let avg_target = if *count > 0 {
-                    (*sum_target / *count as i128) as i64
-                } else {
-                    0
-                };
-                self.writer.update_daily_block_stats_batch(
-                    *date, avg_target, *count, *uncles, &mut batch,
-                )?;
-            }
+        // Daily block stats
+        for (date, (sum_target, count, uncles)) in &stats.daily_block_stats {
+            let avg_target = if *count > 0 {
+                (*sum_target / *count as i128) as i64
+            } else {
+                0
+            };
+            self.writer
+                .update_daily_block_stats_batch(*date, avg_target, *count, *uncles, &mut batch)?;
+        }
 
-            // Daily avg block time
-            for (date, (sum_ms, count)) in &stats.daily_block_times {
-                if *count > 0 {
-                    let avg_ms = sum_ms / *count as i64;
-                    self.writer
-                        .update_daily_avg_block_time_batch(*date, avg_ms, *count, &mut batch)?;
-                }
-            }
-
-            // Hourly statistics
-            for (hour, (blocks, txs, created, consumed, capacity)) in &stats.hourly_stats {
-                self.writer.update_hourly_statistics(
-                    *hour, *blocks, *txs, *created, *consumed, *capacity, &mut batch,
-                )?;
-            }
-
-            // Miner statistics
-            for ((date, miner_hash), (blocks_count, last_block)) in &stats.miner_stats {
-                self.writer.update_miner_statistics_batch(
-                    miner_hash,
-                    *last_block,
-                    *date,
-                    *blocks_count,
-                    &mut batch,
-                )?;
-            }
-
-            // Block time distribution (no-op, no batch param)
-            for (bucket, count) in &stats.block_time_dist {
+        // Daily avg block time
+        for (date, (sum_ms, count)) in &stats.daily_block_times {
+            if *count > 0 {
+                let avg_ms = sum_ms / *count as i64;
                 self.writer
-                    .update_block_time_distribution_batch(*bucket, *count)?;
+                    .update_daily_avg_block_time_batch(*date, avg_ms, *count, &mut batch)?;
             }
+        }
 
-            // Epoch time distribution (no-op, no batch param)
-            for (bucket, count) in &stats.epoch_time_dist {
+        // Hourly statistics
+        for (hour, (blocks, txs, created, consumed, capacity)) in &stats.hourly_stats {
+            self.writer.update_hourly_statistics(
+                *hour, *blocks, *txs, *created, *consumed, *capacity, &mut batch,
+            )?;
+        }
+
+        // Miner statistics
+        for ((date, miner_hash), (blocks_count, last_block)) in &stats.miner_stats {
+            self.writer.update_miner_statistics_batch(
+                miner_hash,
+                *last_block,
+                *date,
+                *blocks_count,
+                &mut batch,
+            )?;
+        }
+
+        // Block time distribution
+        for (bucket, count) in &stats.block_time_dist {
+            self.writer
+                .update_block_time_distribution_batch(*bucket, *count, &mut batch)?;
+        }
+
+        // Epoch time distribution
+        for (bucket, count) in &stats.epoch_time_dist {
+            self.writer
+                .update_epoch_time_distribution_batch(*bucket, *count, &mut batch)?;
+        }
+
+        // DAO daily snapshots
+        {
+            let mut snapshot_dates: Vec<_> = stats.dao_snapshot_dates.iter().collect();
+            snapshot_dates.sort();
+            for date in snapshot_dates {
+                let dao_field = stats.daily_dao_fields.get(date).map(|v| v.as_slice());
                 self.writer
-                    .update_epoch_time_distribution_batch(*bucket, *count)?;
-            }
-
-            // DAO daily snapshots (no-op, takes _batch)
-            {
-                let mut snapshot_dates: Vec<_> = stats.dao_snapshot_dates.iter().collect();
-                snapshot_dates.sort();
-                for date in snapshot_dates {
-                    self.writer.update_dao_daily_snapshot(*date, &mut batch)?;
-                }
+                    .update_dao_daily_snapshot(*date, dao_field, &mut batch)?;
             }
         }
 

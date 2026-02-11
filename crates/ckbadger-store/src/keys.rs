@@ -127,6 +127,7 @@ pub mod stats_prefix {
     pub const BLOCK_TIME_DIST: u8 = 0x05;
     pub const EPOCH_TIME_DIST: u8 = 0x06;
     pub const DAILY_BLOCK: u8 = 0x07;
+    pub const DAO_DAILY_SNAPSHOT: u8 = 0x08;
 }
 
 // Flat re-exports for convenience
@@ -137,6 +138,7 @@ pub const STATS_PREFIX_MINER: u8 = stats_prefix::MINER;
 pub const STATS_PREFIX_BLOCK_TIME_DIST: u8 = stats_prefix::BLOCK_TIME_DIST;
 pub const STATS_PREFIX_EPOCH_TIME_DIST: u8 = stats_prefix::EPOCH_TIME_DIST;
 pub const STATS_PREFIX_DAILY_BLOCK: u8 = stats_prefix::DAILY_BLOCK;
+pub const STATS_PREFIX_DAO_DAILY_SNAPSHOT: u8 = stats_prefix::DAO_DAILY_SNAPSHOT;
 
 /// Sync meta keys
 pub mod sync_meta_keys {
