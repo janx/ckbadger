@@ -110,7 +110,7 @@ struct CachedCellInfo {
 
 #[derive(Default)]
 struct PerfStats {
-    rpc_fetch_us: AtomicU64,
+    fetch_us: AtomicU64,
     db_write_us: AtomicU64,
     blocks_count: AtomicU64,
 }
@@ -125,11 +125,11 @@ impl PerfStats {
         if blocks == 0 {
             return;
         }
-        let rpc_ms = self.rpc_fetch_us.swap(0, Ordering::Relaxed) as f64 / 1000.0;
+        let fetch_ms = self.fetch_us.swap(0, Ordering::Relaxed) as f64 / 1000.0;
         let db_ms = self.db_write_us.swap(0, Ordering::Relaxed) as f64 / 1000.0;
         info!(
             blocks,
-            rpc_ms = format!("{:.1}", rpc_ms),
+            fetch_ms = format!("{:.1}", fetch_ms),
             db_ms = format!("{:.1}", db_ms),
             "Batch perf"
         );
@@ -137,7 +137,7 @@ impl PerfStats {
 
     /// Snapshot the current accumulated values (non-destructive read).
     fn snapshot_ms(&self) -> (f64, f64) {
-        let rpc = self.rpc_fetch_us.load(Ordering::Relaxed);
+        let rpc = self.fetch_us.load(Ordering::Relaxed);
         let db = self.db_write_us.load(Ordering::Relaxed);
         (rpc as f64 / 1000.0, db as f64 / 1000.0)
     }
@@ -383,7 +383,7 @@ impl Indexer {
         self.ckb_store.is_some()
     }
 
-    /// Snapshot the current perf stats: (rpc_ms, db_ms).
+    /// Snapshot the current perf stats: (fetch_ms, db_ms).
     pub fn perf_snapshot_ms(&self) -> (f64, f64) {
         self.perf.snapshot_ms()
     }
@@ -711,8 +711,11 @@ impl Indexer {
         let writer_for_parser = self.writer.clone();
         let cell_cache_for_parser = Arc::clone(&self.cell_cache);
 
+        let parse_tx_for_writer_depth = parse_tx.clone();
         let parser = tokio::spawn(async move {
             while let Some((start_block, end_block, chain_tip, blocks)) = fetch_rx.recv().await {
+                let t_parser = Instant::now();
+
                 let blocks_ref = Arc::clone(&blocks);
                 let (all_parsed_blocks, mut all_tx_data, all_input_outpoints) =
                     tokio::task::spawn_blocking(move || parse_blocks_parallel(&blocks_ref))
@@ -723,6 +726,8 @@ impl Indexer {
                     continue;
                 }
 
+                let t_parse_ms = t_parser.elapsed().as_secs_f64() * 1000.0;
+
                 let mut batch_cells: HashMap<(Vec<u8>, i16), ()> = HashMap::new();
                 for td in &all_tx_data {
                     for (idx, _) in td.cells.iter().enumerate() {
@@ -730,11 +735,14 @@ impl Indexer {
                     }
                 }
 
+                let t_cell_lookup = Instant::now();
+                let mut cache_hits: usize = 0;
                 let mut input_cell_info: HashMap<(Vec<u8>, i16), LiveCellInfo> = HashMap::new();
                 for (tx_hash, idx) in &all_input_outpoints {
                     let hash_arr: [u8; 32] = tx_hash.as_slice().try_into().unwrap_or([0u8; 32]);
                     let key = (hash_arr, *idx as i32);
                     if let Some(cached) = cell_cache_for_parser.get(&key) {
+                        cache_hits += 1;
                         input_cell_info.insert(
                             (tx_hash.clone(), *idx),
                             LiveCellInfo {
@@ -760,6 +768,7 @@ impl Indexer {
                     .cloned()
                     .collect();
 
+                let db_lookups;
                 if !missing_outpoints.is_empty() {
                     let unique_missing: Vec<(Vec<u8>, i16)> = {
                         let mut seen = HashSet::new();
@@ -768,6 +777,7 @@ impl Indexer {
                             .filter(|x| seen.insert(x.clone()))
                             .collect()
                     };
+                    db_lookups = unique_missing.len();
                     let bulk_sync_mode = chain_tip.saturating_sub(end_block) > 1000;
                     let wr = writer_for_parser.clone();
                     let missing_owned: Vec<(Vec<u8>, i16)> = unique_missing
@@ -797,10 +807,15 @@ impl Indexer {
                             warn!("Parser: DB query for cell info timed out after 30s, continuing without data");
                         }
                     }
+                } else {
+                    db_lookups = 0;
                 }
+                let cache_misses = db_lookups;
+                let cell_lookup_ms = t_cell_lookup.elapsed().as_secs_f64() * 1000.0;
 
                 // Pre-compute batch_cell_infos, fees, cell_cache, balance/script changes
                 // (moved from writer to overlap with pipeline buffering)
+                let t_precompute_parser = Instant::now();
 
                 // Pass 1: Build batch_cell_infos
                 let mut batch_cell_infos: HashMap<(Vec<u8>, i16), LiveCellInfo> = HashMap::new();
@@ -968,6 +983,33 @@ impl Indexer {
                     cell_cache_for_parser.clear();
                 }
 
+                let precompute_parser_ms = t_precompute_parser.elapsed().as_secs_f64() * 1000.0;
+                let total_parser_ms = t_parser.elapsed().as_secs_f64() * 1000.0;
+                let tx_count: usize = all_tx_data.len();
+                let cell_count: usize = all_tx_data.iter().map(|t| t.cells.len()).sum();
+                let input_count: usize = all_tx_data
+                    .iter()
+                    .filter(|t| !t.is_cellbase)
+                    .map(|t| t.inputs.len())
+                    .sum();
+                let queue_depth = parse_tx.max_capacity() - parse_tx.capacity();
+                info!(
+                    parse_ms = format!("{:.1}", t_parse_ms),
+                    cell_lookup_ms = format!("{:.1}", cell_lookup_ms),
+                    precompute_ms = format!("{:.1}", precompute_parser_ms),
+                    total_ms = format!("{:.1}", total_parser_ms),
+                    txs = tx_count,
+                    cells = cell_count,
+                    inputs = input_count,
+                    cache_hits,
+                    cache_misses,
+                    cache_size = cell_cache_for_parser.len(),
+                    queue_depth,
+                    "Parser batch {}-{}",
+                    start_block,
+                    end_block,
+                );
+
                 if parse_tx
                     .send((
                         start_block,
@@ -1113,12 +1155,15 @@ impl Indexer {
                         } else {
                             ""
                         };
+                        let writer_queue = parse_tx_for_writer_depth.max_capacity()
+                            - parse_tx_for_writer_depth.capacity();
                         info!(
-                            "Wrote blocks {} to {} ({} remaining, {:.2}s) {}{} {}",
+                            "Wrote blocks {} to {} ({} remaining, {:.2}s, q={}) {}{} {}",
                             start_block,
                             end_block,
                             self.progress.blocks_remaining(),
                             db_elapsed.as_secs_f64(),
+                            writer_queue,
                             partition_range,
                             boundary_info,
                             mode
@@ -1315,8 +1360,7 @@ impl Indexer {
 
         let fetch_start = Instant::now();
         let blocks = self.fetch_blocks_parallel(start_block, end_block).await?;
-        self.perf
-            .add(&self.perf.rpc_fetch_us, fetch_start.elapsed());
+        self.perf.add(&self.perf.fetch_us, fetch_start.elapsed());
 
         let db_start = Instant::now();
         if let Err(e) = self.sync_blocks_batch(&blocks, chain_tip).await {
@@ -2853,7 +2897,8 @@ impl Indexer {
                 // T1: Transactions + Cells + Consumption + Address Balances + Script Usage
                 // CFs: TX_INDEX, TX_HASH_MAP, LIVE_CELLS, CONSUMED_CELLS, CELL_BY_LOCK, CELL_BY_TYPE, ADDR_BALANCE, SCRIPT_INFO
                 // Merged T2+T3 into T1 to reduce commit_no_wal() count (fewer L0 SST files)
-                let h1 = s.spawn(|| -> Result<()> {
+                let h1 = s.spawn(|| -> Result<f64> {
+                    let t = Instant::now();
                     let mut batch = StoreBatch::new(store);
                     if !txs_for_batch.is_empty() {
                         writer.insert_transactions_batch(&txs_for_batch, &mut batch)?;
@@ -2875,12 +2920,14 @@ impl Indexer {
                     if !script_usage_changes.is_empty() {
                         writer.update_script_usage_batch(&script_usage_changes, &mut batch)?;
                     }
-                    batch.commit_no_wal()
+                    batch.commit_no_wal()?;
+                    Ok(t.elapsed().as_secs_f64() * 1000.0)
                 });
 
                 // T4: DAO
                 // CFs: DAO_DEPOSITS, DAO_BY_WITHDRAW_TX
-                let h4 = s.spawn(|| -> Result<()> {
+                let h4 = s.spawn(|| -> Result<f64> {
+                    let t = Instant::now();
                     let mut batch = StoreBatch::new(store);
 
                     // DAO deposits
@@ -3055,12 +3102,14 @@ impl Indexer {
                         }
                     }
 
-                    batch.commit_no_wal()
+                    batch.commit_no_wal()?;
+                    Ok(t.elapsed().as_secs_f64() * 1000.0)
                 });
 
                 // T5: UDT
                 // CFs: TOKENS, TOKEN_HOLDERS
-                let h5 = s.spawn(|| -> Result<()> {
+                let h5 = s.spawn(|| -> Result<f64> {
+                    let t = Instant::now();
                     let mut batch = StoreBatch::new(store);
 
                     struct UdtTxContext {
@@ -3269,14 +3318,16 @@ impl Indexer {
                         writer.insert_udt_cells_batch(&udt_cells_to_insert)?;
                     }
 
-                    batch.commit_no_wal()
+                    batch.commit_no_wal()?;
+                    Ok(t.elapsed().as_secs_f64() * 1000.0)
                 });
 
                 // T6: Spore (bulk sync subset — no mNFT/DotBit or NFT consumption)
                 // CFs: SPORE_DATA, SPORE_CONTENT
-                let h6 = s.spawn(|| -> Result<()> {
+                let h6 = s.spawn(|| -> Result<f64> {
+                    let t = Instant::now();
                     if skip_spore {
-                        return Ok(());
+                        return Ok(t.elapsed().as_secs_f64() * 1000.0);
                     }
                     let mut batch = StoreBatch::new(store);
                     let mut block_tx_idx = 0usize;
@@ -3310,14 +3361,16 @@ impl Indexer {
                             }
                         }
                     }
-                    batch.commit_no_wal()
+                    batch.commit_no_wal()?;
+                    Ok(t.elapsed().as_secs_f64() * 1000.0)
                 });
 
                 // T7: Stats accumulation (overlaps with T1-T6 IO)
                 // Safe: reads CF_BLOCK_HEADERS which is NOT written by T1-T6.
                 // RocksDB supports concurrent reads. All other stats computation is
                 // purely CPU-bound on immutable all_parsed_blocks + all_tx_data.
-                let h7 = s.spawn(|| -> Result<BatchStats> {
+                let h7 = s.spawn(|| -> Result<(BatchStats, f64)> {
+                    let t = Instant::now();
                     let mut stats = BatchStats::default();
                     let mut prev_timestamp: Option<chrono::DateTime<Utc>> =
                         if let Some(first_block) = all_parsed_blocks.first() {
@@ -3470,14 +3523,22 @@ impl Indexer {
                         }
                         stats.dao_snapshot_dates.insert(block_date);
                     }
-                    Ok(stats)
+                    Ok((stats, t.elapsed().as_secs_f64() * 1000.0))
                 });
 
-                h1.join().expect("T1 panicked")?;
-                h4.join().expect("T4 panicked")?;
-                h5.join().expect("T5 panicked")?;
-                h6.join().expect("T6 panicked")?;
-                let stats = h7.join().expect("T7 panicked")?;
+                let t1_ms = h1.join().expect("T1 panicked")?;
+                let t4_ms = h4.join().expect("T4 panicked")?;
+                let t5_ms = h5.join().expect("T5 panicked")?;
+                let t6_ms = h6.join().expect("T6 panicked")?;
+                let (stats, t7_ms) = h7.join().expect("T7 panicked")?;
+                info!(
+                    t1_ms = format!("{:.1}", t1_ms),
+                    t4_ms = format!("{:.1}", t4_ms),
+                    t5_ms = format!("{:.1}", t5_ms),
+                    t6_ms = format!("{:.1}", t6_ms),
+                    t7_ms = format!("{:.1}", t7_ms),
+                    "Thread timing"
+                );
                 Ok(stats)
             })?;
         } else {
@@ -4296,10 +4357,20 @@ impl Indexer {
         }
         let finalize_ms = t_finalize.elapsed().as_secs_f64() * 1000.0;
 
+        let batch_tx_count = all_tx_data.len();
+        let batch_cell_count: usize = all_tx_data.iter().map(|t| t.cells.len()).sum();
+        let batch_input_count: usize = all_tx_data
+            .iter()
+            .filter(|t| !t.is_cellbase)
+            .map(|t| t.inputs.len())
+            .sum();
         info!(
             precompute_ms = format!("{:.1}", precompute_ms),
             write_ms = format!("{:.1}", write_ms),
             finalize_ms = format!("{:.1}", finalize_ms),
+            txs = batch_tx_count,
+            cells = batch_cell_count,
+            inputs = batch_input_count,
             "Batch write breakdown"
         );
         Ok(())
