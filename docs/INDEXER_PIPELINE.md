@@ -128,7 +128,7 @@ Block N arrives
 | Parameter             | Default | Description                                                     |
 | --------------------- | ------- | --------------------------------------------------------------- |
 | `pipeline_enabled`    | `true`  | Enable three-stage pipeline (vs sequential sync)                |
-| `pipeline_buffer`     | `4`     | Channel capacity between stages                                 |
+| `pipeline_buffer`     | `8`     | Channel capacity between stages                                 |
 | `batch_size`          | `10000` | Blocks per batch                                                |
 | `parallel_fetch_size` | `64`    | Concurrent RPC requests (used only in RPC fallback mode)        |
 | `bulk_sync_threshold` | `72`    | Blocks behind tip to auto-enable bulk sync (2x DEEP_FORK_DEPTH) |
@@ -255,8 +255,8 @@ Pipeline mode uses more memory due to buffered batches:
 
 ```
 Memory ≈ pipeline_buffer × batch_size × (block_size + parsed_data)
-       ≈ 4 × 10000 × (~100KB per block)
-       ≈ 4GB additional
+       ≈ 8 × 10000 × (~100KB per block)
+       ≈ 8GB additional
 ```
 
 ### Channel Backpressure
@@ -352,7 +352,7 @@ Same-batch consumptions get code_hashes from the creating transaction directly.
 
 ### High Memory Usage
 
-1. Reduce `pipeline_buffer` (e.g., to 2-4)
+1. Reduce `pipeline_buffer` (e.g., to 2-4 from default 8)
 2. Reduce `batch_size`
 3. Monitor for memory leaks in channel handling
 

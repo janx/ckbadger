@@ -90,7 +90,7 @@ The indexer uses a three-stage pipeline: **Fetcher** (RPC I/O) → **Parser** (C
 | Parameter             | Default | Description                          |
 | --------------------- | ------- | ------------------------------------ |
 | `pipeline_enabled`    | `true`  | Enable pipeline mode (vs sequential) |
-| `pipeline_buffer`     | `4`     | Channel capacity between stages      |
+| `pipeline_buffer`     | `8`     | Channel capacity between stages      |
 | `batch_size`          | `10000` | Blocks per batch                     |
 | `parallel_fetch_size` | `64`    | Concurrent RPC requests              |
 
