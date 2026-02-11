@@ -56,7 +56,7 @@ fn default_pipeline_enabled() -> bool {
 }
 
 fn default_pipeline_buffer() -> usize {
-    4
+    8
 }
 
 fn default_bulk_sync_threshold() -> u64 {
@@ -90,7 +90,7 @@ mod tests {
 
     #[test]
     fn test_default_pipeline_buffer() {
-        assert_eq!(default_pipeline_buffer(), 4);
+        assert_eq!(default_pipeline_buffer(), 8);
     }
 
     #[test]

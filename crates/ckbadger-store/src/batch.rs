@@ -25,6 +25,12 @@ impl<'a> StoreBatch<'a> {
         self.store.write_batch(self.batch)
     }
 
+    /// Commit with WAL disabled. Use during bulk sync where crash recovery
+    /// re-syncs from the last committed block header.
+    pub fn commit_no_wal(self) -> anyhow::Result<()> {
+        self.store.write_batch_no_wal(self.batch)
+    }
+
     /// Get the number of operations in the batch.
     pub fn len(&self) -> usize {
         self.batch.len()

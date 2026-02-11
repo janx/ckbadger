@@ -2520,7 +2520,7 @@ impl Indexer {
         // Activities (no-op in RocksDB model)
         let _ = &udt_transfers_by_tx;
 
-        self.flush_batch_stats(&batch_stats).await?;
+        self.flush_batch_stats(&batch_stats, bulk_sync_mode).await?;
 
         let stats_ms = t_stats.elapsed().as_secs_f64() * 1000.0;
         debug!(
@@ -2684,29 +2684,24 @@ impl Indexer {
             }
         }
 
-        // Write txs, cells, inputs, proposals via StoreBatch (blocks written LAST)
-        let t_headers = Instant::now();
-        {
-            let mut batch = StoreBatch::new(self.writer.store());
-            if !txs_for_batch.is_empty() {
-                self.writer
-                    .insert_transactions_batch(&txs_for_batch, &mut batch)?;
-            }
-            if !all_cells.is_empty() {
-                self.writer.insert_cells_batch(&all_cells, &mut batch)?;
-            }
-            if !all_inputs.is_empty() {
-                self.writer.insert_transaction_inputs_batch(&all_inputs)?;
-            }
-            if !all_proposals.is_empty() {
-                self.writer.insert_proposals_batch(&all_proposals)?;
-            }
-            batch.commit()?;
+        // Unified data batch: accumulates all writes, committed once before block headers
+        let mut data_batch = StoreBatch::new(self.writer.store());
+        if !txs_for_batch.is_empty() {
+            self.writer
+                .insert_transactions_batch(&txs_for_batch, &mut data_batch)?;
         }
-        let headers_ms = t_headers.elapsed().as_secs_f64() * 1000.0;
+        if !all_cells.is_empty() {
+            self.writer
+                .insert_cells_batch(&all_cells, &mut data_batch)?;
+        }
+        if !all_inputs.is_empty() {
+            self.writer.insert_transaction_inputs_batch(&all_inputs)?;
+        }
+        if !all_proposals.is_empty() {
+            self.writer.insert_proposals_batch(&all_proposals)?;
+        }
 
         // Consume cells
-        let t_cells = Instant::now();
         let mut all_consumptions: Vec<(&[u8], i16, i64, &[u8], i64, i16)> = Vec::new();
         for tx_data in &all_tx_data {
             if !tx_data.is_cellbase {
@@ -2737,11 +2732,9 @@ impl Indexer {
                 }
             }
         }
-        // Single batch for consume + address balances + script usage
-        let mut consume_addr_batch = StoreBatch::new(self.writer.store());
         if !all_consumptions.is_empty() {
             self.writer
-                .consume_cells_batch(&all_consumptions, &mut consume_addr_batch)?;
+                .consume_cells_batch(&all_consumptions, &mut data_batch)?;
         }
 
         // Address balances
@@ -2874,19 +2867,14 @@ impl Indexer {
             .address_balances_deferred
             .load(std::sync::atomic::Ordering::Relaxed)
             && bulk_sync_mode;
-        {
-            if !skip_address_balances && !changes_ref.is_empty() {
-                self.writer
-                    .update_address_balances_batch(&changes_ref, &mut consume_addr_batch)?;
-            }
-            if !script_usage_changes.is_empty() {
-                self.writer
-                    .update_script_usage_batch(&script_usage_changes, &mut consume_addr_batch)?;
-            }
-            consume_addr_batch.commit()?;
+        if !skip_address_balances && !changes_ref.is_empty() {
+            self.writer
+                .update_address_balances_batch(&changes_ref, &mut data_batch)?;
         }
-
-        let cells_ms = t_cells.elapsed().as_secs_f64() * 1000.0;
+        if !script_usage_changes.is_empty() {
+            self.writer
+                .update_script_usage_batch(&script_usage_changes, &mut data_batch)?;
+        }
 
         // Stats accumulation
         let t_stats = Instant::now();
@@ -3072,10 +3060,8 @@ impl Indexer {
                 }
             }
             if !all_dao_deposits.is_empty() {
-                let mut batch = StoreBatch::new(self.writer.store());
                 self.writer
-                    .insert_dao_deposits_batch(&all_dao_deposits, &mut batch)?;
-                batch.commit()?;
+                    .insert_dao_deposits_batch(&all_dao_deposits, &mut data_batch)?;
             }
 
             // Batch query consumed DAO deposits
@@ -3200,10 +3186,8 @@ impl Indexer {
                     }
                 }
                 if !withdrawal_contexts.is_empty() {
-                    let mut batch = StoreBatch::new(self.writer.store());
                     self.writer
-                        .process_dao_withdrawals_batch(&withdrawal_contexts, &mut batch)?;
-                    batch.commit()?;
+                        .process_dao_withdrawals_batch(&withdrawal_contexts, &mut data_batch)?;
                 }
             }
         }
@@ -3384,10 +3368,8 @@ impl Indexer {
                         .iter()
                         .map(|(t, h, b)| (t, h.as_slice(), *b))
                         .collect();
-                    let mut batch = StoreBatch::new(self.writer.store());
                     self.writer
-                        .process_udt_transfers_batch(&transfer_refs, &mut batch)?;
-                    batch.commit()?;
+                        .process_udt_transfers_batch(&transfer_refs, &mut data_batch)?;
                 }
                 if !consumed_udt_outpoints.is_empty() {
                     self.writer
@@ -3415,7 +3397,6 @@ impl Indexer {
         // Group C: NFT/Spore processing
         {
             let mut batch_spore_ids: HashSet<Vec<u8>> = HashSet::new();
-            let mut nft_batch = StoreBatch::new(self.writer.store());
             let mut block_tx_idx = 0usize;
             for (block_idx, block_response) in blocks.iter().enumerate() {
                 let parsed = &all_parsed_blocks[block_idx];
@@ -3430,7 +3411,7 @@ impl Indexer {
                                 &cluster,
                                 parsed.number,
                                 &tx_data.hash,
-                                &mut nft_batch,
+                                &mut data_batch,
                             )?;
                         }
                         for (output_index, spore) in
@@ -3442,7 +3423,7 @@ impl Indexer {
                                 &tx_data.hash,
                                 output_index as i16,
                                 parsed.number,
-                                &mut nft_batch,
+                                &mut data_batch,
                             )?;
                             self.writer
                                 .insert_spore_content(&spore.spore_id, &spore.content)?;
@@ -3455,7 +3436,7 @@ impl Indexer {
                                 &tx_data.hash,
                                 0,
                                 parsed.number,
-                                &mut nft_batch,
+                                &mut data_batch,
                             )?;
                         }
                         for (output_index, class) in
@@ -3466,7 +3447,7 @@ impl Indexer {
                                 &tx_data.hash,
                                 output_index as i16,
                                 parsed.number,
-                                &mut nft_batch,
+                                &mut data_batch,
                             )?;
                         }
                         for (output_index, token) in MnftParser::parse_tokens(tx).iter().enumerate()
@@ -3476,7 +3457,7 @@ impl Indexer {
                                 &tx_data.hash,
                                 output_index as i16,
                                 parsed.number,
-                                &mut nft_batch,
+                                &mut data_batch,
                             )?;
                         }
                         for (output_index, account) in
@@ -3487,7 +3468,7 @@ impl Indexer {
                                 &tx_data.hash,
                                 output_index as i16,
                                 parsed.number,
-                                &mut nft_batch,
+                                &mut data_batch,
                             )?;
                         }
                     }
@@ -3559,7 +3540,7 @@ impl Indexer {
                                     spore_id,
                                     *block_number,
                                     consuming_tx_hash,
-                                    &mut nft_batch,
+                                    &mut data_batch,
                                 )?;
                             }
                         }
@@ -3568,7 +3549,7 @@ impl Indexer {
                                 token_id,
                                 *block_number,
                                 consuming_tx_hash,
-                                &mut nft_batch,
+                                &mut data_batch,
                             )?;
                         }
                         if let Some(account_id) = dotbit_map.get(&key) {
@@ -3576,28 +3557,35 @@ impl Indexer {
                                 account_id,
                                 *block_number,
                                 consuming_tx_hash,
-                                &mut nft_batch,
+                                &mut data_batch,
                             )?;
                         }
                     }
                 }
             }
-            nft_batch.commit()?;
         }
 
-        // Write blocks LAST - commit marker for crash recovery
+        // Commit all data writes in a single batch
+        let t_commit = Instant::now();
+        if bulk_sync_mode {
+            data_batch.commit_no_wal()?;
+        } else {
+            data_batch.commit()?;
+        }
+
+        // Write blocks LAST - commit marker for crash recovery (always with WAL)
         {
             let mut batch = StoreBatch::new(self.writer.store());
             self.writer.insert_blocks_batch(&block_refs, &mut batch)?;
             batch.commit()?;
         }
+        let commit_ms = t_commit.elapsed().as_secs_f64() * 1000.0;
 
-        self.flush_batch_stats(&batch_stats).await?;
+        self.flush_batch_stats(&batch_stats, bulk_sync_mode).await?;
 
         let stats_ms = t_stats.elapsed().as_secs_f64() * 1000.0;
         debug!(
-            headers_ms = format!("{:.1}", headers_ms),
-            cells_ms = format!("{:.1}", cells_ms),
+            commit_ms = format!("{:.1}", commit_ms),
             stats_ms = format!("{:.1}", stats_ms),
             "Batch write breakdown"
         );
@@ -3606,7 +3594,7 @@ impl Indexer {
     }
     // === flush_batch_stats ===
 
-    async fn flush_batch_stats(&self, stats: &BatchStats) -> Result<()> {
+    async fn flush_batch_stats(&self, stats: &BatchStats, bulk_sync_mode: bool) -> Result<()> {
         let bulk_sync_active = self.is_bulk_sync_active();
 
         // Critical: sync_status must always be updated (crash recovery)
@@ -3626,29 +3614,25 @@ impl Indexer {
                 .await?;
         }
 
+        // Unified stats batch: epoch stats (always) + detailed stats (live sync only)
+        let mut batch = StoreBatch::new(self.writer.store());
+
         // Epoch statistics - always written (contains epoch metadata needed for queries)
-        {
-            let mut batch = StoreBatch::new(self.writer.store());
-            for (epoch_number, accum) in &stats.epoch_stats {
-                self.writer.upsert_epoch_statistics_batch(
-                    *epoch_number,
-                    accum.start_block,
-                    accum.end_block,
-                    accum.length,
-                    accum.start_ts,
-                    accum.end_ts,
-                    accum.tx_count,
-                    accum.is_new,
-                    &mut batch,
-                )?;
-            }
-            batch.commit()?;
+        for (epoch_number, accum) in &stats.epoch_stats {
+            self.writer.upsert_epoch_statistics_batch(
+                *epoch_number,
+                accum.start_block,
+                accum.end_block,
+                accum.length,
+                accum.start_ts,
+                accum.end_ts,
+                accum.tx_count,
+                accum.is_new,
+                &mut batch,
+            )?;
         }
 
         if !bulk_sync_active && !self.is_stats_rebuild_in_progress() {
-            // All statistics methods are sync and take &mut StoreBatch
-            let mut batch = StoreBatch::new(self.writer.store());
-
             // Daily statistics
             for (
                 date,
@@ -3729,7 +3713,11 @@ impl Indexer {
                     self.writer.update_dao_daily_snapshot(*date, &mut batch)?;
                 }
             }
+        }
 
+        if bulk_sync_mode {
+            batch.commit_no_wal()?;
+        } else {
             batch.commit()?;
         }
 

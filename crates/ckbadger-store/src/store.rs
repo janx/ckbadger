@@ -178,6 +178,9 @@ impl CkbadgerStore {
         // Bypass OS page cache for flush/compaction to avoid cache pollution
         opts.set_use_direct_io_for_flush_and_compaction(true);
 
+        // Pipeline WAL write and memtable insert for concurrent writers
+        opts.set_enable_pipelined_write(true);
+
         // 8 GB block cache — system has 93 GB RAM; 2 GB only covered ~17% of SST data
         let block_cache = rocksdb::Cache::new_lru_cache(8 * 1024 * 1024 * 1024);
         let block_opts = Self::default_block_options(&block_cache);
@@ -320,6 +323,14 @@ impl CkbadgerStore {
         Ok(self.db.write(batch)?)
     }
 
+    /// Write a batch with WAL disabled. Use during bulk sync where crash recovery
+    /// re-syncs from the last committed block header.
+    pub fn write_batch_no_wal(&self, batch: WriteBatch) -> anyhow::Result<()> {
+        let mut opts = rocksdb::WriteOptions::default();
+        opts.disable_wal(true);
+        Ok(self.db.write_opt(batch, &opts)?)
+    }
+
     /// Iterate over a CF starting from a specific key.
     pub fn iterator_cf(
         &self,
@@ -366,6 +377,7 @@ impl CkbadgerStore {
             max_subcompactions = 3,
             block_cache_gb = 8,
             direct_io_compaction = true,
+            pipelined_write = true,
             high_write_cfs = Self::HIGH_WRITE_CFS.len(),
             column_families = ALL_CFS.len(),
             "RocksDB configuration"
