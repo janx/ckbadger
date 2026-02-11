@@ -2966,80 +2966,41 @@ impl Indexer {
         let t_write = Instant::now();
         let mut batch_stats;
         if bulk_sync_mode {
-            // Merged commit path: all threads write to a shared Mutex<StoreBatch>.
-            // DB reads happen outside the lock in parallel, then each thread briefly
-            // locks to append key-value pairs to the in-memory WriteBatch (~1-2ms).
-            // Single commit at the end: data + block headers + stats.
+            // Parallel write path: each thread writes to its own StoreBatch and commits independently.
+            // T4/T5/T6 do inline DB reads during their write phase, so a shared Mutex would
+            // serialize those reads and lose parallelism. Independent batches let all threads
+            // run fully in parallel; the RocksDB write group overhead (~2ms) is negligible.
             let store = self.writer.store();
             let writer = &self.writer;
             let udt_cache = &self.udt_cell_cache;
-            let shared_batch = std::sync::Mutex::new(StoreBatch::new(store));
 
             batch_stats = std::thread::scope(|s| -> Result<BatchStats> {
                 // T1: Transactions + Cells + Consumption + Address Balances + Script Usage
                 // CFs: TX_INDEX, TX_HASH_MAP, LIVE_CELLS, CONSUMED_CELLS, CELL_BY_LOCK, CELL_BY_TYPE, ADDR_BALANCE, SCRIPT_INFO
                 let h1 = s.spawn(|| -> Result<f64> {
                     let t = Instant::now();
-
-                    // Phase 1: DB reads (no lock needed)
-                    let existing_balances = if !skip_address_balances && !changes_ref.is_empty() {
-                        let keys_vec: Vec<&Vec<u8>> = changes_ref.keys().collect();
-                        writer.read_address_balances(&keys_vec)?
-                    } else {
-                        HashMap::new()
-                    };
-                    let existing_scripts = if !script_usage_changes.is_empty() {
-                        let unique_code_hashes: Vec<Vec<u8>> = {
-                            let mut seen = std::collections::HashSet::new();
-                            script_usage_changes
-                                .keys()
-                                .filter_map(|(code_hash, _)| {
-                                    if seen.insert(code_hash.clone()) {
-                                        Some(code_hash.clone())
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect()
-                        };
-                        let refs: Vec<&Vec<u8>> = unique_code_hashes.iter().collect();
-                        writer.read_script_info(&refs)?
-                    } else {
-                        HashMap::new()
-                    };
-
-                    // Phase 2: Batch writes (grab lock briefly)
-                    {
-                        let mut batch = shared_batch.lock().unwrap();
-                        if !txs_for_batch.is_empty() {
-                            writer.insert_transactions_batch(&txs_for_batch, &mut batch)?;
-                        }
-                        if !all_cells.is_empty() {
-                            writer.insert_cells_batch(&all_cells, &mut batch)?;
-                        }
-                        if !all_consumptions.is_empty() {
-                            writer.consume_cells_batch_preloaded(
-                                &all_consumptions,
-                                &input_cell_info,
-                                &batch_cell_infos,
-                                &mut batch,
-                            )?;
-                        }
-                        if !skip_address_balances && !changes_ref.is_empty() {
-                            writer.apply_address_balance_deltas(
-                                &existing_balances,
-                                &changes_ref,
-                                &mut batch,
-                            )?;
-                        }
-                        if !script_usage_changes.is_empty() {
-                            writer.apply_script_usage_deltas(
-                                &existing_scripts,
-                                &script_usage_changes,
-                                &mut batch,
-                            )?;
-                        }
+                    let mut batch = StoreBatch::new(store);
+                    if !txs_for_batch.is_empty() {
+                        writer.insert_transactions_batch(&txs_for_batch, &mut batch)?;
                     }
+                    if !all_cells.is_empty() {
+                        writer.insert_cells_batch(&all_cells, &mut batch)?;
+                    }
+                    if !all_consumptions.is_empty() {
+                        writer.consume_cells_batch_preloaded(
+                            &all_consumptions,
+                            &input_cell_info,
+                            &batch_cell_infos,
+                            &mut batch,
+                        )?;
+                    }
+                    if !skip_address_balances && !changes_ref.is_empty() {
+                        writer.update_address_balances_batch(&changes_ref, &mut batch)?;
+                    }
+                    if !script_usage_changes.is_empty() {
+                        writer.update_script_usage_batch(&script_usage_changes, &mut batch)?;
+                    }
+                    batch.commit_no_wal()?;
                     Ok(t.elapsed().as_secs_f64() * 1000.0)
                 });
 
@@ -3047,8 +3008,9 @@ impl Indexer {
                 // CFs: DAO_DEPOSITS, DAO_BY_WITHDRAW_TX
                 let h4 = s.spawn(|| -> Result<f64> {
                     let t = Instant::now();
+                    let mut batch = StoreBatch::new(store);
 
-                    // Phase 1: DAO computation + DB reads (no lock needed)
+                    // DAO deposits
                     let mut all_dao_deposits: Vec<(
                         crate::parser::ParsedDaoDeposit,
                         i64,
@@ -3075,6 +3037,9 @@ impl Indexer {
                                 ));
                             }
                         }
+                    }
+                    if !all_dao_deposits.is_empty() {
+                        writer.insert_dao_deposits_batch(&all_dao_deposits, &mut batch)?;
                     }
 
                     // Batch query consumed DAO deposits
@@ -3115,7 +3080,7 @@ impl Indexer {
                         HashMap::new()
                     };
 
-                    let withdrawal_contexts = if !consumed_dao_map.is_empty() {
+                    if !consumed_dao_map.is_empty() {
                         use crate::db::DaoWithdrawalContextTrait;
                         #[derive(Clone)]
                         struct DaoWithdrawalContext {
@@ -3211,23 +3176,13 @@ impl Indexer {
                                 });
                             }
                         }
-                        withdrawal_contexts
-                    } else {
-                        Vec::new()
-                    };
-
-                    // Phase 2: write to shared batch (brief lock)
-                    {
-                        let mut batch = shared_batch.lock().unwrap();
-                        if !all_dao_deposits.is_empty() {
-                            writer.insert_dao_deposits_batch(&all_dao_deposits, &mut batch)?;
-                        }
                         if !withdrawal_contexts.is_empty() {
                             writer
                                 .process_dao_withdrawals_batch(&withdrawal_contexts, &mut batch)?;
                         }
                     }
 
+                    batch.commit_no_wal()?;
                     Ok(t.elapsed().as_secs_f64() * 1000.0)
                 });
 
@@ -3235,8 +3190,8 @@ impl Indexer {
                 // CFs: TOKENS, TOKEN_HOLDERS
                 let h5 = s.spawn(|| -> Result<f64> {
                     let t = Instant::now();
+                    let mut batch = StoreBatch::new(store);
 
-                    // Phase 1: UDT cell parsing + cache lookups + DB reads (no lock)
                     struct UdtTxContext {
                         tx_hash: Vec<u8>,
                         block_number: i64,
@@ -3402,9 +3357,12 @@ impl Indexer {
                         }
                     }
 
-                    let mut all_transfers: Vec<(crate::parser::ParsedUdtTransfer, Vec<u8>, i64)> =
-                        Vec::new();
                     if !skip_token && !udt_tx_contexts.is_empty() {
+                        let mut all_transfers: Vec<(
+                            crate::parser::ParsedUdtTransfer,
+                            Vec<u8>,
+                            i64,
+                        )> = Vec::new();
                         for ctx in &udt_tx_contexts {
                             let mut input_udts: Vec<crate::parser::ParsedUdtCell> = Vec::new();
                             for (tx_hash, idx) in &ctx.input_outpoints {
@@ -3475,11 +3433,7 @@ impl Indexer {
                                 }
                             }
                         }
-                    }
 
-                    // Phase 2: write to shared batch (brief lock)
-                    {
-                        let mut batch = shared_batch.lock().unwrap();
                         if !all_transfers.is_empty() {
                             let transfer_refs: Vec<_> = all_transfers
                                 .iter()
@@ -3489,6 +3443,7 @@ impl Indexer {
                         }
                     }
 
+                    batch.commit_no_wal()?;
                     Ok(t.elapsed().as_secs_f64() * 1000.0)
                 });
 
@@ -3499,13 +3454,7 @@ impl Indexer {
                     if skip_spore {
                         return Ok(t.elapsed().as_secs_f64() * 1000.0);
                     }
-                    // Phase 1: parse spores (no lock needed for content writes)
-                    let mut spore_writes: Vec<(
-                        Vec<crate::parser::ParsedClusterCell>,
-                        Vec<(i16, crate::parser::ParsedSporeCell)>,
-                        i64,
-                        Vec<u8>,
-                    )> = Vec::new();
+                    let mut batch = StoreBatch::new(store);
                     let mut block_tx_idx = 0usize;
                     for (block_idx, block_response) in blocks.iter().enumerate() {
                         let parsed = &all_parsed_blocks[block_idx];
@@ -3515,52 +3464,29 @@ impl Indexer {
                         block_tx_idx += tx_count_for_block;
                         for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
                             let tx = &block_response.block.transactions[tx_idx];
-                            let clusters = SporeParser::parse_clusters(tx);
-                            let spores: Vec<(i16, crate::parser::ParsedSporeCell)> =
-                                SporeParser::parse_spores(tx)
-                                    .into_iter()
-                                    .enumerate()
-                                    .map(|(i, s)| (i as i16, s))
-                                    .collect();
-                            if !clusters.is_empty() || !spores.is_empty() {
-                                // Write spore content outside lock (direct DB writes, not batched)
-                                for (_, spore) in &spores {
-                                    writer.insert_spore_content(&spore.spore_id, &spore.content)?;
-                                }
-                                spore_writes.push((
-                                    clusters,
-                                    spores,
-                                    parsed.number,
-                                    tx_data.hash.to_vec(),
-                                ));
-                            }
-                        }
-                    }
-
-                    // Phase 2: write to shared batch (brief lock)
-                    if !spore_writes.is_empty() {
-                        let mut batch = shared_batch.lock().unwrap();
-                        for (clusters, spores, block_number, tx_hash) in &spore_writes {
-                            for cluster in clusters {
+                            for cluster in SporeParser::parse_clusters(tx) {
                                 writer.insert_spore_cluster(
-                                    cluster,
-                                    *block_number,
-                                    tx_hash,
+                                    &cluster,
+                                    parsed.number,
+                                    &tx_data.hash,
                                     &mut batch,
                                 )?;
                             }
-                            for (output_index, spore) in spores {
+                            for (output_index, spore) in
+                                SporeParser::parse_spores(tx).iter().enumerate()
+                            {
                                 writer.insert_spore_cell(
                                     spore,
-                                    tx_hash,
-                                    *output_index,
-                                    *block_number,
+                                    &tx_data.hash,
+                                    output_index as i16,
+                                    parsed.number,
                                     &mut batch,
                                 )?;
+                                writer.insert_spore_content(&spore.spore_id, &spore.content)?;
                             }
                         }
                     }
-
+                    batch.commit_no_wal()?;
                     Ok(t.elapsed().as_secs_f64() * 1000.0)
                 });
 
@@ -3740,18 +3666,6 @@ impl Indexer {
                 );
                 Ok(stats)
             })?;
-
-            // Single merged commit: data + block headers + stats in one atomic write.
-            // Eliminates write group formation overhead (was 5 separate commit_no_wal calls).
-            {
-                let mut batch = shared_batch.into_inner().unwrap();
-                self.writer.insert_blocks_batch(&block_refs, &mut batch)?;
-                self.write_batch_stats_to_batch(&batch_stats, &mut batch)?;
-                let batch_bytes = batch.size_in_bytes();
-                let batch_kvs = batch.len();
-                batch.commit_no_wal()?;
-                debug!(batch_bytes, batch_kvs, "Merged commit size");
-            }
         } else {
             // Live sync: serial writes in a single batch
             let mut data_batch = StoreBatch::new(self.writer.store());
@@ -4562,14 +4476,17 @@ impl Indexer {
         }
         let write_ms = t_write.elapsed().as_secs_f64() * 1000.0;
 
-        // Finalization: block headers + stats commit (live sync only;
-        // bulk sync already committed everything in the merged batch above)
+        // Finalization: block headers + stats commit
         let t_finalize = Instant::now();
-        if !bulk_sync_mode {
+        {
             let mut batch = StoreBatch::new(self.writer.store());
             self.writer.insert_blocks_batch(&block_refs, &mut batch)?;
             self.write_batch_stats_to_batch(&batch_stats, &mut batch)?;
-            batch.commit()?;
+            if bulk_sync_mode {
+                batch.commit_no_wal()?;
+            } else {
+                batch.commit()?;
+            }
         }
 
         // Lightweight async cache update (no DB write)
