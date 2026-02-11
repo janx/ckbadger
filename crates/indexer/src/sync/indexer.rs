@@ -2487,7 +2487,30 @@ impl Indexer {
         // Activities (no-op in RocksDB model)
         let _ = &udt_transfers_by_tx;
 
-        self.flush_batch_stats(&batch_stats, bulk_sync_mode).await?;
+        {
+            let mut batch = StoreBatch::new(self.writer.store());
+            self.write_batch_stats_to_batch(&batch_stats, &mut batch)?;
+            if bulk_sync_mode {
+                batch.commit_no_wal()?;
+            } else {
+                batch.commit()?;
+            }
+        }
+        if let Some((block_number, ref block_hash)) = batch_stats.last_block {
+            let ema_rate = self.progress.ema_blocks_per_second();
+            let ema_rate_opt = if ema_rate > 0.0 { Some(ema_rate) } else { None };
+            self.writer
+                .update_sync_status(
+                    block_number,
+                    block_hash,
+                    batch_stats.sync_totals.0,
+                    batch_stats.sync_totals.1,
+                    batch_stats.sync_totals.2,
+                    0,
+                    ema_rate_opt,
+                )
+                .await?;
+        }
 
         let stats_ms = t_stats.elapsed().as_secs_f64() * 1000.0;
         debug!(
@@ -2521,6 +2544,9 @@ impl Indexer {
             .unwrap_or(0);
         let bulk_sync_mode = chain_tip.saturating_sub(end_block) > 1000;
 
+        let t_precompute = Instant::now();
+
+        // Pass 1: Build batch_cell_infos (must complete before Pass 2)
         let mut batch_cell_infos: HashMap<(Vec<u8>, i16), LiveCellInfo> = HashMap::new();
         for tx_data in &all_tx_data {
             for (output_index, cell) in tx_data.cells.iter().enumerate() {
@@ -2540,6 +2566,7 @@ impl Indexer {
             }
         }
 
+        // Pass 2: Compute input capacity + fee (mutable — needs batch_cell_infos)
         for tx_data in &mut all_tx_data {
             if !tx_data.is_cellbase {
                 for input in &tx_data.inputs {
@@ -2559,7 +2586,19 @@ impl Indexer {
             }
         }
 
+        // Pass 3: Single merged loop for all immutable tx-level pre-computation
+        let mut all_cells: Vec<(&[u8], i16, &crate::parser::cell::ParsedCell, i64)> = Vec::new();
+        let mut all_inputs: Vec<(&[u8], i64, i16, &crate::parser::transaction::ParsedInput)> =
+            Vec::new();
+        let mut all_consumptions: Vec<(&[u8], i16, i64, &[u8], i64, i16)> = Vec::new();
+        let mut address_balance_changes: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, Vec<u8>)> =
+            HashMap::new();
+        let mut script_usage_changes: HashMap<(Vec<u8>, bool), (i64, i64, i64, i64)> =
+            HashMap::new();
+        let mut txs_for_batch: Vec<_> = Vec::with_capacity(all_tx_data.len());
+
         for tx_data in &all_tx_data {
+            // cell_cache update (was loop 3)
             for (output_index, cell) in tx_data.cells.iter().enumerate() {
                 self.cell_cache.insert(
                     (tx_data.hash, output_index as i32),
@@ -2575,41 +2614,29 @@ impl Indexer {
                     },
                 );
             }
-        }
-        if self.cell_cache.len() > CELL_CACHE_CAPACITY * 2 {
-            self.cell_cache.clear();
-        }
 
-        let block_refs: Vec<&crate::parser::block::ParsedBlock> =
-            all_parsed_blocks.iter().collect();
+            // txs_for_batch (was loop 4)
+            txs_for_batch.push((
+                tx_data.hash.as_slice(),
+                tx_data.block_number,
+                tx_data.block_hash.as_slice(),
+                tx_data.tx_index,
+                tx_data.version,
+                tx_data.inputs_count,
+                tx_data.outputs_count,
+                tx_data.witnesses_count,
+                tx_data.cell_deps_count,
+                tx_data.header_deps_count,
+                tx_data.total_input_capacity,
+                tx_data.total_output_capacity,
+                tx_data.fee,
+                Some(tx_data.tx_size),
+                tx_data.cycles,
+                tx_data.is_cellbase,
+                tx_data.timestamp,
+            ));
 
-        let txs_for_batch: Vec<_> = all_tx_data
-            .iter()
-            .map(|tx_data| {
-                (
-                    tx_data.hash.as_slice(),
-                    tx_data.block_number,
-                    tx_data.block_hash.as_slice(),
-                    tx_data.tx_index,
-                    tx_data.version,
-                    tx_data.inputs_count,
-                    tx_data.outputs_count,
-                    tx_data.witnesses_count,
-                    tx_data.cell_deps_count,
-                    tx_data.header_deps_count,
-                    tx_data.total_input_capacity,
-                    tx_data.total_output_capacity,
-                    tx_data.fee,
-                    Some(tx_data.tx_size),
-                    tx_data.cycles,
-                    tx_data.is_cellbase,
-                    tx_data.timestamp,
-                )
-            })
-            .collect();
-
-        let mut all_cells: Vec<(&[u8], i16, &crate::parser::cell::ParsedCell, i64)> = Vec::new();
-        for tx_data in &all_tx_data {
+            // all_cells (was loop 5)
             for (output_index, cell) in tx_data.cells.iter().enumerate() {
                 all_cells.push((
                     tx_data.hash.as_slice(),
@@ -2618,13 +2645,31 @@ impl Indexer {
                     tx_data.block_number,
                 ));
             }
-        }
 
-        // No-op calls kept for API compatibility
-        let mut all_inputs: Vec<(&[u8], i64, i16, &crate::parser::transaction::ParsedInput)> =
-            Vec::new();
-        for tx_data in &all_tx_data {
+            // script_usage_changes - outputs (was loop 10)
+            for cell in &tx_data.cells {
+                let lock_key = (cell.lock_code_hash.clone(), false);
+                let entry = script_usage_changes.entry(lock_key).or_insert((0, 0, 0, 0));
+                entry.0 += 1;
+                entry.1 += 1;
+                entry.2 += cell.capacity;
+                entry.3 += cell.capacity;
+                if let Some(ref type_code_hash) = cell.type_code_hash {
+                    let type_key = (type_code_hash.clone(), true);
+                    let entry = script_usage_changes.entry(type_key).or_insert((0, 0, 0, 0));
+                    entry.0 += 1;
+                    entry.1 += 1;
+                    entry.2 += cell.capacity;
+                    entry.3 += cell.capacity;
+                }
+            }
+
+            // Per-tx balance/consumption tracking
+            let mut tx_balance_changes: HashMap<Vec<u8>, i64> = HashMap::new();
+            let mut tx_cells_consumed: HashMap<Vec<u8>, i32> = HashMap::new();
+
             if !tx_data.is_cellbase {
+                // all_inputs (was loop 6)
                 for (input_index, input) in tx_data.inputs.iter().enumerate() {
                     all_inputs.push((
                         tx_data.hash.as_slice(),
@@ -2633,36 +2678,18 @@ impl Indexer {
                         input,
                     ));
                 }
-            }
-        }
 
-        let mut all_proposals: Vec<(i64, i16, &[u8])> = Vec::new();
-        for parsed_block in all_parsed_blocks {
-            if !parsed_block.proposals.is_empty() {
-                for (proposal_index, proposal_id) in parsed_block.proposals.iter().enumerate() {
-                    all_proposals.push((
-                        parsed_block.number,
-                        proposal_index as i16,
-                        proposal_id.as_slice(),
-                    ));
-                }
-                if !self.is_bulk_sync_active() {
-                    self.cache_block_proposals(&parsed_block.proposals, parsed_block.number)
-                        .await;
-                }
-            }
-        }
-
-        // Consume cells (pre-compute before write branch)
-        let mut all_consumptions: Vec<(&[u8], i16, i64, &[u8], i64, i16)> = Vec::new();
-        for tx_data in &all_tx_data {
-            if !tx_data.is_cellbase {
+                // Per-input work: consumptions + balance changes + script usage (was loops 8, 9-inputs, 11)
                 for (input_index, input) in tx_data.inputs.iter().enumerate() {
                     let key = (
                         input.previous_tx_hash.to_vec(),
                         input.previous_output_index as i16,
                     );
-                    if let Some(info) = input_cell_info.get(&key) {
+                    let info = input_cell_info
+                        .get(&key)
+                        .or_else(|| batch_cell_infos.get(&key));
+                    if let Some(info) = info {
+                        // all_consumptions
                         all_consumptions.push((
                             input.previous_tx_hash.as_slice(),
                             input.previous_output_index as i16,
@@ -2671,50 +2698,31 @@ impl Indexer {
                             tx_data.block_number,
                             input_index as i16,
                         ));
-                    } else if let Some(info) = batch_cell_infos.get(&key) {
-                        all_consumptions.push((
-                            input.previous_tx_hash.as_slice(),
-                            input.previous_output_index as i16,
-                            info.created_at_block,
-                            tx_data.hash.as_slice(),
-                            tx_data.block_number,
-                            input_index as i16,
-                        ));
+                        // balance changes
+                        *tx_balance_changes
+                            .entry(info.lock_script_hash.clone())
+                            .or_default() -= info.capacity;
+                        *tx_cells_consumed
+                            .entry(info.lock_script_hash.clone())
+                            .or_default() += 1;
+                        // script usage - inputs
+                        let lock_key = (info.lock_code_hash.clone(), false);
+                        let entry = script_usage_changes.entry(lock_key).or_insert((0, 0, 0, 0));
+                        entry.1 -= 1;
+                        entry.3 -= info.capacity;
+                        if let Some(ref type_code_hash) = info.type_code_hash {
+                            let type_key = (type_code_hash.clone(), true);
+                            let entry =
+                                script_usage_changes.entry(type_key).or_insert((0, 0, 0, 0));
+                            entry.1 -= 1;
+                            entry.3 -= info.capacity;
+                        }
                     }
                 }
             }
-        }
 
-        // Address balances (pre-compute before write branch)
-        let mut address_balance_changes: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, Vec<u8>)> =
-            HashMap::new();
-        for tx_data in &all_tx_data {
-            let mut tx_balance_changes: HashMap<Vec<u8>, i64> = HashMap::new();
+            // address_balance_changes - outputs + merge (was loop 9)
             let mut tx_cells_created: HashMap<Vec<u8>, i32> = HashMap::new();
-            let mut tx_cells_consumed: HashMap<Vec<u8>, i32> = HashMap::new();
-            if !tx_data.is_cellbase {
-                for input in &tx_data.inputs {
-                    let key = (
-                        input.previous_tx_hash.to_vec(),
-                        input.previous_output_index as i16,
-                    );
-                    if let Some(info) = input_cell_info.get(&key) {
-                        *tx_balance_changes
-                            .entry(info.lock_script_hash.clone())
-                            .or_default() -= info.capacity;
-                        *tx_cells_consumed
-                            .entry(info.lock_script_hash.clone())
-                            .or_default() += 1;
-                    } else if let Some(info) = batch_cell_infos.get(&key) {
-                        *tx_balance_changes
-                            .entry(info.lock_script_hash.clone())
-                            .or_default() -= info.capacity;
-                        *tx_cells_consumed
-                            .entry(info.lock_script_hash.clone())
-                            .or_default() += 1;
-                    }
-                }
-            }
             for cell in &tx_data.cells {
                 *tx_balance_changes
                     .entry(cell.lock_script_hash.clone())
@@ -2749,56 +2757,34 @@ impl Indexer {
                 entry.5 = tx_data.hash.to_vec();
             }
         }
+        // cell_cache eviction check
+        if self.cell_cache.len() > CELL_CACHE_CAPACITY * 2 {
+            self.cell_cache.clear();
+        }
+
         let changes_ref: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8])> =
             address_balance_changes
                 .iter()
                 .map(|(k, (a, b, c, d, e, f))| (k.clone(), (*a, *b, *c, *d, *e, f.as_slice())))
                 .collect();
 
-        // Script usage (pre-compute before write branch)
-        let mut script_usage_changes: HashMap<(Vec<u8>, bool), (i64, i64, i64, i64)> =
-            HashMap::new();
-        for tx_data in &all_tx_data {
-            for cell in &tx_data.cells {
-                let lock_key = (cell.lock_code_hash.clone(), false);
-                let entry = script_usage_changes.entry(lock_key).or_insert((0, 0, 0, 0));
-                entry.0 += 1;
-                entry.1 += 1;
-                entry.2 += cell.capacity;
-                entry.3 += cell.capacity;
-                if let Some(ref type_code_hash) = cell.type_code_hash {
-                    let type_key = (type_code_hash.clone(), true);
-                    let entry = script_usage_changes.entry(type_key).or_insert((0, 0, 0, 0));
-                    entry.0 += 1;
-                    entry.1 += 1;
-                    entry.2 += cell.capacity;
-                    entry.3 += cell.capacity;
+        let block_refs: Vec<&crate::parser::block::ParsedBlock> =
+            all_parsed_blocks.iter().collect();
+
+        // Pass 4: Proposals (iterates all_parsed_blocks, has async call in live sync)
+        let mut all_proposals: Vec<(i64, i16, &[u8])> = Vec::new();
+        for parsed_block in all_parsed_blocks {
+            if !parsed_block.proposals.is_empty() {
+                for (proposal_index, proposal_id) in parsed_block.proposals.iter().enumerate() {
+                    all_proposals.push((
+                        parsed_block.number,
+                        proposal_index as i16,
+                        proposal_id.as_slice(),
+                    ));
                 }
-            }
-        }
-        for tx_data in &all_tx_data {
-            if !tx_data.is_cellbase {
-                for input in &tx_data.inputs {
-                    let key = (
-                        input.previous_tx_hash.to_vec(),
-                        input.previous_output_index as i16,
-                    );
-                    let info = input_cell_info
-                        .get(&key)
-                        .or_else(|| batch_cell_infos.get(&key));
-                    if let Some(info) = info {
-                        let lock_key = (info.lock_code_hash.clone(), false);
-                        let entry = script_usage_changes.entry(lock_key).or_insert((0, 0, 0, 0));
-                        entry.1 -= 1;
-                        entry.3 -= info.capacity;
-                        if let Some(ref type_code_hash) = info.type_code_hash {
-                            let type_key = (type_code_hash.clone(), true);
-                            let entry =
-                                script_usage_changes.entry(type_key).or_insert((0, 0, 0, 0));
-                            entry.1 -= 1;
-                            entry.3 -= info.capacity;
-                        }
-                    }
+                if !self.is_bulk_sync_active() {
+                    self.cache_block_proposals(&parsed_block.proposals, parsed_block.number)
+                        .await;
                 }
             }
         }
@@ -2808,168 +2794,15 @@ impl Indexer {
             .load(std::sync::atomic::Ordering::Relaxed)
             && bulk_sync_mode;
 
-        // Stats accumulation (pre-compute — reads CF_BLOCK_HEADERS which is written LAST)
-        let t_stats = Instant::now();
-        let mut batch_stats = BatchStats::default();
-        let mut prev_timestamp: Option<chrono::DateTime<Utc>> =
-            if let Some(first_block) = all_parsed_blocks.first() {
-                self.writer
-                    .get_previous_block_timestamp(first_block.number)?
-            } else {
-                None
-            };
-        let mut prev_epoch: Option<(i64, chrono::DateTime<Utc>, f64)> =
-            if let Some(first_block) = all_parsed_blocks.first() {
-                self.writer
-                    .get_last_epoch_start(first_block.number)?
-                    .map(|(epoch_num, ts)| (epoch_num, ts, 0.0))
-            } else {
-                None
-            };
-
-        let mut block_tx_idx = 0usize;
-        for parsed in all_parsed_blocks {
-            let block_date = parsed.timestamp.date_naive();
-            let tx_count_for_block = parsed.transactions_count as usize;
-            let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
-            block_tx_idx += tx_count_for_block;
-
-            let cells_created: i32 = tx_slice.iter().map(|tx| tx.cells.len() as i32).sum();
-            let cells_consumed: i32 = tx_slice
-                .iter()
-                .filter(|tx| !tx.is_cellbase)
-                .map(|tx| tx.inputs.len() as i32)
-                .sum();
-            let capacity_transferred: i64 = tx_slice
-                .iter()
-                .filter(|tx| !tx.is_cellbase)
-                .map(|tx| tx.total_output_capacity)
-                .sum();
-            let data_size_added: i64 = tx_slice
-                .iter()
-                .flat_map(|tx| tx.cells.iter())
-                .map(|cell| cell.data_size as i64)
-                .sum();
-            let data_size_consumed: i64 = tx_slice
-                .iter()
-                .filter(|tx| !tx.is_cellbase)
-                .flat_map(|tx| tx.inputs.iter())
-                .filter_map(|input| {
-                    let key = (
-                        input.previous_tx_hash.to_vec(),
-                        input.previous_output_index as i16,
-                    );
-                    input_cell_info
-                        .get(&key)
-                        .map(|info| info.data_size as i64)
-                        .or_else(|| batch_cell_infos.get(&key).map(|info| info.data_size as i64))
-                })
-                .sum();
-
-            batch_stats.sync_totals.0 += parsed.transactions_count as i64;
-            batch_stats.sync_totals.1 += cells_created as i64;
-            batch_stats.sync_totals.2 += cells_consumed as i64;
-            batch_stats.last_block = Some((parsed.number, parsed.hash.clone()));
-
-            {
-                let entry = batch_stats.daily_stats.entry(block_date).or_default();
-                entry.0 += 1;
-                entry.1 += parsed.transactions_count;
-                entry.2 += cells_created;
-                entry.3 += cells_consumed;
-                entry.4 += capacity_transferred;
-                entry.5 += data_size_added;
-                entry.6 += data_size_consumed;
-            }
-            batch_stats
-                .daily_dao_fields
-                .insert(block_date, parsed.dao.clone());
-            {
-                let block_hour = truncate_to_hour(parsed.timestamp);
-                let entry = batch_stats.hourly_stats.entry(block_hour).or_default();
-                entry.0 += 1;
-                entry.1 += parsed.transactions_count;
-                entry.2 += cells_created;
-                entry.3 += cells_consumed;
-                entry.4 += capacity_transferred;
-            }
-            {
-                let entry = batch_stats.daily_block_stats.entry(block_date).or_default();
-                entry.0 += parsed.compact_target as i128;
-                entry.1 += 1;
-                entry.2 += parsed.uncles_count;
-            }
-            if let Some(first_tx) = tx_slice.first() {
-                if first_tx.is_cellbase {
-                    if let Some(first_cell) = first_tx.cells.first() {
-                        let key = (block_date, first_cell.lock_script_hash.clone());
-                        let entry = batch_stats.miner_stats.entry(key).or_insert((0, 0));
-                        entry.0 += 1;
-                        entry.1 = parsed.number;
-                    }
-                }
-            }
-            {
-                let entry = batch_stats
-                    .epoch_stats
-                    .entry(parsed.epoch_number)
-                    .or_insert_with(|| EpochAccum {
-                        start_block: parsed.number,
-                        end_block: parsed.number,
-                        length: parsed.epoch_length,
-                        start_ts: parsed.timestamp,
-                        end_ts: parsed.timestamp,
-                        tx_count: 0,
-                        is_new: parsed.epoch_index == 0,
-                    });
-                entry.end_block = parsed.number;
-                entry.end_ts = parsed.timestamp;
-                entry.tx_count += parsed.transactions_count;
-            }
-
-            if let Some(prev_ts) = prev_timestamp {
-                let block_time_seconds = (parsed.timestamp - prev_ts).num_seconds();
-                if block_time_seconds >= 0 {
-                    *batch_stats
-                        .block_time_dist
-                        .entry(block_time_to_bucket(block_time_seconds))
-                        .or_default() += 1;
-                    let block_time_ms = block_time_seconds * 1000;
-                    let entry = batch_stats
-                        .daily_block_times
-                        .entry(block_date)
-                        .or_insert((0, 0));
-                    entry.0 += block_time_ms;
-                    entry.1 += 1;
-                }
-            }
-            prev_timestamp = Some(parsed.timestamp);
-
-            if parsed.epoch_index == 0 && parsed.epoch_number > 0 {
-                if let Some((prev_epoch_num, prev_start_ts, _)) = prev_epoch {
-                    if prev_epoch_num == parsed.epoch_number - 1 {
-                        let epoch_duration_minutes =
-                            (parsed.timestamp - prev_start_ts).num_seconds() as f64 / 60.0;
-                        let bucket_minutes = epoch_duration_minutes.round() as i32;
-                        *batch_stats
-                            .epoch_time_dist
-                            .entry(bucket_minutes)
-                            .or_default() += 1;
-                    }
-                }
-            }
-            if parsed.epoch_index == 0 {
-                prev_epoch = Some((parsed.epoch_number, parsed.timestamp, 0.0));
-            }
-            batch_stats.dao_snapshot_dates.insert(block_date);
-        }
+        let precompute_ms = t_precompute.elapsed().as_secs_f64() * 1000.0;
 
         // DAO, UDT, NFT processing flags
         let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
         let skip_token = false;
         let skip_spore = false;
 
-        let t_commit = Instant::now();
+        let t_write = Instant::now();
+        let mut batch_stats;
         if bulk_sync_mode {
             // Parallel write path: each thread writes to disjoint CFs with its own StoreBatch.
             // Safe because data comes from a pre-validated CKB node and no cross-CF atomicity
@@ -2977,7 +2810,7 @@ impl Indexer {
             let store = self.writer.store();
             let writer = &self.writer;
 
-            std::thread::scope(|s| -> Result<()> {
+            batch_stats = std::thread::scope(|s| -> Result<BatchStats> {
                 // T1: Transactions + Cells + Consumption
                 // CFs: TX_INDEX, TX_HASH_MAP, LIVE_CELLS, CONSUMED_CELLS, CELL_BY_LOCK, CELL_BY_TYPE
                 let h1 = s.spawn(|| -> Result<()> {
@@ -3456,13 +3289,174 @@ impl Indexer {
                     batch.commit_no_wal()
                 });
 
+                // T7: Stats accumulation (overlaps with T1-T6 IO)
+                // Safe: reads CF_BLOCK_HEADERS which is NOT written by T1-T6.
+                // RocksDB supports concurrent reads. All other stats computation is
+                // purely CPU-bound on immutable all_parsed_blocks + all_tx_data.
+                let h7 = s.spawn(|| -> Result<BatchStats> {
+                    let mut stats = BatchStats::default();
+                    let mut prev_timestamp: Option<chrono::DateTime<Utc>> =
+                        if let Some(first_block) = all_parsed_blocks.first() {
+                            writer.get_previous_block_timestamp(first_block.number)?
+                        } else {
+                            None
+                        };
+                    let mut prev_epoch: Option<(i64, chrono::DateTime<Utc>, f64)> =
+                        if let Some(first_block) = all_parsed_blocks.first() {
+                            writer
+                                .get_last_epoch_start(first_block.number)?
+                                .map(|(epoch_num, ts)| (epoch_num, ts, 0.0))
+                        } else {
+                            None
+                        };
+
+                    let mut block_tx_idx = 0usize;
+                    for parsed in all_parsed_blocks {
+                        let block_date = parsed.timestamp.date_naive();
+                        let tx_count_for_block = parsed.transactions_count as usize;
+                        let tx_slice =
+                            &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
+                        block_tx_idx += tx_count_for_block;
+
+                        let cells_created: i32 =
+                            tx_slice.iter().map(|tx| tx.cells.len() as i32).sum();
+                        let cells_consumed: i32 = tx_slice
+                            .iter()
+                            .filter(|tx| !tx.is_cellbase)
+                            .map(|tx| tx.inputs.len() as i32)
+                            .sum();
+                        let capacity_transferred: i64 = tx_slice
+                            .iter()
+                            .filter(|tx| !tx.is_cellbase)
+                            .map(|tx| tx.total_output_capacity)
+                            .sum();
+                        let data_size_added: i64 = tx_slice
+                            .iter()
+                            .flat_map(|tx| tx.cells.iter())
+                            .map(|cell| cell.data_size as i64)
+                            .sum();
+                        let data_size_consumed: i64 = tx_slice
+                            .iter()
+                            .filter(|tx| !tx.is_cellbase)
+                            .flat_map(|tx| tx.inputs.iter())
+                            .filter_map(|input| {
+                                let key = (
+                                    input.previous_tx_hash.to_vec(),
+                                    input.previous_output_index as i16,
+                                );
+                                input_cell_info
+                                    .get(&key)
+                                    .map(|info| info.data_size as i64)
+                                    .or_else(|| {
+                                        batch_cell_infos.get(&key).map(|info| info.data_size as i64)
+                                    })
+                            })
+                            .sum();
+
+                        stats.sync_totals.0 += parsed.transactions_count as i64;
+                        stats.sync_totals.1 += cells_created as i64;
+                        stats.sync_totals.2 += cells_consumed as i64;
+                        stats.last_block = Some((parsed.number, parsed.hash.clone()));
+
+                        {
+                            let entry = stats.daily_stats.entry(block_date).or_default();
+                            entry.0 += 1;
+                            entry.1 += parsed.transactions_count;
+                            entry.2 += cells_created;
+                            entry.3 += cells_consumed;
+                            entry.4 += capacity_transferred;
+                            entry.5 += data_size_added;
+                            entry.6 += data_size_consumed;
+                        }
+                        stats
+                            .daily_dao_fields
+                            .insert(block_date, parsed.dao.clone());
+                        {
+                            let block_hour = truncate_to_hour(parsed.timestamp);
+                            let entry = stats.hourly_stats.entry(block_hour).or_default();
+                            entry.0 += 1;
+                            entry.1 += parsed.transactions_count;
+                            entry.2 += cells_created;
+                            entry.3 += cells_consumed;
+                            entry.4 += capacity_transferred;
+                        }
+                        {
+                            let entry = stats.daily_block_stats.entry(block_date).or_default();
+                            entry.0 += parsed.compact_target as i128;
+                            entry.1 += 1;
+                            entry.2 += parsed.uncles_count;
+                        }
+                        if let Some(first_tx) = tx_slice.first() {
+                            if first_tx.is_cellbase {
+                                if let Some(first_cell) = first_tx.cells.first() {
+                                    let key = (block_date, first_cell.lock_script_hash.clone());
+                                    let entry = stats.miner_stats.entry(key).or_insert((0, 0));
+                                    entry.0 += 1;
+                                    entry.1 = parsed.number;
+                                }
+                            }
+                        }
+                        {
+                            let entry = stats
+                                .epoch_stats
+                                .entry(parsed.epoch_number)
+                                .or_insert_with(|| EpochAccum {
+                                    start_block: parsed.number,
+                                    end_block: parsed.number,
+                                    length: parsed.epoch_length,
+                                    start_ts: parsed.timestamp,
+                                    end_ts: parsed.timestamp,
+                                    tx_count: 0,
+                                    is_new: parsed.epoch_index == 0,
+                                });
+                            entry.end_block = parsed.number;
+                            entry.end_ts = parsed.timestamp;
+                            entry.tx_count += parsed.transactions_count;
+                        }
+
+                        if let Some(prev_ts) = prev_timestamp {
+                            let block_time_seconds = (parsed.timestamp - prev_ts).num_seconds();
+                            if block_time_seconds >= 0 {
+                                *stats
+                                    .block_time_dist
+                                    .entry(block_time_to_bucket(block_time_seconds))
+                                    .or_default() += 1;
+                                let block_time_ms = block_time_seconds * 1000;
+                                let entry =
+                                    stats.daily_block_times.entry(block_date).or_insert((0, 0));
+                                entry.0 += block_time_ms;
+                                entry.1 += 1;
+                            }
+                        }
+                        prev_timestamp = Some(parsed.timestamp);
+
+                        if parsed.epoch_index == 0 && parsed.epoch_number > 0 {
+                            if let Some((prev_epoch_num, prev_start_ts, _)) = prev_epoch {
+                                if prev_epoch_num == parsed.epoch_number - 1 {
+                                    let epoch_duration_minutes =
+                                        (parsed.timestamp - prev_start_ts).num_seconds() as f64
+                                            / 60.0;
+                                    let bucket_minutes = epoch_duration_minutes.round() as i32;
+                                    *stats.epoch_time_dist.entry(bucket_minutes).or_default() += 1;
+                                }
+                            }
+                        }
+                        if parsed.epoch_index == 0 {
+                            prev_epoch = Some((parsed.epoch_number, parsed.timestamp, 0.0));
+                        }
+                        stats.dao_snapshot_dates.insert(block_date);
+                    }
+                    Ok(stats)
+                });
+
                 h1.join().expect("T1 panicked")?;
                 h2.join().expect("T2 panicked")?;
                 h3.join().expect("T3 panicked")?;
                 h4.join().expect("T4 panicked")?;
                 h5.join().expect("T5 panicked")?;
                 h6.join().expect("T6 panicked")?;
-                Ok(())
+                let stats = h7.join().expect("T7 panicked")?;
+                Ok(stats)
             })?;
         } else {
             // Live sync: serial writes in a single batch
@@ -4089,50 +4083,209 @@ impl Indexer {
 
             // Commit all data writes in a single batch
             data_batch.commit()?;
-        }
 
-        // Write blocks LAST - commit marker for crash recovery (always with WAL)
+            // Stats accumulation for live sync (serial — before finalize)
+            batch_stats = BatchStats::default();
+            let mut prev_timestamp: Option<chrono::DateTime<Utc>> =
+                if let Some(first_block) = all_parsed_blocks.first() {
+                    self.writer
+                        .get_previous_block_timestamp(first_block.number)?
+                } else {
+                    None
+                };
+            let mut prev_epoch: Option<(i64, chrono::DateTime<Utc>, f64)> =
+                if let Some(first_block) = all_parsed_blocks.first() {
+                    self.writer
+                        .get_last_epoch_start(first_block.number)?
+                        .map(|(epoch_num, ts)| (epoch_num, ts, 0.0))
+                } else {
+                    None
+                };
+
+            let mut block_tx_idx = 0usize;
+            for parsed in all_parsed_blocks {
+                let block_date = parsed.timestamp.date_naive();
+                let tx_count_for_block = parsed.transactions_count as usize;
+                let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
+                block_tx_idx += tx_count_for_block;
+
+                let cells_created: i32 = tx_slice.iter().map(|tx| tx.cells.len() as i32).sum();
+                let cells_consumed: i32 = tx_slice
+                    .iter()
+                    .filter(|tx| !tx.is_cellbase)
+                    .map(|tx| tx.inputs.len() as i32)
+                    .sum();
+                let capacity_transferred: i64 = tx_slice
+                    .iter()
+                    .filter(|tx| !tx.is_cellbase)
+                    .map(|tx| tx.total_output_capacity)
+                    .sum();
+                let data_size_added: i64 = tx_slice
+                    .iter()
+                    .flat_map(|tx| tx.cells.iter())
+                    .map(|cell| cell.data_size as i64)
+                    .sum();
+                let data_size_consumed: i64 = tx_slice
+                    .iter()
+                    .filter(|tx| !tx.is_cellbase)
+                    .flat_map(|tx| tx.inputs.iter())
+                    .filter_map(|input| {
+                        let key = (
+                            input.previous_tx_hash.to_vec(),
+                            input.previous_output_index as i16,
+                        );
+                        input_cell_info
+                            .get(&key)
+                            .map(|info| info.data_size as i64)
+                            .or_else(|| {
+                                batch_cell_infos.get(&key).map(|info| info.data_size as i64)
+                            })
+                    })
+                    .sum();
+
+                batch_stats.sync_totals.0 += parsed.transactions_count as i64;
+                batch_stats.sync_totals.1 += cells_created as i64;
+                batch_stats.sync_totals.2 += cells_consumed as i64;
+                batch_stats.last_block = Some((parsed.number, parsed.hash.clone()));
+
+                {
+                    let entry = batch_stats.daily_stats.entry(block_date).or_default();
+                    entry.0 += 1;
+                    entry.1 += parsed.transactions_count;
+                    entry.2 += cells_created;
+                    entry.3 += cells_consumed;
+                    entry.4 += capacity_transferred;
+                    entry.5 += data_size_added;
+                    entry.6 += data_size_consumed;
+                }
+                batch_stats
+                    .daily_dao_fields
+                    .insert(block_date, parsed.dao.clone());
+                {
+                    let block_hour = truncate_to_hour(parsed.timestamp);
+                    let entry = batch_stats.hourly_stats.entry(block_hour).or_default();
+                    entry.0 += 1;
+                    entry.1 += parsed.transactions_count;
+                    entry.2 += cells_created;
+                    entry.3 += cells_consumed;
+                    entry.4 += capacity_transferred;
+                }
+                {
+                    let entry = batch_stats.daily_block_stats.entry(block_date).or_default();
+                    entry.0 += parsed.compact_target as i128;
+                    entry.1 += 1;
+                    entry.2 += parsed.uncles_count;
+                }
+                if let Some(first_tx) = tx_slice.first() {
+                    if first_tx.is_cellbase {
+                        if let Some(first_cell) = first_tx.cells.first() {
+                            let key = (block_date, first_cell.lock_script_hash.clone());
+                            let entry = batch_stats.miner_stats.entry(key).or_insert((0, 0));
+                            entry.0 += 1;
+                            entry.1 = parsed.number;
+                        }
+                    }
+                }
+                {
+                    let entry = batch_stats
+                        .epoch_stats
+                        .entry(parsed.epoch_number)
+                        .or_insert_with(|| EpochAccum {
+                            start_block: parsed.number,
+                            end_block: parsed.number,
+                            length: parsed.epoch_length,
+                            start_ts: parsed.timestamp,
+                            end_ts: parsed.timestamp,
+                            tx_count: 0,
+                            is_new: parsed.epoch_index == 0,
+                        });
+                    entry.end_block = parsed.number;
+                    entry.end_ts = parsed.timestamp;
+                    entry.tx_count += parsed.transactions_count;
+                }
+
+                if let Some(prev_ts) = prev_timestamp {
+                    let block_time_seconds = (parsed.timestamp - prev_ts).num_seconds();
+                    if block_time_seconds >= 0 {
+                        *batch_stats
+                            .block_time_dist
+                            .entry(block_time_to_bucket(block_time_seconds))
+                            .or_default() += 1;
+                        let block_time_ms = block_time_seconds * 1000;
+                        let entry = batch_stats
+                            .daily_block_times
+                            .entry(block_date)
+                            .or_insert((0, 0));
+                        entry.0 += block_time_ms;
+                        entry.1 += 1;
+                    }
+                }
+                prev_timestamp = Some(parsed.timestamp);
+
+                if parsed.epoch_index == 0 && parsed.epoch_number > 0 {
+                    if let Some((prev_epoch_num, prev_start_ts, _)) = prev_epoch {
+                        if prev_epoch_num == parsed.epoch_number - 1 {
+                            let epoch_duration_minutes =
+                                (parsed.timestamp - prev_start_ts).num_seconds() as f64 / 60.0;
+                            let bucket_minutes = epoch_duration_minutes.round() as i32;
+                            *batch_stats
+                                .epoch_time_dist
+                                .entry(bucket_minutes)
+                                .or_default() += 1;
+                        }
+                    }
+                }
+                if parsed.epoch_index == 0 {
+                    prev_epoch = Some((parsed.epoch_number, parsed.timestamp, 0.0));
+                }
+                batch_stats.dao_snapshot_dates.insert(block_date);
+            }
+        }
+        let write_ms = t_write.elapsed().as_secs_f64() * 1000.0;
+
+        // Finalization: single atomic commit for block headers + stats
+        let t_finalize = Instant::now();
         {
             let mut batch = StoreBatch::new(self.writer.store());
             self.writer.insert_blocks_batch(&block_refs, &mut batch)?;
-            batch.commit()?;
+            self.write_batch_stats_to_batch(&batch_stats, &mut batch)?;
+            if bulk_sync_mode {
+                batch.commit_no_wal()?;
+            } else {
+                batch.commit()?;
+            }
         }
-        let commit_ms = t_commit.elapsed().as_secs_f64() * 1000.0;
 
-        self.flush_batch_stats(&batch_stats, bulk_sync_mode).await?;
-
-        let stats_ms = t_stats.elapsed().as_secs_f64() * 1000.0;
-        debug!(
-            commit_ms = format!("{:.1}", commit_ms),
-            stats_ms = format!("{:.1}", stats_ms),
-            "Batch write breakdown"
-        );
-        Ok(())
-    }
-    // === flush_batch_stats ===
-
-    async fn flush_batch_stats(&self, stats: &BatchStats, bulk_sync_mode: bool) -> Result<()> {
-        // Critical: sync_status must always be updated (crash recovery)
-        if let Some((block_number, ref block_hash)) = stats.last_block {
+        // Lightweight async cache update (no DB write)
+        if let Some((block_number, ref block_hash)) = batch_stats.last_block {
             let ema_rate = self.progress.ema_blocks_per_second();
             let ema_rate_opt = if ema_rate > 0.0 { Some(ema_rate) } else { None };
             self.writer
                 .update_sync_status(
                     block_number,
                     block_hash,
-                    stats.sync_totals.0,
-                    stats.sync_totals.1,
-                    stats.sync_totals.2,
+                    batch_stats.sync_totals.0,
+                    batch_stats.sync_totals.1,
+                    batch_stats.sync_totals.2,
                     0,
                     ema_rate_opt,
                 )
                 .await?;
         }
+        let finalize_ms = t_finalize.elapsed().as_secs_f64() * 1000.0;
 
-        // Unified stats batch: epoch stats (always) + detailed stats (live sync only)
-        let mut batch = StoreBatch::new(self.writer.store());
+        debug!(
+            precompute_ms = format!("{:.1}", precompute_ms),
+            write_ms = format!("{:.1}", write_ms),
+            finalize_ms = format!("{:.1}", finalize_ms),
+            "Batch write breakdown"
+        );
+        Ok(())
+    }
+    // === write_batch_stats_to_batch ===
 
-        // Epoch statistics - always written (contains epoch metadata needed for queries)
+    fn write_batch_stats_to_batch(&self, stats: &BatchStats, batch: &mut StoreBatch) -> Result<()> {
+        // Epoch statistics
         for (epoch_number, accum) in &stats.epoch_stats {
             self.writer.upsert_epoch_statistics_batch(
                 *epoch_number,
@@ -4143,7 +4296,7 @@ impl Indexer {
                 accum.end_ts,
                 accum.tx_count,
                 accum.is_new,
-                &mut batch,
+                batch,
             )?;
         }
 
@@ -4164,7 +4317,7 @@ impl Indexer {
                 *data_size_added,
                 *data_size_consumed,
                 dao_field.map(|v| v.as_slice()),
-                &mut batch,
+                batch,
             )?;
         }
 
@@ -4176,7 +4329,7 @@ impl Indexer {
                 0
             };
             self.writer
-                .update_daily_block_stats_batch(*date, avg_target, *count, *uncles, &mut batch)?;
+                .update_daily_block_stats_batch(*date, avg_target, *count, *uncles, batch)?;
         }
 
         // Daily avg block time
@@ -4184,14 +4337,14 @@ impl Indexer {
             if *count > 0 {
                 let avg_ms = sum_ms / *count as i64;
                 self.writer
-                    .update_daily_avg_block_time_batch(*date, avg_ms, *count, &mut batch)?;
+                    .update_daily_avg_block_time_batch(*date, avg_ms, *count, batch)?;
             }
         }
 
         // Hourly statistics
         for (hour, (blocks, txs, created, consumed, capacity)) in &stats.hourly_stats {
             self.writer.update_hourly_statistics(
-                *hour, *blocks, *txs, *created, *consumed, *capacity, &mut batch,
+                *hour, *blocks, *txs, *created, *consumed, *capacity, batch,
             )?;
         }
 
@@ -4202,20 +4355,20 @@ impl Indexer {
                 *last_block,
                 *date,
                 *blocks_count,
-                &mut batch,
+                batch,
             )?;
         }
 
         // Block time distribution
         for (bucket, count) in &stats.block_time_dist {
             self.writer
-                .update_block_time_distribution_batch(*bucket, *count, &mut batch)?;
+                .update_block_time_distribution_batch(*bucket, *count, batch)?;
         }
 
         // Epoch time distribution
         for (bucket, count) in &stats.epoch_time_dist {
             self.writer
-                .update_epoch_time_distribution_batch(*bucket, *count, &mut batch)?;
+                .update_epoch_time_distribution_batch(*bucket, *count, batch)?;
         }
 
         // DAO daily snapshots
@@ -4225,14 +4378,8 @@ impl Indexer {
             for date in snapshot_dates {
                 let dao_field = stats.daily_dao_fields.get(date).map(|v| v.as_slice());
                 self.writer
-                    .update_dao_daily_snapshot(*date, dao_field, &mut batch)?;
+                    .update_dao_daily_snapshot(*date, dao_field, batch)?;
             }
-        }
-
-        if bulk_sync_mode {
-            batch.commit_no_wal()?;
-        } else {
-            batch.commit()?;
         }
 
         Ok(())
