@@ -224,11 +224,11 @@ impl BatchWriter {
         Ok(result)
     }
 
-    pub fn get_cells_code_hashes_batch(
+    pub fn get_full_cells_info_batch(
         &self,
         outpoints: &[(&[u8], i16)],
         _bulk_sync_mode: bool,
-    ) -> Result<HashMap<(Vec<u8>, i16), (Vec<u8>, Option<Vec<u8>>)>> {
+    ) -> Result<HashMap<(Vec<u8>, i16), LiveCellInfo>> {
         if outpoints.is_empty() {
             return Ok(HashMap::new());
         }
@@ -251,10 +251,7 @@ impl BatchWriter {
             if let Ok(Some(value)) = res {
                 if let Ok(info) = bincode::deserialize::<LiveCellInfo>(&value) {
                     let (tx_hash, output_index) = outpoints[idx];
-                    result.insert(
-                        (tx_hash.to_vec(), output_index),
-                        (info.lock_code_hash, info.type_code_hash),
-                    );
+                    result.insert((tx_hash.to_vec(), output_index), info);
                 }
             }
         }
@@ -289,7 +286,16 @@ impl BatchWriter {
                         let (tx_hash, output_index) = missing[idx];
                         result.insert(
                             (tx_hash.to_vec(), *output_index),
-                            (info.lock_code_hash, info.type_code_hash),
+                            LiveCellInfo {
+                                capacity: info.capacity,
+                                created_at_block: info.created_at_block,
+                                lock_script_hash: info.lock_script_hash,
+                                lock_code_hash: info.lock_code_hash,
+                                lock_args: Vec::new(),
+                                type_script_hash: None,
+                                type_code_hash: info.type_code_hash,
+                                data_size: info.data_size,
+                            },
                         );
                     }
                 }
@@ -297,5 +303,45 @@ impl BatchWriter {
         }
 
         Ok(result)
+    }
+
+    pub fn consume_cells_batch_preloaded(
+        &self,
+        consumptions: &[(&[u8], i16, i64, &[u8], i64, i16)],
+        preloaded_cells: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
+        same_batch_cells: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
+        batch: &mut StoreBatch,
+    ) -> Result<()> {
+        if consumptions.is_empty() {
+            return Ok(());
+        }
+
+        for (tx_hash, output_index, ..) in consumptions {
+            let key = (tx_hash.to_vec(), *output_index);
+            let info = preloaded_cells
+                .get(&key)
+                .or_else(|| same_batch_cells.get(&key));
+
+            if let Some(info) = info {
+                batch.put_consumed_cell(tx_hash, *output_index, info);
+                batch.delete_cell(tx_hash, *output_index);
+                batch.delete_cell_by_lock(
+                    &info.lock_script_hash,
+                    info.created_at_block,
+                    tx_hash,
+                    *output_index,
+                );
+                if let Some(ref type_hash) = info.type_script_hash {
+                    batch.delete_cell_by_type(
+                        type_hash,
+                        info.created_at_block,
+                        tx_hash,
+                        *output_index,
+                    );
+                }
+            }
+        }
+
+        Ok(())
     }
 }

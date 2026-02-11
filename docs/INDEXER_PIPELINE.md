@@ -55,22 +55,21 @@ type FetchedBatch = (u64, u64, Vec<BlockResponseWithCycles>);
    - Block headers, transactions, cells
    - Collect all input outpoints for later consumption lookup
 
-2. **Cell info prefetch**:
-   - Check LRU cache for input cell info (capacity, lock_script_hash, data_size)
-   - Batch-fetch missing cell info from DB (`get_cells_info_batch`)
-   - Fetch code_hashes for consumed cells from previous batches (`get_cells_code_hashes_batch`)
+2. **Cell info prefetch** (single DB read replaces two):
+   - Check LRU cache for full input cell info (all `LiveCellInfo` fields)
+   - Batch-fetch missing cell info from DB (`get_full_cells_info_batch`) — returns complete `LiveCellInfo` structs, replacing both the old `get_cells_info_batch` (4 fields) and `get_cells_code_hashes_batch` (2 fields) with a single read
 
 **Output structure**:
 
 ```rust
 type ParsedBatch = (
-    u64,                                                // start_block
-    u64,                                                // end_block
-    Vec<BlockResponseWithCycles>,                       // raw blocks (needed for UDT parsing)
-    Vec<ParsedBlock>,                                   // parsed block headers
-    Vec<TxData>,                                        // parsed transactions with cells
-    HashMap<(Vec<u8>, i16), (i64, i64, Vec<u8>, i32)>,  // input_cell_info: (capacity, created_at_block, lock_hash, data_size)
-    HashMap<(Vec<u8>, i16), (Vec<u8>, Option<Vec<u8>>)> // consumed_code_hashes: (lock_code_hash, type_code_hash)
+    u64,                                        // start_block
+    u64,                                        // end_block
+    u64,                                        // chain_tip
+    Arc<Vec<BlockResponseWithCycles>>,           // raw blocks (needed for UDT parsing)
+    Vec<ParsedBlock>,                            // parsed block headers
+    Vec<TxData>,                                 // parsed transactions with cells
+    HashMap<(Vec<u8>, i16), LiveCellInfo>,        // input_cell_info: full cell data for all consumed inputs
 );
 ```
 
@@ -101,9 +100,8 @@ Block N arrives
 │ PARSER                                                        │
 │  1. parse_blocks_parallel() - extract all structured data     │
 │  2. Collect input outpoints: [(tx_hash, output_index), ...]   │
-│  3. Cache lookup for cell info                                │
-│  4. DB batch fetch for cache misses                           │
-│  5. DB fetch for consumed code_hashes (script usage tracking) │
+│  3. Cache lookup for full LiveCellInfo                        │
+│  4. Single DB batch fetch for cache misses (full_cells_info)  │
 └──────────────────────────────────────────────────────────────┘
        │
        ▼ ParsedBatch
@@ -112,10 +110,10 @@ Block N arrives
 │ WRITER                                                        │
 │  1. Validate batch sequence                                   │
 │  2. Check for reorg                                           │
-│  3. Insert blocks, txs, cells (parallel)                      │
-│  4. Insert inputs, cell_deps (parallel)                       │
-│  5. Consume cells (update status to consumed)                 │
-│  6. Update address balances, txs, script usage (parallel)     │
+│  3. Build same-batch LiveCellInfo map from ParsedCell data    │
+│  4. Insert blocks, txs, cells                                 │
+│  5. Consume cells via preloaded lookup (zero DB reads)        │
+│  6. Update address balances + script usage (parallel reads)   │
 │  7. Process DAO deposits/withdrawals                          │
 │  8. Process token transfers                                   │
 │  9. Flush batch statistics                                    │
@@ -214,18 +212,18 @@ Both modes MUST produce identical database state. This is enforced by:
 
 ### Verified Consistency Points
 
-| Feature                      | Sequential | Pipeline |
-| ---------------------------- | ---------- | -------- |
-| `insert_cells_batch()`       | Yes        | Yes      |
-| `consume_cells_batch()`      | Yes        | Yes      |
-| `insert_dao_deposits()`      | Yes        | Yes      |
-| `complete_dao_withdrawals()` | Yes        | Yes      |
-| `insert_udt_cells_batch()`   | Yes        | Yes      |
-| `insert_token_transfer()`    | Yes        | Yes      |
-| `insert_nft_transfer()`      | Yes        | Yes      |
-| `insert_dob_transfer()`      | Yes        | Yes      |
-| `update_script_usage()`      | Yes        | Yes      |
-| `flush_batch_stats()`        | Yes        | Yes      |
+| Feature                           | Sequential | Pipeline |
+| --------------------------------- | ---------- | -------- |
+| `insert_cells_batch()`            | Yes        | Yes      |
+| `consume_cells_batch_preloaded()` | Yes        | Yes      |
+| `insert_dao_deposits()`           | Yes        | Yes      |
+| `complete_dao_withdrawals()`      | Yes        | Yes      |
+| `insert_udt_cells_batch()`        | Yes        | Yes      |
+| `insert_token_transfer()`         | Yes        | Yes      |
+| `insert_nft_transfer()`           | Yes        | Yes      |
+| `insert_dob_transfer()`           | Yes        | Yes      |
+| `update_script_usage()`           | Yes        | Yes      |
+| `flush_batch_stats()`             | Yes        | Yes      |
 
 ## Performance Characteristics
 
@@ -233,21 +231,23 @@ Both modes MUST produce identical database state. This is enforced by:
 
 With default settings on typical hardware:
 
-| Mode                 | Blocks/sec | Bottleneck     |
-| -------------------- | ---------- | -------------- |
-| Sequential           | ~150-200   | RocksDB writes |
-| Pipeline (buffer=8)  | ~280-320   | RocksDB writes |
-| Pipeline (buffer=16) | ~400-500   | RocksDB writes |
-| Pipeline (optimized) | ~5000-7000 | RocksDB writes |
+| Mode                 | Blocks/sec   | Bottleneck         |
+| -------------------- | ------------ | ------------------ |
+| Sequential           | ~150-200     | RocksDB writes     |
+| Pipeline (buffer=8)  | ~280-320     | RocksDB writes     |
+| Pipeline (buffer=16) | ~400-500     | RocksDB writes     |
+| Pipeline (optimized) | ~5000-7000   | DB reads in Writer |
+| Pipeline (preloaded) | ~15000-20000 | RocksDB commits    |
 
 **Optimizations**:
 
-1. **Parallel writes**: Within each batch, independent operations run concurrently:
-   - blocks, transactions, cells writes (parallel)
-   - inputs, cell_deps writes (parallel)
-   - address balances, script usage updates (parallel)
+1. **Preloaded cell consumption**: Writer uses `consume_cells_batch_preloaded()` with zero DB reads — cell info is passed from the Parser stage via `LiveCellInfo` maps, and same-batch cells are resolved from the in-memory `batch_cell_infos` map. This also **fixes the same-batch consumption bug** where cells created and consumed within the same WriteBatch would not be found by `multi_get_cf`.
 
-2. **RocksDB WriteBatch**: All writes within a batch are grouped into atomic WriteBatch operations for maximum throughput.
+2. **Single Parser DB read**: `get_full_cells_info_batch()` returns complete `LiveCellInfo` structs in one read, replacing two separate reads (`get_cells_info_batch` + `get_cells_code_hashes_batch`).
+
+3. **Parallel address/script reads**: Address balance and script usage DB reads run concurrently via `std::thread::scope`, then deltas are applied sequentially (fast, no I/O).
+
+4. **RocksDB WriteBatch**: All writes within a batch are grouped into atomic WriteBatch operations for maximum throughput.
 
 ### Memory Usage
 
@@ -320,20 +320,19 @@ The parsed batch includes raw `BlockResponseWithCycles` because:
 
 ### Cell Cache Strategy
 
-Two-level lookup for consumed cell info:
+Three-level lookup for consumed cell info:
 
-1. **LRU Cache** (200k entries): Same-batch and recent block consumptions
-2. **DB Batch Query**: Cache misses fetched in single query per batch
+1. **LRU Cache** (200k entries, full `CachedCellInfo`): Recent block cells with all fields (capacity, lock_script_hash, lock_code_hash, lock_args, type_script_hash, type_code_hash, data_size)
+2. **DB Batch Query**: Cache misses fetched via `get_full_cells_info_batch()` — returns complete `LiveCellInfo` in one read
+3. **Same-batch map**: Cells created in the current batch are available via `batch_cell_infos` HashMap built from `ParsedCell` data
 
 ### Script Usage Tracking
 
-To track which scripts are used in consumed cells:
+All code hash data is now available from `LiveCellInfo` — no separate DB reads needed:
 
-1. Parser identifies cells consumed from **previous batches** (not same-batch)
-2. Fetches their `lock_code_hash` and `type_code_hash` from DB
-3. Writer uses this to update `script_usage` table
-
-Same-batch consumptions get code_hashes from the creating transaction directly.
+1. Parser provides `input_cell_info: HashMap<..., LiveCellInfo>` with all fields including `lock_code_hash` and `type_code_hash`
+2. Writer builds `batch_cell_infos: HashMap<..., LiveCellInfo>` for same-batch cells
+3. Script usage changes look up consumed cells from either map directly
 
 ## Troubleshooting
 
@@ -401,10 +400,11 @@ The indexer implements crash recovery to handle failures during batch writes. Ro
 **Sync status is written LAST** as the "commit marker". The write order is:
 
 1. Block headers, transactions, cells (WriteBatch)
-2. Cell consumptions, address balances, script usage
-3. DAO deposits, token transfers, NFT data
-4. Statistics updates
-5. **Sync status (LAST)** - only after all other data succeeds
+2. Cell consumptions via preloaded lookup (no DB reads)
+3. Address balances + script usage (parallel DB reads, then sequential writes)
+4. DAO deposits, token transfers, NFT data
+5. Statistics updates
+6. **Sync status (LAST)** - only after all other data succeeds
 
 This ensures that if sync_status indicates a block range, all related data is complete.
 
@@ -436,4 +436,4 @@ On startup, `find_last_consistent_block()` validates store consistency by compar
 
 ---
 
-_Last updated: 2026-02-09_
+_Last updated: 2026-02-11_

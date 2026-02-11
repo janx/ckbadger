@@ -15,6 +15,7 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use ckbadger_store::batch::StoreBatch;
+use ckbadger_store::types::LiveCellInfo;
 use ckbadger_store::CkbadgerStore;
 
 use crate::cache::CacheInvalidator;
@@ -100,6 +101,10 @@ struct CachedCellInfo {
     capacity: i64,
     created_at_block: i64,
     lock_script_hash: Vec<u8>,
+    lock_code_hash: Vec<u8>,
+    lock_args: Vec<u8>,
+    type_script_hash: Option<Vec<u8>>,
+    type_code_hash: Option<Vec<u8>>,
     data_size: i32,
 }
 
@@ -543,8 +548,7 @@ impl Indexer {
             Arc<Vec<BlockResponseWithCycles>>,
             Vec<crate::parser::block::ParsedBlock>,
             Vec<TxData>,
-            HashMap<(Vec<u8>, i16), (i64, i64, Vec<u8>, i32)>,
-            HashMap<(Vec<u8>, i16), (Vec<u8>, Option<Vec<u8>>)>,
+            HashMap<(Vec<u8>, i16), LiveCellInfo>,
         );
 
         let (fetch_tx, mut fetch_rx) = mpsc::channel::<FetchedBatch>(self.config.pipeline_buffer);
@@ -725,20 +729,23 @@ impl Indexer {
                     }
                 }
 
-                let mut input_cell_info: HashMap<(Vec<u8>, i16), (i64, i64, Vec<u8>, i32)> =
-                    HashMap::new();
+                let mut input_cell_info: HashMap<(Vec<u8>, i16), LiveCellInfo> = HashMap::new();
                 for (tx_hash, idx) in &all_input_outpoints {
                     let hash_arr: [u8; 32] = tx_hash.as_slice().try_into().unwrap_or([0u8; 32]);
                     let key = (hash_arr, *idx as i32);
                     if let Some(cached) = cell_cache_for_parser.get(&key) {
                         input_cell_info.insert(
                             (tx_hash.clone(), *idx),
-                            (
-                                cached.capacity,
-                                cached.created_at_block,
-                                cached.lock_script_hash.clone(),
-                                cached.data_size,
-                            ),
+                            LiveCellInfo {
+                                capacity: cached.capacity,
+                                created_at_block: cached.created_at_block,
+                                lock_script_hash: cached.lock_script_hash.clone(),
+                                lock_code_hash: cached.lock_code_hash.clone(),
+                                lock_args: cached.lock_args.clone(),
+                                type_script_hash: cached.type_script_hash.clone(),
+                                type_code_hash: cached.type_code_hash.clone(),
+                                data_size: cached.data_size,
+                            },
                         );
                     }
                 }
@@ -771,13 +778,12 @@ impl Indexer {
                             .iter()
                             .map(|(h, i)| (h.as_slice(), *i))
                             .collect();
-                        wr.get_cells_info_batch(&refs, bulk_sync_mode)
+                        wr.get_full_cells_info_batch(&refs, bulk_sync_mode)
                     });
                     match tokio::time::timeout(Duration::from_secs(30), db_query).await {
                         Ok(Ok(Ok(db_info))) => {
-                            for ((tx_hash, idx), (cap, block, lock_hash, data_size)) in db_info {
-                                input_cell_info
-                                    .insert((tx_hash, idx), (cap, block, lock_hash, data_size));
+                            for ((tx_hash, idx), info) in db_info {
+                                input_cell_info.insert((tx_hash, idx), info);
                             }
                         }
                         Ok(Ok(Err(e))) => {
@@ -792,55 +798,6 @@ impl Indexer {
                     }
                 }
 
-                let mut consumed_from_db: Vec<(Vec<u8>, i16)> = Vec::new();
-                for td in &all_tx_data {
-                    if !td.is_cellbase {
-                        for input in &td.inputs {
-                            let key = (
-                                input.previous_tx_hash.to_vec(),
-                                input.previous_output_index as i16,
-                            );
-                            if input_cell_info.contains_key(&key) && !batch_cells.contains_key(&key)
-                            {
-                                consumed_from_db.push(key);
-                            }
-                        }
-                    }
-                }
-
-                let consumed_code_hashes = if !consumed_from_db.is_empty() {
-                    let bulk_sync_mode = chain_tip.saturating_sub(end_block) > 1000;
-                    let wr2 = writer_for_parser.clone();
-                    let consumed_owned: Vec<(Vec<u8>, i16)> = consumed_from_db
-                        .iter()
-                        .map(|(h, i)| (h.clone(), *i))
-                        .collect();
-                    let db_query = tokio::task::spawn_blocking(move || {
-                        let refs: Vec<(&[u8], i16)> = consumed_owned
-                            .iter()
-                            .map(|(h, i)| (h.as_slice(), *i))
-                            .collect();
-                        wr2.get_cells_code_hashes_batch(&refs, bulk_sync_mode)
-                    });
-                    match tokio::time::timeout(Duration::from_secs(30), db_query).await {
-                        Ok(Ok(Ok(hashes))) => hashes,
-                        Ok(Ok(Err(e))) => {
-                            error!("Parser: DB error fetching code hashes: {}", e);
-                            HashMap::new()
-                        }
-                        Ok(Err(e)) => {
-                            error!("Parser: Failed to fetch code hashes from DB: {}", e);
-                            HashMap::new()
-                        }
-                        Err(_) => {
-                            warn!("Parser: DB query for code hashes timed out after 30s, continuing without data");
-                            HashMap::new()
-                        }
-                    }
-                } else {
-                    HashMap::new()
-                };
-
                 if parse_tx
                     .send((
                         start_block,
@@ -850,7 +807,6 @@ impl Indexer {
                         all_parsed_blocks,
                         all_tx_data,
                         input_cell_info,
-                        consumed_code_hashes,
                     ))
                     .await
                     .is_err()
@@ -879,7 +835,6 @@ impl Indexer {
                     all_parsed_blocks,
                     all_tx_data,
                     input_cell_info,
-                    consumed_code_hashes,
                 ))) => {
                     let (db_tip, db_tip_hash) = self.repo.get_sync_tip().await?;
                     let expected_start = if db_tip == 0 && db_tip_hash.is_none() {
@@ -932,7 +887,6 @@ impl Indexer {
                             &all_parsed_blocks,
                             all_tx_data,
                             input_cell_info,
-                            consumed_code_hashes,
                             chain_tip,
                         )
                         .await
@@ -1451,39 +1405,42 @@ impl Indexer {
             .unwrap_or(0);
         let bulk_sync_mode = chain_tip.saturating_sub(end_block) > 1000;
 
-        let mut batch_cells: HashMap<
-            (Vec<u8>, i16),
-            (i64, i64, Vec<u8>, i32, Vec<u8>, Option<Vec<u8>>),
-        > = HashMap::new();
+        let mut batch_cell_infos: HashMap<(Vec<u8>, i16), LiveCellInfo> = HashMap::new();
         for tx_data in &all_tx_data {
             for (output_index, cell) in tx_data.cells.iter().enumerate() {
-                batch_cells.insert(
+                batch_cell_infos.insert(
                     (tx_data.hash.to_vec(), output_index as i16),
-                    (
-                        cell.capacity,
-                        tx_data.block_number,
-                        cell.lock_script_hash.clone(),
-                        cell.data_size,
-                        cell.lock_code_hash.clone(),
-                        cell.type_code_hash.clone(),
-                    ),
+                    LiveCellInfo {
+                        capacity: cell.capacity,
+                        created_at_block: tx_data.block_number,
+                        lock_script_hash: cell.lock_script_hash.clone(),
+                        lock_code_hash: cell.lock_code_hash.clone(),
+                        lock_args: cell.lock_args.clone(),
+                        type_script_hash: cell.type_script_hash.clone(),
+                        type_code_hash: cell.type_code_hash.clone(),
+                        data_size: cell.data_size,
+                    },
                 );
             }
         }
 
-        let mut input_cell_info: HashMap<(Vec<u8>, i16), (i64, i64, Vec<u8>, i32)> = HashMap::new();
+        let mut input_cell_info: HashMap<(Vec<u8>, i16), LiveCellInfo> = HashMap::new();
         for (tx_hash, idx) in &all_input_outpoints {
             let hash_arr: [u8; 32] = tx_hash.as_slice().try_into().unwrap_or([0u8; 32]);
             let key = (hash_arr, *idx as i32);
             if let Some(cached) = self.cell_cache.get(&key) {
                 input_cell_info.insert(
                     (tx_hash.clone(), *idx),
-                    (
-                        cached.capacity,
-                        cached.created_at_block,
-                        cached.lock_script_hash.clone(),
-                        cached.data_size,
-                    ),
+                    LiveCellInfo {
+                        capacity: cached.capacity,
+                        created_at_block: cached.created_at_block,
+                        lock_script_hash: cached.lock_script_hash.clone(),
+                        lock_code_hash: cached.lock_code_hash.clone(),
+                        lock_args: cached.lock_args.clone(),
+                        type_script_hash: cached.type_script_hash.clone(),
+                        type_code_hash: cached.type_code_hash.clone(),
+                        data_size: cached.data_size,
+                    },
                 );
             }
         }
@@ -1492,7 +1449,7 @@ impl Indexer {
             .iter()
             .filter(|(h, i)| {
                 let key = (h.clone(), *i);
-                !input_cell_info.contains_key(&key) && !batch_cells.contains_key(&key)
+                !input_cell_info.contains_key(&key) && !batch_cell_infos.contains_key(&key)
             })
             .cloned()
             .collect();
@@ -1511,9 +1468,9 @@ impl Indexer {
                 .collect();
             let db_info = self
                 .writer
-                .get_cells_info_batch(&missing_refs, bulk_sync_mode)?;
-            for ((tx_hash, idx), (cap, block, lock_hash, data_size)) in db_info {
-                input_cell_info.insert((tx_hash, idx), (cap, block, lock_hash, data_size));
+                .get_full_cells_info_batch(&missing_refs, bulk_sync_mode)?;
+            for ((tx_hash, idx), info) in db_info {
+                input_cell_info.insert((tx_hash, idx), info);
             }
         }
 
@@ -1524,10 +1481,10 @@ impl Indexer {
                         input.previous_tx_hash.to_vec(),
                         input.previous_output_index as i16,
                     );
-                    if let Some((cap, _, _, _)) = input_cell_info.get(&key) {
-                        tx_data.total_input_capacity += cap;
-                    } else if let Some((cap, _, _, _, _, _)) = batch_cells.get(&key) {
-                        tx_data.total_input_capacity += cap;
+                    if let Some(info) = input_cell_info.get(&key) {
+                        tx_data.total_input_capacity += info.capacity;
+                    } else if let Some(info) = batch_cell_infos.get(&key) {
+                        tx_data.total_input_capacity += info.capacity;
                     }
                 }
                 tx_data.fee = tx_data
@@ -1544,6 +1501,10 @@ impl Indexer {
                         capacity: cell.capacity,
                         created_at_block: tx_data.block_number,
                         lock_script_hash: cell.lock_script_hash.clone(),
+                        lock_code_hash: cell.lock_code_hash.clone(),
+                        lock_args: cell.lock_args.clone(),
+                        type_script_hash: cell.type_script_hash.clone(),
+                        type_code_hash: cell.type_code_hash.clone(),
                         data_size: cell.data_size,
                     },
                 );
@@ -1662,26 +1623,18 @@ impl Indexer {
                         input.previous_tx_hash.to_vec(),
                         input.previous_output_index as i16,
                     );
-                    if let Some((cap, _, lock_hash, ds)) = input_cell_info.get(&key) {
+                    let info = input_cell_info
+                        .get(&key)
+                        .or_else(|| batch_cell_infos.get(&key));
+                    if let Some(info) = info {
                         all_flows.push((
                             tx_data.block_number,
                             input.previous_tx_hash.as_slice(),
                             input.previous_output_index as i16,
                             1,
-                            lock_hash.as_slice(),
-                            *cap,
-                            *ds,
-                            Some(tx_data.hash.as_slice()),
-                        ));
-                    } else if let Some((cap, _, lock_hash, ds, _, _)) = batch_cells.get(&key) {
-                        all_flows.push((
-                            tx_data.block_number,
-                            input.previous_tx_hash.as_slice(),
-                            input.previous_output_index as i16,
-                            1,
-                            lock_hash.as_slice(),
-                            *cap,
-                            *ds,
+                            info.lock_script_hash.as_slice(),
+                            info.capacity,
+                            info.data_size,
                             Some(tx_data.hash.as_slice()),
                         ));
                     }
@@ -1706,20 +1659,20 @@ impl Indexer {
                         input.previous_tx_hash.to_vec(),
                         input.previous_output_index as i16,
                     );
-                    if let Some((_, created_block, _, _)) = input_cell_info.get(&key) {
+                    if let Some(info) = input_cell_info.get(&key) {
                         all_consumptions.push((
                             input.previous_tx_hash.as_slice(),
                             input.previous_output_index as i16,
-                            *created_block,
+                            info.created_at_block,
                             tx_data.hash.as_slice(),
                             tx_data.block_number,
                             input_index as i16,
                         ));
-                    } else if let Some((_, created_block, _, _, _, _)) = batch_cells.get(&key) {
+                    } else if let Some(info) = batch_cell_infos.get(&key) {
                         all_consumptions.push((
                             input.previous_tx_hash.as_slice(),
                             input.previous_output_index as i16,
-                            *created_block,
+                            info.created_at_block,
                             tx_data.hash.as_slice(),
                             tx_data.block_number,
                             input_index as i16,
@@ -1731,8 +1684,12 @@ impl Indexer {
         // Single batch for consume + address balances + script usage
         let mut consume_addr_batch = StoreBatch::new(self.writer.store());
         if !all_consumptions.is_empty() {
-            self.writer
-                .consume_cells_batch(&all_consumptions, &mut consume_addr_batch)?;
+            self.writer.consume_cells_batch_preloaded(
+                &all_consumptions,
+                &input_cell_info,
+                &batch_cell_infos,
+                &mut consume_addr_batch,
+            )?;
         }
 
         // Address balances
@@ -1748,12 +1705,16 @@ impl Indexer {
                         input.previous_tx_hash.to_vec(),
                         input.previous_output_index as i16,
                     );
-                    if let Some((cap, _, lock_hash, _)) = input_cell_info.get(&key) {
-                        *tx_balance_changes.entry(lock_hash.clone()).or_default() -= cap;
-                        *tx_cells_consumed.entry(lock_hash.clone()).or_default() += 1;
-                    } else if let Some((cap, _, lock_hash, _, _, _)) = batch_cells.get(&key) {
-                        *tx_balance_changes.entry(lock_hash.clone()).or_default() -= cap;
-                        *tx_cells_consumed.entry(lock_hash.clone()).or_default() += 1;
+                    let info = input_cell_info
+                        .get(&key)
+                        .or_else(|| batch_cell_infos.get(&key));
+                    if let Some(info) = info {
+                        *tx_balance_changes
+                            .entry(info.lock_script_hash.clone())
+                            .or_default() -= info.capacity;
+                        *tx_cells_consumed
+                            .entry(info.lock_script_hash.clone())
+                            .or_default() += 1;
                     }
                 }
             }
@@ -1819,8 +1780,6 @@ impl Indexer {
                 }
             }
         }
-
-        let mut consumed_from_db: Vec<(Vec<u8>, i16)> = Vec::new();
         for tx_data in &all_tx_data {
             if !tx_data.is_cellbase {
                 for input in &tx_data.inputs {
@@ -1828,61 +1787,20 @@ impl Indexer {
                         input.previous_tx_hash.to_vec(),
                         input.previous_output_index as i16,
                     );
-                    if input_cell_info.contains_key(&key) && !batch_cells.contains_key(&key) {
-                        consumed_from_db.push(key);
-                    }
-                }
-            }
-        }
-
-        let consumed_code_hashes = if !consumed_from_db.is_empty() {
-            let refs: Vec<(&[u8], i16)> = consumed_from_db
-                .iter()
-                .map(|(h, i)| (h.as_slice(), *i))
-                .collect();
-            self.writer
-                .get_cells_code_hashes_batch(&refs, bulk_sync_mode)?
-        } else {
-            HashMap::new()
-        };
-
-        for tx_data in &all_tx_data {
-            if !tx_data.is_cellbase {
-                for input in &tx_data.inputs {
-                    let key = (
-                        input.previous_tx_hash.to_vec(),
-                        input.previous_output_index as i16,
-                    );
-                    if let Some((cap, _, _, _)) = input_cell_info.get(&key) {
-                        if let Some((lock_code_hash, type_code_hash)) =
-                            consumed_code_hashes.get(&key)
-                        {
-                            let lock_key = (lock_code_hash.clone(), false);
-                            let entry =
-                                script_usage_changes.entry(lock_key).or_insert((0, 0, 0, 0));
-                            entry.1 -= 1;
-                            entry.3 -= cap;
-                            if let Some(type_code_hash) = type_code_hash {
-                                let type_key = (type_code_hash.clone(), true);
-                                let entry =
-                                    script_usage_changes.entry(type_key).or_insert((0, 0, 0, 0));
-                                entry.1 -= 1;
-                                entry.3 -= cap;
-                            }
-                        }
-                    } else if let Some((cap, _, _, _, lock_code_hash, type_code_hash)) =
-                        batch_cells.get(&key)
-                    {
-                        let lock_key = (lock_code_hash.clone(), false);
+                    let info = input_cell_info
+                        .get(&key)
+                        .or_else(|| batch_cell_infos.get(&key));
+                    if let Some(info) = info {
+                        let lock_key = (info.lock_code_hash.clone(), false);
                         let entry = script_usage_changes.entry(lock_key).or_insert((0, 0, 0, 0));
                         entry.1 -= 1;
-                        entry.3 -= cap;
-                        if let Some(type_code_hash) = type_code_hash {
+                        entry.3 -= info.capacity;
+                        if let Some(ref type_code_hash) = info.type_code_hash {
                             let type_key = (type_code_hash.clone(), true);
                             let entry =
                                 script_usage_changes.entry(type_key).or_insert((0, 0, 0, 0));
                             entry.1 -= 1;
-                            entry.3 -= cap;
+                            entry.3 -= info.capacity;
                         }
                     }
                 }
@@ -1893,15 +1811,67 @@ impl Indexer {
             .address_balances_deferred
             .load(std::sync::atomic::Ordering::Relaxed)
             && bulk_sync_mode;
+
+        // Parallel DB reads for address balances and script usage
+        let lock_hash_keys: Vec<&Vec<u8>> = if !skip_address_balances && !changes_ref.is_empty() {
+            changes_ref.keys().collect()
+        } else {
+            vec![]
+        };
+        let unique_code_hashes: Vec<Vec<u8>> = if !script_usage_changes.is_empty() {
+            let mut seen = std::collections::HashSet::new();
+            script_usage_changes
+                .keys()
+                .filter_map(|(code_hash, _)| {
+                    if seen.insert(code_hash.clone()) {
+                        Some(code_hash.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+        let code_hash_refs: Vec<&Vec<u8>> = unique_code_hashes.iter().collect();
+
+        let need_balances = !lock_hash_keys.is_empty();
+        let need_scripts = !code_hash_refs.is_empty();
+
+        if need_balances || need_scripts {
+            let writer = &self.writer;
+            let (existing_balances, existing_scripts) = std::thread::scope(|s| {
+                let bal = if need_balances {
+                    Some(s.spawn(|| writer.read_address_balances(&lock_hash_keys)))
+                } else {
+                    None
+                };
+                let scr = if need_scripts {
+                    Some(s.spawn(|| writer.read_script_info(&code_hash_refs)))
+                } else {
+                    None
+                };
+                (
+                    bal.map(|h| h.join().unwrap()),
+                    scr.map(|h| h.join().unwrap()),
+                )
+            });
+            if let Some(existing) = existing_balances {
+                self.writer.apply_address_balance_deltas(
+                    &existing?,
+                    &changes_ref,
+                    &mut consume_addr_batch,
+                )?;
+            }
+            if let Some(existing) = existing_scripts {
+                self.writer.apply_script_usage_deltas(
+                    &existing?,
+                    &script_usage_changes,
+                    &mut consume_addr_batch,
+                )?;
+            }
+        }
         {
-            if !skip_address_balances && !changes_ref.is_empty() {
-                self.writer
-                    .update_address_balances_batch(&changes_ref, &mut consume_addr_batch)?;
-            }
-            if !script_usage_changes.is_empty() {
-                self.writer
-                    .update_script_usage_batch(&script_usage_changes, &mut consume_addr_batch)?;
-            }
             consume_addr_batch.commit()?;
         }
 
@@ -1960,8 +1930,8 @@ impl Indexer {
                     );
                     input_cell_info
                         .get(&key)
-                        .map(|(_, _, _, ds)| *ds as i64)
-                        .or_else(|| batch_cells.get(&key).map(|(_, _, _, ds, _, _)| *ds as i64))
+                        .map(|info| info.data_size as i64)
+                        .or_else(|| batch_cell_infos.get(&key).map(|info| info.data_size as i64))
                 })
                 .sum();
 
@@ -2541,8 +2511,7 @@ impl Indexer {
         blocks: &[BlockResponseWithCycles],
         all_parsed_blocks: &[crate::parser::block::ParsedBlock],
         mut all_tx_data: Vec<TxData>,
-        input_cell_info: HashMap<(Vec<u8>, i16), (i64, i64, Vec<u8>, i32)>,
-        consumed_code_hashes: HashMap<(Vec<u8>, i16), (Vec<u8>, Option<Vec<u8>>)>,
+        input_cell_info: HashMap<(Vec<u8>, i16), LiveCellInfo>,
         chain_tip: u64,
     ) -> Result<()> {
         if all_parsed_blocks.is_empty() {
@@ -2555,22 +2524,21 @@ impl Indexer {
             .unwrap_or(0);
         let bulk_sync_mode = chain_tip.saturating_sub(end_block) > 1000;
 
-        let mut batch_cells: HashMap<
-            (Vec<u8>, i16),
-            (i64, i64, Vec<u8>, i32, Vec<u8>, Option<Vec<u8>>),
-        > = HashMap::new();
+        let mut batch_cell_infos: HashMap<(Vec<u8>, i16), LiveCellInfo> = HashMap::new();
         for tx_data in &all_tx_data {
             for (output_index, cell) in tx_data.cells.iter().enumerate() {
-                batch_cells.insert(
+                batch_cell_infos.insert(
                     (tx_data.hash.to_vec(), output_index as i16),
-                    (
-                        cell.capacity,
-                        tx_data.block_number,
-                        cell.lock_script_hash.clone(),
-                        cell.data_size,
-                        cell.lock_code_hash.clone(),
-                        cell.type_code_hash.clone(),
-                    ),
+                    LiveCellInfo {
+                        capacity: cell.capacity,
+                        created_at_block: tx_data.block_number,
+                        lock_script_hash: cell.lock_script_hash.clone(),
+                        lock_code_hash: cell.lock_code_hash.clone(),
+                        lock_args: cell.lock_args.clone(),
+                        type_script_hash: cell.type_script_hash.clone(),
+                        type_code_hash: cell.type_code_hash.clone(),
+                        data_size: cell.data_size,
+                    },
                 );
             }
         }
@@ -2582,10 +2550,10 @@ impl Indexer {
                         input.previous_tx_hash.to_vec(),
                         input.previous_output_index as i16,
                     );
-                    if let Some((cap, _, _, _)) = input_cell_info.get(&key) {
-                        tx_data.total_input_capacity += cap;
-                    } else if let Some((cap, ..)) = batch_cells.get(&key) {
-                        tx_data.total_input_capacity += cap;
+                    if let Some(info) = input_cell_info.get(&key) {
+                        tx_data.total_input_capacity += info.capacity;
+                    } else if let Some(info) = batch_cell_infos.get(&key) {
+                        tx_data.total_input_capacity += info.capacity;
                     }
                 }
                 tx_data.fee = tx_data
@@ -2602,6 +2570,10 @@ impl Indexer {
                         capacity: cell.capacity,
                         created_at_block: tx_data.block_number,
                         lock_script_hash: cell.lock_script_hash.clone(),
+                        lock_code_hash: cell.lock_code_hash.clone(),
+                        lock_args: cell.lock_args.clone(),
+                        type_script_hash: cell.type_script_hash.clone(),
+                        type_code_hash: cell.type_code_hash.clone(),
                         data_size: cell.data_size,
                     },
                 );
@@ -2710,20 +2682,20 @@ impl Indexer {
                         input.previous_tx_hash.to_vec(),
                         input.previous_output_index as i16,
                     );
-                    if let Some((_, created_block, _, _)) = input_cell_info.get(&key) {
+                    if let Some(info) = input_cell_info.get(&key) {
                         all_consumptions.push((
                             input.previous_tx_hash.as_slice(),
                             input.previous_output_index as i16,
-                            *created_block,
+                            info.created_at_block,
                             tx_data.hash.as_slice(),
                             tx_data.block_number,
                             input_index as i16,
                         ));
-                    } else if let Some((_, created_block, _, _, _, _)) = batch_cells.get(&key) {
+                    } else if let Some(info) = batch_cell_infos.get(&key) {
                         all_consumptions.push((
                             input.previous_tx_hash.as_slice(),
                             input.previous_output_index as i16,
-                            *created_block,
+                            info.created_at_block,
                             tx_data.hash.as_slice(),
                             tx_data.block_number,
                             input_index as i16,
@@ -2733,8 +2705,12 @@ impl Indexer {
             }
         }
         if !all_consumptions.is_empty() {
-            self.writer
-                .consume_cells_batch(&all_consumptions, &mut data_batch)?;
+            self.writer.consume_cells_batch_preloaded(
+                &all_consumptions,
+                &input_cell_info,
+                &batch_cell_infos,
+                &mut data_batch,
+            )?;
         }
 
         // Address balances
@@ -2750,12 +2726,20 @@ impl Indexer {
                         input.previous_tx_hash.to_vec(),
                         input.previous_output_index as i16,
                     );
-                    if let Some((cap, _, lock_hash, _)) = input_cell_info.get(&key) {
-                        *tx_balance_changes.entry(lock_hash.clone()).or_default() -= cap;
-                        *tx_cells_consumed.entry(lock_hash.clone()).or_default() += 1;
-                    } else if let Some((cap, _, lock_hash, _, _, _)) = batch_cells.get(&key) {
-                        *tx_balance_changes.entry(lock_hash.clone()).or_default() -= cap;
-                        *tx_cells_consumed.entry(lock_hash.clone()).or_default() += 1;
+                    if let Some(info) = input_cell_info.get(&key) {
+                        *tx_balance_changes
+                            .entry(info.lock_script_hash.clone())
+                            .or_default() -= info.capacity;
+                        *tx_cells_consumed
+                            .entry(info.lock_script_hash.clone())
+                            .or_default() += 1;
+                    } else if let Some(info) = batch_cell_infos.get(&key) {
+                        *tx_balance_changes
+                            .entry(info.lock_script_hash.clone())
+                            .or_default() -= info.capacity;
+                        *tx_cells_consumed
+                            .entry(info.lock_script_hash.clone())
+                            .or_default() += 1;
                     }
                 }
             }
@@ -2827,36 +2811,20 @@ impl Indexer {
                         input.previous_tx_hash.to_vec(),
                         input.previous_output_index as i16,
                     );
-                    if let Some((cap, _, _, _)) = input_cell_info.get(&key) {
-                        if let Some((lock_code_hash, type_code_hash)) =
-                            consumed_code_hashes.get(&key)
-                        {
-                            let lock_key = (lock_code_hash.clone(), false);
-                            let entry =
-                                script_usage_changes.entry(lock_key).or_insert((0, 0, 0, 0));
-                            entry.1 -= 1;
-                            entry.3 -= cap;
-                            if let Some(type_code_hash) = type_code_hash {
-                                let type_key = (type_code_hash.clone(), true);
-                                let entry =
-                                    script_usage_changes.entry(type_key).or_insert((0, 0, 0, 0));
-                                entry.1 -= 1;
-                                entry.3 -= cap;
-                            }
-                        }
-                    } else if let Some((cap, _, _, _, lock_code_hash, type_code_hash)) =
-                        batch_cells.get(&key)
-                    {
-                        let lock_key = (lock_code_hash.clone(), false);
+                    let info = input_cell_info
+                        .get(&key)
+                        .or_else(|| batch_cell_infos.get(&key));
+                    if let Some(info) = info {
+                        let lock_key = (info.lock_code_hash.clone(), false);
                         let entry = script_usage_changes.entry(lock_key).or_insert((0, 0, 0, 0));
                         entry.1 -= 1;
-                        entry.3 -= cap;
-                        if let Some(type_code_hash) = type_code_hash {
+                        entry.3 -= info.capacity;
+                        if let Some(ref type_code_hash) = info.type_code_hash {
                             let type_key = (type_code_hash.clone(), true);
                             let entry =
                                 script_usage_changes.entry(type_key).or_insert((0, 0, 0, 0));
                             entry.1 -= 1;
-                            entry.3 -= cap;
+                            entry.3 -= info.capacity;
                         }
                     }
                 }
@@ -2867,13 +2835,65 @@ impl Indexer {
             .address_balances_deferred
             .load(std::sync::atomic::Ordering::Relaxed)
             && bulk_sync_mode;
-        if !skip_address_balances && !changes_ref.is_empty() {
-            self.writer
-                .update_address_balances_batch(&changes_ref, &mut data_batch)?;
-        }
-        if !script_usage_changes.is_empty() {
-            self.writer
-                .update_script_usage_batch(&script_usage_changes, &mut data_batch)?;
+
+        // Parallel DB reads for address balances and script usage
+        let lock_hash_keys: Vec<&Vec<u8>> = if !skip_address_balances && !changes_ref.is_empty() {
+            changes_ref.keys().collect()
+        } else {
+            vec![]
+        };
+        let unique_code_hashes: Vec<Vec<u8>> = if !script_usage_changes.is_empty() {
+            let mut seen = std::collections::HashSet::new();
+            script_usage_changes
+                .keys()
+                .filter_map(|(code_hash, _)| {
+                    if seen.insert(code_hash.clone()) {
+                        Some(code_hash.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+        let code_hash_refs: Vec<&Vec<u8>> = unique_code_hashes.iter().collect();
+
+        let need_balances = !lock_hash_keys.is_empty();
+        let need_scripts = !code_hash_refs.is_empty();
+
+        if need_balances || need_scripts {
+            let writer = &self.writer;
+            let (existing_balances, existing_scripts) = std::thread::scope(|s| {
+                let bal = if need_balances {
+                    Some(s.spawn(|| writer.read_address_balances(&lock_hash_keys)))
+                } else {
+                    None
+                };
+                let scr = if need_scripts {
+                    Some(s.spawn(|| writer.read_script_info(&code_hash_refs)))
+                } else {
+                    None
+                };
+                (
+                    bal.map(|h| h.join().unwrap()),
+                    scr.map(|h| h.join().unwrap()),
+                )
+            });
+            if let Some(existing) = existing_balances {
+                self.writer.apply_address_balance_deltas(
+                    &existing?,
+                    &changes_ref,
+                    &mut data_batch,
+                )?;
+            }
+            if let Some(existing) = existing_scripts {
+                self.writer.apply_script_usage_deltas(
+                    &existing?,
+                    &script_usage_changes,
+                    &mut data_batch,
+                )?;
+            }
         }
 
         // Stats accumulation
@@ -2929,8 +2949,8 @@ impl Indexer {
                     );
                     input_cell_info
                         .get(&key)
-                        .map(|(_, _, _, ds)| *ds as i64)
-                        .or_else(|| batch_cells.get(&key).map(|(_, _, _, ds, _, _)| *ds as i64))
+                        .map(|info| info.data_size as i64)
+                        .or_else(|| batch_cell_infos.get(&key).map(|info| info.data_size as i64))
                 })
                 .sum();
 

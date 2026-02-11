@@ -7,8 +7,35 @@ use ckbadger_store::types::AddressBalance;
 use super::BatchWriter;
 
 impl BatchWriter {
-    pub fn update_address_balances_batch(
+    pub fn read_address_balances(
         &self,
+        lock_hashes: &[&Vec<u8>],
+    ) -> Result<HashMap<Vec<u8>, Option<AddressBalance>>> {
+        if lock_hashes.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let cf_keys: Vec<_> = lock_hashes
+            .iter()
+            .map(|k| (self.store.cf_addr_balance(), k.as_slice()))
+            .collect();
+        let results = self.store.multi_get_cf(cf_keys);
+
+        let mut map = HashMap::with_capacity(lock_hashes.len());
+        for (res, lock_hash) in results.into_iter().zip(lock_hashes.iter()) {
+            let existing: Option<AddressBalance> = match res {
+                Ok(Some(value)) => bincode::deserialize(&value).ok(),
+                _ => None,
+            };
+            map.insert((*lock_hash).clone(), existing);
+        }
+
+        Ok(map)
+    }
+
+    pub fn apply_address_balance_deltas(
+        &self,
+        existing: &HashMap<Vec<u8>, Option<AddressBalance>>,
         changes: &HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8])>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
@@ -16,26 +43,14 @@ impl BatchWriter {
             return Ok(());
         }
 
-        // Collect all lock_hash keys for a single batch read
-        let keys_vec: Vec<&Vec<u8>> = changes.keys().collect();
-        let cf_keys: Vec<_> = keys_vec
-            .iter()
-            .map(|k| (self.store.cf_addr_balance(), k.as_slice()))
-            .collect();
-        let results = self.store.multi_get_cf(cf_keys);
+        for (lock_hash, (balance_delta, live_delta, total_delta, tx_delta, block_num, tx_hash)) in
+            changes
+        {
+            let prev = existing.get(lock_hash).and_then(|o| o.as_ref());
 
-        // Zip results with keys and apply deltas
-        for (res, lock_hash) in results.into_iter().zip(keys_vec.iter()) {
-            let (balance_delta, live_delta, total_delta, tx_delta, block_num, tx_hash) =
-                &changes[*lock_hash];
-
-            let existing: Option<AddressBalance> = match res {
-                Ok(Some(value)) => bincode::deserialize(&value).ok(),
-                _ => None,
-            };
-
-            let updated = match existing {
-                Some(mut bal) => {
+            let updated = match prev {
+                Some(bal) => {
+                    let mut bal = bal.clone();
                     bal.balance += *balance_delta as i128;
                     bal.live_cells_count = (bal.live_cells_count + *live_delta).max(0);
                     bal.total_cells_count += *total_delta as i64;
@@ -62,8 +77,49 @@ impl BatchWriter {
         Ok(())
     }
 
-    pub fn update_script_usage_batch(
+    pub fn update_address_balances_batch(
         &self,
+        changes: &HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8])>,
+        batch: &mut StoreBatch,
+    ) -> Result<()> {
+        if changes.is_empty() {
+            return Ok(());
+        }
+
+        let keys_vec: Vec<&Vec<u8>> = changes.keys().collect();
+        let existing = self.read_address_balances(&keys_vec)?;
+        self.apply_address_balance_deltas(&existing, changes, batch)
+    }
+
+    pub fn read_script_info(
+        &self,
+        code_hashes: &[&Vec<u8>],
+    ) -> Result<HashMap<Vec<u8>, Option<ckbadger_store::types::ScriptInfo>>> {
+        if code_hashes.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let cf_keys: Vec<_> = code_hashes
+            .iter()
+            .map(|k| (self.store.cf_script_info(), k.as_slice()))
+            .collect();
+        let results = self.store.multi_get_cf(cf_keys);
+
+        let mut map = HashMap::with_capacity(code_hashes.len());
+        for (res, code_hash) in results.into_iter().zip(code_hashes.iter()) {
+            let existing: Option<ckbadger_store::types::ScriptInfo> = match res {
+                Ok(Some(value)) => bincode::deserialize(&value).ok(),
+                _ => None,
+            };
+            map.insert((*code_hash).clone(), existing);
+        }
+
+        Ok(map)
+    }
+
+    pub fn apply_script_usage_deltas(
+        &self,
+        existing: &HashMap<Vec<u8>, Option<ckbadger_store::types::ScriptInfo>>,
         changes: &HashMap<(Vec<u8>, bool), (i64, i64, i64, i64)>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
@@ -71,47 +127,17 @@ impl BatchWriter {
             return Ok(());
         }
 
-        // Collect unique code_hashes for a single batch read
-        let unique_code_hashes: Vec<Vec<u8>> = {
-            let mut seen = std::collections::HashSet::new();
-            changes
-                .keys()
-                .filter_map(|(code_hash, _)| {
-                    if seen.insert(code_hash.clone()) {
-                        Some(code_hash.clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        };
-
-        let cf_keys: Vec<_> = unique_code_hashes
-            .iter()
-            .map(|k| (self.store.cf_script_info(), k.as_slice()))
-            .collect();
-        let results = self.store.multi_get_cf(cf_keys);
-
-        // Build lookup from code_hash → existing ScriptInfo
-        let mut existing_map: HashMap<&Vec<u8>, ckbadger_store::types::ScriptInfo> =
-            HashMap::with_capacity(unique_code_hashes.len());
-        for (res, code_hash) in results.into_iter().zip(unique_code_hashes.iter()) {
-            if let Ok(Some(value)) = res {
-                if let Ok(info) = bincode::deserialize::<ckbadger_store::types::ScriptInfo>(&value)
-                {
-                    existing_map.insert(code_hash, info);
-                }
-            }
-        }
-
-        // Apply all deltas, potentially multiple per code_hash (lock + type)
         let mut updated_map: HashMap<&Vec<u8>, ckbadger_store::types::ScriptInfo> =
-            HashMap::with_capacity(unique_code_hashes.len());
+            HashMap::with_capacity(existing.len());
+
         for ((code_hash, is_type), (cells_delta, live_delta, cap_delta, live_cap_delta)) in changes
         {
-            let info = updated_map
-                .entry(code_hash)
-                .or_insert_with(|| existing_map.get(code_hash).cloned().unwrap_or_default());
+            let info = updated_map.entry(code_hash).or_insert_with(|| {
+                existing
+                    .get(code_hash)
+                    .and_then(|o| o.clone())
+                    .unwrap_or_default()
+            });
 
             if *is_type {
                 info.type_cells_count += cells_delta;
@@ -131,5 +157,33 @@ impl BatchWriter {
         }
 
         Ok(())
+    }
+
+    pub fn update_script_usage_batch(
+        &self,
+        changes: &HashMap<(Vec<u8>, bool), (i64, i64, i64, i64)>,
+        batch: &mut StoreBatch,
+    ) -> Result<()> {
+        if changes.is_empty() {
+            return Ok(());
+        }
+
+        let unique_code_hashes: Vec<Vec<u8>> = {
+            let mut seen = std::collections::HashSet::new();
+            changes
+                .keys()
+                .filter_map(|(code_hash, _)| {
+                    if seen.insert(code_hash.clone()) {
+                        Some(code_hash.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
+
+        let refs: Vec<&Vec<u8>> = unique_code_hashes.iter().collect();
+        let existing = self.read_script_info(&refs)?;
+        self.apply_script_usage_deltas(&existing, changes, batch)
     }
 }

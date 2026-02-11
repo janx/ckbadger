@@ -112,7 +112,7 @@ fn test_cell_info_batch_lookup_multiple_cells() {
 }
 
 #[test]
-fn test_code_hash_lookup_returns_lock_and_type() {
+fn test_full_cells_info_returns_lock_and_type() {
     let (store, writer) = setup_store();
     let tx_hash = vec![0x01u8; 32];
     let cell = ParsedCell {
@@ -137,18 +137,20 @@ fn test_code_hash_lookup_returns_lock_and_type() {
     batch.commit().unwrap();
 
     let result = writer
-        .get_cells_code_hashes_batch(&[(&tx_hash, 0)], false)
+        .get_full_cells_info_batch(&[(&tx_hash, 0)], false)
         .unwrap();
 
     assert_eq!(result.len(), 1);
-    let (lock_code_hash, type_code_hash) = result.get(&(tx_hash.clone(), 0)).unwrap();
+    let info = result.get(&(tx_hash.clone(), 0)).unwrap();
 
-    assert_eq!(*lock_code_hash, vec![0x11u8; 32]);
-    assert_eq!(*type_code_hash, Some(vec![0x44u8; 32]));
+    assert_eq!(info.lock_code_hash, vec![0x11u8; 32]);
+    assert_eq!(info.type_code_hash, Some(vec![0x44u8; 32]));
+    assert_eq!(info.capacity, 100_00000000);
+    assert_eq!(info.created_at_block, 1000);
 }
 
 #[test]
-fn test_code_hash_lookup_no_type_script() {
+fn test_full_cells_info_no_type_script() {
     let (store, writer) = setup_store();
     let tx_hash = vec![0x01u8; 32];
     let cell = ParsedCell {
@@ -173,14 +175,14 @@ fn test_code_hash_lookup_no_type_script() {
     batch.commit().unwrap();
 
     let result = writer
-        .get_cells_code_hashes_batch(&[(&tx_hash, 0)], false)
+        .get_full_cells_info_batch(&[(&tx_hash, 0)], false)
         .unwrap();
 
     assert_eq!(result.len(), 1);
-    let (lock_code_hash, type_code_hash) = result.get(&(tx_hash.clone(), 0)).unwrap();
+    let info = result.get(&(tx_hash.clone(), 0)).unwrap();
 
-    assert_eq!(*lock_code_hash, vec![0x11u8; 32]);
-    assert_eq!(*type_code_hash, None);
+    assert_eq!(info.lock_code_hash, vec![0x11u8; 32]);
+    assert_eq!(info.type_code_hash, None);
 }
 
 #[test]
