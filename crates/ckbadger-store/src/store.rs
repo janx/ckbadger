@@ -164,9 +164,11 @@ impl CkbadgerStore {
         opts.set_max_write_buffer_number(4);
 
         // Compaction triggers: give L0 more headroom to avoid write stalls
+        // With 5 parallel commit_no_wal() per batch, L0 files accumulate fast.
+        // Wider thresholds let compaction catch up without stalling writers.
         opts.set_level_zero_file_num_compaction_trigger(4);
-        opts.set_level_zero_slowdown_writes_trigger(12);
-        opts.set_level_zero_stop_writes_trigger(24);
+        opts.set_level_zero_slowdown_writes_trigger(20);
+        opts.set_level_zero_stop_writes_trigger(48);
         opts.set_max_bytes_for_level_base(512 * 1024 * 1024);
         opts.set_compression_type(DBCompressionType::Lz4);
 
