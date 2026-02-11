@@ -373,6 +373,8 @@ impl CkbadgerStore {
             max_write_buffers_low = 2,
             l0_slowdown = 12,
             l0_stop = 24,
+            l0_slowdown_bulk = 64,
+            l0_stop_bulk = 128,
             max_background_jobs = 10,
             max_subcompactions = 3,
             block_cache_gb = 8,
@@ -386,6 +388,40 @@ impl CkbadgerStore {
 
     pub fn is_secondary(&self) -> bool {
         self.is_secondary
+    }
+
+    /// Set relaxed L0 thresholds for bulk sync while keeping compaction enabled.
+    /// This prevents write stalls by raising slowdown/stop triggers, while still
+    /// allowing background compaction threads to drain L0 files.
+    pub fn set_bulk_sync_compaction_options(&self) {
+        for cf_name in ALL_CFS {
+            if let Some(cf) = self.db.cf_handle(cf_name) {
+                let _ = self.db.set_options_cf(
+                    cf,
+                    &[
+                        ("level0_slowdown_writes_trigger", "64"),
+                        ("level0_stop_writes_trigger", "128"),
+                    ],
+                );
+            }
+        }
+        info!("Bulk sync compaction options set: l0_slowdown=64, l0_stop=128");
+    }
+
+    /// Restore normal L0 thresholds after bulk sync completes.
+    pub fn restore_normal_compaction_options(&self) {
+        for cf_name in ALL_CFS {
+            if let Some(cf) = self.db.cf_handle(cf_name) {
+                let _ = self.db.set_options_cf(
+                    cf,
+                    &[
+                        ("level0_slowdown_writes_trigger", "12"),
+                        ("level0_stop_writes_trigger", "24"),
+                    ],
+                );
+            }
+        }
+        info!("Normal compaction options restored: l0_slowdown=12, l0_stop=24");
     }
 
     /// Disable auto-compactions on all column families.

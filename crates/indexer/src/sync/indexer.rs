@@ -436,7 +436,7 @@ impl Indexer {
                 "Bulk sync auto-enabled: {} blocks behind > {} threshold",
                 blocks_behind, self.config.bulk_sync_threshold,
             );
-            self.writer.store().disable_auto_compactions();
+            self.writer.store().set_bulk_sync_compaction_options();
         }
 
         let (start_block, _) = self.repo.get_sync_tip().await?;
@@ -1269,7 +1269,7 @@ impl Indexer {
             );
 
             // Re-enable auto-compactions and trigger manual compaction in background
-            self.writer.store().enable_auto_compactions();
+            self.writer.store().restore_normal_compaction_options();
             let store = Arc::clone(self.writer.store());
             tokio::task::spawn_blocking(move || {
                 store.trigger_full_compaction();
