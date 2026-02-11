@@ -179,6 +179,7 @@ async fn main() -> Result<()> {
                 block_cache_mb = memory_stats.rocksdb_block_cache_bytes / (1024 * 1024),
                 compaction_pending_mb = memory_stats.compaction_pending_bytes / (1024 * 1024),
                 running_compactions = memory_stats.num_running_compactions,
+                l0_files = memory_stats.l0_files_count,
                 sst_size_gb = format!(
                     "{:.1}",
                     memory_stats.sst_files_size as f64 / (1024.0 * 1024.0 * 1024.0)

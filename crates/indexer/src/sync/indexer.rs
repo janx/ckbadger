@@ -400,6 +400,7 @@ impl Indexer {
             compaction_pending_bytes: stats.compaction_pending_bytes,
             num_running_compactions: stats.num_running_compactions,
             sst_files_size: stats.sst_files_size,
+            l0_files_count: stats.l0_files_count,
             top_cf_sizes: stats.top_cf_sizes,
             total_transactions: sync_status.total_transactions,
             total_cells: sync_status.total_cells_created,
@@ -430,6 +431,7 @@ impl Indexer {
                 "Bulk sync auto-enabled: {} blocks behind > {} threshold",
                 blocks_behind, self.config.bulk_sync_threshold,
             );
+            self.writer.store().disable_auto_compactions();
         }
 
         let (start_block, _) = self.repo.get_sync_tip().await?;
@@ -956,6 +958,7 @@ impl Indexer {
                             db_ms = format!("{:.1}", db_elapsed.as_secs_f64() * 1000.0),
                             compaction_pending_mb = stats.compaction_pending_bytes / (1024 * 1024),
                             running_compactions = stats.num_running_compactions,
+                            l0_files = stats.l0_files_count,
                             "Slow DB write detected (possible write stall)"
                         );
                     }
@@ -1201,6 +1204,7 @@ impl Indexer {
                 db_ms = format!("{:.1}", db_elapsed.as_secs_f64() * 1000.0),
                 compaction_pending_mb = stats.compaction_pending_bytes / (1024 * 1024),
                 running_compactions = stats.num_running_compactions,
+                l0_files = stats.l0_files_count,
                 "Slow DB write detected (possible write stall)"
             );
         }
@@ -1309,6 +1313,14 @@ impl Indexer {
                 sst_size_gb = format!("{:.1}", sst_gb),
                 "Bulk sync completed"
             );
+
+            // Re-enable auto-compactions and trigger manual compaction in background
+            self.writer.store().enable_auto_compactions();
+            let store = Arc::clone(self.writer.store());
+            tokio::task::spawn_blocking(move || {
+                store.trigger_full_compaction();
+            });
+
             self.maybe_submit_pending_rebuild_tasks();
         }
 

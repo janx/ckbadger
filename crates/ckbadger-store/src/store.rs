@@ -85,7 +85,7 @@ impl CkbadgerStore {
 
         let cf_descriptors: Vec<ColumnFamilyDescriptor> = ALL_CFS
             .iter()
-            .map(|name| ColumnFamilyDescriptor::new(*name, opts.clone()))
+            .map(|name| ColumnFamilyDescriptor::new(*name, Self::cf_options(name, &block_cache)))
             .collect();
 
         let db = DB::open_cf_descriptors(&opts, path, cf_descriptors)?;
@@ -124,12 +124,42 @@ impl CkbadgerStore {
         Ok(())
     }
 
+    /// High-write column families that benefit from large write buffers (128 MB).
+    const HIGH_WRITE_CFS: &'static [&'static str] = &[
+        CF_LIVE_CELLS,
+        CF_CONSUMED_CELLS,
+        CF_BLOCK_HEADERS,
+        CF_BLOCK_HASH_INDEX,
+        CF_CELL_BY_LOCK,
+        CF_CELL_BY_TYPE,
+        CF_TX_INDEX,
+        CF_TX_HASH_MAP,
+        CF_ADDR_BALANCE,
+        CF_ADDR_TXS,
+        CF_ACTIVITIES,
+        CF_ACTIVITIES_BY_ADDR,
+        CF_DAO_DEPOSITS,
+    ];
+
+    fn is_high_write_cf(name: &str) -> bool {
+        Self::HIGH_WRITE_CFS.contains(&name)
+    }
+
+    fn default_block_options(block_cache: &rocksdb::Cache) -> rocksdb::BlockBasedOptions {
+        let mut block_opts = rocksdb::BlockBasedOptions::default();
+        block_opts.set_block_size(16 * 1024);
+        block_opts.set_block_cache(block_cache);
+        block_opts.set_cache_index_and_filter_blocks(true);
+        block_opts.set_bloom_filter(10.0, false);
+        block_opts
+    }
+
     fn default_options() -> (Options, rocksdb::Cache) {
         let mut opts = Options::default();
         opts.create_if_missing(true);
         opts.create_missing_column_families(true);
 
-        // Write buffer: 128 MB per CF, up to 4 buffers
+        // Write buffer: 128 MB per CF (default for high-write CFs), up to 4 buffers
         opts.set_write_buffer_size(128 * 1024 * 1024);
         opts.set_max_write_buffer_number(4);
 
@@ -145,16 +175,40 @@ impl CkbadgerStore {
         // Allow large compaction jobs to use multiple threads
         opts.set_max_subcompactions(3);
 
-        // 2 GB block cache (plenty of RAM available)
-        let block_cache = rocksdb::Cache::new_lru_cache(2 * 1024 * 1024 * 1024);
-        let mut block_opts = rocksdb::BlockBasedOptions::default();
-        block_opts.set_block_size(16 * 1024);
-        block_opts.set_block_cache(&block_cache);
-        block_opts.set_cache_index_and_filter_blocks(true);
-        block_opts.set_bloom_filter(10.0, false);
+        // Bypass OS page cache for flush/compaction to avoid cache pollution
+        opts.set_use_direct_io_for_flush_and_compaction(true);
+
+        // 8 GB block cache — system has 93 GB RAM; 2 GB only covered ~17% of SST data
+        let block_cache = rocksdb::Cache::new_lru_cache(8 * 1024 * 1024 * 1024);
+        let block_opts = Self::default_block_options(&block_cache);
         opts.set_block_based_table_factory(&block_opts);
 
         (opts, block_cache)
+    }
+
+    /// Per-CF options: low-write CFs get smaller write buffers (32 MB) to reduce
+    /// memtable overhead and free memory for the block cache.
+    fn cf_options(name: &str, block_cache: &rocksdb::Cache) -> Options {
+        let mut opts = Options::default();
+
+        if Self::is_high_write_cf(name) {
+            opts.set_write_buffer_size(128 * 1024 * 1024);
+            opts.set_max_write_buffer_number(4);
+        } else {
+            opts.set_write_buffer_size(32 * 1024 * 1024);
+            opts.set_max_write_buffer_number(2);
+        }
+
+        opts.set_level_zero_file_num_compaction_trigger(4);
+        opts.set_level_zero_slowdown_writes_trigger(12);
+        opts.set_level_zero_stop_writes_trigger(24);
+        opts.set_max_bytes_for_level_base(512 * 1024 * 1024);
+        opts.set_compression_type(DBCompressionType::Lz4);
+
+        let block_opts = Self::default_block_options(block_cache);
+        opts.set_block_based_table_factory(&block_opts);
+
+        opts
     }
 
     // ---- Column family accessors ----
@@ -302,13 +356,17 @@ impl CkbadgerStore {
     /// Log the key RocksDB tuning parameters at startup.
     pub fn log_config() {
         info!(
-            write_buffer_mb = 128,
-            max_write_buffers = 4,
+            write_buffer_high_mb = 128,
+            write_buffer_low_mb = 32,
+            max_write_buffers_high = 4,
+            max_write_buffers_low = 2,
             l0_slowdown = 12,
             l0_stop = 24,
             max_background_jobs = 10,
             max_subcompactions = 3,
-            block_cache_gb = 2,
+            block_cache_gb = 8,
+            direct_io_compaction = true,
+            high_write_cfs = Self::HIGH_WRITE_CFS.len(),
             column_families = ALL_CFS.len(),
             "RocksDB configuration"
         );
@@ -316,6 +374,49 @@ impl CkbadgerStore {
 
     pub fn is_secondary(&self) -> bool {
         self.is_secondary
+    }
+
+    /// Disable auto-compactions on all column families.
+    /// Call during bulk sync to avoid compaction competing with writes.
+    pub fn disable_auto_compactions(&self) {
+        for cf_name in ALL_CFS {
+            if let Some(cf) = self.db.cf_handle(cf_name) {
+                if let Err(e) = self
+                    .db
+                    .set_options_cf(cf, &[("disable_auto_compactions", "true")])
+                {
+                    tracing::warn!(cf = cf_name, error = %e, "Failed to disable auto compactions");
+                }
+            }
+        }
+        info!("Auto-compactions disabled for bulk sync");
+    }
+
+    /// Re-enable auto-compactions on all column families.
+    pub fn enable_auto_compactions(&self) {
+        for cf_name in ALL_CFS {
+            if let Some(cf) = self.db.cf_handle(cf_name) {
+                if let Err(e) = self
+                    .db
+                    .set_options_cf(cf, &[("disable_auto_compactions", "false")])
+                {
+                    tracing::warn!(cf = cf_name, error = %e, "Failed to enable auto compactions");
+                }
+            }
+        }
+        info!("Auto-compactions re-enabled");
+    }
+
+    /// Trigger manual compaction on all column families.
+    /// Should be called after bulk sync completes and auto-compactions are re-enabled.
+    pub fn trigger_full_compaction(&self) {
+        info!("Starting manual compaction across all column families");
+        for cf_name in ALL_CFS {
+            if let Some(cf) = self.db.cf_handle(cf_name) {
+                self.db.compact_range_cf(cf, None::<&[u8]>, None::<&[u8]>);
+            }
+        }
+        info!("Manual compaction completed");
     }
 
     // ---- Memory stats ----
@@ -326,6 +427,7 @@ impl CkbadgerStore {
         let mut compaction_pending_bytes = 0u64;
         let mut num_running_compactions = 0u64;
         let mut sst_files_size = 0u64;
+        let mut l0_files_count = 0u64;
         let mut cf_sizes: Vec<(String, u64)> = Vec::new();
 
         for cf_name in ALL_CFS {
@@ -360,6 +462,13 @@ impl CkbadgerStore {
                 {
                     sst_files_size += v;
                 }
+                // L0 file count — tracks compaction backlog / write stall risk
+                if let Ok(Some(v)) = self
+                    .db
+                    .property_int_value_cf(cf, "rocksdb.num-files-at-level0")
+                {
+                    l0_files_count += v;
+                }
                 // Per-CF live data size for top-N display
                 if let Ok(Some(v)) = self
                     .db
@@ -388,6 +497,7 @@ impl CkbadgerStore {
             compaction_pending_bytes,
             num_running_compactions,
             sst_files_size,
+            l0_files_count,
             top_cf_sizes: cf_sizes,
         }
     }
