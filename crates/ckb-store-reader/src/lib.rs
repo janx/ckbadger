@@ -335,21 +335,31 @@ impl CkbChainReader {
     }
 
     /// Get cell data for a specific output.
+    ///
+    /// First tries `COLUMN_CELL_DATA` (fast path, only available for live cells).
+    /// Falls back to reading the full transaction from `COLUMN_BLOCK_BODY` and
+    /// extracting `outputs_data[index]` (works for both live and consumed cells).
     pub fn get_cell_data(&self, tx_hash: &[u8; 32], index: u32) -> Option<Vec<u8>> {
-        let cf = self.db.cf_handle(COLUMN_CELL_DATA)?;
-        // CKB cell key format: tx_hash (32 bytes) + index (4 bytes LE)
-        let mut key = Vec::with_capacity(36);
-        key.extend_from_slice(tx_hash);
-        key.extend_from_slice(&index.to_le_bytes());
+        // Fast path: COLUMN_CELL_DATA (only stores live cells)
+        if let Some(cf) = self.db.cf_handle(COLUMN_CELL_DATA) {
+            let mut key = Vec::with_capacity(36);
+            key.extend_from_slice(tx_hash);
+            key.extend_from_slice(&index.to_le_bytes());
 
-        let raw = self.db.get_cf(&cf, &key).ok()??;
-
-        // CellDataEntry may be stored, or raw bytes
-        if let Ok(entry) = packed::CellDataEntryReader::from_slice(&raw) {
-            Some(entry.output_data().raw_data().to_vec())
-        } else {
-            Some(raw.to_vec())
+            if let Ok(Some(raw)) = self.db.get_cf(&cf, &key) {
+                if let Ok(entry) = packed::CellDataEntryReader::from_slice(&raw) {
+                    return Some(entry.output_data().raw_data().to_vec());
+                } else {
+                    return Some(raw.to_vec());
+                }
+            }
         }
+
+        // Fallback: read from transaction body (works for consumed cells too)
+        let tx = self.get_transaction(tx_hash)?;
+        let outputs_data = tx.outputs_data();
+        let item = outputs_data.get(index as usize)?;
+        Some(item.raw_data().to_vec())
     }
 
     /// Get the block extension data (contains total_difficulty, cycles, sizes).
