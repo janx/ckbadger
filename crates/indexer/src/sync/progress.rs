@@ -1,9 +1,10 @@
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 pub use ckbadger_common::format_duration_smart;
 
-const WINDOW_SECS: u64 = 10;
+const SAMPLE_INTERVAL_SECS: u64 = 5;
 /// EMA smoothing factor: 0.1 = slow adaptation, 0.3 = faster adaptation
 const EMA_ALPHA: f64 = 0.1;
 
@@ -11,27 +12,21 @@ pub struct SyncProgress {
     current_block: AtomicU64,
     target_block: AtomicU64,
     blocks_processed: AtomicU64,
-    start_time: Instant,
-    // Sliding window for real-time blocks/sec
-    window_start_millis: AtomicU64,
-    window_blocks: AtomicU64,
-    // Cache last computed rate to avoid returning 0 during window reset
-    last_rate: AtomicU64, // stored as bits of f64
+    // Sampler thread state
+    sampler_running: AtomicBool,
+    current_rate: AtomicU64, // stored as bits of f64
     // EMA (Exponential Moving Average) for smoother speed estimation
     ema_rate: AtomicU64, // stored as bits of f64
 }
 
 impl SyncProgress {
     pub fn new(start_block: u64, target_block: u64) -> Self {
-        let now_millis = Instant::now().elapsed().as_millis() as u64;
         Self {
             current_block: AtomicU64::new(start_block),
             target_block: AtomicU64::new(target_block),
             blocks_processed: AtomicU64::new(0),
-            start_time: Instant::now(),
-            window_start_millis: AtomicU64::new(now_millis),
-            window_blocks: AtomicU64::new(0),
-            last_rate: AtomicU64::new(0),
+            sampler_running: AtomicBool::new(false),
+            current_rate: AtomicU64::new(0),
             ema_rate: AtomicU64::new(0),
         }
     }
@@ -39,37 +34,11 @@ impl SyncProgress {
     pub fn update_current(&self, block: u64) {
         self.current_block.store(block, Ordering::SeqCst);
         self.blocks_processed.fetch_add(1, Ordering::SeqCst);
-        self.add_to_window(1);
     }
 
     pub fn update_current_batch(&self, block: u64, count: u64) {
         self.current_block.store(block, Ordering::SeqCst);
         self.blocks_processed.fetch_add(count, Ordering::SeqCst);
-        self.add_to_window(count);
-    }
-
-    fn elapsed_millis(&self) -> u64 {
-        self.start_time.elapsed().as_millis() as u64
-    }
-
-    fn add_to_window(&self, count: u64) {
-        let now = self.elapsed_millis();
-        let window_start = self.window_start_millis.load(Ordering::SeqCst);
-        let window_ms = WINDOW_SECS * 1000;
-
-        if now.saturating_sub(window_start) >= window_ms {
-            let window_blocks = self.window_blocks.load(Ordering::SeqCst);
-            let elapsed_secs = now.saturating_sub(window_start) as f64 / 1000.0;
-            if elapsed_secs > 0.0 {
-                let rate = window_blocks as f64 / elapsed_secs;
-                self.last_rate.store(rate.to_bits(), Ordering::SeqCst);
-                self.update_ema(rate);
-            }
-            self.window_start_millis.store(now, Ordering::SeqCst);
-            self.window_blocks.store(count, Ordering::SeqCst);
-        } else {
-            self.window_blocks.fetch_add(count, Ordering::SeqCst);
-        }
     }
 
     fn update_ema(&self, current_rate: f64) {
@@ -80,6 +49,39 @@ impl SyncProgress {
             EMA_ALPHA * current_rate + (1.0 - EMA_ALPHA) * old_ema
         };
         self.ema_rate.store(new_ema.to_bits(), Ordering::SeqCst);
+    }
+
+    /// Spawn a background thread that samples `blocks_processed` every
+    /// `SAMPLE_INTERVAL_SECS` seconds and updates `current_rate` / EMA.
+    pub fn start_sampler(self: &Arc<Self>) {
+        // Guard: only start once
+        if self.sampler_running.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let progress = Arc::clone(self);
+        std::thread::Builder::new()
+            .name("speed-sampler".into())
+            .spawn(move || {
+                let mut prev_blocks = progress.blocks_processed.load(Ordering::SeqCst);
+                let mut prev_time = Instant::now();
+                loop {
+                    std::thread::sleep(Duration::from_secs(SAMPLE_INTERVAL_SECS));
+                    let now = Instant::now();
+                    let curr_blocks = progress.blocks_processed.load(Ordering::SeqCst);
+                    let delta = curr_blocks.saturating_sub(prev_blocks);
+                    let elapsed = now.duration_since(prev_time).as_secs_f64();
+                    if elapsed > 0.0 {
+                        let rate = delta as f64 / elapsed;
+                        progress
+                            .current_rate
+                            .store(rate.to_bits(), Ordering::SeqCst);
+                        progress.update_ema(rate);
+                    }
+                    prev_blocks = curr_blocks;
+                    prev_time = now;
+                }
+            })
+            .expect("failed to spawn speed-sampler thread");
     }
 
     pub fn update_target(&self, target: u64) {
@@ -101,17 +103,7 @@ impl SyncProgress {
     }
 
     pub fn blocks_per_second(&self) -> f64 {
-        let now = self.elapsed_millis();
-        let window_start = self.window_start_millis.load(Ordering::SeqCst);
-        let elapsed_ms = now.saturating_sub(window_start);
-
-        if elapsed_ms < 1000 {
-            return f64::from_bits(self.last_rate.load(Ordering::SeqCst));
-        }
-
-        let window_blocks = self.window_blocks.load(Ordering::SeqCst);
-        let elapsed_secs = elapsed_ms as f64 / 1000.0;
-        window_blocks as f64 / elapsed_secs
+        f64::from_bits(self.current_rate.load(Ordering::SeqCst))
     }
 
     pub fn ema_blocks_per_second(&self) -> f64 {
@@ -215,79 +207,59 @@ mod tests {
     }
 
     #[test]
-    fn test_blocks_per_second_after_processing() {
-        let progress = SyncProgress::new(0, 10000);
-        progress.update_current_batch(1000, 1000);
-        thread::sleep(Duration::from_millis(1100));
+    fn test_blocks_per_second_after_sampler() {
+        let progress = Arc::new(SyncProgress::new(0, 100_000));
+        progress.start_sampler();
+        // Process blocks during the sample interval so the delta is non-zero
+        thread::sleep(Duration::from_millis(500));
+        progress.update_current_batch(5000, 5000);
+        // Wait for the sampler to wake and compute the rate
+        thread::sleep(Duration::from_millis(5500));
         let rate = progress.blocks_per_second();
-        assert!(rate > 0.0, "rate should be positive: {}", rate);
-        assert!(rate < 2000.0, "rate should be reasonable: {}", rate);
+        assert!(
+            rate > 0.0,
+            "rate should be positive after sampler: {}",
+            rate
+        );
     }
 
     #[test]
-    fn test_blocks_per_second_uses_cached_rate_when_window_too_short() {
-        let progress = SyncProgress::new(0, 10000);
+    fn test_ema_updates_via_sampler() {
+        let progress = Arc::new(SyncProgress::new(0, 100_000));
+        progress.start_sampler();
+
+        // Process blocks during first interval
+        thread::sleep(Duration::from_millis(500));
         progress.update_current_batch(1000, 1000);
-        thread::sleep(Duration::from_millis(1100));
-        let _ = progress.blocks_per_second();
-
-        thread::sleep(Duration::from_secs(11));
-        progress.update_current_batch(2000, 1000);
-
-        let rate = progress.blocks_per_second();
-        assert!(rate > 0.0, "should return cached rate, got: {}", rate);
-    }
-
-    #[test]
-    fn test_ema_smooths_rate_fluctuations() {
-        let progress = SyncProgress::new(0, 100000);
-
-        // Window 1: 1000 blocks
-        progress.update_current_batch(1000, 1000);
-        thread::sleep(Duration::from_millis(10200));
-        // This triggers window 1 completion: rate ≈ 98 blocks/sec, EMA = 98
-        progress.update_current_batch(2000, 1000);
+        // Wait for first sample
+        thread::sleep(Duration::from_millis(5500));
         let ema1 = progress.ema_blocks_per_second();
         assert!(
             ema1 > 0.0,
-            "EMA should be positive after first window: {}",
+            "EMA should be positive after first sample: {}",
             ema1
         );
 
-        // Window 2: 1000 blocks (from previous batch)
-        thread::sleep(Duration::from_millis(10200));
-        // This triggers window 2 completion: rate ≈ 98 blocks/sec
-        // EMA updates but stays similar since rate is similar
-        progress.update_current_batch(12000, 10000);
-
-        // Window 3: 10000 blocks - need to wait for this window to complete
-        // to see the higher rate reflected in EMA
-        thread::sleep(Duration::from_millis(10200));
-        // This triggers window 3 completion: rate ≈ 980 blocks/sec
-        // EMA = 0.1 * 980 + 0.9 * ~98 ≈ 186
-        progress.update_current_batch(13000, 1000);
+        // Process many more blocks during second interval
+        progress.update_current_batch(11000, 10000);
+        // Wait for second sample
+        thread::sleep(Duration::from_millis(5500));
         let ema2 = progress.ema_blocks_per_second();
-
         assert!(
             ema2 > ema1,
-            "EMA should increase with higher rate: ema1={}, ema2={}",
+            "EMA should increase with higher throughput: ema1={}, ema2={}",
             ema1,
             ema2
         );
     }
 
     #[test]
-    fn test_ema_blocks_per_second_after_window_reset() {
-        let progress = SyncProgress::new(0, 10000);
-        progress.update_current_batch(1000, 1000);
-        thread::sleep(Duration::from_millis(10100));
-        progress.update_current_batch(2000, 1000);
-        let ema = progress.ema_blocks_per_second();
-        assert!(
-            ema > 0.0,
-            "EMA should be positive after window reset: {}",
-            ema
-        );
+    fn test_sampler_only_starts_once() {
+        let progress = Arc::new(SyncProgress::new(0, 1000));
+        progress.start_sampler();
+        // Second call should be a no-op (not panic or spawn a second thread)
+        progress.start_sampler();
+        assert!(progress.sampler_running.load(Ordering::SeqCst));
     }
 
     #[test]

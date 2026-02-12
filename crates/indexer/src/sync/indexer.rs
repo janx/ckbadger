@@ -333,6 +333,7 @@ impl Indexer {
         };
 
         let progress = Arc::new(SyncProgress::new(tip_number as u64, chain_tip));
+        progress.start_sampler();
         let cell_cache = Arc::new(DashMap::with_capacity(CELL_CACHE_CAPACITY));
         let udt_cell_cache = Arc::new(DashMap::with_capacity(UDT_CELL_CACHE_CAPACITY));
 
