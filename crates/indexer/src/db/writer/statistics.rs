@@ -528,8 +528,17 @@ impl BatchWriter {
     }
 
     pub fn refresh_token_24h_transfers(&self) -> Result<u64> {
-        // Deferred to task-runner
-        Ok(0)
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let cutoff_hour = now_ms / 3_600_000 - 48; // Keep 48h, discard older
+
+        let tokens = self.store.list_tokens()?;
+        let mut total_deleted = 0u64;
+        for (type_hash, _) in &tokens {
+            total_deleted += self
+                .store
+                .cleanup_old_hourly_buckets(type_hash, cutoff_hour)?;
+        }
+        Ok(total_deleted)
     }
 
     pub fn refresh_mnft_24h_transfers(&self) -> Result<u64> {

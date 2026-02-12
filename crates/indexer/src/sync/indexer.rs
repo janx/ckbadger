@@ -2660,10 +2660,17 @@ impl Indexer {
                     .iter()
                     .map(|(t, h, b)| (t, h.as_slice(), *b))
                     .collect();
+                let block_timestamps: HashMap<i64, i64> = all_parsed_blocks
+                    .iter()
+                    .map(|p| (p.number, p.timestamp.timestamp_millis()))
+                    .collect();
                 {
                     let mut batch = StoreBatch::new(self.writer.store());
-                    self.writer
-                        .process_udt_transfers_batch(&transfer_refs, &mut batch)?;
+                    self.writer.process_udt_transfers_batch(
+                        &transfer_refs,
+                        &block_timestamps,
+                        &mut batch,
+                    )?;
                     batch.commit()?;
                 }
             }
@@ -3450,7 +3457,15 @@ impl Indexer {
                                 .iter()
                                 .map(|(t, h, b)| (t, h.as_slice(), *b))
                                 .collect();
-                            writer.process_udt_transfers_batch(&transfer_refs, &mut batch)?;
+                            let block_timestamps: HashMap<i64, i64> = all_parsed_blocks
+                                .iter()
+                                .map(|p| (p.number, p.timestamp.timestamp_millis()))
+                                .collect();
+                            writer.process_udt_transfers_batch(
+                                &transfer_refs,
+                                &block_timestamps,
+                                &mut batch,
+                            )?;
                         }
                     }
 
@@ -4143,8 +4158,15 @@ impl Indexer {
                             .iter()
                             .map(|(t, h, b)| (t, h.as_slice(), *b))
                             .collect();
-                        self.writer
-                            .process_udt_transfers_batch(&transfer_refs, &mut data_batch)?;
+                        let block_timestamps: HashMap<i64, i64> = all_parsed_blocks
+                            .iter()
+                            .map(|p| (p.number, p.timestamp.timestamp_millis()))
+                            .collect();
+                        self.writer.process_udt_transfers_batch(
+                            &transfer_refs,
+                            &block_timestamps,
+                            &mut data_batch,
+                        )?;
                     }
                 }
             }

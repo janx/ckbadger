@@ -231,6 +231,18 @@ impl<'a> StoreBatch<'a> {
             .put_cf(self.store.cf_token_holders(), key, balance.to_le_bytes());
     }
 
+    pub fn put_token_transfers_count(&mut self, type_hash: &[u8], count: i64) {
+        let key = keys::encode_token_transfers_key(type_hash);
+        self.batch
+            .put_cf(self.store.cf_stats(), key, count.to_le_bytes());
+    }
+
+    pub fn put_token_hourly_transfer(&mut self, type_hash: &[u8], hour_bucket: i64, count: i64) {
+        let key = keys::encode_token_hourly_key(type_hash, hour_bucket);
+        self.batch
+            .put_cf(self.store.cf_stats(), key, count.to_le_bytes());
+    }
+
     pub fn delete_token_holder(&mut self, type_hash: &[u8], lock_hash: &[u8]) {
         let key = keys::encode_token_holder_key(type_hash, lock_hash);
         self.batch.delete_cf(self.store.cf_token_holders(), key);
@@ -369,5 +381,35 @@ mod tests {
         batch.commit().unwrap();
 
         assert!(store.get_cf(store.cf_live_cells(), &key).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_token_transfers_count_batch_write() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let type_hash = [0xAAu8; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_token_transfers_count(&type_hash, 123);
+        batch.commit().unwrap();
+
+        let key = keys::encode_token_transfers_key(&type_hash);
+        let val = store.get_cf(store.cf_stats(), &key).unwrap().unwrap();
+        assert_eq!(i64::from_le_bytes(val[..8].try_into().unwrap()), 123);
+    }
+
+    #[test]
+    fn test_token_hourly_transfer_batch_write() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let type_hash = [0xBBu8; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_token_hourly_transfer(&type_hash, 500_000, 7);
+        batch.commit().unwrap();
+
+        let key = keys::encode_token_hourly_key(&type_hash, 500_000);
+        let val = store.get_cf(store.cf_stats(), &key).unwrap().unwrap();
+        assert_eq!(i64::from_le_bytes(val[..8].try_into().unwrap()), 7);
     }
 }

@@ -128,6 +128,8 @@ pub mod stats_prefix {
     pub const EPOCH_TIME_DIST: u8 = 0x06;
     pub const DAILY_BLOCK: u8 = 0x07;
     pub const DAO_DAILY_SNAPSHOT: u8 = 0x08;
+    pub const TOKEN_TRANSFERS: u8 = 0x09;
+    pub const TOKEN_HOURLY: u8 = 0x0A;
 }
 
 // Flat re-exports for convenience
@@ -139,6 +141,34 @@ pub const STATS_PREFIX_BLOCK_TIME_DIST: u8 = stats_prefix::BLOCK_TIME_DIST;
 pub const STATS_PREFIX_EPOCH_TIME_DIST: u8 = stats_prefix::EPOCH_TIME_DIST;
 pub const STATS_PREFIX_DAILY_BLOCK: u8 = stats_prefix::DAILY_BLOCK;
 pub const STATS_PREFIX_DAO_DAILY_SNAPSHOT: u8 = stats_prefix::DAO_DAILY_SNAPSHOT;
+pub const STATS_PREFIX_TOKEN_TRANSFERS: u8 = stats_prefix::TOKEN_TRANSFERS;
+pub const STATS_PREFIX_TOKEN_HOURLY: u8 = stats_prefix::TOKEN_HOURLY;
+
+/// Token transfers total count key: prefix(1B) + type_hash(32B) = 33 bytes
+pub fn encode_token_transfers_key(type_hash: &[u8]) -> Vec<u8> {
+    let mut key = Vec::with_capacity(33);
+    key.push(STATS_PREFIX_TOKEN_TRANSFERS);
+    key.extend_from_slice(&type_hash[..32]);
+    key
+}
+
+/// Token hourly transfer count key: prefix(1B) + type_hash(32B) + hour_bucket(8B BE) = 41 bytes
+/// hour_bucket = timestamp_ms / 3_600_000
+pub fn encode_token_hourly_key(type_hash: &[u8], hour_bucket: i64) -> Vec<u8> {
+    let mut key = Vec::with_capacity(41);
+    key.push(STATS_PREFIX_TOKEN_HOURLY);
+    key.extend_from_slice(&type_hash[..32]);
+    key.extend_from_slice(&hour_bucket.to_be_bytes());
+    key
+}
+
+/// Prefix for scanning all hourly buckets of a given token.
+pub fn encode_token_hourly_prefix(type_hash: &[u8]) -> Vec<u8> {
+    let mut key = Vec::with_capacity(33);
+    key.push(STATS_PREFIX_TOKEN_HOURLY);
+    key.extend_from_slice(&type_hash[..32]);
+    key
+}
 
 /// Sync meta keys
 pub mod sync_meta_keys {
@@ -186,5 +216,61 @@ mod tests {
         assert_eq!(key.len(), 40);
         assert_eq!(&key[..32], &hash);
         assert_eq!(decode_block_num(&key[32..40]), 42);
+    }
+
+    #[test]
+    fn test_token_transfers_key_structure() {
+        let type_hash = [0xABu8; 32];
+        let key = encode_token_transfers_key(&type_hash);
+        assert_eq!(key.len(), 33);
+        assert_eq!(key[0], STATS_PREFIX_TOKEN_TRANSFERS);
+        assert_eq!(&key[1..33], &type_hash);
+    }
+
+    #[test]
+    fn test_token_hourly_key_structure() {
+        let type_hash = [0xCDu8; 32];
+        let hour_bucket: i64 = 482_000;
+        let key = encode_token_hourly_key(&type_hash, hour_bucket);
+        assert_eq!(key.len(), 41);
+        assert_eq!(key[0], STATS_PREFIX_TOKEN_HOURLY);
+        assert_eq!(&key[1..33], &type_hash);
+        assert_eq!(
+            i64::from_be_bytes(key[33..41].try_into().unwrap()),
+            hour_bucket
+        );
+    }
+
+    #[test]
+    fn test_token_hourly_key_sort_order() {
+        let type_hash = [0x01u8; 32];
+        let k1 = encode_token_hourly_key(&type_hash, 100);
+        let k2 = encode_token_hourly_key(&type_hash, 200);
+        let k3 = encode_token_hourly_key(&type_hash, 300);
+        assert!(k1 < k2);
+        assert!(k2 < k3);
+    }
+
+    #[test]
+    fn test_token_hourly_prefix_is_prefix_of_full_key() {
+        let type_hash = [0x42u8; 32];
+        let prefix = encode_token_hourly_prefix(&type_hash);
+        let full_key = encode_token_hourly_key(&type_hash, 999);
+        assert_eq!(prefix.len(), 33);
+        assert!(full_key.starts_with(&prefix));
+    }
+
+    #[test]
+    fn test_different_tokens_produce_different_keys() {
+        let hash_a = [0x01u8; 32];
+        let hash_b = [0x02u8; 32];
+        assert_ne!(
+            encode_token_transfers_key(&hash_a),
+            encode_token_transfers_key(&hash_b)
+        );
+        assert_ne!(
+            encode_token_hourly_key(&hash_a, 100),
+            encode_token_hourly_key(&hash_b, 100)
+        );
     }
 }

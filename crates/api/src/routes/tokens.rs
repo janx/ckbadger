@@ -95,7 +95,12 @@ pub struct TokenTransferResponse {
 }
 
 /// Convert a store TokenInfo + key into an API TokenResponse.
-fn token_info_to_response(type_hash: &[u8], info: &ckbadger_store::TokenInfo) -> TokenResponse {
+fn token_info_to_response(
+    type_hash: &[u8],
+    info: &ckbadger_store::TokenInfo,
+    transfers_count: i64,
+    transfers_24h: i64,
+) -> TokenResponse {
     TokenResponse {
         type_script_hash: format!("0x{}", hex::encode(type_hash)),
         type_code_hash: format!("0x{}", hex::encode(&info.type_code_hash)),
@@ -119,8 +124,8 @@ fn token_info_to_response(type_hash: &[u8], info: &ckbadger_store::TokenInfo) ->
             .map(|s| s.to_string())
             .unwrap_or_else(|| "0".to_string()),
         holders_count: info.holders_count as i32,
-        transfers_count: 0,
-        transfers_24h: 0,
+        transfers_count,
+        transfers_24h,
     }
 }
 
@@ -209,9 +214,20 @@ async fn list_tokens(
         None
     };
 
+    let now_ms = chrono::Utc::now().timestamp_millis();
     let tokens: Vec<TokenResponse> = page
         .into_iter()
-        .map(|(type_hash, info)| token_info_to_response(type_hash, info))
+        .map(|(type_hash, info)| {
+            let transfers_count = state
+                .store
+                .get_token_transfers_count(type_hash)
+                .unwrap_or(0);
+            let transfers_24h = state
+                .store
+                .get_token_24h_transfers(type_hash, now_ms)
+                .unwrap_or(0);
+            token_info_to_response(type_hash, info, transfers_count, transfers_24h)
+        })
         .collect();
 
     ok(CursorPaginatedResponse::without_total(
@@ -234,7 +250,20 @@ async fn get_token(
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     match info {
-        Some(info) => ok(token_info_to_response(&hash, &info)),
+        Some(info) => {
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            let transfers_count = state.store.get_token_transfers_count(&hash).unwrap_or(0);
+            let transfers_24h = state
+                .store
+                .get_token_24h_transfers(&hash, now_ms)
+                .unwrap_or(0);
+            ok(token_info_to_response(
+                &hash,
+                &info,
+                transfers_count,
+                transfers_24h,
+            ))
+        }
         None => Err(ApiError::not_found("Token not found")),
     }
 }

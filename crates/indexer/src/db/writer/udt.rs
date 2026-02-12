@@ -110,9 +110,11 @@ impl BatchWriter {
     }
 
     /// Process a batch of UDT transfers: upsert tokens and update holder balances.
+    /// `block_timestamps` maps block_number → timestamp_ms for hourly bucket computation.
     pub fn process_udt_transfers_batch(
         &self,
         transfers: &[(&ParsedUdtTransfer, &[u8], i64)],
+        block_timestamps: &HashMap<i64, i64>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
         if transfers.is_empty() {
@@ -174,6 +176,30 @@ impl BatchWriter {
             };
 
             batch.put_token(type_hash, &updated);
+        }
+
+        // Step 2b: Update transfer counts in stats CF
+        for (type_hash, update) in &token_updates {
+            // Total transfers count
+            let current_total = self.store.get_token_transfers_count(type_hash)?;
+            batch.put_token_transfers_count(type_hash, current_total + update.transfers_count);
+
+            // Hourly bucket: determine hour from block timestamp
+            if let Some(&ts_ms) = block_timestamps.get(&update.block_number) {
+                let hour_bucket = ts_ms / 3_600_000;
+                let current_hourly = {
+                    let key = ckbadger_store::keys::encode_token_hourly_key(type_hash, hour_bucket);
+                    match self.store.get_cf(self.store.cf_stats(), &key)? {
+                        Some(v) if v.len() == 8 => i64::from_le_bytes(v[..8].try_into().unwrap()),
+                        _ => 0,
+                    }
+                };
+                batch.put_token_hourly_transfer(
+                    type_hash,
+                    hour_bucket,
+                    current_hourly + update.transfers_count,
+                );
+            }
         }
 
         // Step 3: Aggregate balance changes per (type_hash, lock_hash)
