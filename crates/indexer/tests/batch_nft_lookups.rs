@@ -25,6 +25,8 @@ fn test_spore_insert_retrieve() {
         is_live: true,
         created_at_block: 100,
         created_at_tx: vec![0xDD; 32],
+        name: None,
+        description: None,
     };
 
     let mut batch = StoreBatch::new(&store);
@@ -63,6 +65,8 @@ fn test_spore_consume_burn() {
         is_live: true,
         created_at_block: 50,
         created_at_tx: vec![0x44; 32],
+        name: None,
+        description: None,
     };
 
     let mut batch = StoreBatch::new(&store);
@@ -83,6 +87,8 @@ fn test_spore_consume_burn() {
         is_live: false,
         created_at_block: live_entry.created_at_block,
         created_at_tx: live_entry.created_at_tx.clone(),
+        name: None,
+        description: None,
     };
 
     let mut batch = StoreBatch::new(&store);
@@ -148,6 +154,8 @@ fn test_list_spores_with_limit() {
             is_live: true,
             created_at_block: i as i64,
             created_at_tx: vec![i; 32],
+            name: None,
+            description: None,
         };
         batch.put_spore(&spore_id, &entry);
     }

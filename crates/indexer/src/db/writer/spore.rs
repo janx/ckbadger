@@ -31,6 +31,8 @@ impl BatchWriter {
                 .as_ref()
                 .map(|e| e.created_at_tx.clone())
                 .unwrap_or_else(|| tx_hash.to_vec()),
+            name: cluster.name.clone(),
+            description: cluster.description.clone(),
         };
         batch.put_spore(&cluster.cluster_id, &entry);
         Ok(())
@@ -59,6 +61,8 @@ impl BatchWriter {
                 .as_ref()
                 .map(|e| e.created_at_tx.clone())
                 .unwrap_or_else(|| tx_hash.to_vec()),
+            name: None,
+            description: None,
         };
         batch.put_spore(&spore.spore_id, &entry);
         Ok(())

@@ -155,6 +155,13 @@ fn fetch_assets(
                 }
             }
 
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            let transfers_count = state.store.get_token_transfers_count(hash).unwrap_or(0);
+            let transfers_24h = state
+                .store
+                .get_token_24h_transfers(hash, now_ms)
+                .unwrap_or(0);
+
             assets.push(AssetRow {
                 id: format!("0x{}", hex::encode(hash)),
                 asset_type: "token".to_string(),
@@ -166,8 +173,8 @@ fn fetch_assets(
                 famous: false,
                 tags: None,
                 holders_count: info.holders_count,
-                transfers_count: 0,
-                transfers_24h: 0,
+                transfers_count,
+                transfers_24h,
                 decimals: info.decimals.map(|d| d as i16),
                 total_supply: info.total_supply.map(|s| s.to_string()),
                 content_type: None,
@@ -185,37 +192,46 @@ fn fetch_assets(
             .list_spores(10_000)
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
-        // Group spores by cluster_id to produce DOB asset rows
-        let mut cluster_map: std::collections::HashMap<String, (String, i64)> =
+        // Group spores by cluster_id to produce DOB asset rows.
+        // Track: cluster_id_bytes, spore count, unique owner lock hashes.
+        struct ClusterAgg {
+            count: i64,
+            owners: std::collections::HashSet<Vec<u8>>,
+        }
+
+        let mut cluster_map: std::collections::HashMap<Vec<u8>, ClusterAgg> =
             std::collections::HashMap::new();
 
         for (id, entry) in &spores {
-            let cluster_hex = entry
-                .cluster_id
-                .as_ref()
-                .map(|c| format!("0x{}", hex::encode(c)))
-                .unwrap_or_else(|| format!("0x{}", hex::encode(id)));
+            // Skip cluster entries themselves (content_type == "cluster")
+            if entry.content_type.as_deref() == Some("cluster") {
+                continue;
+            }
 
-            let counter = cluster_map
-                .entry(cluster_hex)
-                .or_insert_with(|| (String::new(), 0));
+            let cluster_id_bytes = entry.cluster_id.clone().unwrap_or_else(|| id.clone());
 
-            counter.1 += 1;
+            let agg = cluster_map
+                .entry(cluster_id_bytes)
+                .or_insert_with(|| ClusterAgg {
+                    count: 0,
+                    owners: std::collections::HashSet::new(),
+                });
 
-            // Use content_type as a name stand-in if we don't have one
-            if counter.0.is_empty() {
-                if let Some(ct) = &entry.content_type {
-                    counter.0 = ct.clone();
+            agg.count += 1;
+
+            if entry.is_live {
+                if let Some(ref owner) = entry.owner_lock_hash {
+                    agg.owners.insert(owner.clone());
                 }
             }
         }
 
-        for (cluster_hex, (content_type, count)) in &cluster_map {
-            let name = if content_type.is_empty() {
-                None
-            } else {
-                Some(content_type.clone())
-            };
+        for (cluster_id_bytes, agg) in &cluster_map {
+            let cluster_hex = format!("0x{}", hex::encode(cluster_id_bytes));
+
+            // Look up the cluster entry to get the real name
+            let cluster_entry = state.store.get_spore(cluster_id_bytes).ok().flatten();
+            let name = cluster_entry.as_ref().and_then(|e| e.name.clone());
 
             if let Some(s) = search {
                 let n = name.as_deref().unwrap_or("").to_lowercase();
@@ -223,6 +239,8 @@ fn fetch_assets(
                     continue;
                 }
             }
+
+            let holders_count = agg.owners.len() as i64;
 
             assets.push(AssetRow {
                 id: cluster_hex.clone(),
@@ -234,14 +252,14 @@ fn fetch_assets(
                 published: false,
                 famous: false,
                 tags: None,
-                holders_count: 0,
-                transfers_count: 0,
+                holders_count,
+                transfers_count: agg.count,
                 transfers_24h: 0,
                 decimals: None,
-                total_supply: Some(count.to_string()),
+                total_supply: Some(agg.count.to_string()),
                 content_type: None,
                 content_size: None,
-                cluster_id: Some(cluster_hex.clone()),
+                cluster_id: Some(cluster_hex),
                 cluster_name: name,
             });
         }

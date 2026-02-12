@@ -198,6 +198,10 @@ pub struct SporeEntry {
     pub is_live: bool,
     pub created_at_block: i64,
     pub created_at_tx: Vec<u8>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

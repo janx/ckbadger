@@ -138,11 +138,14 @@ async fn list_clusters(
 
     let result: Vec<ClusterResponse> = page
         .into_iter()
-        .map(
-            |(cluster_id, (owner, spores_count, created_at_block))| ClusterResponse {
+        .map(|(cluster_id, (owner, spores_count, created_at_block))| {
+            let cluster_entry = state.store.get_spore(cluster_id).ok().flatten();
+            let name = cluster_entry.as_ref().and_then(|e| e.name.clone());
+            let description = cluster_entry.as_ref().and_then(|e| e.description.clone());
+            ClusterResponse {
                 cluster_id: format!("0x{}", hex::encode(cluster_id)),
-                name: None,
-                description: None,
+                name,
+                description,
                 owner_lock_hash: owner
                     .as_ref()
                     .map(|h| format!("0x{}", hex::encode(h)))
@@ -150,8 +153,8 @@ async fn list_clusters(
                 owner_address: None,
                 spores_count: *spores_count,
                 created_at_block: *created_at_block,
-            },
-        )
+            }
+        })
         .collect();
 
     ok(CursorPaginatedResponse::without_total(
@@ -229,24 +232,39 @@ async fn get_cluster(
         .filter(|(_, entry)| entry.cluster_id.as_ref() == Some(&id))
         .collect();
 
-    if cluster_spores.is_empty() {
+    // Look up the cluster entry directly for name/description
+    let cluster_entry = state
+        .store
+        .get_spore(&id)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    if cluster_spores.is_empty() && cluster_entry.is_none() {
         return Err(ApiError::not_found("Cluster not found"));
     }
+
+    let name = cluster_entry.as_ref().and_then(|e| e.name.clone());
+    let description = cluster_entry.as_ref().and_then(|e| e.description.clone());
 
     let spores_count = cluster_spores.len() as i32;
     let created_at_block = cluster_spores
         .iter()
         .map(|(_, e)| e.created_at_block)
         .min()
+        .or_else(|| cluster_entry.as_ref().map(|e| e.created_at_block))
         .unwrap_or(0);
-    let owner_lock_hash = cluster_spores
-        .first()
-        .and_then(|(_, e)| e.owner_lock_hash.clone());
+    let owner_lock_hash = cluster_entry
+        .as_ref()
+        .and_then(|e| e.owner_lock_hash.clone())
+        .or_else(|| {
+            cluster_spores
+                .first()
+                .and_then(|(_, e)| e.owner_lock_hash.clone())
+        });
 
     ok(ClusterResponse {
         cluster_id: format!("0x{}", hex::encode(&id)),
-        name: None,
-        description: None,
+        name,
+        description,
         owner_lock_hash: owner_lock_hash
             .as_ref()
             .map(|h| format!("0x{}", hex::encode(h)))
