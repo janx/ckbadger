@@ -28,6 +28,7 @@ fn make_live_cell(
         created_at_block: block,
         lock_script_hash: vec![lock_hash_byte; 32],
         lock_code_hash: vec![0x11u8; 32],
+        lock_hash_type: 1,
         lock_args: vec![0x22u8; 20],
         type_script_hash: type_hash_byte.map(|b| vec![b; 32]),
         type_code_hash: type_hash_byte.map(|_| vec![0x44u8; 32]),

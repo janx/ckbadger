@@ -843,15 +843,19 @@ fn build_inputs_outputs_from_ckb(
 
                         let lock_resp = ScriptResponse {
                             code_hash: format!("0x{}", hex::encode(&info.lock_code_hash)),
-                            hash_type: "unknown".to_string(), // hash_type not in LiveCellInfo
+                            hash_type: hash_type_to_string(info.lock_hash_type),
                             args: format!("0x{}", hex::encode(&info.lock_args)),
                         };
 
-                        (
-                            Some(cap.to_string()),
-                            Some(lock_resp),
-                            None, // Need hash_type for address derivation
+                        let addr = script_to_address(
+                            &info.lock_code_hash,
+                            info.lock_hash_type,
+                            &info.lock_args,
+                            network,
                         )
+                        .ok();
+
+                        (Some(cap.to_string()), Some(lock_resp), addr)
                     }
                     None => {
                         // Fallback: read from CKB node's RocksDB

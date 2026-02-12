@@ -1627,6 +1627,7 @@ mod tests {
             created_at_block: 100,
             lock_script_hash: vec![0u8; 32],
             lock_code_hash: vec![1u8; 32],
+            lock_hash_type: 1,
             lock_args: vec![2u8; 20],
             type_script_hash: None,
             type_code_hash: None,

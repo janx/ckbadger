@@ -25,6 +25,7 @@ impl BatchWriter {
                 created_at_block: *created_at_block,
                 lock_script_hash: cell.lock_script_hash.clone(),
                 lock_code_hash: cell.lock_code_hash.clone(),
+                lock_hash_type: cell.lock_hash_type,
                 lock_args: cell.lock_args.clone(),
                 type_script_hash: cell.type_script_hash.clone(),
                 type_code_hash: cell.type_code_hash.clone(),
@@ -284,19 +285,7 @@ impl BatchWriter {
                     >(&value)
                     {
                         let (tx_hash, output_index) = missing[idx];
-                        result.insert(
-                            (tx_hash.to_vec(), *output_index),
-                            LiveCellInfo {
-                                capacity: info.capacity,
-                                created_at_block: info.created_at_block,
-                                lock_script_hash: info.lock_script_hash,
-                                lock_code_hash: info.lock_code_hash,
-                                lock_args: Vec::new(),
-                                type_script_hash: None,
-                                type_code_hash: info.type_code_hash,
-                                data_size: info.data_size,
-                            },
-                        );
+                        result.insert((tx_hash.to_vec(), *output_index), info.to_live_cell_info());
                     }
                 }
             }

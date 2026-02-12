@@ -46,6 +46,7 @@ fn make_cell(block_num: i64, lock_hash: &[u8]) -> LiveCellInfo {
         created_at_block: block_num,
         lock_script_hash: lock_hash.to_vec(),
         lock_code_hash: vec![0xAA; 32],
+        lock_hash_type: 1,
         lock_args: vec![0xBB; 20],
         type_script_hash: None,
         type_code_hash: None,
