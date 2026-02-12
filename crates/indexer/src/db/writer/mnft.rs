@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 use ckbadger_store::batch::StoreBatch;
-use ckbadger_store::types::NftEntry;
+use ckbadger_store::types::{NftEntry, NftExtra, NftStandard};
 
 use crate::parser::mnft::{ParsedMnftClass, ParsedMnftIssuer, ParsedMnftToken};
 
@@ -18,23 +18,21 @@ impl BatchWriter {
     ) -> Result<()> {
         let existing = self.store.get_nft(&issuer.issuer_id)?;
         let entry = NftEntry {
-            standard: "mnft_issuer".to_string(),
+            standard: NftStandard::MnftIssuer,
             collection_id: None,
             token_id: None,
             owner_lock_hash: Some(issuer.owner_lock_hash.clone()),
             name: issuer.name.clone(),
-            metadata: issuer.info.as_ref().map(|i| {
-                serde_json::json!({
-                    "class_count": issuer.class_count,
-                    "set_count": issuer.set_count,
-                    "info": hex::encode(i),
-                })
-            }),
             is_live: true,
             created_at_block: existing
                 .as_ref()
                 .map(|e| e.created_at_block)
                 .unwrap_or(block_number),
+            extra: NftExtra::MnftIssuer {
+                class_count: issuer.class_count,
+                set_count: issuer.set_count,
+                info: issuer.info.clone(),
+            },
         };
         batch.put_nft(&issuer.issuer_id, &entry);
         let _ = tx_hash; // Used for provenance tracking in PG, not needed in RocksDB
@@ -66,23 +64,23 @@ impl BatchWriter {
     ) -> Result<()> {
         let existing = self.store.get_nft(&class.class_id)?;
         let entry = NftEntry {
-            standard: "mnft_class".to_string(),
+            standard: NftStandard::MnftClass,
             collection_id: Some(class.issuer_id.clone()),
             token_id: None,
             owner_lock_hash: Some(class.owner_lock_hash.clone()),
             name: class.name.clone(),
-            metadata: Some(serde_json::json!({
-                "description": class.description,
-                "renderer": class.renderer,
-                "total": class.total,
-                "issued": class.issued,
-                "configure": class.configure,
-            })),
             is_live: true,
             created_at_block: existing
                 .as_ref()
                 .map(|e| e.created_at_block)
                 .unwrap_or(block_number),
+            extra: NftExtra::MnftClass {
+                description: class.description.clone(),
+                renderer: class.renderer.clone(),
+                total: class.total,
+                issued: class.issued,
+                configure: class.configure,
+            },
         };
         batch.put_nft(&class.class_id, &entry);
         let _ = tx_hash;
@@ -122,22 +120,22 @@ impl BatchWriter {
     ) -> Result<()> {
         let existing = self.store.get_nft(&token.token_id)?;
         let entry = NftEntry {
-            standard: "mnft".to_string(),
+            standard: NftStandard::MnftToken,
             collection_id: Some(token.class_id.clone()),
             token_id: Some(token.token_id.clone()),
             owner_lock_hash: Some(token.owner_lock_hash.clone()),
             name: None,
-            metadata: Some(serde_json::json!({
-                "token_index": token.token_index,
-                "characteristic": hex::encode(&token.characteristic),
-                "configure": token.configure,
-                "state": token.state,
-            })),
             is_live: true,
             created_at_block: existing
                 .as_ref()
                 .map(|e| e.created_at_block)
                 .unwrap_or(block_number),
+            extra: NftExtra::MnftToken {
+                token_index: token.token_index,
+                characteristic: token.characteristic.clone(),
+                configure: token.configure,
+                state: token.state,
+            },
         };
         batch.put_nft(&token.token_id, &entry);
         let _ = tx_hash;

@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 use ckbadger_store::batch::StoreBatch;
-use ckbadger_store::types::NftEntry;
+use ckbadger_store::types::{NftEntry, NftExtra, NftStandard};
 
 use crate::parser::dotbit::ParsedDotbitAccount;
 
@@ -20,21 +20,19 @@ impl BatchWriter {
         let existing = self.store.get_nft(&account.account_id)?;
 
         let entry = NftEntry {
-            standard: "dotbit".to_string(),
+            standard: NftStandard::DotBit,
             collection_id: None,
             token_id: Some(account.account_id.clone()),
             owner_lock_hash: Some(account.owner_lock_hash.clone()),
             name: Some(account_name),
-            metadata: account.expired_at.map(|e| {
-                serde_json::json!({
-                    "expired_at": e,
-                })
-            }),
             is_live: true,
             created_at_block: existing
                 .as_ref()
                 .map(|e| e.created_at_block)
                 .unwrap_or(block_number),
+            extra: NftExtra::DotBit {
+                expired_at: account.expired_at,
+            },
         };
         batch.put_nft(&account.account_id, &entry);
         let _ = tx_hash;

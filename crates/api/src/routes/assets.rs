@@ -203,12 +203,12 @@ fn fetch_assets(
             std::collections::HashMap::new();
 
         for (id, entry) in &spores {
-            // Skip cluster entries themselves (content_type == "cluster")
-            if entry.content_type.as_deref() == Some("cluster") {
+            // Skip cluster entries themselves
+            if entry.standard.is_cluster() {
                 continue;
             }
 
-            let cluster_id_bytes = entry.cluster_id.clone().unwrap_or_else(|| id.clone());
+            let cluster_id_bytes = entry.collection_id.clone().unwrap_or_else(|| id.clone());
 
             let agg = cluster_map
                 .entry(cluster_id_bytes)
@@ -273,8 +273,15 @@ fn fetch_assets(
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
         // Group NFTs by collection_id
-        let mut collection_map: std::collections::HashMap<String, (Option<String>, i64, bool)> =
-            std::collections::HashMap::new();
+        let mut collection_map: std::collections::HashMap<
+            String,
+            (
+                Option<String>,
+                i64,
+                bool,
+                ckbadger_store::types::NftStandard,
+            ),
+        > = std::collections::HashMap::new();
 
         for (id, entry) in &nfts {
             let collection_hex = entry
@@ -285,12 +292,12 @@ fn fetch_assets(
 
             let counter = collection_map
                 .entry(collection_hex)
-                .or_insert_with(|| (entry.name.clone(), 0, entry.is_live));
+                .or_insert_with(|| (entry.name.clone(), 0, entry.is_live, entry.standard));
 
             counter.1 += 1;
         }
 
-        for (collection_hex, (name, count, is_live)) in &collection_map {
+        for (collection_hex, (name, count, is_live, standard)) in &collection_map {
             if !is_live {
                 continue;
             }
@@ -305,7 +312,7 @@ fn fetch_assets(
             assets.push(AssetRow {
                 id: collection_hex.clone(),
                 asset_type: "nft".to_string(),
-                standard: "m-nft".to_string(),
+                standard: standard.asset_standard().to_string(),
                 name: name.clone(),
                 symbol: None,
                 icon_url: None,

@@ -2,7 +2,7 @@
 
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::CkbadgerStore;
-use ckbadger_store::{NftEntry, SporeEntry};
+use ckbadger_store::{DobEntry, DobExtra, DobStandard, NftEntry, NftExtra, NftStandard};
 use std::sync::Arc;
 
 fn setup_store() -> Arc<CkbadgerStore> {
@@ -17,16 +17,19 @@ fn test_spore_insert_retrieve() {
     let store = setup_store();
 
     let spore_id = vec![0xAA; 32];
-    let entry = SporeEntry {
-        cluster_id: Some(vec![0xBB; 32]),
-        content_type: Some("image/png".to_string()),
-        content_length: Some(4096),
+    let entry = DobEntry {
+        standard: DobStandard::Spore,
+        collection_id: Some(vec![0xBB; 32]),
         owner_lock_hash: Some(vec![0xCC; 32]),
+        name: None,
+        description: None,
         is_live: true,
         created_at_block: 100,
         created_at_tx: vec![0xDD; 32],
-        name: None,
-        description: None,
+        extra: DobExtra::Spore {
+            content_type: "image/png".to_string(),
+            content_length: 4096,
+        },
     };
 
     let mut batch = StoreBatch::new(&store);
@@ -38,12 +41,8 @@ fn test_spore_insert_retrieve() {
 
     let (key, retrieved) = &results[0];
     assert_eq!(key, &spore_id);
-    assert_eq!(retrieved.cluster_id.as_ref().unwrap(), &vec![0xBB; 32]);
-    assert_eq!(
-        retrieved.content_type.as_ref().unwrap(),
-        &"image/png".to_string()
-    );
-    assert_eq!(retrieved.content_length, Some(4096));
+    assert_eq!(retrieved.standard, DobStandard::Spore);
+    assert_eq!(retrieved.collection_id.as_ref().unwrap(), &vec![0xBB; 32]);
     assert_eq!(retrieved.owner_lock_hash.as_ref().unwrap(), &vec![0xCC; 32]);
     assert!(retrieved.is_live);
     assert_eq!(retrieved.created_at_block, 100);
@@ -57,16 +56,19 @@ fn test_spore_consume_burn() {
     let spore_id = vec![0x11; 32];
 
     // Insert a live spore
-    let live_entry = SporeEntry {
-        cluster_id: Some(vec![0x22; 32]),
-        content_type: Some("text/plain".to_string()),
-        content_length: Some(256),
+    let live_entry = DobEntry {
+        standard: DobStandard::Spore,
+        collection_id: Some(vec![0x22; 32]),
         owner_lock_hash: Some(vec![0x33; 32]),
+        name: None,
+        description: None,
         is_live: true,
         created_at_block: 50,
         created_at_tx: vec![0x44; 32],
-        name: None,
-        description: None,
+        extra: DobExtra::Spore {
+            content_type: "text/plain".to_string(),
+            content_length: 256,
+        },
     };
 
     let mut batch = StoreBatch::new(&store);
@@ -79,16 +81,19 @@ fn test_spore_consume_burn() {
     assert!(results[0].1.is_live);
 
     // "Burn" (consume) the spore by writing the same id with is_live=false
-    let burned_entry = SporeEntry {
-        cluster_id: live_entry.cluster_id.clone(),
-        content_type: live_entry.content_type.clone(),
-        content_length: live_entry.content_length,
+    let burned_entry = DobEntry {
+        standard: live_entry.standard,
+        collection_id: live_entry.collection_id.clone(),
         owner_lock_hash: live_entry.owner_lock_hash.clone(),
+        name: None,
+        description: None,
         is_live: false,
         created_at_block: live_entry.created_at_block,
         created_at_tx: live_entry.created_at_tx.clone(),
-        name: None,
-        description: None,
+        extra: DobExtra::Spore {
+            content_type: "text/plain".to_string(),
+            content_length: 256,
+        },
     };
 
     let mut batch = StoreBatch::new(&store);
@@ -108,14 +113,19 @@ fn test_nft_entry_insert_retrieve() {
 
     let nft_id = vec![0x55; 32];
     let entry = NftEntry {
-        standard: "mNFT".to_string(),
+        standard: NftStandard::MnftToken,
         collection_id: Some(vec![0x66; 32]),
         token_id: Some(vec![0x00, 0x01]),
         owner_lock_hash: Some(vec![0x77; 32]),
         name: Some("My DotBit NFT".to_string()),
-        metadata: None,
         is_live: true,
         created_at_block: 200,
+        extra: NftExtra::MnftToken {
+            token_index: 1,
+            characteristic: vec![],
+            configure: 0,
+            state: 0,
+        },
     };
 
     let mut batch = StoreBatch::new(&store);
@@ -127,14 +137,13 @@ fn test_nft_entry_insert_retrieve() {
 
     let (key, retrieved) = &results[0];
     assert_eq!(key, &nft_id);
-    assert_eq!(retrieved.standard, "mNFT");
+    assert_eq!(retrieved.standard, NftStandard::MnftToken);
     assert_eq!(retrieved.collection_id.as_ref().unwrap(), &vec![0x66; 32]);
     assert_eq!(retrieved.token_id.as_ref().unwrap(), &vec![0x00, 0x01]);
     assert_eq!(retrieved.owner_lock_hash.as_ref().unwrap(), &vec![0x77; 32]);
     assert_eq!(retrieved.name.as_ref().unwrap(), "My DotBit NFT");
     assert!(retrieved.is_live);
     assert_eq!(retrieved.created_at_block, 200);
-    assert!(retrieved.metadata.is_none());
 }
 
 #[test]
@@ -146,16 +155,19 @@ fn test_list_spores_with_limit() {
     for i in 0u8..5 {
         let mut spore_id = vec![0u8; 32];
         spore_id[0] = i;
-        let entry = SporeEntry {
-            cluster_id: None,
-            content_type: Some(format!("type_{}", i)),
-            content_length: Some(i as i64 * 100),
+        let entry = DobEntry {
+            standard: DobStandard::Spore,
+            collection_id: None,
             owner_lock_hash: None,
+            name: None,
+            description: None,
             is_live: true,
             created_at_block: i as i64,
             created_at_tx: vec![i; 32],
-            name: None,
-            description: None,
+            extra: DobExtra::Spore {
+                content_type: format!("type_{}", i),
+                content_length: i as i64 * 100,
+            },
         };
         batch.put_spore(&spore_id, &entry);
     }
@@ -180,14 +192,19 @@ fn test_list_nfts_with_limit() {
         let mut nft_id = vec![0u8; 32];
         nft_id[0] = i;
         let entry = NftEntry {
-            standard: "mNFT".to_string(),
+            standard: NftStandard::MnftToken,
             collection_id: None,
             token_id: Some(vec![i]),
             owner_lock_hash: None,
             name: Some(format!("nft_{}", i)),
-            metadata: None,
             is_live: true,
             created_at_block: i as i64 * 10,
+            extra: NftExtra::MnftToken {
+                token_index: i as u32,
+                characteristic: vec![],
+                configure: 0,
+                state: 0,
+            },
         };
         batch.put_nft(&nft_id, &entry);
     }

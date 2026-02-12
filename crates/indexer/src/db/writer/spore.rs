@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 use ckbadger_store::batch::StoreBatch;
-use ckbadger_store::types::SporeEntry;
+use ckbadger_store::types::{DobEntry, DobExtra, DobStandard};
 
 use crate::parser::{ParsedClusterCell, ParsedSporeCell};
 
@@ -15,13 +15,13 @@ impl BatchWriter {
         tx_hash: &[u8],
         batch: &mut StoreBatch,
     ) -> Result<()> {
-        // Clusters are stored as SporeEntry with cluster-specific fields
         let existing = self.store.get_spore(&cluster.cluster_id)?;
-        let entry = SporeEntry {
-            cluster_id: None, // This IS a cluster, not a spore in a cluster
-            content_type: Some("cluster".to_string()),
-            content_length: None,
+        let entry = DobEntry {
+            standard: DobStandard::SporeCluster,
+            collection_id: None, // This IS a cluster, not a spore in a cluster
             owner_lock_hash: Some(cluster.owner_lock_hash.clone()),
+            name: cluster.name.clone(),
+            description: cluster.description.clone(),
             is_live: true,
             created_at_block: existing
                 .as_ref()
@@ -31,8 +31,7 @@ impl BatchWriter {
                 .as_ref()
                 .map(|e| e.created_at_tx.clone())
                 .unwrap_or_else(|| tx_hash.to_vec()),
-            name: cluster.name.clone(),
-            description: cluster.description.clone(),
+            extra: DobExtra::SporeCluster,
         };
         batch.put_spore(&cluster.cluster_id, &entry);
         Ok(())
@@ -47,11 +46,12 @@ impl BatchWriter {
         batch: &mut StoreBatch,
     ) -> Result<()> {
         let existing = self.store.get_spore(&spore.spore_id)?;
-        let entry = SporeEntry {
-            cluster_id: spore.cluster_id.clone(),
-            content_type: Some(spore.content_type.clone()),
-            content_length: Some(spore.content.len() as i64),
+        let entry = DobEntry {
+            standard: DobStandard::Spore,
+            collection_id: spore.cluster_id.clone(),
             owner_lock_hash: Some(spore.owner_lock_hash.clone()),
+            name: None,
+            description: None,
             is_live: true,
             created_at_block: existing
                 .as_ref()
@@ -61,8 +61,10 @@ impl BatchWriter {
                 .as_ref()
                 .map(|e| e.created_at_tx.clone())
                 .unwrap_or_else(|| tx_hash.to_vec()),
-            name: None,
-            description: None,
+            extra: DobExtra::Spore {
+                content_type: spore.content_type.clone(),
+                content_length: spore.content.len() as i64,
+            },
         };
         batch.put_spore(&spore.spore_id, &entry);
         Ok(())

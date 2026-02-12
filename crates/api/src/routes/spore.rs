@@ -60,18 +60,25 @@ pub struct SporeResponse {
     pub created_at_block: i64,
 }
 
-/// Convert a SporeEntry from the store into a SporeResponse.
+/// Convert a DobEntry from the store into a SporeResponse.
 fn spore_to_response(spore_id: &[u8], entry: &ckbadger_store::SporeEntry) -> SporeResponse {
+    let (content_type, content_size) = match &entry.extra {
+        ckbadger_store::DobExtra::Spore {
+            content_type,
+            content_length,
+        } => (content_type.clone(), *content_length as i32),
+        _ => (String::new(), 0),
+    };
     SporeResponse {
         spore_id: format!("0x{}", hex::encode(spore_id)),
         tx_hash: format!("0x{}", hex::encode(&entry.created_at_tx)),
         output_index: 0,
         cluster_id: entry
-            .cluster_id
+            .collection_id
             .as_ref()
             .map(|c| format!("0x{}", hex::encode(c))),
-        content_type: entry.content_type.clone().unwrap_or_default(),
-        content_size: entry.content_length.unwrap_or(0) as i32,
+        content_type,
+        content_size,
         owner_lock_hash: entry
             .owner_lock_hash
             .as_ref()
@@ -103,7 +110,7 @@ async fn list_clusters(
         std::collections::HashMap::new();
 
     for (_, entry) in &all_spores {
-        if let Some(ref cluster_id) = entry.cluster_id {
+        if let Some(ref cluster_id) = entry.collection_id {
             let e = cluster_map.entry(cluster_id.clone()).or_insert((
                 entry.owner_lock_hash.clone(),
                 0,
@@ -184,7 +191,7 @@ async fn get_spores_by_cluster(
         .into_iter()
         .filter(|(_, entry)| {
             entry.is_live
-                && entry.cluster_id.as_ref() == Some(&id)
+                && entry.collection_id.as_ref() == Some(&id)
                 && entry.created_at_block < cursor_block
         })
         .collect();
@@ -229,7 +236,7 @@ async fn get_cluster(
 
     let cluster_spores: Vec<_> = all_spores
         .iter()
-        .filter(|(_, entry)| entry.cluster_id.as_ref() == Some(&id))
+        .filter(|(_, entry)| entry.collection_id.as_ref() == Some(&id))
         .collect();
 
     // Look up the cluster entry directly for name/description
