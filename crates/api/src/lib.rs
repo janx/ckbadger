@@ -138,11 +138,17 @@ pub async fn create_router(config: AppConfig) -> Router {
 
     // Spawn periodic store refresh for secondary instances
     let refresh_store = state.store.clone();
+    let refresh_ckb_store = state.ckb_store.clone();
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
             if let Err(e) = refresh_store.refresh() {
                 tracing::warn!("Store refresh failed: {}", e);
+            }
+            if let Some(ref ckb_store) = refresh_ckb_store {
+                if let Err(e) = ckb_store.refresh() {
+                    tracing::warn!("CKB store refresh failed: {}", e);
+                }
             }
         }
     });
