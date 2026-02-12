@@ -366,77 +366,113 @@ async fn upsert_script_label(
     network: &str,
 ) -> Result<()> {
     // Only import deployments for the configured network
-    let deployments: Box<dyn Iterator<Item = &ScriptDeployment>> = match network {
-        "mainnet" => Box::new(script.deployments.mainnet.iter()),
-        "testnet" => Box::new(script.deployments.testnet.iter()),
-        _ => Box::new(
-            script
+    let (active, excluded): (&[ScriptDeployment], &[ScriptDeployment]) = match network {
+        "mainnet" => (&script.deployments.mainnet, &script.deployments.testnet),
+        "testnet" => (&script.deployments.testnet, &script.deployments.mainnet),
+        _ => {
+            let all_deployments: Vec<&ScriptDeployment> = script
                 .deployments
                 .mainnet
                 .iter()
-                .chain(script.deployments.testnet.iter()),
-        ),
+                .chain(script.deployments.testnet.iter())
+                .collect();
+            // Process all, exclude none — handled below
+            for deployment in all_deployments {
+                if !deployment.deprecated {
+                    import_single_deployment(store, ckb_store, script, deployment)?;
+                }
+            }
+            return Ok(());
+        }
     };
 
-    for deployment in deployments {
-        if deployment.deprecated {
-            continue;
+    // Clean up entries from the excluded network: clear label fields so they don't
+    // appear in name-based queries. Preserves indexer-maintained usage stats.
+    for deployment in excluded {
+        if let Ok(code_hash) = decode_hex(&deployment.code_hash) {
+            if let Ok(Some(mut info)) = store.get_script_info(&code_hash) {
+                if info.name.as_deref() == Some(&script.name) {
+                    info.name = None;
+                    info.description = None;
+                    info.website = None;
+                    info.dep_type_hash = None;
+                    info.dep_data_hash = None;
+                    info.code_cell_tx_hash = None;
+                    info.code_cell_output_index = None;
+                    store.put_script_info_direct(&code_hash, &info)?;
+                }
+            }
         }
+    }
 
-        let code_hash = decode_hex(&deployment.code_hash)?;
+    for deployment in active {
+        if !deployment.deprecated {
+            import_single_deployment(store, ckb_store, script, deployment)?;
+        }
+    }
+    Ok(())
+}
 
-        let mut info = store.get_script_info(&code_hash)?.unwrap_or_else(|| {
-            ckbadger_store::types::ScriptInfo {
+fn import_single_deployment(
+    store: &CkbadgerStore,
+    ckb_store: Option<&CkbChainReader>,
+    script: &ScriptLabelInfo,
+    deployment: &ScriptDeployment,
+) -> Result<()> {
+    let code_hash = decode_hex(&deployment.code_hash)?;
+
+    let mut info =
+        store
+            .get_script_info(&code_hash)?
+            .unwrap_or_else(|| ckbadger_store::types::ScriptInfo {
                 code_hash: code_hash.clone(),
                 hash_type: parse_hash_type(&deployment.hash_type),
                 ..Default::default()
-            }
-        });
+            });
 
-        // Update label fields (preserve indexer-maintained stats)
-        info.name = Some(script.name.clone());
-        info.description = Some(script.description.clone());
-        info.website = Some(script.website.clone());
+    // Update label fields (preserve indexer-maintained stats)
+    info.name = Some(script.name.clone());
+    info.description = Some(script.description.clone());
+    info.website = Some(script.website.clone());
 
-        // Store deployment cell's type_hash and data_hash for code cell lookup
-        let type_hash = decode_hex(&deployment.type_hash).ok();
-        let is_zero_type = type_hash
-            .as_ref()
-            .map(|h| h.iter().all(|&b| b == 0))
-            .unwrap_or(true);
-        info.dep_type_hash = if is_zero_type { None } else { type_hash };
+    // Store deployment cell's type_hash and data_hash for code cell lookup
+    let type_hash = decode_hex(&deployment.type_hash).ok();
+    let is_zero_type = type_hash
+        .as_ref()
+        .map(|h| h.iter().all(|&b| b == 0))
+        .unwrap_or(true);
+    info.dep_type_hash = if is_zero_type { None } else { type_hash };
 
-        let data_hash = decode_hex(&deployment.data_hash).ok();
-        let is_zero_data = data_hash
-            .as_ref()
-            .map(|h| h.iter().all(|&b| b == 0))
-            .unwrap_or(true);
-        info.dep_data_hash = if is_zero_data { None } else { data_hash };
+    let data_hash = decode_hex(&deployment.data_hash).ok();
+    let is_zero_data = data_hash
+        .as_ref()
+        .map(|h| h.iter().all(|&b| b == 0))
+        .unwrap_or(true);
+    info.dep_data_hash = if is_zero_data { None } else { data_hash };
 
-        // Resolve code cell outpoint for scripts that can't use type index at runtime
-        // (data/data1/data2 without dep_type_hash — e.g. genesis cells)
-        if info.hash_type != 1 && info.dep_type_hash.is_none() {
-            if let Some(ref dh) = info.dep_data_hash {
-                if dh.len() == 32 {
-                    let mut hash = [0u8; 32];
-                    hash.copy_from_slice(dh);
-                    if let Some(ckb) = ckb_store {
-                        if let Some((tx_hash, idx)) = ckb.find_cell_by_data_hash(&hash) {
-                            info.code_cell_tx_hash = Some(tx_hash.to_vec());
-                            info.code_cell_output_index = Some(idx);
-                            debug!(
-                                "Resolved code cell for {}: {}:{}",
-                                script.name,
-                                hex::encode(tx_hash),
-                                idx
-                            );
-                        }
+    // Resolve code cell outpoint for scripts that can't use type index at runtime
+    // (data/data1/data2 without dep_type_hash — e.g. genesis cells)
+    if info.hash_type != 1 && info.dep_type_hash.is_none() {
+        if let Some(ref dh) = info.dep_data_hash {
+            if dh.len() == 32 {
+                let mut hash = [0u8; 32];
+                hash.copy_from_slice(dh);
+                if let Some(ckb) = ckb_store {
+                    if let Some((tx_hash, idx)) = ckb.find_cell_by_data_hash(&hash) {
+                        info.code_cell_tx_hash = Some(tx_hash.to_vec());
+                        info.code_cell_output_index = Some(idx);
+                        debug!(
+                            "Resolved code cell for {}: {}:{}",
+                            script.name,
+                            hex::encode(tx_hash),
+                            idx
+                        );
                     }
                 }
             }
         }
-
-        store.put_script_info_direct(&code_hash, &info)?;
     }
+
+    store.put_script_info_direct(&code_hash, &info)?;
     Ok(())
 }
