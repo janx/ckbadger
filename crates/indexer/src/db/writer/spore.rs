@@ -67,6 +67,12 @@ impl BatchWriter {
             },
         };
         batch.put_spore(&spore.spore_id, &entry);
+
+        // Write spore-by-cluster secondary index
+        if let Some(ref cluster_id) = spore.cluster_id {
+            batch.put_spore_by_cluster(cluster_id, &spore.spore_id);
+        }
+
         Ok(())
     }
 

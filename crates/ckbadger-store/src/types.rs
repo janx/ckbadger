@@ -187,6 +187,8 @@ pub struct TokenInfo {
     pub first_seen_block: i64,
     pub icon_url: Option<String>,
     pub description: Option<String>,
+    #[serde(default)]
+    pub transfers_count: i64,
 }
 
 /// DOB (Digital Object) standard identifier.

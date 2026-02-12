@@ -39,6 +39,7 @@ pub const CF_SCRIPT_INFO: &str = "script_info";
 pub const CF_SYNC_META: &str = "sync_meta";
 pub const CF_TASKS: &str = "tasks";
 pub const CF_TASKS_INDEX: &str = "tasks_index";
+pub const CF_SPORE_BY_CLUSTER: &str = "spore_by_cluster";
 
 /// All column family names, used during DB open.
 pub const ALL_CFS: &[&str] = &[
@@ -67,6 +68,7 @@ pub const ALL_CFS: &[&str] = &[
     CF_SYNC_META,
     CF_TASKS,
     CF_TASKS_INDEX,
+    CF_SPORE_BY_CLUSTER,
 ];
 
 pub struct CkbadgerStore {
@@ -323,6 +325,9 @@ impl CkbadgerStore {
     }
     pub fn cf_tasks_index(&self) -> &ColumnFamily {
         self.cf(CF_TASKS_INDEX)
+    }
+    pub fn cf_spore_by_cluster(&self) -> &ColumnFamily {
+        self.cf(CF_SPORE_BY_CLUSTER)
     }
 
     // ---- Raw DB operations ----

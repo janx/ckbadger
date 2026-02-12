@@ -265,6 +265,7 @@ async fn upsert_token_label(store: &CkbadgerStore, label: &UdtLabelInfo) -> Resu
                 first_seen_block: 0,
                 icon_url: None,
                 description: None,
+                transfers_count: 0,
             });
 
     // Update label fields (preserve indexer-maintained stats like holders_count, total_supply)

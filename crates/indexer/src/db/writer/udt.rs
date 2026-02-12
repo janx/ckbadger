@@ -142,12 +142,16 @@ impl BatchWriter {
             }
         }
 
-        // Step 2: Upsert tokens (read-modify-write)
+        // Step 2: Upsert tokens + transfer counts (merged to avoid double iteration)
         for (type_hash, update) in &token_updates {
             let existing = self.store.get_token(type_hash)?;
             let transfer = update.transfer;
 
-            let updated = match existing {
+            // Read current total transfers count from stats CF
+            let current_total = self.store.get_token_transfers_count(type_hash)?;
+            let new_total = current_total + update.transfers_count;
+
+            let mut updated = match existing {
                 Some(mut info) => {
                     info.holders_count += 0; // Will be updated in balance step
                     if let Some(ref mut supply) = info.total_supply {
@@ -172,17 +176,16 @@ impl BatchWriter {
                     first_seen_block: update.block_number,
                     icon_url: None,
                     description: None,
+                    transfers_count: 0,
                 },
             };
 
+            // Embed transfers_count into TokenInfo
+            updated.transfers_count = new_total;
             batch.put_token(type_hash, &updated);
-        }
 
-        // Step 2b: Update transfer counts in stats CF
-        for (type_hash, update) in &token_updates {
-            // Total transfers count
-            let current_total = self.store.get_token_transfers_count(type_hash)?;
-            batch.put_token_transfers_count(type_hash, current_total + update.transfers_count);
+            // Also write to stats CF (source of truth for accumulation)
+            batch.put_token_transfers_count(type_hash, new_total);
 
             // Hourly bucket: determine hour from block timestamp
             if let Some(&ts_ms) = block_timestamps.get(&update.block_number) {
@@ -254,6 +257,11 @@ impl BatchWriter {
                 // For correctness with the batch, we need to track the in-flight value.
                 if let Some(mut info) = self.store.get_token(type_hash)? {
                     info.holders_count = (info.holders_count + holder_delta).max(0);
+                    // Preserve transfers_count from Step 2 (store has stale value)
+                    if let Some(update) = token_updates.get(type_hash.as_slice()) {
+                        let current_total = self.store.get_token_transfers_count(type_hash)?;
+                        info.transfers_count = current_total + update.transfers_count;
+                    }
                     batch.put_token(type_hash, &info);
                 }
             }

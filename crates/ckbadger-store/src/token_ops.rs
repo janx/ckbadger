@@ -107,6 +107,24 @@ impl CkbadgerStore {
         Ok(deleted)
     }
 
+    /// Migrate transfer stats into TokenInfo.transfers_count for all tokens.
+    /// Reads from the stats CF and writes back into the tokens CF.
+    pub fn migrate_token_transfer_stats(&self) -> anyhow::Result<u64> {
+        let tokens = self.list_tokens()?;
+        let mut migrated = 0u64;
+
+        for (type_hash, mut info) in tokens {
+            let count = self.get_token_transfers_count(&type_hash)?;
+            if info.transfers_count != count {
+                info.transfers_count = count;
+                self.put_token_direct(&type_hash, &info)?;
+                migrated += 1;
+            }
+        }
+
+        Ok(migrated)
+    }
+
     /// List holders for a token (prefix scan by type_hash).
     ///
     /// Returns `(lock_hash, balance)` pairs, limited to `limit` results.

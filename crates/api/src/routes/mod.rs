@@ -1,5 +1,5 @@
 mod activities;
-mod assets;
+pub mod assets;
 mod blocks;
 mod cells;
 mod dao;

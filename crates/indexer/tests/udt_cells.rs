@@ -36,6 +36,7 @@ fn make_token(
         first_seen_block,
         icon_url: None,
         description: Some(format!("{} token", name)),
+        transfers_count: 0,
     }
 }
 

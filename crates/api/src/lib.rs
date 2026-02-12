@@ -15,7 +15,7 @@ use tower_http::compression::CompressionLayer;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
-use cache::CacheBackend;
+use cache::{CacheBackend, InMemoryCache};
 use ckb_store_reader::CkbChainReader;
 use cycles::CyclesCalculator;
 use middleware::IpRateLimitLayer;
@@ -31,6 +31,8 @@ pub struct AppState {
     pub cycles_calculator: Arc<CyclesCalculator>,
     /// Direct read-only access to CKB node's RocksDB (when configured).
     pub ckb_store: Option<Arc<CkbChainReader>>,
+    /// In-memory cache for assets/tokens/DOB data (refreshed by background loop).
+    pub mem_cache: InMemoryCache,
 }
 
 pub struct AppConfig {
@@ -87,6 +89,8 @@ pub async fn create_router(config: AppConfig) -> Router {
         None => None,
     };
 
+    let mem_cache = InMemoryCache::new();
+
     let state = Arc::new(AppState {
         store: config.store,
         ws_manager,
@@ -95,6 +99,7 @@ pub async fn create_router(config: AppConfig) -> Router {
         ckb_network: config.ckb_network,
         cycles_calculator,
         ckb_store,
+        mem_cache,
     });
 
     let cors = CorsLayer::new()
@@ -133,6 +138,11 @@ pub async fn create_router(config: AppConfig) -> Router {
         let reorg_broadcaster_ws = state.ws_manager.clone();
         tokio::spawn(async move {
             ws::start_reorg_broadcaster(reorg_broadcaster_store, reorg_broadcaster_ws).await;
+        });
+
+        let assets_state = state.clone();
+        tokio::spawn(async move {
+            warmup::refresh_assets_cache_loop(assets_state).await;
         });
     }
 

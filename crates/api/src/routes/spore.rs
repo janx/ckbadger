@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
+use crate::warmup::{CachedAssetEntry, CACHE_KEY_ASSETS_DOB};
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -90,21 +91,101 @@ fn spore_to_response(spore_id: &[u8], entry: &ckbadger_store::SporeEntry) -> Spo
     }
 }
 
-/// (owner_lock_hash, spores_count, created_at_block)
-type ClusterInfo = (Option<Vec<u8>>, i32, i64);
-
+/// List clusters — use cached DOB assets list when available.
 async fn list_clusters(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<ClusterResponse>> {
     let limit = params.limit.clamp(1, 100) as usize;
+    let cursor_block = params.cursor.unwrap_or(i64::MAX);
 
-    // Clusters are not stored separately in the RocksDB store.
-    // Derive from spores by grouping on cluster_id.
+    // Try cached DOB assets first — they already have cluster grouping
+    if let Some(cached_dobs) = state
+        .mem_cache
+        .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_DOB)
+    {
+        return serve_clusters_from_cache(cached_dobs, cursor_block, limit, &state);
+    }
+
+    // Fallback: derive from spores scan
+    serve_clusters_from_store(&state, cursor_block, limit)
+}
+
+fn serve_clusters_from_cache(
+    cached: Vec<CachedAssetEntry>,
+    cursor_block: i64,
+    limit: usize,
+    state: &Arc<AppState>,
+) -> ApiResult<CursorPaginatedResponse<ClusterResponse>> {
+    // Build cluster responses from cached entries
+    let mut clusters: Vec<ClusterResponse> = cached
+        .into_iter()
+        .filter_map(|entry| {
+            let cluster_id_hex = entry.cluster_id.as_ref().unwrap_or(&entry.id);
+            let cluster_id_bytes =
+                hex::decode(cluster_id_hex.strip_prefix("0x").unwrap_or(cluster_id_hex)).ok()?;
+
+            let cluster_entry = state.store.get_spore(&cluster_id_bytes).ok().flatten();
+            let created_at_block = cluster_entry
+                .as_ref()
+                .map(|e| e.created_at_block)
+                .unwrap_or(0);
+            let description = cluster_entry.as_ref().and_then(|e| e.description.clone());
+            let owner_lock_hash = cluster_entry
+                .as_ref()
+                .and_then(|e| e.owner_lock_hash.clone());
+
+            Some(ClusterResponse {
+                cluster_id: entry.id,
+                name: entry.name,
+                description,
+                owner_lock_hash: owner_lock_hash
+                    .as_ref()
+                    .map(|h| format!("0x{}", hex::encode(h)))
+                    .unwrap_or_default(),
+                owner_address: None,
+                spores_count: entry.transfers_count as i32, // transfers_count holds spore count for DOB
+                created_at_block,
+            })
+        })
+        .collect();
+
+    clusters.sort_by(|a, b| b.created_at_block.cmp(&a.created_at_block));
+
+    let filtered: Vec<_> = clusters
+        .iter()
+        .filter(|c| c.created_at_block < cursor_block)
+        .take(limit + 1)
+        .cloned()
+        .collect();
+
+    let has_more = filtered.len() > limit;
+    let page: Vec<_> = filtered.into_iter().take(limit).collect();
+
+    let next_cursor = if has_more {
+        page.last().map(|c| c.created_at_block.to_string())
+    } else {
+        None
+    };
+
+    ok(CursorPaginatedResponse::without_total(
+        page,
+        limit as i64,
+        next_cursor,
+    ))
+}
+
+fn serve_clusters_from_store(
+    state: &Arc<AppState>,
+    cursor_block: i64,
+    limit: usize,
+) -> ApiResult<CursorPaginatedResponse<ClusterResponse>> {
     let all_spores = state
         .store
         .list_spores(100_000)
         .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    type ClusterInfo = (Option<Vec<u8>>, i32, i64);
 
     let mut cluster_map: std::collections::HashMap<Vec<u8>, ClusterInfo> =
         std::collections::HashMap::new();
@@ -124,9 +205,7 @@ async fn list_clusters(
     }
 
     let mut clusters: Vec<_> = cluster_map.into_iter().collect();
-    clusters.sort_by(|a, b| b.1 .2.cmp(&a.1 .2)); // Sort by created_at_block DESC
-
-    let cursor_block = params.cursor.unwrap_or(i64::MAX);
+    clusters.sort_by(|a, b| b.1 .2.cmp(&a.1 .2));
 
     let filtered: Vec<_> = clusters
         .iter()
@@ -171,6 +250,7 @@ async fn list_clusters(
     ))
 }
 
+/// Get spores by cluster — use secondary index instead of full scan.
 async fn get_spores_by_cluster(
     State(state): State<Arc<AppState>>,
     Path(cluster_id): Path<String>,
@@ -182,18 +262,15 @@ async fn get_spores_by_cluster(
     let limit = params.limit.clamp(1, 100) as usize;
     let cursor_block = params.cursor.unwrap_or(i64::MAX);
 
-    let all_spores = state
+    // Use secondary index for efficient lookup
+    let cluster_spores = state
         .store
-        .list_spores(100_000)
+        .list_spores_by_cluster(&id, 10_000)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let mut filtered: Vec<_> = all_spores
+    let mut filtered: Vec<_> = cluster_spores
         .into_iter()
-        .filter(|(_, entry)| {
-            entry.is_live
-                && entry.collection_id.as_ref() == Some(&id)
-                && entry.created_at_block < cursor_block
-        })
+        .filter(|(_, entry)| entry.is_live && entry.created_at_block < cursor_block)
         .collect();
 
     filtered.sort_by(|a, b| b.1.created_at_block.cmp(&a.1.created_at_block));
@@ -221,6 +298,7 @@ async fn get_spores_by_cluster(
     ))
 }
 
+/// Get cluster — point lookup + count from secondary index (no full scan).
 async fn get_cluster(
     State(state): State<Arc<AppState>>,
     Path(cluster_id): Path<String>,
@@ -228,45 +306,31 @@ async fn get_cluster(
     let id = hex::decode(cluster_id.strip_prefix("0x").unwrap_or(&cluster_id))
         .map_err(|_| ApiError::bad_request("Invalid cluster ID"))?;
 
-    // Derive cluster info from spores
-    let all_spores = state
-        .store
-        .list_spores(100_000)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let cluster_spores: Vec<_> = all_spores
-        .iter()
-        .filter(|(_, entry)| entry.collection_id.as_ref() == Some(&id))
-        .collect();
-
-    // Look up the cluster entry directly for name/description
+    // Look up the cluster entry directly
     let cluster_entry = state
         .store
         .get_spore(&id)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    if cluster_spores.is_empty() && cluster_entry.is_none() {
+    // Count spores in cluster using secondary index
+    let spores_count = state
+        .store
+        .count_spores_in_cluster(&id)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    if spores_count == 0 && cluster_entry.is_none() {
         return Err(ApiError::not_found("Cluster not found"));
     }
 
     let name = cluster_entry.as_ref().and_then(|e| e.name.clone());
     let description = cluster_entry.as_ref().and_then(|e| e.description.clone());
-
-    let spores_count = cluster_spores.len() as i32;
-    let created_at_block = cluster_spores
-        .iter()
-        .map(|(_, e)| e.created_at_block)
-        .min()
-        .or_else(|| cluster_entry.as_ref().map(|e| e.created_at_block))
+    let created_at_block = cluster_entry
+        .as_ref()
+        .map(|e| e.created_at_block)
         .unwrap_or(0);
     let owner_lock_hash = cluster_entry
         .as_ref()
-        .and_then(|e| e.owner_lock_hash.clone())
-        .or_else(|| {
-            cluster_spores
-                .first()
-                .and_then(|(_, e)| e.owner_lock_hash.clone())
-        });
+        .and_then(|e| e.owner_lock_hash.clone());
 
     ok(ClusterResponse {
         cluster_id: format!("0x{}", hex::encode(&id)),
@@ -277,7 +341,7 @@ async fn get_cluster(
             .map(|h| format!("0x{}", hex::encode(h)))
             .unwrap_or_default(),
         owner_address: None,
-        spores_count,
+        spores_count: spores_count as i32,
         created_at_block,
     })
 }

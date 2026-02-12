@@ -255,6 +255,16 @@ impl<'a> StoreBatch<'a> {
         self.batch.put_cf(self.store.cf_spore_data(), id, &value);
     }
 
+    pub fn put_spore_by_cluster(&mut self, cluster_id: &[u8], spore_id: &[u8]) {
+        let key = keys::encode_spore_by_cluster_key(cluster_id, spore_id);
+        self.batch.put_cf(self.store.cf_spore_by_cluster(), key, []);
+    }
+
+    pub fn delete_spore_by_cluster(&mut self, cluster_id: &[u8], spore_id: &[u8]) {
+        let key = keys::encode_spore_by_cluster_key(cluster_id, spore_id);
+        self.batch.delete_cf(self.store.cf_spore_by_cluster(), key);
+    }
+
     pub fn put_nft(&mut self, id: &[u8], entry: &NftEntry) {
         let value = bincode::serialize(entry).expect("serialize NftEntry");
         self.batch.put_cf(self.store.cf_nft_data(), id, &value);

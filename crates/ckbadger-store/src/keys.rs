@@ -170,6 +170,14 @@ pub fn encode_token_hourly_prefix(type_hash: &[u8]) -> Vec<u8> {
     key
 }
 
+/// Spore-by-cluster key: cluster_id(32B) + spore_id(32B) = 64 bytes
+pub fn encode_spore_by_cluster_key(cluster_id: &[u8], spore_id: &[u8]) -> [u8; 64] {
+    let mut key = [0u8; 64];
+    key[..32].copy_from_slice(&cluster_id[..32]);
+    key[32..64].copy_from_slice(&spore_id[..32]);
+    key
+}
+
 /// Sync meta keys
 pub mod sync_meta_keys {
     pub const TIP_BLOCK: &[u8] = b"tip_block";
