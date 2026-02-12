@@ -411,10 +411,21 @@ async fn get_script(
         return Err(ApiError::not_found("Script not found"));
     }
 
-    let scripts: Vec<ScriptResponse> = matching
+    let mut scripts: Vec<ScriptResponse> = matching
         .iter()
         .map(|(_, info)| script_info_to_response(info, network, &state))
         .collect();
+
+    // Propagate script_kind from deployments that have usage stats to those that don't.
+    // All deployments of the same script serve the same purpose (lock/type).
+    let known_kind = scripts.iter().find_map(|s| s.script_kind.clone());
+    if let Some(ref kind) = known_kind {
+        for s in &mut scripts {
+            if s.script_kind.is_none() {
+                s.script_kind = Some(kind.clone());
+            }
+        }
+    }
 
     ok(scripts)
 }

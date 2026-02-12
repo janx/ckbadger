@@ -156,7 +156,7 @@ pub async fn execute(
                 return Ok(());
             }
 
-            match upsert_script_label(store, ckb_store, script).await {
+            match upsert_script_label(store, ckb_store, script, &config.network).await {
                 Ok(_) => {
                     result.script_labels_imported += 1;
                 }
@@ -363,13 +363,20 @@ async fn upsert_script_label(
     store: &CkbadgerStore,
     ckb_store: Option<&CkbChainReader>,
     script: &ScriptLabelInfo,
+    network: &str,
 ) -> Result<()> {
-    // Import each non-deprecated deployment as a script_info entry keyed by code_hash
-    let deployments = script
-        .deployments
-        .mainnet
-        .iter()
-        .chain(script.deployments.testnet.iter());
+    // Only import deployments for the configured network
+    let deployments: Box<dyn Iterator<Item = &ScriptDeployment>> = match network {
+        "mainnet" => Box::new(script.deployments.mainnet.iter()),
+        "testnet" => Box::new(script.deployments.testnet.iter()),
+        _ => Box::new(
+            script
+                .deployments
+                .mainnet
+                .iter()
+                .chain(script.deployments.testnet.iter()),
+        ),
+    };
 
     for deployment in deployments {
         if deployment.deprecated {
