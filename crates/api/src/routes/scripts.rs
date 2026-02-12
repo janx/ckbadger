@@ -104,8 +104,49 @@ pub struct ScriptLookupInfo {
     pub live_capacity_sum: String,
 }
 
+/// Resolve the deployment code cell outpoint for a script.
+fn resolve_code_cell(
+    info: &ckbadger_store::ScriptInfo,
+    store: &ckbadger_store::CkbadgerStore,
+) -> (Option<String>, Option<i32>) {
+    // 1. hash_type="type": code_hash IS the type_script_hash
+    // 2. hash_type="data*" with dep_type_hash: look up by type index
+    let type_hash_for_lookup = if info.hash_type == 1 {
+        Some(info.code_hash.as_slice())
+    } else {
+        info.dep_type_hash.as_deref()
+    };
+
+    if let Some(th) = type_hash_for_lookup {
+        if let Ok(cells) = store.list_cells_by_type(th, 1) {
+            if let Some((tx_hash, idx, _)) = cells.first() {
+                return (
+                    Some(format!("0x{}", hex::encode(tx_hash))),
+                    Some(*idx as i32),
+                );
+            }
+        }
+    }
+
+    // 3. Fallback: use pre-resolved code cell outpoint (resolved during label import)
+    if let (Some(tx_hash), Some(idx)) = (&info.code_cell_tx_hash, info.code_cell_output_index) {
+        if !tx_hash.is_empty() {
+            return (
+                Some(format!("0x{}", hex::encode(tx_hash))),
+                Some(idx as i32),
+            );
+        }
+    }
+
+    (None, None)
+}
+
 /// Convert a store ScriptInfo into an API ScriptResponse.
-fn script_info_to_response(info: &ckbadger_store::ScriptInfo, network: &str) -> ScriptResponse {
+fn script_info_to_response(
+    info: &ckbadger_store::ScriptInfo,
+    network: &str,
+    state: &AppState,
+) -> ScriptResponse {
     let hash_type_str = match info.hash_type {
         0 => Some("data".to_string()),
         1 => Some("type".to_string()),
@@ -125,6 +166,12 @@ fn script_info_to_response(info: &ckbadger_store::ScriptInfo, network: &str) -> 
         None
     };
 
+    // Resolve deployment code cell outpoint.
+    // For hash_type="type": code_hash IS the type_script_hash of the deployment cell.
+    // For hash_type="data"/"data1"/"data2": use dep_type_hash, then fall back to
+    // scanning early blocks via dep_data_hash.
+    let (code_cell_tx_hash, code_cell_output_index) = resolve_code_cell(info, &state.store);
+
     ScriptResponse {
         code_hash: format!("0x{}", hex::encode(&info.code_hash)),
         name: info.name.clone().unwrap_or_else(|| "Unknown".to_string()),
@@ -141,8 +188,8 @@ fn script_info_to_response(info: &ckbadger_store::ScriptInfo, network: &str) -> 
         tag: None,
         deprecated: false,
         is_system: false,
-        code_cell_tx_hash: None,
-        code_cell_output_index: None,
+        code_cell_tx_hash,
+        code_cell_output_index,
     }
 }
 
@@ -203,6 +250,9 @@ async fn lookup_scripts(
                 + info.type_live_capacity_sum as i128)
                 .to_string();
 
+            let (code_cell_tx_hash, code_cell_output_index) =
+                resolve_code_cell(&info, &state.store);
+
             result.insert(
                 code_hash_hex.clone(),
                 ScriptLookupInfo {
@@ -211,8 +261,8 @@ async fn lookup_scripts(
                     script_kind,
                     decoder_type: None,
                     hash_type: hash_type_str,
-                    code_cell_tx_hash: None,
-                    code_cell_output_index: None,
+                    code_cell_tx_hash,
+                    code_cell_output_index,
                     live_cells_count,
                     live_capacity_sum,
                 },
@@ -226,7 +276,6 @@ async fn lookup_scripts(
 #[derive(Debug, Deserialize)]
 pub struct CodeCellQuery {
     code_hash: String,
-    #[allow(dead_code)]
     hash_type: String,
 }
 
@@ -238,10 +287,10 @@ pub struct CodeCellResponse {
 }
 
 async fn get_code_cell(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     Query(params): Query<CodeCellQuery>,
 ) -> ApiResult<CodeCellResponse> {
-    let _code_hash_bytes = hex::decode(
+    let code_hash_bytes = hex::decode(
         params
             .code_hash
             .strip_prefix("0x")
@@ -249,12 +298,30 @@ async fn get_code_cell(
     )
     .map_err(|_| ApiError::bad_request("Invalid code_hash hex"))?;
 
-    // Code cell lookup requires cell table data which is in RocksDB live_cells CF,
-    // but not indexed by data_hash or type_script_hash in the current store API.
-    // Return empty for now.
+    // Build a minimal ScriptInfo for resolve_code_cell
+    let hash_type = match params.hash_type.as_str() {
+        "data" => 0,
+        "type" => 1,
+        "data1" => 2,
+        "data2" => 4,
+        _ => 0,
+    };
+    let script_info = state
+        .store
+        .get_script_info(&code_hash_bytes)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| ckbadger_store::ScriptInfo {
+            code_hash: code_hash_bytes,
+            hash_type,
+            ..Default::default()
+        });
+
+    let (tx_hash, output_index) = resolve_code_cell(&script_info, &state.store);
+
     ok(CodeCellResponse {
-        tx_hash: None,
-        output_index: None,
+        tx_hash,
+        output_index,
     })
 }
 
@@ -311,7 +378,7 @@ async fn list_scripts(
 
     let scripts: Vec<ScriptResponse> = deduped
         .iter()
-        .map(|(_, info)| script_info_to_response(info, network))
+        .map(|(_, info)| script_info_to_response(info, network, &state))
         .collect();
 
     let total_rows = scripts.len() as i64;
@@ -346,7 +413,7 @@ async fn get_script(
 
     let scripts: Vec<ScriptResponse> = matching
         .iter()
-        .map(|(_, info)| script_info_to_response(info, network))
+        .map(|(_, info)| script_info_to_response(info, network, &state))
         .collect();
 
     ok(scripts)

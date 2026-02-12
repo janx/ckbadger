@@ -1,4 +1,5 @@
 use anyhow::Result;
+use ckb_store_reader::CkbChainReader;
 use ckbadger_common::{LabelImportConfig, Task, TaskConfig, TaskType};
 use ckbadger_store::CkbadgerStore;
 use futures::future::join_all;
@@ -17,6 +18,7 @@ pub struct TaskExecutor {
     _ckb_rpc_url: String,
     token_labels_path: String,
     _redis_url: Option<String>,
+    ckb_store: Option<Arc<CkbChainReader>>,
 }
 
 impl TaskExecutor {
@@ -26,6 +28,7 @@ impl TaskExecutor {
         ckb_rpc_url: String,
         token_labels_path: String,
         redis_url: Option<String>,
+        ckb_store: Option<Arc<CkbChainReader>>,
     ) -> Self {
         Self {
             db: TaskDb::new(store.clone()),
@@ -34,6 +37,7 @@ impl TaskExecutor {
             _ckb_rpc_url: ckb_rpc_url,
             token_labels_path,
             _redis_url: redis_url,
+            ckb_store,
         }
     }
 
@@ -211,7 +215,14 @@ impl TaskExecutor {
             config.token_labels_path = self.token_labels_path.clone();
         }
 
-        labels::execute(&self.db, &self.store, task.id, &config).await
+        labels::execute(
+            &self.db,
+            &self.store,
+            self.ckb_store.as_deref(),
+            task.id,
+            &config,
+        )
+        .await
     }
 }
 

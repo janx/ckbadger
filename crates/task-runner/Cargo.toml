@@ -17,6 +17,7 @@ futures = { workspace = true }
 
 # Store
 ckbadger-store = { path = "../ckbadger-store" }
+ckb-store-reader = { path = "../ckb-store-reader" }
 
 # Serialization
 serde = { workspace = true }

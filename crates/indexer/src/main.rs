@@ -227,6 +227,7 @@ async fn main() -> Result<()> {
             config.ckb_rpc_url.clone(),
             args.token_labels_path.clone(),
             config.redis_url.clone(),
+            indexer.ckb_store(),
         );
         let poll_interval = Duration::from_secs(args.task_poll_interval_secs);
         info!(

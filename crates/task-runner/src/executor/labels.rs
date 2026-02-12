@@ -1,4 +1,5 @@
 use anyhow::Result;
+use ckb_store_reader::CkbChainReader;
 use ckbadger_common::{LabelImportConfig, LabelImportResult};
 use ckbadger_store::CkbadgerStore;
 use serde::Deserialize;
@@ -80,6 +81,7 @@ struct ScriptNameOverrides {
 pub async fn execute(
     db: &TaskDb,
     store: &CkbadgerStore,
+    ckb_store: Option<&CkbChainReader>,
     task_id: Uuid,
     config: &LabelImportConfig,
 ) -> Result<()> {
@@ -154,7 +156,7 @@ pub async fn execute(
                 return Ok(());
             }
 
-            match upsert_script_label(store, script).await {
+            match upsert_script_label(store, ckb_store, script).await {
                 Ok(_) => {
                     result.script_labels_imported += 1;
                 }
@@ -357,7 +359,11 @@ fn load_script_overrides(base_path: &str) -> ScriptNameOverrides {
     }
 }
 
-async fn upsert_script_label(store: &CkbadgerStore, script: &ScriptLabelInfo) -> Result<()> {
+async fn upsert_script_label(
+    store: &CkbadgerStore,
+    ckb_store: Option<&CkbChainReader>,
+    script: &ScriptLabelInfo,
+) -> Result<()> {
     // Import each non-deprecated deployment as a script_info entry keyed by code_hash
     let deployments = script
         .deployments
@@ -384,6 +390,44 @@ async fn upsert_script_label(store: &CkbadgerStore, script: &ScriptLabelInfo) ->
         info.name = Some(script.name.clone());
         info.description = Some(script.description.clone());
         info.website = Some(script.website.clone());
+
+        // Store deployment cell's type_hash and data_hash for code cell lookup
+        let type_hash = decode_hex(&deployment.type_hash).ok();
+        let is_zero_type = type_hash
+            .as_ref()
+            .map(|h| h.iter().all(|&b| b == 0))
+            .unwrap_or(true);
+        info.dep_type_hash = if is_zero_type { None } else { type_hash };
+
+        let data_hash = decode_hex(&deployment.data_hash).ok();
+        let is_zero_data = data_hash
+            .as_ref()
+            .map(|h| h.iter().all(|&b| b == 0))
+            .unwrap_or(true);
+        info.dep_data_hash = if is_zero_data { None } else { data_hash };
+
+        // Resolve code cell outpoint for scripts that can't use type index at runtime
+        // (data/data1/data2 without dep_type_hash — e.g. genesis cells)
+        if info.hash_type != 1 && info.dep_type_hash.is_none() {
+            if let Some(ref dh) = info.dep_data_hash {
+                if dh.len() == 32 {
+                    let mut hash = [0u8; 32];
+                    hash.copy_from_slice(dh);
+                    if let Some(ckb) = ckb_store {
+                        if let Some((tx_hash, idx)) = ckb.find_cell_by_data_hash(&hash) {
+                            info.code_cell_tx_hash = Some(tx_hash.to_vec());
+                            info.code_cell_output_index = Some(idx);
+                            debug!(
+                                "Resolved code cell for {}: {}:{}",
+                                script.name,
+                                hex::encode(tx_hash),
+                                idx
+                            );
+                        }
+                    }
+                }
+            }
+        }
 
         store.put_script_info_direct(&code_hash, &info)?;
     }

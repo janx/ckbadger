@@ -362,6 +362,47 @@ impl CkbChainReader {
         Some(item.raw_data().to_vec())
     }
 
+    /// Find a live cell whose data hashes to the given data_hash.
+    ///
+    /// Iterates all entries in `COLUMN_CELL_DATA`, computes `blake2b(data)` for each,
+    /// and returns the first match as `(tx_hash, output_index)`.
+    /// Used to resolve code cells for `hash_type="data"/"data1"/"data2"` scripts.
+    pub fn find_cell_by_data_hash(&self, data_hash: &[u8; 32]) -> Option<([u8; 32], u32)> {
+        let cf = self.db.cf_handle(COLUMN_CELL_DATA)?;
+        let iter = self.db.iterator_cf(&cf, rocksdb::IteratorMode::Start);
+
+        for item in iter {
+            let (key, value) = match item {
+                Ok(kv) => kv,
+                Err(_) => break,
+            };
+            // Key format: tx_hash (32 bytes) + output_index (4 bytes LE)
+            if key.len() != 36 {
+                continue;
+            }
+
+            // Extract raw cell data from CellDataEntry or raw bytes
+            let raw_data = if let Ok(entry) = packed::CellDataEntryReader::from_slice(&value) {
+                entry.output_data().raw_data().to_vec()
+            } else {
+                value.to_vec()
+            };
+
+            let mut hasher = ckb_hash::new_blake2b();
+            hasher.update(&raw_data);
+            let mut hash = [0u8; 32];
+            hasher.finalize(&mut hash);
+
+            if hash == *data_hash {
+                let mut tx_hash = [0u8; 32];
+                tx_hash.copy_from_slice(&key[..32]);
+                let output_index = u32::from_le_bytes(key[32..36].try_into().unwrap());
+                return Some((tx_hash, output_index));
+            }
+        }
+        None
+    }
+
     /// Get the block extension data (contains total_difficulty, cycles, sizes).
     pub fn get_block_ext(&self, hash: &[u8; 32]) -> Option<(u64, Vec<Option<u64>>)> {
         let cf = self.db.cf_handle(COLUMN_BLOCK_EXT)?;

@@ -39,6 +39,10 @@ fn make_script_info_lock(
         type_live_cells_count: 0,
         type_capacity_sum: 0,
         type_live_capacity_sum: 0,
+        dep_type_hash: None,
+        dep_data_hash: None,
+        code_cell_tx_hash: None,
+        code_cell_output_index: None,
     }
 }
 
@@ -66,6 +70,10 @@ fn make_script_info_type(
         type_live_cells_count: live_cells_count,
         type_capacity_sum: capacity_sum,
         type_live_capacity_sum: live_capacity_sum,
+        dep_type_hash: None,
+        dep_data_hash: None,
+        code_cell_tx_hash: None,
+        code_cell_output_index: None,
     }
 }
 
@@ -171,6 +179,10 @@ fn test_consume_cells_adjusts_stats() {
         type_live_cells_count: 0,
         type_capacity_sum: 0,
         type_live_capacity_sum: 0,
+        dep_type_hash: None,
+        dep_data_hash: None,
+        code_cell_tx_hash: None,
+        code_cell_output_index: None,
     };
 
     let mut batch = StoreBatch::new(&store);
@@ -210,6 +222,10 @@ fn test_consume_cells_adjusts_stats() {
         type_live_cells_count: 0,
         type_capacity_sum: 0,
         type_live_capacity_sum: 0,
+        dep_type_hash: None,
+        dep_data_hash: None,
+        code_cell_tx_hash: None,
+        code_cell_output_index: None,
     };
 
     let mut batch = StoreBatch::new(&store);

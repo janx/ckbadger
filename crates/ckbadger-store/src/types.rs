@@ -287,6 +287,21 @@ pub struct ScriptInfo {
     pub type_live_cells_count: i64,
     pub type_capacity_sum: i64,
     pub type_live_capacity_sum: i64,
+    /// type_script_hash of the deployment cell (from label data).
+    /// Used to find the code cell for hash_type="data"/"data1"/"data2" scripts.
+    #[serde(default)]
+    pub dep_type_hash: Option<Vec<u8>>,
+    /// data_hash of the deployment cell (from label data).
+    /// Used as fallback when dep_type_hash is absent (e.g. genesis cells).
+    #[serde(default)]
+    pub dep_data_hash: Option<Vec<u8>>,
+    /// Pre-resolved code cell outpoint (resolved during label import).
+    /// Only populated for scripts where runtime lookup is expensive
+    /// (data/data1/data2 without dep_type_hash).
+    #[serde(default)]
+    pub code_cell_tx_hash: Option<Vec<u8>>,
+    #[serde(default)]
+    pub code_cell_output_index: Option<u32>,
 }
 
 // ============================================

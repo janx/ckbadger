@@ -399,6 +399,10 @@ impl Indexer {
         self.ckb_store.is_some()
     }
 
+    pub fn ckb_store(&self) -> Option<Arc<CkbChainReader>> {
+        self.ckb_store.clone()
+    }
+
     /// Snapshot the current perf stats: (fetch_ms, db_ms).
     pub fn perf_snapshot_ms(&self) -> (f64, f64) {
         self.perf.snapshot_ms()

@@ -66,6 +66,7 @@ async fn main() -> Result<()> {
         args.ckb_rpc_url,
         args.token_labels_path,
         args.redis_url,
+        None,
     );
 
     if args.once {
