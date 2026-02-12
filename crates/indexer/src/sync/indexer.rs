@@ -2716,48 +2716,43 @@ impl Indexer {
                         }
                     }
 
-                    if !bulk_sync_mode {
-                        for issuer in MnftParser::parse_issuers(tx) {
-                            self.writer.insert_mnft_issuer(
-                                &issuer,
-                                &tx_data.hash,
-                                0,
-                                parsed.number,
-                                &mut nft_batch,
-                            )?;
-                        }
-                        for (output_index, class) in
-                            MnftParser::parse_classes(tx).iter().enumerate()
-                        {
-                            self.writer.insert_mnft_class(
-                                class,
-                                &tx_data.hash,
-                                output_index as i16,
-                                parsed.number,
-                                &mut nft_batch,
-                            )?;
-                        }
-                        for (output_index, token) in MnftParser::parse_tokens(tx).iter().enumerate()
-                        {
-                            self.writer.insert_mnft_token(
-                                token,
-                                &tx_data.hash,
-                                output_index as i16,
-                                parsed.number,
-                                &mut nft_batch,
-                            )?;
-                        }
-                        for (output_index, account) in
-                            DotbitParser::parse_accounts(tx).iter().enumerate()
-                        {
-                            self.writer.insert_dotbit_account(
-                                account,
-                                &tx_data.hash,
-                                output_index as i16,
-                                parsed.number,
-                                &mut nft_batch,
-                            )?;
-                        }
+                    for issuer in MnftParser::parse_issuers(tx) {
+                        self.writer.insert_mnft_issuer(
+                            &issuer,
+                            &tx_data.hash,
+                            0,
+                            parsed.number,
+                            &mut nft_batch,
+                        )?;
+                    }
+                    for (output_index, class) in MnftParser::parse_classes(tx).iter().enumerate() {
+                        self.writer.insert_mnft_class(
+                            class,
+                            &tx_data.hash,
+                            output_index as i16,
+                            parsed.number,
+                            &mut nft_batch,
+                        )?;
+                    }
+                    for (output_index, token) in MnftParser::parse_tokens(tx).iter().enumerate() {
+                        self.writer.insert_mnft_token(
+                            token,
+                            &tx_data.hash,
+                            output_index as i16,
+                            parsed.number,
+                            &mut nft_batch,
+                        )?;
+                    }
+                    for (output_index, account) in
+                        DotbitParser::parse_accounts(tx).iter().enumerate()
+                    {
+                        self.writer.insert_dotbit_account(
+                            account,
+                            &tx_data.hash,
+                            output_index as i16,
+                            parsed.number,
+                            &mut nft_batch,
+                        )?;
                     }
                 }
             }
@@ -3473,13 +3468,10 @@ impl Indexer {
                     Ok(t.elapsed().as_secs_f64() * 1000.0)
                 });
 
-                // T6: Spore (bulk sync subset — no mNFT/DotBit or NFT consumption)
-                // CFs: SPORE_DATA, SPORE_CONTENT
+                // T6: Spore + mNFT/DotBit (no NFT consumption during bulk sync)
+                // CFs: SPORE_DATA, SPORE_CONTENT, NFT_DATA
                 let h6 = s.spawn(|| -> Result<f64> {
                     let t = Instant::now();
-                    if skip_spore {
-                        return Ok(t.elapsed().as_secs_f64() * 1000.0);
-                    }
                     let mut batch = StoreBatch::new(store);
                     let mut block_tx_idx = 0usize;
                     for (block_idx, block_response) in blocks.iter().enumerate() {
@@ -3490,25 +3482,69 @@ impl Indexer {
                         block_tx_idx += tx_count_for_block;
                         for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
                             let tx = &block_response.block.transactions[tx_idx];
-                            for cluster in SporeParser::parse_clusters(tx) {
-                                writer.insert_spore_cluster(
-                                    &cluster,
-                                    parsed.number,
+                            if !skip_spore {
+                                for cluster in SporeParser::parse_clusters(tx) {
+                                    writer.insert_spore_cluster(
+                                        &cluster,
+                                        parsed.number,
+                                        &tx_data.hash,
+                                        &mut batch,
+                                    )?;
+                                }
+                                for (output_index, spore) in
+                                    SporeParser::parse_spores(tx).iter().enumerate()
+                                {
+                                    writer.insert_spore_cell(
+                                        spore,
+                                        &tx_data.hash,
+                                        output_index as i16,
+                                        parsed.number,
+                                        &mut batch,
+                                    )?;
+                                    writer.insert_spore_content(&spore.spore_id, &spore.content)?;
+                                }
+                            }
+                            for issuer in MnftParser::parse_issuers(tx) {
+                                writer.insert_mnft_issuer(
+                                    &issuer,
                                     &tx_data.hash,
+                                    0,
+                                    parsed.number,
                                     &mut batch,
                                 )?;
                             }
-                            for (output_index, spore) in
-                                SporeParser::parse_spores(tx).iter().enumerate()
+                            for (output_index, class) in
+                                MnftParser::parse_classes(tx).iter().enumerate()
                             {
-                                writer.insert_spore_cell(
-                                    spore,
+                                writer.insert_mnft_class(
+                                    class,
                                     &tx_data.hash,
                                     output_index as i16,
                                     parsed.number,
                                     &mut batch,
                                 )?;
-                                writer.insert_spore_content(&spore.spore_id, &spore.content)?;
+                            }
+                            for (output_index, token) in
+                                MnftParser::parse_tokens(tx).iter().enumerate()
+                            {
+                                writer.insert_mnft_token(
+                                    token,
+                                    &tx_data.hash,
+                                    output_index as i16,
+                                    parsed.number,
+                                    &mut batch,
+                                )?;
+                            }
+                            for (output_index, account) in
+                                DotbitParser::parse_accounts(tx).iter().enumerate()
+                            {
+                                writer.insert_dotbit_account(
+                                    account,
+                                    &tx_data.hash,
+                                    output_index as i16,
+                                    parsed.number,
+                                    &mut batch,
+                                )?;
                             }
                         }
                     }
@@ -4206,49 +4242,46 @@ impl Indexer {
                                     .insert_spore_content(&spore.spore_id, &spore.content)?;
                             }
                         }
-                        if !bulk_sync_mode {
-                            for issuer in MnftParser::parse_issuers(tx) {
-                                self.writer.insert_mnft_issuer(
-                                    &issuer,
-                                    &tx_data.hash,
-                                    0,
-                                    parsed.number,
-                                    &mut data_batch,
-                                )?;
-                            }
-                            for (output_index, class) in
-                                MnftParser::parse_classes(tx).iter().enumerate()
-                            {
-                                self.writer.insert_mnft_class(
-                                    class,
-                                    &tx_data.hash,
-                                    output_index as i16,
-                                    parsed.number,
-                                    &mut data_batch,
-                                )?;
-                            }
-                            for (output_index, token) in
-                                MnftParser::parse_tokens(tx).iter().enumerate()
-                            {
-                                self.writer.insert_mnft_token(
-                                    token,
-                                    &tx_data.hash,
-                                    output_index as i16,
-                                    parsed.number,
-                                    &mut data_batch,
-                                )?;
-                            }
-                            for (output_index, account) in
-                                DotbitParser::parse_accounts(tx).iter().enumerate()
-                            {
-                                self.writer.insert_dotbit_account(
-                                    account,
-                                    &tx_data.hash,
-                                    output_index as i16,
-                                    parsed.number,
-                                    &mut data_batch,
-                                )?;
-                            }
+                        for issuer in MnftParser::parse_issuers(tx) {
+                            self.writer.insert_mnft_issuer(
+                                &issuer,
+                                &tx_data.hash,
+                                0,
+                                parsed.number,
+                                &mut data_batch,
+                            )?;
+                        }
+                        for (output_index, class) in
+                            MnftParser::parse_classes(tx).iter().enumerate()
+                        {
+                            self.writer.insert_mnft_class(
+                                class,
+                                &tx_data.hash,
+                                output_index as i16,
+                                parsed.number,
+                                &mut data_batch,
+                            )?;
+                        }
+                        for (output_index, token) in MnftParser::parse_tokens(tx).iter().enumerate()
+                        {
+                            self.writer.insert_mnft_token(
+                                token,
+                                &tx_data.hash,
+                                output_index as i16,
+                                parsed.number,
+                                &mut data_batch,
+                            )?;
+                        }
+                        for (output_index, account) in
+                            DotbitParser::parse_accounts(tx).iter().enumerate()
+                        {
+                            self.writer.insert_dotbit_account(
+                                account,
+                                &tx_data.hash,
+                                output_index as i16,
+                                parsed.number,
+                                &mut data_batch,
+                            )?;
                         }
                     }
                 }
