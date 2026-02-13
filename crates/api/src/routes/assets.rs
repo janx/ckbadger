@@ -204,6 +204,10 @@ fn compute_token_assets(
             content_size: None,
             cluster_id: None,
             cluster_name: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            description: None,
         });
     }
 
@@ -268,6 +272,10 @@ fn compute_dob_assets(
             content_size: None,
             cluster_id: Some(cluster_hex),
             cluster_name: name,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            description: None,
         });
     }
 
@@ -327,6 +335,10 @@ fn compute_nft_assets(
             content_size: None,
             cluster_id: Some(collection_hex.clone()),
             cluster_name: name.clone(),
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            description: None,
         });
     }
 

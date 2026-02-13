@@ -143,7 +143,7 @@ async fn list_tokens(
 
     // Apply filters and serve from cache if available
     if let Some(cached_tokens) = cached {
-        return serve_tokens_from_cache(cached_tokens, &params, limit, &state);
+        return serve_tokens_from_cache(cached_tokens, &params, limit);
     }
 
     // Cache cold — fall back to direct store reads
@@ -155,7 +155,6 @@ fn serve_tokens_from_cache(
     cached: Vec<CachedAssetEntry>,
     params: &ListParams,
     limit: usize,
-    state: &Arc<AppState>,
 ) -> ApiResult<CursorPaginatedResponse<TokenResponse>> {
     let search_lower = params.search.as_ref().map(|s| s.to_lowercase());
 
@@ -219,40 +218,31 @@ fn serve_tokens_from_cache(
         None
     };
 
-    // Convert cached entries to full TokenResponse by looking up TokenInfo for extra fields
+    // Build TokenResponse directly from cache — zero DB reads
     let tokens: Vec<TokenResponse> = page
         .into_iter()
-        .map(|entry| {
-            let hash =
-                hex::decode(entry.id.strip_prefix("0x").unwrap_or(&entry.id)).unwrap_or_default();
-            if let Ok(Some(info)) = state.store.get_token(&hash) {
-                token_info_to_response(&hash, &info, entry.transfers_count, entry.transfers_24h)
-            } else {
-                // Fallback: build minimal response from cache
-                TokenResponse {
-                    type_script_hash: entry.id.clone(),
-                    type_code_hash: String::new(),
-                    type_hash_type: String::new(),
-                    type_args: String::new(),
-                    standard: entry.standard.clone(),
-                    name: entry.name.clone(),
-                    symbol: entry.symbol.clone(),
-                    decimals: entry.decimals.unwrap_or(0),
-                    description: None,
-                    icon_url: entry.icon_url.clone(),
-                    published: false,
-                    famous: false,
-                    tags: None,
-                    udt_type: None,
-                    manager: None,
-                    email: None,
-                    operator_website: None,
-                    total_supply: entry.total_supply.clone().unwrap_or_default(),
-                    holders_count: entry.holders_count as i32,
-                    transfers_count: entry.transfers_count,
-                    transfers_24h: entry.transfers_24h,
-                }
-            }
+        .map(|entry| TokenResponse {
+            type_script_hash: entry.id.clone(),
+            type_code_hash: entry.type_code_hash.clone().unwrap_or_default(),
+            type_hash_type: entry.type_hash_type.clone().unwrap_or_default(),
+            type_args: entry.type_args.clone().unwrap_or_default(),
+            standard: entry.standard.clone(),
+            name: entry.name.clone(),
+            symbol: entry.symbol.clone(),
+            decimals: entry.decimals.unwrap_or(0),
+            description: entry.description.clone(),
+            icon_url: entry.icon_url.clone(),
+            published: false,
+            famous: false,
+            tags: None,
+            udt_type: None,
+            manager: None,
+            email: None,
+            operator_website: None,
+            total_supply: entry.total_supply.clone().unwrap_or_default(),
+            holders_count: entry.holders_count as i32,
+            transfers_count: entry.transfers_count,
+            transfers_24h: entry.transfers_24h,
         })
         .collect();
 

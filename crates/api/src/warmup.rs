@@ -34,6 +34,11 @@ pub struct CachedAssetEntry {
     pub content_size: Option<i32>,
     pub cluster_id: Option<String>,
     pub cluster_name: Option<String>,
+    // Token-specific fields (None for DOB/NFT entries)
+    pub type_code_hash: Option<String>,
+    pub type_hash_type: Option<String>,
+    pub type_args: Option<String>,
+    pub description: Option<String>,
 }
 
 impl CachedAssetEntry {
@@ -87,6 +92,16 @@ pub async fn refresh_assets_cache_loop(state: Arc<AppState>) {
     }
 }
 
+fn hash_type_to_string(hash_type: u8) -> String {
+    match hash_type {
+        0 => "data".to_string(),
+        1 => "type".to_string(),
+        2 => "data1".to_string(),
+        4 => "data2".to_string(),
+        _ => format!("unknown({})", hash_type),
+    }
+}
+
 /// Sync function that computes and caches all asset lists.
 fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
     let ttl = CacheTtl::ASSETS;
@@ -119,6 +134,10 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
             content_size: None,
             cluster_id: None,
             cluster_name: None,
+            type_code_hash: Some(format!("0x{}", hex::encode(&info.type_code_hash))),
+            type_hash_type: Some(hash_type_to_string(info.hash_type)),
+            type_args: Some(format!("0x{}", hex::encode(&info.type_args))),
+            description: info.description.clone(),
         });
     }
 
@@ -184,6 +203,10 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
             content_size: None,
             cluster_id: Some(cluster_hex),
             cluster_name: name,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            description: None,
         });
     }
 
@@ -238,6 +261,10 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
             content_size: None,
             cluster_id: Some(collection_hex.clone()),
             cluster_name: name.clone(),
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            description: None,
         });
     }
 
