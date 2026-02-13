@@ -110,6 +110,13 @@ async fn main() -> Result<()> {
     let store = Arc::new(CkbadgerStore::open(&config.data_path)?);
     CkbadgerStore::log_config();
 
+    // One-time backfill: populate code_hash indexes if they are empty
+    if !store.code_hash_indexes_populated() {
+        info!("Code hash indexes empty — running one-time backfill from live_cells...");
+        let count = store.backfill_code_hash_indexes()?;
+        info!("Code hash index backfill complete: {} cells indexed", count);
+    }
+
     let sync_status = store.get_sync_status()?;
     let db_tip = sync_status.tip_block_number;
     let is_fresh_sync = db_tip == 0;

@@ -40,6 +40,8 @@ pub const CF_SYNC_META: &str = "sync_meta";
 pub const CF_TASKS: &str = "tasks";
 pub const CF_TASKS_INDEX: &str = "tasks_index";
 pub const CF_SPORE_BY_CLUSTER: &str = "spore_by_cluster";
+pub const CF_CELL_BY_LOCK_CODE: &str = "cell_by_lock_code";
+pub const CF_CELL_BY_TYPE_CODE: &str = "cell_by_type_code";
 
 /// All column family names, used during DB open.
 pub const ALL_CFS: &[&str] = &[
@@ -49,6 +51,8 @@ pub const ALL_CFS: &[&str] = &[
     CF_BLOCK_HASH_INDEX,
     CF_CELL_BY_LOCK,
     CF_CELL_BY_TYPE,
+    CF_CELL_BY_LOCK_CODE,
+    CF_CELL_BY_TYPE_CODE,
     CF_TX_INDEX,
     CF_TX_HASH_MAP,
     CF_ADDR_BALANCE,
@@ -134,6 +138,8 @@ impl CkbadgerStore {
         CF_CONSUMED_CELLS,
         CF_CELL_BY_LOCK,
         CF_CELL_BY_TYPE,
+        CF_CELL_BY_LOCK_CODE,
+        CF_CELL_BY_TYPE_CODE,
         CF_TX_INDEX,
         CF_TX_HASH_MAP,
         CF_ADDR_BALANCE,
@@ -328,6 +334,12 @@ impl CkbadgerStore {
     }
     pub fn cf_spore_by_cluster(&self) -> &ColumnFamily {
         self.cf(CF_SPORE_BY_CLUSTER)
+    }
+    pub fn cf_cell_by_lock_code(&self) -> &ColumnFamily {
+        self.cf(CF_CELL_BY_LOCK_CODE)
+    }
+    pub fn cf_cell_by_type_code(&self) -> &ColumnFamily {
+        self.cf(CF_CELL_BY_TYPE_CODE)
     }
 
     // ---- Raw DB operations ----

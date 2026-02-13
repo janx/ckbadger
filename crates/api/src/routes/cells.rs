@@ -14,7 +14,9 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::cache::{CacheKeys, CacheTtl};
-use crate::response::{encode_cursor, ok, ApiError, ApiResult, CursorPaginatedResponse};
+use crate::response::{
+    decode_cursor, encode_cursor, ok, ApiError, ApiResult, CursorPaginatedResponse,
+};
 use crate::utils::{
     address_to_lock_script_hash, is_ckb_address, script_to_address, shannon_to_ckb,
 };
@@ -533,45 +535,59 @@ async fn list_cells_by_script(
         (_, None) => 0,
     };
 
-    // RocksDB has cell_by_lock and cell_by_type indices keyed by script_hash (not code_hash).
-    // To list by code_hash we need to iterate live_cells and filter.
-    // This is a full-scan fallback; for production, a code_hash index CF would be ideal.
-    let mut results: Vec<(Vec<u8>, i16, ckbadger_store::LiveCellInfo)> = Vec::new();
+    // Parse cursor for pagination
+    let (cursor_block, cursor_idx) = params
+        .cursor
+        .as_deref()
+        .and_then(decode_cursor)
+        .map(|(b, i)| (Some(b), Some(i as i16)))
+        .unwrap_or((None, None));
 
-    // Use iterator over live_cells and filter by code_hash + hash_type + script_kind
-    let iter = state
-        .store
-        .iterator_cf(state.store.cf_live_cells(), rocksdb::IteratorMode::Start);
+    // Fetch limit+1 to detect has_more
+    let fetch_limit = limit + 1;
 
-    for item in iter.flatten() {
-        let (key, value) = item;
-        if let Ok(info) = bincode::deserialize::<ckbadger_store::LiveCellInfo>(&value) {
-            let matches = match script_kind {
-                "lock" => info.lock_code_hash == code_hash_bytes,
-                "type" => info
-                    .type_code_hash
-                    .as_ref()
-                    .map(|h| h == &code_hash_bytes)
-                    .unwrap_or(false),
-                _ => {
-                    info.lock_code_hash == code_hash_bytes
-                        || info
-                            .type_code_hash
-                            .as_ref()
-                            .map(|h| h == &code_hash_bytes)
-                            .unwrap_or(false)
-                }
-            };
-
-            if matches {
-                let (tx_hash, output_index) = ckbadger_store::keys::decode_outpoint(&key);
-                results.push((tx_hash, output_index, info));
-                if results.len() > limit {
+    // Use code_hash indexes for efficient prefix scans
+    let results: Vec<(Vec<u8>, i16, ckbadger_store::LiveCellInfo)> = match script_kind {
+        "lock" => state
+            .store
+            .list_cells_by_lock_code_hash(&code_hash_bytes, fetch_limit, cursor_block, cursor_idx)
+            .map_err(|e| ApiError::internal(e.to_string()))?,
+        "type" => state
+            .store
+            .list_cells_by_type_code_hash(&code_hash_bytes, fetch_limit, cursor_block, cursor_idx)
+            .map_err(|e| ApiError::internal(e.to_string()))?,
+        _ => {
+            // "both": merge results from lock and type indexes
+            let mut merged = state
+                .store
+                .list_cells_by_lock_code_hash(
+                    &code_hash_bytes,
+                    fetch_limit,
+                    cursor_block,
+                    cursor_idx,
+                )
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+            let type_results = state
+                .store
+                .list_cells_by_type_code_hash(
+                    &code_hash_bytes,
+                    fetch_limit,
+                    cursor_block,
+                    cursor_idx,
+                )
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+            for r in type_results {
+                if merged.len() >= fetch_limit {
                     break;
                 }
+                // Deduplicate: a cell could match both lock and type
+                if !merged.iter().any(|(h, i, _)| h == &r.0 && *i == r.1) {
+                    merged.push(r);
+                }
             }
+            merged
         }
-    }
+    };
 
     let has_more = results.len() > limit;
     let results: Vec<_> = results.into_iter().take(limit).collect();

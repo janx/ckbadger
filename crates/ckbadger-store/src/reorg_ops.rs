@@ -68,6 +68,13 @@ impl CkbadgerStore {
                             output_index,
                         );
                         batch.delete_cf(self.cf_cell_by_lock(), &idx_key);
+                        let idx_key = keys::encode_cell_index_key(
+                            &info.lock_code_hash,
+                            info.created_at_block,
+                            &tx_hash,
+                            output_index,
+                        );
+                        batch.delete_cf(self.cf_cell_by_lock_code(), &idx_key);
                         if let Some(ref type_hash) = info.type_script_hash {
                             let idx_key = keys::encode_cell_index_key(
                                 type_hash,
@@ -76,6 +83,15 @@ impl CkbadgerStore {
                                 output_index,
                             );
                             batch.delete_cf(self.cf_cell_by_type(), &idx_key);
+                        }
+                        if let Some(ref type_code_hash) = info.type_code_hash {
+                            let idx_key = keys::encode_cell_index_key(
+                                type_code_hash,
+                                info.created_at_block,
+                                &tx_hash,
+                                output_index,
+                            );
+                            batch.delete_cf(self.cf_cell_by_type_code(), &idx_key);
                         }
                     }
                 }

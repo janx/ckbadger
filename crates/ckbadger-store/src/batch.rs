@@ -112,6 +112,54 @@ impl<'a> StoreBatch<'a> {
         self.batch.delete_cf(self.store.cf_cell_by_type(), &key);
     }
 
+    pub fn put_cell_by_lock_code(
+        &mut self,
+        lock_code_hash: &[u8],
+        block_num: i64,
+        tx_hash: &[u8],
+        output_index: i16,
+    ) {
+        let key = keys::encode_cell_index_key(lock_code_hash, block_num, tx_hash, output_index);
+        self.batch
+            .put_cf(self.store.cf_cell_by_lock_code(), key, []);
+    }
+
+    pub fn delete_cell_by_lock_code(
+        &mut self,
+        lock_code_hash: &[u8],
+        block_num: i64,
+        tx_hash: &[u8],
+        output_index: i16,
+    ) {
+        let key = keys::encode_cell_index_key(lock_code_hash, block_num, tx_hash, output_index);
+        self.batch
+            .delete_cf(self.store.cf_cell_by_lock_code(), &key);
+    }
+
+    pub fn put_cell_by_type_code(
+        &mut self,
+        type_code_hash: &[u8],
+        block_num: i64,
+        tx_hash: &[u8],
+        output_index: i16,
+    ) {
+        let key = keys::encode_cell_index_key(type_code_hash, block_num, tx_hash, output_index);
+        self.batch
+            .put_cf(self.store.cf_cell_by_type_code(), key, []);
+    }
+
+    pub fn delete_cell_by_type_code(
+        &mut self,
+        type_code_hash: &[u8],
+        block_num: i64,
+        tx_hash: &[u8],
+        output_index: i16,
+    ) {
+        let key = keys::encode_cell_index_key(type_code_hash, block_num, tx_hash, output_index);
+        self.batch
+            .delete_cf(self.store.cf_cell_by_type_code(), &key);
+    }
+
     // ---- Block headers ----
 
     pub fn put_block_header(&mut self, block_number: i64, header: &CachedBlockHeader) {

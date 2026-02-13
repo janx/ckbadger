@@ -38,8 +38,22 @@ impl BatchWriter {
                 tx_hash,
                 *output_index,
             );
+            batch.put_cell_by_lock_code(
+                &cell.lock_code_hash,
+                *created_at_block,
+                tx_hash,
+                *output_index,
+            );
             if let Some(ref type_hash) = cell.type_script_hash {
                 batch.put_cell_by_type(type_hash, *created_at_block, tx_hash, *output_index);
+            }
+            if let Some(ref type_code_hash) = cell.type_code_hash {
+                batch.put_cell_by_type_code(
+                    type_code_hash,
+                    *created_at_block,
+                    tx_hash,
+                    *output_index,
+                );
             }
         }
 
@@ -85,9 +99,23 @@ impl BatchWriter {
                         tx_hash,
                         *output_index,
                     );
+                    batch.delete_cell_by_lock_code(
+                        &info.lock_code_hash,
+                        info.created_at_block,
+                        tx_hash,
+                        *output_index,
+                    );
                     if let Some(ref type_hash) = info.type_script_hash {
                         batch.delete_cell_by_type(
                             type_hash,
+                            info.created_at_block,
+                            tx_hash,
+                            *output_index,
+                        );
+                    }
+                    if let Some(ref type_code_hash) = info.type_code_hash {
+                        batch.delete_cell_by_type_code(
+                            type_code_hash,
                             info.created_at_block,
                             tx_hash,
                             *output_index,
@@ -320,9 +348,23 @@ impl BatchWriter {
                     tx_hash,
                     *output_index,
                 );
+                batch.delete_cell_by_lock_code(
+                    &info.lock_code_hash,
+                    info.created_at_block,
+                    tx_hash,
+                    *output_index,
+                );
                 if let Some(ref type_hash) = info.type_script_hash {
                     batch.delete_cell_by_type(
                         type_hash,
+                        info.created_at_block,
+                        tx_hash,
+                        *output_index,
+                    );
+                }
+                if let Some(ref type_code_hash) = info.type_code_hash {
+                    batch.delete_cell_by_type_code(
+                        type_code_hash,
                         info.created_at_block,
                         tx_hash,
                         *output_index,
