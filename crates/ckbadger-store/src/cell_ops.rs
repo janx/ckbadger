@@ -271,7 +271,8 @@ impl CkbadgerStore {
                     }
 
                     count += 1;
-                    if count.is_multiple_of(batch_size as u64) {
+                    #[allow(clippy::manual_is_multiple_of)]
+                    if count % batch_size as u64 == 0 {
                         self.write_batch(std::mem::take(&mut batch))?;
                         batch = rocksdb::WriteBatch::default();
                     }

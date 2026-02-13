@@ -117,6 +117,13 @@ async fn main() -> Result<()> {
         info!("Code hash index backfill complete: {} cells indexed", count);
     }
 
+    // One-time backfill: populate addr_txs index if empty
+    if !store.addr_txs_populated() {
+        info!("addr_txs index empty — running one-time backfill from cells...");
+        let count = store.backfill_addr_txs()?;
+        info!("addr_txs backfill complete: {} entries indexed", count);
+    }
+
     let sync_status = store.get_sync_status()?;
     let db_tip = sync_status.tip_block_number;
     let is_fresh_sync = db_tip == 0;

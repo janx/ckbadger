@@ -1119,85 +1119,43 @@ async fn get_address_transactions(
 
     let limit = params.limit.clamp(1, 100) as usize;
 
-    // Fetch activities for this address (CKB transfers)
-    let activities = state
+    // Fetch recent transactions for this address (newest first)
+    let addr_txs = state
         .store
-        .list_activities_by_addr(&lock_hash, limit + 1)
+        .list_addr_txs_recent(&lock_hash, limit + 1)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    // Filter to only CKB category activities
-    let ckb_activities: Vec<_> = activities
-        .into_iter()
-        .filter(|a| a.category == "ckb")
-        .take(limit + 1)
-        .collect();
-
-    let has_more = ckb_activities.len() > limit;
-    let ckb_activities: Vec<_> = ckb_activities.into_iter().take(limit).collect();
+    let has_more = addr_txs.len() > limit;
+    let addr_txs: Vec<_> = addr_txs.into_iter().take(limit).collect();
 
     let next_cursor = if has_more {
-        ckb_activities.last().map(|a| {
-            // Use block number from tx location as cursor
-            let block_number = state
-                .store
-                .get_tx_location(&a.tx_hash)
-                .ok()
-                .flatten()
-                .map(|(bn, _)| bn)
-                .unwrap_or(0);
-            encode_cursor(block_number, a.tx_idx)
-        })
+        addr_txs
+            .last()
+            .map(|(block_num, tx_idx, _)| encode_cursor(*block_num, *tx_idx))
     } else {
         None
     };
 
-    let txs: Vec<AddressTransactionResponse> = ckb_activities
+    let txs: Vec<AddressTransactionResponse> = addr_txs
         .into_iter()
-        .map(|activity| {
-            let is_sender = activity
-                .from_lock
-                .as_ref()
-                .map(|h| h == &lock_hash)
-                .unwrap_or(false);
-            let is_receiver = activity
-                .to_lock
-                .as_ref()
-                .map(|h| h == &lock_hash)
-                .unwrap_or(false);
-            let tx_type_str = match (is_sender, is_receiver) {
-                (true, true) => "internal",
-                (true, false) => "sent",
-                (false, true) => "received",
-                (false, false) => "unknown",
-            };
-
-            let amount_str = activity
-                .amount
-                .map(|a| a.to_string())
-                .unwrap_or_else(|| "0".to_string());
-            let capacity_change = if is_sender && !is_receiver {
-                format!("-{}", amount_str)
-            } else {
-                amount_str
-            };
-
-            let block_number = state
+        .map(|(block_number, _tx_idx, tx_hash)| {
+            let timestamp = state
                 .store
-                .get_tx_location(&activity.tx_hash)
+                .get_block_header(block_number)
                 .ok()
                 .flatten()
-                .map(|(bn, _)| bn)
-                .unwrap_or(0);
-
-            let timestamp = chrono::DateTime::from_timestamp(activity.timestamp, 0)
-                .unwrap_or_default()
-                .to_rfc3339();
+                .map(|h| {
+                    chrono::DateTime::from_timestamp(h.timestamp, 0)
+                        .unwrap_or_default()
+                        .to_rfc3339()
+                })
+                .unwrap_or_default();
 
             AddressTransactionResponse {
-                tx_hash: format!("0x{}", hex::encode(&activity.tx_hash)),
+                tx_hash: format!("0x{}", hex::encode(&tx_hash)),
                 block_number,
-                tx_type: tx_type_str.to_string(),
-                capacity_change,
+                tx_type: "transfer".to_string(),
+                capacity_change: "0".to_string(),
                 timestamp,
             }
         })

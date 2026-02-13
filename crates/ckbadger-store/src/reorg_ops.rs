@@ -136,6 +136,19 @@ impl CkbadgerStore {
             batch.delete_cf(self.cf_block_issuance(), &key);
         }
 
+        // 8. Delete addr_txs entries > rollback_to
+        // Key: lock_hash(32) + block_num(8) + tx_idx(4) = 44
+        let iter = self.iterator_cf(self.cf_addr_txs(), IteratorMode::Start);
+        for item in iter.flatten() {
+            let (key, _) = item;
+            if key.len() == 44 {
+                let block_num = keys::decode_block_num(&key[32..40]);
+                if block_num > rollback_to {
+                    batch.delete_cf(self.cf_addr_txs(), &key);
+                }
+            }
+        }
+
         // Commit all deletes atomically
         self.write_batch(batch)?;
 

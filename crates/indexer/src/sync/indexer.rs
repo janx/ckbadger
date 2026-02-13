@@ -2059,6 +2059,14 @@ impl Indexer {
                 entry.3 += 1;
                 entry.4 = tx_data.block_number;
                 entry.5 = tx_data.hash.to_vec();
+
+                // Index address → transaction
+                consume_addr_batch.put_addr_tx(
+                    &lock_hash,
+                    tx_data.block_number,
+                    tx_data.tx_index,
+                    &tx_data.hash,
+                );
             }
         }
 
@@ -2958,6 +2966,37 @@ impl Indexer {
             }
         }
 
+        // Compute per-tx address entries for addr_txs index
+        let mut addr_tx_entries: Vec<(Vec<u8>, i64, i32, Vec<u8>)> = Vec::new();
+        for tx_data in &all_tx_data {
+            let mut touched: HashSet<Vec<u8>> = HashSet::new();
+            for cell in &tx_data.cells {
+                touched.insert(cell.lock_script_hash.clone());
+            }
+            if !tx_data.is_cellbase {
+                for input in &tx_data.inputs {
+                    let key = (
+                        input.previous_tx_hash.to_vec(),
+                        input.previous_output_index as i16,
+                    );
+                    let info = input_cell_info
+                        .get(&key)
+                        .or_else(|| batch_cell_infos.get(&key));
+                    if let Some(info) = info {
+                        touched.insert(info.lock_script_hash.clone());
+                    }
+                }
+            }
+            for lock_hash in touched {
+                addr_tx_entries.push((
+                    lock_hash,
+                    tx_data.block_number,
+                    tx_data.tx_index,
+                    tx_data.hash.to_vec(),
+                ));
+            }
+        }
+
         let changes_ref: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8])> =
             address_balance_changes
                 .iter()
@@ -3260,6 +3299,9 @@ impl Indexer {
                     }
                     if !script_usage_changes.is_empty() {
                         writer.update_script_usage_batch(&script_usage_changes, &mut batch)?;
+                    }
+                    for (lock_hash, block_num, tx_idx, tx_hash) in &addr_tx_entries {
+                        batch.put_addr_tx(lock_hash, *block_num, *tx_idx, tx_hash);
                     }
                     batch.commit_no_wal()?;
                     Ok(t.elapsed().as_secs_f64() * 1000.0)
@@ -3854,6 +3896,11 @@ impl Indexer {
                         &mut data_batch,
                     )?;
                 }
+            }
+
+            // Write addr_txs entries
+            for (lock_hash, block_num, tx_idx, tx_hash) in &addr_tx_entries {
+                data_batch.put_addr_tx(lock_hash, *block_num, *tx_idx, tx_hash);
             }
 
             // Group A: DAO processing
