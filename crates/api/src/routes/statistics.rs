@@ -1,7 +1,8 @@
 #![allow(clippy::type_complexity)]
 
 use axum::{extract::State, routing::get, Router};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
+use ckbadger_common::dao::GENESIS_BURNT;
 use ckbadger_common::sync::{
     format_duration_smart, SyncProgressData, SyncStatusData, SYNC_PROGRESS_REDIS_KEY,
     SYNC_STATUS_REDIS_KEY,
@@ -11,7 +12,7 @@ use std::sync::Arc;
 
 use crate::cache::{CacheKeys, CacheTtl};
 use crate::response::{ok, ApiError, ApiResult};
-use crate::utils::format_duration;
+use crate::utils::{format_duration, shannon_to_ckb, shannon_to_ckb_u128};
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -1231,9 +1232,34 @@ async fn get_total_supply_chart(
         return ok(cached);
     }
 
-    // DAO daily snapshots have not been migrated to RocksDB yet.
-    // Return empty data until the migration is complete.
-    let data: Vec<StackedAreaDataPoint> = Vec::new();
+    let snapshots = state
+        .store
+        .list_dao_daily_snapshots()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    const BURNT_CKB: &str = "84000000";
+    const SHANNON: f64 = 100_000_000.0;
+
+    let data: Vec<StackedAreaDataPoint> = snapshots
+        .iter()
+        .filter_map(|s| {
+            let total_supply = estimated_total_supply(&s.date)?;
+            let locked_shannon = s.total_deposited.max(0) as u128;
+            let circulating_shannon =
+                (total_supply - locked_shannon as f64 - GENESIS_BURNT as f64).max(0.0);
+            let mut values = std::collections::HashMap::new();
+            values.insert(
+                "circulating".to_string(),
+                format!("{:.0}", circulating_shannon / SHANNON),
+            );
+            values.insert("locked".to_string(), shannon_to_ckb_u128(locked_shannon));
+            values.insert("burnt".to_string(), BURNT_CKB.to_string());
+            Some(StackedAreaDataPoint {
+                date: s.date.clone(),
+                values,
+            })
+        })
+        .collect();
 
     let series = vec![
         StackedAreaSeries {
@@ -1316,9 +1342,30 @@ async fn get_secondary_issuance_chart(
         return ok(cached);
     }
 
-    // DAO daily snapshots have not been migrated to RocksDB yet.
-    // Return empty data until the migration is complete.
-    let data: Vec<StackedAreaDataPoint> = Vec::new();
+    let daily_issuance = state
+        .store
+        .list_daily_secondary_issuance()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let data: Vec<StackedAreaDataPoint> = daily_issuance
+        .iter()
+        .map(|(date, cum_dao, cum_miner, cum_treasury)| {
+            let mut values = std::collections::HashMap::new();
+            values.insert(
+                "compensation".to_string(),
+                shannon_to_ckb(&cum_dao.to_string()),
+            );
+            values.insert("mining".to_string(), shannon_to_ckb(&cum_miner.to_string()));
+            values.insert(
+                "burnt".to_string(),
+                shannon_to_ckb(&cum_treasury.to_string()),
+            );
+            StackedAreaDataPoint {
+                date: date.clone(),
+                values,
+            }
+        })
+        .collect();
 
     let series = vec![
         StackedAreaSeries {
@@ -1388,4 +1435,36 @@ fn calculate_inflation_rates(year: f64) -> (f64, f64) {
 /// Convert a date string from "YYYY-MM-DD" to "YYYY/MM/DD" for chart display.
 fn format_date_for_chart(date_str: &str) -> String {
     date_str.replace('-', "/")
+}
+
+/// Estimate total supply (in shannons) at a given date.
+///
+/// CKB issuance schedule:
+/// - Genesis: 33.6B CKB
+/// - Primary: 4.2B/year, halving every ~4 years (first halving ~Nov 2023)
+/// - Secondary: 1.344B/year (constant)
+fn estimated_total_supply(date_str: &str) -> Option<f64> {
+    let date = NaiveDate::parse_from_str(date_str, "%Y-%m-%d").ok()?;
+    let launch = NaiveDate::from_ymd_opt(2019, 11, 16)?;
+    let days = (date - launch).num_days().max(0) as f64;
+    let years = days / 365.25;
+
+    const SHANNON: f64 = 100_000_000.0;
+    const GENESIS_SUPPLY: f64 = 33_600_000_000.0 * SHANNON;
+    const SECONDARY_PER_YEAR: f64 = 1_344_000_000.0 * SHANNON;
+    const PRIMARY_PER_YEAR: f64 = 4_200_000_000.0 * SHANNON;
+
+    let mut primary_issued = 0.0;
+    let mut remaining = years;
+    let mut era = 0u32;
+    while remaining > 0.0 {
+        let era_years = remaining.min(4.0);
+        let rate = PRIMARY_PER_YEAR / 2.0_f64.powi(era as i32);
+        primary_issued += rate * era_years;
+        remaining -= 4.0;
+        era += 1;
+    }
+
+    let secondary_issued = SECONDARY_PER_YEAR * years;
+    Some(GENESIS_SUPPLY + primary_issued + secondary_issued)
 }

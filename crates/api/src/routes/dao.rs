@@ -3,6 +3,7 @@ use axum::{
     routing::get,
     Router,
 };
+use chrono::NaiveDate;
 use ckbadger_common::dao::calculate_estimated_apc;
 use ckbadger_store::keys;
 use serde::{Deserialize, Serialize};
@@ -708,8 +709,19 @@ async fn get_total_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResul
         return ok(cached);
     }
 
-    // DAO daily snapshots are not yet in the RocksDB store -- return empty chart
-    let data: Vec<ChartDataPoint> = Vec::new();
+    let snapshots = state
+        .store
+        .list_dao_daily_snapshots()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let data: Vec<ChartDataPoint> = snapshots
+        .iter()
+        .map(|s| ChartDataPoint {
+            date: s.date.clone(),
+            value: shannon_to_ckb(&s.total_deposited.to_string()),
+            value2: Some(s.depositors_count.to_string()),
+        })
+        .collect();
     let data = downsample_chart_data(data, MAX_CHART_POINTS);
 
     let response = ChartResponse {
@@ -729,8 +741,24 @@ async fn get_daily_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResul
         return ok(cached);
     }
 
-    // DAO daily snapshots are not yet in the RocksDB store -- return empty chart
-    let data: Vec<ChartDataPoint> = Vec::new();
+    let snapshots = state
+        .store
+        .list_dao_daily_snapshots()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    // Compute daily deltas from cumulative deposit totals
+    let data: Vec<ChartDataPoint> = snapshots
+        .windows(2)
+        .map(|w| {
+            let daily_deposited = (w[1].total_deposited - w[0].total_deposited).max(0);
+            let daily_deposits = (w[1].new_deposits - w[0].new_deposits).max(0);
+            ChartDataPoint {
+                date: w[1].date.clone(),
+                value: shannon_to_ckb(&daily_deposited.to_string()),
+                value2: Some(daily_deposits.to_string()),
+            }
+        })
+        .collect();
     let data = downsample_chart_data(data, MAX_CHART_POINTS);
 
     let response = ChartResponse {
@@ -752,8 +780,27 @@ async fn get_circulation_ratio_chart(
         return ok(cached);
     }
 
-    // DAO daily snapshots are not yet in the RocksDB store -- return empty chart
-    let data: Vec<ChartDataPoint> = Vec::new();
+    let snapshots = state
+        .store
+        .list_dao_daily_snapshots()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let data: Vec<ChartDataPoint> = snapshots
+        .iter()
+        .filter_map(|s| {
+            let circulating = estimated_circulating_supply(&s.date)?;
+            if circulating <= 0.0 {
+                return None;
+            }
+            let deposited = s.total_deposited as f64;
+            let ratio = (deposited / circulating) * 100.0;
+            Some(ChartDataPoint {
+                date: s.date.clone(),
+                value: format!("{:.4}", ratio),
+                value2: None,
+            })
+        })
+        .collect();
     let data = downsample_chart_data(data, MAX_CHART_POINTS);
 
     let response = ChartResponse {
@@ -765,4 +812,38 @@ async fn get_circulation_ratio_chart(
 
     state.cache.set(cache_key, &response, CHART_CACHE_TTL).await;
     ok(response)
+}
+
+/// Estimate circulating supply (in shannons) at a given date.
+///
+/// CKB issuance schedule:
+/// - Genesis: 33.6B CKB (8.4B burnt)
+/// - Primary: 4.2B/year, halving every ~4 years (first halving ~Nov 2023)
+/// - Secondary: 1.344B/year (constant)
+fn estimated_circulating_supply(date_str: &str) -> Option<f64> {
+    let date = NaiveDate::parse_from_str(date_str, "%Y-%m-%d").ok()?;
+    let launch = NaiveDate::from_ymd_opt(2019, 11, 16)?;
+    let days = (date - launch).num_days().max(0) as f64;
+    let years = days / 365.25;
+
+    const SHANNON: f64 = 100_000_000.0;
+    const GENESIS_SUPPLY: f64 = 33_600_000_000.0 * SHANNON;
+    const GENESIS_BURNT: f64 = 8_400_000_000.0 * SHANNON;
+    const SECONDARY_PER_YEAR: f64 = 1_344_000_000.0 * SHANNON;
+    const PRIMARY_PER_YEAR: f64 = 4_200_000_000.0 * SHANNON;
+
+    let mut primary_issued = 0.0;
+    let mut remaining = years;
+    let mut era = 0u32;
+    while remaining > 0.0 {
+        let era_years = remaining.min(4.0);
+        let rate = PRIMARY_PER_YEAR / 2.0_f64.powi(era as i32);
+        primary_issued += rate * era_years;
+        remaining -= 4.0;
+        era += 1;
+    }
+
+    let secondary_issued = SECONDARY_PER_YEAR * years;
+    let total = GENESIS_SUPPLY + primary_issued + secondary_issued;
+    Some(total - GENESIS_BURNT)
 }

@@ -276,6 +276,25 @@ impl CkbadgerStore {
         Ok(results)
     }
 
+    // ---- DAO daily snapshots ----
+
+    pub fn list_dao_daily_snapshots(&self) -> anyhow::Result<Vec<DaoDailySnapshot>> {
+        let prefix = [stats_prefix::DAO_DAILY_SNAPSHOT];
+        let iter = self.prefix_iterator_cf(self.cf_stats(), &prefix);
+        let mut results = Vec::new();
+
+        for item in iter.flatten() {
+            let (key, value) = item;
+            if !key.starts_with(&prefix) {
+                break;
+            }
+            if let Ok(snapshot) = bincode::deserialize::<DaoDailySnapshot>(&value) {
+                results.push(snapshot);
+            }
+        }
+        Ok(results)
+    }
+
     // ---- Script info ----
 
     pub fn get_script_info(&self, code_hash: &[u8]) -> anyhow::Result<Option<ScriptInfo>> {
