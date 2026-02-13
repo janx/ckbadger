@@ -1138,24 +1138,107 @@ async fn get_address_transactions(
 
     let txs: Vec<AddressTransactionResponse> = addr_txs
         .into_iter()
-        .map(|(block_number, _tx_idx, tx_hash)| {
+        .map(|(block_number, tx_idx, tx_hash)| {
             let timestamp = state
                 .store
                 .get_block_header(block_number)
                 .ok()
                 .flatten()
                 .map(|h| {
-                    chrono::DateTime::from_timestamp(h.timestamp, 0)
+                    chrono::DateTime::from_timestamp_millis(h.timestamp)
                         .unwrap_or_default()
                         .to_rfc3339()
                 })
                 .unwrap_or_default();
 
+            let tx_entry = state
+                .store
+                .get_tx_index(block_number, tx_idx)
+                .ok()
+                .flatten();
+            let is_cellbase = tx_entry.as_ref().map(|e| e.is_cellbase).unwrap_or(false);
+            let outputs_count = tx_entry.as_ref().map(|e| e.outputs_count).unwrap_or(0);
+
+            // Compute capacity change: sum outputs to this address minus sum inputs from this address
+            let mut output_capacity: i128 = 0;
+            let mut input_capacity: i128 = 0;
+            let mut has_outputs = false;
+            let mut has_inputs = false;
+
+            // Check outputs belonging to this address
+            for idx in 0..outputs_count {
+                let cell = state
+                    .store
+                    .get_cell(&tx_hash, idx)
+                    .ok()
+                    .flatten()
+                    .or_else(|| state.store.get_consumed_cell(&tx_hash, idx).ok().flatten());
+                if let Some(cell) = cell {
+                    if cell.lock_script_hash == lock_hash {
+                        output_capacity += cell.capacity as i128;
+                        has_outputs = true;
+                    }
+                }
+            }
+
+            // Check inputs belonging to this address (resolve previous outpoints)
+            if !is_cellbase {
+                if let Some(ref ckb_store) = state.ckb_store {
+                    if tx_hash.len() == 32 {
+                        let mut tx_hash_arr = [0u8; 32];
+                        tx_hash_arr.copy_from_slice(&tx_hash);
+                        if let Some(tx_view) = ckb_store.get_transaction(&tx_hash_arr) {
+                            use ckb_types::prelude::*;
+                            for input in tx_view.inputs().into_iter() {
+                                let prev_hash: [u8; 32] =
+                                    input.previous_output().tx_hash().unpack();
+                                let prev_index: u32 = input.previous_output().index().unpack();
+                                let cell = state
+                                    .store
+                                    .get_consumed_cell(&prev_hash, prev_index as i16)
+                                    .ok()
+                                    .flatten()
+                                    .or_else(|| {
+                                        state
+                                            .store
+                                            .get_cell(&prev_hash, prev_index as i16)
+                                            .ok()
+                                            .flatten()
+                                    });
+                                if let Some(cell) = cell {
+                                    if cell.lock_script_hash == lock_hash {
+                                        input_capacity += cell.capacity as i128;
+                                        has_inputs = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            let capacity_change = output_capacity - input_capacity;
+            let tx_type = if has_inputs && has_outputs {
+                if capacity_change < 0 {
+                    "sent"
+                } else if capacity_change > 0 {
+                    "received"
+                } else {
+                    "internal"
+                }
+            } else if has_outputs {
+                "received"
+            } else if has_inputs {
+                "sent"
+            } else {
+                "transfer"
+            };
+
             AddressTransactionResponse {
                 tx_hash: format!("0x{}", hex::encode(&tx_hash)),
                 block_number,
-                tx_type: "transfer".to_string(),
-                capacity_change: "0".to_string(),
+                tx_type: tx_type.to_string(),
+                capacity_change: capacity_change.to_string(),
                 timestamp,
             }
         })

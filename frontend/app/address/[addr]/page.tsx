@@ -98,7 +98,7 @@ export default function AddressDetailPage() {
   const cellsTypeFilter = selectedDao ? null : selectedToken?.typeScriptHash;
   const cellsCodeHashFilter = selectedDao ? DAO_CODE_HASH : undefined;
 
-  const { data: cells } = useQuery({
+  const { data: cells, isLoading: cellsLoading } = useQuery({
     queryKey: [
       'address-cells',
       address?.lockScriptHash,
@@ -117,7 +117,7 @@ export default function AddressDetailPage() {
     enabled: !!address,
   });
 
-  const { data: transactions } = useQuery({
+  const { data: transactions, isLoading: txLoading } = useQuery({
     queryKey: ['address-transactions', address?.lockScriptHash, txPagination.cursor],
     queryFn: () =>
       api.getAddressTransactions(address!.lockScriptHash, {
@@ -531,7 +531,9 @@ export default function AddressDetailPage() {
           <TerminalPanelContent padding={activeTab === 'cells' ? 'md' : 'none'}>
             {activeTab === 'cells' && (
               <>
-                {cells?.data && cells.data.length > 0 ? (
+                {cellsLoading ? (
+                  <div className="py-12 text-center text-slate-500">Loading cells...</div>
+                ) : cells?.data && cells.data.length > 0 ? (
                   <>
                     <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
                       {cells.data.map((cell) => {
@@ -669,7 +671,9 @@ export default function AddressDetailPage() {
 
             {activeTab === 'transactions' && (
               <>
-                {transactions?.data && transactions.data.length > 0 ? (
+                {txLoading ? (
+                  <div className="py-12 text-center text-slate-500">Loading transactions...</div>
+                ) : transactions?.data && transactions.data.length > 0 ? (
                   <>
                     <div className="min-w-full overflow-x-auto">
                       <div className="flex gap-4 border-b border-slate-800 bg-slate-900/50 px-4 py-2 font-mono text-xs uppercase tracking-wider text-slate-500">
