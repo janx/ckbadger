@@ -882,14 +882,9 @@ async fn get_cell(
         (None, None) => return Err(ApiError::not_found("Cell not found")),
     };
 
-    // Look up script hash_type from script_info
-    let lock_hash_type_num: i16 = state
-        .store
-        .get_script_info(&info.lock_code_hash)
-        .ok()
-        .flatten()
-        .map(|si| si.hash_type as i16)
-        .unwrap_or(1);
+    // Use the cell's own stored hash_type (not from script_info, which is a canonical
+    // default and may differ from the actual per-cell hash_type).
+    let lock_hash_type_num: i16 = info.lock_hash_type;
 
     let hash_type_str = |ht: i16| match ht {
         0 => "data",
