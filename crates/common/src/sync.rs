@@ -263,9 +263,15 @@ pub struct MemoryStatsData {
     /// Total SST file size on disk (all CFs)
     #[serde(default)]
     pub sst_files_size: u64,
-    /// Total L0 files across all CFs (high values indicate compaction backlog / write stall risk)
+    /// Total L0 files across all CFs (sum)
     #[serde(default)]
     pub l0_files_count: u64,
+    /// Max L0 files in any single CF (the actual write stall trigger)
+    #[serde(default)]
+    pub l0_files_max: u64,
+    /// Name of the CF with the most L0 files
+    #[serde(default)]
+    pub l0_worst_cf: String,
     /// Top column families by estimated live data size: (name, bytes)
     #[serde(default)]
     pub top_cf_sizes: Vec<(String, u64)>,
@@ -381,6 +387,8 @@ mod tests {
             num_running_compactions: 2,
             sst_files_size: 10_000_000_000,
             l0_files_count: 15,
+            l0_files_max: 5,
+            l0_worst_cf: "live_cells".to_string(),
             top_cf_sizes: vec![
                 ("live_cells".to_string(), 3_000_000_000),
                 ("consumed_cells".to_string(), 2_500_000_000),

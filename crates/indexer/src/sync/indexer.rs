@@ -427,6 +427,8 @@ impl Indexer {
             num_running_compactions: stats.num_running_compactions,
             sst_files_size: stats.sst_files_size,
             l0_files_count: stats.l0_files_count,
+            l0_files_max: stats.l0_files_max,
+            l0_worst_cf: stats.l0_worst_cf,
             top_cf_sizes: stats.top_cf_sizes,
             total_transactions: sync_status.total_transactions,
             total_cells: sync_status.total_cells_created,
@@ -1196,7 +1198,10 @@ impl Indexer {
                             db_ms = format!("{:.1}", db_elapsed.as_secs_f64() * 1000.0),
                             compaction_pending_mb = stats.compaction_pending_bytes / (1024 * 1024),
                             running_compactions = stats.num_running_compactions,
-                            l0_files = stats.l0_files_count,
+                            l0_total = stats.l0_files_count,
+                            l0_max = stats.l0_files_max,
+                            l0_worst_cf = stats.l0_worst_cf,
+                            memtable_mb = stats.memtable_bytes / (1024 * 1024),
                             "Slow DB write detected (possible write stall)"
                         );
                     }
@@ -1444,7 +1449,10 @@ impl Indexer {
                 db_ms = format!("{:.1}", db_elapsed.as_secs_f64() * 1000.0),
                 compaction_pending_mb = stats.compaction_pending_bytes / (1024 * 1024),
                 running_compactions = stats.num_running_compactions,
-                l0_files = stats.l0_files_count,
+                l0_total = stats.l0_files_count,
+                l0_max = stats.l0_files_max,
+                l0_worst_cf = stats.l0_worst_cf,
+                memtable_mb = stats.memtable_bytes / (1024 * 1024),
                 "Slow DB write detected (possible write stall)"
             );
         }

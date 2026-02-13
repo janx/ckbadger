@@ -2,7 +2,7 @@
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tracing::info;
+use tracing::{info, warn};
 
 use rocksdb::{
     ColumnFamily, ColumnFamilyDescriptor, DBCompressionType, IteratorMode, Options, WriteBatch, DB,
@@ -424,33 +424,68 @@ impl CkbadgerStore {
         self.is_secondary
     }
 
-    /// Set relaxed L0 thresholds for bulk sync while keeping compaction enabled.
-    /// This prevents write stalls by raising slowdown/stop triggers, while still
-    /// allowing background compaction threads to drain L0 files.
+    /// Set relaxed L0 thresholds and larger write buffers for bulk sync.
+    ///
+    /// During bulk sync, 5 parallel writer threads (T1-T7) each commit large
+    /// WriteBatches. The default per-CF `max_write_buffer_number=4` can cause
+    /// flush stalls when memtables fill faster than background flush can drain.
+    /// Increasing to 8 (mega) / 6 (high) gives more headroom before stalling.
     pub fn set_bulk_sync_compaction_options(&self) {
+        let mut ok = 0u32;
+        let mut fail = 0u32;
         for cf_name in ALL_CFS {
             if let Some(cf) = self.db.cf_handle(cf_name) {
-                let _ = self.db.set_options_cf(
+                // More write buffers = more memtable headroom before flush stall
+                let max_wb = if Self::is_mega_write_cf(cf_name) {
+                    "8"
+                } else if Self::is_high_write_cf(cf_name) {
+                    "6"
+                } else {
+                    "4"
+                };
+                let result = self.db.set_options_cf(
                     cf,
                     &[
                         ("level0_slowdown_writes_trigger", "64"),
                         ("level0_stop_writes_trigger", "128"),
+                        ("max_write_buffer_number", max_wb),
                     ],
                 );
+                if result.is_ok() {
+                    ok += 1;
+                } else {
+                    warn!(
+                        "Failed to set bulk sync options for CF '{}': {:?}",
+                        cf_name,
+                        result.err()
+                    );
+                    fail += 1;
+                }
             }
         }
-        info!("Bulk sync compaction options set: l0_slowdown=64, l0_stop=128");
+        info!(
+            ok,
+            fail,
+            "Bulk sync compaction options set: l0_slowdown=64, l0_stop=128, \
+             write_buffers mega=8/high=6/low=4"
+        );
     }
 
-    /// Restore normal L0 thresholds after bulk sync completes.
+    /// Restore normal L0 thresholds and write buffer counts after bulk sync.
     pub fn restore_normal_compaction_options(&self) {
         for cf_name in ALL_CFS {
             if let Some(cf) = self.db.cf_handle(cf_name) {
+                let max_wb = if Self::is_mega_write_cf(cf_name) || Self::is_high_write_cf(cf_name) {
+                    "4"
+                } else {
+                    "2"
+                };
                 let _ = self.db.set_options_cf(
                     cf,
                     &[
                         ("level0_slowdown_writes_trigger", "12"),
                         ("level0_stop_writes_trigger", "24"),
+                        ("max_write_buffer_number", max_wb),
                     ],
                 );
             }
@@ -509,7 +544,9 @@ impl CkbadgerStore {
         let mut compaction_pending_bytes = 0u64;
         let mut num_running_compactions = 0u64;
         let mut sst_files_size = 0u64;
-        let mut l0_files_count = 0u64;
+        let mut l0_files_total = 0u64;
+        let mut l0_files_max: u64 = 0;
+        let mut l0_worst_cf = String::new();
         let mut cf_sizes: Vec<(String, u64)> = Vec::new();
 
         for cf_name in ALL_CFS {
@@ -544,12 +581,16 @@ impl CkbadgerStore {
                 {
                     sst_files_size += v;
                 }
-                // L0 file count — tracks compaction backlog / write stall risk
+                // L0 file count — track both total and per-CF max
                 if let Ok(Some(v)) = self
                     .db
                     .property_int_value_cf(cf, "rocksdb.num-files-at-level0")
                 {
-                    l0_files_count += v;
+                    l0_files_total += v;
+                    if v > l0_files_max {
+                        l0_files_max = v;
+                        l0_worst_cf = cf_name.to_string();
+                    }
                 }
                 // Per-CF live data size for top-N display
                 if let Ok(Some(v)) = self
@@ -579,7 +620,9 @@ impl CkbadgerStore {
             compaction_pending_bytes,
             num_running_compactions,
             sst_files_size,
-            l0_files_count,
+            l0_files_count: l0_files_total,
+            l0_files_max,
+            l0_worst_cf,
             top_cf_sizes: cf_sizes,
         }
     }

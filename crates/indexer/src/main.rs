@@ -188,6 +188,8 @@ async fn main() -> Result<()> {
                 compaction_pending_mb = memory_stats.compaction_pending_bytes / (1024 * 1024),
                 running_compactions = memory_stats.num_running_compactions,
                 l0_files = memory_stats.l0_files_count,
+                l0_max = memory_stats.l0_files_max,
+                l0_worst_cf = memory_stats.l0_worst_cf,
                 sst_size_gb = format!(
                     "{:.1}",
                     memory_stats.sst_files_size as f64 / (1024.0 * 1024.0 * 1024.0)
