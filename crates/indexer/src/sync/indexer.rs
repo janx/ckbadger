@@ -3036,253 +3036,311 @@ impl Indexer {
         let skip_token = false;
         let skip_spore = false;
 
-        // Pre-fetch DAO and UDT data outside thread::scope so T4/T5 only do writes.
-        // rayon::join overlaps the two DB reads: takes max(dao_time, udt_time).
+        // Pre-fetch DAO, UDT, address balance, and script info data outside thread::scope.
+        // 4-way rayon::join overlaps all DB reads: takes max(dao, udt, addr, script).
         let t_prefetch = Instant::now();
+
+        // Prepare address balance + script info keys for prefetch
+        let lock_hash_keys: Vec<&Vec<u8>> = if !skip_address_balances {
+            changes_ref.keys().collect()
+        } else {
+            Vec::new()
+        };
+
+        let unique_code_hashes: Vec<Vec<u8>> = {
+            let mut seen = std::collections::HashSet::new();
+            script_usage_changes
+                .keys()
+                .filter_map(|(code_hash, _)| {
+                    if seen.insert(code_hash.clone()) {
+                        Some(code_hash.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
+        let code_hash_refs: Vec<&Vec<u8>> = unique_code_hashes.iter().collect();
+
         let (
-            consumed_dao_map,
-            (prefetched_input_udt_info, prefetched_batch_udt_cells, prefetched_udt_tx_infos),
+            (
+                consumed_dao_map,
+                (prefetched_input_udt_info, prefetched_batch_udt_cells, prefetched_udt_tx_infos),
+            ),
+            (prefetched_addr_balances, prefetched_script_info),
         ) = if bulk_sync_mode {
             let writer = &self.writer;
             let udt_cache = &self.udt_cell_cache;
             rayon::join(
                 || {
-                    // DAO: collect input outpoints, deduplicate, batch query DB
-                    let mut all_input_outpoints_dao: Vec<(Vec<u8>, i16)> = Vec::new();
-                    let mut block_tx_idx = 0usize;
-                    for parsed in all_parsed_blocks.iter() {
-                        let tx_count_for_block = parsed.transactions_count as usize;
-                        let tx_slice =
-                            &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
-                        block_tx_idx += tx_count_for_block;
-                        for tx_data in tx_slice {
-                            if tx_data.is_cellbase || tx_data.inputs.is_empty() {
-                                continue;
+                    rayon::join(
+                        || {
+                            // DAO: collect input outpoints, deduplicate, batch query DB
+                            let mut all_input_outpoints_dao: Vec<(Vec<u8>, i16)> = Vec::new();
+                            let mut block_tx_idx = 0usize;
+                            for parsed in all_parsed_blocks.iter() {
+                                let tx_count_for_block = parsed.transactions_count as usize;
+                                let tx_slice =
+                                    &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
+                                block_tx_idx += tx_count_for_block;
+                                for tx_data in tx_slice {
+                                    if tx_data.is_cellbase || tx_data.inputs.is_empty() {
+                                        continue;
+                                    }
+                                    for input in &tx_data.inputs {
+                                        all_input_outpoints_dao.push((
+                                            input.previous_tx_hash.to_vec(),
+                                            input.previous_output_index as i16,
+                                        ));
+                                    }
+                                }
                             }
-                            for input in &tx_data.inputs {
-                                all_input_outpoints_dao.push((
-                                    input.previous_tx_hash.to_vec(),
-                                    input.previous_output_index as i16,
-                                ));
-                            }
-                        }
-                    }
-                    if !all_input_outpoints_dao.is_empty() {
-                        let unique_outpoints: Vec<(Vec<u8>, i16)> = {
-                            let mut seen = HashSet::new();
-                            all_input_outpoints_dao
-                                .into_iter()
-                                .filter(|x| seen.insert(x.clone()))
-                                .collect()
-                        };
-                        let outpoint_refs: Vec<(&[u8], i16)> = unique_outpoints
-                            .iter()
-                            .map(|(h, i)| (h.as_slice(), *i))
-                            .collect();
-                        writer
-                            .find_consumed_dao_deposits_batch(&outpoint_refs)
-                            .unwrap_or_default()
-                    } else {
-                        HashMap::new()
-                    }
-                },
-                || {
-                    // UDT: parse outputs, populate cache, collect input outpoints,
-                    // cache lookup + DB fallback
-                    struct TxInfoForUdt {
-                        tx_hash: Vec<u8>,
-                        block_number: i64,
-                        timestamp: chrono::DateTime<Utc>,
-                        output_udts: Vec<crate::parser::ParsedUdtCell>,
-                        input_outpoints: Vec<(Vec<u8>, i16)>,
-                    }
-                    let mut all_tx_infos_for_udt: Vec<TxInfoForUdt> = Vec::new();
-                    let mut all_input_outpoints_udt: Vec<(Vec<u8>, i16)> = Vec::new();
-                    let mut batch_udt_cells: HashMap<(Vec<u8>, i16), crate::parser::ParsedUdtCell> =
-                        HashMap::new();
-
-                    let mut block_tx_idx = 0usize;
-                    for (block_idx, block_response) in blocks.iter().enumerate() {
-                        let parsed = &all_parsed_blocks[block_idx];
-                        let tx_count_for_block = parsed.transactions_count as usize;
-                        let tx_slice =
-                            &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
-                        block_tx_idx += tx_count_for_block;
-                        for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
-                            if tx_data.is_cellbase {
-                                continue;
-                            }
-                            let tx = &block_response.block.transactions[tx_idx];
-                            let output_udts = UdtParser::parse_udt_cells(tx);
-                            for (output_index, udt_cell) in output_udts.iter().enumerate() {
-                                batch_udt_cells.insert(
-                                    (tx_data.hash.to_vec(), output_index as i16),
-                                    udt_cell.clone(),
-                                );
-                                udt_cache.insert(
-                                    (tx_data.hash, output_index as i16),
-                                    CachedUdtCellInfo {
-                                        type_script_hash: udt_cell.type_script_hash.clone(),
-                                        type_code_hash: udt_cell.type_code_hash.clone(),
-                                        type_hash_type: udt_cell.type_hash_type,
-                                        type_args: udt_cell.type_args.clone(),
-                                        lock_script_hash: udt_cell.lock_script_hash.clone(),
-                                        amount: udt_cell.amount,
-                                        standard: udt_cell.standard.as_str().to_string(),
-                                    },
-                                );
-                            }
-                            let input_outpoints: Vec<(Vec<u8>, i16)> = tx_data
-                                .inputs
-                                .iter()
-                                .map(|i| {
-                                    (i.previous_tx_hash.to_vec(), i.previous_output_index as i16)
-                                })
-                                .collect();
-                            all_input_outpoints_udt.extend(input_outpoints.iter().cloned());
-                            all_tx_infos_for_udt.push(TxInfoForUdt {
-                                tx_hash: tx_data.hash.to_vec(),
-                                block_number: parsed.number,
-                                timestamp: parsed.timestamp,
-                                output_udts,
-                                input_outpoints,
-                            });
-                        }
-                    }
-
-                    // Check persistent UDT cache before DB reads
-                    let mut input_udt_info: HashMap<
-                        (Vec<u8>, i16),
-                        (Vec<u8>, Vec<u8>, i16, Vec<u8>, Vec<u8>, u128, String),
-                    > = HashMap::new();
-                    let mut udt_cache_hits: usize = 0;
-                    let mut udt_db_lookups: usize = 0;
-                    if !skip_token && !all_input_outpoints_udt.is_empty() {
-                        let unique_outpoints: Vec<(Vec<u8>, i16)> = {
-                            let mut seen = HashSet::new();
-                            all_input_outpoints_udt
-                                .into_iter()
-                                .filter(|x| seen.insert(x.clone()))
-                                .collect()
-                        };
-                        let mut uncached: Vec<(Vec<u8>, i16)> = Vec::new();
-                        for (tx_hash, idx) in &unique_outpoints {
-                            let key: [u8; 32] = tx_hash.as_slice().try_into().unwrap_or([0u8; 32]);
-                            if let Some(cached) = udt_cache.get(&(key, *idx)) {
-                                input_udt_info.insert(
-                                    (tx_hash.clone(), *idx),
-                                    (
-                                        cached.type_script_hash.clone(),
-                                        cached.type_code_hash.clone(),
-                                        cached.type_hash_type,
-                                        cached.type_args.clone(),
-                                        cached.lock_script_hash.clone(),
-                                        cached.amount,
-                                        cached.standard.clone(),
-                                    ),
-                                );
-                                udt_cache_hits += 1;
+                            if !all_input_outpoints_dao.is_empty() {
+                                let unique_outpoints: Vec<(Vec<u8>, i16)> = {
+                                    let mut seen = HashSet::new();
+                                    all_input_outpoints_dao
+                                        .into_iter()
+                                        .filter(|x| seen.insert(x.clone()))
+                                        .collect()
+                                };
+                                let outpoint_refs: Vec<(&[u8], i16)> = unique_outpoints
+                                    .iter()
+                                    .map(|(h, i)| (h.as_slice(), *i))
+                                    .collect();
+                                writer
+                                    .find_consumed_dao_deposits_batch(&outpoint_refs)
+                                    .unwrap_or_default()
                             } else {
-                                uncached.push((tx_hash.clone(), *idx));
+                                HashMap::new()
                             }
-                        }
-                        udt_db_lookups = uncached.len();
-                        if !uncached.is_empty() {
-                            let outpoint_refs: Vec<(&[u8], i16)> =
-                                uncached.iter().map(|(h, i)| (h.as_slice(), *i)).collect();
-                            if let Ok(db_results) = writer.get_udt_cells_info_batch(&outpoint_refs)
-                            {
-                                for ((tx_hash, idx), (tsh, tch, tht, ta, lsh, am, std)) in
-                                    &db_results
-                                {
+                        },
+                        || {
+                            // UDT: parse outputs, populate cache, collect input outpoints,
+                            // cache lookup + DB fallback
+                            struct TxInfoForUdt {
+                                tx_hash: Vec<u8>,
+                                block_number: i64,
+                                timestamp: chrono::DateTime<Utc>,
+                                output_udts: Vec<crate::parser::ParsedUdtCell>,
+                                input_outpoints: Vec<(Vec<u8>, i16)>,
+                            }
+                            let mut all_tx_infos_for_udt: Vec<TxInfoForUdt> = Vec::new();
+                            let mut all_input_outpoints_udt: Vec<(Vec<u8>, i16)> = Vec::new();
+                            let mut batch_udt_cells: HashMap<
+                                (Vec<u8>, i16),
+                                crate::parser::ParsedUdtCell,
+                            > = HashMap::new();
+
+                            let mut block_tx_idx = 0usize;
+                            for (block_idx, block_response) in blocks.iter().enumerate() {
+                                let parsed = &all_parsed_blocks[block_idx];
+                                let tx_count_for_block = parsed.transactions_count as usize;
+                                let tx_slice =
+                                    &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
+                                block_tx_idx += tx_count_for_block;
+                                for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
+                                    if tx_data.is_cellbase {
+                                        continue;
+                                    }
+                                    let tx = &block_response.block.transactions[tx_idx];
+                                    let output_udts = UdtParser::parse_udt_cells(tx);
+                                    for (output_index, udt_cell) in output_udts.iter().enumerate() {
+                                        batch_udt_cells.insert(
+                                            (tx_data.hash.to_vec(), output_index as i16),
+                                            udt_cell.clone(),
+                                        );
+                                        udt_cache.insert(
+                                            (tx_data.hash, output_index as i16),
+                                            CachedUdtCellInfo {
+                                                type_script_hash: udt_cell.type_script_hash.clone(),
+                                                type_code_hash: udt_cell.type_code_hash.clone(),
+                                                type_hash_type: udt_cell.type_hash_type,
+                                                type_args: udt_cell.type_args.clone(),
+                                                lock_script_hash: udt_cell.lock_script_hash.clone(),
+                                                amount: udt_cell.amount,
+                                                standard: udt_cell.standard.as_str().to_string(),
+                                            },
+                                        );
+                                    }
+                                    let input_outpoints: Vec<(Vec<u8>, i16)> = tx_data
+                                        .inputs
+                                        .iter()
+                                        .map(|i| {
+                                            (
+                                                i.previous_tx_hash.to_vec(),
+                                                i.previous_output_index as i16,
+                                            )
+                                        })
+                                        .collect();
+                                    all_input_outpoints_udt.extend(input_outpoints.iter().cloned());
+                                    all_tx_infos_for_udt.push(TxInfoForUdt {
+                                        tx_hash: tx_data.hash.to_vec(),
+                                        block_number: parsed.number,
+                                        timestamp: parsed.timestamp,
+                                        output_udts,
+                                        input_outpoints,
+                                    });
+                                }
+                            }
+
+                            // Check persistent UDT cache before DB reads
+                            let mut input_udt_info: HashMap<
+                                (Vec<u8>, i16),
+                                (Vec<u8>, Vec<u8>, i16, Vec<u8>, Vec<u8>, u128, String),
+                            > = HashMap::new();
+                            let mut udt_cache_hits: usize = 0;
+                            let mut udt_db_lookups: usize = 0;
+                            if !skip_token && !all_input_outpoints_udt.is_empty() {
+                                let unique_outpoints: Vec<(Vec<u8>, i16)> = {
+                                    let mut seen = HashSet::new();
+                                    all_input_outpoints_udt
+                                        .into_iter()
+                                        .filter(|x| seen.insert(x.clone()))
+                                        .collect()
+                                };
+                                let mut uncached: Vec<(Vec<u8>, i16)> = Vec::new();
+                                for (tx_hash, idx) in &unique_outpoints {
                                     let key: [u8; 32] =
                                         tx_hash.as_slice().try_into().unwrap_or([0u8; 32]);
-                                    udt_cache.insert(
-                                        (key, *idx),
-                                        CachedUdtCellInfo {
-                                            type_script_hash: tsh.clone(),
-                                            type_code_hash: tch.clone(),
-                                            type_hash_type: *tht,
-                                            type_args: ta.clone(),
-                                            lock_script_hash: lsh.clone(),
-                                            amount: *am,
-                                            standard: std.clone(),
-                                        },
-                                    );
+                                    if let Some(cached) = udt_cache.get(&(key, *idx)) {
+                                        input_udt_info.insert(
+                                            (tx_hash.clone(), *idx),
+                                            (
+                                                cached.type_script_hash.clone(),
+                                                cached.type_code_hash.clone(),
+                                                cached.type_hash_type,
+                                                cached.type_args.clone(),
+                                                cached.lock_script_hash.clone(),
+                                                cached.amount,
+                                                cached.standard.clone(),
+                                            ),
+                                        );
+                                        udt_cache_hits += 1;
+                                    } else {
+                                        uncached.push((tx_hash.clone(), *idx));
+                                    }
                                 }
-                                input_udt_info.extend(db_results);
+                                udt_db_lookups = uncached.len();
+                                if !uncached.is_empty() {
+                                    let outpoint_refs: Vec<(&[u8], i16)> =
+                                        uncached.iter().map(|(h, i)| (h.as_slice(), *i)).collect();
+                                    if let Ok(db_results) =
+                                        writer.get_udt_cells_info_batch(&outpoint_refs)
+                                    {
+                                        for ((tx_hash, idx), (tsh, tch, tht, ta, lsh, am, std)) in
+                                            &db_results
+                                        {
+                                            let key: [u8; 32] =
+                                                tx_hash.as_slice().try_into().unwrap_or([0u8; 32]);
+                                            udt_cache.insert(
+                                                (key, *idx),
+                                                CachedUdtCellInfo {
+                                                    type_script_hash: tsh.clone(),
+                                                    type_code_hash: tch.clone(),
+                                                    type_hash_type: *tht,
+                                                    type_args: ta.clone(),
+                                                    lock_script_hash: lsh.clone(),
+                                                    amount: *am,
+                                                    standard: std.clone(),
+                                                },
+                                            );
+                                        }
+                                        input_udt_info.extend(db_results);
+                                    }
+                                }
                             }
-                        }
-                    }
-                    if udt_cache_hits > 0 || udt_db_lookups > 0 {
-                        debug!(
-                            udt_cache_hits,
-                            udt_db_lookups,
-                            udt_cache_size = udt_cache.len(),
-                            "UDT prefetch cache stats"
-                        );
-                    }
-                    if udt_cache.len() > UDT_CELL_CACHE_CAPACITY * 2 {
-                        udt_cache.clear();
-                    }
+                            if udt_cache_hits > 0 || udt_db_lookups > 0 {
+                                debug!(
+                                    udt_cache_hits,
+                                    udt_db_lookups,
+                                    udt_cache_size = udt_cache.len(),
+                                    "UDT prefetch cache stats"
+                                );
+                            }
+                            if udt_cache.len() > UDT_CELL_CACHE_CAPACITY * 2 {
+                                udt_cache.clear();
+                            }
 
-                    // Build tx contexts for UDT processing
-                    struct UdtTxInfo {
-                        tx_hash: Vec<u8>,
-                        block_number: i64,
-                        #[allow(dead_code)]
-                        timestamp: chrono::DateTime<Utc>,
-                        output_udts: Vec<crate::parser::ParsedUdtCell>,
-                        input_outpoints: Vec<(Vec<u8>, i16)>,
-                    }
-                    let mut udt_tx_contexts: Vec<UdtTxInfo> = Vec::new();
-                    for tx_info in all_tx_infos_for_udt {
-                        let has_udt_outputs = !tx_info.output_udts.is_empty();
-                        let has_udt_inputs =
-                            tx_info.input_outpoints.iter().any(|(tx_hash, idx)| {
-                                input_udt_info.contains_key(&(tx_hash.clone(), *idx))
-                                    || batch_udt_cells.contains_key(&(tx_hash.clone(), *idx))
-                            });
-                        if has_udt_outputs || has_udt_inputs {
-                            udt_tx_contexts.push(UdtTxInfo {
-                                tx_hash: tx_info.tx_hash,
-                                block_number: tx_info.block_number,
-                                timestamp: tx_info.timestamp,
-                                output_udts: tx_info.output_udts,
-                                input_outpoints: tx_info.input_outpoints,
-                            });
-                        }
-                    }
+                            // Build tx contexts for UDT processing
+                            struct UdtTxInfo {
+                                tx_hash: Vec<u8>,
+                                block_number: i64,
+                                #[allow(dead_code)]
+                                timestamp: chrono::DateTime<Utc>,
+                                output_udts: Vec<crate::parser::ParsedUdtCell>,
+                                input_outpoints: Vec<(Vec<u8>, i16)>,
+                            }
+                            let mut udt_tx_contexts: Vec<UdtTxInfo> = Vec::new();
+                            for tx_info in all_tx_infos_for_udt {
+                                let has_udt_outputs = !tx_info.output_udts.is_empty();
+                                let has_udt_inputs =
+                                    tx_info.input_outpoints.iter().any(|(tx_hash, idx)| {
+                                        input_udt_info.contains_key(&(tx_hash.clone(), *idx))
+                                            || batch_udt_cells
+                                                .contains_key(&(tx_hash.clone(), *idx))
+                                    });
+                                if has_udt_outputs || has_udt_inputs {
+                                    udt_tx_contexts.push(UdtTxInfo {
+                                        tx_hash: tx_info.tx_hash,
+                                        block_number: tx_info.block_number,
+                                        timestamp: tx_info.timestamp,
+                                        output_udts: tx_info.output_udts,
+                                        input_outpoints: tx_info.input_outpoints,
+                                    });
+                                }
+                            }
 
-                    (input_udt_info, batch_udt_cells, udt_tx_contexts)
+                            (input_udt_info, batch_udt_cells, udt_tx_contexts)
+                        },
+                    )
+                },
+                || {
+                    rayon::join(
+                        || {
+                            if !lock_hash_keys.is_empty() {
+                                writer
+                                    .read_address_balances(&lock_hash_keys)
+                                    .unwrap_or_default()
+                            } else {
+                                HashMap::new()
+                            }
+                        },
+                        || {
+                            if !code_hash_refs.is_empty() {
+                                writer.read_script_info(&code_hash_refs).unwrap_or_default()
+                            } else {
+                                HashMap::new()
+                            }
+                        },
+                    )
                 },
             )
         } else {
-            (HashMap::new(), (HashMap::new(), HashMap::new(), Vec::new()))
+            (
+                (HashMap::new(), (HashMap::new(), HashMap::new(), Vec::new())),
+                (HashMap::new(), HashMap::new()),
+            )
         };
         let prefetch_ms = t_prefetch.elapsed().as_secs_f64() * 1000.0;
 
         let t_write = Instant::now();
         let mut batch_stats;
-        let mut thread_times: Option<[f64; 5]> = None;
+        let mut thread_times: Option<[f64; 6]> = None;
         if bulk_sync_mode {
             // Parallel write path: each thread writes to its own StoreBatch and commits independently.
-            // DAO/UDT DB reads are pre-fetched above via rayon::join, so T4/T5 only do writes.
+            // DAO/UDT/addr/script DB reads are pre-fetched above via rayon::join, so threads only do writes.
             // Independent batches let all threads run fully in parallel; the RocksDB write
             // group overhead (~2ms) is negligible.
             let store = self.writer.store();
             let writer = &self.writer;
 
             let tt;
-            (batch_stats, tt) = std::thread::scope(|s| -> Result<(BatchStats, [f64; 5])> {
-                // T1: Transactions + Cells + Consumption + Address Balances + Script Usage
-                // CFs: TX_INDEX, TX_HASH_MAP, LIVE_CELLS, CONSUMED_CELLS, CELL_BY_LOCK, CELL_BY_TYPE, ADDR_BALANCE, SCRIPT_INFO
+            (batch_stats, tt) = std::thread::scope(|s| -> Result<(BatchStats, [f64; 6])> {
+                // T1: Cells + Consumption
+                // CFs: LIVE_CELLS, CONSUMED_CELLS, CELL_BY_LOCK, CELL_BY_LOCK_CODE, CELL_BY_TYPE, CELL_BY_TYPE_CODE
                 let h1 = s.spawn(|| -> Result<f64> {
                     let t = Instant::now();
                     let mut batch = StoreBatch::new(store);
-                    if !txs_for_batch.is_empty() {
-                        writer.insert_transactions_batch(&txs_for_batch, &mut batch)?;
-                    }
                     if !all_cells.is_empty() {
                         writer.insert_cells_batch(&all_cells, &mut batch)?;
                     }
@@ -3294,11 +3352,31 @@ impl Indexer {
                             &mut batch,
                         )?;
                     }
+                    batch.commit_no_wal()?;
+                    Ok(t.elapsed().as_secs_f64() * 1000.0)
+                });
+
+                // T2: Transactions + Address Balances + Script Usage + Addr TX index
+                // CFs: TX_INDEX, TX_HASH_MAP, ADDR_BALANCE, SCRIPT_INFO, ADDR_TX
+                let h2 = s.spawn(|| -> Result<f64> {
+                    let t = Instant::now();
+                    let mut batch = StoreBatch::new(store);
+                    if !txs_for_batch.is_empty() {
+                        writer.insert_transactions_batch(&txs_for_batch, &mut batch)?;
+                    }
                     if !skip_address_balances && !changes_ref.is_empty() {
-                        writer.update_address_balances_batch(&changes_ref, &mut batch)?;
+                        writer.apply_address_balance_deltas(
+                            &prefetched_addr_balances,
+                            &changes_ref,
+                            &mut batch,
+                        )?;
                     }
                     if !script_usage_changes.is_empty() {
-                        writer.update_script_usage_batch(&script_usage_changes, &mut batch)?;
+                        writer.apply_script_usage_deltas(
+                            &prefetched_script_info,
+                            &script_usage_changes,
+                            &mut batch,
+                        )?;
                     }
                     for (lock_hash, block_num, tx_idx, tx_hash) in &addr_tx_entries {
                         batch.put_addr_tx(lock_hash, *block_num, *tx_idx, tx_hash);
@@ -3804,11 +3882,12 @@ impl Indexer {
                 });
 
                 let t1_ms = h1.join().expect("T1 panicked")?;
+                let t2_ms = h2.join().expect("T2 panicked")?;
                 let t4_ms = h4.join().expect("T4 panicked")?;
                 let t5_ms = h5.join().expect("T5 panicked")?;
                 let t6_ms = h6.join().expect("T6 panicked")?;
                 let (stats, t7_ms) = h7.join().expect("T7 panicked")?;
-                Ok((stats, [t1_ms, t4_ms, t5_ms, t6_ms, t7_ms]))
+                Ok((stats, [t1_ms, t2_ms, t4_ms, t5_ms, t6_ms, t7_ms]))
             })?;
             thread_times = Some(tt);
         } else {
@@ -4668,13 +4747,14 @@ impl Indexer {
             .filter(|t| !t.is_cellbase)
             .map(|t| t.inputs.len())
             .sum();
-        if let Some([t1, t4, t5, t6, t7]) = thread_times {
+        if let Some([t1, t2, t4, t5, t6, t7]) = thread_times {
             info!(
                 precompute_ms = format!("{:.1}", precompute_ms),
                 prefetch_ms = format!("{:.1}", prefetch_ms),
                 write_ms = format!("{:.1}", write_ms),
                 finalize_ms = format!("{:.1}", finalize_ms),
                 t1_ms = format!("{:.1}", t1),
+                t2_ms = format!("{:.1}", t2),
                 t4_ms = format!("{:.1}", t4),
                 t5_ms = format!("{:.1}", t5),
                 t6_ms = format!("{:.1}", t6),

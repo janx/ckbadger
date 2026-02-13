@@ -111,13 +111,16 @@ Block N arrives
 │  1. Validate batch sequence                                   │
 │  2. Check for reorg                                           │
 │  3. Build same-batch LiveCellInfo map from ParsedCell data    │
-│  4. Insert blocks, txs, cells                                 │
-│  5. Consume cells via preloaded lookup (zero DB reads)        │
-│  6. Update address balances + script usage (parallel reads)   │
-│  7. Process DAO deposits/withdrawals                          │
-│  8. Process token transfers                                   │
-│  9. Flush batch statistics                                    │
-│ 10. Update sync_status (LAST - crash recovery)                │
+│  4. 4-way prefetch: DAO + UDT + addr balances + script info   │
+│  5. Parallel write threads:                                   │
+│     T1: Cells + consumption (preloaded, zero DB reads)        │
+│     T2: Txs + addr deltas + script deltas + addr_tx index     │
+│     T4: DAO deposits/withdrawals                              │
+│     T5: Token transfers (UDT/NFT/Spore)                       │
+│     T6: Spore NFT data                                        │
+│     T7: Statistics + block-level aggregation                   │
+│  6. Finalize: block headers + stats commit                    │
+│  7. Update sync_status (LAST - crash recovery)                │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -245,7 +248,7 @@ With default settings on typical hardware:
 
 2. **Single Parser DB read**: `get_full_cells_info_batch()` returns complete `LiveCellInfo` structs in one read, replacing two separate reads (`get_cells_info_batch` + `get_cells_code_hashes_batch`).
 
-3. **Parallel address/script reads**: Address balance and script usage DB reads run concurrently via `std::thread::scope`, then deltas are applied sequentially (fast, no I/O).
+3. **4-way prefetch + split write threads**: Address balance and script info DB reads are prefetched in parallel with DAO/UDT reads via nested `rayon::join` (4-way). The write phase splits work across T1 (cells + consumption) and T2 (transactions + address deltas + script deltas + addr_tx index), with zero CF overlap. This hides the read latency in the prefetch phase and halves T1's write time.
 
 4. **RocksDB WriteBatch**: All writes within a batch are grouped into atomic WriteBatch operations for maximum throughput.
 
@@ -399,10 +402,10 @@ The indexer implements crash recovery to handle failures during batch writes. Ro
 
 **Sync status is written LAST** as the "commit marker". The write order is:
 
-1. Block headers, transactions, cells (WriteBatch)
-2. Cell consumptions via preloaded lookup (no DB reads)
-3. Address balances + script usage (parallel DB reads, then sequential writes)
-4. DAO deposits, token transfers, NFT data
+1. T1: Cells + consumption via preloaded lookup (no DB reads)
+2. T2: Transactions + address balance deltas + script usage deltas + addr_tx index (using prefetched data, no DB reads)
+3. T4: DAO deposits/withdrawals (using prefetched data)
+4. T5: Token transfers, NFT data (using prefetched data)
 5. Statistics updates
 6. **Sync status (LAST)** - only after all other data succeeds
 

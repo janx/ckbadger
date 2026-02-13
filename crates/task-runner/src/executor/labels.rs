@@ -431,6 +431,12 @@ fn import_single_deployment(
                 ..Default::default()
             });
 
+    // Always sync code_hash and hash_type from label data.
+    // The indexer may create ScriptInfo with default (empty) code_hash and hash_type=0
+    // before labels run; these fields must be authoritative from the label.
+    info.code_hash = code_hash.clone();
+    info.hash_type = parse_hash_type(&deployment.hash_type);
+
     // Update label fields (preserve indexer-maintained stats)
     info.name = Some(script.name.clone());
     info.description = Some(script.description.clone());

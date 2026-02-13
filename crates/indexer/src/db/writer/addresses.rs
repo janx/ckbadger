@@ -136,7 +136,10 @@ impl BatchWriter {
                 existing
                     .get(code_hash)
                     .and_then(|o| o.clone())
-                    .unwrap_or_default()
+                    .unwrap_or_else(|| ckbadger_store::types::ScriptInfo {
+                        code_hash: code_hash.clone(),
+                        ..Default::default()
+                    })
             });
 
             if *is_type {
