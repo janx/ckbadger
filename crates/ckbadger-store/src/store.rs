@@ -192,10 +192,10 @@ impl CkbadgerStore {
         opts.set_max_bytes_for_level_base(512 * 1024 * 1024);
         opts.set_compression_type(DBCompressionType::Lz4);
 
-        // Background jobs: 16 threads shared across 25 CFs for flush + compaction
-        // With 7 writer threads (T1-T7), RocksDB needs more background threads
-        // for concurrent flush + compaction across all CFs on 24-core machines
-        opts.set_max_background_jobs(16);
+        // Background jobs: 24 threads shared across 25 CFs for flush + compaction
+        // With 5 parallel commit_no_wal() per batch, RocksDB needs enough background
+        // threads for concurrent flush + compaction across all CFs on 24-core machines
+        opts.set_max_background_jobs(24);
         // Allow large compaction jobs to use multiple threads
         opts.set_max_subcompactions(4);
 
