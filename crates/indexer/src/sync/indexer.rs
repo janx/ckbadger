@@ -429,6 +429,7 @@ impl Indexer {
             l0_files_count: stats.l0_files_count,
             l0_files_max: stats.l0_files_max,
             l0_worst_cf: stats.l0_worst_cf,
+            immutable_memtables: stats.immutable_memtables,
             top_cf_sizes: stats.top_cf_sizes,
             total_transactions: sync_status.total_transactions,
             total_cells: sync_status.total_cells_created,
@@ -1058,6 +1059,12 @@ impl Indexer {
                     .map(|t| t.inputs.len())
                     .sum();
                 let queue_depth = parse_tx.max_capacity() - parse_tx.capacity();
+                let cache_total = cache_hits + cache_misses;
+                let hit_rate = if cache_total > 0 {
+                    cache_hits as f64 / cache_total as f64 * 100.0
+                } else {
+                    0.0
+                };
                 info!(
                     parse_ms = format!("{:.1}", t_parse_ms),
                     cell_lookup_ms = format!("{:.1}", cell_lookup_ms),
@@ -1068,6 +1075,7 @@ impl Indexer {
                     inputs = input_count,
                     cache_hits,
                     cache_misses,
+                    cache_hit_pct = format!("{:.0}", hit_rate),
                     cache_size = cell_cache_for_parser.len(),
                     queue_depth,
                     "Parser batch {}-{}",
@@ -1106,6 +1114,7 @@ impl Indexer {
             }
 
             let recv_timeout = Duration::from_millis(self.config.poll_interval_ms * 2);
+            let t_recv = Instant::now();
             match tokio::time::timeout(recv_timeout, parse_rx.recv()).await {
                 Ok(Some((
                     start_block,
@@ -1119,6 +1128,7 @@ impl Indexer {
                     address_balance_changes,
                     script_usage_changes,
                 ))) => {
+                    let recv_wait_ms = t_recv.elapsed().as_secs_f64() * 1000.0;
                     let (db_tip, db_tip_hash) = self.repo.get_sync_tip().await?;
                     let expected_start = if db_tip == 0 && db_tip_hash.is_none() {
                         0
@@ -1202,6 +1212,7 @@ impl Indexer {
                             l0_max = stats.l0_files_max,
                             l0_worst_cf = stats.l0_worst_cf,
                             memtable_mb = stats.memtable_bytes / (1024 * 1024),
+                            imm_memtables = stats.immutable_memtables,
                             "Slow DB write detected (possible write stall)"
                         );
                     }
@@ -1226,12 +1237,13 @@ impl Indexer {
                         let writer_queue = parse_tx_for_writer_depth.max_capacity()
                             - parse_tx_for_writer_depth.capacity();
                         info!(
-                            "Wrote blocks {} to {} ({} remaining, {:.2}s, q={}) {}{} {}",
+                            "Wrote blocks {} to {} ({} remaining, {:.2}s, q={}, wait={:.0}ms) {}{} {}",
                             start_block,
                             end_block,
                             self.progress.blocks_remaining(),
                             db_elapsed.as_secs_f64(),
                             writer_queue,
+                            recv_wait_ms,
                             partition_range,
                             boundary_info,
                             mode
@@ -2987,6 +2999,7 @@ impl Indexer {
 
         let t_write = Instant::now();
         let mut batch_stats;
+        let mut thread_times: Option<[f64; 5]> = None;
         if bulk_sync_mode {
             // Parallel write path: each thread writes to its own StoreBatch and commits independently.
             // T4/T5/T6 do inline DB reads during their write phase, so a shared Mutex would
@@ -2996,7 +3009,8 @@ impl Indexer {
             let writer = &self.writer;
             let udt_cache = &self.udt_cell_cache;
 
-            batch_stats = std::thread::scope(|s| -> Result<BatchStats> {
+            let tt;
+            (batch_stats, tt) = std::thread::scope(|s| -> Result<(BatchStats, [f64; 5])> {
                 // T1: Transactions + Cells + Consumption + Address Balances + Script Usage
                 // CFs: TX_INDEX, TX_HASH_MAP, LIVE_CELLS, CONSUMED_CELLS, CELL_BY_LOCK, CELL_BY_TYPE, ADDR_BALANCE, SCRIPT_INFO
                 let h1 = s.spawn(|| -> Result<f64> {
@@ -3727,16 +3741,9 @@ impl Indexer {
                 let t5_ms = h5.join().expect("T5 panicked")?;
                 let t6_ms = h6.join().expect("T6 panicked")?;
                 let (stats, t7_ms) = h7.join().expect("T7 panicked")?;
-                info!(
-                    t1_ms = format!("{:.1}", t1_ms),
-                    t4_ms = format!("{:.1}", t4_ms),
-                    t5_ms = format!("{:.1}", t5_ms),
-                    t6_ms = format!("{:.1}", t6_ms),
-                    t7_ms = format!("{:.1}", t7_ms),
-                    "Thread timing"
-                );
-                Ok(stats)
+                Ok((stats, [t1_ms, t4_ms, t5_ms, t6_ms, t7_ms]))
             })?;
+            thread_times = Some(tt);
         } else {
             // Live sync: serial writes in a single batch
             let mut data_batch = StoreBatch::new(self.writer.store());
@@ -4589,15 +4596,32 @@ impl Indexer {
             .filter(|t| !t.is_cellbase)
             .map(|t| t.inputs.len())
             .sum();
-        info!(
-            precompute_ms = format!("{:.1}", precompute_ms),
-            write_ms = format!("{:.1}", write_ms),
-            finalize_ms = format!("{:.1}", finalize_ms),
-            txs = batch_tx_count,
-            cells = batch_cell_count,
-            inputs = batch_input_count,
-            "Batch write breakdown"
-        );
+        if let Some([t1, t4, t5, t6, t7]) = thread_times {
+            info!(
+                precompute_ms = format!("{:.1}", precompute_ms),
+                write_ms = format!("{:.1}", write_ms),
+                finalize_ms = format!("{:.1}", finalize_ms),
+                t1_ms = format!("{:.1}", t1),
+                t4_ms = format!("{:.1}", t4),
+                t5_ms = format!("{:.1}", t5),
+                t6_ms = format!("{:.1}", t6),
+                t7_ms = format!("{:.1}", t7),
+                txs = batch_tx_count,
+                cells = batch_cell_count,
+                inputs = batch_input_count,
+                "Batch write breakdown"
+            );
+        } else {
+            info!(
+                precompute_ms = format!("{:.1}", precompute_ms),
+                write_ms = format!("{:.1}", write_ms),
+                finalize_ms = format!("{:.1}", finalize_ms),
+                txs = batch_tx_count,
+                cells = batch_cell_count,
+                inputs = batch_input_count,
+                "Batch write breakdown"
+            );
+        }
         Ok(())
     }
     // === write_batch_stats_to_batch ===

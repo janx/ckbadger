@@ -529,6 +529,8 @@ pub struct MemoryStats {
     pub l0_files_max: u64,
     /// Name of the CF with the most L0 files
     pub l0_worst_cf: String,
+    /// Total immutable memtables across all CFs (waiting for flush)
+    pub immutable_memtables: u64,
     /// Top column families by estimated live data size: (name, bytes)
     pub top_cf_sizes: Vec<(String, u64)>,
 }

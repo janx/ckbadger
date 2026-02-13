@@ -190,6 +190,7 @@ async fn main() -> Result<()> {
                 l0_files = memory_stats.l0_files_count,
                 l0_max = memory_stats.l0_files_max,
                 l0_worst_cf = memory_stats.l0_worst_cf,
+                imm_memtables = memory_stats.immutable_memtables,
                 sst_size_gb = format!(
                     "{:.1}",
                     memory_stats.sst_files_size as f64 / (1024.0 * 1024.0 * 1024.0)

@@ -547,6 +547,7 @@ impl CkbadgerStore {
         let mut l0_files_total = 0u64;
         let mut l0_files_max: u64 = 0;
         let mut l0_worst_cf = String::new();
+        let mut immutable_memtables = 0u64;
         let mut cf_sizes: Vec<(String, u64)> = Vec::new();
 
         for cf_name in ALL_CFS {
@@ -592,6 +593,14 @@ impl CkbadgerStore {
                         l0_worst_cf = cf_name.to_string();
                     }
                 }
+                // Immutable memtables waiting for flush — high values indicate
+                // flush can't keep up and writes will stall when all buffers fill.
+                if let Ok(Some(v)) = self
+                    .db
+                    .property_int_value_cf(cf, "rocksdb.num-immutable-mem-table")
+                {
+                    immutable_memtables += v;
+                }
                 // Per-CF live data size for top-N display
                 if let Ok(Some(v)) = self
                     .db
@@ -623,6 +632,7 @@ impl CkbadgerStore {
             l0_files_count: l0_files_total,
             l0_files_max,
             l0_worst_cf,
+            immutable_memtables,
             top_cf_sizes: cf_sizes,
         }
     }
