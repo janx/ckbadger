@@ -5,8 +5,39 @@ use ckbadger_common::{
 };
 use ckbadger_store::CkbadgerStore;
 use redis::AsyncCommands;
+use serde::Deserialize;
 use std::sync::Arc;
 use uuid::Uuid;
+
+/// API response for /statistics/network (subset of fields we need).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ApiNetworkStats {
+    pub latest_block: i64,
+    pub avg_block_time: String,
+    pub hash_rate: String,
+    pub difficulty: String,
+    pub epoch: String,
+    pub tps: String,
+    pub transactions_per_day: String,
+}
+
+/// Parse epoch string like "100(800/1800)" into (epoch_number, epoch_index, epoch_length).
+fn parse_epoch_string(epoch: &str) -> (i64, i32, i32) {
+    let parts: Vec<&str> = epoch.splitn(2, '(').collect();
+    let epoch_number = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
+    if let Some(inner) = parts.get(1).and_then(|s| s.strip_suffix(')')) {
+        let idx_parts: Vec<&str> = inner.splitn(2, '/').collect();
+        let epoch_index = idx_parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
+        let epoch_length = idx_parts
+            .get(1)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1800);
+        (epoch_number, epoch_index, epoch_length)
+    } else {
+        (epoch_number, 0, 1800)
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct SyncStatusRow {
@@ -22,8 +53,6 @@ pub struct SyncStatusRow {
     pub rate_realtime: Option<f64>,
     /// EMA rate (smoothed)
     pub rate_ema: Option<f64>,
-    /// True when indexer reads blocks directly from CKB's RocksDB.
-    pub is_direct_db_read: bool,
     /// DB write time in ms for the last batch
     pub db_write_ms: Option<f64>,
     /// RPC fetch time in ms for the last batch
@@ -48,14 +77,29 @@ impl DeferredFlags {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct ChainInfoData {
+    pub latest_block: i64,
+    pub epoch_number: i64,
+    pub epoch_index: i32,
+    pub epoch_length: i32,
+    pub difficulty: String,
+    pub hash_rate: String,
+    pub avg_block_time: String,
+    pub tps: String,
+    pub tx_24h: i64,
+}
+
 pub struct TaskDb {
     store: Arc<CkbadgerStore>,
     redis: Option<redis::aio::MultiplexedConnection>,
+    api_url: String,
+    http: reqwest::Client,
 }
 
 #[allow(dead_code)]
 impl TaskDb {
-    pub async fn new(store: Arc<CkbadgerStore>, redis_url: Option<&str>) -> Self {
+    pub async fn new(store: Arc<CkbadgerStore>, redis_url: Option<&str>, api_url: &str) -> Self {
         let redis = if let Some(url) = redis_url {
             match redis::Client::open(url) {
                 Ok(client) => match client.get_multiplexed_async_connection().await {
@@ -74,7 +118,17 @@ impl TaskDb {
             None
         };
 
-        Self { store, redis }
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(3))
+            .build()
+            .unwrap_or_default();
+
+        Self {
+            store,
+            redis,
+            api_url: api_url.to_string(),
+            http,
+        }
     }
 
     pub async fn get_sync_status(&self) -> Result<SyncStatusRow> {
@@ -145,7 +199,7 @@ impl TaskDb {
             eta: Some(progress.eta_formatted.clone()),
             rate_realtime: Some(progress.blocks_per_second),
             rate_ema: Some(progress.ema_blocks_per_second),
-            is_direct_db_read: progress.is_direct_db_read,
+
             db_write_ms: progress.db_write_ms,
             rpc_fetch_ms: progress.rpc_fetch_ms,
             address_balances_deferred: deferred.address_balances,
@@ -202,7 +256,7 @@ impl TaskDb {
             eta,
             rate_realtime: None,
             rate_ema: status.sync_ema_rate,
-            is_direct_db_read: false,
+
             db_write_ms: None,
             rpc_fetch_ms: None,
             address_balances_deferred: deferred.address_balances,
@@ -226,7 +280,7 @@ impl TaskDb {
             eta: None,
             rate_realtime: None,
             rate_ema: None,
-            is_direct_db_read: false,
+
             db_write_ms: None,
             rpc_fetch_ms: None,
             address_balances_deferred: deferred.address_balances,
@@ -237,14 +291,55 @@ impl TaskDb {
     }
 
     pub async fn get_memory_stats(&self) -> Option<MemoryStatsData> {
-        self.get_redis_key(MEMORY_STATS_REDIS_KEY).await
+        let mut mem: MemoryStatsData = self.get_redis_key(MEMORY_STATS_REDIS_KEY).await?;
+
+        // The memory:stats publisher may not populate chain-level stats.
+        // Backfill from sync:status (which always has accurate counters).
+        if mem.total_transactions == 0 || mem.total_cells == 0 {
+            if let Some(sync) = self
+                .get_redis_key::<SyncStatusData>(SYNC_STATUS_REDIS_KEY)
+                .await
+            {
+                mem.total_transactions = sync.total_transactions;
+                mem.total_cells = sync.total_cells;
+                mem.total_live_cells = sync.total_live_cells;
+                mem.total_addresses = sync.total_addresses;
+            }
+        }
+
+        Some(mem)
     }
 
+    pub async fn get_chain_info(&self) -> Option<ChainInfoData> {
+        let url = format!("{}/statistics/network", self.api_url);
+        let resp = self.http.get(&url).send().await.ok()?;
+        let stats: ApiNetworkStats = resp.json().await.ok()?;
+
+        let tx_24h = stats.transactions_per_day.parse::<i64>().unwrap_or(0);
+        let (epoch_number, epoch_index, epoch_length) = parse_epoch_string(&stats.epoch);
+
+        Some(ChainInfoData {
+            latest_block: stats.latest_block,
+            epoch_number,
+            epoch_index,
+            epoch_length,
+            difficulty: stats.difficulty,
+            hash_rate: stats.hash_rate,
+            avg_block_time: stats.avg_block_time,
+            tps: stats.tps,
+            tx_24h,
+        })
+    }
+
+    // ─── Task operations (via API) ────────────────────────────────────────
+
     pub async fn list_tasks(&self, limit: i64) -> Result<Vec<Task>> {
-        let mut all = self.store.list_all_tasks()?;
+        let url = format!("{}/tasks", self.api_url);
+        let resp = self.http.get(&url).send().await?;
+        let mut tasks: Vec<ApiTaskJson> = resp.json().await?;
 
         // Sort: running first, then pending, paused, failed, completed, cancelled
-        all.sort_by(|a, b| {
+        tasks.sort_by(|a, b| {
             let status_order = |s: &str| -> u8 {
                 match s {
                     "running" => 1,
@@ -260,150 +355,111 @@ impl TaskDb {
             if ord != std::cmp::Ordering::Equal {
                 return ord;
             }
-            // Within same status, newest first
             b.created_at.cmp(&a.created_at)
         });
 
-        all.truncate(limit as usize);
-        Ok(all.into_iter().map(task_entry_to_task).collect())
-    }
-
-    pub async fn get_task(&self, task_id: Uuid) -> Result<Option<Task>> {
-        Ok(self.store.get_task(&task_id)?.map(task_entry_to_task))
+        tasks.truncate(limit as usize);
+        Ok(tasks.into_iter().map(api_task_to_task).collect())
     }
 
     pub async fn create_task(&self, builder: &TaskBuilder) -> Result<Uuid> {
-        let id = Uuid::new_v4();
-        let entry = ckbadger_store::types::TaskEntry {
-            id,
-            task_type: builder.task_type().to_string(),
-            status: "pending".to_string(),
-            priority: builder.get_priority(),
-            config: serde_json::to_string(builder.config()).unwrap_or_default(),
-            progress_total: None,
-            progress_current: None,
-            progress_message: None,
-            result: None,
-            error_message: None,
-            created_at: chrono::Utc::now(),
-            started_at: None,
-            completed_at: None,
-            heartbeat_at: None,
-            runner_id: None,
-            retry_count: 0,
-            max_retries: builder.get_max_retries(),
-            rate_samples: None,
-            rate_ema: None,
-            log_tail: None,
-        };
-        self.store.create_task(&entry)?;
-        Ok(id)
+        let url = format!("{}/tasks", self.api_url);
+        let body = serde_json::json!({
+            "taskType": builder.task_type().to_string(),
+            "config": builder.config(),
+        });
+        let resp = self.http.post(&url).json(&body).send().await?;
+        let result: ApiCreateTaskResponse = resp.json().await?;
+        Ok(result.id.parse()?)
     }
 
     pub async fn cancel_task(&self, task_id: Uuid) -> Result<bool> {
-        if let Some(mut task) = self.store.get_task(&task_id)? {
-            if task.status == "pending" || task.status == "running" || task.status == "paused" {
-                let old_status = task.status.clone();
-                let old_priority = task.priority;
-                task.status = "cancelled".to_string();
-                self.store.update_task(&task, &old_status, old_priority)?;
-                return Ok(true);
-            }
-        }
-        Ok(false)
+        let url = format!("{}/tasks/{}/cancel", self.api_url, task_id);
+        let resp = self.http.post(&url).send().await?;
+        Ok(resp.status().is_success())
     }
 
     pub async fn pause_task(&self, task_id: Uuid) -> Result<bool> {
-        if let Some(mut task) = self.store.get_task(&task_id)? {
-            if task.status == "running" {
-                let old_status = task.status.clone();
-                let old_priority = task.priority;
-                task.status = "paused".to_string();
-                self.store.update_task(&task, &old_status, old_priority)?;
-                return Ok(true);
-            }
-        }
-        Ok(false)
+        let url = format!("{}/tasks/{}/pause", self.api_url, task_id);
+        let resp = self.http.post(&url).send().await?;
+        Ok(resp.status().is_success())
     }
 
     pub async fn resume_task(&self, task_id: Uuid) -> Result<bool> {
-        if let Some(mut task) = self.store.get_task(&task_id)? {
-            if task.status == "paused" {
-                let old_status = task.status.clone();
-                let old_priority = task.priority;
-                task.status = "pending".to_string();
-                task.runner_id = None;
-                self.store.update_task(&task, &old_status, old_priority)?;
-                return Ok(true);
-            }
-        }
-        Ok(false)
+        let url = format!("{}/tasks/{}/resume", self.api_url, task_id);
+        let resp = self.http.post(&url).send().await?;
+        Ok(resp.status().is_success())
     }
 
     pub async fn retry_task(&self, task_id: Uuid) -> Result<bool> {
-        if let Some(mut task) = self.store.get_task(&task_id)? {
-            if task.status == "failed" {
-                let old_status = task.status.clone();
-                let old_priority = task.priority;
-                task.status = "pending".to_string();
-                task.runner_id = None;
-                task.error_message = None;
-                task.retry_count = 0;
-                self.store.update_task(&task, &old_status, old_priority)?;
-                return Ok(true);
-            }
-        }
-        Ok(false)
+        let url = format!("{}/tasks/{}/retry", self.api_url, task_id);
+        let resp = self.http.post(&url).send().await?;
+        Ok(resp.status().is_success())
     }
 
     pub async fn delete_task(&self, task_id: Uuid) -> Result<bool> {
-        if let Some(task) = self.store.get_task(&task_id)? {
-            if task.status == "completed" || task.status == "failed" || task.status == "cancelled" {
-                // Delete from both CFs
-                self.store
-                    .delete_cf(self.store.cf_tasks(), task_id.as_bytes())?;
-                let idx_key = ckbadger_store::keys::encode_task_index_key(
-                    match task.status.as_str() {
-                        "completed" => 0x03,
-                        "failed" => 0x04,
-                        "cancelled" => 0x05,
-                        _ => 0xFF,
-                    },
-                    task.priority,
-                    &task.id,
-                );
-                self.store
-                    .delete_cf(self.store.cf_tasks_index(), &idx_key)?;
-                return Ok(true);
-            }
-        }
-        Ok(false)
+        let url = format!("{}/tasks/{}", self.api_url, task_id);
+        let resp = self.http.delete(&url).send().await?;
+        Ok(resp.status().is_success())
     }
 }
 
-/// Convert TaskEntry from ckbadger-store to common Task.
-fn task_entry_to_task(entry: ckbadger_store::types::TaskEntry) -> Task {
+/// API task JSON (matches the API's TaskJson response).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ApiTaskJson {
+    pub id: String,
+    pub task_type: String,
+    pub status: String,
+    pub priority: i32,
+    #[serde(default)]
+    pub config: serde_json::Value,
+    pub progress_total: Option<i64>,
+    pub progress_current: Option<i64>,
+    pub progress_message: Option<String>,
+    pub result: Option<serde_json::Value>,
+    pub error_message: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub started_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub heartbeat_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub runner_id: Option<String>,
+    #[serde(default)]
+    pub retry_count: i32,
+    #[serde(default)]
+    pub max_retries: i32,
+    pub rate_ema: Option<f64>,
+    pub log_tail: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ApiCreateTaskResponse {
+    pub id: String,
+}
+
+fn api_task_to_task(t: ApiTaskJson) -> Task {
     Task {
-        id: entry.id,
-        task_type: entry.task_type,
-        status: entry.status,
-        priority: entry.priority,
-        config: serde_json::from_str(&entry.config).unwrap_or_default(),
-        progress_total: entry.progress_total,
-        progress_current: entry.progress_current,
-        progress_message: entry.progress_message,
-        result: entry.result.and_then(|s| serde_json::from_str(&s).ok()),
-        error_message: entry.error_message,
-        created_at: entry.created_at,
-        started_at: entry.started_at,
-        completed_at: entry.completed_at,
-        heartbeat_at: entry.heartbeat_at,
-        runner_id: entry.runner_id,
-        retry_count: entry.retry_count,
-        max_retries: entry.max_retries,
+        id: t.id.parse().unwrap_or_default(),
+        task_type: t.task_type,
+        status: t.status,
+        priority: t.priority,
+        config: t.config,
+        progress_total: t.progress_total,
+        progress_current: t.progress_current,
+        progress_message: t.progress_message,
+        result: t.result,
+        error_message: t.error_message,
+        created_at: t.created_at,
+        started_at: t.started_at,
+        completed_at: t.completed_at,
+        heartbeat_at: t.heartbeat_at,
+        runner_id: t.runner_id,
+        retry_count: t.retry_count,
+        max_retries: t.max_retries,
         rate_samples: None,
-        rate_ema: entry.rate_ema,
-        log_tail: entry.log_tail,
+        rate_ema: t.rate_ema,
+        log_tail: t.log_tail,
     }
 }
 

@@ -28,6 +28,7 @@ fn make_balance(
 ) -> AddressBalance {
     AddressBalance {
         balance,
+        occupied_capacity: 0,
         live_cells_count: live_cells,
         total_cells_count: total_cells,
         txs_count: txs,
@@ -170,4 +171,51 @@ fn test_top_addresses_ordering() {
     assert_eq!(top2.len(), 2);
     assert_eq!(top2[0].1.balance, 1000_00000000);
     assert_eq!(top2[1].1.balance, 500_00000000);
+}
+
+#[test]
+fn test_occupied_capacity_stored_and_retrieved() {
+    let store = setup_store();
+    let lock_hash = vec![0xDDu8; 32];
+
+    let balance = AddressBalance {
+        balance: 200_00000000,
+        occupied_capacity: 6100_00000000,
+        live_cells_count: 2,
+        total_cells_count: 2,
+        txs_count: 1,
+        first_seen_block: 1000,
+        first_seen_tx: vec![0x01; 32],
+        last_activity_block: 1000,
+        last_activity_tx: vec![0x01; 32],
+    };
+
+    let mut batch = StoreBatch::new(&store);
+    batch.put_addr_balance(&lock_hash, &balance);
+    batch.commit().unwrap();
+
+    let retrieved = store.get_addr_balance(&lock_hash).unwrap().unwrap();
+    assert_eq!(retrieved.balance, 200_00000000);
+    assert_eq!(retrieved.occupied_capacity, 6100_00000000);
+    assert_eq!(retrieved.live_cells_count, 2);
+}
+
+#[test]
+fn test_occupied_capacity_zero_by_default() {
+    let store = setup_store();
+    let lock_hash = vec![0xEEu8; 32];
+
+    // Simulate pre-existing data that was created before occupied_capacity was added:
+    // just use the Default-derived zero value.
+    let balance = make_balance(100_00000000, 1, 1, 1, 100, 0x01, 100, 0x01);
+
+    let mut batch = StoreBatch::new(&store);
+    batch.put_addr_balance(&lock_hash, &balance);
+    batch.commit().unwrap();
+
+    let retrieved = store.get_addr_balance(&lock_hash).unwrap().unwrap();
+    assert_eq!(
+        retrieved.occupied_capacity, 0,
+        "occupied_capacity should default to 0"
+    );
 }

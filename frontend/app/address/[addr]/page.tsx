@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { Header } from '@/components/layout/header';
@@ -18,8 +18,14 @@ import { HexDisplay } from '@/components/ui/hex-display';
 import { Capacity } from '@/components/ui/capacity';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
-import { api, type AddressToken, type DaoDeposit } from '@/lib/api';
-import { formatTimeAgo, formatCkbAmount } from '@/lib/utils';
+import {
+  api,
+  type AddressToken,
+  type DaoDeposit,
+  type Activity,
+  type ActivityAssetChange,
+} from '@/lib/api';
+import { formatTimeAgo, formatCkbAmount, formatCkbCompact } from '@/lib/utils';
 import { formatTokenBalance } from '@/lib/format-asset';
 
 export default function AddressDetailPage() {
@@ -28,10 +34,15 @@ export default function AddressDetailPage() {
 
   const [selectedToken, setSelectedToken] = useState<AddressToken | null>(null);
   const [selectedDao, setSelectedDao] = useState(false);
-  const [activeTab, setActiveTab] = useState<'cells' | 'transactions' | 'dao'>('cells');
+  const [activeTab, setActiveTab] = useState<'activities' | 'cells' | 'transactions'>('activities');
+  const [activityFilter, setActivityFilter] = useState<'all' | 'ckb' | 'token' | 'nft' | 'dao'>(
+    'all'
+  );
+  const [cellFilter, setCellFilter] = useState<'all' | 'ckb' | 'token' | 'dao'>('all');
 
   const DAO_CODE_HASH = '0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e';
 
+  const activitiesPagination = useCursorPagination();
   const cellsPagination = useCursorPagination();
   const txPagination = useCursorPagination();
   const daoPagination = useCursorPagination();
@@ -64,6 +75,18 @@ export default function AddressDetailPage() {
         cursor: daoPagination.cursor,
       }),
     enabled: !!address && !!daoSummary?.hasDaoActivity,
+    placeholderData: keepPreviousData,
+  });
+
+  const { data: activities, isLoading: activitiesLoading } = useQuery({
+    queryKey: ['address-activities', address?.lockScriptHash, activitiesPagination.cursor],
+    queryFn: () =>
+      api.getAddressActivities(address!.lockScriptHash, {
+        limit: 20,
+        cursor: activitiesPagination.cursor,
+      }),
+    enabled: !!address,
+    placeholderData: keepPreviousData,
   });
 
   const tokenMap = useMemo(() => {
@@ -75,6 +98,29 @@ export default function AddressDetailPage() {
     }
     return map;
   }, [tokens?.data]);
+
+  const filteredActivities = useMemo(() => {
+    if (!activities?.data || activityFilter === 'all') return activities?.data;
+    return activities.data.filter((a) => {
+      switch (activityFilter) {
+        case 'ckb':
+          return a.assetChanges.length === 0;
+        case 'token':
+          return a.assetChanges.some((c) => c.type === 'token');
+        case 'nft':
+          return a.assetChanges.some((c) => c.type === 'nft' || c.type === 'dob');
+        case 'dao':
+          return a.assetChanges.some(
+            (c) =>
+              c.type === 'daoDeposit' ||
+              c.type === 'daoWithdrawRequest' ||
+              c.type === 'daoWithdrawComplete'
+          );
+        default:
+          return true;
+      }
+    });
+  }, [activities?.data, activityFilter]);
 
   const cellsTypeFilter = selectedDao ? null : selectedToken?.typeScriptHash;
   const cellsCodeHashFilter = selectedDao ? DAO_CODE_HASH : undefined;
@@ -96,7 +142,24 @@ export default function AddressDetailPage() {
         cursor: cellsPagination.cursor,
       }),
     enabled: !!address,
+    placeholderData: keepPreviousData,
   });
+
+  const filteredCells = useMemo(() => {
+    if (!cells?.data || cellFilter === 'all') return cells?.data;
+    return cells.data.filter((cell) => {
+      switch (cellFilter) {
+        case 'ckb':
+          return !cell.typeScriptHash && !cell.udtAmount;
+        case 'token':
+          return !!cell.udtAmount;
+        case 'dao':
+          return cell.typeCodeHash?.toLowerCase() === DAO_CODE_HASH.toLowerCase();
+        default:
+          return true;
+      }
+    });
+  }, [cells?.data, cellFilter]);
 
   const { data: transactions, isLoading: txLoading } = useQuery({
     queryKey: ['address-transactions', address?.lockScriptHash, txPagination.cursor],
@@ -106,6 +169,7 @@ export default function AddressDetailPage() {
         cursor: txPagination.cursor,
       }),
     enabled: !!address,
+    placeholderData: keepPreviousData,
   });
 
   const daoTxHashes = useMemo(() => {
@@ -123,13 +187,6 @@ export default function AddressDetailPage() {
     if (token) {
       setActiveTab('cells');
     }
-  };
-
-  const handleDaoSelect = () => {
-    setSelectedDao(true);
-    setSelectedToken(null);
-    cellsPagination.reset();
-    setActiveTab('cells');
   };
 
   if (isLoading) {
@@ -221,6 +278,50 @@ export default function AddressDetailPage() {
     return `${days} days`;
   };
 
+  const AssetChangeBadge = ({ change }: { change: ActivityAssetChange }) => {
+    switch (change.type) {
+      case 'token': {
+        const isPositive = !change.delta.startsWith('-');
+        const isZero = change.delta === '0';
+        const absDelta = change.delta.startsWith('-') ? change.delta.slice(1) : change.delta;
+        const formatted = formatTokenBalance(absDelta, change.decimals ?? 0);
+        const sign = isZero ? '' : isPositive ? '+' : '-';
+        const color = isZero ? 'text-slate-500' : isPositive ? 'text-green-400' : 'text-red-400';
+        return (
+          <span className={`font-mono text-xs ${color}`}>
+            {sign}
+            {formatted} {change.symbol || '???'}
+          </span>
+        );
+      }
+      case 'dob':
+        return (
+          <Badge variant="purple">
+            {change.action.charAt(0).toUpperCase() + change.action.slice(1)} DOB
+          </Badge>
+        );
+      case 'nft':
+        return (
+          <Badge variant="green">
+            {change.action.charAt(0).toUpperCase() + change.action.slice(1)} NFT
+          </Badge>
+        );
+      case 'daoDeposit':
+        return <Badge variant="purple">DAO Deposit</Badge>;
+      case 'daoWithdrawRequest':
+        return <Badge variant="amber">DAO Withdraw Request</Badge>;
+      case 'daoWithdrawComplete':
+        return (
+          <span className="flex items-center gap-1">
+            <Badge variant="green">DAO Withdraw</Badge>
+            <span className="font-mono text-xs text-green-400">
+              +{formatCkbAmount(change.compensation).full} CKB
+            </span>
+          </span>
+        );
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-950">
       <Header />
@@ -256,14 +357,181 @@ export default function AddressDetailPage() {
               <StatBlock label="Live Cells" value={address.liveCellsCount} color="amber" />
               <StatBlock label="Transactions" value={address.transactionsCount} color="white" />
             </StatGrid>
+            {(() => {
+              const balanceBig = BigInt(address.balance);
+              const occupiedBig = BigInt(address.occupiedCapacity);
+              if (balanceBig <= BigInt(0) || occupiedBig <= BigInt(0)) return null;
+              const freeBig = balanceBig - occupiedBig;
+              const ratio = Number((occupiedBig * BigInt(10000)) / balanceBig) / 100;
+              return (
+                <div className="mt-6">
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="font-mono text-xs uppercase tracking-wider text-slate-500">
+                      Capacity Utilization
+                    </span>
+                    <span className="font-mono text-xs text-slate-400">
+                      {ratio.toFixed(1)}% occupied
+                    </span>
+                  </div>
+                  <div className="flex h-3 w-full overflow-hidden rounded-sm bg-slate-800">
+                    <div
+                      className="bg-amber transition-all duration-300"
+                      style={{ width: `${Math.max(ratio, 0.5)}%` }}
+                    />
+                    <div className="bg-terminal-green/30 flex-1" />
+                  </div>
+                  <div className="mt-1.5 flex items-center justify-between">
+                    <span
+                      className="text-amber font-mono text-xs"
+                      title={formatCkbAmount(address.occupiedCapacity).full + ' CKB'}
+                    >
+                      Occupied: {formatCkbCompact(address.occupiedCapacity).value} CKB
+                    </span>
+                    <span
+                      className="text-terminal-green font-mono text-xs"
+                      title={formatCkbAmount(freeBig.toString()).full + ' CKB'}
+                    >
+                      Free: {formatCkbCompact(freeBig.toString()).value} CKB
+                    </span>
+                  </div>
+                </div>
+              );
+            })()}
           </TerminalPanelContent>
         </TerminalPanel>
 
-        {((tokens?.data && tokens.data.length > 0) || daoSummary?.hasDaoActivity) && (
+        {daoSummary?.hasDaoActivity && (
           <TerminalPanel className="mb-8" variant="elevated">
             <TerminalPanelHeader>
-              Asset Holdings ({(tokens?.total || 0) + (daoSummary?.hasDaoActivity ? 1 : 0)})
+              <div className="flex items-center gap-2">
+                <div className="flex h-5 w-5 items-center justify-center rounded-full bg-purple-900/50 text-xs text-purple-400">
+                  D
+                </div>
+                <Link href="/dao" className="hover:text-terminal-green transition-colors">
+                  Nervos DAO
+                </Link>
+                {daoSummary.estimatedApc && (
+                  <span className="text-xs font-normal text-green-400">
+                    {daoSummary.estimatedApc}% APC
+                  </span>
+                )}
+              </div>
             </TerminalPanelHeader>
+            <TerminalPanelContent>
+              <StatGrid columns={4}>
+                <StatBlock
+                  label="Total Locked"
+                  value={formatCkbCompact(daoSummary.totalLockedCapacity).value}
+                  suffix=" CKB"
+                  color="white"
+                  subtext={formatCkbAmount(daoSummary.totalLockedCapacity).full}
+                />
+                <StatBlock
+                  label="Active Deposits"
+                  value={daoSummary.activeDepositsCount}
+                  color="green"
+                />
+                <StatBlock
+                  label="Pending Withdrawals"
+                  value={daoSummary.pendingWithdrawalsCount}
+                  color={daoSummary.pendingWithdrawalsCount > 0 ? 'amber' : 'white'}
+                />
+                <StatBlock
+                  label="Compensation Earned"
+                  value={`+${formatCkbCompact(daoSummary.totalCompensationEarned).value}`}
+                  suffix=" CKB"
+                  color="green"
+                  subtext={formatCkbAmount(daoSummary.totalCompensationEarned).full}
+                />
+              </StatGrid>
+            </TerminalPanelContent>
+            {daoDeposits?.data && daoDeposits.data.length > 0 && (
+              <>
+                <TerminalPanelContent padding="none">
+                  <div className="min-w-full overflow-x-auto">
+                    <div
+                      className="grid items-center gap-x-4 border-b border-slate-800 bg-slate-900/50 px-4 py-2 font-mono text-xs uppercase tracking-wider text-slate-500"
+                      style={{ gridTemplateColumns: '10rem 6rem 1fr 1fr 6rem 5.5rem' }}
+                    >
+                      <div>Deposit</div>
+                      <div>Status</div>
+                      <div className="text-right">Capacity</div>
+                      <div className="text-right">Compensation</div>
+                      <div>Duration</div>
+                      <div className="text-right">Time</div>
+                    </div>
+                    {daoDeposits.data.map((deposit: DaoDeposit) => (
+                      <TerminalRow key={`dao-${deposit.txHash}-${deposit.outputIndex}`}>
+                        <div
+                          className="grid w-full items-start gap-x-4"
+                          style={{ gridTemplateColumns: '10rem 6rem 1fr 1fr 6rem 5.5rem' }}
+                        >
+                          <div>
+                            <Link href={`/tx/${deposit.txHash}`}>
+                              <HexDisplay
+                                value={deposit.txHash}
+                                truncate
+                                startChars={6}
+                                endChars={6}
+                                className="text-terminal-green"
+                              />
+                            </Link>
+                            <Link
+                              href={`/blocks/${deposit.depositBlockNumber}`}
+                              className="block font-mono text-xs text-slate-500 hover:text-slate-300"
+                            >
+                              #{deposit.depositBlockNumber.toLocaleString()}
+                            </Link>
+                          </div>
+                          <div className="self-center">{getDaoStatusBadge(deposit.status)}</div>
+                          <div className="self-center text-right">
+                            <Capacity value={deposit.capacity} className="text-white" />
+                          </div>
+                          <div className="self-center text-right">
+                            {deposit.compensation ? (
+                              <span className="font-mono text-sm text-green-400">
+                                +{formatCkbAmount(deposit.compensation).full} CKB
+                              </span>
+                            ) : deposit.status === 'deposited' ? (
+                              <span className="text-sm text-slate-500">Accruing...</span>
+                            ) : (
+                              <span className="text-slate-600">-</span>
+                            )}
+                          </div>
+                          <div className="self-center font-mono text-sm text-slate-400">
+                            {formatDaoDuration(
+                              deposit.depositTimestamp,
+                              deposit.withdrawTimestamp || deposit.withdrawRequestTimestamp
+                            )}
+                          </div>
+                          <div className="self-center text-right text-sm text-slate-500">
+                            {formatTimeAgo(deposit.depositTimestamp)}
+                          </div>
+                        </div>
+                      </TerminalRow>
+                    ))}
+                  </div>
+                </TerminalPanelContent>
+                {(daoDeposits.hasMore || daoPagination.hasPrevious) && (
+                  <TerminalPanelFooter className="flex justify-center">
+                    <CursorPagination
+                      total={daoDeposits.total}
+                      totalLabel="deposits"
+                      hasMore={daoDeposits.hasMore}
+                      hasPrevious={daoPagination.hasPrevious}
+                      onNext={() => daoPagination.goToNext(daoDeposits.nextCursor)}
+                      onPrevious={daoPagination.goToPrevious}
+                    />
+                  </TerminalPanelFooter>
+                )}
+              </>
+            )}
+          </TerminalPanel>
+        )}
+
+        {tokens?.data && tokens.data.length > 0 && (
+          <TerminalPanel className="mb-8" variant="elevated">
+            <TerminalPanelHeader>Holdings ({tokens?.total || 0})</TerminalPanelHeader>
             <TerminalPanelContent padding="none">
               <div className="min-w-full">
                 <div className="flex border-b border-slate-800 bg-slate-900/50 px-4 py-2 font-mono text-xs uppercase tracking-wider text-slate-500">
@@ -271,45 +539,6 @@ export default function AddressDetailPage() {
                   <div className="w-32">Standard</div>
                   <div className="w-48 text-right">Balance</div>
                 </div>
-
-                {daoSummary?.hasDaoActivity && (
-                  <TerminalRow className={`cursor-pointer ${selectedDao ? 'bg-slate-800/80' : ''}`}>
-                    <div
-                      className="flex w-full items-center"
-                      onClick={() => (selectedDao ? handleDaoSelect() : handleDaoSelect())}
-                    >
-                      <div className="flex flex-1 items-center gap-3">
-                        <div className="flex h-6 w-6 items-center justify-center rounded-full bg-purple-900/50 text-xs text-purple-400">
-                          D
-                        </div>
-                        <div>
-                          <span className="text-terminal-green font-medium">Nervos DAO</span>
-                          {daoSummary.estimatedApc && (
-                            <span className="ml-2 text-xs text-green-400">
-                              {daoSummary.estimatedApc}% APC
-                            </span>
-                          )}
-                          <div className="text-xs text-slate-500">
-                            {daoSummary.activeDepositsCount} active
-                            {daoSummary.pendingWithdrawalsCount > 0 &&
-                              ` · ${daoSummary.pendingWithdrawalsCount} pending`}
-                            {daoSummary.unclaimedCompensation !== '0' &&
-                              ` · +${formatCkbAmount(daoSummary.unclaimedCompensation).full} unclaimed`}
-                          </div>
-                        </div>
-                      </div>
-                      <div className="w-32">
-                        <Badge variant="purple">DAO</Badge>
-                      </div>
-                      <div className="w-48 text-right">
-                        <span className="font-mono text-white">
-                          {formatCkbAmount(daoSummary.totalLockedCapacity).full}
-                        </span>
-                        <span className="ml-2 text-xs text-slate-500">CKB</span>
-                      </div>
-                    </div>
-                  </TerminalRow>
-                )}
 
                 {tokens?.data?.map((token) => {
                   const isSelected = selectedToken?.typeScriptHash === token.typeScriptHash;
@@ -357,9 +586,6 @@ export default function AddressDetailPage() {
                           <span className="font-mono text-white">
                             {formatTokenBalance(token.balance, token.decimals)}
                           </span>
-                          {token.symbol && (
-                            <span className="ml-2 text-xs text-slate-500">{token.symbol}</span>
-                          )}
                         </div>
                       </div>
                     </TerminalRow>
@@ -374,6 +600,16 @@ export default function AddressDetailPage() {
           <TerminalPanelHeader
             actions={
               <div className="flex gap-2">
+                <button
+                  onClick={() => setActiveTab('activities')}
+                  className={`rounded px-3 py-1 font-mono text-sm transition-colors ${
+                    activeTab === 'activities'
+                      ? 'bg-terminal-green/20 text-terminal-green'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  Activities
+                </button>
                 <button
                   onClick={() => setActiveTab('cells')}
                   className={`rounded px-3 py-1 font-mono text-sm transition-colors ${
@@ -400,29 +636,12 @@ export default function AddressDetailPage() {
                   Transactions
                   <span className="ml-1 opacity-75">({address.transactionsCount})</span>
                 </button>
-                {daoSummary?.hasDaoActivity && (
-                  <button
-                    onClick={() => setActiveTab('dao')}
-                    className={`rounded px-3 py-1 font-mono text-sm transition-colors ${
-                      activeTab === 'dao'
-                        ? 'bg-terminal-green/20 text-terminal-green'
-                        : 'text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    DAO Activities
-                    <span className="ml-1 opacity-75">
-                      (
-                      {(daoSummary.activeDepositsCount || 0) +
-                        (daoSummary.pendingWithdrawalsCount || 0) +
-                        (daoSummary.completedWithdrawalsCount || 0)}
-                      )
-                    </span>
-                  </button>
-                )}
               </div>
             }
           >
-            {activeTab === 'cells' ? (
+            {activeTab === 'activities' ? (
+              'Activities'
+            ) : activeTab === 'cells' ? (
               <div className="flex items-center gap-2">
                 <span>Cells</span>
                 {selectedToken && (
@@ -436,8 +655,6 @@ export default function AddressDetailPage() {
                   </Badge>
                 )}
               </div>
-            ) : activeTab === 'dao' ? (
-              'DAO Activities'
             ) : (
               'History'
             )}
@@ -472,144 +689,271 @@ export default function AddressDetailPage() {
             </div>
           )}
 
-          <TerminalPanelContent padding={activeTab === 'cells' ? 'md' : 'none'}>
-            {activeTab === 'cells' && (
+          <TerminalPanelContent padding="none">
+            {activeTab === 'activities' && (
               <>
-                {cellsLoading ? (
-                  <div className="py-12 text-center text-slate-500">Loading cells...</div>
-                ) : cells?.data && cells.data.length > 0 ? (
+                <div className="flex items-center gap-1.5 border-b border-slate-800 px-4 py-2">
+                  {(['all', 'ckb', 'token', 'nft', 'dao'] as const).map((f) => (
+                    <button
+                      key={f}
+                      onClick={() => setActivityFilter(f)}
+                      className={`rounded px-2 py-0.5 font-mono text-xs transition-colors ${
+                        activityFilter === f
+                          ? 'bg-terminal-green/20 text-terminal-green'
+                          : 'text-slate-500 hover:text-slate-300'
+                      }`}
+                    >
+                      {{ all: 'All', ckb: 'CKB', token: 'Token', nft: 'NFT/DOB', dao: 'DAO' }[f]}
+                    </button>
+                  ))}
+                </div>
+                {activitiesLoading ? (
+                  <div className="py-12 text-center text-slate-500">Loading activities...</div>
+                ) : filteredActivities && filteredActivities.length > 0 ? (
                   <>
-                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-                      {cells.data.map((cell) => {
-                        const cellToken = cell.typeScriptHash
-                          ? tokenMap.get(cell.typeScriptHash)
-                          : undefined;
-                        const cellIsDao = isDaoCell(cell);
-                        const daoDepositBlock = cellIsDao ? parseDaoCellData(cell.data) : null;
-                        const daoDepositInfo = cellIsDao
-                          ? daoDeposits?.data?.find(
-                              (d) => d.txHash === cell.txHash && d.outputIndex === cell.outputIndex
-                            )
-                          : null;
+                    <div className="min-w-full overflow-x-auto">
+                      <div
+                        className="grid items-center gap-x-4 border-b border-slate-800 bg-slate-900/50 px-4 py-2 font-mono text-xs uppercase tracking-wider text-slate-500"
+                        style={{ gridTemplateColumns: '10rem 14rem 1fr 5.5rem' }}
+                      >
+                        <div>Transaction</div>
+                        <div className="text-right">CKB Change</div>
+                        <div className="text-right">Assets</div>
+                        <div className="text-right">Time</div>
+                      </div>
+                      {filteredActivities.map((activity: Activity) => {
+                        const delta = BigInt(activity.ckbDelta);
+                        const isPositive = delta > BigInt(0);
+                        const isNegative = delta < BigInt(0);
+                        const deltaColor = isPositive
+                          ? 'text-green-400'
+                          : isNegative
+                            ? 'text-red-400'
+                            : 'text-slate-500';
                         return (
-                          <TerminalPanel
-                            key={`${cell.txHash}-${cell.outputIndex}`}
-                            variant="inset"
-                            className="h-full"
-                          >
-                            <TerminalPanelContent padding="sm">
-                              <div className="mb-3 flex items-center justify-between">
-                                <Link
-                                  href={`/cell/${cell.txHash}-${cell.outputIndex}`}
-                                  className="text-terminal-green hover:underline"
-                                >
+                          <TerminalRow key={`${activity.txHash}-${activity.txIndex}`}>
+                            <div
+                              className="grid w-full items-start gap-x-4"
+                              style={{ gridTemplateColumns: '10rem 14rem 1fr 5.5rem' }}
+                            >
+                              <div>
+                                <Link href={`/tx/${activity.txHash}`}>
                                   <HexDisplay
-                                    value={`${cell.txHash}:${cell.outputIndex}`}
+                                    value={activity.txHash}
                                     truncate
                                     startChars={6}
                                     endChars={6}
-                                    size="sm"
+                                    className="text-terminal-green"
                                   />
                                 </Link>
-                                <span className="font-mono text-xs text-slate-500">
-                                  #{cell.createdAtBlock.toLocaleString()}
+                                <Link
+                                  href={`/blocks/${activity.blockNumber}`}
+                                  className="block font-mono text-xs text-slate-500 hover:text-slate-300"
+                                >
+                                  #{activity.blockNumber.toLocaleString()}
+                                </Link>
+                              </div>
+                              <div className="self-center text-right">
+                                <span className={`font-mono text-sm ${deltaColor}`}>
+                                  {isPositive && '+'}
+                                  {formatCkbAmount(activity.ckbDelta).full} CKB
                                 </span>
                               </div>
-
-                              <div className="mb-2 rounded border border-slate-800 bg-slate-900/50 p-2">
-                                <Capacity value={cell.capacity} className="text-lg text-white" />
+                              <div className="flex min-w-0 flex-wrap items-center justify-end gap-1 self-center">
+                                {activity.isCellbase && <Badge variant="amber">Coinbase</Badge>}
+                                {activity.assetChanges.map((change, i) => (
+                                  <AssetChangeBadge key={i} change={change} />
+                                ))}
                               </div>
-
-                              {cellIsDao && (
-                                <div className="rounded border border-purple-900/30 bg-purple-900/10 px-2 py-1.5">
-                                  <div className="flex items-center justify-between text-sm">
-                                    <span className="font-mono text-purple-400">Nervos DAO</span>
-                                    {daoDepositInfo && (
-                                      <Badge
-                                        variant={
-                                          daoDepositInfo.status === 'deposited'
-                                            ? 'green'
-                                            : daoDepositInfo.status === 'withdrawing'
-                                              ? 'amber'
-                                              : 'gray'
-                                        }
-                                      >
-                                        {daoDepositInfo.status === 'deposited'
-                                          ? 'Active'
-                                          : daoDepositInfo.status === 'withdrawing'
-                                            ? 'Withdrawing'
-                                            : 'Completed'}
-                                      </Badge>
-                                    )}
-                                  </div>
-                                  {daoDepositBlock !== null && daoDepositBlock > 0 && (
-                                    <div className="mt-1 text-xs text-slate-500">
-                                      Deposit Block: #{daoDepositBlock.toLocaleString()}
-                                    </div>
-                                  )}
-                                  {daoDepositInfo?.compensation && (
-                                    <div className="mt-1 text-xs text-green-400">
-                                      +{formatCkbAmount(daoDepositInfo.compensation).full} CKB
-                                      compensation
-                                    </div>
-                                  )}
-                                </div>
-                              )}
-
-                              {cellToken && cell.udtAmount && (
-                                <div className="rounded border border-amber-900/30 bg-amber-900/10 px-2 py-1.5">
-                                  <div className="flex items-center justify-between text-sm">
-                                    <span className="text-amber-dim font-mono">
-                                      {formatTokenBalance(cell.udtAmount, cellToken.decimals)}
-                                    </span>
-                                    <span className="text-amber text-xs">
-                                      {cellToken.symbol || cellToken.name || 'Unknown Token'}
-                                    </span>
-                                  </div>
-                                </div>
-                              )}
-
-                              {!cellToken && !cellIsDao && cell.udtAmount && (
-                                <div className="rounded border border-slate-700 bg-slate-800/50 px-2 py-1.5">
-                                  <div className="flex items-center justify-between text-sm">
-                                    <span className="font-mono text-slate-400">
-                                      {formatTokenBalance(cell.udtAmount, 0)}
-                                    </span>
-                                    <span className="text-xs text-slate-500">Unknown Token</span>
-                                  </div>
-                                </div>
-                              )}
-
-                              {!cellToken && !cellIsDao && !cell.udtAmount && cell.dataSize > 0 && (
-                                <div className="rounded border border-slate-700 bg-slate-800/30 px-2 py-1">
-                                  <span className="font-mono text-xs text-slate-500">
-                                    {cell.dataSize} bytes data
-                                  </span>
-                                </div>
-                              )}
-                            </TerminalPanelContent>
-                          </TerminalPanel>
+                              <div className="self-center text-right text-sm text-slate-500">
+                                {formatTimeAgo(Number(activity.timestamp))}
+                              </div>
+                            </div>
+                          </TerminalRow>
                         );
                       })}
                     </div>
-                    {(cells.hasMore || cellsPagination.hasPrevious) && (
-                      <TerminalPanelFooter className="mt-4 flex justify-center border-t-0">
+                    {(activities?.hasMore || activitiesPagination.hasPrevious) && (
+                      <TerminalPanelFooter className="flex justify-center">
                         <CursorPagination
-                          hasMore={cells.hasMore}
-                          hasPrevious={cellsPagination.hasPrevious}
-                          onNext={() => cellsPagination.goToNext(cells.nextCursor)}
-                          onPrevious={cellsPagination.goToPrevious}
+                          hasMore={activities?.hasMore ?? false}
+                          hasPrevious={activitiesPagination.hasPrevious}
+                          onNext={() => activitiesPagination.goToNext(activities?.nextCursor)}
+                          onPrevious={activitiesPagination.goToPrevious}
                         />
                       </TerminalPanelFooter>
                     )}
                   </>
                 ) : (
                   <div className="py-12 text-center text-slate-500">
-                    {selectedToken
-                      ? `No cells found for ${selectedToken.symbol || selectedToken.name}`
-                      : 'No live cells'}
+                    {activityFilter === 'all'
+                      ? 'No activities'
+                      : `No ${activityFilter === 'ckb' ? 'CKB' : activityFilter === 'nft' ? 'NFT/DOB' : activityFilter.toUpperCase()} activities on this page`}
                   </div>
                 )}
+              </>
+            )}
+
+            {activeTab === 'cells' && (
+              <>
+                <div className="flex items-center gap-1.5 border-b border-slate-800 px-4 py-2">
+                  {(['all', 'ckb', 'token', 'dao'] as const).map((f) => (
+                    <button
+                      key={f}
+                      onClick={() => setCellFilter(f)}
+                      className={`rounded px-2 py-0.5 font-mono text-xs transition-colors ${
+                        cellFilter === f
+                          ? 'bg-terminal-green/20 text-terminal-green'
+                          : 'text-slate-500 hover:text-slate-300'
+                      }`}
+                    >
+                      {{ all: 'All', ckb: 'CKB', token: 'Token', dao: 'DAO' }[f]}
+                    </button>
+                  ))}
+                </div>
+                <div className="p-4">
+                  {cellsLoading ? (
+                    <div className="py-12 text-center text-slate-500">Loading cells...</div>
+                  ) : filteredCells && filteredCells.length > 0 ? (
+                    <>
+                      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+                        {filteredCells.map((cell) => {
+                          const cellToken = cell.typeScriptHash
+                            ? tokenMap.get(cell.typeScriptHash)
+                            : undefined;
+                          const cellIsDao = isDaoCell(cell);
+                          const daoDepositBlock = cellIsDao ? parseDaoCellData(cell.data) : null;
+                          const daoDepositInfo = cellIsDao
+                            ? daoDeposits?.data?.find(
+                                (d) =>
+                                  d.txHash === cell.txHash && d.outputIndex === cell.outputIndex
+                              )
+                            : null;
+                          return (
+                            <TerminalPanel
+                              key={`${cell.txHash}-${cell.outputIndex}`}
+                              variant="inset"
+                              className="h-full"
+                            >
+                              <TerminalPanelContent padding="sm">
+                                <div className="mb-3 flex items-center justify-between">
+                                  <Link
+                                    href={`/cell/${cell.txHash}-${cell.outputIndex}`}
+                                    className="text-terminal-green hover:underline"
+                                  >
+                                    <HexDisplay
+                                      value={`${cell.txHash}:${cell.outputIndex}`}
+                                      truncate
+                                      startChars={6}
+                                      endChars={6}
+                                      size="sm"
+                                    />
+                                  </Link>
+                                  <span className="font-mono text-xs text-slate-500">
+                                    #{cell.createdAtBlock.toLocaleString()}
+                                  </span>
+                                </div>
+
+                                <div className="mb-2 rounded border border-slate-800 bg-slate-900/50 p-2">
+                                  <Capacity value={cell.capacity} className="text-lg text-white" />
+                                </div>
+
+                                {cellIsDao && (
+                                  <div className="rounded border border-purple-900/30 bg-purple-900/10 px-2 py-1.5">
+                                    <div className="flex items-center justify-between text-sm">
+                                      <span className="font-mono text-purple-400">Nervos DAO</span>
+                                      {daoDepositInfo && (
+                                        <Badge
+                                          variant={
+                                            daoDepositInfo.status === 'deposited'
+                                              ? 'green'
+                                              : daoDepositInfo.status === 'withdrawing'
+                                                ? 'amber'
+                                                : 'gray'
+                                          }
+                                        >
+                                          {daoDepositInfo.status === 'deposited'
+                                            ? 'Active'
+                                            : daoDepositInfo.status === 'withdrawing'
+                                              ? 'Withdrawing'
+                                              : 'Completed'}
+                                        </Badge>
+                                      )}
+                                    </div>
+                                    {daoDepositBlock !== null && daoDepositBlock > 0 && (
+                                      <div className="mt-1 text-xs text-slate-500">
+                                        Deposit Block: #{daoDepositBlock.toLocaleString()}
+                                      </div>
+                                    )}
+                                    {daoDepositInfo?.compensation && (
+                                      <div className="mt-1 text-xs text-green-400">
+                                        +{formatCkbAmount(daoDepositInfo.compensation).full} CKB
+                                        compensation
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+
+                                {cellToken && cell.udtAmount && (
+                                  <div className="rounded border border-amber-900/30 bg-amber-900/10 px-2 py-1.5">
+                                    <div className="flex items-center justify-between text-sm">
+                                      <span className="text-amber-dim font-mono">
+                                        {formatTokenBalance(cell.udtAmount, cellToken.decimals)}
+                                      </span>
+                                      <span className="text-amber text-xs">
+                                        {cellToken.symbol || cellToken.name || 'Unknown Token'}
+                                      </span>
+                                    </div>
+                                  </div>
+                                )}
+
+                                {!cellToken && !cellIsDao && cell.udtAmount && (
+                                  <div className="rounded border border-slate-700 bg-slate-800/50 px-2 py-1.5">
+                                    <div className="flex items-center justify-between text-sm">
+                                      <span className="font-mono text-slate-400">
+                                        {formatTokenBalance(cell.udtAmount, 0)}
+                                      </span>
+                                      <span className="text-xs text-slate-500">Unknown Token</span>
+                                    </div>
+                                  </div>
+                                )}
+
+                                {!cellToken &&
+                                  !cellIsDao &&
+                                  !cell.udtAmount &&
+                                  cell.dataSize > 0 && (
+                                    <div className="rounded border border-slate-700 bg-slate-800/30 px-2 py-1">
+                                      <span className="font-mono text-xs text-slate-500">
+                                        {cell.dataSize} bytes data
+                                      </span>
+                                    </div>
+                                  )}
+                              </TerminalPanelContent>
+                            </TerminalPanel>
+                          );
+                        })}
+                      </div>
+                      {(cells?.hasMore || cellsPagination.hasPrevious) && (
+                        <TerminalPanelFooter className="mt-4 flex justify-center border-t-0">
+                          <CursorPagination
+                            hasMore={cells?.hasMore ?? false}
+                            hasPrevious={cellsPagination.hasPrevious}
+                            onNext={() => cellsPagination.goToNext(cells?.nextCursor)}
+                            onPrevious={cellsPagination.goToPrevious}
+                          />
+                        </TerminalPanelFooter>
+                      )}
+                    </>
+                  ) : (
+                    <div className="py-12 text-center text-slate-500">
+                      {cellFilter !== 'all'
+                        ? `No ${cellFilter === 'ckb' ? 'CKB' : cellFilter.toUpperCase()} cells on this page`
+                        : selectedToken
+                          ? `No cells found for ${selectedToken.symbol || selectedToken.name}`
+                          : 'No live cells'}
+                    </div>
+                  )}
+                </div>
               </>
             )}
 
@@ -686,89 +1030,6 @@ export default function AddressDetailPage() {
                   </>
                 ) : (
                   <div className="py-12 text-center text-slate-500">No transactions</div>
-                )}
-              </>
-            )}
-
-            {activeTab === 'dao' && (
-              <>
-                {daoDeposits?.data && daoDeposits.data.length > 0 ? (
-                  <>
-                    <div className="min-w-full overflow-x-auto">
-                      <div className="flex gap-4 border-b border-slate-800 bg-slate-900/50 px-4 py-2 font-mono text-xs uppercase tracking-wider text-slate-500">
-                        <div className="w-36 shrink-0">DAO Tx</div>
-                        <div className="w-28 shrink-0">Block</div>
-                        <div className="w-24 shrink-0">Status</div>
-                        <div className="w-36 shrink-0 text-right">Capacity</div>
-                        <div className="w-40 shrink-0 text-right">Compensation</div>
-                        <div className="w-20 shrink-0">Duration</div>
-                        <div className="w-24 shrink-0 text-right">Deposited</div>
-                      </div>
-                      {daoDeposits.data.map((deposit: DaoDeposit) => (
-                        <TerminalRow key={`${deposit.txHash}-${deposit.outputIndex}`}>
-                          <div className="flex w-full items-center gap-4">
-                            <div className="w-36 shrink-0">
-                              <Link href={`/tx/${deposit.txHash}`}>
-                                <HexDisplay
-                                  value={deposit.txHash}
-                                  truncate
-                                  startChars={6}
-                                  endChars={6}
-                                  className="text-terminal-green"
-                                />
-                              </Link>
-                            </div>
-                            <div className="w-28 shrink-0">
-                              <Link
-                                href={`/blocks/${deposit.depositBlockNumber}`}
-                                className="font-mono text-sm text-slate-400 hover:text-white"
-                              >
-                                #{deposit.depositBlockNumber.toLocaleString()}
-                              </Link>
-                            </div>
-                            <div className="w-24 shrink-0">{getDaoStatusBadge(deposit.status)}</div>
-                            <div className="w-36 shrink-0 text-right">
-                              <Capacity value={deposit.capacity} className="text-white" />
-                            </div>
-                            <div className="w-40 shrink-0 text-right">
-                              {deposit.compensation ? (
-                                <span className="font-mono text-sm text-green-400">
-                                  +{formatCkbAmount(deposit.compensation).full} CKB
-                                </span>
-                              ) : deposit.status === 'deposited' ? (
-                                <span className="text-sm text-slate-500">Accruing...</span>
-                              ) : (
-                                <span className="text-slate-600">-</span>
-                              )}
-                            </div>
-                            <div className="w-20 shrink-0 font-mono text-sm text-slate-400">
-                              {formatDaoDuration(
-                                deposit.depositTimestamp,
-                                deposit.withdrawTimestamp || deposit.withdrawRequestTimestamp
-                              )}
-                            </div>
-                            <div className="w-24 shrink-0 text-right text-sm text-slate-500">
-                              {formatTimeAgo(deposit.depositTimestamp)}
-                            </div>
-                          </div>
-                        </TerminalRow>
-                      ))}
-                    </div>
-                    {(daoDeposits.hasMore || daoPagination.hasPrevious) && (
-                      <TerminalPanelFooter className="flex justify-center">
-                        <CursorPagination
-                          total={daoDeposits.total}
-                          totalLabel="deposits"
-                          hasMore={daoDeposits.hasMore}
-                          hasPrevious={daoPagination.hasPrevious}
-                          onNext={() => daoPagination.goToNext(daoDeposits.nextCursor)}
-                          onPrevious={daoPagination.goToPrevious}
-                        />
-                      </TerminalPanelFooter>
-                    )}
-                  </>
-                ) : (
-                  <div className="py-12 text-center text-slate-500">No DAO deposits</div>
                 )}
               </>
             )}

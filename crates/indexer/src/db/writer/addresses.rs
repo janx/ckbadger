@@ -36,15 +36,17 @@ impl BatchWriter {
     pub fn apply_address_balance_deltas(
         &self,
         existing: &HashMap<Vec<u8>, Option<AddressBalance>>,
-        changes: &HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8])>,
+        changes: &HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8], i64)>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
         if changes.is_empty() {
             return Ok(());
         }
 
-        for (lock_hash, (balance_delta, live_delta, total_delta, tx_delta, block_num, tx_hash)) in
-            changes
+        for (
+            lock_hash,
+            (balance_delta, live_delta, total_delta, tx_delta, block_num, tx_hash, occupied_delta),
+        ) in changes
         {
             let prev = existing.get(lock_hash).and_then(|o| o.as_ref());
 
@@ -52,6 +54,8 @@ impl BatchWriter {
                 Some(bal) => {
                     let mut bal = bal.clone();
                     bal.balance += *balance_delta as i128;
+                    bal.occupied_capacity =
+                        (bal.occupied_capacity + *occupied_delta as i128).max(0);
                     bal.live_cells_count = (bal.live_cells_count + *live_delta).max(0);
                     bal.total_cells_count += *total_delta as i64;
                     bal.txs_count += tx_delta;
@@ -61,6 +65,7 @@ impl BatchWriter {
                 }
                 None => AddressBalance {
                     balance: *balance_delta as i128,
+                    occupied_capacity: (*occupied_delta as i128).max(0),
                     live_cells_count: (*live_delta).max(0),
                     total_cells_count: (*total_delta).max(0) as i64,
                     txs_count: *tx_delta,
@@ -79,7 +84,7 @@ impl BatchWriter {
 
     pub fn update_address_balances_batch(
         &self,
-        changes: &HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8])>,
+        changes: &HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8], i64)>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
         if changes.is_empty() {

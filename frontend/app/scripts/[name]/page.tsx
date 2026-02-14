@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { Header } from '@/components/layout/header';
@@ -82,6 +82,7 @@ export default function ScriptDetailPage() {
         cursor: cellsPagination.cursor,
       }),
     enabled: !!selectedDeployment,
+    placeholderData: keepPreviousData,
   });
 
   const isLoading = isDeploymentsLoading || isUsageLoading;

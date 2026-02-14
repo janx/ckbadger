@@ -100,6 +100,8 @@ pub struct TxIndexEntry {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AddressBalance {
     pub balance: i128,
+    #[serde(default)]
+    pub occupied_capacity: i128,
     pub live_cells_count: i32,
     pub total_cells_count: i64,
     pub txs_count: i64,
@@ -615,7 +617,7 @@ mod tests {
             tx_index: 3,
             timestamp: 1_700_000_000,
             ckb_delta: -500_00000000,
-            occupied_delta: 6100_00000000,
+            occupied_delta: 610_000_000_000,
             is_cellbase: false,
             asset_changes: vec![
                 AssetChange::Token {
@@ -635,7 +637,7 @@ mod tests {
         assert_eq!(decoded.tx_hash, entry.tx_hash);
         assert_eq!(decoded.block_number, 12345);
         assert_eq!(decoded.ckb_delta, -500_00000000);
-        assert_eq!(decoded.occupied_delta, 6100_00000000);
+        assert_eq!(decoded.occupied_delta, 610_000_000_000);
         assert!(!decoded.is_cellbase);
         assert_eq!(decoded.asset_changes.len(), 2);
         assert_eq!(decoded.peers.len(), 2);
@@ -975,5 +977,40 @@ mod tests {
         assert_eq!(decoded.standard, DobStandard::DidCkb);
         assert_eq!(decoded.name.as_deref(), Some("did:ckb:test"));
         assert!(matches!(decoded.extra, DobExtra::DidCkb));
+    }
+
+    // ---- AddressBalance ----
+
+    #[test]
+    fn test_address_balance_roundtrip() {
+        let entry = AddressBalance {
+            balance: 100_000_000_000,
+            occupied_capacity: 610_000_000_000,
+            live_cells_count: 3,
+            total_cells_count: 10,
+            txs_count: 7,
+            first_seen_block: 100,
+            first_seen_tx: vec![0x01; 32],
+            last_activity_block: 500,
+            last_activity_tx: vec![0x02; 32],
+        };
+        let bytes = bincode::serialize(&entry).unwrap();
+        let decoded: AddressBalance = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.balance, 100_000_000_000);
+        assert_eq!(decoded.occupied_capacity, 610_000_000_000);
+        assert_eq!(decoded.live_cells_count, 3);
+        assert_eq!(decoded.total_cells_count, 10);
+        assert_eq!(decoded.txs_count, 7);
+        assert_eq!(decoded.first_seen_block, 100);
+        assert_eq!(decoded.last_activity_block, 500);
+    }
+
+    #[test]
+    fn test_address_balance_default() {
+        let bal = AddressBalance::default();
+        assert_eq!(bal.balance, 0);
+        assert_eq!(bal.occupied_capacity, 0);
+        assert_eq!(bal.live_cells_count, 0);
+        assert_eq!(bal.txs_count, 0);
     }
 }

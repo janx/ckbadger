@@ -33,6 +33,9 @@ struct Args {
     #[arg(long, env = "REDIS_URL")]
     redis_url: Option<String>,
 
+    #[arg(long, env = "API_URL", default_value = "http://localhost:3001/api/v1")]
+    api_url: String,
+
     #[arg(long, default_value = "1000")]
     refresh_ms: u64,
 }
@@ -45,7 +48,7 @@ async fn main() -> Result<()> {
 
     let store = Arc::new(CkbadgerStore::open(&args.data_path)?);
 
-    let db = TaskDb::new(store, args.redis_url.as_deref()).await;
+    let db = TaskDb::new(store, args.redis_url.as_deref(), &args.api_url).await;
 
     let picker = Picker::from_query_stdio().ok();
 
@@ -122,6 +125,7 @@ async fn run_app<B: ratatui::backend::Backend>(
                             KeyCode::Char('p') => app.pause_selected().await?,
                             KeyCode::Char('r') => app.resume_or_retry_selected().await?,
                             KeyCode::Char('d') => app.delete_selected().await?,
+                            KeyCode::Char('s') => app.toggle_sync_tab(),
                             KeyCode::Char('v') => app.toggle_chart_mode(),
                             KeyCode::Char('R') => app.refresh().await?,
                             KeyCode::Enter => app.confirm_dialog().await?,

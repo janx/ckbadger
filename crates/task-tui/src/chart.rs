@@ -104,20 +104,21 @@ pub struct BarChartResult {
     pub rows: Vec<ChartRow>,
 }
 
-// Gradient: position 0.0 (top) = Red -> Yellow -> Green -> Cyan = position 1.0 (bottom)
+// Green phosphor gradient: top (bright green) → bottom (dark green)
 fn gradient_color(position: f64) -> Color {
-    if position < 0.25 {
-        let t = position / 0.25;
-        Color::Rgb(255, (128.0 + 127.0 * t) as u8, 0)
-    } else if position < 0.5 {
-        let t = (position - 0.25) / 0.25;
-        Color::Rgb((255.0 * (1.0 - t)) as u8, 255, 0)
-    } else if position < 0.75 {
-        let t = (position - 0.5) / 0.25;
-        Color::Rgb(0, 255, (255.0 * t) as u8)
+    // position 0.0 = top row (high values), 1.0 = bottom row (low values)
+    if position < 0.33 {
+        // Top: bright terminal green → terminal dim
+        let t = position / 0.33;
+        Color::Rgb(0, (255.0 - 51.0 * t) as u8, (65.0 - 14.0 * t) as u8)
+    } else if position < 0.66 {
+        // Middle: terminal dim → terminal dark
+        let t = (position - 0.33) / 0.33;
+        Color::Rgb(0, (204.0 - 76.0 * t) as u8, (51.0 - 20.0 * t) as u8)
     } else {
-        let t = (position - 0.75) / 0.25;
-        Color::Rgb(0, (255.0 * (1.0 - t * 0.3)) as u8, 255)
+        // Bottom: terminal dark → very dark
+        let t = (position - 0.66) / 0.34;
+        Color::Rgb(0, (128.0 - 88.0 * t) as u8, (31.0 - 21.0 * t) as u8)
     }
 }
 
@@ -145,7 +146,7 @@ pub fn render_bar_chart(
             rows: vec![
                 ChartRow {
                     content: " ".repeat(char_width),
-                    color: Color::Gray
+                    color: Color::Rgb(90, 106, 127)
                 };
                 char_height
             ],
@@ -275,11 +276,14 @@ mod tests {
         let top = gradient_color(0.0);
         let bottom = gradient_color(1.0);
         match top {
-            Color::Rgb(r, _, _) => assert_eq!(r, 255),
+            Color::Rgb(r, g, _) => {
+                assert_eq!(r, 0);
+                assert_eq!(g, 255);
+            }
             _ => panic!("Expected RGB color"),
         }
         match bottom {
-            Color::Rgb(_, _, b) => assert_eq!(b, 255),
+            Color::Rgb(r, _, _) => assert_eq!(r, 0),
             _ => panic!("Expected RGB color"),
         }
     }

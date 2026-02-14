@@ -109,6 +109,7 @@ struct CachedCellInfo {
     type_script_hash: Option<Vec<u8>>,
     type_code_hash: Option<Vec<u8>>,
     data_size: i32,
+    occupied_capacity: i64,
 }
 
 #[derive(Clone)]
@@ -573,7 +574,7 @@ impl Indexer {
             HashMap<(Vec<u8>, i16), LiveCellInfo>,
             // Pre-computed in parser stage:
             HashMap<(Vec<u8>, i16), LiveCellInfo>, // batch_cell_infos
-            HashMap<Vec<u8>, (i64, i32, i32, i64, i64, Vec<u8>)>, // address_balance_changes
+            HashMap<Vec<u8>, (i64, i32, i32, i64, i64, Vec<u8>, i64)>, // address_balance_changes
             HashMap<(Vec<u8>, bool), (i64, i64, i64, i64)>, // script_usage_changes
         );
 
@@ -819,7 +820,7 @@ impl Indexer {
                                 type_script_hash: cached.type_script_hash.clone(),
                                 type_code_hash: cached.type_code_hash.clone(),
                                 data_size: cached.data_size,
-                                occupied_capacity: 0,
+                                occupied_capacity: cached.occupied_capacity,
                             },
                         );
                     }
@@ -937,7 +938,7 @@ impl Indexer {
                 // Pass 3: cell_cache update + address_balance_changes + script_usage_changes
                 let mut address_balance_changes: HashMap<
                     Vec<u8>,
-                    (i64, i32, i32, i64, i64, Vec<u8>),
+                    (i64, i32, i32, i64, i64, Vec<u8>, i64),
                 > = HashMap::new();
                 let mut script_usage_changes: HashMap<(Vec<u8>, bool), (i64, i64, i64, i64)> =
                     HashMap::new();
@@ -945,6 +946,15 @@ impl Indexer {
                 for tx_data in &all_tx_data {
                     // cell_cache update
                     for (output_index, cell) in tx_data.cells.iter().enumerate() {
+                        let lock_script_size = 32 + 1 + cell.lock_args.len() as i64;
+                        let type_script_size = cell
+                            .type_args
+                            .as_ref()
+                            .map(|a| 32 + 1 + a.len() as i64)
+                            .unwrap_or(0);
+                        let cell_occupied =
+                            (8 + lock_script_size + type_script_size + cell.data_size as i64)
+                                * 100_000_000;
                         cell_cache_for_parser.insert(
                             (tx_data.hash, output_index as i32),
                             CachedCellInfo {
@@ -957,6 +967,7 @@ impl Indexer {
                                 type_script_hash: cell.type_script_hash.clone(),
                                 type_code_hash: cell.type_code_hash.clone(),
                                 data_size: cell.data_size,
+                                occupied_capacity: cell_occupied,
                             },
                         );
                     }
@@ -983,6 +994,7 @@ impl Indexer {
                     // Per-tx balance/consumption tracking
                     let mut tx_balance_changes: HashMap<Vec<u8>, i64> = HashMap::new();
                     let mut tx_cells_consumed: HashMap<Vec<u8>, i32> = HashMap::new();
+                    let mut tx_occupied_changes: HashMap<Vec<u8>, i64> = HashMap::new();
 
                     if !tx_data.is_cellbase {
                         for input in &tx_data.inputs {
@@ -1000,6 +1012,9 @@ impl Indexer {
                                 *tx_cells_consumed
                                     .entry(info.lock_script_hash.clone())
                                     .or_default() += 1;
+                                *tx_occupied_changes
+                                    .entry(info.lock_script_hash.clone())
+                                    .or_default() -= info.occupied_capacity;
                                 // script usage - inputs
                                 let lock_key = (info.lock_code_hash.clone(), false);
                                 let entry =
@@ -1027,11 +1042,24 @@ impl Indexer {
                         *tx_cells_created
                             .entry(cell.lock_script_hash.clone())
                             .or_default() += 1;
+                        let lock_script_size = 32 + 1 + cell.lock_args.len() as i64;
+                        let type_script_size = cell
+                            .type_args
+                            .as_ref()
+                            .map(|a| 32 + 1 + a.len() as i64)
+                            .unwrap_or(0);
+                        let cell_occupied =
+                            (8 + lock_script_size + type_script_size + cell.data_size as i64)
+                                * 100_000_000;
+                        *tx_occupied_changes
+                            .entry(cell.lock_script_hash.clone())
+                            .or_default() += cell_occupied;
                     }
                     let all_addresses: HashSet<Vec<u8>> = tx_balance_changes
                         .keys()
                         .chain(tx_cells_created.keys())
                         .chain(tx_cells_consumed.keys())
+                        .chain(tx_occupied_changes.keys())
                         .cloned()
                         .collect();
                     for lock_hash in all_addresses {
@@ -1040,6 +1068,8 @@ impl Indexer {
                         let cells_created = tx_cells_created.get(&lock_hash).copied().unwrap_or(0);
                         let cells_consumed =
                             tx_cells_consumed.get(&lock_hash).copied().unwrap_or(0);
+                        let occupied_change =
+                            tx_occupied_changes.get(&lock_hash).copied().unwrap_or(0);
                         let entry = address_balance_changes.entry(lock_hash.clone()).or_insert((
                             0,
                             0,
@@ -1047,6 +1077,7 @@ impl Indexer {
                             0,
                             tx_data.block_number,
                             tx_data.hash.to_vec(),
+                            0,
                         ));
                         entry.0 += balance_change;
                         entry.1 += cells_created - cells_consumed;
@@ -1054,6 +1085,7 @@ impl Indexer {
                         entry.3 += 1;
                         entry.4 = tx_data.block_number;
                         entry.5 = tx_data.hash.to_vec();
+                        entry.6 += occupied_change;
                     }
                 }
                 // cell_cache eviction check
@@ -1780,7 +1812,7 @@ impl Indexer {
                         type_script_hash: cached.type_script_hash.clone(),
                         type_code_hash: cached.type_code_hash.clone(),
                         data_size: cached.data_size,
-                        occupied_capacity: 0,
+                        occupied_capacity: cached.occupied_capacity,
                     },
                 );
             }
@@ -1836,6 +1868,14 @@ impl Indexer {
 
         for tx_data in &all_tx_data {
             for (output_index, cell) in tx_data.cells.iter().enumerate() {
+                let lock_script_size = 32 + 1 + cell.lock_args.len() as i64;
+                let type_script_size = cell
+                    .type_args
+                    .as_ref()
+                    .map(|a| 32 + 1 + a.len() as i64)
+                    .unwrap_or(0);
+                let cell_occupied =
+                    (8 + lock_script_size + type_script_size + cell.data_size as i64) * 100_000_000;
                 self.cell_cache.insert(
                     (tx_data.hash, output_index as i32),
                     CachedCellInfo {
@@ -1848,6 +1888,7 @@ impl Indexer {
                         type_script_hash: cell.type_script_hash.clone(),
                         type_code_hash: cell.type_code_hash.clone(),
                         data_size: cell.data_size,
+                        occupied_capacity: cell_occupied,
                     },
                 );
             }
@@ -2037,12 +2078,13 @@ impl Indexer {
         }
 
         // Address balances
-        let mut address_balance_changes: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, Vec<u8>)> =
+        let mut address_balance_changes: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, Vec<u8>, i64)> =
             HashMap::new();
         for tx_data in &all_tx_data {
             let mut tx_balance_changes: HashMap<Vec<u8>, i64> = HashMap::new();
             let mut tx_cells_created: HashMap<Vec<u8>, i32> = HashMap::new();
             let mut tx_cells_consumed: HashMap<Vec<u8>, i32> = HashMap::new();
+            let mut tx_occupied_changes: HashMap<Vec<u8>, i64> = HashMap::new();
             if !tx_data.is_cellbase {
                 for input in &tx_data.inputs {
                     let key = (
@@ -2059,6 +2101,9 @@ impl Indexer {
                         *tx_cells_consumed
                             .entry(info.lock_script_hash.clone())
                             .or_default() += 1;
+                        *tx_occupied_changes
+                            .entry(info.lock_script_hash.clone())
+                            .or_default() -= info.occupied_capacity;
                     }
                 }
             }
@@ -2069,17 +2114,30 @@ impl Indexer {
                 *tx_cells_created
                     .entry(cell.lock_script_hash.clone())
                     .or_default() += 1;
+                let lock_script_size = 32 + 1 + cell.lock_args.len() as i64;
+                let type_script_size = cell
+                    .type_args
+                    .as_ref()
+                    .map(|a| 32 + 1 + a.len() as i64)
+                    .unwrap_or(0);
+                let cell_occupied =
+                    (8 + lock_script_size + type_script_size + cell.data_size as i64) * 100_000_000;
+                *tx_occupied_changes
+                    .entry(cell.lock_script_hash.clone())
+                    .or_default() += cell_occupied;
             }
             let all_addresses: HashSet<Vec<u8>> = tx_balance_changes
                 .keys()
                 .chain(tx_cells_created.keys())
                 .chain(tx_cells_consumed.keys())
+                .chain(tx_occupied_changes.keys())
                 .cloned()
                 .collect();
             for lock_hash in all_addresses {
                 let balance_change = tx_balance_changes.get(&lock_hash).copied().unwrap_or(0);
                 let cells_created = tx_cells_created.get(&lock_hash).copied().unwrap_or(0);
                 let cells_consumed = tx_cells_consumed.get(&lock_hash).copied().unwrap_or(0);
+                let occupied_change = tx_occupied_changes.get(&lock_hash).copied().unwrap_or(0);
                 let entry = address_balance_changes.entry(lock_hash.clone()).or_insert((
                     0,
                     0,
@@ -2087,6 +2145,7 @@ impl Indexer {
                     0,
                     tx_data.block_number,
                     tx_data.hash.to_vec(),
+                    0,
                 ));
                 entry.0 += balance_change;
                 entry.1 += cells_created - cells_consumed;
@@ -2094,6 +2153,7 @@ impl Indexer {
                 entry.3 += 1;
                 entry.4 = tx_data.block_number;
                 entry.5 = tx_data.hash.to_vec();
+                entry.6 += occupied_change;
 
                 // Index address → transaction
                 consume_addr_batch.put_addr_tx(
@@ -2105,10 +2165,12 @@ impl Indexer {
             }
         }
 
-        let changes_ref: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8])> =
+        let changes_ref: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8], i64)> =
             address_balance_changes
                 .iter()
-                .map(|(k, (a, b, c, d, e, f))| (k.clone(), (*a, *b, *c, *d, *e, f.as_slice())))
+                .map(|(k, (a, b, c, d, e, f, g))| {
+                    (k.clone(), (*a, *b, *c, *d, *e, f.as_slice(), *g))
+                })
                 .collect();
 
         // Script usage
@@ -2904,7 +2966,7 @@ impl Indexer {
         all_tx_data: Vec<TxData>,
         input_cell_info: HashMap<(Vec<u8>, i16), LiveCellInfo>,
         batch_cell_infos: HashMap<(Vec<u8>, i16), LiveCellInfo>,
-        address_balance_changes: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, Vec<u8>)>,
+        address_balance_changes: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, Vec<u8>, i64)>,
         script_usage_changes: HashMap<(Vec<u8>, bool), (i64, i64, i64, i64)>,
         chain_tip: u64,
     ) -> Result<()> {
@@ -3020,10 +3082,12 @@ impl Indexer {
             }
         }
 
-        let changes_ref: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8])> =
+        let changes_ref: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8], i64)> =
             address_balance_changes
                 .iter()
-                .map(|(k, (a, b, c, d, e, f))| (k.clone(), (*a, *b, *c, *d, *e, f.as_slice())))
+                .map(|(k, (a, b, c, d, e, f, g))| {
+                    (k.clone(), (*a, *b, *c, *d, *e, f.as_slice(), *g))
+                })
                 .collect();
 
         let block_refs: Vec<&crate::parser::block::ParsedBlock> =

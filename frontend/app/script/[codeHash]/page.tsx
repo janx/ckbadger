@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { useParams, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { Header } from '@/components/layout/header';
@@ -83,6 +83,7 @@ export default function ScriptByCodeHashPage() {
         limit: 20,
         cursor: cellsPagination.cursor,
       }),
+    placeholderData: keepPreviousData,
   });
 
   return (

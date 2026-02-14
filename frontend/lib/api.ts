@@ -248,6 +248,7 @@ interface Address {
   lockScriptHash: string;
   address?: string;
   balance: string;
+  occupiedCapacity: string;
   liveCellsCount: number;
   transactionsCount: number;
   lockScript?: Script;
@@ -309,6 +310,26 @@ interface AssetTransferParams {
   limit?: number;
   cursor?: string;
   category?: 'token' | 'dob' | 'nft' | 'dao';
+}
+
+type ActivityAssetChange =
+  | { type: 'token'; typeScriptHash: string; delta: string; symbol?: string; decimals?: number }
+  | { type: 'dob'; dobId: string; standard: string; action: string }
+  | { type: 'nft'; nftId: string; standard: string; action: string }
+  | { type: 'daoDeposit'; capacity: string }
+  | { type: 'daoWithdrawRequest'; capacity: string; depositBlock: number }
+  | { type: 'daoWithdrawComplete'; capacity: string; compensation: string };
+
+interface Activity {
+  txHash: string;
+  blockNumber: number;
+  txIndex: number;
+  timestamp: string;
+  ckbDelta: string;
+  occupiedDelta: string;
+  isCellbase: boolean;
+  assetChanges: ActivityAssetChange[];
+  peers: string[];
 }
 
 interface GraphNode {
@@ -905,6 +926,8 @@ export type {
   OrphanedTransaction,
   ReorgDetail,
   RecentReorgResponse,
+  Activity,
+  ActivityAssetChange,
 };
 
 export const api = {
@@ -1005,6 +1028,16 @@ export const api = {
     if (params.limit) query.set('limit', String(params.limit));
     if (params.cursor) query.set('cursor', params.cursor);
     return fetchApi(`/addresses/${addr}/tokens?${query}`);
+  },
+
+  getAddressActivities: (
+    addr: string,
+    params: CursorQueryParams = {}
+  ): Promise<CursorPaginatedResponse<Activity>> => {
+    const query = new URLSearchParams();
+    if (params.limit) query.set('limit', String(params.limit));
+    if (params.cursor) query.set('cursor', params.cursor);
+    return fetchApi(`/addresses/${addr}/activities?${query}`);
   },
 
   getLiveCells: (params: CellQueryParams = {}): Promise<CursorPaginatedResponse<Cell>> => {

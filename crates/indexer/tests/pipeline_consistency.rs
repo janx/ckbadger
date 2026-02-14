@@ -284,9 +284,9 @@ fn test_address_balance_update_receive() {
     let lock_hash = vec![0xAAu8; 32];
     let tx_hash = vec![0x01u8; 32];
 
-    let changes: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8])> = [(
+    let changes: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8], i64)> = [(
         lock_hash.clone(),
-        (100_00000000, 1, 1, 1, 1000, tx_hash.as_slice()),
+        (100_00000000, 1, 1, 1, 1000, tx_hash.as_slice(), 0),
     )]
     .into_iter()
     .collect();
@@ -312,9 +312,9 @@ fn test_address_balance_update_send() {
     let tx_hash1 = vec![0x01u8; 32];
     let tx_hash2 = vec![0x02u8; 32];
 
-    let receive: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8])> = [(
+    let receive: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8], i64)> = [(
         lock_hash.clone(),
-        (100_00000000, 1, 1, 1, 1000, tx_hash1.as_slice()),
+        (100_00000000, 1, 1, 1, 1000, tx_hash1.as_slice(), 0),
     )]
     .into_iter()
     .collect();
@@ -324,9 +324,9 @@ fn test_address_balance_update_send() {
         .unwrap();
     batch.commit().unwrap();
 
-    let send: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8])> = [(
+    let send: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8], i64)> = [(
         lock_hash.clone(),
-        (-30_00000000, 0, 1, 1, 2000, tx_hash2.as_slice()),
+        (-30_00000000, 0, 1, 1, 2000, tx_hash2.as_slice(), 0),
     )]
     .into_iter()
     .collect();

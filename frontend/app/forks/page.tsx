@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { Header } from '@/components/layout/header';
 import {
@@ -25,6 +25,7 @@ export default function ForksPage() {
     queryKey: ['forks', cursor, limit],
     queryFn: () => api.getForks({ cursor, limit }),
     staleTime: 30_000,
+    placeholderData: keepPreviousData,
   });
 
   const getBadgeVariant = (type: string): 'red' | 'blue' | 'green' | 'gray' => {

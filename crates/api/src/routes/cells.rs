@@ -250,6 +250,7 @@ pub struct AddressResponse {
     pub lock_script_hash: String,
     pub address: Option<String>,
     pub balance: String,
+    pub occupied_capacity: String,
     pub live_cells_count: i64,
     pub transactions_count: i64,
     pub recent_activities_count: i64,
@@ -635,13 +636,14 @@ async fn get_address(
         .get_addr_balance(&lock_hash)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let (balance, live_cells_count, transactions_count) = match &addr_balance {
+    let (balance, occupied_capacity, live_cells_count, transactions_count) = match &addr_balance {
         Some(ab) => (
             ab.balance.to_string(),
+            ab.occupied_capacity.to_string(),
             ab.live_cells_count as i64,
             ab.txs_count,
         ),
-        None => ("0".to_string(), 0, 0),
+        None => ("0".to_string(), "0".to_string(), 0, 0),
     };
 
     // Try to find a cell for this lock hash to get the lock script details
@@ -714,6 +716,7 @@ async fn get_address(
         lock_script_hash: format!("0x{}", hex::encode(&lock_hash)),
         address,
         balance,
+        occupied_capacity,
         live_cells_count,
         transactions_count,
         recent_activities_count,
