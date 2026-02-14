@@ -20,16 +20,17 @@ export function Logo() {
   return (
     <Link
       href="/"
-      className="logo-container group absolute -left-[5px] -top-[8px] z-[9999] md:-left-[10px] md:-top-[12px]"
+      className="logo-container group absolute -left-[5px] -top-[15px] z-[9999] md:-left-[10px] md:-top-[27px]"
       aria-label="CKBadger Home"
     >
       <Image
-        src="/ckbadger-logo11.png"
+        src="/ckbadger-transparent.png"
         alt="CKBadger"
         width={143}
         height={97}
+        unoptimized
         priority
-        className={`logo-image h-auto w-[81px] rotate-[8deg] transform-gpu object-contain transition-all duration-300 group-hover:rotate-[9deg] group-hover:scale-100 md:w-[123px] lg:w-[143px] ${isGlitching ? 'neon-flicker' : ''}`}
+        className={`logo-image h-auto w-[73px] rotate-[8deg] transform-gpu object-contain transition-all duration-300 group-hover:rotate-[9deg] group-hover:scale-100 md:w-[111px] lg:w-[129px] ${isGlitching ? 'neon-flicker' : ''}`}
       />
     </Link>
   );
