@@ -6,4 +6,7 @@ pub use live_cell_storage::{
     CachedBlockHeader, ConsumedCellRecord, LiveCellInfo, LiveCellStorage, MemoryStats,
 };
 pub use repository::{DeepForkInfo, Repository};
-pub use writer::{BatchWriter, DaoWithdrawalContextTrait, ReorgResult, SecondaryIssuanceBreakdown};
+pub use writer::{
+    rebuild_cell_indices, BatchWriter, DaoWithdrawalContextTrait, ReorgResult,
+    SecondaryIssuanceBreakdown,
+};

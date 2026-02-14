@@ -46,7 +46,7 @@ fn test_cell_info_lookup_returns_all_fields() {
 
     let mut batch = StoreBatch::new(&store);
     writer
-        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], &mut batch)
+        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], &mut batch, false)
         .unwrap();
     batch.commit().unwrap();
 
@@ -85,6 +85,7 @@ fn test_cell_info_batch_lookup_multiple_cells() {
                 (&tx3, 0, &cell3, 3000),
             ],
             &mut batch,
+            false,
         )
         .unwrap();
     batch.commit().unwrap();
@@ -132,7 +133,7 @@ fn test_full_cells_info_returns_lock_and_type() {
 
     let mut batch = StoreBatch::new(&store);
     writer
-        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], &mut batch)
+        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], &mut batch, false)
         .unwrap();
     batch.commit().unwrap();
 
@@ -170,7 +171,7 @@ fn test_full_cells_info_no_type_script() {
 
     let mut batch = StoreBatch::new(&store);
     writer
-        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], &mut batch)
+        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], &mut batch, false)
         .unwrap();
     batch.commit().unwrap();
 
@@ -195,7 +196,7 @@ fn test_same_batch_cell_consumption() {
     // Insert cell
     let mut batch = StoreBatch::new(&store);
     writer
-        .insert_cells_batch(&[(&creating_tx, 0, &cell, 1000)], &mut batch)
+        .insert_cells_batch(&[(&creating_tx, 0, &cell, 1000)], &mut batch, false)
         .unwrap();
     batch.commit().unwrap();
 
@@ -359,6 +360,7 @@ fn test_multiple_outputs_same_tx() {
                 (&tx_hash, 2, &cell2, 1000),
             ],
             &mut batch,
+            false,
         )
         .unwrap();
     batch.commit().unwrap();
@@ -388,7 +390,7 @@ fn test_consumed_cell_not_in_live_cells() {
 
     let mut batch = StoreBatch::new(&store);
     writer
-        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], &mut batch)
+        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], &mut batch, false)
         .unwrap();
     batch.commit().unwrap();
 
@@ -418,6 +420,7 @@ fn test_cross_partition_cell_lookup() {
         .insert_cells_batch(
             &[(&tx_p0, 0, &cell, 1_000_000), (&tx_p1, 0, &cell, 6_000_000)],
             &mut batch,
+            false,
         )
         .unwrap();
     batch.commit().unwrap();
@@ -433,4 +436,196 @@ fn test_cross_partition_cell_lookup() {
 
     let (_, block1, _, _) = result.get(&(tx_p1.clone(), 0)).unwrap();
     assert_eq!(*block1, 6_000_000);
+}
+
+// --- Tests for skip_cell_indices / rebuild_cell_indices ---
+
+#[test]
+fn test_skip_cell_indices_omits_index_entries() {
+    let (store, writer) = setup_store();
+    let tx_hash = vec![0x01u8; 32];
+    let cell = make_cell(100_00000000, 256, 0xAA);
+
+    // Insert with skip_cell_indices = true
+    let mut batch = StoreBatch::new(&store);
+    writer
+        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], &mut batch, true)
+        .unwrap();
+    batch.commit().unwrap();
+
+    // Live cell itself should exist
+    let live = store.get_cell(&tx_hash, 0).unwrap();
+    assert!(live.is_some(), "cell should be in live_cells");
+
+    // But index entries should NOT exist
+    let by_lock = store
+        .list_cells_by_lock(&cell.lock_script_hash, 100)
+        .unwrap();
+    assert!(
+        by_lock.is_empty(),
+        "lock index should be empty when skipped"
+    );
+
+    let by_type = store
+        .list_cells_by_type(cell.type_script_hash.as_ref().unwrap(), 100)
+        .unwrap();
+    assert!(
+        by_type.is_empty(),
+        "type index should be empty when skipped"
+    );
+
+    let by_lock_code = store
+        .list_cells_by_lock_code_hash(&cell.lock_code_hash, 100, None, None)
+        .unwrap();
+    assert!(
+        by_lock_code.is_empty(),
+        "lock_code index should be empty when skipped"
+    );
+
+    let by_type_code = store
+        .list_cells_by_type_code_hash(cell.type_code_hash.as_ref().unwrap(), 100, None, None)
+        .unwrap();
+    assert!(
+        by_type_code.is_empty(),
+        "type_code index should be empty when skipped"
+    );
+}
+
+#[test]
+fn test_rebuild_cell_indices_populates_all_indexes() {
+    use ckbadger_indexer::db::rebuild_cell_indices;
+
+    let (store, writer) = setup_store();
+    let tx1 = vec![0x01u8; 32];
+    let tx2 = vec![0x02u8; 32];
+    let cell1 = make_cell(100_00000000, 256, 0xAA);
+    let cell2 = make_cell(200_00000000, 128, 0xBB);
+
+    // Insert two cells with indices skipped
+    let mut batch = StoreBatch::new(&store);
+    writer
+        .insert_cells_batch(
+            &[(&tx1, 0, &cell1, 1000), (&tx2, 0, &cell2, 2000)],
+            &mut batch,
+            true,
+        )
+        .unwrap();
+    batch.commit().unwrap();
+
+    // Sanity: no index entries yet
+    assert!(store
+        .list_cells_by_lock(&cell1.lock_script_hash, 100)
+        .unwrap()
+        .is_empty());
+
+    // Rebuild
+    rebuild_cell_indices(&store);
+
+    // All 4 index types should now be populated
+    let by_lock1 = store
+        .list_cells_by_lock(&cell1.lock_script_hash, 100)
+        .unwrap();
+    assert_eq!(by_lock1.len(), 1, "lock index should have cell1");
+    assert_eq!(by_lock1[0].2.capacity, 100_00000000);
+
+    let by_lock2 = store
+        .list_cells_by_lock(&cell2.lock_script_hash, 100)
+        .unwrap();
+    assert_eq!(by_lock2.len(), 1, "lock index should have cell2");
+    assert_eq!(by_lock2[0].2.capacity, 200_00000000);
+
+    let by_type = store
+        .list_cells_by_type(cell1.type_script_hash.as_ref().unwrap(), 100)
+        .unwrap();
+    assert_eq!(
+        by_type.len(),
+        2,
+        "type index should have both cells (same type hash)"
+    );
+
+    let by_lock_code = store
+        .list_cells_by_lock_code_hash(&cell1.lock_code_hash, 100, None, None)
+        .unwrap();
+    assert_eq!(
+        by_lock_code.len(),
+        2,
+        "lock_code index should have both cells (same lock code)"
+    );
+
+    let by_type_code = store
+        .list_cells_by_type_code_hash(cell1.type_code_hash.as_ref().unwrap(), 100, None, None)
+        .unwrap();
+    assert_eq!(
+        by_type_code.len(),
+        2,
+        "type_code index should have both cells (same type code)"
+    );
+}
+
+#[test]
+fn test_skip_then_rebuild_matches_direct_insert() {
+    use ckbadger_indexer::db::rebuild_cell_indices;
+
+    // Setup two stores: one with skip+rebuild, one with direct insert
+    let (store_skip, writer_skip) = setup_store();
+    let (store_direct, writer_direct) = setup_store();
+
+    let tx1 = vec![0x01u8; 32];
+    let tx2 = vec![0x02u8; 32];
+    let cell1 = make_cell(100_00000000, 256, 0xAA);
+    let cell2 = make_cell(200_00000000, 128, 0xBB);
+    let cells_ref: Vec<(&[u8], i16, &ParsedCell, i64)> =
+        vec![(&tx1, 0, &cell1, 1000), (&tx2, 0, &cell2, 2000)];
+
+    // Store 1: skip indices, then rebuild
+    let mut batch = StoreBatch::new(&store_skip);
+    writer_skip
+        .insert_cells_batch(&cells_ref, &mut batch, true)
+        .unwrap();
+    batch.commit().unwrap();
+    rebuild_cell_indices(&store_skip);
+
+    // Store 2: direct insert with indices
+    let mut batch = StoreBatch::new(&store_direct);
+    writer_direct
+        .insert_cells_batch(&cells_ref, &mut batch, false)
+        .unwrap();
+    batch.commit().unwrap();
+
+    // Compare: lock index results should match
+    let skip_lock = store_skip
+        .list_cells_by_lock(&cell1.lock_script_hash, 100)
+        .unwrap();
+    let direct_lock = store_direct
+        .list_cells_by_lock(&cell1.lock_script_hash, 100)
+        .unwrap();
+    assert_eq!(skip_lock.len(), direct_lock.len());
+    assert_eq!(skip_lock[0].2.capacity, direct_lock[0].2.capacity);
+
+    // Compare: type index results should match
+    let skip_type = store_skip
+        .list_cells_by_type(cell1.type_script_hash.as_ref().unwrap(), 100)
+        .unwrap();
+    let direct_type = store_direct
+        .list_cells_by_type(cell1.type_script_hash.as_ref().unwrap(), 100)
+        .unwrap();
+    assert_eq!(skip_type.len(), direct_type.len());
+
+    // Compare: lock_code index results should match
+    let skip_lc = store_skip
+        .list_cells_by_lock_code_hash(&cell1.lock_code_hash, 100, None, None)
+        .unwrap();
+    let direct_lc = store_direct
+        .list_cells_by_lock_code_hash(&cell1.lock_code_hash, 100, None, None)
+        .unwrap();
+    assert_eq!(skip_lc.len(), direct_lc.len());
+
+    // Compare: type_code index results should match
+    let skip_tc = store_skip
+        .list_cells_by_type_code_hash(cell1.type_code_hash.as_ref().unwrap(), 100, None, None)
+        .unwrap();
+    let direct_tc = store_direct
+        .list_cells_by_type_code_hash(cell1.type_code_hash.as_ref().unwrap(), 100, None, None)
+        .unwrap();
+    assert_eq!(skip_tc.len(), direct_tc.len());
 }

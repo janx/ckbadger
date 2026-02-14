@@ -20,7 +20,9 @@ use ckbadger_store::CkbadgerStore;
 
 use crate::cache::CacheInvalidator;
 use crate::config::{Config, DEEP_FORK_DEPTH};
-use crate::db::{BatchWriter, ReorgResult, Repository, SecondaryIssuanceBreakdown};
+use crate::db::{
+    rebuild_cell_indices, BatchWriter, ReorgResult, Repository, SecondaryIssuanceBreakdown,
+};
 use crate::parser::{
     BlockParser, CellParser, DaoParser, DotbitParser, MnftParser, SporeParser, TransactionParser,
     UdtParser,
@@ -1576,9 +1578,20 @@ impl Indexer {
 
             // Re-enable auto-compactions and trigger manual compaction in background
             self.writer.store().restore_normal_compaction_options();
-            let store = Arc::clone(self.writer.store());
+            let store_compact = Arc::clone(self.writer.store());
             tokio::task::spawn_blocking(move || {
-                store.trigger_full_compaction();
+                store_compact.trigger_full_compaction();
+            });
+
+            // Rebuild cell secondary indices (skipped during bulk sync)
+            info!("Starting cell index rebuild from LIVE_CELLS");
+            let store_rebuild = Arc::clone(self.writer.store());
+            let pause_flag = Arc::clone(&self.rebuild_pause_flag);
+            pause_flag.store(true, Ordering::SeqCst);
+            tokio::task::spawn_blocking(move || {
+                rebuild_cell_indices(&store_rebuild);
+                pause_flag.store(false, Ordering::SeqCst);
+                info!("Cell index rebuild finished, resuming sync");
             });
 
             self.maybe_submit_pending_rebuild_tasks();
@@ -1876,7 +1889,8 @@ impl Indexer {
                     .insert_transactions_batch(&txs_for_batch, &mut batch)?;
             }
             if !all_cells.is_empty() {
-                self.writer.insert_cells_batch(&all_cells, &mut batch)?;
+                self.writer
+                    .insert_cells_batch(&all_cells, &mut batch, bulk_sync_mode)?;
             }
             batch.commit()?;
         }
@@ -1998,6 +2012,7 @@ impl Indexer {
                 &input_cell_info,
                 &batch_cell_infos,
                 &mut consume_addr_batch,
+                bulk_sync_mode,
             )?;
         }
 
@@ -3336,13 +3351,13 @@ impl Indexer {
 
             let tt;
             (batch_stats, tt) = std::thread::scope(|s| -> Result<(BatchStats, [f64; 6])> {
-                // T1: Cells + Consumption
-                // CFs: LIVE_CELLS, CONSUMED_CELLS, CELL_BY_LOCK, CELL_BY_LOCK_CODE, CELL_BY_TYPE, CELL_BY_TYPE_CODE
+                // T1: Cells + Consumption (index CFs deferred to post-bulk rebuild)
+                // CFs: LIVE_CELLS, CONSUMED_CELLS
                 let h1 = s.spawn(|| -> Result<f64> {
                     let t = Instant::now();
                     let mut batch = StoreBatch::new(store);
                     if !all_cells.is_empty() {
-                        writer.insert_cells_batch(&all_cells, &mut batch)?;
+                        writer.insert_cells_batch(&all_cells, &mut batch, true)?;
                     }
                     if !all_consumptions.is_empty() {
                         writer.consume_cells_batch_preloaded(
@@ -3350,6 +3365,7 @@ impl Indexer {
                             &input_cell_info,
                             &batch_cell_infos,
                             &mut batch,
+                            true,
                         )?;
                     }
                     batch.commit_no_wal()?;
@@ -3899,7 +3915,7 @@ impl Indexer {
             }
             if !all_cells.is_empty() {
                 self.writer
-                    .insert_cells_batch(&all_cells, &mut data_batch)?;
+                    .insert_cells_batch(&all_cells, &mut data_batch, false)?;
             }
             if !all_inputs.is_empty() {
                 self.writer.insert_transaction_inputs_batch(&all_inputs)?;
@@ -3913,6 +3929,7 @@ impl Indexer {
                     &input_cell_info,
                     &batch_cell_infos,
                     &mut data_batch,
+                    false,
                 )?;
             }
 

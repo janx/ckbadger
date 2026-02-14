@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
 use ckbadger_store::types::LiveCellInfo;
+use ckbadger_store::CkbadgerStore;
+use tracing::info;
 
 use crate::parser::cell::ParsedCell;
 
@@ -14,6 +16,7 @@ impl BatchWriter {
         &self,
         cells: &[(&[u8], i16, &ParsedCell, i64)],
         batch: &mut StoreBatch,
+        skip_cell_indices: bool,
     ) -> Result<()> {
         if cells.is_empty() {
             return Ok(());
@@ -32,28 +35,30 @@ impl BatchWriter {
                 data_size: cell.data_size,
             };
             batch.put_cell(tx_hash, *output_index, &info);
-            batch.put_cell_by_lock(
-                &cell.lock_script_hash,
-                *created_at_block,
-                tx_hash,
-                *output_index,
-            );
-            batch.put_cell_by_lock_code(
-                &cell.lock_code_hash,
-                *created_at_block,
-                tx_hash,
-                *output_index,
-            );
-            if let Some(ref type_hash) = cell.type_script_hash {
-                batch.put_cell_by_type(type_hash, *created_at_block, tx_hash, *output_index);
-            }
-            if let Some(ref type_code_hash) = cell.type_code_hash {
-                batch.put_cell_by_type_code(
-                    type_code_hash,
+            if !skip_cell_indices {
+                batch.put_cell_by_lock(
+                    &cell.lock_script_hash,
                     *created_at_block,
                     tx_hash,
                     *output_index,
                 );
+                batch.put_cell_by_lock_code(
+                    &cell.lock_code_hash,
+                    *created_at_block,
+                    tx_hash,
+                    *output_index,
+                );
+                if let Some(ref type_hash) = cell.type_script_hash {
+                    batch.put_cell_by_type(type_hash, *created_at_block, tx_hash, *output_index);
+                }
+                if let Some(ref type_code_hash) = cell.type_code_hash {
+                    batch.put_cell_by_type_code(
+                        type_code_hash,
+                        *created_at_block,
+                        tx_hash,
+                        *output_index,
+                    );
+                }
             }
         }
 
@@ -328,6 +333,7 @@ impl BatchWriter {
         preloaded_cells: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
         same_batch_cells: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
         batch: &mut StoreBatch,
+        skip_cell_indices: bool,
     ) -> Result<()> {
         if consumptions.is_empty() {
             return Ok(());
@@ -342,37 +348,137 @@ impl BatchWriter {
             if let Some(info) = info {
                 batch.put_consumed_cell(tx_hash, *output_index, info);
                 batch.delete_cell(tx_hash, *output_index);
-                batch.delete_cell_by_lock(
-                    &info.lock_script_hash,
-                    info.created_at_block,
-                    tx_hash,
-                    *output_index,
-                );
-                batch.delete_cell_by_lock_code(
-                    &info.lock_code_hash,
-                    info.created_at_block,
-                    tx_hash,
-                    *output_index,
-                );
-                if let Some(ref type_hash) = info.type_script_hash {
-                    batch.delete_cell_by_type(
-                        type_hash,
+                if !skip_cell_indices {
+                    batch.delete_cell_by_lock(
+                        &info.lock_script_hash,
                         info.created_at_block,
                         tx_hash,
                         *output_index,
                     );
-                }
-                if let Some(ref type_code_hash) = info.type_code_hash {
-                    batch.delete_cell_by_type_code(
-                        type_code_hash,
+                    batch.delete_cell_by_lock_code(
+                        &info.lock_code_hash,
                         info.created_at_block,
                         tx_hash,
                         *output_index,
                     );
+                    if let Some(ref type_hash) = info.type_script_hash {
+                        batch.delete_cell_by_type(
+                            type_hash,
+                            info.created_at_block,
+                            tx_hash,
+                            *output_index,
+                        );
+                    }
+                    if let Some(ref type_code_hash) = info.type_code_hash {
+                        batch.delete_cell_by_type_code(
+                            type_code_hash,
+                            info.created_at_block,
+                            tx_hash,
+                            *output_index,
+                        );
+                    }
                 }
             }
         }
 
         Ok(())
     }
+}
+
+/// Rebuild the 4 cell secondary index CFs by scanning all live cells.
+///
+/// This is called after bulk sync completes, when cell indices were skipped
+/// during sync to reduce write volume. Iterates CF_LIVE_CELLS and writes the
+/// corresponding entries into CELL_BY_LOCK, CELL_BY_TYPE, CELL_BY_LOCK_CODE,
+/// and CELL_BY_TYPE_CODE.
+pub fn rebuild_cell_indices(store: &CkbadgerStore) {
+    const BATCH_SIZE: usize = 50_000;
+    const LOG_INTERVAL: usize = 1_000_000;
+
+    info!("Cell index rebuild: scanning LIVE_CELLS");
+
+    let cf = store.cf_live_cells();
+    let mut batch = StoreBatch::new(store);
+    let mut count: usize = 0;
+    let mut last_log: usize = 0;
+    let start = std::time::Instant::now();
+
+    for item in store.iterator_cf(cf, rocksdb::IteratorMode::Start) {
+        let (key, value) = match item {
+            Ok(kv) => kv,
+            Err(e) => {
+                tracing::warn!("Cell index rebuild: iterator error: {}", e);
+                continue;
+            }
+        };
+
+        let (tx_hash, output_index) = keys::decode_outpoint(&key);
+        let info: LiveCellInfo = match bincode::deserialize(&value) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("Cell index rebuild: deserialize error: {}", e);
+                continue;
+            }
+        };
+
+        batch.put_cell_by_lock(
+            &info.lock_script_hash,
+            info.created_at_block,
+            &tx_hash,
+            output_index,
+        );
+        batch.put_cell_by_lock_code(
+            &info.lock_code_hash,
+            info.created_at_block,
+            &tx_hash,
+            output_index,
+        );
+        if let Some(ref type_hash) = info.type_script_hash {
+            batch.put_cell_by_type(type_hash, info.created_at_block, &tx_hash, output_index);
+        }
+        if let Some(ref type_code_hash) = info.type_code_hash {
+            batch.put_cell_by_type_code(
+                type_code_hash,
+                info.created_at_block,
+                &tx_hash,
+                output_index,
+            );
+        }
+
+        count += 1;
+        if count % BATCH_SIZE == 0 {
+            if let Err(e) = batch.commit() {
+                tracing::error!("Cell index rebuild: batch commit error: {}", e);
+                return;
+            }
+            batch = StoreBatch::new(store);
+        }
+        if count - last_log >= LOG_INTERVAL {
+            let elapsed = start.elapsed().as_secs();
+            let rate = if elapsed > 0 {
+                count as f64 / elapsed as f64
+            } else {
+                0.0
+            };
+            info!(
+                "Cell index rebuild: {} cells processed ({:.0} cells/s)",
+                count, rate
+            );
+            last_log = count;
+        }
+    }
+
+    // Commit remaining
+    if count % BATCH_SIZE != 0 {
+        if let Err(e) = batch.commit() {
+            tracing::error!("Cell index rebuild: final commit error: {}", e);
+            return;
+        }
+    }
+
+    let elapsed_secs = start.elapsed().as_secs();
+    info!(
+        "Cell index rebuild complete: {} cells indexed in {}s",
+        count, elapsed_secs
+    );
 }
