@@ -179,6 +179,26 @@ pub fn encode_spore_by_cluster_key(cluster_id: &[u8], spore_id: &[u8]) -> [u8; 6
     key
 }
 
+/// Activity key: lock_hash(32B) + block_num_desc(8B BE) + tx_idx(4B BE) = 44 bytes
+/// Uses descending block_num so newest activities come first in prefix scan.
+pub fn encode_activity_key(lock_hash: &[u8], block_num: i64, tx_idx: i32) -> Vec<u8> {
+    let block_desc = (i64::MAX - block_num).to_be_bytes();
+    let mut key = Vec::with_capacity(44);
+    key.extend_from_slice(&lock_hash[..32]);
+    key.extend_from_slice(&block_desc);
+    key.extend_from_slice(&tx_idx.to_be_bytes());
+    key
+}
+
+/// Decode block_num and tx_idx from an activity key.
+pub fn decode_activity_key(key: &[u8]) -> (Vec<u8>, i64, i32) {
+    let lock_hash = key[..32].to_vec();
+    let block_desc = i64::from_be_bytes(key[32..40].try_into().unwrap());
+    let block_num = i64::MAX - block_desc;
+    let tx_idx = i32::from_be_bytes(key[40..44].try_into().unwrap());
+    (lock_hash, block_num, tx_idx)
+}
+
 /// Sync meta keys
 pub mod sync_meta_keys {
     pub const TIP_BLOCK: &[u8] = b"tip_block";
@@ -267,6 +287,55 @@ mod tests {
         let full_key = encode_token_hourly_key(&type_hash, 999);
         assert_eq!(prefix.len(), 33);
         assert!(full_key.starts_with(&prefix));
+    }
+
+    // ---- Activity key ----
+
+    #[test]
+    fn test_activity_key_roundtrip() {
+        let lock_hash = [0xAAu8; 32];
+        for (block, idx) in [
+            (0i64, 0i32),
+            (1, 0),
+            (100, 5),
+            (1_000_000, 42),
+            (i64::MAX, 0),
+        ] {
+            let key = encode_activity_key(&lock_hash, block, idx);
+            assert_eq!(key.len(), 44);
+            let (decoded_hash, decoded_block, decoded_idx) = decode_activity_key(&key);
+            assert_eq!(decoded_hash, lock_hash.to_vec());
+            assert_eq!(decoded_block, block);
+            assert_eq!(decoded_idx, idx);
+        }
+    }
+
+    #[test]
+    fn test_activity_key_descending_sort_order() {
+        let lock_hash = [0xBBu8; 32];
+        let k1 = encode_activity_key(&lock_hash, 300, 0);
+        let k2 = encode_activity_key(&lock_hash, 200, 0);
+        let k3 = encode_activity_key(&lock_hash, 100, 0);
+        // Higher block_num should produce SMALLER key (descending)
+        assert!(k1 < k2);
+        assert!(k2 < k3);
+    }
+
+    #[test]
+    fn test_activity_key_prefix_is_lock_hash() {
+        let lock_hash = [0xCCu8; 32];
+        let key = encode_activity_key(&lock_hash, 500, 3);
+        assert!(key.starts_with(&lock_hash));
+    }
+
+    #[test]
+    fn test_activity_key_different_locks_differ() {
+        let lock_a = [0x01u8; 32];
+        let lock_b = [0x02u8; 32];
+        assert_ne!(
+            encode_activity_key(&lock_a, 100, 0),
+            encode_activity_key(&lock_b, 100, 0)
+        );
     }
 
     #[test]

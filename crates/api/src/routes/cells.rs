@@ -1368,6 +1368,7 @@ mod tests {
             type_script_hash: None,
             type_code_hash: None,
             data_size: 0,
+            occupied_capacity: 0,
         };
         let tx_hash = vec![3u8; 32];
         let resp = cell_info_to_response(&tx_hash, 0, &info);

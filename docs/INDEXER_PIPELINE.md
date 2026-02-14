@@ -119,6 +119,7 @@ Block N arrives
 │     T5: Token transfers (UDT/NFT/Spore)                       │
 │     T6: Spore NFT data                                        │
 │     T7: Statistics + block-level aggregation                   │
+│     T_ACT: Per-owner activity entries (see ACTIVITY_SYSTEM.md)│
 │  6. Finalize: block headers + stats commit                    │
 │  7. Update sync_status (LAST - crash recovery)                │
 └──────────────────────────────────────────────────────────────┘
@@ -225,6 +226,7 @@ Both modes MUST produce identical database state. This is enforced by:
 | `insert_token_transfer()`         | Yes        | Yes      |
 | `insert_nft_transfer()`           | Yes        | Yes      |
 | `insert_dob_transfer()`           | Yes        | Yes      |
+| `build_activities_for_block()`    | Yes        | Yes      |
 | `update_script_usage()`           | Yes        | Yes      |
 | `flush_batch_stats()`             | Yes        | Yes      |
 
@@ -439,4 +441,4 @@ On startup, `find_last_consistent_block()` validates store consistency by compar
 
 ---
 
-_Last updated: 2026-02-11_
+_Last updated: 2026-02-14_

@@ -23,6 +23,19 @@ impl BatchWriter {
         }
 
         for (tx_hash, output_index, cell, created_at_block) in cells {
+            // Compute occupied capacity:
+            // occupied = (8 + lock_script_size + type_script_size + data_size) * 100_000_000
+            // lock_script_size = 32 (code_hash) + 1 (hash_type) + lock_args.len()
+            // type_script_size = if type_script { 32 + 1 + type_args.len() } else { 0 }
+            let lock_script_size = 32 + 1 + cell.lock_args.len() as i64;
+            let type_script_size = cell
+                .type_args
+                .as_ref()
+                .map(|args| 32 + 1 + args.len() as i64)
+                .unwrap_or(0);
+            let occupied_capacity =
+                (8 + lock_script_size + type_script_size + cell.data_size as i64) * 100_000_000;
+
             let info = LiveCellInfo {
                 capacity: cell.capacity,
                 created_at_block: *created_at_block,
@@ -33,6 +46,7 @@ impl BatchWriter {
                 type_script_hash: cell.type_script_hash.clone(),
                 type_code_hash: cell.type_code_hash.clone(),
                 data_size: cell.data_size,
+                occupied_capacity,
             };
             batch.put_cell(tx_hash, *output_index, &info);
             if !skip_cell_indices {

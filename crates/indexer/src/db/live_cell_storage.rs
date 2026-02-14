@@ -55,6 +55,9 @@ pub struct LiveCellInfo {
     pub type_code_hash: Option<Vec<u8>>,
     /// Size of cell data in bytes.
     pub data_size: i32,
+    /// Occupied capacity in shannons (minimum CKB locked for this cell's structure).
+    #[serde(default)]
+    pub occupied_capacity: i64,
 }
 
 impl LiveCellInfo {
@@ -140,6 +143,7 @@ impl CompactConsumedCellInfo {
             type_script_hash: None,
             type_code_hash: self.type_code_hash.clone(),
             data_size: self.data_size,
+            occupied_capacity: 0,
         }
     }
 }

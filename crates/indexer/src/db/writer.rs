@@ -2,6 +2,7 @@
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::manual_is_multiple_of)]
 
+pub mod activities;
 mod addresses;
 mod blocks;
 mod cells;

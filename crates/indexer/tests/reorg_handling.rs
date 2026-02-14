@@ -1,6 +1,7 @@
 //! Integration tests for chain reorganization (rollback) handling via ckbadger-store.
 
 use ckbadger_store::batch::StoreBatch;
+use ckbadger_store::types::ActivityEntry;
 use ckbadger_store::CkbadgerStore;
 use ckbadger_store::{
     CachedBlockHeader, DeepForkInfo, LiveCellInfo, RollbackResult, SecondaryIssuance, TxIndexEntry,
@@ -51,6 +52,7 @@ fn make_cell(block_num: i64, lock_hash: &[u8]) -> LiveCellInfo {
         type_script_hash: None,
         type_code_hash: None,
         data_size: 0,
+        occupied_capacity: 0,
     }
 }
 
@@ -242,4 +244,51 @@ fn test_deep_fork_flag() {
     // Clear deep fork
     store.clear_deep_fork().unwrap();
     assert!(!store.has_unresolved_deep_fork().unwrap());
+}
+
+#[test]
+fn test_rollback_removes_activities() {
+    let store = setup_store();
+    let lock_hash = vec![0xAA; 32];
+
+    // Insert activities at blocks 100, 200, 300, 400, 500
+    let mut batch = StoreBatch::new(&store);
+    for i in 1..=5 {
+        let block = i * 100;
+        let entry = ActivityEntry {
+            tx_hash: vec![i as u8; 32],
+            block_number: block,
+            tx_index: 0,
+            timestamp: 1_700_000_000 + block,
+            ckb_delta: block as i128 * 100_000_000,
+            occupied_delta: 0,
+            is_cellbase: false,
+            asset_changes: vec![],
+            peers: vec![],
+        };
+        batch.put_activity(&lock_hash, block, 0, &entry);
+    }
+    batch.commit().unwrap();
+
+    // Verify all 5 exist
+    let before = store.list_activities(&lock_hash, 100, None).unwrap();
+    assert_eq!(before.len(), 5);
+
+    // Rollback to block 300: blocks 400, 500 should be removed
+    // Need to also insert block headers so rollback_to_block works
+    let mut batch = StoreBatch::new(&store);
+    for i in 1..=5 {
+        let block = i * 100;
+        batch.put_block_header(block, &make_header(block));
+    }
+    batch.commit().unwrap();
+
+    store.rollback_to_block(300).unwrap();
+
+    let after = store.list_activities(&lock_hash, 100, None).unwrap();
+    assert_eq!(after.len(), 3, "should have 3 activities after rollback");
+    // Remaining are blocks 300, 200, 100 (descending)
+    assert_eq!(after[0].0, 300);
+    assert_eq!(after[1].0, 200);
+    assert_eq!(after[2].0, 100);
 }

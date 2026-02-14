@@ -21,6 +21,8 @@ pub struct LiveCellInfo {
     pub type_script_hash: Option<Vec<u8>>,
     pub type_code_hash: Option<Vec<u8>>,
     pub data_size: i32,
+    #[serde(default)]
+    pub occupied_capacity: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,6 +62,7 @@ impl CompactConsumedCellInfo {
             type_script_hash: None,
             type_code_hash: self.type_code_hash.clone(),
             data_size: self.data_size,
+            occupied_capacity: 0,
         }
     }
 }
@@ -540,9 +543,190 @@ pub struct Cursor {
     pub last_key: Vec<u8>,
 }
 
+// ============================================
+// Group I: Activities
+// ============================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActivityEntry {
+    pub tx_hash: Vec<u8>,
+    pub block_number: i64,
+    pub tx_index: i32,
+    pub timestamp: i64,
+    /// Net CKB change in shannons.
+    pub ckb_delta: i128,
+    /// Net occupied capacity change in shannons.
+    pub occupied_delta: i64,
+    pub is_cellbase: bool,
+    pub asset_changes: Vec<AssetChange>,
+    /// Lock hashes of other parties in this transaction.
+    pub peers: Vec<Vec<u8>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum AssetChange {
+    Token {
+        type_script_hash: Vec<u8>,
+        delta: i128,
+        symbol: Option<String>,
+        decimals: Option<u8>,
+    },
+    Dob {
+        dob_id: Vec<u8>,
+        standard: String,
+        action: AssetAction,
+    },
+    Nft {
+        nft_id: Vec<u8>,
+        standard: String,
+        action: AssetAction,
+    },
+    DaoDeposit {
+        capacity: i64,
+    },
+    DaoWithdrawRequest {
+        capacity: i64,
+        deposit_block: i64,
+    },
+    DaoWithdrawComplete {
+        capacity: i64,
+        compensation: i64,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum AssetAction {
+    Mint,
+    Transfer,
+    Burn,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- ActivityEntry ----
+
+    #[test]
+    fn test_activity_entry_roundtrip() {
+        let entry = ActivityEntry {
+            tx_hash: vec![0x01u8; 32],
+            block_number: 12345,
+            tx_index: 3,
+            timestamp: 1_700_000_000,
+            ckb_delta: -500_00000000,
+            occupied_delta: 6100_00000000,
+            is_cellbase: false,
+            asset_changes: vec![
+                AssetChange::Token {
+                    type_script_hash: vec![0xAA; 32],
+                    delta: 1_000_000,
+                    symbol: Some("SEAL".to_string()),
+                    decimals: Some(8),
+                },
+                AssetChange::DaoDeposit {
+                    capacity: 1_000_000_000_000,
+                },
+            ],
+            peers: vec![vec![0xBB; 32], vec![0xCC; 32]],
+        };
+        let bytes = bincode::serialize(&entry).unwrap();
+        let decoded: ActivityEntry = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.tx_hash, entry.tx_hash);
+        assert_eq!(decoded.block_number, 12345);
+        assert_eq!(decoded.ckb_delta, -500_00000000);
+        assert_eq!(decoded.occupied_delta, 6100_00000000);
+        assert!(!decoded.is_cellbase);
+        assert_eq!(decoded.asset_changes.len(), 2);
+        assert_eq!(decoded.peers.len(), 2);
+    }
+
+    #[test]
+    fn test_activity_entry_all_asset_change_variants() {
+        let entry = ActivityEntry {
+            tx_hash: vec![0x02u8; 32],
+            block_number: 100,
+            tx_index: 0,
+            timestamp: 1_700_000_000,
+            ckb_delta: 0,
+            occupied_delta: 0,
+            is_cellbase: true,
+            asset_changes: vec![
+                AssetChange::Token {
+                    type_script_hash: vec![0xAA; 32],
+                    delta: -999,
+                    symbol: None,
+                    decimals: None,
+                },
+                AssetChange::Dob {
+                    dob_id: vec![0xBB; 32],
+                    standard: "spore".to_string(),
+                    action: AssetAction::Mint,
+                },
+                AssetChange::Nft {
+                    nft_id: vec![0xCC; 20],
+                    standard: "m-nft".to_string(),
+                    action: AssetAction::Transfer,
+                },
+                AssetChange::DaoDeposit { capacity: 500 },
+                AssetChange::DaoWithdrawRequest {
+                    capacity: 600,
+                    deposit_block: 50,
+                },
+                AssetChange::DaoWithdrawComplete {
+                    capacity: 700,
+                    compensation: 42,
+                },
+            ],
+            peers: vec![],
+        };
+        let bytes = bincode::serialize(&entry).unwrap();
+        let decoded: ActivityEntry = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.asset_changes.len(), 6);
+        assert!(decoded.is_cellbase);
+        assert!(decoded.peers.is_empty());
+
+        // Verify each variant survived roundtrip
+        match &decoded.asset_changes[1] {
+            AssetChange::Dob {
+                standard, action, ..
+            } => {
+                assert_eq!(standard, "spore");
+                assert!(matches!(action, AssetAction::Mint));
+            }
+            _ => panic!("expected Dob variant"),
+        }
+        match &decoded.asset_changes[5] {
+            AssetChange::DaoWithdrawComplete {
+                capacity,
+                compensation,
+            } => {
+                assert_eq!(*capacity, 700);
+                assert_eq!(*compensation, 42);
+            }
+            _ => panic!("expected DaoWithdrawComplete variant"),
+        }
+    }
+
+    #[test]
+    fn test_activity_entry_empty_roundtrip() {
+        let entry = ActivityEntry {
+            tx_hash: vec![0x00; 32],
+            block_number: 0,
+            tx_index: 0,
+            timestamp: 0,
+            ckb_delta: 0,
+            occupied_delta: 0,
+            is_cellbase: false,
+            asset_changes: vec![],
+            peers: vec![],
+        };
+        let bytes = bincode::serialize(&entry).unwrap();
+        let decoded: ActivityEntry = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.ckb_delta, 0);
+        assert!(decoded.asset_changes.is_empty());
+        assert!(decoded.peers.is_empty());
+    }
 
     // ---- DobStandard ----
 

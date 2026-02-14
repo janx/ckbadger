@@ -317,6 +317,20 @@ impl<'a> StoreBatch<'a> {
         self.batch.put_cf(self.store.cf_nft_data(), id, &value);
     }
 
+    // ---- Activities ----
+
+    pub fn put_activity(
+        &mut self,
+        lock_hash: &[u8],
+        block_num: i64,
+        tx_idx: i32,
+        entry: &ActivityEntry,
+    ) {
+        let key = keys::encode_activity_key(lock_hash, block_num, tx_idx);
+        let value = bincode::serialize(entry).expect("serialize ActivityEntry");
+        self.batch.put_cf(self.store.cf_activities(), key, &value);
+    }
+
     // ---- Statistics ----
 
     pub fn put_stats(&mut self, key: &[u8], value: &[u8]) {
@@ -424,6 +438,7 @@ mod tests {
             type_script_hash: None,
             type_code_hash: None,
             data_size: 0,
+            occupied_capacity: 0,
         };
 
         let mut batch = StoreBatch::new(&store);
@@ -468,5 +483,123 @@ mod tests {
         let key = keys::encode_token_hourly_key(&type_hash, 500_000);
         let val = store.get_cf(store.cf_stats(), &key).unwrap().unwrap();
         assert_eq!(i64::from_le_bytes(val[..8].try_into().unwrap()), 7);
+    }
+
+    fn make_activity(block_num: i64, tx_idx: i32, delta: i128) -> ActivityEntry {
+        ActivityEntry {
+            tx_hash: vec![block_num as u8; 32],
+            block_number: block_num,
+            tx_index: tx_idx,
+            timestamp: 1_700_000_000 + block_num,
+            ckb_delta: delta,
+            occupied_delta: 0,
+            is_cellbase: tx_idx == 0,
+            asset_changes: vec![],
+            peers: vec![],
+        }
+    }
+
+    #[test]
+    fn test_put_and_list_activities() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let lock = [0xAAu8; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_activity(&lock, 100, 0, &make_activity(100, 0, 500));
+        batch.put_activity(&lock, 200, 0, &make_activity(200, 0, -300));
+        batch.put_activity(&lock, 300, 1, &make_activity(300, 1, 1000));
+        batch.commit().unwrap();
+
+        let results = store.list_activities(&lock, 100, None).unwrap();
+        assert_eq!(results.len(), 3);
+        // Descending block order: 300, 200, 100
+        assert_eq!(results[0].0, 300);
+        assert_eq!(results[0].2.ckb_delta, 1000);
+        assert_eq!(results[1].0, 200);
+        assert_eq!(results[1].2.ckb_delta, -300);
+        assert_eq!(results[2].0, 100);
+        assert_eq!(results[2].2.ckb_delta, 500);
+    }
+
+    #[test]
+    fn test_list_activities_with_limit() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let lock = [0xBBu8; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        for i in 1..=5 {
+            batch.put_activity(&lock, i * 100, 0, &make_activity(i * 100, 0, i as i128));
+        }
+        batch.commit().unwrap();
+
+        let results = store.list_activities(&lock, 2, None).unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].0, 500); // newest first
+        assert_eq!(results[1].0, 400);
+    }
+
+    #[test]
+    fn test_list_activities_cursor_pagination() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let lock = [0xCCu8; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        for i in 1..=5 {
+            batch.put_activity(&lock, i * 100, 0, &make_activity(i * 100, 0, i as i128));
+        }
+        batch.commit().unwrap();
+
+        // Page 1: first 2
+        let page1 = store.list_activities(&lock, 2, None).unwrap();
+        assert_eq!(page1.len(), 2);
+        assert_eq!(page1[0].0, 500);
+        assert_eq!(page1[1].0, 400);
+
+        // Page 2: cursor from last item of page1
+        let cursor = (page1[1].0, page1[1].1);
+        let page2 = store.list_activities(&lock, 2, Some(cursor)).unwrap();
+        assert_eq!(page2.len(), 2);
+        assert_eq!(page2[0].0, 300);
+        assert_eq!(page2[1].0, 200);
+
+        // Page 3: last page
+        let cursor = (page2[1].0, page2[1].1);
+        let page3 = store.list_activities(&lock, 2, Some(cursor)).unwrap();
+        assert_eq!(page3.len(), 1);
+        assert_eq!(page3[0].0, 100);
+    }
+
+    #[test]
+    fn test_list_activities_different_locks_isolated() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let lock_a = [0x01u8; 32];
+        let lock_b = [0x02u8; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_activity(&lock_a, 100, 0, &make_activity(100, 0, 10));
+        batch.put_activity(&lock_a, 200, 0, &make_activity(200, 0, 20));
+        batch.put_activity(&lock_b, 100, 0, &make_activity(100, 0, 30));
+        batch.commit().unwrap();
+
+        let a = store.list_activities(&lock_a, 100, None).unwrap();
+        assert_eq!(a.len(), 2);
+
+        let b = store.list_activities(&lock_b, 100, None).unwrap();
+        assert_eq!(b.len(), 1);
+        assert_eq!(b[0].2.ckb_delta, 30);
+    }
+
+    #[test]
+    fn test_list_activities_empty() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let lock = [0xFFu8; 32];
+
+        let results = store.list_activities(&lock, 100, None).unwrap();
+        assert!(results.is_empty());
     }
 }

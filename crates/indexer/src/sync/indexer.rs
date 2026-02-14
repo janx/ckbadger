@@ -819,6 +819,7 @@ impl Indexer {
                                 type_script_hash: cached.type_script_hash.clone(),
                                 type_code_hash: cached.type_code_hash.clone(),
                                 data_size: cached.data_size,
+                                occupied_capacity: 0,
                             },
                         );
                     }
@@ -886,6 +887,15 @@ impl Indexer {
                 let mut batch_cell_infos: HashMap<(Vec<u8>, i16), LiveCellInfo> = HashMap::new();
                 for tx_data in &all_tx_data {
                     for (output_index, cell) in tx_data.cells.iter().enumerate() {
+                        let lock_script_size = 32 + 1 + cell.lock_args.len() as i64;
+                        let type_script_size = cell
+                            .type_args
+                            .as_ref()
+                            .map(|args| 32 + 1 + args.len() as i64)
+                            .unwrap_or(0);
+                        let occupied_capacity =
+                            (8 + lock_script_size + type_script_size + cell.data_size as i64)
+                                * 100_000_000;
                         batch_cell_infos.insert(
                             (tx_data.hash.to_vec(), output_index as i16),
                             LiveCellInfo {
@@ -898,6 +908,7 @@ impl Indexer {
                                 type_script_hash: cell.type_script_hash.clone(),
                                 type_code_hash: cell.type_code_hash.clone(),
                                 data_size: cell.data_size,
+                                occupied_capacity,
                             },
                         );
                     }
@@ -1726,6 +1737,14 @@ impl Indexer {
         let mut batch_cell_infos: HashMap<(Vec<u8>, i16), LiveCellInfo> = HashMap::new();
         for tx_data in &all_tx_data {
             for (output_index, cell) in tx_data.cells.iter().enumerate() {
+                let lock_script_size = 32 + 1 + cell.lock_args.len() as i64;
+                let type_script_size = cell
+                    .type_args
+                    .as_ref()
+                    .map(|args| 32 + 1 + args.len() as i64)
+                    .unwrap_or(0);
+                let occupied_capacity =
+                    (8 + lock_script_size + type_script_size + cell.data_size as i64) * 100_000_000;
                 batch_cell_infos.insert(
                     (tx_data.hash.to_vec(), output_index as i16),
                     LiveCellInfo {
@@ -1738,6 +1757,7 @@ impl Indexer {
                         type_script_hash: cell.type_script_hash.clone(),
                         type_code_hash: cell.type_code_hash.clone(),
                         data_size: cell.data_size,
+                        occupied_capacity,
                     },
                 );
             }
@@ -1760,6 +1780,7 @@ impl Indexer {
                         type_script_hash: cached.type_script_hash.clone(),
                         type_code_hash: cached.type_code_hash.clone(),
                         data_size: cached.data_size,
+                        occupied_capacity: 0,
                     },
                 );
             }
@@ -3327,7 +3348,7 @@ impl Indexer {
 
         let t_write = Instant::now();
         let mut batch_stats;
-        let mut thread_times: Option<[f64; 6]> = None;
+        let mut thread_times: Option<[f64; 7]> = None;
         if bulk_sync_mode {
             // Parallel write path: each thread writes to its own StoreBatch and commits independently.
             // DAO/UDT/addr/script DB reads are pre-fetched above via rayon::join, so threads only do writes.
@@ -3337,7 +3358,7 @@ impl Indexer {
             let writer = &self.writer;
 
             let tt;
-            (batch_stats, tt) = std::thread::scope(|s| -> Result<(BatchStats, [f64; 6])> {
+            (batch_stats, tt) = std::thread::scope(|s| -> Result<(BatchStats, [f64; 7])> {
                 // T1: Cells + Consumption (index CFs deferred to post-bulk rebuild)
                 // CFs: LIVE_CELLS, CONSUMED_CELLS
                 let h1 = s.spawn(|| -> Result<f64> {
@@ -3884,13 +3905,103 @@ impl Indexer {
                     Ok((stats, t.elapsed().as_secs_f64() * 1000.0))
                 });
 
+                // T_ACT: Activity builder (writes only CF_ACTIVITIES — no conflicts)
+                let h_act = s.spawn(|| -> Result<f64> {
+                    let t = Instant::now();
+                    let mut batch = StoreBatch::new(store);
+                    let token_info_cache: HashMap<Vec<u8>, (Option<String>, Option<u8>)> =
+                        HashMap::new();
+                    let mut block_tx_idx = 0usize;
+                    for parsed in all_parsed_blocks {
+                        let tx_count = parsed.transactions_count as usize;
+                        let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count];
+                        block_tx_idx += tx_count;
+
+                        let tx_views: Vec<crate::db::writer::activities::TxView<'_>> = tx_slice
+                            .iter()
+                            .map(|td| {
+                                let inputs: Vec<crate::db::writer::activities::InputCellView> =
+                                    if td.is_cellbase {
+                                        Vec::new()
+                                    } else {
+                                        td.inputs
+                                            .iter()
+                                            .map(|inp| {
+                                                let key = (
+                                                    inp.previous_tx_hash.to_vec(),
+                                                    inp.previous_output_index as i16,
+                                                );
+                                                let cell_info = input_cell_info
+                                                    .get(&key)
+                                                    .or_else(|| batch_cell_infos.get(&key));
+                                                if let Some(info) = cell_info {
+                                                    crate::db::writer::activities::InputCellView {
+                                                        lock_script_hash: info
+                                                            .lock_script_hash
+                                                            .clone(),
+                                                        capacity: info.capacity,
+                                                        occupied_capacity: info.occupied_capacity,
+                                                        type_code_hash: info.type_code_hash.clone(),
+                                                        type_script_hash: info
+                                                            .type_script_hash
+                                                            .clone(),
+                                                        type_args: None,
+                                                        data: Vec::new(),
+                                                        data_size: info.data_size,
+                                                    }
+                                                } else {
+                                                    crate::db::writer::activities::InputCellView {
+                                                        lock_script_hash: Vec::new(),
+                                                        capacity: 0,
+                                                        occupied_capacity: 0,
+                                                        type_code_hash: None,
+                                                        type_script_hash: None,
+                                                        type_args: None,
+                                                        data: Vec::new(),
+                                                        data_size: 0,
+                                                    }
+                                                }
+                                            })
+                                            .collect()
+                                    };
+                                crate::db::writer::activities::TxView {
+                                    tx_hash: &td.hash,
+                                    tx_index: td.tx_index,
+                                    block_number: parsed.number,
+                                    timestamp: parsed.timestamp.timestamp_millis(),
+                                    is_cellbase: td.is_cellbase,
+                                    inputs,
+                                    outputs: &td.cells,
+                                    outputs_data: &td.outputs_data,
+                                }
+                            })
+                            .collect();
+
+                        let activities = crate::db::writer::activities::build_activities_for_block(
+                            &tx_views,
+                            &token_info_cache,
+                        );
+                        for (lock_hash, entry) in activities {
+                            batch.put_activity(
+                                &lock_hash,
+                                entry.block_number,
+                                entry.tx_index,
+                                &entry,
+                            );
+                        }
+                    }
+                    batch.commit_no_wal()?;
+                    Ok(t.elapsed().as_secs_f64() * 1000.0)
+                });
+
                 let t1_ms = h1.join().expect("T1 panicked")?;
                 let t2_ms = h2.join().expect("T2 panicked")?;
                 let t4_ms = h4.join().expect("T4 panicked")?;
                 let t5_ms = h5.join().expect("T5 panicked")?;
                 let t6_ms = h6.join().expect("T6 panicked")?;
                 let (stats, t7_ms) = h7.join().expect("T7 panicked")?;
-                Ok((stats, [t1_ms, t2_ms, t4_ms, t5_ms, t6_ms, t7_ms]))
+                let t_act_ms = h_act.join().expect("T_ACT panicked")?;
+                Ok((stats, [t1_ms, t2_ms, t4_ms, t5_ms, t6_ms, t7_ms, t_act_ms]))
             })?;
             thread_times = Some(tt);
         } else {
@@ -4551,6 +4662,87 @@ impl Indexer {
                 }
             }
 
+            // Activity writes (live sync)
+            {
+                let token_info_cache: HashMap<Vec<u8>, (Option<String>, Option<u8>)> =
+                    HashMap::new();
+                let mut block_tx_idx = 0usize;
+                for parsed in all_parsed_blocks {
+                    let tx_count = parsed.transactions_count as usize;
+                    let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count];
+                    block_tx_idx += tx_count;
+
+                    let tx_views: Vec<crate::db::writer::activities::TxView<'_>> = tx_slice
+                        .iter()
+                        .map(|td| {
+                            let inputs: Vec<crate::db::writer::activities::InputCellView> =
+                                if td.is_cellbase {
+                                    Vec::new()
+                                } else {
+                                    td.inputs
+                                        .iter()
+                                        .map(|inp| {
+                                            let key = (
+                                                inp.previous_tx_hash.to_vec(),
+                                                inp.previous_output_index as i16,
+                                            );
+                                            let cell_info = input_cell_info
+                                                .get(&key)
+                                                .or_else(|| batch_cell_infos.get(&key));
+                                            if let Some(info) = cell_info {
+                                                crate::db::writer::activities::InputCellView {
+                                                    lock_script_hash: info.lock_script_hash.clone(),
+                                                    capacity: info.capacity,
+                                                    occupied_capacity: info.occupied_capacity,
+                                                    type_code_hash: info.type_code_hash.clone(),
+                                                    type_script_hash: info.type_script_hash.clone(),
+                                                    type_args: None,
+                                                    data: Vec::new(),
+                                                    data_size: info.data_size,
+                                                }
+                                            } else {
+                                                crate::db::writer::activities::InputCellView {
+                                                    lock_script_hash: Vec::new(),
+                                                    capacity: 0,
+                                                    occupied_capacity: 0,
+                                                    type_code_hash: None,
+                                                    type_script_hash: None,
+                                                    type_args: None,
+                                                    data: Vec::new(),
+                                                    data_size: 0,
+                                                }
+                                            }
+                                        })
+                                        .collect()
+                                };
+                            crate::db::writer::activities::TxView {
+                                tx_hash: &td.hash,
+                                tx_index: td.tx_index,
+                                block_number: parsed.number,
+                                timestamp: parsed.timestamp.timestamp_millis(),
+                                is_cellbase: td.is_cellbase,
+                                inputs,
+                                outputs: &td.cells,
+                                outputs_data: &td.outputs_data,
+                            }
+                        })
+                        .collect();
+
+                    let activities = crate::db::writer::activities::build_activities_for_block(
+                        &tx_views,
+                        &token_info_cache,
+                    );
+                    for (lock_hash, entry) in activities {
+                        data_batch.put_activity(
+                            &lock_hash,
+                            entry.block_number,
+                            entry.tx_index,
+                            &entry,
+                        );
+                    }
+                }
+            }
+
             // Commit all data writes in a single batch
             data_batch.commit()?;
 
@@ -4751,7 +4943,7 @@ impl Indexer {
             .filter(|t| !t.is_cellbase)
             .map(|t| t.inputs.len())
             .sum();
-        if let Some([t1, t2, t4, t5, t6, t7]) = thread_times {
+        if let Some([t1, t2, t4, t5, t6, t7, t_act]) = thread_times {
             info!(
                 precompute_ms = format!("{:.1}", precompute_ms),
                 prefetch_ms = format!("{:.1}", prefetch_ms),
@@ -4763,6 +4955,7 @@ impl Indexer {
                 t5_ms = format!("{:.1}", t5),
                 t6_ms = format!("{:.1}", t6),
                 t7_ms = format!("{:.1}", t7),
+                t_act_ms = format!("{:.1}", t_act),
                 txs = batch_tx_count,
                 cells = batch_cell_count,
                 inputs = batch_input_count,

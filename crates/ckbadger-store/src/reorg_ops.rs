@@ -132,6 +132,19 @@ impl CkbadgerStore {
             }
         }
 
+        // 9a. Delete activities entries > rollback_to
+        // Key: lock_hash(32) + block_num_desc(8) + tx_idx(4) = 44
+        let iter = self.iterator_cf(self.cf_activities(), IteratorMode::Start);
+        for item in iter.flatten() {
+            let (key, _) = item;
+            if key.len() == 44 {
+                let (_, block_num, _) = keys::decode_activity_key(&key);
+                if block_num > rollback_to {
+                    batch.delete_cf(self.cf_activities(), &key);
+                }
+            }
+        }
+
         // 9. Delete token_transfers entries > rollback_to
         // Key: type_hash(32) + block_num_desc(8) + tx_idx(4) = 44
         let iter = self.iterator_cf(self.cf_token_transfers(), IteratorMode::Start);

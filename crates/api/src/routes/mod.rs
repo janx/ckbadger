@@ -1,3 +1,4 @@
+mod activities;
 pub mod assets;
 mod blocks;
 mod cells;
@@ -20,6 +21,7 @@ use crate::AppState;
 
 pub fn api_routes() -> Router<Arc<AppState>> {
     Router::new()
+        .merge(activities::routes())
         .merge(assets::routes())
         .merge(blocks::routes())
         .merge(transactions::routes())

@@ -41,6 +41,7 @@ pub const CF_SPORE_BY_CLUSTER: &str = "spore_by_cluster";
 pub const CF_CELL_BY_LOCK_CODE: &str = "cell_by_lock_code";
 pub const CF_CELL_BY_TYPE_CODE: &str = "cell_by_type_code";
 pub const CF_TOKEN_TRANSFERS: &str = "token_transfers";
+pub const CF_ACTIVITIES: &str = "activities";
 
 /// All column family names, used during DB open.
 pub const ALL_CFS: &[&str] = &[
@@ -71,6 +72,7 @@ pub const ALL_CFS: &[&str] = &[
     CF_TASKS_INDEX,
     CF_SPORE_BY_CLUSTER,
     CF_TOKEN_TRANSFERS,
+    CF_ACTIVITIES,
 ];
 
 pub struct CkbadgerStore {
@@ -157,6 +159,7 @@ impl CkbadgerStore {
         CF_ADDR_BALANCE,
         CF_ADDR_TXS,
         CF_DAO_DEPOSITS,
+        CF_ACTIVITIES,
     ];
 
     fn is_mega_write_cf(name: &str) -> bool {
@@ -333,6 +336,9 @@ impl CkbadgerStore {
     }
     pub fn cf_token_transfers(&self) -> &ColumnFamily {
         self.cf(CF_TOKEN_TRANSFERS)
+    }
+    pub fn cf_activities(&self) -> &ColumnFamily {
+        self.cf(CF_ACTIVITIES)
     }
 
     // ---- Raw DB operations ----

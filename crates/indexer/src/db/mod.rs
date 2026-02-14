@@ -1,6 +1,6 @@
 pub mod live_cell_storage;
 mod repository;
-mod writer;
+pub(crate) mod writer;
 
 pub use live_cell_storage::{
     CachedBlockHeader, ConsumedCellRecord, LiveCellInfo, LiveCellStorage, MemoryStats,
