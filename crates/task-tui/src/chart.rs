@@ -13,10 +13,20 @@ impl ChartStats {
         if history.is_empty() {
             return None;
         }
-        let min = history.iter().cloned().fold(f64::INFINITY, f64::min);
-        let max = history.iter().cloned().fold(0.0_f64, f64::max);
         let current = *history.back().unwrap_or(&0.0);
-        let avg = history.iter().sum::<f64>() / history.len() as f64;
+        // Filter out zero values for meaningful min/avg stats
+        let non_zero: Vec<f64> = history.iter().copied().filter(|&v| v > 0.0).collect();
+        if non_zero.is_empty() {
+            return Some(Self {
+                min: 0.0,
+                max: 0.0,
+                current,
+                avg: 0.0,
+            });
+        }
+        let min = non_zero.iter().cloned().fold(f64::INFINITY, f64::min);
+        let max = non_zero.iter().cloned().fold(0.0_f64, f64::max);
+        let avg = non_zero.iter().sum::<f64>() / non_zero.len() as f64;
         Some(Self {
             min,
             max,

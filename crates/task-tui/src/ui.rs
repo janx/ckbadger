@@ -79,7 +79,7 @@ pub struct App {
     last_sample: Instant,
     dialog: Option<DialogType>,
     dialog_selection: usize,
-    status_message: Option<String>,
+    status_message: Option<(String, Instant)>,
     rate_history: VecDeque<f64>,
     db_write_history: VecDeque<f64>,
     chart_mode: ChartMode,
@@ -170,11 +170,11 @@ impl App {
     }
 
     pub fn scroll_detail_up(&mut self) {
-        self.detail_scroll = self.detail_scroll.saturating_add(1);
+        self.detail_scroll = self.detail_scroll.saturating_sub(1);
     }
 
     pub fn scroll_detail_down(&mut self) {
-        self.detail_scroll = self.detail_scroll.saturating_sub(1);
+        self.detail_scroll = self.detail_scroll.saturating_add(1);
     }
 
     #[allow(dead_code)]
@@ -419,7 +419,7 @@ impl App {
                     _ => return Ok(()),
                 };
                 let id = self.db.create_task(&builder).await?;
-                self.status_message = Some(format!("Created task: {}", id));
+                self.status_message = Some((format!("Created task: {}", id), Instant::now()));
                 self.dialog = None;
                 self.refresh().await?;
             }
@@ -435,7 +435,7 @@ impl App {
         if let Some(task) = self.selected_task() {
             let id = task.id;
             if self.db.cancel_task(id).await? {
-                self.status_message = Some(format!("Cancelled task: {}", id));
+                self.status_message = Some((format!("Cancelled task: {}", id), Instant::now()));
                 self.refresh().await?;
             }
         }
@@ -446,7 +446,7 @@ impl App {
         if let Some(task) = self.selected_task() {
             let id = task.id;
             if self.db.pause_task(id).await? {
-                self.status_message = Some(format!("Paused task: {}", id));
+                self.status_message = Some((format!("Paused task: {}", id), Instant::now()));
                 self.refresh().await?;
             }
         }
@@ -459,11 +459,11 @@ impl App {
             let status = task.status.as_str();
             if status == "paused" {
                 if self.db.resume_task(id).await? {
-                    self.status_message = Some(format!("Resumed task: {}", id));
+                    self.status_message = Some((format!("Resumed task: {}", id), Instant::now()));
                     self.refresh().await?;
                 }
             } else if status == "failed" && self.db.retry_task(id).await? {
-                self.status_message = Some(format!("Retrying task: {}", id));
+                self.status_message = Some((format!("Retrying task: {}", id), Instant::now()));
                 self.refresh().await?;
             }
         }
@@ -474,7 +474,7 @@ impl App {
         if let Some(task) = self.selected_task() {
             let id = task.id;
             if self.db.delete_task(id).await? {
-                self.status_message = Some(format!("Deleted task: {}", id));
+                self.status_message = Some((format!("Deleted task: {}", id), Instant::now()));
                 self.refresh().await?;
             }
         }
@@ -794,7 +794,7 @@ fn draw_rate_chart_full(f: &mut Frame, app: &App, area: Rect) {
         }
     }
 
-    let samples = app.rate_history.len();
+    let samples = history.len();
     let duration = if samples >= 3600 {
         "1h".to_string()
     } else if samples >= 60 {
@@ -949,7 +949,12 @@ fn draw_rate_chart_compact(f: &mut Frame, app: &App, area: Rect) {
         .border_style(Style::default().fg(COLOR_BORDER))
         .title(chart_title(app));
 
-    if app.rate_history.is_empty() {
+    let history = match app.chart_mode {
+        ChartMode::SyncRate => &app.rate_history,
+        ChartMode::DbWrite => &app.db_write_history,
+    };
+
+    if history.is_empty() {
         let msg = Paragraph::new("Collecting data...")
             .style(Style::default().fg(COLOR_MUTED))
             .block(block);
@@ -960,11 +965,7 @@ fn draw_rate_chart_compact(f: &mut Frame, app: &App, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let chart_result = render_bar_chart(
-        &app.rate_history,
-        inner.width as usize,
-        inner.height as usize,
-    );
+    let chart_result = render_bar_chart(history, inner.width as usize, inner.height as usize);
 
     for (i, row) in chart_result.rows.iter().enumerate() {
         if i < inner.height as usize {
@@ -981,7 +982,7 @@ fn draw_rate_chart_compact(f: &mut Frame, app: &App, area: Rect) {
         }
     }
 
-    let samples = app.rate_history.len();
+    let samples = history.len();
     let duration = if samples >= 3600 {
         "1h".to_string()
     } else if samples >= 60 {
@@ -1234,7 +1235,7 @@ fn chart_title(app: &App) -> Line<'static> {
                 if unit == "ms" {
                     format!("{:.0}{}", v, unit)
                 } else {
-                    format!("{}{}", format_rate(v), "")
+                    format!("{} {}", format_rate(v), unit)
                 }
             };
             Line::from(vec![
@@ -1280,7 +1281,7 @@ fn draw_task_table(f: &mut Frame, app: &mut App, area: Rect) {
 
     let rows = app.tasks.iter().map(|task| {
         let task_type = task.task_type.clone();
-        let progress = format!("{:.1}%", task.progress_percent());
+        let progress = format!("{:.1}%", task.progress_percent().min(100.0));
         let eta = task.eta_formatted().unwrap_or_default();
 
         let (status_icon, status_text, status_style) = match task.status.as_str() {
@@ -1540,21 +1541,22 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     } else {
         match app.focused_panel {
             FocusedPanel::Tasks => {
-                "Tab: Details │ j/k: Navigate │ n: New │ c: Cancel │ p: Pause │ r: Retry │ d: Del │ q: Quit".to_string()
+                "Tab: Details │ j/k: Navigate │ n: New │ c: Cancel │ p: Pause │ r: Retry │ d: Del │ v: Chart │ R: Refresh │ q: Quit".to_string()
             }
             FocusedPanel::Details => {
-                "Tab: Log │ j/k: Scroll │ q: Quit".to_string()
+                "Tab: Log │ j/k: Scroll │ v: Chart │ R: Refresh │ q: Quit".to_string()
             }
             FocusedPanel::Log => {
-                "Tab: Tasks │ j/k: Scroll │ g: Bottom │ G: Top │ q: Quit".to_string()
+                "Tab: Tasks │ j/k: Scroll │ g: Top │ G: Bottom │ v: Chart │ R: Refresh │ q: Quit".to_string()
             }
         }
     };
 
     let status = app
         .status_message
-        .as_deref()
-        .map(|s| s.to_string())
+        .as_ref()
+        .filter(|(_, t)| t.elapsed().as_secs() < 5)
+        .map(|(s, _)| s.clone())
         .unwrap_or(help);
 
     let footer = Paragraph::new(status)
