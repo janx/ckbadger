@@ -12,11 +12,11 @@ Cells are guarded by type scripts and lock scripts. Cells refer scripts with cod
 
 Transactions capture transitions across the world—from cells to cells, blocks to blocks—binding time and space into an ever-evolving continuum.
 
-PoW, epochs, blocks, cells, and transactions are the fundamental elements of CKB’s spacetime. By parsing these raw datasets—cells, transactions, etc.—we can uncover activities that reflect interactions between humans and assets.
+PoW, epochs, blocks, cells, and transactions are the fundamental elements of CKB’s spacetime. By parsing these raw datasets—cells, transactions, etc.—we can uncover activities that reflect interactions between humans, AI agents and assets.
 
 Assets are standardized data stored within cells. They operate under scripts that define their permitted behaviors and ownership rules.
 
-CKB (or CKByte, the coin) are created from external energy through PoW mining. CKB are issued into circulation with primary and secondary issuance. These issuance rules are the most fundamental in the digital world and cannot be changed.
+CKB (or CKByte, the coin) are created from external energy through PoW mining. CKB are issued into circulation with primary and secondary issuance. These issuance rules are the most fundamental in the digital world and cannot be changed. CKByte has dual attributes: when occupied, it is a means of production; when unoccupied, it is a highly liquid asset.
 
 Miners receive all of the primary issuance and part of the secondary issuance. Users can also deposit into NervosDAO to earn a portion of the secondary issuance. Those who deposit maintain a constant share of CKB (against the total = genesis + primary issuance hard-cap + existing secondary issuance). The primary issuance has the same issuance curve as Bitcoin. The remaining secondary issuance is currently burned but will later accumulate in community-governed treasuries. The Treasury is owned by the CKB community, governed by the CKB community, and used for the CKB community.
 
