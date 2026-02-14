@@ -191,6 +191,18 @@ pub struct TokenInfo {
     pub transfers_count: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenTransferRecord {
+    pub tx_hash: Vec<u8>,
+    pub block_number: i64,
+    pub from_lock_hash: Option<Vec<u8>>,
+    pub to_lock_hash: Vec<u8>,
+    pub amount: u128,
+    pub is_mint: bool,
+    pub is_burn: bool,
+    pub timestamp: i64,
+}
+
 /// DOB (Digital Object) standard identifier.
 ///
 /// DOB is an asset type on CKB. Each variant represents a specific standard

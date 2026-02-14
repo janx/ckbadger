@@ -2,7 +2,7 @@
 
 use crate::keys;
 use crate::store::CkbadgerStore;
-use crate::types::TokenInfo;
+use crate::types::{TokenInfo, TokenTransferRecord};
 
 impl CkbadgerStore {
     pub fn get_token(&self, type_hash: &[u8]) -> anyhow::Result<Option<TokenInfo>> {
@@ -123,6 +123,50 @@ impl CkbadgerStore {
         }
 
         Ok(migrated)
+    }
+
+    /// List transfers for a token, newest first.
+    ///
+    /// Optionally start after the given `(block_num, tx_idx)` cursor.
+    /// Returns `(block_num, tx_idx, record)` tuples for cursor construction.
+    pub fn list_token_transfers(
+        &self,
+        type_hash: &[u8],
+        limit: usize,
+        cursor: Option<(i64, i32)>,
+    ) -> anyhow::Result<Vec<(i64, i32, TokenTransferRecord)>> {
+        let prefix = &type_hash[..32];
+
+        // For cursor: start from the key just after the cursor position.
+        // For no cursor: start from the type_hash prefix (newest first due to desc key).
+        let start_key = match cursor {
+            Some((block_num, tx_idx)) => {
+                keys::encode_token_transfer_key(type_hash, block_num, tx_idx + 1)
+            }
+            None => prefix.to_vec(),
+        };
+
+        let iter = self.iterator_cf(
+            self.cf_token_transfers(),
+            rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
+        );
+
+        let mut results = Vec::new();
+        for item in iter.flatten() {
+            let (key, value) = item;
+            if !key.starts_with(prefix) {
+                break;
+            }
+            if key.len() == 44 {
+                let (block_num, tx_idx) = keys::decode_token_transfer_key(&key);
+                let record: TokenTransferRecord = bincode::deserialize(&value)?;
+                results.push((block_num, tx_idx, record));
+                if results.len() >= limit {
+                    break;
+                }
+            }
+        }
+        Ok(results)
     }
 
     /// List holders for a token (prefix scan by type_hash).

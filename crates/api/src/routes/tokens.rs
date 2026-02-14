@@ -480,15 +480,65 @@ async fn get_token_transfers(
         .get_token(&hash)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    if token_info.is_none() {
-        return Err(ApiError::not_found("Token not found"));
-    }
+    let info = match token_info {
+        Some(info) => info,
+        None => return Err(ApiError::not_found("Token not found")),
+    };
 
-    let limit = params.limit.clamp(1, 100);
+    let limit = params.limit.clamp(1, 100) as usize;
 
-    let transfers: Vec<TokenTransferResponse> = Vec::new();
+    // Parse cursor: "block_num:tx_idx"
+    let cursor = params.cursor.as_ref().and_then(|c| {
+        let parts: Vec<&str> = c.split(':').collect();
+        if parts.len() == 2 {
+            let block_num = parts[0].parse::<i64>().ok()?;
+            let tx_idx = parts[1].parse::<i32>().ok()?;
+            Some((block_num, tx_idx))
+        } else {
+            None
+        }
+    });
 
-    ok(CursorPaginatedResponse::new(transfers, 0, limit, None))
+    let results = state
+        .store
+        .list_token_transfers(&hash, limit + 1, cursor)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let has_more = results.len() > limit;
+    let page: Vec<_> = results.into_iter().take(limit).collect();
+
+    let next_cursor = if has_more {
+        page.last()
+            .map(|(block_num, tx_idx, _)| format!("{}:{}", block_num, tx_idx))
+    } else {
+        None
+    };
+
+    let transfers: Vec<TokenTransferResponse> = page
+        .into_iter()
+        .map(|(_, _, record)| TokenTransferResponse {
+            tx_hash: format!("0x{}", hex::encode(&record.tx_hash)),
+            block_number: record.block_number,
+            from_lock_hash: record
+                .from_lock_hash
+                .as_ref()
+                .map(|h| format!("0x{}", hex::encode(h))),
+            from_address: None,
+            to_lock_hash: format!("0x{}", hex::encode(&record.to_lock_hash)),
+            to_address: None,
+            amount: record.amount.to_string(),
+            is_mint: record.is_mint,
+            is_burn: record.is_burn,
+            timestamp: record.timestamp.to_string(),
+        })
+        .collect();
+
+    ok(CursorPaginatedResponse::new(
+        transfers,
+        info.transfers_count,
+        limit as i64,
+        next_cursor,
+    ))
 }
 
 fn hash_type_to_string(hash_type: i16) -> String {

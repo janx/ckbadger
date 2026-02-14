@@ -170,6 +170,25 @@ pub fn encode_token_hourly_prefix(type_hash: &[u8]) -> Vec<u8> {
     key
 }
 
+/// Token transfer key: type_hash(32B) + block_num_desc(8B BE) + tx_idx(4B BE) = 44 bytes
+/// Uses descending block_num so newest transfers come first in prefix scan.
+pub fn encode_token_transfer_key(type_hash: &[u8], block_num: i64, tx_idx: i32) -> Vec<u8> {
+    let block_desc = (i64::MAX - block_num).to_be_bytes();
+    let mut key = Vec::with_capacity(44);
+    key.extend_from_slice(&type_hash[..32]);
+    key.extend_from_slice(&block_desc);
+    key.extend_from_slice(&tx_idx.to_be_bytes());
+    key
+}
+
+/// Decode block_num and tx_idx from a token transfer key.
+pub fn decode_token_transfer_key(key: &[u8]) -> (i64, i32) {
+    let block_desc = i64::from_be_bytes(key[32..40].try_into().unwrap());
+    let block_num = i64::MAX - block_desc;
+    let tx_idx = i32::from_be_bytes(key[40..44].try_into().unwrap());
+    (block_num, tx_idx)
+}
+
 /// Spore-by-cluster key: cluster_id(32B) + spore_id(32B) = 64 bytes
 pub fn encode_spore_by_cluster_key(cluster_id: &[u8], spore_id: &[u8]) -> [u8; 64] {
     let mut key = [0u8; 64];

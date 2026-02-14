@@ -296,6 +296,19 @@ impl<'a> StoreBatch<'a> {
         self.batch.delete_cf(self.store.cf_token_holders(), key);
     }
 
+    pub fn put_token_transfer(
+        &mut self,
+        type_hash: &[u8],
+        block_num: i64,
+        tx_idx: i32,
+        record: &TokenTransferRecord,
+    ) {
+        let key = keys::encode_token_transfer_key(type_hash, block_num, tx_idx);
+        let value = bincode::serialize(record).expect("serialize TokenTransferRecord");
+        self.batch
+            .put_cf(self.store.cf_token_transfers(), key, &value);
+    }
+
     // ---- Spore/NFT ----
 
     pub fn put_spore(&mut self, id: &[u8], entry: &SporeEntry) {

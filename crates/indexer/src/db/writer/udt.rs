@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::collections::HashMap;
 
 use ckbadger_store::batch::StoreBatch;
-use ckbadger_store::types::TokenInfo;
+use ckbadger_store::types::{TokenInfo, TokenTransferRecord};
 
 use crate::parser::{ParsedUdtCell, ParsedUdtTransfer};
 
@@ -143,6 +143,9 @@ impl BatchWriter {
         }
 
         // Step 2: Upsert tokens + transfer counts (merged to avoid double iteration)
+        // Track in-flight token state so Step 5 can update holders on newly-created tokens.
+        let mut inflight_tokens: HashMap<Vec<u8>, TokenInfo> = HashMap::new();
+
         for (type_hash, update) in &token_updates {
             let existing = self.store.get_token(type_hash)?;
             let transfer = update.transfer;
@@ -153,7 +156,6 @@ impl BatchWriter {
 
             let mut updated = match existing {
                 Some(mut info) => {
-                    info.holders_count += 0; // Will be updated in balance step
                     if let Some(ref mut supply) = info.total_supply {
                         *supply = (*supply + update.supply_delta).max(0);
                     }
@@ -183,6 +185,7 @@ impl BatchWriter {
             // Embed transfers_count into TokenInfo
             updated.transfers_count = new_total;
             batch.put_token(type_hash, &updated);
+            inflight_tokens.insert(type_hash.clone(), updated);
 
             // Also write to stats CF (source of truth for accumulation)
             batch.put_token_transfers_count(type_hash, new_total);
@@ -249,22 +252,43 @@ impl BatchWriter {
             }
         }
 
-        // Step 5: Update holder counts on tokens
+        // Step 5: Update holder counts on tokens using in-flight state
         for (type_hash, holder_delta) in &holder_count_changes {
             if *holder_delta != 0 {
-                // Re-read token (may have been updated in step 2) from batch perspective.
-                // Since batch isn't committed yet, we read the version we wrote in step 2.
-                // For correctness with the batch, we need to track the in-flight value.
-                if let Some(mut info) = self.store.get_token(type_hash)? {
+                // Use in-flight token from Step 2 (handles both new and existing tokens).
+                // Fallback to store for tokens not in this batch (shouldn't happen, but safe).
+                let info = inflight_tokens
+                    .get(type_hash)
+                    .cloned()
+                    .or_else(|| self.store.get_token(type_hash).ok().flatten());
+
+                if let Some(mut info) = info {
                     info.holders_count = (info.holders_count + holder_delta).max(0);
-                    // Preserve transfers_count from Step 2 (store has stale value)
-                    if let Some(update) = token_updates.get(type_hash.as_slice()) {
-                        let current_total = self.store.get_token_transfers_count(type_hash)?;
-                        info.transfers_count = current_total + update.transfers_count;
-                    }
                     batch.put_token(type_hash, &info);
                 }
             }
+        }
+
+        // Step 6: Write individual transfer records for the token transfers tab.
+        // Use a per-(type_hash, block_number) counter as tx_idx to generate unique keys.
+        let mut transfer_idx: HashMap<(Vec<u8>, i64), i32> = HashMap::new();
+        for (transfer, tx_hash, block_number) in transfers {
+            let idx = transfer_idx
+                .entry((transfer.type_script_hash.clone(), *block_number))
+                .or_insert(0);
+            let timestamp = block_timestamps.get(block_number).copied().unwrap_or(0);
+            let record = TokenTransferRecord {
+                tx_hash: tx_hash.to_vec(),
+                block_number: *block_number,
+                from_lock_hash: transfer.from_lock_hash.clone(),
+                to_lock_hash: transfer.to_lock_hash.clone(),
+                amount: transfer.amount,
+                is_mint: transfer.is_mint,
+                is_burn: transfer.is_burn,
+                timestamp,
+            };
+            batch.put_token_transfer(&transfer.type_script_hash, *block_number, *idx, &record);
+            *idx += 1;
         }
 
         Ok(())
