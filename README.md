@@ -28,13 +28,6 @@
 - **sUDT/xUDT Support** - Token listings, holder rankings, transfer history
 - **Spore NFT Support** - NFT collections, metadata rendering, ownership tracking
 
-### Activity System
-
-- **Unified Activity Feed** - Human-readable interpretation of blockchain events
-- **8 Activity Categories** - CKB, Cellbase, Token, DOB, NFT, DAO, Script, RGB++
-- **Address Activity History** - All activities involving an address in one view
-- **Transaction Activity Summary** - See what happened in any transaction at a glance
-
 ### Data & Analytics
 
 - **Network Dashboard** - Hash rate, difficulty, epoch progress, TPS metrics
@@ -207,11 +200,6 @@ GET  /api/v1/status                              # System status (sync, index re
 
 # Mempool API (Real-time transaction pool)
 GET  /api/v1/mempool/pending-proposals           # Pending proposals with fee/size metadata
-
-# Activities API (Semantic blockchain events)
-GET  /api/v1/activities                          # List activities (paginated)
-GET  /api/v1/activities/address/:address         # Activities for an address
-GET  /api/v1/activities/transaction/:hash        # Activities in a transaction
 
 # Graph API (Cell Relationship Visualization)
 GET  /api/v1/graph/cell/:tx_hash/:index?depth=2  # Cell relationship graph

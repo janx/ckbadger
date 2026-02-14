@@ -1,4 +1,3 @@
-pub mod activity;
 pub mod cycles;
 pub mod dao;
 pub mod error;
@@ -8,7 +7,6 @@ pub mod sync;
 pub mod task;
 pub mod types;
 
-pub use activity::*;
 pub use error::{Error, Result};
 pub use hex::{parse_capacity, parse_hex_to_bytes, parse_hex_to_hash, parse_hex_u32};
 pub use proposal::*;

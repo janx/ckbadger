@@ -169,21 +169,6 @@ async fn test_transaction_not_found() {
 }
 
 #[tokio::test]
-async fn test_activities_empty_db() {
-    let store = test_store();
-    let config = test_config(store);
-    let app = create_router(config).await;
-
-    let request = Request::builder()
-        .uri("/api/v1/activities")
-        .body(Body::empty())
-        .unwrap();
-
-    let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-}
-
-#[tokio::test]
 async fn test_scripts_list_empty_db() {
     let store = test_store();
     let config = test_config(store);

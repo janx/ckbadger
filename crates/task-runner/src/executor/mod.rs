@@ -180,7 +180,6 @@ impl TaskExecutor {
             | TaskType::SecondaryIssuanceBackfill
             | TaskType::ConsumedAtBackfill
             | TaskType::CellsStatusRebuild
-            | TaskType::ActivitiesRebuild
             | TaskType::AddressBalancesRebuild
             | TaskType::TokenRebuild
             | TaskType::MnftRebuild

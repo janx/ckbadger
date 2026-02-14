@@ -56,12 +56,6 @@ pub enum BroadcastMessage {
         fee: String,
         timestamp: String,
     },
-    #[serde(rename = "address_activity", rename_all = "camelCase")]
-    AddressActivity {
-        lock_hash: String,
-        tx_hash: String,
-        activity_type: String,
-    },
     #[serde(rename = "reorg", rename_all = "camelCase")]
     Reorg {
         depth: i32,
@@ -147,13 +141,6 @@ impl WsManager {
 
     pub fn broadcast_reorg(&self, msg: BroadcastMessage) {
         let _ = self.reorg_sender.send(msg);
-    }
-
-    pub async fn broadcast_address_activity(&self, lock_hash: &str, msg: BroadcastMessage) {
-        let subs = self.address_subscriptions.read().await;
-        if let Some(sender) = subs.get(lock_hash) {
-            let _ = sender.send(msg);
-        }
     }
 }
 

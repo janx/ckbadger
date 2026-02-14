@@ -13,7 +13,6 @@ use crate::AppState;
 pub struct ActiveTasksResponse {
     pub index_rebuild: Option<IndexRebuildStatus>,
     pub statistics_rebuild: Option<StatisticsRebuildStatus>,
-    pub activities_rebuild: Option<ActivitiesRebuildStatus>,
 }
 
 #[derive(Debug, Serialize)]
@@ -40,16 +39,6 @@ pub struct StatisticsRebuildStatus {
     pub started_at: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ActivitiesRebuildStatus {
-    pub status: String,
-    pub total: i64,
-    pub processed: i64,
-    pub progress: f64,
-    pub started_at: Option<String>,
-}
-
 async fn get_active_tasks(State(state): State<Arc<AppState>>) -> ApiResult<ActiveTasksResponse> {
     // Fetch pending and running tasks from the store
     let mut all_tasks = state
@@ -65,7 +54,7 @@ async fn get_active_tasks(State(state): State<Arc<AppState>>) -> ApiResult<Activ
     all_tasks.extend(pending_tasks);
 
     // Filter to the task types we care about
-    let relevant_types = ["index_rebuild", "statistics_rebuild", "activities_rebuild"];
+    let relevant_types = ["index_rebuild", "statistics_rebuild"];
     let rows: Vec<_> = all_tasks
         .into_iter()
         .filter(|t| relevant_types.contains(&t.task_type.as_str()))
@@ -73,8 +62,6 @@ async fn get_active_tasks(State(state): State<Arc<AppState>>) -> ApiResult<Activ
 
     let mut index_rebuild = None;
     let mut statistics_rebuild = None;
-    let mut activities_rebuild = None;
-
     for task in rows {
         let progress_total = task.progress_total.unwrap_or(0);
         let progress_current = task.progress_current.unwrap_or(0);
@@ -124,15 +111,6 @@ async fn get_active_tasks(State(state): State<Arc<AppState>>) -> ApiResult<Activ
                     started_at: task.started_at.map(|t| t.to_rfc3339()),
                 });
             }
-            "activities_rebuild" if activities_rebuild.is_none() => {
-                activities_rebuild = Some(ActivitiesRebuildStatus {
-                    status: task.status,
-                    total: progress_total,
-                    processed: progress_current,
-                    progress,
-                    started_at: task.started_at.map(|t| t.to_rfc3339()),
-                });
-            }
             _ => {}
         }
     }
@@ -140,7 +118,6 @@ async fn get_active_tasks(State(state): State<Arc<AppState>>) -> ApiResult<Activ
     ok(ActiveTasksResponse {
         index_rebuild,
         statistics_rebuild,
-        activities_rebuild,
     })
 }
 

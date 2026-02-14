@@ -59,7 +59,6 @@ pub enum TaskType {
     ConsumedAtBackfill,
     SecondaryIssuanceBackfill,
     CellsStatusRebuild,
-    ActivitiesRebuild,
     AddressBalancesRebuild,
     TokenRebuild,
     MnftRebuild,
@@ -80,7 +79,6 @@ impl std::fmt::Display for TaskType {
             TaskType::ConsumedAtBackfill => write!(f, "consumed_at_backfill"),
             TaskType::SecondaryIssuanceBackfill => write!(f, "secondary_issuance_backfill"),
             TaskType::CellsStatusRebuild => write!(f, "cells_status_rebuild"),
-            TaskType::ActivitiesRebuild => write!(f, "activities_rebuild"),
             TaskType::AddressBalancesRebuild => write!(f, "address_balances_rebuild"),
             TaskType::TokenRebuild => write!(f, "token_rebuild"),
             TaskType::MnftRebuild => write!(f, "mnft_rebuild"),
@@ -105,7 +103,6 @@ impl std::str::FromStr for TaskType {
             "consumed_at_backfill" => Ok(TaskType::ConsumedAtBackfill),
             "secondary_issuance_backfill" => Ok(TaskType::SecondaryIssuanceBackfill),
             "cells_status_rebuild" => Ok(TaskType::CellsStatusRebuild),
-            "activities_rebuild" => Ok(TaskType::ActivitiesRebuild),
             "address_balances_rebuild" => Ok(TaskType::AddressBalancesRebuild),
             "token_rebuild" => Ok(TaskType::TokenRebuild),
             "mnft_rebuild" => Ok(TaskType::MnftRebuild),
@@ -144,7 +141,6 @@ impl TaskType {
             | TaskType::SporeRebuild
             | TaskType::StatisticsRebuild
             | TaskType::SecondaryIssuanceBackfill
-            | TaskType::ActivitiesRebuild
             | TaskType::AddressBalancesRebuild
             | TaskType::TokenRebuild
             | TaskType::MnftRebuild
@@ -373,25 +369,6 @@ impl Default for CellsStatusRebuildConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ActivitiesRebuildConfig {
-    #[serde(default = "default_activities_batch_size")]
-    pub batch_size: i64,
-}
-
-fn default_activities_batch_size() -> i64 {
-    10_000
-}
-
-impl Default for ActivitiesRebuildConfig {
-    fn default() -> Self {
-        Self {
-            batch_size: default_activities_batch_size(),
-        }
-    }
-}
-
 /// Configuration for address balances rebuild task
 /// Rebuilds address_balances table from cells table
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -543,7 +520,6 @@ pub enum TaskConfig {
     ConsumedAtBackfill(ConsumedAtBackfillConfig),
     SecondaryIssuanceBackfill(SecondaryIssuanceBackfillConfig),
     CellsStatusRebuild(CellsStatusRebuildConfig),
-    ActivitiesRebuild(ActivitiesRebuildConfig),
     AddressBalancesRebuild(AddressBalancesRebuildConfig),
     TokenRebuild(TokenRebuildConfig),
     MnftRebuild(MnftRebuildConfig),
@@ -564,7 +540,6 @@ impl TaskConfig {
             TaskConfig::ConsumedAtBackfill(_) => TaskType::ConsumedAtBackfill,
             TaskConfig::SecondaryIssuanceBackfill(_) => TaskType::SecondaryIssuanceBackfill,
             TaskConfig::CellsStatusRebuild(_) => TaskType::CellsStatusRebuild,
-            TaskConfig::ActivitiesRebuild(_) => TaskType::ActivitiesRebuild,
             TaskConfig::AddressBalancesRebuild(_) => TaskType::AddressBalancesRebuild,
             TaskConfig::TokenRebuild(_) => TaskType::TokenRebuild,
             TaskConfig::MnftRebuild(_) => TaskType::MnftRebuild,
@@ -681,13 +656,6 @@ pub struct CellsStatusRebuildResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct ActivitiesRebuildResult {
-    pub activities_created: i64,
-    pub blocks_processed: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
 pub struct AddressBalancesRebuildResult {
     pub addresses_updated: i64,
 }
@@ -732,7 +700,6 @@ pub enum TaskResult {
     ConsumedAtBackfill(ConsumedAtBackfillResult),
     SecondaryIssuanceBackfill(SecondaryIssuanceBackfillResult),
     CellsStatusRebuild(CellsStatusRebuildResult),
-    ActivitiesRebuild(ActivitiesRebuildResult),
     AddressBalancesRebuild(AddressBalancesRebuildResult),
     TokenRebuild(TokenRebuildResult),
     MnftRebuild(MnftRebuildResult),
@@ -958,16 +925,6 @@ impl TaskBuilder {
             config: serde_json::to_value(TaskConfig::CellsStatusRebuild(config))
                 .expect("CellsStatusRebuildConfig should be serializable"),
             priority: 9, // High priority - needed before statistics work correctly
-            max_retries: 2,
-        }
-    }
-
-    pub fn activities_rebuild(config: ActivitiesRebuildConfig) -> Self {
-        Self {
-            task_type: TaskType::ActivitiesRebuild,
-            config: serde_json::to_value(TaskConfig::ActivitiesRebuild(config))
-                .expect("ActivitiesRebuildConfig should be serializable"),
-            priority: 7, // After bulk sync completes, before statistics
             max_retries: 2,
         }
     }

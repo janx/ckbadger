@@ -18,25 +18,9 @@ import { HexDisplay } from '@/components/ui/hex-display';
 import { Capacity } from '@/components/ui/capacity';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
-import { api, type AddressToken, type AssetTransfer, type DaoDeposit } from '@/lib/api';
-import { ActivityFeed } from '@/components/activity';
+import { api, type AddressToken, type DaoDeposit } from '@/lib/api';
 import { formatTimeAgo, formatCkbAmount } from '@/lib/utils';
-import {
-  formatTokenBalance,
-  formatAssetAmount,
-  getAssetLabel,
-  getAssetBadgeVariant,
-} from '@/lib/format-asset';
-
-function groupAssetTransfersByTx(transfers: AssetTransfer[]): Map<string, AssetTransfer[]> {
-  const map = new Map<string, AssetTransfer[]>();
-  for (const t of transfers) {
-    const existing = map.get(t.txHash) || [];
-    existing.push(t);
-    map.set(t.txHash, existing);
-  }
-  return map;
-}
+import { formatTokenBalance } from '@/lib/format-asset';
 
 export default function AddressDetailPage() {
   const params = useParams();
@@ -44,16 +28,13 @@ export default function AddressDetailPage() {
 
   const [selectedToken, setSelectedToken] = useState<AddressToken | null>(null);
   const [selectedDao, setSelectedDao] = useState(false);
-  const [activeTab, setActiveTab] = useState<'cells' | 'transactions' | 'activities' | 'dao'>(
-    'cells'
-  );
+  const [activeTab, setActiveTab] = useState<'cells' | 'transactions' | 'dao'>('cells');
 
   const DAO_CODE_HASH = '0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e';
 
   const cellsPagination = useCursorPagination();
   const txPagination = useCursorPagination();
   const daoPagination = useCursorPagination();
-  const activitiesPagination = useCursorPagination();
 
   const { data: address, isLoading } = useQuery({
     queryKey: ['address', addr],
@@ -126,31 +107,6 @@ export default function AddressDetailPage() {
       }),
     enabled: !!address,
   });
-
-  const { data: assetTransfers } = useQuery({
-    queryKey: ['address-asset-transfers', address?.lockScriptHash, txPagination.cursor],
-    queryFn: () =>
-      api.getAddressAssetTransfers(address!.lockScriptHash, {
-        limit: 100,
-        cursor: txPagination.cursor,
-      }),
-    enabled: !!address && activeTab === 'transactions',
-  });
-
-  const { data: activities, isLoading: activitiesLoading } = useQuery({
-    queryKey: ['address-activities', address?.lockScriptHash, activitiesPagination.cursor],
-    queryFn: () =>
-      api.getAddressActivities(address!.lockScriptHash, {
-        limit: 20,
-        cursor: activitiesPagination.cursor,
-      }),
-    enabled: !!address && activeTab === 'activities',
-  });
-
-  const assetTransfersByTx = useMemo(
-    () => groupAssetTransfersByTx(assetTransfers?.data || []),
-    [assetTransfers?.data]
-  );
 
   const daoTxHashes = useMemo(() => {
     const set = new Set<string>();
@@ -444,16 +400,6 @@ export default function AddressDetailPage() {
                   Transactions
                   <span className="ml-1 opacity-75">({address.transactionsCount})</span>
                 </button>
-                <button
-                  onClick={() => setActiveTab('activities')}
-                  className={`rounded px-3 py-1 font-mono text-sm transition-colors ${
-                    activeTab === 'activities'
-                      ? 'bg-terminal-green/20 text-terminal-green'
-                      : 'text-slate-400 hover:text-white'
-                  }`}
-                >
-                  Activities
-                </button>
                 {daoSummary?.hasDaoActivity && (
                   <button
                     onClick={() => setActiveTab('dao')}
@@ -490,8 +436,6 @@ export default function AddressDetailPage() {
                   </Badge>
                 )}
               </div>
-            ) : activeTab === 'activities' ? (
-              'Activities'
             ) : activeTab === 'dao' ? (
               'DAO Activities'
             ) : (
@@ -681,15 +625,11 @@ export default function AddressDetailPage() {
                         <div className="w-28 shrink-0">Block</div>
                         <div className="w-28 shrink-0">Type</div>
                         <div className="w-40 shrink-0 text-right">CKB Change</div>
-                        <div className="w-32 shrink-0">Assets</div>
                         <div className="w-24 shrink-0 text-right">Time</div>
                       </div>
                       {transactions.data.map((tx) => {
                         const isPositive = !tx.capacityChange.startsWith('-');
-                        const txAssets = assetTransfersByTx.get(tx.txHash) || [];
-                        const hasDaoActivity =
-                          txAssets.some((a) => a.assetCategory === 'dao') ||
-                          daoTxHashes.has(tx.txHash);
+                        const hasDaoActivity = daoTxHashes.has(tx.txHash);
                         return (
                           <TerminalRow key={tx.txHash}>
                             <div className="flex w-full items-center gap-4">
@@ -723,33 +663,6 @@ export default function AddressDetailPage() {
                                   showSign
                                 />
                               </div>
-                              <div className="flex w-32 shrink-0 flex-wrap gap-1">
-                                {txAssets.length > 0 ? (
-                                  txAssets.slice(0, 3).map((asset, idx) => (
-                                    <span
-                                      key={idx}
-                                      className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-xs ${
-                                        asset.direction === 'in'
-                                          ? 'bg-green-900/30 text-green-400'
-                                          : 'bg-red-900/30 text-red-400'
-                                      }`}
-                                    >
-                                      <span>{asset.direction === 'in' ? '+' : '-'}</span>
-                                      <span>{formatAssetAmount(asset)}</span>
-                                      <Badge variant={getAssetBadgeVariant(asset.assetCategory)}>
-                                        {getAssetLabel(asset)}
-                                      </Badge>
-                                    </span>
-                                  ))
-                                ) : (
-                                  <span className="text-xs text-slate-600">-</span>
-                                )}
-                                {txAssets.length > 3 && (
-                                  <span className="text-xs text-slate-500">
-                                    +{txAssets.length - 3} more
-                                  </span>
-                                )}
-                              </div>
                               <div className="w-24 shrink-0 text-right text-sm text-slate-500">
                                 {formatTimeAgo(tx.timestamp)}
                               </div>
@@ -775,18 +688,6 @@ export default function AddressDetailPage() {
                   <div className="py-12 text-center text-slate-500">No transactions</div>
                 )}
               </>
-            )}
-
-            {activeTab === 'activities' && (
-              <ActivityFeed
-                activities={activities?.activities || []}
-                isLoading={activitiesLoading}
-                hasMore={activities?.hasMore}
-                onLoadMore={() => activitiesPagination.goToNext(activities?.nextCursor)}
-                loadingMore={false}
-                showHeader={false}
-                emptyMessage="No activities found for this address"
-              />
             )}
 
             {activeTab === 'dao' && (

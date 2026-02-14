@@ -24,8 +24,6 @@ pub const CF_TX_INDEX: &str = "tx_index";
 pub const CF_TX_HASH_MAP: &str = "tx_hash_map";
 pub const CF_ADDR_BALANCE: &str = "addr_balance";
 pub const CF_ADDR_TXS: &str = "addr_txs";
-pub const CF_ACTIVITIES: &str = "activities";
-pub const CF_ACTIVITIES_BY_ADDR: &str = "activities_by_addr";
 pub const CF_DAO_DEPOSITS: &str = "dao_deposits";
 pub const CF_DAO_BY_WITHDRAW_TX: &str = "dao_by_withdraw_tx";
 pub const CF_DAO_STATS: &str = "dao_stats";
@@ -58,8 +56,6 @@ pub const ALL_CFS: &[&str] = &[
     CF_TX_HASH_MAP,
     CF_ADDR_BALANCE,
     CF_ADDR_TXS,
-    CF_ACTIVITIES,
-    CF_ACTIVITIES_BY_ADDR,
     CF_DAO_DEPOSITS,
     CF_DAO_BY_WITHDRAW_TX,
     CF_DAO_STATS,
@@ -160,8 +156,6 @@ impl CkbadgerStore {
         CF_TX_HASH_MAP,
         CF_ADDR_BALANCE,
         CF_ADDR_TXS,
-        CF_ACTIVITIES,
-        CF_ACTIVITIES_BY_ADDR,
         CF_DAO_DEPOSITS,
     ];
 
@@ -288,12 +282,6 @@ impl CkbadgerStore {
     }
     pub fn cf_addr_txs(&self) -> &ColumnFamily {
         self.cf(CF_ADDR_TXS)
-    }
-    pub fn cf_activities(&self) -> &ColumnFamily {
-        self.cf(CF_ACTIVITIES)
-    }
-    pub fn cf_activities_by_addr(&self) -> &ColumnFamily {
-        self.cf(CF_ACTIVITIES_BY_ADDR)
     }
     pub fn cf_dao_deposits(&self) -> &ColumnFamily {
         self.cf(CF_DAO_DEPOSITS)

@@ -9,34 +9,6 @@ fn setup_store() -> Arc<CkbadgerStore> {
     store
 }
 
-/// Set activities_deferred flag and verify it persists.
-#[test]
-fn test_sync_status_deferred_flags() {
-    let store = setup_store();
-
-    let status = SyncStatus {
-        tip_block_number: 1000,
-        tip_block_hash: vec![0xaa; 32],
-        total_transactions: 5000,
-        total_cells_created: 8000,
-        total_cells_consumed: 3000,
-        last_synced_at: 1700000000,
-        activities_deferred: true,
-        address_balances_deferred: false,
-        deep_fork_detected: false,
-        deep_fork_info: None,
-    };
-
-    store.set_sync_status(&status).unwrap();
-
-    let retrieved = store.get_sync_status().unwrap();
-    assert!(retrieved.activities_deferred);
-    assert!(!retrieved.address_balances_deferred);
-    assert_eq!(retrieved.tip_block_number, 1000);
-    assert_eq!(retrieved.tip_block_hash, vec![0xaa; 32]);
-    assert_eq!(retrieved.total_transactions, 5000);
-}
-
 /// Set address_balances_deferred flag and verify.
 #[test]
 fn test_sync_status_address_balances_deferred() {
@@ -49,7 +21,6 @@ fn test_sync_status_address_balances_deferred() {
         total_cells_created: 15_000,
         total_cells_consumed: 6000,
         last_synced_at: 1700001000,
-        activities_deferred: false,
         address_balances_deferred: true,
         deep_fork_detected: false,
         deep_fork_info: None,
@@ -58,7 +29,6 @@ fn test_sync_status_address_balances_deferred() {
     store.set_sync_status(&status).unwrap();
 
     let retrieved = store.get_sync_status().unwrap();
-    assert!(!retrieved.activities_deferred);
     assert!(retrieved.address_balances_deferred);
     assert_eq!(retrieved.tip_block_number, 2000);
     assert_eq!(retrieved.total_cells_created, 15_000);
@@ -77,37 +47,35 @@ fn test_update_sync_status_closure() {
         total_cells_created: 30_000,
         total_cells_consumed: 12_000,
         last_synced_at: 1700002000,
-        activities_deferred: false,
         address_balances_deferred: false,
         deep_fork_detected: false,
         deep_fork_info: None,
     };
     store.set_sync_status(&initial).unwrap();
 
-    // Toggle activities_deferred via closure
+    // Toggle address_balances_deferred via closure
     store
         .update_sync_status(|s| {
-            s.activities_deferred = true;
+            s.address_balances_deferred = true;
             s.tip_block_number = 3500;
         })
         .unwrap();
 
     let updated = store.get_sync_status().unwrap();
-    assert!(updated.activities_deferred);
+    assert!(updated.address_balances_deferred);
     assert_eq!(updated.tip_block_number, 3500);
     // Other fields should remain unchanged
     assert_eq!(updated.total_transactions, 20_000);
-    assert!(!updated.address_balances_deferred);
 
     // Toggle it back
     store
         .update_sync_status(|s| {
-            s.activities_deferred = false;
+            s.address_balances_deferred = false;
         })
         .unwrap();
 
     let final_status = store.get_sync_status().unwrap();
-    assert!(!final_status.activities_deferred);
+    assert!(!final_status.address_balances_deferred);
     assert_eq!(final_status.tip_block_number, 3500);
 }
 

@@ -74,24 +74,6 @@ pub fn encode_addr_tx_key(lock_hash: &[u8], block_num: i64, tx_idx: i32) -> Vec<
     key
 }
 
-/// Encode an activity key: block_num(8B BE) + activity_idx(4B BE) = 12 bytes
-pub fn encode_activity_key(block_num: i64, activity_idx: i32) -> [u8; 12] {
-    let mut key = [0u8; 12];
-    key[..8].copy_from_slice(&block_num.to_be_bytes());
-    key[8..12].copy_from_slice(&activity_idx.to_be_bytes());
-    key
-}
-
-/// Encode an activity-by-addr key:
-/// lock_hash(32B) + block_num(8B BE) + idx(4B BE) = 44 bytes
-pub fn encode_activity_by_addr_key(lock_hash: &[u8], block_num: i64, idx: i32) -> Vec<u8> {
-    let mut key = Vec::with_capacity(44);
-    key.extend_from_slice(&lock_hash[..32]);
-    key.extend_from_slice(&block_num.to_be_bytes());
-    key.extend_from_slice(&idx.to_be_bytes());
-    key
-}
-
 /// Encode a token_holders key: type_hash(32B) + lock_hash(32B) = 64 bytes
 pub fn encode_token_holder_key(type_hash: &[u8], lock_hash: &[u8]) -> [u8; 64] {
     let mut key = [0u8; 64];

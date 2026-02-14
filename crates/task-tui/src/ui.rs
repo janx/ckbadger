@@ -596,9 +596,6 @@ fn draw_sync_status_full(f: &mut Frame, app: &App, area: Rect) {
 
     // Build detailed deferred tags
     let mut deferred_tags: Vec<Span> = Vec::new();
-    if sync.activities_deferred {
-        deferred_tags.push(Span::styled(" [ACT]", Style::default().fg(Color::Yellow)));
-    }
     if sync.address_balances_deferred {
         deferred_tags.push(Span::styled(" [BAL]", Style::default().fg(Color::Yellow)));
     }

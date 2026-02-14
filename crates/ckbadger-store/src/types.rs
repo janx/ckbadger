@@ -107,25 +107,7 @@ pub struct AddressBalance {
 }
 
 // ============================================
-// Group D: Activities
-// ============================================
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ActivityEntry {
-    pub activity_type: String,
-    pub category: String,
-    pub tx_hash: Vec<u8>,
-    pub tx_idx: i32,
-    pub from_lock: Option<Vec<u8>>,
-    pub to_lock: Option<Vec<u8>>,
-    pub amount: Option<i128>,
-    pub asset_id: Option<Vec<u8>>,
-    pub metadata: Option<serde_json::Value>,
-    pub timestamp: i64,
-}
-
-// ============================================
-// Group E: DAO
+// Group D: DAO
 // ============================================
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -470,7 +452,6 @@ pub struct SyncStatus {
     pub total_cells_created: i64,
     pub total_cells_consumed: i64,
     pub last_synced_at: i64,
-    pub activities_deferred: bool,
     pub address_balances_deferred: bool,
     pub deep_fork_detected: bool,
     pub deep_fork_info: Option<DeepForkInfo>,

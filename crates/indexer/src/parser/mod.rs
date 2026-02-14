@@ -1,4 +1,3 @@
-pub mod activity;
 pub mod block;
 pub mod cell;
 pub mod dao;
@@ -10,7 +9,6 @@ pub mod spore;
 pub mod transaction;
 pub mod udt;
 
-pub use activity::{ActivityParser, ParsedActivity};
 pub use block::BlockParser;
 pub use cell::CellParser;
 pub use dao::{DaoParser, DaoState, ParsedDaoDeposit, ParsedDaoWithdrawRequest};

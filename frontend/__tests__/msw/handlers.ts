@@ -279,20 +279,6 @@ export const handlers = [
     });
   }),
 
-  http.get(`${API_BASE}/addresses/:addr/asset-transfers`, () => {
-    return HttpResponse.json({
-      data: [],
-      total: 0,
-      limit: 100,
-      hasMore: false,
-      nextCursor: null,
-    });
-  }),
-
-  http.get(`${API_BASE}/transactions/:hash/asset-transfers`, () => {
-    return HttpResponse.json([]);
-  }),
-
   http.get(`${API_BASE}/dao/summary/:lockHash`, () => {
     return HttpResponse.json({
       hasDaoActivity: false,

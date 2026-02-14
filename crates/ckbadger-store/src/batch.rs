@@ -227,20 +227,6 @@ impl<'a> StoreBatch<'a> {
         self.batch.put_cf(self.store.cf_addr_txs(), &key, tx_hash);
     }
 
-    // ---- Activities ----
-
-    pub fn put_activity(&mut self, block_num: i64, activity_idx: i32, entry: &ActivityEntry) {
-        let key = keys::encode_activity_key(block_num, activity_idx);
-        let value = bincode::serialize(entry).expect("serialize ActivityEntry");
-        self.batch.put_cf(self.store.cf_activities(), key, &value);
-    }
-
-    pub fn put_activity_by_addr(&mut self, lock_hash: &[u8], block_num: i64, idx: i32) {
-        let key = keys::encode_activity_by_addr_key(lock_hash, block_num, idx);
-        self.batch
-            .put_cf(self.store.cf_activities_by_addr(), key, []);
-    }
-
     // ---- DAO ----
 
     pub fn put_dao_deposit(&mut self, outpoint_key: &[u8], entry: &DaoDepositCacheEntry) {

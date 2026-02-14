@@ -1,5 +1,3 @@
-import type { Activity } from '@/types/activity';
-
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api/v1';
 
 interface PaginatedResponse<T> {
@@ -724,19 +722,10 @@ interface LiveCellsPopulateStatus {
   startedAt: string | null;
 }
 
-interface ActivitiesRebuildStatus {
-  status: string;
-  total: number;
-  processed: number;
-  progress: number;
-  startedAt: string | null;
-}
-
 interface ActiveTasksResponse {
   indexRebuild: IndexRebuildStatus | null;
   statisticsRebuild: StatisticsRebuildStatus | null;
   liveCellsPopulate: LiveCellsPopulateStatus | null;
-  activitiesRebuild: ActivitiesRebuildStatus | null;
 }
 
 interface MempoolTransaction {
@@ -918,15 +907,6 @@ export type {
   RecentReorgResponse,
 };
 
-export type {
-  Activity,
-  ActivityType,
-  ActivityCategory,
-  ActivitiesResponse,
-  ActivityQueryParams,
-  AddressActivityQueryParams,
-} from '@/types/activity';
-
 export const api = {
   getForks: (params: CursorQueryParams = {}): Promise<CursorPaginatedResponse<ReorgEvent>> => {
     const query = new URLSearchParams();
@@ -988,10 +968,6 @@ export const api = {
     return fetchApi(`/transactions/${hash}/lifecycle`);
   },
 
-  getTransactionAssetTransfers: (hash: string): Promise<AssetTransfer[]> => {
-    return fetchApi(`/transactions/${hash}/asset-transfers`);
-  },
-
   getAddress: (addr: string): Promise<Address> => {
     return fetchApi(`/addresses/${addr}`);
   },
@@ -1029,17 +1005,6 @@ export const api = {
     if (params.limit) query.set('limit', String(params.limit));
     if (params.cursor) query.set('cursor', params.cursor);
     return fetchApi(`/addresses/${addr}/tokens?${query}`);
-  },
-
-  getAddressAssetTransfers: (
-    addr: string,
-    params: AssetTransferParams = {}
-  ): Promise<CursorPaginatedResponse<AssetTransfer>> => {
-    const query = new URLSearchParams();
-    if (params.limit) query.set('limit', String(params.limit));
-    if (params.cursor) query.set('cursor', params.cursor);
-    if (params.category) query.set('category', params.category);
-    return fetchApi(`/addresses/${addr}/asset-transfers?${query}`);
   },
 
   getLiveCells: (params: CellQueryParams = {}): Promise<CursorPaginatedResponse<Cell>> => {
@@ -1383,48 +1348,5 @@ export const api = {
       throw new Error(`API error: ${res.status}`);
     }
     return res.json();
-  },
-
-  getActivities: (
-    params: {
-      limit?: number;
-      cursor?: string;
-      activityType?: string;
-      activityCategory?: string;
-    } = {}
-  ): Promise<{
-    activities: Activity[];
-    nextCursor: string | null;
-    hasMore: boolean;
-  }> => {
-    const query = new URLSearchParams();
-    if (params.limit) query.set('limit', String(params.limit));
-    if (params.cursor) query.set('cursor', params.cursor);
-    if (params.activityType) query.set('activity_type', params.activityType);
-    if (params.activityCategory) query.set('activity_category', params.activityCategory);
-    return fetchApi(`/activities?${query}`);
-  },
-
-  getAddressActivities: (
-    address: string,
-    params: {
-      limit?: number;
-      cursor?: string;
-      direction?: 'in' | 'out' | 'all';
-    } = {}
-  ): Promise<{
-    activities: Activity[];
-    nextCursor: string | null;
-    hasMore: boolean;
-  }> => {
-    const query = new URLSearchParams();
-    if (params.limit) query.set('limit', String(params.limit));
-    if (params.cursor) query.set('cursor', params.cursor);
-    if (params.direction) query.set('direction', params.direction);
-    return fetchApi(`/activities/address/${address}?${query}`);
-  },
-
-  getTransactionActivities: (txHash: string): Promise<Activity[]> => {
-    return fetchApi(`/activities/transaction/${txHash}`);
   },
 };

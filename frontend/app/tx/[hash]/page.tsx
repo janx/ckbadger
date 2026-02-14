@@ -21,14 +21,6 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { CellGraph } from '@/components/cell-graph';
 import { api, type CellDep, type GraphNode, type ScriptLookupResponse } from '@/lib/api';
 import { formatTimeAgo, formatCkbAmount } from '@/lib/utils';
-import { ActivityIcon, ActivityBadge } from '@/components/activity';
-import {
-  formatAssetAmount,
-  getAssetLabel,
-  getAssetBadgeVariant,
-  getActivityLabel,
-  formatActivityAmount,
-} from '@/lib/format-asset';
 import { useCyclesCalculation } from '@/hooks/useCyclesCalculation';
 
 export default function TransactionDetailPage() {
@@ -87,18 +79,6 @@ export default function TransactionDetailPage() {
     queryFn: () => api.lookupScripts(codeHashes),
     enabled: codeHashes.length > 0,
     staleTime: Infinity,
-  });
-
-  const { data: assetTransfers } = useQuery({
-    queryKey: ['txAssetTransfers', hash],
-    queryFn: () => api.getTransactionAssetTransfers(hash),
-    enabled: !!hash,
-  });
-
-  const { data: activities } = useQuery({
-    queryKey: ['txActivities', hash],
-    queryFn: () => api.getTransactionActivities(hash),
-    enabled: !!hash,
   });
 
   const handleGraphNodeClick = (node: GraphNode) => {
@@ -306,125 +286,6 @@ export default function TransactionDetailPage() {
             </DataGrid>
           </TerminalPanelContent>
         </TerminalPanel>
-
-        {activities && activities.length > 0 && (
-          <TerminalPanel className="mb-8">
-            <TerminalPanelHeader>Activity Summary ({activities.length})</TerminalPanelHeader>
-            <TerminalPanelContent padding="none">
-              <div className="min-w-full">
-                <div className="flex border-b border-slate-800 bg-slate-900/50 px-4 py-2 font-mono text-xs uppercase tracking-wider text-slate-500">
-                  <div className="w-10"></div>
-                  <div className="w-32">Type</div>
-                  <div className="flex-1">Description</div>
-                  <div className="w-48 text-right">Amount</div>
-                </div>
-                {activities.map((activity, idx) => (
-                  <TerminalRow key={activity.activityId || idx} className="flex items-center">
-                    <div className="w-10">
-                      <ActivityIcon activityType={activity.activityType} size="md" />
-                    </div>
-                    <div className="w-32">
-                      <ActivityBadge category={activity.activityCategory} />
-                    </div>
-                    <div className="flex flex-1 items-center gap-2">
-                      <span className="text-sm text-slate-300">
-                        {getActivityLabel(activity.activityType)}
-                      </span>
-                      {activity.fromAddress && (
-                        <>
-                          <span className="text-xs text-slate-600">from</span>
-                          <Link
-                            href={`/address/${activity.fromAddress}`}
-                            className="hover:text-amber-400"
-                          >
-                            <HexDisplay
-                              value={activity.fromAddress}
-                              truncate
-                              startChars={6}
-                              endChars={4}
-                              color="white"
-                              size="sm"
-                            />
-                          </Link>
-                        </>
-                      )}
-                      {activity.fromAddress && activity.toAddress && (
-                        <span className="text-slate-600">→</span>
-                      )}
-                      {activity.toAddress && (
-                        <>
-                          {!activity.fromAddress && (
-                            <span className="text-xs text-slate-600">to</span>
-                          )}
-                          <Link
-                            href={`/address/${activity.toAddress}`}
-                            className="hover:text-amber-400"
-                          >
-                            <HexDisplay
-                              value={activity.toAddress}
-                              truncate
-                              startChars={6}
-                              endChars={4}
-                              color="white"
-                              size="sm"
-                            />
-                          </Link>
-                        </>
-                      )}
-                    </div>
-                    <div className="w-48 text-right font-mono text-amber-400">
-                      {formatActivityAmount(activity) || '-'}
-                    </div>
-                  </TerminalRow>
-                ))}
-              </div>
-            </TerminalPanelContent>
-          </TerminalPanel>
-        )}
-
-        {assetTransfers && assetTransfers.length > 0 && (
-          <TerminalPanel className="mb-8">
-            <TerminalPanelHeader>Asset Transfers ({assetTransfers.length})</TerminalPanelHeader>
-            <TerminalPanelContent padding="none">
-              <div className="min-w-full">
-                <div className="flex border-b border-slate-800 bg-slate-900/50 px-4 py-2 font-mono text-xs uppercase tracking-wider text-slate-500">
-                  <div className="w-24">Direction</div>
-                  <div className="flex-1">Asset</div>
-                  <div className="flex-1 text-right">Amount</div>
-                </div>
-                {assetTransfers.map((transfer, idx) => (
-                  <TerminalRow key={idx} className="flex items-center">
-                    <div className="w-24">
-                      <Badge variant={transfer.direction === 'in' ? 'green' : 'red'}>
-                        {transfer.direction === 'in' ? 'Incoming' : 'Outgoing'}
-                      </Badge>
-                    </div>
-                    <div className="flex flex-1 items-center gap-3">
-                      <Badge variant={getAssetBadgeVariant(transfer.assetCategory)}>
-                        {getAssetLabel(transfer)}
-                      </Badge>
-                      {transfer.assetId && (
-                        <span className="font-mono text-xs text-slate-500">
-                          ID:{' '}
-                          <HexDisplay
-                            value={transfer.assetId}
-                            truncate
-                            startChars={6}
-                            endChars={4}
-                          />
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex-1 text-right font-mono text-white">
-                      {transfer.direction === 'in' ? '+' : '-'}
-                      {formatAssetAmount(transfer)}
-                    </div>
-                  </TerminalRow>
-                ))}
-              </div>
-            </TerminalPanelContent>
-          </TerminalPanel>
-        )}
 
         <TerminalPanel>
           <Tabs defaultValue="io">

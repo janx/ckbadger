@@ -25,12 +25,11 @@ impl BatchWriter {
         Ok(())
     }
 
-    /// Cell flows are captured via activities.
+    /// No-op: cell flow data is not stored in RocksDB model.
     pub fn insert_cell_flows_batch(
         &self,
         _flows: &[(i64, &[u8], i16, i16, &[u8], i64, i32, Option<&[u8]>)],
     ) -> Result<()> {
-        // No-op: cell flow data is captured in activities
         Ok(())
     }
 

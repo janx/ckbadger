@@ -268,39 +268,6 @@ describe('api', () => {
       expect(result.confirmations).toBe(24);
     });
 
-    it('getTransactionAssetTransfers fetches asset transfers for a tx', async () => {
-      const mockAssetTransfers = [
-        {
-          txHash: '0x123',
-          blockNumber: 100,
-          txIndex: 0,
-          eventIndex: 0,
-          assetCategory: 'token',
-          assetType: 'sudt',
-          assetId: '0xabc',
-          direction: 'in',
-          peerAddress: null,
-          amount: '1000000',
-          eventType: null,
-          timestamp: '2024-01-15T10:30:00Z',
-          tokenName: 'Test Token',
-          tokenSymbol: 'TT',
-          tokenDecimals: 8,
-        },
-      ];
-
-      server.use(
-        http.get('*/api/v1/transactions/0x123/asset-transfers', () => {
-          return HttpResponse.json(mockAssetTransfers);
-        })
-      );
-
-      const result = await api.getTransactionAssetTransfers('0x123');
-      expect(result).toHaveLength(1);
-      expect(result[0].assetCategory).toBe('token');
-      expect(result[0].tokenSymbol).toBe('TT');
-    });
-
     it('search returns results', async () => {
       const mockSearchResult = {
         results: [{ resultType: 'block', id: '12345', label: 'Block #12345', url: '/block/12345' }],

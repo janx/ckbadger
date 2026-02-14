@@ -135,10 +135,10 @@ async fn main() -> Result<()> {
     }
 
     // Check deferred state
-    if sync_status.activities_deferred || sync_status.address_balances_deferred {
+    if sync_status.address_balances_deferred {
         info!(
-            "Deferred states: activities={}, address_balances={}",
-            sync_status.activities_deferred, sync_status.address_balances_deferred
+            "Deferred states: address_balances={}",
+            sync_status.address_balances_deferred
         );
     }
 

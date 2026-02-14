@@ -217,7 +217,6 @@ For fresh syncs, the indexer defers certain non-critical writes to RocksDB durin
 | -------------------------- | -------- | ----------------------------------------------- |
 | `label_import`             | 0        | Import UDT/script labels from token-labels repo |
 | `statistics_rebuild`       | 5        | No-op (statistics maintained inline by indexer) |
-| `activities_rebuild`       | 7        | No-op (activities maintained inline by indexer) |
 | `token_rebuild`            | 7        | No-op (tokens maintained inline by indexer)     |
 | `spore_rebuild`            | 6        | No-op (spore data maintained inline by indexer) |
 | `address_balances_rebuild` | 8        | No-op (balances maintained inline by indexer)   |
@@ -263,7 +262,6 @@ All data is stored in a single RocksDB instance (`ckbadger-store` crate) with 25
 | `sync_status`      | fixed key                    | SyncStatus           | Sync progress and deferred flags |
 | `addr_balance`     | lock_script_hash (32B)       | AddressBalance       | Address balance and cell counts  |
 | `tokens`           | type_script_hash (32B)       | TokenInfo            | UDT token metadata               |
-| `activities`       | block_num + idx              | ActivityEntry        | Blockchain activity feed         |
 | `daily_stats`      | date string                  | DailyStats           | Daily aggregate statistics       |
 
 **Key Design:**
@@ -468,7 +466,6 @@ cd frontend && pnpm test               # All frontend tests
 | Topic            | Document                   | Must Read Before                   |
 | ---------------- | -------------------------- | ---------------------------------- |
 | **Worldview**    | `docs/WORLD_VIEW.md`       | **Any design or implementation**   |
-| **Activities**   | `docs/ACTIVITIES.md`       | Activity parsing or API changes    |
 | CKB protocol     | `docs/rfcs/`               | Understanding CKB internals        |
 | Nervos docs      | `docs/docs.nervos.org/`    | User-facing explanations           |
 | DAO, APC, Supply | `docs/DAO_CALCULATIONS.md` | Any DAO/supply/circulation changes |
@@ -586,32 +583,28 @@ const DAO_OCCUPIED_CAPACITY: u64 = 102_00000000; // 102 CKB
 
 ## File Locations
 
-| What                | Where                                   |
-| ------------------- | --------------------------------------- |
-| Storage engine      | `crates/ckbadger-store/src/`            |
-| Store types         | `crates/ckbadger-store/src/types.rs`    |
-| Store operations    | `crates/ckbadger-store/src/*_ops.rs`    |
-| API routes          | `crates/api/src/routes/*.rs`            |
-| Activities API      | `crates/api/src/routes/activities.rs`   |
-| Response types      | `crates/api/src/response.rs`            |
-| WebSocket           | `crates/api/src/ws/`                    |
-| RPC client          | `crates/indexer/src/rpc/client.rs`      |
-| Parsers             | `crates/indexer/src/parser/*.rs`        |
-| Activity parser     | `crates/indexer/src/parser/activity.rs` |
-| DB writers          | `crates/indexer/src/db/writer/*.rs`     |
-| Spore writer        | `crates/indexer/src/db/writer/spore.rs` |
-| Activity types      | `crates/common/src/activity.rs`         |
-| Task runner         | `crates/task-runner/src/executor/*.rs`  |
-| Frontend API        | `frontend/lib/api.ts`                   |
-| UI components       | `frontend/components/ui/`               |
-| Activity components | `frontend/components/activity/`         |
-| Pages               | `frontend/app/`                         |
-| Rust tests          | Inline `#[cfg(test)]` in source files   |
-| API integration     | `crates/api/tests/api_integration.rs`   |
-| Frontend tests      | `frontend/__tests__/**/*.test.{ts,tsx}` |
-| MSW handlers        | `frontend/__tests__/msw/handlers.ts`    |
-| E2E tests           | `e2e/*.spec.ts`                         |
-| CI workflow         | `.github/workflows/ci.yml`              |
+| What             | Where                                   |
+| ---------------- | --------------------------------------- |
+| Storage engine   | `crates/ckbadger-store/src/`            |
+| Store types      | `crates/ckbadger-store/src/types.rs`    |
+| Store operations | `crates/ckbadger-store/src/*_ops.rs`    |
+| API routes       | `crates/api/src/routes/*.rs`            |
+| Response types   | `crates/api/src/response.rs`            |
+| WebSocket        | `crates/api/src/ws/`                    |
+| RPC client       | `crates/indexer/src/rpc/client.rs`      |
+| Parsers          | `crates/indexer/src/parser/*.rs`        |
+| DB writers       | `crates/indexer/src/db/writer/*.rs`     |
+| Spore writer     | `crates/indexer/src/db/writer/spore.rs` |
+| Task runner      | `crates/task-runner/src/executor/*.rs`  |
+| Frontend API     | `frontend/lib/api.ts`                   |
+| UI components    | `frontend/components/ui/`               |
+| Pages            | `frontend/app/`                         |
+| Rust tests       | Inline `#[cfg(test)]` in source files   |
+| API integration  | `crates/api/tests/api_integration.rs`   |
+| Frontend tests   | `frontend/__tests__/**/*.test.{ts,tsx}` |
+| MSW handlers     | `frontend/__tests__/msw/handlers.ts`    |
+| E2E tests        | `e2e/*.spec.ts`                         |
+| CI workflow      | `.github/workflows/ci.yml`              |
 
 ## Dependencies
 

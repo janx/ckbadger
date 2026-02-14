@@ -104,24 +104,7 @@ impl CkbadgerStore {
         // track consumed_at_block. The caller should restore cells that were
         // consumed after rollback_to back to the live_cells CF.
 
-        // 5. Delete activities > rollback_to
-        let start_key = keys::encode_block_num(rollback_to + 1);
-        let iter = self.iterator_cf(
-            self.cf_activities(),
-            IteratorMode::From(&start_key, rocksdb::Direction::Forward),
-        );
-        for item in iter.flatten() {
-            let (key, _) = item;
-            if key.len() >= 8 {
-                let block_num = keys::decode_block_num(&key[..8]);
-                if block_num <= rollback_to {
-                    continue;
-                }
-                batch.delete_cf(self.cf_activities(), &key);
-            }
-        }
-
-        // 6. Delete stats entries for removed blocks
+        // 5. Delete stats entries for removed blocks
         // Stats are accumulated, so we'd need to recompute from scratch
         // This is typically handled by rebuild tasks after rollback
 

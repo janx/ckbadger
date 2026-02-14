@@ -563,10 +563,7 @@ mod tests {
                 indexes_rebuild_started_at: None,
                 indexes_rebuild_completed_at: None,
                 indexes_rebuild_progress: None,
-                activities_deferred: false,
-                activities_deferred_at: None,
-                activities_rebuild_started_at: None,
-                activities_rebuild_completed_at: None,
+                ..Default::default()
             };
 
             invalidator.set_sync_status(&status).await;

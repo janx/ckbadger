@@ -10,7 +10,6 @@ vi.mock('@/lib/api', () => ({
     getAddressTokens: vi.fn(),
     getLiveCells: vi.fn(),
     getAddressTransactions: vi.fn(),
-    getAddressAssetTransfers: vi.fn(),
     getAddressDaoSummary: vi.fn(),
     getDaoDepositsByAddress: vi.fn(),
   },
@@ -101,14 +100,6 @@ const emptyTransactions = {
   nextCursor: null,
 };
 
-const emptyAssetTransfers = {
-  data: [],
-  total: 0,
-  limit: 100,
-  hasMore: false,
-  nextCursor: null,
-};
-
 const noDaoActivity = {
   hasDaoActivity: false,
   activeDepositsCount: 0,
@@ -151,7 +142,6 @@ describe('AddressDetailPage', () => {
     vi.mocked(api.getAddressTokens).mockResolvedValue(emptyTokens);
     vi.mocked(api.getLiveCells).mockResolvedValue(emptyCells);
     vi.mocked(api.getAddressTransactions).mockResolvedValue(emptyTransactions);
-    vi.mocked(api.getAddressAssetTransfers).mockResolvedValue(emptyAssetTransfers);
     vi.mocked(api.getAddressDaoSummary).mockResolvedValue(noDaoActivity);
     vi.mocked(api.getDaoDepositsByAddress).mockResolvedValue(emptyDaoDeposits);
   });

@@ -29,7 +29,6 @@ pub struct SyncStatusRow {
     /// RPC fetch time in ms for the last batch
     pub rpc_fetch_ms: Option<f64>,
     /// Detailed deferred flags
-    pub activities_deferred: bool,
     pub address_balances_deferred: bool,
     pub token_deferred: bool,
     pub spore_deferred: bool,
@@ -37,7 +36,6 @@ pub struct SyncStatusRow {
 }
 
 struct DeferredFlags {
-    activities: bool,
     address_balances: bool,
     token: bool,
     spore: bool,
@@ -46,7 +44,7 @@ struct DeferredFlags {
 
 impl DeferredFlags {
     fn any(&self) -> bool {
-        self.activities || self.address_balances || self.token || self.spore || self.tx_block_map
+        self.address_balances || self.token || self.spore || self.tx_block_map
     }
 }
 
@@ -86,7 +84,6 @@ impl TaskDb {
 
         let store_status = self.store.get_sync_status()?;
         let deferred = DeferredFlags {
-            activities: store_status.activities_deferred,
             address_balances: store_status.address_balances_deferred,
             // token/spore/tx_block_map are only in SyncStatusData (Redis), not in store SyncStatus
             token: status_data.as_ref().is_some_and(|s| s.token_deferred),
@@ -151,7 +148,6 @@ impl TaskDb {
             is_direct_db_read: progress.is_direct_db_read,
             db_write_ms: progress.db_write_ms,
             rpc_fetch_ms: progress.rpc_fetch_ms,
-            activities_deferred: deferred.activities,
             address_balances_deferred: deferred.address_balances,
             token_deferred: deferred.token,
             spore_deferred: deferred.spore,
@@ -209,7 +205,6 @@ impl TaskDb {
             is_direct_db_read: false,
             db_write_ms: None,
             rpc_fetch_ms: None,
-            activities_deferred: deferred.activities,
             address_balances_deferred: deferred.address_balances,
             token_deferred: deferred.token,
             spore_deferred: deferred.spore,
@@ -234,7 +229,6 @@ impl TaskDb {
             is_direct_db_read: false,
             db_write_ms: None,
             rpc_fetch_ms: None,
-            activities_deferred: deferred.activities,
             address_balances_deferred: deferred.address_balances,
             token_deferred: deferred.token,
             spore_deferred: deferred.spore,

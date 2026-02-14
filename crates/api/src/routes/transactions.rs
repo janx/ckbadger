@@ -15,16 +15,11 @@ use crate::cycles::{CyclesStatus, CyclesStatusResponse};
 use crate::response::{
     decode_cursor, encode_cursor, ok, ApiError, ApiResult, CursorPaginatedResponse,
 };
-use crate::tx_block_map::get_block_number_for_tx;
 use crate::utils::script_to_address;
 use crate::AppState;
 
 /// (block_number, tx_hash, tx_index, tx_index_entry, block_hash)
 type TxListEntry = (i64, Vec<u8>, i32, ckbadger_store::TxIndexEntry, Vec<u8>);
-
-/// token_id -> (name, symbol, decimals)
-type TokenMetadataMap =
-    std::collections::HashMap<Vec<u8>, (Option<String>, Option<String>, Option<i32>)>;
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -41,11 +36,6 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/transactions/{hash}/calculate-cycles",
             post(trigger_cycles_calculation),
         )
-        .route(
-            "/transactions/{hash}/asset-transfers",
-            get(get_transaction_asset_transfers),
-        )
-        .route("/transactions/{hash}/activities", get(get_tx_activities))
 }
 
 #[derive(Debug, Deserialize)]
@@ -396,7 +386,6 @@ pub struct TransactionDetailResponse {
     pub outputs_occupied_capacity: String,
     pub inputs: Vec<TransactionInputResponse>,
     pub outputs: Vec<TransactionOutputResponse>,
-    pub activities: Vec<ActivityResponse>,
 }
 
 fn hash_type_to_string(hash_type: i16) -> String {
@@ -546,73 +535,6 @@ async fn fetch_tx_size_from_rpc(rpc_url: &str, tx_hash: &str) -> Option<i32> {
     Some(size as i32)
 }
 
-/// Activity response type (matches the activities module shape).
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ActivityResponse {
-    pub activity_id: String,
-    pub activity_type: String,
-    pub activity_category: String,
-    pub block_number: i64,
-    pub tx_hash: String,
-    pub tx_index: i32,
-    pub activity_index: i16,
-    pub from_address: Option<String>,
-    pub to_address: Option<String>,
-    pub from_lock_hash: Option<String>,
-    pub to_lock_hash: Option<String>,
-    pub amount: String,
-    pub asset_id: Option<String>,
-    pub metadata: serde_json::Value,
-    pub timestamp: String,
-}
-
-/// Fetch activities for a transaction from the store.
-fn fetch_tx_activities_from_store(
-    store: &ckbadger_store::CkbadgerStore,
-    tx_hash: &[u8],
-) -> Vec<ActivityResponse> {
-    let block_num = match get_block_number_for_tx(store, tx_hash) {
-        Ok(Some(bn)) => bn,
-        _ => return vec![],
-    };
-
-    let all_activities = match store.list_block_activities(block_num) {
-        Ok(acts) => acts,
-        Err(_) => return vec![],
-    };
-
-    // Filter to activities for this transaction
-    let mut result = Vec::new();
-    for (idx, entry) in all_activities {
-        if entry.tx_hash == tx_hash {
-            let timestamp = chrono::DateTime::from_timestamp_millis(entry.timestamp * 1000)
-                .or_else(|| chrono::DateTime::from_timestamp(entry.timestamp, 0))
-                .map(|dt| dt.to_rfc3339())
-                .unwrap_or_default();
-
-            result.push(ActivityResponse {
-                activity_id: format!("{}:{}", block_num, idx),
-                activity_type: entry.activity_type,
-                activity_category: entry.category,
-                block_number: block_num,
-                tx_hash: format!("0x{}", hex::encode(&entry.tx_hash)),
-                tx_index: entry.tx_idx,
-                activity_index: idx as i16,
-                from_address: None,
-                to_address: None,
-                from_lock_hash: entry.from_lock.map(|h| format!("0x{}", hex::encode(&h))),
-                to_lock_hash: entry.to_lock.map(|h| format!("0x{}", hex::encode(&h))),
-                amount: entry.amount.unwrap_or(0).to_string(),
-                asset_id: entry.asset_id.map(|id| format!("0x{}", hex::encode(&id))),
-                metadata: entry.metadata.unwrap_or(serde_json::Value::Null),
-                timestamp,
-            });
-        }
-    }
-    result
-}
-
 async fn get_transaction_detail(
     State(state): State<Arc<AppState>>,
     Path(hash): Path<String>,
@@ -730,14 +652,6 @@ async fn get_transaction_detail(
         }
     });
 
-    // Fetch activities from the store
-    let store = state.store.clone();
-    let hash_c = hash_bytes.clone();
-    let activities =
-        tokio::task::spawn_blocking(move || fetch_tx_activities_from_store(&store, &hash_c))
-            .await
-            .unwrap_or_default();
-
     ok(TransactionDetailResponse {
         hash: tx_hash_hex,
         block_number,
@@ -758,7 +672,6 @@ async fn get_transaction_detail(
         outputs_occupied_capacity: outputs_occupied_capacity.to_string(),
         inputs,
         outputs,
-        activities,
     })
 }
 
@@ -1391,211 +1304,6 @@ async fn get_transaction_lifecycle(
     })
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TxAssetTransferResponse {
-    pub tx_hash: String,
-    pub block_number: i64,
-    pub tx_index: i32,
-    pub event_index: i16,
-    pub asset_category: String,
-    pub asset_type: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub asset_id: Option<String>,
-    pub direction: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub peer_address: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub amount: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub event_type: Option<String>,
-    pub timestamp: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub token_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub token_symbol: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub token_decimals: Option<i16>,
-}
-
-async fn get_transaction_asset_transfers(
-    State(state): State<Arc<AppState>>,
-    Path(hash): Path<String>,
-) -> ApiResult<Vec<TxAssetTransferResponse>> {
-    let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap_or(&hash))
-        .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
-
-    let store = state.store.clone();
-    let hash_c = hash_bytes.clone();
-
-    let transfers = tokio::task::spawn_blocking(
-        move || -> Result<Vec<TxAssetTransferResponse>, anyhow::Error> {
-            let block_num = match get_block_number_for_tx(&store, &hash_c)? {
-                Some(bn) => bn,
-                None => return Ok(vec![]),
-            };
-
-            let all_activities = store.list_block_activities(block_num)?;
-
-            // Filter to asset-related activities for this tx
-            let asset_categories = ["token", "dob", "nft", "dao"];
-            let mut token_ids_to_lookup: Vec<Vec<u8>> = Vec::new();
-
-            for (_idx, entry) in &all_activities {
-                if entry.tx_hash != hash_c {
-                    continue;
-                }
-                if !asset_categories.contains(&entry.category.as_str()) {
-                    continue;
-                }
-                if entry.category == "token" {
-                    if let Some(ref asset_id) = entry.asset_id {
-                        token_ids_to_lookup.push(asset_id.clone());
-                    }
-                }
-            }
-
-            // Batch lookup token metadata
-            let mut token_metadata: TokenMetadataMap = std::collections::HashMap::new();
-            for token_id in &token_ids_to_lookup {
-                if let Ok(Some(token_info)) = store.get_token(token_id) {
-                    token_metadata.insert(
-                        token_id.clone(),
-                        (token_info.name, token_info.symbol, token_info.decimals),
-                    );
-                }
-            }
-
-            let mut results = Vec::new();
-            for (idx, entry) in &all_activities {
-                if entry.tx_hash != hash_c {
-                    continue;
-                }
-                if !asset_categories.contains(&entry.category.as_str()) {
-                    continue;
-                }
-
-                let direction_str = if entry.from_lock.is_some() && entry.to_lock.is_none() {
-                    "out"
-                } else if entry.from_lock.is_none() && entry.to_lock.is_some() {
-                    "in"
-                } else {
-                    "transfer"
-                };
-
-                let peer_lock_hash = if entry.from_lock.is_some() {
-                    &entry.to_lock
-                } else {
-                    &entry.from_lock
-                };
-
-                let event_type = match entry.activity_type.as_str() {
-                    "TOKEN_MINT" | "DOB_MINT" | "NFT_MINT" => "mint",
-                    "TOKEN_BURN" | "DOB_BURN" => "burn",
-                    "TOKEN_TRANSFER" | "DOB_TRANSFER" | "NFT_TRANSFER" => "transfer",
-                    "DAO_DEPOSIT" => "deposit",
-                    "DAO_WITHDRAW_REQUEST" => "withdraw_request",
-                    "DAO_WITHDRAW_COMPLETE" => "withdraw_complete",
-                    other => other,
-                };
-
-                let (token_name, token_symbol, token_decimals) =
-                    if entry.category == "token" && entry.asset_id.is_some() {
-                        entry
-                            .asset_id
-                            .as_ref()
-                            .and_then(|id| token_metadata.get(id))
-                            .map(|(n, s, d)| (n.clone(), s.clone(), d.map(|d| d as i16)))
-                            .unwrap_or_else(|| extract_token_meta(entry.metadata.as_ref()))
-                    } else {
-                        extract_token_meta(entry.metadata.as_ref())
-                    };
-
-                let timestamp = chrono::DateTime::from_timestamp_millis(entry.timestamp * 1000)
-                    .or_else(|| chrono::DateTime::from_timestamp(entry.timestamp, 0))
-                    .map(|dt| dt.to_rfc3339())
-                    .unwrap_or_default();
-
-                results.push(TxAssetTransferResponse {
-                    tx_hash: format!("0x{}", hex::encode(&entry.tx_hash)),
-                    block_number: block_num,
-                    tx_index: entry.tx_idx,
-                    event_index: *idx as i16,
-                    asset_category: entry.category.clone(),
-                    asset_type: entry.activity_type.clone(),
-                    asset_id: entry
-                        .asset_id
-                        .as_ref()
-                        .map(|id| format!("0x{}", hex::encode(id))),
-                    direction: direction_str.to_string(),
-                    peer_address: peer_lock_hash
-                        .as_ref()
-                        .map(|h| format!("0x{}", hex::encode(h))),
-                    amount: entry.amount.map(|a| a.to_string()),
-                    event_type: Some(event_type.to_string()),
-                    timestamp,
-                    token_name,
-                    token_symbol,
-                    token_decimals,
-                });
-            }
-
-            Ok(results)
-        },
-    )
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
-    .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    ok(transfers)
-}
-
-fn extract_token_meta(
-    metadata: Option<&serde_json::Value>,
-) -> (Option<String>, Option<String>, Option<i16>) {
-    let metadata = match metadata {
-        Some(m) => m,
-        None => return (None, None, None),
-    };
-    let name = metadata
-        .get("token_name")
-        .or_else(|| metadata.get("name"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let symbol = metadata
-        .get("token_symbol")
-        .or_else(|| metadata.get("symbol"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let decimals = metadata
-        .get("decimals")
-        .and_then(|v| v.as_i64())
-        .map(|d| d as i16);
-    (name, symbol, decimals)
-}
-
-async fn get_tx_activities(
-    State(state): State<Arc<AppState>>,
-    Path(hash): Path<String>,
-) -> ApiResult<Vec<ActivityResponse>> {
-    let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap_or(&hash))
-        .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
-
-    if hash_bytes.len() != 32 {
-        return Err(ApiError::bad_request(
-            "Transaction hash must be 32 bytes (64 hex chars)",
-        ));
-    }
-
-    let store = state.store.clone();
-    let activities =
-        tokio::task::spawn_blocking(move || fetch_tx_activities_from_store(&store, &hash_bytes))
-            .await
-            .unwrap_or_default();
-
-    ok(activities)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1656,39 +1364,6 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_token_meta_from_metadata() {
-        let metadata = serde_json::json!({
-            "token_name": "TestToken",
-            "token_symbol": "TT",
-            "decimals": 8
-        });
-        let (name, symbol, decimals) = extract_token_meta(Some(&metadata));
-        assert_eq!(name, Some("TestToken".to_string()));
-        assert_eq!(symbol, Some("TT".to_string()));
-        assert_eq!(decimals, Some(8));
-    }
-
-    #[test]
-    fn test_extract_token_meta_none() {
-        let (name, symbol, decimals) = extract_token_meta(None);
-        assert!(name.is_none());
-        assert!(symbol.is_none());
-        assert!(decimals.is_none());
-    }
-
-    #[test]
-    fn test_extract_token_meta_alt_keys() {
-        let metadata = serde_json::json!({
-            "name": "AltToken",
-            "symbol": "AT"
-        });
-        let (name, symbol, decimals) = extract_token_meta(Some(&metadata));
-        assert_eq!(name, Some("AltToken".to_string()));
-        assert_eq!(symbol, Some("AT".to_string()));
-        assert!(decimals.is_none());
-    }
-
-    #[test]
     fn test_cell_dep_response_serialization() {
         let resp = CellDepResponse {
             out_point_tx_hash: "0xabc".to_string(),
@@ -1706,31 +1381,5 @@ mod tests {
         assert_eq!(pending, "pending");
         let committed = serde_json::to_value(&LifecyclePhase::Committed).unwrap();
         assert_eq!(committed, "committed");
-    }
-
-    #[test]
-    fn test_tx_asset_transfer_response_serialization() {
-        let resp = TxAssetTransferResponse {
-            tx_hash: "0xabc".to_string(),
-            block_number: 100,
-            tx_index: 1,
-            event_index: 0,
-            asset_category: "token".to_string(),
-            asset_type: "TOKEN_TRANSFER".to_string(),
-            asset_id: Some("0xdef".to_string()),
-            direction: "transfer".to_string(),
-            peer_address: None,
-            amount: Some("1000".to_string()),
-            event_type: Some("transfer".to_string()),
-            timestamp: "2024-01-01T00:00:00Z".to_string(),
-            token_name: Some("Test".to_string()),
-            token_symbol: Some("TST".to_string()),
-            token_decimals: Some(8),
-        };
-        let json = serde_json::to_value(&resp).unwrap();
-        assert_eq!(json["assetCategory"], "token");
-        assert_eq!(json["tokenDecimals"], 8);
-        // peer_address should not be in output since it's None
-        assert!(json.get("peerAddress").is_none());
     }
 }

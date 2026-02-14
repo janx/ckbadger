@@ -344,13 +344,12 @@ impl Indexer {
             progress.blocks_remaining() > SECONDARY_ISSUANCE_BACKFILL_THRESHOLD;
 
         let sync_status = store.get_sync_status()?;
-        let activities_deferred = sync_status.activities_deferred;
         let address_balances_deferred = sync_status.address_balances_deferred;
 
-        if activities_deferred || address_balances_deferred {
+        if address_balances_deferred {
             info!(
-                "Loaded deferred states: activities={}, address_balances={}",
-                activities_deferred, address_balances_deferred
+                "Loaded deferred states: address_balances={}",
+                address_balances_deferred
             );
         }
 
@@ -2478,8 +2477,6 @@ impl Indexer {
         let mut all_input_outpoints_udt: Vec<(Vec<u8>, i16)> = Vec::new();
         let mut batch_udt_cells: HashMap<(Vec<u8>, i16), crate::parser::ParsedUdtCell> =
             HashMap::new();
-        let mut udt_transfers_by_tx: HashMap<Vec<u8>, Vec<crate::parser::ParsedUdtTransfer>> =
-            HashMap::new();
 
         struct TxInfoForUdt {
             tx_hash: Vec<u8>,
@@ -2693,13 +2690,6 @@ impl Indexer {
             }
 
             if !all_transfers.is_empty() {
-                for (transfer, tx_hash, _) in &all_transfers {
-                    udt_transfers_by_tx
-                        .entry(tx_hash.clone())
-                        .or_default()
-                        .push(transfer.clone());
-                }
-
                 let transfer_refs: Vec<_> = all_transfers
                     .iter()
                     .map(|(t, h, b)| (t, h.as_slice(), *b))
@@ -2845,9 +2835,6 @@ impl Indexer {
             }
             consume_batch.commit()?;
         }
-
-        // Activities (no-op in RocksDB model)
-        let _ = &udt_transfers_by_tx;
 
         {
             let mut batch = StoreBatch::new(self.writer.store());
