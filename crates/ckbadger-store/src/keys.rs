@@ -182,6 +182,11 @@ pub fn encode_spore_by_cluster_key(cluster_id: &[u8], spore_id: &[u8]) -> [u8; 6
 /// Activity key: lock_hash(32B) + block_num_desc(8B BE) + tx_idx(4B BE) = 44 bytes
 /// Uses descending block_num so newest activities come first in prefix scan.
 pub fn encode_activity_key(lock_hash: &[u8], block_num: i64, tx_idx: i32) -> Vec<u8> {
+    assert!(
+        lock_hash.len() >= 32,
+        "encode_activity_key: lock_hash must be >= 32 bytes, got {}",
+        lock_hash.len()
+    );
     let block_desc = (i64::MAX - block_num).to_be_bytes();
     let mut key = Vec::with_capacity(44);
     key.extend_from_slice(&lock_hash[..32]);

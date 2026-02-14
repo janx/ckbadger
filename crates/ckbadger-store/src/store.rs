@@ -86,12 +86,29 @@ pub struct CkbadgerStore {
 
 impl CkbadgerStore {
     /// Open as primary (read-write). Creates all column families.
+    /// Also opens any legacy CFs that exist on disk but are no longer in ALL_CFS,
+    /// so RocksDB doesn't error on "Column families not opened".
     pub fn open<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
         let (opts, block_cache) = Self::default_options();
 
-        let cf_descriptors: Vec<ColumnFamilyDescriptor> = ALL_CFS
+        // Discover any CFs that exist on disk (may include legacy/removed ones)
+        let existing_cfs = DB::list_cf(&opts, &path).unwrap_or_default();
+        let mut cf_names: Vec<String> = ALL_CFS.iter().map(|s| s.to_string()).collect();
+        for cf in &existing_cfs {
+            if cf != "default" && !ALL_CFS.contains(&cf.as_str()) {
+                warn!(cf = cf.as_str(), "Opening legacy column family from disk");
+                cf_names.push(cf.clone());
+            }
+        }
+
+        let cf_descriptors: Vec<ColumnFamilyDescriptor> = cf_names
             .iter()
-            .map(|name| ColumnFamilyDescriptor::new(*name, Self::cf_options(name, &block_cache)))
+            .map(|name| {
+                ColumnFamilyDescriptor::new(
+                    name.as_str(),
+                    Self::cf_options(name.as_str(), &block_cache),
+                )
+            })
             .collect();
 
         let db = DB::open_cf_descriptors(&opts, path, cf_descriptors)?;
@@ -111,8 +128,15 @@ impl CkbadgerStore {
     ) -> anyhow::Result<Self> {
         let (opts, block_cache) = Self::default_options();
 
-        let cf_names: Vec<&str> = ALL_CFS.to_vec();
-        let db = DB::open_cf_as_secondary(&opts, primary_path, secondary_path, cf_names)?;
+        let existing_cfs = DB::list_cf(&opts, &primary_path).unwrap_or_default();
+        let mut cf_names: Vec<String> = ALL_CFS.iter().map(|s| s.to_string()).collect();
+        for cf in &existing_cfs {
+            if cf != "default" && !ALL_CFS.contains(&cf.as_str()) {
+                cf_names.push(cf.clone());
+            }
+        }
+        let cf_refs: Vec<&str> = cf_names.iter().map(|s| s.as_str()).collect();
+        let db = DB::open_cf_as_secondary(&opts, primary_path, secondary_path, cf_refs)?;
 
         Ok(Self {
             db,

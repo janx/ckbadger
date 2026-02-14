@@ -24,7 +24,7 @@ export function Logo() {
       aria-label="CKBadger Home"
     >
       <Image
-        src="/ckbadger-logo4-tran.png"
+        src="/ckbadger-logo11.png"
         alt="CKBadger"
         width={143}
         height={97}

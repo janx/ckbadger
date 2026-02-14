@@ -142,8 +142,11 @@ fn build_tx_activities(
 ) -> Vec<(Vec<u8>, ActivityEntry)> {
     let mut owners: HashMap<Vec<u8>, OwnerAccum> = HashMap::new();
 
-    // Process inputs
+    // Process inputs (skip inputs with unknown cell info — empty lock_script_hash)
     for input in &tx.inputs {
+        if input.lock_script_hash.len() < 32 {
+            continue;
+        }
         let accum = owners.entry(input.lock_script_hash.clone()).or_default();
         accum.input_capacity += input.capacity as i128;
         accum.input_occupied += input.occupied_capacity;
