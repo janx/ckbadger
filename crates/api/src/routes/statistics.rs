@@ -166,7 +166,7 @@ async fn get_tx_stats(State(state): State<Arc<AppState>>) -> ApiResult<TxStatsRe
     let mut recent_daily: Vec<(String, ckbadger_store::DailyStats)> = daily_stats
         .into_iter()
         .filter(|(date_str, _)| {
-            if let Ok(date) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
+            if let Ok(date) = chrono::NaiveDate::parse_from_str(date_str, "%Y%m%d") {
                 date > cutoff_date && date <= reference_date
             } else {
                 false
@@ -201,7 +201,7 @@ async fn get_tx_stats(State(state): State<Arc<AppState>>) -> ApiResult<TxStatsRe
         .into_iter()
         .rev()
         .map(|(date_str, stats)| {
-            let label = if let Ok(date) = chrono::NaiveDate::parse_from_str(&date_str, "%Y-%m-%d") {
+            let label = if let Ok(date) = chrono::NaiveDate::parse_from_str(&date_str, "%Y%m%d") {
                 date.format("%m/%d").to_string()
             } else {
                 date_str
@@ -745,9 +745,9 @@ async fn fetch_network_stats_from_db(
     // The CachedBlockHeader doesn't store compact_target, so we compute difficulty
     // from the latest DailyBlockStats instead. For now use the latest daily block stats.
     let today = latest_timestamp.date_naive();
-    let today_str = today.format("%Y-%m-%d").to_string();
+    let today_str = today.format("%Y%m%d").to_string();
     let yesterday = today - chrono::Duration::days(1);
-    let yesterday_str = yesterday.format("%Y-%m-%d").to_string();
+    let yesterday_str = yesterday.format("%Y%m%d").to_string();
 
     // Fetch epoch stats for avg block time
     let epoch_stats = store
