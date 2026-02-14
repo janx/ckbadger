@@ -344,6 +344,89 @@ fn test_address_balance_update_send() {
 }
 
 #[test]
+fn test_address_balance_occupied_delta_applied() {
+    let (store, writer) = setup_store();
+    let lock_hash = vec![0xBBu8; 32];
+    let tx_hash1 = vec![0x01u8; 32];
+    let tx_hash2 = vec![0x02u8; 32];
+
+    // Receive: creates a cell with 6100 CKB occupied
+    let receive: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8], i64)> = [(
+        lock_hash.clone(),
+        (
+            100_00000000,
+            1,
+            1,
+            1,
+            1000,
+            tx_hash1.as_slice(),
+            6100_00000000,
+        ),
+    )]
+    .into_iter()
+    .collect();
+    let mut batch = StoreBatch::new(&store);
+    writer
+        .update_address_balances_batch(&receive, &mut batch)
+        .unwrap();
+    batch.commit().unwrap();
+
+    let balance = store.get_addr_balance(&lock_hash).unwrap().unwrap();
+    assert_eq!(balance.occupied_capacity, 6100_00000000);
+
+    // Consume old cell (-6100) and create new smaller cell (+4100)
+    let update: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8], i64)> = [(
+        lock_hash.clone(),
+        (0, 0, 1, 1, 2000, tx_hash2.as_slice(), -2000_00000000),
+    )]
+    .into_iter()
+    .collect();
+    let mut batch = StoreBatch::new(&store);
+    writer
+        .update_address_balances_batch(&update, &mut batch)
+        .unwrap();
+    batch.commit().unwrap();
+
+    let balance = store.get_addr_balance(&lock_hash).unwrap().unwrap();
+    assert_eq!(balance.occupied_capacity, 4100_00000000);
+}
+
+#[test]
+fn test_address_balance_occupied_clamped_at_zero() {
+    let (store, writer) = setup_store();
+    let lock_hash = vec![0xCCu8; 32];
+    let tx_hash = vec![0x01u8; 32];
+
+    // Apply a negative occupied_delta larger than what exists (0)
+    // Should be clamped to 0, not go negative
+    let changes: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8], i64)> = [(
+        lock_hash.clone(),
+        (
+            100_00000000,
+            1,
+            1,
+            1,
+            1000,
+            tx_hash.as_slice(),
+            -9999_00000000,
+        ),
+    )]
+    .into_iter()
+    .collect();
+    let mut batch = StoreBatch::new(&store);
+    writer
+        .update_address_balances_batch(&changes, &mut batch)
+        .unwrap();
+    batch.commit().unwrap();
+
+    let balance = store.get_addr_balance(&lock_hash).unwrap().unwrap();
+    assert_eq!(
+        balance.occupied_capacity, 0,
+        "occupied_capacity should be clamped to 0"
+    );
+}
+
+#[test]
 fn test_multiple_outputs_same_tx() {
     let (store, writer) = setup_store();
     let tx_hash = vec![0x01u8; 32];
