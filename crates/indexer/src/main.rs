@@ -71,6 +71,13 @@ struct Args {
 
     #[arg(long, default_value = "false", help = "Disable embedded task runner")]
     no_task_runner: bool,
+
+    #[arg(
+        long,
+        default_value = "false",
+        help = "Force rebuild of activity entries from scratch on startup"
+    )]
+    rebuild_activities: bool,
 }
 
 #[tokio::main]
@@ -124,6 +131,22 @@ async fn main() -> Result<()> {
         info!("addr_txs backfill complete: {} entries indexed", count);
     }
 
+    // One-time migration: rebuild DAO daily snapshots from deposit history
+    // v3: fixes AR-vs-deposit bug, adds cumulative_deposit_amount, and
+    //     stores actual C/S from DAO header for circulation ratio chart
+    let sync_status = store.get_sync_status()?;
+    if sync_status.dao_snapshots_version < 3 && sync_status.tip_block_number > 0 {
+        info!("DAO snapshots migration v3: rebuilding from deposit history...");
+        let written = store.rebuild_dao_daily_snapshots()?;
+        info!(
+            "DAO snapshots migration v3 complete: {} snapshots rebuilt",
+            written
+        );
+        store.update_sync_status(|s| {
+            s.dao_snapshots_version = 3;
+        })?;
+    }
+
     let sync_status = store.get_sync_status()?;
     let db_tip = sync_status.tip_block_number;
     let is_fresh_sync = db_tip == 0;
@@ -134,11 +157,23 @@ async fn main() -> Result<()> {
         info!("Resuming sync from block {}", db_tip);
     }
 
+    // Force activities rebuild if requested via CLI flag
+    if args.rebuild_activities && !sync_status.activities_deferred {
+        info!("--rebuild-activities flag set: marking activities as deferred for rebuild");
+        store.update_sync_status(|s| {
+            s.activities_deferred = true;
+        })?;
+    }
+
     // Check deferred state
-    if sync_status.address_balances_deferred || sync_status.activities_deferred {
+    if sync_status.address_balances_deferred
+        || sync_status.activities_deferred
+        || args.rebuild_activities
+    {
         info!(
             "Deferred states: address_balances={}, activities={}",
-            sync_status.address_balances_deferred, sync_status.activities_deferred
+            sync_status.address_balances_deferred,
+            sync_status.activities_deferred || args.rebuild_activities
         );
     }
 

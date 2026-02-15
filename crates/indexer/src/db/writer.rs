@@ -24,3 +24,4 @@ pub use cells::rebuild_cell_indices;
 pub use core::BatchWriter;
 pub use dao::{DaoWithdrawalContextTrait, SecondaryIssuanceBreakdown};
 pub use reorg::ReorgResult;
+pub use statistics::DaoSnapshotInput;

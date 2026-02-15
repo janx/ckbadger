@@ -7,6 +7,23 @@ use ckbadger_store::types::*;
 
 use super::BatchWriter;
 
+/// Pre-computed DAO deposit statistics for daily snapshots.
+/// Computed from tracked deposit/withdrawal events rather than block header fields.
+pub struct DaoSnapshotInput {
+    pub total_deposited: i128,
+    pub depositors_count: i64,
+    pub total_deposit_count: i64,
+    pub total_withdrawal_count: i64,
+    pub total_compensation: i128,
+    /// Cumulative gross deposit amount (sum of all deposit capacities regardless
+    /// of withdrawal status).
+    pub cumulative_deposit_amount: i128,
+    /// C field from DAO header: total CKB issuance (shannons).
+    pub total_issuance: i128,
+    /// S field from DAO header: cumulative secondary issuance to treasury (shannons).
+    pub secondary_pool: i128,
+}
+
 impl BatchWriter {
     pub fn update_hourly_statistics(
         &self,
@@ -493,33 +510,23 @@ impl BatchWriter {
     pub fn update_dao_daily_snapshot(
         &self,
         date: NaiveDate,
-        dao_field: Option<&[u8]>,
+        dao_snapshot: &DaoSnapshotInput,
         batch: &mut StoreBatch,
     ) -> Result<()> {
         let date_str = date.format("%Y%m%d").to_string();
         let key =
             keys::encode_stats_key(keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT, date_str.as_bytes());
 
-        // Extract total_deposited from DAO header field (bytes 8-15, little-endian u64)
-        let total_deposited_from_header: Option<i128> = dao_field.and_then(|field| {
-            if field.len() >= 16 {
-                let bytes: [u8; 8] = field[8..16].try_into().ok()?;
-                Some(u64::from_le_bytes(bytes) as i128)
-            } else {
-                None
-            }
-        });
-
-        // Read current global DAO stats for depositor/deposit/withdrawal counts
-        let dao_stats = self.store.get_dao_stats(b"global")?.unwrap_or_default();
-
         let snapshot = DaoDailySnapshot {
             date: date.format("%Y-%m-%d").to_string(),
-            total_deposited: total_deposited_from_header.unwrap_or(dao_stats.total_deposited),
-            depositors_count: dao_stats.total_depositors,
-            new_deposits: dao_stats.total_deposits,
-            withdrawals: dao_stats.total_withdrawals,
-            compensation: dao_stats.total_compensation,
+            total_deposited: dao_snapshot.total_deposited,
+            depositors_count: dao_snapshot.depositors_count,
+            new_deposits: dao_snapshot.total_deposit_count,
+            withdrawals: dao_snapshot.total_withdrawal_count,
+            compensation: dao_snapshot.total_compensation,
+            cumulative_deposit_amount: dao_snapshot.cumulative_deposit_amount,
+            total_issuance: dao_snapshot.total_issuance,
+            secondary_pool: dao_snapshot.secondary_pool,
         };
 
         let value = bincode::serialize(&snapshot)?;

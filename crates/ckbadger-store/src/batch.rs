@@ -351,6 +351,10 @@ impl<'a> StoreBatch<'a> {
         self.batch.put_cf(self.store.cf_stats(), key, value);
     }
 
+    pub fn delete_stats(&mut self, key: &[u8]) {
+        self.batch.delete_cf(self.store.cf_stats(), key);
+    }
+
     pub fn put_script_info(&mut self, code_hash: &[u8], info: &ScriptInfo) {
         let value = bincode::serialize(info).expect("serialize ScriptInfo");
         self.batch

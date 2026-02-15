@@ -746,11 +746,14 @@ async fn get_daily_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResul
         .list_dao_daily_snapshots()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    // Compute daily deltas from cumulative deposit totals
+    // Compute daily gross deposits from cumulative deposit amounts.
+    // Uses cumulative_deposit_amount (gross, never reduced by withdrawals)
+    // to match the official explorer's daily_dao_deposit metric.
     let data: Vec<ChartDataPoint> = snapshots
         .windows(2)
         .map(|w| {
-            let daily_deposited = (w[1].total_deposited - w[0].total_deposited).max(0);
+            let daily_deposited =
+                (w[1].cumulative_deposit_amount - w[0].cumulative_deposit_amount).max(0);
             let daily_deposits = (w[1].new_deposits - w[0].new_deposits).max(0);
             ChartDataPoint {
                 date: w[1].date.clone(),
@@ -785,10 +788,20 @@ async fn get_circulation_ratio_chart(
         .list_dao_daily_snapshots()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
+    // 8.4 billion CKB burnt at genesis (in shannons)
+    const GENESIS_BURNT: i128 = 8_400_000_000 * 100_000_000;
+
     let data: Vec<ChartDataPoint> = snapshots
         .iter()
         .filter_map(|s| {
-            let circulating = estimated_circulating_supply(&s.date)?;
+            // Circulating supply = C - S - burnt
+            // C = total issuance, S = treasury (secondary pool)
+            // Falls back to estimated formula if C/S not available (pre-migration data)
+            let circulating = if s.total_issuance > 0 {
+                (s.total_issuance - s.secondary_pool - GENESIS_BURNT) as f64
+            } else {
+                estimated_circulating_supply(&s.date)?
+            };
             if circulating <= 0.0 {
                 return None;
             }

@@ -482,11 +482,15 @@ impl Indexer {
             let store_act = Arc::clone(self.writer.store());
             let ckb_store_act = self.ckb_store.clone();
             tokio::task::spawn_blocking(move || {
-                rebuild_activities(&store_act, ckb_store_act.as_deref());
-                if let Err(e) = store_act.update_sync_status(|s| {
-                    s.activities_deferred = false;
-                }) {
-                    warn!("Failed to clear activities_deferred flag: {}", e);
+                let completed = rebuild_activities(&store_act, ckb_store_act.as_deref());
+                if completed {
+                    if let Err(e) = store_act.update_sync_status(|s| {
+                        s.activities_deferred = false;
+                    }) {
+                        warn!("Failed to clear activities_deferred flag: {}", e);
+                    }
+                } else {
+                    warn!("Activities rebuild did not complete; deferred flag preserved for retry");
                 }
             });
         }
@@ -1670,12 +1674,15 @@ impl Indexer {
             let store_act = Arc::clone(self.writer.store());
             let ckb_store_act = self.ckb_store.clone();
             tokio::task::spawn_blocking(move || {
-                rebuild_activities(&store_act, ckb_store_act.as_deref());
-                // Clear the deferred flag after successful rebuild
-                if let Err(e) = store_act.update_sync_status(|s| {
-                    s.activities_deferred = false;
-                }) {
-                    warn!("Failed to clear activities_deferred flag: {}", e);
+                let completed = rebuild_activities(&store_act, ckb_store_act.as_deref());
+                if completed {
+                    if let Err(e) = store_act.update_sync_status(|s| {
+                        s.activities_deferred = false;
+                    }) {
+                        warn!("Failed to clear activities_deferred flag: {}", e);
+                    }
+                } else {
+                    warn!("Activities rebuild did not complete; deferred flag preserved for retry on next restart");
                 }
             });
 
@@ -5183,10 +5190,63 @@ impl Indexer {
         {
             let mut snapshot_dates: Vec<_> = stats.dao_snapshot_dates.iter().collect();
             snapshot_dates.sort();
-            for date in snapshot_dates {
-                let dao_field = stats.daily_dao_fields.get(date).map(|v| v.as_slice());
-                self.writer
-                    .update_dao_daily_snapshot(*date, dao_field, batch)?;
+            if !snapshot_dates.is_empty() {
+                // Compute total deposit from tracked deposit/withdrawal events.
+                // Active deposits (status=0) are currently locked in the DAO.
+                let all_deposits = self.writer.store().list_dao_deposits()?;
+                let total_deposited: i128 = all_deposits
+                    .iter()
+                    .filter(|(_, e)| e.status == 0)
+                    .map(|(_, e)| e.capacity as i128)
+                    .sum();
+                let depositors_count = {
+                    let unique: std::collections::HashSet<&[u8]> = all_deposits
+                        .iter()
+                        .filter(|(_, e)| e.status == 0)
+                        .map(|(_, e)| e.lock_script_hash.as_slice())
+                        .collect();
+                    unique.len() as i64
+                };
+                let total_deposit_count = all_deposits.len() as i64;
+                let total_withdrawal_count =
+                    all_deposits.iter().filter(|(_, e)| e.status == 2).count() as i64;
+                let total_compensation: i128 = all_deposits
+                    .iter()
+                    .filter(|(_, e)| e.status == 2 && e.compensation.is_some())
+                    .map(|(_, e)| e.compensation.unwrap_or(0) as i128)
+                    .sum();
+                // Gross deposit amount: sum of ALL deposits' capacity (regardless of status)
+                let cumulative_deposit_amount: i128 =
+                    all_deposits.iter().map(|(_, e)| e.capacity as i128).sum();
+                for date in snapshot_dates {
+                    // Extract C (total_issuance) and S (secondary_pool) from the
+                    // DAO header field for this specific date.
+                    let (total_issuance, secondary_pool) = stats
+                        .daily_dao_fields
+                        .get(date)
+                        .and_then(|field| {
+                            if field.len() >= 24 {
+                                let c = u64::from_le_bytes(field[0..8].try_into().ok()?) as i128;
+                                let s = u64::from_le_bytes(field[16..24].try_into().ok()?) as i128;
+                                Some((c, s))
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or((0, 0));
+                    let dao_snapshot = crate::db::writer::DaoSnapshotInput {
+                        total_deposited,
+                        depositors_count,
+                        total_deposit_count,
+                        total_withdrawal_count,
+                        total_compensation,
+                        cumulative_deposit_amount,
+                        total_issuance,
+                        secondary_pool,
+                    };
+                    self.writer
+                        .update_dao_daily_snapshot(*date, &dao_snapshot, batch)?;
+                }
             }
         }
 

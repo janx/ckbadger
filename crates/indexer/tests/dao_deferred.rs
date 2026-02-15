@@ -25,6 +25,7 @@ fn test_sync_status_address_balances_deferred() {
         activities_deferred: false,
         deep_fork_detected: false,
         deep_fork_info: None,
+        dao_snapshots_version: 0,
     };
 
     store.set_sync_status(&status).unwrap();
@@ -52,6 +53,7 @@ fn test_update_sync_status_closure() {
         activities_deferred: false,
         deep_fork_detected: false,
         deep_fork_info: None,
+        dao_snapshots_version: 0,
     };
     store.set_sync_status(&initial).unwrap();
 

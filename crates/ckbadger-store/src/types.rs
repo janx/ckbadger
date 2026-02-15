@@ -147,6 +147,17 @@ pub struct DaoDailySnapshot {
     pub new_deposits: i64,
     pub withdrawals: i64,
     pub compensation: i128,
+    /// Cumulative gross deposit amount (sum of all deposit capacities, never
+    /// decreased by withdrawals). Used to compute daily gross deposits via
+    /// deltas between consecutive snapshots.
+    #[serde(default)]
+    pub cumulative_deposit_amount: i128,
+    /// C field from DAO header: total CKB issuance up to this date (shannons).
+    #[serde(default)]
+    pub total_issuance: i128,
+    /// S field from DAO header: cumulative secondary issuance to treasury (shannons).
+    #[serde(default)]
+    pub secondary_pool: i128,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -465,6 +476,12 @@ pub struct SyncStatus {
     pub activities_deferred: bool,
     pub deep_fork_detected: bool,
     pub deep_fork_info: Option<DeepForkInfo>,
+    /// DAO snapshots migration version. Tracks which rebuild has been applied:
+    /// - 0 (default): Legacy data using AR field (needs rebuild)
+    /// - 3: Rebuilt with correct deposit totals, cumulative_deposit_amount,
+    ///   and actual C/S from DAO header for circulation ratio
+    #[serde(default)]
+    pub dao_snapshots_version: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -32,12 +32,15 @@ struct TxRebuildData {
 ///
 /// Reads raw blocks from CKB's RocksDB, parses transactions, looks up
 /// input cell info from our store, and writes activity entries.
-pub fn rebuild_activities(store: &CkbadgerStore, ckb_store: Option<&CkbChainReader>) {
+///
+/// Returns `true` if the rebuild completed successfully, `false` if it
+/// was skipped (e.g. missing CKB store) or had no work to do.
+pub fn rebuild_activities(store: &CkbadgerStore, ckb_store: Option<&CkbChainReader>) -> bool {
     let ckb_store = match ckb_store {
         Some(s) => s,
         None => {
             warn!("Activities rebuild skipped: CKB store not available (ckb_data_path not set)");
-            return;
+            return false;
         }
     };
 
@@ -45,13 +48,13 @@ pub fn rebuild_activities(store: &CkbadgerStore, ckb_store: Option<&CkbChainRead
         Ok(status) => status.tip_block_number,
         Err(e) => {
             warn!("Activities rebuild: failed to get sync tip: {}", e);
-            return;
+            return false;
         }
     };
 
     if tip <= 0 {
         info!("Activities rebuild: no blocks to process");
-        return;
+        return true;
     }
 
     const BATCH_BLOCKS: i64 = 1000;
@@ -151,7 +154,7 @@ pub fn rebuild_activities(store: &CkbadgerStore, ckb_store: Option<&CkbChainRead
                     "Activities rebuild: batch commit error at block {}: {}",
                     batch_end, e
                 );
-                return;
+                return false;
             }
         }
         total_activities += batch_count;
@@ -183,6 +186,7 @@ pub fn rebuild_activities(store: &CkbadgerStore, ckb_store: Option<&CkbChainRead
         elapsed_secs,
         "Activities rebuild complete"
     );
+    true
 }
 
 /// Look up the cell that a transaction input is consuming.
@@ -256,8 +260,8 @@ mod tests {
     #[test]
     fn test_rebuild_activities_skips_when_no_ckb_store() {
         let store = setup_store();
-        // Should return early without panic when ckb_store is None
-        rebuild_activities(&store, None);
+        // Should return false (not completed) when ckb_store is None
+        assert!(!rebuild_activities(&store, None));
     }
 
     #[test]
@@ -269,8 +273,8 @@ mod tests {
         let status = store.get_sync_status().unwrap();
         assert_eq!(status.tip_block_number, 0);
         // With None, the "no ckb_store" branch fires before tip check,
-        // but the logic is still validated by the test_rebuild_empty_store test
-        rebuild_activities(&store, None);
+        // returning false since rebuild was skipped
+        assert!(!rebuild_activities(&store, None));
     }
 
     #[test]
