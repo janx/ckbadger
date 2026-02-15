@@ -155,9 +155,21 @@ pub struct DaoDailySnapshot {
     /// C field from DAO header: total CKB issuance up to this date (shannons).
     #[serde(default)]
     pub total_issuance: i128,
-    /// S field from DAO header: cumulative secondary issuance to treasury (shannons).
+    /// S field from DAO header: cumulative non-miner secondary issuance (shannons).
     #[serde(default)]
     pub secondary_pool: i128,
+    /// U field from DAO header: total occupied capacity (shannons).
+    #[serde(default)]
+    pub occupied_capacity: i128,
+    /// Cumulative secondary issuance to miners (shannons).
+    #[serde(default)]
+    pub cum_miner_secondary: i128,
+    /// Cumulative secondary issuance to DAO depositors (shannons).
+    #[serde(default)]
+    pub cum_dao_compensation: i128,
+    /// Cumulative secondary issuance to treasury (shannons).
+    #[serde(default)]
+    pub cum_treasury: i128,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -482,6 +494,8 @@ pub struct SyncStatus {
     ///   and actual C/S from DAO header for circulation ratio
     #[serde(default)]
     pub dao_snapshots_version: i32,
+    #[serde(default)]
+    pub avg_block_time_rebuilt: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

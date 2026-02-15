@@ -5115,13 +5115,14 @@ impl Indexer {
             )?;
         }
 
-        // Daily statistics
+        // Daily statistics (with block time data folded in)
         for (
             date,
             (blocks, txs, created, consumed, capacity, data_size_added, data_size_consumed),
         ) in &stats.daily_stats
         {
             let dao_field = stats.daily_dao_fields.get(date);
+            let block_time = stats.daily_block_times.get(date).copied();
             self.writer.update_daily_statistics(
                 *date,
                 *blocks,
@@ -5132,6 +5133,7 @@ impl Indexer {
                 *data_size_added,
                 *data_size_consumed,
                 dao_field.map(|v| v.as_slice()),
+                block_time,
                 batch,
             )?;
         }
@@ -5145,15 +5147,6 @@ impl Indexer {
             };
             self.writer
                 .update_daily_block_stats_batch(*date, avg_target, *count, *uncles, batch)?;
-        }
-
-        // Daily avg block time
-        for (date, (sum_ms, count)) in &stats.daily_block_times {
-            if *count > 0 {
-                let avg_ms = sum_ms / *count as i64;
-                self.writer
-                    .update_daily_avg_block_time_batch(*date, avg_ms, *count, batch)?;
-            }
         }
 
         // Hourly statistics
@@ -5219,21 +5212,39 @@ impl Indexer {
                 let cumulative_deposit_amount: i128 =
                     all_deposits.iter().map(|(_, e)| e.capacity as i128).sum();
                 for date in snapshot_dates {
-                    // Extract C (total_issuance) and S (secondary_pool) from the
-                    // DAO header field for this specific date.
-                    let (total_issuance, secondary_pool) = stats
+                    // Extract C, S, U from the DAO header field for this date.
+                    let (total_issuance, secondary_pool, occupied_capacity) = stats
                         .daily_dao_fields
                         .get(date)
                         .and_then(|field| {
-                            if field.len() >= 24 {
+                            if field.len() >= 32 {
                                 let c = u64::from_le_bytes(field[0..8].try_into().ok()?) as i128;
                                 let s = u64::from_le_bytes(field[16..24].try_into().ok()?) as i128;
-                                Some((c, s))
+                                let u = u64::from_le_bytes(field[24..32].try_into().ok()?) as i128;
+                                Some((c, s, u))
                             } else {
                                 None
                             }
                         })
-                        .unwrap_or((0, 0));
+                        .unwrap_or((0, 0, 0));
+                    // Read previous snapshot's cumulative values (if any) to
+                    // carry forward; secondary issuance breakdown is computed
+                    // by the rebuild migration and carried forward here.
+                    let prev = self
+                        .writer
+                        .store()
+                        .list_dao_daily_snapshots()
+                        .ok()
+                        .and_then(|snaps| snaps.last().cloned());
+                    let (cum_miner, cum_dao, cum_treasury) = prev
+                        .map(|p| {
+                            (
+                                p.cum_miner_secondary,
+                                p.cum_dao_compensation,
+                                p.cum_treasury,
+                            )
+                        })
+                        .unwrap_or((0, 0, 0));
                     let dao_snapshot = crate::db::writer::DaoSnapshotInput {
                         total_deposited,
                         depositors_count,
@@ -5243,6 +5254,10 @@ impl Indexer {
                         cumulative_deposit_amount,
                         total_issuance,
                         secondary_pool,
+                        occupied_capacity,
+                        cum_miner_secondary: cum_miner,
+                        cum_dao_compensation: cum_dao,
+                        cum_treasury,
                     };
                     self.writer
                         .update_dao_daily_snapshot(*date, &dao_snapshot, batch)?;

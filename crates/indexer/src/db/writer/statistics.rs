@@ -20,8 +20,16 @@ pub struct DaoSnapshotInput {
     pub cumulative_deposit_amount: i128,
     /// C field from DAO header: total CKB issuance (shannons).
     pub total_issuance: i128,
-    /// S field from DAO header: cumulative secondary issuance to treasury (shannons).
+    /// S field from DAO header: cumulative non-miner secondary issuance (shannons).
     pub secondary_pool: i128,
+    /// U field from DAO header: total occupied capacity (shannons).
+    pub occupied_capacity: i128,
+    /// Cumulative secondary issuance to miners (shannons).
+    pub cum_miner_secondary: i128,
+    /// Cumulative secondary issuance to DAO depositors (shannons).
+    pub cum_dao_compensation: i128,
+    /// Cumulative secondary issuance to treasury (shannons).
+    pub cum_treasury: i128,
 }
 
 impl BatchWriter {
@@ -77,6 +85,7 @@ impl BatchWriter {
         data_size_added: i64,
         data_size_consumed: i64,
         dao_field: Option<&[u8]>,
+        block_time: Option<(i64, i32)>, // (sum_ms, count)
         batch: &mut StoreBatch,
     ) -> Result<()> {
         let key = keys::encode_stats_key(
@@ -85,9 +94,36 @@ impl BatchWriter {
         );
         let existing = self.store.get_cf(self.store.cf_stats(), &key)?;
 
+        let avg_block_time_ms = block_time.and_then(|(sum_ms, count)| {
+            if count > 0 {
+                Some(sum_ms / count as i64)
+            } else {
+                None
+            }
+        });
+
         let stats = match existing {
             Some(val) => {
                 let mut s: DailyStats = bincode::deserialize(&val).unwrap_or_default();
+                // Compute weighted average block time before updating blocks_count
+                if let Some(new_avg) = avg_block_time_ms {
+                    let bt_count = block_time.map(|(_, c)| c).unwrap_or(0);
+                    s.avg_block_time_ms = match s.avg_block_time_ms {
+                        Some(existing_avg) => {
+                            let prev_count = s.blocks_count as i64;
+                            let new_total = s.blocks_count as i64 + bt_count as i64;
+                            if new_total > 0 {
+                                Some(
+                                    (existing_avg * prev_count + new_avg * bt_count as i64)
+                                        / new_total,
+                                )
+                            } else {
+                                Some(new_avg)
+                            }
+                        }
+                        None => Some(new_avg),
+                    };
+                }
                 s.blocks_count += blocks_count;
                 s.transactions_count += transactions_count;
                 s.cells_created += cells_created;
@@ -120,7 +156,7 @@ impl BatchWriter {
                     total_all_cells: cells_created as i64,
                     total_data_size: net_data_size,
                     knowledge_size,
-                    avg_block_time_ms: None,
+                    avg_block_time_ms,
                 }
             }
         };
@@ -527,6 +563,10 @@ impl BatchWriter {
             cumulative_deposit_amount: dao_snapshot.cumulative_deposit_amount,
             total_issuance: dao_snapshot.total_issuance,
             secondary_pool: dao_snapshot.secondary_pool,
+            occupied_capacity: dao_snapshot.occupied_capacity,
+            cum_miner_secondary: dao_snapshot.cum_miner_secondary,
+            cum_dao_compensation: dao_snapshot.cum_dao_compensation,
+            cum_treasury: dao_snapshot.cum_treasury,
         };
 
         let value = bincode::serialize(&snapshot)?;

@@ -276,6 +276,70 @@ impl CkbadgerStore {
         Ok(results)
     }
 
+    // ---- Average block time rebuild ----
+
+    /// Rebuild avg_block_time_ms in DailyStats by iterating all block headers
+    /// and computing the mean block time per day.
+    #[allow(clippy::manual_is_multiple_of)]
+    pub fn rebuild_avg_block_times(&self) -> anyhow::Result<usize> {
+        use std::collections::BTreeMap;
+
+        // Iterate all block headers in order, compute block time diffs
+        let mut daily_times: BTreeMap<chrono::NaiveDate, (i64, i64)> = BTreeMap::new(); // (sum_ms, count)
+        let mut prev_timestamp: Option<i64> = None;
+
+        let iter = self.iterator_cf(self.cf_block_headers(), rocksdb::IteratorMode::Start);
+        for item in iter.flatten() {
+            let (_, value) = item;
+            if let Ok(header) = bincode::deserialize::<CachedBlockHeader>(&value) {
+                if let Some(prev_ts) = prev_timestamp {
+                    let block_time_ms = header.timestamp - prev_ts;
+                    if block_time_ms >= 0 {
+                        let ts_secs = header.timestamp / 1000;
+                        if let Some(dt) = chrono::DateTime::from_timestamp(ts_secs, 0) {
+                            let date = dt.date_naive();
+                            let entry = daily_times.entry(date).or_insert((0, 0));
+                            entry.0 += block_time_ms;
+                            entry.1 += 1;
+                        }
+                    }
+                }
+                prev_timestamp = Some(header.timestamp);
+            }
+        }
+
+        // Update each day's DailyStats with the computed average
+        let mut updated = 0usize;
+        let mut batch = crate::batch::StoreBatch::new(self);
+
+        for (date, (sum_ms, count)) in &daily_times {
+            if *count <= 0 {
+                continue;
+            }
+            let date_str = date.format("%Y%m%d").to_string();
+            let key = crate::keys::encode_stats_key(stats_prefix::DAILY, date_str.as_bytes());
+            if let Some(val) = self.get_cf(self.cf_stats(), &key)? {
+                if let Ok(mut s) = bincode::deserialize::<DailyStats>(&val) {
+                    s.avg_block_time_ms = Some(*sum_ms / *count);
+                    let value = bincode::serialize(&s)?;
+                    batch.put_stats(&key, &value);
+                    updated += 1;
+
+                    if updated % 1000 == 0 {
+                        batch.commit()?;
+                        batch = crate::batch::StoreBatch::new(self);
+                    }
+                }
+            }
+        }
+
+        if updated % 1000 != 0 {
+            batch.commit()?;
+        }
+
+        Ok(updated)
+    }
+
     // ---- DAO daily snapshots ----
 
     pub fn list_dao_daily_snapshots(&self) -> anyhow::Result<Vec<DaoDailySnapshot>> {
@@ -302,6 +366,7 @@ impl CkbadgerStore {
     /// - withdraw_request_block date: -capacity (Phase 1 withdrawal)
     ///
     /// Then walks through dates computing running totals to produce snapshots.
+    #[allow(clippy::manual_is_multiple_of)]
     pub fn rebuild_dao_daily_snapshots(&self) -> anyhow::Result<usize> {
         use std::collections::{BTreeMap, HashSet};
 
@@ -413,26 +478,58 @@ impl CkbadgerStore {
         // Sort events by date
         events.sort_by_key(|e| e.date);
 
-        // 5. Collect last DAO field (C, S) per date from block headers.
-        // Iterate all headers in forward order; the last header per date wins.
-        let mut daily_dao_cs: std::collections::HashMap<chrono::NaiveDate, (i128, i128)> =
+        // 5. Collect last DAO field (C, S, U) per date AND compute per-block
+        //    secondary issuance breakdown from consecutive block headers.
+        //    CKB primary issuance: 191,780,821,917,808 shannons per epoch in era 0,
+        //    halving every 8760 epochs.
+        const PRIMARY_PER_EPOCH_ERA0: i128 = 191_780_821_917_808;
+        const HALVING_INTERVAL: i64 = 8760;
+
+        // (C, S, U) per date — last block of each day wins
+        let mut daily_dao_csu: std::collections::HashMap<chrono::NaiveDate, (i128, i128, i128)> =
             std::collections::HashMap::new();
+        // Per-day secondary issuance accumulators: (miner, S_delta)
+        // S_delta = non-miner = dao + treasury
+        let mut daily_secondary: BTreeMap<chrono::NaiveDate, (i128, i128)> = BTreeMap::new();
         {
             let iter = self.iterator_cf(self.cf_block_headers(), rocksdb::IteratorMode::Start);
+            let mut prev_c: Option<i128> = None;
+            let mut prev_s: Option<i128> = None;
             for item in iter.flatten() {
                 let (_, value) = item;
                 if let Ok(header) = bincode::deserialize::<CachedBlockHeader>(&value) {
                     let ts_secs = header.timestamp / 1000;
                     if let Some(dt) = chrono::DateTime::from_timestamp(ts_secs, 0) {
                         let d = dt.date_naive();
-                        if header.dao.len() >= 24 {
+                        if header.dao.len() >= 32 {
                             let c =
                                 u64::from_le_bytes(header.dao[0..8].try_into().unwrap_or([0; 8]))
                                     as i128;
                             let s =
                                 u64::from_le_bytes(header.dao[16..24].try_into().unwrap_or([0; 8]))
                                     as i128;
-                            daily_dao_cs.insert(d, (c, s));
+                            let u =
+                                u64::from_le_bytes(header.dao[24..32].try_into().unwrap_or([0; 8]))
+                                    as i128;
+                            daily_dao_csu.insert(d, (c, s, u));
+
+                            // Compute per-block secondary issuance breakdown
+                            if let (Some(pc), Some(ps)) = (prev_c, prev_s) {
+                                let c_delta = c - pc;
+                                let s_delta = (s - ps).max(0);
+                                // primary_per_block = primary_per_epoch / epoch_length
+                                let era = (header.epoch_number / HALVING_INTERVAL) as u32;
+                                let primary_per_epoch = PRIMARY_PER_EPOCH_ERA0 >> era;
+                                let epoch_len = header.epoch_length.max(1) as i128;
+                                let primary = primary_per_epoch / epoch_len;
+                                let secondary = (c_delta - primary).max(0);
+                                let miner = (secondary - s_delta).max(0);
+                                let entry = daily_secondary.entry(d).or_insert((0, 0));
+                                entry.0 += miner;
+                                entry.1 += s_delta;
+                            }
+                            prev_c = Some(c);
+                            prev_s = Some(s);
                         }
                     }
                 }
@@ -447,7 +544,7 @@ impl CkbadgerStore {
         }
 
         // Also ensure dates with DAO header data but no deposit events get snapshots
-        for date in daily_dao_cs.keys() {
+        for date in daily_dao_csu.keys() {
             daily_events.entry(*date).or_default();
         }
 
@@ -458,6 +555,9 @@ impl CkbadgerStore {
         let mut cumulative_deposits: i64 = 0;
         let mut cumulative_withdrawals: i64 = 0;
         let mut cumulative_compensation: i128 = 0;
+        let mut cum_miner: i128 = 0;
+        let mut cum_dao: i128 = 0;
+        let mut cum_treasury: i128 = 0;
         let mut written = 0usize;
 
         let mut batch = crate::batch::StoreBatch::new(self);
@@ -488,6 +588,19 @@ impl CkbadgerStore {
                 }
             }
 
+            // Accumulate secondary issuance breakdown for this day
+            if let Some(&(daily_miner, daily_non_miner)) = daily_secondary.get(date) {
+                cum_miner += daily_miner;
+                // Split non-miner into dao and treasury using dao_ratio
+                let (c, _s, u) = daily_dao_csu.get(date).copied().unwrap_or((0, 0, 0));
+                let denom = (c - u).max(1);
+                let deposited = running_total.max(0);
+                let daily_dao_share = daily_non_miner * deposited / denom;
+                let daily_treasury_share = daily_non_miner - daily_dao_share;
+                cum_dao += daily_dao_share;
+                cum_treasury += daily_treasury_share;
+            }
+
             let depositors_count = active_depositors.len() as i64;
             let date_str = date.format("%Y%m%d").to_string();
             let key = crate::keys::encode_stats_key(
@@ -495,8 +608,8 @@ impl CkbadgerStore {
                 date_str.as_bytes(),
             );
 
-            let (total_issuance, secondary_pool) =
-                daily_dao_cs.get(date).copied().unwrap_or((0, 0));
+            let (total_issuance, secondary_pool, occupied_capacity) =
+                daily_dao_csu.get(date).copied().unwrap_or((0, 0, 0));
 
             let snapshot = DaoDailySnapshot {
                 date: date.format("%Y-%m-%d").to_string(),
@@ -508,6 +621,10 @@ impl CkbadgerStore {
                 cumulative_deposit_amount,
                 total_issuance,
                 secondary_pool,
+                occupied_capacity,
+                cum_miner_secondary: cum_miner,
+                cum_dao_compensation: cum_dao,
+                cum_treasury,
             };
 
             let value = bincode::serialize(&snapshot)?;
@@ -515,13 +632,13 @@ impl CkbadgerStore {
             written += 1;
 
             // Commit in batches of 1000
-            if written.is_multiple_of(1000) {
+            if written % 1000 == 0 {
                 batch.commit()?;
                 batch = crate::batch::StoreBatch::new(self);
             }
         }
 
-        if !written.is_multiple_of(1000) {
+        if written % 1000 != 0 {
             batch.commit()?;
         }
 

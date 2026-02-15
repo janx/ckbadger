@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use crate::cache::{CacheKeys, CacheTtl};
 use crate::response::{ok, ApiError, ApiResult};
-use crate::utils::{format_duration, shannon_to_ckb, shannon_to_ckb_u128};
+use crate::utils::format_duration;
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -453,18 +453,31 @@ async fn get_cell_count_chart(
         .list_daily_stats_with_dates()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
+    // The stored values are per-day deltas (cells created/consumed that day).
+    // Compute cumulative running totals to match the official explorer.
+    let mut cum_live: i64 = 0;
+    let mut cum_dead: i64 = 0;
+    let mut cum_all: i64 = 0;
+
     let data: Vec<StackedAreaDataPoint> = daily_stats
         .into_iter()
-        .filter(|(_, stats)| stats.total_all_cells > 0)
-        .map(|(date_str, stats)| {
+        .filter_map(|(date_str, stats)| {
+            cum_live += stats.total_live_cells;
+            cum_dead += stats.total_dead_cells;
+            cum_all += stats.total_all_cells;
+
+            if cum_all <= 0 {
+                return None;
+            }
+
             let mut values = std::collections::HashMap::new();
-            values.insert("allCells".to_string(), stats.total_all_cells.to_string());
-            values.insert("liveCells".to_string(), stats.total_live_cells.to_string());
-            values.insert("deadCells".to_string(), stats.total_dead_cells.to_string());
-            StackedAreaDataPoint {
+            values.insert("allCells".to_string(), cum_all.to_string());
+            values.insert("liveCells".to_string(), cum_live.to_string());
+            values.insert("deadCells".to_string(), cum_dead.to_string());
+            Some(StackedAreaDataPoint {
                 date: format_date_for_chart(&date_str),
                 values,
-            }
+            })
         })
         .collect();
 
@@ -535,15 +548,14 @@ async fn get_block_time_distribution_chart(
 
     let data: Vec<ChartDataPoint> = dist
         .into_iter()
-        .map(|(bucket_ms, count)| {
-            let time_seconds = bucket_ms as f64 / 1000.0;
+        .map(|(bucket_secs, count)| {
             let ratio = if total_blocks > 0 {
                 (count as f64 / total_blocks as f64 * 100.0 * 1000.0).round() / 1000.0
             } else {
                 0.0
             };
             ChartDataPoint {
-                date: format!("{:.1}", time_seconds),
+                date: format!("{}", bucket_secs),
                 value: format!("{:.3}", ratio),
                 value2: None,
             }
@@ -1237,23 +1249,36 @@ async fn get_total_supply_chart(
         .list_dao_daily_snapshots()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    const BURNT_CKB: &str = "84000000";
     const SHANNON: f64 = 100_000_000.0;
 
     let data: Vec<StackedAreaDataPoint> = snapshots
         .iter()
         .filter_map(|s| {
-            let total_supply = estimated_total_supply(&s.date)?;
-            let locked_shannon = s.total_deposited.max(0) as u128;
-            let circulating_shannon =
-                (total_supply - locked_shannon as f64 - GENESIS_BURNT as f64).max(0.0);
+            let locked_shannon = s.total_deposited.max(0) as f64;
+
+            // Use actual C (total_issuance) and S (secondary_pool) from the DAO
+            // header when available; fall back to estimate for pre-migration data.
+            let (total_supply, burnt) = if s.total_issuance > 0 {
+                // burnt = genesis lock (8.4B) + treasury (S)
+                let burnt = GENESIS_BURNT as f64 + s.secondary_pool.max(0) as f64;
+                (s.total_issuance as f64, burnt)
+            } else {
+                let ts = estimated_total_supply(&s.date)?;
+                (ts, GENESIS_BURNT as f64)
+            };
+
+            let circulating = (total_supply - burnt - locked_shannon).max(0.0);
+
             let mut values = std::collections::HashMap::new();
             values.insert(
                 "circulating".to_string(),
-                format!("{:.0}", circulating_shannon / SHANNON),
+                format!("{:.0}", circulating / SHANNON),
             );
-            values.insert("locked".to_string(), shannon_to_ckb_u128(locked_shannon));
-            values.insert("burnt".to_string(), BURNT_CKB.to_string());
+            values.insert(
+                "locked".to_string(),
+                format!("{:.0}", locked_shannon / SHANNON),
+            );
+            values.insert("burnt".to_string(), format!("{:.0}", burnt / SHANNON));
             Some(StackedAreaDataPoint {
                 date: s.date.clone(),
                 values,
@@ -1342,26 +1367,32 @@ async fn get_secondary_issuance_chart(
         return ok(cached);
     }
 
-    let daily_issuance = state
+    let snapshots = state
         .store
-        .list_daily_secondary_issuance()
+        .list_dao_daily_snapshots()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let data: Vec<StackedAreaDataPoint> = daily_issuance
+    const SHANNON: f64 = 100_000_000.0;
+
+    let data: Vec<StackedAreaDataPoint> = snapshots
         .iter()
-        .map(|(date, cum_dao, cum_miner, cum_treasury)| {
+        .filter(|s| s.cum_miner_secondary > 0 || s.cum_dao_compensation > 0 || s.cum_treasury > 0)
+        .map(|s| {
             let mut values = std::collections::HashMap::new();
             values.insert(
                 "compensation".to_string(),
-                shannon_to_ckb(&cum_dao.to_string()),
+                format!("{:.0}", s.cum_dao_compensation as f64 / SHANNON),
             );
-            values.insert("mining".to_string(), shannon_to_ckb(&cum_miner.to_string()));
+            values.insert(
+                "mining".to_string(),
+                format!("{:.0}", s.cum_miner_secondary as f64 / SHANNON),
+            );
             values.insert(
                 "burnt".to_string(),
-                shannon_to_ckb(&cum_treasury.to_string()),
+                format!("{:.0}", s.cum_treasury as f64 / SHANNON),
             );
             StackedAreaDataPoint {
-                date: date.clone(),
+                date: s.date.clone(),
                 values,
             }
         })
