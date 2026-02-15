@@ -154,7 +154,9 @@ fn test_list_cells_by_lock_prefix_scan() {
     batch.put_cell_by_lock(&lock_hash, 3000, &tx3, 0);
     batch.commit().unwrap();
 
-    let results = store.list_cells_by_lock(&lock_hash, 100).unwrap();
+    let results = store
+        .list_cells_by_lock(&lock_hash, 100, None, None)
+        .unwrap();
     assert_eq!(results.len(), 3, "should find all 3 cells by lock hash");
 
     // Results should be ordered by block_num (ascending from prefix iterator)
@@ -163,7 +165,7 @@ fn test_list_cells_by_lock_prefix_scan() {
     assert_eq!(results[2].2.capacity, 300_00000000);
 
     // Verify limit works
-    let limited = store.list_cells_by_lock(&lock_hash, 2).unwrap();
+    let limited = store.list_cells_by_lock(&lock_hash, 2, None, None).unwrap();
     assert_eq!(limited.len(), 2, "limit should restrict result count");
 }
 
@@ -185,7 +187,9 @@ fn test_list_cells_by_type_prefix_scan() {
     batch.put_cell_by_type(&type_hash, 600, &tx2, 1);
     batch.commit().unwrap();
 
-    let results = store.list_cells_by_type(&type_hash, 100).unwrap();
+    let results = store
+        .list_cells_by_type(&type_hash, 100, None, None)
+        .unwrap();
     assert_eq!(results.len(), 2, "should find both cells by type hash");
 
     assert_eq!(results[0].2.capacity, 150_00000000);
@@ -198,7 +202,9 @@ fn test_list_cells_by_type_prefix_scan() {
     batch.delete_cell_by_type(&type_hash, 500, &tx1, 0);
     batch.commit().unwrap();
 
-    let after_consume = store.list_cells_by_type(&type_hash, 100).unwrap();
+    let after_consume = store
+        .list_cells_by_type(&type_hash, 100, None, None)
+        .unwrap();
     assert_eq!(
         after_consume.len(),
         1,

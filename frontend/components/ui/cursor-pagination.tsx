@@ -5,6 +5,8 @@ import { cn } from '@/lib/utils';
 interface CursorPaginationProps {
   total?: number;
   totalLabel?: string;
+  page?: number;
+  pageSize?: number;
   hasMore: boolean;
   hasPrevious: boolean;
   onNext: () => void;
@@ -15,22 +17,27 @@ interface CursorPaginationProps {
 export function CursorPagination({
   total,
   totalLabel = 'items',
+  page,
+  pageSize,
   hasMore,
   hasPrevious,
   onNext,
   onPrevious,
   className,
 }: CursorPaginationProps) {
+  const totalPages = total !== undefined && pageSize ? Math.ceil(total / pageSize) : undefined;
+
   return (
     <div className={cn('flex items-center justify-between', className)}>
       {total !== undefined ? (
         <span className="font-mono text-sm text-slate-500">
-          Total: <span className="text-terminal-green">{total.toLocaleString()}</span> {totalLabel}
+          {total.toLocaleString()} {totalLabel}
+          {pageSize !== undefined && <>, {pageSize} per page</>}
         </span>
       ) : (
         <span />
       )}
-      <div className="flex gap-2">
+      <div className="flex items-center gap-3">
         <button
           onClick={onPrevious}
           disabled={!hasPrevious}
@@ -38,6 +45,12 @@ export function CursorPagination({
         >
           Previous
         </button>
+        {page !== undefined && (
+          <span className="font-mono text-sm text-slate-500">
+            {page}
+            {totalPages !== undefined ? ` / ${totalPages}` : ''}
+          </span>
+        )}
         <button
           onClick={onNext}
           disabled={!hasMore}

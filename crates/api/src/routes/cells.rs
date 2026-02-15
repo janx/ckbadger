@@ -106,6 +106,10 @@ pub fn routes() -> Router<Arc<AppState>> {
             get(get_address_transactions),
         )
         .route("/addresses/{addr}/tokens", get(get_address_tokens))
+        .route(
+            "/addresses/{addr}/stats-history",
+            get(get_address_stats_history),
+        )
 }
 
 #[derive(Debug, Deserialize)]
@@ -115,7 +119,6 @@ pub struct ListCellsParams {
     lock_script_hash: Option<String>,
     type_script_hash: Option<String>,
     type_code_hash: Option<String>,
-    #[allow(dead_code)]
     cursor: Option<String>,
 }
 
@@ -315,7 +318,6 @@ pub struct AddressTransactionResponse {
 pub struct AddressTxParams {
     #[serde(default = "default_limit")]
     limit: i64,
-    #[allow(dead_code)]
     cursor: Option<String>,
 }
 
@@ -381,6 +383,10 @@ async fn list_live_cells(
 ) -> ApiResult<CursorPaginatedResponse<CellResponse>> {
     let limit = params.limit.clamp(1, 100) as usize;
 
+    let cursor = params.cursor.as_ref().and_then(|c| decode_cursor(c));
+    let cursor_block = cursor.map(|(b, _)| b);
+    let cursor_idx = cursor.map(|(_, i)| i as i16);
+
     let lock_hash_bytes = if let Some(ref lock_hash) = params.lock_script_hash {
         Some(if is_ckb_address(lock_hash) {
             address_to_lock_script_hash(lock_hash)
@@ -419,7 +425,7 @@ async fn list_live_cells(
                 // Filter by lock first (usually more selective), then post-filter by type
                 let all = state
                     .store
-                    .list_cells_by_lock(lock_bytes, limit * 10 + 1)
+                    .list_cells_by_lock(lock_bytes, limit * 10 + 1, cursor_block, cursor_idx)
                     .map_err(|e| ApiError::internal(e.to_string()))?;
                 all.into_iter()
                     .filter(|(_, _, info)| {
@@ -436,7 +442,7 @@ async fn list_live_cells(
                 if let Some(ref tch) = _type_code_hash_bytes {
                     let all = state
                         .store
-                        .list_cells_by_lock(lock_bytes, limit * 10 + 1)
+                        .list_cells_by_lock(lock_bytes, limit * 10 + 1, cursor_block, cursor_idx)
                         .map_err(|e| ApiError::internal(e.to_string()))?;
                     all.into_iter()
                         .filter(|(_, _, info)| {
@@ -450,13 +456,13 @@ async fn list_live_cells(
                 } else {
                     state
                         .store
-                        .list_cells_by_lock(lock_bytes, limit + 1)
+                        .list_cells_by_lock(lock_bytes, limit + 1, cursor_block, cursor_idx)
                         .map_err(|e| ApiError::internal(e.to_string()))?
                 }
             }
             (None, Some(type_bytes)) => state
                 .store
-                .list_cells_by_type(type_bytes, limit + 1)
+                .list_cells_by_type(type_bytes, limit + 1, cursor_block, cursor_idx)
                 .map_err(|e| ApiError::internal(e.to_string()))?,
             (None, None) => {
                 // No filter: not practical for RocksDB full scan, return empty.
@@ -649,7 +655,7 @@ async fn get_address(
     // Try to find a cell for this lock hash to get the lock script details
     let cells_for_script = state
         .store
-        .list_cells_by_lock(&lock_hash, 1)
+        .list_cells_by_lock(&lock_hash, 1, None, None)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let (lock_script, address) = if let Some((_, _, info)) = cells_for_script.first() {
@@ -1113,10 +1119,12 @@ async fn get_address_transactions(
 
     let limit = params.limit.clamp(1, 100) as usize;
 
+    let cursor = params.cursor.as_ref().and_then(|c| decode_cursor(c));
+
     // Fetch recent transactions for this address (newest first)
     let addr_txs = state
         .store
-        .list_addr_txs_recent(&lock_hash, limit + 1)
+        .list_addr_txs_recent(&lock_hash, limit + 1, cursor)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let has_more = addr_txs.len() > limit;
@@ -1308,6 +1316,103 @@ async fn get_address_tokens(
         limit as i64,
         next_cursor,
     ))
+}
+
+async fn get_address_stats_history(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(addr): axum::extract::Path<String>,
+) -> ApiResult<crate::routes::statistics::StackedAreaChartResponse> {
+    use crate::routes::statistics::{
+        StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries,
+    };
+
+    let lock_hash = if is_ckb_address(&addr) {
+        address_to_lock_script_hash(&addr)
+            .map_err(|e| ApiError::bad_request(format!("Invalid CKB address: {}", e)))?
+    } else {
+        hex::decode(addr.strip_prefix("0x").unwrap_or(&addr))
+            .map_err(|_| ApiError::bad_request("Invalid address/lock script hash"))?
+    };
+
+    // Date range: today - 365 days to today
+    let now = chrono::Utc::now();
+    let today = now.format("%Y%m%d").to_string().parse::<u32>().unwrap_or(0);
+    let one_year_ago = (now - chrono::Duration::days(365))
+        .format("%Y%m%d")
+        .to_string()
+        .parse::<u32>()
+        .unwrap_or(0);
+
+    let daily_stats = state
+        .store
+        .list_addr_daily_stats(&lock_hash, one_year_ago, today)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    // Get current live_cells_count to compute baseline
+    let addr_balance = state
+        .store
+        .get_addr_balance(&lock_hash)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let current_live_cells = addr_balance
+        .map(|ab| ab.live_cells_count as i64)
+        .unwrap_or(0);
+
+    // Sum all cells_delta in range to find baseline
+    let total_delta: i64 = daily_stats.iter().map(|(_, s)| s.cells_delta as i64).sum();
+    let baseline_live_cells = current_live_cells - total_delta;
+
+    // Build cumulative series
+    let mut cum_activities: i64 = 0;
+    let mut cum_txs: i64 = 0;
+    let mut live_cells = baseline_live_cells;
+
+    let data: Vec<StackedAreaDataPoint> = daily_stats
+        .into_iter()
+        .map(|(date, stats)| {
+            cum_activities += stats.activities as i64;
+            cum_txs += stats.txs as i64;
+            live_cells += stats.cells_delta as i64;
+
+            let date_str = format!("{}-{}-{}", date / 10000, (date / 100) % 100, date % 100);
+
+            let mut values = std::collections::HashMap::new();
+            values.insert(
+                "cumulativeActivities".to_string(),
+                cum_activities.to_string(),
+            );
+            values.insert("liveCells".to_string(), live_cells.to_string());
+            values.insert("cumulativeTransactions".to_string(), cum_txs.to_string());
+
+            StackedAreaDataPoint {
+                date: date_str,
+                values,
+            }
+        })
+        .collect();
+
+    let series = vec![
+        StackedAreaSeries {
+            key: "cumulativeActivities".to_string(),
+            label: "Cumulative Activities".to_string(),
+            color: "#22c55e".to_string(),
+        },
+        StackedAreaSeries {
+            key: "liveCells".to_string(),
+            label: "Live Cells".to_string(),
+            color: "#f59e0b".to_string(),
+        },
+        StackedAreaSeries {
+            key: "cumulativeTransactions".to_string(),
+            label: "Cumulative Transactions".to_string(),
+            color: "#8b5cf6".to_string(),
+        },
+    ];
+
+    ok(StackedAreaChartResponse {
+        data,
+        series,
+        title: "Address Stats History".to_string(),
+    })
 }
 
 #[cfg(test)]

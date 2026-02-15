@@ -331,6 +331,20 @@ impl<'a> StoreBatch<'a> {
         self.batch.put_cf(self.store.cf_activities(), key, &value);
     }
 
+    // ---- Address daily stats ----
+
+    pub fn put_addr_daily_stats(
+        &mut self,
+        lock_hash: &[u8],
+        date_yyyymmdd: u32,
+        stats: &AddressDailyStats,
+    ) {
+        let key = keys::encode_addr_daily_stats_key(lock_hash, date_yyyymmdd);
+        let value = bincode::serialize(stats).expect("serialize AddressDailyStats");
+        self.batch
+            .put_cf(self.store.cf_addr_daily_stats(), key, &value);
+    }
+
     // ---- Statistics ----
 
     pub fn put_stats(&mut self, key: &[u8], value: &[u8]) {
@@ -511,7 +525,7 @@ mod tests {
         batch.put_activity(&lock, 300, 1, &make_activity(300, 1, 1000));
         batch.commit().unwrap();
 
-        let results = store.list_activities(&lock, 100, None).unwrap();
+        let results = store.list_activities(&lock, 100, None, None).unwrap();
         assert_eq!(results.len(), 3);
         // Descending block order: 300, 200, 100
         assert_eq!(results[0].0, 300);
@@ -534,7 +548,7 @@ mod tests {
         }
         batch.commit().unwrap();
 
-        let results = store.list_activities(&lock, 2, None).unwrap();
+        let results = store.list_activities(&lock, 2, None, None).unwrap();
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].0, 500); // newest first
         assert_eq!(results[1].0, 400);
@@ -553,21 +567,21 @@ mod tests {
         batch.commit().unwrap();
 
         // Page 1: first 2
-        let page1 = store.list_activities(&lock, 2, None).unwrap();
+        let page1 = store.list_activities(&lock, 2, None, None).unwrap();
         assert_eq!(page1.len(), 2);
         assert_eq!(page1[0].0, 500);
         assert_eq!(page1[1].0, 400);
 
         // Page 2: cursor from last item of page1
         let cursor = (page1[1].0, page1[1].1);
-        let page2 = store.list_activities(&lock, 2, Some(cursor)).unwrap();
+        let page2 = store.list_activities(&lock, 2, Some(cursor), None).unwrap();
         assert_eq!(page2.len(), 2);
         assert_eq!(page2[0].0, 300);
         assert_eq!(page2[1].0, 200);
 
         // Page 3: last page
         let cursor = (page2[1].0, page2[1].1);
-        let page3 = store.list_activities(&lock, 2, Some(cursor)).unwrap();
+        let page3 = store.list_activities(&lock, 2, Some(cursor), None).unwrap();
         assert_eq!(page3.len(), 1);
         assert_eq!(page3[0].0, 100);
     }
@@ -585,10 +599,10 @@ mod tests {
         batch.put_activity(&lock_b, 100, 0, &make_activity(100, 0, 30));
         batch.commit().unwrap();
 
-        let a = store.list_activities(&lock_a, 100, None).unwrap();
+        let a = store.list_activities(&lock_a, 100, None, None).unwrap();
         assert_eq!(a.len(), 2);
 
-        let b = store.list_activities(&lock_b, 100, None).unwrap();
+        let b = store.list_activities(&lock_b, 100, None, None).unwrap();
         assert_eq!(b.len(), 1);
         assert_eq!(b[0].2.ckb_delta, 30);
     }
@@ -599,7 +613,7 @@ mod tests {
         let store = CkbadgerStore::open(dir.path()).unwrap();
         let lock = [0xFFu8; 32];
 
-        let results = store.list_activities(&lock, 100, None).unwrap();
+        let results = store.list_activities(&lock, 100, None, None).unwrap();
         assert!(results.is_empty());
     }
 }

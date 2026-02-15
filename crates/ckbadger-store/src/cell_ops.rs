@@ -101,27 +101,16 @@ impl CkbadgerStore {
         &self,
         lock_hash: &[u8],
         limit: usize,
+        cursor_block: Option<i64>,
+        cursor_output_index: Option<i16>,
     ) -> anyhow::Result<Vec<(Vec<u8>, i16, LiveCellInfo)>> {
-        let mut results = Vec::new();
-        let iter = self.prefix_iterator_cf(self.cf_cell_by_lock(), lock_hash);
-
-        for item in iter.flatten() {
-            let (key, _) = item;
-            if !key.starts_with(lock_hash) {
-                break;
-            }
-            // Key: lock_hash(32) + block_num(8) + outpoint(34)
-            if key.len() >= 74 {
-                let (tx_hash, output_index) = keys::decode_outpoint(&key[40..74]);
-                if let Some(cell) = self.get_cell(&tx_hash, output_index)? {
-                    results.push((tx_hash, output_index, cell));
-                    if results.len() >= limit {
-                        break;
-                    }
-                }
-            }
-        }
-        Ok(results)
+        self.list_cells_by_hash_cf(
+            self.cf_cell_by_lock(),
+            lock_hash,
+            limit,
+            cursor_block,
+            cursor_output_index,
+        )
     }
 
     /// List live cells by type script hash (prefix scan).
@@ -129,15 +118,45 @@ impl CkbadgerStore {
         &self,
         type_hash: &[u8],
         limit: usize,
+        cursor_block: Option<i64>,
+        cursor_output_index: Option<i16>,
+    ) -> anyhow::Result<Vec<(Vec<u8>, i16, LiveCellInfo)>> {
+        self.list_cells_by_hash_cf(
+            self.cf_cell_by_type(),
+            type_hash,
+            limit,
+            cursor_block,
+            cursor_output_index,
+        )
+    }
+
+    fn list_cells_by_hash_cf(
+        &self,
+        cf: &rocksdb::ColumnFamily,
+        hash: &[u8],
+        limit: usize,
+        cursor_block: Option<i64>,
+        cursor_output_index: Option<i16>,
     ) -> anyhow::Result<Vec<(Vec<u8>, i16, LiveCellInfo)>> {
         let mut results = Vec::new();
-        let iter = self.prefix_iterator_cf(self.cf_cell_by_type(), type_hash);
+
+        let start_key = if let (Some(block), Some(idx)) = (cursor_block, cursor_output_index) {
+            keys::encode_cell_index_key(hash, block, &[0xffu8; 32], idx)
+        } else {
+            hash.to_vec()
+        };
+
+        let iter = self.iterator_cf(
+            cf,
+            rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
+        );
 
         for item in iter.flatten() {
             let (key, _) = item;
-            if !key.starts_with(type_hash) {
+            if !key.starts_with(hash) {
                 break;
             }
+            // Key: hash(32) + block_num(8) + outpoint(34)
             if key.len() >= 74 {
                 let (tx_hash, output_index) = keys::decode_outpoint(&key[40..74]);
                 if let Some(cell) = self.get_cell(&tx_hash, output_index)? {

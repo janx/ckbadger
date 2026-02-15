@@ -81,11 +81,21 @@ impl CkbadgerStore {
         &self,
         lock_hash: &[u8],
         limit: usize,
+        cursor: Option<(i64, i32)>,
     ) -> anyhow::Result<Vec<(i64, i32, Vec<u8>)>> {
-        // Seek to the end of the prefix range and iterate backwards
-        let mut upper_key = Vec::with_capacity(44);
-        upper_key.extend_from_slice(lock_hash);
-        upper_key.extend_from_slice(&[0xFF; 12]); // max block_num(8) + max tx_idx(4)
+        // Seek to the cursor position or end of prefix range, then iterate backwards
+        let upper_key = match cursor {
+            Some((block_num, tx_idx)) => {
+                // Seek to cursor position; skip it in the loop
+                crate::keys::encode_addr_tx_key(lock_hash, block_num, tx_idx)
+            }
+            None => {
+                let mut key = Vec::with_capacity(44);
+                key.extend_from_slice(lock_hash);
+                key.extend_from_slice(&[0xFF; 12]); // max block_num(8) + max tx_idx(4)
+                key
+            }
+        };
 
         let iter = self.iterator_cf(
             self.cf_addr_txs(),
@@ -93,6 +103,7 @@ impl CkbadgerStore {
         );
 
         let mut results = Vec::new();
+        let mut skip_first = cursor.is_some();
         for item in iter.flatten() {
             let (key, value) = item;
             if !key.starts_with(lock_hash) {
@@ -101,6 +112,12 @@ impl CkbadgerStore {
             if key.len() == 44 {
                 let block_num = crate::keys::decode_block_num(&key[32..40]);
                 let tx_idx = crate::keys::decode_tx_idx(&key[40..44]);
+                if skip_first {
+                    skip_first = false;
+                    if Some((block_num, tx_idx)) == cursor {
+                        continue;
+                    }
+                }
                 results.push((block_num, tx_idx, value.to_vec()));
                 if results.len() >= limit {
                     break;

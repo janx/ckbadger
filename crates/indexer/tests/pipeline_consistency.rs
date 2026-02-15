@@ -542,7 +542,7 @@ fn test_skip_cell_indices_omits_index_entries() {
 
     // But index entries should NOT exist
     let by_lock = store
-        .list_cells_by_lock(&cell.lock_script_hash, 100)
+        .list_cells_by_lock(&cell.lock_script_hash, 100, None, None)
         .unwrap();
     assert!(
         by_lock.is_empty(),
@@ -550,7 +550,7 @@ fn test_skip_cell_indices_omits_index_entries() {
     );
 
     let by_type = store
-        .list_cells_by_type(cell.type_script_hash.as_ref().unwrap(), 100)
+        .list_cells_by_type(cell.type_script_hash.as_ref().unwrap(), 100, None, None)
         .unwrap();
     assert!(
         by_type.is_empty(),
@@ -597,7 +597,7 @@ fn test_rebuild_cell_indices_populates_all_indexes() {
 
     // Sanity: no index entries yet
     assert!(store
-        .list_cells_by_lock(&cell1.lock_script_hash, 100)
+        .list_cells_by_lock(&cell1.lock_script_hash, 100, None, None)
         .unwrap()
         .is_empty());
 
@@ -606,19 +606,19 @@ fn test_rebuild_cell_indices_populates_all_indexes() {
 
     // All 4 index types should now be populated
     let by_lock1 = store
-        .list_cells_by_lock(&cell1.lock_script_hash, 100)
+        .list_cells_by_lock(&cell1.lock_script_hash, 100, None, None)
         .unwrap();
     assert_eq!(by_lock1.len(), 1, "lock index should have cell1");
     assert_eq!(by_lock1[0].2.capacity, 100_00000000);
 
     let by_lock2 = store
-        .list_cells_by_lock(&cell2.lock_script_hash, 100)
+        .list_cells_by_lock(&cell2.lock_script_hash, 100, None, None)
         .unwrap();
     assert_eq!(by_lock2.len(), 1, "lock index should have cell2");
     assert_eq!(by_lock2[0].2.capacity, 200_00000000);
 
     let by_type = store
-        .list_cells_by_type(cell1.type_script_hash.as_ref().unwrap(), 100)
+        .list_cells_by_type(cell1.type_script_hash.as_ref().unwrap(), 100, None, None)
         .unwrap();
     assert_eq!(
         by_type.len(),
@@ -677,20 +677,20 @@ fn test_skip_then_rebuild_matches_direct_insert() {
 
     // Compare: lock index results should match
     let skip_lock = store_skip
-        .list_cells_by_lock(&cell1.lock_script_hash, 100)
+        .list_cells_by_lock(&cell1.lock_script_hash, 100, None, None)
         .unwrap();
     let direct_lock = store_direct
-        .list_cells_by_lock(&cell1.lock_script_hash, 100)
+        .list_cells_by_lock(&cell1.lock_script_hash, 100, None, None)
         .unwrap();
     assert_eq!(skip_lock.len(), direct_lock.len());
     assert_eq!(skip_lock[0].2.capacity, direct_lock[0].2.capacity);
 
     // Compare: type index results should match
     let skip_type = store_skip
-        .list_cells_by_type(cell1.type_script_hash.as_ref().unwrap(), 100)
+        .list_cells_by_type(cell1.type_script_hash.as_ref().unwrap(), 100, None, None)
         .unwrap();
     let direct_type = store_direct
-        .list_cells_by_type(cell1.type_script_hash.as_ref().unwrap(), 100)
+        .list_cells_by_type(cell1.type_script_hash.as_ref().unwrap(), 100, None, None)
         .unwrap();
     assert_eq!(skip_type.len(), direct_type.len());
 

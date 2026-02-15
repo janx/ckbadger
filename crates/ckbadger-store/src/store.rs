@@ -42,6 +42,7 @@ pub const CF_CELL_BY_LOCK_CODE: &str = "cell_by_lock_code";
 pub const CF_CELL_BY_TYPE_CODE: &str = "cell_by_type_code";
 pub const CF_TOKEN_TRANSFERS: &str = "token_transfers";
 pub const CF_ACTIVITIES: &str = "activities";
+pub const CF_ADDR_DAILY_STATS: &str = "addr_daily_stats";
 
 /// All column family names, used during DB open.
 pub const ALL_CFS: &[&str] = &[
@@ -73,6 +74,7 @@ pub const ALL_CFS: &[&str] = &[
     CF_SPORE_BY_CLUSTER,
     CF_TOKEN_TRANSFERS,
     CF_ACTIVITIES,
+    CF_ADDR_DAILY_STATS,
 ];
 
 pub struct CkbadgerStore {
@@ -363,6 +365,9 @@ impl CkbadgerStore {
     }
     pub fn cf_activities(&self) -> &ColumnFamily {
         self.cf(CF_ACTIVITIES)
+    }
+    pub fn cf_addr_daily_stats(&self) -> &ColumnFamily {
+        self.cf(CF_ADDR_DAILY_STATS)
     }
 
     // ---- Raw DB operations ----

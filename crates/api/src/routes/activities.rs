@@ -20,6 +20,7 @@ pub struct ActivityParams {
     #[serde(default = "default_limit")]
     limit: i64,
     cursor: Option<String>,
+    filter: Option<String>,
 }
 
 fn default_limit() -> i64 {
@@ -164,7 +165,7 @@ async fn get_address_activities(
 
     let results = state
         .store
-        .list_activities(&lock_hash, limit + 1, cursor)
+        .list_activities(&lock_hash, limit + 1, cursor, params.filter.as_deref())
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let has_more = results.len() > limit;

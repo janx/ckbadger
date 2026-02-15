@@ -172,7 +172,9 @@ fn test_rollback_removes_cells_and_indexes() {
     }
 
     // Verify cells exist via lock index (4 blocks, 1 cell each)
-    let cells_before = store.list_cells_by_lock(&lock_hash, 100).unwrap();
+    let cells_before = store
+        .list_cells_by_lock(&lock_hash, 100, None, None)
+        .unwrap();
     assert_eq!(cells_before.len(), 4, "should have 4 cells before rollback");
 
     // Rollback to block 2: blocks 3-4 removed
@@ -181,7 +183,9 @@ fn test_rollback_removes_cells_and_indexes() {
     assert_eq!(result.cells_removed, 2, "cells from blocks 3-4 removed");
 
     // Cells from blocks 1-2 should survive via lock index
-    let cells_after = store.list_cells_by_lock(&lock_hash, 100).unwrap();
+    let cells_after = store
+        .list_cells_by_lock(&lock_hash, 100, None, None)
+        .unwrap();
     assert_eq!(
         cells_after.len(),
         2,
@@ -271,7 +275,7 @@ fn test_rollback_removes_activities() {
     batch.commit().unwrap();
 
     // Verify all 5 exist
-    let before = store.list_activities(&lock_hash, 100, None).unwrap();
+    let before = store.list_activities(&lock_hash, 100, None, None).unwrap();
     assert_eq!(before.len(), 5);
 
     // Rollback to block 300: blocks 400, 500 should be removed
@@ -285,7 +289,7 @@ fn test_rollback_removes_activities() {
 
     store.rollback_to_block(300).unwrap();
 
-    let after = store.list_activities(&lock_hash, 100, None).unwrap();
+    let after = store.list_activities(&lock_hash, 100, None, None).unwrap();
     assert_eq!(after.len(), 3, "should have 3 activities after rollback");
     // Remaining are blocks 300, 200, 100 (descending)
     assert_eq!(after[0].0, 300);

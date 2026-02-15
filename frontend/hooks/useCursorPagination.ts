@@ -29,6 +29,7 @@ export function useCursorPagination() {
 
   return {
     cursor,
+    page: cursorHistory.length + 1,
     hasPrevious: cursorHistory.length > 0,
     goToNext,
     goToPrevious,

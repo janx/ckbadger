@@ -204,6 +204,33 @@ pub fn decode_activity_key(key: &[u8]) -> (Vec<u8>, i64, i32) {
     (lock_hash, block_num, tx_idx)
 }
 
+/// Address daily stats key: lock_hash(32B) + date(4B u32 YYYYMMDD BE) = 36 bytes
+pub const ADDR_DAILY_STATS_KEY_SIZE: usize = 36;
+
+pub fn encode_addr_daily_stats_key(
+    lock_hash: &[u8],
+    date_yyyymmdd: u32,
+) -> [u8; ADDR_DAILY_STATS_KEY_SIZE] {
+    let mut key = [0u8; ADDR_DAILY_STATS_KEY_SIZE];
+    key[..32].copy_from_slice(&lock_hash[..32]);
+    key[32..36].copy_from_slice(&date_yyyymmdd.to_be_bytes());
+    key
+}
+
+pub fn decode_addr_daily_stats_key(key: &[u8]) -> (Vec<u8>, u32) {
+    let lock_hash = key[..32].to_vec();
+    let date = u32::from_be_bytes(key[32..36].try_into().unwrap());
+    (lock_hash, date)
+}
+
+/// Convert a Unix timestamp in milliseconds to YYYYMMDD u32.
+pub fn timestamp_ms_to_date(timestamp_ms: i64) -> u32 {
+    let secs = timestamp_ms / 1000;
+    let dt = chrono::DateTime::from_timestamp(secs, 0).unwrap_or_default();
+    let date = dt.format("%Y%m%d").to_string();
+    date.parse::<u32>().unwrap_or(0)
+}
+
 /// Sync meta keys
 pub mod sync_meta_keys {
     pub const TIP_BLOCK: &[u8] = b"tip_block";
@@ -341,6 +368,46 @@ mod tests {
             encode_activity_key(&lock_a, 100, 0),
             encode_activity_key(&lock_b, 100, 0)
         );
+    }
+
+    // ---- Address daily stats key ----
+
+    #[test]
+    fn test_addr_daily_stats_key_roundtrip() {
+        let lock_hash = [0xAAu8; 32];
+        for date in [20240101u32, 20241231, 20250615, 99991231] {
+            let key = encode_addr_daily_stats_key(&lock_hash, date);
+            assert_eq!(key.len(), ADDR_DAILY_STATS_KEY_SIZE);
+            let (decoded_hash, decoded_date) = decode_addr_daily_stats_key(&key);
+            assert_eq!(decoded_hash, lock_hash.to_vec());
+            assert_eq!(decoded_date, date);
+        }
+    }
+
+    #[test]
+    fn test_addr_daily_stats_key_sort_order() {
+        let lock_hash = [0xBBu8; 32];
+        let k1 = encode_addr_daily_stats_key(&lock_hash, 20240101);
+        let k2 = encode_addr_daily_stats_key(&lock_hash, 20240601);
+        let k3 = encode_addr_daily_stats_key(&lock_hash, 20241231);
+        // Ascending date order for range scans
+        assert!(k1 < k2);
+        assert!(k2 < k3);
+    }
+
+    #[test]
+    fn test_addr_daily_stats_key_prefix_is_lock_hash() {
+        let lock_hash = [0xCCu8; 32];
+        let key = encode_addr_daily_stats_key(&lock_hash, 20240101);
+        assert!(key.starts_with(&lock_hash));
+    }
+
+    #[test]
+    fn test_timestamp_ms_to_date() {
+        // 2024-01-15 00:00:00 UTC = 1705276800000 ms
+        assert_eq!(timestamp_ms_to_date(1705276800000), 20240115);
+        // 2025-06-15 12:30:00 UTC = 1750000200000 ms
+        assert_eq!(timestamp_ms_to_date(1750000200000), 20250615);
     }
 
     #[test]

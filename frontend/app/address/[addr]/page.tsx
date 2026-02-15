@@ -24,7 +24,9 @@ import {
   type DaoDeposit,
   type Activity,
   type ActivityAssetChange,
+  type StackedAreaChartResponse,
 } from '@/lib/api';
+import { MultiSeriesLineChart } from '@/components/ui/multi-series-line-chart';
 import { formatTimeAgo, formatCkbAmount, formatCkbCompact } from '@/lib/utils';
 import { formatTokenBalance } from '@/lib/format-asset';
 
@@ -78,12 +80,24 @@ export default function AddressDetailPage() {
     placeholderData: keepPreviousData,
   });
 
+  const { data: statsHistory } = useQuery<StackedAreaChartResponse>({
+    queryKey: ['address-stats-history', address?.lockScriptHash],
+    queryFn: () => api.getAddressStatsHistory(address!.lockScriptHash),
+    enabled: !!address,
+  });
+
   const { data: activities, isLoading: activitiesLoading } = useQuery({
-    queryKey: ['address-activities', address?.lockScriptHash, activitiesPagination.cursor],
+    queryKey: [
+      'address-activities',
+      address?.lockScriptHash,
+      activitiesPagination.cursor,
+      activityFilter,
+    ],
     queryFn: () =>
       api.getAddressActivities(address!.lockScriptHash, {
         limit: 20,
         cursor: activitiesPagination.cursor,
+        filter: activityFilter,
       }),
     enabled: !!address,
     placeholderData: keepPreviousData,
@@ -98,29 +112,6 @@ export default function AddressDetailPage() {
     }
     return map;
   }, [tokens?.data]);
-
-  const filteredActivities = useMemo(() => {
-    if (!activities?.data || activityFilter === 'all') return activities?.data;
-    return activities.data.filter((a) => {
-      switch (activityFilter) {
-        case 'ckb':
-          return a.assetChanges.length === 0;
-        case 'token':
-          return a.assetChanges.some((c) => c.type === 'token');
-        case 'nft':
-          return a.assetChanges.some((c) => c.type === 'nft' || c.type === 'dob');
-        case 'dao':
-          return a.assetChanges.some(
-            (c) =>
-              c.type === 'daoDeposit' ||
-              c.type === 'daoWithdrawRequest' ||
-              c.type === 'daoWithdrawComplete'
-          );
-        default:
-          return true;
-      }
-    });
-  }, [activities?.data, activityFilter]);
 
   const cellsTypeFilter = selectedDao ? null : selectedToken?.typeScriptHash;
   const cellsCodeHashFilter = selectedDao ? DAO_CODE_HASH : undefined;
@@ -400,6 +391,19 @@ export default function AddressDetailPage() {
           </TerminalPanelContent>
         </TerminalPanel>
 
+        {statsHistory && statsHistory.data.length > 0 && (
+          <TerminalPanel className="mb-8">
+            <TerminalPanelHeader>Address Stats History</TerminalPanelHeader>
+            <TerminalPanelContent>
+              <MultiSeriesLineChart
+                data={statsHistory.data}
+                series={statsHistory.series}
+                height={300}
+              />
+            </TerminalPanelContent>
+          </TerminalPanel>
+        )}
+
         {daoSummary?.hasDaoActivity && (
           <TerminalPanel className="mb-8" variant="elevated">
             <TerminalPanelHeader>
@@ -517,8 +521,10 @@ export default function AddressDetailPage() {
                     <CursorPagination
                       total={daoDeposits.total}
                       totalLabel="deposits"
+                      pageSize={100}
                       hasMore={daoDeposits.hasMore}
                       hasPrevious={daoPagination.hasPrevious}
+                      page={daoPagination.page}
                       onNext={() => daoPagination.goToNext(daoDeposits.nextCursor)}
                       onPrevious={daoPagination.goToPrevious}
                     />
@@ -531,7 +537,7 @@ export default function AddressDetailPage() {
 
         {tokens?.data && tokens.data.length > 0 && (
           <TerminalPanel className="mb-8" variant="elevated">
-            <TerminalPanelHeader>Holdings ({tokens?.total || 0})</TerminalPanelHeader>
+            <TerminalPanelHeader>Holdings ({tokens?.data?.length || 0})</TerminalPanelHeader>
             <TerminalPanelContent padding="none">
               <div className="min-w-full">
                 <div className="flex border-b border-slate-800 bg-slate-900/50 px-4 py-2 font-mono text-xs uppercase tracking-wider text-slate-500">
@@ -540,57 +546,59 @@ export default function AddressDetailPage() {
                   <div className="w-48 text-right">Balance</div>
                 </div>
 
-                {tokens?.data?.map((token) => {
-                  const isSelected = selectedToken?.typeScriptHash === token.typeScriptHash;
-                  return (
-                    <TerminalRow
-                      key={token.typeScriptHash}
-                      className={`cursor-pointer ${isSelected ? 'bg-slate-800/80' : ''}`}
-                    >
-                      <div
-                        className="flex w-full items-center"
-                        onClick={() => handleTokenSelect(isSelected ? null : token)}
+                {[...(tokens?.data ?? [])]
+                  .sort((a, b) => {
+                    const nameA = (a.name || a.symbol || '').toLowerCase();
+                    const nameB = (b.name || b.symbol || '').toLowerCase();
+                    return nameA.localeCompare(nameB);
+                  })
+                  .map((token) => {
+                    const isSelected = selectedToken?.typeScriptHash === token.typeScriptHash;
+                    return (
+                      <TerminalRow
+                        key={token.typeScriptHash}
+                        className={`cursor-pointer ${isSelected ? 'bg-slate-800/80' : ''}`}
                       >
-                        <div className="flex flex-1 items-center gap-3">
-                          {token.iconUrl ? (
-                            <img
-                              src={token.iconUrl}
-                              alt={token.symbol || token.name || 'Token'}
-                              className="h-6 w-6 rounded-full"
-                              onError={(e) => {
-                                (e.target as HTMLImageElement).style.display = 'none';
-                              }}
-                            />
-                          ) : (
-                            <div className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-800 text-xs text-slate-400">
-                              {token.symbol?.[0] || token.name?.[0] || '?'}
-                            </div>
-                          )}
-                          <div>
-                            <Link
-                              href={`/tokens/${token.typeScriptHash}`}
-                              onClick={(e) => e.stopPropagation()}
-                              className="text-terminal-green font-medium hover:underline"
-                            >
-                              {token.name || token.symbol || 'Unknown Token'}
-                            </Link>
-                            {token.symbol && token.name && (
-                              <span className="ml-2 text-xs text-slate-500">{token.symbol}</span>
+                        <div
+                          className="flex w-full items-center"
+                          onClick={() => handleTokenSelect(isSelected ? null : token)}
+                        >
+                          <div className="flex flex-1 items-center gap-3">
+                            {token.iconUrl && (
+                              <img
+                                src={token.iconUrl}
+                                alt={token.symbol || token.name || 'Token'}
+                                className="h-6 w-6 rounded-full"
+                                onError={(e) => {
+                                  (e.target as HTMLImageElement).style.display = 'none';
+                                }}
+                              />
                             )}
+                            <div>
+                              <Link
+                                href={`/tokens/${token.typeScriptHash}`}
+                                onClick={(e) => e.stopPropagation()}
+                                className="text-terminal-green font-medium hover:underline"
+                              >
+                                {token.name || token.symbol || 'Unknown Token'}
+                              </Link>
+                              {token.symbol && token.name && (
+                                <span className="ml-2 text-xs text-slate-500">{token.symbol}</span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="w-32">
+                            <Badge variant="gray">{token.standard}</Badge>
+                          </div>
+                          <div className="w-48 text-right">
+                            <span className="font-mono text-white">
+                              {formatTokenBalance(token.balance, token.decimals)}
+                            </span>
                           </div>
                         </div>
-                        <div className="w-32">
-                          <Badge variant="gray">{token.standard}</Badge>
-                        </div>
-                        <div className="w-48 text-right">
-                          <span className="font-mono text-white">
-                            {formatTokenBalance(token.balance, token.decimals)}
-                          </span>
-                        </div>
-                      </div>
-                    </TerminalRow>
-                  );
-                })}
+                      </TerminalRow>
+                    );
+                  })}
               </div>
             </TerminalPanelContent>
           </TerminalPanel>
@@ -609,6 +617,7 @@ export default function AddressDetailPage() {
                   }`}
                 >
                   Activities
+                  <span className="ml-1 opacity-75">({address.transactionsCount})</span>
                 </button>
                 <button
                   onClick={() => setActiveTab('cells')}
@@ -696,7 +705,10 @@ export default function AddressDetailPage() {
                   {(['all', 'ckb', 'token', 'nft', 'dao'] as const).map((f) => (
                     <button
                       key={f}
-                      onClick={() => setActivityFilter(f)}
+                      onClick={() => {
+                        setActivityFilter(f);
+                        activitiesPagination.reset();
+                      }}
                       className={`rounded px-2 py-0.5 font-mono text-xs transition-colors ${
                         activityFilter === f
                           ? 'bg-terminal-green/20 text-terminal-green'
@@ -709,7 +721,7 @@ export default function AddressDetailPage() {
                 </div>
                 {activitiesLoading ? (
                   <div className="py-12 text-center text-slate-500">Loading activities...</div>
-                ) : filteredActivities && filteredActivities.length > 0 ? (
+                ) : activities?.data && activities?.data.length > 0 ? (
                   <>
                     <div className="min-w-full overflow-x-auto">
                       <div
@@ -721,7 +733,7 @@ export default function AddressDetailPage() {
                         <div className="text-right">Assets</div>
                         <div className="text-right">Time</div>
                       </div>
-                      {filteredActivities.map((activity: Activity) => {
+                      {activities?.data.map((activity: Activity) => {
                         const delta = BigInt(activity.ckbDelta);
                         const isPositive = delta > BigInt(0);
                         const isNegative = delta < BigInt(0);
@@ -776,8 +788,12 @@ export default function AddressDetailPage() {
                     {(activities?.hasMore || activitiesPagination.hasPrevious) && (
                       <TerminalPanelFooter className="flex justify-center">
                         <CursorPagination
+                          total={activityFilter === 'all' ? address.transactionsCount : undefined}
+                          totalLabel="activities"
+                          pageSize={20}
                           hasMore={activities?.hasMore ?? false}
                           hasPrevious={activitiesPagination.hasPrevious}
+                          page={activitiesPagination.page}
                           onNext={() => activitiesPagination.goToNext(activities?.nextCursor)}
                           onPrevious={activitiesPagination.goToPrevious}
                         />
@@ -936,8 +952,14 @@ export default function AddressDetailPage() {
                       {(cells?.hasMore || cellsPagination.hasPrevious) && (
                         <TerminalPanelFooter className="mt-4 flex justify-center border-t-0">
                           <CursorPagination
+                            total={
+                              !selectedToken && !selectedDao ? address.liveCellsCount : undefined
+                            }
+                            totalLabel="cells"
+                            pageSize={20}
                             hasMore={cells?.hasMore ?? false}
                             hasPrevious={cellsPagination.hasPrevious}
+                            page={cellsPagination.page}
                             onNext={() => cellsPagination.goToNext(cells?.nextCursor)}
                             onPrevious={cellsPagination.goToPrevious}
                           />
@@ -1020,8 +1042,10 @@ export default function AddressDetailPage() {
                         <CursorPagination
                           total={transactions.total}
                           totalLabel="transactions"
+                          pageSize={20}
                           hasMore={transactions.hasMore}
                           hasPrevious={txPagination.hasPrevious}
+                          page={txPagination.page}
                           onNext={() => txPagination.goToNext(transactions.nextCursor)}
                           onPrevious={txPagination.goToPrevious}
                         />

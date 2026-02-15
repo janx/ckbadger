@@ -1032,12 +1032,17 @@ export const api = {
 
   getAddressActivities: (
     addr: string,
-    params: CursorQueryParams = {}
+    params: CursorQueryParams & { filter?: string } = {}
   ): Promise<CursorPaginatedResponse<Activity>> => {
     const query = new URLSearchParams();
     if (params.limit) query.set('limit', String(params.limit));
     if (params.cursor) query.set('cursor', params.cursor);
+    if (params.filter && params.filter !== 'all') query.set('filter', params.filter);
     return fetchApi(`/addresses/${addr}/activities?${query}`);
+  },
+
+  getAddressStatsHistory: (addr: string): Promise<StackedAreaChartResponse> => {
+    return fetchApi(`/addresses/${addr}/stats-history`);
   },
 
   getLiveCells: (params: CellQueryParams = {}): Promise<CursorPaginatedResponse<Cell>> => {
