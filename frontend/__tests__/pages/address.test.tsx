@@ -12,6 +12,8 @@ vi.mock('@/lib/api', () => ({
     getAddressTransactions: vi.fn(),
     getAddressDaoSummary: vi.fn(),
     getDaoDepositsByAddress: vi.fn(),
+    getAddressStatsHistory: vi.fn(),
+    getAddressActivities: vi.fn(),
   },
 }));
 
@@ -147,6 +149,14 @@ describe('AddressDetailPage', () => {
     vi.mocked(api.getAddressTransactions).mockResolvedValue(emptyTransactions);
     vi.mocked(api.getAddressDaoSummary).mockResolvedValue(noDaoActivity);
     vi.mocked(api.getDaoDepositsByAddress).mockResolvedValue(emptyDaoDeposits);
+    vi.mocked(api.getAddressStatsHistory).mockResolvedValue({ title: '', data: [], series: [] });
+    vi.mocked(api.getAddressActivities).mockResolvedValue({
+      data: [],
+      total: 0,
+      limit: 20,
+      hasMore: false,
+      nextCursor: null,
+    });
   });
 
   it('displays lock script name badge when lockScriptInfo is present', async () => {
@@ -222,7 +232,8 @@ describe('AddressDetailPage', () => {
     });
 
     expect(screen.getByText('4.86% APC')).toBeInTheDocument();
-    expect(screen.getByText(/3 active/)).toBeInTheDocument();
+    expect(screen.getByText('Active Deposits')).toBeInTheDocument();
+    expect(screen.getByText('3')).toBeInTheDocument();
   });
 
   it('does not display DAO in Asset Holdings when address has no DAO activity', async () => {
@@ -238,7 +249,7 @@ describe('AddressDetailPage', () => {
     expect(screen.queryByText('Nervos DAO')).not.toBeInTheDocument();
   });
 
-  it('displays DAO Activities tab with total count including completed', async () => {
+  it('displays DAO deposit stats including pending withdrawals', async () => {
     vi.mocked(api.getAddress).mockResolvedValue(mockAddressWithLockScriptInfo);
     vi.mocked(api.getAddressDaoSummary).mockResolvedValue(mockDaoSummary);
 
@@ -248,8 +259,8 @@ describe('AddressDetailPage', () => {
       expect(screen.getByText('Nervos DAO')).toBeInTheDocument();
     });
 
-    const daoTab = screen.getByRole('button', { name: /DAO Activities/i });
-    expect(daoTab).toBeInTheDocument();
-    expect(daoTab).toHaveTextContent('(9)');
+    expect(screen.getByText('Active Deposits')).toBeInTheDocument();
+    expect(screen.getByText('Pending Withdrawals')).toBeInTheDocument();
+    expect(screen.getByText('Compensation Earned')).toBeInTheDocument();
   });
 });
