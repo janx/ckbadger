@@ -169,7 +169,7 @@ impl CkbadgerStore {
         CF_TX_INDEX,
         CF_TX_HASH_MAP,
         CF_ADDR_BALANCE,
-        CF_SCRIPT_INFO,
+        CF_ACTIVITIES,
     ];
 
     /// High-write column families that benefit from large write buffers (128 MB).
@@ -245,9 +245,9 @@ impl CkbadgerStore {
     }
 
     /// Per-CF options with 3 tiers:
-    /// - Mega-write (8 CFs): 256MB × 4 buffers = 1GB per CF
-    /// - High-write (5 remaining CFs): 128MB × 4 buffers = 512MB per CF
-    /// - Everything else (12 CFs): 32MB × 2 buffers = 64MB per CF
+    /// - Mega-write (10 CFs): 256MB × 4 buffers = 1GB per CF
+    /// - High-write (remaining CFs): 128MB × 4 buffers = 512MB per CF
+    /// - Everything else: 32MB × 2 buffers = 64MB per CF
     fn cf_options(name: &str, block_cache: &rocksdb::Cache) -> Options {
         let mut opts = Options::default();
 
@@ -444,12 +444,12 @@ impl CkbadgerStore {
             write_buffer_low_mb = 32,
             max_write_buffers_high = 4,
             max_write_buffers_low = 2,
-            l0_slowdown = 12,
-            l0_stop = 24,
+            l0_slowdown = 20,
+            l0_stop = 48,
             l0_slowdown_bulk = 64,
             l0_stop_bulk = 128,
-            max_background_jobs = 10,
-            max_subcompactions = 3,
+            max_background_jobs = 24,
+            max_subcompactions = 4,
             block_cache_gb = 8,
             direct_io_compaction = true,
             pipelined_write = true,
@@ -489,6 +489,7 @@ impl CkbadgerStore {
                         ("level0_slowdown_writes_trigger", "64"),
                         ("level0_stop_writes_trigger", "128"),
                         ("max_write_buffer_number", max_wb),
+                        ("max_bytes_for_level_base", "2147483648"), // 2 GB
                     ],
                 );
                 if result.is_ok() {
@@ -512,6 +513,9 @@ impl CkbadgerStore {
     }
 
     /// Restore normal L0 thresholds and write buffer counts after bulk sync.
+    ///
+    /// Reverts L0 slowdown/stop triggers to 12/24, write buffers to 4 (mega/high)
+    /// or 2 (low), and `max_bytes_for_level_base` to 512 MB.
     pub fn restore_normal_compaction_options(&self) {
         for cf_name in ALL_CFS {
             if let Some(cf) = self.db.cf_handle(cf_name) {
@@ -526,6 +530,7 @@ impl CkbadgerStore {
                         ("level0_slowdown_writes_trigger", "12"),
                         ("level0_stop_writes_trigger", "24"),
                         ("max_write_buffer_number", max_wb),
+                        ("max_bytes_for_level_base", "536870912"), // 512 MB
                     ],
                 );
             }
@@ -774,5 +779,83 @@ mod tests {
         let stats = store.memory_stats();
         // Just verify it doesn't panic and returns reasonable values
         let _ = stats; // Just verify it doesn't panic
+    }
+
+    #[test]
+    fn test_mega_write_cfs_contains_activities() {
+        assert!(
+            CkbadgerStore::is_mega_write_cf(CF_ACTIVITIES),
+            "CF_ACTIVITIES should be in MEGA_WRITE_CFS"
+        );
+    }
+
+    #[test]
+    fn test_mega_write_cfs_excludes_script_info() {
+        assert!(
+            !CkbadgerStore::is_mega_write_cf(CF_SCRIPT_INFO),
+            "CF_SCRIPT_INFO should NOT be in MEGA_WRITE_CFS"
+        );
+    }
+
+    #[test]
+    fn test_mega_write_cfs_expected_members() {
+        let expected = &[
+            CF_LIVE_CELLS,
+            CF_CONSUMED_CELLS,
+            CF_CELL_BY_LOCK,
+            CF_CELL_BY_TYPE,
+            CF_CELL_BY_LOCK_CODE,
+            CF_CELL_BY_TYPE_CODE,
+            CF_TX_INDEX,
+            CF_TX_HASH_MAP,
+            CF_ADDR_BALANCE,
+            CF_ACTIVITIES,
+        ];
+        for cf in expected {
+            assert!(
+                CkbadgerStore::is_mega_write_cf(cf),
+                "{cf} should be in MEGA_WRITE_CFS"
+            );
+        }
+        assert_eq!(
+            CkbadgerStore::MEGA_WRITE_CFS.len(),
+            expected.len(),
+            "MEGA_WRITE_CFS length mismatch"
+        );
+    }
+
+    #[test]
+    fn test_set_bulk_sync_compaction_options_does_not_panic() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        // Should not panic on a freshly opened store
+        store.set_bulk_sync_compaction_options();
+    }
+
+    #[test]
+    fn test_restore_normal_compaction_options_does_not_panic() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        // Should not panic on a freshly opened store
+        store.restore_normal_compaction_options();
+    }
+
+    #[test]
+    fn test_bulk_sync_then_restore_compaction_round_trip() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        // Set bulk sync options, then restore — should work without panics
+        store.set_bulk_sync_compaction_options();
+        store.restore_normal_compaction_options();
+        // Verify DB is still operational after option changes
+        let cf = store.cf_sync_meta();
+        store.put_cf(cf, b"test", b"value").unwrap();
+        let val = store.get_cf(cf, b"test").unwrap();
+        assert_eq!(val.as_deref(), Some(b"value".as_slice()));
+    }
+
+    #[test]
+    fn test_log_config_does_not_panic() {
+        CkbadgerStore::log_config();
     }
 }

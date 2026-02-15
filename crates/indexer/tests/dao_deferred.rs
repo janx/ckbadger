@@ -22,6 +22,7 @@ fn test_sync_status_address_balances_deferred() {
         total_cells_consumed: 6000,
         last_synced_at: 1700001000,
         address_balances_deferred: true,
+        activities_deferred: false,
         deep_fork_detected: false,
         deep_fork_info: None,
     };
@@ -48,6 +49,7 @@ fn test_update_sync_status_closure() {
         total_cells_consumed: 12_000,
         last_synced_at: 1700002000,
         address_balances_deferred: false,
+        activities_deferred: false,
         deep_fork_detected: false,
         deep_fork_info: None,
     };
@@ -77,6 +79,82 @@ fn test_update_sync_status_closure() {
     let final_status = store.get_sync_status().unwrap();
     assert!(!final_status.address_balances_deferred);
     assert_eq!(final_status.tip_block_number, 3500);
+}
+
+/// Set activities_deferred flag, verify persistence, then clear via closure.
+#[test]
+fn test_activities_deferred_lifecycle() {
+    let store = setup_store();
+
+    // Default should be false
+    let status = store.get_sync_status().unwrap();
+    assert!(!status.activities_deferred);
+
+    // Simulate bulk sync start: set activities_deferred = true
+    store
+        .update_sync_status(|s| {
+            s.activities_deferred = true;
+            s.tip_block_number = 5000;
+        })
+        .unwrap();
+
+    let status = store.get_sync_status().unwrap();
+    assert!(status.activities_deferred);
+    assert_eq!(status.tip_block_number, 5000);
+
+    // Simulate rebuild completion: clear activities_deferred
+    store
+        .update_sync_status(|s| {
+            s.activities_deferred = false;
+        })
+        .unwrap();
+
+    let status = store.get_sync_status().unwrap();
+    assert!(!status.activities_deferred);
+    // Other fields preserved
+    assert_eq!(status.tip_block_number, 5000);
+}
+
+/// Both deferred flags can be independently set and cleared.
+#[test]
+fn test_deferred_flags_independent() {
+    let store = setup_store();
+
+    // Set only activities_deferred
+    store
+        .update_sync_status(|s| {
+            s.activities_deferred = true;
+            s.address_balances_deferred = false;
+        })
+        .unwrap();
+
+    let status = store.get_sync_status().unwrap();
+    assert!(status.activities_deferred);
+    assert!(!status.address_balances_deferred);
+
+    // Set only address_balances_deferred
+    store
+        .update_sync_status(|s| {
+            s.activities_deferred = false;
+            s.address_balances_deferred = true;
+        })
+        .unwrap();
+
+    let status = store.get_sync_status().unwrap();
+    assert!(!status.activities_deferred);
+    assert!(status.address_balances_deferred);
+
+    // Set both
+    store
+        .update_sync_status(|s| {
+            s.activities_deferred = true;
+            s.address_balances_deferred = true;
+        })
+        .unwrap();
+
+    let status = store.get_sync_status().unwrap();
+    assert!(status.activities_deferred);
+    assert!(status.address_balances_deferred);
 }
 
 /// Toggle bulk sync mode on and off.

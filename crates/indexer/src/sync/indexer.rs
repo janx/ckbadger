@@ -21,7 +21,8 @@ use ckbadger_store::CkbadgerStore;
 use crate::cache::CacheInvalidator;
 use crate::config::{Config, DEEP_FORK_DEPTH};
 use crate::db::{
-    rebuild_cell_indices, BatchWriter, ReorgResult, Repository, SecondaryIssuanceBreakdown,
+    rebuild_activities, rebuild_cell_indices, BatchWriter, ReorgResult, Repository,
+    SecondaryIssuanceBreakdown,
 };
 use crate::parser::{
     BlockParser, CellParser, DaoParser, DotbitParser, MnftParser, SporeParser, TransactionParser,
@@ -305,6 +306,7 @@ pub struct Indexer {
     rebuild_pause_flag: Arc<std::sync::atomic::AtomicBool>,
     reorg_notify_flag: Arc<std::sync::atomic::AtomicBool>,
     address_balances_deferred: std::sync::atomic::AtomicBool,
+    activities_deferred: std::sync::atomic::AtomicBool,
     ckb_store: Option<Arc<CkbChainReader>>,
 }
 
@@ -346,11 +348,12 @@ impl Indexer {
 
         let sync_status = store.get_sync_status()?;
         let address_balances_deferred = sync_status.address_balances_deferred;
+        let activities_deferred = sync_status.activities_deferred;
 
-        if address_balances_deferred {
+        if address_balances_deferred || activities_deferred {
             info!(
-                "Loaded deferred states: address_balances={}",
-                address_balances_deferred
+                "Loaded deferred states: address_balances={}, activities={}",
+                address_balances_deferred, activities_deferred
             );
         }
 
@@ -374,6 +377,7 @@ impl Indexer {
             address_balances_deferred: std::sync::atomic::AtomicBool::new(
                 address_balances_deferred,
             ),
+            activities_deferred: std::sync::atomic::AtomicBool::new(activities_deferred),
             ckb_store,
         })
     }
@@ -460,6 +464,31 @@ impl Indexer {
                 blocks_behind, self.config.bulk_sync_threshold,
             );
             self.writer.store().set_bulk_sync_compaction_options();
+
+            // Mark activities as deferred for crash recovery
+            self.activities_deferred.store(true, Ordering::Relaxed);
+            if let Err(e) = self.writer.store().update_sync_status(|s| {
+                s.activities_deferred = true;
+            }) {
+                warn!("Failed to set activities_deferred flag: {}", e);
+            }
+        }
+
+        // If activities were deferred from a previous run but bulk sync is done, rebuild now
+        if self.activities_deferred.load(Ordering::Relaxed)
+            && blocks_behind <= self.config.bulk_sync_threshold
+        {
+            info!("Activities deferred from previous run, starting rebuild");
+            let store_act = Arc::clone(self.writer.store());
+            let ckb_store_act = self.ckb_store.clone();
+            tokio::task::spawn_blocking(move || {
+                rebuild_activities(&store_act, ckb_store_act.as_deref());
+                if let Err(e) = store_act.update_sync_status(|s| {
+                    s.activities_deferred = false;
+                }) {
+                    warn!("Failed to clear activities_deferred flag: {}", e);
+                }
+            });
         }
 
         let (start_block, _) = self.repo.get_sync_tip().await?;
@@ -1634,6 +1663,20 @@ impl Indexer {
                 rebuild_cell_indices(&store_rebuild);
                 pause_flag.store(false, Ordering::SeqCst);
                 info!("Cell index rebuild finished, resuming sync");
+            });
+
+            // Rebuild activities (skipped during bulk sync)
+            info!("Starting activities rebuild");
+            let store_act = Arc::clone(self.writer.store());
+            let ckb_store_act = self.ckb_store.clone();
+            tokio::task::spawn_blocking(move || {
+                rebuild_activities(&store_act, ckb_store_act.as_deref());
+                // Clear the deferred flag after successful rebuild
+                if let Err(e) = store_act.update_sync_status(|s| {
+                    s.activities_deferred = false;
+                }) {
+                    warn!("Failed to clear activities_deferred flag: {}", e);
+                }
             });
 
             self.maybe_submit_pending_rebuild_tasks();
@@ -3115,6 +3158,7 @@ impl Indexer {
             .address_balances_deferred
             .load(std::sync::atomic::Ordering::Relaxed)
             && bulk_sync_mode;
+        let skip_activities = bulk_sync_mode;
 
         let precompute_ms = t_precompute.elapsed().as_secs_f64() * 1000.0;
 
@@ -3970,93 +4014,98 @@ impl Indexer {
                 });
 
                 // T_ACT: Activity builder (writes only CF_ACTIVITIES — no conflicts)
-                let h_act = s.spawn(|| -> Result<f64> {
-                    let t = Instant::now();
-                    let mut batch = StoreBatch::new(store);
-                    let token_info_cache: HashMap<Vec<u8>, (Option<String>, Option<u8>)> =
-                        HashMap::new();
-                    let mut block_tx_idx = 0usize;
-                    for parsed in all_parsed_blocks {
-                        let tx_count = parsed.transactions_count as usize;
-                        let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count];
-                        block_tx_idx += tx_count;
+                // Skipped during bulk sync; activities are rebuilt after completion.
+                let h_act = if !skip_activities {
+                    Some(s.spawn(|| -> Result<f64> {
+                        let t = Instant::now();
+                        let mut batch = StoreBatch::new(store);
+                        let token_info_cache: HashMap<Vec<u8>, (Option<String>, Option<u8>)> =
+                            HashMap::new();
+                        let mut block_tx_idx = 0usize;
+                        for parsed in all_parsed_blocks {
+                            let tx_count = parsed.transactions_count as usize;
+                            let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count];
+                            block_tx_idx += tx_count;
 
-                        let tx_views: Vec<crate::db::writer::activities::TxView<'_>> = tx_slice
-                            .iter()
-                            .map(|td| {
-                                let inputs: Vec<crate::db::writer::activities::InputCellView> =
-                                    if td.is_cellbase {
-                                        Vec::new()
-                                    } else {
-                                        td.inputs
-                                            .iter()
-                                            .map(|inp| {
-                                                let key = (
-                                                    inp.previous_tx_hash.to_vec(),
-                                                    inp.previous_output_index as i16,
-                                                );
-                                                let cell_info = input_cell_info
-                                                    .get(&key)
-                                                    .or_else(|| batch_cell_infos.get(&key));
-                                                if let Some(info) = cell_info {
-                                                    crate::db::writer::activities::InputCellView {
-                                                        lock_script_hash: info
-                                                            .lock_script_hash
-                                                            .clone(),
-                                                        capacity: info.capacity,
-                                                        occupied_capacity: info.occupied_capacity,
-                                                        type_code_hash: info.type_code_hash.clone(),
-                                                        type_script_hash: info
-                                                            .type_script_hash
-                                                            .clone(),
-                                                        type_args: None,
-                                                        data: Vec::new(),
-                                                        data_size: info.data_size,
+                            let tx_views: Vec<crate::db::writer::activities::TxView<'_>> = tx_slice
+                                .iter()
+                                .map(|td| {
+                                    let inputs: Vec<crate::db::writer::activities::InputCellView> =
+                                        if td.is_cellbase {
+                                            Vec::new()
+                                        } else {
+                                            td.inputs
+                                                .iter()
+                                                .map(|inp| {
+                                                    let key = (
+                                                        inp.previous_tx_hash.to_vec(),
+                                                        inp.previous_output_index as i16,
+                                                    );
+                                                    let cell_info = input_cell_info
+                                                        .get(&key)
+                                                        .or_else(|| batch_cell_infos.get(&key));
+                                                    if let Some(info) = cell_info {
+                                                        crate::db::writer::activities::InputCellView {
+                                                            lock_script_hash: info
+                                                                .lock_script_hash
+                                                                .clone(),
+                                                            capacity: info.capacity,
+                                                            occupied_capacity: info.occupied_capacity,
+                                                            type_code_hash: info.type_code_hash.clone(),
+                                                            type_script_hash: info
+                                                                .type_script_hash
+                                                                .clone(),
+                                                            type_args: None,
+                                                            data: Vec::new(),
+                                                            data_size: info.data_size,
+                                                        }
+                                                    } else {
+                                                        crate::db::writer::activities::InputCellView {
+                                                            lock_script_hash: Vec::new(),
+                                                            capacity: 0,
+                                                            occupied_capacity: 0,
+                                                            type_code_hash: None,
+                                                            type_script_hash: None,
+                                                            type_args: None,
+                                                            data: Vec::new(),
+                                                            data_size: 0,
+                                                        }
                                                     }
-                                                } else {
-                                                    crate::db::writer::activities::InputCellView {
-                                                        lock_script_hash: Vec::new(),
-                                                        capacity: 0,
-                                                        occupied_capacity: 0,
-                                                        type_code_hash: None,
-                                                        type_script_hash: None,
-                                                        type_args: None,
-                                                        data: Vec::new(),
-                                                        data_size: 0,
-                                                    }
-                                                }
-                                            })
-                                            .collect()
-                                    };
-                                crate::db::writer::activities::TxView {
-                                    tx_hash: &td.hash,
-                                    tx_index: td.tx_index,
-                                    block_number: parsed.number,
-                                    timestamp: parsed.timestamp.timestamp_millis(),
-                                    is_cellbase: td.is_cellbase,
-                                    inputs,
-                                    outputs: &td.cells,
-                                    outputs_data: &td.outputs_data,
-                                }
-                            })
-                            .collect();
+                                                })
+                                                .collect()
+                                        };
+                                    crate::db::writer::activities::TxView {
+                                        tx_hash: &td.hash,
+                                        tx_index: td.tx_index,
+                                        block_number: parsed.number,
+                                        timestamp: parsed.timestamp.timestamp_millis(),
+                                        is_cellbase: td.is_cellbase,
+                                        inputs,
+                                        outputs: &td.cells,
+                                        outputs_data: &td.outputs_data,
+                                    }
+                                })
+                                .collect();
 
-                        let activities = crate::db::writer::activities::build_activities_for_block(
-                            &tx_views,
-                            &token_info_cache,
-                        );
-                        for (lock_hash, entry) in activities {
-                            batch.put_activity(
-                                &lock_hash,
-                                entry.block_number,
-                                entry.tx_index,
-                                &entry,
+                            let activities = crate::db::writer::activities::build_activities_for_block(
+                                &tx_views,
+                                &token_info_cache,
                             );
+                            for (lock_hash, entry) in activities {
+                                batch.put_activity(
+                                    &lock_hash,
+                                    entry.block_number,
+                                    entry.tx_index,
+                                    &entry,
+                                );
+                            }
                         }
-                    }
-                    batch.commit_no_wal()?;
-                    Ok(t.elapsed().as_secs_f64() * 1000.0)
-                });
+                        batch.commit_no_wal()?;
+                        Ok(t.elapsed().as_secs_f64() * 1000.0)
+                    }))
+                } else {
+                    None
+                };
 
                 let t1_ms = h1.join().expect("T1 panicked")?;
                 let t2_ms = h2.join().expect("T2 panicked")?;
@@ -4064,7 +4113,10 @@ impl Indexer {
                 let t5_ms = h5.join().expect("T5 panicked")?;
                 let t6_ms = h6.join().expect("T6 panicked")?;
                 let (stats, t7_ms) = h7.join().expect("T7 panicked")?;
-                let t_act_ms = h_act.join().expect("T_ACT panicked")?;
+                let t_act_ms = match h_act {
+                    Some(h) => h.join().expect("T_ACT panicked")?,
+                    None => 0.0,
+                };
                 Ok((stats, [t1_ms, t2_ms, t4_ms, t5_ms, t6_ms, t7_ms, t_act_ms]))
             })?;
             thread_times = Some(tt);

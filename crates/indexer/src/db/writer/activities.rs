@@ -67,6 +67,7 @@ impl CodeHashes {
 }
 
 /// Input cell info needed for activity building.
+#[derive(Clone)]
 pub struct InputCellView {
     pub lock_script_hash: Vec<u8>,
     pub capacity: i64,
