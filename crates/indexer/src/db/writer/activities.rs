@@ -121,6 +121,8 @@ struct OwnerAccum {
     dao_deposits: Vec<i64>,
     /// DAO withdraw requests (output cells with DAO type and non-zero deposit block)
     dao_withdraw_requests: Vec<(i64, i64)>,
+    /// DAO withdraw completes (input cells with DAO withdraw request consumed without DAO output)
+    dao_withdraw_completes: Vec<i64>,
     /// Spore/DOB IDs seen as inputs
     spore_inputs: Vec<Vec<u8>>,
     /// Spore/DOB IDs seen as outputs
@@ -160,6 +162,7 @@ fn build_tx_activities(
                 &input.data,
                 input.data_size,
                 hashes,
+                input.capacity,
             );
         }
     }
@@ -191,6 +194,7 @@ fn build_tx_activities(
                 hashes,
                 idx,
                 tx.outputs_data,
+                cell.capacity,
             );
         }
     }
@@ -243,6 +247,14 @@ fn build_tx_activities(
             asset_changes.push(AssetChange::DaoWithdrawRequest {
                 capacity: *capacity,
                 deposit_block: *deposit_block,
+            });
+        }
+
+        // DAO withdraw completes
+        for capacity in &accum.dao_withdraw_completes {
+            asset_changes.push(AssetChange::DaoWithdrawComplete {
+                capacity: *capacity,
+                compensation: 0,
             });
         }
 
@@ -299,6 +311,7 @@ fn classify_input(
     data: &[u8],
     _data_size: i32,
     hashes: &CodeHashes,
+    capacity: i64,
 ) {
     if hashes.is_udt(type_code_hash) {
         if let Some(tsh) = type_script_hash {
@@ -308,7 +321,13 @@ fn classify_input(
             }
         }
     } else if type_code_hash == hashes.dao {
-        // DAO input — handled by DAO withdraw detection
+        // DAO withdraw request cell consumed as input = withdrawal completing
+        if data.len() == 8 {
+            let val = u64::from_le_bytes(data[..8].try_into().unwrap_or([0; 8]));
+            if val != 0 {
+                accum.dao_withdraw_completes.push(capacity);
+            }
+        }
     } else if hashes.is_spore(type_code_hash) || hashes.is_cluster(type_code_hash) {
         if let Some(args) = type_args {
             if !args.is_empty() {
@@ -340,6 +359,7 @@ fn classify_output(
     hashes: &CodeHashes,
     output_idx: usize,
     outputs_data: &[String],
+    capacity: i64,
 ) {
     if hashes.is_udt(type_code_hash) {
         if let Some(tsh) = type_script_hash {
@@ -361,25 +381,12 @@ fn classify_output(
                     let deposit_block =
                         u64::from_le_bytes(data_bytes[..8].try_into().unwrap_or([0; 8]));
                     if deposit_block == 0 {
-                        // New deposit (data = 0 means deposit)
-                        // capacity is stored on the OwnerAccum via output_capacity
-                        // We can't get exact capacity here since we iterate cells,
-                        // but the calling code has access to the full cell
+                        accum.dao_deposits.push(capacity);
                     } else {
-                        // Withdraw request (data = deposit block number)
-                        // Note: actual capacity is the cell capacity
+                        accum
+                            .dao_withdraw_requests
+                            .push((capacity, deposit_block as i64));
                     }
-                }
-            }
-        }
-        // For deposits, detect output cells with DAO type script where data is all zeros
-        if let Some(data_hex) = outputs_data.get(output_idx) {
-            let data_bytes = crate::rpc::parse_hex_to_bytes(data_hex);
-            if data_bytes.len() == 8 {
-                let val = u64::from_le_bytes(data_bytes[..8].try_into().unwrap_or([0; 8]));
-                if val == 0 {
-                    // This is a DAO deposit — we don't know the exact capacity here
-                    // but we'll get it from the output cells iteration above
                 }
             }
         }
