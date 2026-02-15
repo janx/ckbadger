@@ -40,10 +40,6 @@ export default function ScriptsPage() {
     pagination.reset();
   };
 
-  const formatNumber = (num: number | string) => {
-    return new Intl.NumberFormat().format(Number(num));
-  };
-
   return (
     <div className="min-h-screen bg-slate-950">
       <Header />
