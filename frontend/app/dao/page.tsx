@@ -13,6 +13,8 @@ import {
 } from '@/components/ui/terminal-panel';
 import { PageHeader, Badge } from '@/components/ui/page-header';
 import { StatCard, FilterButtonGroup } from '@/components/ui/chart-card';
+import { CursorPagination } from '@/components/ui/cursor-pagination';
+import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, DaoDeposit, ScriptLookupResponse } from '@/lib/api';
 import { formatTimeAgo, formatCkbAmount, formatCkbValue, formatNumber } from '@/lib/utils';
 
@@ -111,8 +113,7 @@ function InteractivePieChart({
 }
 
 export default function DaoPage() {
-  const [cursor, setCursor] = useState<string | undefined>(undefined);
-  const [cursorHistory, setCursorHistory] = useState<string[]>([]);
+  const depositsPagination = useCursorPagination();
   const [status, setStatus] = useState<number | undefined>(undefined);
   const [secondaryHover, setSecondaryHover] = useState<number | null>(null);
   const [compensationHover, setCompensationHover] = useState<number | null>(null);
@@ -123,8 +124,8 @@ export default function DaoPage() {
   });
 
   const { data: deposits, isLoading } = useQuery({
-    queryKey: ['dao-deposits', cursor, status],
-    queryFn: () => api.getDaoDeposits({ limit: 20, status, cursor }),
+    queryKey: ['dao-deposits', depositsPagination.cursor, status],
+    queryFn: () => api.getDaoDeposits({ limit: 20, status, cursor: depositsPagination.cursor }),
   });
 
   const codeHashes = useMemo(() => {
@@ -142,26 +143,6 @@ export default function DaoPage() {
     enabled: codeHashes.length > 0,
     staleTime: Infinity,
   });
-
-  const handleNextPage = () => {
-    if (deposits?.nextCursor) {
-      setCursorHistory((prev) => [...prev, cursor || '']);
-      setCursor(deposits.nextCursor);
-    }
-  };
-
-  const handlePrevPage = () => {
-    if (cursorHistory.length > 0) {
-      const prev = cursorHistory[cursorHistory.length - 1];
-      setCursorHistory((h) => h.slice(0, -1));
-      setCursor(prev || undefined);
-    }
-  };
-
-  const resetPagination = () => {
-    setCursor(undefined);
-    setCursorHistory([]);
-  };
 
   const getSecondaryIssuanceData = () => {
     if (!stats) return [];
@@ -413,7 +394,7 @@ export default function DaoPage() {
                 selected={status}
                 onChange={(v) => {
                   setStatus(v as number | undefined);
-                  resetPagination();
+                  depositsPagination.reset();
                 }}
               />
             }
@@ -489,26 +470,17 @@ export default function DaoPage() {
                     </tbody>
                   </table>
                 </div>
-                <div className="flex items-center justify-between border-t border-slate-800 px-4 py-3">
-                  <span className="font-mono text-sm text-slate-500">
-                    {deposits.total != null && `Total: ${deposits.total.toLocaleString()} deposits`}
-                  </span>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={handlePrevPage}
-                      disabled={cursorHistory.length === 0}
-                      className="rounded border border-slate-700 bg-slate-800 px-3 py-1.5 font-mono text-sm text-slate-300 transition-colors hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      Previous
-                    </button>
-                    <button
-                      onClick={handleNextPage}
-                      disabled={!deposits.hasMore}
-                      className="rounded border border-slate-700 bg-slate-800 px-3 py-1.5 font-mono text-sm text-slate-300 transition-colors hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      Next
-                    </button>
-                  </div>
+                <div className="border-t border-slate-800 px-4 py-3">
+                  <CursorPagination
+                    total={deposits.total ?? undefined}
+                    totalLabel="deposits"
+                    pageSize={20}
+                    page={depositsPagination.page}
+                    hasMore={deposits.hasMore}
+                    hasPrevious={depositsPagination.hasPrevious}
+                    onNext={() => depositsPagination.goToNext(deposits.nextCursor)}
+                    onPrevious={depositsPagination.goToPrevious}
+                  />
                 </div>
               </>
             ) : (

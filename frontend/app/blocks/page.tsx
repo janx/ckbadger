@@ -18,7 +18,7 @@ import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { formatTimeAgo } from '@/lib/utils';
 
 export default function BlocksPage() {
-  const { cursor, hasPrevious, goToNext, goToPrevious } = useCursorPagination();
+  const { cursor, hasPrevious, page, goToNext, goToPrevious } = useCursorPagination();
   const limit = 25;
 
   const { data, isLoading } = useQuery({
@@ -100,6 +100,8 @@ export default function BlocksPage() {
               <CursorPagination
                 total={data.total}
                 totalLabel="blocks"
+                pageSize={limit}
+                page={page}
                 hasMore={data.hasMore}
                 hasPrevious={hasPrevious}
                 onNext={() => goToNext(data.nextCursor)}

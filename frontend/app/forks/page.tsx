@@ -18,7 +18,7 @@ import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { formatTimeAgo } from '@/lib/utils';
 
 export default function ForksPage() {
-  const { cursor, hasPrevious, goToNext, goToPrevious } = useCursorPagination();
+  const { cursor, hasPrevious, page, goToNext, goToPrevious } = useCursorPagination();
   const limit = 25;
 
   const { data, isLoading } = useQuery({
@@ -156,6 +156,8 @@ export default function ForksPage() {
               <CursorPagination
                 total={data.total}
                 totalLabel="events"
+                pageSize={limit}
+                page={page}
                 hasMore={data.hasMore}
                 hasPrevious={hasPrevious}
                 onNext={() => goToNext(data.nextCursor)}

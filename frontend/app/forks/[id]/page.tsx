@@ -223,8 +223,7 @@ export default function ForkDetailPage({ params }: { params: Promise<{ id: strin
             <TabsContent value="transactions" className="m-0">
               <TerminalPanelContent padding="none">
                 <div className="flex border-b border-slate-800 bg-slate-900/50 px-4 py-2 font-mono text-xs uppercase tracking-wider text-slate-500">
-                  <div className="flex-1">Hash</div>
-                  <div className="w-28">Block</div>
+                  <div className="flex-1">Transaction</div>
                   <div className="w-36">Fee</div>
                   <div className="w-24 text-right">I/O</div>
                 </div>
@@ -241,9 +240,12 @@ export default function ForkDetailPage({ params }: { params: Promise<{ id: strin
                           <Link href={`/tx/${tx.hash}`} className="hover:underline">
                             <HexDisplay value={tx.hash} color="green" size="sm" />
                           </Link>
-                        </div>
-                        <div className="w-28 font-mono text-slate-300">
-                          #{tx.blockNumber.toLocaleString()}
+                          <Link
+                            href={`/blocks/${tx.blockNumber}`}
+                            className="block font-mono text-xs text-slate-500 hover:text-slate-300"
+                          >
+                            #{tx.blockNumber.toLocaleString()}
+                          </Link>
                         </div>
                         <div className="w-36 font-mono text-slate-300">
                           {tx.totalCapacity ? parseInt(tx.totalCapacity).toLocaleString() : '-'}{' '}

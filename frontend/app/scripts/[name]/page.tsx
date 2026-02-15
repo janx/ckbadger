@@ -382,6 +382,8 @@ export default function ScriptDetailPage() {
                     <CursorPagination
                       total={cellsData.total}
                       totalLabel="cells"
+                      pageSize={20}
+                      page={cellsPagination.page}
                       hasMore={cellsData.hasMore}
                       hasPrevious={cellsPagination.hasPrevious}
                       onNext={() => cellsPagination.goToNext(cellsData.nextCursor)}

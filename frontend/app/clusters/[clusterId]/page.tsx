@@ -18,13 +18,13 @@ import { HexDisplay } from '@/components/ui/hex-display';
 import { DataField, DataGrid } from '@/components/ui/data-field';
 import { Address } from '@/components/ui/address';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
+import { useCursorPagination } from '@/hooks/useCursorPagination';
 
 export default function ClusterDetailPage() {
   const params = useParams();
   const clusterId = params.clusterId as string;
 
-  const [cursor, setCursor] = useState<string | undefined>(undefined);
-  const [cursorHistory, setCursorHistory] = useState<string[]>([]);
+  const sporesPagination = useCursorPagination();
 
   const {
     data: cluster,
@@ -36,8 +36,9 @@ export default function ClusterDetailPage() {
   });
 
   const { data: sporesData, isLoading: sporesLoading } = useQuery({
-    queryKey: ['cluster-spores', clusterId, cursor],
-    queryFn: () => api.getSporesByCluster(clusterId, { limit: 20, cursor }),
+    queryKey: ['cluster-spores', clusterId, sporesPagination.cursor],
+    queryFn: () =>
+      api.getSporesByCluster(clusterId, { limit: 20, cursor: sporesPagination.cursor }),
     enabled: !!clusterId,
   });
 
@@ -51,21 +52,6 @@ export default function ClusterDetailPage() {
     if (contentType.startsWith('audio/')) return '🎵';
     if (contentType.startsWith('text/')) return '📄';
     return '📦';
-  };
-
-  const handleNextPage = () => {
-    if (sporesData?.nextCursor) {
-      setCursorHistory((prev) => [...prev, cursor || '']);
-      setCursor(sporesData.nextCursor);
-    }
-  };
-
-  const handlePrevPage = () => {
-    if (cursorHistory.length > 0) {
-      const prev = cursorHistory[cursorHistory.length - 1];
-      setCursorHistory((h) => h.slice(0, -1));
-      setCursor(prev || undefined);
-    }
   };
 
   if (clusterLoading) {
@@ -231,10 +217,12 @@ export default function ClusterDetailPage() {
                   <CursorPagination
                     total={sporesData.total}
                     totalLabel="DOBs"
+                    pageSize={20}
+                    page={sporesPagination.page}
                     hasMore={sporesData.hasMore}
-                    hasPrevious={cursorHistory.length > 0}
-                    onNext={handleNextPage}
-                    onPrevious={handlePrevPage}
+                    hasPrevious={sporesPagination.hasPrevious}
+                    onNext={() => sporesPagination.goToNext(sporesData.nextCursor)}
+                    onPrevious={sporesPagination.goToPrevious}
                   />
                 </TerminalPanelFooter>
               )}

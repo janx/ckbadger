@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
-import { useState, useMemo } from 'react';
+import { useMemo } from 'react';
 import { api } from '@/lib/api';
 import { Header } from '@/components/layout/header';
 import {
@@ -14,11 +14,12 @@ import {
 } from '@/components/ui/terminal-panel';
 import { PageHeader } from '@/components/ui/page-header';
 import { HexDisplay } from '@/components/ui/hex-display';
+import { CursorPagination } from '@/components/ui/cursor-pagination';
+import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { formatTimeAgo } from '@/lib/utils';
 
 export default function TransactionsPage() {
-  const [cursor, setCursor] = useState<string | undefined>(undefined);
-  const [cursorHistory, setCursorHistory] = useState<string[]>([]);
+  const { cursor, hasPrevious, page, goToNext, goToPrevious } = useCursorPagination();
   const limit = 25;
 
   const { data, isLoading } = useQuery({
@@ -27,21 +28,6 @@ export default function TransactionsPage() {
     staleTime: 30_000,
     gcTime: 5 * 60_000,
   });
-
-  const handleNextPage = () => {
-    if (data?.nextCursor) {
-      setCursorHistory((prev) => [...prev, cursor || '']);
-      setCursor(data.nextCursor);
-    }
-  };
-
-  const handlePrevPage = () => {
-    if (cursorHistory.length > 0) {
-      const prev = cursorHistory[cursorHistory.length - 1];
-      setCursorHistory((h) => h.slice(0, -1));
-      setCursor(prev || undefined);
-    }
-  };
 
   const formattedNumbers = useMemo(() => {
     if (!data?.data) return new Map<string, string>();
@@ -58,8 +44,7 @@ export default function TransactionsPage() {
           <TerminalPanelHeader indicator="active">Transaction List</TerminalPanelHeader>
           <TerminalPanelContent padding="none">
             <div className="flex border-b border-slate-800 bg-slate-900/50 px-4 py-2 font-mono text-xs uppercase tracking-wider text-slate-500">
-              <div className="flex-1">Tx Hash</div>
-              <div className="w-32">Block</div>
+              <div className="flex-1">Transaction</div>
               <div className="w-24 text-center">In/Out</div>
               <div className="w-32 text-right">Time</div>
             </div>
@@ -70,9 +55,7 @@ export default function TransactionsPage() {
                     <div className="flex animate-pulse items-center">
                       <div className="flex-1">
                         <div className="h-4 w-48 rounded bg-slate-800" />
-                      </div>
-                      <div className="w-32">
-                        <div className="h-4 w-20 rounded bg-slate-800" />
+                        <div className="mt-1 h-3 w-20 rounded bg-slate-800" />
                       </div>
                       <div className="w-24 text-center">
                         <div className="mx-auto h-4 w-16 rounded bg-slate-800" />
@@ -90,11 +73,9 @@ export default function TransactionsPage() {
                         <Link href={`/tx/${tx.hash}`} className="hover:underline">
                           <HexDisplay value={tx.hash} color="green" startChars={12} endChars={8} />
                         </Link>
-                      </div>
-                      <div className="w-32">
                         <Link
                           href={`/blocks/${tx.blockNumber}`}
-                          className="text-amber font-mono hover:underline"
+                          className="block font-mono text-xs text-slate-500 hover:text-slate-300"
                         >
                           #{formattedNumbers.get(tx.hash)}
                         </Link>
@@ -113,26 +94,17 @@ export default function TransactionsPage() {
           </TerminalPanelContent>
 
           {data && (
-            <TerminalPanelFooter className="flex items-center justify-between">
-              <span className="text-sm text-slate-500">
-                {data.total != null && `Total: ${data.total.toLocaleString()} transactions`}
-              </span>
-              <div className="flex gap-2">
-                <button
-                  onClick={handlePrevPage}
-                  disabled={cursorHistory.length === 0}
-                  className="hover:border-terminal-dark hover:text-terminal-green rounded border border-slate-700 bg-slate-800 px-4 py-1.5 font-mono text-sm text-slate-300 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Previous
-                </button>
-                <button
-                  onClick={handleNextPage}
-                  disabled={!data.hasMore}
-                  className="hover:border-terminal-dark hover:text-terminal-green rounded border border-slate-700 bg-slate-800 px-4 py-1.5 font-mono text-sm text-slate-300 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Next
-                </button>
-              </div>
+            <TerminalPanelFooter>
+              <CursorPagination
+                total={data.total ?? undefined}
+                totalLabel="transactions"
+                pageSize={limit}
+                page={page}
+                hasMore={data.hasMore}
+                hasPrevious={hasPrevious}
+                onNext={() => goToNext(data.nextCursor)}
+                onPrevious={goToPrevious}
+              />
             </TerminalPanelFooter>
           )}
         </TerminalPanel>

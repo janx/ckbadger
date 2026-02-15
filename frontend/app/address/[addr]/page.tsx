@@ -726,9 +726,10 @@ export default function AddressDetailPage() {
                     <div className="min-w-full overflow-x-auto">
                       <div
                         className="grid items-center gap-x-4 border-b border-slate-800 bg-slate-900/50 px-4 py-2 font-mono text-xs uppercase tracking-wider text-slate-500"
-                        style={{ gridTemplateColumns: '10rem 14rem 1fr 5.5rem' }}
+                        style={{ gridTemplateColumns: '10rem 6rem 14rem 1fr 5.5rem' }}
                       >
                         <div>Transaction</div>
+                        <div>Type</div>
                         <div className="text-right">CKB Change</div>
                         <div className="text-right">Assets</div>
                         <div className="text-right">Time</div>
@@ -746,7 +747,7 @@ export default function AddressDetailPage() {
                           <TerminalRow key={`${activity.txHash}-${activity.txIndex}`}>
                             <div
                               className="grid w-full items-start gap-x-4"
-                              style={{ gridTemplateColumns: '10rem 14rem 1fr 5.5rem' }}
+                              style={{ gridTemplateColumns: '10rem 6rem 14rem 1fr 5.5rem' }}
                             >
                               <div>
                                 <Link href={`/tx/${activity.txHash}`}>
@@ -765,6 +766,17 @@ export default function AddressDetailPage() {
                                   #{activity.blockNumber.toLocaleString()}
                                 </Link>
                               </div>
+                              <div className="self-center">
+                                {activity.isCellbase ? (
+                                  <Badge variant="amber">Coinbase</Badge>
+                                ) : isPositive ? (
+                                  <Badge variant="green">Received</Badge>
+                                ) : isNegative ? (
+                                  <Badge variant="red">Sent</Badge>
+                                ) : (
+                                  <Badge variant="gray">Self</Badge>
+                                )}
+                              </div>
                               <div className="self-center text-right">
                                 <span className={`font-mono text-sm ${deltaColor}`}>
                                   {isPositive && '+'}
@@ -772,7 +784,6 @@ export default function AddressDetailPage() {
                                 </span>
                               </div>
                               <div className="flex min-w-0 flex-wrap items-center justify-end gap-1 self-center">
-                                {activity.isCellbase && <Badge variant="amber">Coinbase</Badge>}
                                 {activity.assetChanges.map((change, i) => (
                                   <AssetChangeBadge key={i} change={change} />
                                 ))}
@@ -986,20 +997,25 @@ export default function AddressDetailPage() {
                 ) : transactions?.data && transactions.data.length > 0 ? (
                   <>
                     <div className="min-w-full overflow-x-auto">
-                      <div className="flex gap-4 border-b border-slate-800 bg-slate-900/50 px-4 py-2 font-mono text-xs uppercase tracking-wider text-slate-500">
-                        <div className="w-36 shrink-0">Tx Hash</div>
-                        <div className="w-28 shrink-0">Block</div>
-                        <div className="w-28 shrink-0">Type</div>
-                        <div className="w-40 shrink-0 text-right">CKB Change</div>
-                        <div className="w-24 shrink-0 text-right">Time</div>
+                      <div
+                        className="grid items-center gap-x-4 border-b border-slate-800 bg-slate-900/50 px-4 py-2 font-mono text-xs uppercase tracking-wider text-slate-500"
+                        style={{ gridTemplateColumns: '10rem 8rem 1fr 6rem' }}
+                      >
+                        <div>Transaction</div>
+                        <div>Type</div>
+                        <div className="text-right">CKB Change</div>
+                        <div className="text-right">Time</div>
                       </div>
                       {transactions.data.map((tx) => {
                         const isPositive = !tx.capacityChange.startsWith('-');
                         const hasDaoActivity = daoTxHashes.has(tx.txHash);
                         return (
                           <TerminalRow key={tx.txHash}>
-                            <div className="flex w-full items-center gap-4">
-                              <div className="w-36 shrink-0">
+                            <div
+                              className="grid w-full items-center gap-x-4"
+                              style={{ gridTemplateColumns: '10rem 8rem 1fr 6rem' }}
+                            >
+                              <div>
                                 <Link href={`/tx/${tx.txHash}`}>
                                   <HexDisplay
                                     value={tx.txHash}
@@ -1009,27 +1025,25 @@ export default function AddressDetailPage() {
                                     className="text-terminal-green"
                                   />
                                 </Link>
-                              </div>
-                              <div className="w-28 shrink-0">
                                 <Link
                                   href={`/blocks/${tx.blockNumber}`}
-                                  className="font-mono text-sm text-slate-400 hover:text-white"
+                                  className="block font-mono text-xs text-slate-500 hover:text-slate-300"
                                 >
                                   #{tx.blockNumber.toLocaleString()}
                                 </Link>
                               </div>
-                              <div className="flex w-28 shrink-0 items-center gap-1">
+                              <div className="flex items-center gap-1">
                                 {getTxTypeBadge(tx.txType)}
                                 {hasDaoActivity && <Badge variant="purple">DAO</Badge>}
                               </div>
-                              <div className="w-40 shrink-0 text-right">
+                              <div className="text-right">
                                 <Capacity
                                   value={tx.capacityChange}
                                   className={isPositive ? 'text-green-400' : 'text-red-400'}
                                   showSign
                                 />
                               </div>
-                              <div className="w-24 shrink-0 text-right text-sm text-slate-500">
+                              <div className="text-right text-sm text-slate-500">
                                 {formatTimeAgo(tx.timestamp)}
                               </div>
                             </div>

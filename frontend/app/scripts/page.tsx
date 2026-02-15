@@ -13,50 +13,31 @@ import {
 } from '@/components/ui/terminal-panel';
 import { PageHeader, Badge } from '@/components/ui/page-header';
 import { HexDisplay } from '@/components/ui/hex-display';
+import { CursorPagination } from '@/components/ui/cursor-pagination';
+import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, KnownScript } from '@/lib/api';
 
 export default function ScriptsPage() {
-  const [cursor, setCursor] = useState<string | undefined>(undefined);
-  const [cursorHistory, setCursorHistory] = useState<string[]>([]);
+  const pagination = useCursorPagination();
   const decoderType = undefined;
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState<string | undefined>(undefined);
 
   const { data, isLoading } = useQuery({
-    queryKey: ['scripts', cursor, decoderType, search],
-    queryFn: () => api.getScripts({ limit: 20, cursor, decoderType, search }),
+    queryKey: ['scripts', pagination.cursor, decoderType, search],
+    queryFn: () => api.getScripts({ limit: 20, cursor: pagination.cursor, decoderType, search }),
   });
-
-  const handleNextPage = () => {
-    if (data?.nextCursor) {
-      setCursorHistory((prev) => [...prev, cursor || '']);
-      setCursor(data.nextCursor);
-    }
-  };
-
-  const handlePrevPage = () => {
-    if (cursorHistory.length > 0) {
-      const prev = cursorHistory[cursorHistory.length - 1];
-      setCursorHistory((h) => h.slice(0, -1));
-      setCursor(prev || undefined);
-    }
-  };
-
-  const resetPagination = () => {
-    setCursor(undefined);
-    setCursorHistory([]);
-  };
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     setSearch(searchInput.trim() || undefined);
-    resetPagination();
+    pagination.reset();
   };
 
   const clearSearch = () => {
     setSearchInput('');
     setSearch(undefined);
-    resetPagination();
+    pagination.reset();
   };
 
   const formatNumber = (num: number | string) => {
@@ -182,26 +163,17 @@ export default function ScriptsPage() {
           </TerminalPanelContent>
 
           {data && data.data?.length > 0 && (
-            <TerminalPanelFooter className="flex items-center justify-between">
-              <span className="text-sm text-slate-500">
-                {data.total != null && `Total: ${formatNumber(data.total)} scripts`}
-              </span>
-              <div className="flex gap-2">
-                <button
-                  onClick={handlePrevPage}
-                  disabled={cursorHistory.length === 0}
-                  className="hover:border-terminal-dark hover:text-terminal-green rounded border border-slate-700 bg-slate-800 px-4 py-1.5 font-mono text-sm text-slate-300 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Previous
-                </button>
-                <button
-                  onClick={handleNextPage}
-                  disabled={!data.hasMore}
-                  className="hover:border-terminal-dark hover:text-terminal-green rounded border border-slate-700 bg-slate-800 px-4 py-1.5 font-mono text-sm text-slate-300 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Next
-                </button>
-              </div>
+            <TerminalPanelFooter>
+              <CursorPagination
+                total={data.total ?? undefined}
+                totalLabel="scripts"
+                pageSize={20}
+                page={pagination.page}
+                hasMore={data.hasMore}
+                hasPrevious={pagination.hasPrevious}
+                onNext={() => pagination.goToNext(data.nextCursor)}
+                onPrevious={pagination.goToPrevious}
+              />
             </TerminalPanelFooter>
           )}
         </TerminalPanel>

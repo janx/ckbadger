@@ -264,6 +264,10 @@ export default function ScriptByCodeHashPage() {
           {cellsData && cellsData.data.length > 0 && (
             <TerminalPanelFooter>
               <CursorPagination
+                total={cellsData.total}
+                totalLabel="cells"
+                pageSize={20}
+                page={cellsPagination.page}
                 hasMore={cellsData.hasMore}
                 hasPrevious={cellsPagination.hasPrevious}
                 onNext={() => cellsPagination.goToNext(cellsData.nextCursor)}

@@ -1,6 +1,5 @@
 'use client';
 
-import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
@@ -17,6 +16,8 @@ import { StatBlock, StatGrid } from '@/components/ui/stat-block';
 import { DataField } from '@/components/ui/data-field';
 import { HexDisplay } from '@/components/ui/hex-display';
 import { Address } from '@/components/ui/address';
+import { CursorPagination } from '@/components/ui/cursor-pagination';
+import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { api, TokenHolder, TokenTransfer } from '@/lib/api';
 import { formatTimeAgo } from '@/lib/utils';
@@ -25,11 +26,8 @@ export default function TokenDetailPage() {
   const params = useParams();
   const typeHash = params.typeHash as string;
 
-  const [holdersCursor, setHoldersCursor] = useState<string | undefined>(undefined);
-  const [holdersCursorHistory, setHoldersCursorHistory] = useState<string[]>([]);
-
-  const [transfersCursor, setTransfersCursor] = useState<string | undefined>(undefined);
-  const [transfersCursorHistory, setTransfersCursorHistory] = useState<string[]>([]);
+  const holdersPagination = useCursorPagination();
+  const transfersPagination = useCursorPagination();
 
   const {
     data: token,
@@ -41,46 +39,17 @@ export default function TokenDetailPage() {
   });
 
   const { data: holders } = useQuery({
-    queryKey: ['token-holders', typeHash, holdersCursor],
-    queryFn: () => api.getTokenHolders(typeHash, { limit: 20, cursor: holdersCursor }),
+    queryKey: ['token-holders', typeHash, holdersPagination.cursor],
+    queryFn: () => api.getTokenHolders(typeHash, { limit: 20, cursor: holdersPagination.cursor }),
     enabled: !!token,
   });
 
   const { data: transfers } = useQuery({
-    queryKey: ['token-transfers', typeHash, transfersCursor],
-    queryFn: () => api.getTokenTransfers(typeHash, { limit: 20, cursor: transfersCursor }),
+    queryKey: ['token-transfers', typeHash, transfersPagination.cursor],
+    queryFn: () =>
+      api.getTokenTransfers(typeHash, { limit: 20, cursor: transfersPagination.cursor }),
     enabled: !!token,
   });
-
-  const handleHoldersNextPage = () => {
-    if (holders?.nextCursor) {
-      setHoldersCursorHistory((prev) => [...prev, holdersCursor || '']);
-      setHoldersCursor(holders.nextCursor);
-    }
-  };
-
-  const handleHoldersPrevPage = () => {
-    if (holdersCursorHistory.length > 0) {
-      const prev = holdersCursorHistory[holdersCursorHistory.length - 1];
-      setHoldersCursorHistory((h) => h.slice(0, -1));
-      setHoldersCursor(prev || undefined);
-    }
-  };
-
-  const handleTransfersNextPage = () => {
-    if (transfers?.nextCursor) {
-      setTransfersCursorHistory((prev) => [...prev, transfersCursor || '']);
-      setTransfersCursor(transfers.nextCursor);
-    }
-  };
-
-  const handleTransfersPrevPage = () => {
-    if (transfersCursorHistory.length > 0) {
-      const prev = transfersCursorHistory[transfersCursorHistory.length - 1];
-      setTransfersCursorHistory((h) => h.slice(0, -1));
-      setTransfersCursor(prev || undefined);
-    }
-  };
 
   const formatNumber = (num: number | string) => {
     return new Intl.NumberFormat().format(Number(num));
@@ -307,26 +276,17 @@ export default function TokenDetailPage() {
                 )}
               </TerminalPanelContent>
               {holders?.data?.length ? (
-                <TerminalPanelFooter className="flex items-center justify-between">
-                  <span className="text-sm text-slate-500">
-                    {holders.total != null && `Total: ${formatNumber(holders.total)} holders`}
-                  </span>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={handleHoldersPrevPage}
-                      disabled={holdersCursorHistory.length === 0}
-                      className="hover:border-terminal-dark hover:text-terminal-green rounded border border-slate-700 bg-slate-800 px-4 py-1.5 font-mono text-sm text-slate-300 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      Previous
-                    </button>
-                    <button
-                      onClick={handleHoldersNextPage}
-                      disabled={!holders.hasMore}
-                      className="hover:border-terminal-dark hover:text-terminal-green rounded border border-slate-700 bg-slate-800 px-4 py-1.5 font-mono text-sm text-slate-300 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      Next
-                    </button>
-                  </div>
+                <TerminalPanelFooter>
+                  <CursorPagination
+                    total={holders.total ?? undefined}
+                    totalLabel="holders"
+                    pageSize={20}
+                    page={holdersPagination.page}
+                    hasMore={holders.hasMore}
+                    hasPrevious={holdersPagination.hasPrevious}
+                    onNext={() => holdersPagination.goToNext(holders.nextCursor)}
+                    onPrevious={holdersPagination.goToPrevious}
+                  />
                 </TerminalPanelFooter>
               ) : null}
             </TabsContent>
@@ -407,26 +367,17 @@ export default function TokenDetailPage() {
                 )}
               </TerminalPanelContent>
               {transfers?.data?.length ? (
-                <TerminalPanelFooter className="flex items-center justify-between">
-                  <span className="text-sm text-slate-500">
-                    {transfers.total != null && `Total: ${formatNumber(transfers.total)} transfers`}
-                  </span>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={handleTransfersPrevPage}
-                      disabled={transfersCursorHistory.length === 0}
-                      className="hover:border-terminal-dark hover:text-terminal-green rounded border border-slate-700 bg-slate-800 px-4 py-1.5 font-mono text-sm text-slate-300 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      Previous
-                    </button>
-                    <button
-                      onClick={handleTransfersNextPage}
-                      disabled={!transfers.hasMore}
-                      className="hover:border-terminal-dark hover:text-terminal-green rounded border border-slate-700 bg-slate-800 px-4 py-1.5 font-mono text-sm text-slate-300 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      Next
-                    </button>
-                  </div>
+                <TerminalPanelFooter>
+                  <CursorPagination
+                    total={transfers.total ?? undefined}
+                    totalLabel="transfers"
+                    pageSize={20}
+                    page={transfersPagination.page}
+                    hasMore={transfers.hasMore}
+                    hasPrevious={transfersPagination.hasPrevious}
+                    onNext={() => transfersPagination.goToNext(transfers.nextCursor)}
+                    onPrevious={transfersPagination.goToPrevious}
+                  />
                 </TerminalPanelFooter>
               ) : null}
             </TabsContent>
