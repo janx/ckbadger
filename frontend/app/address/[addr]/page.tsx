@@ -338,16 +338,17 @@ export default function AddressDetailPage() {
 
         <TerminalPanel className="mb-8">
           <TerminalPanelContent>
-            <StatGrid columns={3}>
+            <div className="grid grid-cols-2 gap-6 md:grid-cols-4">
               <StatBlock
                 label="Balance"
                 value={formatCkbAmount(address.balance).full}
                 suffix=" CKB"
                 color="green"
+                className="col-span-2"
               />
               <StatBlock label="Live Cells" value={address.liveCellsCount} color="amber" />
               <StatBlock label="Transactions" value={address.transactionsCount} color="white" />
-            </StatGrid>
+            </div>
             {(() => {
               const balanceBig = BigInt(address.balance);
               const occupiedBig = BigInt(address.occupiedCapacity);
@@ -665,7 +666,7 @@ export default function AddressDetailPage() {
                 )}
               </div>
             ) : (
-              'History'
+              'Transactions'
             )}
           </TerminalPanelHeader>
 
@@ -723,78 +724,74 @@ export default function AddressDetailPage() {
                   <div className="py-12 text-center text-slate-500">Loading activities...</div>
                 ) : activities?.data && activities?.data.length > 0 ? (
                   <>
-                    <div className="min-w-full overflow-x-auto">
-                      <div
-                        className="grid items-center gap-x-4 border-b border-slate-800 bg-slate-900/50 px-4 py-2 font-mono text-xs uppercase tracking-wider text-slate-500"
-                        style={{ gridTemplateColumns: '10rem 6rem 14rem 1fr 5.5rem' }}
-                      >
-                        <div>Transaction</div>
-                        <div>Type</div>
-                        <div className="text-right">CKB Change</div>
-                        <div className="text-right">Assets</div>
-                        <div className="text-right">Time</div>
+                    <div className="overflow-x-auto">
+                      <div className="min-w-[640px]">
+                        <div className="flex items-center gap-4 border-b border-slate-800 bg-slate-900/50 px-4 py-2 font-mono text-xs uppercase tracking-wider text-slate-500">
+                          <div className="flex-1">Transaction</div>
+                          <div className="w-20">Type</div>
+                          <div className="w-44 text-right">CKB Change</div>
+                          <div className="w-32 text-right lg:w-48">Assets</div>
+                          <div className="w-20 text-right">Time</div>
+                        </div>
+                        {activities?.data.map((activity: Activity) => {
+                          const delta = BigInt(activity.ckbDelta);
+                          const isPositive = delta > BigInt(0);
+                          const isNegative = delta < BigInt(0);
+                          const deltaColor = isPositive
+                            ? 'text-green-400'
+                            : isNegative
+                              ? 'text-red-400'
+                              : 'text-slate-500';
+                          return (
+                            <TerminalRow key={`${activity.txHash}-${activity.txIndex}`}>
+                              <div className="flex w-full items-center gap-4">
+                                <div className="min-w-0 flex-1">
+                                  <Link href={`/tx/${activity.txHash}`}>
+                                    <HexDisplay
+                                      value={activity.txHash}
+                                      truncate
+                                      startChars={6}
+                                      endChars={6}
+                                      className="text-terminal-green"
+                                    />
+                                  </Link>
+                                  <Link
+                                    href={`/blocks/${activity.blockNumber}`}
+                                    className="block font-mono text-xs text-slate-500 hover:text-slate-300"
+                                  >
+                                    #{activity.blockNumber.toLocaleString()}
+                                  </Link>
+                                </div>
+                                <div className="w-20">
+                                  {activity.isCellbase ? (
+                                    <Badge variant="amber">Coinbase</Badge>
+                                  ) : isPositive ? (
+                                    <Badge variant="green">Received</Badge>
+                                  ) : isNegative ? (
+                                    <Badge variant="red">Sent</Badge>
+                                  ) : (
+                                    <Badge variant="gray">Self</Badge>
+                                  )}
+                                </div>
+                                <div className="w-44 whitespace-nowrap text-right">
+                                  <span className={`font-mono text-sm ${deltaColor}`}>
+                                    {isPositive && '+'}
+                                    {formatCkbAmount(activity.ckbDelta).full} CKB
+                                  </span>
+                                </div>
+                                <div className="flex w-32 min-w-0 flex-wrap items-center justify-end gap-1 lg:w-48">
+                                  {activity.assetChanges.map((change, i) => (
+                                    <AssetChangeBadge key={i} change={change} />
+                                  ))}
+                                </div>
+                                <div className="w-20 text-right text-sm text-slate-500">
+                                  {formatTimeAgo(Number(activity.timestamp))}
+                                </div>
+                              </div>
+                            </TerminalRow>
+                          );
+                        })}
                       </div>
-                      {activities?.data.map((activity: Activity) => {
-                        const delta = BigInt(activity.ckbDelta);
-                        const isPositive = delta > BigInt(0);
-                        const isNegative = delta < BigInt(0);
-                        const deltaColor = isPositive
-                          ? 'text-green-400'
-                          : isNegative
-                            ? 'text-red-400'
-                            : 'text-slate-500';
-                        return (
-                          <TerminalRow key={`${activity.txHash}-${activity.txIndex}`}>
-                            <div
-                              className="grid w-full items-start gap-x-4"
-                              style={{ gridTemplateColumns: '10rem 6rem 14rem 1fr 5.5rem' }}
-                            >
-                              <div>
-                                <Link href={`/tx/${activity.txHash}`}>
-                                  <HexDisplay
-                                    value={activity.txHash}
-                                    truncate
-                                    startChars={6}
-                                    endChars={6}
-                                    className="text-terminal-green"
-                                  />
-                                </Link>
-                                <Link
-                                  href={`/blocks/${activity.blockNumber}`}
-                                  className="block font-mono text-xs text-slate-500 hover:text-slate-300"
-                                >
-                                  #{activity.blockNumber.toLocaleString()}
-                                </Link>
-                              </div>
-                              <div className="self-center">
-                                {activity.isCellbase ? (
-                                  <Badge variant="amber">Coinbase</Badge>
-                                ) : isPositive ? (
-                                  <Badge variant="green">Received</Badge>
-                                ) : isNegative ? (
-                                  <Badge variant="red">Sent</Badge>
-                                ) : (
-                                  <Badge variant="gray">Self</Badge>
-                                )}
-                              </div>
-                              <div className="self-center text-right">
-                                <span className={`font-mono text-sm ${deltaColor}`}>
-                                  {isPositive && '+'}
-                                  {formatCkbAmount(activity.ckbDelta).full} CKB
-                                </span>
-                              </div>
-                              <div className="flex min-w-0 flex-wrap items-center justify-end gap-1 self-center">
-                                {activity.assetChanges.map((change, i) => (
-                                  <AssetChangeBadge key={i} change={change} />
-                                ))}
-                              </div>
-                              <div className="self-center text-right text-sm text-slate-500">
-                                {formatTimeAgo(Number(activity.timestamp))}
-                              </div>
-                            </div>
-                          </TerminalRow>
-                        );
-                      })}
                     </div>
                     {(activities?.hasMore || activitiesPagination.hasPrevious) && (
                       <TerminalPanelFooter className="flex justify-center">
@@ -996,65 +993,109 @@ export default function AddressDetailPage() {
                   <div className="py-12 text-center text-slate-500">Loading transactions...</div>
                 ) : transactions?.data && transactions.data.length > 0 ? (
                   <>
-                    <div className="min-w-full overflow-x-auto">
-                      <div
-                        className="grid items-center gap-x-4 border-b border-slate-800 bg-slate-900/50 px-4 py-2 font-mono text-xs uppercase tracking-wider text-slate-500"
-                        style={{ gridTemplateColumns: '10rem 8rem 1fr 6rem' }}
-                      >
-                        <div>Transaction</div>
-                        <div>Type</div>
-                        <div className="text-right">CKB Change</div>
-                        <div className="text-right">Time</div>
-                      </div>
-                      {transactions.data.map((tx) => {
-                        const isPositive = !tx.capacityChange.startsWith('-');
-                        const hasDaoActivity = daoTxHashes.has(tx.txHash);
-                        return (
-                          <TerminalRow key={tx.txHash}>
-                            <div
-                              className="grid w-full items-center gap-x-4"
-                              style={{ gridTemplateColumns: '10rem 8rem 1fr 6rem' }}
-                            >
-                              <div>
-                                <Link href={`/tx/${tx.txHash}`}>
-                                  <HexDisplay
-                                    value={tx.txHash}
-                                    truncate
-                                    startChars={6}
-                                    endChars={6}
-                                    className="text-terminal-green"
+                    <div className="overflow-x-auto">
+                      <div className="min-w-[700px]">
+                        <div className="flex items-center gap-4 border-b border-slate-800 bg-slate-900/50 px-4 py-2 font-mono text-xs uppercase tracking-wider text-slate-500">
+                          <div className="flex-1">Transaction</div>
+                          <div className="w-20 text-center">In/Out</div>
+                          <div className="w-32 text-right">Fee</div>
+                          <div className="hidden w-28 text-right xl:block">Size/Cycles</div>
+                          <div className="w-44 text-right">CKB Change</div>
+                          <div className="w-20 text-right">Time</div>
+                        </div>
+                        {transactions.data.map((tx) => {
+                          const isPositive = !tx.capacityChange.startsWith('-');
+                          const fee = Number(tx.fee);
+                          const feeRate =
+                            tx.txSize && tx.txSize > 0 && fee > 0 ? fee / tx.txSize : null;
+                          return (
+                            <TerminalRow key={tx.txHash}>
+                              <div className="flex w-full items-center gap-4">
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex flex-wrap items-center gap-1.5">
+                                    <Link href={`/tx/${tx.txHash}`}>
+                                      <HexDisplay
+                                        value={tx.txHash}
+                                        truncate
+                                        startChars={6}
+                                        endChars={6}
+                                        className="text-terminal-green"
+                                      />
+                                    </Link>
+                                    {tx.isCellbase && <Badge variant="blue">Cellbase</Badge>}
+                                    {tx.scriptLabels.map((label) => (
+                                      <Badge key={label} variant="purple">
+                                        {label}
+                                      </Badge>
+                                    ))}
+                                  </div>
+                                  <Link
+                                    href={`/blocks/${tx.blockNumber}`}
+                                    className="block font-mono text-xs text-slate-500 hover:text-slate-300"
+                                  >
+                                    #{tx.blockNumber.toLocaleString()}
+                                  </Link>
+                                </div>
+                                <div className="w-20 text-center font-mono text-slate-400">
+                                  <span className="text-terminal-dim">{tx.inputsCount}</span>
+                                  <span className="mx-1 text-slate-600">→</span>
+                                  <span className="text-terminal-dim">{tx.outputsCount}</span>
+                                </div>
+                                <div className="w-32 whitespace-nowrap text-right">
+                                  {tx.isCellbase ? (
+                                    <span className="text-slate-600">—</span>
+                                  ) : (
+                                    <div>
+                                      <Capacity value={tx.fee} className="text-slate-400" />
+                                      {feeRate != null && (
+                                        <div className="font-mono text-xs text-slate-600">
+                                          {feeRate.toFixed(1)} shannons/B
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                                <div className="hidden w-28 whitespace-nowrap text-right font-mono text-xs text-slate-500 xl:block">
+                                  {tx.txSize != null ? (
+                                    <span>
+                                      {tx.txSize >= 1000
+                                        ? `${(tx.txSize / 1000).toFixed(1)} kB`
+                                        : `${tx.txSize} B`}
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-600">—</span>
+                                  )}
+                                  {tx.cycles != null && (
+                                    <>
+                                      <span className="mx-1 text-slate-700">/</span>
+                                      <span>
+                                        {tx.cycles >= 1000000
+                                          ? `${(tx.cycles / 1000000).toFixed(1)}M`
+                                          : `${(tx.cycles / 1000).toFixed(0)}k`}
+                                      </span>
+                                    </>
+                                  )}
+                                </div>
+                                <div className="w-44 whitespace-nowrap text-right">
+                                  <Capacity
+                                    value={tx.capacityChange}
+                                    className={isPositive ? 'text-green-400' : 'text-red-400'}
+                                    showSign
                                   />
-                                </Link>
-                                <Link
-                                  href={`/blocks/${tx.blockNumber}`}
-                                  className="block font-mono text-xs text-slate-500 hover:text-slate-300"
-                                >
-                                  #{tx.blockNumber.toLocaleString()}
-                                </Link>
+                                </div>
+                                <div className="w-20 text-right text-sm text-slate-500">
+                                  {formatTimeAgo(tx.timestamp)}
+                                </div>
                               </div>
-                              <div className="flex items-center gap-1">
-                                {getTxTypeBadge(tx.txType)}
-                                {hasDaoActivity && <Badge variant="purple">DAO</Badge>}
-                              </div>
-                              <div className="text-right">
-                                <Capacity
-                                  value={tx.capacityChange}
-                                  className={isPositive ? 'text-green-400' : 'text-red-400'}
-                                  showSign
-                                />
-                              </div>
-                              <div className="text-right text-sm text-slate-500">
-                                {formatTimeAgo(tx.timestamp)}
-                              </div>
-                            </div>
-                          </TerminalRow>
-                        );
-                      })}
+                            </TerminalRow>
+                          );
+                        })}
+                      </div>
                     </div>
                     {(transactions.hasMore || txPagination.hasPrevious) && (
                       <TerminalPanelFooter className="flex justify-center">
                         <CursorPagination
-                          total={transactions.total}
+                          total={address.transactionsCount}
                           totalLabel="transactions"
                           pageSize={20}
                           hasMore={transactions.hasMore}

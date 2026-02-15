@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import Link from 'next/link';
 import { Header } from '@/components/layout/header';
 import { Hash } from '@/components/ui/hash';
@@ -126,6 +126,7 @@ export default function DaoPage() {
   const { data: deposits, isLoading } = useQuery({
     queryKey: ['dao-deposits', depositsPagination.cursor, status],
     queryFn: () => api.getDaoDeposits({ limit: 20, status, cursor: depositsPagination.cursor }),
+    placeholderData: keepPreviousData,
   });
 
   const codeHashes = useMemo(() => {

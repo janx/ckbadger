@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { useMemo } from 'react';
 import { api } from '@/lib/api';
 import { Header } from '@/components/layout/header';
@@ -27,6 +27,7 @@ export default function TransactionsPage() {
     queryFn: () => api.getTransactions({ cursor, limit }),
     staleTime: 30_000,
     gcTime: 5 * 60_000,
+    placeholderData: keepPreviousData,
   });
 
   const formattedNumbers = useMemo(() => {

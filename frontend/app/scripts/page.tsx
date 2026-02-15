@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import Link from 'next/link';
 import { Header } from '@/components/layout/header';
 import {
@@ -26,6 +26,7 @@ export default function ScriptsPage() {
   const { data, isLoading } = useQuery({
     queryKey: ['scripts', pagination.cursor, decoderType, search],
     queryFn: () => api.getScripts({ limit: 20, cursor: pagination.cursor, decoderType, search }),
+    placeholderData: keepPreviousData,
   });
 
   const handleSearch = (e: React.FormEvent) => {

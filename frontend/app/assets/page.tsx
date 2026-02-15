@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import Link from 'next/link';
 import { Header } from '@/components/layout/header';
 import {
@@ -26,6 +26,7 @@ function AssetTable({ assetType, search }: { assetType: AssetTab; search: string
   const { data, isLoading } = useQuery({
     queryKey: ['assets', assetType, pagination.cursor, search],
     queryFn: () => api.getAssets({ limit: 20, type: assetType, cursor: pagination.cursor, search }),
+    placeholderData: keepPreviousData,
   });
 
   const formatNumber = (num: number | string) => {

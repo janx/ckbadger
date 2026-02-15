@@ -1,6 +1,6 @@
 'use client';
 
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { Header } from '@/components/layout/header';
@@ -39,6 +39,7 @@ export default function ClusterDetailPage() {
     queryFn: () =>
       api.getSporesByCluster(clusterId, { limit: 20, cursor: sporesPagination.cursor }),
     enabled: !!clusterId,
+    placeholderData: keepPreviousData,
   });
 
   const formatNumber = (num: number) => {

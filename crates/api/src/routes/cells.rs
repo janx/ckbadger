@@ -312,6 +312,13 @@ pub struct AddressTransactionResponse {
     pub tx_type: String,
     pub capacity_change: String,
     pub timestamp: String,
+    pub inputs_count: i16,
+    pub outputs_count: i16,
+    pub fee: String,
+    pub is_cellbase: bool,
+    pub tx_size: Option<i32>,
+    pub cycles: Option<i64>,
+    pub script_labels: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1166,6 +1173,8 @@ async fn get_address_transactions(
             let mut input_capacity: i128 = 0;
             let mut has_outputs = false;
             let mut has_inputs = false;
+            let mut script_code_hashes: std::collections::HashSet<Vec<u8>> =
+                std::collections::HashSet::new();
 
             // Check outputs belonging to this address
             for idx in 0..outputs_count {
@@ -1176,6 +1185,10 @@ async fn get_address_transactions(
                     .flatten()
                     .or_else(|| state.store.get_consumed_cell(&tx_hash, idx).ok().flatten());
                 if let Some(cell) = cell {
+                    if let Some(ref tch) = cell.type_code_hash {
+                        script_code_hashes.insert(tch.clone());
+                    }
+                    script_code_hashes.insert(cell.lock_code_hash.clone());
                     if cell.lock_script_hash == lock_hash {
                         output_capacity += cell.capacity as i128;
                         has_outputs = true;
@@ -1184,6 +1197,7 @@ async fn get_address_transactions(
             }
 
             // Check inputs belonging to this address (resolve previous outpoints)
+            let mut dao_compensation: i128 = 0;
             if !is_cellbase {
                 if let Some(ref ckb_store) = state.ckb_store {
                     if tx_hash.len() == 32 {
@@ -1195,6 +1209,18 @@ async fn get_address_transactions(
                                 let prev_hash: [u8; 32] =
                                     input.previous_output().tx_hash().unpack();
                                 let prev_index: u32 = input.previous_output().index().unpack();
+                                // Check if this input is a DAO withdrawal request
+                                if let Ok(Some(outpoint_key)) =
+                                    state.store.get_dao_deposit_by_withdraw_tx(&prev_hash)
+                                {
+                                    if let Ok(Some(entry)) =
+                                        state.store.get_dao_deposit(&outpoint_key)
+                                    {
+                                        if let Some(comp) = entry.compensation {
+                                            dao_compensation += comp as i128;
+                                        }
+                                    }
+                                }
                                 let cell = state
                                     .store
                                     .get_consumed_cell(&prev_hash, prev_index as i16)
@@ -1208,6 +1234,10 @@ async fn get_address_transactions(
                                             .flatten()
                                     });
                                 if let Some(cell) = cell {
+                                    if let Some(ref tch) = cell.type_code_hash {
+                                        script_code_hashes.insert(tch.clone());
+                                    }
+                                    script_code_hashes.insert(cell.lock_code_hash.clone());
                                     if cell.lock_script_hash == lock_hash {
                                         input_capacity += cell.capacity as i128;
                                         has_inputs = true;
@@ -1236,12 +1266,49 @@ async fn get_address_transactions(
                 "transfer"
             };
 
+            let inputs_count = tx_entry.as_ref().map(|e| e.inputs_count).unwrap_or(0);
+            let stored_fee = tx_entry.as_ref().map(|e| e.fee as i128).unwrap_or(0);
+            // For DAO withdrawals, stored fee = actual_fee - compensation (negative).
+            // Correct by adding back the DAO compensation.
+            let fee = (stored_fee + dao_compensation).max(0) as i64;
+            let tx_size = tx_entry.as_ref().map(|e| e.tx_size);
+            let cycles = tx_entry.as_ref().and_then(|e| e.cycles);
+
+            // Resolve script labels from collected code hashes (type + lock scripts)
+            let mut script_labels: Vec<String> = script_code_hashes
+                .iter()
+                .filter_map(|ch| {
+                    state
+                        .store
+                        .get_script_info(ch)
+                        .ok()
+                        .flatten()
+                        .and_then(|si| si.name)
+                })
+                .filter(|name| {
+                    // Filter out common lock scripts that aren't interesting as labels
+                    !matches!(
+                        name.as_str(),
+                        "Default Lock" | "Default Multisig" | "anyone_can_pay"
+                    )
+                })
+                .collect();
+            script_labels.sort();
+            script_labels.dedup();
+
             AddressTransactionResponse {
                 tx_hash: format!("0x{}", hex::encode(&tx_hash)),
                 block_number,
                 tx_type: tx_type.to_string(),
                 capacity_change: capacity_change.to_string(),
                 timestamp,
+                inputs_count,
+                outputs_count,
+                fee: fee.to_string(),
+                is_cellbase,
+                tx_size,
+                cycles,
+                script_labels,
             }
         })
         .collect();

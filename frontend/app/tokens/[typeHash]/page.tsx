@@ -1,6 +1,6 @@
 'use client';
 
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { Header } from '@/components/layout/header';
@@ -42,6 +42,7 @@ export default function TokenDetailPage() {
     queryKey: ['token-holders', typeHash, holdersPagination.cursor],
     queryFn: () => api.getTokenHolders(typeHash, { limit: 20, cursor: holdersPagination.cursor }),
     enabled: !!token,
+    placeholderData: keepPreviousData,
   });
 
   const { data: transfers } = useQuery({
@@ -49,6 +50,7 @@ export default function TokenDetailPage() {
     queryFn: () =>
       api.getTokenTransfers(typeHash, { limit: 20, cursor: transfersPagination.cursor }),
     enabled: !!token,
+    placeholderData: keepPreviousData,
   });
 
   const formatNumber = (num: number | string) => {

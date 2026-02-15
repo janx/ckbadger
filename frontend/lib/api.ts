@@ -276,6 +276,13 @@ interface AddressTransaction {
   txType: 'received' | 'sent' | 'internal';
   capacityChange: string;
   timestamp: string;
+  inputsCount: number;
+  outputsCount: number;
+  fee: string;
+  isCellbase: boolean;
+  txSize: number | null;
+  cycles: number | null;
+  scriptLabels: string[];
 }
 
 interface AddressToken {

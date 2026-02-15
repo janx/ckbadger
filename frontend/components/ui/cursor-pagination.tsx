@@ -28,7 +28,7 @@ export function CursorPagination({
   const totalPages = total !== undefined && pageSize ? Math.ceil(total / pageSize) : undefined;
 
   return (
-    <div className={cn('flex items-center justify-between', className)}>
+    <div className={cn('flex w-full items-center justify-between', className)}>
       {total !== undefined ? (
         <span className="font-mono text-sm text-slate-500">
           {total.toLocaleString()} {totalLabel}
