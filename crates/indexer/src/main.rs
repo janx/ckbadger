@@ -131,26 +131,7 @@ async fn main() -> Result<()> {
         info!("addr_txs backfill complete: {} entries indexed", count);
     }
 
-    // One-time migration: rebuild DAO daily snapshots from deposit history
-    // v3: fixes AR-vs-deposit bug, adds cumulative_deposit_amount, and
-    //     stores actual C/S from DAO header for circulation ratio chart
-    // v4: adds secondary issuance breakdown (miner/dao/treasury) from block headers
-    // v5: fixes total supply chart burnt using cum_treasury instead of secondary_pool,
-    //     and ensures incremental indexer updates cum_treasury/cum_dao correctly
-    let sync_status = store.get_sync_status()?;
-    if sync_status.dao_snapshots_version < 5 && sync_status.tip_block_number > 0 {
-        info!("DAO snapshots migration v5: rebuilding from deposit history...");
-        let written = store.rebuild_dao_daily_snapshots()?;
-        info!(
-            "DAO snapshots migration v5 complete: {} snapshots rebuilt",
-            written
-        );
-        store.update_sync_status(|s| {
-            s.dao_snapshots_version = 5;
-        })?;
-    }
-
-    // One-time migration: rebuild avg_block_time_ms from block headers
+    // One-time backfill: rebuild avg_block_time_ms from block headers
     let sync_status = store.get_sync_status()?;
     if !sync_status.avg_block_time_rebuilt && sync_status.tip_block_number > 0 {
         info!("avg_block_time migration: rebuilding from block headers...");

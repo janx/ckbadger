@@ -488,12 +488,6 @@ pub struct SyncStatus {
     pub activities_deferred: bool,
     pub deep_fork_detected: bool,
     pub deep_fork_info: Option<DeepForkInfo>,
-    /// DAO snapshots migration version. Tracks which rebuild has been applied:
-    /// - 0 (default): Legacy data using AR field (needs rebuild)
-    /// - 3: Rebuilt with correct deposit totals, cumulative_deposit_amount,
-    ///   and actual C/S from DAO header for circulation ratio
-    #[serde(default)]
-    pub dao_snapshots_version: i32,
     #[serde(default)]
     pub avg_block_time_rebuilt: bool,
 }
