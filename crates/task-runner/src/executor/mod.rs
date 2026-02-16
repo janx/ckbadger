@@ -17,12 +17,11 @@ pub struct TaskExecutor {
     runner_id: String,
     _ckb_rpc_url: String,
     token_labels_path: String,
-    _redis_url: Option<String>,
     ckb_store: Option<Arc<CkbChainReader>>,
 }
 
 impl TaskExecutor {
-    pub fn new(
+    pub async fn new(
         store: Arc<CkbadgerStore>,
         runner_id: String,
         ckb_rpc_url: String,
@@ -30,13 +29,38 @@ impl TaskExecutor {
         redis_url: Option<String>,
         ckb_store: Option<Arc<CkbChainReader>>,
     ) -> Self {
+        let redis_conn = match redis_url {
+            Some(ref url) => match redis::Client::open(url.as_str()) {
+                Ok(client) => match redis::aio::ConnectionManager::new(client).await {
+                    Ok(conn) => {
+                        info!("Task runner Redis connection established for command queue");
+                        Some(conn)
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to connect to Redis for task commands: {}. API task mutations will not be processed.",
+                            e
+                        );
+                        None
+                    }
+                },
+                Err(e) => {
+                    warn!("Invalid Redis URL for task commands: {}", e);
+                    None
+                }
+            },
+            None => {
+                info!("No Redis URL configured — task command queue disabled");
+                None
+            }
+        };
+
         Self {
-            db: TaskDb::new(store.clone()),
+            db: TaskDb::new(store.clone(), redis_conn),
             store,
             runner_id,
             _ckb_rpc_url: ckb_rpc_url,
             token_labels_path,
-            _redis_url: redis_url,
             ckb_store,
         }
     }
@@ -60,10 +84,18 @@ impl TaskExecutor {
         self.recover_orphaned_tasks().await?;
 
         loop {
+            // Process any pending Redis commands before checking for tasks
+            self.db.process_redis_commands().await;
+
             match self.run_once().await {
                 Ok(executed) => {
                     if !executed {
-                        tokio::time::sleep(poll_interval).await;
+                        // During idle, sleep in 500ms chunks to check Redis commands frequently
+                        let chunks = (poll_interval.as_millis() / 500).max(1) as u64;
+                        for _ in 0..chunks {
+                            tokio::time::sleep(Duration::from_millis(500)).await;
+                            self.db.process_redis_commands().await;
+                        }
                     }
                 }
                 Err(e) => {

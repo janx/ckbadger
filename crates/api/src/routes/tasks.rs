@@ -1,4 +1,8 @@
 //! Task management API endpoints.
+//!
+//! Mutation endpoints (create, cancel, pause, resume, retry, delete) use a Redis
+//! command queue because the API opens RocksDB in secondary (read-only) mode.
+//! The task-runner (with primary write access) consumes and executes commands.
 
 use axum::{
     extract::{Path, State},
@@ -9,7 +13,12 @@ use chrono::{DateTime, Utc};
 use ckbadger_common::task::{
     IndexRebuildResult, LabelImportConfig, StatisticsRebuildResult, TaskBuilder,
 };
+use ckbadger_common::task_cmd::{
+    task_cmd_key, task_cmd_result_key, TaskCommand, TaskCommandAction, TaskCommandResult,
+    TASK_CMD_QUEUE_KEY, TASK_CMD_TTL_SECS,
+};
 use ckbadger_store::types::TaskEntry;
+use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
@@ -67,6 +76,74 @@ fn entry_to_json(e: TaskEntry) -> TaskJson {
     }
 }
 
+// ─── Redis command queue helper ────────────────────────────────────────────
+
+type ApiErr = (axum::http::StatusCode, axum::Json<ApiError>);
+
+/// Send a task command via Redis and wait for the result (up to 5s).
+async fn send_task_command(
+    state: &AppState,
+    action: TaskCommandAction,
+) -> Result<TaskCommandResult, ApiErr> {
+    let mut conn = state
+        .redis_conn
+        .clone()
+        .ok_or_else(|| ApiError::internal("Redis not available — task mutations disabled"))?;
+
+    let cmd = TaskCommand {
+        id: Uuid::new_v4(),
+        action,
+    };
+    let cmd_json = serde_json::to_string(&cmd).map_err(|e| ApiError::internal(e.to_string()))?;
+
+    // SET command payload with TTL
+    let cmd_key = task_cmd_key(&cmd.id);
+    conn.set_ex::<_, _, ()>(&cmd_key, &cmd_json, TASK_CMD_TTL_SECS)
+        .await
+        .map_err(|e| ApiError::internal(format!("Redis SET failed: {}", e)))?;
+
+    // RPUSH command ID to queue
+    conn.rpush::<_, _, ()>(TASK_CMD_QUEUE_KEY, cmd.id.to_string())
+        .await
+        .map_err(|e| ApiError::internal(format!("Redis RPUSH failed: {}", e)))?;
+
+    // Poll for result (5s timeout, 50ms intervals)
+    let result_key = task_cmd_result_key(&cmd.id);
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(5);
+
+    loop {
+        let result: Option<String> = conn
+            .get(&result_key)
+            .await
+            .map_err(|e| ApiError::internal(format!("Redis GET failed: {}", e)))?;
+
+        if let Some(json) = result {
+            let cmd_result: TaskCommandResult = serde_json::from_str(&json)
+                .map_err(|e| ApiError::internal(format!("Invalid command result: {}", e)))?;
+            return Ok(cmd_result);
+        }
+
+        if tokio::time::Instant::now() >= deadline {
+            return Err(ApiError::internal(
+                "Task command timed out — task-runner may not be running",
+            ));
+        }
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    }
+}
+
+/// After the task-runner processes a command, refresh the store and re-read the task.
+fn refresh_and_get_task(state: &AppState, task_id: &Uuid) -> Result<TaskEntry, ApiErr> {
+    // Refresh secondary RocksDB instance to pick up the write
+    let _ = state.store.refresh();
+    state
+        .store
+        .get_task(task_id)
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found("Task not found after command execution"))
+}
+
 // ─── GET /tasks ────────────────────────────────────────────────────────────
 
 async fn list_tasks(State(state): State<Arc<AppState>>) -> ApiResult<Vec<TaskJson>> {
@@ -97,10 +174,12 @@ async fn create_task(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateTaskRequest>,
 ) -> ApiResult<CreateTaskResponse> {
-    let builder = match req.task_type.as_str() {
+    // Validate task type before sending to queue
+    match req.task_type.as_str() {
         "label_import" => {
-            let config: LabelImportConfig = serde_json::from_value(req.config).unwrap_or_default();
-            TaskBuilder::label_import(config)
+            let _config: LabelImportConfig =
+                serde_json::from_value(req.config.clone()).unwrap_or_default();
+            let _ = TaskBuilder::label_import(_config);
         }
         _ => {
             return Err(ApiError::bad_request(format!(
@@ -110,35 +189,27 @@ async fn create_task(
         }
     };
 
-    let id = Uuid::new_v4();
-    let entry = TaskEntry {
-        id,
-        task_type: builder.task_type().to_string(),
-        status: "pending".to_string(),
-        priority: builder.get_priority(),
-        config: serde_json::to_string(builder.config()).unwrap_or_default(),
-        progress_total: None,
-        progress_current: None,
-        progress_message: None,
-        result: None,
-        error_message: None,
-        created_at: Utc::now(),
-        started_at: None,
-        completed_at: None,
-        heartbeat_at: None,
-        runner_id: None,
-        retry_count: 0,
-        max_retries: builder.get_max_retries(),
-        rate_samples: None,
-        rate_ema: None,
-        log_tail: None,
-    };
-    state
-        .store
-        .create_task(&entry)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let result = send_task_command(
+        &state,
+        TaskCommandAction::Create {
+            task_type: req.task_type,
+            config: req.config,
+        },
+    )
+    .await?;
 
-    ok(CreateTaskResponse { id: id.to_string() })
+    if result.success {
+        let task_id = result
+            .task_id
+            .ok_or_else(|| ApiError::internal("No task ID in create result"))?;
+        ok(CreateTaskResponse {
+            id: task_id.to_string(),
+        })
+    } else {
+        Err(ApiError::internal(result.error.unwrap_or_else(|| {
+            "Unknown error creating task".to_string()
+        })))
+    }
 }
 
 // ─── POST /tasks/:id/cancel ────────────────────────────────────────────────
@@ -150,7 +221,9 @@ async fn cancel_task(
     let task_id = id
         .parse::<Uuid>()
         .map_err(|_| ApiError::bad_request("Invalid task ID"))?;
-    let mut task = state
+
+    // Validate task exists and is in cancellable state (read-only check)
+    let task = state
         .store
         .get_task(&task_id)
         .map_err(|e| ApiError::internal(e.to_string()))?
@@ -166,15 +239,18 @@ async fn cancel_task(
         }
     }
 
-    let old_status = task.status.clone();
-    let old_priority = task.priority;
-    task.status = "cancelled".to_string();
-    task.completed_at = Some(Utc::now());
-    state
-        .store
-        .update_task(&task, &old_status, old_priority)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    ok(entry_to_json(task))
+    let result = send_task_command(&state, TaskCommandAction::Cancel { task_id }).await?;
+
+    if result.success {
+        let entry = refresh_and_get_task(&state, &task_id)?;
+        ok(entry_to_json(entry))
+    } else {
+        Err(ApiError::internal(
+            result
+                .error
+                .unwrap_or_else(|| "Failed to cancel task".to_string()),
+        ))
+    }
 }
 
 // ─── POST /tasks/:id/pause ─────────────────────────────────────────────────
@@ -186,7 +262,8 @@ async fn pause_task(
     let task_id = id
         .parse::<Uuid>()
         .map_err(|_| ApiError::bad_request("Invalid task ID"))?;
-    let mut task = state
+
+    let task = state
         .store
         .get_task(&task_id)
         .map_err(|e| ApiError::internal(e.to_string()))?
@@ -199,14 +276,18 @@ async fn pause_task(
         )));
     }
 
-    let old_status = task.status.clone();
-    let old_priority = task.priority;
-    task.status = "paused".to_string();
-    state
-        .store
-        .update_task(&task, &old_status, old_priority)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    ok(entry_to_json(task))
+    let result = send_task_command(&state, TaskCommandAction::Pause { task_id }).await?;
+
+    if result.success {
+        let entry = refresh_and_get_task(&state, &task_id)?;
+        ok(entry_to_json(entry))
+    } else {
+        Err(ApiError::internal(
+            result
+                .error
+                .unwrap_or_else(|| "Failed to pause task".to_string()),
+        ))
+    }
 }
 
 // ─── POST /tasks/:id/resume ────────────────────────────────────────────────
@@ -218,7 +299,8 @@ async fn resume_task(
     let task_id = id
         .parse::<Uuid>()
         .map_err(|_| ApiError::bad_request("Invalid task ID"))?;
-    let mut task = state
+
+    let task = state
         .store
         .get_task(&task_id)
         .map_err(|e| ApiError::internal(e.to_string()))?
@@ -231,15 +313,18 @@ async fn resume_task(
         )));
     }
 
-    let old_status = task.status.clone();
-    let old_priority = task.priority;
-    task.status = "pending".to_string();
-    task.runner_id = None;
-    state
-        .store
-        .update_task(&task, &old_status, old_priority)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    ok(entry_to_json(task))
+    let result = send_task_command(&state, TaskCommandAction::Resume { task_id }).await?;
+
+    if result.success {
+        let entry = refresh_and_get_task(&state, &task_id)?;
+        ok(entry_to_json(entry))
+    } else {
+        Err(ApiError::internal(
+            result
+                .error
+                .unwrap_or_else(|| "Failed to resume task".to_string()),
+        ))
+    }
 }
 
 // ─── POST /tasks/:id/retry ─────────────────────────────────────────────────
@@ -251,7 +336,8 @@ async fn retry_task(
     let task_id = id
         .parse::<Uuid>()
         .map_err(|_| ApiError::bad_request("Invalid task ID"))?;
-    let mut task = state
+
+    let task = state
         .store
         .get_task(&task_id)
         .map_err(|e| ApiError::internal(e.to_string()))?
@@ -264,17 +350,18 @@ async fn retry_task(
         )));
     }
 
-    let old_status = task.status.clone();
-    let old_priority = task.priority;
-    task.status = "pending".to_string();
-    task.runner_id = None;
-    task.error_message = None;
-    task.retry_count = 0;
-    state
-        .store
-        .update_task(&task, &old_status, old_priority)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    ok(entry_to_json(task))
+    let result = send_task_command(&state, TaskCommandAction::Retry { task_id }).await?;
+
+    if result.success {
+        let entry = refresh_and_get_task(&state, &task_id)?;
+        ok(entry_to_json(entry))
+    } else {
+        Err(ApiError::internal(
+            result
+                .error
+                .unwrap_or_else(|| "Failed to retry task".to_string()),
+        ))
+    }
 }
 
 // ─── DELETE /tasks/:id ─────────────────────────────────────────────────────
@@ -292,6 +379,7 @@ async fn delete_task(
     let task_id = id
         .parse::<Uuid>()
         .map_err(|_| ApiError::bad_request("Invalid task ID"))?;
+
     let task = state
         .store
         .get_task(&task_id)
@@ -302,26 +390,17 @@ async fn delete_task(
         return Err(ApiError::bad_request("Cannot delete a running task"));
     }
 
-    let status_byte = match task.status.as_str() {
-        "pending" => 0x01,
-        "running" => 0x02,
-        "completed" => 0x03,
-        "failed" => 0x04,
-        "cancelled" => 0x05,
-        "paused" => 0x06,
-        _ => 0xFF,
-    };
-    state
-        .store
-        .delete_cf(state.store.cf_tasks(), task_id.as_bytes())
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    let idx_key = ckbadger_store::keys::encode_task_index_key(status_byte, task.priority, &task.id);
-    state
-        .store
-        .delete_cf(state.store.cf_tasks_index(), &idx_key)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let result = send_task_command(&state, TaskCommandAction::Delete { task_id }).await?;
 
-    ok(DeleteTaskResponse { deleted: true })
+    if result.success {
+        ok(DeleteTaskResponse { deleted: true })
+    } else {
+        Err(ApiError::internal(
+            result
+                .error
+                .unwrap_or_else(|| "Failed to delete task".to_string()),
+        ))
+    }
 }
 
 // ─── Legacy: GET /tasks/active ─────────────────────────────────────────────

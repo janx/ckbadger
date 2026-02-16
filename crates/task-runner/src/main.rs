@@ -67,7 +67,8 @@ async fn main() -> Result<()> {
         args.token_labels_path,
         args.redis_url,
         None,
-    );
+    )
+    .await;
 
     if args.once {
         info!("Running in single-task mode");

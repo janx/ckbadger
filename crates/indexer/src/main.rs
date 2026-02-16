@@ -278,7 +278,8 @@ async fn main() -> Result<()> {
             args.token_labels_path.clone(),
             config.redis_url.clone(),
             indexer.ckb_store(),
-        );
+        )
+        .await;
         let poll_interval = Duration::from_secs(args.task_poll_interval_secs);
         info!(
             "Starting embedded task runner '{}' with poll interval {}s",
