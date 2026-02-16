@@ -1256,11 +1256,13 @@ async fn get_total_supply_chart(
         .filter_map(|s| {
             let locked_shannon = s.total_deposited.max(0) as f64;
 
-            // Use actual C (total_issuance) and S (secondary_pool) from the DAO
-            // header when available; fall back to estimate for pre-migration data.
+            // Use actual C (total_issuance) and cum_treasury from the DAO
+            // when available; fall back to estimate for pre-migration data.
+            // NOTE: secondary_pool (S field) is non-miner secondary = dao + treasury.
+            // Only the treasury portion is actually burnt.
             let (total_supply, burnt) = if s.total_issuance > 0 {
-                // burnt = genesis lock (8.4B) + treasury (S)
-                let burnt = GENESIS_BURNT as f64 + s.secondary_pool.max(0) as f64;
+                // burnt = genesis lock (8.4B) + cumulative treasury secondary issuance
+                let burnt = GENESIS_BURNT as f64 + s.cum_treasury.max(0) as f64;
                 (s.total_issuance as f64, burnt)
             } else {
                 let ts = estimated_total_supply(&s.date)?;

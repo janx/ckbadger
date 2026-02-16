@@ -5227,24 +5227,31 @@ impl Indexer {
                             }
                         })
                         .unwrap_or((0, 0, 0));
-                    // Read previous snapshot's cumulative values (if any) to
-                    // carry forward; secondary issuance breakdown is computed
-                    // by the rebuild migration and carried forward here.
+                    // Read previous snapshot and compute daily secondary
+                    // issuance breakdown from the S-field delta.
                     let prev = self
                         .writer
                         .store()
                         .list_dao_daily_snapshots()
                         .ok()
                         .and_then(|snaps| snaps.last().cloned());
-                    let (cum_miner, cum_dao, cum_treasury) = prev
-                        .map(|p| {
-                            (
-                                p.cum_miner_secondary,
-                                p.cum_dao_compensation,
-                                p.cum_treasury,
-                            )
-                        })
-                        .unwrap_or((0, 0, 0));
+                    let (cum_miner, cum_dao, cum_treasury) = if let Some(ref p) = prev {
+                        // S_delta = non-miner secondary issuance for this day
+                        let s_delta = (secondary_pool - p.secondary_pool).max(0);
+                        // Split S_delta into DAO depositor and treasury (burnt)
+                        // shares proportional to deposited / (C - U).
+                        let denom = (total_issuance - occupied_capacity).max(1);
+                        let deposited = total_deposited.max(0);
+                        let daily_dao_share = s_delta * deposited / denom;
+                        let daily_treasury_share = s_delta - daily_dao_share;
+                        (
+                            p.cum_miner_secondary, // requires epoch info; carried forward
+                            p.cum_dao_compensation + daily_dao_share,
+                            p.cum_treasury + daily_treasury_share,
+                        )
+                    } else {
+                        (0, 0, 0)
+                    };
                     let dao_snapshot = crate::db::writer::DaoSnapshotInput {
                         total_deposited,
                         depositors_count,
