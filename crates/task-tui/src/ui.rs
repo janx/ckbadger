@@ -1,4 +1,3 @@
-use anyhow::Result;
 use chrono::{DateTime, Local};
 use ckbadger_common::{LabelImportConfig, MemoryStatsData, Task, TaskBuilder};
 use ratatui::{
@@ -223,8 +222,13 @@ impl App {
         self.detail_scroll = 0;
     }
 
-    pub async fn refresh(&mut self) -> Result<()> {
-        self.tasks = self.db.list_tasks(100).await?;
+    pub async fn refresh(&mut self) {
+        match self.db.list_tasks(100).await {
+            Ok(tasks) => self.tasks = tasks,
+            Err(e) => {
+                self.log_error(format!("API unavailable: {}", e));
+            }
+        }
         self.sync_status = self.db.get_sync_status().await.ok();
         self.memory_stats = self.db.get_memory_stats().await;
         self.chain_info = self.db.get_chain_info().await;
@@ -240,7 +244,18 @@ impl App {
         if self.table_state.selected().is_none() && !self.tasks.is_empty() {
             self.table_state.select(Some(0));
         }
-        Ok(())
+    }
+
+    fn log_error(&mut self, message: String) {
+        self.status_message = Some((message.clone(), Instant::now()));
+        self.log_entries.push_back(LogEntry {
+            timestamp: Local::now(),
+            message,
+            level: LogLevel::Warning,
+        });
+        while self.log_entries.len() > LOG_HISTORY_SIZE {
+            self.log_entries.pop_front();
+        }
     }
 
     fn detect_events(&mut self) {
@@ -453,74 +468,121 @@ impl App {
         self.dialog.is_some()
     }
 
-    pub async fn confirm_dialog(&mut self) -> Result<()> {
+    pub async fn confirm_dialog(&mut self) {
         match self.dialog {
             Some(DialogType::NewTask) => {
                 let builder = match self.dialog_selection {
                     0 => TaskBuilder::label_import(LabelImportConfig::default()),
-                    _ => return Ok(()),
+                    _ => return,
                 };
-                let id = self.db.create_task(&builder).await?;
-                self.status_message = Some((format!("Created task: {}", id), Instant::now()));
-                self.dialog = None;
-                self.refresh().await?;
+                match self.db.create_task(&builder).await {
+                    Ok(id) => {
+                        self.status_message =
+                            Some((format!("Created task: {}", id), Instant::now()));
+                        self.dialog = None;
+                        self.refresh().await;
+                    }
+                    Err(e) => {
+                        self.log_error(format!("Failed to create task: {}", e));
+                        self.dialog = None;
+                    }
+                }
             }
             Some(DialogType::Confirm(_)) => {
                 self.dialog = None;
             }
             None => {}
         }
-        Ok(())
     }
 
-    pub async fn cancel_selected(&mut self) -> Result<()> {
+    pub async fn cancel_selected(&mut self) {
         if let Some(task) = self.selected_task() {
             let id = task.id;
-            if self.db.cancel_task(id).await? {
-                self.status_message = Some((format!("Cancelled task: {}", id), Instant::now()));
-                self.refresh().await?;
+            match self.db.cancel_task(id).await {
+                Ok(true) => {
+                    self.status_message = Some((format!("Cancelled task: {}", id), Instant::now()));
+                    self.refresh().await;
+                }
+                Ok(false) => {
+                    self.log_error(format!("Failed to cancel task: {}", id));
+                }
+                Err(e) => {
+                    self.log_error(format!("Error: {}", e));
+                }
             }
         }
-        Ok(())
     }
 
-    pub async fn pause_selected(&mut self) -> Result<()> {
+    pub async fn pause_selected(&mut self) {
         if let Some(task) = self.selected_task() {
             let id = task.id;
-            if self.db.pause_task(id).await? {
-                self.status_message = Some((format!("Paused task: {}", id), Instant::now()));
-                self.refresh().await?;
+            match self.db.pause_task(id).await {
+                Ok(true) => {
+                    self.status_message = Some((format!("Paused task: {}", id), Instant::now()));
+                    self.refresh().await;
+                }
+                Ok(false) => {
+                    self.log_error(format!("Failed to pause task: {}", id));
+                }
+                Err(e) => {
+                    self.log_error(format!("Error: {}", e));
+                }
             }
         }
-        Ok(())
     }
 
-    pub async fn resume_or_retry_selected(&mut self) -> Result<()> {
+    pub async fn resume_or_retry_selected(&mut self) {
         if let Some(task) = self.selected_task() {
             let id = task.id;
             let status = task.status.as_str();
             if status == "paused" {
-                if self.db.resume_task(id).await? {
-                    self.status_message = Some((format!("Resumed task: {}", id), Instant::now()));
-                    self.refresh().await?;
+                match self.db.resume_task(id).await {
+                    Ok(true) => {
+                        self.status_message =
+                            Some((format!("Resumed task: {}", id), Instant::now()));
+                        self.refresh().await;
+                    }
+                    Ok(false) => {
+                        self.log_error(format!("Failed to resume task: {}", id));
+                    }
+                    Err(e) => {
+                        self.log_error(format!("Error: {}", e));
+                    }
                 }
-            } else if status == "failed" && self.db.retry_task(id).await? {
-                self.status_message = Some((format!("Retrying task: {}", id), Instant::now()));
-                self.refresh().await?;
+            } else if status == "failed" {
+                match self.db.retry_task(id).await {
+                    Ok(true) => {
+                        self.status_message =
+                            Some((format!("Retrying task: {}", id), Instant::now()));
+                        self.refresh().await;
+                    }
+                    Ok(false) => {
+                        self.log_error(format!("Failed to retry task: {}", id));
+                    }
+                    Err(e) => {
+                        self.log_error(format!("Error: {}", e));
+                    }
+                }
             }
         }
-        Ok(())
     }
 
-    pub async fn delete_selected(&mut self) -> Result<()> {
+    pub async fn delete_selected(&mut self) {
         if let Some(task) = self.selected_task() {
             let id = task.id;
-            if self.db.delete_task(id).await? {
-                self.status_message = Some((format!("Deleted task: {}", id), Instant::now()));
-                self.refresh().await?;
+            match self.db.delete_task(id).await {
+                Ok(true) => {
+                    self.status_message = Some((format!("Deleted task: {}", id), Instant::now()));
+                    self.refresh().await;
+                }
+                Ok(false) => {
+                    self.log_error(format!("Failed to delete task: {}", id));
+                }
+                Err(e) => {
+                    self.log_error(format!("Error: {}", e));
+                }
             }
         }
-        Ok(())
     }
 }
 

@@ -86,7 +86,7 @@ async fn run_app<B: ratatui::backend::Backend>(
     app: &mut App,
     tick_rate: Duration,
 ) -> Result<()> {
-    app.refresh().await?;
+    app.refresh().await;
 
     loop {
         terminal.draw(|f| ui::draw(f, app))?;
@@ -101,7 +101,7 @@ async fn run_app<B: ratatui::backend::Backend>(
                                 app.next_dialog_option()
                             }
                             KeyCode::Char('k') | KeyCode::Up => app.previous_dialog_option(),
-                            KeyCode::Enter => app.confirm_dialog().await?,
+                            KeyCode::Enter => app.confirm_dialog().await,
                             _ => {}
                         }
                     } else {
@@ -121,14 +121,14 @@ async fn run_app<B: ratatui::backend::Backend>(
                             KeyCode::Char('g') | KeyCode::Home => app.scroll_log_to_top(),
                             KeyCode::Char('G') | KeyCode::End => app.scroll_log_to_bottom(),
                             KeyCode::Char('n') => app.show_new_task_dialog(),
-                            KeyCode::Char('c') => app.cancel_selected().await?,
-                            KeyCode::Char('p') => app.pause_selected().await?,
-                            KeyCode::Char('r') => app.resume_or_retry_selected().await?,
-                            KeyCode::Char('d') => app.delete_selected().await?,
+                            KeyCode::Char('c') => app.cancel_selected().await,
+                            KeyCode::Char('p') => app.pause_selected().await,
+                            KeyCode::Char('r') => app.resume_or_retry_selected().await,
+                            KeyCode::Char('d') => app.delete_selected().await,
                             KeyCode::Char('s') => app.toggle_sync_tab(),
                             KeyCode::Char('v') => app.toggle_chart_mode(),
-                            KeyCode::Char('R') => app.refresh().await?,
-                            KeyCode::Enter => app.confirm_dialog().await?,
+                            KeyCode::Char('R') => app.refresh().await,
+                            KeyCode::Enter => app.confirm_dialog().await,
                             KeyCode::Esc => app.cancel_dialog(),
                             _ => {}
                         }
@@ -138,7 +138,7 @@ async fn run_app<B: ratatui::backend::Backend>(
         }
 
         if app.should_refresh() {
-            app.refresh().await?;
+            app.refresh().await;
         }
     }
 }
