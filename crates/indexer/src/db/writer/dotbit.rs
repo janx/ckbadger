@@ -18,6 +18,7 @@ impl BatchWriter {
         tx_hash: &[u8],
         _output_index: i16,
         block_number: i64,
+        timestamp_ms: i64,
         batch: &mut StoreBatch,
     ) -> Result<()> {
         let account_name = format!("0x{}", hex::encode(&account.account_id));
@@ -53,6 +54,18 @@ impl BatchWriter {
             agg.total_count += 1;
             agg.live_count += 1;
             batch.put_nft_collection_aggregate(&DOTBIT_SENTINEL_COLLECTION, &agg);
+        } else {
+            // Re-insert (transfer) — increment hourly bucket for 24h tracking
+            let hour_bucket = timestamp_ms / 3_600_000;
+            let key = ckbadger_store::keys::encode_nft_hourly_key(
+                &DOTBIT_SENTINEL_COLLECTION,
+                hour_bucket,
+            );
+            let current = match self.store.get_cf(self.store.cf_stats(), &key)? {
+                Some(v) if v.len() == 8 => i64::from_le_bytes(v[..8].try_into().unwrap()),
+                _ => 0,
+            };
+            batch.put_nft_hourly_transfer(&DOTBIT_SENTINEL_COLLECTION, hour_bucket, current + 1);
         }
 
         let _ = tx_hash;

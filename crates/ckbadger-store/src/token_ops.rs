@@ -117,6 +117,65 @@ impl CkbadgerStore {
         Ok(result)
     }
 
+    /// Scan ALL spore hourly transfer entries in one pass and group by cluster_id.
+    /// Returns a map of cluster_id → 24h transfer count.
+    pub fn scan_all_spore_24h_transfers(
+        &self,
+        now_ms: i64,
+    ) -> anyhow::Result<HashMap<Vec<u8>, i64>> {
+        let current_hour = now_ms / 3_600_000;
+        let cutoff_hour = current_hour - 24;
+
+        let prefix = [keys::STATS_PREFIX_SPORE_HOURLY];
+        let iter = self.prefix_iterator_cf(self.cf_stats(), &prefix);
+        let mut result: HashMap<Vec<u8>, i64> = HashMap::new();
+
+        for item in iter.flatten() {
+            let (key, value) = item;
+            if key.first() != Some(&keys::STATS_PREFIX_SPORE_HOURLY) {
+                break;
+            }
+            if key.len() == 41 && value.len() == 8 {
+                let hour = i64::from_be_bytes(key[33..41].try_into().unwrap());
+                if hour > cutoff_hour {
+                    let cluster_id = key[1..33].to_vec();
+                    let count = i64::from_le_bytes(value[..8].try_into().unwrap());
+                    *result.entry(cluster_id).or_insert(0) += count;
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Scan ALL NFT hourly transfer entries in one pass and group by collection_id.
+    /// Returns a map of collection_id → 24h transfer count.
+    pub fn scan_all_nft_24h_transfers(&self, now_ms: i64) -> anyhow::Result<HashMap<Vec<u8>, i64>> {
+        let current_hour = now_ms / 3_600_000;
+        let cutoff_hour = current_hour - 24;
+
+        let prefix = [keys::STATS_PREFIX_NFT_HOURLY];
+        let iter = self.prefix_iterator_cf(self.cf_stats(), &prefix);
+        let mut result: HashMap<Vec<u8>, i64> = HashMap::new();
+
+        for item in iter.flatten() {
+            let (key, value) = item;
+            if key.first() != Some(&keys::STATS_PREFIX_NFT_HOURLY) {
+                break;
+            }
+            if key.len() == 41 && value.len() == 8 {
+                let hour = i64::from_be_bytes(key[33..41].try_into().unwrap());
+                if hour > cutoff_hour {
+                    let collection_id = key[1..33].to_vec();
+                    let count = i64::from_le_bytes(value[..8].try_into().unwrap());
+                    *result.entry(collection_id).or_insert(0) += count;
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
     /// Delete hourly buckets older than the cutoff hour for a given token.
     pub fn cleanup_old_hourly_buckets(
         &self,
@@ -452,5 +511,99 @@ mod tests {
         let now_ms = 1000 * 3_600_000;
         assert_eq!(store.get_token_24h_transfers(&hash_a, now_ms).unwrap(), 5);
         assert_eq!(store.get_token_24h_transfers(&hash_b, now_ms).unwrap(), 15);
+    }
+
+    // ---- Spore hourly transfers ----
+
+    #[test]
+    fn test_scan_all_spore_24h_transfers_empty() {
+        let (_dir, store) = test_store();
+        let now_ms = 1_700_000_000_000i64;
+        let result = store.scan_all_spore_24h_transfers(now_ms).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_scan_all_spore_24h_transfers_multiple_clusters() {
+        let (_dir, store) = test_store();
+        let cluster_a = [0x0Au8; 32];
+        let cluster_b = [0x0Bu8; 32];
+        let now_ms = 1_700_000_000_000i64;
+        let current_hour = now_ms / 3_600_000;
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_spore_hourly_transfer(&cluster_a, current_hour, 10);
+        batch.put_spore_hourly_transfer(&cluster_a, current_hour - 5, 20);
+        batch.put_spore_hourly_transfer(&cluster_b, current_hour - 1, 15);
+        batch.commit().unwrap();
+
+        let result = store.scan_all_spore_24h_transfers(now_ms).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(*result.get(cluster_a.as_slice()).unwrap(), 30);
+        assert_eq!(*result.get(cluster_b.as_slice()).unwrap(), 15);
+    }
+
+    #[test]
+    fn test_scan_all_spore_24h_transfers_excludes_old() {
+        let (_dir, store) = test_store();
+        let cluster_a = [0x0Au8; 32];
+        let now_ms = 1_700_000_000_000i64;
+        let current_hour = now_ms / 3_600_000;
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_spore_hourly_transfer(&cluster_a, current_hour, 10);
+        batch.put_spore_hourly_transfer(&cluster_a, current_hour - 24, 20); // at cutoff, excluded
+        batch.put_spore_hourly_transfer(&cluster_a, current_hour - 48, 30); // old, excluded
+        batch.commit().unwrap();
+
+        let result = store.scan_all_spore_24h_transfers(now_ms).unwrap();
+        assert_eq!(*result.get(cluster_a.as_slice()).unwrap(), 10);
+    }
+
+    // ---- NFT hourly transfers ----
+
+    #[test]
+    fn test_scan_all_nft_24h_transfers_empty() {
+        let (_dir, store) = test_store();
+        let now_ms = 1_700_000_000_000i64;
+        let result = store.scan_all_nft_24h_transfers(now_ms).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_scan_all_nft_24h_transfers_multiple_collections() {
+        let (_dir, store) = test_store();
+        let coll_a = [0x0Au8; 32];
+        let coll_b = [0x0Bu8; 32];
+        let now_ms = 1_700_000_000_000i64;
+        let current_hour = now_ms / 3_600_000;
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_nft_hourly_transfer(&coll_a, current_hour, 10);
+        batch.put_nft_hourly_transfer(&coll_a, current_hour - 5, 20);
+        batch.put_nft_hourly_transfer(&coll_b, current_hour - 1, 15);
+        batch.commit().unwrap();
+
+        let result = store.scan_all_nft_24h_transfers(now_ms).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(*result.get(coll_a.as_slice()).unwrap(), 30);
+        assert_eq!(*result.get(coll_b.as_slice()).unwrap(), 15);
+    }
+
+    #[test]
+    fn test_scan_all_nft_24h_transfers_excludes_old() {
+        let (_dir, store) = test_store();
+        let coll_a = [0x0Au8; 32];
+        let now_ms = 1_700_000_000_000i64;
+        let current_hour = now_ms / 3_600_000;
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_nft_hourly_transfer(&coll_a, current_hour, 10);
+        batch.put_nft_hourly_transfer(&coll_a, current_hour - 24, 20); // at cutoff, excluded
+        batch.put_nft_hourly_transfer(&coll_a, current_hour - 48, 30); // old, excluded
+        batch.commit().unwrap();
+
+        let result = store.scan_all_nft_24h_transfers(now_ms).unwrap();
+        assert_eq!(*result.get(coll_a.as_slice()).unwrap(), 10);
     }
 }

@@ -277,6 +277,18 @@ impl<'a> StoreBatch<'a> {
             .put_cf(self.store.cf_stats(), key, count.to_le_bytes());
     }
 
+    pub fn put_spore_hourly_transfer(&mut self, cluster_id: &[u8], hour_bucket: i64, count: i64) {
+        let key = keys::encode_spore_hourly_key(cluster_id, hour_bucket);
+        self.batch
+            .put_cf(self.store.cf_stats(), key, count.to_le_bytes());
+    }
+
+    pub fn put_nft_hourly_transfer(&mut self, collection_id: &[u8], hour_bucket: i64, count: i64) {
+        let key = keys::encode_nft_hourly_key(collection_id, hour_bucket);
+        self.batch
+            .put_cf(self.store.cf_stats(), key, count.to_le_bytes());
+    }
+
     pub fn delete_token_holder(&mut self, type_hash: &[u8], lock_hash: &[u8]) {
         let key = keys::encode_token_holder_key(type_hash, lock_hash);
         self.batch.delete_cf(self.store.cf_token_holders(), key);

@@ -153,6 +153,7 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
 
     // -- DOB (Spore) assets from pre-aggregated cluster_agg CF --
     let cluster_aggs = state.store.list_cluster_aggregates()?;
+    let spore_transfers_24h_map = state.store.scan_all_spore_24h_transfers(now_ms)?;
     let mut dob_assets: Vec<CachedAssetEntry> = Vec::with_capacity(cluster_aggs.len());
 
     for (cluster_id_bytes, agg) in &cluster_aggs {
@@ -160,6 +161,10 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
             continue;
         }
         let cluster_hex = format!("0x{}", hex::encode(cluster_id_bytes));
+        let transfers_24h = spore_transfers_24h_map
+            .get(cluster_id_bytes.as_slice())
+            .copied()
+            .unwrap_or(0);
 
         dob_assets.push(CachedAssetEntry {
             id: cluster_hex.clone(),
@@ -170,7 +175,7 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
             icon_url: None,
             holders_count: agg.owner_count,
             transfers_count: agg.total_count,
-            transfers_24h: 0,
+            transfers_24h,
             decimals: None,
             total_supply: Some(agg.total_count.to_string()),
             content_type: None,
@@ -194,6 +199,7 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
 
     // -- NFT assets from pre-aggregated nft_collection_agg CF --
     let nft_aggs = state.store.list_nft_collection_aggregates()?;
+    let nft_transfers_24h_map = state.store.scan_all_nft_24h_transfers(now_ms)?;
     let mut nft_assets: Vec<CachedAssetEntry> = Vec::with_capacity(nft_aggs.len());
 
     for (collection_id_bytes, agg) in &nft_aggs {
@@ -201,6 +207,10 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
             continue;
         }
         let collection_hex = format!("0x{}", hex::encode(collection_id_bytes));
+        let transfers_24h = nft_transfers_24h_map
+            .get(collection_id_bytes.as_slice())
+            .copied()
+            .unwrap_or(0);
 
         nft_assets.push(CachedAssetEntry {
             id: collection_hex.clone(),
@@ -211,7 +221,7 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
             icon_url: None,
             holders_count: agg.live_count,
             transfers_count: agg.total_count,
-            transfers_24h: 0,
+            transfers_24h,
             decimals: None,
             total_supply: Some(agg.total_count.to_string()),
             content_type: None,

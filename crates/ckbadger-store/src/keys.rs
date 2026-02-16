@@ -114,6 +114,8 @@ pub mod stats_prefix {
     pub const TOKEN_HOURLY: u8 = 0x0A;
     pub const HODL_WAVE: u8 = 0x0B;
     pub const CLUSTER_OWNER: u8 = 0x0C;
+    pub const SPORE_HOURLY: u8 = 0x0D;
+    pub const NFT_HOURLY: u8 = 0x0E;
 }
 
 // Flat re-exports for convenience
@@ -129,6 +131,8 @@ pub const STATS_PREFIX_TOKEN_TRANSFERS: u8 = stats_prefix::TOKEN_TRANSFERS;
 pub const STATS_PREFIX_TOKEN_HOURLY: u8 = stats_prefix::TOKEN_HOURLY;
 pub const STATS_PREFIX_HODL_WAVE: u8 = stats_prefix::HODL_WAVE;
 pub const STATS_PREFIX_CLUSTER_OWNER: u8 = stats_prefix::CLUSTER_OWNER;
+pub const STATS_PREFIX_SPORE_HOURLY: u8 = stats_prefix::SPORE_HOURLY;
+pub const STATS_PREFIX_NFT_HOURLY: u8 = stats_prefix::NFT_HOURLY;
 
 /// Token transfers total count key: prefix(1B) + type_hash(32B) = 33 bytes
 pub fn encode_token_transfers_key(type_hash: &[u8]) -> Vec<u8> {
@@ -153,6 +157,40 @@ pub fn encode_token_hourly_prefix(type_hash: &[u8]) -> Vec<u8> {
     let mut key = Vec::with_capacity(33);
     key.push(STATS_PREFIX_TOKEN_HOURLY);
     key.extend_from_slice(&type_hash[..32]);
+    key
+}
+
+/// Spore (DOB) hourly transfer count key: prefix(1B) + cluster_id(32B) + hour_bucket(8B BE) = 41 bytes
+pub fn encode_spore_hourly_key(cluster_id: &[u8], hour_bucket: i64) -> Vec<u8> {
+    let mut key = Vec::with_capacity(41);
+    key.push(STATS_PREFIX_SPORE_HOURLY);
+    key.extend_from_slice(&cluster_id[..32]);
+    key.extend_from_slice(&hour_bucket.to_be_bytes());
+    key
+}
+
+/// Prefix for scanning all hourly buckets of a given spore cluster.
+pub fn encode_spore_hourly_prefix(cluster_id: &[u8]) -> Vec<u8> {
+    let mut key = Vec::with_capacity(33);
+    key.push(STATS_PREFIX_SPORE_HOURLY);
+    key.extend_from_slice(&cluster_id[..32]);
+    key
+}
+
+/// NFT hourly transfer count key: prefix(1B) + collection_id(32B) + hour_bucket(8B BE) = 41 bytes
+pub fn encode_nft_hourly_key(collection_id: &[u8], hour_bucket: i64) -> Vec<u8> {
+    let mut key = Vec::with_capacity(41);
+    key.push(STATS_PREFIX_NFT_HOURLY);
+    key.extend_from_slice(&collection_id[..32]);
+    key.extend_from_slice(&hour_bucket.to_be_bytes());
+    key
+}
+
+/// Prefix for scanning all hourly buckets of a given NFT collection.
+pub fn encode_nft_hourly_prefix(collection_id: &[u8]) -> Vec<u8> {
+    let mut key = Vec::with_capacity(33);
+    key.push(STATS_PREFIX_NFT_HOURLY);
+    key.extend_from_slice(&collection_id[..32]);
     key
 }
 
@@ -436,6 +474,72 @@ mod tests {
         assert_eq!(timestamp_ms_to_date(1705276800000), 20240115);
         // 2025-06-15 12:30:00 UTC = 1750000200000 ms
         assert_eq!(timestamp_ms_to_date(1750000200000), 20250615);
+    }
+
+    #[test]
+    fn test_spore_hourly_key_structure() {
+        let cluster_id = [0xCDu8; 32];
+        let hour_bucket: i64 = 482_000;
+        let key = encode_spore_hourly_key(&cluster_id, hour_bucket);
+        assert_eq!(key.len(), 41);
+        assert_eq!(key[0], STATS_PREFIX_SPORE_HOURLY);
+        assert_eq!(&key[1..33], &cluster_id);
+        assert_eq!(
+            i64::from_be_bytes(key[33..41].try_into().unwrap()),
+            hour_bucket
+        );
+    }
+
+    #[test]
+    fn test_spore_hourly_key_sort_order() {
+        let cluster_id = [0x01u8; 32];
+        let k1 = encode_spore_hourly_key(&cluster_id, 100);
+        let k2 = encode_spore_hourly_key(&cluster_id, 200);
+        let k3 = encode_spore_hourly_key(&cluster_id, 300);
+        assert!(k1 < k2);
+        assert!(k2 < k3);
+    }
+
+    #[test]
+    fn test_spore_hourly_prefix_is_prefix_of_full_key() {
+        let cluster_id = [0x42u8; 32];
+        let prefix = encode_spore_hourly_prefix(&cluster_id);
+        let full_key = encode_spore_hourly_key(&cluster_id, 999);
+        assert_eq!(prefix.len(), 33);
+        assert!(full_key.starts_with(&prefix));
+    }
+
+    #[test]
+    fn test_nft_hourly_key_structure() {
+        let collection_id = [0xCDu8; 32];
+        let hour_bucket: i64 = 482_000;
+        let key = encode_nft_hourly_key(&collection_id, hour_bucket);
+        assert_eq!(key.len(), 41);
+        assert_eq!(key[0], STATS_PREFIX_NFT_HOURLY);
+        assert_eq!(&key[1..33], &collection_id);
+        assert_eq!(
+            i64::from_be_bytes(key[33..41].try_into().unwrap()),
+            hour_bucket
+        );
+    }
+
+    #[test]
+    fn test_nft_hourly_key_sort_order() {
+        let collection_id = [0x01u8; 32];
+        let k1 = encode_nft_hourly_key(&collection_id, 100);
+        let k2 = encode_nft_hourly_key(&collection_id, 200);
+        let k3 = encode_nft_hourly_key(&collection_id, 300);
+        assert!(k1 < k2);
+        assert!(k2 < k3);
+    }
+
+    #[test]
+    fn test_nft_hourly_prefix_is_prefix_of_full_key() {
+        let collection_id = [0x42u8; 32];
+        let prefix = encode_nft_hourly_prefix(&collection_id);
+        let full_key = encode_nft_hourly_key(&collection_id, 999);
+        assert_eq!(prefix.len(), 33);
+        assert!(full_key.starts_with(&prefix));
     }
 
     #[test]

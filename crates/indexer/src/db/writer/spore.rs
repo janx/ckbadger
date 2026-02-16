@@ -53,6 +53,7 @@ impl BatchWriter {
         tx_hash: &[u8],
         _output_index: i16,
         block_number: i64,
+        timestamp_ms: i64,
         batch: &mut StoreBatch,
     ) -> Result<()> {
         let existing = self.store.get_spore(&spore.spore_id)?;
@@ -92,8 +93,16 @@ impl BatchWriter {
                 // New spore: increment counts
                 agg.total_count += 1;
                 agg.live_count += 1;
+            } else {
+                // Re-insert (transfer) — increment hourly bucket for 24h tracking
+                let hour_bucket = timestamp_ms / 3_600_000;
+                let key = ckbadger_store::keys::encode_spore_hourly_key(cluster_id, hour_bucket);
+                let current = match self.store.get_cf(self.store.cf_stats(), &key)? {
+                    Some(v) if v.len() == 8 => i64::from_le_bytes(v[..8].try_into().unwrap()),
+                    _ => 0,
+                };
+                batch.put_spore_hourly_transfer(cluster_id, hour_bucket, current + 1);
             }
-            // else: re-insert (transfer) — counts stay the same
 
             // Track owner changes
             let old_owner = existing.as_ref().and_then(|e| e.owner_lock_hash.clone());

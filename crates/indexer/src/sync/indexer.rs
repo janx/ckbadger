@@ -2895,6 +2895,7 @@ impl Indexer {
                                 &tx_data.hash,
                                 output_index as i16,
                                 parsed.number,
+                                parsed.timestamp.timestamp_millis(),
                                 &mut nft_batch,
                             )?;
                             self.writer
@@ -2926,6 +2927,7 @@ impl Indexer {
                             &tx_data.hash,
                             output_index as i16,
                             parsed.number,
+                            parsed.timestamp.timestamp_millis(),
                             &mut nft_batch,
                         )?;
                     }
@@ -2937,6 +2939,7 @@ impl Indexer {
                             &tx_data.hash,
                             output_index as i16,
                             parsed.number,
+                            parsed.timestamp.timestamp_millis(),
                             &mut nft_batch,
                         )?;
                     }
@@ -3816,6 +3819,7 @@ impl Indexer {
                         let tx_slice =
                             &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
                         block_tx_idx += tx_count_for_block;
+                        let ts_ms = parsed.timestamp.timestamp_millis();
                         for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
                             let tx = &block_response.block.transactions[tx_idx];
                             if !skip_spore {
@@ -3835,6 +3839,7 @@ impl Indexer {
                                         &tx_data.hash,
                                         output_index as i16,
                                         parsed.number,
+                                        ts_ms,
                                         &mut batch,
                                     )?;
                                     writer.insert_spore_content(&spore.spore_id, &spore.content)?;
@@ -3868,6 +3873,7 @@ impl Indexer {
                                     &tx_data.hash,
                                     output_index as i16,
                                     parsed.number,
+                                    ts_ms,
                                     &mut batch,
                                 )?;
                             }
@@ -3879,6 +3885,7 @@ impl Indexer {
                                     &tx_data.hash,
                                     output_index as i16,
                                     parsed.number,
+                                    ts_ms,
                                     &mut batch,
                                 )?;
                             }
@@ -4650,6 +4657,7 @@ impl Indexer {
                     let tx_count_for_block = parsed.transactions_count as usize;
                     let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
                     block_tx_idx += tx_count_for_block;
+                    let ts_ms = parsed.timestamp.timestamp_millis();
                     for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
                         let tx = &block_response.block.transactions[tx_idx];
                         if !skip_spore {
@@ -4670,6 +4678,7 @@ impl Indexer {
                                     &tx_data.hash,
                                     output_index as i16,
                                     parsed.number,
+                                    ts_ms,
                                     &mut data_batch,
                                 )?;
                                 self.writer
@@ -4703,6 +4712,7 @@ impl Indexer {
                                 &tx_data.hash,
                                 output_index as i16,
                                 parsed.number,
+                                ts_ms,
                                 &mut data_batch,
                             )?;
                         }
@@ -4714,6 +4724,7 @@ impl Indexer {
                                 &tx_data.hash,
                                 output_index as i16,
                                 parsed.number,
+                                ts_ms,
                                 &mut data_batch,
                             )?;
                         }
