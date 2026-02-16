@@ -7,6 +7,12 @@ export interface StackedAreaDataPoint {
   values: Record<string, string>;
 }
 
+interface OverlayLine {
+  key: string;
+  label: string;
+  color: string;
+}
+
 interface StackedAreaChartProps {
   data: StackedAreaDataPoint[];
   series: {
@@ -17,6 +23,7 @@ interface StackedAreaChartProps {
   height?: number;
   interactive?: boolean;
   isPercentage?: boolean;
+  overlayLine?: OverlayLine;
 }
 
 function formatValue(val: number | undefined, isPercentage = false): string {
@@ -42,6 +49,7 @@ export function StackedAreaChart({
   height: chartHeightProp = 240,
   interactive = true,
   isPercentage = false,
+  overlayLine,
 }: StackedAreaChartProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
@@ -53,7 +61,10 @@ export function StackedAreaChart({
 
   const width = 600;
   const height = chartHeightProp;
-  const padding = useMemo(() => ({ top: 20, right: 20, bottom: 40, left: 70 }), []);
+  const padding = useMemo(
+    () => ({ top: 20, right: overlayLine ? 70 : 20, bottom: 40, left: 70 }),
+    [overlayLine]
+  );
   const chartWidth = width - padding.left - padding.right;
   const chartHeight = height - padding.top - padding.bottom;
 
@@ -86,6 +97,17 @@ export function StackedAreaChart({
     return max || 1;
   }, [stackedValues, isPercentage]);
 
+  const overlayValues = useMemo(() => {
+    if (!overlayLine) return null;
+    return data.map((d) => parseFloat(d.values[overlayLine.key] || '0') || 0);
+  }, [data, overlayLine]);
+
+  const overlayMaxVal = useMemo(() => {
+    if (!overlayValues) return 1;
+    const max = Math.max(...overlayValues) * 1.1;
+    return max || 1;
+  }, [overlayValues]);
+
   const xScale = useCallback(
     (i: number) => padding.left + (i / (data.length - 1 || 1)) * chartWidth,
     [data.length, padding.left, chartWidth]
@@ -94,6 +116,11 @@ export function StackedAreaChart({
   const yScale = useCallback(
     (v: number) => padding.top + chartHeight - (v / maxVal) * chartHeight,
     [padding.top, chartHeight, maxVal]
+  );
+
+  const yScaleOverlay = useCallback(
+    (v: number) => padding.top + chartHeight - (v / overlayMaxVal) * chartHeight,
+    [padding.top, chartHeight, overlayMaxVal]
   );
 
   const xScaleInverse = useCallback(
@@ -284,7 +311,17 @@ export function StackedAreaChart({
     return `${topPath} ${bottomPath} Z`;
   });
 
+  const overlayLinePath =
+    overlayValues && overlayValues.length > 0
+      ? overlayValues
+          .map((v, i) => `${i === 0 ? 'M' : 'L'} ${xScale(i)} ${yScaleOverlay(v)}`)
+          .join(' ')
+      : null;
+
   const yTicks = Array.from({ length: 5 }, (_, i) => (maxVal / 4) * i);
+  const overlayYTicks = overlayLine
+    ? Array.from({ length: 5 }, (_, i) => (overlayMaxVal / 4) * i)
+    : [];
 
   const xTickCount = Math.min(5, data.length);
   const xTicks = Array.from({ length: xTickCount }, (_, i) =>
@@ -363,6 +400,31 @@ export function StackedAreaChart({
           />
         ))}
 
+        {overlayLine && overlayLinePath && (
+          <path
+            d={overlayLinePath}
+            fill="none"
+            stroke={overlayLine.color}
+            strokeWidth="2"
+            strokeLinejoin="round"
+          />
+        )}
+
+        {overlayLine &&
+          overlayYTicks.map((tick, i) => (
+            <text
+              key={`oy-${i}`}
+              x={width - padding.right + 8}
+              y={yScaleOverlay(tick)}
+              textAnchor="start"
+              className="fill-slate-400 font-mono tabular-nums"
+              dominantBaseline="middle"
+              fontSize={10}
+            >
+              {formatAxisValue(tick)}
+            </text>
+          ))}
+
         {interactive && selectionStart !== null && selectionEnd !== null && (
           <rect
             x={xScale(selectionStart)}
@@ -406,7 +468,7 @@ export function StackedAreaChart({
               x={0}
               y={0}
               width={150}
-              height={20 + series.length * 14}
+              height={20 + series.length * 14 + (overlayLine ? 14 : 0)}
               rx={4}
               fill="#0f172a"
               fillOpacity={0.95}
@@ -435,6 +497,18 @@ export function StackedAreaChart({
                 </tspan>
               </text>
             ))}
+            {overlayLine && overlayValues && (
+              <text
+                x={8}
+                y={28 + series.length * 14}
+                className="fill-slate-400 font-mono tabular-nums"
+                fontSize={10}
+              >
+                <tspan fill={overlayLine.color}>━ </tspan>
+                <tspan>{overlayLine.label}: </tspan>
+                <tspan className="fill-white">{formatValue(overlayValues[hoverIndex])}</tspan>
+              </text>
+            )}
           </g>
         )}
       </svg>

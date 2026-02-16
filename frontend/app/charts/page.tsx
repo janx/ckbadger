@@ -240,6 +240,11 @@ export default function ChartsPage() {
     queryFn: () => api.getInflationRateChart(),
   });
 
+  const { data: hodlWave } = useQuery({
+    queryKey: ['chart-hodl-wave'],
+    queryFn: () => api.getHodlWaveChart(),
+  });
+
   return (
     <div className="min-h-screen bg-slate-950">
       <Header />
@@ -279,6 +284,7 @@ export default function ChartsPage() {
             defaultSeries="liveCells"
           />
           <LineChartPreview data={knowledgeSize} href="/charts/knowledge-size" />
+          <StackedAreaPreview data={hodlWave} href="/charts/hodl-wave" />
         </ChartSection>
 
         <ChartSection title="Economics">

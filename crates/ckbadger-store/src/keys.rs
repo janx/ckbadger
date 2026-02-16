@@ -112,6 +112,7 @@ pub mod stats_prefix {
     pub const DAO_DAILY_SNAPSHOT: u8 = 0x08;
     pub const TOKEN_TRANSFERS: u8 = 0x09;
     pub const TOKEN_HOURLY: u8 = 0x0A;
+    pub const HODL_WAVE: u8 = 0x0B;
 }
 
 // Flat re-exports for convenience
@@ -125,6 +126,7 @@ pub const STATS_PREFIX_DAILY_BLOCK: u8 = stats_prefix::DAILY_BLOCK;
 pub const STATS_PREFIX_DAO_DAILY_SNAPSHOT: u8 = stats_prefix::DAO_DAILY_SNAPSHOT;
 pub const STATS_PREFIX_TOKEN_TRANSFERS: u8 = stats_prefix::TOKEN_TRANSFERS;
 pub const STATS_PREFIX_TOKEN_HOURLY: u8 = stats_prefix::TOKEN_HOURLY;
+pub const STATS_PREFIX_HODL_WAVE: u8 = stats_prefix::HODL_WAVE;
 
 /// Token transfers total count key: prefix(1B) + type_hash(32B) = 33 bytes
 pub fn encode_token_transfers_key(type_hash: &[u8]) -> Vec<u8> {
@@ -237,6 +239,7 @@ pub mod sync_meta_keys {
     pub const SYNC_STATUS: &[u8] = b"sync_status";
     pub const DEEP_FORK: &[u8] = b"deep_fork";
     pub const REORG_EVENTS: &[u8] = b"reorg_events";
+    pub const HODL_TRACKER: &[u8] = b"hodl_tracker";
 }
 
 #[cfg(test)]

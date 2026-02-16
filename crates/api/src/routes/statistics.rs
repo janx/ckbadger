@@ -57,6 +57,7 @@ pub fn routes() -> Router<Arc<AppState>> {
             get(get_secondary_issuance_chart),
         )
         .route("/charts/inflation-rate", get(get_inflation_rate_chart))
+        .route("/charts/hodl-wave", get(get_hodl_wave_chart))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1500,4 +1501,122 @@ fn estimated_total_supply(date_str: &str) -> Option<f64> {
 
     let secondary_issued = SECONDARY_PER_YEAR * years;
     Some(GENESIS_SUPPLY + primary_issued + secondary_issued)
+}
+
+/// Format YYYYMMDD date key to YYYY-MM-DD for chart display.
+fn format_date_key(date_key: &str) -> String {
+    if date_key.len() == 8 {
+        format!(
+            "{}-{}-{}",
+            &date_key[0..4],
+            &date_key[4..6],
+            &date_key[6..8]
+        )
+    } else {
+        date_key.to_string()
+    }
+}
+
+async fn get_hodl_wave_chart(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<StackedAreaChartResponse> {
+    let cache_key = "chart:hodl-wave";
+    if let Some(cached) = state.cache.get::<StackedAreaChartResponse>(cache_key).await {
+        return ok(cached);
+    }
+
+    let waves = state
+        .store
+        .list_hodl_waves()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let data: Vec<StackedAreaDataPoint> = waves
+        .iter()
+        .map(|(date, w)| {
+            let total = (w.band_24h
+                + w.band_1d_1w
+                + w.band_1w_1m
+                + w.band_1m_3m
+                + w.band_3m_6m
+                + w.band_6m_1y
+                + w.band_1y_3y
+                + w.band_gt_3y) as f64;
+            let pct = |v: i128| -> String {
+                if total > 0.0 {
+                    format!("{:.2}", v as f64 / total * 100.0)
+                } else {
+                    "0".to_string()
+                }
+            };
+
+            let mut values = std::collections::HashMap::new();
+            values.insert("24h".to_string(), pct(w.band_24h));
+            values.insert("1d1w".to_string(), pct(w.band_1d_1w));
+            values.insert("1w1m".to_string(), pct(w.band_1w_1m));
+            values.insert("1m3m".to_string(), pct(w.band_1m_3m));
+            values.insert("3m6m".to_string(), pct(w.band_3m_6m));
+            values.insert("6m1y".to_string(), pct(w.band_6m_1y));
+            values.insert("1y3y".to_string(), pct(w.band_1y_3y));
+            values.insert("gt3y".to_string(), pct(w.band_gt_3y));
+            values.insert("holderCount".to_string(), w.holder_count.to_string());
+
+            StackedAreaDataPoint {
+                date: format_date_key(date),
+                values,
+            }
+        })
+        .collect();
+
+    let series = vec![
+        StackedAreaSeries {
+            key: "gt3y".to_string(),
+            label: "> 3y".to_string(),
+            color: "#a78bfa".to_string(),
+        },
+        StackedAreaSeries {
+            key: "1y3y".to_string(),
+            label: "1y-3y".to_string(),
+            color: "#67e8f9".to_string(),
+        },
+        StackedAreaSeries {
+            key: "6m1y".to_string(),
+            label: "6m-1y".to_string(),
+            color: "#22c55e".to_string(),
+        },
+        StackedAreaSeries {
+            key: "3m6m".to_string(),
+            label: "3m-6m".to_string(),
+            color: "#d4e157".to_string(),
+        },
+        StackedAreaSeries {
+            key: "1m3m".to_string(),
+            label: "1m-3m".to_string(),
+            color: "#f59e0b".to_string(),
+        },
+        StackedAreaSeries {
+            key: "1w1m".to_string(),
+            label: "1w-1m".to_string(),
+            color: "#f87171".to_string(),
+        },
+        StackedAreaSeries {
+            key: "1d1w".to_string(),
+            label: "1d-1w".to_string(),
+            color: "#4ade80".to_string(),
+        },
+        StackedAreaSeries {
+            key: "24h".to_string(),
+            label: "24h".to_string(),
+            color: "#6366f1".to_string(),
+        },
+    ];
+
+    let response = StackedAreaChartResponse {
+        data,
+        series,
+        title: "CKB HODL Wave".to_string(),
+    };
+
+    state.cache.set(cache_key, &response, CacheTtl::CHART).await;
+
+    ok(response)
 }

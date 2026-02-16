@@ -645,6 +645,61 @@ impl CkbadgerStore {
         Ok(written)
     }
 
+    // ---- HODL wave snapshots ----
+
+    pub fn put_hodl_wave(&self, date: &str, wave: &DailyHodlWave) -> anyhow::Result<()> {
+        let key = keys::encode_stats_key(stats_prefix::HODL_WAVE, date.as_bytes());
+        let value = bincode::serialize(wave)?;
+        self.put_cf(self.cf_stats(), &key, &value)
+    }
+
+    pub fn get_hodl_wave(&self, date: &str) -> anyhow::Result<Option<DailyHodlWave>> {
+        let key = keys::encode_stats_key(stats_prefix::HODL_WAVE, date.as_bytes());
+        match self.get_cf(self.cf_stats(), &key)? {
+            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn list_hodl_waves(&self) -> anyhow::Result<Vec<(String, DailyHodlWave)>> {
+        let prefix = [stats_prefix::HODL_WAVE];
+        let iter = self.prefix_iterator_cf(self.cf_stats(), &prefix);
+        let mut results = Vec::new();
+
+        for item in iter.flatten() {
+            let (key, value) = item;
+            if !key.starts_with(&prefix) {
+                break;
+            }
+            if let Ok(wave) = bincode::deserialize::<DailyHodlWave>(&value) {
+                let date = String::from_utf8_lossy(&key[1..]).to_string();
+                results.push((date, wave));
+            }
+        }
+        Ok(results)
+    }
+
+    // ---- HODL tracker state persistence ----
+
+    pub fn get_hodl_tracker_state(&self) -> anyhow::Result<Option<HodlTrackerState>> {
+        match self.get_cf(
+            self.cf_sync_meta(),
+            crate::keys::sync_meta_keys::HODL_TRACKER,
+        )? {
+            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn put_hodl_tracker_state(&self, state: &HodlTrackerState) -> anyhow::Result<()> {
+        let value = bincode::serialize(state)?;
+        self.put_cf(
+            self.cf_sync_meta(),
+            crate::keys::sync_meta_keys::HODL_TRACKER,
+            &value,
+        )
+    }
+
     // ---- Script info ----
 
     pub fn get_script_info(&self, code_hash: &[u8]) -> anyhow::Result<Option<ScriptInfo>> {
@@ -674,5 +729,103 @@ impl CkbadgerStore {
             }
         }
         Ok(results)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::CkbadgerStore;
+
+    #[test]
+    fn test_hodl_wave_put_get_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap();
+
+        let wave = DailyHodlWave {
+            band_24h: 100_000_000,
+            band_1d_1w: 200_000_000,
+            band_1w_1m: 300_000_000,
+            band_1m_3m: 400_000_000,
+            band_3m_6m: 500_000_000,
+            band_6m_1y: 600_000_000,
+            band_1y_3y: 700_000_000,
+            band_gt_3y: 800_000_000,
+            holder_count: 42_000,
+        };
+
+        store.put_hodl_wave("20240115", &wave).unwrap();
+
+        let retrieved = store.get_hodl_wave("20240115").unwrap().unwrap();
+        assert_eq!(retrieved.band_24h, 100_000_000);
+        assert_eq!(retrieved.band_gt_3y, 800_000_000);
+        assert_eq!(retrieved.holder_count, 42_000);
+
+        // Non-existent date returns None
+        assert!(store.get_hodl_wave("20240116").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_hodl_wave_list_sorted() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap();
+
+        let wave1 = DailyHodlWave {
+            band_24h: 100,
+            holder_count: 10,
+            ..Default::default()
+        };
+        let wave2 = DailyHodlWave {
+            band_24h: 200,
+            holder_count: 20,
+            ..Default::default()
+        };
+        let wave3 = DailyHodlWave {
+            band_24h: 300,
+            holder_count: 30,
+            ..Default::default()
+        };
+
+        // Insert out of order
+        store.put_hodl_wave("20240115", &wave2).unwrap();
+        store.put_hodl_wave("20240113", &wave1).unwrap();
+        store.put_hodl_wave("20240117", &wave3).unwrap();
+
+        let waves = store.list_hodl_waves().unwrap();
+        assert_eq!(waves.len(), 3);
+        // RocksDB prefix scan returns sorted by key
+        assert_eq!(waves[0].0, "20240113");
+        assert_eq!(waves[0].1.band_24h, 100);
+        assert_eq!(waves[1].0, "20240115");
+        assert_eq!(waves[1].1.band_24h, 200);
+        assert_eq!(waves[2].0, "20240117");
+        assert_eq!(waves[2].1.band_24h, 300);
+    }
+
+    #[test]
+    fn test_hodl_tracker_state_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap();
+
+        // Initially none
+        assert!(store.get_hodl_tracker_state().unwrap().is_none());
+
+        let state = HodlTrackerState {
+            capacity_by_date: vec![
+                ("20240101".to_string(), 1_000_000),
+                ("20240102".to_string(), 2_000_000),
+            ],
+            date_transitions: vec![(0, "20240101".to_string()), (100, "20240102".to_string())],
+            holder_count: 500,
+            last_snapshot_date: Some("20240102".to_string()),
+        };
+
+        store.put_hodl_tracker_state(&state).unwrap();
+
+        let retrieved = store.get_hodl_tracker_state().unwrap().unwrap();
+        assert_eq!(retrieved.capacity_by_date.len(), 2);
+        assert_eq!(retrieved.holder_count, 500);
+        assert_eq!(retrieved.last_snapshot_date, Some("20240102".to_string()));
+        assert_eq!(retrieved.date_transitions[1].0, 100);
     }
 }

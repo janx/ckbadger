@@ -469,6 +469,31 @@ pub struct ScriptInfo {
 }
 
 // ============================================
+// Group G2: HODL Wave
+// ============================================
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DailyHodlWave {
+    pub band_24h: i128,
+    pub band_1d_1w: i128,
+    pub band_1w_1m: i128,
+    pub band_1m_3m: i128,
+    pub band_3m_6m: i128,
+    pub band_6m_1y: i128,
+    pub band_1y_3y: i128,
+    pub band_gt_3y: i128,
+    pub holder_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HodlTrackerState {
+    pub capacity_by_date: Vec<(String, i128)>,
+    pub date_transitions: Vec<(i64, String)>,
+    pub holder_count: i64,
+    pub last_snapshot_date: Option<String>,
+}
+
+// ============================================
 // Group H: System
 // ============================================
 

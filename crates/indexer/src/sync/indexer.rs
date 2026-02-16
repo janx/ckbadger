@@ -20,6 +20,7 @@ use ckbadger_store::CkbadgerStore;
 
 use crate::cache::CacheInvalidator;
 use crate::config::{Config, DEEP_FORK_DEPTH};
+use crate::db::writer::hodl_wave::HodlWaveTracker;
 use crate::db::{
     rebuild_activities, rebuild_cell_indices, BatchWriter, ReorgResult, Repository,
     SecondaryIssuanceBreakdown,
@@ -308,6 +309,7 @@ pub struct Indexer {
     address_balances_deferred: std::sync::atomic::AtomicBool,
     activities_deferred: std::sync::atomic::AtomicBool,
     ckb_store: Option<Arc<CkbChainReader>>,
+    hodl_tracker: std::sync::Mutex<HodlWaveTracker>,
 }
 
 impl Indexer {
@@ -357,6 +359,22 @@ impl Indexer {
             );
         }
 
+        let hodl_tracker = match store.get_hodl_tracker_state()? {
+            Some(state) => {
+                info!(
+                    "Restored HODL tracker: {} date entries, {} transitions, holder_count={}",
+                    state.capacity_by_date.len(),
+                    state.date_transitions.len(),
+                    state.holder_count,
+                );
+                HodlWaveTracker::from_state(state)
+            }
+            None => {
+                info!("Starting fresh HODL wave tracker");
+                HodlWaveTracker::new()
+            }
+        };
+
         Ok(Self {
             config,
             rpc,
@@ -379,6 +397,7 @@ impl Indexer {
             ),
             activities_deferred: std::sync::atomic::AtomicBool::new(activities_deferred),
             ckb_store,
+            hodl_tracker: std::sync::Mutex::new(hodl_tracker),
         })
     }
 
@@ -2978,6 +2997,16 @@ impl Indexer {
                 batch.commit()?;
             }
         }
+
+        // HODL wave tracker update
+        self.update_hodl_wave(
+            &all_parsed_blocks,
+            &all_tx_data,
+            &input_cell_info,
+            &batch_cell_infos,
+            &address_balance_changes,
+        )?;
+
         if let Some((block_number, ref block_hash)) = batch_stats.last_block {
             let ema_rate = self.progress.ema_blocks_per_second();
             let ema_rate_opt = if ema_rate > 0.0 { Some(ema_rate) } else { None };
@@ -5041,6 +5070,15 @@ impl Indexer {
             }
         }
 
+        // HODL wave tracker update
+        self.update_hodl_wave(
+            all_parsed_blocks,
+            &all_tx_data,
+            &input_cell_info,
+            &batch_cell_infos,
+            &address_balance_changes,
+        )?;
+
         // Lightweight async cache update (no DB write)
         if let Some((block_number, ref block_hash)) = batch_stats.last_block {
             let ema_rate = self.progress.ema_blocks_per_second();
@@ -5271,6 +5309,89 @@ impl Indexer {
                 }
             }
         }
+
+        Ok(())
+    }
+
+    // === update_hodl_wave ===
+
+    /// Feed parsed block data into the HODL wave tracker and write snapshots at day boundaries.
+    fn update_hodl_wave(
+        &self,
+        all_parsed_blocks: &[crate::parser::block::ParsedBlock],
+        all_tx_data: &[TxData],
+        input_cell_info: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
+        batch_cell_infos: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
+        address_balance_changes: &HashMap<Vec<u8>, (i64, i32, i32, i64, i64, Vec<u8>, i64)>,
+    ) -> Result<()> {
+        let mut tracker = self.hodl_tracker.lock().unwrap();
+        let store = self.writer.store();
+
+        // Phase 1: Record block dates and cell creates/consumes
+        let mut block_tx_idx = 0usize;
+        for parsed in all_parsed_blocks {
+            let block_date = parsed.timestamp.date_naive();
+            tracker.record_block_date(parsed.number, block_date);
+
+            let tx_count = parsed.transactions_count as usize;
+            let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count];
+            block_tx_idx += tx_count;
+
+            for tx_data in tx_slice {
+                // Cell creates
+                for cell in &tx_data.cells {
+                    tracker.cell_created(block_date, cell.capacity);
+                }
+                // Cell consumes
+                if !tx_data.is_cellbase {
+                    for input in &tx_data.inputs {
+                        let key = (
+                            input.previous_tx_hash.to_vec(),
+                            input.previous_output_index as i16,
+                        );
+                        let info = input_cell_info
+                            .get(&key)
+                            .or_else(|| batch_cell_infos.get(&key));
+                        if let Some(info) = info {
+                            tracker.cell_consumed(info.created_at_block, info.capacity);
+                        }
+                    }
+                }
+            }
+
+            // Check for day boundary and write snapshot
+            if let Some((snapshot_date, snapshot)) = tracker.maybe_snapshot(block_date) {
+                let date_str = snapshot_date.format("%Y%m%d").to_string();
+                store.put_hodl_wave(&date_str, &snapshot)?;
+            }
+        }
+
+        // Phase 2: Update holder count from address balance changes
+        // Each entry: (balance_delta, live_delta, total_delta, tx_delta, block_num, tx_hash, occupied_delta)
+        for (
+            lock_hash,
+            (
+                _balance_delta,
+                live_delta,
+                _total_delta,
+                _tx_delta,
+                _block_num,
+                _tx_hash,
+                _occupied_delta,
+            ),
+        ) in address_balance_changes
+        {
+            let prev_balance = store.get_addr_balance(lock_hash)?;
+            let old_live = prev_balance
+                .as_ref()
+                .map(|b| b.live_cells_count)
+                .unwrap_or(0);
+            let new_live = (old_live + *live_delta).max(0);
+            tracker.update_holder_count(old_live, new_live);
+        }
+
+        // Phase 3: Persist tracker state
+        store.put_hodl_tracker_state(&tracker.to_state())?;
 
         Ok(())
     }

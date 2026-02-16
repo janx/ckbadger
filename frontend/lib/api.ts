@@ -1316,6 +1316,10 @@ export const api = {
     return fetchApi('/charts/inflation-rate');
   },
 
+  getHodlWaveChart: (): Promise<StackedAreaChartResponse> => {
+    return fetchApi('/charts/hodl-wave');
+  },
+
   getMempoolInfo: (): Promise<MempoolInfo> => {
     return fetchApi('/mempool/info');
   },

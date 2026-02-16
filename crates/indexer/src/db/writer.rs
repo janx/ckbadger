@@ -10,6 +10,7 @@ mod cells;
 mod core;
 mod dao;
 mod dotbit;
+pub mod hodl_wave;
 mod inputs;
 mod mnft;
 mod reorg;

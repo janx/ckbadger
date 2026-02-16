@@ -25,6 +25,7 @@ vi.mock('@/lib/api', () => ({
     getNominalApcChart: vi.fn(),
     getSecondaryIssuanceChart: vi.fn(),
     getInflationRateChart: vi.fn(),
+    getHodlWaveChart: vi.fn(),
   },
 }));
 
@@ -139,6 +140,7 @@ describe('ChartsPage', () => {
     vi.mocked(api.getNominalApcChart).mockResolvedValue(mockChartResponse);
     vi.mocked(api.getSecondaryIssuanceChart).mockResolvedValue(mockStackedAreaResponse);
     vi.mocked(api.getInflationRateChart).mockResolvedValue(mockChartResponse);
+    vi.mocked(api.getHodlWaveChart).mockResolvedValue(mockStackedAreaResponse);
   });
 
   it('renders the page with header and title', async () => {
