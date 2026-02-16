@@ -1,5 +1,7 @@
 //! Token operations.
 
+use std::collections::HashMap;
+
 use crate::keys;
 use crate::store::CkbadgerStore;
 use crate::types::{TokenInfo, TokenTransferRecord};
@@ -79,6 +81,40 @@ impl CkbadgerStore {
             }
         }
         Ok(total)
+    }
+
+    /// Scan ALL hourly transfer entries in one pass and group by type_hash.
+    /// Returns a map of type_hash → 24h transfer count.
+    /// Much faster than calling `get_token_24h_transfers` per-token (N+1).
+    pub fn scan_all_token_24h_transfers(
+        &self,
+        now_ms: i64,
+    ) -> anyhow::Result<HashMap<Vec<u8>, i64>> {
+        let current_hour = now_ms / 3_600_000;
+        let cutoff_hour = current_hour - 24;
+
+        // Scan all entries with the TOKEN_HOURLY prefix (0x0A)
+        let prefix = [keys::STATS_PREFIX_TOKEN_HOURLY];
+        let iter = self.prefix_iterator_cf(self.cf_stats(), &prefix);
+        let mut result: HashMap<Vec<u8>, i64> = HashMap::new();
+
+        for item in iter.flatten() {
+            let (key, value) = item;
+            if key.first() != Some(&keys::STATS_PREFIX_TOKEN_HOURLY) {
+                break;
+            }
+            // Key: prefix(1B) + type_hash(32B) + hour_bucket(8B) = 41 bytes
+            if key.len() == 41 && value.len() == 8 {
+                let hour = i64::from_be_bytes(key[33..41].try_into().unwrap());
+                if hour > cutoff_hour {
+                    let type_hash = key[1..33].to_vec();
+                    let count = i64::from_le_bytes(value[..8].try_into().unwrap());
+                    *result.entry(type_hash).or_insert(0) += count;
+                }
+            }
+        }
+
+        Ok(result)
     }
 
     /// Delete hourly buckets older than the cutoff hour for a given token.
@@ -328,6 +364,73 @@ mod tests {
             store.get_token_24h_transfers(&type_hash, now_ms).unwrap(),
             10 // only current_hour is within 24h window (current_hour - 24 == cutoff, excluded)
         );
+    }
+
+    #[test]
+    fn test_scan_all_token_24h_transfers_empty() {
+        let (_dir, store) = test_store();
+        let now_ms = 1_700_000_000_000i64;
+        let result = store.scan_all_token_24h_transfers(now_ms).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_scan_all_token_24h_transfers_multiple_tokens() {
+        let (_dir, store) = test_store();
+        let hash_a = [0x0Au8; 32];
+        let hash_b = [0x0Bu8; 32];
+        let now_ms = 1_700_000_000_000i64;
+        let current_hour = now_ms / 3_600_000;
+
+        let mut batch = StoreBatch::new(&store);
+        // Token A: 2 recent buckets
+        batch.put_token_hourly_transfer(&hash_a, current_hour, 10);
+        batch.put_token_hourly_transfer(&hash_a, current_hour - 5, 20);
+        // Token B: 1 recent bucket
+        batch.put_token_hourly_transfer(&hash_b, current_hour - 1, 15);
+        batch.commit().unwrap();
+
+        let result = store.scan_all_token_24h_transfers(now_ms).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(*result.get(hash_a.as_slice()).unwrap(), 30);
+        assert_eq!(*result.get(hash_b.as_slice()).unwrap(), 15);
+    }
+
+    #[test]
+    fn test_scan_all_token_24h_transfers_excludes_old() {
+        let (_dir, store) = test_store();
+        let hash_a = [0x0Au8; 32];
+        let now_ms = 1_700_000_000_000i64;
+        let current_hour = now_ms / 3_600_000;
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_token_hourly_transfer(&hash_a, current_hour, 10);
+        // Exactly at cutoff — excluded
+        batch.put_token_hourly_transfer(&hash_a, current_hour - 24, 20);
+        // Old — excluded
+        batch.put_token_hourly_transfer(&hash_a, current_hour - 48, 30);
+        batch.commit().unwrap();
+
+        let result = store.scan_all_token_24h_transfers(now_ms).unwrap();
+        assert_eq!(*result.get(hash_a.as_slice()).unwrap(), 10);
+    }
+
+    #[test]
+    fn test_scan_all_matches_per_token() {
+        let (_dir, store) = test_store();
+        let hash_a = [0x0Au8; 32];
+        let now_ms = 1_700_000_000_000i64;
+        let current_hour = now_ms / 3_600_000;
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_token_hourly_transfer(&hash_a, current_hour, 10);
+        batch.put_token_hourly_transfer(&hash_a, current_hour - 12, 20);
+        batch.commit().unwrap();
+
+        // Compare scan result with per-token result
+        let scan_result = store.scan_all_token_24h_transfers(now_ms).unwrap();
+        let per_token = store.get_token_24h_transfers(&hash_a, now_ms).unwrap();
+        assert_eq!(*scan_result.get(hash_a.as_slice()).unwrap(), per_token);
     }
 
     #[test]

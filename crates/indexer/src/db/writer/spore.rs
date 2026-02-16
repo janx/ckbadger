@@ -34,6 +34,16 @@ impl BatchWriter {
             extra: DobExtra::SporeCluster,
         };
         batch.put_spore(&cluster.cluster_id, &entry);
+
+        // Update cluster aggregate with name/description
+        let mut agg = self
+            .store
+            .get_cluster_aggregate(&cluster.cluster_id)?
+            .unwrap_or_default();
+        agg.name = cluster.name.clone();
+        agg.description = cluster.description.clone();
+        batch.put_cluster_aggregate(&cluster.cluster_id, &agg);
+
         Ok(())
     }
 
@@ -71,6 +81,48 @@ impl BatchWriter {
         // Write spore-by-cluster secondary index
         if let Some(ref cluster_id) = spore.cluster_id {
             batch.put_spore_by_cluster(cluster_id, &spore.spore_id);
+
+            // Update cluster aggregate
+            let mut agg = self
+                .store
+                .get_cluster_aggregate(cluster_id)?
+                .unwrap_or_default();
+
+            if existing.is_none() {
+                // New spore: increment counts
+                agg.total_count += 1;
+                agg.live_count += 1;
+            }
+            // else: re-insert (transfer) — counts stay the same
+
+            // Track owner changes
+            let old_owner = existing.as_ref().and_then(|e| e.owner_lock_hash.clone());
+            let new_owner = Some(spore.owner_lock_hash.clone());
+
+            if old_owner != new_owner {
+                // Decrement old owner's count
+                if let Some(ref old_lock) = old_owner {
+                    let old_count = self.store.get_cluster_owner_count(cluster_id, old_lock)?;
+                    let new_count = old_count - 1;
+                    if new_count <= 0 {
+                        batch.delete_cluster_owner(cluster_id, old_lock);
+                        agg.owner_count -= 1;
+                    } else {
+                        batch.put_cluster_owner_count(cluster_id, old_lock, new_count);
+                    }
+                }
+
+                // Increment new owner's count
+                if let Some(ref new_lock) = new_owner {
+                    let cur_count = self.store.get_cluster_owner_count(cluster_id, new_lock)?;
+                    if cur_count == 0 {
+                        agg.owner_count += 1;
+                    }
+                    batch.put_cluster_owner_count(cluster_id, new_lock, cur_count + 1);
+                }
+            }
+
+            batch.put_cluster_aggregate(cluster_id, &agg);
         }
 
         Ok(())
@@ -90,9 +142,32 @@ impl BatchWriter {
         batch: &mut StoreBatch,
     ) -> Result<()> {
         if let Some(mut entry) = self.store.get_spore(spore_id)? {
+            let old_owner = entry.owner_lock_hash.clone();
+            let cluster_id = entry.collection_id.clone();
+
             entry.is_live = false;
             entry.owner_lock_hash = None;
             batch.put_spore(spore_id, &entry);
+
+            // Update cluster aggregate
+            if let Some(ref cid) = cluster_id {
+                let mut agg = self.store.get_cluster_aggregate(cid)?.unwrap_or_default();
+                agg.live_count -= 1;
+
+                // Decrement old owner's count
+                if let Some(ref old_lock) = old_owner {
+                    let old_count = self.store.get_cluster_owner_count(cid, old_lock)?;
+                    let new_count = old_count - 1;
+                    if new_count <= 0 {
+                        batch.delete_cluster_owner(cid, old_lock);
+                        agg.owner_count -= 1;
+                    } else {
+                        batch.put_cluster_owner_count(cid, old_lock, new_count);
+                    }
+                }
+
+                batch.put_cluster_aggregate(cid, &agg);
+            }
         }
         Ok(())
     }

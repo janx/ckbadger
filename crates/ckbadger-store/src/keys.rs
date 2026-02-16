@@ -113,6 +113,7 @@ pub mod stats_prefix {
     pub const TOKEN_TRANSFERS: u8 = 0x09;
     pub const TOKEN_HOURLY: u8 = 0x0A;
     pub const HODL_WAVE: u8 = 0x0B;
+    pub const CLUSTER_OWNER: u8 = 0x0C;
 }
 
 // Flat re-exports for convenience
@@ -127,6 +128,7 @@ pub const STATS_PREFIX_DAO_DAILY_SNAPSHOT: u8 = stats_prefix::DAO_DAILY_SNAPSHOT
 pub const STATS_PREFIX_TOKEN_TRANSFERS: u8 = stats_prefix::TOKEN_TRANSFERS;
 pub const STATS_PREFIX_TOKEN_HOURLY: u8 = stats_prefix::TOKEN_HOURLY;
 pub const STATS_PREFIX_HODL_WAVE: u8 = stats_prefix::HODL_WAVE;
+pub const STATS_PREFIX_CLUSTER_OWNER: u8 = stats_prefix::CLUSTER_OWNER;
 
 /// Token transfers total count key: prefix(1B) + type_hash(32B) = 33 bytes
 pub fn encode_token_transfers_key(type_hash: &[u8]) -> Vec<u8> {
@@ -171,6 +173,29 @@ pub fn decode_token_transfer_key(key: &[u8]) -> (i64, i32) {
     let block_num = i64::MAX - block_desc;
     let tx_idx = i32::from_be_bytes(key[40..44].try_into().unwrap());
     (block_num, tx_idx)
+}
+
+/// Cluster owner key: prefix(1B) + cluster_id(32B) + lock_hash(32B) = 65 bytes
+/// Stored in the stats CF. Value is i64 LE (live spore count for this owner).
+pub const CLUSTER_OWNER_KEY_SIZE: usize = 65;
+
+pub fn encode_cluster_owner_key(
+    cluster_id: &[u8],
+    lock_hash: &[u8],
+) -> [u8; CLUSTER_OWNER_KEY_SIZE] {
+    let mut key = [0u8; CLUSTER_OWNER_KEY_SIZE];
+    key[0] = STATS_PREFIX_CLUSTER_OWNER;
+    key[1..33].copy_from_slice(&cluster_id[..32]);
+    key[33..65].copy_from_slice(&lock_hash[..32]);
+    key
+}
+
+/// Prefix for scanning all owners of a given cluster.
+pub fn encode_cluster_owner_prefix(cluster_id: &[u8]) -> [u8; 33] {
+    let mut prefix = [0u8; 33];
+    prefix[0] = STATS_PREFIX_CLUSTER_OWNER;
+    prefix[1..33].copy_from_slice(&cluster_id[..32]);
+    prefix
 }
 
 /// Spore-by-cluster key: cluster_id(32B) + spore_id(32B) = 64 bytes

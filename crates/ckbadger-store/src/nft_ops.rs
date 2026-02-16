@@ -2,7 +2,7 @@
 
 use crate::batch::StoreBatch;
 use crate::store::CkbadgerStore;
-use crate::types::{NftEntry, SporeEntry};
+use crate::types::{NftCollectionAggregate, NftEntry, SporeEntry};
 
 impl CkbadgerStore {
     pub fn get_spore(&self, id: &[u8]) -> anyhow::Result<Option<SporeEntry>> {
@@ -127,6 +127,33 @@ impl CkbadgerStore {
         Ok(count)
     }
 
+    /// Get pre-aggregated data for an NFT collection.
+    pub fn get_nft_collection_aggregate(
+        &self,
+        collection_id: &[u8],
+    ) -> anyhow::Result<Option<NftCollectionAggregate>> {
+        match self.get_cf(self.cf_nft_collection_agg(), collection_id)? {
+            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// List all NFT collection aggregates. Scans the small `nft_collection_agg` CF.
+    pub fn list_nft_collection_aggregates(
+        &self,
+    ) -> anyhow::Result<Vec<(Vec<u8>, NftCollectionAggregate)>> {
+        let iter = self.iterator_cf(self.cf_nft_collection_agg(), rocksdb::IteratorMode::Start);
+        let mut results = Vec::new();
+
+        for item in iter.flatten() {
+            let (key, value) = item;
+            if let Ok(agg) = bincode::deserialize::<NftCollectionAggregate>(&value) {
+                results.push((key.to_vec(), agg));
+            }
+        }
+        Ok(results)
+    }
+
     /// List all NFTs.
     pub fn list_nfts(&self, limit: usize) -> anyhow::Result<Vec<(Vec<u8>, NftEntry)>> {
         let iter = self.iterator_cf(self.cf_nft_data(), rocksdb::IteratorMode::Start);
@@ -142,5 +169,87 @@ impl CkbadgerStore {
             }
         }
         Ok(results)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::NftStandard;
+    use tempfile::TempDir;
+
+    fn test_store() -> (TempDir, CkbadgerStore) {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        (dir, store)
+    }
+
+    #[test]
+    fn test_get_nft_collection_aggregate_missing() {
+        let (_dir, store) = test_store();
+        let id = [0x01u8; 32];
+        assert!(store.get_nft_collection_aggregate(&id).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_put_and_get_nft_collection_aggregate() {
+        let (_dir, store) = test_store();
+        let id = [0x01u8; 32];
+        let agg = NftCollectionAggregate {
+            name: Some("Test mNFT Class".to_string()),
+            standard: NftStandard::MnftClass,
+            total_count: 50,
+            live_count: 42,
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_nft_collection_aggregate(&id, &agg);
+        batch.commit().unwrap();
+
+        let result = store.get_nft_collection_aggregate(&id).unwrap().unwrap();
+        assert_eq!(result.name.as_deref(), Some("Test mNFT Class"));
+        assert_eq!(result.standard, NftStandard::MnftClass);
+        assert_eq!(result.total_count, 50);
+        assert_eq!(result.live_count, 42);
+    }
+
+    #[test]
+    fn test_list_nft_collection_aggregates() {
+        let (_dir, store) = test_store();
+        let id_a = [0x01u8; 32];
+        let id_b = [0x02u8; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_nft_collection_aggregate(
+            &id_a,
+            &NftCollectionAggregate {
+                name: Some("Class A".to_string()),
+                standard: NftStandard::MnftClass,
+                total_count: 10,
+                live_count: 8,
+            },
+        );
+        batch.put_nft_collection_aggregate(
+            &id_b,
+            &NftCollectionAggregate {
+                name: Some("DotBit".to_string()),
+                standard: NftStandard::DotBit,
+                total_count: 100,
+                live_count: 90,
+            },
+        );
+        batch.commit().unwrap();
+
+        let results = store.list_nft_collection_aggregates().unwrap();
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn test_nft_collection_aggregate_default() {
+        let agg = NftCollectionAggregate::default();
+        assert!(agg.name.is_none());
+        assert_eq!(agg.standard, NftStandard::MnftClass);
+        assert_eq!(agg.total_count, 0);
+        assert_eq!(agg.live_count, 0);
     }
 }

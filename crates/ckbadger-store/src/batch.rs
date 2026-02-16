@@ -317,6 +317,37 @@ impl<'a> StoreBatch<'a> {
         self.batch.put_cf(self.store.cf_nft_data(), id, &value);
     }
 
+    // ---- Cluster aggregates ----
+
+    pub fn put_cluster_aggregate(&mut self, cluster_id: &[u8], agg: &ClusterAggregate) {
+        let value = bincode::serialize(agg).expect("serialize ClusterAggregate");
+        self.batch
+            .put_cf(self.store.cf_cluster_agg(), cluster_id, &value);
+    }
+
+    pub fn put_cluster_owner_count(&mut self, cluster_id: &[u8], lock_hash: &[u8], count: i64) {
+        let key = keys::encode_cluster_owner_key(cluster_id, lock_hash);
+        self.batch
+            .put_cf(self.store.cf_stats(), key, count.to_le_bytes());
+    }
+
+    pub fn delete_cluster_owner(&mut self, cluster_id: &[u8], lock_hash: &[u8]) {
+        let key = keys::encode_cluster_owner_key(cluster_id, lock_hash);
+        self.batch.delete_cf(self.store.cf_stats(), key);
+    }
+
+    // ---- NFT collection aggregates ----
+
+    pub fn put_nft_collection_aggregate(
+        &mut self,
+        collection_id: &[u8],
+        agg: &NftCollectionAggregate,
+    ) {
+        let value = bincode::serialize(agg).expect("serialize NftCollectionAggregate");
+        self.batch
+            .put_cf(self.store.cf_nft_collection_agg(), collection_id, &value);
+    }
+
     // ---- Activities ----
 
     pub fn put_activity(

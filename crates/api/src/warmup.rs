@@ -4,7 +4,6 @@ use crate::utils::shannon_to_ckb_u128;
 use crate::AppState;
 use ckbadger_common::dao::GENESIS_BURNT;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::info;
@@ -68,9 +67,6 @@ impl CachedAssetEntry {
 
 /// Background loop that refreshes the assets cache every 30 seconds.
 pub async fn refresh_assets_cache_loop(state: Arc<AppState>) {
-    // Small initial delay so the API can start serving immediately
-    tokio::time::sleep(Duration::from_secs(2)).await;
-
     loop {
         let state_clone = state.clone();
         let result =
@@ -103,20 +99,19 @@ fn hash_type_to_string(hash_type: u8) -> String {
 }
 
 /// Sync function that computes and caches all asset lists.
+/// Uses pre-aggregated CFs for DOBs and NFTs (fast reads instead of full scans).
+/// Uses a single scan for all token 24h transfers instead of N+1 per-token queries.
 fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
     let ttl = CacheTtl::ASSETS;
     let now_ms = chrono::Utc::now().timestamp_millis();
 
-    // -- Token assets --
+    // -- Token assets (2 scans: list_tokens + scan_all_token_24h_transfers) --
     let tokens = state.store.list_tokens()?;
+    let transfers_24h_map = state.store.scan_all_token_24h_transfers(now_ms)?;
     let mut token_assets: Vec<CachedAssetEntry> = Vec::with_capacity(tokens.len());
 
     for (hash, info) in &tokens {
-        let transfers_count = info.transfers_count;
-        let transfers_24h = state
-            .store
-            .get_token_24h_transfers(hash, now_ms)
-            .unwrap_or(0);
+        let transfers_24h = transfers_24h_map.get(hash.as_slice()).copied().unwrap_or(0);
 
         token_assets.push(CachedAssetEntry {
             id: format!("0x{}", hex::encode(hash)),
@@ -126,7 +121,7 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
             symbol: info.symbol.clone(),
             icon_url: info.icon_url.clone(),
             holders_count: info.holders_count,
-            transfers_count,
+            transfers_count: info.transfers_count,
             transfers_24h,
             decimals: info.decimals.map(|d| d as i16),
             total_supply: info.total_supply.map(|s| s.to_string()),
@@ -151,58 +146,32 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
         .mem_cache
         .set(CACHE_KEY_ASSETS_TOKEN, &token_assets, ttl);
 
-    // -- DOB (Spore) assets --
-    let spores = state.store.list_spores(10_000)?;
+    // -- DOB (Spore) assets from pre-aggregated cluster_agg CF --
+    let cluster_aggs = state.store.list_cluster_aggregates()?;
+    let mut dob_assets: Vec<CachedAssetEntry> = Vec::with_capacity(cluster_aggs.len());
 
-    struct ClusterAgg {
-        count: i64,
-        owners: HashSet<Vec<u8>>,
-    }
-
-    let mut cluster_map: HashMap<Vec<u8>, ClusterAgg> = HashMap::new();
-
-    for (id, entry) in &spores {
-        if entry.standard.is_cluster() {
+    for (cluster_id_bytes, agg) in &cluster_aggs {
+        if agg.total_count == 0 {
             continue;
         }
-        let cluster_id_bytes = entry.collection_id.clone().unwrap_or_else(|| id.clone());
-        let agg = cluster_map
-            .entry(cluster_id_bytes)
-            .or_insert_with(|| ClusterAgg {
-                count: 0,
-                owners: HashSet::new(),
-            });
-        agg.count += 1;
-        if entry.is_live {
-            if let Some(ref owner) = entry.owner_lock_hash {
-                agg.owners.insert(owner.clone());
-            }
-        }
-    }
-
-    let mut dob_assets: Vec<CachedAssetEntry> = Vec::new();
-
-    for (cluster_id_bytes, agg) in &cluster_map {
         let cluster_hex = format!("0x{}", hex::encode(cluster_id_bytes));
-        let cluster_entry = state.store.get_spore(cluster_id_bytes).ok().flatten();
-        let name = cluster_entry.as_ref().and_then(|e| e.name.clone());
 
         dob_assets.push(CachedAssetEntry {
             id: cluster_hex.clone(),
             asset_type: "dob".to_string(),
             standard: "spore".to_string(),
-            name: name.clone(),
+            name: agg.name.clone(),
             symbol: None,
             icon_url: None,
-            holders_count: agg.owners.len() as i64,
-            transfers_count: agg.count,
+            holders_count: agg.owner_count,
+            transfers_count: agg.total_count,
             transfers_24h: 0,
             decimals: None,
-            total_supply: Some(agg.count.to_string()),
+            total_supply: Some(agg.total_count.to_string()),
             content_type: None,
             content_size: None,
             cluster_id: Some(cluster_hex),
-            cluster_name: name,
+            cluster_name: agg.name.clone(),
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
@@ -218,49 +187,32 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
 
     state.mem_cache.set(CACHE_KEY_ASSETS_DOB, &dob_assets, ttl);
 
-    // -- NFT assets --
-    let nfts = state.store.list_nfts(10_000)?;
+    // -- NFT assets from pre-aggregated nft_collection_agg CF --
+    let nft_aggs = state.store.list_nft_collection_aggregates()?;
+    let mut nft_assets: Vec<CachedAssetEntry> = Vec::with_capacity(nft_aggs.len());
 
-    let mut collection_map: HashMap<
-        String,
-        (Option<String>, i64, bool, ckbadger_store::NftStandard),
-    > = HashMap::new();
-
-    for (id, entry) in &nfts {
-        let collection_hex = entry
-            .collection_id
-            .as_ref()
-            .map(|c| format!("0x{}", hex::encode(c)))
-            .unwrap_or_else(|| format!("0x{}", hex::encode(id)));
-
-        let counter = collection_map
-            .entry(collection_hex)
-            .or_insert_with(|| (entry.name.clone(), 0, entry.is_live, entry.standard));
-        counter.1 += 1;
-    }
-
-    let mut nft_assets: Vec<CachedAssetEntry> = Vec::new();
-
-    for (collection_hex, (name, count, is_live, standard)) in &collection_map {
-        if !is_live {
+    for (collection_id_bytes, agg) in &nft_aggs {
+        if agg.total_count == 0 {
             continue;
         }
+        let collection_hex = format!("0x{}", hex::encode(collection_id_bytes));
+
         nft_assets.push(CachedAssetEntry {
             id: collection_hex.clone(),
             asset_type: "nft".to_string(),
-            standard: standard.asset_standard().to_string(),
-            name: name.clone(),
+            standard: agg.standard.asset_standard().to_string(),
+            name: agg.name.clone(),
             symbol: None,
             icon_url: None,
-            holders_count: *count,
-            transfers_count: *count,
+            holders_count: agg.live_count,
+            transfers_count: agg.total_count,
             transfers_24h: 0,
             decimals: None,
-            total_supply: Some(count.to_string()),
+            total_supply: Some(agg.total_count.to_string()),
             content_type: None,
             content_size: None,
             cluster_id: Some(collection_hex.clone()),
-            cluster_name: name.clone(),
+            cluster_name: agg.name.clone(),
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,

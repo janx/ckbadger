@@ -43,6 +43,8 @@ pub const CF_CELL_BY_TYPE_CODE: &str = "cell_by_type_code";
 pub const CF_TOKEN_TRANSFERS: &str = "token_transfers";
 pub const CF_ACTIVITIES: &str = "activities";
 pub const CF_ADDR_DAILY_STATS: &str = "addr_daily_stats";
+pub const CF_CLUSTER_AGG: &str = "cluster_agg";
+pub const CF_NFT_COLLECTION_AGG: &str = "nft_collection_agg";
 
 /// All column family names, used during DB open.
 pub const ALL_CFS: &[&str] = &[
@@ -75,6 +77,8 @@ pub const ALL_CFS: &[&str] = &[
     CF_TOKEN_TRANSFERS,
     CF_ACTIVITIES,
     CF_ADDR_DAILY_STATS,
+    CF_CLUSTER_AGG,
+    CF_NFT_COLLECTION_AGG,
 ];
 
 pub struct CkbadgerStore {
@@ -368,6 +372,12 @@ impl CkbadgerStore {
     }
     pub fn cf_addr_daily_stats(&self) -> &ColumnFamily {
         self.cf(CF_ADDR_DAILY_STATS)
+    }
+    pub fn cf_cluster_agg(&self) -> &ColumnFamily {
+        self.cf(CF_CLUSTER_AGG)
+    }
+    pub fn cf_nft_collection_agg(&self) -> &ColumnFamily {
+        self.cf(CF_NFT_COLLECTION_AGG)
     }
 
     // ---- Raw DB operations ----

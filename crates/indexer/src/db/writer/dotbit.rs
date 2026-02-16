@@ -1,11 +1,15 @@
 use anyhow::Result;
 
 use ckbadger_store::batch::StoreBatch;
-use ckbadger_store::types::{NftEntry, NftExtra, NftStandard};
+use ckbadger_store::types::{NftCollectionAggregate, NftEntry, NftExtra, NftStandard};
 
 use crate::parser::dotbit::ParsedDotbitAccount;
 
 use super::BatchWriter;
+
+/// Sentinel collection key for DotBit accounts (which have no collection_id).
+/// 32-byte key: "dotbit_collection_______________" (padded to 32 bytes).
+const DOTBIT_SENTINEL_COLLECTION: [u8; 32] = *b"dotbit_collection_______________";
 
 impl BatchWriter {
     pub fn insert_dotbit_account(
@@ -35,6 +39,22 @@ impl BatchWriter {
             },
         };
         batch.put_nft(&account.account_id, &entry);
+
+        // Update collection aggregate if this is a new account
+        if existing.is_none() {
+            let mut agg = self
+                .store
+                .get_nft_collection_aggregate(&DOTBIT_SENTINEL_COLLECTION)?
+                .unwrap_or_else(|| NftCollectionAggregate {
+                    name: Some(".bit".to_string()),
+                    standard: NftStandard::DotBit,
+                    ..Default::default()
+                });
+            agg.total_count += 1;
+            agg.live_count += 1;
+            batch.put_nft_collection_aggregate(&DOTBIT_SENTINEL_COLLECTION, &agg);
+        }
+
         let _ = tx_hash;
         Ok(())
     }
@@ -50,6 +70,14 @@ impl BatchWriter {
             entry.is_live = false;
             entry.owner_lock_hash = None;
             batch.put_nft(account_id, &entry);
+
+            // Decrement collection's live_count
+            let mut agg = self
+                .store
+                .get_nft_collection_aggregate(&DOTBIT_SENTINEL_COLLECTION)?
+                .unwrap_or_default();
+            agg.live_count -= 1;
+            batch.put_nft_collection_aggregate(&DOTBIT_SENTINEL_COLLECTION, &agg);
         }
         Ok(())
     }

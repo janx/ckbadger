@@ -217,9 +217,10 @@ pub struct TokenTransferRecord {
 ///
 /// DOB is an asset type on CKB. Each variant represents a specific standard
 /// or entity type within the DOB ecosystem.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum DobStandard {
     /// A Spore item (individual DOB).
+    #[default]
     Spore,
     /// A Spore cluster (collection of Spores).
     SporeCluster,
@@ -292,11 +293,12 @@ pub type SporeEntry = DobEntry;
 ///
 /// NFT is an asset type on CKB, separate from DOB. Each variant represents
 /// a specific standard or entity type within the NFT ecosystem.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum NftStandard {
     /// mNFT issuer (top-level entity that creates classes).
     MnftIssuer,
     /// mNFT class (a collection of mNFT tokens).
+    #[default]
     MnftClass,
     /// mNFT token (individual NFT item).
     MnftToken,
@@ -374,6 +376,25 @@ pub struct NftEntry {
     pub created_at_block: i64,
     /// Standard-specific payload (bincode-serialized, no JSON).
     pub extra: NftExtra,
+}
+
+/// Pre-aggregated cluster (DOB collection) data, maintained inline by the indexer.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ClusterAggregate {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub total_count: i64,
+    pub live_count: i64,
+    pub owner_count: i64,
+}
+
+/// Pre-aggregated NFT collection data, maintained inline by the indexer.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NftCollectionAggregate {
+    pub name: Option<String>,
+    pub standard: NftStandard,
+    pub total_count: i64,
+    pub live_count: i64,
 }
 
 // ============================================
