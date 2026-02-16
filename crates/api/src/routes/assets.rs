@@ -22,7 +22,6 @@ pub struct ListParams {
     limit: i64,
     #[serde(rename = "type")]
     asset_type: Option<String>,
-    #[allow(dead_code)]
     cursor: Option<String>,
     search: Option<String>,
 }
@@ -63,7 +62,13 @@ async fn list_assets(
     let search_lower = params.search.as_ref().map(|s| s.to_lowercase());
     let filter_type = params.asset_type.as_deref();
 
-    let (total, rows) = fetch_assets_cached(&state, filter_type, search_lower.as_deref(), limit)?;
+    let (total, rows) = fetch_assets_cached(
+        &state,
+        filter_type,
+        search_lower.as_deref(),
+        limit,
+        params.cursor.as_deref(),
+    )?;
 
     let has_more = rows.len() as i64 > limit;
     let rows: Vec<_> = rows.into_iter().take(limit as usize).collect();
@@ -87,12 +92,14 @@ async fn list_assets(
     ))
 }
 
-/// Read from in-memory cache, apply search filter + limit. Falls back to direct computation.
+/// Read from in-memory cache, apply search filter + cursor-based pagination.
+/// Falls back to direct computation when cache is cold.
 fn fetch_assets_cached(
     state: &Arc<AppState>,
     filter_type: Option<&str>,
     search: Option<&str>,
     limit: i64,
+    cursor: Option<&str>,
 ) -> Result<(i64, Vec<AssetResponse>), (axum::http::StatusCode, Json<ApiError>)> {
     let mut all_cached: Vec<CachedAssetEntry> = Vec::new();
 
@@ -159,6 +166,19 @@ fn fetch_assets_cached(
             .then_with(|| b.id.cmp(&a.id))
     });
 
+    // Apply cursor-based pagination: skip items up to and including the cursor item
+    if let Some(cursor_str) = cursor {
+        if let Some((_c_transfers, _c_holders, c_id, c_type)) = parse_asset_cursor(cursor_str) {
+            // Find the cursor item by its unique (id, asset_type) and skip past it
+            if let Some(pos) = all_cached
+                .iter()
+                .position(|e| e.id == c_id && e.asset_type == c_type)
+            {
+                all_cached = all_cached.split_off(pos + 1);
+            }
+        }
+    }
+
     all_cached.truncate((limit + 1) as usize);
 
     let assets: Vec<AssetResponse> = all_cached
@@ -167,6 +187,20 @@ fn fetch_assets_cached(
         .collect();
 
     Ok((total, assets))
+}
+
+/// Parse cursor string: "transfers_24h:holders_count:id:asset_type"
+fn parse_asset_cursor(cursor: &str) -> Option<(i64, i64, String, String)> {
+    let parts: Vec<&str> = cursor.splitn(4, ':').collect();
+    if parts.len() == 4 {
+        let transfers = parts[0].parse::<i64>().ok()?;
+        let holders = parts[1].parse::<i64>().ok()?;
+        let id = parts[2].to_string();
+        let asset_type = parts[3].to_string();
+        Some((transfers, holders, id, asset_type))
+    } else {
+        None
+    }
 }
 
 /// Fallback: compute token assets directly using batch 24h scan (when cache is cold).
