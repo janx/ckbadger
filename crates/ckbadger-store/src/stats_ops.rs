@@ -359,6 +359,14 @@ impl CkbadgerStore {
         Ok(results)
     }
 
+    pub fn get_dao_daily_snapshot(&self, date: &str) -> anyhow::Result<Option<DaoDailySnapshot>> {
+        let key = keys::encode_stats_key(stats_prefix::DAO_DAILY_SNAPSHOT, date.as_bytes());
+        match self.get_cf(self.cf_stats(), &key)? {
+            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            None => Ok(None),
+        }
+    }
+
     /// Delete all DAO daily snapshots and rebuild them from deposit history.
     ///
     /// For each deposit, creates timeline events:
@@ -827,5 +835,180 @@ mod tests {
         assert_eq!(retrieved.holder_count, 500);
         assert_eq!(retrieved.last_snapshot_date, Some("20240102".to_string()));
         assert_eq!(retrieved.date_transitions[1].0, 100);
+    }
+
+    /// Helper: write a DaoDailySnapshot directly to the store.
+    fn put_dao_snapshot(store: &CkbadgerStore, date_key: &str, snap: &DaoDailySnapshot) {
+        let key = crate::keys::encode_stats_key(
+            crate::keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
+            date_key.as_bytes(),
+        );
+        let value = bincode::serialize(snap).unwrap();
+        store.put_cf(store.cf_stats(), &key, &value).unwrap();
+    }
+
+    #[test]
+    fn test_dao_daily_snapshot_get_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap();
+
+        let snap = DaoDailySnapshot {
+            date: "2024-01-15".to_string(),
+            total_deposited: 100_000_000_000_000,
+            depositors_count: 42,
+            new_deposits: 100,
+            withdrawals: 10,
+            compensation: 50_000_000_000,
+            cumulative_deposit_amount: 200_000_000_000_000,
+            total_issuance: 4_000_000_000_000_000_000,
+            secondary_pool: 10_000_000_000_000,
+            occupied_capacity: 400_000_000_000_000_000,
+            cum_miner_secondary: 1_000_000_000_000,
+            cum_dao_compensation: 2_000_000_000_000,
+            cum_treasury: 7_000_000_000_000,
+        };
+
+        put_dao_snapshot(&store, "20240115", &snap);
+
+        let retrieved = store.get_dao_daily_snapshot("20240115").unwrap().unwrap();
+        assert_eq!(retrieved.date, "2024-01-15");
+        assert_eq!(retrieved.cum_miner_secondary, 1_000_000_000_000);
+        assert_eq!(retrieved.cum_dao_compensation, 2_000_000_000_000);
+        assert_eq!(retrieved.cum_treasury, 7_000_000_000_000);
+        assert_eq!(retrieved.total_issuance, 4_000_000_000_000_000_000);
+
+        // Non-existent date returns None
+        assert!(store.get_dao_daily_snapshot("20240116").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_dao_snapshot_miner_secondary_nonzero() {
+        // Simulates the indexer formula: daily_miner = s_delta * U / (C - U)
+        // With U/C = 10%, miner should get ~11.1% of S_delta (U/(C-U) = 0.1/0.9)
+        let c: i128 = 4_000_000_000_000_000_000; // 40B CKB
+        let u: i128 = 400_000_000_000_000_000; // 4B CKB (10% of C)
+        let prev_s: i128 = 10_000_000_000_000;
+        let curr_s: i128 = 10_100_000_000_000;
+        let s_delta = curr_s - prev_s; // 1000 CKB worth
+
+        let denom = (c - u).max(1);
+        let daily_miner = s_delta * u / denom;
+
+        // Miner should be ~11.1% of s_delta (U / (C-U) = 4B / 36B ≈ 0.1111)
+        assert!(daily_miner > 0, "miner secondary must be non-zero");
+        let ratio = daily_miner as f64 / s_delta as f64;
+        assert!(
+            (ratio - 0.1111).abs() < 0.001,
+            "miner ratio should be ~11.1%, got {:.4}",
+            ratio
+        );
+
+        // Verify that miner + non-miner (s_delta) reconstructs correctly:
+        // total_secondary = s_delta + daily_miner = s_delta * C / (C-U)
+        let total_secondary = s_delta + daily_miner;
+        let expected_total = s_delta * c / denom;
+        assert_eq!(total_secondary, expected_total);
+    }
+
+    #[test]
+    fn test_dao_snapshot_multiday_chaining() {
+        // Simulates a multi-day batch where each date must chain from the
+        // previous date's cumulative values (not a stale store snapshot).
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap();
+
+        // Seed an initial "day 0" snapshot in the store
+        let day0 = DaoDailySnapshot {
+            date: "2024-01-14".to_string(),
+            total_deposited: 50_000_000_000_000,
+            depositors_count: 10,
+            new_deposits: 50,
+            withdrawals: 5,
+            compensation: 10_000_000_000,
+            cumulative_deposit_amount: 100_000_000_000_000,
+            total_issuance: 4_000_000_000_000_000_000,
+            secondary_pool: 10_000_000_000_000,
+            occupied_capacity: 400_000_000_000_000_000,
+            cum_miner_secondary: 500_000_000_000,
+            cum_dao_compensation: 1_000_000_000_000,
+            cum_treasury: 3_500_000_000_000,
+        };
+        put_dao_snapshot(&store, "20240114", &day0);
+
+        // Simulate processing two dates in one batch, mimicking the fixed
+        // indexer loop that updates prev_snapshot after each iteration.
+        let dates = ["2024-01-15", "2024-01-16"];
+        let s_values: [i128; 2] = [10_100_000_000_000, 10_200_000_000_000];
+        let c: i128 = 4_000_000_000_000_000_000;
+        let u: i128 = 400_000_000_000_000_000;
+        let deposited: i128 = 50_000_000_000_000;
+
+        let mut prev = store.list_dao_daily_snapshots().unwrap().last().cloned();
+
+        let mut snapshots = Vec::new();
+        for (i, date) in dates.iter().enumerate() {
+            let secondary_pool = s_values[i];
+            let (cum_miner, cum_dao, cum_treasury) = if let Some(ref p) = prev {
+                let s_delta = (secondary_pool - p.secondary_pool).max(0);
+                let denom = (c - u).max(1);
+                let daily_miner = s_delta * u / denom;
+                let daily_dao_share = s_delta * deposited / denom;
+                let daily_treasury_share = s_delta - daily_dao_share;
+                (
+                    p.cum_miner_secondary + daily_miner,
+                    p.cum_dao_compensation + daily_dao_share,
+                    p.cum_treasury + daily_treasury_share,
+                )
+            } else {
+                (0, 0, 0)
+            };
+
+            let snap = DaoDailySnapshot {
+                date: date.to_string(),
+                total_deposited: deposited,
+                depositors_count: 10,
+                new_deposits: 50,
+                withdrawals: 5,
+                compensation: 10_000_000_000,
+                cumulative_deposit_amount: 100_000_000_000_000,
+                total_issuance: c,
+                secondary_pool,
+                occupied_capacity: u,
+                cum_miner_secondary: cum_miner,
+                cum_dao_compensation: cum_dao,
+                cum_treasury,
+            };
+
+            // Update prev for next iteration (the bug fix)
+            prev = Some(snap.clone());
+            snapshots.push(snap);
+        }
+
+        // Day 1 should build on day 0's cumulatives
+        assert!(
+            snapshots[0].cum_miner_secondary > day0.cum_miner_secondary,
+            "day 1 miner should increase from day 0"
+        );
+        // Day 2 should build on day 1's cumulatives (NOT day 0's)
+        assert!(
+            snapshots[1].cum_miner_secondary > snapshots[0].cum_miner_secondary,
+            "day 2 miner should increase from day 1"
+        );
+        assert!(
+            snapshots[1].cum_dao_compensation > snapshots[0].cum_dao_compensation,
+            "day 2 dao should increase from day 1"
+        );
+        assert!(
+            snapshots[1].cum_treasury > snapshots[0].cum_treasury,
+            "day 2 treasury should increase from day 1"
+        );
+
+        // Verify the increments are equal (same s_delta each day)
+        let miner_inc_1 = snapshots[0].cum_miner_secondary - day0.cum_miner_secondary;
+        let miner_inc_2 = snapshots[1].cum_miner_secondary - snapshots[0].cum_miner_secondary;
+        assert_eq!(
+            miner_inc_1, miner_inc_2,
+            "equal s_delta should produce equal miner increments"
+        );
     }
 }

@@ -15,7 +15,7 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use ckbadger_store::batch::StoreBatch;
-use ckbadger_store::types::LiveCellInfo;
+use ckbadger_store::types::{DaoDailySnapshot, LiveCellInfo};
 use ckbadger_store::CkbadgerStore;
 
 use crate::cache::CacheInvalidator;
@@ -5260,6 +5260,20 @@ impl Indexer {
                 // Gross deposit amount: sum of ALL deposits' capacity (regardless of status)
                 let cumulative_deposit_amount: i128 =
                     all_deposits.iter().map(|(_, e)| e.capacity as i128).sum();
+                // Read prev snapshot ONCE before the loop so multi-day batches
+                // chain correctly (each date builds on the previous).
+                let mut prev_snapshot = self
+                    .writer
+                    .store()
+                    .list_dao_daily_snapshots()
+                    .ok()
+                    .and_then(|snaps| snaps.last().cloned());
+
+                // NOTE: total_deposited is computed once from current deposit state
+                // (batch-end), not per-date historical state. This slightly skews the
+                // dao/treasury split for historical dates in multi-day batches. The
+                // rebuild_dao_daily_snapshots() task handles this correctly with
+                // event-based timeline tracking and can be run after sync for accuracy.
                 for date in snapshot_dates {
                     // Extract C, S, U from the DAO header field for this date.
                     let (total_issuance, secondary_pool, occupied_capacity) = stats
@@ -5276,25 +5290,20 @@ impl Indexer {
                             }
                         })
                         .unwrap_or((0, 0, 0));
-                    // Read previous snapshot and compute daily secondary
-                    // issuance breakdown from the S-field delta.
-                    let prev = self
-                        .writer
-                        .store()
-                        .list_dao_daily_snapshots()
-                        .ok()
-                        .and_then(|snaps| snaps.last().cloned());
-                    let (cum_miner, cum_dao, cum_treasury) = if let Some(ref p) = prev {
-                        // S_delta = non-miner secondary issuance for this day
+                    // Compute daily secondary issuance breakdown from the S-field delta.
+                    // S tracks cumulative non-miner secondary issuance. The total
+                    // secondary issuance = S_delta * C / (C - U), and the miner share
+                    // is total_secondary - S_delta = S_delta * U / (C - U).
+                    let (cum_miner, cum_dao, cum_treasury) = if let Some(ref p) = prev_snapshot {
                         let s_delta = (secondary_pool - p.secondary_pool).max(0);
-                        // Split S_delta into DAO depositor and treasury (burnt)
-                        // shares proportional to deposited / (C - U).
                         let denom = (total_issuance - occupied_capacity).max(1);
                         let deposited = total_deposited.max(0);
+
+                        let daily_miner = s_delta * occupied_capacity / denom;
                         let daily_dao_share = s_delta * deposited / denom;
                         let daily_treasury_share = s_delta - daily_dao_share;
                         (
-                            p.cum_miner_secondary, // requires epoch info; carried forward
+                            p.cum_miner_secondary + daily_miner,
                             p.cum_dao_compensation + daily_dao_share,
                             p.cum_treasury + daily_treasury_share,
                         )
@@ -5317,6 +5326,23 @@ impl Indexer {
                     };
                     self.writer
                         .update_dao_daily_snapshot(*date, &dao_snapshot, batch)?;
+
+                    // Update prev_snapshot for next iteration in this batch
+                    prev_snapshot = Some(DaoDailySnapshot {
+                        date: date.format("%Y-%m-%d").to_string(),
+                        total_deposited,
+                        depositors_count,
+                        new_deposits: total_deposit_count,
+                        withdrawals: total_withdrawal_count,
+                        compensation: total_compensation,
+                        cumulative_deposit_amount,
+                        total_issuance,
+                        secondary_pool,
+                        occupied_capacity,
+                        cum_miner_secondary: cum_miner,
+                        cum_dao_compensation: cum_dao,
+                        cum_treasury,
+                    });
                 }
             }
         }
