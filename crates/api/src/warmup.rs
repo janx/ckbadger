@@ -111,6 +111,11 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
     let mut token_assets: Vec<CachedAssetEntry> = Vec::with_capacity(tokens.len());
 
     for (hash, info) in &tokens {
+        // Skip noise tokens: no name/symbol and no holders
+        if info.name.is_none() && info.symbol.is_none() && info.holders_count == 0 {
+            continue;
+        }
+
         let transfers_24h = transfers_24h_map.get(hash.as_slice()).copied().unwrap_or(0);
 
         token_assets.push(CachedAssetEntry {
