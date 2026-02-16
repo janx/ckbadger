@@ -160,11 +160,20 @@ pub fn encode_token_hourly_prefix(type_hash: &[u8]) -> Vec<u8> {
     key
 }
 
+/// Zero-pad an ID to exactly 32 bytes. IDs shorter than 32 bytes (e.g. mNFT class_id = 24B)
+/// are right-padded with zeros; IDs already 32+ bytes are truncated to 32.
+fn pad_id_32(id: &[u8]) -> [u8; 32] {
+    let mut buf = [0u8; 32];
+    let len = id.len().min(32);
+    buf[..len].copy_from_slice(&id[..len]);
+    buf
+}
+
 /// Spore (DOB) hourly transfer count key: prefix(1B) + cluster_id(32B) + hour_bucket(8B BE) = 41 bytes
 pub fn encode_spore_hourly_key(cluster_id: &[u8], hour_bucket: i64) -> Vec<u8> {
     let mut key = Vec::with_capacity(41);
     key.push(STATS_PREFIX_SPORE_HOURLY);
-    key.extend_from_slice(&cluster_id[..32]);
+    key.extend_from_slice(&pad_id_32(cluster_id));
     key.extend_from_slice(&hour_bucket.to_be_bytes());
     key
 }
@@ -173,7 +182,7 @@ pub fn encode_spore_hourly_key(cluster_id: &[u8], hour_bucket: i64) -> Vec<u8> {
 pub fn encode_spore_hourly_prefix(cluster_id: &[u8]) -> Vec<u8> {
     let mut key = Vec::with_capacity(33);
     key.push(STATS_PREFIX_SPORE_HOURLY);
-    key.extend_from_slice(&cluster_id[..32]);
+    key.extend_from_slice(&pad_id_32(cluster_id));
     key
 }
 
@@ -181,7 +190,7 @@ pub fn encode_spore_hourly_prefix(cluster_id: &[u8]) -> Vec<u8> {
 pub fn encode_nft_hourly_key(collection_id: &[u8], hour_bucket: i64) -> Vec<u8> {
     let mut key = Vec::with_capacity(41);
     key.push(STATS_PREFIX_NFT_HOURLY);
-    key.extend_from_slice(&collection_id[..32]);
+    key.extend_from_slice(&pad_id_32(collection_id));
     key.extend_from_slice(&hour_bucket.to_be_bytes());
     key
 }
@@ -190,7 +199,7 @@ pub fn encode_nft_hourly_key(collection_id: &[u8], hour_bucket: i64) -> Vec<u8> 
 pub fn encode_nft_hourly_prefix(collection_id: &[u8]) -> Vec<u8> {
     let mut key = Vec::with_capacity(33);
     key.push(STATS_PREFIX_NFT_HOURLY);
-    key.extend_from_slice(&collection_id[..32]);
+    key.extend_from_slice(&pad_id_32(collection_id));
     key
 }
 
@@ -540,6 +549,68 @@ mod tests {
         let full_key = encode_nft_hourly_key(&collection_id, 999);
         assert_eq!(prefix.len(), 33);
         assert!(full_key.starts_with(&prefix));
+    }
+
+    // ---- Regression: short IDs (mNFT class_id = 24 bytes) must not panic ----
+
+    #[test]
+    fn test_nft_hourly_key_short_collection_id() {
+        // mNFT class_id is 24 bytes (20B issuer + 4B class index)
+        let short_id = [0xAB; 24];
+        let key = encode_nft_hourly_key(&short_id, 500);
+        assert_eq!(key.len(), 41);
+        assert_eq!(key[0], STATS_PREFIX_NFT_HOURLY);
+        // First 24 bytes of ID field should match, rest zero-padded
+        assert_eq!(&key[1..25], &short_id);
+        assert_eq!(&key[25..33], &[0u8; 8]);
+        assert_eq!(i64::from_be_bytes(key[33..41].try_into().unwrap()), 500);
+    }
+
+    #[test]
+    fn test_nft_hourly_prefix_short_collection_id() {
+        let short_id = [0xAB; 24];
+        let prefix = encode_nft_hourly_prefix(&short_id);
+        let full_key = encode_nft_hourly_key(&short_id, 999);
+        assert_eq!(prefix.len(), 33);
+        assert!(full_key.starts_with(&prefix));
+    }
+
+    #[test]
+    fn test_spore_hourly_key_short_cluster_id() {
+        let short_id = [0xCD; 20];
+        let key = encode_spore_hourly_key(&short_id, 100);
+        assert_eq!(key.len(), 41);
+        assert_eq!(&key[1..21], &short_id);
+        assert_eq!(&key[21..33], &[0u8; 12]);
+    }
+
+    #[test]
+    fn test_spore_hourly_prefix_short_cluster_id() {
+        let short_id = [0xCD; 20];
+        let prefix = encode_spore_hourly_prefix(&short_id);
+        let full_key = encode_spore_hourly_key(&short_id, 100);
+        assert_eq!(prefix.len(), 33);
+        assert!(full_key.starts_with(&prefix));
+    }
+
+    #[test]
+    fn test_pad_id_32_exact() {
+        let id = [0xFF; 32];
+        assert_eq!(pad_id_32(&id), id);
+    }
+
+    #[test]
+    fn test_pad_id_32_short() {
+        let id = [0xAA; 10];
+        let padded = pad_id_32(&id);
+        assert_eq!(&padded[..10], &[0xAA; 10]);
+        assert_eq!(&padded[10..], &[0u8; 22]);
+    }
+
+    #[test]
+    fn test_pad_id_32_empty() {
+        let padded = pad_id_32(&[]);
+        assert_eq!(padded, [0u8; 32]);
     }
 
     #[test]
