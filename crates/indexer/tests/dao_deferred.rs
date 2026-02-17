@@ -27,6 +27,8 @@ fn test_sync_status_address_balances_deferred() {
         deep_fork_info: None,
 
         avg_block_time_rebuilt: false,
+        dao_daily_snapshots_rebuilt: false,
+        address_balances_rebuilt_from_live_cells: false,
     };
 
     store.set_sync_status(&status).unwrap();
@@ -56,6 +58,8 @@ fn test_update_sync_status_closure() {
         deep_fork_info: None,
 
         avg_block_time_rebuilt: false,
+        dao_daily_snapshots_rebuilt: false,
+        address_balances_rebuilt_from_live_cells: false,
     };
     store.set_sync_status(&initial).unwrap();
 

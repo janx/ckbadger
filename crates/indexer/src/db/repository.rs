@@ -35,22 +35,15 @@ impl Repository {
     }
 
     pub async fn get_sync_tip(&self) -> Result<(i64, Option<Vec<u8>>)> {
-        if let Some(cache) = &self.cache_invalidator {
-            if let Some(status) = cache.get_sync_status().await {
-                if status.tip_block_number > 0 {
-                    let hash = if status.tip_block_hash.is_empty() {
-                        None
-                    } else {
-                        hex::decode(status.tip_block_hash.trim_start_matches("0x")).ok()
-                    };
-                    return Ok((status.tip_block_number, hash));
-                }
-            }
+        // Authoritative source for sync progression is the persisted block_headers CF.
+        // Cache/Redis can be stale and must never drive writer/fetcher start height.
+        if let Some((num, header)) = self.store.get_sync_tip_block()? {
+            return Ok((num, Some(header.hash)));
         }
 
-        // Fallback to store
+        // Legacy fallback for older stores that may only have sync_status.
         let (num, hash) = self.store.get_sync_tip()?;
-        if num > 0 {
+        if num > 0 || hash.is_some() {
             Ok((num, hash))
         } else {
             Ok((0, None))
@@ -98,5 +91,85 @@ impl Repository {
 
     pub fn get_deep_fork_info(&self) -> Result<Option<DeepForkInfo>> {
         self.store.get_deep_fork_info()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    use ckbadger_store::batch::StoreBatch;
+    use ckbadger_store::types::CachedBlockHeader;
+    use tempfile::TempDir;
+
+    fn make_header(block_number: i64) -> CachedBlockHeader {
+        let mut hash = vec![0u8; 32];
+        hash[..8].copy_from_slice(&block_number.to_le_bytes());
+        CachedBlockHeader {
+            hash,
+            timestamp: block_number,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0u8; 32],
+            transactions_count: 1,
+        }
+    }
+
+    struct TestCtx {
+        _dir: TempDir,
+        repo: Repository,
+        store: Arc<CkbadgerStore>,
+    }
+
+    fn setup() -> TestCtx {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let repo = Repository::new(store.clone());
+        TestCtx {
+            _dir: dir,
+            repo,
+            store,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_sync_tip_uses_block_headers_over_sync_status() {
+        let ctx = setup();
+
+        let mut batch = StoreBatch::new(&ctx.store);
+        for n in 0..=10 {
+            batch.put_block_header(n, &make_header(n));
+        }
+        batch.commit().unwrap();
+
+        // Inject a stale/ahead sync_status tip that should be ignored.
+        ctx.store
+            .update_sync_status(|status| {
+                status.tip_block_number = 1000;
+                status.tip_block_hash = vec![0xAB; 32];
+            })
+            .unwrap();
+
+        let (tip, hash) = ctx.repo.get_sync_tip().await.unwrap();
+        assert_eq!(tip, 10);
+        assert_eq!(hash, Some(make_header(10).hash));
+    }
+
+    #[tokio::test]
+    async fn test_get_sync_tip_falls_back_to_sync_status_when_no_headers() {
+        let ctx = setup();
+
+        ctx.store
+            .update_sync_status(|status| {
+                status.tip_block_number = 7;
+                status.tip_block_hash = vec![0xCD; 32];
+            })
+            .unwrap();
+
+        let (tip, hash) = ctx.repo.get_sync_tip().await.unwrap();
+        assert_eq!(tip, 7);
+        assert_eq!(hash, Some(vec![0xCD; 32]));
     }
 }

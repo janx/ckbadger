@@ -193,14 +193,6 @@ async fn run_sync(args: Cli) -> Result<()> {
         info!("Resuming sync from block {}", db_tip);
     }
 
-    // Check deferred state
-    if sync_status.address_balances_deferred {
-        info!(
-            "Deferred states: address_balances={}",
-            sync_status.address_balances_deferred
-        );
-    }
-
     info!("Connecting to CKB node: {}", config.ckb_rpc_url);
 
     let indexer = Indexer::new(config.clone(), store.clone()).await?;

@@ -56,6 +56,48 @@ fn crosses_partition_boundary(start_block: u64, end_block: u64) -> bool {
     get_partition_index(start_block) != get_partition_index(end_block)
 }
 
+fn collect_missing_input_outpoints<T>(
+    all_input_outpoints: &[(Vec<u8>, i16)],
+    input_cell_info: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
+    same_batch_cells: &HashMap<(Vec<u8>, i16), T>,
+) -> Vec<(Vec<u8>, i16)> {
+    let mut seen = HashSet::new();
+    all_input_outpoints
+        .iter()
+        .filter_map(|(tx_hash, output_index)| {
+            let key = (tx_hash.clone(), *output_index);
+            if input_cell_info.contains_key(&key) || same_batch_cells.contains_key(&key) {
+                None
+            } else if seen.insert(key.clone()) {
+                Some(key)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn format_outpoint_sample(outpoints: &[(Vec<u8>, i16)], max_items: usize) -> String {
+    if outpoints.is_empty() {
+        return "none".to_string();
+    }
+
+    outpoints
+        .iter()
+        .take(max_items)
+        .map(|(tx_hash, output_index)| {
+            let prefix_len = tx_hash.len().min(8);
+            format!("0x{}:{}", hex::encode(&tx_hash[..prefix_len]), output_index)
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn should_skip_address_balances(_bulk_sync_mode: bool) -> bool {
+    // Address balances must always be updated inline to keep bulk sync exact.
+    false
+}
+
 enum SyncAction {
     CaughtUp,
     Continue,
@@ -84,6 +126,9 @@ struct BatchStats {
     dao_snapshot_dates: HashSet<NaiveDate>,
     daily_block_times: HashMap<NaiveDate, (i64, i32)>,
     daily_dao_fields: HashMap<NaiveDate, Vec<u8>>,
+    dao_daily_active_delta: HashMap<NaiveDate, i128>,
+    dao_daily_gross_deposit_delta: HashMap<NaiveDate, i128>,
+    dao_daily_new_deposits_delta: HashMap<NaiveDate, i64>,
 }
 
 #[derive(Clone)]
@@ -454,7 +499,6 @@ pub struct Indexer {
     was_secondary_issuance_bulk_active: std::sync::atomic::AtomicBool,
     rebuild_pause_flag: Arc<std::sync::atomic::AtomicBool>,
     reorg_notify_flag: Arc<std::sync::atomic::AtomicBool>,
-    address_balances_deferred: std::sync::atomic::AtomicBool,
     label_import_started: std::sync::atomic::AtomicBool,
     ckb_store: Option<Arc<CkbChainReader>>,
     hodl_tracker: std::sync::Mutex<HodlWaveTracker>,
@@ -496,15 +540,6 @@ impl Indexer {
         let was_secondary_bulk =
             progress.blocks_remaining() > SECONDARY_ISSUANCE_BACKFILL_THRESHOLD;
 
-        let sync_status = store.get_sync_status()?;
-        let address_balances_deferred = sync_status.address_balances_deferred;
-        if address_balances_deferred {
-            info!(
-                "Loaded deferred states: address_balances={}",
-                address_balances_deferred
-            );
-        }
-
         let hodl_tracker = match store.get_hodl_tracker_state()? {
             Some(state) => {
                 info!(
@@ -539,9 +574,6 @@ impl Indexer {
             ),
             rebuild_pause_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             reorg_notify_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            address_balances_deferred: std::sync::atomic::AtomicBool::new(
-                address_balances_deferred,
-            ),
             label_import_started: std::sync::atomic::AtomicBool::new(false),
             ckb_store,
             hodl_tracker: std::sync::Mutex::new(hodl_tracker),
@@ -958,6 +990,7 @@ impl Indexer {
         let writer_for_parser = self.writer.clone();
         let cell_cache_for_parser = Arc::clone(&self.cell_cache);
         let pipeline_perf_for_parser = Arc::clone(&self.pipeline_perf);
+        let reorg_notify_for_parser = Arc::clone(&self.reorg_notify_flag);
 
         let parse_tx_for_writer_depth = parse_tx.clone();
         let parser = tokio::spawn(async move {
@@ -1009,28 +1042,19 @@ impl Indexer {
                     }
                 }
 
-                let missing_outpoints: Vec<(Vec<u8>, i16)> = all_input_outpoints
-                    .iter()
-                    .filter(|(h, i)| {
-                        let key = (h.clone(), *i);
-                        !input_cell_info.contains_key(&key) && !batch_cells.contains_key(&key)
-                    })
-                    .cloned()
-                    .collect();
+                let missing_outpoints = collect_missing_input_outpoints(
+                    &all_input_outpoints,
+                    &input_cell_info,
+                    &batch_cells,
+                );
 
                 let db_lookups;
+                let mut db_lookup_failed = false;
                 if !missing_outpoints.is_empty() {
-                    let unique_missing: Vec<(Vec<u8>, i16)> = {
-                        let mut seen = HashSet::new();
-                        missing_outpoints
-                            .into_iter()
-                            .filter(|x| seen.insert(x.clone()))
-                            .collect()
-                    };
-                    db_lookups = unique_missing.len();
+                    db_lookups = missing_outpoints.len();
                     let bulk_sync_mode = chain_tip.saturating_sub(end_block) > 1000;
                     let wr = writer_for_parser.clone();
-                    let missing_owned: Vec<(Vec<u8>, i16)> = unique_missing
+                    let missing_owned: Vec<(Vec<u8>, i16)> = missing_outpoints
                         .iter()
                         .map(|(h, i)| (h.clone(), *i))
                         .collect();
@@ -1049,17 +1073,40 @@ impl Indexer {
                         }
                         Ok(Ok(Err(e))) => {
                             error!("Parser: DB error fetching cell info: {}", e);
+                            db_lookup_failed = true;
                         }
                         Ok(Err(e)) => {
                             error!("Parser: Failed to fetch cell info from DB: {}", e);
+                            db_lookup_failed = true;
                         }
                         Err(_) => {
-                            warn!("Parser: DB query for cell info timed out after 30s, continuing without data");
+                            warn!(
+                                "Parser: DB query for cell info timed out after 30s, forcing batch retry"
+                            );
+                            db_lookup_failed = true;
                         }
                     }
                 } else {
                     db_lookups = 0;
                 }
+
+                let unresolved_outpoints = collect_missing_input_outpoints(
+                    &all_input_outpoints,
+                    &input_cell_info,
+                    &batch_cells,
+                );
+                if db_lookup_failed || !unresolved_outpoints.is_empty() {
+                    error!(
+                        unresolved_count = unresolved_outpoints.len(),
+                        unresolved_sample = %format_outpoint_sample(&unresolved_outpoints, 5),
+                        db_lookup_failed,
+                        "Parser: unresolved input cells detected, dropping batch and requesting refetch"
+                    );
+                    reorg_notify_for_parser.store(true, Ordering::SeqCst);
+                    sleep(Duration::from_millis(500)).await;
+                    continue;
+                }
+
                 let cache_misses = db_lookups;
                 let cell_lookup_ms = t_cell_lookup.elapsed().as_secs_f64() * 1000.0;
 
@@ -1792,6 +1839,7 @@ impl Indexer {
             self.cache_invalidator
                 .update_sync_status(|status| {
                     status.mark_bulk_sync_completed(chain_tip as i64);
+                    status.address_balances_deferred = false;
                 })
                 .await;
 
@@ -1810,6 +1858,8 @@ impl Indexer {
                 sst_size_gb = format!("{:.1}", sst_gb),
                 "Bulk sync completed"
             );
+
+            self.cache_invalidator.invalidate_chart_caches().await;
 
             // Re-enable auto-compactions and trigger manual compaction in background
             self.writer.store().restore_normal_compaction_options();
@@ -1964,24 +2014,14 @@ impl Indexer {
             }
         }
 
-        let missing_outpoints: Vec<(Vec<u8>, i16)> = all_input_outpoints
-            .iter()
-            .filter(|(h, i)| {
-                let key = (h.clone(), *i);
-                !input_cell_info.contains_key(&key) && !batch_cell_infos.contains_key(&key)
-            })
-            .cloned()
-            .collect();
+        let missing_outpoints = collect_missing_input_outpoints(
+            &all_input_outpoints,
+            &input_cell_info,
+            &batch_cell_infos,
+        );
 
         if !missing_outpoints.is_empty() {
-            let unique_missing: Vec<(Vec<u8>, i16)> = {
-                let mut seen = HashSet::new();
-                missing_outpoints
-                    .into_iter()
-                    .filter(|x| seen.insert(x.clone()))
-                    .collect()
-            };
-            let missing_refs: Vec<(&[u8], i16)> = unique_missing
+            let missing_refs: Vec<(&[u8], i16)> = missing_outpoints
                 .iter()
                 .map(|(h, i)| (h.as_slice(), *i))
                 .collect();
@@ -1991,6 +2031,22 @@ impl Indexer {
             for ((tx_hash, idx), info) in db_info {
                 input_cell_info.insert((tx_hash, idx), info);
             }
+        }
+        let unresolved_outpoints = collect_missing_input_outpoints(
+            &all_input_outpoints,
+            &input_cell_info,
+            &batch_cell_infos,
+        );
+        if !unresolved_outpoints.is_empty() {
+            let first_block = all_parsed_blocks.first().map(|b| b.number).unwrap_or(0);
+            let last_block = all_parsed_blocks.last().map(|b| b.number).unwrap_or(0);
+            return Err(anyhow::anyhow!(
+                "sync batch {}-{} has {} unresolved input cells (sample: {})",
+                first_block,
+                last_block,
+                unresolved_outpoints.len(),
+                format_outpoint_sample(&unresolved_outpoints, 5)
+            ));
         }
 
         for tx_data in &mut all_tx_data {
@@ -2372,10 +2428,7 @@ impl Indexer {
             }
         }
 
-        let skip_address_balances = self
-            .address_balances_deferred
-            .load(std::sync::atomic::Ordering::Relaxed)
-            && bulk_sync_mode;
+        let skip_address_balances = should_skip_address_balances(bulk_sync_mode);
 
         // Parallel DB reads for address balances and script usage
         let lock_hash_keys: Vec<&Vec<u8>> = if !skip_address_balances && !changes_ref.is_empty() {
@@ -3144,6 +3197,35 @@ impl Indexer {
             .unwrap_or(0);
         let bulk_sync_mode = chain_tip.saturating_sub(end_block) > 1000;
 
+        let all_input_outpoints: Vec<(Vec<u8>, i16)> = all_tx_data
+            .iter()
+            .filter(|tx| !tx.is_cellbase)
+            .flat_map(|tx| {
+                tx.inputs.iter().map(|input| {
+                    (
+                        input.previous_tx_hash.to_vec(),
+                        input.previous_output_index as i16,
+                    )
+                })
+            })
+            .collect();
+        let unresolved_outpoints = collect_missing_input_outpoints(
+            &all_input_outpoints,
+            &input_cell_info,
+            &batch_cell_infos,
+        );
+        if !unresolved_outpoints.is_empty() {
+            let first_block = all_parsed_blocks.first().map(|b| b.number).unwrap_or(0);
+            let last_block = all_parsed_blocks.last().map(|b| b.number).unwrap_or(0);
+            return Err(anyhow::anyhow!(
+                "pipeline batch {}-{} has {} unresolved input cells (sample: {})",
+                first_block,
+                last_block,
+                unresolved_outpoints.len(),
+                format_outpoint_sample(&unresolved_outpoints, 5)
+            ));
+        }
+
         let t_precompute = Instant::now();
 
         // Build reference vectors from pre-computed data (Passes 1-3 done in parser)
@@ -3275,10 +3357,7 @@ impl Indexer {
             }
         }
 
-        let skip_address_balances = self
-            .address_balances_deferred
-            .load(std::sync::atomic::Ordering::Relaxed)
-            && bulk_sync_mode;
+        let skip_address_balances = should_skip_address_balances(bulk_sync_mode);
         let skip_activities = false;
 
         let precompute_ms = t_precompute.elapsed().as_secs_f64() * 1000.0;
@@ -4051,6 +4130,7 @@ impl Indexer {
                         } else {
                             None
                         };
+                    let mut same_batch_dao_deposits: HashMap<(Vec<u8>, i16), i64> = HashMap::new();
 
                     let mut block_tx_idx = 0usize;
                     for parsed in all_parsed_blocks {
@@ -4059,6 +4139,76 @@ impl Indexer {
                         let tx_slice =
                             &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
                         block_tx_idx += tx_count_for_block;
+
+                        // Exact DAO per-day deltas for snapshot accumulation in bulk mode.
+                        for tx_data in tx_slice {
+                            let mut withdraw_request_caps: Vec<i64> = Vec::new();
+
+                            for (output_index, cell) in tx_data.cells.iter().enumerate() {
+                                if let Some(ref type_code_hash) = cell.type_code_hash {
+                                    if type_code_hash == &dao_code_hash && cell.data_size == 8 {
+                                        if cell.data.len() == 8 && cell.data.iter().all(|&b| b == 0)
+                                        {
+                                            *stats
+                                                .dao_daily_active_delta
+                                                .entry(block_date)
+                                                .or_default() += cell.capacity as i128;
+                                            *stats
+                                                .dao_daily_gross_deposit_delta
+                                                .entry(block_date)
+                                                .or_default() += cell.capacity as i128;
+                                            *stats
+                                                .dao_daily_new_deposits_delta
+                                                .entry(block_date)
+                                                .or_default() += 1;
+                                            same_batch_dao_deposits.insert(
+                                                (tx_data.hash.to_vec(), output_index as i16),
+                                                cell.capacity,
+                                            );
+                                        } else if let Some(data) =
+                                            tx_data.outputs_data.get(output_index)
+                                        {
+                                            let data_bytes = crate::rpc::parse_hex_to_bytes(data);
+                                            if DaoParser::parse_deposit_block_number(&data_bytes)
+                                                .is_some()
+                                            {
+                                                withdraw_request_caps.push(cell.capacity);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            if !tx_data.is_cellbase && !withdraw_request_caps.is_empty() {
+                                for input in &tx_data.inputs {
+                                    let outpoint = (
+                                        input.previous_tx_hash.to_vec(),
+                                        input.previous_output_index as i16,
+                                    );
+                                    let mut maybe_cap: Option<i64> =
+                                        same_batch_dao_deposits.get(&outpoint).copied();
+
+                                    if maybe_cap.is_none() {
+                                        if let Some((_, _, _, capacity_str, _, status)) =
+                                            consumed_dao_map.get(&outpoint)
+                                        {
+                                            if *status == 0 {
+                                                maybe_cap = capacity_str.parse::<i64>().ok();
+                                            }
+                                        }
+                                    }
+
+                                    if let Some(capacity) = maybe_cap {
+                                        if withdraw_request_caps.iter().any(|c| *c == capacity) {
+                                            *stats
+                                                .dao_daily_active_delta
+                                                .entry(block_date)
+                                                .or_default() -= capacity as i128;
+                                        }
+                                    }
+                                }
+                            }
+                        }
 
                         let cells_created: i32 =
                             tx_slice.iter().map(|tx| tx.cells.len() as i32).sum();
@@ -5418,116 +5568,236 @@ impl Indexer {
             let mut snapshot_dates: Vec<_> = stats.dao_snapshot_dates.iter().collect();
             snapshot_dates.sort();
             if !snapshot_dates.is_empty() {
-                // Compute total deposit from tracked deposit/withdrawal events.
-                // Active deposits (status=0) are currently locked in the DAO.
-                let all_deposits = self.writer.store().list_dao_deposits()?;
-                let total_deposited: i128 = all_deposits
-                    .iter()
-                    .filter(|(_, e)| e.status == 0)
-                    .map(|(_, e)| e.capacity as i128)
-                    .sum();
-                let depositors_count = {
-                    let unique: std::collections::HashSet<&[u8]> = all_deposits
+                let has_exact_dao_deltas = !(stats.dao_daily_active_delta.is_empty()
+                    && stats.dao_daily_gross_deposit_delta.is_empty()
+                    && stats.dao_daily_new_deposits_delta.is_empty());
+
+                if has_exact_dao_deltas {
+                    // Continue from the latest snapshot and apply exact per-day deltas from
+                    // this batch (deposits and phase-1 withdrawals) in date order.
+                    let mut prev_snapshot = self
+                        .writer
+                        .store()
+                        .list_dao_daily_snapshots()
+                        .ok()
+                        .and_then(|snaps| snaps.last().cloned());
+
+                    let mut running_total_deposited = prev_snapshot
+                        .as_ref()
+                        .map(|s| s.total_deposited)
+                        .unwrap_or(0);
+                    let running_depositors = prev_snapshot
+                        .as_ref()
+                        .map(|s| s.depositors_count)
+                        .unwrap_or(0);
+                    let mut running_total_deposit_count =
+                        prev_snapshot.as_ref().map(|s| s.new_deposits).unwrap_or(0);
+                    let running_total_withdrawal_count =
+                        prev_snapshot.as_ref().map(|s| s.withdrawals).unwrap_or(0);
+                    let running_total_compensation =
+                        prev_snapshot.as_ref().map(|s| s.compensation).unwrap_or(0);
+                    let mut running_cumulative_deposit_amount = prev_snapshot
+                        .as_ref()
+                        .map(|s| s.cumulative_deposit_amount)
+                        .unwrap_or(0);
+                    let mut running_cum_miner = prev_snapshot
+                        .as_ref()
+                        .map(|s| s.cum_miner_secondary)
+                        .unwrap_or(0);
+                    let mut running_cum_dao = prev_snapshot
+                        .as_ref()
+                        .map(|s| s.cum_dao_compensation)
+                        .unwrap_or(0);
+                    let mut running_cum_treasury =
+                        prev_snapshot.as_ref().map(|s| s.cum_treasury).unwrap_or(0);
+                    let mut prev_secondary_pool = prev_snapshot
+                        .as_ref()
+                        .map(|s| s.secondary_pool)
+                        .unwrap_or(0);
+
+                    for date in snapshot_dates {
+                        running_total_deposited +=
+                            stats.dao_daily_active_delta.get(date).copied().unwrap_or(0);
+                        running_cumulative_deposit_amount += stats
+                            .dao_daily_gross_deposit_delta
+                            .get(date)
+                            .copied()
+                            .unwrap_or(0);
+                        running_total_deposit_count += stats
+                            .dao_daily_new_deposits_delta
+                            .get(date)
+                            .copied()
+                            .unwrap_or(0);
+
+                        // Extract C, S, U from the DAO header field for this date.
+                        let (total_issuance, secondary_pool, occupied_capacity) = stats
+                            .daily_dao_fields
+                            .get(date)
+                            .and_then(|field| {
+                                if field.len() >= 32 {
+                                    let c =
+                                        u64::from_le_bytes(field[0..8].try_into().ok()?) as i128;
+                                    let s =
+                                        u64::from_le_bytes(field[16..24].try_into().ok()?) as i128;
+                                    let u =
+                                        u64::from_le_bytes(field[24..32].try_into().ok()?) as i128;
+                                    Some((c, s, u))
+                                } else {
+                                    None
+                                }
+                            })
+                            .unwrap_or((0, 0, 0));
+                        let (daily_miner, daily_dao_share, daily_treasury_share) =
+                            if prev_snapshot.is_some() && total_issuance > 0 {
+                                let s_delta = (secondary_pool - prev_secondary_pool).max(0);
+                                let denom = (total_issuance - occupied_capacity).max(1);
+                                let deposited = running_total_deposited.max(0);
+                                let miner = s_delta * occupied_capacity / denom;
+                                let dao = s_delta * deposited / denom;
+                                let treasury = s_delta - dao;
+                                (miner, dao, treasury)
+                            } else {
+                                (0, 0, 0)
+                            };
+                        running_cum_miner += daily_miner;
+                        running_cum_dao += daily_dao_share;
+                        running_cum_treasury += daily_treasury_share;
+                        prev_secondary_pool = secondary_pool;
+
+                        let dao_snapshot = crate::db::writer::DaoSnapshotInput {
+                            total_deposited: running_total_deposited,
+                            depositors_count: running_depositors,
+                            total_deposit_count: running_total_deposit_count,
+                            total_withdrawal_count: running_total_withdrawal_count,
+                            total_compensation: running_total_compensation,
+                            cumulative_deposit_amount: running_cumulative_deposit_amount,
+                            total_issuance,
+                            secondary_pool,
+                            occupied_capacity,
+                            cum_miner_secondary: running_cum_miner,
+                            cum_dao_compensation: running_cum_dao,
+                            cum_treasury: running_cum_treasury,
+                        };
+                        self.writer
+                            .update_dao_daily_snapshot(*date, &dao_snapshot, batch)?;
+
+                        // Update prev_snapshot for next iteration in this batch
+                        prev_snapshot = Some(DaoDailySnapshot {
+                            date: date.format("%Y-%m-%d").to_string(),
+                            total_deposited: running_total_deposited,
+                            depositors_count: running_depositors,
+                            new_deposits: running_total_deposit_count,
+                            withdrawals: running_total_withdrawal_count,
+                            compensation: running_total_compensation,
+                            cumulative_deposit_amount: running_cumulative_deposit_amount,
+                            total_issuance,
+                            secondary_pool,
+                            occupied_capacity,
+                            cum_miner_secondary: running_cum_miner,
+                            cum_dao_compensation: running_cum_dao,
+                            cum_treasury: running_cum_treasury,
+                        });
+                    }
+                } else {
+                    // Live sync fallback: keep behavior when exact DAO deltas are unavailable.
+                    let all_deposits = self.writer.store().list_dao_deposits()?;
+                    let total_deposited: i128 = all_deposits
                         .iter()
                         .filter(|(_, e)| e.status == 0)
-                        .map(|(_, e)| e.lock_script_hash.as_slice())
-                        .collect();
-                    unique.len() as i64
-                };
-                let total_deposit_count = all_deposits.len() as i64;
-                let total_withdrawal_count =
-                    all_deposits.iter().filter(|(_, e)| e.status == 2).count() as i64;
-                let total_compensation: i128 = all_deposits
-                    .iter()
-                    .filter(|(_, e)| e.status == 2 && e.compensation.is_some())
-                    .map(|(_, e)| e.compensation.unwrap_or(0) as i128)
-                    .sum();
-                // Gross deposit amount: sum of ALL deposits' capacity (regardless of status)
-                let cumulative_deposit_amount: i128 =
-                    all_deposits.iter().map(|(_, e)| e.capacity as i128).sum();
-                // Read prev snapshot ONCE before the loop so multi-day batches
-                // chain correctly (each date builds on the previous).
-                let mut prev_snapshot = self
-                    .writer
-                    .store()
-                    .list_dao_daily_snapshots()
-                    .ok()
-                    .and_then(|snaps| snaps.last().cloned());
-
-                // NOTE: total_deposited is computed once from current deposit state
-                // (batch-end), not per-date historical state. This slightly skews the
-                // dao/treasury split for historical dates in multi-day batches. The
-                // rebuild_dao_daily_snapshots() task handles this correctly with
-                // event-based timeline tracking and can be run after sync for accuracy.
-                for date in snapshot_dates {
-                    // Extract C, S, U from the DAO header field for this date.
-                    let (total_issuance, secondary_pool, occupied_capacity) = stats
-                        .daily_dao_fields
-                        .get(date)
-                        .and_then(|field| {
-                            if field.len() >= 32 {
-                                let c = u64::from_le_bytes(field[0..8].try_into().ok()?) as i128;
-                                let s = u64::from_le_bytes(field[16..24].try_into().ok()?) as i128;
-                                let u = u64::from_le_bytes(field[24..32].try_into().ok()?) as i128;
-                                Some((c, s, u))
-                            } else {
-                                None
-                            }
-                        })
-                        .unwrap_or((0, 0, 0));
-                    // Compute daily secondary issuance breakdown from the S-field delta.
-                    // S tracks cumulative non-miner secondary issuance. The total
-                    // secondary issuance = S_delta * C / (C - U), and the miner share
-                    // is total_secondary - S_delta = S_delta * U / (C - U).
-                    let (cum_miner, cum_dao, cum_treasury) = if let Some(ref p) = prev_snapshot {
-                        let s_delta = (secondary_pool - p.secondary_pool).max(0);
-                        let denom = (total_issuance - occupied_capacity).max(1);
-                        let deposited = total_deposited.max(0);
-
-                        let daily_miner = s_delta * occupied_capacity / denom;
-                        let daily_dao_share = s_delta * deposited / denom;
-                        let daily_treasury_share = s_delta - daily_dao_share;
-                        (
-                            p.cum_miner_secondary + daily_miner,
-                            p.cum_dao_compensation + daily_dao_share,
-                            p.cum_treasury + daily_treasury_share,
-                        )
-                    } else {
-                        (0, 0, 0)
+                        .map(|(_, e)| e.capacity as i128)
+                        .sum();
+                    let depositors_count = {
+                        let unique: std::collections::HashSet<&[u8]> = all_deposits
+                            .iter()
+                            .filter(|(_, e)| e.status == 0)
+                            .map(|(_, e)| e.lock_script_hash.as_slice())
+                            .collect();
+                        unique.len() as i64
                     };
-                    let dao_snapshot = crate::db::writer::DaoSnapshotInput {
-                        total_deposited,
-                        depositors_count,
-                        total_deposit_count,
-                        total_withdrawal_count,
-                        total_compensation,
-                        cumulative_deposit_amount,
-                        total_issuance,
-                        secondary_pool,
-                        occupied_capacity,
-                        cum_miner_secondary: cum_miner,
-                        cum_dao_compensation: cum_dao,
-                        cum_treasury,
-                    };
-                    self.writer
-                        .update_dao_daily_snapshot(*date, &dao_snapshot, batch)?;
+                    let total_deposit_count = all_deposits.len() as i64;
+                    let total_withdrawal_count =
+                        all_deposits.iter().filter(|(_, e)| e.status == 2).count() as i64;
+                    let total_compensation: i128 = all_deposits
+                        .iter()
+                        .filter(|(_, e)| e.status == 2 && e.compensation.is_some())
+                        .map(|(_, e)| e.compensation.unwrap_or(0) as i128)
+                        .sum();
+                    let cumulative_deposit_amount: i128 =
+                        all_deposits.iter().map(|(_, e)| e.capacity as i128).sum();
+                    let mut prev_snapshot = self
+                        .writer
+                        .store()
+                        .list_dao_daily_snapshots()
+                        .ok()
+                        .and_then(|snaps| snaps.last().cloned());
 
-                    // Update prev_snapshot for next iteration in this batch
-                    prev_snapshot = Some(DaoDailySnapshot {
-                        date: date.format("%Y-%m-%d").to_string(),
-                        total_deposited,
-                        depositors_count,
-                        new_deposits: total_deposit_count,
-                        withdrawals: total_withdrawal_count,
-                        compensation: total_compensation,
-                        cumulative_deposit_amount,
-                        total_issuance,
-                        secondary_pool,
-                        occupied_capacity,
-                        cum_miner_secondary: cum_miner,
-                        cum_dao_compensation: cum_dao,
-                        cum_treasury,
-                    });
+                    for date in snapshot_dates {
+                        let (total_issuance, secondary_pool, occupied_capacity) = stats
+                            .daily_dao_fields
+                            .get(date)
+                            .and_then(|field| {
+                                if field.len() >= 32 {
+                                    let c =
+                                        u64::from_le_bytes(field[0..8].try_into().ok()?) as i128;
+                                    let s =
+                                        u64::from_le_bytes(field[16..24].try_into().ok()?) as i128;
+                                    let u =
+                                        u64::from_le_bytes(field[24..32].try_into().ok()?) as i128;
+                                    Some((c, s, u))
+                                } else {
+                                    None
+                                }
+                            })
+                            .unwrap_or((0, 0, 0));
+                        let (cum_miner, cum_dao, cum_treasury) = if let Some(ref p) = prev_snapshot
+                        {
+                            let s_delta = (secondary_pool - p.secondary_pool).max(0);
+                            let denom = (total_issuance - occupied_capacity).max(1);
+                            let deposited = total_deposited.max(0);
+                            let daily_miner = s_delta * occupied_capacity / denom;
+                            let daily_dao_share = s_delta * deposited / denom;
+                            let daily_treasury_share = s_delta - daily_dao_share;
+                            (
+                                p.cum_miner_secondary + daily_miner,
+                                p.cum_dao_compensation + daily_dao_share,
+                                p.cum_treasury + daily_treasury_share,
+                            )
+                        } else {
+                            (0, 0, 0)
+                        };
+                        let dao_snapshot = crate::db::writer::DaoSnapshotInput {
+                            total_deposited,
+                            depositors_count,
+                            total_deposit_count,
+                            total_withdrawal_count,
+                            total_compensation,
+                            cumulative_deposit_amount,
+                            total_issuance,
+                            secondary_pool,
+                            occupied_capacity,
+                            cum_miner_secondary: cum_miner,
+                            cum_dao_compensation: cum_dao,
+                            cum_treasury,
+                        };
+                        self.writer
+                            .update_dao_daily_snapshot(*date, &dao_snapshot, batch)?;
+
+                        prev_snapshot = Some(DaoDailySnapshot {
+                            date: date.format("%Y-%m-%d").to_string(),
+                            total_deposited,
+                            depositors_count,
+                            new_deposits: total_deposit_count,
+                            withdrawals: total_withdrawal_count,
+                            compensation: total_compensation,
+                            cumulative_deposit_amount,
+                            total_issuance,
+                            secondary_pool,
+                            occupied_capacity,
+                            cum_miner_secondary: cum_miner,
+                            cum_dao_compensation: cum_dao,
+                            cum_treasury,
+                        });
+                    }
                 }
             }
         }
@@ -5904,6 +6174,58 @@ impl Indexer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn dummy_live_cell_info() -> LiveCellInfo {
+        LiveCellInfo {
+            capacity: 1,
+            created_at_block: 1,
+            lock_script_hash: vec![1u8; 32],
+            lock_code_hash: vec![2u8; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: None,
+            type_code_hash: None,
+            data_size: 0,
+            occupied_capacity: 1,
+        }
+    }
+
+    #[test]
+    fn test_collect_missing_input_outpoints_dedups_and_skips_resolved() {
+        let input_outpoints = vec![
+            (vec![0xAA; 32], 0),
+            (vec![0xAA; 32], 0),
+            (vec![0xBB; 32], 1),
+            (vec![0xCC; 32], 2),
+        ];
+        let mut resolved = HashMap::new();
+        resolved.insert((vec![0xBB; 32], 1), dummy_live_cell_info());
+        let mut same_batch = HashMap::new();
+        same_batch.insert((vec![0xCC; 32], 2), ());
+
+        let missing = collect_missing_input_outpoints(&input_outpoints, &resolved, &same_batch);
+        assert_eq!(missing, vec![(vec![0xAA; 32], 0)]);
+    }
+
+    #[test]
+    fn test_format_outpoint_sample_limits_items() {
+        let outpoints = vec![
+            (vec![0x11; 32], 0),
+            (vec![0x22; 32], 1),
+            (vec![0x33; 32], 2),
+        ];
+
+        let sample = format_outpoint_sample(&outpoints, 2);
+        assert!(sample.contains("0x1111111111111111:0"));
+        assert!(sample.contains("0x2222222222222222:1"));
+        assert!(!sample.contains("0x3333333333333333:2"));
+    }
+
+    #[test]
+    fn test_address_balances_are_never_skipped_in_bulk_mode() {
+        assert!(!should_skip_address_balances(true));
+        assert!(!should_skip_address_balances(false));
+    }
 
     #[test]
     fn test_secondary_issuance_backfill_threshold_is_1000() {

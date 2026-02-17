@@ -121,3 +121,54 @@ impl BatchWriter {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use ckbadger_store::CkbadgerStore;
+    use tempfile::TempDir;
+
+    use super::BatchWriter;
+
+    fn setup() -> (TempDir, Arc<CkbadgerStore>, BatchWriter) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+        (dir, store, writer)
+    }
+
+    #[test]
+    fn test_init_sync_start_keeps_rebuild_flags_in_bulk_sync() {
+        let (_dir, store, writer) = setup();
+        store
+            .update_sync_status(|status| {
+                status.dao_daily_snapshots_rebuilt = true;
+                status.address_balances_rebuilt_from_live_cells = true;
+            })
+            .unwrap();
+
+        writer.init_sync_start(0, true).unwrap();
+
+        let status = store.get_sync_status().unwrap();
+        assert!(status.dao_daily_snapshots_rebuilt);
+        assert!(status.address_balances_rebuilt_from_live_cells);
+    }
+
+    #[test]
+    fn test_init_sync_start_keeps_rebuild_flags_for_non_bulk_sync() {
+        let (_dir, store, writer) = setup();
+        store
+            .update_sync_status(|status| {
+                status.dao_daily_snapshots_rebuilt = true;
+                status.address_balances_rebuilt_from_live_cells = true;
+            })
+            .unwrap();
+
+        writer.init_sync_start(0, false).unwrap();
+
+        let status = store.get_sync_status().unwrap();
+        assert!(status.dao_daily_snapshots_rebuilt);
+        assert!(status.address_balances_rebuilt_from_live_cells);
+    }
+}
