@@ -3501,7 +3501,13 @@ impl Indexer {
                         (Vec<u8>, i16),
                         (i64, Vec<u8>, i16, String, i64, i16),
                     > = HashMap::new();
-                    for (deposit, block_number, _ts, _ar) in &all_dao_deposits {
+                    // Also build a pending entries map keyed by outpoint for
+                    // process_dao_withdrawals_batch to update same-batch deposits.
+                    let mut pending_dao_entries: HashMap<
+                        [u8; 34],
+                        ckbadger_store::types::DaoDepositCacheEntry,
+                    > = HashMap::new();
+                    for (deposit, block_number, _ts, ar) in &all_dao_deposits {
                         same_batch_dao_deposits.insert(
                             (deposit.tx_hash.clone(), deposit.output_index as i16),
                             (
@@ -3512,6 +3518,26 @@ impl Indexer {
                                 *block_number,
                                 0i16, // status = 0 (active)
                             ),
+                        );
+                        let outpoint_key = ckbadger_store::keys::encode_outpoint(
+                            &deposit.tx_hash,
+                            deposit.output_index as i16,
+                        );
+                        pending_dao_entries.insert(
+                            outpoint_key,
+                            ckbadger_store::types::DaoDepositCacheEntry {
+                                capacity: deposit.capacity,
+                                deposit_block_number: *block_number,
+                                lock_script_hash: deposit.lock_script_hash.clone(),
+                                deposit_ar: *ar,
+                                status: 0,
+                                withdraw_request_tx: None,
+                                withdraw_request_block: None,
+                                withdraw_request_ar: None,
+                                withdraw_block: None,
+                                withdraw_tx: None,
+                                compensation: None,
+                            },
                         );
                     }
 
@@ -3615,8 +3641,11 @@ impl Indexer {
                             }
                         }
                         if !withdrawal_contexts.is_empty() {
-                            writer
-                                .process_dao_withdrawals_batch(&withdrawal_contexts, &mut batch)?;
+                            writer.process_dao_withdrawals_batch(
+                                &withdrawal_contexts,
+                                &mut batch,
+                                &pending_dao_entries,
+                            )?;
                         }
                     }
 
@@ -4249,7 +4278,12 @@ impl Indexer {
                     (Vec<u8>, i16),
                     (i64, Vec<u8>, i16, String, i64, i16),
                 > = HashMap::new();
-                for (deposit, block_number, _ts, _ar) in &all_dao_deposits {
+                // Also build pending entries map for process_dao_withdrawals_batch
+                let mut pending_dao_entries: HashMap<
+                    [u8; 34],
+                    ckbadger_store::types::DaoDepositCacheEntry,
+                > = HashMap::new();
+                for (deposit, block_number, _ts, ar) in &all_dao_deposits {
                     same_batch_dao_deposits.insert(
                         (deposit.tx_hash.clone(), deposit.output_index as i16),
                         (
@@ -4260,6 +4294,26 @@ impl Indexer {
                             *block_number,
                             0i16, // status = 0 (active)
                         ),
+                    );
+                    let outpoint_key = ckbadger_store::keys::encode_outpoint(
+                        &deposit.tx_hash,
+                        deposit.output_index as i16,
+                    );
+                    pending_dao_entries.insert(
+                        outpoint_key,
+                        ckbadger_store::types::DaoDepositCacheEntry {
+                            capacity: deposit.capacity,
+                            deposit_block_number: *block_number,
+                            lock_script_hash: deposit.lock_script_hash.clone(),
+                            deposit_ar: *ar,
+                            status: 0,
+                            withdraw_request_tx: None,
+                            withdraw_request_block: None,
+                            withdraw_request_ar: None,
+                            withdraw_block: None,
+                            withdraw_tx: None,
+                            compensation: None,
+                        },
                     );
                 }
 
@@ -4351,8 +4405,11 @@ impl Indexer {
                         }
                     }
                     if !withdrawal_contexts.is_empty() {
-                        self.writer
-                            .process_dao_withdrawals_batch(&withdrawal_contexts, &mut data_batch)?;
+                        self.writer.process_dao_withdrawals_batch(
+                            &withdrawal_contexts,
+                            &mut data_batch,
+                            &pending_dao_entries,
+                        )?;
                     }
                 }
             }
