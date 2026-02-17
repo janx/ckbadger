@@ -61,12 +61,13 @@ cd frontend && npx vitest run            # Non-interactive
 # E2E Testing (requires running services)
 pnpm test:e2e                            # Playwright tests
 
-# Data Integrity Verification
+# Data Integrity Verification (requires running API at localhost:3001)
 cargo run -p ckbadger-indexer -- verify --depth fast        # Quick checks (seconds)
-cargo run -p ckbadger-indexer -- verify --depth sampling    # Sampling + aggregation (minutes)
-cargo run -p ckbadger-indexer -- verify --depth exhaustive  # Full scan (hours)
-cargo run -p ckbadger-indexer -- verify --list-checks       # List all 38 checks
-cargo run -p ckbadger-indexer -- verify --no-explorer       # Skip HTTP checks
+cargo run -p ckbadger-indexer -- verify --depth sampling    # Sampling + explorer (minutes)
+cargo run -p ckbadger-indexer -- verify --list-checks       # List all 18 checks
+cargo run -p ckbadger-indexer -- verify --no-explorer       # Skip explorer HTTP checks
+cargo run -p ckbadger-indexer -- verify --api-url http://localhost:3001/api/v1  # Custom API URL
+cargo run -p ckbadger-indexer -- verify --rpc-url http://localhost:8114         # Add RPC spot-checks
 
 # Pre-commit verification
 cargo check && cargo clippy && cd frontend && pnpm type-check && pnpm lint
@@ -296,56 +297,42 @@ CKBADGER_DATA_PATH=/ssd/ckbadger-store cargo run -p ckbadger-indexer
 
 ## Data Integrity Verification (`verify` subcommand)
 
-The indexer includes a `verify` subcommand for acceptance testing data integrity. It opens the store in secondary (read-only) mode and runs tiered checks.
+The indexer includes a `verify` subcommand for acceptance testing data integrity. It calls the ckbadger REST API (no direct store access needed) and can run from anywhere the API is reachable.
 
 ```bash
 # Quick sanity checks (seconds)
 cargo run -p ckbadger-indexer -- verify --depth fast
 
-# Sampling + aggregation + explorer checks (minutes)
+# Sampling + chart validation + explorer comparison (minutes)
 cargo run -p ckbadger-indexer -- verify --depth sampling
 
-# Full scan of every record (hours)
-cargo run -p ckbadger-indexer -- verify --depth exhaustive
-
-# Offline only (skip explorer HTTP calls)
+# Skip explorer HTTP calls
 cargo run -p ckbadger-indexer -- verify --depth sampling --no-explorer
+
+# Custom API URL
+cargo run -p ckbadger-indexer -- verify --api-url http://localhost:3001/api/v1
+
+# With CKB RPC spot-checks
+cargo run -p ckbadger-indexer -- verify --rpc-url http://localhost:8114
 
 # List all available checks
 cargo run -p ckbadger-indexer -- verify --list-checks
 
 # Run specific checks
-cargo run -p ckbadger-indexer -- verify --checks dao_snapshot_monotonicity,circulating_supply_sanity
+cargo run -p ckbadger-indexer -- verify --checks genesis_block,dao_statistics_sane
 ```
 
 ### Check Tiers
 
-| Tier                   | Checks | Runtime | What it validates                                                                                                                                                                         |
-| ---------------------- | ------ | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Fast** (F1-F8)       | 8      | seconds | Metadata: sync tip consistency, cell count balance, deferred flags cleared, genesis exists, DAO fields sane, block count matches tip                                                      |
-| **Sampling** (S1-S15)  | 15     | minutes | Index roundtrips (hash↔number, tx_hash_map, cell indexes), address balance recomputation, DAO deposit field consistency, RPC spot-checks, **aggregated data cross-checks**                |
-| **Exhaustive** (E1-E5) | 5      | hours   | Full-scan: every live cell index, every address balance, block contiguity, every tx hash, occupied capacity sum                                                                           |
-| **Explorer** (X1-X10)  | 10     | minutes | Compare last 30 days against official CKB explorer API (tx count, live/dead cells, DAO deposit, hash rate, difficulty, knowledge size, occupied capacity, uncle rate, circulating supply) |
-
-### Aggregated Data Cross-Checks (S7-S15)
-
-These offline checks target the highest-risk area — derived/aggregated computations:
-
-| Check | Name                                     | Catches                                                                            |
-| ----- | ---------------------------------------- | ---------------------------------------------------------------------------------- |
-| S7    | `daily_stats_cell_delta_consistency`     | Cumulative counter drift in daily cell stats                                       |
-| S8    | `daily_stats_knowledge_size_vs_dao`      | Divergent DAO U-field parsing between statistics and snapshot code paths           |
-| S9    | `dao_snapshot_monotonicity`              | Negative deltas or stale reads in cumulative DAO fields                            |
-| S10   | `dao_secondary_issuance_sum`             | Miner secondary issuance errors (the 50x under-reporting class from POSTMORTEM.md) |
-| S11   | `daily_block_stats_count_vs_daily_stats` | One accumulator missing blocks the other sees                                      |
-| S12   | `circulating_supply_sanity`              | Sign errors, overflow, DAO accounting bugs in supply computation                   |
-| S13   | `daily_stats_tx_count_vs_blocks`         | DailyStats.transactions_count diverging from block header source data              |
-| S14   | `dao_cumulative_deposit_monotonicity`    | Gross deposit amount decreasing or falling below net deposits                      |
-| S15   | `dao_issuance_decomposition`             | Secondary issuance components not summing consistently with DAO fields             |
+| Tier                 | Checks | Runtime | What it validates                                                                                                        |
+| -------------------- | ------ | ------- | ------------------------------------------------------------------------------------------------------------------------ |
+| **Fast** (F1-F6)     | 6      | seconds | API reachable, sync complete, genesis block, tip block, deep fork clear, DAO statistics sane                             |
+| **Sampling** (S1-S7) | 7      | minutes | Block hash roundtrip, parent chain, address balance spot-check, chart validations (tx count, cells, supply), RPC compare |
+| **Explorer** (X1-X5) | 5      | minutes | Compare last 30 days against official CKB explorer API (tx count, DAO deposit, hash rate, difficulty, knowledge size)    |
 
 ### Explorer Response Cache
 
-Explorer checks cache HTTP responses to `{data_path}/.verify-cache/{indicator}.json` (override with `--cache-dir`).
+Explorer checks cache HTTP responses to `.verify-cache/{indicator}.json` (override with `--cache-dir`).
 
 - **Fresh cache** (< 24h): used immediately, no HTTP request
 - **Stale cache**: re-fetched from API; on HTTP failure, stale data used with warning
@@ -353,23 +340,21 @@ Explorer checks cache HTTP responses to `{data_path}/.verify-cache/{indicator}.j
 
 ### Adding a New Verify Check
 
-1. Choose tier: `fast.rs` (constant time), `sampling_checks.rs` (N samples), `exhaustive.rs` (full scan), `explorer.rs` (external API)
+1. Choose tier: `api_checks.rs` (fast or sampling), `explorer.rs` (external API comparison)
 2. Create struct implementing `Check` trait (name, description, tier, run)
 3. Register in the module's `*_checks()` function
-4. Convention: `S{N}` / `F{N}` / `E{N}` / `X{N}` prefix in doc comment
+4. Convention: `F{N}` / `S{N}` / `X{N}` prefix in doc comment
 
 ### Verify File Locations
 
-| What                | Where                                          |
-| ------------------- | ---------------------------------------------- |
-| CLI args & runner   | `crates/indexer/src/verify/mod.rs`             |
-| Check trait & types | `crates/indexer/src/verify/checks.rs`          |
-| Fast checks         | `crates/indexer/src/verify/fast.rs`            |
-| Sampling checks     | `crates/indexer/src/verify/sampling_checks.rs` |
-| Exhaustive checks   | `crates/indexer/src/verify/exhaustive.rs`      |
-| Explorer checks     | `crates/indexer/src/verify/explorer.rs`        |
-| Report rendering    | `crates/indexer/src/verify/report.rs`          |
-| LCG sampler         | `crates/indexer/src/verify/sampling.rs`        |
+| What                | Where                                     |
+| ------------------- | ----------------------------------------- |
+| CLI args & runner   | `crates/indexer/src/verify/mod.rs`        |
+| Check trait & types | `crates/indexer/src/verify/checks.rs`     |
+| API checks (F+S)    | `crates/indexer/src/verify/api_checks.rs` |
+| Explorer checks     | `crates/indexer/src/verify/explorer.rs`   |
+| Report rendering    | `crates/indexer/src/verify/report.rs`     |
+| LCG sampler         | `crates/indexer/src/verify/sampling.rs`   |
 
 ## Rust Style
 

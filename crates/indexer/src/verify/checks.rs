@@ -1,19 +1,13 @@
 //! Core types and trait for verification checks.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Instant;
-
-use ckbadger_store::CkbadgerStore;
-
-use crate::rpc::CkbRpcClient;
 
 /// Severity tier. Derives PartialOrd so `tier <= depth` naturally includes lower tiers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CheckTier {
     Fast,
     Sampling,
-    Exhaustive,
 }
 
 impl std::fmt::Display for CheckTier {
@@ -21,17 +15,16 @@ impl std::fmt::Display for CheckTier {
         match self {
             CheckTier::Fast => write!(f, "fast"),
             CheckTier::Sampling => write!(f, "sampling"),
-            CheckTier::Exhaustive => write!(f, "exhaustive"),
         }
     }
 }
 
-/// Context shared with every check.
+/// Context shared with every check. All data comes via HTTP — no store dependency.
 pub struct CheckContext {
-    pub store: Arc<CkbadgerStore>,
-    pub rpc: Option<CkbRpcClient>,
+    pub api_url: String,
+    pub rpc_url: Option<String>,
     pub explorer_url: Option<String>,
-    pub http_client: reqwest::Client,
+    pub http: reqwest::blocking::Client,
     pub sample_count: usize,
     pub seed: u64,
     pub tolerance: f64,
@@ -152,7 +145,7 @@ pub fn execute_check(
     progress: &ProgressReporter,
 ) -> CompletedCheck {
     // Check skip conditions
-    if check.requires_rpc() && ctx.rpc.is_none() {
+    if check.requires_rpc() && ctx.rpc_url.is_none() {
         return CompletedCheck {
             name: check.name(),
             description: check.description(),

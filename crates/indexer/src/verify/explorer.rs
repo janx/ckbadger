@@ -1,4 +1,4 @@
-//! Explorer comparison checks — compares our data against the official CKB explorer API.
+//! Explorer comparison checks — compares our API data against the official CKB explorer API.
 //!
 //! Supports file-based caching of explorer responses to avoid repeated HTTP requests.
 //! Cache files are stored in `{cache_dir}/{indicator}.json` with a 24-hour freshness window.
@@ -11,6 +11,33 @@ use console::style;
 
 use super::checks::*;
 use super::report::{format_number, format_number_i128};
+
+// ---------------------------------------------------------------------------
+// Lightweight types for our API chart responses
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ApiResponse<T> {
+    data: T,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChartDataPoint {
+    date: String,
+    value: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChartResponse {
+    data: Vec<ChartDataPoint>,
+}
+
+// ---------------------------------------------------------------------------
+// Explorer API caching
+// ---------------------------------------------------------------------------
 
 /// Cached explorer response stored as JSON on disk.
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -77,7 +104,7 @@ fn fetch_explorer_daily(
     }
 
     // 2. Fetch from API
-    match fetch_from_api(ctx, indicator, field) {
+    match fetch_from_explorer_api(ctx, indicator, field) {
         Ok(data) => {
             write_cache(&ctx.cache_dir, indicator, &data);
             Ok(data)
@@ -101,7 +128,7 @@ fn fetch_explorer_daily(
 }
 
 /// Perform the actual HTTP fetch from the explorer API.
-fn fetch_from_api(
+fn fetch_from_explorer_api(
     ctx: &CheckContext,
     indicator: &str,
     field: &str,
@@ -117,20 +144,14 @@ fn fetch_from_api(
         indicator
     );
 
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
+    let resp = ctx
+        .http
+        .get(&url)
+        .header("Content-Type", "application/vnd.api+json")
+        .header("Accept", "application/vnd.api+json")
+        .send()?;
 
-    let resp = rt.block_on(async {
-        ctx.http_client
-            .get(&url)
-            .header("Content-Type", "application/vnd.api+json")
-            .header("Accept", "application/vnd.api+json")
-            .send()
-            .await
-    })?;
-
-    let body: serde_json::Value = rt.block_on(resp.json())?;
+    let body: serde_json::Value = resp.json()?;
 
     let mut result = HashMap::new();
     if let Some(data) = body.get("data").and_then(|d| d.as_array()) {
@@ -139,7 +160,6 @@ fn fetch_from_api(
                 Some(a) => a,
                 None => continue,
             };
-            // Try as string first, then as number
             let ts_val = attrs
                 .get("created_at_unixtimestamp")
                 .and_then(|v| {
@@ -175,11 +195,46 @@ fn fetch_from_api(
     Ok(result)
 }
 
-/// Compare integer values: our store vs explorer, requiring exact match.
+// ---------------------------------------------------------------------------
+// Helpers: fetch our data from the ckbadger API charts
+// ---------------------------------------------------------------------------
+
+fn api_get<T: serde::de::DeserializeOwned>(ctx: &CheckContext, path: &str) -> anyhow::Result<T> {
+    let url = format!(
+        "{}/{}",
+        ctx.api_url.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    );
+    let resp = ctx.http.get(&url).send()?;
+    let status = resp.status();
+    if !status.is_success() {
+        anyhow::bail!("GET {} returned {}", path, status);
+    }
+    Ok(resp.json()?)
+}
+
+/// Fetch our chart data as a date→value map. Works for simple ChartResponse endpoints.
+fn fetch_our_chart(
+    ctx: &CheckContext,
+    chart_path: &str,
+) -> anyhow::Result<HashMap<String, String>> {
+    let wrapper: ApiResponse<ChartResponse> = api_get(ctx, chart_path)?;
+    let mut map = HashMap::new();
+    for point in wrapper.data.data {
+        map.insert(point.date, point.value);
+    }
+    Ok(map)
+}
+
+// ---------------------------------------------------------------------------
+// Comparison helpers
+// ---------------------------------------------------------------------------
+
+/// Compare integer values: our API vs explorer, requiring exact match.
 fn compare_exact_i64(ours: i64, theirs: &str, date: &str, label: &str) -> Option<Finding> {
     let their_val: i64 = match theirs.parse() {
         Ok(v) => v,
-        Err(_) => return None, // Skip unparseable values
+        Err(_) => return None,
     };
     if ours != their_val {
         Some(Finding {
@@ -197,7 +252,7 @@ fn compare_exact_i64(ours: i64, theirs: &str, date: &str, label: &str) -> Option
     }
 }
 
-/// Compare i128 values: our store vs explorer, requiring exact match.
+/// Compare i128 values: our API vs explorer, requiring exact match.
 fn compare_exact_i128(ours: i128, theirs: &str, date: &str, label: &str) -> Option<Finding> {
     let their_val: i128 = match theirs.parse() {
         Ok(v) => v,
@@ -269,16 +324,11 @@ fn last_30_days() -> Vec<String> {
         .collect()
 }
 
-/// Convert "YYYY-MM-DD" to "YYYYMMDD" for store lookups.
-fn date_to_key(date: &str) -> String {
-    date.replace('-', "")
-}
-
 // ============================================
-// Explorer checks
+// Explorer checks (X1-X5)
 // ============================================
 
-/// X1: Daily transactions_count for last 30 days.
+/// X1: Compare /charts/transaction-count last 30 days vs explorer transactions_count.
 pub struct ExplorerTxCount;
 
 impl Check for ExplorerTxCount {
@@ -299,24 +349,20 @@ impl Check for ExplorerTxCount {
     }
     fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
         let explorer_data = fetch_explorer_daily(ctx, "transactions_count", "transactions_count")?;
+        let our_data = fetch_our_chart(ctx, "charts/transaction-count")?;
         let dates = last_30_days();
         let mut findings = vec![];
         let mut checked = 0u64;
 
         for date in &dates {
-            if let Some(explorer_val) = explorer_data.get(date) {
-                let key = date_to_key(date);
-                if let Some(stats) = ctx.store.get_daily_stats(&key)? {
-                    if let Some(f) = compare_exact_i64(
-                        stats.transactions_count as i64,
-                        explorer_val,
-                        date,
-                        "transactions_count",
-                    ) {
-                        findings.push(f);
-                    }
-                    checked += 1;
+            if let (Some(our_val), Some(explorer_val)) =
+                (our_data.get(date), explorer_data.get(date))
+            {
+                let ours: i64 = our_val.parse().unwrap_or(0);
+                if let Some(f) = compare_exact_i64(ours, explorer_val, date, "transactions_count") {
+                    findings.push(f);
                 }
+                checked += 1;
             }
             progress.inc(1);
         }
@@ -329,114 +375,12 @@ impl Check for ExplorerTxCount {
     }
 }
 
-/// X2: Daily live_cells_count.
-pub struct ExplorerLiveCells;
+/// X2: Compare /dao/charts/total-deposit vs explorer total_dao_deposit.
+pub struct ExplorerTotalDeposit;
 
-impl Check for ExplorerLiveCells {
+impl Check for ExplorerTotalDeposit {
     fn name(&self) -> &'static str {
-        "explorer_live_cells"
-    }
-    fn description(&self) -> &'static str {
-        "Daily live_cells_count vs explorer"
-    }
-    fn tier(&self) -> CheckTier {
-        CheckTier::Sampling
-    }
-    fn requires_explorer(&self) -> bool {
-        true
-    }
-    fn estimated_total(&self, _ctx: &CheckContext) -> Option<u64> {
-        Some(30)
-    }
-    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
-        let explorer_data = fetch_explorer_daily(ctx, "live_cells_count", "live_cells_count")?;
-        let dates = last_30_days();
-        let mut findings = vec![];
-        let mut checked = 0u64;
-
-        for date in &dates {
-            if let Some(explorer_val) = explorer_data.get(date) {
-                let key = date_to_key(date);
-                if let Some(stats) = ctx.store.get_daily_stats(&key)? {
-                    if let Some(f) = compare_exact_i64(
-                        stats.total_live_cells,
-                        explorer_val,
-                        date,
-                        "live_cells_count",
-                    ) {
-                        findings.push(f);
-                    }
-                    checked += 1;
-                }
-            }
-            progress.inc(1);
-        }
-
-        if findings.is_empty() {
-            Ok(CheckResult::pass(checked))
-        } else {
-            Ok(CheckResult::fail(checked, findings))
-        }
-    }
-}
-
-/// X3: Daily dead_cells_count.
-pub struct ExplorerDeadCells;
-
-impl Check for ExplorerDeadCells {
-    fn name(&self) -> &'static str {
-        "explorer_dead_cells"
-    }
-    fn description(&self) -> &'static str {
-        "Daily dead_cells_count vs explorer"
-    }
-    fn tier(&self) -> CheckTier {
-        CheckTier::Sampling
-    }
-    fn requires_explorer(&self) -> bool {
-        true
-    }
-    fn estimated_total(&self, _ctx: &CheckContext) -> Option<u64> {
-        Some(30)
-    }
-    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
-        let explorer_data = fetch_explorer_daily(ctx, "dead_cells_count", "dead_cells_count")?;
-        let dates = last_30_days();
-        let mut findings = vec![];
-        let mut checked = 0u64;
-
-        for date in &dates {
-            if let Some(explorer_val) = explorer_data.get(date) {
-                let key = date_to_key(date);
-                if let Some(stats) = ctx.store.get_daily_stats(&key)? {
-                    if let Some(f) = compare_exact_i64(
-                        stats.total_dead_cells,
-                        explorer_val,
-                        date,
-                        "dead_cells_count",
-                    ) {
-                        findings.push(f);
-                    }
-                    checked += 1;
-                }
-            }
-            progress.inc(1);
-        }
-
-        if findings.is_empty() {
-            Ok(CheckResult::pass(checked))
-        } else {
-            Ok(CheckResult::fail(checked, findings))
-        }
-    }
-}
-
-/// X4: Daily total_dao_deposit.
-pub struct ExplorerDaoDeposit;
-
-impl Check for ExplorerDaoDeposit {
-    fn name(&self) -> &'static str {
-        "explorer_dao_deposit"
+        "explorer_total_deposit"
     }
     fn description(&self) -> &'static str {
         "Daily total_dao_deposit vs explorer"
@@ -452,28 +396,20 @@ impl Check for ExplorerDaoDeposit {
     }
     fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
         let explorer_data = fetch_explorer_daily(ctx, "total_dao_deposit", "total_dao_deposit")?;
+        let our_data = fetch_our_chart(ctx, "dao/charts/total-deposit")?;
         let dates = last_30_days();
         let mut findings = vec![];
         let mut checked = 0u64;
 
-        // Load DAO daily snapshots into a map
-        let snapshots = ctx.store.list_dao_daily_snapshots()?;
-        let snap_map: HashMap<String, _> =
-            snapshots.into_iter().map(|s| (s.date.clone(), s)).collect();
-
         for date in &dates {
-            if let Some(explorer_val) = explorer_data.get(date) {
-                if let Some(snap) = snap_map.get(date) {
-                    if let Some(f) = compare_exact_i128(
-                        snap.total_deposited,
-                        explorer_val,
-                        date,
-                        "total_dao_deposit",
-                    ) {
-                        findings.push(f);
-                    }
-                    checked += 1;
+            if let (Some(our_val), Some(explorer_val)) =
+                (our_data.get(date), explorer_data.get(date))
+            {
+                let ours: i128 = our_val.parse().unwrap_or(0);
+                if let Some(f) = compare_exact_i128(ours, explorer_val, date, "total_dao_deposit") {
+                    findings.push(f);
                 }
+                checked += 1;
             }
             progress.inc(1);
         }
@@ -486,7 +422,7 @@ impl Check for ExplorerDaoDeposit {
     }
 }
 
-/// X5: Daily avg_hash_rate (tolerance-based).
+/// X3: Compare /charts/hash-rate vs explorer avg_hash_rate (tolerance-based).
 pub struct ExplorerHashRate;
 
 impl Check for ExplorerHashRate {
@@ -507,33 +443,22 @@ impl Check for ExplorerHashRate {
     }
     fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
         let explorer_data = fetch_explorer_daily(ctx, "avg_hash_rate", "avg_hash_rate")?;
+        let our_data = fetch_our_chart(ctx, "charts/hash-rate")?;
         let dates = last_30_days();
-        let daily_block_stats = ctx.store.list_daily_block_stats()?;
-        let stats_map: HashMap<String, _> = daily_block_stats
-            .into_iter()
-            .map(|(d, s)| (format!("{}-{}-{}", &d[..4], &d[4..6], &d[6..8]), s))
-            .collect();
-
         let mut findings = vec![];
         let mut checked = 0u64;
 
         for date in &dates {
-            if let Some(explorer_val) = explorer_data.get(date) {
-                if let Some(stats) = stats_map.get(date) {
-                    // Convert compact_target to hash_rate
-                    // avg_compact_target is already stored as difficulty-equivalent
-                    let our_hash_rate = compact_target_to_hash_rate(stats.avg_compact_target);
-                    if let Some(f) = compare_tolerance_f64(
-                        our_hash_rate,
-                        explorer_val,
-                        date,
-                        "avg_hash_rate",
-                        ctx.tolerance,
-                    ) {
-                        findings.push(f);
-                    }
-                    checked += 1;
+            if let (Some(our_val), Some(explorer_val)) =
+                (our_data.get(date), explorer_data.get(date))
+            {
+                let ours: f64 = our_val.parse().unwrap_or(0.0);
+                if let Some(f) =
+                    compare_tolerance_f64(ours, explorer_val, date, "avg_hash_rate", ctx.tolerance)
+                {
+                    findings.push(f);
                 }
+                checked += 1;
             }
             progress.inc(1);
         }
@@ -546,15 +471,7 @@ impl Check for ExplorerHashRate {
     }
 }
 
-/// Convert compact target average to hash rate estimate.
-/// Hash rate ≈ difficulty / block_time.
-/// The explorer stores this differently, so we may need tolerance.
-fn compact_target_to_hash_rate(avg_compact_target: f64) -> f64 {
-    // compact_target is stored as the raw difficulty value in our store
-    avg_compact_target
-}
-
-/// X6: Daily avg_difficulty (tolerance-based).
+/// X4: Compare /charts/difficulty vs explorer avg_difficulty (tolerance-based).
 pub struct ExplorerDifficulty;
 
 impl Check for ExplorerDifficulty {
@@ -575,30 +492,22 @@ impl Check for ExplorerDifficulty {
     }
     fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
         let explorer_data = fetch_explorer_daily(ctx, "avg_difficulty", "avg_difficulty")?;
+        let our_data = fetch_our_chart(ctx, "charts/difficulty")?;
         let dates = last_30_days();
-        let daily_block_stats = ctx.store.list_daily_block_stats()?;
-        let stats_map: HashMap<String, _> = daily_block_stats
-            .into_iter()
-            .map(|(d, s)| (format!("{}-{}-{}", &d[..4], &d[4..6], &d[6..8]), s))
-            .collect();
-
         let mut findings = vec![];
         let mut checked = 0u64;
 
         for date in &dates {
-            if let Some(explorer_val) = explorer_data.get(date) {
-                if let Some(stats) = stats_map.get(date) {
-                    if let Some(f) = compare_tolerance_f64(
-                        stats.avg_compact_target,
-                        explorer_val,
-                        date,
-                        "avg_difficulty",
-                        ctx.tolerance,
-                    ) {
-                        findings.push(f);
-                    }
-                    checked += 1;
+            if let (Some(our_val), Some(explorer_val)) =
+                (our_data.get(date), explorer_data.get(date))
+            {
+                let ours: f64 = our_val.parse().unwrap_or(0.0);
+                if let Some(f) =
+                    compare_tolerance_f64(ours, explorer_val, date, "avg_difficulty", ctx.tolerance)
+                {
+                    findings.push(f);
                 }
+                checked += 1;
             }
             progress.inc(1);
         }
@@ -611,7 +520,7 @@ impl Check for ExplorerDifficulty {
     }
 }
 
-/// X7: Daily knowledge_size (exact match).
+/// X5: Compare /charts/knowledge-size vs explorer occupied_capacity.
 pub struct ExplorerKnowledgeSize;
 
 impl Check for ExplorerKnowledgeSize {
@@ -619,57 +528,7 @@ impl Check for ExplorerKnowledgeSize {
         "explorer_knowledge_size"
     }
     fn description(&self) -> &'static str {
-        "Daily knowledge_size vs explorer"
-    }
-    fn tier(&self) -> CheckTier {
-        CheckTier::Sampling
-    }
-    fn requires_explorer(&self) -> bool {
-        true
-    }
-    fn estimated_total(&self, _ctx: &CheckContext) -> Option<u64> {
-        Some(30)
-    }
-    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
-        let explorer_data = fetch_explorer_daily(ctx, "knowledge_size", "knowledge_size")?;
-        let dates = last_30_days();
-        let mut findings = vec![];
-        let mut checked = 0u64;
-
-        for date in &dates {
-            if let Some(explorer_val) = explorer_data.get(date) {
-                let key = date_to_key(date);
-                if let Some(stats) = ctx.store.get_daily_stats(&key)? {
-                    if let Some(our_ks) = stats.knowledge_size {
-                        if let Some(f) =
-                            compare_exact_i128(our_ks, explorer_val, date, "knowledge_size")
-                        {
-                            findings.push(f);
-                        }
-                        checked += 1;
-                    }
-                }
-            }
-            progress.inc(1);
-        }
-
-        if findings.is_empty() {
-            Ok(CheckResult::pass(checked))
-        } else {
-            Ok(CheckResult::fail(checked, findings))
-        }
-    }
-}
-
-/// X8: Daily occupied_capacity (exact match).
-pub struct ExplorerOccupiedCapacity;
-
-impl Check for ExplorerOccupiedCapacity {
-    fn name(&self) -> &'static str {
-        "explorer_occupied_capacity"
-    }
-    fn description(&self) -> &'static str {
-        "Daily occupied_capacity vs explorer"
+        "Daily knowledge_size vs explorer occupied_capacity"
     }
     fn tier(&self) -> CheckTier {
         CheckTier::Sampling
@@ -682,150 +541,20 @@ impl Check for ExplorerOccupiedCapacity {
     }
     fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
         let explorer_data = fetch_explorer_daily(ctx, "occupied_capacity", "occupied_capacity")?;
+        let our_data = fetch_our_chart(ctx, "charts/knowledge-size")?;
         let dates = last_30_days();
         let mut findings = vec![];
         let mut checked = 0u64;
 
-        let snapshots = ctx.store.list_dao_daily_snapshots()?;
-        let snap_map: HashMap<String, _> =
-            snapshots.into_iter().map(|s| (s.date.clone(), s)).collect();
-
         for date in &dates {
-            if let Some(explorer_val) = explorer_data.get(date) {
-                if let Some(snap) = snap_map.get(date) {
-                    if let Some(f) = compare_exact_i128(
-                        snap.occupied_capacity,
-                        explorer_val,
-                        date,
-                        "occupied_capacity",
-                    ) {
-                        findings.push(f);
-                    }
-                    checked += 1;
+            if let (Some(our_val), Some(explorer_val)) =
+                (our_data.get(date), explorer_data.get(date))
+            {
+                let ours: i128 = our_val.parse().unwrap_or(0);
+                if let Some(f) = compare_exact_i128(ours, explorer_val, date, "knowledge_size") {
+                    findings.push(f);
                 }
-            }
-            progress.inc(1);
-        }
-
-        if findings.is_empty() {
-            Ok(CheckResult::pass(checked))
-        } else {
-            Ok(CheckResult::fail(checked, findings))
-        }
-    }
-}
-
-/// X9: Daily uncle_rate (tolerance-based).
-pub struct ExplorerUncleRate;
-
-impl Check for ExplorerUncleRate {
-    fn name(&self) -> &'static str {
-        "explorer_uncle_rate"
-    }
-    fn description(&self) -> &'static str {
-        "Daily uncle_rate vs explorer"
-    }
-    fn tier(&self) -> CheckTier {
-        CheckTier::Sampling
-    }
-    fn requires_explorer(&self) -> bool {
-        true
-    }
-    fn estimated_total(&self, _ctx: &CheckContext) -> Option<u64> {
-        Some(30)
-    }
-    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
-        let explorer_data = fetch_explorer_daily(ctx, "uncle_rate", "uncle_rate")?;
-        let dates = last_30_days();
-        let daily_block_stats = ctx.store.list_daily_block_stats()?;
-        let stats_map: HashMap<String, _> = daily_block_stats
-            .into_iter()
-            .map(|(d, s)| (format!("{}-{}-{}", &d[..4], &d[4..6], &d[6..8]), s))
-            .collect();
-
-        let mut findings = vec![];
-        let mut checked = 0u64;
-
-        for date in &dates {
-            if let Some(explorer_val) = explorer_data.get(date) {
-                if let Some(stats) = stats_map.get(date) {
-                    let our_rate = if stats.block_count > 0 {
-                        stats.total_uncles as f64 / stats.block_count as f64
-                    } else {
-                        0.0
-                    };
-                    if let Some(f) = compare_tolerance_f64(
-                        our_rate,
-                        explorer_val,
-                        date,
-                        "uncle_rate",
-                        ctx.tolerance,
-                    ) {
-                        findings.push(f);
-                    }
-                    checked += 1;
-                }
-            }
-            progress.inc(1);
-        }
-
-        if findings.is_empty() {
-            Ok(CheckResult::pass(checked))
-        } else {
-            Ok(CheckResult::fail(checked, findings))
-        }
-    }
-}
-
-/// X10: Daily circulating_supply (tolerance-based).
-pub struct ExplorerCirculatingSupply;
-
-impl Check for ExplorerCirculatingSupply {
-    fn name(&self) -> &'static str {
-        "explorer_circulating_supply"
-    }
-    fn description(&self) -> &'static str {
-        "Daily circulating_supply vs explorer"
-    }
-    fn tier(&self) -> CheckTier {
-        CheckTier::Sampling
-    }
-    fn requires_explorer(&self) -> bool {
-        true
-    }
-    fn estimated_total(&self, _ctx: &CheckContext) -> Option<u64> {
-        Some(30)
-    }
-    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
-        let explorer_data = fetch_explorer_daily(ctx, "circulating_supply", "circulating_supply")?;
-        let dates = last_30_days();
-        let mut findings = vec![];
-        let mut checked = 0u64;
-
-        let snapshots = ctx.store.list_dao_daily_snapshots()?;
-        let snap_map: HashMap<String, _> =
-            snapshots.into_iter().map(|s| (s.date.clone(), s)).collect();
-
-        // Genesis burnt: 8,400,000,000 CKB = 840,000,000,000,000,000 shannons
-        const BURNT_SHANNONS: i128 = 840_000_000_000_000_000;
-
-        for date in &dates {
-            if let Some(explorer_val) = explorer_data.get(date) {
-                if let Some(snap) = snap_map.get(date) {
-                    // circulating = total_issuance - burnt - dao_locked
-                    let circulating = snap.total_issuance - BURNT_SHANNONS - snap.total_deposited;
-                    let our_supply = circulating as f64 / 1e8; // Convert shannons to CKB
-                    if let Some(f) = compare_tolerance_f64(
-                        our_supply,
-                        explorer_val,
-                        date,
-                        "circulating_supply",
-                        ctx.tolerance,
-                    ) {
-                        findings.push(f);
-                    }
-                    checked += 1;
-                }
+                checked += 1;
             }
             progress.inc(1);
         }
@@ -842,14 +571,9 @@ impl Check for ExplorerCirculatingSupply {
 pub fn explorer_checks() -> Vec<Box<dyn Check>> {
     vec![
         Box::new(ExplorerTxCount),
-        Box::new(ExplorerLiveCells),
-        Box::new(ExplorerDeadCells),
-        Box::new(ExplorerDaoDeposit),
+        Box::new(ExplorerTotalDeposit),
         Box::new(ExplorerHashRate),
         Box::new(ExplorerDifficulty),
         Box::new(ExplorerKnowledgeSize),
-        Box::new(ExplorerOccupiedCapacity),
-        Box::new(ExplorerUncleRate),
-        Box::new(ExplorerCirculatingSupply),
     ]
 }

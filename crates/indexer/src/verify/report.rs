@@ -21,7 +21,7 @@ pub fn make_spinner(mp: &MultiProgress, name: &str) -> ProgressBar {
     pb
 }
 
-/// Create a progress bar for a sampling/exhaustive check with known total.
+/// Create a progress bar for a sampling check with known total.
 pub fn make_progress_bar(mp: &MultiProgress, name: &str, total: u64) -> ProgressBar {
     let pb = mp.add(ProgressBar::new(total));
     pb.set_style(
@@ -119,7 +119,6 @@ pub fn print_tier_header(tier: CheckTier) {
     let label = match tier {
         CheckTier::Fast => "FAST CHECKS",
         CheckTier::Sampling => "SAMPLING CHECKS",
-        CheckTier::Exhaustive => "EXHAUSTIVE CHECKS",
     };
     eprintln!("\n{}", style(label).bold().underlined());
 }
@@ -155,18 +154,11 @@ pub fn print_summary(results: &[CompletedCheck], total_duration: Duration) {
     }
 }
 
-/// Print the initial header with store info.
-pub fn print_header(
-    data_path: &str,
-    tip: i64,
-    depth: &str,
-    seed: u64,
-    samples: usize,
-    rpc_url: Option<&str>,
-) {
+/// Print the initial header with API info.
+pub fn print_header(api_url: &str, depth: &str, seed: u64, samples: usize, rpc_url: Option<&str>) {
     eprintln!();
-    eprintln!("{}", style("ckbadger verify v0.1.0").bold());
-    eprintln!("Store: {} (tip: #{})", data_path, format_number(tip as u64));
+    eprintln!("{}", style("ckbadger verify v0.2.0").bold());
+    eprintln!("API:   {}", api_url);
     eprintln!("Depth: {} (seed: {}, {} samples)", depth, seed, samples);
     if let Some(rpc) = rpc_url {
         eprintln!("RPC:   {}", rpc);

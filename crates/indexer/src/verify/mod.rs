@@ -1,36 +1,31 @@
 //! Verification/acceptance testing suite for ckbadger data integrity.
 //!
-//! Provides a `verify` CLI subcommand that validates internal consistency,
+//! Provides a `verify` CLI subcommand that validates data via the ckbadger REST API,
 //! spot-checks against a CKB RPC node, and compares against the official explorer.
 
+pub mod api_checks;
 pub mod checks;
-pub mod exhaustive;
 pub mod explorer;
-pub mod fast;
 pub mod report;
 pub mod sampling;
-pub mod sampling_checks;
 
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Instant;
 
 use indicatif::MultiProgress;
 
 use checks::{execute_check, Check, CheckContext, CheckTier, CompletedCheck, ProgressReporter};
-use ckbadger_store::CkbadgerStore;
-
-use crate::rpc::CkbRpcClient;
 
 /// CLI arguments for the verify subcommand.
 #[derive(clap::Args, Debug)]
 pub struct VerifyArgs {
+    /// ckbadger API base URL.
     #[arg(
         long,
-        env = "CKBADGER_DATA_PATH",
-        default_value = "./data/ckbadger-store"
+        env = "CKBADGER_API_URL",
+        default_value = "http://localhost:3001/api/v1"
     )]
-    pub data_path: String,
+    pub api_url: String,
 
     /// CKB RPC URL for spot-checks.
     #[arg(long, env = "CKB_RPC_URL")]
@@ -87,11 +82,7 @@ fn parse_depth(s: &str) -> Result<CheckTier, String> {
     match s.to_lowercase().as_str() {
         "fast" => Ok(CheckTier::Fast),
         "sampling" => Ok(CheckTier::Sampling),
-        "exhaustive" => Ok(CheckTier::Exhaustive),
-        _ => Err(format!(
-            "Invalid depth: {}. Use fast, sampling, or exhaustive",
-            s
-        )),
+        _ => Err(format!("Invalid depth: {}. Use fast or sampling", s)),
     }
 }
 
@@ -106,9 +97,7 @@ fn parse_format(s: &str) -> Result<OutputFormat, String> {
 /// Collect all registered checks.
 fn all_checks() -> Vec<Box<dyn Check>> {
     let mut checks: Vec<Box<dyn Check>> = Vec::new();
-    checks.extend(fast::fast_checks());
-    checks.extend(sampling_checks::sampling_checks());
-    checks.extend(exhaustive::exhaustive_checks());
+    checks.extend(api_checks::api_checks());
     checks.extend(explorer::explorer_checks());
     checks
 }
@@ -133,40 +122,28 @@ pub fn run(args: VerifyArgs) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Open store in secondary (read-only) mode
-    let secondary_path = format!("{}-verify-secondary", args.data_path);
-    std::fs::create_dir_all(&secondary_path)?;
-    let store = Arc::new(CkbadgerStore::open_secondary(
-        &args.data_path,
-        &secondary_path,
-    )?);
-    store.refresh()?;
-
-    let sync_status = store.get_sync_status()?;
-    let tip = sync_status.tip_block_number;
-
-    // Build context
-    let rpc = args.rpc_url.as_ref().map(CkbRpcClient::new);
     let explorer_url = if args.no_explorer {
         None
     } else {
         Some(args.explorer_url.clone())
     };
 
-    let cache_dir = args
-        .cache_dir
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(&args.data_path).join(".verify-cache"));
+    let cache_dir = args.cache_dir.as_ref().map(PathBuf::from).or_else(|| {
+        // Default cache dir next to working directory
+        Some(PathBuf::from(".verify-cache"))
+    });
 
     let ctx = CheckContext {
-        store,
-        rpc,
+        api_url: args.api_url.clone(),
+        rpc_url: args.rpc_url.clone(),
         explorer_url,
-        http_client: reqwest::Client::new(),
+        http: reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()?,
         sample_count: args.sample_count,
         seed: args.seed,
         tolerance: args.tolerance,
-        cache_dir: Some(cache_dir),
+        cache_dir,
     };
 
     // Filter checks by tier and name
@@ -199,8 +176,7 @@ pub fn run(args: VerifyArgs) -> anyhow::Result<()> {
 
     if !is_json {
         report::print_header(
-            &args.data_path,
-            tip,
+            &args.api_url,
             &args.depth.to_string(),
             args.seed,
             args.sample_count,

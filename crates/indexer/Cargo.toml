@@ -17,8 +17,8 @@ ckbadger-task-runner = { path = "../task-runner" }
 # Async runtime
 tokio = { workspace = true }
 
-# HTTP client (for CKB RPC)
-reqwest = { workspace = true }
+# HTTP client (for CKB RPC + blocking verify checks)
+reqwest = { workspace = true, features = ["blocking"] }
 
 # Serialization
 serde = { workspace = true }
