@@ -379,6 +379,9 @@ cargo run -p ckbadger-indexer --release
 # Run API server (from project root)
 cargo run -p ckbadger-api --release
 
+# Run monitoring TUI (sync/memory/throughput, no task controls)
+cargo run -p ckbadger-tui
+
 # Run frontend
 cd frontend && pnpm install && pnpm dev
 ```

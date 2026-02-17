@@ -6,6 +6,7 @@ members = [
     "crates/ckbadger-store",
     "crates/indexer",
     "crates/api",
+    "crates/tui",
 ]
 
 [workspace.package]
