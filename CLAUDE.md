@@ -598,9 +598,10 @@ knowledge_size = dao.U - (BURN_QUOTA * 0.6)
 
 **If exact calculation is expensive (e.g., RPC calls for every block):**
 
-1. Defer during bulk sync, then backfill via indexer background routines after sync completes
-2. Use cumulative on-chain values (e.g., DAO field differences) instead of per-block sampling
-3. Never sacrifice accuracy for performance - correctness is non-negotiable
+1. Prefer exact incremental calculation during bulk sync (no post-bulk rebuild dependency for core aggregates)
+2. Use cumulative on-chain values (e.g., DAO field differences) instead of sampling
+3. Only defer non-critical indexes, and complete exact backfill before exposing them as final
+4. Do **NOT** write approximate values into persistent user-facing aggregates (`daily_stats`, DAO snapshots, supply/issuance charts)
 
 ### Script Identification
 

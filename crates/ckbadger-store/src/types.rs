@@ -533,6 +533,10 @@ pub struct SyncStatus {
     pub deep_fork_info: Option<DeepForkInfo>,
     #[serde(default)]
     pub avg_block_time_rebuilt: bool,
+    #[serde(default)]
+    pub dao_daily_snapshots_rebuilt: bool,
+    #[serde(default)]
+    pub address_balances_rebuilt_from_live_cells: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

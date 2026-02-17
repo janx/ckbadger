@@ -4199,7 +4199,7 @@ impl Indexer {
                                     }
 
                                     if let Some(capacity) = maybe_cap {
-                                        if withdraw_request_caps.iter().any(|c| *c == capacity) {
+                                        if withdraw_request_caps.contains(&capacity) {
                                             *stats
                                                 .dao_daily_active_delta
                                                 .entry(block_date)

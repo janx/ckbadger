@@ -1,5 +1,6 @@
 //! Block header operations.
 
+use chrono::Datelike;
 use rocksdb::IteratorMode;
 
 use crate::keys;
@@ -109,5 +110,165 @@ impl CkbadgerStore {
             count += 1;
         }
         count
+    }
+
+    /// Find the first missing block number in `block_headers` if there is an internal gap.
+    ///
+    /// Returns:
+    /// - `Some(n)` when block `n` is missing while later blocks exist.
+    /// - `None` when headers are contiguous from 0..tip, or there are no headers.
+    pub fn find_first_block_header_gap(&self) -> anyhow::Result<Option<i64>> {
+        let iter = self.iterator_cf(self.cf_block_headers(), IteratorMode::Start);
+        let mut expected: Option<i64> = None;
+
+        for item in iter.flatten() {
+            let (key, _) = item;
+            if key.len() != 8 {
+                continue;
+            }
+            let block_num = keys::decode_block_num(&key);
+
+            match expected {
+                None => {
+                    if block_num != 0 {
+                        return Ok(Some(0));
+                    }
+                    expected = Some(1);
+                }
+                Some(exp) => {
+                    if block_num != exp {
+                        return Ok(Some(exp));
+                    }
+                    expected = Some(exp + 1);
+                }
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Find the first block number of the UTC day containing `block_number`.
+    /// If a predecessor header is missing, stops at the first available block.
+    pub fn find_day_start_block(&self, block_number: i64) -> anyhow::Result<Option<i64>> {
+        let Some(header) = self.get_block_header(block_number)? else {
+            return Ok(None);
+        };
+        let Some(dt) = chrono::DateTime::from_timestamp(header.timestamp / 1000, 0) else {
+            return Ok(Some(block_number));
+        };
+        let target_date = dt.date_naive();
+
+        let mut cursor = block_number;
+        while cursor > 0 {
+            let prev_num = cursor - 1;
+            let Some(prev_header) = self.get_block_header(prev_num)? else {
+                break;
+            };
+            let Some(prev_dt) = chrono::DateTime::from_timestamp(prev_header.timestamp / 1000, 0)
+            else {
+                break;
+            };
+            let d = prev_dt.date_naive();
+            if d.year() == target_date.year()
+                && d.month() == target_date.month()
+                && d.day() == target_date.day()
+            {
+                cursor = prev_num;
+                continue;
+            }
+            break;
+        }
+
+        Ok(Some(cursor))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::batch::StoreBatch;
+    use tempfile::tempdir;
+
+    fn make_header(block_number: i64) -> CachedBlockHeader {
+        let mut hash = vec![0u8; 32];
+        hash[..8].copy_from_slice(&block_number.to_le_bytes());
+        CachedBlockHeader {
+            hash,
+            timestamp: block_number,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0u8; 32],
+            transactions_count: 1,
+        }
+    }
+
+    #[test]
+    fn test_find_first_block_header_gap_none_when_contiguous() {
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+
+        let mut batch = StoreBatch::new(&store);
+        for n in 0..=5 {
+            batch.put_block_header(n, &make_header(n));
+        }
+        batch.commit().unwrap();
+
+        assert_eq!(store.find_first_block_header_gap().unwrap(), None);
+    }
+
+    #[test]
+    fn test_find_first_block_header_gap_detects_internal_gap() {
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(0, &make_header(0));
+        batch.put_block_header(1, &make_header(1));
+        batch.put_block_header(3, &make_header(3));
+        batch.commit().unwrap();
+
+        assert_eq!(store.find_first_block_header_gap().unwrap(), Some(2));
+    }
+
+    #[test]
+    fn test_find_first_block_header_gap_detects_missing_genesis() {
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(5, &make_header(5));
+        batch.commit().unwrap();
+
+        assert_eq!(store.find_first_block_header_gap().unwrap(), Some(0));
+    }
+
+    #[test]
+    fn test_find_day_start_block() {
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+
+        // 2026-02-17 00:00:00 UTC in ms
+        let day_start_ts = 1_771_286_400_000i64;
+
+        let mut h0 = make_header(0);
+        h0.timestamp = day_start_ts + 10_000;
+        let mut h1 = make_header(1);
+        h1.timestamp = day_start_ts + 20_000;
+        let mut h2 = make_header(2);
+        h2.timestamp = day_start_ts + 30_000;
+        let mut h3 = make_header(3);
+        h3.timestamp = day_start_ts + 86_400_000 + 10_000; // next day
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(0, &h0);
+        batch.put_block_header(1, &h1);
+        batch.put_block_header(2, &h2);
+        batch.put_block_header(3, &h3);
+        batch.commit().unwrap();
+
+        assert_eq!(store.find_day_start_block(2).unwrap(), Some(0));
+        assert_eq!(store.find_day_start_block(3).unwrap(), Some(3));
+        assert_eq!(store.find_day_start_block(999).unwrap(), None);
     }
 }

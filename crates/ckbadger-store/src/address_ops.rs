@@ -2,8 +2,9 @@
 
 use rocksdb::IteratorMode;
 
+use crate::keys;
 use crate::store::CkbadgerStore;
-use crate::types::AddressBalance;
+use crate::types::{AddressBalance, LiveCellInfo};
 
 impl CkbadgerStore {
     pub fn get_addr_balance(&self, lock_hash: &[u8]) -> anyhow::Result<Option<AddressBalance>> {
@@ -231,5 +232,168 @@ impl CkbadgerStore {
         }
 
         Ok(count)
+    }
+
+    /// Rebuild addr_balance from live_cells.
+    ///
+    /// This heals historical drift caused by previously skipped input-cell consumption.
+    /// Uses live_cells as the source of truth for:
+    /// - balance
+    /// - occupied_capacity
+    /// - live_cells_count
+    ///
+    /// Other fields are re-initialized conservatively.
+    pub fn rebuild_addr_balances_from_live_cells(&self) -> anyhow::Result<usize> {
+        use std::collections::HashMap;
+
+        struct Agg {
+            balance: i128,
+            occupied_capacity: i128,
+            live_cells_count: i32,
+            first_seen_block: i64,
+            first_seen_tx: Vec<u8>,
+            last_activity_block: i64,
+            last_activity_tx: Vec<u8>,
+        }
+
+        let mut agg_by_lock: HashMap<Vec<u8>, Agg> = HashMap::new();
+        let iter = self.iterator_cf(self.cf_live_cells(), rocksdb::IteratorMode::Start);
+        for item in iter.flatten() {
+            let (key, value) = item;
+            if key.len() != keys::OUTPOINT_KEY_SIZE {
+                continue;
+            }
+            let info: LiveCellInfo = match bincode::deserialize(&value) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let tx_hash = key[..32].to_vec();
+
+            let entry = agg_by_lock
+                .entry(info.lock_script_hash.clone())
+                .or_insert_with(|| Agg {
+                    balance: 0,
+                    occupied_capacity: 0,
+                    live_cells_count: 0,
+                    first_seen_block: info.created_at_block,
+                    first_seen_tx: tx_hash.clone(),
+                    last_activity_block: info.created_at_block,
+                    last_activity_tx: tx_hash.clone(),
+                });
+
+            entry.balance += info.capacity as i128;
+            entry.occupied_capacity += info.occupied_capacity as i128;
+            entry.live_cells_count += 1;
+
+            if info.created_at_block < entry.first_seen_block {
+                entry.first_seen_block = info.created_at_block;
+                entry.first_seen_tx = tx_hash.clone();
+            }
+            if info.created_at_block > entry.last_activity_block {
+                entry.last_activity_block = info.created_at_block;
+                entry.last_activity_tx = tx_hash;
+            }
+        }
+
+        // Clear existing addr_balance CF
+        let mut clear_batch = rocksdb::WriteBatch::default();
+        let mut cleared = 0usize;
+        let iter = self.iterator_cf(self.cf_addr_balance(), IteratorMode::Start);
+        for item in iter.flatten() {
+            let (key, _) = item;
+            clear_batch.delete_cf(self.cf_addr_balance(), &key);
+            cleared += 1;
+            #[allow(clippy::manual_is_multiple_of)]
+            if cleared % 20_000 == 0 {
+                self.write_batch(std::mem::take(&mut clear_batch))?;
+                clear_batch = rocksdb::WriteBatch::default();
+            }
+        }
+        if !clear_batch.is_empty() {
+            self.write_batch(clear_batch)?;
+        }
+
+        // Write rebuilt balances
+        let mut write_batch = crate::batch::StoreBatch::new(self);
+        let mut written = 0usize;
+        for (lock_hash, agg) in agg_by_lock {
+            let balance = AddressBalance {
+                balance: agg.balance,
+                occupied_capacity: agg.occupied_capacity.max(0),
+                live_cells_count: agg.live_cells_count.max(0),
+                total_cells_count: agg.live_cells_count.max(0) as i64,
+                txs_count: 0,
+                first_seen_block: agg.first_seen_block,
+                first_seen_tx: agg.first_seen_tx,
+                last_activity_block: agg.last_activity_block,
+                last_activity_tx: agg.last_activity_tx,
+            };
+            write_batch.put_addr_balance(&lock_hash, &balance);
+            written += 1;
+            #[allow(clippy::manual_is_multiple_of)]
+            if written % 20_000 == 0 {
+                write_batch.commit()?;
+                write_batch = crate::batch::StoreBatch::new(self);
+            }
+        }
+        if !written.is_multiple_of(20_000) {
+            write_batch.commit()?;
+        }
+
+        Ok(written)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::batch::StoreBatch;
+    use tempfile::tempdir;
+
+    fn make_cell(
+        lock_hash: Vec<u8>,
+        created_at: i64,
+        capacity: i64,
+        occupied: i64,
+    ) -> LiveCellInfo {
+        LiveCellInfo {
+            capacity,
+            created_at_block: created_at,
+            lock_script_hash: lock_hash,
+            lock_code_hash: vec![0x11; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: None,
+            type_code_hash: None,
+            data_size: 0,
+            occupied_capacity: occupied,
+        }
+    }
+
+    #[test]
+    fn test_rebuild_addr_balances_from_live_cells() {
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let lock_a = vec![0xAA; 32];
+        let lock_b = vec![0xBB; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_cell(&[0x01; 32], 0, &make_cell(lock_a.clone(), 10, 100, 120));
+        batch.put_cell(&[0x02; 32], 0, &make_cell(lock_a.clone(), 11, 300, 320));
+        batch.put_cell(&[0x03; 32], 0, &make_cell(lock_b.clone(), 12, 50, 60));
+        batch.commit().unwrap();
+
+        let rebuilt = store.rebuild_addr_balances_from_live_cells().unwrap();
+        assert_eq!(rebuilt, 2);
+
+        let a = store.get_addr_balance(&lock_a).unwrap().unwrap();
+        assert_eq!(a.balance, 400);
+        assert_eq!(a.occupied_capacity, 440);
+        assert_eq!(a.live_cells_count, 2);
+
+        let b = store.get_addr_balance(&lock_b).unwrap().unwrap();
+        assert_eq!(b.balance, 50);
+        assert_eq!(b.occupied_capacity, 60);
+        assert_eq!(b.live_cells_count, 1);
     }
 }

@@ -6,6 +6,27 @@ use crate::keys;
 use crate::store::*;
 use crate::types::*;
 
+fn should_delete_stats_for_replay(key: &[u8], cutoff_yyyymmdd: &[u8]) -> bool {
+    if key.is_empty() {
+        return false;
+    }
+    let prefix = key[0];
+    let suffix = &key[1..];
+
+    match prefix {
+        // date scoped: YYYYMMDD
+        keys::STATS_PREFIX_DAILY
+        | keys::STATS_PREFIX_DAILY_BLOCK
+        | keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT
+        | keys::STATS_PREFIX_HODL_WAVE => suffix.len() >= 8 && &suffix[..8] >= cutoff_yyyymmdd,
+        // hour scoped: YYYYMMDDHH
+        keys::STATS_PREFIX_HOURLY => suffix.len() >= 10 && &suffix[..8] >= cutoff_yyyymmdd,
+        // date+miner hash: YYYYMMDD + 32-byte lock hash
+        keys::STATS_PREFIX_MINER => suffix.len() >= 40 && &suffix[..8] >= cutoff_yyyymmdd,
+        _ => false,
+    }
+}
+
 impl CkbadgerStore {
     /// Atomic rollback across all CFs to a given block number.
     /// Deletes all data for blocks > rollback_to.
@@ -15,6 +36,11 @@ impl CkbadgerStore {
         let mut txs_removed = 0u64;
         let mut cells_removed = 0u64;
         let cells_restored = 0u64;
+        let replay_start = rollback_to + 1;
+        let replay_cutoff_date = self
+            .get_block_header(replay_start)?
+            .and_then(|h| chrono::DateTime::from_timestamp(h.timestamp / 1000, 0))
+            .map(|dt| dt.format("%Y%m%d").to_string());
 
         // 1. Delete block headers > rollback_to
         let start_key = keys::encode_block_num(rollback_to + 1);
@@ -104,9 +130,17 @@ impl CkbadgerStore {
         // track consumed_at_block. The caller should restore cells that were
         // consumed after rollback_to back to the live_cells CF.
 
-        // 5. Delete stats entries for removed blocks
-        // Stats are accumulated, so we'd need to recompute from scratch
-        // This is typically handled by rebuild tasks after rollback
+        // 5. Delete date-scoped stats entries from replay cutoff date onward.
+        // These are additive snapshots and would be double-counted after replay.
+        if let Some(cutoff) = replay_cutoff_date.as_deref() {
+            let iter = self.iterator_cf(self.cf_stats(), IteratorMode::Start);
+            for item in iter.flatten() {
+                let (key, _) = item;
+                if should_delete_stats_for_replay(&key, cutoff.as_bytes()) {
+                    batch.delete_cf(self.cf_stats(), &key);
+                }
+            }
+        }
 
         // 7. Delete block issuance > rollback_to
         let start_key = keys::encode_block_num(rollback_to + 1);
@@ -176,4 +210,30 @@ pub struct RollbackResult {
     pub txs_removed: u64,
     pub cells_removed: u64,
     pub cells_restored: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_should_delete_stats_for_replay_daily_prefix() {
+        let cutoff = b"20260210";
+        let key = crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_DAILY, b"20260211");
+        assert!(should_delete_stats_for_replay(&key, cutoff));
+
+        let key_old = crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_DAILY, b"20260209");
+        assert!(!should_delete_stats_for_replay(&key_old, cutoff));
+    }
+
+    #[test]
+    fn test_should_delete_stats_for_replay_hourly_and_miner_prefix() {
+        let cutoff = b"20260210";
+        let hourly = crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_HOURLY, b"2026021001");
+        assert!(should_delete_stats_for_replay(&hourly, cutoff));
+
+        let miner_suffix = [b"20260210".as_slice(), &[0xAA; 32]].concat();
+        let miner = crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_MINER, &miner_suffix);
+        assert!(should_delete_stats_for_replay(&miner, cutoff));
+    }
 }

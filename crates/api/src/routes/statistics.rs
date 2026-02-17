@@ -2,6 +2,7 @@
 
 use axum::{extract::State, routing::get, Router};
 use chrono::{DateTime, NaiveDate, Utc};
+use ckb_types::utilities::compact_to_difficulty as ckb_compact_to_difficulty;
 use ckbadger_common::dao::GENESIS_BURNT;
 use ckbadger_common::sync::{
     format_duration_smart, SyncProgressData, SyncStatusData, SYNC_PROGRESS_REDIS_KEY,
@@ -291,25 +292,8 @@ async fn get_recent_blocks(State(state): State<Arc<AppState>>) -> ApiResult<Rece
 }
 
 fn compact_to_difficulty(compact: i64) -> u64 {
-    let compact = compact as u32;
-    let exponent = ((compact >> 24) & 0xFF) as i32;
-    let mantissa = (compact & 0x00FFFFFF) as f64;
-
-    if mantissa == 0.0 {
-        return 0;
-    }
-
-    const GENESIS_EXP: i32 = 0x20;
-    const GENESIS_MAN: f64 = 0x01_0000 as f64;
-
-    let exp_diff = GENESIS_EXP - exponent;
-    let difficulty = if exp_diff >= 0 {
-        (GENESIS_MAN / mantissa) * (256.0_f64).powi(exp_diff)
-    } else {
-        (GENESIS_MAN / mantissa) / (256.0_f64).powi(-exp_diff)
-    };
-
-    difficulty as u64
+    let difficulty = ckb_compact_to_difficulty(compact as u32);
+    difficulty.to_string().parse::<u64>().unwrap_or(u64::MAX)
 }
 
 fn format_hash_rate(hash_rate: f64) -> String {
