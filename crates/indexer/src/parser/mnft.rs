@@ -115,7 +115,10 @@ impl MnftParser {
         let owner_lock_hash = ScriptParser::compute_script_hash(&output.lock);
 
         Some(ParsedMnftClass {
-            class_id: args.clone(),
+            // mNFT class identity is issuer_id(20B) + class_index(4B).
+            // Extra args bytes (if present) are not part of the class id and
+            // must be ignored to keep class_id consistent with token.class_id.
+            class_id: args[..24].to_vec(),
             type_script_hash,
             issuer_id,
             name: class_data.name,
@@ -475,6 +478,31 @@ mod tests {
             parsed.description,
             Some("A test NFT collection".to_string())
         );
+        assert_eq!(parsed.issuer_id, issuer_id.to_vec());
+    }
+
+    #[test]
+    fn test_parse_class_cell_with_extended_args_uses_first_24_bytes() {
+        let issuer_id = [0xcd; 20];
+        let mut args = issuer_id.to_vec();
+        args.extend_from_slice(&7u32.to_le_bytes());
+        args.extend_from_slice(&[0xaa, 0xbb, 0xcc, 0xdd]); // extension bytes
+
+        let output = CellOutput {
+            capacity: "0x174876e800".to_string(),
+            lock: create_lock_script(),
+            type_: Some(Script {
+                code_hash: MNFT_CLASS_CODE_HASH.to_string(),
+                hash_type: "type".to_string(),
+                args: format!("0x{}", hex::encode(&args)),
+            }),
+        };
+
+        let data = create_class_data(10, 1, 0, "Extended Args Class", "desc");
+        let data_hex = format!("0x{}", hex::encode(&data));
+
+        let parsed = MnftParser::parse_class_cell(&output, &data_hex).expect("must parse");
+        assert_eq!(parsed.class_id, args[..24].to_vec());
         assert_eq!(parsed.issuer_id, issuer_id.to_vec());
     }
 
