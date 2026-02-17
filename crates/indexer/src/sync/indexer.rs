@@ -126,12 +126,20 @@ struct CachedUdtCellInfo {
 struct PerfStats {
     fetch_us: AtomicU64,
     db_write_us: AtomicU64,
+    last_fetch_us: AtomicU64,
+    last_db_write_us: AtomicU64,
     blocks_count: AtomicU64,
 }
 
 impl PerfStats {
-    fn add(&self, field: &AtomicU64, duration: Duration) {
-        field.fetch_add(duration.as_micros() as u64, Ordering::Relaxed);
+    fn add_fetch(&self, duration: Duration) {
+        self.fetch_us
+            .fetch_add(duration.as_micros() as u64, Ordering::Relaxed);
+    }
+
+    fn add_db_write(&self, duration: Duration) {
+        self.db_write_us
+            .fetch_add(duration.as_micros() as u64, Ordering::Relaxed);
     }
 
     fn report_and_reset(&self) {
@@ -139,8 +147,13 @@ impl PerfStats {
         if blocks == 0 {
             return;
         }
-        let fetch_ms = self.fetch_us.swap(0, Ordering::Relaxed) as f64 / 1000.0;
-        let db_ms = self.db_write_us.swap(0, Ordering::Relaxed) as f64 / 1000.0;
+        let fetch_us = self.fetch_us.swap(0, Ordering::Relaxed);
+        let db_us = self.db_write_us.swap(0, Ordering::Relaxed);
+        self.last_fetch_us.store(fetch_us, Ordering::Relaxed);
+        self.last_db_write_us.store(db_us, Ordering::Relaxed);
+
+        let fetch_ms = fetch_us as f64 / 1000.0;
+        let db_ms = db_us as f64 / 1000.0;
         info!(
             blocks,
             fetch_ms = format!("{:.1}", fetch_ms),
@@ -149,10 +162,20 @@ impl PerfStats {
         );
     }
 
-    /// Snapshot the current accumulated values (non-destructive read).
+    /// Snapshot current accumulated values, falling back to the latest completed batch.
     fn snapshot_ms(&self) -> (f64, f64) {
         let rpc = self.fetch_us.load(Ordering::Relaxed);
         let db = self.db_write_us.load(Ordering::Relaxed);
+        let rpc = if rpc > 0 {
+            rpc
+        } else {
+            self.last_fetch_us.load(Ordering::Relaxed)
+        };
+        let db = if db > 0 {
+            db
+        } else {
+            self.last_db_write_us.load(Ordering::Relaxed)
+        };
         (rpc as f64 / 1000.0, db as f64 / 1000.0)
     }
 }
@@ -1256,7 +1279,7 @@ impl Indexer {
                         continue;
                     }
                     let db_elapsed = db_start.elapsed();
-                    self.perf.add(&self.perf.db_write_us, db_elapsed);
+                    self.perf.add_db_write(db_elapsed);
 
                     if db_elapsed.as_secs() >= 5 {
                         let stats = self.writer.store().memory_stats();
@@ -1494,7 +1517,7 @@ impl Indexer {
 
         let fetch_start = Instant::now();
         let blocks = self.fetch_blocks_parallel(start_block, end_block).await?;
-        self.perf.add(&self.perf.fetch_us, fetch_start.elapsed());
+        self.perf.add_fetch(fetch_start.elapsed());
 
         let db_start = Instant::now();
         if let Err(e) = self.sync_blocks_batch(&blocks, chain_tip).await {
@@ -1507,7 +1530,7 @@ impl Indexer {
             return Err(e);
         }
         let db_elapsed = db_start.elapsed();
-        self.perf.add(&self.perf.db_write_us, db_elapsed);
+        self.perf.add_db_write(db_elapsed);
 
         if db_elapsed.as_secs() >= 5 {
             let stats = self.writer.store().memory_stats();
@@ -5740,6 +5763,36 @@ mod tests {
         assert!(1000 <= threshold);
         assert!(999 <= threshold);
         assert!(1 <= threshold);
+    }
+
+    #[test]
+    fn test_perf_snapshot_uses_last_batch_after_reset() {
+        let perf = PerfStats::default();
+        perf.add_fetch(Duration::from_millis(120));
+        perf.add_db_write(Duration::from_millis(340));
+        perf.blocks_count.fetch_add(10, Ordering::Relaxed);
+        perf.report_and_reset();
+
+        let (rpc_ms, db_ms) = perf.snapshot_ms();
+        assert!((rpc_ms - 120.0).abs() < 0.001);
+        assert!((db_ms - 340.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_perf_snapshot_prefers_current_accumulator_over_last_batch() {
+        let perf = PerfStats::default();
+
+        perf.add_fetch(Duration::from_millis(500));
+        perf.add_db_write(Duration::from_millis(700));
+        perf.blocks_count.fetch_add(10, Ordering::Relaxed);
+        perf.report_and_reset();
+
+        perf.add_fetch(Duration::from_millis(150));
+        perf.add_db_write(Duration::from_millis(250));
+
+        let (rpc_ms, db_ms) = perf.snapshot_ms();
+        assert!((rpc_ms - 150.0).abs() < 0.001);
+        assert!((db_ms - 250.0).abs() < 0.001);
     }
 
     // --- DAO recalculation boundary tests ---
