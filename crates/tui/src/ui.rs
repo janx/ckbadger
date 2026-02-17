@@ -71,6 +71,13 @@ enum LayoutDensity {
     Wide,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DiagnosticsViewMode {
+    Auto,
+    Compact,
+    Detail,
+}
+
 pub struct App {
     db: TuiDb,
     sync_status: Option<SyncStatusRow>,
@@ -81,6 +88,9 @@ pub struct App {
     status_message: Option<(String, Instant)>,
     rate_history: VecDeque<f64>,
     db_write_history: VecDeque<f64>,
+    fetch_stage_history: VecDeque<f64>,
+    parse_stage_history: VecDeque<f64>,
+    write_stage_history: VecDeque<f64>,
     log_entries: VecDeque<LogEntry>,
     sync_event_entries: VecDeque<LogEntry>,
     log_scroll: usize,
@@ -95,6 +105,7 @@ pub struct App {
     stale_warning_active: bool,
     help_visible: bool,
     force_compact_layout: bool,
+    diagnostics_view_mode: DiagnosticsViewMode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,6 +141,9 @@ impl App {
             status_message: None,
             rate_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             db_write_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
+            fetch_stage_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
+            parse_stage_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
+            write_stage_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             log_entries,
             sync_event_entries,
             log_scroll: 0,
@@ -144,6 +158,7 @@ impl App {
             stale_warning_active: false,
             help_visible: false,
             force_compact_layout: false,
+            diagnostics_view_mode: DiagnosticsViewMode::Auto,
         }
     }
 
@@ -181,6 +196,22 @@ impl App {
             "Compact layout disabled (auto mode)".to_string()
         };
         self.status_message = Some((msg, Instant::now()));
+    }
+
+    pub fn cycle_diagnostics_view_mode(&mut self) {
+        self.diagnostics_view_mode = match self.diagnostics_view_mode {
+            DiagnosticsViewMode::Auto => DiagnosticsViewMode::Compact,
+            DiagnosticsViewMode::Compact => DiagnosticsViewMode::Detail,
+            DiagnosticsViewMode::Detail => DiagnosticsViewMode::Auto,
+        };
+
+        self.status_message = Some((
+            format!(
+                "Diagnostics view: {}",
+                diagnostics_view_mode_label(self.diagnostics_view_mode)
+            ),
+            Instant::now(),
+        ));
     }
 
     pub fn scroll_log_up(&mut self) {
@@ -273,6 +304,22 @@ impl App {
             self.db_write_history.pop_front();
         }
         self.db_write_history.push_back(db_ms);
+
+        let (fetch_ms, parse_ms, write_ms) = self
+            .sync_status
+            .as_ref()
+            .and_then(|s| s.pipeline.as_ref())
+            .map(|p| {
+                (
+                    p.fetch_ms.unwrap_or(0.0),
+                    p.parse_ms.unwrap_or(0.0),
+                    p.write_ms.unwrap_or(0.0),
+                )
+            })
+            .unwrap_or((0.0, 0.0, 0.0));
+        push_history_sample(&mut self.fetch_stage_history, fetch_ms);
+        push_history_sample(&mut self.parse_stage_history, parse_ms);
+        push_history_sample(&mut self.write_stage_history, write_ms);
 
         if self.rate_history.len() >= 2 {
             let prev = self.rate_history[self.rate_history.len() - 2];
@@ -557,6 +604,14 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
                 SLATE_500
             }),
         ),
+        Span::styled("  ", Style::default().fg(SLATE_700)),
+        Span::styled(
+            format!(
+                "[Diag:{}]",
+                diagnostics_view_mode_label(app.diagnostics_view_mode)
+            ),
+            Style::default().fg(diagnostics_view_mode_color(app.diagnostics_view_mode)),
+        ),
         Span::styled("  [Tab/s]", Style::default().fg(SLATE_500)),
     ]);
     f.render_widget(Paragraph::new(line), inner);
@@ -667,8 +722,8 @@ fn draw_sync_content(f: &mut Frame, app: &App, area: Rect) {
                     Constraint::Length(4),
                     Constraint::Length(7),
                     Constraint::Length(10),
-                    Constraint::Length(7),
-                    Constraint::Min(7),
+                    Constraint::Length(9),
+                    Constraint::Min(5),
                 ])
                 .split(area);
             draw_sync_realtime_bar(f, app, chunks[0]);
@@ -1231,43 +1286,8 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
 
     let cols = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .constraints([Constraint::Percentage(52), Constraint::Percentage(48)])
         .split(inner);
-
-    let db_write = sync
-        .db_write_ms
-        .map(|v| format!("{v:.1} ms"))
-        .unwrap_or_else(|| "-".to_string());
-    let rpc_fetch = sync
-        .rpc_fetch_ms
-        .map(|v| format!("{v:.1} ms"))
-        .unwrap_or_else(|| "-".to_string());
-
-    let io_share = match (sync.db_write_ms, sync.rpc_fetch_ms) {
-        (Some(db), Some(rpc)) if db + rpc > 0.0 => format!("DB {:.0}%", (db / (db + rpc)) * 100.0),
-        _ => "-".to_string(),
-    };
-
-    let left = vec![
-        Line::from(vec![
-            Span::styled("DB write: ", Style::default().fg(SLATE_500)),
-            Span::styled(db_write, Style::default().fg(TERMINAL_GREEN)),
-        ]),
-        Line::from(vec![
-            Span::styled("RPC fetch: ", Style::default().fg(SLATE_500)),
-            Span::styled(rpc_fetch, Style::default().fg(FOREGROUND)),
-        ]),
-        Line::from(vec![
-            Span::styled("I/O share: ", Style::default().fg(SLATE_500)),
-            Span::styled(io_share, Style::default().fg(TERMINAL_DIM)),
-        ]),
-    ];
-    f.render_widget(Paragraph::new(left), cols[0]);
-
-    let jitter = rate_jitter(&app.rate_history, 30);
-    let jitter_text = jitter
-        .map(|v| format!("{v:.1} blk/s"))
-        .unwrap_or_else(|| "-".to_string());
 
     let deferred_count = [
         sync.address_balances_deferred,
@@ -1280,30 +1300,287 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
     .filter(|v| *v)
     .count();
 
-    let right = vec![
-        Line::from(vec![
-            Span::styled("Rate jitter: ", Style::default().fg(SLATE_500)),
-            Span::styled(jitter_text, Style::default().fg(AMBER)),
-        ]),
-        Line::from(vec![
-            Span::styled("Samples: ", Style::default().fg(SLATE_500)),
-            Span::styled(
-                format_num_u64(app.rate_history.len() as u64),
-                Style::default().fg(FOREGROUND),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("Deferred idx: ", Style::default().fg(SLATE_500)),
-            Span::styled(
-                format!("{deferred_count}"),
-                Style::default().fg(if deferred_count > 0 {
-                    AMBER
-                } else {
-                    TERMINAL_GREEN
-                }),
-            ),
-        ]),
-    ];
+    let db_write = sync
+        .db_write_ms
+        .map(|v| format!("{v:.1}ms"))
+        .unwrap_or_else(|| "-".to_string());
+    let rpc_fetch = sync
+        .rpc_fetch_ms
+        .map(|v| format!("{v:.1}ms"))
+        .unwrap_or_else(|| "-".to_string());
+    let rate_jitter_value = rate_jitter(&app.rate_history, 30);
+    let rate_jitter_text = rate_jitter_value
+        .map(|v| format!("{v:.1} blk/s"))
+        .unwrap_or_else(|| "-".to_string());
+    let eta_conf = eta_confidence_label(
+        sync.rate_ema.unwrap_or(0.0),
+        rate_jitter_value.unwrap_or(0.0),
+    );
+    let dense_panel = diagnostics_dense_panel(app.diagnostics_view_mode, inner.width, inner.height);
+
+    let (left, right) = if let Some(pipeline) = sync.pipeline.as_ref() {
+        let (state, state_color) = pipeline_flow_state(
+            sync.is_syncing,
+            pipeline.fetch_queue_depth,
+            pipeline.fetch_queue_capacity,
+            pipeline.parse_queue_depth,
+            pipeline.parse_queue_capacity,
+            pipeline.writer_queue_depth,
+            pipeline.writer_queue_capacity,
+        );
+        let (stage, stage_color) =
+            pipeline_bottleneck(pipeline.fetch_ms, pipeline.parse_ms, pipeline.write_ms);
+        let bottleneck_delta = match stage {
+            "FETCH" => trend_delta(&app.fetch_stage_history, 10),
+            "PARSE" => trend_delta(&app.parse_stage_history, 10),
+            "WRITE" => trend_delta(&app.write_stage_history, 10),
+            _ => None,
+        };
+        let bottleneck_delta_text = format_delta(bottleneck_delta, "ms/10s");
+        let (stability, stability_color) = pipeline_stability_label(&app.write_stage_history);
+        let fetch_util = format_util_pct(queue_utilization(
+            pipeline.fetch_queue_depth,
+            pipeline.fetch_queue_capacity,
+        ));
+        let parse_util = format_util_pct(queue_utilization(
+            pipeline.parse_queue_depth,
+            pipeline.parse_queue_capacity,
+        ));
+        let write_util = format_util_pct(queue_utilization(
+            pipeline.writer_queue_depth,
+            pipeline.writer_queue_capacity,
+        ));
+
+        let spark_width = cols[1].width.saturating_sub(14).clamp(8, 24) as usize;
+        let (left, right) = if dense_panel {
+            (
+                vec![
+                    Line::from(vec![
+                        Span::styled("State ", Style::default().fg(SLATE_500)),
+                        Span::styled(
+                            format!("[{}]", state),
+                            Style::default()
+                                .fg(Color::Black)
+                                .bg(state_color)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled("  Bottleneck ", Style::default().fg(SLATE_500)),
+                        Span::styled(stage, Style::default().fg(stage_color)),
+                    ]),
+                    pipeline_stage_line(
+                        "FETCH",
+                        pipeline.fetch_ms,
+                        pipeline.fetch_queue_depth,
+                        pipeline.fetch_queue_capacity,
+                        TERMINAL_DIM,
+                    ),
+                    pipeline_stage_line(
+                        "PARSE",
+                        pipeline.parse_ms,
+                        pipeline.parse_queue_depth,
+                        pipeline.parse_queue_capacity,
+                        AMBER,
+                    ),
+                    pipeline_stage_line(
+                        "WRITE",
+                        pipeline.write_ms,
+                        pipeline.writer_queue_depth,
+                        pipeline.writer_queue_capacity,
+                        TERMINAL_GREEN,
+                    ),
+                    Line::from(vec![
+                        Span::styled("Wait ", Style::default().fg(SLATE_500)),
+                        Span::styled(
+                            pipeline
+                                .writer_wait_ms
+                                .map(|v| format!("{v:.1}ms"))
+                                .unwrap_or_else(|| "-".to_string()),
+                            Style::default().fg(FOREGROUND),
+                        ),
+                        Span::styled("  Trend ", Style::default().fg(SLATE_500)),
+                        Span::styled(
+                            bottleneck_delta_text,
+                            Style::default().fg(delta_color(bottleneck_delta)),
+                        ),
+                    ]),
+                ],
+                vec![
+                    stage_trend_line("F", TERMINAL_DIM, &app.fetch_stage_history, spark_width),
+                    stage_trend_line("P", AMBER, &app.parse_stage_history, spark_width),
+                    stage_trend_line("W", TERMINAL_GREEN, &app.write_stage_history, spark_width),
+                    Line::from(vec![
+                        Span::styled("Stability ", Style::default().fg(SLATE_500)),
+                        Span::styled(stability, Style::default().fg(stability_color)),
+                        Span::styled("  Deferred ", Style::default().fg(SLATE_500)),
+                        Span::styled(
+                            format!("{deferred_count}"),
+                            Style::default().fg(if deferred_count > 0 {
+                                AMBER
+                            } else {
+                                TERMINAL_GREEN
+                            }),
+                        ),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("I/O ", Style::default().fg(SLATE_500)),
+                        Span::styled(
+                            format!("RPC {} DB {}", rpc_fetch, db_write),
+                            Style::default().fg(FOREGROUND),
+                        ),
+                        Span::styled("  jitter ", Style::default().fg(SLATE_500)),
+                        Span::styled(rate_jitter_text.clone(), Style::default().fg(AMBER)),
+                    ]),
+                ],
+            )
+        } else {
+            (
+                vec![
+                    Line::from(vec![
+                        Span::styled("State ", Style::default().fg(SLATE_500)),
+                        Span::styled(
+                            format!("[{}]", state),
+                            Style::default()
+                                .fg(Color::Black)
+                                .bg(state_color)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled("  Bottleneck ", Style::default().fg(SLATE_500)),
+                        Span::styled(stage, Style::default().fg(stage_color)),
+                        Span::styled("  Δ ", Style::default().fg(SLATE_500)),
+                        Span::styled(
+                            bottleneck_delta_text,
+                            Style::default().fg(delta_color(bottleneck_delta)),
+                        ),
+                    ]),
+                    pipeline_stage_line(
+                        "FETCH",
+                        pipeline.fetch_ms,
+                        pipeline.fetch_queue_depth,
+                        pipeline.fetch_queue_capacity,
+                        TERMINAL_DIM,
+                    ),
+                    pipeline_stage_line(
+                        "PARSE",
+                        pipeline.parse_ms,
+                        pipeline.parse_queue_depth,
+                        pipeline.parse_queue_capacity,
+                        AMBER,
+                    ),
+                    pipeline_stage_line(
+                        "WRITE",
+                        pipeline.write_ms,
+                        pipeline.writer_queue_depth,
+                        pipeline.writer_queue_capacity,
+                        TERMINAL_GREEN,
+                    ),
+                    Line::from(vec![
+                        Span::styled("Util F/P/W ", Style::default().fg(SLATE_500)),
+                        Span::styled(
+                            format!("{}/{}/{}", fetch_util, parse_util, write_util),
+                            Style::default().fg(FOREGROUND),
+                        ),
+                        Span::styled("  Wait ", Style::default().fg(SLATE_500)),
+                        Span::styled(
+                            pipeline
+                                .writer_wait_ms
+                                .map(|v| format!("{v:.1}ms"))
+                                .unwrap_or_else(|| "-".to_string()),
+                            Style::default().fg(AMBER),
+                        ),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("Source ", Style::default().fg(SLATE_500)),
+                        Span::styled(
+                            if sync.is_direct_db_read { "DB" } else { "RPC" },
+                            Style::default().fg(TERMINAL_DIM),
+                        ),
+                        Span::styled("  Deferred ", Style::default().fg(SLATE_500)),
+                        Span::styled(
+                            format!("{deferred_count}"),
+                            Style::default().fg(if deferred_count > 0 {
+                                AMBER
+                            } else {
+                                TERMINAL_GREEN
+                            }),
+                        ),
+                    ]),
+                ],
+                vec![
+                    stage_trend_line("F", TERMINAL_DIM, &app.fetch_stage_history, spark_width),
+                    stage_trend_line("P", AMBER, &app.parse_stage_history, spark_width),
+                    stage_trend_line("W", TERMINAL_GREEN, &app.write_stage_history, spark_width),
+                    Line::from(vec![
+                        Span::styled("Stability ", Style::default().fg(SLATE_500)),
+                        Span::styled(stability, Style::default().fg(stability_color)),
+                        Span::styled("  ETA ", Style::default().fg(SLATE_500)),
+                        Span::styled(eta_conf.0, Style::default().fg(eta_conf.1)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("I/O ", Style::default().fg(SLATE_500)),
+                        Span::styled(
+                            format!("RPC {} DB {}", rpc_fetch, db_write),
+                            Style::default().fg(FOREGROUND),
+                        ),
+                        Span::styled("  jitter ", Style::default().fg(SLATE_500)),
+                        Span::styled(rate_jitter_text.clone(), Style::default().fg(AMBER)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("Rate ", Style::default().fg(SLATE_500)),
+                        Span::styled(
+                            format!(
+                                "{:.0}/{:.0} blk/s",
+                                sync.rate_realtime.unwrap_or(0.0),
+                                sync.rate_ema.unwrap_or(0.0)
+                            ),
+                            Style::default().fg(TERMINAL_GREEN),
+                        ),
+                        Span::styled("  samples ", Style::default().fg(SLATE_500)),
+                        Span::styled(
+                            format_num_u64(app.write_stage_history.len() as u64),
+                            Style::default().fg(FOREGROUND),
+                        ),
+                    ]),
+                ],
+            )
+        };
+
+        (left, right)
+    } else {
+        (
+            vec![
+                Line::from(vec![
+                    Span::styled("State ", Style::default().fg(SLATE_500)),
+                    Span::styled("N/A", Style::default().fg(SLATE_500)),
+                ]),
+                Line::from(vec![
+                    Span::styled("Pipeline ", Style::default().fg(SLATE_500)),
+                    Span::styled("not available", Style::default().fg(SLATE_500)),
+                ]),
+                Line::from(vec![
+                    Span::styled("Samples ", Style::default().fg(SLATE_500)),
+                    Span::styled(
+                        format_num_u64(app.rate_history.len() as u64),
+                        Style::default().fg(FOREGROUND),
+                    ),
+                ]),
+            ],
+            vec![
+                Line::from(vec![
+                    Span::styled("I/O ", Style::default().fg(SLATE_500)),
+                    Span::styled(
+                        format!("RPC {} DB {}", rpc_fetch, db_write),
+                        Style::default().fg(FOREGROUND),
+                    ),
+                ]),
+                Line::from(vec![
+                    Span::styled("Rate jitter ", Style::default().fg(SLATE_500)),
+                    Span::styled(rate_jitter_text, Style::default().fg(AMBER)),
+                ]),
+            ],
+        )
+    };
+
+    f.render_widget(Paragraph::new(left), cols[0]);
     f.render_widget(Paragraph::new(right), cols[1]);
 }
 
@@ -1689,6 +1966,8 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         Span::styled(" switch-tab  ", Style::default().fg(SLATE_500)),
         Span::styled("c", Style::default().fg(TERMINAL_GREEN)),
         Span::styled(" compact  ", Style::default().fg(SLATE_500)),
+        Span::styled("v", Style::default().fg(TERMINAL_GREEN)),
+        Span::styled(" diag-view  ", Style::default().fg(SLATE_500)),
         Span::styled("?", Style::default().fg(TERMINAL_GREEN)),
         Span::styled(" help  ", Style::default().fg(SLATE_500)),
         Span::styled("j/k", Style::default().fg(TERMINAL_GREEN)),
@@ -1711,6 +1990,37 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     }
 
     f.render_widget(Paragraph::new(lines).alignment(Alignment::Left), inner);
+}
+
+fn push_history_sample(history: &mut VecDeque<f64>, sample: f64) {
+    if history.len() >= RATE_HISTORY_SIZE {
+        history.pop_front();
+    }
+    history.push_back(sample);
+}
+
+fn diagnostics_view_mode_label(mode: DiagnosticsViewMode) -> &'static str {
+    match mode {
+        DiagnosticsViewMode::Auto => "Auto",
+        DiagnosticsViewMode::Compact => "Compact",
+        DiagnosticsViewMode::Detail => "Detail",
+    }
+}
+
+fn diagnostics_view_mode_color(mode: DiagnosticsViewMode) -> Color {
+    match mode {
+        DiagnosticsViewMode::Auto => SLATE_500,
+        DiagnosticsViewMode::Compact => AMBER,
+        DiagnosticsViewMode::Detail => TERMINAL_GREEN,
+    }
+}
+
+fn diagnostics_dense_panel(mode: DiagnosticsViewMode, width: u16, height: u16) -> bool {
+    match mode {
+        DiagnosticsViewMode::Compact => true,
+        DiagnosticsViewMode::Detail => false,
+        DiagnosticsViewMode::Auto => width < 145 || height < 7,
+    }
 }
 
 fn rate_jitter(history: &VecDeque<f64>, sample_window: usize) -> Option<f64> {
@@ -1770,6 +2080,226 @@ fn bottleneck_label(bottleneck: SyncBottleneck) -> &'static str {
     }
 }
 
+fn pipeline_stage_line(
+    stage: &'static str,
+    stage_ms: Option<f64>,
+    queue_depth: Option<u64>,
+    queue_capacity: Option<u64>,
+    stage_color: Color,
+) -> Line<'static> {
+    let ms_text = stage_ms
+        .map(|v| format!("{v:.1}ms"))
+        .unwrap_or_else(|| "-".to_string());
+    let queue_text = match (queue_depth, queue_capacity) {
+        (Some(depth), Some(capacity)) if capacity > 0 => format!("{depth}/{capacity}"),
+        (Some(depth), None) => depth.to_string(),
+        _ => "-".to_string(),
+    };
+    let pressure_bar = queue_utilization(queue_depth, queue_capacity)
+        .map(|u| draw_bar(u, 8))
+        .unwrap_or_else(|| "[--------]".to_string());
+
+    Line::from(vec![
+        Span::styled(format!("{stage:<5}"), Style::default().fg(stage_color)),
+        Span::styled(" ", Style::default().fg(SLATE_700)),
+        Span::styled(ms_text, Style::default().fg(FOREGROUND)),
+        Span::styled("  q ", Style::default().fg(SLATE_500)),
+        Span::styled(queue_text, Style::default().fg(TERMINAL_DIM)),
+        Span::styled(" ", Style::default().fg(SLATE_700)),
+        Span::styled(pressure_bar, Style::default().fg(stage_color)),
+    ])
+}
+
+fn queue_utilization(queue_depth: Option<u64>, queue_capacity: Option<u64>) -> Option<f64> {
+    match (queue_depth, queue_capacity) {
+        (Some(depth), Some(capacity)) if capacity > 0 => {
+            Some((depth as f64 / capacity as f64).clamp(0.0, 1.0))
+        }
+        _ => None,
+    }
+}
+
+fn format_util_pct(util: Option<f64>) -> String {
+    util.map(|u| format!("{:.0}%", u * 100.0))
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn pipeline_flow_state(
+    is_syncing: bool,
+    fetch_depth: Option<u64>,
+    fetch_capacity: Option<u64>,
+    parse_depth: Option<u64>,
+    parse_capacity: Option<u64>,
+    writer_depth: Option<u64>,
+    writer_capacity: Option<u64>,
+) -> (&'static str, Color) {
+    if !is_syncing {
+        return ("IDLE", SLATE_500);
+    }
+
+    let max_util = [
+        queue_utilization(fetch_depth, fetch_capacity),
+        queue_utilization(parse_depth, parse_capacity),
+        queue_utilization(writer_depth, writer_capacity),
+    ]
+    .into_iter()
+    .flatten()
+    .fold(0.0, f64::max);
+
+    if max_util >= 0.9 {
+        ("STALL", ERROR_RED)
+    } else if max_util >= 0.75 {
+        ("BACKPRESSURE", AMBER)
+    } else {
+        ("FLOW", TERMINAL_GREEN)
+    }
+}
+
+fn pipeline_bottleneck(
+    fetch_ms: Option<f64>,
+    parse_ms: Option<f64>,
+    write_ms: Option<f64>,
+) -> (&'static str, Color) {
+    let mut best: Option<(&'static str, f64, Color)> = None;
+    for (name, value, color) in [
+        ("FETCH", fetch_ms, TERMINAL_DIM),
+        ("PARSE", parse_ms, AMBER),
+        ("WRITE", write_ms, TERMINAL_GREEN),
+    ] {
+        if let Some(ms) = value {
+            match best {
+                Some((_, best_ms, _)) if ms <= best_ms => {}
+                _ => best = Some((name, ms, color)),
+            }
+        }
+    }
+
+    if let Some((name, _, color)) = best {
+        (name, color)
+    } else {
+        ("N/A", SLATE_500)
+    }
+}
+
+fn sparkline(history: &VecDeque<f64>, width: usize) -> String {
+    const CHARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
+    if width == 0 {
+        return String::new();
+    }
+
+    let mut values: Vec<f64> = history.iter().rev().take(width).copied().collect();
+    if values.is_empty() {
+        return "-".to_string();
+    }
+    values.reverse();
+
+    let min = values.iter().copied().fold(f64::INFINITY, f64::min);
+    let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+
+    if (max - min).abs() < f64::EPSILON {
+        return CHARS[0].to_string().repeat(values.len());
+    }
+
+    values
+        .into_iter()
+        .map(|v| {
+            let idx = (((v - min) / (max - min)) * (CHARS.len() - 1) as f64).round() as usize;
+            CHARS[idx.min(CHARS.len() - 1)]
+        })
+        .collect()
+}
+
+fn trend_delta(history: &VecDeque<f64>, window: usize) -> Option<f64> {
+    if window == 0 {
+        return None;
+    }
+
+    let mut values: Vec<f64> = history.iter().rev().take(window * 2).copied().collect();
+    if values.len() < 4 {
+        return None;
+    }
+    values.reverse();
+    let split = values.len() / 2;
+    if split == 0 || split >= values.len() {
+        return None;
+    }
+
+    let (prev, latest) = values.split_at(split);
+    let prev_vals: Vec<f64> = prev.iter().copied().filter(|v| *v > 0.0).collect();
+    let latest_vals: Vec<f64> = latest.iter().copied().filter(|v| *v > 0.0).collect();
+    if prev_vals.is_empty() || latest_vals.is_empty() {
+        return None;
+    }
+
+    let prev_avg = prev_vals.iter().sum::<f64>() / prev_vals.len() as f64;
+    let latest_avg = latest_vals.iter().sum::<f64>() / latest_vals.len() as f64;
+    Some(latest_avg - prev_avg)
+}
+
+fn format_delta(delta: Option<f64>, unit: &str) -> String {
+    match delta {
+        Some(v) if v >= 0.0 => format!("+{v:.1}{unit}"),
+        Some(v) => format!("{v:.1}{unit}"),
+        None => "-".to_string(),
+    }
+}
+
+fn delta_color(delta: Option<f64>) -> Color {
+    match delta {
+        Some(v) if v > 5.0 => ERROR_RED,
+        Some(v) if v < -5.0 => TERMINAL_GREEN,
+        Some(_) => AMBER,
+        None => SLATE_500,
+    }
+}
+
+fn stage_trend_line(
+    label: &'static str,
+    color: Color,
+    history: &VecDeque<f64>,
+    spark_width: usize,
+) -> Line<'static> {
+    let delta = trend_delta(history, 10);
+    Line::from(vec![
+        Span::styled(label, Style::default().fg(color)),
+        Span::styled(" ", Style::default().fg(SLATE_700)),
+        Span::styled(sparkline(history, spark_width), Style::default().fg(color)),
+        Span::styled(" ", Style::default().fg(SLATE_700)),
+        Span::styled(
+            format_delta(delta, "ms"),
+            Style::default().fg(delta_color(delta)),
+        ),
+    ])
+}
+
+fn pipeline_stability_label(history: &VecDeque<f64>) -> (&'static str, Color) {
+    let jitter = rate_jitter(history, 30);
+    let mean = history
+        .iter()
+        .rev()
+        .take(30)
+        .copied()
+        .filter(|v| *v > 0.0)
+        .collect::<Vec<f64>>();
+    if mean.is_empty() {
+        return ("N/A", SLATE_500);
+    }
+    let mean = mean.iter().sum::<f64>() / mean.len() as f64;
+    if mean <= 0.0 {
+        return ("N/A", SLATE_500);
+    }
+
+    let ratio = jitter.unwrap_or(0.0) / mean;
+    if ratio < 0.2 {
+        ("HIGH", TERMINAL_GREEN)
+    } else if ratio < 0.4 {
+        ("MED", AMBER)
+    } else {
+        ("LOW", ERROR_RED)
+    }
+}
+
 fn eta_confidence_label(ema_rate: f64, jitter: f64) -> (&'static str, Color) {
     if ema_rate <= 0.0 {
         return ("ETA ?", SLATE_500);
@@ -1821,6 +2351,7 @@ fn draw_help_popup(f: &mut Frame) {
         Line::from("  Tab/s/l  Next tab"),
         Line::from("  h        Previous tab"),
         Line::from("  c        Toggle compact layout override"),
+        Line::from("  v        Cycle diagnostics view (Auto/Compact/Detail)"),
         Line::from("  R        Force refresh"),
         Line::from(""),
         Line::from(Span::styled(
@@ -1918,8 +2449,9 @@ fn format_bytes(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        eta_confidence_label, format_num, format_num_commas, rate_jitter, sync_bottleneck, Color,
-        SyncBottleneck,
+        diagnostics_dense_panel, eta_confidence_label, format_num, format_num_commas,
+        pipeline_bottleneck, pipeline_flow_state, rate_jitter, sparkline, sync_bottleneck,
+        trend_delta, Color, DiagnosticsViewMode, SyncBottleneck,
     };
     use std::collections::VecDeque;
 
@@ -1980,5 +2512,117 @@ mod tests {
             eta_confidence_label(100.0, 60.0),
             ("ETA LOW", Color::Rgb(239, 68, 68))
         );
+    }
+
+    #[test]
+    fn test_pipeline_bottleneck_detection() {
+        assert_eq!(
+            pipeline_bottleneck(Some(10.0), Some(20.0), Some(30.0)),
+            ("WRITE", Color::Rgb(0, 255, 65))
+        );
+        assert_eq!(
+            pipeline_bottleneck(Some(40.0), Some(20.0), Some(30.0)),
+            ("FETCH", Color::Rgb(0, 204, 51))
+        );
+        assert_eq!(
+            pipeline_bottleneck(None, Some(25.0), Some(10.0)),
+            ("PARSE", Color::Rgb(255, 176, 0))
+        );
+        assert_eq!(
+            pipeline_bottleneck(None, None, None),
+            ("N/A", Color::Rgb(160, 174, 192))
+        );
+    }
+
+    #[test]
+    fn test_pipeline_flow_state() {
+        assert_eq!(
+            pipeline_flow_state(
+                false,
+                Some(0),
+                Some(16),
+                Some(0),
+                Some(16),
+                Some(0),
+                Some(16)
+            ),
+            ("IDLE", Color::Rgb(160, 174, 192))
+        );
+        assert_eq!(
+            pipeline_flow_state(
+                true,
+                Some(2),
+                Some(16),
+                Some(3),
+                Some(16),
+                Some(4),
+                Some(16)
+            ),
+            ("FLOW", Color::Rgb(0, 255, 65))
+        );
+        assert_eq!(
+            pipeline_flow_state(
+                true,
+                Some(13),
+                Some(16),
+                Some(12),
+                Some(16),
+                Some(14),
+                Some(16)
+            ),
+            ("BACKPRESSURE", Color::Rgb(255, 176, 0))
+        );
+        assert_eq!(
+            pipeline_flow_state(
+                true,
+                Some(15),
+                Some(16),
+                Some(10),
+                Some(16),
+                Some(12),
+                Some(16)
+            ),
+            ("STALL", Color::Rgb(239, 68, 68))
+        );
+    }
+
+    #[test]
+    fn test_trend_delta() {
+        let mut rising = VecDeque::new();
+        for v in [10.0, 12.0, 14.0, 18.0, 22.0, 26.0] {
+            rising.push_back(v);
+        }
+        let delta = trend_delta(&rising, 3).expect("delta should be present");
+        assert!(delta > 0.0);
+
+        let mut falling = VecDeque::new();
+        for v in [30.0, 24.0, 20.0, 18.0, 15.0, 10.0] {
+            falling.push_back(v);
+        }
+        let delta = trend_delta(&falling, 3).expect("delta should be present");
+        assert!(delta < 0.0);
+    }
+
+    #[test]
+    fn test_sparkline_output() {
+        let mut history = VecDeque::new();
+        for v in [10.0, 20.0, 15.0, 35.0, 40.0, 25.0] {
+            history.push_back(v);
+        }
+        let s = sparkline(&history, 6);
+        assert_eq!(s.chars().count(), 6);
+    }
+
+    #[test]
+    fn test_diagnostics_dense_panel_mode() {
+        assert!(diagnostics_dense_panel(
+            DiagnosticsViewMode::Compact,
+            200,
+            20
+        ));
+        assert!(!diagnostics_dense_panel(DiagnosticsViewMode::Detail, 90, 5));
+        assert!(diagnostics_dense_panel(DiagnosticsViewMode::Auto, 120, 8));
+        assert!(diagnostics_dense_panel(DiagnosticsViewMode::Auto, 180, 6));
+        assert!(!diagnostics_dense_panel(DiagnosticsViewMode::Auto, 180, 10));
     }
 }

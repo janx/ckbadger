@@ -180,6 +180,34 @@ pub struct SyncProgressData {
     /// RPC fetch time in ms for the last batch (from PerfStats).
     #[serde(default)]
     pub rpc_fetch_ms: Option<f64>,
+    /// Detailed pipeline stage timings and queue depth, when pipeline mode is enabled.
+    #[serde(default)]
+    pub pipeline: Option<PipelineProgressData>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PipelineProgressData {
+    /// Fetcher stage duration in ms for the most recent batch.
+    pub fetch_ms: Option<f64>,
+    /// Parser stage duration in ms for the most recent batch.
+    pub parse_ms: Option<f64>,
+    /// Writer stage duration in ms for the most recent batch.
+    pub write_ms: Option<f64>,
+    /// Time writer spent waiting for parsed data in ms.
+    pub writer_wait_ms: Option<f64>,
+    /// Current queue depth between fetcher -> parser.
+    pub fetch_queue_depth: Option<u64>,
+    /// Queue capacity between fetcher -> parser.
+    pub fetch_queue_capacity: Option<u64>,
+    /// Current queue depth between parser -> writer.
+    pub parse_queue_depth: Option<u64>,
+    /// Queue capacity between parser -> writer.
+    pub parse_queue_capacity: Option<u64>,
+    /// Current queue depth observed by writer (parser -> writer channel).
+    pub writer_queue_depth: Option<u64>,
+    /// Queue capacity observed by writer (parser -> writer channel).
+    pub writer_queue_capacity: Option<u64>,
 }
 
 pub fn format_duration_smart(total_secs: f64) -> String {
@@ -387,5 +415,45 @@ mod tests {
         assert_eq!(parsed.sst_files_size, stats.sst_files_size);
         assert_eq!(parsed.top_cf_sizes.len(), 2);
         assert_eq!(parsed.total_transactions, 50_000_000);
+    }
+
+    #[test]
+    fn test_sync_progress_pipeline_serialization() {
+        let progress = SyncProgressData {
+            current_block: 1000,
+            target_block: 2000,
+            blocks_per_second: 500.0,
+            ema_blocks_per_second: 450.0,
+            eta_seconds: Some(2.0),
+            eta_formatted: "2s".to_string(),
+            progress_percentage: 50.0,
+            updated_at: 1700000000,
+            is_direct_db_read: false,
+            db_write_ms: Some(120.0),
+            rpc_fetch_ms: Some(45.0),
+            pipeline: Some(PipelineProgressData {
+                fetch_ms: Some(45.0),
+                parse_ms: Some(80.0),
+                write_ms: Some(120.0),
+                writer_wait_ms: Some(15.0),
+                fetch_queue_depth: Some(2),
+                fetch_queue_capacity: Some(16),
+                parse_queue_depth: Some(5),
+                parse_queue_capacity: Some(16),
+                writer_queue_depth: Some(4),
+                writer_queue_capacity: Some(16),
+            }),
+        };
+
+        let json = serde_json::to_string(&progress).unwrap();
+        let parsed: SyncProgressData = serde_json::from_str(&json).unwrap();
+
+        let pipeline = parsed.pipeline.expect("pipeline should be present");
+        assert_eq!(pipeline.fetch_ms, Some(45.0));
+        assert_eq!(pipeline.parse_ms, Some(80.0));
+        assert_eq!(pipeline.write_ms, Some(120.0));
+        assert_eq!(pipeline.fetch_queue_depth, Some(2));
+        assert_eq!(pipeline.parse_queue_capacity, Some(16));
+        assert_eq!(pipeline.writer_queue_depth, Some(4));
     }
 }

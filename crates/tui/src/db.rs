@@ -1,6 +1,6 @@
 use anyhow::Result;
 use ckbadger_common::{
-    format_duration_smart, MemoryStatsData, SyncProgressData, SyncStatusData,
+    format_duration_smart, MemoryStatsData, PipelineProgressData, SyncProgressData, SyncStatusData,
     MEMORY_STATS_REDIS_KEY, SYNC_PROGRESS_REDIS_KEY, SYNC_STATUS_REDIS_KEY,
 };
 use ckbadger_store::CkbadgerStore;
@@ -50,6 +50,7 @@ pub struct SyncStatusRow {
     pub rate_ema: Option<f64>,
     pub db_write_ms: Option<f64>,
     pub rpc_fetch_ms: Option<f64>,
+    pub pipeline: Option<PipelineProgressData>,
     pub is_direct_db_read: bool,
     pub address_balances_deferred: bool,
     pub activities_deferred: bool,
@@ -195,6 +196,7 @@ impl TuiDb {
             rate_ema: Some(progress.ema_blocks_per_second),
             db_write_ms: progress.db_write_ms,
             rpc_fetch_ms: progress.rpc_fetch_ms,
+            pipeline: progress.pipeline.clone(),
             is_direct_db_read: progress.is_direct_db_read,
             address_balances_deferred: deferred.address_balances,
             activities_deferred: deferred.activities,
@@ -253,6 +255,7 @@ impl TuiDb {
             rate_ema: status.sync_ema_rate,
             db_write_ms: None,
             rpc_fetch_ms: None,
+            pipeline: None,
             is_direct_db_read: false,
             address_balances_deferred: deferred.address_balances,
             activities_deferred: deferred.activities,
@@ -278,6 +281,7 @@ impl TuiDb {
             rate_ema: None,
             db_write_ms: None,
             rpc_fetch_ms: None,
+            pipeline: None,
             is_direct_db_read: false,
             address_balances_deferred: deferred.address_balances,
             activities_deferred: deferred.activities,

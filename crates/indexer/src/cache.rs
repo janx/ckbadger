@@ -428,6 +428,7 @@ mod tests {
             is_direct_db_read: false,
             db_write_ms: None,
             rpc_fetch_ms: None,
+            pipeline: None,
         };
         invalidator.publish_sync_progress(&data).await;
     }
@@ -518,6 +519,9 @@ mod tests {
                 progress_percentage: 50.0,
                 updated_at: chrono::Utc::now().timestamp(),
                 is_direct_db_read: false,
+                db_write_ms: None,
+                rpc_fetch_ms: None,
+                pipeline: None,
             };
             invalidator.publish_sync_progress(&data).await;
 

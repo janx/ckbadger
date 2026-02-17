@@ -223,6 +223,7 @@ async fn run_sync(args: Cli) -> Result<()> {
             let bps = progress.blocks_per_second();
 
             let (perf_rpc_ms, perf_db_ms) = indexer_for_progress.perf_snapshot_ms();
+            let pipeline = indexer_for_progress.pipeline_progress_snapshot();
             let sync_data = ckbadger_common::SyncProgressData {
                 current_block: progress.current(),
                 target_block: progress.target(),
@@ -243,6 +244,7 @@ async fn run_sync(args: Cli) -> Result<()> {
                 } else {
                     None
                 },
+                pipeline,
             };
             indexer_for_progress
                 .cache_invalidator()

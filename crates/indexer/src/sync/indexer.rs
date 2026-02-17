@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use chrono::{DateTime, NaiveDate, Timelike, Utc};
-use ckbadger_common::LabelImportConfig;
+use ckbadger_common::{LabelImportConfig, PipelineProgressData};
 use dashmap::DashMap;
 use futures::stream::{FuturesOrdered, StreamExt};
 use rayon::prelude::*;
@@ -180,6 +180,133 @@ impl PerfStats {
     }
 }
 
+#[derive(Default)]
+struct PipelinePerfStats {
+    last_fetch_us: AtomicU64,
+    last_parse_us: AtomicU64,
+    last_write_us: AtomicU64,
+    last_writer_wait_us: AtomicU64,
+    fetch_queue_depth: AtomicU64,
+    fetch_queue_capacity: AtomicU64,
+    parse_queue_depth: AtomicU64,
+    parse_queue_capacity: AtomicU64,
+    writer_queue_depth: AtomicU64,
+    writer_queue_capacity: AtomicU64,
+}
+
+impl PipelinePerfStats {
+    fn set_queue_capacities(&self, fetch_capacity: usize, parse_capacity: usize) {
+        self.fetch_queue_capacity
+            .store(fetch_capacity as u64, Ordering::Relaxed);
+        self.parse_queue_capacity
+            .store(parse_capacity as u64, Ordering::Relaxed);
+        self.writer_queue_capacity
+            .store(parse_capacity as u64, Ordering::Relaxed);
+    }
+
+    fn record_fetch(&self, duration: Duration, queue_depth: usize, queue_capacity: usize) {
+        self.last_fetch_us
+            .store(duration.as_micros() as u64, Ordering::Relaxed);
+        self.fetch_queue_depth
+            .store(queue_depth as u64, Ordering::Relaxed);
+        self.fetch_queue_capacity
+            .store(queue_capacity as u64, Ordering::Relaxed);
+    }
+
+    fn record_parse(&self, duration: Duration, queue_depth: usize, queue_capacity: usize) {
+        self.last_parse_us
+            .store(duration.as_micros() as u64, Ordering::Relaxed);
+        self.parse_queue_depth
+            .store(queue_depth as u64, Ordering::Relaxed);
+        self.parse_queue_capacity
+            .store(queue_capacity as u64, Ordering::Relaxed);
+    }
+
+    fn record_write(
+        &self,
+        duration: Duration,
+        writer_wait_ms: f64,
+        queue_depth: usize,
+        queue_capacity: usize,
+    ) {
+        self.last_write_us
+            .store(duration.as_micros() as u64, Ordering::Relaxed);
+        self.last_writer_wait_us.store(
+            Duration::from_secs_f64((writer_wait_ms.max(0.0)) / 1000.0).as_micros() as u64,
+            Ordering::Relaxed,
+        );
+        self.writer_queue_depth
+            .store(queue_depth as u64, Ordering::Relaxed);
+        self.writer_queue_capacity
+            .store(queue_capacity as u64, Ordering::Relaxed);
+    }
+
+    fn snapshot(&self) -> Option<PipelineProgressData> {
+        let fetch_us = self.last_fetch_us.load(Ordering::Relaxed);
+        let parse_us = self.last_parse_us.load(Ordering::Relaxed);
+        let write_us = self.last_write_us.load(Ordering::Relaxed);
+        let wait_us = self.last_writer_wait_us.load(Ordering::Relaxed);
+        let fetch_depth = self.fetch_queue_depth.load(Ordering::Relaxed);
+        let fetch_capacity = self.fetch_queue_capacity.load(Ordering::Relaxed);
+        let parse_depth = self.parse_queue_depth.load(Ordering::Relaxed);
+        let parse_capacity = self.parse_queue_capacity.load(Ordering::Relaxed);
+        let writer_depth = self.writer_queue_depth.load(Ordering::Relaxed);
+        let writer_capacity = self.writer_queue_capacity.load(Ordering::Relaxed);
+
+        if fetch_us == 0
+            && parse_us == 0
+            && write_us == 0
+            && wait_us == 0
+            && fetch_capacity == 0
+            && parse_capacity == 0
+            && writer_capacity == 0
+        {
+            return None;
+        }
+
+        Some(PipelineProgressData {
+            fetch_ms: if fetch_us > 0 {
+                Some(fetch_us as f64 / 1000.0)
+            } else {
+                None
+            },
+            parse_ms: if parse_us > 0 {
+                Some(parse_us as f64 / 1000.0)
+            } else {
+                None
+            },
+            write_ms: if write_us > 0 {
+                Some(write_us as f64 / 1000.0)
+            } else {
+                None
+            },
+            writer_wait_ms: if wait_us > 0 {
+                Some(wait_us as f64 / 1000.0)
+            } else {
+                None
+            },
+            fetch_queue_depth: Some(fetch_depth),
+            fetch_queue_capacity: if fetch_capacity > 0 {
+                Some(fetch_capacity)
+            } else {
+                None
+            },
+            parse_queue_depth: Some(parse_depth),
+            parse_queue_capacity: if parse_capacity > 0 {
+                Some(parse_capacity)
+            } else {
+                None
+            },
+            writer_queue_depth: Some(writer_depth),
+            writer_queue_capacity: if writer_capacity > 0 {
+                Some(writer_capacity)
+            } else {
+                None
+            },
+        })
+    }
+}
+
 const CELL_CACHE_CAPACITY: usize = 200_000;
 const UDT_CELL_CACHE_CAPACITY: usize = 100_000;
 
@@ -320,6 +447,7 @@ pub struct Indexer {
     cell_cache: Arc<DashMap<([u8; 32], i32), CachedCellInfo>>,
     udt_cell_cache: Arc<DashMap<([u8; 32], i16), CachedUdtCellInfo>>,
     perf: PerfStats,
+    pipeline_perf: Arc<PipelinePerfStats>,
     cache_invalidator: CacheInvalidator,
     last_cache_invalidation: tokio::sync::Mutex<u64>,
     was_bulk_sync_active: std::sync::atomic::AtomicBool,
@@ -402,6 +530,7 @@ impl Indexer {
             cell_cache,
             udt_cell_cache,
             perf: PerfStats::default(),
+            pipeline_perf: Arc::new(PipelinePerfStats::default()),
             cache_invalidator,
             last_cache_invalidation: tokio::sync::Mutex::new(0),
             was_bulk_sync_active: std::sync::atomic::AtomicBool::new(was_bulk),
@@ -450,6 +579,13 @@ impl Indexer {
     /// Snapshot the current perf stats: (fetch_ms, db_ms).
     pub fn perf_snapshot_ms(&self) -> (f64, f64) {
         self.perf.snapshot_ms()
+    }
+
+    pub fn pipeline_progress_snapshot(&self) -> Option<PipelineProgressData> {
+        if !self.config.pipeline_enabled {
+            return None;
+        }
+        self.pipeline_perf.snapshot()
     }
 
     pub fn get_memory_stats(&self) -> ckbadger_common::MemoryStatsData {
@@ -614,6 +750,8 @@ impl Indexer {
 
         let (fetch_tx, mut fetch_rx) = mpsc::channel::<FetchedBatch>(self.config.pipeline_buffer);
         let (parse_tx, mut parse_rx) = mpsc::channel::<ParsedBatch>(self.config.pipeline_buffer);
+        self.pipeline_perf
+            .set_queue_capacities(self.config.pipeline_buffer, self.config.pipeline_buffer);
 
         let rpc = self.rpc.clone();
         let config = self.config.clone();
@@ -622,6 +760,7 @@ impl Indexer {
         let rebuild_pause = Arc::clone(&self.rebuild_pause_flag);
         let reorg_notify = Arc::clone(&self.reorg_notify_flag);
         let ckb_store = self.ckb_store.clone();
+        let pipeline_perf_for_fetcher = Arc::clone(&self.pipeline_perf);
 
         // === Fetcher task ===
         let fetcher = tokio::spawn(async move {
@@ -710,6 +849,7 @@ impl Indexer {
                     start_block, end_block, chain_tip, next_block
                 );
 
+                let fetch_started = Instant::now();
                 let blocks = if let Some(ref store) = ckb_store {
                     let store = Arc::clone(store);
                     let sb = start_block;
@@ -751,6 +891,7 @@ impl Indexer {
                         }
                     }
                 };
+                let fetch_elapsed = fetch_started.elapsed();
 
                 // Split into sub-batches if too many transactions
                 let max_txs = config.max_batch_txs;
@@ -799,6 +940,13 @@ impl Indexer {
                     break;
                 }
 
+                let fetch_queue_depth = fetch_tx.max_capacity() - fetch_tx.capacity();
+                pipeline_perf_for_fetcher.record_fetch(
+                    fetch_elapsed,
+                    fetch_queue_depth,
+                    fetch_tx.max_capacity(),
+                );
+
                 next_block = Some(end_block + 1);
                 if end_block % 1000 == 0 {
                     next_block = None;
@@ -809,6 +957,7 @@ impl Indexer {
         // === Parser task ===
         let writer_for_parser = self.writer.clone();
         let cell_cache_for_parser = Arc::clone(&self.cell_cache);
+        let pipeline_perf_for_parser = Arc::clone(&self.pipeline_perf);
 
         let parse_tx_for_writer_depth = parse_tx.clone();
         let parser = tokio::spawn(async move {
@@ -1138,6 +1287,11 @@ impl Indexer {
                     .map(|t| t.inputs.len())
                     .sum();
                 let queue_depth = parse_tx.max_capacity() - parse_tx.capacity();
+                pipeline_perf_for_parser.record_parse(
+                    t_parser.elapsed(),
+                    queue_depth,
+                    parse_tx.max_capacity(),
+                );
                 let cache_total = cache_hits + cache_misses;
                 let hit_rate = if cache_total > 0 {
                     cache_hits as f64 / cache_total as f64 * 100.0
@@ -1313,6 +1467,12 @@ impl Indexer {
                         };
                         let writer_queue = parse_tx_for_writer_depth.max_capacity()
                             - parse_tx_for_writer_depth.capacity();
+                        self.pipeline_perf.record_write(
+                            db_elapsed,
+                            recv_wait_ms,
+                            writer_queue,
+                            parse_tx_for_writer_depth.max_capacity(),
+                        );
                         info!(
                             "Wrote blocks {} to {} ({} remaining, {:.2}s, q={}, wait={:.0}ms) {}{} {}",
                             start_block,
@@ -5793,6 +5953,35 @@ mod tests {
         let (rpc_ms, db_ms) = perf.snapshot_ms();
         assert!((rpc_ms - 150.0).abs() < 0.001);
         assert!((db_ms - 250.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_pipeline_perf_snapshot_returns_none_when_empty() {
+        let perf = PipelinePerfStats::default();
+        assert!(perf.snapshot().is_none());
+    }
+
+    #[test]
+    fn test_pipeline_perf_snapshot_contains_stage_metrics() {
+        let perf = PipelinePerfStats::default();
+        perf.set_queue_capacities(16, 16);
+        perf.record_fetch(Duration::from_millis(20), 3, 16);
+        perf.record_parse(Duration::from_millis(40), 7, 16);
+        perf.record_write(Duration::from_millis(80), 12.0, 6, 16);
+
+        let snapshot = perf.snapshot().expect("pipeline snapshot should exist");
+        assert_eq!(snapshot.fetch_ms, Some(20.0));
+        assert_eq!(snapshot.parse_ms, Some(40.0));
+        assert_eq!(snapshot.write_ms, Some(80.0));
+        let wait = snapshot
+            .writer_wait_ms
+            .expect("writer wait should be present");
+        assert!((wait - 12.0).abs() < 0.001);
+        assert_eq!(snapshot.fetch_queue_depth, Some(3));
+        assert_eq!(snapshot.parse_queue_depth, Some(7));
+        assert_eq!(snapshot.parse_queue_capacity, Some(16));
+        assert_eq!(snapshot.writer_queue_depth, Some(6));
+        assert_eq!(snapshot.writer_queue_capacity, Some(16));
     }
 
     // --- DAO recalculation boundary tests ---
