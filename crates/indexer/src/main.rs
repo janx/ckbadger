@@ -1,26 +1,31 @@
 use anyhow::Result;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use ckbadger_indexer::{sync::Indexer, Config};
+use ckbadger_indexer::{sync::Indexer, verify, Config};
 use ckbadger_store::CkbadgerStore;
 use ckbadger_task_runner::executor::TaskExecutor;
 
 #[derive(Parser, Debug)]
 #[command(name = "ckbadger-indexer")]
 #[command(about = "CKB blockchain indexer for ckbadger explorer")]
-struct Args {
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+
+    // ---- Sync args (used when no subcommand or `sync` subcommand) ----
     #[arg(
         long,
         env = "CKBADGER_DATA_PATH",
-        default_value = "./data/ckbadger-store"
+        default_value = "./data/ckbadger-store",
+        global = true
     )]
     data_path: String,
 
-    #[arg(long, env = "CKB_RPC_URL")]
+    #[arg(long, env = "CKB_RPC_URL", global = true)]
     ckb_rpc_url: Option<String>,
 
     #[arg(long, env = "REDIS_URL")]
@@ -73,6 +78,14 @@ struct Args {
     no_task_runner: bool,
 }
 
+#[derive(Subcommand, Debug)]
+enum Command {
+    /// Run the sync daemon (default behavior).
+    Sync,
+    /// Verify data integrity of the store.
+    Verify(verify::VerifyArgs),
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
@@ -84,8 +97,19 @@ async fn main() -> Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let args = Args::parse();
+    let cli = Cli::parse();
 
+    match cli.command {
+        Some(Command::Verify(args)) => {
+            verify::run(args)?;
+            Ok(())
+        }
+        // Default (no subcommand) or explicit `sync` → run sync daemon
+        None | Some(Command::Sync) => run_sync(cli).await,
+    }
+}
+
+async fn run_sync(args: Cli) -> Result<()> {
     let config = Config {
         data_path: args.data_path.clone(),
         ckb_rpc_url: args

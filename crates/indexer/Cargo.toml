@@ -48,6 +48,10 @@ dotenvy = { workspace = true }
 # CLI
 clap = { workspace = true }
 
+# Terminal UI for verify subcommand
+indicatif = "0.17"
+console = "0.15"
+
 # CKB types
 ckb-types = { workspace = true }
 ckb-jsonrpc-types = { workspace = true }
