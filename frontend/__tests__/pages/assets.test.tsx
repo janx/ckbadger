@@ -14,11 +14,6 @@ vi.mock('@/components/layout/header', () => ({
   Header: () => <div data-testid="header">Header</div>,
 }));
 
-vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push: vi.fn() }),
-  useSearchParams: () => new URLSearchParams(),
-}));
-
 const mockTokenAssets = {
   data: [
     {
@@ -88,6 +83,7 @@ const emptyAssets = {
 describe('AssetsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.history.replaceState(null, '', '/assets');
   });
 
   it('renders the page with header and title', async () => {
@@ -116,6 +112,31 @@ describe('AssetsPage', () => {
 
     await waitFor(() => {
       expect(api.getAssets).toHaveBeenCalledWith(expect.objectContaining({ type: 'token' }));
+    });
+  });
+
+  it('uses query type as initial tab', async () => {
+    window.history.replaceState(null, '', '/assets?type=dob');
+    vi.mocked(api.getAssets).mockResolvedValue(mockClusterAssets);
+
+    render(<AssetsPage />);
+
+    await waitFor(() => {
+      expect(api.getAssets).toHaveBeenCalledWith(expect.objectContaining({ type: 'dob' }));
+      expect(screen.getByText('DOB Collections')).toBeInTheDocument();
+    });
+  });
+
+  it('updates query type when tab changes', async () => {
+    vi.mocked(api.getAssets).mockResolvedValue(emptyAssets);
+
+    render(<AssetsPage />);
+
+    fireEvent.click(screen.getByRole('button', { name: /NFTs/i }));
+
+    await waitFor(() => {
+      expect(window.location.search).toBe('?type=nft');
+      expect(api.getAssets).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'nft' }));
     });
   });
 

@@ -20,6 +20,13 @@ import { api, Asset } from '@/lib/api';
 
 type AssetTab = 'token' | 'nft' | 'dob';
 
+function normalizeAssetTab(value: string | null): AssetTab {
+  if (value === 'nft' || value === 'dob' || value === 'token') {
+    return value;
+  }
+  return 'token';
+}
+
 function AssetTable({ assetType, search }: { assetType: AssetTab; search: string | undefined }) {
   const pagination = useCursorPagination();
 
@@ -196,7 +203,11 @@ function AssetTable({ assetType, search }: { assetType: AssetTab; search: string
 }
 
 export default function AssetsPage() {
-  const [activeTab, setActiveTab] = useState<AssetTab>('token');
+  const [activeTab, setActiveTab] = useState<AssetTab>(() => {
+    if (typeof window === 'undefined') return 'token';
+    const params = new URLSearchParams(window.location.search);
+    return normalizeAssetTab(params.get('type'));
+  });
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState<string | undefined>(undefined);
 
@@ -211,9 +222,18 @@ export default function AssetsPage() {
   };
 
   const handleTabChange = (value: string) => {
-    setActiveTab(value as AssetTab);
+    const nextTab = normalizeAssetTab(value);
+    setActiveTab(nextTab);
     setSearch(undefined);
     setSearchInput('');
+
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      params.set('type', nextTab);
+      const query = params.toString();
+      const nextUrl = query ? `${window.location.pathname}?${query}` : window.location.pathname;
+      window.history.replaceState(null, '', nextUrl);
+    }
   };
 
   return (
