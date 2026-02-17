@@ -5,9 +5,6 @@ use ckbadger_store::CkbadgerStore;
 use serde::Deserialize;
 use std::path::Path;
 use tracing::{debug, info};
-use uuid::Uuid;
-
-use crate::db::TaskDb;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -78,13 +75,11 @@ struct ScriptNameOverrides {
     pub deprecated: Vec<String>,
 }
 
-pub async fn execute(
-    db: &TaskDb,
+pub fn run_label_import(
     store: &CkbadgerStore,
     ckb_store: Option<&CkbChainReader>,
-    task_id: Uuid,
     config: &LabelImportConfig,
-) -> Result<()> {
+) -> Result<LabelImportResult> {
     info!(
         "Starting label import: path={}, network={}, udt={}, scripts={}",
         config.token_labels_path, config.network, config.import_udt, config.import_scripts
@@ -92,37 +87,21 @@ pub async fn execute(
 
     let base_path = Path::new(&config.token_labels_path);
     if !base_path.exists() {
-        let msg = format!(
-            "Token labels path not found: {}. No labels imported.",
+        info!(
+            "Token labels path not found: {}. Skipping label import.",
             config.token_labels_path
         );
-        info!("{}", msg);
-        db.update_progress(task_id, 100, 100, Some(&msg), None)
-            .await?;
-        db.complete_task(
-            task_id,
-            Some(serde_json::to_value(LabelImportResult::default())?),
-        )
-        .await?;
-        return Ok(());
+        return Ok(LabelImportResult::default());
     }
 
     let mut result = LabelImportResult::default();
 
     if config.import_udt {
-        db.update_progress(task_id, 0, 100, Some("Loading UDT labels..."), None)
-            .await?;
-
         let labels = load_token_labels(&config.token_labels_path)?;
-        let total = labels.len() as i64;
-        info!("Found {} UDT labels to import", total);
+        info!("Found {} UDT labels to import", labels.len());
 
-        for (i, label) in labels.iter().enumerate() {
-            if db.check_cancelled(task_id).await? {
-                return Ok(());
-            }
-
-            match upsert_token_label(store, label).await {
+        for label in &labels {
+            match upsert_token_label(store, label) {
                 Ok(updated) => {
                     if updated {
                         result.udt_labels_imported += 1;
@@ -134,60 +113,39 @@ pub async fn execute(
                         .push(format!("UDT {}: {}", label.type_hash, e));
                 }
             }
-
-            if i % 10 == 0 {
-                let msg = format!("UDT labels: {}/{}", i + 1, total);
-                db.update_progress(task_id, (i + 1) as i64, total, Some(&msg), None)
-                    .await?;
-            }
         }
     }
 
     if config.import_scripts {
-        db.update_progress(task_id, 0, 100, Some("Loading script labels..."), None)
-            .await?;
-
         let scripts = load_script_labels(&config.token_labels_path)?;
-        let total = scripts.len() as i64;
-        info!("Found {} script labels to import", total);
+        info!("Found {} script labels to import", scripts.len());
 
-        for (i, script) in scripts.iter().enumerate() {
-            if db.check_cancelled(task_id).await? {
-                return Ok(());
-            }
-
-            match upsert_script_label(store, ckb_store, script, &config.network).await {
-                Ok(_) => {
+        for script in &scripts {
+            match upsert_script_label(store, ckb_store, script, &config.network) {
+                Ok(()) => {
                     result.script_labels_imported += 1;
                 }
                 Err(e) => {
                     result.errors.push(format!("Script {}: {}", script.name, e));
                 }
             }
-
-            if i % 10 == 0 {
-                let msg = format!("Script labels: {}/{}", i + 1, total);
-                db.update_progress(task_id, (i + 1) as i64, total, Some(&msg), None)
-                    .await?;
-            }
         }
     }
 
     info!(
-        "Label import completed: {} UDT, {} scripts",
-        result.udt_labels_imported, result.script_labels_imported
+        "Label import completed: {} UDT, {} scripts, {} errors",
+        result.udt_labels_imported,
+        result.script_labels_imported,
+        result.errors.len()
     );
 
-    db.complete_task(task_id, Some(serde_json::to_value(&result)?))
-        .await?;
-
-    Ok(())
+    Ok(result)
 }
 
 fn load_token_labels(base_path: &str) -> Result<Vec<UdtLabelInfo>> {
     let mut labels = Vec::new();
 
-    for network in &["mainnet", "testnet"] {
+    for network in ["mainnet", "testnet"] {
         let network_path = Path::new(base_path)
             .join("information")
             .join("udt")
@@ -246,7 +204,7 @@ fn decode_hex(s: &str) -> Result<Vec<u8>> {
     hex::decode(s).map_err(|e| anyhow::anyhow!("invalid hex: {}", e))
 }
 
-async fn upsert_token_label(store: &CkbadgerStore, label: &UdtLabelInfo) -> Result<bool> {
+fn upsert_token_label(store: &CkbadgerStore, label: &UdtLabelInfo) -> Result<bool> {
     let type_hash = decode_hex(&label.type_hash)?;
 
     let mut info =
@@ -268,7 +226,7 @@ async fn upsert_token_label(store: &CkbadgerStore, label: &UdtLabelInfo) -> Resu
                 transfers_count: 0,
             });
 
-    // Update label fields (preserve indexer-maintained stats like holders_count, total_supply)
+    // Update label fields (preserve indexer-maintained stats like holders_count, total_supply).
     info.name = label.name.clone().or(Some(label.symbol.clone()));
     info.symbol = Some(label.symbol.clone());
     info.decimals = Some(label.decimal as i32);
@@ -309,7 +267,7 @@ fn load_script_labels(base_path: &str) -> Result<Vec<ScriptLabelInfo>> {
                     if let Some(new_name) = overrides.overrides.get(&script.name) {
                         script.name = new_name.clone();
                     }
-                    for deployment in script.deployments.mainnet.iter_mut() {
+                    for deployment in &mut script.deployments.mainnet {
                         let code_hash_lower = deployment.code_hash.to_lowercase();
                         if overrides
                             .deprecated
@@ -319,7 +277,7 @@ fn load_script_labels(base_path: &str) -> Result<Vec<ScriptLabelInfo>> {
                             deployment.deprecated = true;
                         }
                     }
-                    for deployment in script.deployments.testnet.iter_mut() {
+                    for deployment in &mut script.deployments.testnet {
                         let code_hash_lower = deployment.code_hash.to_lowercase();
                         if overrides
                             .deprecated
@@ -360,13 +318,13 @@ fn load_script_overrides(base_path: &str) -> ScriptNameOverrides {
     }
 }
 
-async fn upsert_script_label(
+fn upsert_script_label(
     store: &CkbadgerStore,
     ckb_store: Option<&CkbChainReader>,
     script: &ScriptLabelInfo,
     network: &str,
 ) -> Result<()> {
-    // Only import deployments for the configured network
+    // Only import deployments for the configured network.
     let (active, excluded): (&[ScriptDeployment], &[ScriptDeployment]) = match network {
         "mainnet" => (&script.deployments.mainnet, &script.deployments.testnet),
         "testnet" => (&script.deployments.testnet, &script.deployments.mainnet),
@@ -377,7 +335,6 @@ async fn upsert_script_label(
                 .iter()
                 .chain(script.deployments.testnet.iter())
                 .collect();
-            // Process all, exclude none — handled below
             for deployment in all_deployments {
                 if !deployment.deprecated {
                     import_single_deployment(store, ckb_store, script, deployment)?;
@@ -432,17 +389,15 @@ fn import_single_deployment(
             });
 
     // Always sync code_hash and hash_type from label data.
-    // The indexer may create ScriptInfo with default (empty) code_hash and hash_type=0
-    // before labels run; these fields must be authoritative from the label.
     info.code_hash = code_hash.clone();
     info.hash_type = parse_hash_type(&deployment.hash_type);
 
-    // Update label fields (preserve indexer-maintained stats)
+    // Update label fields (preserve indexer-maintained stats).
     info.name = Some(script.name.clone());
     info.description = Some(script.description.clone());
     info.website = Some(script.website.clone());
 
-    // Store deployment cell's type_hash and data_hash for code cell lookup
+    // Store deployment cell's type_hash and data_hash for code cell lookup.
     let type_hash = decode_hex(&deployment.type_hash).ok();
     let is_zero_type = type_hash
         .as_ref()
@@ -457,8 +412,7 @@ fn import_single_deployment(
         .unwrap_or(true);
     info.dep_data_hash = if is_zero_data { None } else { data_hash };
 
-    // Resolve code cell outpoint for scripts that can't use type index at runtime
-    // (data/data1/data2 without dep_type_hash — e.g. genesis cells)
+    // Resolve code cell outpoint for scripts that can't use type index at runtime.
     if info.hash_type != 1 && info.dep_type_hash.is_none() {
         if let Some(ref dh) = info.dep_data_hash {
             if dh.len() == 32 {
@@ -482,4 +436,40 @@ fn import_single_deployment(
 
     store.put_script_info_direct(&code_hash, &info)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_parse_hash_type() {
+        assert_eq!(parse_hash_type("data"), 0);
+        assert_eq!(parse_hash_type("type"), 1);
+        assert_eq!(parse_hash_type("data1"), 2);
+        assert_eq!(parse_hash_type("data2"), 4);
+        assert_eq!(parse_hash_type("unknown"), 0);
+    }
+
+    #[test]
+    fn test_decode_hex_invalid() {
+        assert!(decode_hex("0xgg").is_err());
+    }
+
+    #[test]
+    fn test_run_label_import_missing_path_returns_default() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap();
+
+        let config = LabelImportConfig {
+            token_labels_path: dir.path().join("not-found").to_string_lossy().to_string(),
+            ..Default::default()
+        };
+
+        let result = run_label_import(&store, None, &config).unwrap();
+        assert_eq!(result.udt_labels_imported, 0);
+        assert_eq!(result.script_labels_imported, 0);
+        assert!(result.errors.is_empty());
+    }
 }

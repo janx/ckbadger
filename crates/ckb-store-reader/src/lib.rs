@@ -81,7 +81,7 @@ impl CkbChainReader {
         }
 
         // Secondary instances need their own directory for manifest tracking.
-        // Use a per-process path to allow multiple consumers (indexer, api, task-runner).
+        // Use a per-process path to allow multiple consumers (indexer, API, CLI tools).
         let secondary_path = format!("/tmp/ckbadger-rocksdb-secondary-{}", std::process::id());
         std::fs::create_dir_all(&secondary_path)
             .map_err(|e| anyhow!("Failed to create secondary path {}: {}", secondary_path, e))?;

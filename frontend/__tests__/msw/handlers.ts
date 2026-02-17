@@ -305,12 +305,6 @@ export const handlers = [
     });
   }),
 
-  http.get(`${API_BASE}/tasks/active`, () => {
-    return HttpResponse.json({
-      indexRebuild: null,
-    });
-  }),
-
   http.get(`${API_BASE}/charts/hodl-wave`, () => {
     return HttpResponse.json({
       title: 'CKB HODL Wave',

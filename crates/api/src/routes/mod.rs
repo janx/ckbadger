@@ -10,7 +10,6 @@ mod scripts;
 mod search;
 mod spore;
 pub(crate) mod statistics;
-mod tasks;
 mod tokens;
 mod transactions;
 
@@ -35,5 +34,4 @@ pub fn api_routes() -> Router<Arc<AppState>> {
         .merge(mempool::routes())
         .merge(scripts::routes())
         .merge(forks::routes())
-        .merge(tasks::routes())
 }

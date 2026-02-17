@@ -83,10 +83,9 @@ crates/
   api/            # Axum REST/WebSocket server (port 3001)
   indexer/        # Blockchain sync daemon (three-stage pipeline)
     src/verify/   #   Data integrity verification suite (38 checks across 4 tiers)
-  ckbadger-store/ # Embedded RocksDB storage engine (25 column families)
+  ckbadger-store/ # Embedded RocksDB storage engine
   common/         # Shared types (block, cell, tx, script, error)
-  task-runner/    # Background task executor
-  task-tui/       # Terminal UI for task management
+  ckb-store-reader/ # Read-only CKB RocksDB reader (optional direct read mode)
 frontend/         # Next.js 15 App Router + React 19
 docs/POSTMORTEM.md                # Historical bugs - READ BEFORE CKB/DAO WORK
 docs/INDEXER_PIPELINE.md          # Pipeline architecture documentation
@@ -200,7 +199,7 @@ pub struct MemoryStatsData {
 3. Indexer updates `memory:stats` every 10 seconds with RocksDB memory usage
 4. API reads `sync:status` for totals (blocks, transactions, cells)
 5. API reads `sync:progress` for real-time progress display
-6. Task TUI reads `memory:stats` for Memory Usage panel
+6. Operational tools can read `memory:stats` for memory monitoring
 7. WebSocket broadcaster uses both for `new_block` messages
 
 **Fallback** (when Redis unavailable):
@@ -220,39 +219,35 @@ For fresh syncs, the indexer defers certain non-critical writes to RocksDB durin
 
 **Note:** Deferred states are stored in `sync_status` within the RocksDB store. The indexer reads these flags on startup.
 
-**Available Task Types:**
+**Label Import (No Task System):**
 
-| Task Type                  | Priority | Description                                     |
-| -------------------------- | -------- | ----------------------------------------------- |
-| `label_import`             | 0        | Import UDT/script labels from token-labels repo |
-| `statistics_rebuild`       | 5        | No-op (statistics maintained inline by indexer) |
-| `token_rebuild`            | 7        | No-op (tokens maintained inline by indexer)     |
-| `spore_rebuild`            | 6        | No-op (spore data maintained inline by indexer) |
-| `address_balances_rebuild` | 8        | No-op (balances maintained inline by indexer)   |
+Task system has been removed. `label_import` is retained as direct indexer logic.
 
-> **Note:** Most rebuild tasks are now no-ops because the RocksDB indexer maintains all data inline during sync. Only `label_import` performs actual work.
+**Auto-trigger behavior:**
 
-**Bulk Sync Protection:**
-
-Tasks that require complete blockchain data are automatically deferred during bulk sync. The task-runner checks sync status before executing each task.
-
-**Label Import Auto-Trigger:**
-
-The `label_import` task is automatically submitted when the indexer starts, if:
+`label_import` runs in a background blocking worker when indexer starts, if:
 
 1. Token labels directory exists (checks `$TOKEN_LABELS_PATH/information/` or `docs/token-labels/information/`)
-2. No pending/running `label_import` task already exists
+2. It has not already started in the current indexer process
 
 The path is determined by `TOKEN_LABELS_PATH` environment variable, defaulting to `docs/token-labels` for local development. In Docker, this is set to `/app/token-labels` with a volume mount.
 
-**Progress Monitoring:**
+**Manual trigger (CLI):**
 
-- **REST API**: `GET /api/v1/tasks/active` returns task status and progress
-- **Task TUI**: Use `cargo run -p ckbadger-task-tui` to monitor/manage tasks
+```bash
+cargo run -p ckbadger-indexer -- label-import
+```
+
+Optional flags:
+
+- `--token-labels-path <path>`
+- `--network <mainnet|testnet>`
+- `--import-udt <true|false>`
+- `--import-scripts <true|false>`
 
 ## ckbadger-store (Embedded Storage Engine)
 
-All data is stored in a single RocksDB instance (`ckbadger-store` crate) with 25 column families. The indexer opens it read-write; the API opens a secondary (read-only) instance.
+All data is stored in a single RocksDB instance (`ckbadger-store` crate) with multiple column families. The indexer opens it read-write; the API opens a secondary (read-only) instance.
 
 | Parameter            | Default                 | Description            |
 | -------------------- | ----------------------- | ---------------------- |
@@ -267,7 +262,6 @@ All data is stored in a single RocksDB instance (`ckbadger-store` crate) with 25
 | `block_headers`    | block_number (8B)            | CachedBlockHeader    | Block header + DAO field cache   |
 | `block_hash_index` | block_hash (32B)             | block_number (8B)    | Reverse lookup: hash → number    |
 | `dao_deposits`     | tx_hash + output_index (34B) | DaoDepositCacheEntry | DAO deposit lifecycle cache      |
-| `tasks`            | task UUID (16B)              | TaskEntry            | Background task state            |
 | `sync_status`      | fixed key                    | SyncStatus           | Sync progress and deferred flags |
 | `addr_balance`     | lock_script_hash (32B)       | AddressBalance       | Address balance and cell counts  |
 | `tokens`           | type_script_hash (32B)       | TokenInfo            | UDT token metadata               |
@@ -275,10 +269,9 @@ All data is stored in a single RocksDB instance (`ckbadger-store` crate) with 25
 
 **Key Design:**
 
-- `CkbadgerStore::open(path)` — primary read-write mode for indexer and task-runner
+- `CkbadgerStore::open(path)` — primary read-write mode for indexer and maintenance CLI commands
 - `CkbadgerStore::open_secondary(path)` — read-only mode for API
 - All store operations are synchronous (RocksDB reads are fast)
-- `TaskEntry` (store type) converts to `Task` (common type) via `task_entry_to_task()`
 
 **Memory Considerations:**
 
@@ -605,7 +598,7 @@ knowledge_size = dao.U - (BURN_QUOTA * 0.6)
 
 **If exact calculation is expensive (e.g., RPC calls for every block):**
 
-1. Defer during bulk sync, backfill via task-runner after sync completes
+1. Defer during bulk sync, then backfill via indexer background routines after sync completes
 2. Use cumulative on-chain values (e.g., DAO field differences) instead of per-block sampling
 3. Never sacrifice accuracy for performance - correctness is non-negotiable
 
@@ -665,10 +658,10 @@ const DAO_OCCUPIED_CAPACITY: u64 = 102_00000000; // 102 CKB
 | Parsers          | `crates/indexer/src/parser/*.rs`        |
 | DB writers       | `crates/indexer/src/db/writer/*.rs`     |
 | Spore writer     | `crates/indexer/src/db/writer/spore.rs` |
+| Label import     | `crates/indexer/src/label_import.rs`    |
 | Verify checks    | `crates/indexer/src/verify/*.rs`        |
 | Verify runner    | `crates/indexer/src/verify/mod.rs`      |
 | Explorer cache   | `{data_path}/.verify-cache/*.json`      |
-| Task runner      | `crates/task-runner/src/executor/*.rs`  |
 | Frontend API     | `frontend/lib/api.ts`                   |
 | UI components    | `frontend/components/ui/`               |
 | Pages            | `frontend/app/`                         |

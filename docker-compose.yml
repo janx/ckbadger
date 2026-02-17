@@ -103,10 +103,6 @@ services:
       - '3000:3000'
     restart: unless-stopped
 
-  # task-runner is now embedded in the indexer process (shares RocksDB primary instance).
-  # To run standalone, use: docker compose run --rm task-runner
-  # Or disable the embedded runner with: --no-task-runner flag on the indexer.
-
 volumes:
   ckbadger-data:
   redis-data:

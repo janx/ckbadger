@@ -564,8 +564,8 @@ impl BatchWriter {
     }
 
     pub fn recalculate_dao_extended_statistics(&self, _current_block: i64) -> Result<()> {
-        // DAO extended statistics recalculation is deferred to task-runner
-        // since it requires complex aggregation across all deposits
+        // No-op placeholder: full DAO extended statistics recalculation is not implemented
+        // in incremental writer path yet.
         Ok(())
     }
 }

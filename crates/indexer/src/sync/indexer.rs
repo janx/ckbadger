@@ -7,12 +7,12 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use chrono::{DateTime, NaiveDate, Timelike, Utc};
+use ckbadger_common::LabelImportConfig;
 use dashmap::DashMap;
 use futures::stream::{FuturesOrdered, StreamExt};
 use rayon::prelude::*;
 use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
-use uuid::Uuid;
 
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{DaoDailySnapshot, LiveCellInfo};
@@ -306,6 +306,7 @@ pub struct Indexer {
     rebuild_pause_flag: Arc<std::sync::atomic::AtomicBool>,
     reorg_notify_flag: Arc<std::sync::atomic::AtomicBool>,
     address_balances_deferred: std::sync::atomic::AtomicBool,
+    label_import_started: std::sync::atomic::AtomicBool,
     ckb_store: Option<Arc<CkbChainReader>>,
     hodl_tracker: std::sync::Mutex<HodlWaveTracker>,
 }
@@ -391,6 +392,7 @@ impl Indexer {
             address_balances_deferred: std::sync::atomic::AtomicBool::new(
                 address_balances_deferred,
             ),
+            label_import_started: std::sync::atomic::AtomicBool::new(false),
             ckb_store,
             hodl_tracker: std::sync::Mutex::new(hodl_tracker),
         })
@@ -498,14 +500,7 @@ impl Indexer {
             blocks_behind > self.config.bulk_sync_threshold,
         )?;
 
-        if let Err(e) = self.maybe_submit_label_import_task() {
-            warn!("Failed to submit label import task: {}", e);
-        }
-
-        if !self.is_bulk_sync_active() {
-            info!("Not in bulk sync - checking for pending rebuild tasks from previous run...");
-            self.maybe_submit_pending_rebuild_tasks();
-        }
+        self.maybe_start_label_import();
 
         // Periodic 24h transfer refresh
         let store_for_task = Arc::clone(self.writer.store());
@@ -1652,7 +1647,7 @@ impl Indexer {
                 info!("Cell index rebuild finished, resuming sync");
             });
 
-            self.maybe_submit_pending_rebuild_tasks();
+            self.maybe_start_label_import();
         }
 
         if was_secondary_bulk && !currently_secondary_bulk {
@@ -1665,64 +1660,8 @@ impl Indexer {
             .store(currently_secondary_bulk, Ordering::SeqCst);
     }
 
-    fn maybe_submit_pending_rebuild_tasks(&self) {
-        if let Err(e) = self.maybe_submit_label_import_task() {
-            warn!("Failed to submit label import task: {}", e);
-        }
-    }
-
-    fn submit_task_if_not_exists(
-        &self,
-        task_type: &str,
-        config: serde_json::Value,
-        priority: i32,
-        max_retries: i32,
-    ) -> Result<()> {
-        use ckbadger_store::TaskEntry;
-
-        let store = self.writer.store();
-        let pending = store.list_tasks_by_status("pending")?;
-        if pending.iter().any(|t| t.task_type == task_type) {
-            info!("{} task already pending, skipping submission", task_type);
-            return Ok(());
-        }
-        let running = store.list_tasks_by_status("running")?;
-        if running.iter().any(|t| t.task_type == task_type) {
-            info!("{} task already running, skipping submission", task_type);
-            return Ok(());
-        }
-
-        let entry = TaskEntry {
-            id: Uuid::new_v4(),
-            task_type: task_type.to_string(),
-            status: "pending".to_string(),
-            priority,
-            config: serde_json::to_string(&config).unwrap_or_default(),
-            progress_total: None,
-            progress_current: None,
-            progress_message: None,
-            result: None,
-            error_message: None,
-            created_at: Utc::now(),
-            started_at: None,
-            completed_at: None,
-            heartbeat_at: None,
-            runner_id: None,
-            retry_count: 0,
-            max_retries,
-            rate_samples: None,
-            rate_ema: None,
-            log_tail: None,
-        };
-        store.create_task(&entry)?;
-        info!("Submitted {} task: {}", task_type, entry.id);
-        Ok(())
-    }
-
-    fn maybe_submit_label_import_task(&self) -> Result<()> {
-        use ckbadger_common::{LabelImportConfig, TaskBuilder};
-        let token_labels_path =
-            std::env::var("TOKEN_LABELS_PATH").unwrap_or_else(|_| "docs/token-labels".to_string());
+    fn maybe_start_label_import(&self) {
+        let token_labels_path = self.config.token_labels_path.clone();
         if !std::path::Path::new(&token_labels_path)
             .join("information")
             .exists()
@@ -1731,18 +1670,38 @@ impl Indexer {
                 "Token labels directory not found at {}, skipping label import",
                 token_labels_path
             );
-            return Ok(());
+            return;
         }
-        let builder = TaskBuilder::label_import(LabelImportConfig {
+
+        if self.label_import_started.swap(true, Ordering::SeqCst) {
+            debug!("Label import already started in this process, skipping");
+            return;
+        }
+
+        let config = LabelImportConfig {
             token_labels_path,
             ..Default::default()
+        };
+        let store = Arc::clone(self.writer.store());
+        let ckb_store = self.ckb_store.clone();
+
+        tokio::spawn(async move {
+            let result = tokio::task::spawn_blocking(move || {
+                crate::label_import::run_label_import(store.as_ref(), ckb_store.as_deref(), &config)
+            })
+            .await;
+
+            match result {
+                Ok(Ok(summary)) => info!(
+                    "Background label import finished: {} UDT, {} scripts, {} errors",
+                    summary.udt_labels_imported,
+                    summary.script_labels_imported,
+                    summary.errors.len()
+                ),
+                Ok(Err(e)) => warn!("Background label import failed: {}", e),
+                Err(e) => warn!("Background label import task panicked: {}", e),
+            }
         });
-        self.submit_task_if_not_exists(
-            &builder.task_type().to_string(),
-            builder.config().clone(),
-            builder.get_priority(),
-            builder.get_max_retries(),
-        )
     }
 
     async fn fetch_blocks_parallel(

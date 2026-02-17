@@ -346,7 +346,7 @@ impl BatchWriter {
     }
 
     pub fn update_block_time_distribution(&self, _block_time_seconds: i64) -> Result<()> {
-        // No-op: rebuilt periodically via statistics_rebuild task
+        // No-op: distribution is not maintained incrementally yet.
         Ok(())
     }
 
@@ -356,7 +356,7 @@ impl BatchWriter {
         _epoch_duration_minutes: f64,
         _batch: &mut StoreBatch,
     ) -> Result<()> {
-        // No-op during incremental sync; rebuilt via task
+        // No-op: distribution is not maintained incrementally yet.
         Ok(())
     }
 
@@ -589,22 +589,22 @@ impl BatchWriter {
     }
 
     pub fn refresh_mnft_24h_transfers(&self) -> Result<u64> {
-        // Deferred to task-runner
+        // No-op placeholder for future MNFT transfer-window maintenance.
         Ok(0)
     }
 
     pub fn rebuild_mnft_statistics(&self) -> Result<u64> {
-        // Deferred to task-runner
+        // No-op placeholder for future full MNFT statistics rebuild.
         Ok(0)
     }
 
     pub fn rebuild_all_statistics(&self) -> Result<()> {
-        // Deferred to task-runner
+        // No-op placeholder for future full statistics rebuild.
         Ok(())
     }
 
     pub fn get_dao_deposits_at_block(&self, _block_number: i64) -> Result<u128> {
-        // This requires iterating all DAO deposits which is handled by the task
+        // Not implemented: requires full DAO deposit aggregation at historical height.
         Ok(0)
     }
 

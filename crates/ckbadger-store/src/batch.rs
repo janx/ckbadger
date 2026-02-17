@@ -410,22 +410,6 @@ impl<'a> StoreBatch<'a> {
         self.batch.put_cf(self.store.cf_sync_meta(), key, value);
     }
 
-    // ---- Tasks ----
-
-    pub fn put_task(&mut self, id: &uuid::Uuid, entry: &TaskEntry) {
-        let value = bincode::serialize(entry).expect("serialize TaskEntry");
-        self.batch
-            .put_cf(self.store.cf_tasks(), id.as_bytes(), &value);
-    }
-
-    pub fn put_task_index(&mut self, key: &[u8]) {
-        self.batch.put_cf(self.store.cf_tasks_index(), key, []);
-    }
-
-    pub fn delete_task_index(&mut self, key: &[u8]) {
-        self.batch.delete_cf(self.store.cf_tasks_index(), key);
-    }
-
     /// Get mutable access to the underlying WriteBatch for direct operations.
     pub fn raw_batch(&mut self) -> &mut WriteBatch {
         &mut self.batch

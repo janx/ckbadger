@@ -4,7 +4,6 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 // ============================================
 // Group A: Core cell data (ported from LiveCellStorage)
@@ -544,33 +543,6 @@ pub struct DeepForkInfo {
     pub chain_tip_hash: Vec<u8>,
     pub depth: i32,
     pub fork_point: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TaskEntry {
-    pub id: Uuid,
-    pub task_type: String,
-    pub status: String,
-    pub priority: i32,
-    /// JSON-encoded config string (bincode cannot round-trip serde_json::Value).
-    pub config: String,
-    pub progress_total: Option<i64>,
-    pub progress_current: Option<i64>,
-    pub progress_message: Option<String>,
-    /// JSON-encoded result string.
-    pub result: Option<String>,
-    pub error_message: Option<String>,
-    pub created_at: DateTime<Utc>,
-    pub started_at: Option<DateTime<Utc>>,
-    pub completed_at: Option<DateTime<Utc>>,
-    pub heartbeat_at: Option<DateTime<Utc>>,
-    pub runner_id: Option<String>,
-    pub retry_count: i32,
-    pub max_retries: i32,
-    /// JSON-encoded rate samples string.
-    pub rate_samples: Option<String>,
-    pub rate_ema: Option<f64>,
-    pub log_tail: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

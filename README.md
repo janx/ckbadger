@@ -340,8 +340,7 @@ ckbadger/
 │   │       ├── routes/     # HTTP handlers (blocks, tx, cells, graph)
 │   │       └── ws/         # WebSocket handlers
 │   ├── ckbadger-store/     # Embedded RocksDB storage engine
-│   ├── task-runner/        # Background task executor
-│   └── task-tui/           # Terminal UI for task management
+│   └── ckb-store-reader/   # Read-only CKB RocksDB reader (optional direct read mode)
 ├── frontend/               # Next.js application
 │   ├── app/                # App router pages
 │   ├── components/         # React components
@@ -355,7 +354,7 @@ ckbadger/
 │   ├── token-labels/       # [submodule] Known token metadata
 │   ├── POSTMORTEM.md       # Historical bugs & lessons learned
 │   └── DAO_CALCULATIONS.md # DAO formula documentation
-├── docker/                 # Dockerfiles (indexer, api, frontend, task-runner)
+├── docker/                 # Dockerfiles (indexer, api, frontend)
 ├── e2e/                    # Playwright E2E tests
 ├── .github/workflows/      # CI/CD pipelines
 └── docker-compose.yml      # Development setup
@@ -404,34 +403,20 @@ docker compose logs -f indexer
 docker compose restart indexer
 ```
 
-### Task TUI (Terminal UI)
-
-A terminal-based UI for managing background tasks:
+### Label Import
 
 ```bash
-# Run task TUI (requires CKBADGER_DATA_PATH in .env)
-cargo run -p ckbadger-task-tui
+# Manual trigger (imports UDT + script labels once)
+cargo run -p ckbadger-indexer -- label-import
 
-# Custom refresh interval (default: 1000ms)
-cargo run -p ckbadger-task-tui -- --refresh-ms 500
+# Custom source path / network
+cargo run -p ckbadger-indexer -- label-import \
+  --token-labels-path docs/token-labels \
+  --network mainnet
 ```
 
-**Keyboard Shortcuts:**
-
-| Key       | Action             |
-| --------- | ------------------ |
-| `q`       | Quit               |
-| `j` / `↓` | Move down          |
-| `k` / `↑` | Move up            |
-| `n`       | New task           |
-| `c`       | Cancel task        |
-| `p`       | Pause task         |
-| `r`       | Resume/Retry task  |
-| `d`       | Delete task        |
-| `R`       | Refresh list       |
-| `Enter`   | Confirm dialog     |
-| `Esc`     | Cancel dialog      |
-| `Tab`     | Next dialog option |
+`label_import` also auto-runs in the background when the indexer starts and
+`$TOKEN_LABELS_PATH/information` exists.
 
 ### Data Integrity Verification
 
@@ -490,7 +475,7 @@ pnpm test:e2e                            # Playwright tests
 
 | Area                    | Tests | Coverage                                     |
 | ----------------------- | ----- | -------------------------------------------- |
-| **Rust (all crates)**   | 542   | parsers, store, api, task-runner, task-tui   |
+| **Rust (all crates)**   | 542   | parsers, indexer, store, api, verify         |
 | **Frontend Components** | 195   | Hash, Capacity, Address, Pagination, Banners |
 | **E2E**                 | 7     | Homepage, block detail, navigation           |
 

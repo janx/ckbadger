@@ -37,6 +37,9 @@ pub struct Config {
     /// with ~1.31M txs) are split into sub-batches to prevent memtable flush stalls.
     #[serde(default = "default_max_batch_txs")]
     pub max_batch_txs: usize,
+    /// Path to token-labels repository for label import.
+    #[serde(default = "default_token_labels_path")]
+    pub token_labels_path: String,
 }
 
 fn default_batch_size() -> usize {
@@ -73,6 +76,10 @@ fn default_fast_sync_mode() -> bool {
 
 fn default_max_batch_txs() -> usize {
     300_000
+}
+
+fn default_token_labels_path() -> String {
+    "docs/token-labels".to_string()
 }
 
 impl Config {
@@ -121,5 +128,10 @@ mod tests {
             default_bulk_sync_threshold(),
             CKB_FINALIZATION_DEPTH
         );
+    }
+
+    #[test]
+    fn test_default_token_labels_path() {
+        assert_eq!(default_token_labels_path(), "docs/token-labels");
     }
 }

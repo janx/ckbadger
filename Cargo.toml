@@ -6,8 +6,6 @@ members = [
     "crates/ckbadger-store",
     "crates/indexer",
     "crates/api",
-    "crates/task-runner",
-    "crates/task-tui",
 ]
 
 [workspace.package]

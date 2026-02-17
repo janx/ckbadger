@@ -1,6 +1,6 @@
 //! `ckbadger-store` — RocksDB-based embedded storage engine for ckbadger.
 //!
-//! Replaces PostgreSQL with 25 column families for all indexed/derived data.
+//! Replaces PostgreSQL with RocksDB column families for all indexed/derived data.
 //! The CKB node's own RocksDB (via `ckb-store-reader`) remains unchanged
 //! for raw block/transaction data.
 //!
@@ -37,7 +37,6 @@ mod nft_ops;
 mod reorg_ops;
 mod stats_ops;
 mod sync_ops;
-mod task_ops;
 mod token_ops;
 mod tx_ops;
 
@@ -50,7 +49,7 @@ pub use store::{
     CF_BLOCK_ISSUANCE, CF_CELL_BY_LOCK, CF_CELL_BY_LOCK_CODE, CF_CELL_BY_TYPE,
     CF_CELL_BY_TYPE_CODE, CF_CLUSTER_AGG, CF_CONSUMED_CELLS, CF_DAO_BY_WITHDRAW_TX,
     CF_DAO_DEPOSITS, CF_DAO_STATS, CF_LIVE_CELLS, CF_NFT_COLLECTION_AGG, CF_NFT_DATA,
-    CF_SCRIPT_INFO, CF_SPORE_BY_CLUSTER, CF_SPORE_DATA, CF_STATS, CF_SYNC_META, CF_TASKS,
-    CF_TASKS_INDEX, CF_TOKENS, CF_TOKEN_HOLDERS, CF_TX_HASH_MAP, CF_TX_INDEX,
+    CF_SCRIPT_INFO, CF_SPORE_BY_CLUSTER, CF_SPORE_DATA, CF_STATS, CF_SYNC_META, CF_TOKENS,
+    CF_TOKEN_HOLDERS, CF_TX_HASH_MAP, CF_TX_INDEX,
 };
 pub use types::*;

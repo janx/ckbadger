@@ -82,16 +82,6 @@ pub fn encode_token_holder_key(type_hash: &[u8], lock_hash: &[u8]) -> [u8; 64] {
     key
 }
 
-/// Encode task index key: status(1B) + priority_desc(2B BE) + id(16B) = 19 bytes
-pub fn encode_task_index_key(status: u8, priority: i32, id: &uuid::Uuid) -> Vec<u8> {
-    let priority_desc = (i32::MAX - priority) as u16;
-    let mut key = Vec::with_capacity(19);
-    key.push(status);
-    key.extend_from_slice(&priority_desc.to_be_bytes());
-    key.extend_from_slice(id.as_bytes());
-    key
-}
-
 /// Stats key: prefix(1B) + variable key
 pub fn encode_stats_key(prefix: u8, suffix: &[u8]) -> Vec<u8> {
     let mut key = Vec::with_capacity(1 + suffix.len());

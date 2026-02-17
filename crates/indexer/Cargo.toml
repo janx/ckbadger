@@ -12,7 +12,6 @@ path = "src/main.rs"
 ckbadger-common = { path = "../common" }
 ckb-store-reader = { path = "../ckb-store-reader" }
 ckbadger-store = { path = "../ckbadger-store" }
-ckbadger-task-runner = { path = "../task-runner" }
 
 # Async runtime
 tokio = { workspace = true }
@@ -39,7 +38,6 @@ futures = { workspace = true }
 dashmap = "6.1"
 rayon = { workspace = true }
 async-trait = { workspace = true }
-uuid = { workspace = true }
 
 # Configuration
 config = { workspace = true }

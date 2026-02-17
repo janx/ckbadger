@@ -722,40 +722,6 @@ interface MempoolInfo {
   lastUpdatedAt: number;
 }
 
-interface IndexRebuildStatus {
-  status: 'pending' | 'running';
-  isRebuilding: boolean;
-  total: number;
-  completed: number;
-  currentIndex: string | null;
-  failed: string[];
-  progress: number;
-  startedAt: string | null;
-}
-
-interface StatisticsRebuildStatus {
-  status: string;
-  total: number;
-  completed: number;
-  currentTable: string | null;
-  progress: number;
-  startedAt: string | null;
-}
-
-interface LiveCellsPopulateStatus {
-  status: string;
-  total: number;
-  populated: number;
-  progress: number;
-  startedAt: string | null;
-}
-
-interface ActiveTasksResponse {
-  indexRebuild: IndexRebuildStatus | null;
-  statisticsRebuild: StatisticsRebuildStatus | null;
-  liveCellsPopulate: LiveCellsPopulateStatus | null;
-}
-
 interface MempoolTransaction {
   txHash: string;
   fee: number;
@@ -915,8 +881,6 @@ export type {
   PendingProposalsResponse,
   BlockFeeStats,
   BlockProposal,
-  ActiveTasksResponse,
-  IndexRebuildStatus,
   KnownScript,
   ScriptUsage,
   ScriptLookupInfo,
@@ -1338,10 +1302,6 @@ export const api = {
 
   getPendingProposals: (): Promise<PendingProposalsResponse> => {
     return fetchApi('/mempool/pending-proposals');
-  },
-
-  getActiveTasks: (): Promise<ActiveTasksResponse> => {
-    return fetchApi('/tasks/active');
   },
 
   getScripts: (params: ScriptQueryParams = {}): Promise<CursorPaginatedResponse<KnownScript>> => {

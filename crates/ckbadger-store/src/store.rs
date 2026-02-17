@@ -1,4 +1,4 @@
-//! Core RocksDB store with 25 column families.
+//! Core RocksDB store.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -35,8 +35,6 @@ pub const CF_NFT_DATA: &str = "nft_data";
 pub const CF_STATS: &str = "stats";
 pub const CF_SCRIPT_INFO: &str = "script_info";
 pub const CF_SYNC_META: &str = "sync_meta";
-pub const CF_TASKS: &str = "tasks";
-pub const CF_TASKS_INDEX: &str = "tasks_index";
 pub const CF_SPORE_BY_CLUSTER: &str = "spore_by_cluster";
 pub const CF_CELL_BY_LOCK_CODE: &str = "cell_by_lock_code";
 pub const CF_CELL_BY_TYPE_CODE: &str = "cell_by_type_code";
@@ -71,8 +69,6 @@ pub const ALL_CFS: &[&str] = &[
     CF_STATS,
     CF_SCRIPT_INFO,
     CF_SYNC_META,
-    CF_TASKS,
-    CF_TASKS_INDEX,
     CF_SPORE_BY_CLUSTER,
     CF_TOKEN_TRANSFERS,
     CF_ACTIVITIES,
@@ -227,7 +223,7 @@ impl CkbadgerStore {
         opts.set_max_bytes_for_level_base(512 * 1024 * 1024);
         opts.set_compression_type(DBCompressionType::Lz4);
 
-        // Background jobs: 24 threads shared across 25 CFs for flush + compaction
+        // Background jobs shared across all column families for flush + compaction
         // With 5 parallel commit_no_wal() per batch, RocksDB needs enough background
         // threads for concurrent flush + compaction across all CFs on 24-core machines
         opts.set_max_background_jobs(24);
@@ -249,7 +245,7 @@ impl CkbadgerStore {
     }
 
     /// Per-CF options with 3 tiers:
-    /// - Mega-write (10 CFs): 256MB × 4 buffers = 1GB per CF
+    /// - Mega-write CFs: 256MB × 4 buffers = 1GB per CF
     /// - High-write (remaining CFs): 128MB × 4 buffers = 512MB per CF
     /// - Everything else: 32MB × 2 buffers = 64MB per CF
     fn cf_options(name: &str, block_cache: &rocksdb::Cache) -> Options {
@@ -348,12 +344,6 @@ impl CkbadgerStore {
     }
     pub fn cf_sync_meta(&self) -> &ColumnFamily {
         self.cf(CF_SYNC_META)
-    }
-    pub fn cf_tasks(&self) -> &ColumnFamily {
-        self.cf(CF_TASKS)
-    }
-    pub fn cf_tasks_index(&self) -> &ColumnFamily {
-        self.cf(CF_TASKS_INDEX)
     }
     pub fn cf_spore_by_cluster(&self) -> &ColumnFamily {
         self.cf(CF_SPORE_BY_CLUSTER)

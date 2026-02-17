@@ -1,13 +1,13 @@
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use std::sync::Arc;
-use std::time::Duration;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use ckbadger_indexer::{sync::Indexer, verify, Config};
+use ckb_store_reader::CkbChainReader;
+use ckbadger_common::LabelImportConfig;
+use ckbadger_indexer::{label_import::run_label_import, sync::Indexer, verify, Config};
 use ckbadger_store::CkbadgerStore;
-use ckbadger_task_runner::executor::TaskExecutor;
 
 #[derive(Parser, Debug)]
 #[command(name = "ckbadger-indexer")]
@@ -67,15 +67,9 @@ struct Cli {
     )]
     max_batch_txs: usize,
 
-    // Task runner settings (embedded)
+    // Label import settings
     #[arg(long, env = "TOKEN_LABELS_PATH", default_value = "docs/token-labels")]
     token_labels_path: String,
-
-    #[arg(long, default_value = "5")]
-    task_poll_interval_secs: u64,
-
-    #[arg(long, default_value = "false", help = "Disable embedded task runner")]
-    no_task_runner: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -84,6 +78,23 @@ enum Command {
     Sync,
     /// Verify data integrity of the store.
     Verify(verify::VerifyArgs),
+    /// Import UDT and script labels directly (without task system).
+    LabelImport(LabelImportArgs),
+}
+
+#[derive(Args, Debug)]
+struct LabelImportArgs {
+    #[arg(long, env = "TOKEN_LABELS_PATH", default_value = "docs/token-labels")]
+    token_labels_path: String,
+
+    #[arg(long, default_value = "mainnet")]
+    network: String,
+
+    #[arg(long, default_value_t = true)]
+    import_udt: bool,
+
+    #[arg(long, default_value_t = true)]
+    import_scripts: bool,
 }
 
 #[tokio::main]
@@ -98,6 +109,8 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
+    let data_path = cli.data_path.clone();
+    let ckb_data_path = cli.ckb_data_path.clone();
 
     match cli.command {
         Some(Command::Verify(args)) => {
@@ -107,6 +120,9 @@ async fn main() -> Result<()> {
                 .await
                 .expect("verify task panicked")?;
             Ok(())
+        }
+        Some(Command::LabelImport(args)) => {
+            run_label_import_command(data_path, ckb_data_path, args).await
         }
         // Default (no subcommand) or explicit `sync` → run sync daemon
         None | Some(Command::Sync) => run_sync(cli).await,
@@ -132,6 +148,7 @@ async fn run_sync(args: Cli) -> Result<()> {
         fast_sync_mode: true,
         ckb_data_path: args.ckb_data_path,
         max_batch_txs: args.max_batch_txs,
+        token_labels_path: args.token_labels_path,
     };
 
     info!("Opening ckbadger-store at: {}", config.data_path);
@@ -277,28 +294,6 @@ async fn run_sync(args: Cli) -> Result<()> {
         }
     });
 
-    // Spawn embedded task runner
-    if !args.no_task_runner {
-        let runner_id = format!("indexer-runner-{}", &uuid::Uuid::new_v4().to_string()[..8]);
-        let task_executor = TaskExecutor::new(
-            store.clone(),
-            runner_id.clone(),
-            config.ckb_rpc_url.clone(),
-            args.token_labels_path.clone(),
-            config.redis_url.clone(),
-            indexer.ckb_store(),
-        )
-        .await;
-        let poll_interval = Duration::from_secs(args.task_poll_interval_secs);
-        info!(
-            "Starting embedded task runner '{}' with poll interval {}s",
-            runner_id, args.task_poll_interval_secs
-        );
-        tokio::spawn(async move {
-            task_executor.run_continuous(poll_interval).await.ok();
-        });
-    }
-
     let indexer_for_shutdown = Arc::clone(&indexer);
     tokio::spawn(async move {
         match tokio::signal::ctrl_c().await {
@@ -315,4 +310,44 @@ async fn run_sync(args: Cli) -> Result<()> {
     });
 
     indexer.run().await
+}
+
+async fn run_label_import_command(
+    data_path: String,
+    ckb_data_path: Option<String>,
+    args: LabelImportArgs,
+) -> Result<()> {
+    info!("Opening ckbadger-store at: {}", data_path);
+    let store = Arc::new(CkbadgerStore::open(&data_path)?);
+
+    let ckb_store = match ckb_data_path.as_deref() {
+        Some(path) => {
+            let reader = CkbChainReader::open(path)?;
+            info!("CKB direct RocksDB reader opened at {}", path);
+            Some(Arc::new(reader))
+        }
+        None => None,
+    };
+
+    let config = LabelImportConfig {
+        token_labels_path: args.token_labels_path,
+        network: args.network,
+        import_udt: args.import_udt,
+        import_scripts: args.import_scripts,
+    };
+
+    let result = tokio::task::spawn_blocking(move || {
+        run_label_import(store.as_ref(), ckb_store.as_deref(), &config)
+    })
+    .await
+    .expect("label import task panicked")?;
+
+    info!(
+        "Label import completed: {} UDT, {} scripts, {} errors",
+        result.udt_labels_imported,
+        result.script_labels_imported,
+        result.errors.len()
+    );
+
+    Ok(())
 }

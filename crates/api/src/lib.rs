@@ -33,8 +33,6 @@ pub struct AppState {
     pub ckb_store: Option<Arc<CkbChainReader>>,
     /// In-memory cache for assets/tokens/DOB data (refreshed by background loop).
     pub mem_cache: InMemoryCache,
-    /// Redis connection for the task command queue (API → task-runner).
-    pub redis_conn: Option<redis::aio::ConnectionManager>,
 }
 
 pub struct AppConfig {
@@ -93,33 +91,6 @@ pub async fn create_router(config: AppConfig) -> Router {
 
     let mem_cache = InMemoryCache::new();
 
-    // Establish Redis connection for task command queue (separate from cache).
-    let redis_conn = match config.redis_url.as_deref() {
-        Some(url) => match redis::Client::open(url) {
-            Ok(client) => match redis::aio::ConnectionManager::new(client).await {
-                Ok(conn) => {
-                    tracing::info!("Redis task command queue connected");
-                    Some(conn)
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to connect Redis for task commands: {}. Task mutations will be unavailable.",
-                        e
-                    );
-                    None
-                }
-            },
-            Err(e) => {
-                tracing::warn!("Invalid Redis URL for task commands: {}", e);
-                None
-            }
-        },
-        None => {
-            tracing::info!("No Redis URL configured — task mutations via API disabled");
-            None
-        }
-    };
-
     let state = Arc::new(AppState {
         store: config.store,
         ws_manager,
@@ -129,7 +100,6 @@ pub async fn create_router(config: AppConfig) -> Router {
         cycles_calculator,
         ckb_store,
         mem_cache,
-        redis_conn,
     });
 
     let cors = CorsLayer::new()
