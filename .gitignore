@@ -40,6 +40,7 @@ coverage/
 fuzzing/reports/
 playwright-report/
 test-results/
+.verify-cache/
 
 # Docker data volumes
 docker-data/

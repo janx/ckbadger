@@ -28,7 +28,7 @@ pub struct VerifyArgs {
     pub api_url: String,
 
     /// CKB RPC URL for spot-checks.
-    #[arg(long, env = "CKB_RPC_URL")]
+    #[arg(long, env = "VERIFY_CKB_RPC_URL")]
     pub rpc_url: Option<String>,
 
     /// Official explorer API URL.

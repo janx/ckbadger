@@ -18,12 +18,6 @@ use super::report::{format_number, format_number_i128};
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ApiResponse<T> {
-    data: T,
-}
-
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct ChartDataPoint {
     date: String,
     value: String,
@@ -218,9 +212,9 @@ fn fetch_our_chart(
     ctx: &CheckContext,
     chart_path: &str,
 ) -> anyhow::Result<HashMap<String, String>> {
-    let wrapper: ApiResponse<ChartResponse> = api_get(ctx, chart_path)?;
+    let wrapper: ChartResponse = api_get(ctx, chart_path)?;
     let mut map = HashMap::new();
-    for point in wrapper.data.data {
+    for point in wrapper.data {
         map.insert(point.date, point.value);
     }
     Ok(map)
@@ -546,12 +540,19 @@ impl Check for ExplorerKnowledgeSize {
         let mut findings = vec![];
         let mut checked = 0u64;
 
+        // Tolerance comparison: CKB Explorer uses UTC+8 (Beijing time) for daily
+        // boundaries while we use UTC, so the "last block of the day" differs by
+        // ~8 hours. For point-in-time values like occupied_capacity this means
+        // the DAO U field is read at a different block height. Observed deviation
+        // is typically <0.2%.
         for date in &dates {
             if let (Some(our_val), Some(explorer_val)) =
                 (our_data.get(date), explorer_data.get(date))
             {
-                let ours: i128 = our_val.parse().unwrap_or(0);
-                if let Some(f) = compare_exact_i128(ours, explorer_val, date, "knowledge_size") {
+                let ours: f64 = our_val.parse().unwrap_or(0.0);
+                if let Some(f) =
+                    compare_tolerance_f64(ours, explorer_val, date, "knowledge_size", 0.002)
+                {
                     findings.push(f);
                 }
                 checked += 1;

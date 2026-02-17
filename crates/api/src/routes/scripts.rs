@@ -118,7 +118,7 @@ fn resolve_code_cell(
     };
 
     if let Some(th) = type_hash_for_lookup {
-        if let Ok(cells) = store.list_cells_by_type(th, 1, None, None) {
+        if let Ok(cells) = store.list_cells_by_type(th, 1, None) {
             if let Some((tx_hash, idx, _)) = cells.first() {
                 return (
                     Some(format!("0x{}", hex::encode(tx_hash))),

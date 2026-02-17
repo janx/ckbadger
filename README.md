@@ -34,7 +34,7 @@
 - **Historical Charts** - Block time, transaction volume, active addresses
 - **Real-time Updates** - WebSocket subscriptions for new blocks and transactions
 - **System Status Page** - Monitor sync progress, index rebuild status, and integrity checks
-- **Data Integrity Verification** - 38 built-in checks across 4 tiers for acceptance testing synced data
+- **Data Integrity Verification** - 18 built-in checks across 3 tiers for acceptance testing via API
 - **Developer API** - REST endpoints with rate limiting
 
 ## Architecture
@@ -162,6 +162,10 @@ API_RATE_LIMIT=100  # requests per minute
 # Frontend
 NEXT_PUBLIC_API_URL=http://localhost:3001
 NEXT_PUBLIC_WS_URL=ws://localhost:3001/ws
+
+# Verify subcommand (runs outside Docker, calls the ckbadger API)
+CKBADGER_API_URL=http://localhost:3001/api/v1
+# VERIFY_CKB_RPC_URL=http://localhost:8114
 ```
 
 ### Indexer Configuration
@@ -330,7 +334,7 @@ ckbadger/
 │   │       ├── parser/     # Block, cell, script parsers
 │   │       ├── db/         # RocksDB write operations
 │   │       ├── sync/       # Synchronization logic
-│   │       └── verify/     # Data integrity verification (38 checks)
+│   │       └── verify/     # Data integrity verification (18 checks via API)
 │   ├── api/                # REST API server
 │   │   └── src/
 │   │       ├── routes/     # HTTP handlers (blocks, tx, cells, graph)
@@ -384,24 +388,20 @@ cd frontend && pnpm install && pnpm dev
 
 The `docker-compose.yml` includes the following services:
 
-| Service       | Description                                   | Port |
-| ------------- | --------------------------------------------- | ---- |
-| `redis`       | Redis cache for sync status                   | 6379 |
-| `ckb-node`    | CKB node (profile: internal)                  | 8114 |
-| `indexer`     | Blockchain sync daemon                        | -    |
-| `api`         | REST/WebSocket API server                     | 3001 |
-| `frontend`    | Next.js web application                       | 3000 |
-| `task-runner` | Background task executor (label import, etc.) | -    |
+| Service    | Description                  | Port |
+| ---------- | ---------------------------- | ---- |
+| `redis`    | Redis cache for sync status  | 6379 |
+| `ckb-node` | CKB node (profile: internal) | 8114 |
+| `indexer`  | Blockchain sync daemon       | -    |
+| `api`      | REST/WebSocket API server    | 3001 |
+| `frontend` | Next.js web application      | 3000 |
 
 ```bash
 # View logs for specific service
-docker compose logs -f task-runner
+docker compose logs -f indexer
 
 # Restart a service
-docker compose restart task-runner
-
-# Run task-runner standalone (for development)
-cargo run -p ckbadger-task-runner
+docker compose restart indexer
 ```
 
 ### Task TUI (Terminal UI)
@@ -435,33 +435,35 @@ cargo run -p ckbadger-task-tui -- --refresh-ms 500
 
 ### Data Integrity Verification
 
-The indexer includes a `verify` subcommand that validates synced data across 4 tiers of checks — from quick metadata sanity (seconds) to exhaustive full-scan verification (hours).
+The indexer includes a `verify` subcommand that validates data by calling the ckbadger REST API — no direct store access needed. It can run from anywhere the API is reachable (host, CI, another machine).
 
 ```bash
-# Quick sanity checks
+# Quick sanity checks (seconds)
 cargo run -p ckbadger-indexer -- verify --depth fast
 
-# Sampling + aggregated data cross-checks + explorer comparison
+# Sampling + explorer comparison (minutes)
 cargo run -p ckbadger-indexer -- verify --depth sampling
 
-# Offline mode (skip explorer HTTP calls)
+# Skip explorer HTTP calls
 cargo run -p ckbadger-indexer -- verify --depth sampling --no-explorer
 
-# Full scan of every record
-cargo run -p ckbadger-indexer -- verify --depth exhaustive
+# Custom API URL
+cargo run -p ckbadger-indexer -- verify --api-url http://localhost:3001/api/v1
 
-# List all 38 available checks
+# Add CKB RPC spot-checks
+cargo run -p ckbadger-indexer -- verify --rpc-url http://localhost:8114
+
+# List all 18 available checks
 cargo run -p ckbadger-indexer -- verify --list-checks
 ```
 
-| Tier           | Checks | What it validates                                                                      |
-| -------------- | ------ | -------------------------------------------------------------------------------------- |
-| **Fast**       | 8      | Sync tip, cell count balance, deferred flags, genesis block, DAO fields                |
-| **Sampling**   | 15     | Index roundtrips, balance recomputation, DAO consistency, aggregated data cross-checks |
-| **Exhaustive** | 5      | Every live cell index, every address balance, block contiguity                         |
-| **Explorer**   | 10     | Last 30 days vs official CKB explorer (cached, 24h freshness)                          |
+| Tier         | Checks | What it validates                                                     |
+| ------------ | ------ | --------------------------------------------------------------------- |
+| **Fast**     | 6      | API reachable, sync complete, genesis block, tip block, DAO, forks    |
+| **Sampling** | 7      | Block hash roundtrips, parent chain, balances, charts, RPC spot-check |
+| **Explorer** | 5      | Last 30 days vs official CKB explorer (cached, 24h freshness)         |
 
-Explorer API responses are cached to `{data_path}/.verify-cache/` with 24-hour freshness. On HTTP failure, stale cache is used as fallback.
+Explorer API responses are cached to `.verify-cache/` with 24-hour freshness. On HTTP failure, stale cache is used as fallback.
 
 ### Running Tests
 

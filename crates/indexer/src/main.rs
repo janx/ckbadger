@@ -101,7 +101,11 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Some(Command::Verify(args)) => {
-            verify::run(args)?;
+            // Run on a blocking thread so reqwest::blocking's internal
+            // tokio runtime isn't nested inside #[tokio::main].
+            tokio::task::spawn_blocking(move || verify::run(args))
+                .await
+                .expect("verify task panicked")?;
             Ok(())
         }
         // Default (no subcommand) or explicit `sync` → run sync daemon

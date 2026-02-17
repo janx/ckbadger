@@ -154,9 +154,7 @@ fn test_list_cells_by_lock_prefix_scan() {
     batch.put_cell_by_lock(&lock_hash, 3000, &tx3, 0);
     batch.commit().unwrap();
 
-    let results = store
-        .list_cells_by_lock(&lock_hash, 100, None, None)
-        .unwrap();
+    let results = store.list_cells_by_lock(&lock_hash, 100, None).unwrap();
     assert_eq!(results.len(), 3, "should find all 3 cells by lock hash");
 
     // Results should be ordered by block_num (ascending from prefix iterator)
@@ -165,8 +163,85 @@ fn test_list_cells_by_lock_prefix_scan() {
     assert_eq!(results[2].2.capacity, 300_00000000);
 
     // Verify limit works
-    let limited = store.list_cells_by_lock(&lock_hash, 2, None, None).unwrap();
+    let limited = store.list_cells_by_lock(&lock_hash, 2, None).unwrap();
     assert_eq!(limited.len(), 2, "limit should restrict result count");
+}
+
+#[test]
+fn test_list_cells_by_lock_cursor_pagination() {
+    let store = setup_store();
+    let lock_hash = vec![0xAAu8; 32];
+
+    // Create 5 cells: 3 in the same block (different tx hashes) + 2 in other blocks
+    let tx1 = vec![0x11u8; 32];
+    let tx2 = vec![0x22u8; 32];
+    let tx3 = vec![0x33u8; 32];
+    let tx4 = vec![0x44u8; 32];
+    let tx5 = vec![0x55u8; 32];
+
+    let cell1 = make_live_cell(100_00000000, 1000, 0xAA, None, 50);
+    let cell2 = make_live_cell(200_00000000, 1000, 0xAA, None, 60); // same block as cell1
+    let cell3 = make_live_cell(300_00000000, 1000, 0xAA, None, 70); // same block as cell1
+    let cell4 = make_live_cell(400_00000000, 2000, 0xAA, None, 80);
+    let cell5 = make_live_cell(500_00000000, 3000, 0xAA, None, 90);
+
+    let mut batch = StoreBatch::new(&store);
+    batch.put_cell(&tx1, 0, &cell1);
+    batch.put_cell(&tx2, 0, &cell2);
+    batch.put_cell(&tx3, 0, &cell3);
+    batch.put_cell(&tx4, 0, &cell4);
+    batch.put_cell(&tx5, 0, &cell5);
+    batch.put_cell_by_lock(&lock_hash, 1000, &tx1, 0);
+    batch.put_cell_by_lock(&lock_hash, 1000, &tx2, 0);
+    batch.put_cell_by_lock(&lock_hash, 1000, &tx3, 0);
+    batch.put_cell_by_lock(&lock_hash, 2000, &tx4, 0);
+    batch.put_cell_by_lock(&lock_hash, 3000, &tx5, 0);
+    batch.commit().unwrap();
+
+    // All 5 cells should be returned without cursor
+    let all = store.list_cells_by_lock(&lock_hash, 100, None).unwrap();
+    assert_eq!(all.len(), 5, "should find all 5 cells");
+
+    // Paginate with limit=2: page 1
+    let page1 = store.list_cells_by_lock(&lock_hash, 2, None).unwrap();
+    assert_eq!(page1.len(), 2, "page 1 should have 2 cells");
+
+    // Build cursor from last result of page 1
+    let (ref last_tx, last_idx, ref last_info) = page1[1];
+    let cursor_key =
+        keys::encode_cell_index_key(&lock_hash, last_info.created_at_block, last_tx, last_idx);
+
+    // Page 2: should continue from after cursor
+    let page2 = store
+        .list_cells_by_lock(&lock_hash, 2, Some(&cursor_key))
+        .unwrap();
+    assert_eq!(page2.len(), 2, "page 2 should have 2 cells");
+
+    // Page 3: should have the remaining 1 cell
+    let (ref last_tx2, last_idx2, ref last_info2) = page2[1];
+    let cursor_key2 =
+        keys::encode_cell_index_key(&lock_hash, last_info2.created_at_block, last_tx2, last_idx2);
+    let page3 = store
+        .list_cells_by_lock(&lock_hash, 2, Some(&cursor_key2))
+        .unwrap();
+    assert_eq!(page3.len(), 1, "page 3 should have 1 remaining cell");
+
+    // Collect all capacities across pages and verify no duplicates or gaps
+    let mut all_capacities: Vec<i64> = page1
+        .iter()
+        .chain(page2.iter())
+        .chain(page3.iter())
+        .map(|(_, _, info)| info.capacity)
+        .collect();
+    all_capacities.sort();
+
+    let mut expected: Vec<i64> = all.iter().map(|(_, _, info)| info.capacity).collect();
+    expected.sort();
+
+    assert_eq!(
+        all_capacities, expected,
+        "paginated results should contain exactly the same cells as unpaginated"
+    );
 }
 
 #[test]
@@ -187,9 +262,7 @@ fn test_list_cells_by_type_prefix_scan() {
     batch.put_cell_by_type(&type_hash, 600, &tx2, 1);
     batch.commit().unwrap();
 
-    let results = store
-        .list_cells_by_type(&type_hash, 100, None, None)
-        .unwrap();
+    let results = store.list_cells_by_type(&type_hash, 100, None).unwrap();
     assert_eq!(results.len(), 2, "should find both cells by type hash");
 
     assert_eq!(results[0].2.capacity, 150_00000000);
@@ -202,9 +275,7 @@ fn test_list_cells_by_type_prefix_scan() {
     batch.delete_cell_by_type(&type_hash, 500, &tx1, 0);
     batch.commit().unwrap();
 
-    let after_consume = store
-        .list_cells_by_type(&type_hash, 100, None, None)
-        .unwrap();
+    let after_consume = store.list_cells_by_type(&type_hash, 100, None).unwrap();
     assert_eq!(
         after_consume.len(),
         1,

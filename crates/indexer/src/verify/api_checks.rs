@@ -12,10 +12,10 @@ use super::sampling::LcgSampler;
 // These are intentionally minimal — only the fields we need for verification.
 // ---------------------------------------------------------------------------
 
+/// Wrapper for chart endpoints that return `{ "data": [...] }`.
 #[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ApiResponse<T> {
-    data: T,
+struct ChartWrapper<T> {
+    data: Vec<T>,
 }
 
 #[derive(serde::Deserialize)]
@@ -54,7 +54,7 @@ struct BlockResponse {
 struct DaoStatisticsResponse {
     total_deposited: String,
     estimated_apc: String,
-    active_deposits: i32,
+    active_deposits: i64,
 }
 
 #[derive(serde::Deserialize)]
@@ -77,6 +77,7 @@ struct CellListResponse {
     next_cursor: Option<String>,
 }
 
+/// Simple chart point with a single value (e.g. transaction-count).
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ChartDataPoint {
@@ -84,23 +85,12 @@ struct ChartDataPoint {
     value: String,
 }
 
+/// Stacked chart point with named series (e.g. cell-count, total-supply).
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ChartResponse {
-    data: Vec<ChartDataPoint>,
-}
-
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct StackedAreaDataPoint {
+struct StackedChartDataPoint {
     date: String,
     values: std::collections::HashMap<String, String>,
-}
-
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct StackedAreaChartResponse {
-    data: Vec<StackedAreaDataPoint>,
 }
 
 // ---------------------------------------------------------------------------
@@ -123,8 +113,7 @@ fn api_get<T: serde::de::DeserializeOwned>(ctx: &CheckContext, path: &str) -> an
 
 /// Fetch network stats (used by multiple fast checks).
 fn fetch_network_stats(ctx: &CheckContext) -> anyhow::Result<NetworkStats> {
-    let wrapper: ApiResponse<NetworkStats> = api_get(ctx, "statistics/network")?;
-    Ok(wrapper.data)
+    api_get(ctx, "statistics/network")
 }
 
 // ============================================
@@ -231,8 +220,7 @@ impl Check for GenesisBlock {
         CheckTier::Fast
     }
     fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
-        let wrapper: ApiResponse<BlockResponse> = api_get(ctx, "blocks/0")?;
-        let block = wrapper.data;
+        let block: BlockResponse = api_get(ctx, "blocks/0")?;
 
         if block.number != 0 {
             return Ok(CheckResult::fail(
@@ -277,8 +265,7 @@ impl Check for TipBlock {
         let stats = fetch_network_stats(ctx)?;
         let tip = stats.latest_block;
 
-        let wrapper: ApiResponse<BlockResponse> = api_get(ctx, &format!("blocks/{}", tip))?;
-        let block = wrapper.data;
+        let block: BlockResponse = api_get(ctx, &format!("blocks/{}", tip))?;
 
         let mut findings = vec![];
         if block.transactions_count <= 0 {
@@ -349,8 +336,7 @@ impl Check for DaoStatisticsSane {
         CheckTier::Fast
     }
     fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
-        let wrapper: ApiResponse<DaoStatisticsResponse> = api_get(ctx, "dao/statistics")?;
-        let dao = wrapper.data;
+        let dao: DaoStatisticsResponse = api_get(ctx, "dao/statistics")?;
         let mut findings = vec![];
 
         let total_deposited: f64 = dao.total_deposited.parse().unwrap_or(0.0);
@@ -422,14 +408,10 @@ impl Check for BlockHashRoundtrip {
         let mut findings = vec![];
 
         for block_num in &blocks {
-            let wrapper: ApiResponse<BlockResponse> =
-                api_get(ctx, &format!("blocks/{}", block_num))?;
-            let by_number = wrapper.data;
+            let by_number: BlockResponse = api_get(ctx, &format!("blocks/{}", block_num))?;
 
             // Now look up by hash
-            let wrapper2: ApiResponse<BlockResponse> =
-                api_get(ctx, &format!("blocks/{}", by_number.hash))?;
-            let by_hash = wrapper2.data;
+            let by_hash: BlockResponse = api_get(ctx, &format!("blocks/{}", by_number.hash))?;
 
             if by_hash.number != *block_num as i64 {
                 findings.push(Finding {
@@ -482,11 +464,8 @@ impl Check for BlockParentChain {
 
         for block_num in &blocks {
             let n = *block_num + 1; // shift range [0, tip-1) to [1, tip)
-            let wrapper: ApiResponse<BlockResponse> = api_get(ctx, &format!("blocks/{}", n))?;
-            let current = wrapper.data;
-
-            let wrapper2: ApiResponse<BlockResponse> = api_get(ctx, &format!("blocks/{}", n - 1))?;
-            let parent = wrapper2.data;
+            let current: BlockResponse = api_get(ctx, &format!("blocks/{}", n))?;
+            let parent: BlockResponse = api_get(ctx, &format!("blocks/{}", n - 1))?;
 
             if current.parent_hash != parent.hash {
                 findings.push(Finding {
@@ -529,8 +508,7 @@ impl Check for AddressBalanceSpotCheck {
         Some(10)
     }
     fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
-        let wrapper: ApiResponse<Vec<TopAddressResponse>> = api_get(ctx, "addresses/top")?;
-        let top_addresses = wrapper.data;
+        let top_addresses: Vec<TopAddressResponse> = api_get(ctx, "addresses/top")?;
 
         let n = top_addresses.len().min(10);
         let mut findings = vec![];
@@ -602,8 +580,7 @@ impl Check for ChartTxCountPositive {
         CheckTier::Sampling
     }
     fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
-        let wrapper: ApiResponse<ChartResponse> = api_get(ctx, "charts/transaction-count")?;
-        let chart = wrapper.data;
+        let chart: ChartWrapper<ChartDataPoint> = api_get(ctx, "charts/transaction-count")?;
         let mut findings = vec![];
         let mut prev_date = String::new();
 
@@ -656,8 +633,7 @@ impl Check for ChartCellCountConsistency {
         CheckTier::Sampling
     }
     fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
-        let wrapper: ApiResponse<StackedAreaChartResponse> = api_get(ctx, "charts/cell-count")?;
-        let chart = wrapper.data;
+        let chart: ChartWrapper<StackedChartDataPoint> = api_get(ctx, "charts/cell-count")?;
         let mut findings = vec![];
         let mut prev_date = String::new();
 
@@ -674,14 +650,14 @@ impl Check for ChartCellCountConsistency {
             }
             prev_date = point.date.clone();
 
-            // Check both series exist
-            let has_live = point.values.contains_key("live");
-            let has_dead = point.values.contains_key("dead");
+            // Check both series exist (API uses liveCells/deadCells keys)
+            let has_live = point.values.contains_key("liveCells");
+            let has_dead = point.values.contains_key("deadCells");
             if !has_live || !has_dead {
                 findings.push(Finding {
                     entity: point.date.clone(),
                     details: vec![format!(
-                        "missing series: live={}, dead={}",
+                        "missing series: liveCells={}, deadCells={}",
                         has_live, has_dead
                     )],
                 });
@@ -714,8 +690,7 @@ impl Check for ChartTotalSupplyMonotonic {
         CheckTier::Sampling
     }
     fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
-        let wrapper: ApiResponse<StackedAreaChartResponse> = api_get(ctx, "charts/total-supply")?;
-        let chart = wrapper.data;
+        let chart: ChartWrapper<StackedChartDataPoint> = api_get(ctx, "charts/total-supply")?;
         let mut findings = vec![];
         let mut prev_total: f64 = 0.0;
         let mut prev_date = String::new();
@@ -790,9 +765,7 @@ impl Check for RpcBlockSpotCheck {
 
         for block_num in &blocks {
             // Fetch from our API
-            let wrapper: ApiResponse<BlockResponse> =
-                api_get(ctx, &format!("blocks/{}", block_num))?;
-            let our_block = wrapper.data;
+            let our_block: BlockResponse = api_get(ctx, &format!("blocks/{}", block_num))?;
 
             // Fetch from CKB RPC
             let rpc_hash = rpc_get_block_hash(ctx, rpc_url, *block_num)?;

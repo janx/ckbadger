@@ -97,37 +97,25 @@ impl CkbadgerStore {
     }
 
     /// List live cells by lock script hash (prefix scan).
+    /// `after_key` is the full 74-byte cell index key of the last returned entry (for pagination).
     pub fn list_cells_by_lock(
         &self,
         lock_hash: &[u8],
         limit: usize,
-        cursor_block: Option<i64>,
-        cursor_output_index: Option<i16>,
+        after_key: Option<&[u8]>,
     ) -> anyhow::Result<Vec<(Vec<u8>, i16, LiveCellInfo)>> {
-        self.list_cells_by_hash_cf(
-            self.cf_cell_by_lock(),
-            lock_hash,
-            limit,
-            cursor_block,
-            cursor_output_index,
-        )
+        self.list_cells_by_hash_cf(self.cf_cell_by_lock(), lock_hash, limit, after_key)
     }
 
     /// List live cells by type script hash (prefix scan).
+    /// `after_key` is the full 74-byte cell index key of the last returned entry (for pagination).
     pub fn list_cells_by_type(
         &self,
         type_hash: &[u8],
         limit: usize,
-        cursor_block: Option<i64>,
-        cursor_output_index: Option<i16>,
+        after_key: Option<&[u8]>,
     ) -> anyhow::Result<Vec<(Vec<u8>, i16, LiveCellInfo)>> {
-        self.list_cells_by_hash_cf(
-            self.cf_cell_by_type(),
-            type_hash,
-            limit,
-            cursor_block,
-            cursor_output_index,
-        )
+        self.list_cells_by_hash_cf(self.cf_cell_by_type(), type_hash, limit, after_key)
     }
 
     fn list_cells_by_hash_cf(
@@ -135,26 +123,31 @@ impl CkbadgerStore {
         cf: &rocksdb::ColumnFamily,
         hash: &[u8],
         limit: usize,
-        cursor_block: Option<i64>,
-        cursor_output_index: Option<i16>,
+        after_key: Option<&[u8]>,
     ) -> anyhow::Result<Vec<(Vec<u8>, i16, LiveCellInfo)>> {
         let mut results = Vec::new();
 
-        let start_key = if let (Some(block), Some(idx)) = (cursor_block, cursor_output_index) {
-            keys::encode_cell_index_key(hash, block, &[0xffu8; 32], idx)
-        } else {
-            hash.to_vec()
-        };
+        let start_key = after_key
+            .map(|k| k.to_vec())
+            .unwrap_or_else(|| hash.to_vec());
 
         let iter = self.iterator_cf(
             cf,
             rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
         );
 
+        let mut first = after_key.is_some();
         for item in iter.flatten() {
             let (key, _) = item;
             if !key.starts_with(hash) {
                 break;
+            }
+            // Skip the cursor key itself (already returned on the previous page)
+            if first {
+                first = false;
+                if after_key.is_some_and(|ak| key.as_ref() == ak) {
+                    continue;
+                }
             }
             // Key: hash(32) + block_num(8) + outpoint(34)
             if key.len() >= 74 {
@@ -171,37 +164,25 @@ impl CkbadgerStore {
     }
 
     /// List live cells by lock code hash (prefix scan on cell_by_lock_code).
+    /// `after_key` is the full 74-byte cell index key of the last returned entry (for pagination).
     pub fn list_cells_by_lock_code_hash(
         &self,
         code_hash: &[u8],
         limit: usize,
-        cursor_block: Option<i64>,
-        cursor_output_index: Option<i16>,
+        after_key: Option<&[u8]>,
     ) -> anyhow::Result<Vec<(Vec<u8>, i16, LiveCellInfo)>> {
-        self.list_cells_by_code_hash_cf(
-            self.cf_cell_by_lock_code(),
-            code_hash,
-            limit,
-            cursor_block,
-            cursor_output_index,
-        )
+        self.list_cells_by_code_hash_cf(self.cf_cell_by_lock_code(), code_hash, limit, after_key)
     }
 
     /// List live cells by type code hash (prefix scan on cell_by_type_code).
+    /// `after_key` is the full 74-byte cell index key of the last returned entry (for pagination).
     pub fn list_cells_by_type_code_hash(
         &self,
         code_hash: &[u8],
         limit: usize,
-        cursor_block: Option<i64>,
-        cursor_output_index: Option<i16>,
+        after_key: Option<&[u8]>,
     ) -> anyhow::Result<Vec<(Vec<u8>, i16, LiveCellInfo)>> {
-        self.list_cells_by_code_hash_cf(
-            self.cf_cell_by_type_code(),
-            code_hash,
-            limit,
-            cursor_block,
-            cursor_output_index,
-        )
+        self.list_cells_by_code_hash_cf(self.cf_cell_by_type_code(), code_hash, limit, after_key)
     }
 
     fn list_cells_by_code_hash_cf(
@@ -209,27 +190,31 @@ impl CkbadgerStore {
         cf: &rocksdb::ColumnFamily,
         code_hash: &[u8],
         limit: usize,
-        cursor_block: Option<i64>,
-        cursor_output_index: Option<i16>,
+        after_key: Option<&[u8]>,
     ) -> anyhow::Result<Vec<(Vec<u8>, i16, LiveCellInfo)>> {
         let mut results = Vec::new();
 
-        // Build start key: when cursor is provided, seek past it; otherwise start at prefix
-        let start_key = if let (Some(block), Some(idx)) = (cursor_block, cursor_output_index) {
-            keys::encode_cell_index_key(code_hash, block, &[0xffu8; 32], idx)
-        } else {
-            code_hash.to_vec()
-        };
+        let start_key = after_key
+            .map(|k| k.to_vec())
+            .unwrap_or_else(|| code_hash.to_vec());
 
         let iter = self.iterator_cf(
             cf,
             rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
         );
 
+        let mut first = after_key.is_some();
         for item in iter.flatten() {
             let (key, _) = item;
             if !key.starts_with(code_hash) {
                 break;
+            }
+            // Skip the cursor key itself (already returned on the previous page)
+            if first {
+                first = false;
+                if after_key.is_some_and(|ak| key.as_ref() == ak) {
+                    continue;
+                }
             }
             // Key: code_hash(32) + block_num(8) + outpoint(34) = 74
             if key.len() >= 74 {

@@ -21,6 +21,7 @@ use crate::utils::{
     address_to_lock_script_hash, is_ckb_address, script_to_address, shannon_to_ckb,
 };
 use crate::AppState;
+use ckbadger_store::keys;
 
 struct DepGroupParseResult {
     is_dep_group: bool,
@@ -384,15 +385,29 @@ fn cell_info_to_response(
     }
 }
 
+/// Decode a cell cursor (hex-encoded full cell index key).
+fn decode_cell_cursor(cursor: &str) -> Option<Vec<u8>> {
+    hex::decode(cursor.strip_prefix("0x").unwrap_or(cursor)).ok()
+}
+
+/// Encode a cell cursor from the last result's components.
+fn encode_cell_cursor(
+    script_hash: &[u8],
+    block_num: i64,
+    tx_hash: &[u8],
+    output_index: i16,
+) -> String {
+    let key = keys::encode_cell_index_key(script_hash, block_num, tx_hash, output_index);
+    hex::encode(key)
+}
+
 async fn list_live_cells(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListCellsParams>,
 ) -> ApiResult<CursorPaginatedResponse<CellResponse>> {
     let limit = params.limit.clamp(1, 100) as usize;
 
-    let cursor = params.cursor.as_ref().and_then(|c| decode_cursor(c));
-    let cursor_block = cursor.map(|(b, _)| b);
-    let cursor_idx = cursor.map(|(_, i)| i as i16);
+    let after_key = params.cursor.as_deref().and_then(decode_cell_cursor);
 
     let lock_hash_bytes = if let Some(ref lock_hash) = params.lock_script_hash {
         Some(if is_ckb_address(lock_hash) {
@@ -424,6 +439,8 @@ async fn list_live_cells(
         None
     };
 
+    let after_key_ref = after_key.as_deref();
+
     // Fetch cells from the store based on available filters.
     // The store supports listing by lock hash or type hash via prefix scans.
     let raw_cells: Vec<(Vec<u8>, i16, ckbadger_store::LiveCellInfo)> =
@@ -432,7 +449,7 @@ async fn list_live_cells(
                 // Filter by lock first (usually more selective), then post-filter by type
                 let all = state
                     .store
-                    .list_cells_by_lock(lock_bytes, limit * 10 + 1, cursor_block, cursor_idx)
+                    .list_cells_by_lock(lock_bytes, limit * 10 + 1, after_key_ref)
                     .map_err(|e| ApiError::internal(e.to_string()))?;
                 all.into_iter()
                     .filter(|(_, _, info)| {
@@ -449,7 +466,7 @@ async fn list_live_cells(
                 if let Some(ref tch) = _type_code_hash_bytes {
                     let all = state
                         .store
-                        .list_cells_by_lock(lock_bytes, limit * 10 + 1, cursor_block, cursor_idx)
+                        .list_cells_by_lock(lock_bytes, limit * 10 + 1, after_key_ref)
                         .map_err(|e| ApiError::internal(e.to_string()))?;
                     all.into_iter()
                         .filter(|(_, _, info)| {
@@ -463,13 +480,13 @@ async fn list_live_cells(
                 } else {
                     state
                         .store
-                        .list_cells_by_lock(lock_bytes, limit + 1, cursor_block, cursor_idx)
+                        .list_cells_by_lock(lock_bytes, limit + 1, after_key_ref)
                         .map_err(|e| ApiError::internal(e.to_string()))?
                 }
             }
             (None, Some(type_bytes)) => state
                 .store
-                .list_cells_by_type(type_bytes, limit + 1, cursor_block, cursor_idx)
+                .list_cells_by_type(type_bytes, limit + 1, after_key_ref)
                 .map_err(|e| ApiError::internal(e.to_string()))?,
             (None, None) => {
                 // No filter: not practical for RocksDB full scan, return empty.
@@ -482,9 +499,12 @@ async fn list_live_cells(
     let has_more = raw_cells.len() > limit;
     let raw_cells: Vec<_> = raw_cells.into_iter().take(limit).collect();
 
+    // Determine which script hash was used as the index prefix for cursor encoding
+    let index_hash = lock_hash_bytes.as_deref().or(type_hash_bytes.as_deref());
+
     let next_cursor = if has_more {
-        raw_cells.last().map(|(_, output_index, info)| {
-            encode_cursor(info.created_at_block, *output_index as i32)
+        raw_cells.last().and_then(|(tx_hash, output_index, info)| {
+            index_hash.map(|h| encode_cell_cursor(h, info.created_at_block, tx_hash, *output_index))
         })
     } else {
         None
@@ -546,12 +566,8 @@ async fn list_cells_by_script(
     };
 
     // Parse cursor for pagination
-    let (cursor_block, cursor_idx) = params
-        .cursor
-        .as_deref()
-        .and_then(decode_cursor)
-        .map(|(b, i)| (Some(b), Some(i as i16)))
-        .unwrap_or((None, None));
+    let after_key = params.cursor.as_deref().and_then(decode_cell_cursor);
+    let after_key_ref = after_key.as_deref();
 
     // Fetch limit+1 to detect has_more
     let fetch_limit = limit + 1;
@@ -560,31 +576,21 @@ async fn list_cells_by_script(
     let results: Vec<(Vec<u8>, i16, ckbadger_store::LiveCellInfo)> = match script_kind {
         "lock" => state
             .store
-            .list_cells_by_lock_code_hash(&code_hash_bytes, fetch_limit, cursor_block, cursor_idx)
+            .list_cells_by_lock_code_hash(&code_hash_bytes, fetch_limit, after_key_ref)
             .map_err(|e| ApiError::internal(e.to_string()))?,
         "type" => state
             .store
-            .list_cells_by_type_code_hash(&code_hash_bytes, fetch_limit, cursor_block, cursor_idx)
+            .list_cells_by_type_code_hash(&code_hash_bytes, fetch_limit, after_key_ref)
             .map_err(|e| ApiError::internal(e.to_string()))?,
         _ => {
             // "both": merge results from lock and type indexes
             let mut merged = state
                 .store
-                .list_cells_by_lock_code_hash(
-                    &code_hash_bytes,
-                    fetch_limit,
-                    cursor_block,
-                    cursor_idx,
-                )
+                .list_cells_by_lock_code_hash(&code_hash_bytes, fetch_limit, after_key_ref)
                 .map_err(|e| ApiError::internal(e.to_string()))?;
             let type_results = state
                 .store
-                .list_cells_by_type_code_hash(
-                    &code_hash_bytes,
-                    fetch_limit,
-                    cursor_block,
-                    cursor_idx,
-                )
+                .list_cells_by_type_code_hash(&code_hash_bytes, fetch_limit, after_key_ref)
                 .map_err(|e| ApiError::internal(e.to_string()))?;
             for r in type_results {
                 if merged.len() >= fetch_limit {
@@ -603,8 +609,13 @@ async fn list_cells_by_script(
     let results: Vec<_> = results.into_iter().take(limit).collect();
 
     let next_cursor = if has_more {
-        results.last().map(|(_, output_index, info)| {
-            encode_cursor(info.created_at_block, *output_index as i32)
+        results.last().map(|(tx_hash, output_index, info)| {
+            encode_cell_cursor(
+                &code_hash_bytes,
+                info.created_at_block,
+                tx_hash,
+                *output_index,
+            )
         })
     } else {
         None
@@ -662,7 +673,7 @@ async fn get_address(
     // Try to find a cell for this lock hash to get the lock script details
     let cells_for_script = state
         .store
-        .list_cells_by_lock(&lock_hash, 1, None, None)
+        .list_cells_by_lock(&lock_hash, 1, None)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let (lock_script, address) = if let Some((_, _, info)) = cells_for_script.first() {

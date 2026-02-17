@@ -172,9 +172,7 @@ fn test_rollback_removes_cells_and_indexes() {
     }
 
     // Verify cells exist via lock index (4 blocks, 1 cell each)
-    let cells_before = store
-        .list_cells_by_lock(&lock_hash, 100, None, None)
-        .unwrap();
+    let cells_before = store.list_cells_by_lock(&lock_hash, 100, None).unwrap();
     assert_eq!(cells_before.len(), 4, "should have 4 cells before rollback");
 
     // Rollback to block 2: blocks 3-4 removed
@@ -183,9 +181,7 @@ fn test_rollback_removes_cells_and_indexes() {
     assert_eq!(result.cells_removed, 2, "cells from blocks 3-4 removed");
 
     // Cells from blocks 1-2 should survive via lock index
-    let cells_after = store
-        .list_cells_by_lock(&lock_hash, 100, None, None)
-        .unwrap();
+    let cells_after = store.list_cells_by_lock(&lock_hash, 100, None).unwrap();
     assert_eq!(
         cells_after.len(),
         2,
