@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
@@ -25,6 +26,7 @@ import { formatTimeAgo } from '@/lib/utils';
 export default function TokenDetailPage() {
   const params = useParams();
   const typeHash = params.typeHash as string;
+  const [activeTab, setActiveTab] = useState('holders');
 
   const holdersPagination = useCursorPagination();
   const transfersPagination = useCursorPagination();
@@ -57,16 +59,27 @@ export default function TokenDetailPage() {
     return new Intl.NumberFormat().format(Number(num));
   };
 
-  const formatAmount = (amount: string, decimals: number) => {
+  const formatTokenAmount = (amount: string, decimals: number) => {
     const num = BigInt(amount);
     const divisor = BigInt(10 ** decimals);
     const whole = num / divisor;
     const remainder = num % divisor;
-    if (remainder === BigInt(0)) {
-      return formatNumber(whole.toString());
+    const integer = whole.toLocaleString('en-US');
+    if (decimals === 0) {
+      return { integer, decimal: '' };
     }
-    const decimal = remainder.toString().padStart(decimals, '0').slice(0, 4);
-    return `${formatNumber(whole.toString())}.${decimal}`;
+    const decimal = remainder.toString().padStart(decimals, '0');
+    return { integer, decimal };
+  };
+
+  const TokenAmount = ({ amount, decimals }: { amount: string; decimals: number }) => {
+    const { integer, decimal } = formatTokenAmount(amount, decimals);
+    return (
+      <span className="font-mono tabular-nums">
+        <span>{integer}</span>
+        {decimal && <span className="text-terminal-dark text-[0.85em]">.{decimal}</span>}
+      </span>
+    );
   };
 
   if (isLoading) {
@@ -160,7 +173,13 @@ export default function TokenDetailPage() {
                 <StatBlock label="Decimals" value={token.decimals} color="white" />
                 <StatBlock
                   label="Total Supply"
-                  value={formatAmount(token.totalSupply, token.decimals)}
+                  value={(() => {
+                    const { integer, decimal } = formatTokenAmount(
+                      token.totalSupply,
+                      token.decimals
+                    );
+                    return decimal ? `${integer}.${decimal}` : integer;
+                  })()}
                   color="green"
                 />
               </StatGrid>
@@ -226,7 +245,7 @@ export default function TokenDetailPage() {
         </div>
 
         <TerminalPanel>
-          <Tabs defaultValue="holders">
+          <Tabs value={activeTab} onValueChange={setActiveTab}>
             <TerminalPanelHeader
               actions={
                 <TabsList>
@@ -239,7 +258,7 @@ export default function TokenDetailPage() {
                 </TabsList>
               }
             >
-              Data
+              {activeTab === 'holders' ? 'Holders' : 'Transfers'}
             </TerminalPanelHeader>
 
             <TabsContent value="holders">
@@ -266,8 +285,8 @@ export default function TokenDetailPage() {
                               </Link>
                             )}
                           </div>
-                          <div className="w-48 text-right font-mono text-white">
-                            {formatAmount(holder.balance, token.decimals)}
+                          <div className="w-48 text-right text-white">
+                            <TokenAmount amount={holder.balance} decimals={token.decimals} />
                           </div>
                         </div>
                       </TerminalRow>
@@ -296,74 +315,108 @@ export default function TokenDetailPage() {
             <TabsContent value="transfers">
               <TerminalPanelContent padding="none">
                 {transfers?.data?.length ? (
-                  <>
-                    <div className="flex border-b border-slate-800 bg-slate-900/50 px-4 py-2 font-mono text-xs uppercase tracking-wider text-slate-500">
-                      <div className="w-32">Tx Hash</div>
-                      <div className="flex-1">From</div>
-                      <div className="flex-1">To</div>
-                      <div className="w-32 text-right">Amount</div>
-                      <div className="w-24 text-right">Time</div>
-                    </div>
-                    {transfers.data.map((transfer: TokenTransfer, idx: number) => (
-                      <TerminalRow key={`${transfer.txHash}-${idx}`}>
-                        <div className="flex items-center">
-                          <div className="w-32">
-                            <Link href={`/tx/${transfer.txHash}`}>
-                              <HexDisplay
-                                value={transfer.txHash}
-                                color="amber"
-                                startChars={8}
-                                endChars={6}
-                                className="hover:underline"
-                              />
-                            </Link>
-                          </div>
-                          <div className="flex-1">
-                            {transfer.isMint ? (
-                              <Badge variant="green">Mint</Badge>
-                            ) : transfer.fromAddress ? (
-                              <Address address={transfer.fromAddress} className="text-slate-400" />
-                            ) : transfer.fromLockHash ? (
-                              <Link href={`/address/${transfer.fromLockHash}`}>
+                  <div className="overflow-x-auto">
+                    <table className="w-full">
+                      <thead>
+                        <tr className="border-b border-slate-800 bg-slate-900/50 font-mono text-xs uppercase tracking-wider text-slate-500">
+                          <th className="whitespace-nowrap px-4 py-2 text-left font-medium">
+                            Tx Hash
+                          </th>
+                          <th className="whitespace-nowrap px-4 py-2 text-left font-medium">
+                            From
+                          </th>
+                          <th className="w-6 px-0 py-2"></th>
+                          <th className="whitespace-nowrap px-4 py-2 text-left font-medium">To</th>
+                          <th className="whitespace-nowrap px-4 py-2 text-right font-medium">
+                            Amount
+                          </th>
+                          <th className="whitespace-nowrap px-4 py-2 text-right font-medium">
+                            Time
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {transfers.data.map((transfer: TokenTransfer, idx: number) => (
+                          <tr
+                            key={`${transfer.txHash}-${idx}`}
+                            className="border-b border-slate-800/50 transition-colors hover:bg-slate-800/30"
+                          >
+                            <td className="whitespace-nowrap px-4 py-3">
+                              <Link href={`/tx/${transfer.txHash}`}>
                                 <HexDisplay
-                                  value={transfer.fromLockHash}
-                                  color="white"
+                                  value={transfer.txHash}
+                                  color="amber"
                                   startChars={8}
-                                  endChars={6}
-                                  className="hover:text-terminal-green"
+                                  endChars={4}
+                                  className="hover:underline"
                                 />
                               </Link>
-                            ) : (
-                              <span className="text-slate-600">-</span>
-                            )}
-                          </div>
-                          <div className="flex-1">
-                            {transfer.isBurn ? (
-                              <Badge variant="red">Burn</Badge>
-                            ) : transfer.toAddress ? (
-                              <Address address={transfer.toAddress} className="text-slate-400" />
-                            ) : (
-                              <Link href={`/address/${transfer.toLockHash}`}>
-                                <HexDisplay
-                                  value={transfer.toLockHash}
-                                  color="white"
-                                  startChars={8}
-                                  endChars={6}
-                                  className="hover:text-terminal-green"
+                            </td>
+                            <td className="whitespace-nowrap px-4 py-3">
+                              {transfer.isMint ? (
+                                <Badge variant="green">Mint</Badge>
+                              ) : transfer.fromAddress ? (
+                                <Address
+                                  address={transfer.fromAddress}
+                                  className="text-slate-400"
                                 />
-                              </Link>
-                            )}
-                          </div>
-                          <div className="w-32 text-right font-mono text-white">
-                            {formatAmount(transfer.amount, token.decimals)}
-                          </div>
-                          <div className="w-24 text-right text-slate-500">
-                            {formatTimeAgo(transfer.timestamp)}
-                          </div>
-                        </div>
-                      </TerminalRow>
-                    ))}
-                  </>
+                              ) : transfer.fromLockHash ? (
+                                <Link href={`/address/${transfer.fromLockHash}`}>
+                                  <HexDisplay
+                                    value={transfer.fromLockHash}
+                                    color="white"
+                                    startChars={6}
+                                    endChars={4}
+                                    className="hover:text-terminal-green"
+                                  />
+                                </Link>
+                              ) : (
+                                <span className="text-slate-600">-</span>
+                              )}
+                            </td>
+                            <td className="px-0 py-3 text-center text-slate-600">
+                              <svg
+                                className="mx-auto h-3.5 w-3.5"
+                                fill="none"
+                                viewBox="0 0 24 24"
+                                stroke="currentColor"
+                                strokeWidth={2}
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  d="M13 7l5 5m0 0l-5 5m5-5H6"
+                                />
+                              </svg>
+                            </td>
+                            <td className="whitespace-nowrap px-4 py-3">
+                              {transfer.isBurn ? (
+                                <Badge variant="red">Burn</Badge>
+                              ) : transfer.toAddress ? (
+                                <Address address={transfer.toAddress} className="text-slate-400" />
+                              ) : (
+                                <Link href={`/address/${transfer.toLockHash}`}>
+                                  <HexDisplay
+                                    value={transfer.toLockHash}
+                                    color="white"
+                                    startChars={6}
+                                    endChars={4}
+                                    className="hover:text-terminal-green"
+                                  />
+                                </Link>
+                              )}
+                            </td>
+                            <td className="whitespace-nowrap px-4 py-3 text-right text-white">
+                              <TokenAmount amount={transfer.amount} decimals={token.decimals} />
+                            </td>
+                            <td className="whitespace-nowrap px-4 py-3 text-right font-mono text-xs text-slate-500">
+                              {formatTimeAgo(transfer.timestamp)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 ) : (
                   <div className="py-8 text-center text-slate-500">No transfers</div>
                 )}

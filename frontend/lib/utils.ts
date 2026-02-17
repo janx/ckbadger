@@ -11,7 +11,10 @@ export function truncateHash(hash: string, start = 10, end = 8): string {
 }
 
 export function formatTimeAgo(timestamp: string | number | Date): string {
-  const date = new Date(timestamp);
+  const date =
+    typeof timestamp === 'string' && /^\d+$/.test(timestamp)
+      ? new Date(Number(timestamp))
+      : new Date(timestamp);
   const now = new Date();
   const seconds = Math.floor((now.getTime() - date.getTime()) / 1000);
 
