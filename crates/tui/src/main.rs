@@ -92,7 +92,7 @@ async fn run_app<B: ratatui::backend::Backend>(
                         KeyCode::Char('k') | KeyCode::Up => app.scroll_log_down(),
                         KeyCode::Char('g') | KeyCode::Home => app.scroll_log_to_top(),
                         KeyCode::Char('G') | KeyCode::End => app.scroll_log_to_bottom(),
-                        KeyCode::Char('s') => app.toggle_sync_tab(),
+                        KeyCode::Tab | KeyCode::Char('s') => app.toggle_main_tab(),
                         KeyCode::Char('v') => app.toggle_chart_mode(),
                         KeyCode::Char('R') => app.refresh().await,
                         _ => {}

@@ -58,10 +58,10 @@ impl LogLevel {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub enum SyncTab {
+pub enum MainTab {
     #[default]
-    ChainInfo,
-    SyncProgress,
+    Overview,
+    Sync,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -84,7 +84,7 @@ pub struct App {
     chart_mode: ChartMode,
     log_entries: VecDeque<LogEntry>,
     log_scroll: usize,
-    sync_tab: SyncTab,
+    main_tab: MainTab,
     prev_is_bulk_sync: Option<bool>,
     prev_is_syncing: Option<bool>,
     prev_indexes_deferred: Option<bool>,
@@ -113,7 +113,7 @@ impl App {
             chart_mode: ChartMode::default(),
             log_entries,
             log_scroll: 0,
-            sync_tab: SyncTab::default(),
+            main_tab: MainTab::default(),
             prev_is_bulk_sync: None,
             prev_is_syncing: None,
             prev_indexes_deferred: None,
@@ -121,10 +121,10 @@ impl App {
         }
     }
 
-    pub fn toggle_sync_tab(&mut self) {
-        self.sync_tab = match self.sync_tab {
-            SyncTab::ChainInfo => SyncTab::SyncProgress,
-            SyncTab::SyncProgress => SyncTab::ChainInfo,
+    pub fn toggle_main_tab(&mut self) {
+        self.main_tab = match self.main_tab {
+            MainTab::Overview => MainTab::Sync,
+            MainTab::Sync => MainTab::Overview,
         };
     }
 
@@ -280,20 +280,16 @@ pub fn draw(f: &mut Frame, app: &App) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),
-            Constraint::Length(7),
-            Constraint::Length(8),
-            Constraint::Length(9),
-            Constraint::Min(8),
+            Constraint::Length(3),
+            Constraint::Min(10),
             Constraint::Length(3),
         ])
         .split(f.area());
 
     draw_header(f, app, chunks[0]);
-    draw_sync_status_full(f, app, chunks[1]);
-    draw_rate_chart_full(f, app, chunks[2]);
-    draw_memory_stats(f, app, chunks[3]);
-    draw_log(f, app, chunks[4]);
-    draw_footer(f, app, chunks[5]);
+    draw_tabs(f, app, chunks[1]);
+    draw_content(f, app, chunks[2]);
+    draw_footer(f, app, chunks[3]);
 }
 
 fn draw_header(f: &mut Frame, app: &App, area: Rect) {
@@ -343,10 +339,68 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(right, cols[1]);
 }
 
-fn draw_sync_status_full(f: &mut Frame, app: &App, area: Rect) {
-    match app.sync_tab {
-        SyncTab::ChainInfo => draw_chain_info(f, app, area),
-        SyncTab::SyncProgress => draw_sync_progress(f, app, area),
+fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(SLATE_800));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let (overview_style, sync_style) = match app.main_tab {
+        MainTab::Overview => (
+            Style::default()
+                .fg(Color::Black)
+                .bg(TERMINAL_GREEN)
+                .add_modifier(Modifier::BOLD),
+            Style::default().fg(SLATE_500),
+        ),
+        MainTab::Sync => (
+            Style::default().fg(SLATE_500),
+            Style::default()
+                .fg(Color::Black)
+                .bg(TERMINAL_GREEN)
+                .add_modifier(Modifier::BOLD),
+        ),
+    };
+
+    let line = Line::from(vec![
+        Span::styled(" Tabs: ", Style::default().fg(SLATE_500)),
+        Span::styled(" Overview ", overview_style),
+        Span::styled("  ", Style::default().fg(SLATE_700)),
+        Span::styled(" Sync ", sync_style),
+        Span::styled("  [Tab/s]", Style::default().fg(SLATE_500)),
+    ]);
+    f.render_widget(Paragraph::new(line), inner);
+}
+
+fn draw_content(f: &mut Frame, app: &App, area: Rect) {
+    match app.main_tab {
+        MainTab::Overview => {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(7),
+                    Constraint::Length(9),
+                    Constraint::Min(8),
+                ])
+                .split(area);
+            draw_chain_info(f, app, chunks[0]);
+            draw_memory_stats(f, app, chunks[1]);
+            draw_log(f, app, chunks[2]);
+        }
+        MainTab::Sync => {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(7),
+                    Constraint::Length(8),
+                    Constraint::Min(8),
+                ])
+                .split(area);
+            draw_sync_progress(f, app, chunks[0]);
+            draw_rate_chart_full(f, app, chunks[1]);
+            draw_log(f, app, chunks[2]);
+        }
     }
 }
 
@@ -354,10 +408,7 @@ fn draw_chain_info(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(SLATE_800))
-        .title(Span::styled(
-            "Chain Info [s]",
-            Style::default().fg(FOREGROUND),
-        ));
+        .title(Span::styled("Chain Info", Style::default().fg(FOREGROUND)));
 
     let Some(info) = &app.chain_info else {
         let msg = Paragraph::new("No chain data available").block(block);
@@ -455,10 +506,7 @@ fn draw_sync_progress(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(SLATE_800))
-        .title(Span::styled(
-            "Sync Status [s]",
-            Style::default().fg(FOREGROUND),
-        ));
+        .title(Span::styled("Sync Status", Style::default().fg(FOREGROUND)));
 
     let Some(sync) = &app.sync_status else {
         let msg = Paragraph::new("No sync data available").block(block);
@@ -879,10 +927,10 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let hint = Line::from(vec![
         Span::styled("q", Style::default().fg(TERMINAL_GREEN)),
         Span::styled(" quit  ", Style::default().fg(SLATE_500)),
-        Span::styled("s", Style::default().fg(TERMINAL_GREEN)),
-        Span::styled(" sync-tab  ", Style::default().fg(SLATE_500)),
+        Span::styled("Tab/s", Style::default().fg(TERMINAL_GREEN)),
+        Span::styled(" switch-tab  ", Style::default().fg(SLATE_500)),
         Span::styled("v", Style::default().fg(TERMINAL_GREEN)),
-        Span::styled(" chart-mode  ", Style::default().fg(SLATE_500)),
+        Span::styled(" chart-mode(Sync)  ", Style::default().fg(SLATE_500)),
         Span::styled("j/k", Style::default().fg(TERMINAL_GREEN)),
         Span::styled(" log-scroll  ", Style::default().fg(SLATE_500)),
         Span::styled("R", Style::default().fg(TERMINAL_GREEN)),
