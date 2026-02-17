@@ -3,7 +3,6 @@
 #![allow(clippy::manual_is_multiple_of)]
 
 pub mod activities;
-pub mod activities_rebuild;
 mod addresses;
 mod blocks;
 mod cells;
@@ -20,7 +19,6 @@ mod sync;
 mod transactions;
 mod udt;
 
-pub use activities_rebuild::rebuild_activities;
 pub use cells::rebuild_cell_indices;
 pub use core::BatchWriter;
 pub use dao::{DaoWithdrawalContextTrait, SecondaryIssuanceBreakdown};

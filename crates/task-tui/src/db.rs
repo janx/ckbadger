@@ -59,6 +59,8 @@ pub struct SyncStatusRow {
     pub rpc_fetch_ms: Option<f64>,
     /// Detailed deferred flags
     pub address_balances_deferred: bool,
+    /// Deprecated: activities are now written inline. Always false.
+    #[allow(dead_code)]
     pub activities_deferred: bool,
     pub token_deferred: bool,
     pub spore_deferred: bool,

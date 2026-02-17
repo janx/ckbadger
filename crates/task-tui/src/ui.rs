@@ -804,9 +804,6 @@ fn draw_sync_progress(f: &mut Frame, app: &App, area: Rect) {
     if sync.address_balances_deferred {
         deferred_tags.push(Span::styled("[BAL]", Style::default().fg(AMBER)));
     }
-    if sync.activities_deferred {
-        deferred_tags.push(Span::styled(" [ACT]", Style::default().fg(AMBER)));
-    }
     if sync.token_deferred {
         deferred_tags.push(Span::styled(" [TOK]", Style::default().fg(AMBER)));
     }

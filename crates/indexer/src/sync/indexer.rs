@@ -22,8 +22,7 @@ use crate::cache::CacheInvalidator;
 use crate::config::{Config, DEEP_FORK_DEPTH};
 use crate::db::writer::hodl_wave::HodlWaveTracker;
 use crate::db::{
-    rebuild_activities, rebuild_cell_indices, BatchWriter, ReorgResult, Repository,
-    SecondaryIssuanceBreakdown,
+    rebuild_cell_indices, BatchWriter, ReorgResult, Repository, SecondaryIssuanceBreakdown,
 };
 use crate::parser::{
     BlockParser, CellParser, DaoParser, DotbitParser, MnftParser, SporeParser, TransactionParser,
@@ -307,7 +306,6 @@ pub struct Indexer {
     rebuild_pause_flag: Arc<std::sync::atomic::AtomicBool>,
     reorg_notify_flag: Arc<std::sync::atomic::AtomicBool>,
     address_balances_deferred: std::sync::atomic::AtomicBool,
-    activities_deferred: std::sync::atomic::AtomicBool,
     ckb_store: Option<Arc<CkbChainReader>>,
     hodl_tracker: std::sync::Mutex<HodlWaveTracker>,
 }
@@ -350,12 +348,10 @@ impl Indexer {
 
         let sync_status = store.get_sync_status()?;
         let address_balances_deferred = sync_status.address_balances_deferred;
-        let activities_deferred = sync_status.activities_deferred;
-
-        if address_balances_deferred || activities_deferred {
+        if address_balances_deferred {
             info!(
-                "Loaded deferred states: address_balances={}, activities={}",
-                address_balances_deferred, activities_deferred
+                "Loaded deferred states: address_balances={}",
+                address_balances_deferred
             );
         }
 
@@ -395,7 +391,6 @@ impl Indexer {
             address_balances_deferred: std::sync::atomic::AtomicBool::new(
                 address_balances_deferred,
             ),
-            activities_deferred: std::sync::atomic::AtomicBool::new(activities_deferred),
             ckb_store,
             hodl_tracker: std::sync::Mutex::new(hodl_tracker),
         })
@@ -483,35 +478,6 @@ impl Indexer {
                 blocks_behind, self.config.bulk_sync_threshold,
             );
             self.writer.store().set_bulk_sync_compaction_options();
-
-            // Mark activities as deferred for crash recovery
-            self.activities_deferred.store(true, Ordering::Relaxed);
-            if let Err(e) = self.writer.store().update_sync_status(|s| {
-                s.activities_deferred = true;
-            }) {
-                warn!("Failed to set activities_deferred flag: {}", e);
-            }
-        }
-
-        // If activities were deferred from a previous run but bulk sync is done, rebuild now
-        if self.activities_deferred.load(Ordering::Relaxed)
-            && blocks_behind <= self.config.bulk_sync_threshold
-        {
-            info!("Activities deferred from previous run, starting rebuild");
-            let store_act = Arc::clone(self.writer.store());
-            let ckb_store_act = self.ckb_store.clone();
-            tokio::task::spawn_blocking(move || {
-                let completed = rebuild_activities(&store_act, ckb_store_act.as_deref());
-                if completed {
-                    if let Err(e) = store_act.update_sync_status(|s| {
-                        s.activities_deferred = false;
-                    }) {
-                        warn!("Failed to clear activities_deferred flag: {}", e);
-                    }
-                } else {
-                    warn!("Activities rebuild did not complete; deferred flag preserved for retry");
-                }
-            });
         }
 
         let (start_block, _) = self.repo.get_sync_tip().await?;
@@ -1684,23 +1650,6 @@ impl Indexer {
                 rebuild_cell_indices(&store_rebuild);
                 pause_flag.store(false, Ordering::SeqCst);
                 info!("Cell index rebuild finished, resuming sync");
-            });
-
-            // Rebuild activities (skipped during bulk sync)
-            info!("Starting activities rebuild");
-            let store_act = Arc::clone(self.writer.store());
-            let ckb_store_act = self.ckb_store.clone();
-            tokio::task::spawn_blocking(move || {
-                let completed = rebuild_activities(&store_act, ckb_store_act.as_deref());
-                if completed {
-                    if let Err(e) = store_act.update_sync_status(|s| {
-                        s.activities_deferred = false;
-                    }) {
-                        warn!("Failed to clear activities_deferred flag: {}", e);
-                    }
-                } else {
-                    warn!("Activities rebuild did not complete; deferred flag preserved for retry on next restart");
-                }
             });
 
             self.maybe_submit_pending_rebuild_tasks();
@@ -3195,7 +3144,7 @@ impl Indexer {
             .address_balances_deferred
             .load(std::sync::atomic::Ordering::Relaxed)
             && bulk_sync_mode;
-        let skip_activities = bulk_sync_mode;
+        let skip_activities = false;
 
         let precompute_ms = t_precompute.elapsed().as_secs_f64() * 1000.0;
 
@@ -4055,7 +4004,6 @@ impl Indexer {
                 });
 
                 // T_ACT: Activity builder (writes only CF_ACTIVITIES — no conflicts)
-                // Skipped during bulk sync; activities are rebuilt after completion.
                 let h_act = if !skip_activities {
                     Some(s.spawn(|| -> Result<f64> {
                         let t = Instant::now();

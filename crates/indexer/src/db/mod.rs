@@ -7,6 +7,6 @@ pub use live_cell_storage::{
 };
 pub use repository::{DeepForkInfo, Repository};
 pub use writer::{
-    rebuild_activities, rebuild_cell_indices, BatchWriter, DaoWithdrawalContextTrait, ReorgResult,
+    rebuild_cell_indices, BatchWriter, DaoWithdrawalContextTrait, ReorgResult,
     SecondaryIssuanceBreakdown,
 };

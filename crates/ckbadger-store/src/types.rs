@@ -527,9 +527,7 @@ pub struct SyncStatus {
     pub total_cells_consumed: i64,
     pub last_synced_at: i64,
     pub address_balances_deferred: bool,
-    /// When `true`, activity entries were skipped during bulk sync and need
-    /// to be rebuilt via `rebuild_activities` before live sync begins.
-    /// Set to `true` when bulk sync starts; cleared after the rebuild completes.
+    /// Deprecated: activities are now written inline. Kept for bincode compat.
     #[serde(default)]
     pub activities_deferred: bool,
     pub deep_fork_detected: bool,

@@ -71,13 +71,6 @@ struct Args {
 
     #[arg(long, default_value = "false", help = "Disable embedded task runner")]
     no_task_runner: bool,
-
-    #[arg(
-        long,
-        default_value = "false",
-        help = "Force rebuild of activity entries from scratch on startup"
-    )]
-    rebuild_activities: bool,
 }
 
 #[tokio::main]
@@ -155,23 +148,11 @@ async fn main() -> Result<()> {
         info!("Resuming sync from block {}", db_tip);
     }
 
-    // Force activities rebuild if requested via CLI flag
-    if args.rebuild_activities && !sync_status.activities_deferred {
-        info!("--rebuild-activities flag set: marking activities as deferred for rebuild");
-        store.update_sync_status(|s| {
-            s.activities_deferred = true;
-        })?;
-    }
-
     // Check deferred state
-    if sync_status.address_balances_deferred
-        || sync_status.activities_deferred
-        || args.rebuild_activities
-    {
+    if sync_status.address_balances_deferred {
         info!(
-            "Deferred states: address_balances={}, activities={}",
-            sync_status.address_balances_deferred,
-            sync_status.activities_deferred || args.rebuild_activities
+            "Deferred states: address_balances={}",
+            sync_status.address_balances_deferred
         );
     }
 
