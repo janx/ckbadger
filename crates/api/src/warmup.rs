@@ -1,5 +1,6 @@
 use crate::cache::CacheTtl;
 use crate::routes::assets::AssetResponse;
+use crate::utils::resolve_dob_collection_name;
 use crate::utils::shannon_to_ckb_u128;
 use crate::AppState;
 use ckbadger_common::dao::GENESIS_BURNT;
@@ -161,6 +162,11 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
             continue;
         }
         let cluster_hex = format!("0x{}", hex::encode(cluster_id_bytes));
+        let display_name = resolve_dob_collection_name(
+            state.store.as_ref(),
+            cluster_id_bytes,
+            agg.name.as_deref(),
+        );
         let transfers_24h = spore_transfers_24h_map
             .get(cluster_id_bytes.as_slice())
             .copied()
@@ -170,7 +176,7 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
             id: cluster_hex.clone(),
             asset_type: "dob".to_string(),
             standard: "spore".to_string(),
-            name: agg.name.clone(),
+            name: display_name.clone(),
             symbol: None,
             icon_url: None,
             holders_count: agg.owner_count,
@@ -181,7 +187,7 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
             content_type: None,
             content_size: None,
             cluster_id: Some(cluster_hex),
-            cluster_name: agg.name.clone(),
+            cluster_name: display_name,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,

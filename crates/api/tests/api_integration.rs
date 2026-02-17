@@ -5,6 +5,8 @@ use std::sync::Arc;
 use tower::ServiceExt;
 
 use ckbadger_api::{create_router, AppConfig};
+use ckbadger_store::batch::StoreBatch;
+use ckbadger_store::types::{ClusterAggregate, DobEntry, DobExtra, DobStandard};
 use ckbadger_store::CkbadgerStore;
 
 fn test_store() -> Arc<CkbadgerStore> {
@@ -196,6 +198,53 @@ async fn test_spore_list_empty_db() {
 
     let response = app.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn test_assets_dob_uses_cluster_entry_name_when_aggregate_name_missing() {
+    let store = test_store();
+
+    let cluster_id = [0x42u8; 32];
+    let cluster_entry = DobEntry {
+        standard: DobStandard::SporeCluster,
+        collection_id: None,
+        owner_lock_hash: Some(vec![0x11; 32]),
+        name: Some("Recovered Cluster Name".to_string()),
+        description: Some("desc".to_string()),
+        is_live: true,
+        created_at_block: 123,
+        created_at_tx: vec![0x22; 32],
+        extra: DobExtra::SporeCluster,
+    };
+    store.put_spore_direct(&cluster_id, &cluster_entry).unwrap();
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_cluster_aggregate(
+        &cluster_id,
+        &ClusterAggregate {
+            name: None,
+            description: None,
+            total_count: 3,
+            live_count: 3,
+            owner_count: 1,
+        },
+    );
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/assets?type=dob")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"][0]["name"], "Recovered Cluster Name");
 }
 
 #[tokio::test]

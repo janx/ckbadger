@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
+use crate::utils::resolve_dob_collection_name;
 use crate::warmup::{
     CachedAssetEntry, CACHE_KEY_ASSETS_DOB, CACHE_KEY_ASSETS_NFT, CACHE_KEY_ASSETS_TOKEN,
 };
@@ -268,12 +269,17 @@ fn compute_dob_assets(
             continue;
         }
         let cluster_hex = format!("0x{}", hex::encode(cluster_id_bytes));
+        let display_name = resolve_dob_collection_name(
+            state.store.as_ref(),
+            cluster_id_bytes,
+            agg.name.as_deref(),
+        );
 
         result.push(CachedAssetEntry {
             id: cluster_hex.clone(),
             asset_type: "dob".to_string(),
             standard: "spore".to_string(),
-            name: agg.name.clone(),
+            name: display_name.clone(),
             symbol: None,
             icon_url: None,
             holders_count: agg.owner_count,
@@ -284,7 +290,7 @@ fn compute_dob_assets(
             content_type: None,
             content_size: None,
             cluster_id: Some(cluster_hex),
-            cluster_name: agg.name.clone(),
+            cluster_name: display_name,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
