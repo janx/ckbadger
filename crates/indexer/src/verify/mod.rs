@@ -11,6 +11,7 @@ pub mod report;
 pub mod sampling;
 pub mod sampling_checks;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -70,6 +71,10 @@ pub struct VerifyArgs {
     /// List available checks and exit.
     #[arg(long)]
     pub list_checks: bool,
+
+    /// Directory for caching explorer API responses.
+    #[arg(long)]
+    pub cache_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -148,6 +153,11 @@ pub fn run(args: VerifyArgs) -> anyhow::Result<()> {
         Some(args.explorer_url.clone())
     };
 
+    let cache_dir = args
+        .cache_dir
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(&args.data_path).join(".verify-cache"));
+
     let ctx = CheckContext {
         store,
         rpc,
@@ -156,6 +166,7 @@ pub fn run(args: VerifyArgs) -> anyhow::Result<()> {
         sample_count: args.sample_count,
         seed: args.seed,
         tolerance: args.tolerance,
+        cache_dir: Some(cache_dir),
     };
 
     // Filter checks by tier and name

@@ -1,13 +1,107 @@
 //! Explorer comparison checks — compares our data against the official CKB explorer API.
+//!
+//! Supports file-based caching of explorer responses to avoid repeated HTTP requests.
+//! Cache files are stored in `{cache_dir}/{indicator}.json` with a 24-hour freshness window.
+//! On HTTP failure, stale cache is used as fallback with a warning.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
+
+use console::style;
 
 use super::checks::*;
 use super::report::{format_number, format_number_i128};
 
-/// Fetch daily statistics from the official CKB explorer API.
+/// Cached explorer response stored as JSON on disk.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CacheEntry {
+    fetched_at: String,
+    indicator: String,
+    data: HashMap<String, String>,
+}
+
+const CACHE_FRESHNESS_SECS: i64 = 24 * 60 * 60; // 24 hours
+
+/// Read a cache file for the given indicator. Returns None if file doesn't exist.
+fn read_cache(cache_dir: &Option<PathBuf>, indicator: &str) -> Option<CacheEntry> {
+    let dir = cache_dir.as_ref()?;
+    let path = dir.join(format!("{}.json", indicator));
+    let content = std::fs::read_to_string(&path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+/// Check if a cache entry is fresh (< 24 hours old).
+fn is_cache_fresh(entry: &CacheEntry) -> bool {
+    let fetched = chrono::DateTime::parse_from_rfc3339(&entry.fetched_at)
+        .map(|dt| dt.with_timezone(&chrono::Utc));
+    match fetched {
+        Ok(dt) => {
+            let age = chrono::Utc::now().signed_duration_since(dt);
+            age.num_seconds() < CACHE_FRESHNESS_SECS
+        }
+        Err(_) => false,
+    }
+}
+
+/// Write a cache file for the given indicator.
+fn write_cache(cache_dir: &Option<PathBuf>, indicator: &str, data: &HashMap<String, String>) {
+    let Some(dir) = cache_dir.as_ref() else {
+        return;
+    };
+    if std::fs::create_dir_all(dir).is_err() {
+        return;
+    }
+    let entry = CacheEntry {
+        fetched_at: chrono::Utc::now().to_rfc3339(),
+        indicator: indicator.to_string(),
+        data: data.clone(),
+    };
+    let path = dir.join(format!("{}.json", indicator));
+    if let Ok(json) = serde_json::to_string_pretty(&entry) {
+        let _ = std::fs::write(&path, json);
+    }
+}
+
+/// Fetch daily statistics from the official CKB explorer API, with file-based caching.
 /// Returns a map of date_str ("YYYY-MM-DD") -> value (as string).
 fn fetch_explorer_daily(
+    ctx: &CheckContext,
+    indicator: &str,
+    field: &str,
+) -> anyhow::Result<HashMap<String, String>> {
+    // 1. Try fresh cache first
+    if let Some(cached) = read_cache(&ctx.cache_dir, indicator) {
+        if is_cache_fresh(&cached) {
+            return Ok(cached.data);
+        }
+    }
+
+    // 2. Fetch from API
+    match fetch_from_api(ctx, indicator, field) {
+        Ok(data) => {
+            write_cache(&ctx.cache_dir, indicator, &data);
+            Ok(data)
+        }
+        Err(e) => {
+            // 3. Fall back to stale cache
+            if let Some(cached) = read_cache(&ctx.cache_dir, indicator) {
+                eprintln!(
+                    "    {} Explorer fetch for '{}' failed ({}), using stale cache from {}",
+                    style("⚠").yellow(),
+                    indicator,
+                    e,
+                    cached.fetched_at,
+                );
+                Ok(cached.data)
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
+/// Perform the actual HTTP fetch from the explorer API.
+fn fetch_from_api(
     ctx: &CheckContext,
     indicator: &str,
     field: &str,

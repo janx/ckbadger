@@ -34,6 +34,7 @@
 - **Historical Charts** - Block time, transaction volume, active addresses
 - **Real-time Updates** - WebSocket subscriptions for new blocks and transactions
 - **System Status Page** - Monitor sync progress, index rebuild status, and integrity checks
+- **Data Integrity Verification** - 38 built-in checks across 4 tiers for acceptance testing synced data
 - **Developer API** - REST endpoints with rate limiting
 
 ## Architecture
@@ -328,7 +329,8 @@ ckbadger/
 │   │       ├── rpc/        # CKB RPC client
 │   │       ├── parser/     # Block, cell, script parsers
 │   │       ├── db/         # RocksDB write operations
-│   │       └── sync/       # Synchronization logic
+│   │       ├── sync/       # Synchronization logic
+│   │       └── verify/     # Data integrity verification (38 checks)
 │   ├── api/                # REST API server
 │   │   └── src/
 │   │       ├── routes/     # HTTP handlers (blocks, tx, cells, graph)
@@ -430,6 +432,36 @@ cargo run -p ckbadger-task-tui -- --refresh-ms 500
 | `Enter`   | Confirm dialog     |
 | `Esc`     | Cancel dialog      |
 | `Tab`     | Next dialog option |
+
+### Data Integrity Verification
+
+The indexer includes a `verify` subcommand that validates synced data across 4 tiers of checks — from quick metadata sanity (seconds) to exhaustive full-scan verification (hours).
+
+```bash
+# Quick sanity checks
+cargo run -p ckbadger-indexer -- verify --depth fast
+
+# Sampling + aggregated data cross-checks + explorer comparison
+cargo run -p ckbadger-indexer -- verify --depth sampling
+
+# Offline mode (skip explorer HTTP calls)
+cargo run -p ckbadger-indexer -- verify --depth sampling --no-explorer
+
+# Full scan of every record
+cargo run -p ckbadger-indexer -- verify --depth exhaustive
+
+# List all 38 available checks
+cargo run -p ckbadger-indexer -- verify --list-checks
+```
+
+| Tier           | Checks | What it validates                                                                      |
+| -------------- | ------ | -------------------------------------------------------------------------------------- |
+| **Fast**       | 8      | Sync tip, cell count balance, deferred flags, genesis block, DAO fields                |
+| **Sampling**   | 15     | Index roundtrips, balance recomputation, DAO consistency, aggregated data cross-checks |
+| **Exhaustive** | 5      | Every live cell index, every address balance, block contiguity                         |
+| **Explorer**   | 10     | Last 30 days vs official CKB explorer (cached, 24h freshness)                          |
+
+Explorer API responses are cached to `{data_path}/.verify-cache/` with 24-hour freshness. On HTTP failure, stale cache is used as fallback.
 
 ### Running Tests
 

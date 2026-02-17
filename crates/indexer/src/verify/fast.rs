@@ -433,6 +433,7 @@ mod tests {
             sample_count: 10,
             seed: 42,
             tolerance: 0.001,
+            cache_dir: None,
         }
     }
 

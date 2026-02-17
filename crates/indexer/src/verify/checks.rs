@@ -1,5 +1,6 @@
 //! Core types and trait for verification checks.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -34,6 +35,7 @@ pub struct CheckContext {
     pub sample_count: usize,
     pub seed: u64,
     pub tolerance: f64,
+    pub cache_dir: Option<PathBuf>,
 }
 
 /// Progress reporter wrapping indicatif. Checks call .inc() to advance progress.
