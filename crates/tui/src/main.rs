@@ -86,14 +86,29 @@ async fn run_app<B: ratatui::backend::Backend>(
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {
+                    if app.is_help_visible() {
+                        match key.code {
+                            KeyCode::Char('q') => return Ok(()),
+                            KeyCode::Char('?') | KeyCode::Esc | KeyCode::Enter => {
+                                app.close_help();
+                            }
+                            _ => {}
+                        }
+                        continue;
+                    }
+
                     match key.code {
                         KeyCode::Char('q') => return Ok(()),
+                        KeyCode::Char('?') => app.toggle_help(),
                         KeyCode::Char('j') | KeyCode::Down => app.scroll_log_up(),
                         KeyCode::Char('k') | KeyCode::Up => app.scroll_log_down(),
                         KeyCode::Char('g') | KeyCode::Home => app.scroll_log_to_top(),
                         KeyCode::Char('G') | KeyCode::End => app.scroll_log_to_bottom(),
-                        KeyCode::Tab | KeyCode::Char('s') => app.toggle_main_tab(),
-                        KeyCode::Char('v') => app.toggle_chart_mode(),
+                        KeyCode::Tab | KeyCode::Char('s') | KeyCode::Char('l') | KeyCode::Right => {
+                            app.next_tab()
+                        }
+                        KeyCode::Char('h') | KeyCode::Left => app.previous_tab(),
+                        KeyCode::Char('c') => app.toggle_compact_layout(),
                         KeyCode::Char('R') => app.refresh().await,
                         _ => {}
                     }
