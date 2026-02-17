@@ -6,6 +6,14 @@ use crate::keys;
 use crate::store::CkbadgerStore;
 use crate::types::{CompactConsumedCellInfo, LiveCellInfo};
 
+/// Aggregated cell statistics for a token.
+#[derive(Debug, Clone, Default)]
+pub struct TokenCellStats {
+    pub cells_count: i64,
+    pub total_capacity: i128,
+    pub total_occupied_capacity: i128,
+}
+
 impl CkbadgerStore {
     pub fn get_cell(
         &self,
@@ -298,6 +306,60 @@ impl CkbadgerStore {
         iter.flatten().next().is_some()
     }
 
+    /// Aggregate cell stats for a token (by type script hash).
+    /// Prefix-scans `cell_by_type` and multi-gets each cell's capacity/occupied_capacity.
+    pub fn aggregate_token_cell_stats(&self, type_hash: &[u8]) -> anyhow::Result<TokenCellStats> {
+        let mut stats = TokenCellStats {
+            cells_count: 0,
+            total_capacity: 0,
+            total_occupied_capacity: 0,
+        };
+
+        let cf = self.cf_cell_by_type();
+        let iter = self.iterator_cf(
+            cf,
+            rocksdb::IteratorMode::From(type_hash, rocksdb::Direction::Forward),
+        );
+
+        // Collect outpoints in batches for multi-get
+        let batch_size = 256;
+        let mut outpoints: Vec<(Vec<u8>, i16)> = Vec::with_capacity(batch_size);
+
+        for item in iter.flatten() {
+            let (key, _) = item;
+            if !key.starts_with(type_hash) {
+                break;
+            }
+            // Key: hash(32) + block_num(8) + outpoint(34) = 74 bytes
+            if key.len() >= 74 {
+                let (tx_hash, output_index) = keys::decode_outpoint(&key[40..74]);
+                outpoints.push((tx_hash, output_index));
+
+                if outpoints.len() >= batch_size {
+                    Self::accumulate_cell_stats(self, &outpoints, &mut stats);
+                    outpoints.clear();
+                }
+            }
+        }
+
+        // Flush remaining
+        if !outpoints.is_empty() {
+            Self::accumulate_cell_stats(self, &outpoints, &mut stats);
+        }
+
+        Ok(stats)
+    }
+
+    fn accumulate_cell_stats(&self, outpoints: &[(Vec<u8>, i16)], stats: &mut TokenCellStats) {
+        let refs: Vec<(&[u8], i16)> = outpoints.iter().map(|(h, i)| (h.as_slice(), *i)).collect();
+        let cells = self.get_cells_batch(&refs);
+        for cell in cells.values() {
+            stats.cells_count += 1;
+            stats.total_capacity += cell.capacity as i128;
+            stats.total_occupied_capacity += cell.occupied_capacity as i128;
+        }
+    }
+
     /// Return cells created after a given block number.
     pub fn cells_created_since(&self, block_number: i64) -> Vec<(Vec<u8>, i16, LiveCellInfo)> {
         let mut result = Vec::new();
@@ -312,5 +374,125 @@ impl CkbadgerStore {
             }
         }
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::CkbadgerStore;
+    use tempfile::TempDir;
+
+    fn test_store() -> (TempDir, CkbadgerStore) {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        (dir, store)
+    }
+
+    fn make_cell(capacity: i64, occupied: i64, type_hash: &[u8]) -> LiveCellInfo {
+        LiveCellInfo {
+            capacity,
+            created_at_block: 100,
+            lock_script_hash: vec![0xAA; 32],
+            lock_code_hash: vec![0xBB; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: Some(type_hash.to_vec()),
+            type_code_hash: Some(vec![0xCC; 32]),
+            data_size: 0,
+            occupied_capacity: occupied,
+        }
+    }
+
+    fn insert_cell(
+        store: &CkbadgerStore,
+        tx_hash: &[u8],
+        output_index: i16,
+        type_hash: &[u8],
+        cell: &LiveCellInfo,
+    ) {
+        // Write to live_cells
+        let outpoint_key = keys::encode_outpoint(tx_hash, output_index);
+        let value = bincode::serialize(cell).unwrap();
+        store
+            .put_cf(store.cf_live_cells(), &outpoint_key, &value)
+            .unwrap();
+
+        // Write to cell_by_type index
+        let idx_key =
+            keys::encode_cell_index_key(type_hash, cell.created_at_block, tx_hash, output_index);
+        store
+            .put_cf(store.cf_cell_by_type(), &idx_key, &[])
+            .unwrap();
+    }
+
+    #[test]
+    fn test_aggregate_token_cell_stats_empty() {
+        let (_dir, store) = test_store();
+        let type_hash = [0x01u8; 32];
+        let stats = store.aggregate_token_cell_stats(&type_hash).unwrap();
+        assert_eq!(stats.cells_count, 0);
+        assert_eq!(stats.total_capacity, 0);
+        assert_eq!(stats.total_occupied_capacity, 0);
+    }
+
+    #[test]
+    fn test_aggregate_token_cell_stats_single_cell() {
+        let (_dir, store) = test_store();
+        let type_hash = [0x01u8; 32];
+        let tx_hash = [0x11u8; 32];
+        let cell = make_cell(200_00000000, 61_00000000, &type_hash);
+        insert_cell(&store, &tx_hash, 0, &type_hash, &cell);
+
+        let stats = store.aggregate_token_cell_stats(&type_hash).unwrap();
+        assert_eq!(stats.cells_count, 1);
+        assert_eq!(stats.total_capacity, 200_00000000);
+        assert_eq!(stats.total_occupied_capacity, 61_00000000);
+    }
+
+    #[test]
+    fn test_aggregate_token_cell_stats_multiple_cells() {
+        let (_dir, store) = test_store();
+        let type_hash = [0x01u8; 32];
+
+        let tx1 = [0x11u8; 32];
+        let cell1 = make_cell(200_00000000, 61_00000000, &type_hash);
+        insert_cell(&store, &tx1, 0, &type_hash, &cell1);
+
+        let tx2 = [0x22u8; 32];
+        let cell2 = make_cell(300_00000000, 80_00000000, &type_hash);
+        insert_cell(&store, &tx2, 0, &type_hash, &cell2);
+
+        let tx3 = [0x33u8; 32];
+        let cell3 = make_cell(150_00000000, 61_00000000, &type_hash);
+        insert_cell(&store, &tx3, 1, &type_hash, &cell3);
+
+        let stats = store.aggregate_token_cell_stats(&type_hash).unwrap();
+        assert_eq!(stats.cells_count, 3);
+        assert_eq!(stats.total_capacity, 650_00000000);
+        assert_eq!(stats.total_occupied_capacity, 202_00000000);
+    }
+
+    #[test]
+    fn test_aggregate_token_cell_stats_different_types_isolated() {
+        let (_dir, store) = test_store();
+        let type_a = [0x01u8; 32];
+        let type_b = [0x02u8; 32];
+
+        let tx1 = [0x11u8; 32];
+        let cell1 = make_cell(200_00000000, 61_00000000, &type_a);
+        insert_cell(&store, &tx1, 0, &type_a, &cell1);
+
+        let tx2 = [0x22u8; 32];
+        let cell2 = make_cell(500_00000000, 100_00000000, &type_b);
+        insert_cell(&store, &tx2, 0, &type_b, &cell2);
+
+        let stats_a = store.aggregate_token_cell_stats(&type_a).unwrap();
+        assert_eq!(stats_a.cells_count, 1);
+        assert_eq!(stats_a.total_capacity, 200_00000000);
+
+        let stats_b = store.aggregate_token_cell_stats(&type_b).unwrap();
+        assert_eq!(stats_b.cells_count, 1);
+        assert_eq!(stats_b.total_capacity, 500_00000000);
     }
 }

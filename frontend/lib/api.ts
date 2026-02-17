@@ -429,6 +429,9 @@ interface Token {
   holdersCount: number;
   transfersCount: number;
   transfers24h: number;
+  cellsCount: number | null;
+  totalCapacity: string | null;
+  totalOccupiedCapacity: string | null;
 }
 
 interface TokenHolder {

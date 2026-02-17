@@ -41,6 +41,7 @@ mod token_ops;
 mod tx_ops;
 
 pub use batch::StoreBatch;
+pub use cell_ops::TokenCellStats;
 pub use pagination::PaginatedResult;
 pub use reorg_ops::RollbackResult;
 pub use store::{CkbadgerStore, ALL_CFS};

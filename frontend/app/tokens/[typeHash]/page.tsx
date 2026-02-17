@@ -21,12 +21,12 @@ import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { api, TokenHolder, TokenTransfer } from '@/lib/api';
-import { formatTimeAgo } from '@/lib/utils';
+import { formatTimeAgo, formatCkbCompact, formatCkbAmount } from '@/lib/utils';
 
 export default function TokenDetailPage() {
   const params = useParams();
   const typeHash = params.typeHash as string;
-  const [activeTab, setActiveTab] = useState('holders');
+  const [activeTab, setActiveTab] = useState('transfers');
 
   const holdersPagination = useCursorPagination();
   const transfersPagination = useCursorPagination();
@@ -163,11 +163,13 @@ export default function TokenDetailPage() {
           </div>
         )}
 
-        <div className="mb-6 grid gap-6 lg:grid-cols-2">
+        <div
+          className={`mb-6 grid gap-6 ${token.operatorWebsite || token.manager || token.email ? 'lg:grid-cols-2' : ''}`}
+        >
           <TerminalPanel glow>
             <TerminalPanelHeader indicator="active">Overview</TerminalPanelHeader>
             <TerminalPanelContent>
-              <StatGrid columns={2}>
+              <StatGrid columns={token.operatorWebsite || token.manager || token.email ? 2 : 3}>
                 <StatBlock label="Holders" value={token.holdersCount} color="green" />
                 <StatBlock label="Transfers" value={token.transfersCount} color="amber" />
                 <StatBlock label="Decimals" value={token.decimals} color="white" />
@@ -182,7 +184,60 @@ export default function TokenDetailPage() {
                   })()}
                   color="green"
                 />
+                {token.cellsCount != null && (
+                  <StatBlock label="Cells" value={token.cellsCount} color="white" />
+                )}
+                {token.totalCapacity != null && (
+                  <StatBlock
+                    label="CKB Locked"
+                    value={formatCkbCompact(token.totalCapacity).value}
+                    suffix=" CKB"
+                    color="green"
+                  />
+                )}
               </StatGrid>
+              {token.totalCapacity != null &&
+                token.totalOccupiedCapacity != null &&
+                (() => {
+                  const totalBig = BigInt(token.totalCapacity);
+                  const occupiedBig = BigInt(token.totalOccupiedCapacity);
+                  if (totalBig <= BigInt(0)) return null;
+                  const freeBig = totalBig - occupiedBig;
+                  const ratio = Number((occupiedBig * BigInt(10000)) / totalBig) / 100;
+                  return (
+                    <div className="mt-6">
+                      <div className="mb-2 flex items-center justify-between">
+                        <span className="font-mono text-xs uppercase tracking-wider text-slate-500">
+                          Capacity Utilization
+                        </span>
+                        <span className="font-mono text-xs text-slate-400">
+                          {ratio.toFixed(1)}% occupied
+                        </span>
+                      </div>
+                      <div className="flex h-3 w-full overflow-hidden rounded-sm bg-slate-800">
+                        <div
+                          className="bg-amber transition-all duration-300"
+                          style={{ width: `${Math.max(ratio, 0.5)}%` }}
+                        />
+                        <div className="bg-terminal-green/30 flex-1" />
+                      </div>
+                      <div className="mt-1.5 flex items-center justify-between">
+                        <span
+                          className="text-amber font-mono text-xs"
+                          title={formatCkbAmount(token.totalOccupiedCapacity).full + ' CKB'}
+                        >
+                          Occupied: {formatCkbCompact(token.totalOccupiedCapacity).value} CKB
+                        </span>
+                        <span
+                          className="text-terminal-green font-mono text-xs"
+                          title={formatCkbAmount(freeBig.toString()).full + ' CKB'}
+                        >
+                          Free: {formatCkbCompact(freeBig.toString()).value} CKB
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })()}
               {token.description && (
                 <div className="mt-4 border-t border-slate-800 pt-4">
                   <div className="font-mono text-xs uppercase tracking-wider text-slate-500">

@@ -70,6 +70,9 @@ pub struct TokenResponse {
     pub holders_count: i32,
     pub transfers_count: i64,
     pub transfers_24h: i64,
+    pub cells_count: Option<i64>,
+    pub total_capacity: Option<String>,
+    pub total_occupied_capacity: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -101,6 +104,7 @@ fn token_info_to_response(
     info: &ckbadger_store::TokenInfo,
     transfers_count: i64,
     transfers_24h: i64,
+    cell_stats: Option<ckbadger_store::TokenCellStats>,
 ) -> TokenResponse {
     TokenResponse {
         type_script_hash: format!("0x{}", hex::encode(type_hash)),
@@ -127,6 +131,11 @@ fn token_info_to_response(
         holders_count: info.holders_count as i32,
         transfers_count,
         transfers_24h,
+        cells_count: cell_stats.as_ref().map(|s| s.cells_count),
+        total_capacity: cell_stats.as_ref().map(|s| s.total_capacity.to_string()),
+        total_occupied_capacity: cell_stats
+            .as_ref()
+            .map(|s| s.total_occupied_capacity.to_string()),
     }
 }
 
@@ -243,6 +252,9 @@ fn serve_tokens_from_cache(
             holders_count: entry.holders_count as i32,
             transfers_count: entry.transfers_count,
             transfers_24h: entry.transfers_24h,
+            cells_count: None,
+            total_capacity: None,
+            total_occupied_capacity: None,
         })
         .collect();
 
@@ -342,7 +354,7 @@ fn serve_tokens_from_store(
                 .store
                 .get_token_24h_transfers(type_hash, now_ms)
                 .unwrap_or(0);
-            token_info_to_response(type_hash, info, transfers_count, transfers_24h)
+            token_info_to_response(type_hash, info, transfers_count, transfers_24h, None)
         })
         .collect();
 
@@ -374,11 +386,13 @@ async fn get_token(
                 .store
                 .get_token_24h_transfers(&hash, now_ms)
                 .unwrap_or(0);
+            let cell_stats = state.store.aggregate_token_cell_stats(&hash).ok();
             ok(token_info_to_response(
                 &hash,
                 &info,
                 transfers_count,
                 transfers_24h,
+                cell_stats,
             ))
         }
         None => Err(ApiError::not_found("Token not found")),

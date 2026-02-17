@@ -21,9 +21,7 @@ use ckbadger_store::CkbadgerStore;
 use crate::cache::CacheInvalidator;
 use crate::config::{Config, DEEP_FORK_DEPTH};
 use crate::db::writer::hodl_wave::HodlWaveTracker;
-use crate::db::{
-    rebuild_cell_indices, BatchWriter, ReorgResult, Repository, SecondaryIssuanceBreakdown,
-};
+use crate::db::{BatchWriter, ReorgResult, Repository, SecondaryIssuanceBreakdown};
 use crate::parser::{
     BlockParser, CellParser, DaoParser, DotbitParser, MnftParser, SporeParser, TransactionParser,
     UdtParser,
@@ -1637,17 +1635,6 @@ impl Indexer {
                 store_compact.trigger_full_compaction();
             });
 
-            // Rebuild cell secondary indices (skipped during bulk sync)
-            info!("Starting cell index rebuild from LIVE_CELLS");
-            let store_rebuild = Arc::clone(self.writer.store());
-            let pause_flag = Arc::clone(&self.rebuild_pause_flag);
-            pause_flag.store(true, Ordering::SeqCst);
-            tokio::task::spawn_blocking(move || {
-                rebuild_cell_indices(&store_rebuild);
-                pause_flag.store(false, Ordering::SeqCst);
-                info!("Cell index rebuild finished, resuming sync");
-            });
-
             self.maybe_start_label_import();
         }
 
@@ -1932,7 +1919,7 @@ impl Indexer {
             }
             if !all_cells.is_empty() {
                 self.writer
-                    .insert_cells_batch(&all_cells, &mut batch, bulk_sync_mode)?;
+                    .insert_cells_batch(&all_cells, &mut batch, false)?;
             }
             batch.commit()?;
         }
@@ -2054,7 +2041,7 @@ impl Indexer {
                 &input_cell_info,
                 &batch_cell_infos,
                 &mut consume_addr_batch,
-                bulk_sync_mode,
+                false,
             )?;
         }
 
@@ -3418,13 +3405,13 @@ impl Indexer {
 
             let tt;
             (batch_stats, tt) = std::thread::scope(|s| -> Result<(BatchStats, [f64; 7])> {
-                // T1: Cells + Consumption (index CFs deferred to post-bulk rebuild)
-                // CFs: LIVE_CELLS, CONSUMED_CELLS
+                // T1: Cells + Consumption + cell index CFs
+                // CFs: LIVE_CELLS, CONSUMED_CELLS, CELL_BY_LOCK, CELL_BY_TYPE, etc.
                 let h1 = s.spawn(|| -> Result<f64> {
                     let t = Instant::now();
                     let mut batch = StoreBatch::new(store);
                     if !all_cells.is_empty() {
-                        writer.insert_cells_batch(&all_cells, &mut batch, true)?;
+                        writer.insert_cells_batch(&all_cells, &mut batch, false)?;
                     }
                     if !all_consumptions.is_empty() {
                         writer.consume_cells_batch_preloaded(
@@ -3432,7 +3419,7 @@ impl Indexer {
                             &input_cell_info,
                             &batch_cell_infos,
                             &mut batch,
-                            true,
+                            false,
                         )?;
                     }
                     batch.commit_no_wal()?;
