@@ -340,7 +340,7 @@ impl Indexer {
         };
 
         let progress = Arc::new(SyncProgress::new(tip_number as u64, chain_tip));
-        progress.start_sampler();
+        progress.start_refresher();
         let cell_cache = Arc::new(DashMap::with_capacity(CELL_CACHE_CAPACITY));
         let udt_cell_cache = Arc::new(DashMap::with_capacity(UDT_CELL_CACHE_CAPACITY));
 
@@ -1314,10 +1314,8 @@ impl Indexer {
                     }
 
                     if let Some(last_block) = all_parsed_blocks.last() {
-                        self.progress.update_current_batch(
-                            last_block.number as u64,
-                            all_parsed_blocks.len() as u64,
-                        );
+                        self.progress
+                            .record_batch(last_block.number as u64, all_parsed_blocks.len() as u64);
 
                         let mode = if self.is_bulk_sync_active() {
                             "[BULK]"
@@ -1568,7 +1566,7 @@ impl Indexer {
         if let Some(last_block_response) = blocks.last() {
             let last_block_number = BlockParser::parse_block_number(&last_block_response.block);
             self.progress
-                .update_current_batch(last_block_number, blocks.len() as u64);
+                .record_batch(last_block_number, blocks.len() as u64);
 
             let partition_range = format_partition_range(start_block, end_block);
             let boundary_info = if crosses_partition_boundary(start_block, end_block) {
