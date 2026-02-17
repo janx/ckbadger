@@ -64,7 +64,7 @@ pnpm test:e2e                            # Playwright tests
 # Data Integrity Verification (requires running API at localhost:3001)
 cargo run -p ckbadger-indexer -- verify --depth fast        # Quick checks (seconds)
 cargo run -p ckbadger-indexer -- verify --depth sampling    # Sampling + explorer (minutes)
-cargo run -p ckbadger-indexer -- verify --list-checks       # List all 18 checks
+cargo run -p ckbadger-indexer -- verify --list-checks       # List all 28 checks
 cargo run -p ckbadger-indexer -- verify --no-explorer       # Skip explorer HTTP checks
 cargo run -p ckbadger-indexer -- verify --api-url http://localhost:3001/api/v1  # Custom API URL
 cargo run -p ckbadger-indexer -- verify --rpc-url http://localhost:8114         # Add RPC spot-checks
@@ -82,7 +82,7 @@ pnpm format                              # Prettier (all files)
 crates/
   api/            # Axum REST/WebSocket server (port 3001)
   indexer/        # Blockchain sync daemon (three-stage pipeline)
-    src/verify/   #   Data integrity verification suite (38 checks across 4 tiers)
+    src/verify/   #   Data integrity verification suite (28 checks across 2 tiers)
   ckbadger-store/ # Embedded RocksDB storage engine
   common/         # Shared types (block, cell, tx, script, error)
   ckb-store-reader/ # Read-only CKB RocksDB reader (optional direct read mode)
@@ -317,11 +317,11 @@ cargo run -p ckbadger-indexer -- verify --checks genesis_block,dao_statistics_sa
 
 ### Check Tiers
 
-| Tier                 | Checks | Runtime | What it validates                                                                                                        |
-| -------------------- | ------ | ------- | ------------------------------------------------------------------------------------------------------------------------ |
-| **Fast** (F1-F6)     | 6      | seconds | API reachable, sync complete, genesis block, tip block, deep fork clear, DAO statistics sane                             |
-| **Sampling** (S1-S7) | 7      | minutes | Block hash roundtrip, parent chain, address balance spot-check, chart validations (tx count, cells, supply), RPC compare |
-| **Explorer** (X1-X5) | 5      | minutes | Compare last 30 days against official CKB explorer API (tx count, DAO deposit, hash rate, difficulty, knowledge size)    |
+| Tier                  | Checks | Runtime | What it validates                                                                                                                                                                                                   |
+| --------------------- | ------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Fast** (F1-F6)      | 6      | seconds | API reachable, sync complete, genesis block, tip block, deep fork clear, DAO statistics sane                                                                                                                        |
+| **Sampling** (S1-S7)  | 7      | minutes | Block hash roundtrip, parent chain, address balance spot-check, chart validations (tx count, cells, supply), RPC compare                                                                                            |
+| **Explorer** (X1-X15) | 15     | minutes | Compare last 30 days against official CKB explorer API (tx count, DAO deposit, hash rate, difficulty, knowledge size, uncle rate, cell counts, daily deposit, circulation ratio, supply, burnt, secondary issuance) |
 
 ### Explorer Response Cache
 

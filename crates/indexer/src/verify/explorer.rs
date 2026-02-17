@@ -29,6 +29,19 @@ struct ChartResponse {
     data: Vec<ChartDataPoint>,
 }
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StackedAreaDataPoint {
+    date: String,
+    values: HashMap<String, String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StackedAreaChartResponse {
+    data: Vec<StackedAreaDataPoint>,
+}
+
 // ---------------------------------------------------------------------------
 // Explorer API caching
 // ---------------------------------------------------------------------------
@@ -207,6 +220,17 @@ fn api_get<T: serde::de::DeserializeOwned>(ctx: &CheckContext, path: &str) -> an
     Ok(resp.json()?)
 }
 
+/// Normalize date string to "YYYY-MM-DD" format.
+/// Handles "YYYYMMDD", "YYYY/MM/DD", and "YYYY-MM-DD" inputs.
+fn normalize_date(date: &str) -> String {
+    let d = date.replace('/', "-");
+    if d.len() == 8 && !d.contains('-') {
+        format!("{}-{}-{}", &d[0..4], &d[4..6], &d[6..8])
+    } else {
+        d
+    }
+}
+
 /// Fetch our chart data as a date→value map. Works for simple ChartResponse endpoints.
 fn fetch_our_chart(
     ctx: &CheckContext,
@@ -215,7 +239,23 @@ fn fetch_our_chart(
     let wrapper: ChartResponse = api_get(ctx, chart_path)?;
     let mut map = HashMap::new();
     for point in wrapper.data {
-        map.insert(point.date, point.value);
+        map.insert(normalize_date(&point.date), point.value);
+    }
+    Ok(map)
+}
+
+/// Fetch our stacked area chart data and extract a specific series key as a date→value map.
+fn fetch_our_stacked_chart(
+    ctx: &CheckContext,
+    chart_path: &str,
+    series_key: &str,
+) -> anyhow::Result<HashMap<String, String>> {
+    let wrapper: StackedAreaChartResponse = api_get(ctx, chart_path)?;
+    let mut map = HashMap::new();
+    for point in wrapper.data {
+        if let Some(val) = point.values.get(series_key) {
+            map.insert(normalize_date(&point.date), val.clone());
+        }
     }
     Ok(map)
 }
@@ -337,8 +377,80 @@ fn last_30_days() -> Vec<String> {
         .collect()
 }
 
+// ---------------------------------------------------------------------------
+// Common explorer check runner to reduce boilerplate
+// ---------------------------------------------------------------------------
+
+/// Run a tolerance-based explorer comparison over the last 30 days.
+/// `value_transform` converts (our_value_str, explorer_value_str) → (our_f64, explorer_f64).
+fn run_tolerance_explorer_check(
+    our_data: &HashMap<String, String>,
+    explorer_data: &HashMap<String, String>,
+    progress: &ProgressReporter,
+    label: &str,
+    tolerance: f64,
+    value_transform: impl Fn(&str, &str) -> Option<(f64, f64)>,
+) -> CheckResult {
+    let dates = last_30_days();
+    let mut findings = vec![];
+    let mut checked = 0u64;
+
+    for date in &dates {
+        if let (Some(our_val), Some(explorer_val)) = (our_data.get(date), explorer_data.get(date)) {
+            if let Some((ours, theirs)) = value_transform(our_val, explorer_val) {
+                if let Some(f) = compare_tolerance_f64_values(ours, theirs, date, label, tolerance)
+                {
+                    findings.push(f);
+                }
+            }
+            checked += 1;
+        }
+        progress.inc(1);
+    }
+
+    if findings.is_empty() {
+        CheckResult::pass(checked)
+    } else {
+        CheckResult::fail(checked, findings)
+    }
+}
+
+/// Compare two f64 values with tolerance (like `compare_tolerance_f64` but takes f64 directly).
+fn compare_tolerance_f64_values(
+    ours: f64,
+    theirs: f64,
+    date: &str,
+    label: &str,
+    tolerance: f64,
+) -> Option<Finding> {
+    if theirs == 0.0 && ours == 0.0 {
+        return None;
+    }
+    let denom = if theirs.abs() > f64::EPSILON {
+        theirs.abs()
+    } else {
+        1.0
+    };
+    let deviation = ((ours - theirs) / denom).abs();
+    if deviation > tolerance {
+        Some(Finding {
+            entity: date.to_string(),
+            details: vec![format!(
+                "{}: ours={:.6}, explorer={:.6} (deviation: {:.4}%, tolerance: {:.4}%)",
+                label,
+                ours,
+                theirs,
+                deviation * 100.0,
+                tolerance * 100.0,
+            )],
+        })
+    } else {
+        None
+    }
+}
+
 // ============================================
-// Explorer checks (X1-X5)
+// Explorer checks (X1-X15)
 // ============================================
 
 /// X1: Compare /charts/transaction-count last 30 days vs explorer transactions_count.
@@ -589,14 +701,403 @@ impl Check for ExplorerKnowledgeSize {
     }
 }
 
+/// X6: Compare /charts/uncle-rate vs explorer uncle_rate (tolerance-based).
+pub struct ExplorerUncleRate;
+
+impl Check for ExplorerUncleRate {
+    fn name(&self) -> &'static str {
+        "explorer_uncle_rate"
+    }
+    fn description(&self) -> &'static str {
+        "Daily uncle_rate vs explorer"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn requires_explorer(&self) -> bool {
+        true
+    }
+    fn estimated_total(&self, _ctx: &CheckContext) -> Option<u64> {
+        Some(30)
+    }
+    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let explorer_data = fetch_explorer_daily(ctx, "uncle_rate", "uncle_rate")?;
+        let our_data = fetch_our_chart(ctx, "charts/uncle-rate")?;
+        Ok(run_tolerance_explorer_check(
+            &our_data,
+            &explorer_data,
+            progress,
+            "uncle_rate",
+            0.002,
+            |ours, theirs| {
+                let o: f64 = ours.parse().ok()?;
+                let t: f64 = theirs.parse().ok()?;
+                Some((o, t))
+            },
+        ))
+    }
+}
+
+/// X7: Compare /charts/cell-count (liveCells) vs explorer live_cells_count (tolerance-based).
+pub struct ExplorerLiveCellCount;
+
+impl Check for ExplorerLiveCellCount {
+    fn name(&self) -> &'static str {
+        "explorer_live_cell_count"
+    }
+    fn description(&self) -> &'static str {
+        "Daily live_cells_count vs explorer"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn requires_explorer(&self) -> bool {
+        true
+    }
+    fn estimated_total(&self, _ctx: &CheckContext) -> Option<u64> {
+        Some(30)
+    }
+    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let explorer_data = fetch_explorer_daily(ctx, "live_cells_count", "live_cells_count")?;
+        let our_data = fetch_our_stacked_chart(ctx, "charts/cell-count", "liveCells")?;
+        Ok(run_tolerance_explorer_check(
+            &our_data,
+            &explorer_data,
+            progress,
+            "live_cells_count",
+            0.002,
+            |ours, theirs| {
+                let o: f64 = ours.parse().ok()?;
+                let t: f64 = theirs.parse().ok()?;
+                Some((o, t))
+            },
+        ))
+    }
+}
+
+/// X8: Compare /charts/cell-count (deadCells) vs explorer dead_cells_count (tolerance-based).
+pub struct ExplorerDeadCellCount;
+
+impl Check for ExplorerDeadCellCount {
+    fn name(&self) -> &'static str {
+        "explorer_dead_cell_count"
+    }
+    fn description(&self) -> &'static str {
+        "Daily dead_cells_count vs explorer"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn requires_explorer(&self) -> bool {
+        true
+    }
+    fn estimated_total(&self, _ctx: &CheckContext) -> Option<u64> {
+        Some(30)
+    }
+    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let explorer_data = fetch_explorer_daily(ctx, "dead_cells_count", "dead_cells_count")?;
+        let our_data = fetch_our_stacked_chart(ctx, "charts/cell-count", "deadCells")?;
+        Ok(run_tolerance_explorer_check(
+            &our_data,
+            &explorer_data,
+            progress,
+            "dead_cells_count",
+            0.002,
+            |ours, theirs| {
+                let o: f64 = ours.parse().ok()?;
+                let t: f64 = theirs.parse().ok()?;
+                Some((o, t))
+            },
+        ))
+    }
+}
+
+/// X9: Compare /dao/charts/daily-deposit vs explorer daily_dao_deposit (tolerance-based).
+/// Our API returns CKB, explorer returns shannons.
+pub struct ExplorerDailyDeposit;
+
+impl Check for ExplorerDailyDeposit {
+    fn name(&self) -> &'static str {
+        "explorer_daily_deposit"
+    }
+    fn description(&self) -> &'static str {
+        "Daily daily_dao_deposit vs explorer"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn requires_explorer(&self) -> bool {
+        true
+    }
+    fn estimated_total(&self, _ctx: &CheckContext) -> Option<u64> {
+        Some(30)
+    }
+    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let explorer_data = fetch_explorer_daily(ctx, "daily_dao_deposit", "daily_dao_deposit")?;
+        let our_data = fetch_our_chart(ctx, "dao/charts/daily-deposit")?;
+        Ok(run_tolerance_explorer_check(
+            &our_data,
+            &explorer_data,
+            progress,
+            "daily_dao_deposit",
+            0.002,
+            |ours, theirs| {
+                let o = parse_ckb_to_shannon(ours)? as f64;
+                let t: f64 = theirs.parse().ok()?;
+                Some((o, t))
+            },
+        ))
+    }
+}
+
+/// X10: Compare /dao/charts/circulation-ratio vs explorer circulation_ratio (tolerance-based).
+/// Our API returns percentage (e.g., "15.5600"), explorer returns decimal (e.g., "0.1556").
+pub struct ExplorerCirculationRatio;
+
+impl Check for ExplorerCirculationRatio {
+    fn name(&self) -> &'static str {
+        "explorer_circulation_ratio"
+    }
+    fn description(&self) -> &'static str {
+        "Daily circulation_ratio vs explorer"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn requires_explorer(&self) -> bool {
+        true
+    }
+    fn estimated_total(&self, _ctx: &CheckContext) -> Option<u64> {
+        Some(30)
+    }
+    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let explorer_data = fetch_explorer_daily(ctx, "circulation_ratio", "circulation_ratio")?;
+        let our_data = fetch_our_chart(ctx, "dao/charts/circulation-ratio")?;
+        Ok(run_tolerance_explorer_check(
+            &our_data,
+            &explorer_data,
+            progress,
+            "circulation_ratio",
+            0.01,
+            |ours, theirs| {
+                let o: f64 = ours.parse().ok()?;
+                let t: f64 = theirs.parse().ok()?;
+                // Explorer returns decimal fraction, our API returns percentage
+                Some((o, t * 100.0))
+            },
+        ))
+    }
+}
+
+/// X11: Compare /charts/total-supply (circulating) vs explorer circulating_supply (tolerance-based).
+/// Our API returns CKB, explorer returns shannons.
+pub struct ExplorerCirculatingSupply;
+
+impl Check for ExplorerCirculatingSupply {
+    fn name(&self) -> &'static str {
+        "explorer_circulating_supply"
+    }
+    fn description(&self) -> &'static str {
+        "Daily circulating_supply vs explorer"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn requires_explorer(&self) -> bool {
+        true
+    }
+    fn estimated_total(&self, _ctx: &CheckContext) -> Option<u64> {
+        Some(30)
+    }
+    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let explorer_data = fetch_explorer_daily(ctx, "circulating_supply", "circulating_supply")?;
+        let our_data = fetch_our_stacked_chart(ctx, "charts/total-supply", "circulating")?;
+        Ok(run_tolerance_explorer_check(
+            &our_data,
+            &explorer_data,
+            progress,
+            "circulating_supply",
+            0.002,
+            |ours, theirs| {
+                let o = parse_ckb_to_shannon(ours)? as f64;
+                let t: f64 = theirs.parse().ok()?;
+                Some((o, t))
+            },
+        ))
+    }
+}
+
+/// X12: Compare /charts/total-supply (burnt) vs explorer burnt (tolerance-based).
+/// Our API returns CKB, explorer returns shannons.
+pub struct ExplorerBurnt;
+
+impl Check for ExplorerBurnt {
+    fn name(&self) -> &'static str {
+        "explorer_burnt"
+    }
+    fn description(&self) -> &'static str {
+        "Daily burnt vs explorer"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn requires_explorer(&self) -> bool {
+        true
+    }
+    fn estimated_total(&self, _ctx: &CheckContext) -> Option<u64> {
+        Some(30)
+    }
+    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let explorer_data = fetch_explorer_daily(ctx, "burnt", "burnt")?;
+        let our_data = fetch_our_stacked_chart(ctx, "charts/total-supply", "burnt")?;
+        Ok(run_tolerance_explorer_check(
+            &our_data,
+            &explorer_data,
+            progress,
+            "burnt",
+            0.002,
+            |ours, theirs| {
+                let o = parse_ckb_to_shannon(ours)? as f64;
+                let t: f64 = theirs.parse().ok()?;
+                Some((o, t))
+            },
+        ))
+    }
+}
+
+/// X13: Compare /charts/secondary-issuance (compensation) vs explorer deposit_compensation (tolerance-based).
+/// Our API returns CKB, explorer returns shannons.
+pub struct ExplorerDepositCompensation;
+
+impl Check for ExplorerDepositCompensation {
+    fn name(&self) -> &'static str {
+        "explorer_deposit_compensation"
+    }
+    fn description(&self) -> &'static str {
+        "Daily deposit_compensation vs explorer"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn requires_explorer(&self) -> bool {
+        true
+    }
+    fn estimated_total(&self, _ctx: &CheckContext) -> Option<u64> {
+        Some(30)
+    }
+    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let explorer_data =
+            fetch_explorer_daily(ctx, "deposit_compensation", "deposit_compensation")?;
+        let our_data = fetch_our_stacked_chart(ctx, "charts/secondary-issuance", "compensation")?;
+        Ok(run_tolerance_explorer_check(
+            &our_data,
+            &explorer_data,
+            progress,
+            "deposit_compensation",
+            0.002,
+            |ours, theirs| {
+                let o = parse_ckb_to_shannon(ours)? as f64;
+                let t: f64 = theirs.parse().ok()?;
+                Some((o, t))
+            },
+        ))
+    }
+}
+
+/// X14: Compare /charts/secondary-issuance (mining) vs explorer mining_reward (tolerance-based).
+/// Our API returns CKB, explorer returns shannons.
+pub struct ExplorerMiningReward;
+
+impl Check for ExplorerMiningReward {
+    fn name(&self) -> &'static str {
+        "explorer_mining_reward"
+    }
+    fn description(&self) -> &'static str {
+        "Daily mining_reward vs explorer"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn requires_explorer(&self) -> bool {
+        true
+    }
+    fn estimated_total(&self, _ctx: &CheckContext) -> Option<u64> {
+        Some(30)
+    }
+    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let explorer_data = fetch_explorer_daily(ctx, "mining_reward", "mining_reward")?;
+        let our_data = fetch_our_stacked_chart(ctx, "charts/secondary-issuance", "mining")?;
+        Ok(run_tolerance_explorer_check(
+            &our_data,
+            &explorer_data,
+            progress,
+            "mining_reward",
+            0.002,
+            |ours, theirs| {
+                let o = parse_ckb_to_shannon(ours)? as f64;
+                let t: f64 = theirs.parse().ok()?;
+                Some((o, t))
+            },
+        ))
+    }
+}
+
+/// X15: Compare /charts/secondary-issuance (burnt) vs explorer treasury_amount (tolerance-based).
+/// Our API returns CKB, explorer returns shannons.
+pub struct ExplorerTreasuryAmount;
+
+impl Check for ExplorerTreasuryAmount {
+    fn name(&self) -> &'static str {
+        "explorer_treasury_amount"
+    }
+    fn description(&self) -> &'static str {
+        "Daily treasury_amount vs explorer"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn requires_explorer(&self) -> bool {
+        true
+    }
+    fn estimated_total(&self, _ctx: &CheckContext) -> Option<u64> {
+        Some(30)
+    }
+    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let explorer_data = fetch_explorer_daily(ctx, "treasury_amount", "treasury_amount")?;
+        let our_data = fetch_our_stacked_chart(ctx, "charts/secondary-issuance", "burnt")?;
+        Ok(run_tolerance_explorer_check(
+            &our_data,
+            &explorer_data,
+            progress,
+            "treasury_amount",
+            0.002,
+            |ours, theirs| {
+                let o = parse_ckb_to_shannon(ours)? as f64;
+                let t: f64 = theirs.parse().ok()?;
+                Some((o, t))
+            },
+        ))
+    }
+}
+
 /// Return all explorer comparison checks.
 pub fn explorer_checks() -> Vec<Box<dyn Check>> {
     vec![
-        Box::new(ExplorerTxCount),
-        Box::new(ExplorerTotalDeposit),
-        Box::new(ExplorerHashRate),
-        Box::new(ExplorerDifficulty),
-        Box::new(ExplorerKnowledgeSize),
+        Box::new(ExplorerTxCount),             // X1
+        Box::new(ExplorerTotalDeposit),        // X2
+        Box::new(ExplorerHashRate),            // X3
+        Box::new(ExplorerDifficulty),          // X4
+        Box::new(ExplorerKnowledgeSize),       // X5
+        Box::new(ExplorerUncleRate),           // X6
+        Box::new(ExplorerLiveCellCount),       // X7
+        Box::new(ExplorerDeadCellCount),       // X8
+        Box::new(ExplorerDailyDeposit),        // X9
+        Box::new(ExplorerCirculationRatio),    // X10
+        Box::new(ExplorerCirculatingSupply),   // X11
+        Box::new(ExplorerBurnt),               // X12
+        Box::new(ExplorerDepositCompensation), // X13
+        Box::new(ExplorerMiningReward),        // X14
+        Box::new(ExplorerTreasuryAmount),      // X15
     ]
 }
 
@@ -648,5 +1149,20 @@ mod tests {
             .trim_end_matches('0')
             .to_string();
         assert_eq!(parse_ckb_to_shannon(&ckb_str), Some(shannons as i128));
+    }
+
+    #[test]
+    fn test_normalize_date_slash_format() {
+        assert_eq!(normalize_date("2024/01/15"), "2024-01-15");
+    }
+
+    #[test]
+    fn test_normalize_date_compact_format() {
+        assert_eq!(normalize_date("20240115"), "2024-01-15");
+    }
+
+    #[test]
+    fn test_normalize_date_already_normalized() {
+        assert_eq!(normalize_date("2024-01-15"), "2024-01-15");
     }
 }
