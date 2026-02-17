@@ -1101,10 +1101,11 @@ impl Indexer {
                         entry.6 += occupied_change;
                     }
                 }
-                // cell_cache eviction check
-                if cell_cache_for_parser.len() > CELL_CACHE_CAPACITY * 2 {
-                    cell_cache_for_parser.clear();
-                }
+                // NOTE: Do NOT clear cell_cache here. In pipeline mode, the
+                // parser runs ahead of the writer. Clearing would wipe entries
+                // from recently-parsed batches not yet committed to DB, causing
+                // the next batch's input lookups to silently miss — leading to
+                // wrong balance decrements. The writer handles safe eviction.
 
                 let precompute_parser_ms = t_precompute_parser.elapsed().as_secs_f64() * 1000.0;
                 let total_parser_ms = t_parser.elapsed().as_secs_f64() * 1000.0;
@@ -1869,7 +1870,12 @@ impl Indexer {
             }
         }
         if self.cell_cache.len() > CELL_CACHE_CAPACITY * 2 {
-            self.cell_cache.clear();
+            // In pipeline mode, the parser runs concurrently and may need
+            // cache entries from batches not yet committed to DB. Only evict
+            // entries from blocks already committed (before this batch).
+            let safe_cutoff = all_parsed_blocks.first().map(|b| b.number).unwrap_or(0);
+            self.cell_cache
+                .retain(|_, v| v.created_at_block >= safe_cutoff);
         }
 
         // Prepare all data for insertion
@@ -3500,8 +3506,29 @@ impl Indexer {
                         writer.insert_dao_deposits_batch(&all_dao_deposits, &mut batch)?;
                     }
 
-                    // consumed_dao_map was pre-fetched outside thread::scope
-                    if !consumed_dao_map.is_empty() {
+                    // Build a same-batch deposit map so that deposits created
+                    // and consumed within the same batch can be found.
+                    // consumed_dao_map was pre-fetched from DB before the batch,
+                    // so it misses deposits written above in this batch.
+                    let mut same_batch_dao_deposits: HashMap<
+                        (Vec<u8>, i16),
+                        (i64, Vec<u8>, i16, String, i64, i16),
+                    > = HashMap::new();
+                    for (deposit, block_number, _ts, _ar) in &all_dao_deposits {
+                        same_batch_dao_deposits.insert(
+                            (deposit.tx_hash.clone(), deposit.output_index as i16),
+                            (
+                                0,
+                                deposit.tx_hash.clone(),
+                                deposit.output_index as i16,
+                                deposit.capacity.to_string(),
+                                *block_number,
+                                0i16, // status = 0 (active)
+                            ),
+                        );
+                    }
+
+                    if !consumed_dao_map.is_empty() || !same_batch_dao_deposits.is_empty() {
                         use crate::db::DaoWithdrawalContextTrait;
                         #[derive(Clone)]
                         struct DaoWithdrawalContext {
@@ -3556,7 +3583,10 @@ impl Indexer {
                                         input.previous_tx_hash.to_vec(),
                                         input.previous_output_index as i16,
                                     );
-                                    if let Some(deposit_info) = consumed_dao_map.get(&key) {
+                                    if let Some(deposit_info) = consumed_dao_map
+                                        .get(&key)
+                                        .or_else(|| same_batch_dao_deposits.get(&key))
+                                    {
                                         consumed_deposits.push(deposit_info.clone());
                                     }
                                 }
@@ -4226,7 +4256,27 @@ impl Indexer {
                     HashMap::new()
                 };
 
-                if !consumed_dao_map.is_empty() {
+                // Build a same-batch deposit map for deposits created in this
+                // batch that may also be consumed within the same batch.
+                let mut same_batch_dao_deposits: HashMap<
+                    (Vec<u8>, i16),
+                    (i64, Vec<u8>, i16, String, i64, i16),
+                > = HashMap::new();
+                for (deposit, block_number, _ts, _ar) in &all_dao_deposits {
+                    same_batch_dao_deposits.insert(
+                        (deposit.tx_hash.clone(), deposit.output_index as i16),
+                        (
+                            0,
+                            deposit.tx_hash.clone(),
+                            deposit.output_index as i16,
+                            deposit.capacity.to_string(),
+                            *block_number,
+                            0i16, // status = 0 (active)
+                        ),
+                    );
+                }
+
+                if !consumed_dao_map.is_empty() || !same_batch_dao_deposits.is_empty() {
                     use crate::db::DaoWithdrawalContextTrait;
                     #[derive(Clone)]
                     struct DaoWithdrawalContext {
@@ -4272,7 +4322,10 @@ impl Indexer {
                                     input.previous_tx_hash.to_vec(),
                                     input.previous_output_index as i16,
                                 );
-                                if let Some(deposit_info) = consumed_dao_map.get(&key) {
+                                if let Some(deposit_info) = consumed_dao_map
+                                    .get(&key)
+                                    .or_else(|| same_batch_dao_deposits.get(&key))
+                                {
                                     consumed_deposits.push(deposit_info.clone());
                                 }
                             }

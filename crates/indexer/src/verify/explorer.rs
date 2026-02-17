@@ -268,6 +268,25 @@ fn compare_exact_i128(ours: i128, theirs: &str, date: &str, label: &str) -> Opti
     }
 }
 
+/// Parse a CKB decimal string (e.g. "270263243.54537001") back to shannons (i128).
+/// The API's `shannon_to_ckb` formats as `{integer}.{remainder:08}` with trailing zeros trimmed.
+fn parse_ckb_to_shannon(ckb: &str) -> Option<i128> {
+    const SHANNON_PER_CKB: i128 = 100_000_000;
+
+    if let Some(dot_pos) = ckb.find('.') {
+        let integer_part: i128 = ckb[..dot_pos].parse().ok()?;
+        let decimal_str = &ckb[dot_pos + 1..];
+        // Pad right to 8 digits (shannon_to_ckb uses {:08} format, then trims trailing zeros)
+        let padded = format!("{:0<8}", decimal_str);
+        let decimal_part: i128 = padded[..8].parse().ok()?;
+        Some(integer_part * SHANNON_PER_CKB + decimal_part)
+    } else {
+        // No decimal point — whole CKB value
+        let integer_part: i128 = ckb.parse().ok()?;
+        Some(integer_part * SHANNON_PER_CKB)
+    }
+}
+
 /// Compare float values with tolerance.
 fn compare_tolerance_f64(
     ours: f64,
@@ -399,7 +418,9 @@ impl Check for ExplorerTotalDeposit {
             if let (Some(our_val), Some(explorer_val)) =
                 (our_data.get(date), explorer_data.get(date))
             {
-                let ours: i128 = our_val.parse().unwrap_or(0);
+                // Our chart returns CKB (decimal string from shannon_to_ckb),
+                // explorer returns shannons. Convert ours back to shannons.
+                let ours: i128 = parse_ckb_to_shannon(our_val).unwrap_or(0);
                 if let Some(f) = compare_exact_i128(ours, explorer_val, date, "total_dao_deposit") {
                     findings.push(f);
                 }
@@ -577,4 +598,55 @@ pub fn explorer_checks() -> Vec<Box<dyn Check>> {
         Box::new(ExplorerDifficulty),
         Box::new(ExplorerKnowledgeSize),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_ckb_to_shannon_with_decimal() {
+        // "270263243.54537001" → 270263243 * 100_000_000 + 54537001
+        assert_eq!(
+            parse_ckb_to_shannon("270263243.54537001"),
+            Some(27026324354537001)
+        );
+    }
+
+    #[test]
+    fn test_parse_ckb_to_shannon_trimmed_zeros() {
+        // shannon_to_ckb trims trailing zeros: "100.5" means remainder=50000000
+        assert_eq!(
+            parse_ckb_to_shannon("100.5"),
+            Some(100 * 100_000_000 + 50_000_000)
+        );
+    }
+
+    #[test]
+    fn test_parse_ckb_to_shannon_whole_number() {
+        assert_eq!(parse_ckb_to_shannon("42"), Some(42 * 100_000_000));
+    }
+
+    #[test]
+    fn test_parse_ckb_to_shannon_zero() {
+        assert_eq!(parse_ckb_to_shannon("0"), Some(0));
+    }
+
+    #[test]
+    fn test_parse_ckb_to_shannon_full_precision() {
+        // 8 decimal places (no trimming)
+        assert_eq!(parse_ckb_to_shannon("1.00000001"), Some(100_000_001));
+    }
+
+    #[test]
+    fn test_parse_ckb_to_shannon_roundtrip() {
+        // Simulate what shannon_to_ckb produces for a known value
+        let shannons: u128 = 750_402_753_667_822_462;
+        let ckb = shannons / 100_000_000;
+        let remainder = shannons % 100_000_000;
+        let ckb_str = format!("{}.{:08}", ckb, remainder)
+            .trim_end_matches('0')
+            .to_string();
+        assert_eq!(parse_ckb_to_shannon(&ckb_str), Some(shannons as i128));
+    }
 }
