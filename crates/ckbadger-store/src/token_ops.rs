@@ -264,6 +264,28 @@ impl CkbadgerStore {
         Ok(results)
     }
 
+    /// Count holders for a token (prefix scan by type_hash).
+    ///
+    /// Counts entries with balance > 0 without collecting them.
+    pub fn count_token_holders(&self, type_hash: &[u8]) -> anyhow::Result<i64> {
+        let iter = self.prefix_iterator_cf(self.cf_token_holders(), type_hash);
+        let mut count: i64 = 0;
+
+        for item in iter.flatten() {
+            let (key, value) = item;
+            if !key.starts_with(type_hash) {
+                break;
+            }
+            if key.len() == 64 && value.len() == 16 {
+                let balance = i128::from_le_bytes(value[..16].try_into().unwrap());
+                if balance > 0 {
+                    count += 1;
+                }
+            }
+        }
+        Ok(count)
+    }
+
     /// List holders for a token (prefix scan by type_hash).
     ///
     /// Returns `(lock_hash, balance)` pairs, limited to `limit` results.
@@ -605,5 +627,49 @@ mod tests {
 
         let result = store.scan_all_nft_24h_transfers(now_ms).unwrap();
         assert_eq!(*result.get(coll_a.as_slice()).unwrap(), 10);
+    }
+
+    // ---- count_token_holders ----
+
+    #[test]
+    fn test_count_token_holders_empty() {
+        let (_dir, store) = test_store();
+        let type_hash = [0x01u8; 32];
+        assert_eq!(store.count_token_holders(&type_hash).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_count_token_holders_excludes_zero_balance() {
+        let (_dir, store) = test_store();
+        let type_hash = [0x01u8; 32];
+        let lock_a = [0x0Au8; 32];
+        let lock_b = [0x0Bu8; 32];
+        let lock_c = [0x0Cu8; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_token_holder(&type_hash, &lock_a, 100);
+        batch.put_token_holder(&type_hash, &lock_b, 0); // zero balance
+        batch.put_token_holder(&type_hash, &lock_c, 50);
+        batch.commit().unwrap();
+
+        assert_eq!(store.count_token_holders(&type_hash).unwrap(), 2);
+    }
+
+    #[test]
+    fn test_count_token_holders_different_tokens() {
+        let (_dir, store) = test_store();
+        let type_a = [0x01u8; 32];
+        let type_b = [0x02u8; 32];
+        let lock_a = [0x0Au8; 32];
+        let lock_b = [0x0Bu8; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_token_holder(&type_a, &lock_a, 100);
+        batch.put_token_holder(&type_a, &lock_b, 200);
+        batch.put_token_holder(&type_b, &lock_a, 50);
+        batch.commit().unwrap();
+
+        assert_eq!(store.count_token_holders(&type_a).unwrap(), 2);
+        assert_eq!(store.count_token_holders(&type_b).unwrap(), 1);
     }
 }

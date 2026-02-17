@@ -378,7 +378,7 @@ async fn get_token(
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     match info {
-        Some(info) => {
+        Some(mut info) => {
             let now_ms = chrono::Utc::now().timestamp_millis();
             // Read transfers_count from TokenInfo directly
             let transfers_count = info.transfers_count;
@@ -387,6 +387,11 @@ async fn get_token(
                 .get_token_24h_transfers(&hash, now_ms)
                 .unwrap_or(0);
             let cell_stats = state.store.aggregate_token_cell_stats(&hash).ok();
+            // Use real holder count from token_holders CF instead of
+            // potentially stale TokenInfo.holders_count.
+            if let Ok(real_count) = state.store.count_token_holders(&hash) {
+                info.holders_count = real_count;
+            }
             ok(token_info_to_response(
                 &hash,
                 &info,
@@ -407,15 +412,15 @@ async fn get_token_holders(
     let hash = hex::decode(type_hash.strip_prefix("0x").unwrap_or(&type_hash))
         .map_err(|_| ApiError::bad_request("Invalid type script hash"))?;
 
-    let token_info = state
+    // Verify the token exists.
+    let token_exists = state
         .store
         .get_token(&hash)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let holders_count = match token_info {
-        Some(info) => info.holders_count,
-        None => return Err(ApiError::not_found("Token not found")),
-    };
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .is_some();
+    if !token_exists {
+        return Err(ApiError::not_found("Token not found"));
+    }
 
     let limit = params.limit.clamp(1, 100) as usize;
 
@@ -429,6 +434,8 @@ async fn get_token_holders(
         .filter(|(_, balance)| *balance > 0)
         .collect();
     sorted_holders.sort_by(|a, b| b.1.cmp(&a.1));
+
+    let holders_count = sorted_holders.len() as i64;
 
     let cursor_balance = params.cursor.as_ref().and_then(|c| {
         let parts: Vec<&str> = c.split(':').collect();
