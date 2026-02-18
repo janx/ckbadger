@@ -93,6 +93,10 @@ fn format_outpoint_sample(outpoints: &[(Vec<u8>, i16)], max_items: usize) -> Str
         .join(", ")
 }
 
+fn should_log_unresolved_retry(attempt: usize) -> bool {
+    attempt == 1 || attempt.is_multiple_of(10) || attempt >= PARSER_UNRESOLVED_MAX_RETRIES
+}
+
 fn should_skip_address_balances(_bulk_sync_mode: bool) -> bool {
     // Address balances must always be updated inline to keep bulk sync exact.
     false
@@ -354,6 +358,8 @@ impl PipelinePerfStats {
 
 const CELL_CACHE_CAPACITY: usize = 200_000;
 const UDT_CELL_CACHE_CAPACITY: usize = 100_000;
+const PARSER_UNRESOLVED_RETRY_DELAY_MS: u64 = 500;
+const PARSER_UNRESOLVED_MAX_RETRIES: usize = 240;
 
 fn block_time_to_bucket(block_time_seconds: i64) -> i32 {
     if block_time_seconds < 1 {
@@ -990,7 +996,6 @@ impl Indexer {
         let writer_for_parser = self.writer.clone();
         let cell_cache_for_parser = Arc::clone(&self.cell_cache);
         let pipeline_perf_for_parser = Arc::clone(&self.pipeline_perf);
-        let reorg_notify_for_parser = Arc::clone(&self.reorg_notify_flag);
 
         let parse_tx_for_writer_depth = parse_tx.clone();
         let parser = tokio::spawn(async move {
@@ -1017,97 +1022,122 @@ impl Indexer {
                 }
 
                 let t_cell_lookup = Instant::now();
-                let mut cache_hits: usize = 0;
-                let mut input_cell_info: HashMap<(Vec<u8>, i16), LiveCellInfo> = HashMap::new();
-                for (tx_hash, idx) in &all_input_outpoints {
-                    let hash_arr: [u8; 32] = tx_hash.as_slice().try_into().unwrap_or([0u8; 32]);
-                    let key = (hash_arr, *idx as i32);
-                    if let Some(cached) = cell_cache_for_parser.get(&key) {
-                        cache_hits += 1;
-                        input_cell_info.insert(
-                            (tx_hash.clone(), *idx),
-                            LiveCellInfo {
-                                capacity: cached.capacity,
-                                created_at_block: cached.created_at_block,
-                                lock_script_hash: cached.lock_script_hash.clone(),
-                                lock_code_hash: cached.lock_code_hash.clone(),
-                                lock_hash_type: cached.lock_hash_type,
-                                lock_args: cached.lock_args.clone(),
-                                type_script_hash: cached.type_script_hash.clone(),
-                                type_code_hash: cached.type_code_hash.clone(),
-                                data_size: cached.data_size,
-                                occupied_capacity: cached.occupied_capacity,
-                            },
-                        );
+                let mut unresolved_retry_count: usize = 0;
+                let (input_cell_info, cache_hits, cache_misses): (
+                    HashMap<(Vec<u8>, i16), LiveCellInfo>,
+                    usize,
+                    usize,
+                ) = loop {
+                    let mut attempt_cache_hits: usize = 0;
+                    let mut attempt_input_cell_info: HashMap<(Vec<u8>, i16), LiveCellInfo> =
+                        HashMap::new();
+                    for (tx_hash, idx) in &all_input_outpoints {
+                        let hash_arr: [u8; 32] = tx_hash.as_slice().try_into().unwrap_or([0u8; 32]);
+                        let key = (hash_arr, *idx as i32);
+                        if let Some(cached) = cell_cache_for_parser.get(&key) {
+                            attempt_cache_hits += 1;
+                            attempt_input_cell_info.insert(
+                                (tx_hash.clone(), *idx),
+                                LiveCellInfo {
+                                    capacity: cached.capacity,
+                                    created_at_block: cached.created_at_block,
+                                    lock_script_hash: cached.lock_script_hash.clone(),
+                                    lock_code_hash: cached.lock_code_hash.clone(),
+                                    lock_hash_type: cached.lock_hash_type,
+                                    lock_args: cached.lock_args.clone(),
+                                    type_script_hash: cached.type_script_hash.clone(),
+                                    type_code_hash: cached.type_code_hash.clone(),
+                                    data_size: cached.data_size,
+                                    occupied_capacity: cached.occupied_capacity,
+                                },
+                            );
+                        }
                     }
-                }
 
-                let missing_outpoints = collect_missing_input_outpoints(
-                    &all_input_outpoints,
-                    &input_cell_info,
-                    &batch_cells,
-                );
+                    let missing_outpoints = collect_missing_input_outpoints(
+                        &all_input_outpoints,
+                        &attempt_input_cell_info,
+                        &batch_cells,
+                    );
 
-                let db_lookups;
-                let mut db_lookup_failed = false;
-                if !missing_outpoints.is_empty() {
-                    db_lookups = missing_outpoints.len();
-                    let bulk_sync_mode = chain_tip.saturating_sub(end_block) > 1000;
-                    let wr = writer_for_parser.clone();
-                    let missing_owned: Vec<(Vec<u8>, i16)> = missing_outpoints
-                        .iter()
-                        .map(|(h, i)| (h.clone(), *i))
-                        .collect();
-                    let db_query = tokio::task::spawn_blocking(move || {
-                        let refs: Vec<(&[u8], i16)> = missing_owned
+                    let mut db_lookups = 0usize;
+                    let mut db_lookup_failed = false;
+                    if !missing_outpoints.is_empty() {
+                        db_lookups = missing_outpoints.len();
+                        let bulk_sync_mode = chain_tip.saturating_sub(end_block) > 1000;
+                        let wr = writer_for_parser.clone();
+                        let missing_owned: Vec<(Vec<u8>, i16)> = missing_outpoints
                             .iter()
-                            .map(|(h, i)| (h.as_slice(), *i))
+                            .map(|(h, i)| (h.clone(), *i))
                             .collect();
-                        wr.get_full_cells_info_batch(&refs, bulk_sync_mode)
-                    });
-                    match tokio::time::timeout(Duration::from_secs(30), db_query).await {
-                        Ok(Ok(Ok(db_info))) => {
-                            for ((tx_hash, idx), info) in db_info {
-                                input_cell_info.insert((tx_hash, idx), info);
+                        let db_query = tokio::task::spawn_blocking(move || {
+                            let refs: Vec<(&[u8], i16)> = missing_owned
+                                .iter()
+                                .map(|(h, i)| (h.as_slice(), *i))
+                                .collect();
+                            wr.get_full_cells_info_batch(&refs, bulk_sync_mode)
+                        });
+                        match tokio::time::timeout(Duration::from_secs(30), db_query).await {
+                            Ok(Ok(Ok(db_info))) => {
+                                for ((tx_hash, idx), info) in db_info {
+                                    attempt_input_cell_info.insert((tx_hash, idx), info);
+                                }
+                            }
+                            Ok(Ok(Err(e))) => {
+                                error!("Parser: DB error fetching cell info: {}", e);
+                                db_lookup_failed = true;
+                            }
+                            Ok(Err(e)) => {
+                                error!("Parser: Failed to fetch cell info from DB: {}", e);
+                                db_lookup_failed = true;
+                            }
+                            Err(_) => {
+                                warn!(
+                                    "Parser: DB query for cell info timed out after 30s, forcing batch retry"
+                                );
+                                db_lookup_failed = true;
                             }
                         }
-                        Ok(Ok(Err(e))) => {
-                            error!("Parser: DB error fetching cell info: {}", e);
-                            db_lookup_failed = true;
-                        }
-                        Ok(Err(e)) => {
-                            error!("Parser: Failed to fetch cell info from DB: {}", e);
-                            db_lookup_failed = true;
-                        }
-                        Err(_) => {
-                            warn!(
-                                "Parser: DB query for cell info timed out after 30s, forcing batch retry"
-                            );
-                            db_lookup_failed = true;
-                        }
                     }
-                } else {
-                    db_lookups = 0;
-                }
 
-                let unresolved_outpoints = collect_missing_input_outpoints(
-                    &all_input_outpoints,
-                    &input_cell_info,
-                    &batch_cells,
-                );
-                if db_lookup_failed || !unresolved_outpoints.is_empty() {
-                    error!(
-                        unresolved_count = unresolved_outpoints.len(),
-                        unresolved_sample = %format_outpoint_sample(&unresolved_outpoints, 5),
-                        db_lookup_failed,
-                        "Parser: unresolved input cells detected, dropping batch and requesting refetch"
+                    let unresolved_outpoints = collect_missing_input_outpoints(
+                        &all_input_outpoints,
+                        &attempt_input_cell_info,
+                        &batch_cells,
                     );
-                    reorg_notify_for_parser.store(true, Ordering::SeqCst);
-                    sleep(Duration::from_millis(500)).await;
-                    continue;
-                }
+                    if !db_lookup_failed && unresolved_outpoints.is_empty() {
+                        break (attempt_input_cell_info, attempt_cache_hits, db_lookups);
+                    }
 
-                let cache_misses = db_lookups;
+                    unresolved_retry_count += 1;
+                    if should_log_unresolved_retry(unresolved_retry_count) {
+                        warn!(
+                            start_block,
+                            end_block,
+                            retry = unresolved_retry_count,
+                            unresolved_count = unresolved_outpoints.len(),
+                            unresolved_sample = %format_outpoint_sample(&unresolved_outpoints, 5),
+                            db_lookup_failed,
+                            "Parser: unresolved input cells detected; waiting for writer progress and retrying same batch"
+                        );
+                    }
+
+                    if unresolved_retry_count >= PARSER_UNRESOLVED_MAX_RETRIES {
+                        error!(
+                            start_block,
+                            end_block,
+                            retries = unresolved_retry_count,
+                            unresolved_count = unresolved_outpoints.len(),
+                            unresolved_sample = %format_outpoint_sample(&unresolved_outpoints, 5),
+                            db_lookup_failed,
+                            "Parser: unresolved input cells persisted after max retries; stopping parser task"
+                        );
+                        return;
+                    }
+
+                    sleep(Duration::from_millis(PARSER_UNRESOLVED_RETRY_DELAY_MS)).await;
+                };
+
                 let cell_lookup_ms = t_cell_lookup.elapsed().as_secs_f64() * 1000.0;
 
                 // Pre-compute batch_cell_infos, fees, cell_cache, balance/script changes
@@ -6219,6 +6249,20 @@ mod tests {
         assert!(sample.contains("0x1111111111111111:0"));
         assert!(sample.contains("0x2222222222222222:1"));
         assert!(!sample.contains("0x3333333333333333:2"));
+    }
+
+    #[test]
+    fn test_should_log_unresolved_retry_policy() {
+        assert!(should_log_unresolved_retry(1));
+        assert!(!should_log_unresolved_retry(2));
+        assert!(should_log_unresolved_retry(10));
+        assert!(should_log_unresolved_retry(PARSER_UNRESOLVED_MAX_RETRIES));
+    }
+
+    #[test]
+    fn test_parser_unresolved_retry_defaults() {
+        assert_eq!(PARSER_UNRESOLVED_RETRY_DELAY_MS, 500);
+        assert_eq!(PARSER_UNRESOLVED_MAX_RETRIES, 240);
     }
 
     #[test]
