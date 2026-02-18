@@ -630,14 +630,15 @@ impl Indexer {
         let stats = self.writer.store().memory_stats();
         let sync_status = self.writer.store().get_sync_status().unwrap_or_default();
         ckbadger_common::MemoryStatsData {
-            live_cells_count: stats.cells_count as u64,
-            consumed_cells_count: 0,
-            consumed_cells_bytes: 0,
+            live_cells_count: stats.live_cells_count as u64,
+            consumed_cells_count: stats.consumed_cells_count as u64,
+            consumed_cells_bytes: stats.consumed_cells_bytes as u64,
+            consumed_cells_bytes_source: stats.consumed_cells_bytes_source.to_string(),
             rocksdb_memtable_bytes: stats.memtable_bytes as u64,
             rocksdb_block_cache_bytes: stats.block_cache_bytes as u64,
             rocksdb_table_readers_bytes: stats.table_readers_bytes as u64,
             rocksdb_total_bytes: stats.memory_bytes as u64,
-            block_headers_count: 0,
+            block_headers_count: stats.block_headers_count as u64,
             bulk_sync_cell_cache_enabled: false,
             bulk_sync_mode: self.is_bulk_sync_active(),
             compaction_pending_bytes: stats.compaction_pending_bytes,

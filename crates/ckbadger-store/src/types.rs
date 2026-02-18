@@ -560,6 +560,17 @@ pub struct ReorgEvent {
 /// Memory/storage statistics for monitoring.
 #[derive(Debug, Clone, Default)]
 pub struct MemoryStats {
+    /// Estimated number of live cells (from RocksDB estimate-num-keys on live_cells CF).
+    pub live_cells_count: usize,
+    /// Estimated number of consumed cells (from consumed_cells CF).
+    pub consumed_cells_count: usize,
+    /// Estimated bytes used by consumed_cells CF (live-data estimate with SST fallback).
+    pub consumed_cells_bytes: usize,
+    /// Source used to estimate consumed_cells_bytes: live/sst/mem/none.
+    pub consumed_cells_bytes_source: &'static str,
+    /// Estimated number of cached block headers.
+    pub block_headers_count: usize,
+    /// Backward-compatible alias for live cell count.
     pub cells_count: usize,
     pub memory_bytes: usize,
     pub memtable_bytes: usize,

@@ -238,10 +238,13 @@ pub fn format_duration_smart(total_secs: f64) -> String {
 pub struct MemoryStatsData {
     /// Number of live (unspent) cells in RocksDB
     pub live_cells_count: u64,
-    /// Number of consumed cells retained in cache (for reorg support)
+    /// Number of consumed cells retained for reorg support
     pub consumed_cells_count: u64,
-    /// Bytes used by consumed cells cache
+    /// Estimated storage bytes used by consumed_cells column family
     pub consumed_cells_bytes: u64,
+    /// Source used to estimate consumed_cells_bytes: live/sst/mem/none
+    #[serde(default)]
+    pub consumed_cells_bytes_source: String,
 
     /// RocksDB memtable (write buffer) memory usage
     pub rocksdb_memtable_bytes: u64,
@@ -381,6 +384,7 @@ mod tests {
             live_cells_count: 45_000_000,
             consumed_cells_count: 12_000_000,
             consumed_cells_bytes: 14_000_000_000,
+            consumed_cells_bytes_source: "live".to_string(),
             rocksdb_memtable_bytes: 1_000_000_000,
             rocksdb_block_cache_bytes: 512_000_000,
             rocksdb_table_readers_bytes: 100_000_000,
@@ -413,8 +417,22 @@ mod tests {
         assert_eq!(parsed.rocksdb_total_bytes, stats.rocksdb_total_bytes);
         assert_eq!(parsed.bulk_sync_mode, stats.bulk_sync_mode);
         assert_eq!(parsed.sst_files_size, stats.sst_files_size);
+        assert_eq!(parsed.consumed_cells_bytes_source, "live");
         assert_eq!(parsed.top_cf_sizes.len(), 2);
         assert_eq!(parsed.total_transactions, 50_000_000);
+    }
+
+    #[test]
+    fn test_memory_stats_deserialize_without_source_field() {
+        let mut value = serde_json::to_value(MemoryStatsData::default()).unwrap();
+        value["liveCellsCount"] = serde_json::json!(1);
+        value["consumedCellsCount"] = serde_json::json!(2);
+        value["consumedCellsBytes"] = serde_json::json!(3);
+        if let Some(obj) = value.as_object_mut() {
+            obj.remove("consumedCellsBytesSource");
+        }
+        let parsed: MemoryStatsData = serde_json::from_value(value).unwrap();
+        assert_eq!(parsed.consumed_cells_bytes_source, "");
     }
 
     #[test]

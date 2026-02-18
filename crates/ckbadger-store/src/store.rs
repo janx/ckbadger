@@ -77,6 +77,25 @@ pub const ALL_CFS: &[&str] = &[
     CF_NFT_COLLECTION_AGG,
 ];
 
+fn consumed_cf_storage_bytes(
+    live_data_bytes: Option<u64>,
+    sst_files_bytes: Option<u64>,
+    memtable_bytes: Option<u64>,
+) -> (usize, &'static str) {
+    let (base, source) = match live_data_bytes {
+        Some(v) if v > 0 => (v, "live"),
+        _ => match sst_files_bytes {
+            Some(v) if v > 0 => (v, "sst"),
+            _ => match memtable_bytes {
+                Some(v) if v > 0 => (0, "mem"),
+                _ => (0, "none"),
+            },
+        },
+    };
+    let total = base.saturating_add(memtable_bytes.unwrap_or(0));
+    (usize::try_from(total).unwrap_or(usize::MAX), source)
+}
+
 pub struct CkbadgerStore {
     db: DB,
     /// Keep block cache alive for the lifetime of the store.
@@ -480,7 +499,7 @@ impl CkbadgerStore {
     pub fn set_bulk_sync_compaction_options(&self) {
         let mut ok = 0u32;
         let mut fail = 0u32;
-        for cf_name in ALL_CFS {
+        for &cf_name in ALL_CFS {
             if let Some(cf) = self.db.cf_handle(cf_name) {
                 // More write buffers = more memtable headroom before flush stall
                 let max_wb = if Self::is_mega_write_cf(cf_name) {
@@ -524,7 +543,7 @@ impl CkbadgerStore {
     /// Reverts L0 slowdown/stop triggers to 12/24, write buffers to 4 (mega/high)
     /// or 2 (low), and `max_bytes_for_level_base` to 512 MB.
     pub fn restore_normal_compaction_options(&self) {
-        for cf_name in ALL_CFS {
+        for &cf_name in ALL_CFS {
             if let Some(cf) = self.db.cf_handle(cf_name) {
                 let max_wb = if Self::is_mega_write_cf(cf_name) || Self::is_high_write_cf(cf_name) {
                     "4"
@@ -548,7 +567,7 @@ impl CkbadgerStore {
     /// Disable auto-compactions on all column families.
     /// Call during bulk sync to avoid compaction competing with writes.
     pub fn disable_auto_compactions(&self) {
-        for cf_name in ALL_CFS {
+        for cf_name in ALL_CFS.iter().copied() {
             if let Some(cf) = self.db.cf_handle(cf_name) {
                 if let Err(e) = self
                     .db
@@ -593,6 +612,12 @@ impl CkbadgerStore {
     pub fn memory_stats(&self) -> MemoryStats {
         let mut memtable_bytes = 0usize;
         let mut table_readers_bytes = 0usize;
+        let mut live_cells_count = 0usize;
+        let mut consumed_cells_count = 0usize;
+        let mut consumed_cf_live_data_bytes: Option<u64> = None;
+        let mut consumed_cf_sst_files_bytes: Option<u64> = None;
+        let mut consumed_cf_memtable_bytes: Option<u64> = None;
+        let mut block_headers_count = 0usize;
         let mut compaction_pending_bytes = 0u64;
         let mut num_running_compactions = 0u64;
         let mut sst_files_size = 0u64;
@@ -602,13 +627,16 @@ impl CkbadgerStore {
         let mut immutable_memtables = 0u64;
         let mut cf_sizes: Vec<(String, u64)> = Vec::new();
 
-        for cf_name in ALL_CFS {
+        for &cf_name in ALL_CFS {
             if let Some(cf) = self.db.cf_handle(cf_name) {
                 if let Ok(Some(v)) = self
                     .db
                     .property_int_value_cf(cf, "rocksdb.cur-size-all-mem-tables")
                 {
                     memtable_bytes += v as usize;
+                    if cf_name == CF_CONSUMED_CELLS {
+                        consumed_cf_memtable_bytes = Some(v);
+                    }
                 }
                 if let Ok(Some(v)) = self
                     .db
@@ -624,6 +652,17 @@ impl CkbadgerStore {
                 }
                 if let Ok(Some(v)) = self
                     .db
+                    .property_int_value_cf(cf, "rocksdb.estimate-num-keys")
+                {
+                    match cf_name {
+                        CF_LIVE_CELLS => live_cells_count = v as usize,
+                        CF_CONSUMED_CELLS => consumed_cells_count = v as usize,
+                        CF_BLOCK_HEADERS => block_headers_count = v as usize,
+                        _ => {}
+                    }
+                }
+                if let Ok(Some(v)) = self
+                    .db
                     .property_int_value_cf(cf, "rocksdb.num-running-compactions")
                 {
                     num_running_compactions += v;
@@ -633,6 +672,9 @@ impl CkbadgerStore {
                     .property_int_value_cf(cf, "rocksdb.total-sst-files-size")
                 {
                     sst_files_size += v;
+                    if cf_name == CF_CONSUMED_CELLS {
+                        consumed_cf_sst_files_bytes = Some(v);
+                    }
                 }
                 // L0 file count — track both total and per-CF max
                 if let Ok(Some(v)) = self
@@ -658,6 +700,9 @@ impl CkbadgerStore {
                     .db
                     .property_int_value_cf(cf, "rocksdb.estimate-live-data-size")
                 {
+                    if cf_name == CF_CONSUMED_CELLS {
+                        consumed_cf_live_data_bytes = Some(v);
+                    }
                     if v > 0 {
                         cf_sizes.push((cf_name.to_string(), v));
                     }
@@ -668,12 +713,22 @@ impl CkbadgerStore {
         // Sort by size descending and keep top 5
         cf_sizes.sort_by(|a, b| b.1.cmp(&a.1));
         cf_sizes.truncate(5);
+        let (consumed_cells_bytes, consumed_cells_bytes_source) = consumed_cf_storage_bytes(
+            consumed_cf_live_data_bytes,
+            consumed_cf_sst_files_bytes,
+            consumed_cf_memtable_bytes,
+        );
 
         let block_cache_bytes = self.block_cache.get_usage();
         let memory_bytes = memtable_bytes + block_cache_bytes + table_readers_bytes;
 
         MemoryStats {
-            cells_count: 0,
+            live_cells_count,
+            consumed_cells_count,
+            consumed_cells_bytes,
+            consumed_cells_bytes_source,
+            block_headers_count,
+            cells_count: live_cells_count,
             memory_bytes,
             memtable_bytes,
             block_cache_bytes,
@@ -783,9 +838,64 @@ mod tests {
     fn test_memory_stats() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open(dir.path()).unwrap();
+        store
+            .put_cf(store.cf_live_cells(), b"live-k1", b"live-v1")
+            .unwrap();
+        store
+            .put_cf(store.cf_consumed_cells(), b"consumed-k1", b"consumed-v1")
+            .unwrap();
+        store
+            .put_cf(store.cf_block_headers(), b"hdr-k1", b"hdr-v1")
+            .unwrap();
+
+        // Flush written keys so RocksDB estimate properties have observable values.
+        store.db.flush_cf(store.cf_live_cells()).unwrap();
+        store.db.flush_cf(store.cf_consumed_cells()).unwrap();
+        store.db.flush_cf(store.cf_block_headers()).unwrap();
+
         let stats = store.memory_stats();
-        // Just verify it doesn't panic and returns reasonable values
-        let _ = stats; // Just verify it doesn't panic
+        assert!(stats.live_cells_count >= 1);
+        assert!(stats.consumed_cells_count >= 1);
+        assert!(stats.block_headers_count >= 1);
+        assert_eq!(stats.cells_count, stats.live_cells_count);
+        assert!(
+            matches!(
+                stats.consumed_cells_bytes_source,
+                "live" | "sst" | "mem" | "none"
+            ),
+            "unexpected source: {}",
+            stats.consumed_cells_bytes_source
+        );
+    }
+
+    #[test]
+    fn test_consumed_cf_storage_bytes_prefers_live_data_estimate() {
+        assert_eq!(
+            consumed_cf_storage_bytes(Some(100), Some(500), Some(20)),
+            (120, "live")
+        );
+    }
+
+    #[test]
+    fn test_consumed_cf_storage_bytes_falls_back_to_sst_when_live_missing() {
+        assert_eq!(
+            consumed_cf_storage_bytes(None, Some(500), Some(20)),
+            (520, "sst")
+        );
+        assert_eq!(
+            consumed_cf_storage_bytes(Some(0), Some(500), Some(20)),
+            (520, "sst")
+        );
+    }
+
+    #[test]
+    fn test_consumed_cf_storage_bytes_returns_none_when_all_missing() {
+        assert_eq!(consumed_cf_storage_bytes(None, None, None), (0, "none"));
+    }
+
+    #[test]
+    fn test_consumed_cf_storage_bytes_memtable_only_source() {
+        assert_eq!(consumed_cf_storage_bytes(None, None, Some(20)), (20, "mem"));
     }
 
     #[test]

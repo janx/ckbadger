@@ -84,6 +84,12 @@ enum CompactSyncLayout {
     ChartsAndDiagnostics,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompactOverviewLayout {
+    MemoryOnly,
+    MemoryAndStorage,
+}
+
 pub struct App {
     db: TuiDb,
     sync_status: Option<SyncStatusRow>,
@@ -276,9 +282,10 @@ impl App {
         }
 
         self.memory_stats = self.db.get_memory_stats().await;
-        self.chain_info = self.db.get_chain_info().await;
+        let (chain_info, api_service) = self.db.get_chain_info_and_api_service_info().await;
+        self.chain_info = chain_info;
         self.redis_service = self.db.get_redis_service_info().await;
-        self.api_service = self.db.get_api_service_info().await;
+        self.api_service = api_service;
         self.last_refresh = Instant::now();
 
         self.detect_events();
@@ -639,22 +646,42 @@ fn draw_content(f: &mut Frame, app: &App, area: Rect) {
 fn draw_overview_content(f: &mut Frame, app: &App, area: Rect) {
     let log_min_height = overview_log_min_height();
     match detect_layout_density(app, area) {
-        LayoutDensity::Compact => {
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Length(6),
-                    Constraint::Length(7),
-                    Constraint::Length(8),
-                    Constraint::Min(log_min_height),
-                ])
-                .split(area);
+        LayoutDensity::Compact => match compact_overview_layout(area) {
+            CompactOverviewLayout::MemoryOnly => {
+                let chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([
+                        Constraint::Length(6),
+                        Constraint::Length(7),
+                        Constraint::Length(8),
+                        Constraint::Min(log_min_height),
+                    ])
+                    .split(area);
 
-            draw_overview_kpis(f, app, chunks[0]);
-            draw_chain_info(f, app, chunks[1]);
-            draw_storage_health(f, app, chunks[2]);
-            draw_overview_tail(f, app, chunks[3]);
-        }
+                draw_overview_kpis(f, app, chunks[0]);
+                draw_chain_info(f, app, chunks[1]);
+                draw_memory_stats(f, app, chunks[2]);
+                draw_overview_tail(f, app, chunks[3]);
+            }
+            CompactOverviewLayout::MemoryAndStorage => {
+                let chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([
+                        Constraint::Length(6),
+                        Constraint::Length(7),
+                        Constraint::Length(8),
+                        Constraint::Length(8),
+                        Constraint::Min(log_min_height),
+                    ])
+                    .split(area);
+
+                draw_overview_kpis(f, app, chunks[0]);
+                draw_chain_info(f, app, chunks[1]);
+                draw_memory_stats(f, app, chunks[2]);
+                draw_storage_health(f, app, chunks[3]);
+                draw_overview_tail(f, app, chunks[4]);
+            }
+        },
         LayoutDensity::Standard => {
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
@@ -696,6 +723,15 @@ fn draw_overview_content(f: &mut Frame, app: &App, area: Rect) {
 
 fn overview_log_min_height() -> u16 {
     3
+}
+
+fn compact_overview_layout(area: Rect) -> CompactOverviewLayout {
+    let min_height_for_storage = 6 + 7 + 8 + 8 + overview_log_min_height();
+    if area.height >= min_height_for_storage {
+        CompactOverviewLayout::MemoryAndStorage
+    } else {
+        CompactOverviewLayout::MemoryOnly
+    }
 }
 
 fn overview_services_min_height() -> u16 {
@@ -1748,7 +1784,7 @@ fn draw_memory_stats(f: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(SLATE_800))
         .title(Span::styled(
-            "Memory Stats",
+            "Storage Runtime",
             Style::default().fg(FOREGROUND),
         ));
 
@@ -1786,11 +1822,19 @@ fn draw_memory_stats(f: &mut Frame, app: &App, area: Rect) {
             ),
         ]),
         Line::from(vec![
-            Span::styled("Consumed B: ", Style::default().fg(SLATE_500)),
+            Span::styled("Consumed Sz: ", Style::default().fg(SLATE_500)),
             Span::styled(
                 format_bytes(mem.consumed_cells_bytes),
                 Style::default().fg(FOREGROUND),
             ),
+            Span::styled(" [", Style::default().fg(SLATE_500)),
+            Span::styled(
+                consumed_bytes_source_label(&mem.consumed_cells_bytes_source),
+                Style::default().fg(consumed_bytes_source_color(
+                    &mem.consumed_cells_bytes_source,
+                )),
+            ),
+            Span::styled("]", Style::default().fg(SLATE_500)),
         ]),
         Line::from(vec![
             Span::styled("BlockHdrs:  ", Style::default().fg(SLATE_500)),
@@ -2046,27 +2090,76 @@ fn draw_redis_health(f: &mut Frame, app: &App, area: Rect) {
             ),
         ]),
         Line::from(vec![
-            Span::styled("sync:status ", Style::default().fg(SLATE_500)),
+            Span::styled("Keys ", Style::default().fg(SLATE_500)),
             Span::styled(
-                format_age_secs(info.sync_status_age_secs),
+                format_num_u64(info.db_keys_total.unwrap_or(0)),
                 Style::default().fg(TERMINAL_DIM),
             ),
-            Span::styled("  progress ", Style::default().fg(SLATE_500)),
+            Span::styled("  exp ", Style::default().fg(SLATE_500)),
             Span::styled(
-                format_age_secs(info.sync_progress_age_secs),
+                format_num_u64(info.db_keys_expiring.unwrap_or(0)),
+                Style::default().fg(TERMINAL_DIM),
+            ),
+            Span::styled("  pers ", Style::default().fg(SLATE_500)),
+            Span::styled(
+                format_num_u64(info.db_keys_persistent.unwrap_or(0)),
                 Style::default().fg(TERMINAL_DIM),
             ),
         ]),
         Line::from(vec![
-            Span::styled("memory:stats ", Style::default().fg(SLATE_500)),
+            Span::styled("Mem ", Style::default().fg(SLATE_500)),
             Span::styled(
-                format_age_secs(info.memory_stats_age_secs),
+                format_bytes(info.used_memory_bytes.unwrap_or(0)),
                 Style::default().fg(TERMINAL_DIM),
             ),
+            Span::styled("  peak ", Style::default().fg(SLATE_500)),
+            Span::styled(
+                format_bytes(info.used_memory_peak_bytes.unwrap_or(0)),
+                Style::default().fg(TERMINAL_DIM),
+            ),
+            Span::styled("  frag ", Style::default().fg(SLATE_500)),
+            Span::styled(
+                format_ratio(info.mem_fragmentation_ratio),
+                Style::default().fg(AMBER),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("Hit ", Style::default().fg(SLATE_500)),
+            Span::styled(
+                format_hit_rate(info.keyspace_hits, info.keyspace_misses),
+                Style::default().fg(TERMINAL_GREEN),
+            ),
+            Span::styled("  evict ", Style::default().fg(SLATE_500)),
+            Span::styled(
+                format_num_u64(info.evicted_keys.unwrap_or(0)),
+                Style::default().fg(AMBER),
+            ),
             Span::styled("  max-age ", Style::default().fg(SLATE_500)),
-            Span::styled(format_age_secs(max_age), Style::default().fg(AMBER)),
+            Span::styled(format_age_secs(max_age), Style::default().fg(TERMINAL_DIM)),
         ]),
     ];
+
+    lines.push(redis_key_line(
+        "sync:status",
+        info.sync_status_type.as_deref(),
+        info.sync_status_value_bytes,
+        info.sync_status_ttl_secs,
+        info.sync_status_age_secs,
+    ));
+    lines.push(redis_key_line(
+        "sync:progress",
+        info.sync_progress_type.as_deref(),
+        info.sync_progress_value_bytes,
+        info.sync_progress_ttl_secs,
+        info.sync_progress_age_secs,
+    ));
+    lines.push(redis_key_line(
+        "memory:stats",
+        info.memory_stats_type.as_deref(),
+        info.memory_stats_value_bytes,
+        info.memory_stats_ttl_secs,
+        info.memory_stats_age_secs,
+    ));
 
     if let Some(err) = &info.error {
         lines.push(Line::from(vec![
@@ -2207,6 +2300,73 @@ fn format_age_secs(age_secs: Option<i64>) -> String {
     age_secs
         .map(|v| format!("{v}s"))
         .unwrap_or_else(|| "-".to_string())
+}
+
+fn format_ttl(ttl_secs: Option<i64>) -> String {
+    match ttl_secs {
+        Some(-1) => "persist".to_string(),
+        Some(v) => format!("{v}s"),
+        None => "-".to_string(),
+    }
+}
+
+fn format_ratio(value: Option<f64>) -> String {
+    value
+        .map(|v| format!("{v:.2}"))
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn format_hit_rate(hits: Option<u64>, misses: Option<u64>) -> String {
+    match (hits, misses) {
+        (Some(h), Some(m)) if h + m > 0 => format!("{:.1}%", h as f64 * 100.0 / (h + m) as f64),
+        _ => "-".to_string(),
+    }
+}
+
+fn consumed_bytes_source_label(source: &str) -> &str {
+    match source {
+        "live" => "live",
+        "sst" => "sst",
+        "mem" => "mem",
+        "none" => "none",
+        _ => "-",
+    }
+}
+
+fn consumed_bytes_source_color(source: &str) -> Color {
+    match source {
+        "live" => TERMINAL_GREEN,
+        "sst" => AMBER,
+        "mem" => AMBER,
+        "none" => ERROR_RED,
+        _ => TERMINAL_DIM,
+    }
+}
+
+fn redis_key_line(
+    name: &str,
+    key_type: Option<&str>,
+    value_bytes: Option<u64>,
+    ttl_secs: Option<i64>,
+    age_secs: Option<i64>,
+) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(name.to_string(), Style::default().fg(SLATE_500)),
+        Span::styled(" ", Style::default().fg(SLATE_700)),
+        Span::styled(
+            key_type.unwrap_or("-").to_string(),
+            Style::default().fg(TERMINAL_DIM),
+        ),
+        Span::styled(" ", Style::default().fg(SLATE_700)),
+        Span::styled(
+            format_bytes(value_bytes.unwrap_or(0)),
+            Style::default().fg(FOREGROUND),
+        ),
+        Span::styled(" ttl ", Style::default().fg(SLATE_500)),
+        Span::styled(format_ttl(ttl_secs), Style::default().fg(AMBER)),
+        Span::styled(" age ", Style::default().fg(SLATE_500)),
+        Span::styled(format_age_secs(age_secs), Style::default().fg(TERMINAL_DIM)),
+    ])
 }
 
 fn trim_for_panel(text: &str, width: usize) -> String {
@@ -2789,13 +2949,15 @@ fn format_bytes(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        api_health_state, chart_height_warning, compact_sync_layout, dense_right_lines,
+        api_health_state, chart_height_warning, compact_overview_layout, compact_sync_layout,
+        consumed_bytes_source_color, consumed_bytes_source_label, dense_right_lines,
         detail_right_lines, diagnostics_dense_panel, eta_confidence_label, format_age_secs,
-        format_num, format_num_commas, heartbeat_is_on, io_rpc_jitter_line,
-        overview_log_min_height, overview_services_min_height, pipeline_bottleneck,
-        pipeline_flow_state, rate_jitter, redis_health_state, redis_max_key_age, sparkline,
-        stack_sync_charts, sync_bottleneck, trend_delta, trim_for_panel, Color, CompactSyncLayout,
-        DiagnosticsViewMode, SyncBottleneck,
+        format_hit_rate, format_num, format_num_commas, format_ratio, format_ttl, heartbeat_is_on,
+        io_rpc_jitter_line, overview_log_min_height, overview_services_min_height,
+        pipeline_bottleneck, pipeline_flow_state, rate_jitter, redis_health_state, redis_key_line,
+        redis_max_key_age, sparkline, stack_sync_charts, sync_bottleneck, trend_delta,
+        trim_for_panel, Color, CompactOverviewLayout, CompactSyncLayout, DiagnosticsViewMode,
+        SyncBottleneck, AMBER, ERROR_RED, TERMINAL_DIM, TERMINAL_GREEN,
     };
     use crate::db::{ApiServiceInfo, RedisServiceInfo};
     use ratatui::layout::Rect;
@@ -3064,6 +3226,18 @@ mod tests {
     }
 
     #[test]
+    fn test_compact_overview_layout() {
+        assert_eq!(
+            compact_overview_layout(Rect::new(0, 0, 100, 31)),
+            CompactOverviewLayout::MemoryOnly
+        );
+        assert_eq!(
+            compact_overview_layout(Rect::new(0, 0, 100, 32)),
+            CompactOverviewLayout::MemoryAndStorage
+        );
+    }
+
+    #[test]
     fn test_redis_health_state() {
         let off = RedisServiceInfo::default();
         assert_eq!(redis_health_state(&off), ("OFF", Color::Rgb(160, 174, 192)));
@@ -3136,9 +3310,45 @@ mod tests {
     fn test_health_format_helpers() {
         assert_eq!(format_age_secs(None), "-");
         assert_eq!(format_age_secs(Some(12)), "12s");
+        assert_eq!(format_ttl(None), "-");
+        assert_eq!(format_ttl(Some(-1)), "persist");
+        assert_eq!(format_ttl(Some(20)), "20s");
+        assert_eq!(format_ratio(None), "-");
+        assert_eq!(format_ratio(Some(1.236)), "1.24");
+        assert_eq!(format_hit_rate(None, None), "-");
+        assert_eq!(format_hit_rate(Some(95), Some(5)), "95.0%");
         assert_eq!(trim_for_panel("abcdef", 0), "");
         assert_eq!(trim_for_panel("abcdef", 6), "...");
         assert_eq!(trim_for_panel("abcdefghijkl", 10), "a...");
+    }
+
+    #[test]
+    fn test_redis_key_line_format() {
+        let line = redis_key_line("sync:status", Some("string"), Some(2048), Some(30), Some(2));
+        let text = line_text(&line);
+        assert!(text.contains("sync:status"));
+        assert!(text.contains("string"));
+        assert!(text.contains("2.00 KB"));
+        assert!(text.contains("ttl 30s"));
+        assert!(text.contains("age 2s"));
+    }
+
+    #[test]
+    fn test_consumed_bytes_source_label() {
+        assert_eq!(consumed_bytes_source_label("live"), "live");
+        assert_eq!(consumed_bytes_source_label("sst"), "sst");
+        assert_eq!(consumed_bytes_source_label("mem"), "mem");
+        assert_eq!(consumed_bytes_source_label("none"), "none");
+        assert_eq!(consumed_bytes_source_label(""), "-");
+    }
+
+    #[test]
+    fn test_consumed_bytes_source_color() {
+        assert_eq!(consumed_bytes_source_color("live"), TERMINAL_GREEN);
+        assert_eq!(consumed_bytes_source_color("sst"), AMBER);
+        assert_eq!(consumed_bytes_source_color("mem"), AMBER);
+        assert_eq!(consumed_bytes_source_color("none"), ERROR_RED);
+        assert_eq!(consumed_bytes_source_color(""), TERMINAL_DIM);
     }
 
     #[test]

@@ -6,6 +6,7 @@ use ckbadger_common::{
 use ckbadger_store::CkbadgerStore;
 use redis::AsyncCommands;
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -93,9 +94,28 @@ pub struct RedisServiceInfo {
     pub enabled: bool,
     pub reachable: bool,
     pub latency_ms: Option<f64>,
+    pub db_keys_total: Option<u64>,
+    pub db_keys_expiring: Option<u64>,
+    pub db_keys_persistent: Option<u64>,
+    pub used_memory_bytes: Option<u64>,
+    pub used_memory_peak_bytes: Option<u64>,
+    pub used_memory_rss_bytes: Option<u64>,
+    pub mem_fragmentation_ratio: Option<f64>,
+    pub keyspace_hits: Option<u64>,
+    pub keyspace_misses: Option<u64>,
+    pub evicted_keys: Option<u64>,
     pub sync_status_age_secs: Option<i64>,
     pub sync_progress_age_secs: Option<i64>,
     pub memory_stats_age_secs: Option<i64>,
+    pub sync_status_type: Option<String>,
+    pub sync_status_ttl_secs: Option<i64>,
+    pub sync_status_value_bytes: Option<u64>,
+    pub sync_progress_type: Option<String>,
+    pub sync_progress_ttl_secs: Option<i64>,
+    pub sync_progress_value_bytes: Option<u64>,
+    pub memory_stats_type: Option<String>,
+    pub memory_stats_ttl_secs: Option<i64>,
+    pub memory_stats_value_bytes: Option<u64>,
     pub error: Option<String>,
 }
 
@@ -115,6 +135,67 @@ fn age_since(unix_ts: i64, now: i64) -> Option<i64> {
         None
     } else {
         Some((now - unix_ts).max(0))
+    }
+}
+
+fn chain_info_from_api_stats(stats: &ApiNetworkStats) -> ChainInfoData {
+    let tx_24h = stats.transactions_per_day.parse::<i64>().unwrap_or(0);
+    let (epoch_number, epoch_index, epoch_length) = parse_epoch_string(&stats.epoch);
+
+    ChainInfoData {
+        latest_block: stats.latest_block,
+        epoch_number,
+        epoch_index,
+        epoch_length,
+        difficulty: stats.difficulty.clone(),
+        hash_rate: stats.hash_rate.clone(),
+        avg_block_time: stats.avg_block_time.clone(),
+        tps: stats.tps.clone(),
+        tx_24h,
+    }
+}
+
+fn parse_info_map(info_text: &str) -> HashMap<String, String> {
+    info_text
+        .lines()
+        .filter_map(|line| {
+            if line.is_empty() || line.starts_with('#') {
+                return None;
+            }
+            let (k, v) = line.split_once(':')?;
+            Some((k.trim().to_string(), v.trim().to_string()))
+        })
+        .collect()
+}
+
+fn parse_keyspace_db0(keyspace_info: &str) -> (Option<u64>, Option<u64>) {
+    for line in keyspace_info.lines() {
+        if let Some((db, payload)) = line.split_once(':') {
+            if db.trim() != "db0" {
+                continue;
+            }
+            let mut keys = None;
+            let mut expires = None;
+            for part in payload.split(',') {
+                if let Some((name, value)) = part.split_once('=') {
+                    match name.trim() {
+                        "keys" => keys = value.trim().parse::<u64>().ok(),
+                        "expires" => expires = value.trim().parse::<u64>().ok(),
+                        _ => {}
+                    }
+                }
+            }
+            return (keys, expires);
+        }
+    }
+    (None, None)
+}
+
+fn ttl_or_none(ttl_secs: i64) -> Option<i64> {
+    if ttl_secs == -2 {
+        None
+    } else {
+        Some(ttl_secs)
     }
 }
 
@@ -340,25 +421,43 @@ impl TuiDb {
         Some(mem)
     }
 
-    pub async fn get_chain_info(&self) -> Option<ChainInfoData> {
+    pub async fn get_chain_info_and_api_service_info(
+        &self,
+    ) -> (Option<ChainInfoData>, ApiServiceInfo) {
+        let mut api_info = ApiServiceInfo::default();
         let url = format!("{}/statistics/network", self.api_url);
-        let resp = self.http.get(&url).send().await.ok()?;
-        let stats: ApiNetworkStats = resp.json().await.ok()?;
+        let started = Instant::now();
 
-        let tx_24h = stats.transactions_per_day.parse::<i64>().unwrap_or(0);
-        let (epoch_number, epoch_index, epoch_length) = parse_epoch_string(&stats.epoch);
+        let response = self.http.get(&url).send().await;
+        api_info.latency_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
 
-        Some(ChainInfoData {
-            latest_block: stats.latest_block,
-            epoch_number,
-            epoch_index,
-            epoch_length,
-            difficulty: stats.difficulty,
-            hash_rate: stats.hash_rate,
-            avg_block_time: stats.avg_block_time,
-            tps: stats.tps,
-            tx_24h,
-        })
+        let response = match response {
+            Ok(resp) => resp,
+            Err(e) => {
+                api_info.error = Some(format!("request failed: {e}"));
+                return (None, api_info);
+            }
+        };
+
+        api_info.status_code = Some(response.status().as_u16());
+        if !response.status().is_success() {
+            api_info.error = Some(format!("http {}", response.status()));
+            return (None, api_info);
+        }
+
+        match response.json::<ApiNetworkStats>().await {
+            Ok(stats) => {
+                api_info.reachable = true;
+                api_info.latest_block = Some(stats.latest_block);
+                api_info.tps = Some(stats.tps.clone());
+                api_info.avg_block_time = Some(stats.avg_block_time.clone());
+                (Some(chain_info_from_api_stats(&stats)), api_info)
+            }
+            Err(e) => {
+                api_info.error = Some(format!("decode failed: {e}"));
+                (None, api_info)
+            }
+        }
     }
 
     pub async fn get_redis_service_info(&self) -> RedisServiceInfo {
@@ -386,6 +485,103 @@ impl TuiDb {
 
         info.reachable = true;
 
+        let dbsize_result: std::result::Result<u64, _> =
+            redis::cmd("DBSIZE").query_async(&mut conn).await;
+        info.db_keys_total = dbsize_result.ok();
+
+        let info_memory: std::result::Result<String, _> = redis::cmd("INFO")
+            .arg("memory")
+            .query_async(&mut conn)
+            .await;
+        if let Ok(text) = info_memory {
+            let map = parse_info_map(&text);
+            info.used_memory_bytes = map.get("used_memory").and_then(|v| v.parse::<u64>().ok());
+            info.used_memory_peak_bytes = map
+                .get("used_memory_peak")
+                .and_then(|v| v.parse::<u64>().ok());
+            info.used_memory_rss_bytes = map
+                .get("used_memory_rss")
+                .and_then(|v| v.parse::<u64>().ok());
+            info.mem_fragmentation_ratio = map
+                .get("mem_fragmentation_ratio")
+                .and_then(|v| v.parse::<f64>().ok());
+        }
+
+        let info_stats: std::result::Result<String, _> =
+            redis::cmd("INFO").arg("stats").query_async(&mut conn).await;
+        if let Ok(text) = info_stats {
+            let map = parse_info_map(&text);
+            info.keyspace_hits = map.get("keyspace_hits").and_then(|v| v.parse::<u64>().ok());
+            info.keyspace_misses = map
+                .get("keyspace_misses")
+                .and_then(|v| v.parse::<u64>().ok());
+            info.evicted_keys = map.get("evicted_keys").and_then(|v| v.parse::<u64>().ok());
+        }
+
+        let info_keyspace: std::result::Result<String, _> = redis::cmd("INFO")
+            .arg("keyspace")
+            .query_async(&mut conn)
+            .await;
+        if let Ok(text) = info_keyspace {
+            let (keys, expires) = parse_keyspace_db0(&text);
+            if keys.is_some() {
+                info.db_keys_total = keys;
+            }
+            info.db_keys_expiring = expires;
+            info.db_keys_persistent = match (info.db_keys_total, info.db_keys_expiring) {
+                (Some(total), Some(exp)) => Some(total.saturating_sub(exp)),
+                _ => None,
+            };
+        }
+
+        let sync_status_type: std::result::Result<String, _> = redis::cmd("TYPE")
+            .arg(SYNC_STATUS_REDIS_KEY)
+            .query_async(&mut conn)
+            .await;
+        info.sync_status_type = sync_status_type.ok();
+        let sync_status_ttl: std::result::Result<i64, _> = redis::cmd("TTL")
+            .arg(SYNC_STATUS_REDIS_KEY)
+            .query_async(&mut conn)
+            .await;
+        info.sync_status_ttl_secs = sync_status_ttl.ok().and_then(ttl_or_none);
+        let sync_status_strlen: std::result::Result<u64, _> = redis::cmd("STRLEN")
+            .arg(SYNC_STATUS_REDIS_KEY)
+            .query_async(&mut conn)
+            .await;
+        info.sync_status_value_bytes = sync_status_strlen.ok();
+
+        let sync_progress_type: std::result::Result<String, _> = redis::cmd("TYPE")
+            .arg(SYNC_PROGRESS_REDIS_KEY)
+            .query_async(&mut conn)
+            .await;
+        info.sync_progress_type = sync_progress_type.ok();
+        let sync_progress_ttl: std::result::Result<i64, _> = redis::cmd("TTL")
+            .arg(SYNC_PROGRESS_REDIS_KEY)
+            .query_async(&mut conn)
+            .await;
+        info.sync_progress_ttl_secs = sync_progress_ttl.ok().and_then(ttl_or_none);
+        let sync_progress_strlen: std::result::Result<u64, _> = redis::cmd("STRLEN")
+            .arg(SYNC_PROGRESS_REDIS_KEY)
+            .query_async(&mut conn)
+            .await;
+        info.sync_progress_value_bytes = sync_progress_strlen.ok();
+
+        let memory_stats_type: std::result::Result<String, _> = redis::cmd("TYPE")
+            .arg(MEMORY_STATS_REDIS_KEY)
+            .query_async(&mut conn)
+            .await;
+        info.memory_stats_type = memory_stats_type.ok();
+        let memory_stats_ttl: std::result::Result<i64, _> = redis::cmd("TTL")
+            .arg(MEMORY_STATS_REDIS_KEY)
+            .query_async(&mut conn)
+            .await;
+        info.memory_stats_ttl_secs = memory_stats_ttl.ok().and_then(ttl_or_none);
+        let memory_stats_strlen: std::result::Result<u64, _> = redis::cmd("STRLEN")
+            .arg(MEMORY_STATS_REDIS_KEY)
+            .query_async(&mut conn)
+            .await;
+        info.memory_stats_value_bytes = memory_stats_strlen.ok();
+
         let status: Option<SyncStatusData> = self.get_redis_key(SYNC_STATUS_REDIS_KEY).await;
         let progress: Option<SyncProgressData> = self.get_redis_key(SYNC_PROGRESS_REDIS_KEY).await;
         let memory: Option<MemoryStatsData> = self.get_redis_key(MEMORY_STATS_REDIS_KEY).await;
@@ -396,48 +592,11 @@ impl TuiDb {
 
         info
     }
-
-    pub async fn get_api_service_info(&self) -> ApiServiceInfo {
-        let mut info = ApiServiceInfo::default();
-        let url = format!("{}/statistics/network", self.api_url);
-        let started = Instant::now();
-
-        let response = self.http.get(&url).send().await;
-        info.latency_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
-
-        let response = match response {
-            Ok(resp) => resp,
-            Err(e) => {
-                info.error = Some(format!("request failed: {e}"));
-                return info;
-            }
-        };
-
-        info.status_code = Some(response.status().as_u16());
-        if !response.status().is_success() {
-            info.error = Some(format!("http {}", response.status()));
-            return info;
-        }
-
-        match response.json::<ApiNetworkStats>().await {
-            Ok(stats) => {
-                info.reachable = true;
-                info.latest_block = Some(stats.latest_block);
-                info.tps = Some(stats.tps);
-                info.avg_block_time = Some(stats.avg_block_time);
-            }
-            Err(e) => {
-                info.error = Some(format!("decode failed: {e}"));
-            }
-        }
-
-        info
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{age_since, parse_epoch_string};
+    use super::{age_since, parse_epoch_string, parse_info_map, parse_keyspace_db0, ttl_or_none};
 
     #[test]
     fn parse_epoch_full() {
@@ -459,5 +618,32 @@ mod tests {
         assert_eq!(age_since(0, 100), None);
         assert_eq!(age_since(120, 100), Some(0));
         assert_eq!(age_since(80, 100), Some(20));
+    }
+
+    #[test]
+    fn parse_info_map_works() {
+        let text = "# Memory\r\nused_memory:123\r\nmem_fragmentation_ratio:1.23\r\n";
+        let map = parse_info_map(text);
+        assert_eq!(map.get("used_memory"), Some(&"123".to_string()));
+        assert_eq!(
+            map.get("mem_fragmentation_ratio"),
+            Some(&"1.23".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_keyspace_db0_works() {
+        let text = "# Keyspace\r\ndb0:keys=10,expires=7,avg_ttl=123\r\n";
+        let (keys, expires) = parse_keyspace_db0(text);
+        assert_eq!(keys, Some(10));
+        assert_eq!(expires, Some(7));
+    }
+
+    #[test]
+    fn ttl_or_none_works() {
+        assert_eq!(ttl_or_none(-2), None);
+        assert_eq!(ttl_or_none(-1), Some(-1));
+        assert_eq!(ttl_or_none(0), Some(0));
+        assert_eq!(ttl_or_none(15), Some(15));
     }
 }
