@@ -472,7 +472,6 @@ async fn warmup_total_supply(state: &AppState) -> Result<(), String> {
         "data": [],
         "series": [
             {"key": "circulating", "label": "Circulating", "color": "#00c389"},
-            {"key": "locked", "label": "Locked in DAO", "color": "#8b5cf6"},
             {"key": "burnt", "label": "Burnt", "color": "#6b7280"}
         ],
         "title": "Total Supply"

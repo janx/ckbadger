@@ -5680,13 +5680,20 @@ impl Indexer {
                             .unwrap_or((0, 0, 0));
                         let (daily_miner, daily_dao_share, daily_treasury_share) =
                             if prev_snapshot.is_some() && total_issuance > 0 {
-                                let s_delta = (secondary_pool - prev_secondary_pool).max(0);
-                                let denom = (total_issuance - occupied_capacity).max(1);
-                                let deposited = running_total_deposited.max(0);
-                                let miner = s_delta * occupied_capacity / denom;
-                                let dao = s_delta * deposited / denom;
-                                let treasury = s_delta - dao;
-                                (miner, dao, treasury)
+                                let s_delta = secondary_pool - prev_secondary_pool;
+                                if s_delta >= 0 {
+                                    let denom = (total_issuance - occupied_capacity).max(1);
+                                    let deposited = running_total_deposited.max(0);
+                                    let miner = s_delta * occupied_capacity / denom;
+                                    let dao = s_delta * deposited / denom;
+                                    let treasury = s_delta - dao;
+                                    (miner, dao, treasury)
+                                } else {
+                                    // S field decreased (protocol upgrade boundary).
+                                    // Absorb negative adjustment into treasury to keep
+                                    // miner/dao monotonic while preserving the sum.
+                                    (0, 0, s_delta)
+                                }
                             } else {
                                 (0, 0, 0)
                             };
@@ -5782,17 +5789,27 @@ impl Indexer {
                             .unwrap_or((0, 0, 0));
                         let (cum_miner, cum_dao, cum_treasury) = if let Some(ref p) = prev_snapshot
                         {
-                            let s_delta = (secondary_pool - p.secondary_pool).max(0);
-                            let denom = (total_issuance - occupied_capacity).max(1);
-                            let deposited = total_deposited.max(0);
-                            let daily_miner = s_delta * occupied_capacity / denom;
-                            let daily_dao_share = s_delta * deposited / denom;
-                            let daily_treasury_share = s_delta - daily_dao_share;
-                            (
-                                p.cum_miner_secondary + daily_miner,
-                                p.cum_dao_compensation + daily_dao_share,
-                                p.cum_treasury + daily_treasury_share,
-                            )
+                            let s_delta = secondary_pool - p.secondary_pool;
+                            if s_delta >= 0 {
+                                let denom = (total_issuance - occupied_capacity).max(1);
+                                let deposited = total_deposited.max(0);
+                                let daily_miner = s_delta * occupied_capacity / denom;
+                                let daily_dao_share = s_delta * deposited / denom;
+                                let daily_treasury_share = s_delta - daily_dao_share;
+                                (
+                                    p.cum_miner_secondary + daily_miner,
+                                    p.cum_dao_compensation + daily_dao_share,
+                                    p.cum_treasury + daily_treasury_share,
+                                )
+                            } else {
+                                // S field decreased (protocol upgrade boundary).
+                                // Absorb negative adjustment into treasury.
+                                (
+                                    p.cum_miner_secondary,
+                                    p.cum_dao_compensation,
+                                    p.cum_treasury + s_delta,
+                                )
+                            }
                         } else {
                             (0, 0, 0)
                         };

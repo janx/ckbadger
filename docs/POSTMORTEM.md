@@ -453,6 +453,57 @@ This inflated `dao_deposits` by ~2x, causing DAO compensation to be ~2x higher a
 
 ---
 
+### DAO-018: Secondary issuance overcounting from CKB S-field protocol upgrade drops
+
+**Symptom**: Cumulative secondary issuance values (mining_reward, deposit_compensation, treasury_amount) exceeded the on-chain S field by ~4.7% (~321M CKB). Verify checks X13-X15 failed against CKB Explorer.
+
+**Root Cause**: The CKB DAO header's S field (cumulative non-miner secondary issuance) **physically decreases** at protocol upgrade boundaries. This was observed at 6+ points in the chain's history:
+
+| Date       | Approximate S Drop |
+| ---------- | ------------------ |
+| 2020-07-01 | ~1.5M CKB          |
+| 2021-07-29 | ~1.2M CKB          |
+| 2021-09-20 | ~0.9M CKB          |
+| 2021-12-03 | ~32M CKB           |
+| 2022-10-17 | ~62M CKB           |
+| 2024-10-17 | ~5.4M CKB          |
+
+The code computed `s_delta = (S_today - S_prev).max(0)`, which:
+
+1. Clamped the negative delta to 0 (discarded the decrease)
+2. **Still updated `prev_secondary_pool` to the lower S value**
+3. In the next batch, `s_delta = S_next - S_low` was inflated by the amount of the drop
+
+This was particularly destructive at **batch boundaries**: if a batch ended mid-day after an S drop, the partial-day snapshot stored the low S value. The next batch then computed an inflated s_delta from that low base, permanently overcounting the cumulative.
+
+```rust
+// WRONG: discards S drop but still updates prev to the lower value
+let s_delta = (secondary_pool - prev_secondary_pool).max(0);
+// ... compute split ...
+prev_secondary_pool = secondary_pool; // saves the too-low S!
+
+// CORRECT: allow negative s_delta, absorb into treasury
+let s_delta = secondary_pool - prev_secondary_pool;
+if s_delta >= 0 {
+    // normal split
+} else {
+    // protocol upgrade: absorb negative into treasury
+    (0, 0, s_delta)
+}
+prev_secondary_pool = secondary_pool;
+```
+
+**Lesson**: CKB protocol upgrades can retroactively recalculate the DAO S field, causing it to decrease. Never assume on-chain cumulative fields are monotonically increasing. When computing deltas from cumulative values, handle negative deltas explicitly rather than clamping to zero.
+
+**Files**:
+
+- `crates/indexer/src/sync/indexer.rs` — inline snapshot computation (2 paths)
+- `crates/ckbadger-store/src/stats_ops.rs` — rebuild path
+
+**Tests**: `stats_ops::tests::test_dao_snapshot_negative_s_delta_protocol_upgrade`, `stats_ops::tests::test_dao_snapshot_negative_s_delta_batch_boundary`
+
+---
+
 ## Category: Statistics & Charts
 
 ### STATS-001: Cumulative values wrong for new days (19ee513)

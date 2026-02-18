@@ -1239,8 +1239,6 @@ async fn get_total_supply_chart(
     let data: Vec<StackedAreaDataPoint> = snapshots
         .iter()
         .filter_map(|s| {
-            let locked_shannon = s.total_deposited.max(0) as f64;
-
             // Use actual C (total_issuance) and cum_treasury from the DAO
             // when available; fall back to estimate for pre-migration data.
             // NOTE: secondary_pool (S field) is non-miner secondary = dao + treasury.
@@ -1254,16 +1252,14 @@ async fn get_total_supply_chart(
                 (ts, GENESIS_BURNT as f64)
             };
 
-            let circulating = (total_supply - burnt - locked_shannon).max(0.0);
+            // Circulating = total_supply - burnt (standard CKB definition).
+            // DAO-locked CKB is still considered circulating — it can be unlocked.
+            let circulating = (total_supply - burnt).max(0.0);
 
             let mut values = std::collections::HashMap::new();
             values.insert(
                 "circulating".to_string(),
                 format!("{:.0}", circulating / SHANNON),
-            );
-            values.insert(
-                "locked".to_string(),
-                format!("{:.0}", locked_shannon / SHANNON),
             );
             values.insert("burnt".to_string(), format!("{:.0}", burnt / SHANNON));
             Some(StackedAreaDataPoint {
@@ -1278,11 +1274,6 @@ async fn get_total_supply_chart(
             key: "circulating".to_string(),
             label: "Circulating".to_string(),
             color: "#00c389".to_string(),
-        },
-        StackedAreaSeries {
-            key: "locked".to_string(),
-            label: "Locked in DAO".to_string(),
-            color: "#8b5cf6".to_string(),
         },
         StackedAreaSeries {
             key: "burnt".to_string(),
