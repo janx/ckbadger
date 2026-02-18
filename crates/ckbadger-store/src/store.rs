@@ -233,8 +233,15 @@ impl CkbadgerStore {
         // Bypass OS page cache for flush/compaction to avoid cache pollution
         opts.set_use_direct_io_for_flush_and_compaction(true);
 
-        // Pipeline WAL write and memtable insert for concurrent writers
-        opts.set_enable_pipelined_write(true);
+        // Atomic flush: when any CF's memtable triggers a flush, ALL CFs flush
+        // together. This prevents cross-CF data inconsistency when using
+        // commit_no_wal() during bulk sync — without it, a crash can leave
+        // live_cells deletes flushed to SST while consumed_cells puts are lost
+        // in memtable, creating unrecoverable "cell black holes".
+        // Note: atomic_flush is incompatible with enable_pipelined_write, but
+        // pipelined_write only helps pipeline WAL+memtable inserts — irrelevant
+        // during bulk sync where WAL is disabled (commit_no_wal).
+        opts.set_atomic_flush(true);
 
         // 8 GB block cache — system has 93 GB RAM; 2 GB only covered ~17% of SST data
         let block_cache = rocksdb::Cache::new_lru_cache(8 * 1024 * 1024 * 1024);

@@ -336,7 +336,8 @@ impl CkbadgerStore {
                 write_batch = crate::batch::StoreBatch::new(self);
             }
         }
-        if !written.is_multiple_of(20_000) {
+        #[allow(clippy::manual_is_multiple_of)]
+        if written % 20_000 != 0 {
             write_batch.commit()?;
         }
 

@@ -7,6 +7,7 @@ use ckbadger_store::CkbadgerStore;
 use redis::AsyncCommands;
 use serde::Deserialize;
 use std::sync::Arc;
+use std::time::Instant;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -85,6 +86,36 @@ pub struct ChainInfoData {
     pub avg_block_time: String,
     pub tps: String,
     pub tx_24h: i64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RedisServiceInfo {
+    pub enabled: bool,
+    pub reachable: bool,
+    pub latency_ms: Option<f64>,
+    pub sync_status_age_secs: Option<i64>,
+    pub sync_progress_age_secs: Option<i64>,
+    pub memory_stats_age_secs: Option<i64>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ApiServiceInfo {
+    pub reachable: bool,
+    pub latency_ms: Option<f64>,
+    pub status_code: Option<u16>,
+    pub latest_block: Option<i64>,
+    pub tps: Option<String>,
+    pub avg_block_time: Option<String>,
+    pub error: Option<String>,
+}
+
+fn age_since(unix_ts: i64, now: i64) -> Option<i64> {
+    if unix_ts <= 0 {
+        None
+    } else {
+        Some((now - unix_ts).max(0))
+    }
 }
 
 pub struct TuiDb {
@@ -329,11 +360,84 @@ impl TuiDb {
             tx_24h,
         })
     }
+
+    pub async fn get_redis_service_info(&self) -> RedisServiceInfo {
+        let now = chrono::Utc::now().timestamp();
+        let mut info = RedisServiceInfo {
+            enabled: self.redis.is_some(),
+            ..Default::default()
+        };
+
+        let Some(conn) = self.redis.as_ref() else {
+            info.error = Some("redis not configured".to_string());
+            return info;
+        };
+
+        let mut conn = conn.clone();
+        let started = Instant::now();
+        let ping_result: std::result::Result<String, _> =
+            redis::cmd("PING").query_async(&mut conn).await;
+        info.latency_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
+
+        if let Err(e) = ping_result {
+            info.error = Some(format!("ping failed: {e}"));
+            return info;
+        }
+
+        info.reachable = true;
+
+        let status: Option<SyncStatusData> = self.get_redis_key(SYNC_STATUS_REDIS_KEY).await;
+        let progress: Option<SyncProgressData> = self.get_redis_key(SYNC_PROGRESS_REDIS_KEY).await;
+        let memory: Option<MemoryStatsData> = self.get_redis_key(MEMORY_STATS_REDIS_KEY).await;
+
+        info.sync_status_age_secs = status.and_then(|s| age_since(s.last_synced_at, now));
+        info.sync_progress_age_secs = progress.and_then(|p| age_since(p.updated_at, now));
+        info.memory_stats_age_secs = memory.and_then(|m| age_since(m.updated_at, now));
+
+        info
+    }
+
+    pub async fn get_api_service_info(&self) -> ApiServiceInfo {
+        let mut info = ApiServiceInfo::default();
+        let url = format!("{}/statistics/network", self.api_url);
+        let started = Instant::now();
+
+        let response = self.http.get(&url).send().await;
+        info.latency_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
+
+        let response = match response {
+            Ok(resp) => resp,
+            Err(e) => {
+                info.error = Some(format!("request failed: {e}"));
+                return info;
+            }
+        };
+
+        info.status_code = Some(response.status().as_u16());
+        if !response.status().is_success() {
+            info.error = Some(format!("http {}", response.status()));
+            return info;
+        }
+
+        match response.json::<ApiNetworkStats>().await {
+            Ok(stats) => {
+                info.reachable = true;
+                info.latest_block = Some(stats.latest_block);
+                info.tps = Some(stats.tps);
+                info.avg_block_time = Some(stats.avg_block_time);
+            }
+            Err(e) => {
+                info.error = Some(format!("decode failed: {e}"));
+            }
+        }
+
+        info
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::parse_epoch_string;
+    use super::{age_since, parse_epoch_string};
 
     #[test]
     fn parse_epoch_full() {
@@ -348,5 +452,12 @@ mod tests {
     #[test]
     fn parse_epoch_invalid() {
         assert_eq!(parse_epoch_string("bad"), (0, 0, 1800));
+    }
+
+    #[test]
+    fn age_since_handles_zero_and_future() {
+        assert_eq!(age_since(0, 100), None);
+        assert_eq!(age_since(120, 100), Some(0));
+        assert_eq!(age_since(80, 100), Some(20));
     }
 }

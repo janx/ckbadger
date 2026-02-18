@@ -11,7 +11,7 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use crate::chart::{render_bar_chart, ChartStats};
-use crate::db::{ChainInfoData, SyncStatusRow, TuiDb};
+use crate::db::{ApiServiceInfo, ChainInfoData, RedisServiceInfo, SyncStatusRow, TuiDb};
 
 const RATE_HISTORY_SIZE: usize = 3600;
 const LOG_HISTORY_SIZE: usize = 200;
@@ -78,11 +78,19 @@ enum DiagnosticsViewMode {
     Detail,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompactSyncLayout {
+    DiagnosticsOnly,
+    ChartsAndDiagnostics,
+}
+
 pub struct App {
     db: TuiDb,
     sync_status: Option<SyncStatusRow>,
     memory_stats: Option<MemoryStatsData>,
     chain_info: Option<ChainInfoData>,
+    redis_service: RedisServiceInfo,
+    api_service: ApiServiceInfo,
     last_refresh: Instant,
     last_sample: Instant,
     status_message: Option<(String, Instant)>,
@@ -136,6 +144,8 @@ impl App {
             sync_status: None,
             memory_stats: None,
             chain_info: None,
+            redis_service: RedisServiceInfo::default(),
+            api_service: ApiServiceInfo::default(),
             last_refresh: Instant::now(),
             last_sample: Instant::now(),
             status_message: None,
@@ -267,6 +277,8 @@ impl App {
 
         self.memory_stats = self.db.get_memory_stats().await;
         self.chain_info = self.db.get_chain_info().await;
+        self.redis_service = self.db.get_redis_service_info().await;
+        self.api_service = self.db.get_api_service_info().await;
         self.last_refresh = Instant::now();
 
         self.detect_events();
@@ -625,6 +637,7 @@ fn draw_content(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_overview_content(f: &mut Frame, app: &App, area: Rect) {
+    let log_min_height = overview_log_min_height();
     match detect_layout_density(app, area) {
         LayoutDensity::Compact => {
             let chunks = Layout::default()
@@ -633,14 +646,14 @@ fn draw_overview_content(f: &mut Frame, app: &App, area: Rect) {
                     Constraint::Length(6),
                     Constraint::Length(7),
                     Constraint::Length(8),
-                    Constraint::Min(4),
+                    Constraint::Min(log_min_height),
                 ])
                 .split(area);
 
             draw_overview_kpis(f, app, chunks[0]);
             draw_chain_info(f, app, chunks[1]);
             draw_storage_health(f, app, chunks[2]);
-            draw_log(f, app, chunks[3]);
+            draw_overview_tail(f, app, chunks[3]);
         }
         LayoutDensity::Standard => {
             let chunks = Layout::default()
@@ -650,7 +663,7 @@ fn draw_overview_content(f: &mut Frame, app: &App, area: Rect) {
                     Constraint::Length(7),
                     Constraint::Length(8),
                     Constraint::Length(8),
-                    Constraint::Min(5),
+                    Constraint::Min(log_min_height),
                 ])
                 .split(area);
 
@@ -658,7 +671,7 @@ fn draw_overview_content(f: &mut Frame, app: &App, area: Rect) {
             draw_chain_info(f, app, chunks[1]);
             draw_memory_stats(f, app, chunks[2]);
             draw_storage_health(f, app, chunks[3]);
-            draw_log(f, app, chunks[4]);
+            draw_overview_tail(f, app, chunks[4]);
         }
         LayoutDensity::Wide => {
             let chunks = Layout::default()
@@ -668,7 +681,7 @@ fn draw_overview_content(f: &mut Frame, app: &App, area: Rect) {
                     Constraint::Length(7),
                     Constraint::Length(8),
                     Constraint::Length(8),
-                    Constraint::Min(7),
+                    Constraint::Min(log_min_height),
                 ])
                 .split(area);
 
@@ -676,28 +689,72 @@ fn draw_overview_content(f: &mut Frame, app: &App, area: Rect) {
             draw_chain_info(f, app, chunks[1]);
             draw_memory_stats(f, app, chunks[2]);
             draw_storage_health(f, app, chunks[3]);
-            draw_log(f, app, chunks[4]);
+            draw_overview_tail(f, app, chunks[4]);
         }
+    }
+}
+
+fn overview_log_min_height() -> u16 {
+    3
+}
+
+fn overview_services_min_height() -> u16 {
+    8
+}
+
+fn draw_overview_tail(f: &mut Frame, app: &App, area: Rect) {
+    let min_log = overview_log_min_height();
+    let min_services = overview_services_min_height();
+    if area.height >= min_services + min_log {
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(min_services), Constraint::Min(min_log)])
+            .split(area);
+        draw_service_windows(f, app, rows[0]);
+        draw_log(f, app, rows[1]);
+    } else {
+        draw_log(f, app, area);
     }
 }
 
 fn draw_sync_content(f: &mut Frame, app: &App, area: Rect) {
     match detect_layout_density(app, area) {
-        LayoutDensity::Compact => {
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Length(4),
-                    Constraint::Length(7),
-                    Constraint::Min(10),
-                    Constraint::Min(4),
-                ])
-                .split(area);
-            draw_sync_realtime_bar(f, app, chunks[0]);
-            draw_sync_progress(f, app, chunks[1]);
-            draw_sync_charts(f, app, chunks[2]);
-            draw_sync_events(f, app, chunks[3]);
-        }
+        LayoutDensity::Compact => match compact_sync_layout(area) {
+            CompactSyncLayout::DiagnosticsOnly => {
+                let chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([
+                        Constraint::Length(4),
+                        Constraint::Length(7),
+                        Constraint::Min(7),
+                        Constraint::Min(3),
+                    ])
+                    .split(area);
+                draw_sync_realtime_bar(f, app, chunks[0]);
+                draw_sync_progress(f, app, chunks[1]);
+                draw_sync_diagnostics(f, app, chunks[2]);
+                draw_sync_events(f, app, chunks[3]);
+            }
+            CompactSyncLayout::ChartsAndDiagnostics => {
+                let chart_height = if area.width < 120 { 16 } else { 8 };
+                let diagnostics_height = if area.width < 120 { 8 } else { 7 };
+                let chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([
+                        Constraint::Length(4),
+                        Constraint::Length(7),
+                        Constraint::Length(chart_height),
+                        Constraint::Length(diagnostics_height),
+                        Constraint::Min(3),
+                    ])
+                    .split(area);
+                draw_sync_realtime_bar(f, app, chunks[0]);
+                draw_sync_progress(f, app, chunks[1]);
+                draw_sync_charts(f, app, chunks[2]);
+                draw_sync_diagnostics(f, app, chunks[3]);
+                draw_sync_events(f, app, chunks[4]);
+            }
+        },
         LayoutDensity::Standard => {
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
@@ -705,8 +762,8 @@ fn draw_sync_content(f: &mut Frame, app: &App, area: Rect) {
                     Constraint::Length(4),
                     Constraint::Length(7),
                     Constraint::Length(10),
-                    Constraint::Length(7),
-                    Constraint::Min(5),
+                    Constraint::Length(6),
+                    Constraint::Min(3),
                 ])
                 .split(area);
             draw_sync_realtime_bar(f, app, chunks[0]);
@@ -722,8 +779,8 @@ fn draw_sync_content(f: &mut Frame, app: &App, area: Rect) {
                     Constraint::Length(4),
                     Constraint::Length(7),
                     Constraint::Length(10),
-                    Constraint::Length(9),
-                    Constraint::Min(5),
+                    Constraint::Length(8),
+                    Constraint::Min(3),
                 ])
                 .split(area);
             draw_sync_realtime_bar(f, app, chunks[0]);
@@ -766,7 +823,7 @@ fn draw_sync_realtime_bar(f: &mut Frame, app: &App, area: Rect) {
         Style::default().fg(TERMINAL_DIM)
     };
 
-    let heartbeat_on = (app.last_refresh.elapsed().as_millis() / 500).is_multiple_of(2);
+    let heartbeat_on = heartbeat_is_on(app.last_refresh.elapsed().as_millis());
     let heartbeat = if heartbeat_on { "●" } else { "○" };
     let heartbeat_color = if app.last_refresh.elapsed().as_secs() <= 2 {
         TERMINAL_GREEN
@@ -807,6 +864,10 @@ fn draw_sync_realtime_bar(f: &mut Frame, app: &App, area: Rect) {
         Span::styled(format!("{stale_secs}s"), stale_style),
     ]);
     f.render_widget(Paragraph::new(line), inner);
+}
+
+fn heartbeat_is_on(elapsed_millis: u128) -> bool {
+    (elapsed_millis / 500).is_multiple_of(2)
 }
 
 fn draw_overview_kpis(f: &mut Frame, app: &App, area: Rect) {
@@ -1189,7 +1250,7 @@ fn draw_sync_progress(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_sync_charts(f: &mut Frame, app: &App, area: Rect) {
-    if area.width < 120 {
+    if stack_sync_charts(area) {
         let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
@@ -1215,7 +1276,15 @@ fn draw_chart_panel(f: &mut Frame, area: Rect, title: &str, unit: &str, data: &V
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    if inner.width < 10 || inner.height < 3 {
+    if inner.width < 10 || inner.height == 0 {
+        return;
+    }
+
+    if let Some(message) = chart_height_warning(inner.height) {
+        f.render_widget(
+            Paragraph::new(message).style(Style::default().fg(SLATE_500)),
+            inner,
+        );
         return;
     }
 
@@ -1265,6 +1334,18 @@ fn draw_chart_panel(f: &mut Frame, area: Rect, title: &str, unit: &str, data: &V
         Paragraph::new(chart_lines).wrap(Wrap { trim: false }),
         rows[1],
     );
+}
+
+fn stack_sync_charts(area: Rect) -> bool {
+    area.width < 120 && area.height >= 10
+}
+
+fn chart_height_warning(inner_height: u16) -> Option<&'static str> {
+    if inner_height < 3 {
+        Some("高度不足无法显示")
+    } else {
+        None
+    }
 }
 
 fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
@@ -1404,7 +1485,7 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
                         ),
                     ]),
                 ],
-                vec![
+                dense_right_lines(
                     stage_trend_line("F", TERMINAL_DIM, &app.fetch_stage_history, spark_width),
                     stage_trend_line("P", AMBER, &app.parse_stage_history, spark_width),
                     stage_trend_line("W", TERMINAL_GREEN, &app.write_stage_history, spark_width),
@@ -1421,16 +1502,8 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
                             }),
                         ),
                     ]),
-                    Line::from(vec![
-                        Span::styled("I/O ", Style::default().fg(SLATE_500)),
-                        Span::styled(
-                            format!("RPC {} DB {}", rpc_fetch, db_write),
-                            Style::default().fg(FOREGROUND),
-                        ),
-                        Span::styled("  jitter ", Style::default().fg(SLATE_500)),
-                        Span::styled(rate_jitter_text.clone(), Style::default().fg(AMBER)),
-                    ]),
-                ],
+                    io_rpc_jitter_line(&rpc_fetch, &db_write, &rate_jitter_text),
+                ),
             )
         } else {
             (
@@ -1505,7 +1578,7 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
                         ),
                     ]),
                 ],
-                vec![
+                detail_right_lines(
                     stage_trend_line("F", TERMINAL_DIM, &app.fetch_stage_history, spark_width),
                     stage_trend_line("P", AMBER, &app.parse_stage_history, spark_width),
                     stage_trend_line("W", TERMINAL_GREEN, &app.write_stage_history, spark_width),
@@ -1514,15 +1587,6 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
                         Span::styled(stability, Style::default().fg(stability_color)),
                         Span::styled("  ETA ", Style::default().fg(SLATE_500)),
                         Span::styled(eta_conf.0, Style::default().fg(eta_conf.1)),
-                    ]),
-                    Line::from(vec![
-                        Span::styled("I/O ", Style::default().fg(SLATE_500)),
-                        Span::styled(
-                            format!("RPC {} DB {}", rpc_fetch, db_write),
-                            Style::default().fg(FOREGROUND),
-                        ),
-                        Span::styled("  jitter ", Style::default().fg(SLATE_500)),
-                        Span::styled(rate_jitter_text.clone(), Style::default().fg(AMBER)),
                     ]),
                     Line::from(vec![
                         Span::styled("Rate ", Style::default().fg(SLATE_500)),
@@ -1540,7 +1604,8 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
                             Style::default().fg(FOREGROUND),
                         ),
                     ]),
-                ],
+                    io_rpc_jitter_line(&rpc_fetch, &db_write, &rate_jitter_text),
+                ),
             )
         };
 
@@ -1582,6 +1647,46 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
 
     f.render_widget(Paragraph::new(left), cols[0]);
     f.render_widget(Paragraph::new(right), cols[1]);
+}
+
+fn io_rpc_jitter_line(rpc_fetch: &str, db_write: &str, rate_jitter_text: &str) -> Line<'static> {
+    Line::from(vec![
+        Span::styled("I/O ", Style::default().fg(SLATE_500)),
+        Span::styled(
+            format!("RPC {} DB {}", rpc_fetch, db_write),
+            Style::default().fg(FOREGROUND),
+        ),
+        Span::styled("  jitter ", Style::default().fg(SLATE_500)),
+        Span::styled(rate_jitter_text.to_string(), Style::default().fg(AMBER)),
+    ])
+}
+
+fn dense_right_lines(
+    fetch_line: Line<'static>,
+    parse_line: Line<'static>,
+    write_line: Line<'static>,
+    stability_line: Line<'static>,
+    io_line: Line<'static>,
+) -> Vec<Line<'static>> {
+    vec![stability_line, fetch_line, parse_line, write_line, io_line]
+}
+
+fn detail_right_lines(
+    fetch_line: Line<'static>,
+    parse_line: Line<'static>,
+    write_line: Line<'static>,
+    stability_line: Line<'static>,
+    rate_line: Line<'static>,
+    io_line: Line<'static>,
+) -> Vec<Line<'static>> {
+    vec![
+        stability_line,
+        fetch_line,
+        parse_line,
+        write_line,
+        rate_line,
+        io_line,
+    ]
 }
 
 fn draw_sync_events(f: &mut Frame, app: &App, area: Rect) {
@@ -1895,6 +2000,232 @@ fn draw_storage_health(f: &mut Frame, app: &App, area: Rect) {
         }
     }
     f.render_widget(Paragraph::new(right_lines), cols[1]);
+}
+
+fn draw_service_windows(f: &mut Frame, app: &App, area: Rect) {
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(area);
+    draw_redis_health(f, app, cols[0]);
+    draw_api_health(f, app, cols[1]);
+}
+
+fn draw_redis_health(f: &mut Frame, app: &App, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(SLATE_800))
+        .title(Span::styled(
+            "Redis Health",
+            Style::default().fg(FOREGROUND),
+        ));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if inner.height == 0 {
+        return;
+    }
+
+    let info = &app.redis_service;
+    let (state, state_color) = redis_health_state(info);
+    let max_age = redis_max_key_age(info);
+
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled("State ", Style::default().fg(SLATE_500)),
+            Span::styled(
+                format!("[{}]", state),
+                Style::default()
+                    .fg(state_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  RTT ", Style::default().fg(SLATE_500)),
+            Span::styled(
+                format_latency_ms(info.latency_ms),
+                Style::default().fg(FOREGROUND),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("sync:status ", Style::default().fg(SLATE_500)),
+            Span::styled(
+                format_age_secs(info.sync_status_age_secs),
+                Style::default().fg(TERMINAL_DIM),
+            ),
+            Span::styled("  progress ", Style::default().fg(SLATE_500)),
+            Span::styled(
+                format_age_secs(info.sync_progress_age_secs),
+                Style::default().fg(TERMINAL_DIM),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("memory:stats ", Style::default().fg(SLATE_500)),
+            Span::styled(
+                format_age_secs(info.memory_stats_age_secs),
+                Style::default().fg(TERMINAL_DIM),
+            ),
+            Span::styled("  max-age ", Style::default().fg(SLATE_500)),
+            Span::styled(format_age_secs(max_age), Style::default().fg(AMBER)),
+        ]),
+    ];
+
+    if let Some(err) = &info.error {
+        lines.push(Line::from(vec![
+            Span::styled("Err ", Style::default().fg(SLATE_500)),
+            Span::styled(
+                trim_for_panel(err, inner.width as usize),
+                Style::default().fg(AMBER),
+            ),
+        ]));
+    } else if !info.enabled {
+        lines.push(Line::from(Span::styled(
+            "Not configured (REDIS_URL)",
+            Style::default().fg(SLATE_500),
+        )));
+    }
+
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+fn draw_api_health(f: &mut Frame, app: &App, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(SLATE_800))
+        .title(Span::styled("API Health", Style::default().fg(FOREGROUND)));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if inner.height == 0 {
+        return;
+    }
+
+    let info = &app.api_service;
+    let (state, state_color) = api_health_state(info);
+    let status_text = info
+        .status_code
+        .map(|code| code.to_string())
+        .unwrap_or_else(|| "-".to_string());
+    let latest_block = info
+        .latest_block
+        .map(format_num)
+        .unwrap_or_else(|| "-".to_string());
+
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled("State ", Style::default().fg(SLATE_500)),
+            Span::styled(
+                format!("[{}]", state),
+                Style::default()
+                    .fg(state_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  RTT ", Style::default().fg(SLATE_500)),
+            Span::styled(
+                format_latency_ms(info.latency_ms),
+                Style::default().fg(FOREGROUND),
+            ),
+            Span::styled("  HTTP ", Style::default().fg(SLATE_500)),
+            Span::styled(status_text, Style::default().fg(TERMINAL_DIM)),
+        ]),
+        Line::from(vec![
+            Span::styled("Latest ", Style::default().fg(SLATE_500)),
+            Span::styled(latest_block, Style::default().fg(TERMINAL_GREEN)),
+            Span::styled("  TPS ", Style::default().fg(SLATE_500)),
+            Span::styled(
+                info.tps.clone().unwrap_or_else(|| "-".to_string()),
+                Style::default().fg(TERMINAL_DIM),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("Avg Block ", Style::default().fg(SLATE_500)),
+            Span::styled(
+                info.avg_block_time
+                    .clone()
+                    .unwrap_or_else(|| "-".to_string()),
+                Style::default().fg(FOREGROUND),
+            ),
+        ]),
+    ];
+
+    if let Some(err) = &info.error {
+        lines.push(Line::from(vec![
+            Span::styled("Err ", Style::default().fg(SLATE_500)),
+            Span::styled(
+                trim_for_panel(err, inner.width as usize),
+                Style::default().fg(AMBER),
+            ),
+        ]));
+    }
+
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+fn redis_max_key_age(info: &RedisServiceInfo) -> Option<i64> {
+    [
+        info.sync_status_age_secs,
+        info.sync_progress_age_secs,
+        info.memory_stats_age_secs,
+    ]
+    .into_iter()
+    .flatten()
+    .max()
+}
+
+fn redis_health_state(info: &RedisServiceInfo) -> (&'static str, Color) {
+    if !info.enabled {
+        return ("OFF", SLATE_500);
+    }
+    if !info.reachable {
+        return ("DOWN", ERROR_RED);
+    }
+    if redis_max_key_age(info).is_some_and(|age| age > 30) {
+        ("STALE", AMBER)
+    } else {
+        ("OK", TERMINAL_GREEN)
+    }
+}
+
+fn api_health_state(info: &ApiServiceInfo) -> (&'static str, Color) {
+    if !info.reachable {
+        return ("DOWN", ERROR_RED);
+    }
+    if info.status_code.is_some_and(|code| code >= 500)
+        || info.latency_ms.is_some_and(|latency| latency >= 1500.0)
+    {
+        ("WARN", AMBER)
+    } else {
+        ("OK", TERMINAL_GREEN)
+    }
+}
+
+fn format_latency_ms(latency_ms: Option<f64>) -> String {
+    latency_ms
+        .map(|v| format!("{v:.1}ms"))
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn format_age_secs(age_secs: Option<i64>) -> String {
+    age_secs
+        .map(|v| format!("{v}s"))
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn trim_for_panel(text: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    let max = width.saturating_sub(6);
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    if max <= 3 {
+        return "...".to_string();
+    }
+    let mut out = String::new();
+    for ch in text.chars().take(max - 3) {
+        out.push(ch);
+    }
+    out.push_str("...");
+    out
 }
 
 fn draw_log(f: &mut Frame, app: &App, area: Rect) {
@@ -2328,6 +2659,15 @@ fn detect_layout_density(app: &App, area: Rect) -> LayoutDensity {
     }
 }
 
+fn compact_sync_layout(area: Rect) -> CompactSyncLayout {
+    let min_height_for_charts = if area.width < 120 { 38 } else { 30 };
+    if area.height >= min_height_for_charts {
+        CompactSyncLayout::ChartsAndDiagnostics
+    } else {
+        CompactSyncLayout::DiagnosticsOnly
+    }
+}
+
 fn draw_help_popup(f: &mut Frame) {
     let outer = f.area();
     let popup_area = centered_rect(74, 62, outer);
@@ -2449,11 +2789,25 @@ fn format_bytes(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        diagnostics_dense_panel, eta_confidence_label, format_num, format_num_commas,
-        pipeline_bottleneck, pipeline_flow_state, rate_jitter, sparkline, sync_bottleneck,
-        trend_delta, Color, DiagnosticsViewMode, SyncBottleneck,
+        api_health_state, chart_height_warning, compact_sync_layout, dense_right_lines,
+        detail_right_lines, diagnostics_dense_panel, eta_confidence_label, format_age_secs,
+        format_num, format_num_commas, heartbeat_is_on, io_rpc_jitter_line,
+        overview_log_min_height, overview_services_min_height, pipeline_bottleneck,
+        pipeline_flow_state, rate_jitter, redis_health_state, redis_max_key_age, sparkline,
+        stack_sync_charts, sync_bottleneck, trend_delta, trim_for_panel, Color, CompactSyncLayout,
+        DiagnosticsViewMode, SyncBottleneck,
     };
+    use crate::db::{ApiServiceInfo, RedisServiceInfo};
+    use ratatui::layout::Rect;
+    use ratatui::text::Line;
     use std::collections::VecDeque;
+
+    fn line_text(line: &Line<'_>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>()
+    }
 
     #[test]
     fn test_format_num_commas() {
@@ -2624,5 +2978,175 @@ mod tests {
         assert!(diagnostics_dense_panel(DiagnosticsViewMode::Auto, 120, 8));
         assert!(diagnostics_dense_panel(DiagnosticsViewMode::Auto, 180, 6));
         assert!(!diagnostics_dense_panel(DiagnosticsViewMode::Auto, 180, 10));
+    }
+
+    #[test]
+    fn test_compact_sync_layout() {
+        assert_eq!(
+            compact_sync_layout(Rect::new(0, 0, 120, 20)),
+            CompactSyncLayout::DiagnosticsOnly
+        );
+        assert_eq!(
+            compact_sync_layout(Rect::new(0, 0, 120, 29)),
+            CompactSyncLayout::DiagnosticsOnly
+        );
+        assert_eq!(
+            compact_sync_layout(Rect::new(0, 0, 120, 30)),
+            CompactSyncLayout::ChartsAndDiagnostics
+        );
+        assert_eq!(
+            compact_sync_layout(Rect::new(0, 0, 100, 37)),
+            CompactSyncLayout::DiagnosticsOnly
+        );
+        assert_eq!(
+            compact_sync_layout(Rect::new(0, 0, 100, 38)),
+            CompactSyncLayout::ChartsAndDiagnostics
+        );
+    }
+
+    #[test]
+    fn test_io_rpc_jitter_line_format() {
+        let line = io_rpc_jitter_line("123.4ms", "567.8ms", "9.0 blk/s");
+        let text = line_text(&line);
+        assert!(text.starts_with("I/O RPC 123.4ms DB 567.8ms"));
+        assert!(text.contains("jitter 9.0 blk/s"));
+    }
+
+    #[test]
+    fn test_dense_right_lines_order() {
+        let lines = dense_right_lines(
+            Line::from("F"),
+            Line::from("P"),
+            Line::from("W"),
+            Line::from("Stability"),
+            Line::from("I/O"),
+        );
+        let labels: Vec<String> = lines.iter().map(line_text).collect();
+        assert_eq!(labels, vec!["Stability", "F", "P", "W", "I/O"]);
+    }
+
+    #[test]
+    fn test_detail_right_lines_order() {
+        let lines = detail_right_lines(
+            Line::from("F"),
+            Line::from("P"),
+            Line::from("W"),
+            Line::from("Stability"),
+            Line::from("Rate"),
+            Line::from("I/O"),
+        );
+        let labels: Vec<String> = lines.iter().map(line_text).collect();
+        assert_eq!(labels, vec!["Stability", "F", "P", "W", "Rate", "I/O"]);
+    }
+
+    #[test]
+    fn test_stack_sync_charts_rule() {
+        assert!(stack_sync_charts(Rect::new(0, 0, 100, 12)));
+        assert!(!stack_sync_charts(Rect::new(0, 0, 100, 8)));
+        assert!(!stack_sync_charts(Rect::new(0, 0, 130, 12)));
+    }
+
+    #[test]
+    fn test_chart_height_warning() {
+        assert_eq!(chart_height_warning(0), Some("高度不足无法显示"));
+        assert_eq!(chart_height_warning(2), Some("高度不足无法显示"));
+        assert_eq!(chart_height_warning(3), None);
+    }
+
+    #[test]
+    fn test_overview_log_min_height() {
+        assert_eq!(overview_log_min_height(), 3);
+    }
+
+    #[test]
+    fn test_overview_services_min_height() {
+        assert_eq!(overview_services_min_height(), 8);
+    }
+
+    #[test]
+    fn test_redis_health_state() {
+        let off = RedisServiceInfo::default();
+        assert_eq!(redis_health_state(&off), ("OFF", Color::Rgb(160, 174, 192)));
+
+        let down = RedisServiceInfo {
+            enabled: true,
+            reachable: false,
+            ..Default::default()
+        };
+        assert_eq!(redis_health_state(&down), ("DOWN", Color::Rgb(239, 68, 68)));
+
+        let stale = RedisServiceInfo {
+            enabled: true,
+            reachable: true,
+            sync_progress_age_secs: Some(40),
+            ..Default::default()
+        };
+        assert_eq!(
+            redis_health_state(&stale),
+            ("STALE", Color::Rgb(255, 176, 0))
+        );
+
+        let ok = RedisServiceInfo {
+            enabled: true,
+            reachable: true,
+            sync_progress_age_secs: Some(10),
+            ..Default::default()
+        };
+        assert_eq!(redis_health_state(&ok), ("OK", Color::Rgb(0, 255, 65)));
+        assert_eq!(redis_max_key_age(&ok), Some(10));
+    }
+
+    #[test]
+    fn test_api_health_state() {
+        let down = ApiServiceInfo::default();
+        assert_eq!(api_health_state(&down), ("DOWN", Color::Rgb(239, 68, 68)));
+
+        let warn_http = ApiServiceInfo {
+            reachable: true,
+            status_code: Some(503),
+            latency_ms: Some(30.0),
+            ..Default::default()
+        };
+        assert_eq!(
+            api_health_state(&warn_http),
+            ("WARN", Color::Rgb(255, 176, 0))
+        );
+
+        let warn_latency = ApiServiceInfo {
+            reachable: true,
+            status_code: Some(200),
+            latency_ms: Some(1800.0),
+            ..Default::default()
+        };
+        assert_eq!(
+            api_health_state(&warn_latency),
+            ("WARN", Color::Rgb(255, 176, 0))
+        );
+
+        let ok = ApiServiceInfo {
+            reachable: true,
+            status_code: Some(200),
+            latency_ms: Some(25.0),
+            ..Default::default()
+        };
+        assert_eq!(api_health_state(&ok), ("OK", Color::Rgb(0, 255, 65)));
+    }
+
+    #[test]
+    fn test_health_format_helpers() {
+        assert_eq!(format_age_secs(None), "-");
+        assert_eq!(format_age_secs(Some(12)), "12s");
+        assert_eq!(trim_for_panel("abcdef", 0), "");
+        assert_eq!(trim_for_panel("abcdef", 6), "...");
+        assert_eq!(trim_for_panel("abcdefghijkl", 10), "a...");
+    }
+
+    #[test]
+    fn test_heartbeat_is_on_every_500ms_with_1s_cycle() {
+        assert!(heartbeat_is_on(0));
+        assert!(heartbeat_is_on(499));
+        assert!(!heartbeat_is_on(500));
+        assert!(!heartbeat_is_on(999));
+        assert!(heartbeat_is_on(1000));
     }
 }
