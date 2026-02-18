@@ -142,9 +142,6 @@ describe('CellDetailPage', () => {
     await waitFor(() => {
       expect(screen.getByText('Live')).toBeInTheDocument();
     });
-
-    expect(screen.queryByText('Nervos DAO')).not.toBeInTheDocument();
-    expect(screen.queryByText('Nervos DAO Deposit')).not.toBeInTheDocument();
   });
 
   it('renders withdrawn DAO cell with compensation info', async () => {

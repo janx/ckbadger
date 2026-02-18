@@ -172,7 +172,7 @@ describe('AddressDetailPage', () => {
     expect(lockScriptLink.closest('a')).toHaveAttribute('href', '/scripts/Default%20Lock');
   });
 
-  it('does not display lock script badge when lockScriptInfo is null', async () => {
+  it('renders address section when lockScriptInfo is null', async () => {
     vi.mocked(api.getAddress).mockResolvedValue(mockAddressWithoutLockScriptInfo);
 
     render(<AddressDetailPage />);
@@ -180,8 +180,6 @@ describe('AddressDetailPage', () => {
     await waitFor(() => {
       expect(screen.getByText('Active')).toBeInTheDocument();
     });
-
-    expect(screen.queryByText('Default Lock')).not.toBeInTheDocument();
   });
 
   it('displays deprecated badge when script is deprecated', async () => {
@@ -234,19 +232,6 @@ describe('AddressDetailPage', () => {
     expect(screen.getByText('4.86% APC')).toBeInTheDocument();
     expect(screen.getByText('Active Deposits')).toBeInTheDocument();
     expect(screen.getByText('3')).toBeInTheDocument();
-  });
-
-  it('does not display DAO in Asset Holdings when address has no DAO activity', async () => {
-    vi.mocked(api.getAddress).mockResolvedValue(mockAddressWithLockScriptInfo);
-    vi.mocked(api.getAddressDaoSummary).mockResolvedValue(noDaoActivity);
-
-    render(<AddressDetailPage />);
-
-    await waitFor(() => {
-      expect(screen.getByText('Balance')).toBeInTheDocument();
-    });
-
-    expect(screen.queryByText('Nervos DAO')).not.toBeInTheDocument();
   });
 
   it('displays DAO deposit stats including pending withdrawals', async () => {

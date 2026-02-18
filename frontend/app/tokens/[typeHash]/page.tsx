@@ -189,7 +189,7 @@ export default function TokenDetailPage() {
                 )}
                 {token.totalCapacity != null && (
                   <StatBlock
-                    label="CKB Locked"
+                    label="Cells Capacity"
                     value={formatCkbCompact(token.totalCapacity).value}
                     suffix=" CKB"
                     color="green"
@@ -232,7 +232,7 @@ export default function TokenDetailPage() {
                           className="text-terminal-green font-mono text-xs"
                           title={formatCkbAmount(freeBig.toString()).full + ' CKB'}
                         >
-                          Free: {formatCkbCompact(freeBig.toString()).value} CKB
+                          Unoccupied: {formatCkbCompact(freeBig.toString()).value} CKB
                         </span>
                       </div>
                     </div>

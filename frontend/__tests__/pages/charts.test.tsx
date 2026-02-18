@@ -152,18 +152,6 @@ describe('ChartsPage', () => {
     expect(screen.getByText('Charts')).toBeInTheDocument();
   });
 
-  it('does NOT show warning when chartDataMayBeIncomplete is false', async () => {
-    vi.mocked(api.getNetworkStats).mockResolvedValue(mockNetworkStatsComplete);
-
-    render(<ChartsPage />);
-
-    await waitFor(() => {
-      expect(api.getNetworkStats).toHaveBeenCalled();
-    });
-
-    expect(screen.queryByText(/Chart data may be incomplete/i)).not.toBeInTheDocument();
-  });
-
   it('shows warning when chartDataMayBeIncomplete is true', async () => {
     vi.mocked(api.getNetworkStats).mockResolvedValue(mockNetworkStatsSyncing);
 

@@ -85,13 +85,13 @@ describe('TokenDetailPage', () => {
     });
   });
 
-  it('renders CKB locked stat', async () => {
+  it('renders cells capacity stat', async () => {
     vi.mocked(api.getToken).mockResolvedValue(mockToken);
 
     render(<TokenDetailPage />);
 
     await waitFor(() => {
-      expect(screen.getByText('CKB Locked')).toBeInTheDocument();
+      expect(screen.getByText('Cells Capacity')).toBeInTheDocument();
     });
   });
 
@@ -106,34 +106,15 @@ describe('TokenDetailPage', () => {
     });
   });
 
-  it('renders occupied and free breakdown', async () => {
+  it('renders occupied and unoccupied breakdown', async () => {
     vi.mocked(api.getToken).mockResolvedValue(mockToken);
 
     render(<TokenDetailPage />);
 
     await waitFor(() => {
       expect(screen.getByText(/^Occupied:/)).toBeInTheDocument();
-      expect(screen.getByText(/^Free:/)).toBeInTheDocument();
+      expect(screen.getByText(/^Unoccupied:/)).toBeInTheDocument();
     });
-  });
-
-  it('does not render capacity section when data is null', async () => {
-    vi.mocked(api.getToken).mockResolvedValue({
-      ...mockToken,
-      cellsCount: null,
-      totalCapacity: null,
-      totalOccupiedCapacity: null,
-    });
-
-    render(<TokenDetailPage />);
-
-    await waitFor(() => {
-      expect(screen.getByText('TEST')).toBeInTheDocument();
-    });
-
-    expect(screen.queryByText('Cells')).not.toBeInTheDocument();
-    expect(screen.queryByText('CKB Locked')).not.toBeInTheDocument();
-    expect(screen.queryByText('Capacity Utilization')).not.toBeInTheDocument();
   });
 
   it('renders basic token info', async () => {

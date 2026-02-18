@@ -105,8 +105,7 @@ export default function ScriptsPage() {
             ) : data?.data?.length ? (
               <>
                 <div className="flex border-b border-slate-800 bg-slate-900/50 px-4 py-2 font-mono text-xs uppercase tracking-wider text-slate-500">
-                  <div className="w-36">Script</div>
-                  <div className="w-28">Status</div>
+                  <div className="w-44">Script</div>
                   <div className="w-16">Kind</div>
                   <div className="flex-1 px-4">Description</div>
                   <div className="w-44 text-right">Code Hash</div>
@@ -114,20 +113,13 @@ export default function ScriptsPage() {
                 {data.data.map((script: KnownScript) => (
                   <TerminalRow key={script.name}>
                     <div className="flex items-center">
-                      <div className="w-36">
+                      <div className="w-44">
                         <Link
                           href={`/scripts/${encodeURIComponent(script.name)}`}
                           className="text-terminal-green font-medium hover:underline"
                         >
                           {script.name}
                         </Link>
-                      </div>
-                      <div className="flex w-28 gap-1">
-                        {script.isSystem && <Badge variant="gray">System</Badge>}
-                        {script.deprecated && <Badge variant="red">Deprecated</Badge>}
-                        {!script.isSystem && !script.deprecated && (
-                          <span className="text-slate-600">-</span>
-                        )}
                       </div>
                       <div className="w-16">
                         {script.scriptKind ? (
