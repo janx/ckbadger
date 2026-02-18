@@ -170,7 +170,7 @@ async fn run_sync(args: Cli) -> Result<()> {
     }
 
     // One-time backfill: rebuild avg_block_time_ms from block headers
-    let sync_status = store.get_sync_status()?;
+    let mut sync_status = store.get_sync_status()?;
     if !sync_status.avg_block_time_rebuilt && sync_status.tip_block_number > 0 {
         info!("avg_block_time migration: rebuilding from block headers...");
         let updated = store.rebuild_avg_block_times()?;
@@ -181,9 +181,9 @@ async fn run_sync(args: Cli) -> Result<()> {
         store.update_sync_status(|s| {
             s.avg_block_time_rebuilt = true;
         })?;
+        sync_status = store.get_sync_status()?;
     }
 
-    let sync_status = store.get_sync_status()?;
     let db_tip = sync_status.tip_block_number;
     let is_fresh_sync = db_tip == 0;
 

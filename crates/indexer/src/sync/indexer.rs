@@ -34,6 +34,8 @@ use super::SyncProgress;
 
 #[allow(dead_code)]
 const PARTITION_SIZE: u64 = 5_000_000;
+const PRIMARY_PER_EPOCH_ERA0: i128 = 191_780_821_917_808;
+const PRIMARY_HALVING_EPOCH_INTERVAL: i64 = 8760;
 
 #[allow(dead_code)]
 fn get_partition_index(block_number: u64) -> usize {
@@ -133,6 +135,8 @@ struct BatchStats {
     dao_daily_active_delta: HashMap<NaiveDate, i128>,
     dao_daily_gross_deposit_delta: HashMap<NaiveDate, i128>,
     dao_daily_new_deposits_delta: HashMap<NaiveDate, i64>,
+    daily_secondary_non_miner_delta: HashMap<NaiveDate, i128>,
+    daily_secondary_miner_delta: HashMap<NaiveDate, i128>,
 }
 
 #[derive(Clone)]
@@ -169,6 +173,54 @@ struct CachedUdtCellInfo {
     lock_script_hash: Vec<u8>,
     amount: u128,
     standard: String,
+}
+
+fn extract_dao_csu(dao: &[u8]) -> Option<(i128, i128, i128)> {
+    if dao.len() < 32 {
+        return None;
+    }
+    let c = u64::from_le_bytes(dao[0..8].try_into().ok()?) as i128;
+    let s = u64::from_le_bytes(dao[16..24].try_into().ok()?) as i128;
+    let u = u64::from_le_bytes(dao[24..32].try_into().ok()?) as i128;
+    Some((c, s, u))
+}
+
+fn primary_issuance_per_block(epoch_number: i64, epoch_length: i32) -> i128 {
+    let era = (epoch_number / PRIMARY_HALVING_EPOCH_INTERVAL).max(0) as u32;
+    let primary_per_epoch = PRIMARY_PER_EPOCH_ERA0 >> era;
+    primary_per_epoch / (epoch_length.max(1) as i128)
+}
+
+fn accumulate_secondary_issuance_deltas(
+    stats: &mut BatchStats,
+    parsed: &crate::parser::block::ParsedBlock,
+    block_date: NaiveDate,
+    prev_dao_cs: &mut Option<(i128, i128)>,
+) {
+    let Some((c, s, _)) = extract_dao_csu(&parsed.dao) else {
+        return;
+    };
+
+    if let Some((prev_c, prev_s)) = *prev_dao_cs {
+        let c_delta = c - prev_c;
+        let s_delta = s - prev_s;
+        *stats
+            .daily_secondary_non_miner_delta
+            .entry(block_date)
+            .or_default() += s_delta;
+
+        if s_delta >= 0 {
+            let primary = primary_issuance_per_block(parsed.epoch_number, parsed.epoch_length);
+            let secondary = (c_delta - primary).max(0);
+            let miner = (secondary - s_delta).max(0);
+            *stats
+                .daily_secondary_miner_delta
+                .entry(block_date)
+                .or_default() += miner;
+        }
+    }
+
+    *prev_dao_cs = Some((c, s));
 }
 
 #[derive(Default)]
@@ -2544,10 +2596,29 @@ impl Indexer {
             } else {
                 None
             };
+        let mut prev_dao_cs: Option<(i128, i128)> =
+            if let Some(first_block) = all_parsed_blocks.first() {
+                if first_block.number > 0 {
+                    self.writer
+                        .store()
+                        .get_block_header(first_block.number - 1)?
+                        .and_then(|h| extract_dao_csu(&h.dao).map(|(c, s, _)| (c, s)))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
 
         let mut block_tx_idx = 0usize;
         for parsed in &all_parsed_blocks {
             let block_date = ckbadger_common::block_date(parsed.timestamp);
+            accumulate_secondary_issuance_deltas(
+                &mut batch_stats,
+                parsed,
+                block_date,
+                &mut prev_dao_cs,
+            );
             let tx_count_for_block = parsed.transactions_count as usize;
             let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
             block_tx_idx += tx_count_for_block;
@@ -4161,11 +4232,30 @@ impl Indexer {
                         } else {
                             None
                         };
+                    let mut prev_dao_cs: Option<(i128, i128)> =
+                        if let Some(first_block) = all_parsed_blocks.first() {
+                            if first_block.number > 0 {
+                                writer
+                                    .store()
+                                    .get_block_header(first_block.number - 1)?
+                                    .and_then(|h| extract_dao_csu(&h.dao).map(|(c, s, _)| (c, s)))
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
                     let mut same_batch_dao_deposits: HashMap<(Vec<u8>, i16), i64> = HashMap::new();
 
                     let mut block_tx_idx = 0usize;
                     for parsed in all_parsed_blocks {
                         let block_date = ckbadger_common::block_date(parsed.timestamp);
+                        accumulate_secondary_issuance_deltas(
+                            &mut stats,
+                            parsed,
+                            block_date,
+                            &mut prev_dao_cs,
+                        );
                         let tx_count_for_block = parsed.transactions_count as usize;
                         let tx_slice =
                             &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
@@ -5292,10 +5382,29 @@ impl Indexer {
                 } else {
                     None
                 };
+            let mut prev_dao_cs: Option<(i128, i128)> =
+                if let Some(first_block) = all_parsed_blocks.first() {
+                    if first_block.number > 0 {
+                        self.writer
+                            .store()
+                            .get_block_header(first_block.number - 1)?
+                            .and_then(|h| extract_dao_csu(&h.dao).map(|(c, s, _)| (c, s)))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
 
             let mut block_tx_idx = 0usize;
             for parsed in all_parsed_blocks {
                 let block_date = ckbadger_common::block_date(parsed.timestamp);
+                accumulate_secondary_issuance_deltas(
+                    &mut batch_stats,
+                    parsed,
+                    block_date,
+                    &mut prev_dao_cs,
+                );
                 let tx_count_for_block = parsed.transactions_count as usize;
                 let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
                 block_tx_idx += tx_count_for_block;
@@ -5664,35 +5773,44 @@ impl Indexer {
                         let (total_issuance, secondary_pool, occupied_capacity) = stats
                             .daily_dao_fields
                             .get(date)
-                            .and_then(|field| {
-                                if field.len() >= 32 {
-                                    let c =
-                                        u64::from_le_bytes(field[0..8].try_into().ok()?) as i128;
-                                    let s =
-                                        u64::from_le_bytes(field[16..24].try_into().ok()?) as i128;
-                                    let u =
-                                        u64::from_le_bytes(field[24..32].try_into().ok()?) as i128;
-                                    Some((c, s, u))
-                                } else {
-                                    None
-                                }
-                            })
+                            .and_then(|field| extract_dao_csu(field))
                             .unwrap_or((0, 0, 0));
+                        let daily_non_miner =
+                            stats.daily_secondary_non_miner_delta.get(date).copied();
+                        let daily_miner_exact = stats
+                            .daily_secondary_miner_delta
+                            .get(date)
+                            .copied()
+                            .unwrap_or(0);
                         let (daily_miner, daily_dao_share, daily_treasury_share) =
                             if prev_snapshot.is_some() && total_issuance > 0 {
-                                let s_delta = secondary_pool - prev_secondary_pool;
-                                if s_delta >= 0 {
-                                    let denom = (total_issuance - occupied_capacity).max(1);
-                                    let deposited = running_total_deposited.max(0);
-                                    let miner = s_delta * occupied_capacity / denom;
-                                    let dao = s_delta * deposited / denom;
-                                    let treasury = s_delta - dao;
-                                    (miner, dao, treasury)
+                                if let Some(non_miner) = daily_non_miner {
+                                    if non_miner >= 0 {
+                                        let denom = (total_issuance - occupied_capacity).max(1);
+                                        let deposited = running_total_deposited.max(0);
+                                        let dao = non_miner * deposited / denom;
+                                        let treasury = non_miner - dao;
+                                        (daily_miner_exact.max(0), dao, treasury)
+                                    } else {
+                                        // S field decreased (protocol upgrade boundary).
+                                        // Keep miner/dao monotonic while preserving non-miner sum.
+                                        (0, 0, non_miner)
+                                    }
                                 } else {
-                                    // S field decreased (protocol upgrade boundary).
-                                    // Absorb negative adjustment into treasury to keep
-                                    // miner/dao monotonic while preserving the sum.
-                                    (0, 0, s_delta)
+                                    let s_delta = secondary_pool - prev_secondary_pool;
+                                    if s_delta >= 0 {
+                                        let denom = (total_issuance - occupied_capacity).max(1);
+                                        let deposited = running_total_deposited.max(0);
+                                        let miner = s_delta * occupied_capacity / denom;
+                                        let dao = s_delta * deposited / denom;
+                                        let treasury = s_delta - dao;
+                                        (miner, dao, treasury)
+                                    } else {
+                                        // S field decreased (protocol upgrade boundary).
+                                        // Absorb negative adjustment into treasury to keep
+                                        // miner/dao monotonic while preserving the sum.
+                                        (0, 0, s_delta)
+                                    }
                                 }
                             } else {
                                 (0, 0, 0)
@@ -5773,42 +5891,59 @@ impl Indexer {
                         let (total_issuance, secondary_pool, occupied_capacity) = stats
                             .daily_dao_fields
                             .get(date)
-                            .and_then(|field| {
-                                if field.len() >= 32 {
-                                    let c =
-                                        u64::from_le_bytes(field[0..8].try_into().ok()?) as i128;
-                                    let s =
-                                        u64::from_le_bytes(field[16..24].try_into().ok()?) as i128;
-                                    let u =
-                                        u64::from_le_bytes(field[24..32].try_into().ok()?) as i128;
-                                    Some((c, s, u))
-                                } else {
-                                    None
-                                }
-                            })
+                            .and_then(|field| extract_dao_csu(field))
                             .unwrap_or((0, 0, 0));
+                        let daily_non_miner =
+                            stats.daily_secondary_non_miner_delta.get(date).copied();
+                        let daily_miner_exact = stats
+                            .daily_secondary_miner_delta
+                            .get(date)
+                            .copied()
+                            .unwrap_or(0);
                         let (cum_miner, cum_dao, cum_treasury) = if let Some(ref p) = prev_snapshot
                         {
-                            let s_delta = secondary_pool - p.secondary_pool;
-                            if s_delta >= 0 {
-                                let denom = (total_issuance - occupied_capacity).max(1);
-                                let deposited = total_deposited.max(0);
-                                let daily_miner = s_delta * occupied_capacity / denom;
-                                let daily_dao_share = s_delta * deposited / denom;
-                                let daily_treasury_share = s_delta - daily_dao_share;
-                                (
-                                    p.cum_miner_secondary + daily_miner,
-                                    p.cum_dao_compensation + daily_dao_share,
-                                    p.cum_treasury + daily_treasury_share,
-                                )
+                            if let Some(non_miner) = daily_non_miner {
+                                if non_miner >= 0 {
+                                    let denom = (total_issuance - occupied_capacity).max(1);
+                                    let deposited = total_deposited.max(0);
+                                    let daily_dao_share = non_miner * deposited / denom;
+                                    let daily_treasury_share = non_miner - daily_dao_share;
+                                    (
+                                        p.cum_miner_secondary + daily_miner_exact.max(0),
+                                        p.cum_dao_compensation + daily_dao_share,
+                                        p.cum_treasury + daily_treasury_share,
+                                    )
+                                } else {
+                                    // S field decreased (protocol upgrade boundary).
+                                    // Keep miner/dao monotonic while preserving non-miner sum.
+                                    (
+                                        p.cum_miner_secondary,
+                                        p.cum_dao_compensation,
+                                        p.cum_treasury + non_miner,
+                                    )
+                                }
                             } else {
-                                // S field decreased (protocol upgrade boundary).
-                                // Absorb negative adjustment into treasury.
-                                (
-                                    p.cum_miner_secondary,
-                                    p.cum_dao_compensation,
-                                    p.cum_treasury + s_delta,
-                                )
+                                let s_delta = secondary_pool - p.secondary_pool;
+                                if s_delta >= 0 {
+                                    let denom = (total_issuance - occupied_capacity).max(1);
+                                    let deposited = total_deposited.max(0);
+                                    let daily_miner = s_delta * occupied_capacity / denom;
+                                    let daily_dao_share = s_delta * deposited / denom;
+                                    let daily_treasury_share = s_delta - daily_dao_share;
+                                    (
+                                        p.cum_miner_secondary + daily_miner,
+                                        p.cum_dao_compensation + daily_dao_share,
+                                        p.cum_treasury + daily_treasury_share,
+                                    )
+                                } else {
+                                    // S field decreased (protocol upgrade boundary).
+                                    // Absorb negative adjustment into treasury.
+                                    (
+                                        p.cum_miner_secondary,
+                                        p.cum_dao_compensation,
+                                        p.cum_treasury + s_delta,
+                                    )
+                                }
                             }
                         } else {
                             (0, 0, 0)
@@ -6307,6 +6442,89 @@ mod tests {
         assert!(1000 <= threshold);
         assert!(999 <= threshold);
         assert!(1 <= threshold);
+    }
+
+    fn build_dao_field(c: u64, s: u64, u: u64) -> Vec<u8> {
+        let mut dao = vec![0u8; 32];
+        dao[0..8].copy_from_slice(&c.to_le_bytes());
+        dao[16..24].copy_from_slice(&s.to_le_bytes());
+        dao[24..32].copy_from_slice(&u.to_le_bytes());
+        dao
+    }
+
+    fn dummy_parsed_block(
+        dao: Vec<u8>,
+        epoch_number: i64,
+        epoch_length: i32,
+    ) -> crate::parser::block::ParsedBlock {
+        crate::parser::block::ParsedBlock {
+            number: 1,
+            hash: vec![0u8; 32],
+            parent_hash: vec![0u8; 32],
+            timestamp: Utc::now(),
+            version: 0,
+            compact_target: 0,
+            transactions_count: 0,
+            proposals_count: 0,
+            uncles_count: 0,
+            epoch_number,
+            epoch_index: 0,
+            epoch_length,
+            dao,
+            nonce: vec![],
+            extra_hash: vec![],
+            proposals_hash: vec![],
+            transactions_root: vec![],
+            uncles_hash: vec![],
+            proposals: vec![],
+        }
+    }
+
+    #[test]
+    fn test_accumulate_secondary_issuance_deltas_tracks_exact_miner_and_non_miner() {
+        let mut stats = BatchStats::default();
+        let mut prev = Some((10_000_000_000_000_i128, 5_000_i128));
+        let primary = primary_issuance_per_block(0, 1000);
+        let block = dummy_parsed_block(
+            build_dao_field(
+                (10_000_000_000_000_i128 + primary + 1_000) as u64,
+                (5_000_i128 + 600) as u64,
+                0,
+            ),
+            0,
+            1000,
+        );
+        let date = ckbadger_common::block_date(block.timestamp);
+
+        accumulate_secondary_issuance_deltas(&mut stats, &block, date, &mut prev);
+
+        assert_eq!(stats.daily_secondary_non_miner_delta.get(&date), Some(&600));
+        assert_eq!(stats.daily_secondary_miner_delta.get(&date), Some(&400));
+    }
+
+    #[test]
+    fn test_accumulate_secondary_issuance_deltas_keeps_negative_adjustment_in_non_miner_only() {
+        let mut stats = BatchStats::default();
+        let mut prev = Some((20_000_000_000_000_i128, 8_000_i128));
+        let primary = primary_issuance_per_block(0, 1000);
+        let block = dummy_parsed_block(
+            build_dao_field(
+                (20_000_000_000_000_i128 + primary + 500) as u64,
+                (8_000_i128 - 100) as u64,
+                0,
+            ),
+            0,
+            1000,
+        );
+        let date = ckbadger_common::block_date(block.timestamp);
+
+        accumulate_secondary_issuance_deltas(&mut stats, &block, date, &mut prev);
+
+        assert_eq!(
+            stats.daily_secondary_non_miner_delta.get(&date),
+            Some(&-100)
+        );
+        assert!(!stats.daily_secondary_miner_delta.contains_key(&date));
     }
 
     #[test]

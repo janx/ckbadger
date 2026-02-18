@@ -49,19 +49,50 @@ struct StackedAreaChartResponse {
 /// Cached explorer response stored as JSON on disk.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct CacheEntry {
+    #[serde(default = "default_cache_version")]
+    version: u8,
     fetched_at: String,
     indicator: String,
     data: HashMap<String, String>,
 }
 
 const CACHE_FRESHNESS_SECS: i64 = 24 * 60 * 60; // 24 hours
+const CACHE_VERSION: u8 = 3;
+
+fn default_cache_version() -> u8 {
+    1
+}
+
+/// Cache v2 incorrectly shifted explorer dates back by one day.
+/// Normalize v2 cache keys in memory by shifting them forward one day.
+fn remap_v2_cache_dates(data: &HashMap<String, String>) -> HashMap<String, String> {
+    let mut remapped = HashMap::with_capacity(data.len());
+    for (date, value) in data {
+        if let Ok(d) = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d") {
+            let fixed = (d + chrono::Duration::days(1))
+                .format("%Y-%m-%d")
+                .to_string();
+            remapped.insert(fixed, value.clone());
+        } else {
+            remapped.insert(date.clone(), value.clone());
+        }
+    }
+    remapped
+}
 
 /// Read a cache file for the given indicator. Returns None if file doesn't exist.
 fn read_cache(cache_dir: &Option<PathBuf>, indicator: &str) -> Option<CacheEntry> {
     let dir = cache_dir.as_ref()?;
     let path = dir.join(format!("{}.json", indicator));
     let content = std::fs::read_to_string(&path).ok()?;
-    serde_json::from_str(&content).ok()
+    let mut entry: CacheEntry = serde_json::from_str(&content).ok()?;
+    if entry.version < CACHE_VERSION {
+        if entry.version == 2 {
+            entry.data = remap_v2_cache_dates(&entry.data);
+        }
+        entry.version = CACHE_VERSION;
+    }
+    Some(entry)
 }
 
 /// Check if a cache entry is fresh (< 24 hours old).
@@ -86,6 +117,7 @@ fn write_cache(cache_dir: &Option<PathBuf>, indicator: &str, data: &HashMap<Stri
         return;
     }
     let entry = CacheEntry {
+        version: CACHE_VERSION,
         fetched_at: chrono::Utc::now().to_rfc3339(),
         indicator: indicator.to_string(),
         data: data.clone(),
@@ -176,13 +208,7 @@ fn fetch_from_explorer_api(
                 })
                 .unwrap_or(0);
 
-            let date = chrono::DateTime::from_timestamp(ts_val, 0)
-                .map(|dt| {
-                    let utc8 =
-                        chrono::FixedOffset::east_opt(ckbadger_common::CKB_UTC8_OFFSET).unwrap();
-                    dt.with_timezone(&utc8).format("%Y-%m-%d").to_string()
-                })
-                .unwrap_or_default();
+            let date = explorer_timestamp_to_date(ts_val).unwrap_or_default();
 
             if date.is_empty() {
                 continue;
@@ -204,6 +230,14 @@ fn fetch_from_explorer_api(
     }
 
     Ok(result)
+}
+
+/// Explorer's `created_at_unixtimestamp` maps directly to the stats date in UTC+8.
+fn explorer_timestamp_to_date(ts_val: i64) -> Option<String> {
+    let dt = chrono::DateTime::from_timestamp(ts_val, 0)?;
+    let utc8 = chrono::FixedOffset::east_opt(ckbadger_common::CKB_UTC8_OFFSET)?;
+    let day = dt.with_timezone(&utc8).date_naive();
+    Some(day.format("%Y-%m-%d").to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -1191,5 +1225,25 @@ mod tests {
     #[test]
     fn test_normalize_date_already_normalized() {
         assert_eq!(normalize_date("2024-01-15"), "2024-01-15");
+    }
+
+    #[test]
+    fn test_explorer_timestamp_to_date_uses_same_utc8_day() {
+        // 1771171200 = 2026-02-15 16:00:00 UTC = 2026-02-16 00:00:00 UTC+8.
+        assert_eq!(
+            explorer_timestamp_to_date(1_771_171_200),
+            Some("2026-02-16".to_string())
+        );
+    }
+
+    #[test]
+    fn test_remap_v2_cache_dates_shifts_forward_one_day() {
+        let mut v2 = HashMap::new();
+        v2.insert("2026-02-15".to_string(), "16773".to_string());
+        v2.insert("2026-02-16".to_string(), "17030".to_string());
+
+        let fixed = remap_v2_cache_dates(&v2);
+        assert_eq!(fixed.get("2026-02-16"), Some(&"16773".to_string()));
+        assert_eq!(fixed.get("2026-02-17"), Some(&"17030".to_string()));
     }
 }

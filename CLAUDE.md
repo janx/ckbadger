@@ -19,6 +19,13 @@ When solving problems or designing features:
 3. **Breaking changes are acceptable** — just update the store types/ops in `crates/ckbadger-store/`
 4. **If a bug fix requires storage change**, do it properly rather than working around bad structure
 5. **Re-sync is always an option** — don't let existing data constrain the right solution
+6. **Do not add rebuild tasks for sync bugs** — fix the indexer write/read logic directly and require a DB rebuild + re-sync
+
+**Sync Bug Policy (MANDATORY):**
+
+- No rebuild task/workflow should be introduced as the primary fix for sync correctness issues
+- For any sync/data inconsistency bug: fix indexer logic first, then instruct users to delete RocksDB and re-sync from genesis
+- If existing data is wrong, prefer dropping and rebuilding DB over adding complex compatibility/backfill paths
 
 ```bash
 # Typical workflow after storage changes:
