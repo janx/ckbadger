@@ -3,7 +3,6 @@ use axum::{
     routing::get,
     Router,
 };
-use chrono::NaiveDate;
 use ckbadger_common::dao::calculate_estimated_apc;
 use ckbadger_store::keys;
 use serde::{Deserialize, Serialize};
@@ -15,7 +14,6 @@ use crate::utils::shannon_to_ckb;
 use crate::AppState;
 
 const CHART_CACHE_TTL: Duration = Duration::from_secs(3600);
-const MAX_CHART_POINTS: usize = 600;
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -296,6 +294,29 @@ async fn get_deposits_by_address(
 
 const DAO_OCCUPIED_CAPACITY: u128 = 102_00000000;
 
+fn snapshot_secondary_burnt(snapshot: &ckbadger_store::DaoDailySnapshot) -> u128 {
+    snapshot.cum_treasury.max(0) as u128
+}
+
+fn snapshot_estimated_apc(snapshot: &ckbadger_store::DaoDailySnapshot) -> Option<String> {
+    let total_issuance = u64::try_from(snapshot.total_issuance).ok()?;
+    if total_issuance == 0 {
+        return None;
+    }
+    let apc = calculate_estimated_apc(total_issuance, snapshot_secondary_burnt(snapshot));
+    (apc > 0.0).then(|| format!("{:.2}", apc))
+}
+
+fn snapshot_circulating_supply(snapshot: &ckbadger_store::DaoDailySnapshot) -> Option<i128> {
+    const GENESIS_BURNT: i128 = 8_400_000_000 * 100_000_000;
+    let total_issuance = snapshot.total_issuance;
+    if total_issuance <= 0 {
+        return None;
+    }
+    let secondary_burnt = snapshot.cum_treasury.max(0);
+    Some(total_issuance - GENESIS_BURNT - secondary_burnt)
+}
+
 async fn get_address_dao_summary(
     State(state): State<Arc<AppState>>,
     Path(lock_hash): Path<String>,
@@ -350,13 +371,12 @@ async fn get_address_dao_summary(
     // Get latest block header for AR
     let latest_block = state.store.get_sync_tip_block().ok().flatten();
 
-    let (latest_block_number, latest_ar, total_issuance) = match &latest_block {
+    let (latest_block_number, latest_ar) = match &latest_block {
         Some((num, header)) => {
             let ar = extract_ar(&header.dao).unwrap_or(1);
-            let issuance = extract_total_issuance(&header.dao).unwrap_or(0);
-            (*num, ar, issuance)
+            (*num, ar)
         }
-        None => (0, 1, 0),
+        None => (0, 1),
     };
 
     // Calculate unclaimed compensation for active/pending deposits
@@ -374,18 +394,13 @@ async fn get_address_dao_summary(
         }
     }
 
-    // Get DAO stats for APC (cumulative_burnt)
-    let dao_stats = state.store.get_dao_stats(b"global").ok().flatten();
-
-    let secondary_burnt: u128 = 0; // Not tracked separately in RocksDB; derive from issuance data
-    let _ = dao_stats; // DaoStats doesn't carry cumulative_burnt
-
-    let apc = calculate_estimated_apc(total_issuance, secondary_burnt);
-    let estimated_apc = if apc > 0.0 {
-        format!("{:.2}", apc)
-    } else {
-        String::new()
-    };
+    let estimated_apc = state
+        .store
+        .list_dao_daily_snapshots()
+        .ok()
+        .and_then(|snapshots| snapshots.last().cloned())
+        .and_then(|s| snapshot_estimated_apc(&s))
+        .unwrap_or_default();
 
     let total_locked_str = total_locked.to_string();
     let total_comp_str = total_comp_earned.to_string();
@@ -439,13 +454,12 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
     // Get latest block for AR
     let latest_block = state.store.get_sync_tip_block().ok().flatten();
 
-    let (latest_block_number, latest_ar, total_issuance) = match &latest_block {
+    let (latest_block_number, latest_ar) = match &latest_block {
         Some((num, header)) => {
             let ar = extract_ar(&header.dao).unwrap_or(1);
-            let issuance = extract_total_issuance(&header.dao).unwrap_or(0);
-            (*num, ar, issuance)
+            (*num, ar)
         }
-        None => (0, 1, 0),
+        None => (0, 1),
     };
 
     // Calculate average deposit time
@@ -480,21 +494,32 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
         }
     }
 
-    let secondary_burnt: u128 = 0;
-    let apc = calculate_estimated_apc(total_issuance, secondary_burnt);
-    let estimated_apc = if apc > 0.0 {
-        format!("{:.2}", apc)
-    } else {
-        String::new()
-    };
+    let latest_snapshot = state
+        .store
+        .list_dao_daily_snapshots()
+        .ok()
+        .and_then(|snapshots| snapshots.last().cloned());
+    let estimated_apc = latest_snapshot
+        .as_ref()
+        .and_then(snapshot_estimated_apc)
+        .unwrap_or_default();
 
     let avg_days = epochs_to_days(avg_epochs);
 
     let total_deposited_str = total_deposited.to_string();
     let total_comp_str = total_compensation_paid.to_string();
-    let mining_reward = "0".to_string();
-    let deposit_compensation = "0".to_string();
-    let burnt = "0".to_string();
+    let mining_reward = latest_snapshot
+        .as_ref()
+        .map(|s| s.cum_miner_secondary.max(0).to_string())
+        .unwrap_or_else(|| "0".to_string());
+    let deposit_compensation = latest_snapshot
+        .as_ref()
+        .map(|s| s.cum_dao_compensation.max(0).to_string())
+        .unwrap_or_else(|| "0".to_string());
+    let burnt = latest_snapshot
+        .as_ref()
+        .map(|s| s.cum_treasury.max(0).to_string())
+        .unwrap_or_else(|| "0".to_string());
 
     ok(DaoStatisticsResponse {
         total_deposited: total_deposited_str.clone(),
@@ -514,14 +539,6 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
         burnt: burnt.clone(),
         burnt_ckb: shannon_to_ckb(&burnt),
     })
-}
-
-fn extract_total_issuance(dao: &[u8]) -> Option<u64> {
-    if dao.len() < 8 {
-        return None;
-    }
-    let bytes: [u8; 8] = dao[0..8].try_into().ok()?;
-    Some(u64::from_le_bytes(bytes))
 }
 
 fn epochs_to_days(epochs: f64) -> String {
@@ -625,67 +642,6 @@ fn extract_ar(dao: &[u8]) -> Option<u64> {
     Some(u64::from_le_bytes(bytes))
 }
 
-#[allow(clippy::needless_range_loop)]
-fn downsample_chart_data(data: Vec<ChartDataPoint>, target_points: usize) -> Vec<ChartDataPoint> {
-    if data.len() <= target_points || target_points < 3 {
-        return data;
-    }
-
-    let mut result = Vec::with_capacity(target_points);
-    result.push(data[0].clone());
-
-    let bucket_size = (data.len() - 2) as f64 / (target_points - 2) as f64;
-
-    for i in 0..(target_points - 2) {
-        let bucket_start = ((i as f64) * bucket_size).floor() as usize + 1;
-        let bucket_end = (((i + 1) as f64) * bucket_size).floor() as usize + 1;
-        let bucket_end = bucket_end.min(data.len() - 1);
-
-        let prev_y: f64 = result
-            .last()
-            .and_then(|p| p.value.parse().ok())
-            .unwrap_or(0.0);
-
-        let next_bucket_start = bucket_end;
-        let next_bucket_end = (((i + 2) as f64) * bucket_size).floor() as usize + 1;
-        let next_bucket_end = next_bucket_end.min(data.len());
-
-        let (next_avg_x, next_avg_y) = if next_bucket_start < next_bucket_end {
-            let sum: f64 = data[next_bucket_start..next_bucket_end]
-                .iter()
-                .filter_map(|p| p.value.parse::<f64>().ok())
-                .sum();
-            let count = next_bucket_end - next_bucket_start;
-            (
-                (next_bucket_start + next_bucket_end) as f64 / 2.0,
-                sum / count as f64,
-            )
-        } else {
-            ((data.len() - 1) as f64, 0.0)
-        };
-
-        let mut max_area = -1.0f64;
-        let mut max_idx = bucket_start;
-        let prev_x = i as f64;
-
-        for j in bucket_start..bucket_end {
-            let curr_y: f64 = data[j].value.parse().unwrap_or(0.0);
-            let area = ((prev_x - next_avg_x) * (curr_y - prev_y)
-                - (prev_x - j as f64) * (next_avg_y - prev_y))
-                .abs();
-            if area > max_area {
-                max_area = area;
-                max_idx = j;
-            }
-        }
-
-        result.push(data[max_idx].clone());
-    }
-
-    result.push(data[data.len() - 1].clone());
-    result
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChartDataPoint {
@@ -722,7 +678,6 @@ async fn get_total_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResul
             value2: Some(s.depositors_count.to_string()),
         })
         .collect();
-    let data = downsample_chart_data(data, MAX_CHART_POINTS);
 
     let response = ChartResponse {
         data,
@@ -762,7 +717,6 @@ async fn get_daily_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResul
             }
         })
         .collect();
-    let data = downsample_chart_data(data, MAX_CHART_POINTS);
 
     let response = ChartResponse {
         data,
@@ -788,33 +742,25 @@ async fn get_circulation_ratio_chart(
         .list_dao_daily_snapshots()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    // 8.4 billion CKB burnt at genesis (in shannons)
-    const GENESIS_BURNT: i128 = 8_400_000_000 * 100_000_000;
-
-    let data: Vec<ChartDataPoint> = snapshots
-        .iter()
-        .filter_map(|s| {
-            // Circulating supply = C - S - burnt
-            // C = total issuance, S = treasury (secondary pool)
-            // Falls back to estimated formula if C/S not available (pre-migration data)
-            let circulating = if s.total_issuance > 0 {
-                (s.total_issuance - s.secondary_pool - GENESIS_BURNT) as f64
-            } else {
-                estimated_circulating_supply(&s.date)?
-            };
-            if circulating <= 0.0 {
-                return None;
-            }
-            let deposited = s.total_deposited as f64;
-            let ratio = (deposited / circulating) * 100.0;
-            Some(ChartDataPoint {
-                date: s.date.clone(),
-                value: format!("{:.4}", ratio),
-                value2: None,
-            })
-        })
-        .collect();
-    let data = downsample_chart_data(data, MAX_CHART_POINTS);
+    let mut data = Vec::with_capacity(snapshots.len());
+    for s in &snapshots {
+        let Some(circulating) = snapshot_circulating_supply(s) else {
+            return Err(ApiError::internal(format!(
+                "missing DAO snapshot total_issuance for {}. delete RocksDB and re-sync from genesis",
+                s.date
+            )));
+        };
+        if circulating <= 0 {
+            continue;
+        }
+        let deposited = s.total_deposited.max(0) as f64;
+        let ratio = (deposited / circulating as f64) * 100.0;
+        data.push(ChartDataPoint {
+            date: s.date.clone(),
+            value: format!("{:.4}", ratio),
+            value2: None,
+        });
+    }
 
     let response = ChartResponse {
         data,
@@ -827,36 +773,45 @@ async fn get_circulation_ratio_chart(
     ok(response)
 }
 
-/// Estimate circulating supply (in shannons) at a given date.
-///
-/// CKB issuance schedule:
-/// - Genesis: 33.6B CKB (8.4B burnt)
-/// - Primary: 4.2B/year, halving every ~4 years (first halving ~Nov 2023)
-/// - Secondary: 1.344B/year (constant)
-fn estimated_circulating_supply(date_str: &str) -> Option<f64> {
-    let date = NaiveDate::parse_from_str(date_str, "%Y-%m-%d").ok()?;
-    let launch = NaiveDate::from_ymd_opt(2019, 11, 16)?;
-    let days = (date - launch).num_days().max(0) as f64;
-    let years = days / 365.25;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    const SHANNON: f64 = 100_000_000.0;
-    const GENESIS_SUPPLY: f64 = 33_600_000_000.0 * SHANNON;
-    const GENESIS_BURNT: f64 = 8_400_000_000.0 * SHANNON;
-    const SECONDARY_PER_YEAR: f64 = 1_344_000_000.0 * SHANNON;
-    const PRIMARY_PER_YEAR: f64 = 4_200_000_000.0 * SHANNON;
-
-    let mut primary_issued = 0.0;
-    let mut remaining = years;
-    let mut era = 0u32;
-    while remaining > 0.0 {
-        let era_years = remaining.min(4.0);
-        let rate = PRIMARY_PER_YEAR / 2.0_f64.powi(era as i32);
-        primary_issued += rate * era_years;
-        remaining -= 4.0;
-        era += 1;
+    fn snapshot(total_issuance: i128, cum_treasury: i128) -> ckbadger_store::DaoDailySnapshot {
+        ckbadger_store::DaoDailySnapshot {
+            date: "2026-02-18".to_string(),
+            total_deposited: 0,
+            depositors_count: 0,
+            new_deposits: 0,
+            withdrawals: 0,
+            compensation: 0,
+            cumulative_deposit_amount: 0,
+            total_issuance,
+            secondary_pool: 0,
+            occupied_capacity: 0,
+            cum_miner_secondary: 0,
+            cum_dao_compensation: 0,
+            cum_treasury,
+        }
     }
 
-    let secondary_issued = SECONDARY_PER_YEAR * years;
-    let total = GENESIS_SUPPLY + primary_issued + secondary_issued;
-    Some(total - GENESIS_BURNT)
+    #[test]
+    fn test_snapshot_secondary_burnt_clamps_negative() {
+        assert_eq!(snapshot_secondary_burnt(&snapshot(1, -10)), 0);
+        assert_eq!(snapshot_secondary_burnt(&snapshot(1, 25)), 25);
+    }
+
+    #[test]
+    fn test_snapshot_estimated_apc_requires_total_issuance() {
+        assert!(snapshot_estimated_apc(&snapshot(0, 0)).is_none());
+    }
+
+    #[test]
+    fn test_snapshot_circulating_supply_uses_cum_treasury() {
+        let total_issuance = 1_000_000_000_000_000_000i128;
+        let cum_treasury = 20_000_000_000_000_000i128;
+        let s = snapshot(total_issuance, cum_treasury);
+        let expected = total_issuance - (8_400_000_000i128 * 100_000_000i128) - cum_treasury;
+        assert_eq!(snapshot_circulating_supply(&s), Some(expected));
+    }
 }

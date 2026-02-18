@@ -15,7 +15,7 @@ use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
 
 use ckbadger_store::batch::StoreBatch;
-use ckbadger_store::types::{DaoDailySnapshot, LiveCellInfo};
+use ckbadger_store::types::LiveCellInfo;
 use ckbadger_store::CkbadgerStore;
 
 use crate::cache::CacheInvalidator;
@@ -135,6 +135,12 @@ struct BatchStats {
     dao_daily_new_deposits_delta: HashMap<NaiveDate, i64>,
     daily_secondary_non_miner_delta: HashMap<NaiveDate, i128>,
     daily_secondary_miner_delta: HashMap<NaiveDate, i128>,
+}
+
+fn has_exact_dao_deltas(stats: &BatchStats) -> bool {
+    !(stats.dao_daily_active_delta.is_empty()
+        && stats.dao_daily_gross_deposit_delta.is_empty()
+        && stats.dao_daily_new_deposits_delta.is_empty())
 }
 
 #[derive(Clone)]
@@ -5721,264 +5727,133 @@ impl Indexer {
             let mut snapshot_dates: Vec<_> = stats.dao_snapshot_dates.iter().collect();
             snapshot_dates.sort();
             if !snapshot_dates.is_empty() {
-                let has_exact_dao_deltas = !(stats.dao_daily_active_delta.is_empty()
-                    && stats.dao_daily_gross_deposit_delta.is_empty()
-                    && stats.dao_daily_new_deposits_delta.is_empty());
+                if !has_exact_dao_deltas(stats) {
+                    return Err(anyhow::anyhow!(
+                        "missing exact DAO daily deltas in batch stats; delete RocksDB and re-sync from genesis"
+                    ));
+                }
 
-                if has_exact_dao_deltas {
-                    // Continue from the latest snapshot and apply exact per-day deltas from
-                    // this batch (deposits and phase-1 withdrawals) in date order.
-                    let latest_snapshot = self
-                        .writer
-                        .store()
-                        .list_dao_daily_snapshots()
-                        .ok()
-                        .and_then(|snaps| snaps.last().cloned());
+                // Continue from the latest snapshot and apply exact per-day deltas from
+                // this batch (deposits and phase-1 withdrawals) in date order.
+                let latest_snapshot = self
+                    .writer
+                    .store()
+                    .list_dao_daily_snapshots()
+                    .ok()
+                    .and_then(|snaps| snaps.last().cloned());
 
-                    let mut running_total_deposited = latest_snapshot
-                        .as_ref()
-                        .map(|s| s.total_deposited)
+                let mut running_total_deposited = latest_snapshot
+                    .as_ref()
+                    .map(|s| s.total_deposited)
+                    .unwrap_or(0);
+                let running_depositors = latest_snapshot
+                    .as_ref()
+                    .map(|s| s.depositors_count)
+                    .unwrap_or(0);
+                let mut running_total_deposit_count = latest_snapshot
+                    .as_ref()
+                    .map(|s| s.new_deposits)
+                    .unwrap_or(0);
+                let running_total_withdrawal_count =
+                    latest_snapshot.as_ref().map(|s| s.withdrawals).unwrap_or(0);
+                let running_total_compensation = latest_snapshot
+                    .as_ref()
+                    .map(|s| s.compensation)
+                    .unwrap_or(0);
+                let mut running_cumulative_deposit_amount = latest_snapshot
+                    .as_ref()
+                    .map(|s| s.cumulative_deposit_amount)
+                    .unwrap_or(0);
+                let mut running_cum_miner = latest_snapshot
+                    .as_ref()
+                    .map(|s| s.cum_miner_secondary)
+                    .unwrap_or(0);
+                let mut running_cum_dao = latest_snapshot
+                    .as_ref()
+                    .map(|s| s.cum_dao_compensation)
+                    .unwrap_or(0);
+                let mut running_cum_treasury = latest_snapshot
+                    .as_ref()
+                    .map(|s| s.cum_treasury)
+                    .unwrap_or(0);
+                let mut prev_secondary_pool = latest_snapshot
+                    .as_ref()
+                    .map(|s| s.secondary_pool)
+                    .unwrap_or(0);
+
+                for date in snapshot_dates {
+                    running_total_deposited +=
+                        stats.dao_daily_active_delta.get(date).copied().unwrap_or(0);
+                    running_cumulative_deposit_amount += stats
+                        .dao_daily_gross_deposit_delta
+                        .get(date)
+                        .copied()
                         .unwrap_or(0);
-                    let running_depositors = latest_snapshot
-                        .as_ref()
-                        .map(|s| s.depositors_count)
-                        .unwrap_or(0);
-                    let mut running_total_deposit_count = latest_snapshot
-                        .as_ref()
-                        .map(|s| s.new_deposits)
-                        .unwrap_or(0);
-                    let running_total_withdrawal_count =
-                        latest_snapshot.as_ref().map(|s| s.withdrawals).unwrap_or(0);
-                    let running_total_compensation = latest_snapshot
-                        .as_ref()
-                        .map(|s| s.compensation)
-                        .unwrap_or(0);
-                    let mut running_cumulative_deposit_amount = latest_snapshot
-                        .as_ref()
-                        .map(|s| s.cumulative_deposit_amount)
-                        .unwrap_or(0);
-                    let mut running_cum_miner = latest_snapshot
-                        .as_ref()
-                        .map(|s| s.cum_miner_secondary)
-                        .unwrap_or(0);
-                    let mut running_cum_dao = latest_snapshot
-                        .as_ref()
-                        .map(|s| s.cum_dao_compensation)
-                        .unwrap_or(0);
-                    let mut running_cum_treasury = latest_snapshot
-                        .as_ref()
-                        .map(|s| s.cum_treasury)
-                        .unwrap_or(0);
-                    let mut prev_secondary_pool = latest_snapshot
-                        .as_ref()
-                        .map(|s| s.secondary_pool)
+                    running_total_deposit_count += stats
+                        .dao_daily_new_deposits_delta
+                        .get(date)
+                        .copied()
                         .unwrap_or(0);
 
-                    for date in snapshot_dates {
-                        running_total_deposited +=
-                            stats.dao_daily_active_delta.get(date).copied().unwrap_or(0);
-                        running_cumulative_deposit_amount += stats
-                            .dao_daily_gross_deposit_delta
-                            .get(date)
-                            .copied()
-                            .unwrap_or(0);
-                        running_total_deposit_count += stats
-                            .dao_daily_new_deposits_delta
-                            .get(date)
-                            .copied()
-                            .unwrap_or(0);
-
-                        // Extract C, S, U from the DAO header field for this date.
-                        let (total_issuance, secondary_pool, occupied_capacity) = stats
-                            .daily_dao_fields
-                            .get(date)
-                            .and_then(|field| extract_dao_csu(field))
-                            .unwrap_or((0, 0, 0));
-                        let daily_non_miner =
-                            stats.daily_secondary_non_miner_delta.get(date).copied();
-                        let (daily_miner, daily_dao_share, daily_treasury_share) =
-                            if total_issuance > 0 {
-                                if let Some(non_miner) = daily_non_miner {
-                                    if non_miner > 0 {
-                                        split_secondary_issuance(
-                                            total_issuance,
-                                            occupied_capacity,
-                                            running_total_deposited,
-                                            non_miner,
-                                        )
-                                    } else {
-                                        // Ignore negative S adjustments in user-facing cumulative
-                                        // charts to keep the series monotonic.
-                                        (0, 0, 0)
-                                    }
-                                } else {
-                                    let s_delta = secondary_pool - prev_secondary_pool;
-                                    if s_delta > 0 {
-                                        split_secondary_issuance(
-                                            total_issuance,
-                                            occupied_capacity,
-                                            running_total_deposited,
-                                            s_delta,
-                                        )
-                                    } else {
-                                        (0, 0, 0)
-                                    }
-                                }
+                    // Extract C, S, U from the DAO header field for this date.
+                    let (total_issuance, secondary_pool, occupied_capacity) = stats
+                        .daily_dao_fields
+                        .get(date)
+                        .and_then(|field| extract_dao_csu(field))
+                        .unwrap_or((0, 0, 0));
+                    let daily_non_miner = stats.daily_secondary_non_miner_delta.get(date).copied();
+                    let (daily_miner, daily_dao_share, daily_treasury_share) = if total_issuance > 0
+                    {
+                        if let Some(non_miner) = daily_non_miner {
+                            if non_miner > 0 {
+                                split_secondary_issuance(
+                                    total_issuance,
+                                    occupied_capacity,
+                                    running_total_deposited,
+                                    non_miner,
+                                )
+                            } else {
+                                // Ignore negative S adjustments in user-facing cumulative
+                                // charts to keep the series monotonic.
+                                (0, 0, 0)
+                            }
+                        } else {
+                            let s_delta = secondary_pool - prev_secondary_pool;
+                            if s_delta > 0 {
+                                split_secondary_issuance(
+                                    total_issuance,
+                                    occupied_capacity,
+                                    running_total_deposited,
+                                    s_delta,
+                                )
                             } else {
                                 (0, 0, 0)
-                            };
-                        running_cum_miner += daily_miner;
-                        running_cum_dao += daily_dao_share;
-                        running_cum_treasury += daily_treasury_share;
-                        prev_secondary_pool = secondary_pool;
-
-                        let dao_snapshot = crate::db::writer::DaoSnapshotInput {
-                            total_deposited: running_total_deposited,
-                            depositors_count: running_depositors,
-                            total_deposit_count: running_total_deposit_count,
-                            total_withdrawal_count: running_total_withdrawal_count,
-                            total_compensation: running_total_compensation,
-                            cumulative_deposit_amount: running_cumulative_deposit_amount,
-                            total_issuance,
-                            secondary_pool,
-                            occupied_capacity,
-                            cum_miner_secondary: running_cum_miner,
-                            cum_dao_compensation: running_cum_dao,
-                            cum_treasury: running_cum_treasury,
-                        };
-                        self.writer
-                            .update_dao_daily_snapshot(*date, &dao_snapshot, batch)?;
-                    }
-                } else {
-                    // Live sync fallback: keep behavior when exact DAO deltas are unavailable.
-                    let all_deposits = self.writer.store().list_dao_deposits()?;
-                    let total_deposited: i128 = all_deposits
-                        .iter()
-                        .filter(|(_, e)| e.status == 0)
-                        .map(|(_, e)| e.capacity as i128)
-                        .sum();
-                    let depositors_count = {
-                        let unique: std::collections::HashSet<&[u8]> = all_deposits
-                            .iter()
-                            .filter(|(_, e)| e.status == 0)
-                            .map(|(_, e)| e.lock_script_hash.as_slice())
-                            .collect();
-                        unique.len() as i64
-                    };
-                    let total_deposit_count = all_deposits.len() as i64;
-                    let total_withdrawal_count =
-                        all_deposits.iter().filter(|(_, e)| e.status == 2).count() as i64;
-                    let total_compensation: i128 = all_deposits
-                        .iter()
-                        .filter(|(_, e)| e.status == 2 && e.compensation.is_some())
-                        .map(|(_, e)| e.compensation.unwrap_or(0) as i128)
-                        .sum();
-                    let cumulative_deposit_amount: i128 =
-                        all_deposits.iter().map(|(_, e)| e.capacity as i128).sum();
-                    let mut prev_snapshot = self
-                        .writer
-                        .store()
-                        .list_dao_daily_snapshots()
-                        .ok()
-                        .and_then(|snaps| snaps.last().cloned());
-
-                    for date in snapshot_dates {
-                        let (total_issuance, secondary_pool, occupied_capacity) = stats
-                            .daily_dao_fields
-                            .get(date)
-                            .and_then(|field| extract_dao_csu(field))
-                            .unwrap_or((0, 0, 0));
-                        let daily_non_miner =
-                            stats.daily_secondary_non_miner_delta.get(date).copied();
-                        let (cum_miner, cum_dao, cum_treasury) = if let Some(ref p) = prev_snapshot
-                        {
-                            if let Some(non_miner) = daily_non_miner {
-                                if non_miner > 0 {
-                                    let (daily_miner, daily_dao_share, daily_treasury_share) =
-                                        split_secondary_issuance(
-                                            total_issuance,
-                                            occupied_capacity,
-                                            total_deposited,
-                                            non_miner,
-                                        );
-                                    (
-                                        p.cum_miner_secondary + daily_miner,
-                                        p.cum_dao_compensation + daily_dao_share,
-                                        p.cum_treasury + daily_treasury_share,
-                                    )
-                                } else {
-                                    (
-                                        p.cum_miner_secondary,
-                                        p.cum_dao_compensation,
-                                        p.cum_treasury,
-                                    )
-                                }
-                            } else {
-                                let s_delta = secondary_pool - p.secondary_pool;
-                                if s_delta > 0 {
-                                    let (daily_miner, daily_dao_share, daily_treasury_share) =
-                                        split_secondary_issuance(
-                                            total_issuance,
-                                            occupied_capacity,
-                                            total_deposited,
-                                            s_delta,
-                                        );
-                                    (
-                                        p.cum_miner_secondary + daily_miner,
-                                        p.cum_dao_compensation + daily_dao_share,
-                                        p.cum_treasury + daily_treasury_share,
-                                    )
-                                } else {
-                                    (
-                                        p.cum_miner_secondary,
-                                        p.cum_dao_compensation,
-                                        p.cum_treasury,
-                                    )
-                                }
                             }
-                        } else if total_issuance > 0 && secondary_pool > 0 {
-                            split_secondary_issuance(
-                                total_issuance,
-                                occupied_capacity,
-                                total_deposited,
-                                secondary_pool,
-                            )
-                        } else {
-                            (0, 0, 0)
-                        };
-                        let dao_snapshot = crate::db::writer::DaoSnapshotInput {
-                            total_deposited,
-                            depositors_count,
-                            total_deposit_count,
-                            total_withdrawal_count,
-                            total_compensation,
-                            cumulative_deposit_amount,
-                            total_issuance,
-                            secondary_pool,
-                            occupied_capacity,
-                            cum_miner_secondary: cum_miner,
-                            cum_dao_compensation: cum_dao,
-                            cum_treasury,
-                        };
-                        self.writer
-                            .update_dao_daily_snapshot(*date, &dao_snapshot, batch)?;
+                        }
+                    } else {
+                        (0, 0, 0)
+                    };
+                    running_cum_miner += daily_miner;
+                    running_cum_dao += daily_dao_share;
+                    running_cum_treasury += daily_treasury_share;
+                    prev_secondary_pool = secondary_pool;
 
-                        prev_snapshot = Some(DaoDailySnapshot {
-                            date: date.format("%Y-%m-%d").to_string(),
-                            total_deposited,
-                            depositors_count,
-                            new_deposits: total_deposit_count,
-                            withdrawals: total_withdrawal_count,
-                            compensation: total_compensation,
-                            cumulative_deposit_amount,
-                            total_issuance,
-                            secondary_pool,
-                            occupied_capacity,
-                            cum_miner_secondary: cum_miner,
-                            cum_dao_compensation: cum_dao,
-                            cum_treasury,
-                        });
-                    }
+                    let dao_snapshot = crate::db::writer::DaoSnapshotInput {
+                        total_deposited: running_total_deposited,
+                        depositors_count: running_depositors,
+                        total_deposit_count: running_total_deposit_count,
+                        total_withdrawal_count: running_total_withdrawal_count,
+                        total_compensation: running_total_compensation,
+                        cumulative_deposit_amount: running_cumulative_deposit_amount,
+                        total_issuance,
+                        secondary_pool,
+                        occupied_capacity,
+                        cum_miner_secondary: running_cum_miner,
+                        cum_dao_compensation: running_cum_dao,
+                        cum_treasury: running_cum_treasury,
+                    };
+                    self.writer
+                        .update_dao_daily_snapshot(*date, &dao_snapshot, batch)?;
                 }
             }
         }
@@ -6585,6 +6460,17 @@ mod tests {
     }
 
     // --- DAO recalculation boundary tests ---
+
+    #[test]
+    fn test_has_exact_dao_deltas_requires_any_daily_delta_map() {
+        let mut stats = BatchStats::default();
+        assert!(!has_exact_dao_deltas(&stats));
+
+        stats
+            .dao_daily_active_delta
+            .insert(NaiveDate::from_ymd_opt(2026, 2, 18).unwrap(), 1);
+        assert!(has_exact_dao_deltas(&stats));
+    }
 
     /// Helper: returns true if this batch crosses a 1000-block boundary
     fn crosses_1000_boundary(start_block: u64, end_block: u64) -> bool {
