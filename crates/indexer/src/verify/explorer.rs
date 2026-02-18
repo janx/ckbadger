@@ -264,6 +264,25 @@ fn fetch_our_stacked_chart(
     Ok(map)
 }
 
+/// Fetch our stacked area chart data and sum multiple series keys as a date→value map.
+fn fetch_our_stacked_chart_sum(
+    ctx: &CheckContext,
+    chart_path: &str,
+    series_keys: &[&str],
+) -> anyhow::Result<HashMap<String, String>> {
+    let wrapper: StackedAreaChartResponse = api_get(ctx, chart_path)?;
+    let mut map = HashMap::new();
+    for point in wrapper.data {
+        let sum: f64 = series_keys
+            .iter()
+            .filter_map(|k| point.values.get(*k))
+            .filter_map(|v| v.parse::<f64>().ok())
+            .sum();
+        map.insert(normalize_date(&point.date), format!("{sum:.0}"));
+    }
+    Ok(map)
+}
+
 // ---------------------------------------------------------------------------
 // Comparison helpers
 // ---------------------------------------------------------------------------
@@ -895,8 +914,8 @@ impl Check for ExplorerCirculationRatio {
     }
 }
 
-/// X11: Compare /charts/total-supply (circulating) vs explorer circulating_supply (tolerance-based).
-/// Our API returns CKB, explorer returns shannons.
+/// X11: Compare /charts/total-supply (circulating + nervosdao) vs explorer circulating_supply (tolerance-based).
+/// Explorer's circulating_supply includes DAO-locked CKB. Our API returns CKB, explorer returns shannons.
 pub struct ExplorerCirculatingSupply;
 
 impl Check for ExplorerCirculatingSupply {
@@ -917,7 +936,9 @@ impl Check for ExplorerCirculatingSupply {
     }
     fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
         let explorer_data = fetch_explorer_daily(ctx, "circulating_supply", "circulating_supply")?;
-        let our_data = fetch_our_stacked_chart(ctx, "charts/total-supply", "circulating")?;
+        // Explorer's circulating_supply includes DAO-locked CKB, so sum both series.
+        let our_data =
+            fetch_our_stacked_chart_sum(ctx, "charts/total-supply", &["circulating", "nervosdao"])?;
         Ok(run_tolerance_explorer_check(
             &our_data,
             &explorer_data,

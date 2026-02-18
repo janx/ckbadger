@@ -216,10 +216,6 @@ pub fn run(args: VerifyArgs) -> anyhow::Result<()> {
         let completed = execute_check(*check, &ctx, &progress);
 
         report::finish_check(&pb, &completed);
-        if !completed.passed && !is_json {
-            report::print_findings(&completed);
-        }
-
         results.push(completed);
     }
 
@@ -228,6 +224,7 @@ pub fn run(args: VerifyArgs) -> anyhow::Result<()> {
     if is_json {
         report::print_json_report(&results, total_duration);
     } else {
+        report::print_failure_summary(&results);
         report::print_summary(&results, total_duration);
     }
 

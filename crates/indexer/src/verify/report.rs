@@ -91,29 +91,6 @@ pub fn finish_check(pb: &ProgressBar, completed: &CompletedCheck) {
     }
 }
 
-/// Print findings (errors) for a failed check.
-pub fn print_findings(completed: &CompletedCheck) {
-    if let Some(ref result) = completed.result {
-        if result.findings.is_empty() {
-            return;
-        }
-        let count = result.findings.len();
-        let noun = if count == 1 { "mismatch" } else { "mismatches" };
-        eprintln!("    {} {} found:\n", style(count).red().bold(), noun);
-        for finding in result.findings.iter().take(10) {
-            eprintln!("    {} {}", style("┌─").dim(), finding.entity);
-            for detail in &finding.details {
-                eprintln!("    {}  {}", style("│").dim(), detail);
-            }
-            eprintln!("    {}", style("└─").dim());
-        }
-        if count > 10 {
-            eprintln!("    {} ... and {} more", style("│").dim(), count - 10,);
-        }
-        eprintln!();
-    }
-}
-
 /// Print a tier header.
 pub fn print_tier_header(tier: CheckTier) {
     let label = match tier {
@@ -126,6 +103,66 @@ pub fn print_tier_header(tier: CheckTier) {
 /// Print the explorer section header.
 pub fn print_explorer_header() {
     eprintln!("\n{}", style("EXPLORER COMPARISON").bold().underlined());
+}
+
+/// Print a consolidated summary of all failed checks at the end.
+pub fn print_failure_summary(results: &[CompletedCheck]) {
+    let failed: Vec<&CompletedCheck> = results.iter().filter(|c| !c.passed).collect();
+    if failed.is_empty() {
+        return;
+    }
+
+    let header = format!(" FAILED CHECKS ({}) ", failed.len());
+    let width: usize = 60;
+    let pad_total = width.saturating_sub(header.len());
+    let pad_left = pad_total / 2;
+    let pad_right = pad_total - pad_left;
+    let banner = format!(
+        "{}{}{}",
+        "━".repeat(pad_left),
+        header,
+        "━".repeat(pad_right)
+    );
+
+    eprintln!();
+    eprintln!("{}", style(&banner).red().bold());
+
+    for (i, check) in failed.iter().enumerate() {
+        eprintln!();
+        eprintln!(
+            "  {} {}  {}",
+            style("✗").red().bold(),
+            style(check.name).red().bold(),
+            style(check.description).dim()
+        );
+
+        if let Some(ref result) = check.result {
+            if result.findings.is_empty() {
+                continue;
+            }
+            let count = result.findings.len();
+            let noun = if count == 1 { "mismatch" } else { "mismatches" };
+            eprintln!("    {} {} found:", style(count).red().bold(), noun);
+            eprintln!();
+            for finding in result.findings.iter().take(10) {
+                eprintln!("    {} {}", style("┌─").dim(), finding.entity);
+                for detail in &finding.details {
+                    eprintln!("    {}  {}", style("│").dim(), detail);
+                }
+                eprintln!("    {}", style("└─").dim());
+            }
+            if count > 10 {
+                eprintln!("    {} ... and {} more", style("⋯").dim(), count - 10,);
+            }
+        }
+
+        // Separator between failed checks (but not after the last one)
+        if i < failed.len() - 1 {
+            eprintln!("    {}", style("─".repeat(52)).dim());
+        }
+    }
+
+    eprintln!();
 }
 
 /// Print the summary banner.
