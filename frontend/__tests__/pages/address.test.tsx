@@ -207,6 +207,8 @@ describe('AddressDetailPage', () => {
     expect(screen.getAllByText('Transactions').length).toBeGreaterThan(0);
     expect(screen.getAllByText('5').length).toBeGreaterThan(0);
     expect(screen.getAllByText('10').length).toBeGreaterThan(0);
+    expect(screen.getByText(/^Unoccupied:/)).toBeInTheDocument();
+    expect(screen.queryByText(/^Free:/)).not.toBeInTheDocument();
   });
 
   it('displays Active badge', async () => {

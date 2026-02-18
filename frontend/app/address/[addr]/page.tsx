@@ -383,7 +383,7 @@ export default function AddressDetailPage() {
                       className="text-terminal-green font-mono text-xs"
                       title={formatCkbAmount(freeBig.toString()).full + ' CKB'}
                     >
-                      Free: {formatCkbCompact(freeBig.toString()).value} CKB
+                      Unoccupied: {formatCkbCompact(freeBig.toString()).value} CKB
                     </span>
                   </div>
                 </div>
