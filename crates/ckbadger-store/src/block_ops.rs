@@ -1,6 +1,5 @@
 //! Block header operations.
 
-use chrono::Datelike;
 use rocksdb::IteratorMode;
 
 use crate::keys;
@@ -147,7 +146,7 @@ impl CkbadgerStore {
         Ok(None)
     }
 
-    /// Find the first block number of the UTC day containing `block_number`.
+    /// Find the first block number of the UTC+8 day containing `block_number`.
     /// If a predecessor header is missing, stops at the first available block.
     pub fn find_day_start_block(&self, block_number: i64) -> anyhow::Result<Option<i64>> {
         let Some(header) = self.get_block_header(block_number)? else {
@@ -156,7 +155,7 @@ impl CkbadgerStore {
         let Some(dt) = chrono::DateTime::from_timestamp(header.timestamp / 1000, 0) else {
             return Ok(Some(block_number));
         };
-        let target_date = dt.date_naive();
+        let target_date = ckbadger_common::block_date(dt);
 
         let mut cursor = block_number;
         while cursor > 0 {
@@ -168,11 +167,8 @@ impl CkbadgerStore {
             else {
                 break;
             };
-            let d = prev_dt.date_naive();
-            if d.year() == target_date.year()
-                && d.month() == target_date.month()
-                && d.day() == target_date.day()
-            {
+            let d = ckbadger_common::block_date(prev_dt);
+            if d == target_date {
                 cursor = prev_num;
                 continue;
             }

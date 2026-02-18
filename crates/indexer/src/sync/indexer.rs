@@ -2547,7 +2547,7 @@ impl Indexer {
 
         let mut block_tx_idx = 0usize;
         for parsed in &all_parsed_blocks {
-            let block_date = parsed.timestamp.date_naive();
+            let block_date = ckbadger_common::block_date(parsed.timestamp);
             let tx_count_for_block = parsed.transactions_count as usize;
             let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
             block_tx_idx += tx_count_for_block;
@@ -4165,7 +4165,7 @@ impl Indexer {
 
                     let mut block_tx_idx = 0usize;
                     for parsed in all_parsed_blocks {
-                        let block_date = parsed.timestamp.date_naive();
+                        let block_date = ckbadger_common::block_date(parsed.timestamp);
                         let tx_count_for_block = parsed.transactions_count as usize;
                         let tx_slice =
                             &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
@@ -5295,7 +5295,7 @@ impl Indexer {
 
             let mut block_tx_idx = 0usize;
             for parsed in all_parsed_blocks {
-                let block_date = parsed.timestamp.date_naive();
+                let block_date = ckbadger_common::block_date(parsed.timestamp);
                 let tx_count_for_block = parsed.transactions_count as usize;
                 let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
                 block_tx_idx += tx_count_for_block;
@@ -5870,7 +5870,7 @@ impl Indexer {
         // Phase 1: Record block dates and cell creates/consumes
         let mut block_tx_idx = 0usize;
         for parsed in all_parsed_blocks {
-            let block_date = parsed.timestamp.date_naive();
+            let block_date = ckbadger_common::block_date(parsed.timestamp);
             tracker.record_block_date(parsed.number, block_date);
 
             let tx_count = parsed.transactions_count as usize;

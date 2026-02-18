@@ -297,7 +297,7 @@ impl CkbadgerStore {
                     if block_time_ms >= 0 {
                         let ts_secs = header.timestamp / 1000;
                         if let Some(dt) = chrono::DateTime::from_timestamp(ts_secs, 0) {
-                            let date = dt.date_naive();
+                            let date = ckbadger_common::block_date(dt);
                             let entry = daily_times.entry(date).or_insert((0, 0));
                             entry.0 += block_time_ms;
                             entry.1 += 1;
@@ -427,7 +427,7 @@ impl CkbadgerStore {
             if let Ok(Some(header)) = self.get_block_header(*block_num) {
                 let ts_secs = header.timestamp / 1000;
                 if let Some(dt) = chrono::DateTime::from_timestamp(ts_secs, 0) {
-                    block_dates.insert(*block_num, dt.date_naive());
+                    block_dates.insert(*block_num, ckbadger_common::block_date(dt));
                 }
             }
         }
@@ -508,7 +508,7 @@ impl CkbadgerStore {
                 if let Ok(header) = bincode::deserialize::<CachedBlockHeader>(&value) {
                     let ts_secs = header.timestamp / 1000;
                     if let Some(dt) = chrono::DateTime::from_timestamp(ts_secs, 0) {
-                        let d = dt.date_naive();
+                        let d = ckbadger_common::block_date(dt);
                         if header.dao.len() >= 32 {
                             let c =
                                 u64::from_le_bytes(header.dao[0..8].try_into().unwrap_or([0; 8]))

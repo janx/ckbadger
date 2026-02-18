@@ -287,12 +287,11 @@ pub fn decode_addr_daily_stats_key(key: &[u8]) -> (Vec<u8>, u32) {
     (lock_hash, date)
 }
 
-/// Convert a Unix timestamp in milliseconds to YYYYMMDD u32.
+/// Convert a Unix timestamp in milliseconds to YYYYMMDD u32 (UTC+8 day boundary).
 pub fn timestamp_ms_to_date(timestamp_ms: i64) -> u32 {
-    let secs = timestamp_ms / 1000;
-    let dt = chrono::DateTime::from_timestamp(secs, 0).unwrap_or_default();
-    let date = dt.format("%Y%m%d").to_string();
-    date.parse::<u32>().unwrap_or(0)
+    let date = ckbadger_common::block_date_from_ms(timestamp_ms);
+    let s = date.format("%Y%m%d").to_string();
+    s.parse::<u32>().unwrap_or(0)
 }
 
 /// Sync meta keys
@@ -469,10 +468,14 @@ mod tests {
 
     #[test]
     fn test_timestamp_ms_to_date() {
-        // 2024-01-15 00:00:00 UTC = 1705276800000 ms
+        // 2024-01-15 00:00:00 UTC = 08:00 UTC+8 → still 20240115
         assert_eq!(timestamp_ms_to_date(1705276800000), 20240115);
-        // 2025-06-15 12:30:00 UTC = 1750000200000 ms
+        // 2025-06-15 12:30:00 UTC = 20:30 UTC+8 → still 20250615
         assert_eq!(timestamp_ms_to_date(1750000200000), 20250615);
+        // UTC+8 boundary test: 2024-01-15 15:59:59 UTC = 2024-01-15 23:59:59 UTC+8 → 20240115
+        assert_eq!(timestamp_ms_to_date(1705334399000), 20240115);
+        // 2024-01-15 16:00:00 UTC = 2024-01-16 00:00:00 UTC+8 → 20240116
+        assert_eq!(timestamp_ms_to_date(1705334400000), 20240116);
     }
 
     #[test]

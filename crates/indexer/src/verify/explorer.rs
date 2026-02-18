@@ -177,7 +177,11 @@ fn fetch_from_explorer_api(
                 .unwrap_or(0);
 
             let date = chrono::DateTime::from_timestamp(ts_val, 0)
-                .map(|dt| dt.format("%Y-%m-%d").to_string())
+                .map(|dt| {
+                    let utc8 =
+                        chrono::FixedOffset::east_opt(ckbadger_common::CKB_UTC8_OFFSET).unwrap();
+                    dt.with_timezone(&utc8).format("%Y-%m-%d").to_string()
+                })
                 .unwrap_or_default();
 
             if date.is_empty() {
@@ -365,9 +369,10 @@ fn compare_tolerance_f64(
     }
 }
 
-/// Get the last 30 completed days (excluding today).
+/// Get the last 30 completed days (excluding today) using UTC+8 boundaries.
 fn last_30_days() -> Vec<String> {
-    let today = chrono::Utc::now().date_naive();
+    let utc8 = chrono::FixedOffset::east_opt(ckbadger_common::CKB_UTC8_OFFSET).unwrap();
+    let today = chrono::Utc::now().with_timezone(&utc8).date_naive();
     (1..=30)
         .map(|i| {
             (today - chrono::Duration::days(i))

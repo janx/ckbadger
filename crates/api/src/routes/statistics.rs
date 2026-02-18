@@ -162,7 +162,7 @@ async fn get_tx_stats(State(state): State<Arc<AppState>>) -> ApiResult<TxStatsRe
         .list_daily_stats_with_dates()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let reference_date = reference_time.date_naive();
+    let reference_date = ckbadger_common::block_date(reference_time);
     let cutoff_date = reference_date - chrono::Duration::days(14);
 
     let mut recent_daily: Vec<(String, ckbadger_store::DailyStats)> = daily_stats
@@ -741,7 +741,7 @@ async fn fetch_network_stats_from_db(
     // Get compact_target from the latest block header's DAO or from block header directly
     // The CachedBlockHeader doesn't store compact_target, so we compute difficulty
     // from the latest DailyBlockStats instead. For now use the latest daily block stats.
-    let today = latest_timestamp.date_naive();
+    let today = ckbadger_common::block_date(latest_timestamp);
     let today_str = today.format("%Y%m%d").to_string();
     let yesterday = today - chrono::Duration::days(1);
     let yesterday_str = yesterday.format("%Y%m%d").to_string();
