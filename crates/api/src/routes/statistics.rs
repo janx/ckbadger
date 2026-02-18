@@ -9,6 +9,7 @@ use ckbadger_common::sync::{
     SYNC_STATUS_REDIS_KEY,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::cache::{CacheKeys, CacheTtl};
@@ -1221,6 +1222,151 @@ async fn get_miner_address_distribution_chart(
     ok(response)
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct DailyDaoCsu {
+    total_issuance: i128,
+    secondary_pool: i128,
+    occupied_capacity: i128,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct SecondaryCumulative {
+    cum_miner: i128,
+    cum_dao: i128,
+    cum_treasury: i128,
+}
+
+fn parse_dao_csu(dao: &[u8]) -> Option<DailyDaoCsu> {
+    if dao.len() < 32 {
+        return None;
+    }
+    Some(DailyDaoCsu {
+        total_issuance: u64::from_le_bytes(dao[0..8].try_into().ok()?) as i128,
+        secondary_pool: u64::from_le_bytes(dao[16..24].try_into().ok()?) as i128,
+        occupied_capacity: u64::from_le_bytes(dao[24..32].try_into().ok()?) as i128,
+    })
+}
+
+fn load_daily_dao_csu(
+    store: &ckbadger_store::CkbadgerStore,
+) -> anyhow::Result<HashMap<String, DailyDaoCsu>> {
+    let mut by_date = HashMap::new();
+    let iter = store.iterator_cf(store.cf_block_headers(), rocksdb::IteratorMode::Start);
+    for item in iter.flatten() {
+        let (_, value) = item;
+        let header: ckbadger_store::CachedBlockHeader = match bincode::deserialize(&value) {
+            Ok(h) => h,
+            Err(_) => continue,
+        };
+        let ts_secs = header.timestamp / 1000;
+        let Some(dt) = chrono::DateTime::from_timestamp(ts_secs, 0) else {
+            continue;
+        };
+        let Some(csu) = parse_dao_csu(&header.dao) else {
+            continue;
+        };
+        // Iterator is ascending by block number, so later blocks overwrite earlier
+        // blocks in the same date and become the day-end snapshot.
+        by_date.insert(
+            ckbadger_common::block_date(dt)
+                .format("%Y-%m-%d")
+                .to_string(),
+            csu,
+        );
+    }
+    Ok(by_date)
+}
+
+fn resolve_snapshot_csu(
+    snapshot: &ckbadger_store::DaoDailySnapshot,
+    daily_csu: &HashMap<String, DailyDaoCsu>,
+) -> DailyDaoCsu {
+    let fallback = daily_csu.get(&snapshot.date).copied().unwrap_or_default();
+    DailyDaoCsu {
+        total_issuance: if snapshot.total_issuance > 0 {
+            snapshot.total_issuance
+        } else {
+            fallback.total_issuance
+        },
+        secondary_pool: if snapshot.secondary_pool > 0 {
+            snapshot.secondary_pool
+        } else {
+            fallback.secondary_pool
+        },
+        occupied_capacity: if snapshot.occupied_capacity > 0 {
+            snapshot.occupied_capacity
+        } else {
+            fallback.occupied_capacity
+        },
+    }
+}
+
+fn split_secondary_non_miner(
+    total_issuance: i128,
+    occupied_capacity: i128,
+    total_deposited: i128,
+    non_miner_secondary: i128,
+) -> (i128, i128, i128) {
+    if non_miner_secondary <= 0 || total_issuance <= occupied_capacity {
+        return (0, 0, 0);
+    }
+
+    let denom = (total_issuance - occupied_capacity).max(1);
+    let deposited = total_deposited.max(0);
+    let occupied = occupied_capacity.max(0);
+
+    let miner = non_miner_secondary * occupied / denom;
+    let dao = non_miner_secondary * deposited / denom;
+    let treasury = non_miner_secondary - dao;
+
+    (miner.max(0), dao.max(0), treasury.max(0))
+}
+
+fn derive_secondary_cumulative_map(
+    snapshots: &[ckbadger_store::DaoDailySnapshot],
+    daily_csu: &HashMap<String, DailyDaoCsu>,
+) -> HashMap<String, SecondaryCumulative> {
+    let mut by_date = HashMap::with_capacity(snapshots.len());
+    let mut running = SecondaryCumulative::default();
+    let mut prev_secondary_pool: Option<i128> = None;
+
+    for snapshot in snapshots {
+        let csu = resolve_snapshot_csu(snapshot, daily_csu);
+        if prev_secondary_pool.is_none() && csu.secondary_pool > 0 {
+            // If historical snapshots were serialized before secondary_pool was
+            // persisted, bootstrap from 0 so cumulative series still starts from genesis.
+            prev_secondary_pool = Some(0);
+        }
+
+        if let Some(prev_s) = prev_secondary_pool {
+            let s_delta = csu.secondary_pool - prev_s;
+            if s_delta > 0 {
+                let (miner, dao, treasury) = split_secondary_non_miner(
+                    csu.total_issuance,
+                    csu.occupied_capacity,
+                    snapshot.total_deposited,
+                    s_delta,
+                );
+                running.cum_miner += miner;
+                running.cum_dao += dao;
+                running.cum_treasury += treasury;
+            }
+            // Ignore negative S adjustments to keep user-facing cumulative
+            // series monotonic and explorer-compatible.
+            prev_secondary_pool = Some(csu.secondary_pool);
+        }
+
+        // Preserve already-correct historical values when present.
+        running.cum_miner = running.cum_miner.max(snapshot.cum_miner_secondary.max(0));
+        running.cum_dao = running.cum_dao.max(snapshot.cum_dao_compensation.max(0));
+        running.cum_treasury = running.cum_treasury.max(snapshot.cum_treasury.max(0));
+
+        by_date.insert(snapshot.date.clone(), running);
+    }
+
+    by_date
+}
+
 async fn get_total_supply_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<StackedAreaChartResponse> {
@@ -1233,23 +1379,26 @@ async fn get_total_supply_chart(
         .store
         .list_dao_daily_snapshots()
         .map_err(|e| ApiError::internal(e.to_string()))?;
+    let daily_csu =
+        load_daily_dao_csu(&state.store).map_err(|e| ApiError::internal(e.to_string()))?;
+    let secondary_cumulative = derive_secondary_cumulative_map(&snapshots, &daily_csu);
 
     const SHANNON: f64 = 100_000_000.0;
 
     let data: Vec<StackedAreaDataPoint> = snapshots
         .iter()
         .filter_map(|s| {
-            // Use actual C (total_issuance) and cum_treasury from the DAO
-            // when available; fall back to estimate for pre-migration data.
-            // NOTE: secondary_pool (S field) is non-miner secondary = dao + treasury.
-            // Only the treasury portion is actually burnt.
-            let (total_supply, burnt) = if s.total_issuance > 0 {
-                // burnt = genesis lock (8.4B) + cumulative treasury secondary issuance
-                let burnt = GENESIS_BURNT as f64 + s.cum_treasury.max(0) as f64;
-                (s.total_issuance as f64, burnt)
+            let csu = resolve_snapshot_csu(s, &daily_csu);
+            let cum = secondary_cumulative
+                .get(&s.date)
+                .copied()
+                .unwrap_or_default();
+
+            let burnt = (GENESIS_BURNT as i128 + cum.cum_treasury.max(0)) as f64;
+            let total_supply = if csu.total_issuance > 0 {
+                csu.total_issuance as f64
             } else {
-                let ts = estimated_total_supply(&s.date)?;
-                (ts, GENESIS_BURNT as f64)
+                estimated_total_supply(&s.date)?
             };
 
             // Nervos DAO locked = active deposits (can be unlocked, but currently locked)
@@ -1360,30 +1509,44 @@ async fn get_secondary_issuance_chart(
         .store
         .list_dao_daily_snapshots()
         .map_err(|e| ApiError::internal(e.to_string()))?;
+    let daily_csu =
+        load_daily_dao_csu(&state.store).map_err(|e| ApiError::internal(e.to_string()))?;
+    let secondary_cumulative = derive_secondary_cumulative_map(&snapshots, &daily_csu);
 
     const SHANNON: f64 = 100_000_000.0;
 
     let data: Vec<StackedAreaDataPoint> = snapshots
         .iter()
-        .filter(|s| s.cum_miner_secondary > 0 || s.cum_dao_compensation > 0 || s.cum_treasury > 0)
-        .map(|s| {
+        .filter_map(|s| {
+            let cum = secondary_cumulative
+                .get(&s.date)
+                .copied()
+                .unwrap_or_else(|| SecondaryCumulative {
+                    cum_miner: s.cum_miner_secondary.max(0),
+                    cum_dao: s.cum_dao_compensation.max(0),
+                    cum_treasury: s.cum_treasury.max(0),
+                });
+            if cum.cum_miner <= 0 && cum.cum_dao <= 0 && cum.cum_treasury <= 0 {
+                return None;
+            }
+
             let mut values = std::collections::HashMap::new();
             values.insert(
                 "compensation".to_string(),
-                format!("{:.0}", s.cum_dao_compensation as f64 / SHANNON),
+                format!("{:.0}", cum.cum_dao as f64 / SHANNON),
             );
             values.insert(
                 "mining".to_string(),
-                format!("{:.0}", s.cum_miner_secondary as f64 / SHANNON),
+                format!("{:.0}", cum.cum_miner as f64 / SHANNON),
             );
             values.insert(
                 "burnt".to_string(),
-                format!("{:.0}", s.cum_treasury as f64 / SHANNON),
+                format!("{:.0}", cum.cum_treasury as f64 / SHANNON),
             );
-            StackedAreaDataPoint {
+            Some(StackedAreaDataPoint {
                 date: s.date.clone(),
                 values,
-            }
+            })
         })
         .collect();
 
@@ -1605,4 +1768,72 @@ async fn get_hodl_wave_chart(
     state.cache.set(cache_key, &response, CacheTtl::CHART).await;
 
     ok(response)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn snapshot(
+        date: &str,
+        total_deposited: i128,
+        total_issuance: i128,
+        secondary_pool: i128,
+        occupied_capacity: i128,
+    ) -> ckbadger_store::DaoDailySnapshot {
+        ckbadger_store::DaoDailySnapshot {
+            date: date.to_string(),
+            total_deposited,
+            depositors_count: 0,
+            new_deposits: 0,
+            withdrawals: 0,
+            compensation: 0,
+            cumulative_deposit_amount: 0,
+            total_issuance,
+            secondary_pool,
+            occupied_capacity,
+            cum_miner_secondary: 0,
+            cum_dao_compensation: 0,
+            cum_treasury: 0,
+        }
+    }
+
+    #[test]
+    fn test_derive_secondary_cumulative_bootstraps_from_secondary_pool() {
+        let snapshots = vec![
+            snapshot("2026-02-15", 200, 1000, 100, 100),
+            snapshot("2026-02-16", 200, 1000, 150, 100),
+        ];
+
+        let result = derive_secondary_cumulative_map(&snapshots, &HashMap::new());
+        let day1 = result.get("2026-02-15").copied().unwrap();
+        let day2 = result.get("2026-02-16").copied().unwrap();
+
+        assert_eq!(day1.cum_miner, 11);
+        assert_eq!(day1.cum_dao, 22);
+        assert_eq!(day1.cum_treasury, 78);
+        assert_eq!(day2.cum_miner, 16);
+        assert_eq!(day2.cum_dao, 33);
+        assert_eq!(day2.cum_treasury, 117);
+    }
+
+    #[test]
+    fn test_derive_secondary_cumulative_ignores_negative_secondary_pool_delta() {
+        let snapshots = vec![
+            snapshot("2026-02-15", 200, 1000, 100, 100),
+            snapshot("2026-02-16", 200, 1000, 80, 100), // -20
+            snapshot("2026-02-17", 200, 1000, 130, 100), // +50
+        ];
+
+        let result = derive_secondary_cumulative_map(&snapshots, &HashMap::new());
+        let day2 = result.get("2026-02-16").copied().unwrap();
+        let day3 = result.get("2026-02-17").copied().unwrap();
+
+        assert_eq!(day2.cum_miner, 11);
+        assert_eq!(day2.cum_dao, 22);
+        assert_eq!(day2.cum_treasury, 78);
+        assert_eq!(day3.cum_miner, 16);
+        assert_eq!(day3.cum_dao, 33);
+        assert_eq!(day3.cum_treasury, 117);
+    }
 }

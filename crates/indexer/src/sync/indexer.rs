@@ -34,8 +34,6 @@ use super::SyncProgress;
 
 #[allow(dead_code)]
 const PARTITION_SIZE: u64 = 5_000_000;
-const PRIMARY_PER_EPOCH_ERA0: i128 = 191_780_821_917_808;
-const PRIMARY_HALVING_EPOCH_INTERVAL: i64 = 8760;
 
 #[allow(dead_code)]
 fn get_partition_index(block_number: u64) -> usize {
@@ -185,10 +183,25 @@ fn extract_dao_csu(dao: &[u8]) -> Option<(i128, i128, i128)> {
     Some((c, s, u))
 }
 
-fn primary_issuance_per_block(epoch_number: i64, epoch_length: i32) -> i128 {
-    let era = (epoch_number / PRIMARY_HALVING_EPOCH_INTERVAL).max(0) as u32;
-    let primary_per_epoch = PRIMARY_PER_EPOCH_ERA0 >> era;
-    primary_per_epoch / (epoch_length.max(1) as i128)
+fn split_secondary_issuance(
+    total_issuance: i128,
+    occupied_capacity: i128,
+    total_deposited: i128,
+    non_miner_secondary: i128,
+) -> (i128, i128, i128) {
+    if non_miner_secondary <= 0 || total_issuance <= occupied_capacity {
+        return (0, 0, 0);
+    }
+
+    let denom = (total_issuance - occupied_capacity).max(1);
+    let deposited = total_deposited.max(0);
+    let occupied = occupied_capacity.max(0);
+
+    let miner = non_miner_secondary * occupied / denom;
+    let dao = non_miner_secondary * deposited / denom;
+    let treasury = non_miner_secondary - dao;
+
+    (miner.max(0), dao.max(0), treasury.max(0))
 }
 
 fn accumulate_secondary_issuance_deltas(
@@ -197,22 +210,22 @@ fn accumulate_secondary_issuance_deltas(
     block_date: NaiveDate,
     prev_dao_cs: &mut Option<(i128, i128)>,
 ) {
-    let Some((c, s, _)) = extract_dao_csu(&parsed.dao) else {
+    let Some((c, s, u)) = extract_dao_csu(&parsed.dao) else {
         return;
     };
 
     if let Some((prev_c, prev_s)) = *prev_dao_cs {
-        let c_delta = c - prev_c;
+        let _c_delta = c - prev_c;
         let s_delta = s - prev_s;
         *stats
             .daily_secondary_non_miner_delta
             .entry(block_date)
             .or_default() += s_delta;
 
-        if s_delta >= 0 {
-            let primary = primary_issuance_per_block(parsed.epoch_number, parsed.epoch_length);
-            let secondary = (c_delta - primary).max(0);
-            let miner = (secondary - s_delta).max(0);
+        if s_delta > 0 {
+            // Derive miner share directly from C/U ratio to avoid compact-target
+            // and primary-issuance approximation drift.
+            let (miner, _, _) = split_secondary_issuance(c, u, 0, s_delta);
             *stats
                 .daily_secondary_miner_delta
                 .entry(block_date)
@@ -5715,42 +5728,48 @@ impl Indexer {
                 if has_exact_dao_deltas {
                     // Continue from the latest snapshot and apply exact per-day deltas from
                     // this batch (deposits and phase-1 withdrawals) in date order.
-                    let mut prev_snapshot = self
+                    let latest_snapshot = self
                         .writer
                         .store()
                         .list_dao_daily_snapshots()
                         .ok()
                         .and_then(|snaps| snaps.last().cloned());
 
-                    let mut running_total_deposited = prev_snapshot
+                    let mut running_total_deposited = latest_snapshot
                         .as_ref()
                         .map(|s| s.total_deposited)
                         .unwrap_or(0);
-                    let running_depositors = prev_snapshot
+                    let running_depositors = latest_snapshot
                         .as_ref()
                         .map(|s| s.depositors_count)
                         .unwrap_or(0);
-                    let mut running_total_deposit_count =
-                        prev_snapshot.as_ref().map(|s| s.new_deposits).unwrap_or(0);
+                    let mut running_total_deposit_count = latest_snapshot
+                        .as_ref()
+                        .map(|s| s.new_deposits)
+                        .unwrap_or(0);
                     let running_total_withdrawal_count =
-                        prev_snapshot.as_ref().map(|s| s.withdrawals).unwrap_or(0);
-                    let running_total_compensation =
-                        prev_snapshot.as_ref().map(|s| s.compensation).unwrap_or(0);
-                    let mut running_cumulative_deposit_amount = prev_snapshot
+                        latest_snapshot.as_ref().map(|s| s.withdrawals).unwrap_or(0);
+                    let running_total_compensation = latest_snapshot
+                        .as_ref()
+                        .map(|s| s.compensation)
+                        .unwrap_or(0);
+                    let mut running_cumulative_deposit_amount = latest_snapshot
                         .as_ref()
                         .map(|s| s.cumulative_deposit_amount)
                         .unwrap_or(0);
-                    let mut running_cum_miner = prev_snapshot
+                    let mut running_cum_miner = latest_snapshot
                         .as_ref()
                         .map(|s| s.cum_miner_secondary)
                         .unwrap_or(0);
-                    let mut running_cum_dao = prev_snapshot
+                    let mut running_cum_dao = latest_snapshot
                         .as_ref()
                         .map(|s| s.cum_dao_compensation)
                         .unwrap_or(0);
-                    let mut running_cum_treasury =
-                        prev_snapshot.as_ref().map(|s| s.cum_treasury).unwrap_or(0);
-                    let mut prev_secondary_pool = prev_snapshot
+                    let mut running_cum_treasury = latest_snapshot
+                        .as_ref()
+                        .map(|s| s.cum_treasury)
+                        .unwrap_or(0);
+                    let mut prev_secondary_pool = latest_snapshot
                         .as_ref()
                         .map(|s| s.secondary_pool)
                         .unwrap_or(0);
@@ -5777,39 +5796,32 @@ impl Indexer {
                             .unwrap_or((0, 0, 0));
                         let daily_non_miner =
                             stats.daily_secondary_non_miner_delta.get(date).copied();
-                        let daily_miner_exact = stats
-                            .daily_secondary_miner_delta
-                            .get(date)
-                            .copied()
-                            .unwrap_or(0);
                         let (daily_miner, daily_dao_share, daily_treasury_share) =
-                            if prev_snapshot.is_some() && total_issuance > 0 {
+                            if total_issuance > 0 {
                                 if let Some(non_miner) = daily_non_miner {
-                                    if non_miner >= 0 {
-                                        let denom = (total_issuance - occupied_capacity).max(1);
-                                        let deposited = running_total_deposited.max(0);
-                                        let dao = non_miner * deposited / denom;
-                                        let treasury = non_miner - dao;
-                                        (daily_miner_exact.max(0), dao, treasury)
+                                    if non_miner > 0 {
+                                        split_secondary_issuance(
+                                            total_issuance,
+                                            occupied_capacity,
+                                            running_total_deposited,
+                                            non_miner,
+                                        )
                                     } else {
-                                        // S field decreased (protocol upgrade boundary).
-                                        // Keep miner/dao monotonic while preserving non-miner sum.
-                                        (0, 0, non_miner)
+                                        // Ignore negative S adjustments in user-facing cumulative
+                                        // charts to keep the series monotonic.
+                                        (0, 0, 0)
                                     }
                                 } else {
                                     let s_delta = secondary_pool - prev_secondary_pool;
-                                    if s_delta >= 0 {
-                                        let denom = (total_issuance - occupied_capacity).max(1);
-                                        let deposited = running_total_deposited.max(0);
-                                        let miner = s_delta * occupied_capacity / denom;
-                                        let dao = s_delta * deposited / denom;
-                                        let treasury = s_delta - dao;
-                                        (miner, dao, treasury)
+                                    if s_delta > 0 {
+                                        split_secondary_issuance(
+                                            total_issuance,
+                                            occupied_capacity,
+                                            running_total_deposited,
+                                            s_delta,
+                                        )
                                     } else {
-                                        // S field decreased (protocol upgrade boundary).
-                                        // Absorb negative adjustment into treasury to keep
-                                        // miner/dao monotonic while preserving the sum.
-                                        (0, 0, s_delta)
+                                        (0, 0, 0)
                                     }
                                 }
                             } else {
@@ -5836,23 +5848,6 @@ impl Indexer {
                         };
                         self.writer
                             .update_dao_daily_snapshot(*date, &dao_snapshot, batch)?;
-
-                        // Update prev_snapshot for next iteration in this batch
-                        prev_snapshot = Some(DaoDailySnapshot {
-                            date: date.format("%Y-%m-%d").to_string(),
-                            total_deposited: running_total_deposited,
-                            depositors_count: running_depositors,
-                            new_deposits: running_total_deposit_count,
-                            withdrawals: running_total_withdrawal_count,
-                            compensation: running_total_compensation,
-                            cumulative_deposit_amount: running_cumulative_deposit_amount,
-                            total_issuance,
-                            secondary_pool,
-                            occupied_capacity,
-                            cum_miner_secondary: running_cum_miner,
-                            cum_dao_compensation: running_cum_dao,
-                            cum_treasury: running_cum_treasury,
-                        });
                     }
                 } else {
                     // Live sync fallback: keep behavior when exact DAO deltas are unavailable.
@@ -5895,56 +5890,59 @@ impl Indexer {
                             .unwrap_or((0, 0, 0));
                         let daily_non_miner =
                             stats.daily_secondary_non_miner_delta.get(date).copied();
-                        let daily_miner_exact = stats
-                            .daily_secondary_miner_delta
-                            .get(date)
-                            .copied()
-                            .unwrap_or(0);
                         let (cum_miner, cum_dao, cum_treasury) = if let Some(ref p) = prev_snapshot
                         {
                             if let Some(non_miner) = daily_non_miner {
-                                if non_miner >= 0 {
-                                    let denom = (total_issuance - occupied_capacity).max(1);
-                                    let deposited = total_deposited.max(0);
-                                    let daily_dao_share = non_miner * deposited / denom;
-                                    let daily_treasury_share = non_miner - daily_dao_share;
-                                    (
-                                        p.cum_miner_secondary + daily_miner_exact.max(0),
-                                        p.cum_dao_compensation + daily_dao_share,
-                                        p.cum_treasury + daily_treasury_share,
-                                    )
-                                } else {
-                                    // S field decreased (protocol upgrade boundary).
-                                    // Keep miner/dao monotonic while preserving non-miner sum.
-                                    (
-                                        p.cum_miner_secondary,
-                                        p.cum_dao_compensation,
-                                        p.cum_treasury + non_miner,
-                                    )
-                                }
-                            } else {
-                                let s_delta = secondary_pool - p.secondary_pool;
-                                if s_delta >= 0 {
-                                    let denom = (total_issuance - occupied_capacity).max(1);
-                                    let deposited = total_deposited.max(0);
-                                    let daily_miner = s_delta * occupied_capacity / denom;
-                                    let daily_dao_share = s_delta * deposited / denom;
-                                    let daily_treasury_share = s_delta - daily_dao_share;
+                                if non_miner > 0 {
+                                    let (daily_miner, daily_dao_share, daily_treasury_share) =
+                                        split_secondary_issuance(
+                                            total_issuance,
+                                            occupied_capacity,
+                                            total_deposited,
+                                            non_miner,
+                                        );
                                     (
                                         p.cum_miner_secondary + daily_miner,
                                         p.cum_dao_compensation + daily_dao_share,
                                         p.cum_treasury + daily_treasury_share,
                                     )
                                 } else {
-                                    // S field decreased (protocol upgrade boundary).
-                                    // Absorb negative adjustment into treasury.
                                     (
                                         p.cum_miner_secondary,
                                         p.cum_dao_compensation,
-                                        p.cum_treasury + s_delta,
+                                        p.cum_treasury,
+                                    )
+                                }
+                            } else {
+                                let s_delta = secondary_pool - p.secondary_pool;
+                                if s_delta > 0 {
+                                    let (daily_miner, daily_dao_share, daily_treasury_share) =
+                                        split_secondary_issuance(
+                                            total_issuance,
+                                            occupied_capacity,
+                                            total_deposited,
+                                            s_delta,
+                                        );
+                                    (
+                                        p.cum_miner_secondary + daily_miner,
+                                        p.cum_dao_compensation + daily_dao_share,
+                                        p.cum_treasury + daily_treasury_share,
+                                    )
+                                } else {
+                                    (
+                                        p.cum_miner_secondary,
+                                        p.cum_dao_compensation,
+                                        p.cum_treasury,
                                     )
                                 }
                             }
+                        } else if total_issuance > 0 && secondary_pool > 0 {
+                            split_secondary_issuance(
+                                total_issuance,
+                                occupied_capacity,
+                                total_deposited,
+                                secondary_pool,
+                            )
                         } else {
                             (0, 0, 0)
                         };
@@ -6483,33 +6481,33 @@ mod tests {
     #[test]
     fn test_accumulate_secondary_issuance_deltas_tracks_exact_miner_and_non_miner() {
         let mut stats = BatchStats::default();
-        let mut prev = Some((10_000_000_000_000_i128, 5_000_i128));
-        let primary = primary_issuance_per_block(0, 1000);
-        let block = dummy_parsed_block(
-            build_dao_field(
-                (10_000_000_000_000_i128 + primary + 1_000) as u64,
-                (5_000_i128 + 600) as u64,
-                0,
-            ),
-            0,
-            1000,
-        );
+        let prev_c = 10_000_000_000_000_i128;
+        let prev_s = 5_000_i128;
+        let c = prev_c + 1_000;
+        let s = prev_s + 600;
+        let u = 2_000_i128;
+        let denom = c - u;
+        let expected_miner = 600 * u / denom;
+        let mut prev = Some((prev_c, prev_s));
+        let block = dummy_parsed_block(build_dao_field(c as u64, s as u64, u as u64), 0, 1000);
         let date = ckbadger_common::block_date(block.timestamp);
 
         accumulate_secondary_issuance_deltas(&mut stats, &block, date, &mut prev);
 
         assert_eq!(stats.daily_secondary_non_miner_delta.get(&date), Some(&600));
-        assert_eq!(stats.daily_secondary_miner_delta.get(&date), Some(&400));
+        assert_eq!(
+            stats.daily_secondary_miner_delta.get(&date),
+            Some(&expected_miner)
+        );
     }
 
     #[test]
     fn test_accumulate_secondary_issuance_deltas_keeps_negative_adjustment_in_non_miner_only() {
         let mut stats = BatchStats::default();
         let mut prev = Some((20_000_000_000_000_i128, 8_000_i128));
-        let primary = primary_issuance_per_block(0, 1000);
         let block = dummy_parsed_block(
             build_dao_field(
-                (20_000_000_000_000_i128 + primary + 500) as u64,
+                (20_000_000_000_000_i128 + 500) as u64,
                 (8_000_i128 - 100) as u64,
                 0,
             ),

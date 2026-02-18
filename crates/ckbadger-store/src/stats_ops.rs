@@ -486,12 +486,8 @@ impl CkbadgerStore {
         // Sort events by date
         events.sort_by_key(|e| e.date);
 
-        // 5. Collect last DAO field (C, S, U) per date AND compute per-block
-        //    secondary issuance breakdown from consecutive block headers.
-        //    CKB primary issuance: 191,780,821,917,808 shannons per epoch in era 0,
-        //    halving every 8760 epochs.
-        const PRIMARY_PER_EPOCH_ERA0: i128 = 191_780_821_917_808;
-        const HALVING_INTERVAL: i64 = 8760;
+        // 5. Collect last DAO field (C, S, U) per date and per-day secondary
+        // issuance breakdown from consecutive block headers.
 
         // (C, S, U) per date — last block of each day wins
         let mut daily_dao_csu: std::collections::HashMap<chrono::NaiveDate, (i128, i128, i128)> =
@@ -501,7 +497,6 @@ impl CkbadgerStore {
         let mut daily_secondary: BTreeMap<chrono::NaiveDate, (i128, i128)> = BTreeMap::new();
         {
             let iter = self.iterator_cf(self.cf_block_headers(), rocksdb::IteratorMode::Start);
-            let mut prev_c: Option<i128> = None;
             let mut prev_s: Option<i128> = None;
             for item in iter.flatten() {
                 let (_, value) = item;
@@ -522,23 +517,16 @@ impl CkbadgerStore {
                             daily_dao_csu.insert(d, (c, s, u));
 
                             // Compute per-block secondary issuance breakdown
-                            if let (Some(pc), Some(ps)) = (prev_c, prev_s) {
-                                let c_delta = c - pc;
+                            if let Some(ps) = prev_s {
                                 let s_delta = s - ps; // allow negative (protocol upgrade boundaries)
                                 let entry = daily_secondary.entry(d).or_insert((0, 0));
-                                if s_delta >= 0 {
-                                    // primary_per_block = primary_per_epoch / epoch_length
-                                    let era = (header.epoch_number / HALVING_INTERVAL) as u32;
-                                    let primary_per_epoch = PRIMARY_PER_EPOCH_ERA0 >> era;
-                                    let epoch_len = header.epoch_length.max(1) as i128;
-                                    let primary = primary_per_epoch / epoch_len;
-                                    let secondary = (c_delta - primary).max(0);
-                                    let miner = (secondary - s_delta).max(0);
+                                if s_delta > 0 {
+                                    let denom = (c - u).max(1);
+                                    let miner = s_delta * u.max(0) / denom;
                                     entry.0 += miner;
                                 }
                                 entry.1 += s_delta;
                             }
-                            prev_c = Some(c);
                             prev_s = Some(s);
                         }
                     }
@@ -601,7 +589,7 @@ impl CkbadgerStore {
             // Accumulate secondary issuance breakdown for this day
             if let Some(&(daily_miner, daily_non_miner)) = daily_secondary.get(date) {
                 cum_miner += daily_miner;
-                if daily_non_miner >= 0 {
+                if daily_non_miner > 0 {
                     // Split non-miner into dao and treasury using dao_ratio
                     let (c, _s, u) = daily_dao_csu.get(date).copied().unwrap_or((0, 0, 0));
                     let denom = (c - u).max(1);
@@ -610,10 +598,6 @@ impl CkbadgerStore {
                     let daily_treasury_share = daily_non_miner - daily_dao_share;
                     cum_dao += daily_dao_share;
                     cum_treasury += daily_treasury_share;
-                } else {
-                    // S field decreased (protocol upgrade boundary).
-                    // Absorb negative adjustment into treasury.
-                    cum_treasury += daily_non_miner;
                 }
             }
 
@@ -1031,14 +1015,8 @@ mod tests {
     #[test]
     fn test_dao_snapshot_negative_s_delta_protocol_upgrade() {
         // CKB's on-chain S field can decrease at protocol upgrade boundaries.
-        // When s_delta < 0 we must:
-        //   1. Absorb the negative into treasury (keeps miner/dao monotonic)
-        //   2. Still update prev_secondary_pool so future deltas telescope
-        //
-        // This test simulates a 3-day sequence where day 2 has a negative S
-        // delta (protocol upgrade), followed by a normal day 3.  The total
-        // cum_dao + cum_treasury must equal sum(s_delta) across all days —
-        // i.e. S_final - S_initial.
+        // For user-facing cumulative charts, negative deltas are ignored to
+        // keep miner/dao/treasury monotonic and avoid artificial drops.
         let c: i128 = 4_000_000_000_000_000_000; // 40B CKB
         let u: i128 = 400_000_000_000_000_000; // 4B CKB
         let deposited: i128 = 50_000_000_000_000;
@@ -1058,59 +1036,35 @@ mod tests {
 
         for &s in &s_values {
             let s_delta = s - prev_s;
-            if s_delta >= 0 {
+            if s_delta > 0 {
                 let miner = s_delta * u / denom;
                 let dao = s_delta * deposited / denom;
                 let treasury = s_delta - dao;
                 cum_miner += miner;
                 cum_dao += dao;
                 cum_treasury += treasury;
-            } else {
-                // Protocol upgrade: absorb into treasury
-                cum_treasury += s_delta;
             }
             prev_s = s;
         }
 
-        let total_s_change = s3 - s0; // net S change
+        let positive_s_change = (s1 - s0) + (s3 - s2); // only positive deltas
         let cum_non_miner = cum_dao + cum_treasury;
 
-        // The cumulative non-miner must equal the net S change exactly.
+        // Non-miner tracks only positive S growth.
         assert_eq!(
-            cum_non_miner, total_s_change,
-            "cum_dao + cum_treasury must telescope to S_final - S_initial"
+            cum_non_miner, positive_s_change,
+            "cum_dao + cum_treasury must equal sum(positive s_delta)"
         );
 
         // Miner and dao must be non-negative (monotonic).
         assert!(cum_miner >= 0, "cum_miner must be non-negative");
         assert!(cum_dao >= 0, "cum_dao must be non-negative");
-
-        // Treasury absorbed the negative delta, so it should be lower than
-        // if all days were positive.
-        let positive_only_treasury = {
-            // Hypothetical: if day 2 had s_delta = 0 instead of -30
-            let d1_dao = 100_000_000_000 * deposited / denom;
-            let d3_dao = 100_000_000_000 * deposited / denom;
-            let d1_treas = 100_000_000_000 - d1_dao;
-            let d3_treas = 100_000_000_000 - d3_dao;
-            d1_treas + d3_treas
-        };
-        assert!(
-            cum_treasury < positive_only_treasury,
-            "treasury should be reduced by the protocol upgrade drop"
-        );
     }
 
     #[test]
     fn test_dao_snapshot_negative_s_delta_batch_boundary() {
-        // Regression test for the batch-boundary overcounting bug.
-        //
-        // Scenario: a protocol upgrade causes S to drop mid-day.  The batch
-        // boundary falls AFTER the S drop but BEFORE the day ends, so batch N
-        // sees a negative s_delta and batch N+1 continues from the lower S.
-        //
-        // With the fix, the two partial contributions must telescope correctly
-        // to S(day_end) - S(prev_day_end), NOT overcounting.
+        // Regression test: negative S deltas are ignored even across batch
+        // boundaries, while positive deltas still accumulate normally.
         let c: i128 = 4_000_000_000_000_000_000;
         let u: i128 = 400_000_000_000_000_000;
         let deposited: i128 = 50_000_000_000_000;
@@ -1123,7 +1077,7 @@ mod tests {
         let s_delta_batch_n = s_batch_end - s_prev_day; // -20
         assert!(s_delta_batch_n < 0);
 
-        let (miner_n, dao_n, treas_n) = (0i128, 0i128, s_delta_batch_n);
+        let (miner_n, dao_n, treas_n) = (0i128, 0i128, 0i128);
 
         // Batch N+1 processes rest of day: s_delta = s_day_end - s_batch_end > 0
         let s_delta_batch_n1 = s_day_end - s_batch_end; // +100
@@ -1139,12 +1093,12 @@ mod tests {
         let total_treas = treas_n + treas_n1;
         let total_non_miner = total_dao + total_treas;
 
-        // Must equal the actual full-day S change
-        let actual_day_s_change = s_day_end - s_prev_day; // +80
+        // Negative segment is ignored; only positive segment contributes.
+        let actual_positive_change = s_delta_batch_n1; // +100
         assert_eq!(
-            total_non_miner, actual_day_s_change,
-            "batch-split non-miner must equal full-day S change: got {} expected {}",
-            total_non_miner, actual_day_s_change
+            total_non_miner, actual_positive_change,
+            "batch-split non-miner must equal positive segment: got {} expected {}",
+            total_non_miner, actual_positive_change
         );
 
         // Miner should only account for the positive portion

@@ -637,8 +637,8 @@ impl Check for ExplorerHashRate {
             if let (Some(our_val), Some(explorer_val)) =
                 (our_data.get(date), explorer_data.get(date))
             {
-                // Our API returns H/s, explorer returns kH/s — convert before comparing
-                let ours: f64 = our_val.parse::<f64>().unwrap_or(0.0) / 1000.0;
+                // Both APIs return H/s.
+                let ours: f64 = our_val.parse::<f64>().unwrap_or(0.0);
                 if let Some(f) =
                     compare_tolerance_f64(ours, explorer_val, date, "avg_hash_rate", 0.002)
                 {

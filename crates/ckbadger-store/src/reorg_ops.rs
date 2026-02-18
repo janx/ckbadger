@@ -194,6 +194,10 @@ impl CkbadgerStore {
 
         // Commit all deletes atomically
         self.write_batch(batch)?;
+        // Rebuild addr_balance from live_cells after rollback. Reorg deletes
+        // created cells in rolled-back blocks, and historical drift can leave
+        // addr_balance inconsistent with live_cells otherwise.
+        self.rebuild_addr_balances_from_live_cells()?;
 
         Ok(RollbackResult {
             blocks_removed,
@@ -215,6 +219,9 @@ pub struct RollbackResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::batch::StoreBatch;
+    use crate::store::CkbadgerStore;
+    use crate::types::{AddressBalance, CachedBlockHeader, LiveCellInfo};
 
     #[test]
     fn test_should_delete_stats_for_replay_daily_prefix() {
@@ -235,5 +242,83 @@ mod tests {
         let miner_suffix = [b"20260210".as_slice(), &[0xAA; 32]].concat();
         let miner = crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_MINER, &miner_suffix);
         assert!(should_delete_stats_for_replay(&miner, cutoff));
+    }
+
+    #[test]
+    fn test_rollback_rebuilds_addr_balance_from_live_cells() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let lock_hash = vec![0xAA; 32];
+
+        let header1 = CachedBlockHeader {
+            hash: vec![0x01; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+        let header2 = CachedBlockHeader {
+            hash: vec![0x02; 32],
+            timestamp: 1_700_000_010_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+        let cell_block_1 = LiveCellInfo {
+            capacity: 100,
+            created_at_block: 1,
+            lock_script_hash: lock_hash.clone(),
+            lock_code_hash: vec![0x11; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: None,
+            type_code_hash: None,
+            data_size: 0,
+            occupied_capacity: 100,
+        };
+        let cell_block_2 = LiveCellInfo {
+            capacity: 300,
+            created_at_block: 2,
+            lock_script_hash: lock_hash.clone(),
+            lock_code_hash: vec![0x11; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: None,
+            type_code_hash: None,
+            data_size: 0,
+            occupied_capacity: 300,
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(1, &header1);
+        batch.put_block_header(2, &header2);
+        batch.put_cell(&[0x10; 32], 0, &cell_block_1);
+        batch.put_cell(&[0x20; 32], 0, &cell_block_2);
+        batch.put_addr_balance(
+            &lock_hash,
+            &AddressBalance {
+                balance: 400,
+                occupied_capacity: 400,
+                live_cells_count: 2,
+                total_cells_count: 2,
+                txs_count: 0,
+                first_seen_block: 1,
+                first_seen_tx: vec![0x10; 32],
+                last_activity_block: 2,
+                last_activity_tx: vec![0x20; 32],
+            },
+        );
+        batch.commit().unwrap();
+
+        store.rollback_to_block(1).unwrap();
+
+        let rebuilt = store.get_addr_balance(&lock_hash).unwrap().unwrap();
+        assert_eq!(rebuilt.balance, 100);
+        assert_eq!(rebuilt.occupied_capacity, 100);
+        assert_eq!(rebuilt.live_cells_count, 1);
     }
 }
