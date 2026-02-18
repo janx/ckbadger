@@ -1,9 +1,7 @@
 use crate::cache::CacheTtl;
 use crate::routes::assets::AssetResponse;
 use crate::utils::resolve_dob_collection_name;
-use crate::utils::shannon_to_ckb_u128;
 use crate::AppState;
-use ckbadger_common::dao::GENESIS_BURNT;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
@@ -255,6 +253,24 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
 pub async fn warmup_chart_caches(state: Arc<AppState>) {
     info!("Starting cache warmup for charts...");
 
+    // These chart caches used to be prefilled with placeholder payloads (often empty),
+    // which overrides real chart handlers after Redis flush/restart.
+    // Purge them on startup and let route handlers populate on first request.
+    const STUB_CHART_KEYS: &[&str] = &[
+        "chart:average-block-time",
+        "chart:hash-rate",
+        "chart:difficulty",
+        "chart:uncle-rate",
+        "chart:epoch-time-distribution",
+        "chart:epoch-time-length",
+        "chart:miner-address-distribution",
+        "chart:total-supply",
+        "chart:secondary-issuance",
+    ];
+    for key in STUB_CHART_KEYS {
+        state.cache.delete(key).await;
+    }
+
     macro_rules! run_warmup {
         ($key:expr, $fn:ident) => {
             async {
@@ -294,79 +310,22 @@ pub async fn warmup_chart_caches(state: Arc<AppState>) {
 }
 
 async fn warmup_average_block_time(state: &AppState) -> Result<(), String> {
-    let stats = state.store.list_daily_stats().map_err(|e| e.to_string())?;
-
-    let data: Vec<serde_json::Value> = stats
-        .into_iter()
-        .filter_map(|s| {
-            let avg_time_ms = s.avg_block_time_ms?;
-            // We don't have the date directly on DailyStats — use empty placeholder
-            // This will be populated from the stats key prefix in production
-            Some(serde_json::json!({
-                "value": format!("{:.2}", avg_time_ms as f64 / 1000.0)
-            }))
-        })
-        .collect();
-
-    let response = serde_json::json!({
-        "data": data,
-        "title": "Average Block Time",
-        "yAxisLabel": "Seconds"
-    });
-
-    state
-        .cache
-        .set("chart:average-block-time", &response, CHART_CACHE_TTL)
-        .await;
-
+    state.cache.delete("chart:average-block-time").await;
     Ok(())
 }
 
 async fn warmup_hash_rate(state: &AppState) -> Result<(), String> {
-    // Hash rate requires daily_block_stats which have avg_compact_target
-    // These are stored in the stats CF with DAILY_BLOCK prefix
-    // For now, use an empty response — will be populated when data exists
-    let response = serde_json::json!({
-        "data": [],
-        "title": "Hash Rate",
-        "yAxisLabel": "Hash Rate (H/s)"
-    });
-
-    state
-        .cache
-        .set("chart:hash-rate", &response, CHART_CACHE_TTL)
-        .await;
-
+    state.cache.delete("chart:hash-rate").await;
     Ok(())
 }
 
 async fn warmup_difficulty(state: &AppState) -> Result<(), String> {
-    let response = serde_json::json!({
-        "data": [],
-        "title": "Difficulty",
-        "yAxisLabel": "Difficulty"
-    });
-
-    state
-        .cache
-        .set("chart:difficulty", &response, CHART_CACHE_TTL)
-        .await;
-
+    state.cache.delete("chart:difficulty").await;
     Ok(())
 }
 
 async fn warmup_uncle_rate(state: &AppState) -> Result<(), String> {
-    let response = serde_json::json!({
-        "data": [],
-        "title": "Uncle Rate",
-        "yAxisLabel": "Uncle Rate"
-    });
-
-    state
-        .cache
-        .set("chart:uncle-rate", &response, CHART_CACHE_TTL)
-        .await;
-
+    state.cache.delete("chart:uncle-rate").await;
     Ok(())
 }
 
@@ -415,92 +374,27 @@ async fn warmup_block_time_distribution(state: &AppState) -> Result<(), String> 
 }
 
 async fn warmup_epoch_time_distribution(state: &AppState) -> Result<(), String> {
-    let response = serde_json::json!({
-        "data": [],
-        "title": "Epoch Time Distribution",
-        "yAxisLabel": "Epochs"
-    });
-
-    state
-        .cache
-        .set("chart:epoch-time-distribution", &response, CHART_CACHE_TTL)
-        .await;
-
+    state.cache.delete("chart:epoch-time-distribution").await;
     Ok(())
 }
 
 async fn warmup_epoch_time_length(state: &AppState) -> Result<(), String> {
-    let response = serde_json::json!({
-        "data": [],
-        "title": "Epoch Time Length",
-        "yAxisLabel": "Hours",
-        "y2AxisLabel": "Blocks"
-    });
-
-    state
-        .cache
-        .set("chart:epoch-time-length", &response, CHART_CACHE_TTL)
-        .await;
-
+    state.cache.delete("chart:epoch-time-length").await;
     Ok(())
 }
 
 async fn warmup_miner_distribution(state: &AppState) -> Result<(), String> {
-    let response = serde_json::json!({
-        "data": [],
-        "title": "Miner Address Distribution",
-        "totalBlocks": 0
-    });
-
-    state
-        .cache
-        .set(
-            "chart:miner-address-distribution",
-            &response,
-            CHART_CACHE_TTL,
-        )
-        .await;
-
+    state.cache.delete("chart:miner-address-distribution").await;
     Ok(())
 }
 
 async fn warmup_total_supply(state: &AppState) -> Result<(), String> {
-    let _ = GENESIS_BURNT;
-    let _ = shannon_to_ckb_u128;
-
-    let response = serde_json::json!({
-        "data": [],
-        "series": [
-            {"key": "circulating", "label": "Circulating", "color": "#00c389"},
-            {"key": "burnt", "label": "Burnt", "color": "#6b7280"}
-        ],
-        "title": "Total Supply"
-    });
-
-    state
-        .cache
-        .set("chart:total-supply", &response, CHART_CACHE_TTL)
-        .await;
-
+    state.cache.delete("chart:total-supply").await;
     Ok(())
 }
 
 async fn warmup_secondary_issuance(state: &AppState) -> Result<(), String> {
-    let response = serde_json::json!({
-        "data": [],
-        "series": [
-            {"key": "compensation", "label": "Deposit Compensation", "color": "#00c389"},
-            {"key": "mining", "label": "Mining Reward", "color": "#8b5cf6"},
-            {"key": "burnt", "label": "Burnt", "color": "#6b7280"}
-        ],
-        "title": "Secondary Issuance"
-    });
-
-    state
-        .cache
-        .set("chart:secondary-issuance", &response, CHART_CACHE_TTL)
-        .await;
-
+    state.cache.delete("chart:secondary-issuance").await;
     Ok(())
 }
 

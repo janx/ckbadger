@@ -9,7 +9,7 @@ use ckbadger_common::sync::{
     SYNC_STATUS_REDIS_KEY,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use crate::cache::{CacheKeys, CacheTtl};
@@ -1032,8 +1032,7 @@ async fn get_hash_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<Ch
         })
         .map(|(date_str, stats)| {
             let difficulty = compact_to_difficulty(stats.avg_compact_target as i64);
-            let avg_block_time = 86400.0 / stats.block_count as f64;
-            let hash_rate = difficulty as f64 / avg_block_time;
+            let hash_rate = calculate_daily_hash_rate(difficulty, stats.block_count);
             ChartDataPoint {
                 date: format_date_for_chart(&date_str),
                 value: format!("{:.0}", hash_rate),
@@ -1301,6 +1300,64 @@ fn resolve_snapshot_csu(
     }
 }
 
+fn calculate_daily_hash_rate(difficulty: u64, block_count: i32) -> f64 {
+    if block_count <= 0 {
+        return 0.0;
+    }
+
+    // Explorer computes hash rate using average block time in milliseconds.
+    let avg_block_time_ms = 86_400_000.0 / block_count as f64;
+    if avg_block_time_ms <= 0.0 {
+        0.0
+    } else {
+        difficulty as f64 / avg_block_time_ms
+    }
+}
+
+fn load_daily_dao_compensation_cumulative(
+    store: &ckbadger_store::CkbadgerStore,
+) -> anyhow::Result<BTreeMap<String, i128>> {
+    let mut daily_compensation: BTreeMap<String, i128> = BTreeMap::new();
+    let mut block_date_cache: HashMap<i64, String> = HashMap::new();
+
+    for (_, entry) in store.list_dao_deposits()? {
+        let Some(withdraw_block) = entry.withdraw_block else {
+            continue;
+        };
+        let compensation = entry.compensation.unwrap_or(0) as i128;
+        if compensation <= 0 {
+            continue;
+        }
+
+        let date = if let Some(cached) = block_date_cache.get(&withdraw_block) {
+            cached.clone()
+        } else {
+            let Some(header) = store.get_block_header(withdraw_block)? else {
+                continue;
+            };
+            let Some(dt) = chrono::DateTime::from_timestamp_millis(header.timestamp) else {
+                continue;
+            };
+            let date = ckbadger_common::block_date(dt)
+                .format("%Y-%m-%d")
+                .to_string();
+            block_date_cache.insert(withdraw_block, date.clone());
+            date
+        };
+
+        *daily_compensation.entry(date).or_default() += compensation;
+    }
+
+    let mut cumulative: BTreeMap<String, i128> = BTreeMap::new();
+    let mut running = 0i128;
+    for (date, delta) in daily_compensation {
+        running += delta;
+        cumulative.insert(date, running);
+    }
+
+    Ok(cumulative)
+}
+
 fn split_secondary_non_miner(
     total_issuance: i128,
     occupied_capacity: i128,
@@ -1325,41 +1382,52 @@ fn split_secondary_non_miner(
 fn derive_secondary_cumulative_map(
     snapshots: &[ckbadger_store::DaoDailySnapshot],
     daily_csu: &HashMap<String, DailyDaoCsu>,
+    compensation_cumulative: &BTreeMap<String, i128>,
 ) -> HashMap<String, SecondaryCumulative> {
     let mut by_date = HashMap::with_capacity(snapshots.len());
     let mut running = SecondaryCumulative::default();
-    let mut prev_secondary_pool: Option<i128> = None;
+    let mut prev_effective_non_miner: Option<i128> = None;
+    let mut running_compensation = 0i128;
+    let mut compensation_iter = compensation_cumulative.iter().peekable();
 
     for snapshot in snapshots {
-        let csu = resolve_snapshot_csu(snapshot, daily_csu);
-        if prev_secondary_pool.is_none() && csu.secondary_pool > 0 {
-            // If historical snapshots were serialized before secondary_pool was
-            // persisted, bootstrap from 0 so cumulative series still starts from genesis.
-            prev_secondary_pool = Some(0);
+        while let Some((date, cum)) = compensation_iter.peek() {
+            if date.as_str() <= snapshot.date.as_str() {
+                running_compensation = **cum;
+                compensation_iter.next();
+            } else {
+                break;
+            }
         }
 
-        if let Some(prev_s) = prev_secondary_pool {
-            let s_delta = csu.secondary_pool - prev_s;
-            if s_delta > 0 {
+        let csu = resolve_snapshot_csu(snapshot, daily_csu);
+        let effective_non_miner = csu.secondary_pool + running_compensation;
+
+        if prev_effective_non_miner.is_none() && effective_non_miner > 0 {
+            // If historical snapshots were serialized before secondary_pool was
+            // persisted, bootstrap from 0 so cumulative series still starts from genesis.
+            prev_effective_non_miner = Some(0);
+        }
+
+        if let Some(prev_non_miner) = prev_effective_non_miner {
+            let non_miner_delta = effective_non_miner - prev_non_miner;
+            if non_miner_delta > 0 {
                 let (miner, dao, treasury) = split_secondary_non_miner(
                     csu.total_issuance,
                     csu.occupied_capacity,
                     snapshot.total_deposited,
-                    s_delta,
+                    non_miner_delta,
                 );
                 running.cum_miner += miner;
                 running.cum_dao += dao;
                 running.cum_treasury += treasury;
+            } else if non_miner_delta < 0 {
+                // Protocol-level adjustments can decrease effective non-miner.
+                // Reflect this in treasury to keep cumulative totals consistent.
+                running.cum_treasury += non_miner_delta;
             }
-            // Ignore negative S adjustments to keep user-facing cumulative
-            // series monotonic and explorer-compatible.
-            prev_secondary_pool = Some(csu.secondary_pool);
+            prev_effective_non_miner = Some(effective_non_miner);
         }
-
-        // Preserve already-correct historical values when present.
-        running.cum_miner = running.cum_miner.max(snapshot.cum_miner_secondary.max(0));
-        running.cum_dao = running.cum_dao.max(snapshot.cum_dao_compensation.max(0));
-        running.cum_treasury = running.cum_treasury.max(snapshot.cum_treasury.max(0));
 
         by_date.insert(snapshot.date.clone(), running);
     }
@@ -1381,7 +1449,10 @@ async fn get_total_supply_chart(
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let daily_csu =
         load_daily_dao_csu(&state.store).map_err(|e| ApiError::internal(e.to_string()))?;
-    let secondary_cumulative = derive_secondary_cumulative_map(&snapshots, &daily_csu);
+    let compensation_cumulative = load_daily_dao_compensation_cumulative(&state.store)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let secondary_cumulative =
+        derive_secondary_cumulative_map(&snapshots, &daily_csu, &compensation_cumulative);
 
     const SHANNON: f64 = 100_000_000.0;
 
@@ -1511,7 +1582,10 @@ async fn get_secondary_issuance_chart(
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let daily_csu =
         load_daily_dao_csu(&state.store).map_err(|e| ApiError::internal(e.to_string()))?;
-    let secondary_cumulative = derive_secondary_cumulative_map(&snapshots, &daily_csu);
+    let compensation_cumulative = load_daily_dao_compensation_cumulative(&state.store)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let secondary_cumulative =
+        derive_secondary_cumulative_map(&snapshots, &daily_csu, &compensation_cumulative);
 
     const SHANNON: f64 = 100_000_000.0;
 
@@ -1805,7 +1879,7 @@ mod tests {
             snapshot("2026-02-16", 200, 1000, 150, 100),
         ];
 
-        let result = derive_secondary_cumulative_map(&snapshots, &HashMap::new());
+        let result = derive_secondary_cumulative_map(&snapshots, &HashMap::new(), &BTreeMap::new());
         let day1 = result.get("2026-02-15").copied().unwrap();
         let day2 = result.get("2026-02-16").copied().unwrap();
 
@@ -1818,22 +1892,50 @@ mod tests {
     }
 
     #[test]
-    fn test_derive_secondary_cumulative_ignores_negative_secondary_pool_delta() {
+    fn test_derive_secondary_cumulative_absorbs_negative_secondary_pool_delta() {
         let snapshots = vec![
             snapshot("2026-02-15", 200, 1000, 100, 100),
             snapshot("2026-02-16", 200, 1000, 80, 100), // -20
             snapshot("2026-02-17", 200, 1000, 130, 100), // +50
         ];
 
-        let result = derive_secondary_cumulative_map(&snapshots, &HashMap::new());
+        let result = derive_secondary_cumulative_map(&snapshots, &HashMap::new(), &BTreeMap::new());
         let day2 = result.get("2026-02-16").copied().unwrap();
         let day3 = result.get("2026-02-17").copied().unwrap();
 
         assert_eq!(day2.cum_miner, 11);
         assert_eq!(day2.cum_dao, 22);
-        assert_eq!(day2.cum_treasury, 78);
+        assert_eq!(day2.cum_treasury, 58);
         assert_eq!(day3.cum_miner, 16);
         assert_eq!(day3.cum_dao, 33);
-        assert_eq!(day3.cum_treasury, 117);
+        assert_eq!(day3.cum_treasury, 97);
+    }
+
+    #[test]
+    fn test_derive_secondary_cumulative_adds_cumulative_compensation_to_s_pool() {
+        let snapshots = vec![
+            snapshot("2026-02-15", 200, 1000, 100, 100),
+            snapshot("2026-02-16", 200, 1000, 120, 100),
+        ];
+        let mut compensation = BTreeMap::new();
+        compensation.insert("2026-02-16".to_string(), 30);
+
+        let result = derive_secondary_cumulative_map(&snapshots, &HashMap::new(), &compensation);
+        let day1 = result.get("2026-02-15").copied().unwrap();
+        let day2 = result.get("2026-02-16").copied().unwrap();
+
+        assert_eq!(day1.cum_miner, 11);
+        assert_eq!(day1.cum_dao, 22);
+        assert_eq!(day1.cum_treasury, 78);
+        assert_eq!(day2.cum_miner, 16);
+        assert_eq!(day2.cum_dao, 33);
+        assert_eq!(day2.cum_treasury, 117);
+    }
+
+    #[test]
+    fn test_calculate_daily_hash_rate_uses_millisecond_block_time() {
+        // 8,640 blocks/day => 10,000ms avg block time
+        let hash_rate = calculate_daily_hash_rate(1_000_000, 8_640);
+        assert_eq!(hash_rate, 100.0);
     }
 }
