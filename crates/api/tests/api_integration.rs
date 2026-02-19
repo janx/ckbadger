@@ -271,7 +271,7 @@ async fn test_script_occupation_chart_aggregates_deployments() {
         .body(Body::empty())
         .unwrap();
 
-    let response = app.oneshot(request).await.unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
     let body = response.into_body().collect().await.unwrap().to_bytes();
@@ -285,6 +285,20 @@ async fn test_script_occupation_chart_aggregates_deployments() {
     assert_eq!(data[1]["date"], "2024-01-16");
     assert_eq!(data[1]["values"]["occupied"], "85");
     assert_eq!(data[1]["values"]["unoccupied"], "55");
+
+    let request = Request::builder()
+        .uri("/api/v1/scripts/SECP256K1_BLAKE160/charts/occupation?from=2024-01-16&to=2024-01-16")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let data = json["data"].as_array().unwrap();
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0]["date"], "2024-01-16");
+    assert_eq!(data[0]["values"]["occupied"], "85");
+    assert_eq!(data[0]["values"]["unoccupied"], "55");
 }
 
 #[tokio::test]
@@ -396,7 +410,7 @@ async fn test_token_occupation_chart_returns_cumulative_series() {
         .body(Body::empty())
         .unwrap();
 
-    let response = app.oneshot(request).await.unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
     let body = response.into_body().collect().await.unwrap().to_bytes();
@@ -410,6 +424,65 @@ async fn test_token_occupation_chart_returns_cumulative_series() {
     assert_eq!(data[1]["date"], "2024-01-16");
     assert_eq!(data[1]["values"]["occupied"], "50");
     assert_eq!(data[1]["values"]["unoccupied"], "30");
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/tokens/{}/charts/occupation?from=2024-01-16&to=2024-01-16",
+            type_hash_hex
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let data = json["data"].as_array().unwrap();
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0]["date"], "2024-01-16");
+    assert_eq!(data[0]["values"]["occupied"], "50");
+    assert_eq!(data[0]["values"]["unoccupied"], "30");
+}
+
+#[tokio::test]
+async fn test_token_occupation_chart_rejects_invalid_date_range() {
+    let store = test_store();
+    let type_hash = vec![0x45; 32];
+    let type_hash_hex = format!("0x{}", hex::encode(&type_hash));
+
+    store
+        .put_token_direct(
+            &type_hash,
+            &TokenInfo {
+                type_code_hash: vec![0x55; 32],
+                hash_type: 1,
+                type_args: vec![0x66; 20],
+                standard: "xudt".to_string(),
+                name: Some("Test Token".to_string()),
+                symbol: Some("TEST".to_string()),
+                decimals: Some(8),
+                total_supply: Some(0),
+                holders_count: 0,
+                first_seen_block: 0,
+                icon_url: None,
+                description: None,
+                transfers_count: 0,
+            },
+        )
+        .unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/tokens/{}/charts/occupation?from=2024-01-31&to=2024-01-01",
+            type_hash_hex
+        ))
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
@@ -490,6 +563,23 @@ async fn test_cluster_occupation_chart_and_cluster_capacity_fields() {
     assert_eq!(data[1]["values"]["unoccupied"], "30");
 
     let request = Request::builder()
+        .uri(format!(
+            "/api/v1/spore/clusters/{}/charts/occupation?from=2024-01-16&to=2024-01-16",
+            cluster_id_hex
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let data = json["data"].as_array().unwrap();
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0]["date"], "2024-01-16");
+    assert_eq!(data[0]["values"]["occupied"], "50");
+    assert_eq!(data[0]["values"]["unoccupied"], "30");
+
+    let request = Request::builder()
         .uri(format!("/api/v1/spore/clusters/{}", cluster_id_hex))
         .body(Body::empty())
         .unwrap();
@@ -563,6 +653,23 @@ async fn test_spore_occupation_chart_and_spore_capacity_fields() {
     assert_eq!(data.len(), 2);
     assert_eq!(data[1]["values"]["occupied"], "50");
     assert_eq!(data[1]["values"]["unoccupied"], "30");
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/spore/nfts/{}/charts/occupation?from=2024-01-16&to=2024-01-16",
+            spore_id_hex
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let data = json["data"].as_array().unwrap();
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0]["date"], "2024-01-16");
+    assert_eq!(data[0]["values"]["occupied"], "50");
+    assert_eq!(data[0]["values"]["unoccupied"], "30");
 
     let request = Request::builder()
         .uri(format!("/api/v1/spore/nfts/{}", spore_id_hex))
@@ -679,6 +786,22 @@ async fn test_assets_nft_collection_occupation_chart_and_capacity_fields() {
     assert_eq!(json["title"], "Test NFT Collection Capacity Occupation");
     assert_eq!(json["data"][1]["values"]["occupied"], "50");
     assert_eq!(json["data"][1]["values"]["unoccupied"], "30");
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/assets/nfts/{}/charts/occupation?from=2024-01-16&to=2024-01-16",
+            collection_id_hex
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(json["data"][0]["date"], "2024-01-16");
+    assert_eq!(json["data"][0]["values"]["occupied"], "50");
+    assert_eq!(json["data"][0]["values"]["unoccupied"], "30");
 
     let request = Request::builder()
         .uri(format!("/api/v1/assets/nfts/{}", collection_id_hex))

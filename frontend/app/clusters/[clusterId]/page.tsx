@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
@@ -18,12 +19,16 @@ import { DataField, DataGrid } from '@/components/ui/data-field';
 import { Address } from '@/components/ui/address';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { StackedAreaChart } from '@/components/ui/stacked-area-chart';
+import { OccupationRangeSelector } from '@/components/ui/occupation-range-selector';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
+import { getOccupationRangeParams, OccupationRangeKey } from '@/lib/occupation-range';
 import { formatCkbAmount, formatCkbCompact } from '@/lib/utils';
 
 export default function ClusterDetailPage() {
   const params = useParams();
   const clusterId = params.clusterId as string;
+  const [occupationRange, setOccupationRange] = useState<OccupationRangeKey>('all');
+  const occupationRangeParams = getOccupationRangeParams(occupationRange);
 
   const sporesPagination = useCursorPagination();
 
@@ -45,8 +50,11 @@ export default function ClusterDetailPage() {
   });
 
   const { data: occupationChart, isLoading: isOccupationChartLoading } = useQuery({
-    queryKey: ['cluster-occupation-chart', clusterId],
-    queryFn: () => api.getSporeClusterOccupationChart(clusterId),
+    queryKey: ['cluster-occupation-chart', clusterId, occupationRange],
+    queryFn: () =>
+      occupationRangeParams
+        ? api.getSporeClusterOccupationChart(clusterId, occupationRangeParams)
+        : api.getSporeClusterOccupationChart(clusterId),
     enabled: !!clusterId,
   });
 
@@ -204,6 +212,7 @@ export default function ClusterDetailPage() {
                 <div className="mb-3 text-sm text-slate-400">
                   Daily cumulative live CKB occupation for this DOB collection.
                 </div>
+                <OccupationRangeSelector value={occupationRange} onChange={setOccupationRange} />
                 {isOccupationChartLoading ? (
                   <div className="py-8 text-center text-slate-500">
                     Loading occupation history...

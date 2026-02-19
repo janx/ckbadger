@@ -9,7 +9,9 @@ use std::sync::Arc;
 
 use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
-use crate::utils::{resolve_dob_collection_name, resolve_nft_collection_name};
+use crate::utils::{
+    parse_chart_date_range, resolve_dob_collection_name, resolve_nft_collection_name,
+};
 use crate::warmup::{
     CachedAssetEntry, CACHE_KEY_ASSETS_DOB, CACHE_KEY_ASSETS_NFT, CACHE_KEY_ASSETS_TOKEN,
 };
@@ -35,6 +37,12 @@ pub struct ListParams {
     asset_type: Option<String>,
     cursor: Option<String>,
     search: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ChartRangeParams {
+    from: Option<String>,
+    to: Option<String>,
 }
 
 fn default_limit() -> i64 {
@@ -246,8 +254,20 @@ fn build_capacity_occupation_chart(
     deltas: Vec<(u32, i64, i64)>,
     title: String,
 ) -> StackedAreaChartResponse {
-    let mut cumulative_capacity: i128 = 0;
-    let mut cumulative_occupied: i128 = 0;
+    build_capacity_occupation_chart_with_initial(deltas, title, 0, 0)
+}
+
+fn build_capacity_occupation_chart_with_initial(
+    deltas: Vec<(u32, i64, i64)>,
+    title: String,
+    initial_capacity: i128,
+    initial_occupied: i128,
+) -> StackedAreaChartResponse {
+    let mut cumulative_capacity = initial_capacity.max(0);
+    let mut cumulative_occupied = initial_occupied.max(0);
+    if cumulative_occupied > cumulative_capacity {
+        cumulative_occupied = cumulative_capacity;
+    }
     let mut data = Vec::with_capacity(deltas.len());
 
     for (date, cap_delta, occupied_delta) in deltas {
@@ -351,7 +371,11 @@ async fn get_nft_collection(
 async fn get_nft_collection_occupation_chart(
     State(state): State<Arc<AppState>>,
     Path(collection_id): Path<String>,
+    Query(params): Query<ChartRangeParams>,
 ) -> ApiResult<StackedAreaChartResponse> {
+    let (from_date, to_date) = parse_chart_date_range(params.from.as_deref(), params.to.as_deref())
+        .map_err(|msg| ApiError::bad_request(&msg))?;
+
     let collection_id_bytes = decode_nft_collection_id(&collection_id)?;
 
     let agg = state
@@ -362,13 +386,35 @@ async fn get_nft_collection_occupation_chart(
 
     let daily = state
         .store
-        .list_nft_daily_deltas(&collection_id_bytes)
+        .list_nft_daily_deltas_in_range(&collection_id_bytes, from_date, to_date)
         .map_err(|e| ApiError::internal(e.to_string()))?;
+    let (initial_capacity, initial_occupied) = if let Some(from) = from_date {
+        let mut base_capacity: i128 = 0;
+        let mut base_occupied: i128 = 0;
+        let baseline = state
+            .store
+            .list_nft_daily_deltas_in_range(
+                &collection_id_bytes,
+                None,
+                Some(from.saturating_sub(1)),
+            )
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        for (_, delta) in baseline {
+            base_capacity = (base_capacity + delta.live_capacity_delta as i128).max(0);
+            base_occupied = (base_occupied + delta.live_occupied_capacity_delta as i128).max(0);
+            if base_occupied > base_capacity {
+                base_occupied = base_capacity;
+            }
+        }
+        (base_capacity, base_occupied)
+    } else {
+        (0, 0)
+    };
     let standard = agg.standard.asset_standard().to_string();
     let title = resolve_nft_collection_name(&standard, agg.name.as_deref())
         .unwrap_or_else(|| format!("0x{}", hex::encode(&collection_id_bytes)));
 
-    ok(build_capacity_occupation_chart(
+    ok(build_capacity_occupation_chart_with_initial(
         daily
             .into_iter()
             .map(|(date, delta)| {
@@ -380,6 +426,8 @@ async fn get_nft_collection_occupation_chart(
             })
             .collect(),
         format!("{title} Capacity Occupation"),
+        initial_capacity,
+        initial_occupied,
     ))
 }
 

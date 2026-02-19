@@ -21,16 +21,20 @@ import { StackedAreaChart } from '@/components/ui/stacked-area-chart';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { OccupationRangeSelector } from '@/components/ui/occupation-range-selector';
 import { api, TokenHolder, TokenTransfer } from '@/lib/api';
+import { getOccupationRangeParams, OccupationRangeKey } from '@/lib/occupation-range';
 import { formatTimeAgo, formatCkbCompact, formatCkbAmount } from '@/lib/utils';
 
 export default function TokenDetailPage() {
   const params = useParams();
   const typeHash = params.typeHash as string;
   const [activeTab, setActiveTab] = useState('transfers');
+  const [occupationRange, setOccupationRange] = useState<OccupationRangeKey>('all');
 
   const holdersPagination = useCursorPagination();
   const transfersPagination = useCursorPagination();
+  const occupationRangeParams = getOccupationRangeParams(occupationRange);
 
   const {
     data: token,
@@ -57,8 +61,11 @@ export default function TokenDetailPage() {
   });
 
   const { data: occupationChart, isLoading: isOccupationChartLoading } = useQuery({
-    queryKey: ['token-occupation-chart', typeHash],
-    queryFn: () => api.getTokenOccupationChart(typeHash),
+    queryKey: ['token-occupation-chart', typeHash, occupationRange],
+    queryFn: () =>
+      occupationRangeParams
+        ? api.getTokenOccupationChart(typeHash, occupationRangeParams)
+        : api.getTokenOccupationChart(typeHash),
     enabled: !!token,
   });
 
@@ -312,6 +319,7 @@ export default function TokenDetailPage() {
             <div className="mb-3 text-xs text-slate-500">
               Daily cumulative live CKB occupation for token cells.
             </div>
+            <OccupationRangeSelector value={occupationRange} onChange={setOccupationRange} />
             {isOccupationChartLoading ? (
               <div className="py-8 text-center text-slate-500">Loading occupation history...</div>
             ) : occupationChart && occupationChart.data.length > 0 ? (

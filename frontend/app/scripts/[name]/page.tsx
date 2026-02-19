@@ -17,8 +17,10 @@ import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { Capacity } from '@/components/ui/capacity';
 import { CapacityUtilization } from '@/components/ui/capacity-utilization';
 import { StackedAreaChart } from '@/components/ui/stacked-area-chart';
+import { OccupationRangeSelector } from '@/components/ui/occupation-range-selector';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api } from '@/lib/api';
+import { getOccupationRangeParams, OccupationRangeKey } from '@/lib/occupation-range';
 import { formatCkbCompact } from '@/lib/utils';
 import type { KnownScript } from '@/lib/api';
 
@@ -31,8 +33,10 @@ interface SelectedDeployment {
 export default function ScriptDetailPage() {
   const params = useParams();
   const name = decodeURIComponent(params.name as string);
+  const [occupationRange, setOccupationRange] = useState<OccupationRangeKey>('all');
   const [selectedDeployment, setSelectedDeployment] = useState<SelectedDeployment | null>(null);
   const cellsPagination = useCursorPagination();
+  const occupationRangeParams = getOccupationRangeParams(occupationRange);
 
   const {
     data: deployments,
@@ -49,8 +53,11 @@ export default function ScriptDetailPage() {
   });
 
   const { data: occupationChart, isLoading: isOccupationChartLoading } = useQuery({
-    queryKey: ['script-occupation-chart', name],
-    queryFn: () => api.getScriptOccupationChart(name),
+    queryKey: ['script-occupation-chart', name, occupationRange],
+    queryFn: () =>
+      occupationRangeParams
+        ? api.getScriptOccupationChart(name, occupationRangeParams)
+        : api.getScriptOccupationChart(name),
   });
   const selectedScriptKindForChart =
     selectedDeployment?.scriptKind === 'lock' || selectedDeployment?.scriptKind === 'type'
@@ -62,12 +69,19 @@ export default function ScriptDetailPage() {
       'deployment',
       selectedDeployment?.codeHash,
       selectedScriptKindForChart,
+      occupationRange,
     ],
     queryFn: () =>
-      api.getScriptOccupationChartByCodeHash(
-        selectedDeployment!.codeHash,
-        selectedScriptKindForChart
-      ),
+      occupationRangeParams
+        ? api.getScriptOccupationChartByCodeHash(
+            selectedDeployment!.codeHash,
+            selectedScriptKindForChart,
+            occupationRangeParams
+          )
+        : api.getScriptOccupationChartByCodeHash(
+            selectedDeployment!.codeHash,
+            selectedScriptKindForChart
+          ),
     enabled: !!selectedDeployment,
   });
 
@@ -357,6 +371,7 @@ export default function ScriptDetailPage() {
             <div className="mb-3 text-xs text-slate-500">
               Daily cumulative live CKB occupation for this script across all deployments.
             </div>
+            <OccupationRangeSelector value={occupationRange} onChange={setOccupationRange} />
             {isOccupationChartLoading ? (
               <div className="py-8 text-center text-slate-500">Loading occupation history...</div>
             ) : occupationChart && occupationChart.data.length > 0 ? (
@@ -396,6 +411,7 @@ export default function ScriptDetailPage() {
                 <div className="mb-3 text-xs text-slate-500">
                   Historical occupied/unoccupied live capacity for the selected deployment.
                 </div>
+                <OccupationRangeSelector value={occupationRange} onChange={setOccupationRange} />
                 {isSelectedOccupationChartLoading ? (
                   <div className="py-6 text-center text-slate-500">
                     Loading deployment history...

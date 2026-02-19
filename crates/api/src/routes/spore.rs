@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
+use crate::utils::parse_chart_date_range;
 use crate::warmup::{CachedAssetEntry, CACHE_KEY_ASSETS_DOB};
 use crate::AppState;
 
@@ -37,6 +38,12 @@ pub struct ListParams {
     #[serde(default = "default_limit")]
     limit: i64,
     cursor: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ChartRangeParams {
+    from: Option<String>,
+    to: Option<String>,
 }
 
 fn default_limit() -> i64 {
@@ -120,8 +127,20 @@ fn build_capacity_occupation_chart(
     deltas: Vec<(u32, i64, i64)>,
     title: String,
 ) -> StackedAreaChartResponse {
-    let mut running_capacity: i128 = 0;
-    let mut running_occupied: i128 = 0;
+    build_capacity_occupation_chart_with_initial(deltas, title, 0, 0)
+}
+
+fn build_capacity_occupation_chart_with_initial(
+    deltas: Vec<(u32, i64, i64)>,
+    title: String,
+    initial_capacity: i128,
+    initial_occupied: i128,
+) -> StackedAreaChartResponse {
+    let mut running_capacity = initial_capacity.max(0);
+    let mut running_occupied = initial_occupied.max(0);
+    if running_occupied > running_capacity {
+        running_occupied = running_capacity;
+    }
     let mut data = Vec::with_capacity(deltas.len());
 
     for (date, capacity_delta, occupied_delta) in deltas {
@@ -549,7 +568,11 @@ async fn get_spore(
 async fn get_cluster_occupation_chart(
     State(state): State<Arc<AppState>>,
     Path(cluster_id): Path<String>,
+    Query(params): Query<ChartRangeParams>,
 ) -> ApiResult<StackedAreaChartResponse> {
+    let (from_date, to_date) = parse_chart_date_range(params.from.as_deref(), params.to.as_deref())
+        .map_err(|msg| ApiError::bad_request(&msg))?;
+
     let id = hex::decode(cluster_id.strip_prefix("0x").unwrap_or(&cluster_id))
         .map_err(|_| ApiError::bad_request("Invalid cluster ID"))?;
 
@@ -571,10 +594,28 @@ async fn get_cluster_occupation_chart(
         .unwrap_or_else(|| "Spore Cluster".to_string());
     let daily = state
         .store
-        .list_cluster_daily_deltas(&id)
+        .list_cluster_daily_deltas_in_range(&id, from_date, to_date)
         .map_err(|e| ApiError::internal(e.to_string()))?;
+    let (initial_capacity, initial_occupied) = if let Some(from) = from_date {
+        let mut base_capacity: i128 = 0;
+        let mut base_occupied: i128 = 0;
+        let baseline = state
+            .store
+            .list_cluster_daily_deltas_in_range(&id, None, Some(from.saturating_sub(1)))
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        for (_, delta) in baseline {
+            base_capacity = (base_capacity + delta.live_capacity_delta as i128).max(0);
+            base_occupied = (base_occupied + delta.live_occupied_capacity_delta as i128).max(0);
+            if base_occupied > base_capacity {
+                base_occupied = base_capacity;
+            }
+        }
+        (base_capacity, base_occupied)
+    } else {
+        (0, 0)
+    };
 
-    ok(build_capacity_occupation_chart(
+    ok(build_capacity_occupation_chart_with_initial(
         daily
             .into_iter()
             .map(|(date, delta)| {
@@ -586,13 +627,19 @@ async fn get_cluster_occupation_chart(
             })
             .collect(),
         format!("{name} Capacity Occupation"),
+        initial_capacity,
+        initial_occupied,
     ))
 }
 
 async fn get_spore_occupation_chart(
     State(state): State<Arc<AppState>>,
     Path(spore_id): Path<String>,
+    Query(params): Query<ChartRangeParams>,
 ) -> ApiResult<StackedAreaChartResponse> {
+    let (from_date, to_date) = parse_chart_date_range(params.from.as_deref(), params.to.as_deref())
+        .map_err(|msg| ApiError::bad_request(&msg))?;
+
     let id = hex::decode(spore_id.strip_prefix("0x").unwrap_or(&spore_id))
         .map_err(|_| ApiError::bad_request("Invalid spore ID"))?;
 
@@ -606,10 +653,28 @@ async fn get_spore_occupation_chart(
 
     let daily = state
         .store
-        .list_spore_daily_deltas(&id)
+        .list_spore_daily_deltas_in_range(&id, from_date, to_date)
         .map_err(|e| ApiError::internal(e.to_string()))?;
+    let (initial_capacity, initial_occupied) = if let Some(from) = from_date {
+        let mut base_capacity: i128 = 0;
+        let mut base_occupied: i128 = 0;
+        let baseline = state
+            .store
+            .list_spore_daily_deltas_in_range(&id, None, Some(from.saturating_sub(1)))
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        for (_, delta) in baseline {
+            base_capacity = (base_capacity + delta.live_capacity_delta as i128).max(0);
+            base_occupied = (base_occupied + delta.live_occupied_capacity_delta as i128).max(0);
+            if base_occupied > base_capacity {
+                base_occupied = base_capacity;
+            }
+        }
+        (base_capacity, base_occupied)
+    } else {
+        (0, 0)
+    };
 
-    ok(build_capacity_occupation_chart(
+    ok(build_capacity_occupation_chart_with_initial(
         daily
             .into_iter()
             .map(|(date, delta)| {
@@ -621,6 +686,8 @@ async fn get_spore_occupation_chart(
             })
             .collect(),
         "Spore Capacity Occupation".to_string(),
+        initial_capacity,
+        initial_occupied,
     ))
 }
 

@@ -150,8 +150,22 @@ impl CkbadgerStore {
         &self,
         cluster_id: &[u8],
     ) -> anyhow::Result<Vec<(u32, ClusterDailyDelta)>> {
+        self.list_cluster_daily_deltas_in_range(cluster_id, None, None)
+    }
+
+    pub fn list_cluster_daily_deltas_in_range(
+        &self,
+        cluster_id: &[u8],
+        from_date_yyyymmdd: Option<u32>,
+        to_date_yyyymmdd: Option<u32>,
+    ) -> anyhow::Result<Vec<(u32, ClusterDailyDelta)>> {
         let prefix = keys::encode_cluster_daily_prefix(cluster_id);
-        let iter = self.prefix_iterator_cf(self.cf_stats(), &prefix);
+        let start_key =
+            keys::encode_cluster_daily_key(cluster_id, from_date_yyyymmdd.unwrap_or(u32::MIN));
+        let iter = self.iterator_cf(
+            self.cf_stats(),
+            rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
+        );
         let mut results = Vec::new();
 
         for item in iter.flatten() {
@@ -163,6 +177,11 @@ impl CkbadgerStore {
                 continue;
             }
             let (_, date) = keys::decode_cluster_daily_key(&key);
+            if let Some(to_date) = to_date_yyyymmdd {
+                if date > to_date {
+                    break;
+                }
+            }
             if let Ok(delta) = bincode::deserialize::<ClusterDailyDelta>(&value) {
                 results.push((date, delta));
             }
@@ -198,8 +217,22 @@ impl CkbadgerStore {
         &self,
         spore_id: &[u8],
     ) -> anyhow::Result<Vec<(u32, SporeDailyDelta)>> {
+        self.list_spore_daily_deltas_in_range(spore_id, None, None)
+    }
+
+    pub fn list_spore_daily_deltas_in_range(
+        &self,
+        spore_id: &[u8],
+        from_date_yyyymmdd: Option<u32>,
+        to_date_yyyymmdd: Option<u32>,
+    ) -> anyhow::Result<Vec<(u32, SporeDailyDelta)>> {
         let prefix = keys::encode_spore_daily_prefix(spore_id);
-        let iter = self.prefix_iterator_cf(self.cf_stats(), &prefix);
+        let start_key =
+            keys::encode_spore_daily_key(spore_id, from_date_yyyymmdd.unwrap_or(u32::MIN));
+        let iter = self.iterator_cf(
+            self.cf_stats(),
+            rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
+        );
         let mut results = Vec::new();
 
         for item in iter.flatten() {
@@ -211,6 +244,11 @@ impl CkbadgerStore {
                 continue;
             }
             let (_, date) = keys::decode_spore_daily_key(&key);
+            if let Some(to_date) = to_date_yyyymmdd {
+                if date > to_date {
+                    break;
+                }
+            }
             if let Ok(delta) = bincode::deserialize::<SporeDailyDelta>(&value) {
                 results.push((date, delta));
             }
@@ -246,8 +284,22 @@ impl CkbadgerStore {
         &self,
         collection_id: &[u8],
     ) -> anyhow::Result<Vec<(u32, NftDailyDelta)>> {
+        self.list_nft_daily_deltas_in_range(collection_id, None, None)
+    }
+
+    pub fn list_nft_daily_deltas_in_range(
+        &self,
+        collection_id: &[u8],
+        from_date_yyyymmdd: Option<u32>,
+        to_date_yyyymmdd: Option<u32>,
+    ) -> anyhow::Result<Vec<(u32, NftDailyDelta)>> {
         let prefix = keys::encode_nft_daily_prefix(collection_id);
-        let iter = self.prefix_iterator_cf(self.cf_stats(), &prefix);
+        let start_key =
+            keys::encode_nft_daily_key(collection_id, from_date_yyyymmdd.unwrap_or(u32::MIN));
+        let iter = self.iterator_cf(
+            self.cf_stats(),
+            rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
+        );
         let mut results = Vec::new();
 
         for item in iter.flatten() {
@@ -259,6 +311,11 @@ impl CkbadgerStore {
                 continue;
             }
             let (_, date) = keys::decode_nft_daily_key(&key);
+            if let Some(to_date) = to_date_yyyymmdd {
+                if date > to_date {
+                    break;
+                }
+            }
             if let Ok(delta) = bincode::deserialize::<NftDailyDelta>(&value) {
                 results.push((date, delta));
             }
@@ -515,6 +572,18 @@ mod tests {
         let spore_list = store.list_spore_daily_deltas(&spore_id).unwrap();
         assert_eq!(spore_list.len(), 1);
         assert_eq!(spore_list[0].0, 20260219);
+
+        let cluster_ranged = store
+            .list_cluster_daily_deltas_in_range(&cluster_id, Some(20260219), Some(20260219))
+            .unwrap();
+        assert_eq!(cluster_ranged.len(), 1);
+        assert_eq!(cluster_ranged[0].0, 20260219);
+
+        let spore_ranged = store
+            .list_spore_daily_deltas_in_range(&spore_id, Some(20260219), Some(20260219))
+            .unwrap();
+        assert_eq!(spore_ranged.len(), 1);
+        assert_eq!(spore_ranged[0].0, 20260219);
     }
 
     #[test]
@@ -557,5 +626,11 @@ mod tests {
         let list = store.list_nft_daily_deltas(&collection_id).unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].0, 20260219);
+
+        let ranged = store
+            .list_nft_daily_deltas_in_range(&collection_id, Some(20260219), Some(20260219))
+            .unwrap();
+        assert_eq!(ranged.len(), 1);
+        assert_eq!(ranged[0].0, 20260219);
     }
 }

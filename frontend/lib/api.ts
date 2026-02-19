@@ -719,6 +719,11 @@ interface ScriptQueryParams {
   search?: string;
 }
 
+interface OccupationChartRangeParams {
+  from?: string;
+  to?: string;
+}
+
 interface ScriptLookupInfo {
   codeHash: string;
   name: string;
@@ -1131,8 +1136,15 @@ export const api = {
     return fetchApi(`/tokens/${typeHash}`);
   },
 
-  getTokenOccupationChart: (typeHash: string): Promise<StackedAreaChartResponse> => {
-    return fetchApi(`/tokens/${typeHash}/charts/occupation`);
+  getTokenOccupationChart: (
+    typeHash: string,
+    range: OccupationChartRangeParams = {}
+  ): Promise<StackedAreaChartResponse> => {
+    const query = new URLSearchParams();
+    if (range.from) query.set('from', range.from);
+    if (range.to) query.set('to', range.to);
+    const suffix = query.toString();
+    return fetchApi(`/tokens/${typeHash}/charts/occupation${suffix ? `?${suffix}` : ''}`);
   },
 
   getTokenHolders: (
@@ -1206,8 +1218,15 @@ export const api = {
     return fetchApi(`/spore/clusters/${clusterId}`);
   },
 
-  getSporeClusterOccupationChart: (clusterId: string): Promise<StackedAreaChartResponse> => {
-    return fetchApi(`/spore/clusters/${clusterId}/charts/occupation`);
+  getSporeClusterOccupationChart: (
+    clusterId: string,
+    range: OccupationChartRangeParams = {}
+  ): Promise<StackedAreaChartResponse> => {
+    const query = new URLSearchParams();
+    if (range.from) query.set('from', range.from);
+    if (range.to) query.set('to', range.to);
+    const suffix = query.toString();
+    return fetchApi(`/spore/clusters/${clusterId}/charts/occupation${suffix ? `?${suffix}` : ''}`);
   },
 
   getSporeNfts: (params: CursorQueryParams = {}): Promise<CursorPaginatedResponse<SporeNft>> => {
@@ -1221,16 +1240,32 @@ export const api = {
     return fetchApi(`/spore/nfts/${sporeId}`);
   },
 
-  getSporeNftOccupationChart: (sporeId: string): Promise<StackedAreaChartResponse> => {
-    return fetchApi(`/spore/nfts/${sporeId}/charts/occupation`);
+  getSporeNftOccupationChart: (
+    sporeId: string,
+    range: OccupationChartRangeParams = {}
+  ): Promise<StackedAreaChartResponse> => {
+    const query = new URLSearchParams();
+    if (range.from) query.set('from', range.from);
+    if (range.to) query.set('to', range.to);
+    const suffix = query.toString();
+    return fetchApi(`/spore/nfts/${sporeId}/charts/occupation${suffix ? `?${suffix}` : ''}`);
   },
 
   getNftCollection: (collectionId: string): Promise<NftCollection> => {
     return fetchApi(`/assets/nfts/${normalizeNftAssetId(collectionId)}`);
   },
 
-  getNftCollectionOccupationChart: (collectionId: string): Promise<StackedAreaChartResponse> => {
-    return fetchApi(`/assets/nfts/${normalizeNftAssetId(collectionId)}/charts/occupation`);
+  getNftCollectionOccupationChart: (
+    collectionId: string,
+    range: OccupationChartRangeParams = {}
+  ): Promise<StackedAreaChartResponse> => {
+    const query = new URLSearchParams();
+    if (range.from) query.set('from', range.from);
+    if (range.to) query.set('to', range.to);
+    const suffix = query.toString();
+    return fetchApi(
+      `/assets/nfts/${normalizeNftAssetId(collectionId)}/charts/occupation${suffix ? `?${suffix}` : ''}`
+    );
   },
 
   getSporesByOwner: (
@@ -1367,17 +1402,29 @@ export const api = {
     return fetchApi(`/scripts/${encodeURIComponent(name)}/usage`);
   },
 
-  getScriptOccupationChart: (name: string): Promise<StackedAreaChartResponse> => {
-    return fetchApi(`/scripts/${encodeURIComponent(name)}/charts/occupation`);
+  getScriptOccupationChart: (
+    name: string,
+    range: OccupationChartRangeParams = {}
+  ): Promise<StackedAreaChartResponse> => {
+    const query = new URLSearchParams();
+    if (range.from) query.set('from', range.from);
+    if (range.to) query.set('to', range.to);
+    const suffix = query.toString();
+    return fetchApi(
+      `/scripts/${encodeURIComponent(name)}/charts/occupation${suffix ? `?${suffix}` : ''}`
+    );
   },
 
   getScriptOccupationChartByCodeHash: (
     codeHash: string,
-    scriptKind?: 'lock' | 'type' | 'both'
+    scriptKind?: 'lock' | 'type' | 'both',
+    range: OccupationChartRangeParams = {}
   ): Promise<StackedAreaChartResponse> => {
     const query = new URLSearchParams();
     query.set('code_hash', codeHash);
     if (scriptKind && scriptKind !== 'both') query.set('script_kind', scriptKind);
+    if (range.from) query.set('from', range.from);
+    if (range.to) query.set('to', range.to);
     return fetchApi(`/scripts/charts/occupation?${query}`);
   },
 

@@ -192,6 +192,28 @@ describe('api', () => {
       expect(chart.title).toContain('Capacity Occupation');
     });
 
+    it('builds date range query params for script occupation chart by name', async () => {
+      server.use(
+        http.get('*/api/v1/scripts/:name/charts/occupation', ({ request, params }) => {
+          expect(params.name).toBe('SECP256K1_BLAKE160');
+          const url = new URL(request.url);
+          expect(url.searchParams.get('from')).toBe('2024-01-01');
+          expect(url.searchParams.get('to')).toBe('2024-01-31');
+          return HttpResponse.json({
+            title: 'SECP256K1_BLAKE160 Capacity Occupation',
+            data: [],
+            series: [],
+          });
+        })
+      );
+
+      const chart = await api.getScriptOccupationChart('SECP256K1_BLAKE160', {
+        from: '2024-01-01',
+        to: '2024-01-31',
+      });
+      expect(chart.title).toContain('Capacity Occupation');
+    });
+
     it('builds query params for script occupation chart by code hash', async () => {
       server.use(
         http.get('*/api/v1/scripts/charts/occupation', ({ request }) => {
@@ -223,6 +245,28 @@ describe('api', () => {
       );
 
       const chart = await api.getTokenOccupationChart('0x1234');
+      expect(chart.title).toContain('Capacity Occupation');
+    });
+
+    it('builds date range query params for token occupation chart', async () => {
+      server.use(
+        http.get('*/api/v1/tokens/:typeHash/charts/occupation', ({ request, params }) => {
+          expect(params.typeHash).toBe('0x1234');
+          const url = new URL(request.url);
+          expect(url.searchParams.get('from')).toBe('2024-01-10');
+          expect(url.searchParams.get('to')).toBe('2024-01-20');
+          return HttpResponse.json({
+            title: 'TEST Capacity Occupation',
+            data: [],
+            series: [],
+          });
+        })
+      );
+
+      const chart = await api.getTokenOccupationChart('0x1234', {
+        from: '2024-01-10',
+        to: '2024-01-20',
+      });
       expect(chart.title).toContain('Capacity Occupation');
     });
 

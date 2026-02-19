@@ -734,8 +734,26 @@ impl CkbadgerStore {
         code_hash: &[u8],
         is_type: bool,
     ) -> anyhow::Result<Vec<(u32, ScriptDailyDelta)>> {
+        self.list_script_daily_deltas_in_range(code_hash, is_type, None, None)
+    }
+
+    pub fn list_script_daily_deltas_in_range(
+        &self,
+        code_hash: &[u8],
+        is_type: bool,
+        from_date_yyyymmdd: Option<u32>,
+        to_date_yyyymmdd: Option<u32>,
+    ) -> anyhow::Result<Vec<(u32, ScriptDailyDelta)>> {
         let prefix = keys::encode_script_daily_prefix(code_hash, is_type);
-        let iter = self.prefix_iterator_cf(self.cf_stats(), &prefix);
+        let start_key = keys::encode_script_daily_key(
+            code_hash,
+            is_type,
+            from_date_yyyymmdd.unwrap_or(u32::MIN),
+        );
+        let iter = self.iterator_cf(
+            self.cf_stats(),
+            rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
+        );
         let mut results = Vec::new();
 
         for item in iter.flatten() {
@@ -747,6 +765,11 @@ impl CkbadgerStore {
                 continue;
             }
             let (_, _, date) = keys::decode_script_daily_key(&key);
+            if let Some(to_date) = to_date_yyyymmdd {
+                if date > to_date {
+                    break;
+                }
+            }
             if let Ok(delta) = bincode::deserialize::<ScriptDailyDelta>(&value) {
                 results.push((date, delta));
             }
@@ -919,6 +942,12 @@ mod tests {
         assert_eq!(listed.len(), 2);
         assert_eq!(listed[0].0, 20240115);
         assert_eq!(listed[1].0, 20240116);
+
+        let ranged = store
+            .list_script_daily_deltas_in_range(&code_hash, false, Some(20240116), Some(20240116))
+            .unwrap();
+        assert_eq!(ranged.len(), 1);
+        assert_eq!(ranged[0].0, 20240116);
     }
 
     /// Helper: write a DaoDailySnapshot directly to the store.

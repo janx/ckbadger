@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
+use crate::utils::parse_chart_date_range;
 use crate::warmup::{CachedAssetEntry, CACHE_KEY_ASSETS_TOKEN};
 use crate::AppState;
 
@@ -50,6 +51,12 @@ pub struct TransferParams {
     limit: i64,
     #[allow(dead_code)]
     cursor: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ChartRangeParams {
+    from: Option<String>,
+    to: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -576,6 +583,7 @@ fn format_yyyymmdd_for_chart(date_yyyymmdd: u32) -> String {
 async fn get_token_occupation_chart(
     State(state): State<Arc<AppState>>,
     Path(type_hash): Path<String>,
+    Query(params): Query<ChartRangeParams>,
 ) -> ApiResult<StackedAreaChartResponse> {
     let hash = hex::decode(type_hash.strip_prefix("0x").unwrap_or(&type_hash))
         .map_err(|_| ApiError::bad_request("Invalid type script hash"))?;
@@ -589,13 +597,31 @@ async fn get_token_occupation_chart(
         None => return Err(ApiError::not_found("Token not found")),
     };
 
-    let deltas = state
-        .store
-        .list_token_daily_deltas(&hash)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let (from_date, to_date) = parse_chart_date_range(params.from.as_deref(), params.to.as_deref())
+        .map_err(|msg| ApiError::bad_request(&msg))?;
 
     let mut cumulative_capacity: i128 = 0;
     let mut cumulative_occupied: i128 = 0;
+    if let Some(from) = from_date {
+        let baseline = state
+            .store
+            .list_token_daily_deltas_in_range(&hash, None, Some(from.saturating_sub(1)))
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        for (_, delta) in baseline {
+            cumulative_capacity = (cumulative_capacity + delta.live_capacity_delta as i128).max(0);
+            cumulative_occupied =
+                (cumulative_occupied + delta.live_occupied_capacity_delta as i128).max(0);
+            if cumulative_occupied > cumulative_capacity {
+                cumulative_occupied = cumulative_capacity;
+            }
+        }
+    }
+
+    let deltas = state
+        .store
+        .list_token_daily_deltas_in_range(&hash, from_date, to_date)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
     let mut data = Vec::with_capacity(deltas.len());
     for (date, delta) in deltas {
         cumulative_capacity = (cumulative_capacity + delta.live_capacity_delta as i128).max(0);

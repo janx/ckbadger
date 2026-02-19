@@ -1,5 +1,7 @@
 //! Formatting utilities for CKB values and durations.
 
+use chrono::NaiveDate;
+
 const SHANNON_PER_CKB: u128 = 100_000_000;
 
 /// Converts shannon (smallest CKB unit, 1 CKB = 10^8 shannon) to CKB string.
@@ -44,6 +46,45 @@ pub fn format_duration(seconds: u64) -> String {
             format!("{}d", days)
         }
     }
+}
+
+/// Parse chart date into YYYYMMDD (u32). Accepts `YYYY-MM-DD` and `YYYYMMDD`.
+pub fn parse_chart_date_yyyymmdd(input: &str) -> Option<u32> {
+    let s = input.trim();
+    let date = NaiveDate::parse_from_str(s, "%Y-%m-%d")
+        .or_else(|_| NaiveDate::parse_from_str(s, "%Y%m%d"))
+        .ok()?;
+    date.format("%Y%m%d").to_string().parse::<u32>().ok()
+}
+
+/// Parse `from`/`to` date range for chart endpoints.
+pub fn parse_chart_date_range(
+    from: Option<&str>,
+    to: Option<&str>,
+) -> Result<(Option<u32>, Option<u32>), String> {
+    let from_date = match from {
+        Some(value) => Some(
+            parse_chart_date_yyyymmdd(value)
+                .ok_or_else(|| "Invalid from date, expected YYYY-MM-DD or YYYYMMDD".to_string())?,
+        ),
+        None => None,
+    };
+
+    let to_date = match to {
+        Some(value) => Some(
+            parse_chart_date_yyyymmdd(value)
+                .ok_or_else(|| "Invalid to date, expected YYYY-MM-DD or YYYYMMDD".to_string())?,
+        ),
+        None => None,
+    };
+
+    if let (Some(from_date), Some(to_date)) = (from_date, to_date) {
+        if from_date > to_date {
+            return Err("Invalid range: from date is after to date".to_string());
+        }
+    }
+
+    Ok((from_date, to_date))
 }
 
 #[cfg(test)]
@@ -105,5 +146,22 @@ mod tests {
         assert_eq!(format_duration(90000), "1d 1h");
         assert_eq!(format_duration(172800), "2d");
         assert_eq!(format_duration(176400), "2d 1h");
+    }
+
+    #[test]
+    fn test_parse_chart_date_yyyymmdd() {
+        assert_eq!(parse_chart_date_yyyymmdd("2024-01-15"), Some(20240115));
+        assert_eq!(parse_chart_date_yyyymmdd("20240116"), Some(20240116));
+        assert_eq!(parse_chart_date_yyyymmdd("2024-13-01"), None);
+    }
+
+    #[test]
+    fn test_parse_chart_date_range() {
+        assert_eq!(
+            parse_chart_date_range(Some("2024-01-01"), Some("2024-01-31")).unwrap(),
+            (Some(20240101), Some(20240131))
+        );
+        assert!(parse_chart_date_range(Some("invalid"), None).is_err());
+        assert!(parse_chart_date_range(Some("2024-02-01"), Some("2024-01-01")).is_err());
     }
 }

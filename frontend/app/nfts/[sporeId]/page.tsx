@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
@@ -15,7 +16,9 @@ import { HexDisplay } from '@/components/ui/hex-display';
 import { DataField, DataGrid } from '@/components/ui/data-field';
 import { Address } from '@/components/ui/address';
 import { StackedAreaChart } from '@/components/ui/stacked-area-chart';
+import { OccupationRangeSelector } from '@/components/ui/occupation-range-selector';
 import { isDotbitAlias, normalizeNftAssetId } from '@/lib/nft-collections';
+import { getOccupationRangeParams, OccupationRangeKey } from '@/lib/occupation-range';
 import { formatCkbAmount, formatCkbCompact } from '@/lib/utils';
 
 function isNotFoundError(error: unknown): boolean {
@@ -69,6 +72,8 @@ function renderCapacityUtilization(
 export default function SporeDetailPage() {
   const params = useParams();
   const rawAssetId = params.sporeId as string;
+  const [occupationRange, setOccupationRange] = useState<OccupationRangeKey>('all');
+  const occupationRangeParams = getOccupationRangeParams(occupationRange);
   const isDotbitCollection = isDotbitAlias(rawAssetId);
   const assetId = normalizeNftAssetId(rawAssetId);
 
@@ -96,15 +101,21 @@ export default function SporeDetailPage() {
   });
 
   const { data: occupationChart, isLoading: isOccupationChartLoading } = useQuery({
-    queryKey: ['spore-occupation-chart', assetId],
-    queryFn: () => api.getSporeNftOccupationChart(assetId),
+    queryKey: ['spore-occupation-chart', assetId, occupationRange],
+    queryFn: () =>
+      occupationRangeParams
+        ? api.getSporeNftOccupationChart(assetId, occupationRangeParams)
+        : api.getSporeNftOccupationChart(assetId),
     enabled: !!spore,
   });
 
   const { data: collectionOccupationChart, isLoading: isCollectionOccupationChartLoading } =
     useQuery({
-      queryKey: ['nft-collection-occupation-chart', assetId],
-      queryFn: () => api.getNftCollectionOccupationChart(assetId),
+      queryKey: ['nft-collection-occupation-chart', assetId, occupationRange],
+      queryFn: () =>
+        occupationRangeParams
+          ? api.getNftCollectionOccupationChart(assetId, occupationRangeParams)
+          : api.getNftCollectionOccupationChart(assetId),
       enabled: !!collection,
     });
 
@@ -213,6 +224,7 @@ export default function SporeDetailPage() {
                 <div className="mb-3 text-sm text-slate-400">
                   Daily cumulative live CKB occupation for this NFT collection.
                 </div>
+                <OccupationRangeSelector value={occupationRange} onChange={setOccupationRange} />
                 {isCollectionOccupationChartLoading ? (
                   <div className="py-8 text-center text-slate-500">
                     Loading occupation history...
@@ -316,6 +328,7 @@ export default function SporeDetailPage() {
                 <div className="mb-3 text-sm text-slate-400">
                   Daily cumulative live CKB occupation for this NFT.
                 </div>
+                <OccupationRangeSelector value={occupationRange} onChange={setOccupationRange} />
                 {isOccupationChartLoading ? (
                   <div className="py-8 text-center text-slate-500">
                     Loading occupation history...

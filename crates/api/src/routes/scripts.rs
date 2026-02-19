@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
+use crate::utils::parse_chart_date_range;
 use crate::AppState;
 
 type ApiRouteError = (StatusCode, Json<ApiError>);
@@ -304,12 +305,16 @@ pub struct CodeCellQuery {
 pub struct ScriptOccupationQuery {
     code_hash: Option<String>,
     script_kind: Option<String>,
+    from: Option<String>,
+    to: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct ScriptOccupationByCodeHashQuery {
     code_hash: String,
     script_kind: Option<String>,
+    from: Option<String>,
+    to: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -585,6 +590,8 @@ fn build_script_occupation_chart(
     state: &AppState,
     targets: Vec<(Vec<u8>, bool)>,
     title: String,
+    from_date: Option<u32>,
+    to_date: Option<u32>,
 ) -> Result<StackedAreaChartResponse, ApiRouteError> {
     let series = vec![
         StackedAreaSeries {
@@ -613,11 +620,40 @@ fn build_script_occupation_chart(
         .filter(|target| dedup.insert(target.clone()))
         .collect();
 
+    let mut cumulative_capacity: i128 = 0;
+    let mut cumulative_occupied: i128 = 0;
+    if let Some(from) = from_date {
+        let mut baseline_daily: BTreeMap<u32, (i128, i128)> = BTreeMap::new();
+        for (code_hash, is_type) in &unique_targets {
+            let baseline = state
+                .store
+                .list_script_daily_deltas_in_range(
+                    code_hash,
+                    *is_type,
+                    None,
+                    Some(from.saturating_sub(1)),
+                )
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+            for (date, delta) in baseline {
+                let entry = baseline_daily.entry(date).or_insert((0, 0));
+                entry.0 += delta.live_capacity_delta as i128;
+                entry.1 += delta.live_occupied_capacity_delta as i128;
+            }
+        }
+        for (_, (cap_delta, occupied_delta)) in baseline_daily {
+            cumulative_capacity = (cumulative_capacity + cap_delta).max(0);
+            cumulative_occupied = (cumulative_occupied + occupied_delta).max(0);
+            if cumulative_occupied > cumulative_capacity {
+                cumulative_occupied = cumulative_capacity;
+            }
+        }
+    }
+
     let mut daily_deltas: BTreeMap<u32, (i128, i128)> = BTreeMap::new();
-    for (code_hash, is_type) in unique_targets {
+    for (code_hash, is_type) in &unique_targets {
         let deltas = state
             .store
-            .list_script_daily_deltas(&code_hash, is_type)
+            .list_script_daily_deltas_in_range(code_hash, *is_type, from_date, to_date)
             .map_err(|e| ApiError::internal(e.to_string()))?;
         for (date, delta) in deltas {
             let entry = daily_deltas.entry(date).or_insert((0, 0));
@@ -626,8 +662,6 @@ fn build_script_occupation_chart(
         }
     }
 
-    let mut cumulative_capacity: i128 = 0;
-    let mut cumulative_occupied: i128 = 0;
     let mut data = Vec::with_capacity(daily_deltas.len());
     for (date, (cap_delta, occupied_delta)) in daily_deltas {
         cumulative_capacity = (cumulative_capacity + cap_delta).max(0);
@@ -657,6 +691,9 @@ async fn get_script_occupation_chart(
     Path(name): Path<String>,
     Query(params): Query<ScriptOccupationQuery>,
 ) -> ApiResult<StackedAreaChartResponse> {
+    let (from_date, to_date) = parse_chart_date_range(params.from.as_deref(), params.to.as_deref())
+        .map_err(|msg| ApiError::bad_request(&msg))?;
+
     let all_scripts = state
         .store
         .list_script_infos()
@@ -691,6 +728,8 @@ async fn get_script_occupation_chart(
         &state,
         targets,
         format!("{name} Capacity Occupation"),
+        from_date,
+        to_date,
     )?)
 }
 
@@ -698,6 +737,9 @@ async fn get_script_occupation_chart_by_code_hash(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ScriptOccupationByCodeHashQuery>,
 ) -> ApiResult<StackedAreaChartResponse> {
+    let (from_date, to_date) = parse_chart_date_range(params.from.as_deref(), params.to.as_deref())
+        .map_err(|msg| ApiError::bad_request(&msg))?;
+
     let code_hash = parse_code_hash_hex(&params.code_hash)?;
     let kind_filter = parse_script_kind_filter(params.script_kind.as_deref())?;
     let targets = kind_filter
@@ -709,5 +751,7 @@ async fn get_script_occupation_chart_by_code_hash(
         &state,
         targets,
         format!("0x{} Capacity Occupation", hex::encode(&code_hash)),
+        from_date,
+        to_date,
     )?)
 }
