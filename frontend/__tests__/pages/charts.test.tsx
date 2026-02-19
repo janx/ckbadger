@@ -33,6 +33,12 @@ vi.mock('@/components/layout/header', () => ({
   Header: () => <div data-testid="header">Header</div>,
 }));
 
+vi.mock('@/components/ui/stacked-area-chart', () => ({
+  StackedAreaChart: ({ isPercentage }: { isPercentage?: boolean }) => (
+    <div data-testid={isPercentage ? 'stacked-area-percentage' : 'stacked-area-absolute'} />
+  ),
+}));
+
 const mockNetworkStatsComplete = {
   latestBlock: 1000000,
   avgBlockTime: '8.5',
@@ -172,5 +178,16 @@ describe('ChartsPage', () => {
     expect(screen.getByText('Block')).toBeInTheDocument();
     expect(screen.getByText('Activities')).toBeInTheDocument();
     expect(screen.getByText('Economics')).toBeInTheDocument();
+  });
+
+  it('uses percentage mode in overview previews that are percentage charts', async () => {
+    vi.mocked(api.getNetworkStats).mockResolvedValue(mockNetworkStatsComplete);
+
+    render(<ChartsPage />);
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId('stacked-area-percentage')).toHaveLength(2);
+      expect(screen.getAllByTestId('stacked-area-absolute')).toHaveLength(1);
+    });
   });
 });

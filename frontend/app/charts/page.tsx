@@ -47,9 +47,11 @@ function LineChartPreview({ data, href }: { data: ChartResponse | undefined; hre
 function StackedAreaPreview({
   data,
   href,
+  isPercentage = false,
 }: {
   data: StackedAreaChartResponse | undefined;
   href: string;
+  isPercentage?: boolean;
 }) {
   return (
     <ChartCard
@@ -59,7 +61,13 @@ function StackedAreaPreview({
       error={data === null}
     >
       {data && (
-        <StackedAreaChart data={data.data} series={data.series} height={160} interactive={false} />
+        <StackedAreaChart
+          data={data.data}
+          series={data.series}
+          height={160}
+          interactive={false}
+          isPercentage={isPercentage}
+        />
       )}
     </ChartCard>
   );
@@ -284,13 +292,17 @@ export default function ChartsPage() {
             defaultSeries="liveCells"
           />
           <LineChartPreview data={knowledgeSize} href="/charts/knowledge-size" />
-          <StackedAreaPreview data={hodlWave} href="/charts/hodl-wave" />
+          <StackedAreaPreview data={hodlWave} href="/charts/hodl-wave" isPercentage />
         </ChartSection>
 
         <ChartSection title="Economics">
           <StackedAreaPreview data={totalSupply} href="/charts/total-supply" />
           <LineChartPreview data={nominalApc} href="/charts/nominal-apc" />
-          <StackedAreaPreview data={secondaryIssuance} href="/charts/secondary-issuance" />
+          <StackedAreaPreview
+            data={secondaryIssuance}
+            href="/charts/secondary-issuance"
+            isPercentage
+          />
           <LineChartPreview data={inflationRate} href="/charts/inflation-rate" />
         </ChartSection>
       </main>
