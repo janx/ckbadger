@@ -2,6 +2,7 @@ use anyhow::Result;
 use std::collections::HashMap;
 
 use ckbadger_store::batch::StoreBatch;
+use ckbadger_store::keys;
 use ckbadger_store::types::{DobEntry, DobExtra, DobStandard, SporeTypeIndex};
 
 use crate::parser::{ParsedClusterCell, ParsedSporeCell};
@@ -208,7 +209,12 @@ impl BatchWriter {
                 .unwrap_or_default();
             current.live_capacity_delta += *capacity_delta;
             current.live_occupied_capacity_delta += *occupied_delta;
-            batch.put_spore_daily_delta(spore_id, *date, &current);
+            if current.live_capacity_delta == 0 && current.live_occupied_capacity_delta == 0 {
+                let key = keys::encode_spore_daily_key(spore_id, *date);
+                batch.delete_stats(&key);
+            } else {
+                batch.put_spore_daily_delta(spore_id, *date, &current);
+            }
         }
         Ok(())
     }
@@ -228,7 +234,12 @@ impl BatchWriter {
                 .unwrap_or_default();
             current.live_capacity_delta += *capacity_delta;
             current.live_occupied_capacity_delta += *occupied_delta;
-            batch.put_cluster_daily_delta(cluster_id, *date, &current);
+            if current.live_capacity_delta == 0 && current.live_occupied_capacity_delta == 0 {
+                let key = keys::encode_cluster_daily_key(cluster_id, *date);
+                batch.delete_stats(&key);
+            } else {
+                batch.put_cluster_daily_delta(cluster_id, *date, &current);
+            }
         }
         Ok(())
     }
@@ -267,7 +278,7 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
-    fn test_update_spore_daily_and_cluster_daily_deltas_batch_accumulates() {
+    fn test_update_spore_daily_and_cluster_daily_deltas_batch_accumulates_and_deletes_zero_net() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open(dir.path()).unwrap();
         let writer = BatchWriter::new(Arc::new(store));
@@ -323,6 +334,34 @@ mod tests {
             .unwrap();
         assert_eq!(cluster.live_capacity_delta, 800);
         assert_eq!(cluster.live_occupied_capacity_delta, 500);
+
+        {
+            let mut batch = StoreBatch::new(writer.store());
+            let mut spore_changes = HashMap::new();
+            spore_changes.insert((spore_id.clone(), date), (-80, -50));
+            writer
+                .update_spore_daily_deltas_batch(&spore_changes, &mut batch)
+                .unwrap();
+
+            let mut cluster_changes = HashMap::new();
+            cluster_changes.insert((cluster_id.clone(), date), (-800, -500));
+            writer
+                .update_cluster_daily_deltas_batch(&cluster_changes, &mut batch)
+                .unwrap();
+            batch.commit().unwrap();
+        }
+
+        let spore = writer
+            .store()
+            .get_spore_daily_delta(&spore_id, date)
+            .unwrap();
+        assert!(spore.is_none());
+
+        let cluster = writer
+            .store()
+            .get_cluster_daily_delta(&cluster_id, date)
+            .unwrap();
+        assert!(cluster.is_none());
     }
 
     #[test]

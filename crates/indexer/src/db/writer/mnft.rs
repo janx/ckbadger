@@ -2,6 +2,7 @@ use anyhow::Result;
 use std::collections::HashMap;
 
 use ckbadger_store::batch::StoreBatch;
+use ckbadger_store::keys;
 use ckbadger_store::types::{NftEntry, NftExtra, NftStandard, NftTypeIndex};
 
 use crate::parser::mnft::{ParsedMnftClass, ParsedMnftIssuer, ParsedMnftToken};
@@ -246,7 +247,12 @@ impl BatchWriter {
                 .unwrap_or_default();
             current.live_capacity_delta += *capacity_delta;
             current.live_occupied_capacity_delta += *occupied_delta;
-            batch.put_nft_daily_delta(collection_id, *date, &current);
+            if current.live_capacity_delta == 0 && current.live_occupied_capacity_delta == 0 {
+                let key = keys::encode_nft_daily_key(collection_id, *date);
+                batch.delete_stats(&key);
+            } else {
+                batch.put_nft_daily_delta(collection_id, *date, &current);
+            }
         }
         Ok(())
     }
@@ -260,7 +266,7 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
-    fn test_update_nft_type_index_and_daily_deltas_batch() {
+    fn test_update_nft_type_index_and_daily_deltas_batch_and_delete_zero_net() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open(dir.path()).unwrap();
         let writer = BatchWriter::new(Arc::new(store));
@@ -302,5 +308,19 @@ mod tests {
             .unwrap();
         assert_eq!(daily.live_capacity_delta, 100);
         assert_eq!(daily.live_occupied_capacity_delta, 61);
+
+        let mut batch = StoreBatch::new(writer.store());
+        let mut daily_changes = HashMap::new();
+        daily_changes.insert((collection_id.clone(), date), (-100, -61));
+        writer
+            .update_nft_daily_deltas_batch(&daily_changes, &mut batch)
+            .unwrap();
+        batch.commit().unwrap();
+
+        let daily = writer
+            .store()
+            .get_nft_daily_delta(&collection_id, date)
+            .unwrap();
+        assert!(daily.is_none());
     }
 }

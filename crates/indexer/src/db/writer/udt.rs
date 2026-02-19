@@ -49,8 +49,12 @@ impl BatchWriter {
             };
             existing.live_capacity_delta += live_cap_delta;
             existing.live_occupied_capacity_delta += live_occupied_delta;
-            let value = bincode::serialize(&existing)?;
-            batch.put_stats(&key, &value);
+            if existing.live_capacity_delta == 0 && existing.live_occupied_capacity_delta == 0 {
+                batch.delete_stats(&key);
+            } else {
+                let value = bincode::serialize(&existing)?;
+                batch.put_stats(&key, &value);
+            }
         }
 
         Ok(())
@@ -357,7 +361,7 @@ mod tests {
     use ckbadger_store::CkbadgerStore;
 
     #[test]
-    fn test_update_token_daily_deltas_batch_accumulates() {
+    fn test_update_token_daily_deltas_batch_accumulates_and_deletes_zero_net() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
@@ -385,5 +389,16 @@ mod tests {
             .unwrap();
         assert_eq!(delta.live_capacity_delta, 80);
         assert_eq!(delta.live_occupied_capacity_delta, 50);
+
+        let mut third = HashMap::new();
+        third.insert((type_hash.clone(), 20240115u32), (-80i64, -50i64));
+        let mut batch = StoreBatch::new(&store);
+        writer
+            .update_token_daily_deltas_batch(&third, &mut batch)
+            .unwrap();
+        batch.commit().unwrap();
+
+        let delta = store.get_token_daily_delta(&type_hash, 20240115).unwrap();
+        assert!(delta.is_none());
     }
 }

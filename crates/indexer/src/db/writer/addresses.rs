@@ -251,10 +251,67 @@ impl BatchWriter {
             };
             existing.live_capacity_delta += live_cap_delta;
             existing.live_occupied_capacity_delta += live_occupied_delta;
-            let value = bincode::serialize(&existing)?;
-            batch.put_stats(&key, &value);
+            if existing.live_capacity_delta == 0 && existing.live_occupied_capacity_delta == 0 {
+                batch.delete_stats(&key);
+            } else {
+                let value = bincode::serialize(&existing)?;
+                batch.put_stats(&key, &value);
+            }
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    use ckbadger_store::CkbadgerStore;
+
+    #[test]
+    fn test_update_script_daily_deltas_batch_accumulates_and_deletes_zero_net() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+        let code_hash = vec![0xBB; 32];
+        let date = 20240115u32;
+
+        let mut first = HashMap::new();
+        first.insert((code_hash.clone(), false, date), (100i64, 60i64));
+        let mut batch = StoreBatch::new(&store);
+        writer
+            .update_script_daily_deltas_batch(&first, &mut batch)
+            .unwrap();
+        batch.commit().unwrap();
+
+        let mut second = HashMap::new();
+        second.insert((code_hash.clone(), false, date), (-20i64, -10i64));
+        let mut batch = StoreBatch::new(&store);
+        writer
+            .update_script_daily_deltas_batch(&second, &mut batch)
+            .unwrap();
+        batch.commit().unwrap();
+
+        let delta = store
+            .get_script_daily_delta(&code_hash, false, date)
+            .unwrap()
+            .unwrap();
+        assert_eq!(delta.live_capacity_delta, 80);
+        assert_eq!(delta.live_occupied_capacity_delta, 50);
+
+        let mut third = HashMap::new();
+        third.insert((code_hash.clone(), false, date), (-80i64, -50i64));
+        let mut batch = StoreBatch::new(&store);
+        writer
+            .update_script_daily_deltas_batch(&third, &mut batch)
+            .unwrap();
+        batch.commit().unwrap();
+
+        let delta = store
+            .get_script_daily_delta(&code_hash, false, date)
+            .unwrap();
+        assert!(delta.is_none());
     }
 }
