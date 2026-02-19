@@ -7,9 +7,9 @@ use tower::ServiceExt;
 use ckbadger_api::{create_router, AppConfig};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
-    ClusterAggregate, ClusterDailyDelta, DobEntry, DobExtra, DobStandard, NftCollectionAggregate,
-    NftDailyDelta, NftStandard, ScriptDailyDelta, ScriptInfo, SporeDailyDelta, TokenDailyDelta,
-    TokenInfo,
+    CachedBlockHeader, ClusterAggregate, ClusterDailyDelta, DobEntry, DobExtra, DobStandard,
+    LiveCellInfo, NftCollectionAggregate, NftDailyDelta, NftStandard, ScriptDailyDelta, ScriptInfo,
+    SporeDailyDelta, TokenDailyDelta, TokenInfo,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -187,6 +187,133 @@ async fn test_scripts_list_empty_db() {
 
     let response = app.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn test_get_script_returns_deployments_sorted_by_deployed_at() {
+    let store = test_store();
+    let name = "SECP256K1_BLAKE160".to_string();
+
+    let older_code_hash = vec![0x11; 32];
+    let newer_code_hash = vec![0x22; 32];
+    let older_tx_hash = vec![0xaa; 32];
+    let newer_tx_hash = vec![0xbb; 32];
+
+    store
+        .put_script_info_direct(
+            &older_code_hash,
+            &ScriptInfo {
+                code_hash: older_code_hash.clone(),
+                hash_type: 1, // type
+                name: Some(name.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    store
+        .put_script_info_direct(
+            &newer_code_hash,
+            &ScriptInfo {
+                code_hash: newer_code_hash.clone(),
+                hash_type: 1, // type
+                name: Some(name.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let older_block = 100i64;
+    let newer_block = 200i64;
+    let older_timestamp = 1_700_000_000_000i64;
+    let newer_timestamp = 1_700_100_000_000i64;
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(
+        older_block,
+        &CachedBlockHeader {
+            hash: vec![0x01; 32],
+            timestamp: older_timestamp,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        },
+    );
+    batch.put_block_header(
+        newer_block,
+        &CachedBlockHeader {
+            hash: vec![0x02; 32],
+            timestamp: newer_timestamp,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        },
+    );
+    batch.put_cell(
+        &older_tx_hash,
+        0,
+        &LiveCellInfo {
+            capacity: 100_00000000,
+            created_at_block: older_block,
+            lock_script_hash: vec![0x10; 32],
+            lock_code_hash: vec![0x20; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: Some(older_code_hash.clone()),
+            type_code_hash: Some(vec![0x30; 32]),
+            data_size: 0,
+            occupied_capacity: 61_00000000,
+        },
+    );
+    batch.put_cell_by_type(&older_code_hash, older_block, &older_tx_hash, 0);
+    batch.put_cell(
+        &newer_tx_hash,
+        1,
+        &LiveCellInfo {
+            capacity: 100_00000000,
+            created_at_block: newer_block,
+            lock_script_hash: vec![0x11; 32],
+            lock_code_hash: vec![0x21; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: Some(newer_code_hash.clone()),
+            type_code_hash: Some(vec![0x31; 32]),
+            data_size: 0,
+            occupied_capacity: 61_00000000,
+        },
+    );
+    batch.put_cell_by_type(&newer_code_hash, newer_block, &newer_tx_hash, 1);
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/scripts/SECP256K1_BLAKE160")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let items = json.as_array().unwrap();
+
+    assert_eq!(items.len(), 2);
+    assert_eq!(
+        items[0]["codeHash"],
+        serde_json::Value::String(format!("0x{}", hex::encode(&newer_code_hash)))
+    );
+    assert_eq!(items[0]["deployedAt"], newer_timestamp);
+    assert_eq!(
+        items[1]["codeHash"],
+        serde_json::Value::String(format!("0x{}", hex::encode(&older_code_hash)))
+    );
+    assert_eq!(items[1]["deployedAt"], older_timestamp);
 }
 
 #[tokio::test]

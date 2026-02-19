@@ -70,6 +70,7 @@ pub struct ScriptResponse {
     pub is_system: bool,
     pub code_cell_tx_hash: Option<String>,
     pub code_cell_output_index: Option<i32>,
+    pub deployed_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -159,6 +160,35 @@ fn resolve_code_cell(
     (None, None)
 }
 
+fn resolve_deployed_at(
+    store: &ckbadger_store::CkbadgerStore,
+    code_cell_tx_hash: Option<&str>,
+    code_cell_output_index: Option<i32>,
+) -> Option<i64> {
+    let tx_hash = code_cell_tx_hash?;
+    let output_index = code_cell_output_index?;
+    let output_index = i16::try_from(output_index).ok()?;
+    let tx_hash_bytes = hex::decode(tx_hash.strip_prefix("0x").unwrap_or(tx_hash)).ok()?;
+
+    let created_at_block = store
+        .get_cell(&tx_hash_bytes, output_index)
+        .ok()
+        .flatten()
+        .or_else(|| {
+            store
+                .get_consumed_cell(&tx_hash_bytes, output_index)
+                .ok()
+                .flatten()
+        })
+        .map(|cell| cell.created_at_block)?;
+
+    store
+        .get_block_header(created_at_block)
+        .ok()
+        .flatten()
+        .map(|header| header.timestamp)
+}
+
 /// Convert a store ScriptInfo into an API ScriptResponse.
 fn script_info_to_response(
     info: &ckbadger_store::ScriptInfo,
@@ -189,6 +219,11 @@ fn script_info_to_response(
     // For hash_type="data"/"data1"/"data2": use dep_type_hash, then fall back to
     // scanning early blocks via dep_data_hash.
     let (code_cell_tx_hash, code_cell_output_index) = resolve_code_cell(info, &state.store);
+    let deployed_at = resolve_deployed_at(
+        &state.store,
+        code_cell_tx_hash.as_deref(),
+        code_cell_output_index,
+    );
 
     ScriptResponse {
         code_hash: format!("0x{}", hex::encode(&info.code_hash)),
@@ -208,6 +243,7 @@ fn script_info_to_response(
         is_system: false,
         code_cell_tx_hash,
         code_cell_output_index,
+        deployed_at,
     }
 }
 
@@ -464,6 +500,14 @@ async fn get_script(
             }
         }
     }
+
+    // Show newest deployments first when deployment timestamp is available.
+    scripts.sort_by(|a, b| match (a.deployed_at, b.deployed_at) {
+        (Some(a_ts), Some(b_ts)) => b_ts.cmp(&a_ts).then_with(|| a.code_hash.cmp(&b.code_hash)),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => a.code_hash.cmp(&b.code_hash),
+    });
 
     ok(scripts)
 }

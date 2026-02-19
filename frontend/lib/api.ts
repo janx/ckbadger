@@ -687,6 +687,7 @@ interface KnownScript {
   isSystem: boolean;
   codeCellTxHash: string | null;
   codeCellOutputIndex: number | null;
+  deployedAt?: number | null;
 }
 
 interface DeploymentUsage {

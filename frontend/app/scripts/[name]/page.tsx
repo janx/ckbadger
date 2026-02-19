@@ -30,6 +30,17 @@ interface SelectedDeployment {
   scriptKind?: 'lock' | 'type';
 }
 
+function compareDeploymentsByDeployedAt(a: KnownScript, b: KnownScript): number {
+  const aTs = a.deployedAt ?? null;
+  const bTs = b.deployedAt ?? null;
+  if (aTs != null && bTs != null) {
+    return bTs - aTs;
+  }
+  if (aTs != null) return -1;
+  if (bTs != null) return 1;
+  return a.codeHash.localeCompare(b.codeHash);
+}
+
 export default function ScriptDetailPage() {
   const params = useParams();
   const name = decodeURIComponent(params.name as string);
@@ -52,13 +63,6 @@ export default function ScriptDetailPage() {
     queryFn: () => api.getScriptUsage(name),
   });
 
-  const { data: occupationChart, isLoading: isOccupationChartLoading } = useQuery({
-    queryKey: ['script-occupation-chart', name, occupationRange],
-    queryFn: () =>
-      occupationRangeParams
-        ? api.getScriptOccupationChart(name, occupationRangeParams)
-        : api.getScriptOccupationChart(name),
-  });
   const selectedScriptKindForChart =
     selectedDeployment?.scriptKind === 'lock' || selectedDeployment?.scriptKind === 'type'
       ? selectedDeployment.scriptKind
@@ -87,12 +91,13 @@ export default function ScriptDetailPage() {
 
   useEffect(() => {
     if (deployments && deployments.length > 0 && usage && !selectedDeployment) {
+      const sortedDeployments = [...deployments].sort(compareDeploymentsByDeployedAt);
       const usageByCodeHash = new Map(usage.byDeployment.map((d) => [d.codeHash, d]));
-      const firstWithCells = deployments.find((d) => {
+      const firstWithCells = sortedDeployments.find((d) => {
         const stats = usageByCodeHash.get(d.codeHash);
         return d.hashType && stats && stats.liveCellsCount > 0;
       });
-      const target = firstWithCells || deployments[0];
+      const target = firstWithCells || sortedDeployments[0];
       const stats = usageByCodeHash.get(target.codeHash);
       if (target.hashType) {
         setSelectedDeployment({
@@ -164,6 +169,7 @@ export default function ScriptDetailPage() {
 
   const usageByCodeHash = new Map(usage?.byDeployment.map((d) => [d.codeHash, d]) ?? []);
   const inferredScriptKind = usage?.byDeployment.find((d) => d.scriptKind)?.scriptKind;
+  const sortedDeployments = [...deployments].sort(compareDeploymentsByDeployedAt);
   const selectedDeploymentUsage = selectedDeployment
     ? usageByCodeHash.get(selectedDeployment.codeHash)
     : undefined;
@@ -249,15 +255,15 @@ export default function ScriptDetailPage() {
           <TerminalPanelContent padding="none">
             <div className="overflow-x-auto">
               <div className="flex border-b border-slate-800 bg-slate-900/50 px-4 py-2 font-mono text-xs uppercase tracking-wider text-slate-500">
-                <div className="w-56">Code Cell</div>
-                <div className="flex-1 pl-4">Script Ref</div>
+                <div className="flex-1">Deployment</div>
+                <div className="w-48">Deployed At</div>
                 <div className="w-20">Tag</div>
                 <div className="w-20">Kind</div>
                 <div className="w-20">Status</div>
                 <div className="w-24 text-right">Cells</div>
                 <div className="w-28 text-right">Capacity</div>
               </div>
-              {deployments.map((deployment, idx) => {
+              {sortedDeployments.map((deployment, idx) => {
                 const stats = usageByCodeHash.get(deployment.codeHash);
                 const selected = isSelected(deployment);
                 return (
@@ -269,31 +275,43 @@ export default function ScriptDetailPage() {
                       className="flex w-full items-center"
                       onClick={() => handleDeploymentClick(deployment)}
                     >
-                      <div className="w-56">
-                        {deployment.codeCellTxHash && deployment.codeCellOutputIndex !== null ? (
-                          <Link
-                            href={`/cell/${deployment.codeCellTxHash}-${deployment.codeCellOutputIndex}`}
-                            onClick={(e) => e.stopPropagation()}
-                            className="text-amber hover:underline"
-                          >
-                            <HexDisplay
-                              value={`${deployment.codeCellTxHash}:${deployment.codeCellOutputIndex}`}
-                              color="amber"
-                              startChars={8}
-                              endChars={8}
-                            />
-                          </Link>
-                        ) : (
-                          <span className="text-slate-600">-</span>
-                        )}
-                      </div>
-                      <div className="flex-1 pl-4">
+                      <div className="min-w-0 flex-1">
+                        <div className="mb-1">
+                          {deployment.codeCellTxHash && deployment.codeCellOutputIndex !== null ? (
+                            <Link
+                              href={`/cell/${deployment.codeCellTxHash}-${deployment.codeCellOutputIndex}`}
+                              onClick={(e) => e.stopPropagation()}
+                              className="text-amber hover:underline"
+                            >
+                              <HexDisplay
+                                value={`${deployment.codeCellTxHash}:${deployment.codeCellOutputIndex}`}
+                                color="amber"
+                                startChars={8}
+                                endChars={8}
+                              />
+                            </Link>
+                          ) : (
+                            <span className="text-slate-600">-</span>
+                          )}
+                        </div>
                         <HexDisplay
                           value={`${deployment.hashType}:${deployment.codeHash}`}
                           color={selected ? 'green' : 'white'}
                           startChars={15}
                           endChars={6}
                         />
+                      </div>
+                      <div
+                        className="w-48 font-mono text-xs text-slate-400"
+                        title={
+                          deployment.deployedAt
+                            ? new Date(deployment.deployedAt).toISOString()
+                            : undefined
+                        }
+                      >
+                        {deployment.deployedAt
+                          ? new Date(deployment.deployedAt).toLocaleString()
+                          : '-'}
                       </div>
                       <div className="w-20 text-slate-400">{deployment.tag || '-'}</div>
                       <div className="w-20">
@@ -337,8 +355,8 @@ export default function ScriptDetailPage() {
               {usage && (
                 <>
                   <div className="flex border-t border-slate-700 bg-slate-900/50 px-4 py-3 font-medium">
-                    <div className="w-56" />
-                    <div className="flex-1 pl-4 text-slate-400">Total</div>
+                    <div className="flex-1 text-slate-400">Total</div>
+                    <div className="w-48" />
                     <div className="w-20" />
                     <div className="w-20" />
                     <div className="w-20" />
@@ -353,146 +371,143 @@ export default function ScriptDetailPage() {
                       </span>
                     </div>
                   </div>
-                  <div className="border-t border-slate-800 px-4 py-4">
-                    <CapacityUtilization
-                      totalCapacity={usage.liveCapacitySum}
-                      occupiedCapacity={usage.liveOccupiedCapacitySum}
-                    />
-                  </div>
                 </>
               )}
             </div>
-          </TerminalPanelContent>
-        </TerminalPanel>
-
-        <TerminalPanel className="mb-6">
-          <TerminalPanelHeader indicator="active">Occupation History</TerminalPanelHeader>
-          <TerminalPanelContent>
-            <div className="mb-3 text-xs text-slate-500">
-              Daily cumulative live CKB occupation for this script across all deployments.
-            </div>
-            <OccupationRangeSelector value={occupationRange} onChange={setOccupationRange} />
-            {isOccupationChartLoading ? (
-              <div className="py-8 text-center text-slate-500">Loading occupation history...</div>
-            ) : occupationChart && occupationChart.data.length > 0 ? (
-              <StackedAreaChart data={occupationChart.data} series={occupationChart.series} />
-            ) : (
-              <div className="py-8 text-center text-slate-500">No occupation history yet</div>
-            )}
           </TerminalPanelContent>
         </TerminalPanel>
 
         {selectedDeployment && (
-          <TerminalPanel>
-            <TerminalPanelHeader indicator="none">
-              <div className="flex items-center gap-2">
-                <span>Cells</span>
-                <span className="text-slate-600">|</span>
-                <HexDisplay
-                  value={`${selectedDeployment.hashType}:${selectedDeployment.codeHash}`}
-                  color="white"
-                  size="sm"
-                  startChars={15}
-                  endChars={6}
-                />
-              </div>
-            </TerminalPanelHeader>
-            <TerminalPanelContent padding="none">
-              {selectedDeploymentUsage && (
-                <div className="border-b border-slate-800 px-4 py-4">
-                  <CapacityUtilization
-                    totalCapacity={selectedDeploymentUsage.liveCapacitySum}
-                    occupiedCapacity={selectedDeploymentUsage.liveOccupiedCapacitySum}
-                    label="Selected Deployment Utilization"
+          <>
+            <TerminalPanel className="mb-6">
+              <TerminalPanelHeader indicator="none">
+                <div className="flex items-center gap-2">
+                  <span>Capacity &amp; Occupation</span>
+                  <span className="text-slate-600">|</span>
+                  <HexDisplay
+                    value={`${selectedDeployment.hashType}:${selectedDeployment.codeHash}`}
+                    color="white"
+                    size="sm"
+                    startChars={15}
+                    endChars={6}
                   />
                 </div>
-              )}
-              <div className="border-b border-slate-800 px-4 py-4">
-                <div className="mb-3 text-xs text-slate-500">
-                  Historical occupied/unoccupied live capacity for the selected deployment.
-                </div>
-                <OccupationRangeSelector value={occupationRange} onChange={setOccupationRange} />
-                {isSelectedOccupationChartLoading ? (
-                  <div className="py-6 text-center text-slate-500">
-                    Loading deployment history...
-                  </div>
-                ) : selectedOccupationChart && selectedOccupationChart.data.length > 0 ? (
-                  <StackedAreaChart
-                    data={selectedOccupationChart.data}
-                    series={selectedOccupationChart.series}
-                    height={220}
-                  />
-                ) : (
-                  <div className="py-6 text-center text-slate-500">No deployment history yet</div>
-                )}
-              </div>
-              {isCellsLoading ? (
-                <div className="py-8 text-center text-slate-500">Loading cells...</div>
-              ) : cellsData && cellsData.data.length > 0 ? (
-                <>
-                  <div className="flex border-b border-slate-800 bg-slate-900/50 px-4 py-2 font-mono text-xs uppercase tracking-wider text-slate-500">
-                    <div className="flex-1">Cell</div>
-                    <div className="w-52 shrink-0 text-right">Capacity</div>
-                    <div className="w-24 shrink-0 text-right">Data Size</div>
-                    <div className="w-28 shrink-0 text-right">Created At</div>
-                  </div>
-                  {cellsData.data.map((cell) => (
-                    <TerminalRow key={`${cell.txHash}-${cell.outputIndex}`}>
-                      <div className="flex items-center">
-                        <div className="flex-1">
-                          <Link
-                            href={`/cell/${cell.txHash}-${cell.outputIndex}`}
-                            className="text-terminal-green hover:underline"
-                          >
-                            <HexDisplay value={`${cell.txHash}:${cell.outputIndex}`} />
-                          </Link>
-                        </div>
-                        <div className="w-52 shrink-0 text-right text-white">
-                          <Capacity value={cell.capacity} />
-                        </div>
-                        <div className="w-24 shrink-0 text-right font-mono text-slate-400">
-                          {cell.cellType === 'genesis_special_burn' ? (
-                            <span
-                              className="cursor-help border-b border-dashed border-slate-600"
-                              title="Virtual occupied capacity: 5.04B CKB"
-                            >
-                              <Capacity value={cell.virtualOccupiedCapacity || '0'} />
-                            </span>
-                          ) : (
-                            <>{cell.dataSize.toLocaleString()} bytes</>
-                          )}
-                        </div>
-                        <div className="w-28 shrink-0 text-right">
-                          <Link
-                            href={`/blocks/${cell.createdAtBlock}`}
-                            className="text-amber hover:underline"
-                          >
-                            #{cell.createdAtBlock.toLocaleString()}
-                          </Link>
-                        </div>
-                      </div>
-                    </TerminalRow>
-                  ))}
-                  <div className="border-t border-slate-800 p-4">
-                    <CursorPagination
-                      total={cellsData.total}
-                      totalLabel="cells"
-                      pageSize={20}
-                      page={cellsPagination.page}
-                      hasMore={cellsData.hasMore}
-                      hasPrevious={cellsPagination.hasPrevious}
-                      onNext={() => cellsPagination.goToNext(cellsData.nextCursor)}
-                      onPrevious={cellsPagination.goToPrevious}
+              </TerminalPanelHeader>
+              <TerminalPanelContent padding="none">
+                {selectedDeploymentUsage && (
+                  <div className="border-b border-slate-800 px-4 py-4">
+                    <CapacityUtilization
+                      totalCapacity={selectedDeploymentUsage.liveCapacitySum}
+                      occupiedCapacity={selectedDeploymentUsage.liveOccupiedCapacitySum}
+                      label="Capacity & Occupation"
                     />
                   </div>
-                </>
-              ) : (
-                <div className="py-8 text-center text-slate-500">
-                  No cells found for this script
+                )}
+                <div className="px-4 py-4">
+                  <div className="mb-3 text-xs text-slate-500">
+                    Historical occupied/unoccupied live capacity for the selected deployment.
+                  </div>
+                  <OccupationRangeSelector value={occupationRange} onChange={setOccupationRange} />
+                  {isSelectedOccupationChartLoading ? (
+                    <div className="py-6 text-center text-slate-500">
+                      Loading deployment history...
+                    </div>
+                  ) : selectedOccupationChart && selectedOccupationChart.data.length > 0 ? (
+                    <StackedAreaChart
+                      data={selectedOccupationChart.data}
+                      series={selectedOccupationChart.series}
+                      height={220}
+                    />
+                  ) : (
+                    <div className="py-6 text-center text-slate-500">No deployment history yet</div>
+                  )}
                 </div>
-              )}
-            </TerminalPanelContent>
-          </TerminalPanel>
+              </TerminalPanelContent>
+            </TerminalPanel>
+
+            <TerminalPanel>
+              <TerminalPanelHeader indicator="none">
+                <div className="flex items-center gap-2">
+                  <span>Cells</span>
+                  <span className="text-slate-600">|</span>
+                  <HexDisplay
+                    value={`${selectedDeployment.hashType}:${selectedDeployment.codeHash}`}
+                    color="white"
+                    size="sm"
+                    startChars={15}
+                    endChars={6}
+                  />
+                </div>
+              </TerminalPanelHeader>
+              <TerminalPanelContent padding="none">
+                {isCellsLoading ? (
+                  <div className="py-8 text-center text-slate-500">Loading cells...</div>
+                ) : cellsData && cellsData.data.length > 0 ? (
+                  <>
+                    <div className="flex border-b border-slate-800 bg-slate-900/50 px-4 py-2 font-mono text-xs uppercase tracking-wider text-slate-500">
+                      <div className="flex-1">Cell</div>
+                      <div className="w-52 shrink-0 text-right">Capacity</div>
+                      <div className="w-24 shrink-0 text-right">Data Size</div>
+                      <div className="w-28 shrink-0 text-right">Created At</div>
+                    </div>
+                    {cellsData.data.map((cell) => (
+                      <TerminalRow key={`${cell.txHash}-${cell.outputIndex}`}>
+                        <div className="flex items-center">
+                          <div className="flex-1">
+                            <Link
+                              href={`/cell/${cell.txHash}-${cell.outputIndex}`}
+                              className="text-terminal-green hover:underline"
+                            >
+                              <HexDisplay value={`${cell.txHash}:${cell.outputIndex}`} />
+                            </Link>
+                          </div>
+                          <div className="w-52 shrink-0 text-right text-white">
+                            <Capacity value={cell.capacity} />
+                          </div>
+                          <div className="w-24 shrink-0 text-right font-mono text-slate-400">
+                            {cell.cellType === 'genesis_special_burn' ? (
+                              <span
+                                className="cursor-help border-b border-dashed border-slate-600"
+                                title="Virtual occupied capacity: 5.04B CKB"
+                              >
+                                <Capacity value={cell.virtualOccupiedCapacity || '0'} />
+                              </span>
+                            ) : (
+                              <>{cell.dataSize.toLocaleString()} bytes</>
+                            )}
+                          </div>
+                          <div className="w-28 shrink-0 text-right">
+                            <Link
+                              href={`/blocks/${cell.createdAtBlock}`}
+                              className="text-amber hover:underline"
+                            >
+                              #{cell.createdAtBlock.toLocaleString()}
+                            </Link>
+                          </div>
+                        </div>
+                      </TerminalRow>
+                    ))}
+                    <div className="border-t border-slate-800 p-4">
+                      <CursorPagination
+                        total={cellsData.total}
+                        totalLabel="cells"
+                        pageSize={20}
+                        page={cellsPagination.page}
+                        hasMore={cellsData.hasMore}
+                        hasPrevious={cellsPagination.hasPrevious}
+                        onNext={() => cellsPagination.goToNext(cellsData.nextCursor)}
+                        onPrevious={cellsPagination.goToPrevious}
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <div className="py-8 text-center text-slate-500">
+                    No cells found for this script
+                  </div>
+                )}
+              </TerminalPanelContent>
+            </TerminalPanel>
+          </>
         )}
       </main>
     </div>
