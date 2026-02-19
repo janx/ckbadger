@@ -95,7 +95,7 @@ impl CkbadgerStore {
         let mut blocks_removed = 0u64;
         let mut txs_removed = 0u64;
         let mut cells_removed = 0u64;
-        let cells_restored = 0u64;
+        let mut cells_restored = 0u64;
         let replay_start = rollback_to + 1;
         let replay_cutoff_date = self
             .get_block_header(replay_start)?
@@ -184,11 +184,67 @@ impl CkbadgerStore {
             }
         }
 
-        // 4. Restore consumed cells that were consumed after rollback_to
-        // Note: consumed cell restoration is handled by the caller using
-        // in-memory consumed_history, since the consumed_cells CF doesn't
-        // track consumed_at_block. The caller should restore cells that were
-        // consumed after rollback_to back to the live_cells CF.
+        // 4. Restore consumed cells that were consumed after rollback_to.
+        //
+        // New schema stores `consumed_at_block` in consumed_cells so rollback can
+        // recover precise state without in-memory history.
+        let iter = self.iterator_cf(self.cf_consumed_cells(), IteratorMode::Start);
+        for item in iter.flatten() {
+            let (key, value) = item;
+            if key.len() != keys::OUTPOINT_KEY_SIZE {
+                continue;
+            }
+            let Some(consumed) = crate::types::decode_consumed_cell_info(&value) else {
+                continue;
+            };
+            if consumed.consumed_at_block <= rollback_to {
+                continue;
+            }
+
+            // Remove stale consumed record from rolled-back blocks.
+            batch.delete_cf(self.cf_consumed_cells(), &key);
+
+            // If the cell itself existed before rollback point, restore it to live_cells.
+            if consumed.cell.created_at_block <= rollback_to {
+                let encoded = bincode::serialize(&consumed.cell)?;
+                batch.put_cf(self.cf_live_cells(), &key, &encoded);
+                cells_restored += 1;
+
+                let (tx_hash, output_index) = keys::decode_outpoint(&key);
+                let idx_key = keys::encode_cell_index_key(
+                    &consumed.cell.lock_script_hash,
+                    consumed.cell.created_at_block,
+                    &tx_hash,
+                    output_index,
+                );
+                batch.put_cf(self.cf_cell_by_lock(), &idx_key, []);
+                let idx_key = keys::encode_cell_index_key(
+                    &consumed.cell.lock_code_hash,
+                    consumed.cell.created_at_block,
+                    &tx_hash,
+                    output_index,
+                );
+                batch.put_cf(self.cf_cell_by_lock_code(), &idx_key, []);
+                if let Some(ref type_hash) = consumed.cell.type_script_hash {
+                    let idx_key = keys::encode_cell_index_key(
+                        type_hash,
+                        consumed.cell.created_at_block,
+                        &tx_hash,
+                        output_index,
+                    );
+                    batch.put_cf(self.cf_cell_by_type(), &idx_key, []);
+                }
+                if let Some(ref type_code_hash) = consumed.cell.type_code_hash {
+                    let idx_key = keys::encode_cell_index_key(
+                        type_code_hash,
+                        consumed.cell.created_at_block,
+                        &tx_hash,
+                        output_index,
+                    );
+                    batch.put_cf(self.cf_cell_by_type_code(), &idx_key, []);
+                }
+            }
+        }
 
         // 5. Delete date-scoped stats entries from replay cutoff date onward.
         // These are additive snapshots and would be double-counted after replay.
@@ -280,6 +336,7 @@ pub struct RollbackResult {
 mod tests {
     use super::*;
     use crate::batch::StoreBatch;
+    use crate::keys;
     use crate::store::CkbadgerStore;
     use crate::types::{AddressBalance, CachedBlockHeader, LiveCellInfo};
 
@@ -440,5 +497,69 @@ mod tests {
         assert_eq!(rebuilt.balance, 100);
         assert_eq!(rebuilt.occupied_capacity, 100);
         assert_eq!(rebuilt.live_cells_count, 1);
+    }
+
+    #[test]
+    fn test_rollback_restores_consumed_cells_after_fork_point() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let lock_hash = vec![0xAB; 32];
+        let tx_hash = vec![0x42; 32];
+
+        let header1 = CachedBlockHeader {
+            hash: vec![0x01; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+        let header2 = CachedBlockHeader {
+            hash: vec![0x02; 32],
+            timestamp: 1_700_000_010_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+        let cell = LiveCellInfo {
+            capacity: 500,
+            created_at_block: 1,
+            lock_script_hash: lock_hash,
+            lock_code_hash: vec![0x11; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: None,
+            type_code_hash: None,
+            data_size: 0,
+            occupied_capacity: 500,
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(1, &header1);
+        batch.put_block_header(2, &header2);
+        batch.put_cell(&tx_hash, 0, &cell);
+        batch.commit().unwrap();
+
+        // Simulate consumption in block 2.
+        let mut batch = StoreBatch::new(&store);
+        batch.put_consumed_cell(&tx_hash, 0, &cell, 2);
+        batch.delete_cell(&tx_hash, 0);
+        batch.commit().unwrap();
+
+        assert!(store.get_cell(&tx_hash, 0).unwrap().is_none());
+        assert!(store.get_consumed_cell(&tx_hash, 0).unwrap().is_some());
+
+        store.rollback_to_block(1).unwrap();
+
+        assert!(store.get_cell(&tx_hash, 0).unwrap().is_some());
+
+        let outpoint_key = keys::encode_outpoint(&tx_hash, 0);
+        let consumed_raw = store
+            .get_cf(store.cf_consumed_cells(), &outpoint_key)
+            .unwrap();
+        assert!(consumed_raw.is_none());
     }
 }

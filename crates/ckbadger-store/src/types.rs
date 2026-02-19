@@ -67,6 +67,49 @@ impl CompactConsumedCellInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConsumedCellInfo {
+    pub cell: LiveCellInfo,
+    pub consumed_at_block: i64,
+}
+
+impl ConsumedCellInfo {
+    pub fn from_live_cell_info(info: &LiveCellInfo, consumed_at_block: i64) -> Self {
+        Self {
+            cell: info.clone(),
+            consumed_at_block,
+        }
+    }
+
+    pub fn to_live_cell_info(&self) -> LiveCellInfo {
+        self.cell.clone()
+    }
+}
+
+/// Decode consumed cell bytes across storage schema versions.
+///
+/// Order:
+/// 1. `ConsumedCellInfo` (current schema, includes consumed_at_block)
+/// 2. `CompactConsumedCellInfo` (legacy schema)
+/// 3. `LiveCellInfo` (very old schema)
+pub fn decode_consumed_cell_info(value: &[u8]) -> Option<ConsumedCellInfo> {
+    if let Ok(v2) = bincode::deserialize::<ConsumedCellInfo>(value) {
+        return Some(v2);
+    }
+    if let Ok(compact) = bincode::deserialize::<CompactConsumedCellInfo>(value) {
+        return Some(ConsumedCellInfo {
+            cell: compact.to_live_cell_info(),
+            consumed_at_block: 0,
+        });
+    }
+    bincode::deserialize::<LiveCellInfo>(value)
+        .ok()
+        .map(|cell| ConsumedCellInfo {
+            cell,
+            consumed_at_block: 0,
+        })
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CachedBlockHeader {
     pub hash: Vec<u8>,
     pub timestamp: i64,

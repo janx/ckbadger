@@ -58,10 +58,16 @@ impl<'a> StoreBatch<'a> {
         self.batch.delete_cf(self.store.cf_live_cells(), key);
     }
 
-    pub fn put_consumed_cell(&mut self, tx_hash: &[u8], output_index: i16, info: &LiveCellInfo) {
+    pub fn put_consumed_cell(
+        &mut self,
+        tx_hash: &[u8],
+        output_index: i16,
+        info: &LiveCellInfo,
+        consumed_at_block: i64,
+    ) {
         let key = keys::encode_outpoint(tx_hash, output_index);
-        let compact = CompactConsumedCellInfo::from_live_cell_info(info);
-        let value = bincode::serialize(&compact).expect("serialize CompactConsumedCellInfo");
+        let consumed = ConsumedCellInfo::from_live_cell_info(info, consumed_at_block);
+        let value = bincode::serialize(&consumed).expect("serialize ConsumedCellInfo");
         self.batch
             .put_cf(self.store.cf_consumed_cells(), key, &value);
     }

@@ -104,11 +104,15 @@ impl BatchWriter {
         let results = self.store.multi_get_cf(key_refs);
 
         // Zip results with consumptions and process writes
-        for (res, (tx_hash, output_index, ..)) in results.into_iter().zip(consumptions.iter()) {
+        for (
+            res,
+            (tx_hash, output_index, _created_at_block, _consumed_by_tx, consumed_at_block, _idx),
+        ) in results.into_iter().zip(consumptions.iter())
+        {
             if let Ok(Some(value)) = res {
                 if let Ok(info) = bincode::deserialize::<LiveCellInfo>(&value) {
                     // Move to consumed cells
-                    batch.put_consumed_cell(tx_hash, *output_index, &info);
+                    batch.put_consumed_cell(tx_hash, *output_index, &info, *consumed_at_block);
                     // Remove from live cells
                     batch.delete_cell(tx_hash, *output_index);
                     // Remove cell indexes
@@ -173,13 +177,11 @@ impl BatchWriter {
             .store
             .get_cf(self.store.cf_consumed_cells(), &outpoint_key)?
         {
-            if let Ok(info) =
-                bincode::deserialize::<ckbadger_store::types::CompactConsumedCellInfo>(&value)
-            {
+            if let Some(info) = ckbadger_store::types::decode_consumed_cell_info(&value) {
                 return Ok(Some((
-                    info.capacity,
-                    info.created_at_block,
-                    info.lock_script_hash,
+                    info.cell.capacity,
+                    info.cell.created_at_block,
+                    info.cell.lock_script_hash,
                 )));
             }
         }
@@ -250,18 +252,15 @@ impl BatchWriter {
 
             for (idx, res) in consumed_results.into_iter().enumerate() {
                 if let Ok(Some(value)) = res {
-                    if let Ok(info) = bincode::deserialize::<
-                        ckbadger_store::types::CompactConsumedCellInfo,
-                    >(&value)
-                    {
+                    if let Some(info) = ckbadger_store::types::decode_consumed_cell_info(&value) {
                         let (tx_hash, output_index) = missing[idx];
                         result.insert(
                             (tx_hash.to_vec(), *output_index),
                             (
-                                info.capacity,
-                                info.created_at_block,
-                                info.lock_script_hash,
-                                info.data_size,
+                                info.cell.capacity,
+                                info.cell.created_at_block,
+                                info.cell.lock_script_hash,
+                                info.cell.data_size,
                             ),
                         );
                     }
@@ -327,10 +326,7 @@ impl BatchWriter {
 
             for (idx, res) in consumed_results.into_iter().enumerate() {
                 if let Ok(Some(value)) = res {
-                    if let Ok(info) = bincode::deserialize::<
-                        ckbadger_store::types::CompactConsumedCellInfo,
-                    >(&value)
-                    {
+                    if let Some(info) = ckbadger_store::types::decode_consumed_cell_info(&value) {
                         let (tx_hash, output_index) = missing[idx];
                         result.insert((tx_hash.to_vec(), *output_index), info.to_live_cell_info());
                     }
@@ -353,14 +349,16 @@ impl BatchWriter {
             return Ok(());
         }
 
-        for (tx_hash, output_index, ..) in consumptions {
+        for (tx_hash, output_index, _created_at_block, _consumed_by_tx, consumed_at_block, _idx) in
+            consumptions
+        {
             let key = (tx_hash.to_vec(), *output_index);
             let info = preloaded_cells
                 .get(&key)
                 .or_else(|| same_batch_cells.get(&key));
 
             if let Some(info) = info {
-                batch.put_consumed_cell(tx_hash, *output_index, info);
+                batch.put_consumed_cell(tx_hash, *output_index, info, *consumed_at_block);
                 batch.delete_cell(tx_hash, *output_index);
                 if !skip_cell_indices {
                     batch.delete_cell_by_lock(

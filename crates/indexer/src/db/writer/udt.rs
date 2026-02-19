@@ -96,9 +96,8 @@ impl BatchWriter {
                 .store
                 .get_cf(self.store.cf_consumed_cells(), &outpoint_key)?
             {
-                let compact =
-                    bincode::deserialize::<ckbadger_store::types::CompactConsumedCellInfo>(&val)?;
-                Some(compact.to_live_cell_info())
+                ckbadger_store::types::decode_consumed_cell_info(&val)
+                    .map(|c| c.to_live_cell_info())
             } else {
                 None
             };

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use crate::keys;
 use crate::store::CkbadgerStore;
-use crate::types::{CompactConsumedCellInfo, LiveCellInfo};
+use crate::types::{decode_consumed_cell_info, LiveCellInfo};
 
 /// Aggregated cell statistics for a token.
 #[derive(Debug, Clone, Default)]
@@ -61,12 +61,7 @@ impl CkbadgerStore {
     ) -> anyhow::Result<Option<LiveCellInfo>> {
         let key = keys::encode_outpoint(tx_hash, output_index);
         match self.get_cf(self.cf_consumed_cells(), &key)? {
-            Some(value) => {
-                if let Ok(compact) = bincode::deserialize::<CompactConsumedCellInfo>(&value) {
-                    return Ok(Some(compact.to_live_cell_info()));
-                }
-                Ok(bincode::deserialize::<LiveCellInfo>(&value).ok())
-            }
+            Some(value) => Ok(decode_consumed_cell_info(&value).map(|c| c.to_live_cell_info())),
             None => Ok(None),
         }
     }
@@ -89,12 +84,7 @@ impl CkbadgerStore {
 
         for (i, value_result) in values.into_iter().enumerate() {
             if let Ok(Some(value)) = value_result {
-                let info =
-                    if let Ok(compact) = bincode::deserialize::<CompactConsumedCellInfo>(&value) {
-                        Some(compact.to_live_cell_info())
-                    } else {
-                        bincode::deserialize::<LiveCellInfo>(&value).ok()
-                    };
+                let info = decode_consumed_cell_info(&value).map(|c| c.to_live_cell_info());
                 if let Some(info) = info {
                     let (tx_hash, idx) = outpoints[i];
                     result.insert((tx_hash.to_vec(), idx), info);

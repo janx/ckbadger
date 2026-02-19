@@ -139,7 +139,7 @@ impl CkbadgerStore {
     /// Returns the number of index entries written.
     pub fn backfill_addr_txs(&self) -> anyhow::Result<u64> {
         use crate::keys;
-        use crate::types::{CompactConsumedCellInfo, LiveCellInfo};
+        use crate::types::{decode_consumed_cell_info, LiveCellInfo};
         use std::collections::{HashMap, HashSet};
 
         let mut count = 0u64;
@@ -172,14 +172,8 @@ impl CkbadgerStore {
         for item in iter.flatten() {
             let (key, value) = item;
             if key.len() == keys::OUTPOINT_KEY_SIZE {
-                let lock_hash =
-                    if let Ok(compact) = bincode::deserialize::<CompactConsumedCellInfo>(&value) {
-                        Some((compact.lock_script_hash, compact.created_at_block))
-                    } else if let Ok(info) = bincode::deserialize::<LiveCellInfo>(&value) {
-                        Some((info.lock_script_hash, info.created_at_block))
-                    } else {
-                        None
-                    };
+                let lock_hash = decode_consumed_cell_info(&value)
+                    .map(|c| (c.cell.lock_script_hash, c.cell.created_at_block));
                 if let Some((lock_hash, created_at_block)) = lock_hash {
                     let tx_hash = key[..32].to_vec();
                     tx_addresses
