@@ -83,8 +83,12 @@ impl SyncStatusData {
 
     pub fn init_sync_start(&mut self, start_block: i64, is_bulk_sync: bool) {
         self.sync_started_block = start_block;
-        if is_bulk_sync && self.sync_started_at.is_none() {
+        if is_bulk_sync {
+            // Every bulk sync run should start a fresh timing window. Keeping
+            // stale values from prior runs makes elapsed/total durations misleading.
             self.sync_started_at = Some(chrono::Utc::now().timestamp());
+            self.bulk_sync_completed_at = None;
+            self.bulk_sync_completed_block = None;
         }
     }
 
@@ -368,6 +372,43 @@ mod tests {
 
         assert_eq!(parsed.tip_block_number, status.tip_block_number);
         assert_eq!(parsed.tip_block_hash, status.tip_block_hash);
+    }
+
+    #[test]
+    fn test_init_sync_start_resets_bulk_timing_for_new_bulk_run() {
+        let mut status = SyncStatusData {
+            sync_started_at: Some(123),
+            sync_started_block: 10,
+            bulk_sync_completed_at: Some(456),
+            bulk_sync_completed_block: Some(999),
+            ..Default::default()
+        };
+
+        status.init_sync_start(100, true);
+
+        assert_eq!(status.sync_started_block, 100);
+        assert!(status.sync_started_at.is_some());
+        assert_ne!(status.sync_started_at, Some(123));
+        assert_eq!(status.bulk_sync_completed_at, None);
+        assert_eq!(status.bulk_sync_completed_block, None);
+    }
+
+    #[test]
+    fn test_init_sync_start_non_bulk_does_not_clear_bulk_timing() {
+        let mut status = SyncStatusData {
+            sync_started_at: Some(123),
+            sync_started_block: 10,
+            bulk_sync_completed_at: Some(456),
+            bulk_sync_completed_block: Some(999),
+            ..Default::default()
+        };
+
+        status.init_sync_start(200, false);
+
+        assert_eq!(status.sync_started_block, 200);
+        assert_eq!(status.sync_started_at, Some(123));
+        assert_eq!(status.bulk_sync_completed_at, Some(456));
+        assert_eq!(status.bulk_sync_completed_block, Some(999));
     }
 
     #[test]

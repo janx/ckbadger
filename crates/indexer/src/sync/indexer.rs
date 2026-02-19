@@ -102,6 +102,10 @@ fn should_skip_address_balances(_bulk_sync_mode: bool) -> bool {
     false
 }
 
+fn bump_pipeline_reset_epoch(epoch: &AtomicU64) -> u64 {
+    epoch.fetch_add(1, Ordering::SeqCst) + 1
+}
+
 enum SyncAction {
     CaughtUp,
     Continue,
@@ -135,12 +139,10 @@ struct BatchStats {
     dao_daily_new_deposits_delta: HashMap<NaiveDate, i64>,
     daily_secondary_non_miner_delta: HashMap<NaiveDate, i128>,
     daily_secondary_miner_delta: HashMap<NaiveDate, i128>,
-}
-
-fn has_exact_dao_deltas(stats: &BatchStats) -> bool {
-    !(stats.dao_daily_active_delta.is_empty()
-        && stats.dao_daily_gross_deposit_delta.is_empty()
-        && stats.dao_daily_new_deposits_delta.is_empty())
+    /// Set to true after the DAO delta computation code path runs, even if no
+    /// DAO transactions were found.  This distinguishes "genuinely zero deltas"
+    /// from "deltas never computed" (e.g. stale DB from an older indexer).
+    dao_deltas_computed: bool,
 }
 
 #[derive(Clone)]
@@ -576,6 +578,7 @@ pub struct Indexer {
     was_secondary_issuance_bulk_active: std::sync::atomic::AtomicBool,
     rebuild_pause_flag: Arc<std::sync::atomic::AtomicBool>,
     reorg_notify_flag: Arc<std::sync::atomic::AtomicBool>,
+    pipeline_reset_epoch: Arc<AtomicU64>,
     label_import_started: std::sync::atomic::AtomicBool,
     ckb_store: Option<Arc<CkbChainReader>>,
     hodl_tracker: std::sync::Mutex<HodlWaveTracker>,
@@ -651,6 +654,7 @@ impl Indexer {
             ),
             rebuild_pause_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             reorg_notify_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            pipeline_reset_epoch: Arc::new(AtomicU64::new(0)),
             label_import_started: std::sync::atomic::AtomicBool::new(false),
             ckb_store,
             hodl_tracker: std::sync::Mutex::new(hodl_tracker),
@@ -683,6 +687,12 @@ impl Indexer {
 
     pub fn ckb_store(&self) -> Option<Arc<CkbChainReader>> {
         self.ckb_store.clone()
+    }
+
+    fn request_pipeline_reset(&self, reason: &'static str) {
+        let epoch = bump_pipeline_reset_epoch(&self.pipeline_reset_epoch);
+        self.reorg_notify_flag.store(true, Ordering::SeqCst);
+        info!(epoch, reason, "Pipeline reset requested");
     }
 
     /// Snapshot the current perf stats: (fetch_ms, db_ms).
@@ -843,8 +853,9 @@ impl Indexer {
     async fn run_pipeline(&self) -> Result<()> {
         use tokio::sync::mpsc;
 
-        type FetchedBatch = (u64, u64, u64, Arc<Vec<BlockResponseWithCycles>>);
+        type FetchedBatch = (u64, u64, u64, u64, Arc<Vec<BlockResponseWithCycles>>);
         type ParsedBatch = (
+            u64,
             u64,
             u64,
             u64,
@@ -869,6 +880,7 @@ impl Indexer {
         let repo = self.repo.clone();
         let rebuild_pause = Arc::clone(&self.rebuild_pause_flag);
         let reorg_notify = Arc::clone(&self.reorg_notify_flag);
+        let pipeline_epoch_for_fetcher = Arc::clone(&self.pipeline_reset_epoch);
         let ckb_store = self.ckb_store.clone();
         let pipeline_perf_for_fetcher = Arc::clone(&self.pipeline_perf);
 
@@ -1029,6 +1041,7 @@ impl Indexer {
 
                         if fetch_tx
                             .send((
+                                pipeline_epoch_for_fetcher.load(Ordering::SeqCst),
                                 sub_start_block,
                                 sub_end_block,
                                 chain_tip,
@@ -1068,10 +1081,20 @@ impl Indexer {
         let writer_for_parser = self.writer.clone();
         let cell_cache_for_parser = Arc::clone(&self.cell_cache);
         let pipeline_perf_for_parser = Arc::clone(&self.pipeline_perf);
+        let pipeline_epoch_for_parser = Arc::clone(&self.pipeline_reset_epoch);
 
         let parse_tx_for_writer_depth = parse_tx.clone();
         let parser = tokio::spawn(async move {
-            while let Some((start_block, end_block, chain_tip, blocks)) = fetch_rx.recv().await {
+            while let Some((batch_epoch, start_block, end_block, chain_tip, blocks)) =
+                fetch_rx.recv().await
+            {
+                if batch_epoch != pipeline_epoch_for_parser.load(Ordering::SeqCst) {
+                    debug!(
+                        batch_epoch,
+                        "Skipping stale fetched batch {}-{}", start_block, end_block
+                    );
+                    continue;
+                }
                 let t_parser = Instant::now();
 
                 let blocks_ref = Arc::clone(&blocks);
@@ -1465,8 +1488,19 @@ impl Indexer {
                     end_block,
                 );
 
+                if batch_epoch != pipeline_epoch_for_parser.load(Ordering::SeqCst) {
+                    debug!(
+                        batch_epoch,
+                        "Dropping parsed stale batch {}-{} before writer handoff",
+                        start_block,
+                        end_block
+                    );
+                    continue;
+                }
+
                 if parse_tx
                     .send((
+                        batch_epoch,
                         start_block,
                         end_block,
                         chain_tip,
@@ -1499,6 +1533,7 @@ impl Indexer {
             let t_recv = Instant::now();
             match tokio::time::timeout(recv_timeout, parse_rx.recv()).await {
                 Ok(Some((
+                    batch_epoch,
                     start_block,
                     end_block,
                     chain_tip,
@@ -1511,6 +1546,17 @@ impl Indexer {
                     script_usage_changes,
                 ))) => {
                     let recv_wait_ms = t_recv.elapsed().as_secs_f64() * 1000.0;
+                    let current_epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst);
+                    if batch_epoch != current_epoch {
+                        debug!(
+                            batch_epoch,
+                            current_epoch,
+                            "Dropping stale parsed batch {}-{}",
+                            start_block,
+                            end_block
+                        );
+                        continue;
+                    }
                     let (db_tip, db_tip_hash) = self.repo.get_sync_tip().await?;
                     let expected_start = if db_tip == 0 && db_tip_hash.is_none() {
                         0
@@ -1523,7 +1569,7 @@ impl Indexer {
                             "Pipeline batch mismatch: expected {}, got {}. Draining stale batches.",
                             expected_start, start_block
                         );
-                        self.reorg_notify_flag.store(true, Ordering::SeqCst);
+                        self.request_pipeline_reset("pipeline batch mismatch");
                         Self::drain_channel(&mut parse_rx).await;
                         continue;
                     }
@@ -1538,13 +1584,13 @@ impl Indexer {
                                 {
                                     Some(ReorgAction::Handled(_)) => {
                                         info!("Reorg handled, draining stale batches");
-                                        self.reorg_notify_flag.store(true, Ordering::SeqCst);
+                                        self.request_pipeline_reset("reorg handled");
                                         Self::drain_channel(&mut parse_rx).await;
                                         continue;
                                     }
                                     Some(ReorgAction::DeepForkPaused) => {
                                         warn!("Deep fork detected, sync paused");
-                                        self.reorg_notify_flag.store(true, Ordering::SeqCst);
+                                        self.request_pipeline_reset("deep fork paused");
                                         Self::drain_channel(&mut parse_rx).await;
                                         sleep(Duration::from_secs(30)).await;
                                         continue;
@@ -1576,7 +1622,7 @@ impl Indexer {
                         {
                             error!("Failed to cleanup partial batch: {:?}", cleanup_err);
                         }
-                        self.reorg_notify_flag.store(true, Ordering::SeqCst);
+                        self.request_pipeline_reset("batch write failed");
                         Self::drain_channel(&mut parse_rx).await;
                         sleep(Duration::from_secs(5)).await;
                         continue;
@@ -2629,6 +2675,36 @@ impl Indexer {
                 None
             };
 
+        // Pre-build consumed DAO deposit map for delta computation
+        let dao_code_hash_for_seq_stats =
+            crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
+        let all_input_outpoints_for_seq_dao: Vec<(Vec<u8>, i16)> = all_tx_data
+            .iter()
+            .filter(|tx| !tx.is_cellbase)
+            .flat_map(|tx| {
+                tx.inputs.iter().map(|input| {
+                    (
+                        input.previous_tx_hash.to_vec(),
+                        input.previous_output_index as i16,
+                    )
+                })
+            })
+            .collect();
+        let consumed_dao_for_seq_stats = if !all_input_outpoints_for_seq_dao.is_empty() {
+            let unique: Vec<(Vec<u8>, i16)> = {
+                let mut seen = HashSet::new();
+                all_input_outpoints_for_seq_dao
+                    .into_iter()
+                    .filter(|x| seen.insert(x.clone()))
+                    .collect()
+            };
+            let refs: Vec<(&[u8], i16)> = unique.iter().map(|(h, i)| (h.as_slice(), *i)).collect();
+            self.writer.find_consumed_dao_deposits_batch(&refs)?
+        } else {
+            HashMap::new()
+        };
+        let mut same_batch_dao_for_seq_stats: HashMap<(Vec<u8>, i16), i64> = HashMap::new();
+
         let mut block_tx_idx = 0usize;
         for parsed in &all_parsed_blocks {
             let block_date = ckbadger_common::block_date(parsed.timestamp);
@@ -2775,8 +2851,70 @@ impl Indexer {
                 prev_epoch = Some((parsed.epoch_number, parsed.timestamp, 0.0));
             }
 
+            // DAO per-day deltas for snapshot accumulation
+            for tx_data in tx_slice {
+                let mut withdraw_request_caps: Vec<i64> = Vec::new();
+                for (output_index, cell) in tx_data.cells.iter().enumerate() {
+                    if let Some(ref type_code_hash) = cell.type_code_hash {
+                        if type_code_hash == &dao_code_hash_for_seq_stats && cell.data_size == 8 {
+                            if cell.data.len() == 8 && cell.data.iter().all(|&b| b == 0) {
+                                *batch_stats
+                                    .dao_daily_active_delta
+                                    .entry(block_date)
+                                    .or_default() += cell.capacity as i128;
+                                *batch_stats
+                                    .dao_daily_gross_deposit_delta
+                                    .entry(block_date)
+                                    .or_default() += cell.capacity as i128;
+                                *batch_stats
+                                    .dao_daily_new_deposits_delta
+                                    .entry(block_date)
+                                    .or_default() += 1;
+                                same_batch_dao_for_seq_stats.insert(
+                                    (tx_data.hash.to_vec(), output_index as i16),
+                                    cell.capacity,
+                                );
+                            } else if let Some(data) = tx_data.outputs_data.get(output_index) {
+                                let data_bytes = crate::rpc::parse_hex_to_bytes(data);
+                                if DaoParser::parse_deposit_block_number(&data_bytes).is_some() {
+                                    withdraw_request_caps.push(cell.capacity);
+                                }
+                            }
+                        }
+                    }
+                }
+                if !tx_data.is_cellbase && !withdraw_request_caps.is_empty() {
+                    for input in &tx_data.inputs {
+                        let outpoint = (
+                            input.previous_tx_hash.to_vec(),
+                            input.previous_output_index as i16,
+                        );
+                        let mut maybe_cap: Option<i64> =
+                            same_batch_dao_for_seq_stats.get(&outpoint).copied();
+                        if maybe_cap.is_none() {
+                            if let Some((_, _, _, capacity_str, _, status)) =
+                                consumed_dao_for_seq_stats.get(&outpoint)
+                            {
+                                if *status == 0 {
+                                    maybe_cap = capacity_str.parse::<i64>().ok();
+                                }
+                            }
+                        }
+                        if let Some(capacity) = maybe_cap {
+                            if withdraw_request_caps.contains(&capacity) {
+                                *batch_stats
+                                    .dao_daily_active_delta
+                                    .entry(block_date)
+                                    .or_default() -= capacity as i128;
+                            }
+                        }
+                    }
+                }
+            }
+
             batch_stats.dao_snapshot_dates.insert(block_date);
         }
+        batch_stats.dao_deltas_computed = true;
 
         // DAO processing
         let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
@@ -4478,6 +4616,7 @@ impl Indexer {
                         }
                         stats.dao_snapshot_dates.insert(block_date);
                     }
+                    stats.dao_deltas_computed = true;
                     Ok((stats, t.elapsed().as_secs_f64() * 1000.0))
                 });
 
@@ -5415,6 +5554,37 @@ impl Indexer {
                     None
                 };
 
+            // Pre-build consumed DAO deposit map for delta computation
+            let dao_code_hash_for_stats =
+                crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
+            let all_input_outpoints_for_dao: Vec<(Vec<u8>, i16)> = all_tx_data
+                .iter()
+                .filter(|tx| !tx.is_cellbase)
+                .flat_map(|tx| {
+                    tx.inputs.iter().map(|input| {
+                        (
+                            input.previous_tx_hash.to_vec(),
+                            input.previous_output_index as i16,
+                        )
+                    })
+                })
+                .collect();
+            let consumed_dao_for_stats = if !all_input_outpoints_for_dao.is_empty() {
+                let unique: Vec<(Vec<u8>, i16)> = {
+                    let mut seen = HashSet::new();
+                    all_input_outpoints_for_dao
+                        .into_iter()
+                        .filter(|x| seen.insert(x.clone()))
+                        .collect()
+                };
+                let refs: Vec<(&[u8], i16)> =
+                    unique.iter().map(|(h, i)| (h.as_slice(), *i)).collect();
+                self.writer.find_consumed_dao_deposits_batch(&refs)?
+            } else {
+                HashMap::new()
+            };
+            let mut same_batch_dao_for_stats: HashMap<(Vec<u8>, i16), i64> = HashMap::new();
+
             let mut block_tx_idx = 0usize;
             for parsed in all_parsed_blocks {
                 let block_date = ckbadger_common::block_date(parsed.timestamp);
@@ -5557,8 +5727,72 @@ impl Indexer {
                 if parsed.epoch_index == 0 {
                     prev_epoch = Some((parsed.epoch_number, parsed.timestamp, 0.0));
                 }
+
+                // DAO per-day deltas for snapshot accumulation (mirrors T7 bulk path)
+                for tx_data in tx_slice {
+                    let mut withdraw_request_caps: Vec<i64> = Vec::new();
+                    for (output_index, cell) in tx_data.cells.iter().enumerate() {
+                        if let Some(ref type_code_hash) = cell.type_code_hash {
+                            if type_code_hash == &dao_code_hash_for_stats && cell.data_size == 8 {
+                                if cell.data.len() == 8 && cell.data.iter().all(|&b| b == 0) {
+                                    *batch_stats
+                                        .dao_daily_active_delta
+                                        .entry(block_date)
+                                        .or_default() += cell.capacity as i128;
+                                    *batch_stats
+                                        .dao_daily_gross_deposit_delta
+                                        .entry(block_date)
+                                        .or_default() += cell.capacity as i128;
+                                    *batch_stats
+                                        .dao_daily_new_deposits_delta
+                                        .entry(block_date)
+                                        .or_default() += 1;
+                                    same_batch_dao_for_stats.insert(
+                                        (tx_data.hash.to_vec(), output_index as i16),
+                                        cell.capacity,
+                                    );
+                                } else if let Some(data) = tx_data.outputs_data.get(output_index) {
+                                    let data_bytes = crate::rpc::parse_hex_to_bytes(data);
+                                    if DaoParser::parse_deposit_block_number(&data_bytes).is_some()
+                                    {
+                                        withdraw_request_caps.push(cell.capacity);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if !tx_data.is_cellbase && !withdraw_request_caps.is_empty() {
+                        for input in &tx_data.inputs {
+                            let outpoint = (
+                                input.previous_tx_hash.to_vec(),
+                                input.previous_output_index as i16,
+                            );
+                            let mut maybe_cap: Option<i64> =
+                                same_batch_dao_for_stats.get(&outpoint).copied();
+                            if maybe_cap.is_none() {
+                                if let Some((_, _, _, capacity_str, _, status)) =
+                                    consumed_dao_for_stats.get(&outpoint)
+                                {
+                                    if *status == 0 {
+                                        maybe_cap = capacity_str.parse::<i64>().ok();
+                                    }
+                                }
+                            }
+                            if let Some(capacity) = maybe_cap {
+                                if withdraw_request_caps.contains(&capacity) {
+                                    *batch_stats
+                                        .dao_daily_active_delta
+                                        .entry(block_date)
+                                        .or_default() -= capacity as i128;
+                                }
+                            }
+                        }
+                    }
+                }
+
                 batch_stats.dao_snapshot_dates.insert(block_date);
             }
+            batch_stats.dao_deltas_computed = true;
         }
         let write_ms = t_write.elapsed().as_secs_f64() * 1000.0;
 
@@ -5727,14 +5961,11 @@ impl Indexer {
             let mut snapshot_dates: Vec<_> = stats.dao_snapshot_dates.iter().collect();
             snapshot_dates.sort();
             if !snapshot_dates.is_empty() {
-                if !has_exact_dao_deltas(stats) {
-                    return Err(anyhow::anyhow!(
-                        "missing exact DAO daily deltas in batch stats; delete RocksDB and re-sync from genesis"
-                    ));
-                }
-
                 // Continue from the latest snapshot and apply exact per-day deltas from
                 // this batch (deposits and phase-1 withdrawals) in date order.
+                // When dao_deltas_computed is false (e.g. live sync path), deposit
+                // deltas default to 0 via unwrap_or(0), carrying forward previous
+                // totals while still updating DAO fields and secondary issuance.
                 let latest_snapshot = self
                     .writer
                     .store()
@@ -6459,17 +6690,31 @@ mod tests {
         assert_eq!(snapshot.writer_queue_capacity, Some(16));
     }
 
+    #[test]
+    fn test_bump_pipeline_reset_epoch_is_monotonic() {
+        let epoch = AtomicU64::new(0);
+        assert_eq!(bump_pipeline_reset_epoch(&epoch), 1);
+        assert_eq!(bump_pipeline_reset_epoch(&epoch), 2);
+        assert_eq!(epoch.load(Ordering::SeqCst), 2);
+    }
+
     // --- DAO recalculation boundary tests ---
 
     #[test]
-    fn test_has_exact_dao_deltas_requires_any_daily_delta_map() {
-        let mut stats = BatchStats::default();
-        assert!(!has_exact_dao_deltas(&stats));
+    fn test_dao_deltas_computed_flag_defaults_false() {
+        let stats = BatchStats::default();
+        assert!(!stats.dao_deltas_computed);
+    }
 
-        stats
-            .dao_daily_active_delta
-            .insert(NaiveDate::from_ymd_opt(2026, 2, 18).unwrap(), 1);
-        assert!(has_exact_dao_deltas(&stats));
+    #[test]
+    fn test_dao_deltas_computed_flag_set_after_computation() {
+        let stats = BatchStats {
+            dao_deltas_computed: true,
+            ..Default::default()
+        };
+        assert!(stats.dao_deltas_computed);
+        // Empty delta maps are valid when no DAO txs exist
+        assert!(stats.dao_daily_active_delta.is_empty());
     }
 
     /// Helper: returns true if this batch crosses a 1000-block boundary

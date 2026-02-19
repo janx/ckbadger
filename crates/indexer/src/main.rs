@@ -6,7 +6,9 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use ckb_store_reader::CkbChainReader;
 use ckbadger_common::LabelImportConfig;
-use ckbadger_indexer::{label_import::run_label_import, sync::Indexer, verify, Config};
+use ckbadger_indexer::{
+    db::Repository, label_import::run_label_import, sync::Indexer, verify, Config,
+};
 use ckbadger_store::CkbadgerStore;
 
 #[derive(Parser, Debug)]
@@ -184,8 +186,15 @@ async fn run_sync(args: Cli) -> Result<()> {
         sync_status = store.get_sync_status()?;
     }
 
-    let db_tip = sync_status.tip_block_number;
-    let is_fresh_sync = db_tip == 0;
+    let repo = Repository::new(store.clone());
+    let (db_tip, db_tip_hash) = repo.get_sync_tip().await?;
+    if sync_status.tip_block_number != db_tip {
+        info!(
+            "sync_status tip ({}) differs from block_headers tip ({}), using block_headers tip",
+            sync_status.tip_block_number, db_tip
+        );
+    }
+    let is_fresh_sync = db_tip == 0 && db_tip_hash.is_none();
 
     if is_fresh_sync {
         info!("Fresh database detected (tip=0), starting initial sync");
