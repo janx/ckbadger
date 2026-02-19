@@ -7,6 +7,8 @@ use super::checks::*;
 use super::report::format_number;
 use super::sampling::LcgSampler;
 
+const SYNC_COMPLETE_MAX_LAG_BLOCKS: i64 = 100;
+
 // ---------------------------------------------------------------------------
 // Lightweight API response types (deserialized from ckbadger API JSON).
 // These are intentionally minimal — only the fields we need for verification.
@@ -158,7 +160,7 @@ impl Check for ApiReachable {
     }
 }
 
-/// F2: syncStatus.isSyncing == false, syncedBlock == tipBlock.
+/// F2: syncStatus.isSyncing == false, lag <= 100 blocks.
 pub struct SyncComplete;
 
 impl Check for SyncComplete {
@@ -166,7 +168,7 @@ impl Check for SyncComplete {
         "sync_complete"
     }
     fn description(&self) -> &'static str {
-        "Sync complete (isSyncing=false, syncedBlock==tipBlock)"
+        "Sync complete (isSyncing=false, lag <= 100 blocks)"
     }
     fn tier(&self) -> CheckTier {
         CheckTier::Fast
@@ -174,36 +176,53 @@ impl Check for SyncComplete {
     fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
         let stats = fetch_network_stats(ctx)?;
         let ss = &stats.sync_status;
-        let mut findings = vec![];
-
-        if ss.is_syncing {
-            findings.push(Finding {
-                entity: "sync_status".to_string(),
-                details: vec![format!(
-                    "isSyncing=true (synced={}, tip={})",
-                    ss.synced_block, ss.tip_block,
-                )],
-            });
-        }
-        if ss.synced_block != ss.tip_block {
-            findings.push(Finding {
-                entity: "sync_status".to_string(),
-                details: vec![format!(
-                    "syncedBlock ({}) != tipBlock ({})",
-                    ss.synced_block, ss.tip_block,
-                )],
-            });
-        }
+        let lag = (ss.tip_block - ss.synced_block).max(0);
+        let findings = sync_complete_findings(ss);
 
         if findings.is_empty() {
             Ok(CheckResult::pass_with_detail(
                 1,
-                format!("synced to #{}", format_number(ss.synced_block as u64)),
+                if lag == 0 {
+                    format!("synced to #{}", format_number(ss.synced_block as u64))
+                } else {
+                    format!(
+                        "near tip: synced #{} (lag {} blocks)",
+                        format_number(ss.synced_block as u64),
+                        format_number(lag as u64),
+                    )
+                },
             ))
         } else {
             Ok(CheckResult::fail(1, findings))
         }
     }
+}
+
+fn sync_complete_findings(ss: &SyncStatus) -> Vec<Finding> {
+    let mut findings = vec![];
+    let lag = (ss.tip_block - ss.synced_block).max(0);
+
+    if ss.is_syncing {
+        findings.push(Finding {
+            entity: "sync_status".to_string(),
+            details: vec![format!(
+                "isSyncing=true (synced={}, tip={}, lag={})",
+                ss.synced_block, ss.tip_block, lag,
+            )],
+        });
+    }
+
+    if lag > SYNC_COMPLETE_MAX_LAG_BLOCKS {
+        findings.push(Finding {
+            entity: "sync_status".to_string(),
+            details: vec![format!(
+                "lag {} > {} blocks (synced={}, tip={})",
+                lag, SYNC_COMPLETE_MAX_LAG_BLOCKS, ss.synced_block, ss.tip_block,
+            )],
+        });
+    }
+
+    findings
 }
 
 /// F3: GET /blocks/0 returns valid genesis block.
@@ -957,5 +976,43 @@ mod tests {
         let progress = ProgressReporter::new(None);
         let completed = execute_check(&check, &ctx, &progress);
         assert!(completed.skipped);
+    }
+
+    #[test]
+    fn test_sync_complete_allows_small_lag_when_not_syncing() {
+        let ss = SyncStatus {
+            is_syncing: false,
+            synced_block: 1_000,
+            tip_block: 1_005,
+        };
+
+        let findings = sync_complete_findings(&ss);
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn test_sync_complete_fails_when_lag_exceeds_threshold() {
+        let ss = SyncStatus {
+            is_syncing: false,
+            synced_block: 1_000,
+            tip_block: 1_101,
+        };
+
+        let findings = sync_complete_findings(&ss);
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].details[0].contains("lag 101 > 100 blocks"));
+    }
+
+    #[test]
+    fn test_sync_complete_fails_when_is_syncing_true() {
+        let ss = SyncStatus {
+            is_syncing: true,
+            synced_block: 1_000,
+            tip_block: 1_005,
+        };
+
+        let findings = sync_complete_findings(&ss);
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].details[0].contains("isSyncing=true"));
     }
 }

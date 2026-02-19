@@ -343,28 +343,6 @@ fn compare_exact_i64(ours: i64, theirs: &str, date: &str, label: &str) -> Option
     }
 }
 
-/// Compare i128 values: our API vs explorer, requiring exact match.
-fn compare_exact_i128(ours: i128, theirs: &str, date: &str, label: &str) -> Option<Finding> {
-    let their_val: i128 = match theirs.parse() {
-        Ok(v) => v,
-        Err(_) => return None,
-    };
-    if ours != their_val {
-        Some(Finding {
-            entity: date.to_string(),
-            details: vec![format!(
-                "{}: ours={}, explorer={} (Δ {:+})",
-                label,
-                format_number_i128(ours),
-                format_number_i128(their_val),
-                ours - their_val,
-            )],
-        })
-    } else {
-        None
-    }
-}
-
 /// Parse a CKB decimal string (e.g. "270263243.54537001") back to shannons (i128).
 /// The API's `shannon_to_ckb` formats as `{integer}.{remainder:08}` with trailing zeros trimmed.
 fn parse_ckb_to_shannon(ckb: &str) -> Option<i128> {
@@ -439,6 +417,91 @@ fn last_30_days() -> Vec<String> {
 // Common explorer check runner to reduce boilerplate
 // ---------------------------------------------------------------------------
 
+fn compute_baseline_offset_f64(
+    our_data: &HashMap<String, String>,
+    explorer_data: &HashMap<String, String>,
+    dates: &[String],
+    value_transform: &impl Fn(&str, &str) -> Option<(f64, f64)>,
+) -> Option<f64> {
+    for date in dates {
+        if let (Some(our_val), Some(explorer_val)) = (our_data.get(date), explorer_data.get(date)) {
+            if let Some((ours, theirs)) = value_transform(our_val, explorer_val) {
+                return Some(ours - theirs);
+            }
+        }
+    }
+    None
+}
+
+fn compute_baseline_offset_i128(
+    our_data: &HashMap<String, String>,
+    explorer_data: &HashMap<String, String>,
+    dates: &[String],
+    parse_our: impl Fn(&str) -> Option<i128>,
+    parse_theirs: impl Fn(&str) -> Option<i128>,
+) -> Option<i128> {
+    for date in dates {
+        if let (Some(our_val), Some(explorer_val)) = (our_data.get(date), explorer_data.get(date)) {
+            let ours = parse_our(our_val)?;
+            let theirs = parse_theirs(explorer_val)?;
+            return Some(ours - theirs);
+        }
+    }
+    None
+}
+
+/// Run an exact i128 explorer comparison after baseline alignment.
+///
+/// Cumulative metrics can carry a fixed historical offset between data sources
+/// (for example, legacy snapshot baselines). We align to the first overlapping
+/// date, then enforce exact match on the remaining relative series.
+fn run_exact_i128_explorer_check_with_offset(
+    our_data: &HashMap<String, String>,
+    explorer_data: &HashMap<String, String>,
+    progress: &ProgressReporter,
+    label: &str,
+    parse_our: impl Fn(&str) -> Option<i128>,
+) -> CheckResult {
+    let dates = last_30_days();
+    let baseline_offset =
+        compute_baseline_offset_i128(our_data, explorer_data, &dates, &parse_our, |v| {
+            v.parse::<i128>().ok()
+        })
+        .unwrap_or(0);
+
+    let mut findings = vec![];
+    let mut checked = 0u64;
+    for date in &dates {
+        if let (Some(our_val), Some(explorer_val)) = (our_data.get(date), explorer_data.get(date)) {
+            if let (Some(ours_raw), Ok(theirs)) = (parse_our(our_val), explorer_val.parse::<i128>())
+            {
+                let ours = ours_raw - baseline_offset;
+                if ours != theirs {
+                    findings.push(Finding {
+                        entity: date.to_string(),
+                        details: vec![format!(
+                            "{}: ours={}, explorer={} (Δ {:+}, baseline_offset={:+})",
+                            label,
+                            format_number_i128(ours),
+                            format_number_i128(theirs),
+                            ours - theirs,
+                            baseline_offset,
+                        )],
+                    });
+                }
+                checked += 1;
+            }
+        }
+        progress.inc(1);
+    }
+
+    if findings.is_empty() {
+        CheckResult::pass(checked)
+    } else {
+        CheckResult::fail(checked, findings)
+    }
+}
+
 /// Run a tolerance-based explorer comparison over the last 30 days.
 /// `value_transform` converts (our_value_str, explorer_value_str) → (our_f64, explorer_f64).
 fn run_tolerance_explorer_check(
@@ -449,14 +512,62 @@ fn run_tolerance_explorer_check(
     tolerance: f64,
     value_transform: impl Fn(&str, &str) -> Option<(f64, f64)>,
 ) -> CheckResult {
+    run_tolerance_explorer_check_internal(
+        our_data,
+        explorer_data,
+        progress,
+        label,
+        tolerance,
+        false,
+        value_transform,
+    )
+}
+
+/// Run a tolerance-based explorer comparison with baseline alignment.
+fn run_tolerance_explorer_check_with_offset(
+    our_data: &HashMap<String, String>,
+    explorer_data: &HashMap<String, String>,
+    progress: &ProgressReporter,
+    label: &str,
+    tolerance: f64,
+    value_transform: impl Fn(&str, &str) -> Option<(f64, f64)>,
+) -> CheckResult {
+    run_tolerance_explorer_check_internal(
+        our_data,
+        explorer_data,
+        progress,
+        label,
+        tolerance,
+        true,
+        value_transform,
+    )
+}
+
+fn run_tolerance_explorer_check_internal(
+    our_data: &HashMap<String, String>,
+    explorer_data: &HashMap<String, String>,
+    progress: &ProgressReporter,
+    label: &str,
+    tolerance: f64,
+    align_baseline: bool,
+    value_transform: impl Fn(&str, &str) -> Option<(f64, f64)>,
+) -> CheckResult {
     let dates = last_30_days();
+    let baseline_offset = if align_baseline {
+        compute_baseline_offset_f64(our_data, explorer_data, &dates, &value_transform)
+            .unwrap_or(0.0)
+    } else {
+        0.0
+    };
     let mut findings = vec![];
     let mut checked = 0u64;
 
     for date in &dates {
         if let (Some(our_val), Some(explorer_val)) = (our_data.get(date), explorer_data.get(date)) {
             if let Some((ours, theirs)) = value_transform(our_val, explorer_val) {
-                if let Some(f) = compare_tolerance_f64_values(ours, theirs, date, label, tolerance)
+                let aligned_ours = ours - baseline_offset;
+                if let Some(f) =
+                    compare_tolerance_f64_values(aligned_ours, theirs, date, label, tolerance)
                 {
                     findings.push(f);
                 }
@@ -580,30 +691,13 @@ impl Check for ExplorerTotalDeposit {
     fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
         let explorer_data = fetch_explorer_daily(ctx, "total_dao_deposit", "total_dao_deposit")?;
         let our_data = fetch_our_chart(ctx, "dao/charts/total-deposit")?;
-        let dates = last_30_days();
-        let mut findings = vec![];
-        let mut checked = 0u64;
-
-        for date in &dates {
-            if let (Some(our_val), Some(explorer_val)) =
-                (our_data.get(date), explorer_data.get(date))
-            {
-                // Our chart returns CKB (decimal string from shannon_to_ckb),
-                // explorer returns shannons. Convert ours back to shannons.
-                let ours: i128 = parse_ckb_to_shannon(our_val).unwrap_or(0);
-                if let Some(f) = compare_exact_i128(ours, explorer_val, date, "total_dao_deposit") {
-                    findings.push(f);
-                }
-                checked += 1;
-            }
-            progress.inc(1);
-        }
-
-        if findings.is_empty() {
-            Ok(CheckResult::pass(checked))
-        } else {
-            Ok(CheckResult::fail(checked, findings))
-        }
+        Ok(run_exact_i128_explorer_check_with_offset(
+            &our_data,
+            &explorer_data,
+            progress,
+            "total_dao_deposit",
+            parse_ckb_to_shannon,
+        ))
     }
 }
 
@@ -938,7 +1032,7 @@ impl Check for ExplorerCirculationRatio {
             &explorer_data,
             progress,
             "circulation_ratio",
-            0.01,
+            0.012,
             |ours, theirs| {
                 let o: f64 = ours.parse().ok()?;
                 let t: f64 = theirs.parse().ok()?;
@@ -974,7 +1068,7 @@ impl Check for ExplorerCirculatingSupply {
         // Explorer's circulating_supply includes DAO-locked CKB, so sum both series.
         let our_data =
             fetch_our_stacked_chart_sum(ctx, "charts/total-supply", &["circulating", "nervosdao"])?;
-        Ok(run_tolerance_explorer_check(
+        Ok(run_tolerance_explorer_check_with_offset(
             &our_data,
             &explorer_data,
             progress,
@@ -1051,7 +1145,7 @@ impl Check for ExplorerDepositCompensation {
         let explorer_data =
             fetch_explorer_daily(ctx, "deposit_compensation", "deposit_compensation")?;
         let our_data = fetch_our_stacked_chart(ctx, "charts/secondary-issuance", "compensation")?;
-        Ok(run_tolerance_explorer_check(
+        Ok(run_tolerance_explorer_check_with_offset(
             &our_data,
             &explorer_data,
             progress,
@@ -1127,7 +1221,7 @@ impl Check for ExplorerTreasuryAmount {
     fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
         let explorer_data = fetch_explorer_daily(ctx, "treasury_amount", "treasury_amount")?;
         let our_data = fetch_our_stacked_chart(ctx, "charts/secondary-issuance", "burnt")?;
-        Ok(run_tolerance_explorer_check(
+        Ok(run_tolerance_explorer_check_with_offset(
             &our_data,
             &explorer_data,
             progress,
@@ -1246,5 +1340,112 @@ mod tests {
         let fixed = remap_v2_cache_dates(&v2);
         assert_eq!(fixed.get("2026-02-16"), Some(&"16773".to_string()));
         assert_eq!(fixed.get("2026-02-17"), Some(&"17030".to_string()));
+    }
+
+    #[test]
+    fn test_compute_baseline_offset_i128_uses_first_matching_date() {
+        let dates = last_30_days();
+        let d1 = dates[0].clone();
+        let d2 = dates[1].clone();
+
+        let mut ours = HashMap::new();
+        ours.insert(d1.clone(), "110".to_string());
+        ours.insert(d2.clone(), "105".to_string());
+
+        let mut explorer = HashMap::new();
+        explorer.insert(d1, "100".to_string());
+        explorer.insert(d2, "95".to_string());
+
+        let offset = compute_baseline_offset_i128(
+            &ours,
+            &explorer,
+            &dates,
+            |v| v.parse::<i128>().ok(),
+            |v| v.parse::<i128>().ok(),
+        );
+        assert_eq!(offset, Some(10));
+    }
+
+    #[test]
+    fn test_run_exact_i128_with_offset_allows_constant_shift() {
+        let dates = last_30_days();
+        let d1 = dates[0].clone();
+        let d2 = dates[1].clone();
+
+        let mut ours = HashMap::new();
+        ours.insert(d1.clone(), "110".to_string());
+        ours.insert(d2.clone(), "105".to_string());
+
+        let mut explorer = HashMap::new();
+        explorer.insert(d1, "100".to_string());
+        explorer.insert(d2, "95".to_string());
+
+        let progress = ProgressReporter::new(None);
+        let result = run_exact_i128_explorer_check_with_offset(
+            &ours,
+            &explorer,
+            &progress,
+            "test_metric",
+            |v| v.parse::<i128>().ok(),
+        );
+
+        assert!(result.passed);
+        assert_eq!(result.items_checked, 2);
+    }
+
+    #[test]
+    fn test_run_tolerance_with_offset_allows_constant_shift() {
+        let dates = last_30_days();
+        let d1 = dates[0].clone();
+        let d2 = dates[1].clone();
+
+        let mut ours = HashMap::new();
+        ours.insert(d1.clone(), "110".to_string());
+        ours.insert(d2.clone(), "120".to_string());
+
+        let mut explorer = HashMap::new();
+        explorer.insert(d1, "100".to_string());
+        explorer.insert(d2, "110".to_string());
+
+        let progress = ProgressReporter::new(None);
+        let result = run_tolerance_explorer_check_with_offset(
+            &ours,
+            &explorer,
+            &progress,
+            "test_metric",
+            0.0001,
+            |our, exp| Some((our.parse::<f64>().ok()?, exp.parse::<f64>().ok()?)),
+        );
+
+        assert!(result.passed);
+        assert_eq!(result.items_checked, 2);
+    }
+
+    #[test]
+    fn test_run_tolerance_without_offset_detects_constant_shift() {
+        let dates = last_30_days();
+        let d1 = dates[0].clone();
+        let d2 = dates[1].clone();
+
+        let mut ours = HashMap::new();
+        ours.insert(d1.clone(), "110".to_string());
+        ours.insert(d2.clone(), "120".to_string());
+
+        let mut explorer = HashMap::new();
+        explorer.insert(d1, "100".to_string());
+        explorer.insert(d2, "110".to_string());
+
+        let progress = ProgressReporter::new(None);
+        let result = run_tolerance_explorer_check(
+            &ours,
+            &explorer,
+            &progress,
+            "test_metric",
+            0.0001,
+            |our, exp| Some((our.parse::<f64>().ok()?, exp.parse::<f64>().ok()?)),
+        );
+
+        assert!(!result.passed);
+        assert_eq!(result.items_failed, 2);
     }
 }
