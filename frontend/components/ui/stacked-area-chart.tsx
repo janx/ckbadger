@@ -78,9 +78,16 @@ export function StackedAreaChart({
   const stackedValues = useMemo(() => {
     return data.map((d) => {
       const result: Record<string, number> = {};
+      const rawValues = series.map((s) => parseFloat(d.values[s.key] || '0') || 0);
+      const rawTotal = rawValues.reduce((sum, value) => sum + value, 0);
+      const values =
+        isPercentage && rawTotal > 0
+          ? rawValues.map((value) => (value / rawTotal) * 100)
+          : rawValues;
+
       let cumulative = 0;
-      for (const s of series) {
-        const val = parseFloat(d.values[s.key] || '0') || 0;
+      for (const [index, s] of series.entries()) {
+        const val = values[index];
         result[`${s.key}_start`] = cumulative;
         cumulative += val;
         result[`${s.key}_end`] = cumulative;
@@ -89,7 +96,7 @@ export function StackedAreaChart({
       result.total = cumulative;
       return result;
     });
-  }, [data, series]);
+  }, [data, series, isPercentage]);
 
   const maxVal = useMemo(() => {
     if (isPercentage) return 100;
