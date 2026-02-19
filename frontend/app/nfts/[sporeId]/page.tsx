@@ -17,18 +17,73 @@ import { Address } from '@/components/ui/address';
 import { StackedAreaChart } from '@/components/ui/stacked-area-chart';
 import { formatCkbAmount, formatCkbCompact } from '@/lib/utils';
 
+function isNotFoundError(error: unknown): boolean {
+  return error instanceof Error && error.message.includes('404');
+}
+
+function renderCapacityUtilization(
+  liveCapacity: string | null | undefined,
+  liveOccupiedCapacity: string | null | undefined
+) {
+  if (!liveCapacity || !liveOccupiedCapacity) return null;
+  const totalBig = BigInt(liveCapacity);
+  const occupiedBig = BigInt(liveOccupiedCapacity);
+  if (totalBig <= BigInt(0)) return null;
+
+  const freeBig = totalBig - occupiedBig;
+  const ratio = Number((occupiedBig * BigInt(10000)) / totalBig) / 100;
+
+  return (
+    <DataField label="Capacity Utilization">
+      <div className="w-full">
+        <div className="mb-1 flex items-center justify-between">
+          <span className="font-mono text-xs text-slate-400">{ratio.toFixed(1)}% occupied</span>
+        </div>
+        <div className="flex h-2.5 w-full overflow-hidden rounded-sm bg-slate-800">
+          <div
+            className="bg-amber transition-all duration-300"
+            style={{ width: `${Math.max(ratio, 0.5)}%` }}
+          />
+          <div className="bg-terminal-green/30 flex-1" />
+        </div>
+        <div className="mt-1.5 flex items-center justify-between">
+          <span
+            className="text-amber font-mono text-xs"
+            title={formatCkbAmount(liveOccupiedCapacity).full + ' CKB'}
+          >
+            Occupied: {formatCkbCompact(liveOccupiedCapacity).value} CKB
+          </span>
+          <span
+            className="text-terminal-green font-mono text-xs"
+            title={formatCkbAmount(freeBig.toString()).full + ' CKB'}
+          >
+            Unoccupied: {formatCkbCompact(freeBig.toString()).value} CKB
+          </span>
+        </div>
+      </div>
+    </DataField>
+  );
+}
+
 export default function SporeDetailPage() {
   const params = useParams();
-  const sporeId = params.sporeId as string;
+  const assetId = params.sporeId as string;
 
-  const {
-    data: spore,
-    isLoading,
-    error,
-  } = useQuery({
-    queryKey: ['spore', sporeId],
-    queryFn: () => api.getSporeNft(sporeId),
+  const sporeQuery = useQuery({
+    queryKey: ['spore', assetId],
+    queryFn: () => api.getSporeNft(assetId),
+    retry: false,
   });
+  const spore = sporeQuery.data;
+  const shouldQueryCollection = !spore && isNotFoundError(sporeQuery.error);
+
+  const collectionQuery = useQuery({
+    queryKey: ['nft-collection', assetId],
+    queryFn: () => api.getNftCollection(assetId),
+    enabled: shouldQueryCollection,
+    retry: false,
+  });
+  const collection = collectionQuery.data;
 
   const { data: cluster } = useQuery({
     queryKey: ['cluster', spore?.clusterId],
@@ -37,10 +92,17 @@ export default function SporeDetailPage() {
   });
 
   const { data: occupationChart, isLoading: isOccupationChartLoading } = useQuery({
-    queryKey: ['spore-occupation-chart', sporeId],
-    queryFn: () => api.getSporeNftOccupationChart(sporeId),
-    enabled: !!sporeId,
+    queryKey: ['spore-occupation-chart', assetId],
+    queryFn: () => api.getSporeNftOccupationChart(assetId),
+    enabled: !!spore,
   });
+
+  const { data: collectionOccupationChart, isLoading: isCollectionOccupationChartLoading } =
+    useQuery({
+      queryKey: ['nft-collection-occupation-chart', assetId],
+      queryFn: () => api.getNftCollectionOccupationChart(assetId),
+      enabled: !!collection,
+    });
 
   const formatNumber = (num: number) => {
     return new Intl.NumberFormat().format(num);
@@ -54,7 +116,14 @@ export default function SporeDetailPage() {
     return '📦';
   };
 
-  if (isLoading) {
+  const isPageLoading =
+    sporeQuery.isLoading || (shouldQueryCollection && collectionQuery.isLoading);
+
+  const hasTerminalError =
+    (!spore && !collection && !isPageLoading && !shouldQueryCollection) ||
+    (!spore && shouldQueryCollection && collectionQuery.isError);
+
+  if (isPageLoading) {
     return (
       <div className="min-h-screen bg-slate-950">
         <Header />
@@ -69,19 +138,99 @@ export default function SporeDetailPage() {
     );
   }
 
-  if (error || !spore) {
+  if (hasTerminalError) {
     return (
       <div className="min-h-screen bg-slate-950">
         <Header />
         <main className="container mx-auto px-4 py-8">
           <TerminalPanel>
             <TerminalPanelContent className="py-12 text-center">
-              <h2 className="text-xl text-slate-400">NFT not found</h2>
+              <h2 className="text-xl text-slate-400">Asset not found</h2>
             </TerminalPanelContent>
           </TerminalPanel>
         </main>
       </div>
     );
+  }
+
+  if (collection) {
+    return (
+      <div className="min-h-screen bg-slate-950">
+        <Header />
+        <main className="container mx-auto px-4 py-8">
+          <div className="mb-6">
+            <Link
+              href="/assets?type=nft"
+              className="hover:text-terminal-green text-sm text-slate-500 transition-colors"
+            >
+              ← Back to NFTs
+            </Link>
+          </div>
+
+          <PageHeader
+            title={collection.name || 'NFT Collection'}
+            badge={<Badge variant="purple">{collection.standard.toUpperCase()}</Badge>}
+          />
+
+          <div className="space-y-6">
+            <TerminalPanel>
+              <TerminalPanelHeader indicator="active">Collection Details</TerminalPanelHeader>
+              <TerminalPanelContent>
+                <DataGrid columns={1}>
+                  <DataField label="Collection ID">
+                    <HexDisplay value={collection.collectionId} truncate={false} color="white" />
+                  </DataField>
+                  <DataField label="Standard">
+                    <span className="font-mono text-slate-300">
+                      {collection.standard.toUpperCase()}
+                    </span>
+                  </DataField>
+                  <DataField label="Live NFTs">
+                    <span className="text-amber font-mono">
+                      {formatNumber(collection.liveCount)}
+                    </span>
+                  </DataField>
+                  <DataField label="Total NFTs">
+                    <span className="text-amber font-mono">
+                      {formatNumber(collection.totalCount)}
+                    </span>
+                  </DataField>
+                  {renderCapacityUtilization(
+                    collection.liveCapacity,
+                    collection.liveOccupiedCapacity
+                  )}
+                </DataGrid>
+              </TerminalPanelContent>
+            </TerminalPanel>
+
+            <TerminalPanel>
+              <TerminalPanelHeader indicator="none">Occupation History</TerminalPanelHeader>
+              <TerminalPanelContent>
+                <div className="mb-3 text-sm text-slate-400">
+                  Daily cumulative live CKB occupation for this NFT collection.
+                </div>
+                {isCollectionOccupationChartLoading ? (
+                  <div className="py-8 text-center text-slate-500">
+                    Loading occupation history...
+                  </div>
+                ) : collectionOccupationChart && collectionOccupationChart.data.length > 0 ? (
+                  <StackedAreaChart
+                    data={collectionOccupationChart.data}
+                    series={collectionOccupationChart.series}
+                  />
+                ) : (
+                  <div className="py-8 text-center text-slate-500">No occupation history yet</div>
+                )}
+              </TerminalPanelContent>
+            </TerminalPanel>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  if (!spore) {
+    return null;
   }
 
   return (
@@ -152,47 +301,7 @@ export default function SporeDetailPage() {
                       #{formatNumber(spore.createdAtBlock)}
                     </Link>
                   </DataField>
-                  {spore.liveCapacity &&
-                    spore.liveOccupiedCapacity &&
-                    (() => {
-                      const totalBig = BigInt(spore.liveCapacity);
-                      const occupiedBig = BigInt(spore.liveOccupiedCapacity);
-                      if (totalBig <= BigInt(0)) return null;
-                      const freeBig = totalBig - occupiedBig;
-                      const ratio = Number((occupiedBig * BigInt(10000)) / totalBig) / 100;
-                      return (
-                        <DataField label="Capacity Utilization">
-                          <div className="w-full">
-                            <div className="mb-1 flex items-center justify-between">
-                              <span className="font-mono text-xs text-slate-400">
-                                {ratio.toFixed(1)}% occupied
-                              </span>
-                            </div>
-                            <div className="flex h-2.5 w-full overflow-hidden rounded-sm bg-slate-800">
-                              <div
-                                className="bg-amber transition-all duration-300"
-                                style={{ width: `${Math.max(ratio, 0.5)}%` }}
-                              />
-                              <div className="bg-terminal-green/30 flex-1" />
-                            </div>
-                            <div className="mt-1.5 flex items-center justify-between">
-                              <span
-                                className="text-amber font-mono text-xs"
-                                title={formatCkbAmount(spore.liveOccupiedCapacity).full + ' CKB'}
-                              >
-                                Occupied: {formatCkbCompact(spore.liveOccupiedCapacity).value} CKB
-                              </span>
-                              <span
-                                className="text-terminal-green font-mono text-xs"
-                                title={formatCkbAmount(freeBig.toString()).full + ' CKB'}
-                              >
-                                Unoccupied: {formatCkbCompact(freeBig.toString()).value} CKB
-                              </span>
-                            </div>
-                          </div>
-                        </DataField>
-                      );
-                    })()}
+                  {renderCapacityUtilization(spore.liveCapacity, spore.liveOccupiedCapacity)}
                 </DataGrid>
               </TerminalPanelContent>
             </TerminalPanel>

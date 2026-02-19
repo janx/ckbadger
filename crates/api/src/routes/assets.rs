@@ -1,11 +1,13 @@
 use axum::{
-    extract::{Query, State},
+    extract::{Path, Query, State},
     routing::get,
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 
+use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
 use crate::utils::resolve_dob_collection_name;
 use crate::warmup::{
@@ -14,7 +16,13 @@ use crate::warmup::{
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
-    Router::new().route("/assets", get(list_assets))
+    Router::new()
+        .route("/assets", get(list_assets))
+        .route("/assets/nfts/{collection_id}", get(get_nft_collection))
+        .route(
+            "/assets/nfts/{collection_id}/charts/occupation",
+            get(get_nft_collection_occupation_chart),
+        )
 }
 
 #[derive(Debug, Deserialize)]
@@ -52,6 +60,18 @@ pub struct AssetResponse {
     pub content_size: Option<i32>,
     pub cluster_id: Option<String>,
     pub cluster_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NftCollectionDetailResponse {
+    pub collection_id: String,
+    pub standard: String,
+    pub name: Option<String>,
+    pub total_count: i64,
+    pub live_count: i64,
+    pub live_capacity: String,
+    pub live_occupied_capacity: String,
 }
 
 async fn list_assets(
@@ -202,6 +222,153 @@ fn parse_asset_cursor(cursor: &str) -> Option<(i64, i64, String, String)> {
     } else {
         None
     }
+}
+
+fn format_yyyymmdd_for_chart(date_yyyymmdd: u32) -> String {
+    let date = format!("{date_yyyymmdd:08}");
+    format!("{}-{}-{}", &date[0..4], &date[4..6], &date[6..8])
+}
+
+fn build_capacity_occupation_chart(
+    deltas: Vec<(u32, i64, i64)>,
+    title: String,
+) -> StackedAreaChartResponse {
+    let mut cumulative_capacity: i128 = 0;
+    let mut cumulative_occupied: i128 = 0;
+    let mut data = Vec::with_capacity(deltas.len());
+
+    for (date, cap_delta, occupied_delta) in deltas {
+        cumulative_capacity = (cumulative_capacity + cap_delta as i128).max(0);
+        cumulative_occupied = (cumulative_occupied + occupied_delta as i128).max(0);
+        if cumulative_occupied > cumulative_capacity {
+            cumulative_occupied = cumulative_capacity;
+        }
+        let unoccupied = cumulative_capacity - cumulative_occupied;
+
+        data.push(StackedAreaDataPoint {
+            date: format_yyyymmdd_for_chart(date),
+            values: HashMap::from([
+                ("occupied".to_string(), cumulative_occupied.to_string()),
+                ("unoccupied".to_string(), unoccupied.to_string()),
+            ]),
+        });
+    }
+
+    StackedAreaChartResponse {
+        data,
+        series: vec![
+            StackedAreaSeries {
+                key: "occupied".to_string(),
+                label: "Occupied".to_string(),
+                color: "#f59e0b".to_string(),
+            },
+            StackedAreaSeries {
+                key: "unoccupied".to_string(),
+                label: "Unoccupied".to_string(),
+                color: "#00c389".to_string(),
+            },
+        ],
+        title,
+    }
+}
+
+fn latest_capacity_from_chart(chart: &StackedAreaChartResponse) -> (String, String) {
+    if let Some(last) = chart.data.last() {
+        let occupied = last
+            .values
+            .get("occupied")
+            .cloned()
+            .unwrap_or_else(|| "0".to_string());
+        let unoccupied = last
+            .values
+            .get("unoccupied")
+            .cloned()
+            .unwrap_or_else(|| "0".to_string());
+        let total = occupied.parse::<i128>().unwrap_or(0) + unoccupied.parse::<i128>().unwrap_or(0);
+        return (total.to_string(), occupied);
+    }
+    ("0".to_string(), "0".to_string())
+}
+
+async fn get_nft_collection(
+    State(state): State<Arc<AppState>>,
+    Path(collection_id): Path<String>,
+) -> ApiResult<NftCollectionDetailResponse> {
+    let collection_id_bytes =
+        hex::decode(collection_id.strip_prefix("0x").unwrap_or(&collection_id))
+            .map_err(|_| ApiError::bad_request("Invalid NFT collection ID"))?;
+
+    let agg = state
+        .store
+        .get_nft_collection_aggregate(&collection_id_bytes)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let agg = agg.ok_or_else(|| ApiError::not_found("NFT collection not found"))?;
+
+    let daily = state
+        .store
+        .list_nft_daily_deltas(&collection_id_bytes)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let chart = build_capacity_occupation_chart(
+        daily
+            .into_iter()
+            .map(|(date, delta)| {
+                (
+                    date,
+                    delta.live_capacity_delta,
+                    delta.live_occupied_capacity_delta,
+                )
+            })
+            .collect(),
+        "NFT Collection Capacity Occupation".to_string(),
+    );
+    let (live_capacity, live_occupied_capacity) = latest_capacity_from_chart(&chart);
+
+    ok(NftCollectionDetailResponse {
+        collection_id: format!("0x{}", hex::encode(&collection_id_bytes)),
+        standard: agg.standard.asset_standard().to_string(),
+        name: agg.name,
+        total_count: agg.total_count,
+        live_count: agg.live_count,
+        live_capacity,
+        live_occupied_capacity,
+    })
+}
+
+async fn get_nft_collection_occupation_chart(
+    State(state): State<Arc<AppState>>,
+    Path(collection_id): Path<String>,
+) -> ApiResult<StackedAreaChartResponse> {
+    let collection_id_bytes =
+        hex::decode(collection_id.strip_prefix("0x").unwrap_or(&collection_id))
+            .map_err(|_| ApiError::bad_request("Invalid NFT collection ID"))?;
+
+    let agg = state
+        .store
+        .get_nft_collection_aggregate(&collection_id_bytes)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let agg = agg.ok_or_else(|| ApiError::not_found("NFT collection not found"))?;
+
+    let daily = state
+        .store
+        .list_nft_daily_deltas(&collection_id_bytes)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let title = agg
+        .name
+        .unwrap_or_else(|| format!("0x{}", hex::encode(&collection_id_bytes)));
+
+    ok(build_capacity_occupation_chart(
+        daily
+            .into_iter()
+            .map(|(date, delta)| {
+                (
+                    date,
+                    delta.live_capacity_delta,
+                    delta.live_occupied_capacity_delta,
+                )
+            })
+            .collect(),
+        format!("{title} Capacity Occupation"),
+    ))
 }
 
 /// Fallback: compute token assets directly using batch 24h scan (when cache is cold).

@@ -1,7 +1,8 @@
 use anyhow::Result;
+use std::collections::HashMap;
 
 use ckbadger_store::batch::StoreBatch;
-use ckbadger_store::types::{NftEntry, NftExtra, NftStandard};
+use ckbadger_store::types::{NftEntry, NftExtra, NftStandard, NftTypeIndex};
 
 use crate::parser::mnft::{ParsedMnftClass, ParsedMnftIssuer, ParsedMnftToken};
 
@@ -217,5 +218,89 @@ impl BatchWriter {
         _output_indices: &[i16],
     ) -> Result<Vec<(Vec<u8>, i16, Vec<u8>)>> {
         Ok(Vec::new())
+    }
+
+    pub fn update_nft_type_index_batch(
+        &self,
+        changes: &HashMap<Vec<u8>, NftTypeIndex>,
+        batch: &mut StoreBatch,
+    ) -> Result<()> {
+        for (type_script_hash, index) in changes {
+            batch.put_nft_type_index(type_script_hash, index);
+        }
+        Ok(())
+    }
+
+    pub fn update_nft_daily_deltas_batch(
+        &self,
+        changes: &HashMap<(Vec<u8>, u32), (i64, i64)>,
+        batch: &mut StoreBatch,
+    ) -> Result<()> {
+        for ((collection_id, date), (capacity_delta, occupied_delta)) in changes {
+            if *capacity_delta == 0 && *occupied_delta == 0 {
+                continue;
+            }
+            let mut current = self
+                .store
+                .get_nft_daily_delta(collection_id, *date)?
+                .unwrap_or_default();
+            current.live_capacity_delta += *capacity_delta;
+            current.live_occupied_capacity_delta += *occupied_delta;
+            batch.put_nft_daily_delta(collection_id, *date, &current);
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::writer::BatchWriter;
+    use ckbadger_store::store::CkbadgerStore;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_update_nft_type_index_and_daily_deltas_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let writer = BatchWriter::new(Arc::new(store));
+
+        let type_script_hash = vec![0x11; 32];
+        let collection_id = vec![0x22; 24];
+        let date = 20260219;
+
+        let mut batch = StoreBatch::new(writer.store());
+        let mut index_changes = HashMap::new();
+        index_changes.insert(
+            type_script_hash.clone(),
+            NftTypeIndex {
+                collection_id: collection_id.clone(),
+            },
+        );
+        writer
+            .update_nft_type_index_batch(&index_changes, &mut batch)
+            .unwrap();
+
+        let mut daily_changes = HashMap::new();
+        daily_changes.insert((collection_id.clone(), date), (100, 61));
+        writer
+            .update_nft_daily_deltas_batch(&daily_changes, &mut batch)
+            .unwrap();
+        batch.commit().unwrap();
+
+        let idx = writer
+            .store()
+            .get_nft_type_index(&type_script_hash)
+            .unwrap()
+            .unwrap();
+        assert_eq!(idx.collection_id, collection_id);
+
+        let daily = writer
+            .store()
+            .get_nft_daily_delta(&[0x22; 24], date)
+            .unwrap()
+            .unwrap();
+        assert_eq!(daily.live_capacity_delta, 100);
+        assert_eq!(daily.live_occupied_capacity_delta, 61);
     }
 }

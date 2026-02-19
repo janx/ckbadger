@@ -257,6 +257,43 @@ describe('api', () => {
       expect(chart.title).toContain('Capacity Occupation');
     });
 
+    it('fetches nft collection detail', async () => {
+      server.use(
+        http.get('*/api/v1/assets/nfts/:collectionId', ({ params }) => {
+          expect(params.collectionId).toBe('0xcollection');
+          return HttpResponse.json({
+            collectionId: '0xcollection',
+            standard: 'm-nft',
+            name: 'Test Collection',
+            totalCount: 10,
+            liveCount: 7,
+            liveCapacity: '1000',
+            liveOccupiedCapacity: '600',
+          });
+        })
+      );
+
+      const collection = await api.getNftCollection('0xcollection');
+      expect(collection.collectionId).toBe('0xcollection');
+      expect(collection.liveOccupiedCapacity).toBe('600');
+    });
+
+    it('fetches nft collection occupation chart', async () => {
+      server.use(
+        http.get('*/api/v1/assets/nfts/:collectionId/charts/occupation', ({ params }) => {
+          expect(params.collectionId).toBe('0xcollection');
+          return HttpResponse.json({
+            title: 'Test Collection Capacity Occupation',
+            data: [],
+            series: [],
+          });
+        })
+      );
+
+      const chart = await api.getNftCollectionOccupationChart('0xcollection');
+      expect(chart.title).toContain('Capacity Occupation');
+    });
+
     it('builds query params for getAddressTokens', async () => {
       server.use(
         http.get('*/api/v1/addresses/:addr/tokens', ({ request }) => {

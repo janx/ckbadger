@@ -9,6 +9,8 @@ vi.mock('@/lib/api', () => ({
     getSporeNft: vi.fn(),
     getSporeCluster: vi.fn(),
     getSporeNftOccupationChart: vi.fn(),
+    getNftCollection: vi.fn(),
+    getNftCollectionOccupationChart: vi.fn(),
   },
 }));
 
@@ -36,11 +38,26 @@ const mockSpore = {
   liveOccupiedCapacity: '61000000000',
 };
 
+const mockCollection = {
+  collectionId: '0x1234567890abcdef1234567890abcdef1234567890abcdef',
+  standard: 'm-nft',
+  name: 'Test Collection',
+  totalCount: 500,
+  liveCount: 320,
+  liveCapacity: '800000000000',
+  liveOccupiedCapacity: '510000000000',
+};
+
 describe('SporeDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(api.getSporeNftOccupationChart).mockResolvedValue({
       title: 'Spore Capacity Occupation',
+      data: [],
+      series: [],
+    });
+    vi.mocked(api.getNftCollectionOccupationChart).mockResolvedValue({
+      title: 'Test Collection Capacity Occupation',
       data: [],
       series: [],
     });
@@ -66,5 +83,20 @@ describe('SporeDetailPage', () => {
     await waitFor(() => {
       expect(screen.getByText('Occupation History')).toBeInTheDocument();
     });
+  });
+
+  it('falls back to NFT collection detail when spore lookup returns 404', async () => {
+    vi.mocked(api.getSporeNft).mockRejectedValue(new Error('API error: 404'));
+    vi.mocked(api.getNftCollection).mockResolvedValue(mockCollection);
+
+    render(<SporeDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Collection Details')).toBeInTheDocument();
+    });
+
+    expect(screen.getByText('Test Collection')).toBeInTheDocument();
+    expect(screen.getByText('Capacity Utilization')).toBeInTheDocument();
+    expect(screen.getByText('Occupation History')).toBeInTheDocument();
   });
 });

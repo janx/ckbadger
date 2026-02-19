@@ -4,8 +4,8 @@ use crate::batch::StoreBatch;
 use crate::keys;
 use crate::store::CkbadgerStore;
 use crate::types::{
-    ClusterDailyDelta, NftCollectionAggregate, NftEntry, SporeDailyDelta, SporeEntry,
-    SporeTypeIndex,
+    ClusterDailyDelta, NftCollectionAggregate, NftDailyDelta, NftEntry, NftTypeIndex,
+    SporeDailyDelta, SporeEntry, SporeTypeIndex,
 };
 
 impl CkbadgerStore {
@@ -102,6 +102,27 @@ impl CkbadgerStore {
         self.put_cf(self.cf_stats(), &key, &value)
     }
 
+    pub fn get_nft_type_index(
+        &self,
+        type_script_hash: &[u8],
+    ) -> anyhow::Result<Option<NftTypeIndex>> {
+        let key = keys::encode_nft_type_index_key(type_script_hash);
+        match self.get_cf(self.cf_stats(), &key)? {
+            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn put_nft_type_index_direct(
+        &self,
+        type_script_hash: &[u8],
+        index: &NftTypeIndex,
+    ) -> anyhow::Result<()> {
+        let key = keys::encode_nft_type_index_key(type_script_hash);
+        let value = bincode::serialize(index)?;
+        self.put_cf(self.cf_stats(), &key, &value)
+    }
+
     pub fn get_cluster_daily_delta(
         &self,
         cluster_id: &[u8],
@@ -191,6 +212,54 @@ impl CkbadgerStore {
             }
             let (_, date) = keys::decode_spore_daily_key(&key);
             if let Ok(delta) = bincode::deserialize::<SporeDailyDelta>(&value) {
+                results.push((date, delta));
+            }
+        }
+
+        Ok(results)
+    }
+
+    pub fn get_nft_daily_delta(
+        &self,
+        collection_id: &[u8],
+        date_yyyymmdd: u32,
+    ) -> anyhow::Result<Option<NftDailyDelta>> {
+        let key = keys::encode_nft_daily_key(collection_id, date_yyyymmdd);
+        match self.get_cf(self.cf_stats(), &key)? {
+            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn put_nft_daily_delta(
+        &self,
+        collection_id: &[u8],
+        date_yyyymmdd: u32,
+        delta: &NftDailyDelta,
+    ) -> anyhow::Result<()> {
+        let key = keys::encode_nft_daily_key(collection_id, date_yyyymmdd);
+        let value = bincode::serialize(delta)?;
+        self.put_cf(self.cf_stats(), &key, &value)
+    }
+
+    pub fn list_nft_daily_deltas(
+        &self,
+        collection_id: &[u8],
+    ) -> anyhow::Result<Vec<(u32, NftDailyDelta)>> {
+        let prefix = keys::encode_nft_daily_prefix(collection_id);
+        let iter = self.prefix_iterator_cf(self.cf_stats(), &prefix);
+        let mut results = Vec::new();
+
+        for item in iter.flatten() {
+            let (key, value) = item;
+            if !key.starts_with(&prefix) {
+                break;
+            }
+            if key.len() != keys::NFT_DAILY_KEY_SIZE {
+                continue;
+            }
+            let (_, date) = keys::decode_nft_daily_key(&key);
+            if let Ok(delta) = bincode::deserialize::<NftDailyDelta>(&value) {
                 results.push((date, delta));
             }
         }
@@ -296,7 +365,10 @@ impl CkbadgerStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{ClusterDailyDelta, NftStandard, SporeDailyDelta, SporeTypeIndex};
+    use crate::types::{
+        ClusterDailyDelta, NftDailyDelta, NftStandard, NftTypeIndex, SporeDailyDelta,
+        SporeTypeIndex,
+    };
     use tempfile::TempDir;
 
     fn test_store() -> (TempDir, CkbadgerStore) {
@@ -443,5 +515,47 @@ mod tests {
         let spore_list = store.list_spore_daily_deltas(&spore_id).unwrap();
         assert_eq!(spore_list.len(), 1);
         assert_eq!(spore_list[0].0, 20260219);
+    }
+
+    #[test]
+    fn test_nft_type_index_and_nft_daily_delta_roundtrip() {
+        let (_dir, store) = test_store();
+        let type_script_hash = [0x66u8; 32];
+        let collection_id = [0x77u8; 24];
+
+        store
+            .put_nft_type_index_direct(
+                &type_script_hash,
+                &NftTypeIndex {
+                    collection_id: collection_id.to_vec(),
+                },
+            )
+            .unwrap();
+        let loaded_index = store
+            .get_nft_type_index(&type_script_hash)
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded_index.collection_id, collection_id.to_vec());
+
+        store
+            .put_nft_daily_delta(
+                &collection_id,
+                20260219,
+                &NftDailyDelta {
+                    live_capacity_delta: 500,
+                    live_occupied_capacity_delta: 320,
+                },
+            )
+            .unwrap();
+        let loaded_daily = store
+            .get_nft_daily_delta(&collection_id, 20260219)
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded_daily.live_capacity_delta, 500);
+        assert_eq!(loaded_daily.live_occupied_capacity_delta, 320);
+
+        let list = store.list_nft_daily_deltas(&collection_id).unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].0, 20260219);
     }
 }

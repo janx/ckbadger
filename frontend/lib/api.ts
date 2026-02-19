@@ -593,6 +593,16 @@ interface SporeNft {
   liveOccupiedCapacity?: string | null;
 }
 
+interface NftCollection {
+  collectionId: string;
+  standard: string;
+  name: string | null;
+  totalCount: number;
+  liveCount: number;
+  liveCapacity: string;
+  liveOccupiedCapacity: string;
+}
+
 interface ChartDataPoint {
   date: string;
   value: string;
@@ -870,6 +880,7 @@ export type {
   DaoCalculatorResult,
   SporeCluster,
   SporeNft,
+  NftCollection,
   ChartDataPoint,
   ChartResponse,
   TxStatsDataPoint,
@@ -1210,6 +1221,14 @@ export const api = {
 
   getSporeNftOccupationChart: (sporeId: string): Promise<StackedAreaChartResponse> => {
     return fetchApi(`/spore/nfts/${sporeId}/charts/occupation`);
+  },
+
+  getNftCollection: (collectionId: string): Promise<NftCollection> => {
+    return fetchApi(`/assets/nfts/${collectionId}`);
+  },
+
+  getNftCollectionOccupationChart: (collectionId: string): Promise<StackedAreaChartResponse> => {
+    return fetchApi(`/assets/nfts/${collectionId}/charts/occupation`);
   },
 
   getSporesByOwner: (

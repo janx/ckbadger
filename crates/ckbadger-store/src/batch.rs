@@ -289,6 +289,23 @@ impl<'a> StoreBatch<'a> {
             .put_cf(self.store.cf_stats(), key, count.to_le_bytes());
     }
 
+    pub fn put_nft_daily_delta(
+        &mut self,
+        collection_id: &[u8],
+        date_yyyymmdd: u32,
+        delta: &NftDailyDelta,
+    ) {
+        let key = keys::encode_nft_daily_key(collection_id, date_yyyymmdd);
+        let value = bincode::serialize(delta).expect("serialize NftDailyDelta");
+        self.batch.put_cf(self.store.cf_stats(), key, &value);
+    }
+
+    pub fn put_nft_type_index(&mut self, type_script_hash: &[u8], index: &NftTypeIndex) {
+        let key = keys::encode_nft_type_index_key(type_script_hash);
+        let value = bincode::serialize(index).expect("serialize NftTypeIndex");
+        self.batch.put_cf(self.store.cf_stats(), key, &value);
+    }
+
     pub fn put_cluster_daily_delta(
         &mut self,
         cluster_id: &[u8],

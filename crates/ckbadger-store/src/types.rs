@@ -534,6 +534,19 @@ pub struct SporeTypeIndex {
     pub cluster_id: Option<Vec<u8>>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NftDailyDelta {
+    /// Net live capacity change in shannons for this NFT collection on a day.
+    pub live_capacity_delta: i64,
+    /// Net live occupied capacity change in shannons for this NFT collection on a day.
+    pub live_occupied_capacity_delta: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NftTypeIndex {
+    pub collection_id: Vec<u8>,
+}
+
 // ============================================
 // Group G2: HODL Wave
 // ============================================
@@ -831,6 +844,45 @@ mod tests {
         let index = SporeTypeIndex::default();
         assert!(index.spore_id.is_empty());
         assert!(index.cluster_id.is_none());
+    }
+
+    // ---- NftDailyDelta ----
+
+    #[test]
+    fn test_nft_daily_delta_roundtrip() {
+        let delta = NftDailyDelta {
+            live_capacity_delta: 222_000_000_000,
+            live_occupied_capacity_delta: -33_000_000_000,
+        };
+        let bytes = bincode::serialize(&delta).unwrap();
+        let decoded: NftDailyDelta = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.live_capacity_delta, 222_000_000_000);
+        assert_eq!(decoded.live_occupied_capacity_delta, -33_000_000_000);
+    }
+
+    #[test]
+    fn test_nft_daily_delta_default() {
+        let delta = NftDailyDelta::default();
+        assert_eq!(delta.live_capacity_delta, 0);
+        assert_eq!(delta.live_occupied_capacity_delta, 0);
+    }
+
+    // ---- NftTypeIndex ----
+
+    #[test]
+    fn test_nft_type_index_roundtrip() {
+        let index = NftTypeIndex {
+            collection_id: vec![0xEE; 24],
+        };
+        let bytes = bincode::serialize(&index).unwrap();
+        let decoded: NftTypeIndex = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.collection_id, vec![0xEE; 24]);
+    }
+
+    #[test]
+    fn test_nft_type_index_default() {
+        let index = NftTypeIndex::default();
+        assert!(index.collection_id.is_empty());
     }
 
     // ---- AddressDailyStats ----

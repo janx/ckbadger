@@ -71,6 +71,18 @@ fn should_delete_stats_for_replay(key: &[u8], cutoff_yyyymmdd: &[u8]) -> bool {
             let date = u32::from_be_bytes(suffix[32..36].try_into().unwrap_or([0; 4]));
             date >= cutoff_date
         }
+        // collection_id(32 padded) + date(4B u32 YYYYMMDD BE)
+        keys::STATS_PREFIX_NFT_DAILY => {
+            let cutoff_date = std::str::from_utf8(cutoff_yyyymmdd)
+                .ok()
+                .and_then(|s| s.parse::<u32>().ok())
+                .unwrap_or(0);
+            if suffix.len() < 36 {
+                return false;
+            }
+            let date = u32::from_be_bytes(suffix[32..36].try_into().unwrap_or([0; 4]));
+            date >= cutoff_date
+        }
         _ => false,
     }
 }
@@ -337,6 +349,18 @@ mod tests {
         assert!(should_delete_stats_for_replay(&new_key, cutoff));
 
         let old_key = crate::keys::encode_spore_daily_key(&spore_id, 20260209);
+        assert!(!should_delete_stats_for_replay(&old_key, cutoff));
+    }
+
+    #[test]
+    fn test_should_delete_stats_for_replay_nft_daily_prefix() {
+        let cutoff = b"20260210";
+        let collection_id = [0xEE; 24];
+
+        let new_key = crate::keys::encode_nft_daily_key(&collection_id, 20260211);
+        assert!(should_delete_stats_for_replay(&new_key, cutoff));
+
+        let old_key = crate::keys::encode_nft_daily_key(&collection_id, 20260209);
         assert!(!should_delete_stats_for_replay(&old_key, cutoff));
     }
 

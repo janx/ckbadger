@@ -7,8 +7,9 @@ use tower::ServiceExt;
 use ckbadger_api::{create_router, AppConfig};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
-    ClusterAggregate, ClusterDailyDelta, DobEntry, DobExtra, DobStandard, ScriptDailyDelta,
-    ScriptInfo, SporeDailyDelta, TokenDailyDelta, TokenInfo,
+    ClusterAggregate, ClusterDailyDelta, DobEntry, DobExtra, DobStandard, NftCollectionAggregate,
+    NftDailyDelta, NftStandard, ScriptDailyDelta, ScriptInfo, SporeDailyDelta, TokenDailyDelta,
+    TokenInfo,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -620,6 +621,76 @@ async fn test_assets_dob_uses_cluster_entry_name_when_aggregate_name_missing() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["data"][0]["name"], "Recovered Cluster Name");
+}
+
+#[tokio::test]
+async fn test_assets_nft_collection_occupation_chart_and_capacity_fields() {
+    let store = test_store();
+    let collection_id = [0x24u8; 24];
+    let collection_id_hex = format!("0x{}", hex::encode(collection_id));
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_nft_collection_aggregate(
+        &collection_id,
+        &NftCollectionAggregate {
+            name: Some("Test NFT Collection".to_string()),
+            standard: NftStandard::MnftToken,
+            total_count: 100,
+            live_count: 60,
+        },
+    );
+    batch.commit().unwrap();
+
+    store
+        .put_nft_daily_delta(
+            &collection_id,
+            20240115,
+            &NftDailyDelta {
+                live_capacity_delta: 100,
+                live_occupied_capacity_delta: 60,
+            },
+        )
+        .unwrap();
+    store
+        .put_nft_daily_delta(
+            &collection_id,
+            20240116,
+            &NftDailyDelta {
+                live_capacity_delta: -20,
+                live_occupied_capacity_delta: -10,
+            },
+        )
+        .unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/assets/nfts/{}/charts/occupation",
+            collection_id_hex
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["title"], "Test NFT Collection Capacity Occupation");
+    assert_eq!(json["data"][1]["values"]["occupied"], "50");
+    assert_eq!(json["data"][1]["values"]["unoccupied"], "30");
+
+    let request = Request::builder()
+        .uri(format!("/api/v1/assets/nfts/{}", collection_id_hex))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["standard"], "m-nft");
+    assert_eq!(json["liveCapacity"], "80");
+    assert_eq!(json["liveOccupiedCapacity"], "50");
 }
 
 #[tokio::test]

@@ -15,7 +15,7 @@ use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
 
 use ckbadger_store::batch::StoreBatch;
-use ckbadger_store::types::{LiveCellInfo, SporeTypeIndex};
+use ckbadger_store::types::{LiveCellInfo, NftTypeIndex, SporeTypeIndex};
 use ckbadger_store::CkbadgerStore;
 
 use crate::cache::CacheInvalidator;
@@ -34,6 +34,7 @@ use super::SyncProgress;
 
 #[allow(dead_code)]
 const PARTITION_SIZE: u64 = 5_000_000;
+const DOTBIT_SENTINEL_COLLECTION: [u8; 32] = *b"dotbit_collection_______________";
 
 #[allow(dead_code)]
 fn get_partition_index(block_number: u64) -> usize {
@@ -100,6 +101,16 @@ fn should_log_unresolved_retry(attempt: usize) -> bool {
 fn should_skip_address_balances(_bulk_sync_mode: bool) -> bool {
     // Address balances must always be updated inline to keep bulk sync exact.
     false
+}
+
+fn classify_nft_collection_id(type_code_hash: &[u8], type_args: &[u8]) -> Option<Vec<u8>> {
+    if type_args.len() >= 24 && MnftParser::is_token_type_script(type_code_hash) {
+        return Some(type_args[..24].to_vec());
+    }
+    if DotbitParser::is_account_cell_type_script(type_code_hash) {
+        return Some(DOTBIT_SENTINEL_COLLECTION.to_vec());
+    }
+    None
 }
 
 /// Reconstruct pre-batch live cell count from persisted post-batch count and batch delta.
@@ -948,6 +959,8 @@ impl Indexer {
             HashMap<Vec<u8>, SporeTypeIndex>,      // spore_type_index_changes
             HashMap<(Vec<u8>, u32), (i64, i64)>,   // spore_daily_changes
             HashMap<(Vec<u8>, u32), (i64, i64)>,   // cluster_daily_changes
+            HashMap<Vec<u8>, NftTypeIndex>,        // nft_type_index_changes
+            HashMap<(Vec<u8>, u32), (i64, i64)>,   // nft_daily_changes
         );
 
         let (fetch_tx, mut fetch_rx) = mpsc::channel::<FetchedBatch>(self.config.pipeline_buffer);
@@ -1386,7 +1399,11 @@ impl Indexer {
                 let mut spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex> = HashMap::new();
                 let mut spore_daily_changes: HashMap<(Vec<u8>, u32), (i64, i64)> = HashMap::new();
                 let mut cluster_daily_changes: HashMap<(Vec<u8>, u32), (i64, i64)> = HashMap::new();
+                let mut nft_type_index_changes: HashMap<Vec<u8>, NftTypeIndex> = HashMap::new();
+                let mut nft_daily_changes: HashMap<(Vec<u8>, u32), (i64, i64)> = HashMap::new();
                 let mut spore_type_index_cache: HashMap<Vec<u8>, Option<SporeTypeIndex>> =
+                    HashMap::new();
+                let mut nft_type_index_cache: HashMap<Vec<u8>, Option<NftTypeIndex>> =
                     HashMap::new();
 
                 for tx_data in &all_tx_data {
@@ -1505,6 +1522,28 @@ impl Indexer {
                                 }
                             }
                         }
+                        if let (Some(type_script_hash), Some(type_code_hash), Some(type_args)) = (
+                            cell.type_script_hash.as_ref(),
+                            cell.type_code_hash.as_ref(),
+                            cell.type_args.as_ref(),
+                        ) {
+                            let collection_id =
+                                classify_nft_collection_id(type_code_hash, type_args);
+                            if let Some(collection_id) = collection_id {
+                                let index = NftTypeIndex {
+                                    collection_id: collection_id.clone(),
+                                };
+                                nft_type_index_cache
+                                    .insert(type_script_hash.clone(), Some(index.clone()));
+                                nft_type_index_changes.insert(type_script_hash.clone(), index);
+
+                                let nft_daily = nft_daily_changes
+                                    .entry((collection_id, date_yyyymmdd))
+                                    .or_insert((0, 0));
+                                nft_daily.0 += cell.capacity;
+                                nft_daily.1 += cell_occupied;
+                            }
+                        }
                     }
 
                     // Per-tx balance/consumption tracking
@@ -1597,6 +1636,38 @@ impl Indexer {
                                                 cluster_daily.0 -= info.capacity;
                                                 cluster_daily.1 -= info.occupied_capacity;
                                             }
+                                        }
+                                    }
+                                    if DotbitParser::is_account_cell_type_script(type_code_hash)
+                                        || MnftParser::is_token_type_script(type_code_hash)
+                                    {
+                                        let collection_id =
+                                            if DotbitParser::is_account_cell_type_script(
+                                                type_code_hash,
+                                            ) {
+                                                Some(DOTBIT_SENTINEL_COLLECTION.to_vec())
+                                            } else if let Some(cached) =
+                                                nft_type_index_cache.get(type_script_hash)
+                                            {
+                                                cached.clone().map(|idx| idx.collection_id)
+                                            } else {
+                                                let loaded = writer_for_parser
+                                                    .store()
+                                                    .get_nft_type_index(type_script_hash)
+                                                    .ok()
+                                                    .flatten();
+                                                nft_type_index_cache.insert(
+                                                    type_script_hash.clone(),
+                                                    loaded.clone(),
+                                                );
+                                                loaded.map(|idx| idx.collection_id)
+                                            };
+                                        if let Some(collection_id) = collection_id {
+                                            let nft_daily = nft_daily_changes
+                                                .entry((collection_id, date_yyyymmdd))
+                                                .or_insert((0, 0));
+                                            nft_daily.0 -= info.capacity;
+                                            nft_daily.1 -= info.occupied_capacity;
                                         }
                                     }
                                 }
@@ -1732,6 +1803,8 @@ impl Indexer {
                         spore_type_index_changes,
                         spore_daily_changes,
                         cluster_daily_changes,
+                        nft_type_index_changes,
+                        nft_daily_changes,
                     ))
                     .await
                     .is_err()
@@ -1770,6 +1843,8 @@ impl Indexer {
                     spore_type_index_changes,
                     spore_daily_changes,
                     cluster_daily_changes,
+                    nft_type_index_changes,
+                    nft_daily_changes,
                 ))) => {
                     let recv_wait_ms = t_recv.elapsed().as_secs_f64() * 1000.0;
                     let current_epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst);
@@ -1842,6 +1917,8 @@ impl Indexer {
                             spore_type_index_changes,
                             spore_daily_changes,
                             cluster_daily_changes,
+                            nft_type_index_changes,
+                            nft_daily_changes,
                             chain_tip,
                         )
                         .await
@@ -2767,7 +2844,10 @@ impl Indexer {
         let mut spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex> = HashMap::new();
         let mut spore_daily_changes: HashMap<(Vec<u8>, u32), (i64, i64)> = HashMap::new();
         let mut cluster_daily_changes: HashMap<(Vec<u8>, u32), (i64, i64)> = HashMap::new();
+        let mut nft_type_index_changes: HashMap<Vec<u8>, NftTypeIndex> = HashMap::new();
+        let mut nft_daily_changes: HashMap<(Vec<u8>, u32), (i64, i64)> = HashMap::new();
         let mut spore_type_index_cache: HashMap<Vec<u8>, Option<SporeTypeIndex>> = HashMap::new();
+        let mut nft_type_index_cache: HashMap<Vec<u8>, Option<NftTypeIndex>> = HashMap::new();
         for tx_data in &all_tx_data {
             let date_yyyymmdd =
                 ckbadger_store::keys::timestamp_ms_to_date(tx_data.timestamp.timestamp_millis());
@@ -2850,6 +2930,26 @@ impl Indexer {
                         }
                     }
                 }
+                if let (Some(type_script_hash), Some(type_code_hash), Some(type_args)) = (
+                    cell.type_script_hash.as_ref(),
+                    cell.type_code_hash.as_ref(),
+                    cell.type_args.as_ref(),
+                ) {
+                    let collection_id = classify_nft_collection_id(type_code_hash, type_args);
+                    if let Some(collection_id) = collection_id {
+                        let index = NftTypeIndex {
+                            collection_id: collection_id.clone(),
+                        };
+                        nft_type_index_cache.insert(type_script_hash.clone(), Some(index.clone()));
+                        nft_type_index_changes.insert(type_script_hash.clone(), index);
+
+                        let nft_daily = nft_daily_changes
+                            .entry((collection_id, date_yyyymmdd))
+                            .or_insert((0, 0));
+                        nft_daily.0 += cell.capacity;
+                        nft_daily.1 += cell_occupied;
+                    }
+                }
             }
         }
         for tx_data in &all_tx_data {
@@ -2929,6 +3029,33 @@ impl Indexer {
                                         cluster_daily.0 -= info.capacity;
                                         cluster_daily.1 -= info.occupied_capacity;
                                     }
+                                }
+                            }
+                            if DotbitParser::is_account_cell_type_script(type_code_hash)
+                                || MnftParser::is_token_type_script(type_code_hash)
+                            {
+                                let collection_id =
+                                    if DotbitParser::is_account_cell_type_script(type_code_hash) {
+                                        Some(DOTBIT_SENTINEL_COLLECTION.to_vec())
+                                    } else if let Some(cached) =
+                                        nft_type_index_cache.get(type_script_hash)
+                                    {
+                                        cached.clone().map(|idx| idx.collection_id)
+                                    } else {
+                                        let loaded = self
+                                            .writer
+                                            .store()
+                                            .get_nft_type_index(type_script_hash)?;
+                                        nft_type_index_cache
+                                            .insert(type_script_hash.clone(), loaded.clone());
+                                        loaded.map(|idx| idx.collection_id)
+                                    };
+                                if let Some(collection_id) = collection_id {
+                                    let nft_daily = nft_daily_changes
+                                        .entry((collection_id, date_yyyymmdd))
+                                        .or_insert((0, 0));
+                                    nft_daily.0 -= info.capacity;
+                                    nft_daily.1 -= info.occupied_capacity;
                                 }
                             }
                         }
@@ -3015,6 +3142,14 @@ impl Indexer {
         if !spore_daily_changes.is_empty() {
             self.writer
                 .update_spore_daily_deltas_batch(&spore_daily_changes, &mut consume_addr_batch)?;
+        }
+        if !nft_type_index_changes.is_empty() {
+            self.writer
+                .update_nft_type_index_batch(&nft_type_index_changes, &mut consume_addr_batch)?;
+        }
+        if !nft_daily_changes.is_empty() {
+            self.writer
+                .update_nft_daily_deltas_batch(&nft_daily_changes, &mut consume_addr_batch)?;
         }
         if !cluster_daily_changes.is_empty() {
             self.writer.update_cluster_daily_deltas_batch(
@@ -3785,6 +3920,8 @@ impl Indexer {
         spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex>,
         spore_daily_changes: HashMap<(Vec<u8>, u32), (i64, i64)>,
         cluster_daily_changes: HashMap<(Vec<u8>, u32), (i64, i64)>,
+        nft_type_index_changes: HashMap<Vec<u8>, NftTypeIndex>,
+        nft_daily_changes: HashMap<(Vec<u8>, u32), (i64, i64)>,
         chain_tip: u64,
     ) -> Result<()> {
         if all_parsed_blocks.is_empty() {
@@ -4323,6 +4460,12 @@ impl Indexer {
                     }
                     if !spore_daily_changes.is_empty() {
                         writer.update_spore_daily_deltas_batch(&spore_daily_changes, &mut batch)?;
+                    }
+                    if !nft_type_index_changes.is_empty() {
+                        writer.update_nft_type_index_batch(&nft_type_index_changes, &mut batch)?;
+                    }
+                    if !nft_daily_changes.is_empty() {
+                        writer.update_nft_daily_deltas_batch(&nft_daily_changes, &mut batch)?;
                     }
                     if !cluster_daily_changes.is_empty() {
                         writer.update_cluster_daily_deltas_batch(
@@ -5131,6 +5274,14 @@ impl Indexer {
             if !spore_daily_changes.is_empty() {
                 self.writer
                     .update_spore_daily_deltas_batch(&spore_daily_changes, &mut data_batch)?;
+            }
+            if !nft_type_index_changes.is_empty() {
+                self.writer
+                    .update_nft_type_index_batch(&nft_type_index_changes, &mut data_batch)?;
+            }
+            if !nft_daily_changes.is_empty() {
+                self.writer
+                    .update_nft_daily_deltas_batch(&nft_daily_changes, &mut data_batch)?;
             }
             if !cluster_daily_changes.is_empty() {
                 self.writer
@@ -6799,6 +6950,37 @@ mod tests {
     fn test_address_balances_are_never_skipped_in_bulk_mode() {
         assert!(!should_skip_address_balances(true));
         assert!(!should_skip_address_balances(false));
+    }
+
+    #[test]
+    fn test_classify_nft_collection_id_mnft_uses_first_24_args_bytes() {
+        let mnft_code_hash =
+            crate::rpc::parse_hex_to_bytes(crate::parser::mnft::MNFT_TOKEN_CODE_HASH);
+        let mut args = vec![0xAB; 24];
+        args.extend_from_slice(&[0xCD; 8]);
+
+        let collection_id = classify_nft_collection_id(&mnft_code_hash, &args)
+            .expect("mNFT token type should map to collection id");
+        assert_eq!(collection_id, vec![0xAB; 24]);
+    }
+
+    #[test]
+    fn test_classify_nft_collection_id_dotbit_uses_sentinel_collection() {
+        let dotbit_code_hash =
+            crate::rpc::parse_hex_to_bytes(crate::parser::dotbit::DOTBIT_ACCOUNT_CELL_TYPE_ID);
+        let collection_id = classify_nft_collection_id(&dotbit_code_hash, &[])
+            .expect("dotbit account type should map to sentinel collection");
+        assert_eq!(collection_id, DOTBIT_SENTINEL_COLLECTION.to_vec());
+    }
+
+    #[test]
+    fn test_classify_nft_collection_id_rejects_non_nft_or_short_mnft_args() {
+        let non_nft = vec![0x11; 32];
+        assert!(classify_nft_collection_id(&non_nft, &[0x22; 24]).is_none());
+
+        let mnft_code_hash =
+            crate::rpc::parse_hex_to_bytes(crate::parser::mnft::MNFT_TOKEN_CODE_HASH);
+        assert!(classify_nft_collection_id(&mnft_code_hash, &[0x33; 23]).is_none());
     }
 
     #[test]

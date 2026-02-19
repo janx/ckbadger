@@ -112,6 +112,8 @@ pub mod stats_prefix {
     pub const SPORE_DAILY: u8 = 0x12;
     pub const SPORE_OUTPOINT: u8 = 0x13;
     pub const SPORE_TYPE_INDEX: u8 = 0x14;
+    pub const NFT_DAILY: u8 = 0x15;
+    pub const NFT_TYPE_INDEX: u8 = 0x16;
 }
 
 // Flat re-exports for convenience
@@ -135,6 +137,8 @@ pub const STATS_PREFIX_CLUSTER_DAILY: u8 = stats_prefix::CLUSTER_DAILY;
 pub const STATS_PREFIX_SPORE_DAILY: u8 = stats_prefix::SPORE_DAILY;
 pub const STATS_PREFIX_SPORE_OUTPOINT: u8 = stats_prefix::SPORE_OUTPOINT;
 pub const STATS_PREFIX_SPORE_TYPE_INDEX: u8 = stats_prefix::SPORE_TYPE_INDEX;
+pub const STATS_PREFIX_NFT_DAILY: u8 = stats_prefix::NFT_DAILY;
+pub const STATS_PREFIX_NFT_TYPE_INDEX: u8 = stats_prefix::NFT_TYPE_INDEX;
 
 /// Token transfers total count key: prefix(1B) + type_hash(32B) = 33 bytes
 pub fn encode_token_transfers_key(type_hash: &[u8]) -> Vec<u8> {
@@ -261,6 +265,40 @@ pub const SPORE_TYPE_INDEX_KEY_SIZE: usize = 33;
 pub fn encode_spore_type_index_key(type_script_hash: &[u8]) -> [u8; SPORE_TYPE_INDEX_KEY_SIZE] {
     let mut key = [0u8; SPORE_TYPE_INDEX_KEY_SIZE];
     key[0] = STATS_PREFIX_SPORE_TYPE_INDEX;
+    key[1..33].copy_from_slice(&type_script_hash[..32]);
+    key
+}
+
+/// NFT collection daily stats key: prefix(1B) + collection_id(32B padded) + date(4B YYYYMMDD BE)
+pub const NFT_DAILY_KEY_SIZE: usize = 37;
+
+pub fn encode_nft_daily_key(collection_id: &[u8], date_yyyymmdd: u32) -> [u8; NFT_DAILY_KEY_SIZE] {
+    let mut key = [0u8; NFT_DAILY_KEY_SIZE];
+    key[0] = STATS_PREFIX_NFT_DAILY;
+    key[1..33].copy_from_slice(&pad_id_32(collection_id));
+    key[33..37].copy_from_slice(&date_yyyymmdd.to_be_bytes());
+    key
+}
+
+pub fn encode_nft_daily_prefix(collection_id: &[u8]) -> [u8; 33] {
+    let mut prefix = [0u8; 33];
+    prefix[0] = STATS_PREFIX_NFT_DAILY;
+    prefix[1..33].copy_from_slice(&pad_id_32(collection_id));
+    prefix
+}
+
+pub fn decode_nft_daily_key(key: &[u8]) -> (Vec<u8>, u32) {
+    let collection_id = key[1..33].to_vec();
+    let date = u32::from_be_bytes(key[33..37].try_into().unwrap());
+    (collection_id, date)
+}
+
+/// NFT type-script index key: prefix(1B) + type_script_hash(32B)
+pub const NFT_TYPE_INDEX_KEY_SIZE: usize = 33;
+
+pub fn encode_nft_type_index_key(type_script_hash: &[u8]) -> [u8; NFT_TYPE_INDEX_KEY_SIZE] {
+    let mut key = [0u8; NFT_TYPE_INDEX_KEY_SIZE];
+    key[0] = STATS_PREFIX_NFT_TYPE_INDEX;
     key[1..33].copy_from_slice(&type_script_hash[..32]);
     key
 }
@@ -603,6 +641,35 @@ mod tests {
         let key = encode_spore_type_index_key(&type_script_hash);
         assert_eq!(key.len(), SPORE_TYPE_INDEX_KEY_SIZE);
         assert_eq!(key[0], STATS_PREFIX_SPORE_TYPE_INDEX);
+        assert_eq!(&key[1..33], &type_script_hash);
+    }
+
+    #[test]
+    fn test_nft_daily_key_roundtrip() {
+        let collection_id = [0x66u8; 24];
+        let key = encode_nft_daily_key(&collection_id, 20260219);
+        assert_eq!(key.len(), NFT_DAILY_KEY_SIZE);
+        let (decoded_id, decoded_date) = decode_nft_daily_key(&key);
+        assert_eq!(&decoded_id[..24], &collection_id);
+        assert_eq!(&decoded_id[24..], &[0u8; 8]);
+        assert_eq!(decoded_date, 20260219);
+    }
+
+    #[test]
+    fn test_nft_daily_prefix_is_prefix_of_full_key() {
+        let collection_id = [0x77u8; 24];
+        let prefix = encode_nft_daily_prefix(&collection_id);
+        let key = encode_nft_daily_key(&collection_id, 20240101);
+        assert_eq!(prefix.len(), 33);
+        assert!(key.starts_with(&prefix));
+    }
+
+    #[test]
+    fn test_nft_type_index_key_structure() {
+        let type_script_hash = [0xDDu8; 32];
+        let key = encode_nft_type_index_key(&type_script_hash);
+        assert_eq!(key.len(), NFT_TYPE_INDEX_KEY_SIZE);
+        assert_eq!(key[0], STATS_PREFIX_NFT_TYPE_INDEX);
         assert_eq!(&key[1..33], &type_script_hash);
     }
 
