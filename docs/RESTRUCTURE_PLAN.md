@@ -1,6 +1,6 @@
 # ckbadger 数据库重构计划
 
-> **Note (2026-02)**: This plan is **fully superseded**. PostgreSQL has been replaced by embedded RocksDB (`ckbadger-store` crate) with 25 column families. All data — blocks, transactions, cells, balances, statistics, DAO, tokens, activities — is stored in a single RocksDB instance. The partitioning, SQL schemas, and migration strategies described below no longer apply. This document is preserved for historical reference only.
+> **Note (2026-02)**: This plan is **fully superseded**. PostgreSQL has been replaced by embedded RocksDB (`ckbadger-store` crate) with 29 column families. All data — blocks, transactions, cells, balances, statistics, DAO, tokens, activities — is stored in a single RocksDB instance. The partitioning, SQL schemas, and migration strategies described below no longer apply. This document is preserved for historical reference only.
 
 > 目标: 在单台PC上支持2-5x当前CKB主网数据量,实现所有页面 <200ms 响应
 

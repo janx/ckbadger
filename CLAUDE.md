@@ -43,7 +43,7 @@ cargo check                              # Type check all crates
 cargo build -p ckbadger-api              # Build specific crate
 cargo clippy                             # Lint
 
-# Rust Testing (533 tests across all crates)
+# Rust Testing
 cargo test                               # Run all tests
 cargo test --lib                         # Unit tests only (fast)
 cargo test test_name                     # Single test (partial match)
@@ -60,7 +60,7 @@ pnpm build                               # Production build
 pnpm lint                                # ESLint
 cd frontend && pnpm type-check           # TypeScript (tsc --noEmit)
 
-# Frontend Testing (90 tests)
+# Frontend Testing
 cd frontend && pnpm test                 # Run Vitest
 cd frontend && pnpm test:coverage        # With coverage report
 cd frontend && npx vitest run            # Non-interactive
@@ -89,7 +89,7 @@ pnpm format                              # Prettier (all files)
 crates/
   api/            # Axum REST/WebSocket server (port 3001)
   indexer/        # Blockchain sync daemon (three-stage pipeline)
-    src/verify/   #   Data integrity verification suite (28 checks across 2 tiers)
+    src/verify/   #   Data integrity verification suite (28 checks; fast/sampling depths + explorer comparisons)
   ckbadger-store/ # Embedded RocksDB storage engine
   common/         # Shared types (block, cell, tx, script, error)
   ckb-store-reader/ # Read-only CKB RocksDB reader (optional direct read mode)
@@ -102,25 +102,30 @@ docs/INDEXER_PIPELINE.md          # Pipeline architecture documentation
 
 The indexer uses a three-stage pipeline: **Fetcher** (RPC I/O) → **Parser** (CPU + DB prefetch) → **Writer** (DB I/O).
 
-| Parameter             | Default | Description                          |
-| --------------------- | ------- | ------------------------------------ |
-| `pipeline_enabled`    | `true`  | Enable pipeline mode (vs sequential) |
-| `pipeline_buffer`     | `8`     | Channel capacity between stages      |
-| `batch_size`          | `10000` | Blocks per batch                     |
-| `parallel_fetch_size` | `64`    | Concurrent RPC requests              |
+| Parameter             | Default | Description                             |
+| --------------------- | ------- | --------------------------------------- |
+| `pipeline_enabled`    | `true`  | Enable pipeline mode (vs sequential)    |
+| `pipeline_buffer`     | `8`     | Channel capacity between stages         |
+| `batch_size`          | `10000` | Blocks per batch                        |
+| `parallel_fetch_size` | `64`    | Concurrent RPC requests                 |
+| `bulk_sync_threshold` | `1000`  | Blocks behind tip to treat as bulk sync |
 
 ```bash
 # CLI arguments
 cargo run -p ckbadger-indexer -- \
   --pipeline-enabled \
   --pipeline-buffer 4 \
-  --batch-size 10000
+  --batch-size 10000 \
+  --bulk-sync-threshold 1000
 
-# Environment variables
-PIPELINE_ENABLED=true
-PIPELINE_BUFFER=4
-BATCH_SIZE=10000
+# Environment variables (common)
+CKBADGER_DATA_PATH=./data/ckbadger-store
+CKB_RPC_URL=http://localhost:8114
+REDIS_URL=redis://localhost:6379
 ```
+
+Note: `pipeline_enabled`, `pipeline_buffer`, `batch_size`, `parallel_fetch_size`, and
+`bulk_sync_threshold` are configured via CLI flags in current builds.
 
 See `docs/INDEXER_PIPELINE.md` for architecture details.
 
@@ -128,7 +133,7 @@ See `docs/INDEXER_PIPELINE.md` for architecture details.
 
 The indexer uses two complementary log lines:
 
-1. **Batch log** (per batch): `Wrote blocks X to Y (N remaining, 2.34s) [COPY]`
+1. **Batch log** (per batch): `Wrote blocks X to Y (N remaining, 2.34s)`
    - Shows DB write duration for the batch
    - Useful for identifying slow batches
 
@@ -262,22 +267,22 @@ All data is stored in a single RocksDB instance (`ckbadger-store` crate) with mu
 
 **Key Column Families:**
 
-| Column Family      | Key                          | Value                | Purpose                          |
-| ------------------ | ---------------------------- | -------------------- | -------------------------------- |
-| `live_cells`       | tx_hash + output_index (34B) | LiveCellInfo         | O(1) lookup for unspent cells    |
-| `consumed_cells`   | tx_hash + output_index (34B) | LiveCellInfo         | Recently consumed cells          |
-| `block_headers`    | block_number (8B)            | CachedBlockHeader    | Block header + DAO field cache   |
-| `block_hash_index` | block_hash (32B)             | block_number (8B)    | Reverse lookup: hash → number    |
-| `dao_deposits`     | tx_hash + output_index (34B) | DaoDepositCacheEntry | DAO deposit lifecycle cache      |
-| `sync_status`      | fixed key                    | SyncStatus           | Sync progress and deferred flags |
-| `addr_balance`     | lock_script_hash (32B)       | AddressBalance       | Address balance and cell counts  |
-| `tokens`           | type_script_hash (32B)       | TokenInfo            | UDT token metadata               |
-| `daily_stats`      | date string                  | DailyStats           | Daily aggregate statistics       |
+| Column Family      | Key                          | Value                        | Purpose                                  |
+| ------------------ | ---------------------------- | ---------------------------- | ---------------------------------------- |
+| `live_cells`       | tx_hash + output_index (34B) | LiveCellInfo                 | O(1) lookup for unspent cells            |
+| `consumed_cells`   | tx_hash + output_index (34B) | LiveCellInfo                 | Recently consumed cells                  |
+| `block_headers`    | block_number (8B)            | CachedBlockHeader            | Block header + DAO field cache           |
+| `block_hash_index` | block_hash (32B)             | block_number (8B)            | Reverse lookup: hash → number            |
+| `dao_deposits`     | tx_hash + output_index (34B) | DaoDepositCacheEntry         | DAO deposit lifecycle cache              |
+| `sync_meta`        | fixed keys                   | SyncStatus/ReorgEvent        | Sync progress, deep-fork, reorg metadata |
+| `addr_balance`     | lock_script_hash (32B)       | AddressBalance               | Address balance and cell counts          |
+| `tokens`           | type_script_hash (32B)       | TokenInfo                    | UDT token metadata                       |
+| `stats`            | prefixed keys                | DailyStats + other snapshots | Daily/hourly/chart aggregates            |
 
 **Key Design:**
 
 - `CkbadgerStore::open(path)` — primary read-write mode for indexer and maintenance CLI commands
-- `CkbadgerStore::open_secondary(path)` — read-only mode for API
+- `CkbadgerStore::open_secondary(primary_path, secondary_path)` — read-only mode for API
 - All store operations are synchronous (RocksDB reads are fast)
 
 **Memory Considerations:**

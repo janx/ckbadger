@@ -34,7 +34,7 @@
 - **Historical Charts** - Block time, transaction volume, active addresses
 - **Real-time Updates** - WebSocket subscriptions for new blocks and transactions
 - **System Status Page** - Monitor sync progress, index rebuild status, and integrity checks
-- **Data Integrity Verification** - 18 built-in checks across 3 tiers for acceptance testing via API
+- **Data Integrity Verification** - 28 built-in checks for acceptance testing via API
 - **Developer API** - REST endpoints with rate limiting
 
 ## Architecture
@@ -67,7 +67,7 @@
                                 ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                        CKB Node                                  │
-│                      RPC + ckb-indexer                           │
+│               RPC (+ optional direct RocksDB read)               │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -170,21 +170,22 @@ CKBADGER_API_URL=http://localhost:3001/api/v1
 
 ### Indexer Configuration
 
-```toml
-# indexer.toml
+`ckbadger-indexer` is configured via CLI flags and environment variables.
 
-[sync]
-batch_size = 100          # Blocks per batch
-start_block = 0           # Starting block (0 = genesis)
-confirmations = 24        # Blocks before marking as finalized
+```bash
+# CLI
+cargo run -p ckbadger-indexer -- \
+  --batch-size 10000 \
+  --parallel-fetch-size 64 \
+  --pipeline-enabled \
+  --pipeline-buffer 8 \
+  --bulk-sync-threshold 1000
 
-[parsers]
-sudt = true               # Enable sUDT token parsing
-spore = true              # Enable Spore NFT parsing
-dao = true                # Enable DAO deposit tracking
-
-[performance]
-concurrent_requests = 4
+# Environment variables
+CKBADGER_DATA_PATH=./data/ckbadger-store
+CKB_RPC_URL=http://localhost:8114
+REDIS_URL=redis://localhost:6379
+TOKEN_LABELS_PATH=docs/token-labels
 ```
 
 ## API Reference
@@ -193,22 +194,22 @@ concurrent_requests = 4
 
 ```
 GET  /api/v1/blocks                              # List blocks (paginated)
-GET  /api/v1/blocks/:hash_or_number              # Block details
+GET  /api/v1/blocks/{id}                         # Block details
 GET  /api/v1/transactions                        # List transactions (paginated)
-GET  /api/v1/transactions/:hash                  # Transaction details
-GET  /api/v1/transactions/:hash/detail           # Transaction with inputs/outputs
-GET  /api/v1/addresses/:address                  # Address info & balance
+GET  /api/v1/transactions/{hash}                 # Transaction details
+GET  /api/v1/transactions/{hash}/detail          # Transaction with inputs/outputs
+GET  /api/v1/addresses/{addr}                    # Address info & balance
 GET  /api/v1/cells/live                          # Query live cells
-GET  /api/v1/cells/:tx_hash/:output_index        # Cell details
-GET  /api/v1/statistics/network                  # Network stats
-GET  /api/v1/status                              # System status (sync, index rebuild)
+GET  /api/v1/cells/{tx_hash}/{output_index}      # Cell details
+GET  /api/v1/statistics/network                  # Network + sync status
+GET  /api/v1/forks/recent                        # Deep fork / recent reorg status
 
 # Mempool API (Real-time transaction pool)
 GET  /api/v1/mempool/pending-proposals           # Pending proposals with fee/size metadata
 
 # Graph API (Cell Relationship Visualization)
-GET  /api/v1/graph/cell/:tx_hash/:index?depth=2  # Cell relationship graph
-GET  /api/v1/graph/transaction/:hash?depth=2     # Transaction I/O graph
+GET  /api/v1/graph/cell/{tx_hash}/{output_index}?depth=2  # Cell relationship graph
+GET  /api/v1/graph/transaction/{hash}?depth=2             # Transaction I/O graph
 ```
 
 ### Graph API Response
@@ -301,24 +302,24 @@ ws.onmessage = (event) => {
 ### Docker Compose (Recommended for small deployments)
 
 ```bash
-# Production configuration
-docker compose -f docker-compose.prod.yml up -d
+# Built-in CKB node
+docker compose --profile internal up -d
+
+# External CKB node on host (set CKB_RPC_URL in .env first)
+docker compose up -d
 ```
 
 ### Kubernetes (Production scale)
 
 ```bash
-# Add Helm repository
-helm repo add ckbadger https://charts.ckbadger.io
-
-# Install with custom values
-helm install ckbadger ckbadger/ckbadger \
+# Install local Helm chart
+helm install ckbadger ./deploy/helm/ckbadger \
   --namespace ckbadger \
   --create-namespace \
-  -f values.yaml
+  -f ./deploy/helm/ckbadger/values.yaml
 ```
 
-See [deployment documentation](./docs/deployment.md) for detailed instructions.
+Helm chart templates and values are under `deploy/helm/ckbadger/`.
 
 ## Development
 
@@ -334,7 +335,7 @@ ckbadger/
 │   │       ├── parser/     # Block, cell, script parsers
 │   │       ├── db/         # RocksDB write operations
 │   │       ├── sync/       # Synchronization logic
-│   │       └── verify/     # Data integrity verification (18 checks via API)
+│   │       └── verify/     # Data integrity verification (28 checks via API)
 │   ├── api/                # REST API server
 │   │   └── src/
 │   │       ├── routes/     # HTTP handlers (blocks, tx, cells, graph)
@@ -441,7 +442,7 @@ cargo run -p ckbadger-indexer -- verify --api-url http://localhost:3001/api/v1
 # Add CKB RPC spot-checks
 cargo run -p ckbadger-indexer -- verify --rpc-url http://localhost:8114
 
-# List all 18 available checks
+# List all 28 available checks
 cargo run -p ckbadger-indexer -- verify --list-checks
 ```
 
@@ -449,20 +450,20 @@ cargo run -p ckbadger-indexer -- verify --list-checks
 | ------------ | ------ | --------------------------------------------------------------------- |
 | **Fast**     | 6      | API reachable, sync complete, genesis block, tip block, DAO, forks    |
 | **Sampling** | 7      | Block hash roundtrips, parent chain, balances, charts, RPC spot-check |
-| **Explorer** | 5      | Last 30 days vs official CKB explorer (cached, 24h freshness)         |
+| **Explorer** | 15     | Last 30 days vs official CKB explorer (cached, 24h freshness)         |
 
 Explorer API responses are cached to `.verify-cache/` with 24-hour freshness. On HTTP failure, stale cache is used as fallback.
 
 ### Running Tests
 
 ```bash
-# Rust tests (542 tests)
+# Rust tests
 cargo test                               # All tests
 cargo test --lib                         # Unit tests only
 cargo test -p ckbadger-indexer           # Specific crate
 cargo test test_parse_epoch              # Single test (partial match)
 
-# Frontend tests (195 tests)
+# Frontend tests
 cd frontend && pnpm test                 # Run Vitest
 cd frontend && pnpm test:coverage        # With coverage
 
@@ -476,11 +477,7 @@ pnpm test:e2e                            # Playwright tests
 
 ### Test Coverage
 
-| Area                    | Tests | Coverage                                     |
-| ----------------------- | ----- | -------------------------------------------- |
-| **Rust (all crates)**   | 542   | parsers, indexer, store, api, verify         |
-| **Frontend Components** | 195   | Hash, Capacity, Address, Pagination, Banners |
-| **E2E**                 | 7     | Homepage, block detail, navigation           |
+Coverage is verified in CI across Rust crates, frontend unit tests, and E2E flows.
 
 ### CI/CD
 

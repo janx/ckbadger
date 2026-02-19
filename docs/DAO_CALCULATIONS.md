@@ -145,9 +145,12 @@ APC decreases over time because:
 - `secondary_issuance` is constant (1.344B/year)
 - `circulating_supply` grows (primary + secondary issuance - burnt)
 
-**Update frequency**: Every 1,000 blocks
+**Update frequency**: Calculated from latest snapshot on API read path.
 
-**Implementation**: `crates/indexer/src/db/writer.rs::recalculate_dao_extended_statistics()`
+**Implementation**:
+
+- API calculation: `crates/api/src/routes/dao.rs::snapshot_estimated_apc()`
+- Writer hook (currently no-op): `crates/indexer/src/db/writer/dao.rs::recalculate_dao_extended_statistics()`
 
 ## 3. Secondary Issuance Distribution
 
@@ -191,45 +194,31 @@ Where:
 
 **CRITICAL**: When calculating historical secondary issuance breakdown, `dao_deposits` must be queried for that specific block number. Using current deposits will produce incorrect historical values. The indexer maintains point-in-time deposit tracking in RocksDB's `dao_deposits` column family.
 
-**Update frequency**: Every 50 blocks
+**Update frequency**: Per processed block when close to tip; skipped while secondary-issuance bulk mode is active (`blocks_remaining > 1000`).
 
 **Implementation**: `crates/indexer/src/sync/indexer.rs::update_secondary_issuance()`
 
 ## 4. Storage Schema (RocksDB)
 
-DAO statistics are stored in the `dao_stats` column family in RocksDB, keyed by metric name. Key fields:
+DAO-related state is split across several CFs:
 
-| Field                         | Description                                         |
-| ----------------------------- | --------------------------------------------------- |
-| `total_deposited`             | Total CKB in active DAO deposits (shannons)         |
-| `total_depositors`            | Unique addresses with active deposits               |
-| `active_deposits`             | Count of active deposit cells                       |
-| `total_compensation_paid`     | Cumulative compensation claimed (shannons)          |
-| `unclaimed_compensation`      | Current unclaimed compensation (shannons)           |
-| `estimated_apc`               | Annualized percentage compensation (e.g., "4.86")   |
-| `cumulative_miner_secondary`  | Cumulative mining reward from secondary issuance    |
-| `cumulative_dao_compensation` | Cumulative DAO compensation from secondary issuance |
-| `cumulative_burnt`            | Cumulative burnt secondary issuance                 |
-| `last_processed_block`        | Last block processed for secondary issuance         |
-
-### API Response Mapping
-
-| API Field                | Store Field                   | Conversion       |
-| ------------------------ | ----------------------------- | ---------------- |
-| `miningRewardCkb`        | `cumulative_miner_secondary`  | shannon_to_ckb() |
-| `depositCompensationCkb` | `cumulative_dao_compensation` | shannon_to_ckb() |
-| `burntCkb`               | `cumulative_burnt`            | shannon_to_ckb() |
-| `estimatedApc`           | `estimated_apc`               | Direct           |
+| CF / Data                     | Key                        | Value                  | Purpose                                                                                                                                          |
+| ----------------------------- | -------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `dao_deposits`                | `tx_hash + output_index`   | `DaoDepositCacheEntry` | Deposit lifecycle (active / withdraw requested / completed)                                                                                      |
+| `dao_by_withdraw_tx`          | `withdraw_request_tx_hash` | `deposit_outpoint_key` | Fast lookup on withdraw completion                                                                                                               |
+| `dao_stats`                   | metric key                 | `DaoStats`             | Aggregate DAO counters (`total_deposited`, `total_depositors`, `total_compensation`, `total_deposits`, `total_withdrawals`)                      |
+| `block_issuance`              | block number               | `SecondaryIssuance`    | Per-block secondary issuance split (miner / dao / treasury)                                                                                      |
+| `stats` (DAO snapshot prefix) | date                       | `DaoDailySnapshot`     | Daily cumulative series (`total_issuance`, `secondary_pool`, `occupied_capacity`, `cum_miner_secondary`, `cum_dao_compensation`, `cum_treasury`) |
 
 ## 5. Update Triggers
 
-| Statistic                    | Trigger                       | Function                                |
-| ---------------------------- | ----------------------------- | --------------------------------------- |
-| Secondary issuance breakdown | Every 50 blocks               | `update_secondary_issuance()`           |
-| APC, unclaimed compensation  | Every 1,000 blocks (non-bulk) | `recalculate_dao_extended_statistics()` |
-| Daily snapshots              | Daily                         | `update_dao_daily_snapshot()`           |
+| Statistic                    | Trigger                                                  | Function                                                  |
+| ---------------------------- | -------------------------------------------------------- | --------------------------------------------------------- |
+| Secondary issuance breakdown | For each processed block when `blocks_remaining <= 1000` | `update_secondary_issuance()`                             |
+| DAO extended statistics hook | When crossing 1000-block boundaries in non-bulk mode     | `recalculate_dao_extended_statistics()` (currently no-op) |
+| Daily snapshots              | Daily                                                    | `update_dao_daily_snapshot()`                             |
 
-> **Note:** `recalculate_dao_extended_statistics()` is skipped during bulk sync (`is_bulk_sync_active()` guard) to avoid expensive scans during high-throughput indexing. The first recalculation after bulk sync completion produces correct results from all historical data.
+> **Note:** Estimated APC served by DAO APIs is derived from the latest `DaoDailySnapshot` + protocol constants, not from a periodically persisted `estimated_apc` field.
 
 ## 6. Charts Data
 
@@ -431,7 +420,7 @@ pub fn calculate_knowledge_size(dao_field: &[u8]) -> Option<i128> {
 1. Each block's DAO field is stored during indexing
 2. `update_daily_statistics()` extracts U field from the last block of each day
 3. Calculates `knowledge_size = U - 504000000000000000`
-4. Stores in `daily_statistics.knowledge_size` column
+4. Stores in `DailyStats.knowledge_size` in the `stats` column family
 5. API serves historical chart data
 
 ### Reference

@@ -127,26 +127,26 @@ Block N arrives
 
 ## Configuration
 
-| Parameter             | Default | Description                                                     |
-| --------------------- | ------- | --------------------------------------------------------------- |
-| `pipeline_enabled`    | `true`  | Enable three-stage pipeline (vs sequential sync)                |
-| `pipeline_buffer`     | `8`     | Channel capacity between stages                                 |
-| `batch_size`          | `10000` | Blocks per batch                                                |
-| `parallel_fetch_size` | `64`    | Concurrent RPC requests (used only in RPC fallback mode)        |
-| `bulk_sync_threshold` | `72`    | Blocks behind tip to auto-enable bulk sync (2x DEEP_FORK_DEPTH) |
-| `ckb_data_path`       | -       | Path to CKB node's RocksDB data dir for direct reads            |
+| Parameter             | Default | Description                                              |
+| --------------------- | ------- | -------------------------------------------------------- |
+| `pipeline_enabled`    | `true`  | Enable three-stage pipeline (vs sequential sync)         |
+| `pipeline_buffer`     | `8`     | Channel capacity between stages                          |
+| `batch_size`          | `10000` | Blocks per batch                                         |
+| `parallel_fetch_size` | `64`    | Concurrent RPC requests (used only in RPC fallback mode) |
+| `bulk_sync_threshold` | `1000`  | Blocks behind tip to treat sync as bulk mode             |
+| `ckb_data_path`       | -       | Path to CKB node's RocksDB data dir for direct reads     |
 
 ### Environment Variables
 
 ```bash
-PIPELINE_ENABLED=true
-PIPELINE_BUFFER=4
-BATCH_SIZE=10000
-PARALLEL_FETCH_SIZE=64
-BULK_SYNC_THRESHOLD=72
 CKBADGER_DATA_PATH=./data/ckbadger-store
 CKB_DATA_PATH=/var/lib/ckb/data/db
+CKB_RPC_URL=http://127.0.0.1:8114
+REDIS_URL=redis://localhost:6379
 ```
+
+`pipeline_enabled`, `pipeline_buffer`, `batch_size`, `parallel_fetch_size`, and
+`bulk_sync_threshold` are configured via CLI flags in current builds.
 
 ### CLI Arguments
 
@@ -156,7 +156,7 @@ cargo run -p ckbadger-indexer -- \
   --pipeline-buffer 4 \
   --batch-size 10000 \
   --parallel-fetch-size 64 \
-  --bulk-sync-threshold 72
+  --bulk-sync-threshold 1000
 ```
 
 ## Error Handling
@@ -194,7 +194,7 @@ Before processing each batch (only when close to chain tip):
 
 If reorg depth exceeds `REORG_LIMIT` (36 blocks):
 
-1. Flag `has_unresolved_deep_fork` in database
+1. Set `deep_fork_detected` in sync status
 2. Pause sync with 30s sleep loop
 3. Require manual intervention
 
@@ -345,7 +345,7 @@ All code hash data is now available from `LiveCellInfo` — no separate DB reads
 
 1. Check logs for errors
 2. Verify CKB node is synced and responsive
-3. Check for `has_unresolved_deep_fork` flag
+3. Check for `deep_fork_detected` in sync status
 4. Try restarting indexer
 
 ### Data Inconsistency
@@ -362,7 +362,7 @@ All code hash data is now available from `LiveCellInfo` — no separate DB reads
 
 ## Bulk Sync Statistics Optimization
 
-During bulk sync (when `blocks_remaining > bulk_sync_threshold`, default 72 = 2x DEEP_FORK_DEPTH), the indexer skips non-critical statistics updates to maximize write throughput.
+During bulk sync (when `blocks_remaining > bulk_sync_threshold`, default 1000), the indexer skips expensive work to maximize write throughput.
 
 ### Skipped Statistics (during bulk sync)
 
@@ -382,19 +382,20 @@ During bulk sync (when `blocks_remaining > bulk_sync_threshold`, default 72 = 2x
 | `sync_status` | Critical for crash recovery                     |
 | `epoch_stats` | Contains epoch metadata (start/end block, etc.) |
 
-### Automatic Rebuild
+### Bulk-Sync Completion Behavior
 
 When bulk sync completes (transitions from `blocks_remaining > threshold` to `<= threshold`):
 
 1. Indexer detects state transition via `was_bulk_sync_active` flag
-2. Triggers `rebuild_all_statistics()` which rebuilds from raw data
-3. Logs progress for each statistics group
+2. Marks bulk sync completed in sync status/cache metadata
+3. Invalidates chart caches
+4. Restores normal compaction options and triggers background compaction
 
 ### Implementation Details
 
 - State tracking: `was_bulk_sync_active: AtomicBool` in Indexer struct
 - Detection: `check_bulk_sync_completion()` called after each batch
-- Rebuild entry point: `BatchWriter::rebuild_all_statistics()`
+- No automatic call to `BatchWriter::rebuild_all_statistics()` in current runtime path
 
 ## Crash Recovery
 
