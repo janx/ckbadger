@@ -8,6 +8,7 @@ use ckbadger_api::{create_router, AppConfig};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
     ClusterAggregate, DobEntry, DobExtra, DobStandard, ScriptDailyDelta, ScriptInfo,
+    TokenDailyDelta, TokenInfo,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -334,6 +335,80 @@ async fn test_script_occupation_chart_by_code_hash_with_kind_filter() {
     assert_eq!(data.len(), 1);
     assert_eq!(data[0]["values"]["occupied"], "40");
     assert_eq!(data[0]["values"]["unoccupied"], "60");
+}
+
+#[tokio::test]
+async fn test_token_occupation_chart_returns_cumulative_series() {
+    let store = test_store();
+    let type_hash = vec![0x44; 32];
+    let type_hash_hex = format!("0x{}", hex::encode(&type_hash));
+
+    store
+        .put_token_direct(
+            &type_hash,
+            &TokenInfo {
+                type_code_hash: vec![0x55; 32],
+                hash_type: 1,
+                type_args: vec![0x66; 20],
+                standard: "xudt".to_string(),
+                name: Some("Test Token".to_string()),
+                symbol: Some("TEST".to_string()),
+                decimals: Some(8),
+                total_supply: Some(0),
+                holders_count: 0,
+                first_seen_block: 0,
+                icon_url: None,
+                description: None,
+                transfers_count: 0,
+            },
+        )
+        .unwrap();
+    store
+        .put_token_daily_delta(
+            &type_hash,
+            20240115,
+            &TokenDailyDelta {
+                live_capacity_delta: 100,
+                live_occupied_capacity_delta: 60,
+            },
+        )
+        .unwrap();
+    store
+        .put_token_daily_delta(
+            &type_hash,
+            20240116,
+            &TokenDailyDelta {
+                live_capacity_delta: -20,
+                live_occupied_capacity_delta: -10,
+            },
+        )
+        .unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/tokens/{}/charts/occupation",
+            type_hash_hex
+        ))
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let data = json["data"].as_array().unwrap();
+    assert_eq!(json["title"], "TEST Capacity Occupation");
+    assert_eq!(data.len(), 2);
+    assert_eq!(data[0]["date"], "2024-01-15");
+    assert_eq!(data[0]["values"]["occupied"], "60");
+    assert_eq!(data[0]["values"]["unoccupied"], "40");
+    assert_eq!(data[1]["date"], "2024-01-16");
+    assert_eq!(data[1]["values"]["occupied"], "50");
+    assert_eq!(data[1]["values"]["unoccupied"], "30");
 }
 
 #[tokio::test]

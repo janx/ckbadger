@@ -7,6 +7,7 @@ import { api } from '@/lib/api';
 vi.mock('@/lib/api', () => ({
   api: {
     getToken: vi.fn(),
+    getTokenOccupationChart: vi.fn(),
     getTokenHolders: vi.fn(),
     getTokenTransfers: vi.fn(),
   },
@@ -70,6 +71,19 @@ const mockTransfers = {
 describe('TokenDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(api.getTokenOccupationChart).mockResolvedValue({
+      title: 'TEST Capacity Occupation',
+      series: [
+        { key: 'occupied', label: 'Occupied', color: '#f59e0b' },
+        { key: 'unoccupied', label: 'Unoccupied', color: '#00c389' },
+      ],
+      data: [
+        {
+          date: '2024-01-15',
+          values: { occupied: '15300000000000', unoccupied: '34700000000000' },
+        },
+      ],
+    });
     vi.mocked(api.getTokenHolders).mockResolvedValue(mockHolders);
     vi.mocked(api.getTokenTransfers).mockResolvedValue(mockTransfers);
   });
@@ -126,6 +140,16 @@ describe('TokenDetailPage', () => {
       expect(screen.getByText('TEST')).toBeInTheDocument();
       expect(screen.getByText('XUDT')).toBeInTheDocument();
       expect(screen.getByText('A test token')).toBeInTheDocument();
+    });
+  });
+
+  it('renders occupation history panel', async () => {
+    vi.mocked(api.getToken).mockResolvedValue(mockToken);
+
+    render(<TokenDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Occupation History')).toBeInTheDocument();
     });
   });
 });

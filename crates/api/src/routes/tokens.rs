@@ -4,8 +4,10 @@ use axum::{
     Router,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 
+use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
 use crate::warmup::{CachedAssetEntry, CACHE_KEY_ASSETS_TOKEN};
 use crate::AppState;
@@ -16,6 +18,10 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/tokens/{type_hash}", get(get_token))
         .route("/tokens/{type_hash}/holders", get(get_token_holders))
         .route("/tokens/{type_hash}/transfers", get(get_token_transfers))
+        .route(
+            "/tokens/{type_hash}/charts/occupation",
+            get(get_token_occupation_chart),
+        )
 }
 
 #[derive(Debug, Deserialize)]
@@ -560,6 +566,76 @@ async fn get_token_transfers(
         limit as i64,
         next_cursor,
     ))
+}
+
+fn format_yyyymmdd_for_chart(date_yyyymmdd: u32) -> String {
+    let date = format!("{date_yyyymmdd:08}");
+    format!("{}-{}-{}", &date[0..4], &date[4..6], &date[6..8])
+}
+
+async fn get_token_occupation_chart(
+    State(state): State<Arc<AppState>>,
+    Path(type_hash): Path<String>,
+) -> ApiResult<StackedAreaChartResponse> {
+    let hash = hex::decode(type_hash.strip_prefix("0x").unwrap_or(&type_hash))
+        .map_err(|_| ApiError::bad_request("Invalid type script hash"))?;
+
+    let token = state
+        .store
+        .get_token(&hash)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let token = match token {
+        Some(info) => info,
+        None => return Err(ApiError::not_found("Token not found")),
+    };
+
+    let deltas = state
+        .store
+        .list_token_daily_deltas(&hash)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let mut cumulative_capacity: i128 = 0;
+    let mut cumulative_occupied: i128 = 0;
+    let mut data = Vec::with_capacity(deltas.len());
+    for (date, delta) in deltas {
+        cumulative_capacity = (cumulative_capacity + delta.live_capacity_delta as i128).max(0);
+        cumulative_occupied =
+            (cumulative_occupied + delta.live_occupied_capacity_delta as i128).max(0);
+        if cumulative_occupied > cumulative_capacity {
+            cumulative_occupied = cumulative_capacity;
+        }
+        let unoccupied = cumulative_capacity - cumulative_occupied;
+
+        data.push(StackedAreaDataPoint {
+            date: format_yyyymmdd_for_chart(date),
+            values: HashMap::from([
+                ("occupied".to_string(), cumulative_occupied.to_string()),
+                ("unoccupied".to_string(), unoccupied.to_string()),
+            ]),
+        });
+    }
+
+    let title = token
+        .symbol
+        .or(token.name)
+        .unwrap_or_else(|| format!("0x{}", hex::encode(&hash)));
+
+    ok(StackedAreaChartResponse {
+        data,
+        series: vec![
+            StackedAreaSeries {
+                key: "occupied".to_string(),
+                label: "Occupied".to_string(),
+                color: "#f59e0b".to_string(),
+            },
+            StackedAreaSeries {
+                key: "unoccupied".to_string(),
+                label: "Unoccupied".to_string(),
+                color: "#00c389".to_string(),
+            },
+        ],
+        title: format!("{title} Capacity Occupation"),
+    })
 }
 
 fn hash_type_to_string(hash_type: i16) -> String {

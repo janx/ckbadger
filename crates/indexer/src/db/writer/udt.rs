@@ -2,13 +2,60 @@ use anyhow::Result;
 use std::collections::HashMap;
 
 use ckbadger_store::batch::StoreBatch;
-use ckbadger_store::types::{TokenInfo, TokenTransferRecord};
+use ckbadger_store::types::{TokenDailyDelta, TokenInfo, TokenTransferRecord};
 
 use crate::parser::{ParsedUdtCell, ParsedUdtTransfer};
 
 use super::BatchWriter;
 
 impl BatchWriter {
+    pub fn update_token_daily_deltas_batch(
+        &self,
+        changes: &HashMap<(Vec<u8>, u32), (i64, i64)>,
+        batch: &mut StoreBatch,
+    ) -> Result<()> {
+        if changes.is_empty() {
+            return Ok(());
+        }
+
+        let mut keyed_changes: Vec<(Vec<u8>, i64, i64)> = Vec::with_capacity(changes.len());
+        for ((type_hash, date_yyyymmdd), (live_cap_delta, live_occupied_delta)) in changes {
+            if *live_cap_delta == 0 && *live_occupied_delta == 0 {
+                continue;
+            }
+            keyed_changes.push((
+                ckbadger_store::keys::encode_token_daily_key(type_hash, *date_yyyymmdd).to_vec(),
+                *live_cap_delta,
+                *live_occupied_delta,
+            ));
+        }
+
+        if keyed_changes.is_empty() {
+            return Ok(());
+        }
+
+        let cf_keys: Vec<_> = keyed_changes
+            .iter()
+            .map(|(key, _, _)| (self.store.cf_stats(), key.as_slice()))
+            .collect();
+        let existing_results = self.store.multi_get_cf(cf_keys);
+
+        for ((key, live_cap_delta, live_occupied_delta), existing_res) in
+            keyed_changes.into_iter().zip(existing_results.into_iter())
+        {
+            let mut existing: TokenDailyDelta = match existing_res {
+                Ok(Some(value)) => bincode::deserialize(&value).unwrap_or_default(),
+                _ => TokenDailyDelta::default(),
+            };
+            existing.live_capacity_delta += live_cap_delta;
+            existing.live_occupied_capacity_delta += live_occupied_delta;
+            let value = bincode::serialize(&existing)?;
+            batch.put_stats(&key, &value);
+        }
+
+        Ok(())
+    }
+
     /// Look up UDT cell info for multiple outpoints.
     /// Returns (type_script_hash, type_code_hash, type_hash_type, type_args, lock_script_hash, amount, standard).
     pub fn get_udt_cells_info_batch(
@@ -300,4 +347,43 @@ struct TokenUpdate<'a> {
     block_number: i64,
     transfers_count: i64,
     supply_delta: i128,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    use ckbadger_store::CkbadgerStore;
+
+    #[test]
+    fn test_update_token_daily_deltas_batch_accumulates() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+        let type_hash = vec![0xAA; 32];
+
+        let mut first = HashMap::new();
+        first.insert((type_hash.clone(), 20240115u32), (100i64, 60i64));
+        let mut batch = StoreBatch::new(&store);
+        writer
+            .update_token_daily_deltas_batch(&first, &mut batch)
+            .unwrap();
+        batch.commit().unwrap();
+
+        let mut second = HashMap::new();
+        second.insert((type_hash.clone(), 20240115u32), (-20i64, -10i64));
+        let mut batch = StoreBatch::new(&store);
+        writer
+            .update_token_daily_deltas_batch(&second, &mut batch)
+            .unwrap();
+        batch.commit().unwrap();
+
+        let delta = store
+            .get_token_daily_delta(&type_hash, 20240115)
+            .unwrap()
+            .unwrap();
+        assert_eq!(delta.live_capacity_delta, 80);
+        assert_eq!(delta.live_occupied_capacity_delta, 50);
+    }
 }

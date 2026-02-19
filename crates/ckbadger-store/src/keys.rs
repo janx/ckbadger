@@ -107,6 +107,7 @@ pub mod stats_prefix {
     pub const SPORE_HOURLY: u8 = 0x0D;
     pub const NFT_HOURLY: u8 = 0x0E;
     pub const SCRIPT_DAILY: u8 = 0x0F;
+    pub const TOKEN_DAILY: u8 = 0x10;
 }
 
 // Flat re-exports for convenience
@@ -125,6 +126,7 @@ pub const STATS_PREFIX_CLUSTER_OWNER: u8 = stats_prefix::CLUSTER_OWNER;
 pub const STATS_PREFIX_SPORE_HOURLY: u8 = stats_prefix::SPORE_HOURLY;
 pub const STATS_PREFIX_NFT_HOURLY: u8 = stats_prefix::NFT_HOURLY;
 pub const STATS_PREFIX_SCRIPT_DAILY: u8 = stats_prefix::SCRIPT_DAILY;
+pub const STATS_PREFIX_TOKEN_DAILY: u8 = stats_prefix::TOKEN_DAILY;
 
 /// Token transfers total count key: prefix(1B) + type_hash(32B) = 33 bytes
 pub fn encode_token_transfers_key(type_hash: &[u8]) -> Vec<u8> {
@@ -150,6 +152,31 @@ pub fn encode_token_hourly_prefix(type_hash: &[u8]) -> Vec<u8> {
     key.push(STATS_PREFIX_TOKEN_HOURLY);
     key.extend_from_slice(&type_hash[..32]);
     key
+}
+
+/// Token daily stats key: prefix(1B) + type_hash(32B) + date(4B YYYYMMDD BE)
+pub const TOKEN_DAILY_KEY_SIZE: usize = 37;
+
+pub fn encode_token_daily_key(type_hash: &[u8], date_yyyymmdd: u32) -> [u8; TOKEN_DAILY_KEY_SIZE] {
+    let mut key = [0u8; TOKEN_DAILY_KEY_SIZE];
+    key[0] = STATS_PREFIX_TOKEN_DAILY;
+    key[1..33].copy_from_slice(&type_hash[..32]);
+    key[33..37].copy_from_slice(&date_yyyymmdd.to_be_bytes());
+    key
+}
+
+/// Prefix for scanning all token daily entries.
+pub fn encode_token_daily_prefix(type_hash: &[u8]) -> [u8; 33] {
+    let mut prefix = [0u8; 33];
+    prefix[0] = STATS_PREFIX_TOKEN_DAILY;
+    prefix[1..33].copy_from_slice(&type_hash[..32]);
+    prefix
+}
+
+pub fn decode_token_daily_key(key: &[u8]) -> (Vec<u8>, u32) {
+    let type_hash = key[1..33].to_vec();
+    let date = u32::from_be_bytes(key[33..37].try_into().unwrap());
+    (type_hash, date)
 }
 
 /// Zero-pad an ID to exactly 32 bytes. IDs shorter than 32 bytes (e.g. mNFT class_id = 24B)
@@ -414,6 +441,25 @@ mod tests {
         let full_key = encode_token_hourly_key(&type_hash, 999);
         assert_eq!(prefix.len(), 33);
         assert!(full_key.starts_with(&prefix));
+    }
+
+    #[test]
+    fn test_token_daily_key_roundtrip() {
+        let type_hash = [0x77u8; 32];
+        let key = encode_token_daily_key(&type_hash, 20260219);
+        assert_eq!(key.len(), TOKEN_DAILY_KEY_SIZE);
+        let (decoded_hash, decoded_date) = decode_token_daily_key(&key);
+        assert_eq!(decoded_hash, type_hash.to_vec());
+        assert_eq!(decoded_date, 20260219);
+    }
+
+    #[test]
+    fn test_token_daily_prefix_is_prefix_of_full_key() {
+        let type_hash = [0x11u8; 32];
+        let prefix = encode_token_daily_prefix(&type_hash);
+        let key = encode_token_daily_key(&type_hash, 20240101);
+        assert_eq!(prefix.len(), 33);
+        assert!(key.starts_with(&prefix));
     }
 
     // ---- Activity key ----

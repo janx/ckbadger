@@ -504,6 +504,14 @@ pub struct ScriptDailyDelta {
     pub live_occupied_capacity_delta: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TokenDailyDelta {
+    /// Net live capacity change in shannons for this token's cells on a day.
+    pub live_capacity_delta: i64,
+    /// Net live occupied capacity change in shannons for this token's cells on a day.
+    pub live_occupied_capacity_delta: i64,
+}
+
 // ============================================
 // Group G2: HODL Wave
 // ============================================
@@ -715,6 +723,27 @@ mod tests {
     #[test]
     fn test_script_daily_delta_default() {
         let delta = ScriptDailyDelta::default();
+        assert_eq!(delta.live_capacity_delta, 0);
+        assert_eq!(delta.live_occupied_capacity_delta, 0);
+    }
+
+    // ---- TokenDailyDelta ----
+
+    #[test]
+    fn test_token_daily_delta_roundtrip() {
+        let delta = TokenDailyDelta {
+            live_capacity_delta: 890_000_000_000,
+            live_occupied_capacity_delta: -120_000_000_000,
+        };
+        let bytes = bincode::serialize(&delta).unwrap();
+        let decoded: TokenDailyDelta = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.live_capacity_delta, 890_000_000_000);
+        assert_eq!(decoded.live_occupied_capacity_delta, -120_000_000_000);
+    }
+
+    #[test]
+    fn test_token_daily_delta_default() {
+        let delta = TokenDailyDelta::default();
         assert_eq!(delta.live_capacity_delta, 0);
         assert_eq!(delta.live_occupied_capacity_delta, 0);
     }

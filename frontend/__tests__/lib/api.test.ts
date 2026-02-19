@@ -209,6 +209,22 @@ describe('api', () => {
       expect(chart.title).toContain('Capacity Occupation');
     });
 
+    it('fetches token occupation chart by type hash', async () => {
+      server.use(
+        http.get('*/api/v1/tokens/:typeHash/charts/occupation', ({ params }) => {
+          expect(params.typeHash).toBe('0x1234');
+          return HttpResponse.json({
+            title: 'TEST Capacity Occupation',
+            data: [],
+            series: [],
+          });
+        })
+      );
+
+      const chart = await api.getTokenOccupationChart('0x1234');
+      expect(chart.title).toContain('Capacity Occupation');
+    });
+
     it('builds query params for getAddressTokens', async () => {
       server.use(
         http.get('*/api/v1/addresses/:addr/tokens', ({ request }) => {

@@ -17,6 +17,7 @@ import { StatBlock, StatGrid } from '@/components/ui/stat-block';
 import { DataField } from '@/components/ui/data-field';
 import { HexDisplay } from '@/components/ui/hex-display';
 import { Address } from '@/components/ui/address';
+import { StackedAreaChart } from '@/components/ui/stacked-area-chart';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
@@ -53,6 +54,12 @@ export default function TokenDetailPage() {
       api.getTokenTransfers(typeHash, { limit: 20, cursor: transfersPagination.cursor }),
     enabled: !!token,
     placeholderData: keepPreviousData,
+  });
+
+  const { data: occupationChart, isLoading: isOccupationChartLoading } = useQuery({
+    queryKey: ['token-occupation-chart', typeHash],
+    queryFn: () => api.getTokenOccupationChart(typeHash),
+    enabled: !!token,
   });
 
   const formatNumber = (num: number | string) => {
@@ -298,6 +305,22 @@ export default function TokenDetailPage() {
             </TerminalPanel>
           )}
         </div>
+
+        <TerminalPanel className="mb-6">
+          <TerminalPanelHeader indicator="active">Occupation History</TerminalPanelHeader>
+          <TerminalPanelContent>
+            <div className="mb-3 text-xs text-slate-500">
+              Daily cumulative live CKB occupation for token cells.
+            </div>
+            {isOccupationChartLoading ? (
+              <div className="py-8 text-center text-slate-500">Loading occupation history...</div>
+            ) : occupationChart && occupationChart.data.length > 0 ? (
+              <StackedAreaChart data={occupationChart.data} series={occupationChart.series} />
+            ) : (
+              <div className="py-8 text-center text-slate-500">No occupation history yet</div>
+            )}
+          </TerminalPanelContent>
+        </TerminalPanel>
 
         <TerminalPanel>
           <Tabs value={activeTab} onValueChange={setActiveTab}>

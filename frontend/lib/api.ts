@@ -1114,6 +1114,10 @@ export const api = {
     return fetchApi(`/tokens/${typeHash}`);
   },
 
+  getTokenOccupationChart: (typeHash: string): Promise<StackedAreaChartResponse> => {
+    return fetchApi(`/tokens/${typeHash}/charts/occupation`);
+  },
+
   getTokenHolders: (
     typeHash: string,
     params: TokenHolderParams = {}

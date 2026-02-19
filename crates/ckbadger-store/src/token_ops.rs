@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use crate::keys;
 use crate::store::CkbadgerStore;
-use crate::types::{TokenInfo, TokenTransferRecord};
+use crate::types::{TokenDailyDelta, TokenInfo, TokenTransferRecord};
 
 impl CkbadgerStore {
     pub fn get_token(&self, type_hash: &[u8]) -> anyhow::Result<Option<TokenInfo>> {
@@ -81,6 +81,54 @@ impl CkbadgerStore {
             }
         }
         Ok(total)
+    }
+
+    pub fn get_token_daily_delta(
+        &self,
+        type_hash: &[u8],
+        date_yyyymmdd: u32,
+    ) -> anyhow::Result<Option<TokenDailyDelta>> {
+        let key = keys::encode_token_daily_key(type_hash, date_yyyymmdd);
+        match self.get_cf(self.cf_stats(), &key)? {
+            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn put_token_daily_delta(
+        &self,
+        type_hash: &[u8],
+        date_yyyymmdd: u32,
+        delta: &TokenDailyDelta,
+    ) -> anyhow::Result<()> {
+        let key = keys::encode_token_daily_key(type_hash, date_yyyymmdd);
+        let value = bincode::serialize(delta)?;
+        self.put_cf(self.cf_stats(), &key, &value)
+    }
+
+    pub fn list_token_daily_deltas(
+        &self,
+        type_hash: &[u8],
+    ) -> anyhow::Result<Vec<(u32, TokenDailyDelta)>> {
+        let prefix = keys::encode_token_daily_prefix(type_hash);
+        let iter = self.prefix_iterator_cf(self.cf_stats(), &prefix);
+        let mut results = Vec::new();
+
+        for item in iter.flatten() {
+            let (key, value) = item;
+            if !key.starts_with(&prefix) {
+                break;
+            }
+            if key.len() != keys::TOKEN_DAILY_KEY_SIZE {
+                continue;
+            }
+            let (_, date) = keys::decode_token_daily_key(&key);
+            if let Ok(delta) = bincode::deserialize::<TokenDailyDelta>(&value) {
+                results.push((date, delta));
+            }
+        }
+
+        Ok(results)
     }
 
     /// Scan ALL hourly transfer entries in one pass and group by type_hash.
@@ -416,6 +464,45 @@ mod tests {
             store.get_token_24h_transfers(&type_hash, now_ms).unwrap(),
             10
         );
+    }
+
+    #[test]
+    fn test_token_daily_delta_roundtrip_and_list() {
+        let (_dir, store) = test_store();
+        let type_hash = [0x06u8; 32];
+
+        store
+            .put_token_daily_delta(
+                &type_hash,
+                20240115,
+                &TokenDailyDelta {
+                    live_capacity_delta: 1_000_000_000_000,
+                    live_occupied_capacity_delta: 610_000_000_000,
+                },
+            )
+            .unwrap();
+        store
+            .put_token_daily_delta(
+                &type_hash,
+                20240116,
+                &TokenDailyDelta {
+                    live_capacity_delta: -200_000_000_000,
+                    live_occupied_capacity_delta: -150_000_000_000,
+                },
+            )
+            .unwrap();
+
+        let day1 = store
+            .get_token_daily_delta(&type_hash, 20240115)
+            .unwrap()
+            .unwrap();
+        assert_eq!(day1.live_capacity_delta, 1_000_000_000_000);
+        assert_eq!(day1.live_occupied_capacity_delta, 610_000_000_000);
+
+        let listed = store.list_token_daily_deltas(&type_hash).unwrap();
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].0, 20240115);
+        assert_eq!(listed[1].0, 20240116);
     }
 
     #[test]
