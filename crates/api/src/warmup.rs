@@ -1,5 +1,6 @@
 use crate::cache::CacheTtl;
 use crate::routes::assets::AssetResponse;
+use crate::routes::statistics::build_block_time_distribution_response;
 use crate::utils::{resolve_dob_collection_name, resolve_nft_collection_name};
 use crate::AppState;
 use serde::{Deserialize, Serialize};
@@ -263,6 +264,8 @@ pub async fn warmup_chart_caches(state: Arc<AppState>) {
         "chart:hash-rate",
         "chart:difficulty",
         "chart:uncle-rate",
+        "chart:block-time-distribution",
+        "chart:block-time-distribution:v2",
         "chart:epoch-time-distribution",
         "chart:epoch-time-length",
         "chart:miner-address-distribution",
@@ -292,7 +295,7 @@ pub async fn warmup_chart_caches(state: Arc<AppState>) {
         run_warmup!("chart:difficulty", warmup_difficulty),
         run_warmup!("chart:uncle-rate", warmup_uncle_rate),
         run_warmup!(
-            "chart:block-time-distribution",
+            "chart:block-time-distribution:v2",
             warmup_block_time_distribution
         ),
         run_warmup!(
@@ -332,44 +335,15 @@ async fn warmup_uncle_rate(state: &AppState) -> Result<(), String> {
 }
 
 async fn warmup_block_time_distribution(state: &AppState) -> Result<(), String> {
-    // Block time distribution is stored as individual bucket entries
-    // Iterate over all buckets
-    let mut buckets = Vec::new();
-    for bucket_ms in (0..60_000).step_by(500) {
-        if let Ok(Some(count)) = state.store.get_block_time_dist(bucket_ms) {
-            if count > 0 {
-                buckets.push((bucket_ms, count as i64));
-            }
-        }
-    }
-
-    let total_blocks: i64 = buckets.iter().map(|(_, count)| count).sum();
-
-    let data: Vec<serde_json::Value> = buckets
-        .into_iter()
-        .map(|(bucket_ms, count)| {
-            let time_seconds = bucket_ms as f64 / 1000.0;
-            let ratio = if total_blocks > 0 {
-                (count as f64 / total_blocks as f64 * 100.0 * 1000.0).round() / 1000.0
-            } else {
-                0.0
-            };
-            serde_json::json!({
-                "date": format!("{:.1}", time_seconds),
-                "value": format!("{:.3}", ratio)
-            })
-        })
-        .collect();
-
-    let response = serde_json::json!({
-        "data": data,
-        "title": "Block Time Distribution (Recent 50000 blocks)",
-        "yAxisLabel": "Block Ratio (%)"
-    });
+    let response = build_block_time_distribution_response(state.store.as_ref())?;
 
     state
         .cache
-        .set("chart:block-time-distribution", &response, CHART_CACHE_TTL)
+        .set(
+            "chart:block-time-distribution:v2",
+            &response,
+            CHART_CACHE_TTL,
+        )
         .await;
 
     Ok(())

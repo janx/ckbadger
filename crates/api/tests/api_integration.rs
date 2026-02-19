@@ -144,6 +144,49 @@ async fn test_charts_average_block_time_empty_db() {
 }
 
 #[tokio::test]
+async fn test_charts_block_time_distribution_with_data() {
+    let store = test_store();
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    for (number, ts_ms) in [(0i64, 0i64), (1, 1_000), (2, 3_000)] {
+        batch.put_block_header(
+            number,
+            &CachedBlockHeader {
+                hash: vec![number as u8; 32],
+                timestamp: ts_ms,
+                epoch_number: 0,
+                epoch_index: 0,
+                epoch_length: 1,
+                dao: vec![0; 32],
+                transactions_count: 1,
+            },
+        );
+    }
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/charts/block-time-distribution")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let data = json["data"].as_array().unwrap();
+    assert_eq!(data.len(), 501);
+
+    let point_1s = data.iter().find(|point| point["date"] == "1.0").unwrap();
+    let point_2s = data.iter().find(|point| point["date"] == "2.0").unwrap();
+    assert_eq!(point_1s["value"], "50.000");
+    assert_eq!(point_2s["value"], "50.000");
+}
+
+#[tokio::test]
 async fn test_block_not_found() {
     let store = test_store();
     let config = test_config(store);

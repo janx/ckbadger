@@ -16,6 +16,7 @@ const CHART_CACHE_KEYS: &[&str] = &[
     "chart:difficulty",
     "chart:uncle-rate",
     "chart:block-time-distribution",
+    "chart:block-time-distribution:v2",
     "chart:epoch-time-distribution",
     "chart:epoch-time-length",
     "chart:miner-address-distribution",

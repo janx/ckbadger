@@ -519,44 +519,85 @@ async fn get_knowledge_size_chart(State(state): State<Arc<AppState>>) -> ApiResu
 async fn get_block_time_distribution_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<ChartResponse> {
-    let cache_key = "chart:block-time-distribution";
+    let cache_key = "chart:block-time-distribution:v2";
     if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
         return ok(cached);
     }
 
-    let dist = state
-        .store
-        .list_block_time_dist()
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let total_blocks: i64 = dist.iter().map(|(_, count)| *count as i64).sum();
-
-    let data: Vec<ChartDataPoint> = dist
-        .into_iter()
-        .map(|(bucket_secs, count)| {
-            let ratio = if total_blocks > 0 {
-                (count as f64 / total_blocks as f64 * 100.0 * 1000.0).round() / 1000.0
-            } else {
-                0.0
-            };
-            ChartDataPoint {
-                date: format!("{}", bucket_secs),
-                value: format!("{:.3}", ratio),
-                value2: None,
-            }
-        })
-        .collect();
-
-    let response = ChartResponse {
-        data,
-        title: "Block Time Distribution (Recent 50000 blocks)".to_string(),
-        y_axis_label: "Block Ratio (%)".to_string(),
-        y2_axis_label: None,
-    };
+    let response =
+        build_block_time_distribution_response(state.store.as_ref()).map_err(ApiError::internal)?;
 
     state.cache.set(cache_key, &response, CacheTtl::CHART).await;
 
     ok(response)
+}
+
+const BLOCK_TIME_DIST_RECENT_BLOCKS: usize = 50_000;
+const BLOCK_TIME_DIST_BUCKET_MS: i64 = 100;
+const BLOCK_TIME_DIST_MAX_MS: i64 = 50_000;
+const BLOCK_TIME_DIST_BUCKET_COUNT: usize =
+    (BLOCK_TIME_DIST_MAX_MS / BLOCK_TIME_DIST_BUCKET_MS + 1) as usize;
+
+fn block_time_ms_to_bucket_index(diff_ms: i64) -> Option<usize> {
+    if !(0..=BLOCK_TIME_DIST_MAX_MS).contains(&diff_ms) {
+        return None;
+    }
+    Some((diff_ms / BLOCK_TIME_DIST_BUCKET_MS) as usize)
+}
+
+fn build_block_time_distribution_data(
+    bucket_counts: &[u64],
+    total_blocks: u64,
+) -> Vec<ChartDataPoint> {
+    (0..BLOCK_TIME_DIST_BUCKET_COUNT)
+        .map(|idx| {
+            let ratio = if total_blocks > 0 {
+                (bucket_counts[idx] as f64 / total_blocks as f64) * 100.0
+            } else {
+                0.0
+            };
+            ChartDataPoint {
+                date: format!("{:.1}", idx as f64 / 10.0),
+                value: format!("{:.3}", ratio),
+                value2: None,
+            }
+        })
+        .collect()
+}
+
+pub(crate) fn build_block_time_distribution_response(
+    store: &ckbadger_store::CkbadgerStore,
+) -> Result<ChartResponse, String> {
+    let mut bucket_counts = vec![0u64; BLOCK_TIME_DIST_BUCKET_COUNT];
+    let mut total_blocks = 0u64;
+
+    let mut headers = store
+        .list_blocks_desc(None, BLOCK_TIME_DIST_RECENT_BLOCKS + 1)
+        .map_err(|e| e.to_string())?;
+
+    if headers.len() >= 2 {
+        headers.reverse();
+        for window in headers.windows(2) {
+            let (prev_number, prev_header) = &window[0];
+            let (curr_number, curr_header) = &window[1];
+            if *curr_number != *prev_number + 1 {
+                continue;
+            }
+
+            let diff_ms = curr_header.timestamp - prev_header.timestamp;
+            if let Some(bucket_index) = block_time_ms_to_bucket_index(diff_ms) {
+                bucket_counts[bucket_index] += 1;
+                total_blocks += 1;
+            }
+        }
+    }
+
+    Ok(ChartResponse {
+        data: build_block_time_distribution_data(&bucket_counts, total_blocks),
+        title: "Block Time Distribution (Recent 50000 blocks)".to_string(),
+        y_axis_label: "Block Ratio (%)".to_string(),
+        y2_axis_label: None,
+    })
 }
 
 async fn get_epoch_time_distribution_chart(
@@ -1613,6 +1654,9 @@ async fn get_hodl_wave_chart(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ckbadger_store::batch::StoreBatch;
+    use ckbadger_store::types::CachedBlockHeader;
+    use ckbadger_store::CkbadgerStore;
 
     fn snapshot(
         date: &str,
@@ -1731,5 +1775,116 @@ mod tests {
             title: "CKB HODL Wave".to_string(),
         };
         assert!(!hodl_wave_cache_has_holder_count(&response));
+    }
+
+    #[test]
+    fn test_block_time_ms_to_bucket_index_handles_bounds() {
+        assert_eq!(block_time_ms_to_bucket_index(-100), None);
+        assert_eq!(block_time_ms_to_bucket_index(0), Some(0));
+        assert_eq!(block_time_ms_to_bucket_index(99), Some(0));
+        assert_eq!(block_time_ms_to_bucket_index(100), Some(1));
+        assert_eq!(
+            block_time_ms_to_bucket_index(BLOCK_TIME_DIST_MAX_MS),
+            Some(BLOCK_TIME_DIST_BUCKET_COUNT - 1)
+        );
+        assert_eq!(
+            block_time_ms_to_bucket_index(BLOCK_TIME_DIST_MAX_MS + 1),
+            None
+        );
+    }
+
+    #[test]
+    fn test_build_block_time_distribution_data_formats_decisecond_buckets() {
+        let mut counts = vec![0u64; BLOCK_TIME_DIST_BUCKET_COUNT];
+        counts[10] = 1;
+        counts[20] = 3;
+        let data = build_block_time_distribution_data(&counts, 4);
+        assert_eq!(data.len(), BLOCK_TIME_DIST_BUCKET_COUNT);
+        assert_eq!(data[0].date, "0.0");
+        assert_eq!(data[10].date, "1.0");
+        assert_eq!(data[20].date, "2.0");
+        assert_eq!(data[10].value, "25.000");
+        assert_eq!(data[20].value, "75.000");
+    }
+
+    #[test]
+    fn test_build_block_time_distribution_response_uses_recent_headers() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+
+        let mut batch = StoreBatch::new(&store);
+        for (number, ts_ms) in [(0i64, 0i64), (1, 1_000), (2, 3_000)] {
+            batch.put_block_header(
+                number,
+                &CachedBlockHeader {
+                    hash: vec![number as u8; 32],
+                    timestamp: ts_ms,
+                    epoch_number: 0,
+                    epoch_index: 0,
+                    epoch_length: 1,
+                    dao: vec![0; 32],
+                    transactions_count: 1,
+                },
+            );
+        }
+        batch.commit().unwrap();
+
+        let response = build_block_time_distribution_response(&store).unwrap();
+        assert_eq!(
+            response.title,
+            "Block Time Distribution (Recent 50000 blocks)"
+        );
+        assert_eq!(response.data.len(), BLOCK_TIME_DIST_BUCKET_COUNT);
+
+        let at_1s = response
+            .data
+            .iter()
+            .find(|point| point.date == "1.0")
+            .unwrap();
+        let at_2s = response
+            .data
+            .iter()
+            .find(|point| point.date == "2.0")
+            .unwrap();
+        assert_eq!(at_1s.value, "50.000");
+        assert_eq!(at_2s.value, "50.000");
+    }
+
+    #[test]
+    fn test_build_block_time_distribution_response_excludes_overflow_from_50s_bucket() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+
+        let mut batch = StoreBatch::new(&store);
+        // 0->1 is 60s (overflow), 1->2 is 1s (in-range)
+        for (number, ts_ms) in [(0i64, 0i64), (1, 60_000), (2, 61_000)] {
+            batch.put_block_header(
+                number,
+                &CachedBlockHeader {
+                    hash: vec![number as u8; 32],
+                    timestamp: ts_ms,
+                    epoch_number: 0,
+                    epoch_index: 0,
+                    epoch_length: 1,
+                    dao: vec![0; 32],
+                    transactions_count: 1,
+                },
+            );
+        }
+        batch.commit().unwrap();
+
+        let response = build_block_time_distribution_response(&store).unwrap();
+        let at_1s = response
+            .data
+            .iter()
+            .find(|point| point.date == "1.0")
+            .unwrap();
+        let at_50s = response
+            .data
+            .iter()
+            .find(|point| point.date == "50.0")
+            .unwrap();
+        assert_eq!(at_1s.value, "100.000");
+        assert_eq!(at_50s.value, "0.000");
     }
 }
