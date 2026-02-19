@@ -191,6 +191,24 @@ describe('api', () => {
       expect(chart.title).toContain('Capacity Occupation');
     });
 
+    it('builds query params for script occupation chart by code hash', async () => {
+      server.use(
+        http.get('*/api/v1/scripts/charts/occupation', ({ request }) => {
+          const url = new URL(request.url);
+          expect(url.searchParams.get('code_hash')).toBe('0x1234');
+          expect(url.searchParams.get('script_kind')).toBe('type');
+          return HttpResponse.json({
+            title: '0x1234 Capacity Occupation',
+            data: [],
+            series: [],
+          });
+        })
+      );
+
+      const chart = await api.getScriptOccupationChartByCodeHash('0x1234', 'type');
+      expect(chart.title).toContain('Capacity Occupation');
+    });
+
     it('builds query params for getAddressTokens', async () => {
       server.use(
         http.get('*/api/v1/addresses/:addr/tokens', ({ request }) => {

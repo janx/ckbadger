@@ -2,22 +2,29 @@
 
 use axum::{
     extract::{Path, Query, State},
+    http::StatusCode,
     routing::{get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
 use crate::AppState;
 
+type ApiRouteError = (StatusCode, Json<ApiError>);
+
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/scripts", get(list_scripts))
         .route("/scripts/lookup", post(lookup_scripts))
         .route("/scripts/code-cell", get(get_code_cell))
+        .route(
+            "/scripts/charts/occupation",
+            get(get_script_occupation_chart_by_code_hash),
+        )
         .route("/scripts/{name}", get(get_script))
         .route("/scripts/{name}/usage", get(get_script_usage))
         .route(
@@ -293,6 +300,18 @@ pub struct CodeCellQuery {
     hash_type: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ScriptOccupationQuery {
+    code_hash: Option<String>,
+    script_kind: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ScriptOccupationByCodeHashQuery {
+    code_hash: String,
+    script_kind: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodeCellResponse {
@@ -541,20 +560,32 @@ fn format_yyyymmdd_for_chart(date_yyyymmdd: u32) -> String {
     format!("{}-{}-{}", &date[0..4], &date[4..6], &date[6..8])
 }
 
-async fn get_script_occupation_chart(
-    State(state): State<Arc<AppState>>,
-    Path(name): Path<String>,
-) -> ApiResult<StackedAreaChartResponse> {
-    let all_scripts = state
-        .store
-        .list_script_infos()
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+fn parse_script_kind_filter(script_kind: Option<&str>) -> Result<Vec<bool>, ApiRouteError> {
+    match script_kind {
+        None => Ok(vec![false, true]),
+        Some("lock") => Ok(vec![false]),
+        Some("type") => Ok(vec![true]),
+        Some("both") | Some("lock+type") => Ok(vec![false, true]),
+        Some(_) => Err(ApiError::bad_request(
+            "Invalid script_kind, expected lock/type/both",
+        )),
+    }
+}
 
-    let matching: Vec<_> = all_scripts
-        .into_iter()
-        .filter(|(_, info)| info.name.as_deref() == Some(name.as_str()))
-        .collect();
+fn parse_code_hash_hex(code_hash: &str) -> Result<Vec<u8>, ApiRouteError> {
+    let decoded = hex::decode(code_hash.strip_prefix("0x").unwrap_or(code_hash))
+        .map_err(|_| ApiError::bad_request("Invalid code_hash hex"))?;
+    if decoded.len() != 32 {
+        return Err(ApiError::bad_request("Invalid code_hash length"));
+    }
+    Ok(decoded)
+}
 
+fn build_script_occupation_chart(
+    state: &AppState,
+    targets: Vec<(Vec<u8>, bool)>,
+    title: String,
+) -> Result<StackedAreaChartResponse, ApiRouteError> {
     let series = vec![
         StackedAreaSeries {
             key: "occupied".to_string(),
@@ -568,34 +599,36 @@ async fn get_script_occupation_chart(
         },
     ];
 
-    if matching.is_empty() {
-        return ok(StackedAreaChartResponse {
+    if targets.is_empty() {
+        return Ok(StackedAreaChartResponse {
             data: vec![],
             series,
-            title: format!("{name} Capacity Occupation"),
+            title,
         });
     }
 
-    let mut daily_deltas: BTreeMap<u32, (i128, i128)> = BTreeMap::new();
+    let mut dedup = HashSet::new();
+    let unique_targets: Vec<(Vec<u8>, bool)> = targets
+        .into_iter()
+        .filter(|target| dedup.insert(target.clone()))
+        .collect();
 
-    for (_, info) in matching {
-        for is_type in [false, true] {
-            let deltas = state
-                .store
-                .list_script_daily_deltas(&info.code_hash, is_type)
-                .map_err(|e| ApiError::internal(e.to_string()))?;
-            for (date, delta) in deltas {
-                let entry = daily_deltas.entry(date).or_insert((0, 0));
-                entry.0 += delta.live_capacity_delta as i128;
-                entry.1 += delta.live_occupied_capacity_delta as i128;
-            }
+    let mut daily_deltas: BTreeMap<u32, (i128, i128)> = BTreeMap::new();
+    for (code_hash, is_type) in unique_targets {
+        let deltas = state
+            .store
+            .list_script_daily_deltas(&code_hash, is_type)
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        for (date, delta) in deltas {
+            let entry = daily_deltas.entry(date).or_insert((0, 0));
+            entry.0 += delta.live_capacity_delta as i128;
+            entry.1 += delta.live_occupied_capacity_delta as i128;
         }
     }
 
     let mut cumulative_capacity: i128 = 0;
     let mut cumulative_occupied: i128 = 0;
     let mut data = Vec::with_capacity(daily_deltas.len());
-
     for (date, (cap_delta, occupied_delta)) in daily_deltas {
         cumulative_capacity = (cumulative_capacity + cap_delta).max(0);
         cumulative_occupied = (cumulative_occupied + occupied_delta).max(0);
@@ -603,7 +636,6 @@ async fn get_script_occupation_chart(
             cumulative_occupied = cumulative_capacity;
         }
         let unoccupied = cumulative_capacity - cumulative_occupied;
-
         data.push(StackedAreaDataPoint {
             date: format_yyyymmdd_for_chart(date),
             values: HashMap::from([
@@ -613,9 +645,69 @@ async fn get_script_occupation_chart(
         });
     }
 
-    ok(StackedAreaChartResponse {
+    Ok(StackedAreaChartResponse {
         data,
         series,
-        title: format!("{name} Capacity Occupation"),
+        title,
     })
+}
+
+async fn get_script_occupation_chart(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    Query(params): Query<ScriptOccupationQuery>,
+) -> ApiResult<StackedAreaChartResponse> {
+    let all_scripts = state
+        .store
+        .list_script_infos()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let code_hash_filter = params
+        .code_hash
+        .as_deref()
+        .map(parse_code_hash_hex)
+        .transpose()?;
+    let matching: Vec<ckbadger_store::ScriptInfo> = all_scripts
+        .into_iter()
+        .filter(|(_, info)| info.name.as_deref() == Some(name.as_str()))
+        .filter(|(_, info)| {
+            code_hash_filter
+                .as_ref()
+                .map(|filter| &info.code_hash == filter)
+                .unwrap_or(true)
+        })
+        .map(|(_, info)| info)
+        .collect();
+
+    let kind_filter = parse_script_kind_filter(params.script_kind.as_deref())?;
+    let mut targets = Vec::new();
+    for info in matching {
+        for is_type in &kind_filter {
+            targets.push((info.code_hash.clone(), *is_type));
+        }
+    }
+
+    ok(build_script_occupation_chart(
+        &state,
+        targets,
+        format!("{name} Capacity Occupation"),
+    )?)
+}
+
+async fn get_script_occupation_chart_by_code_hash(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<ScriptOccupationByCodeHashQuery>,
+) -> ApiResult<StackedAreaChartResponse> {
+    let code_hash = parse_code_hash_hex(&params.code_hash)?;
+    let kind_filter = parse_script_kind_filter(params.script_kind.as_deref())?;
+    let targets = kind_filter
+        .into_iter()
+        .map(|is_type| (code_hash.clone(), is_type))
+        .collect();
+
+    ok(build_script_occupation_chart(
+        &state,
+        targets,
+        format!("0x{} Capacity Occupation", hex::encode(&code_hash)),
+    )?)
 }

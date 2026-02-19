@@ -286,6 +286,57 @@ async fn test_script_occupation_chart_aggregates_deployments() {
 }
 
 #[tokio::test]
+async fn test_script_occupation_chart_by_code_hash_with_kind_filter() {
+    let store = test_store();
+    let code_hash = vec![0x33; 32];
+    let code_hash_hex = format!("0x{}", hex::encode(&code_hash));
+
+    store
+        .put_script_daily_delta(
+            &code_hash,
+            false,
+            20240115,
+            &ScriptDailyDelta {
+                live_capacity_delta: 100,
+                live_occupied_capacity_delta: 40,
+            },
+        )
+        .unwrap();
+    store
+        .put_script_daily_delta(
+            &code_hash,
+            true,
+            20240115,
+            &ScriptDailyDelta {
+                live_capacity_delta: 80,
+                live_occupied_capacity_delta: 60,
+            },
+        )
+        .unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/scripts/charts/occupation?code_hash={}&script_kind=lock",
+            code_hash_hex
+        ))
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let data = json["data"].as_array().unwrap();
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0]["values"]["occupied"], "40");
+    assert_eq!(data[0]["values"]["unoccupied"], "60");
+}
+
+#[tokio::test]
 async fn test_spore_list_empty_db() {
     let store = test_store();
     let config = test_config(store);

@@ -8,6 +8,7 @@ vi.mock('@/lib/api', () => ({
   api: {
     lookupScripts: vi.fn(),
     getCodeCell: vi.fn(),
+    getScriptOccupationChartByCodeHash: vi.fn(),
     getCellsByScriptRef: vi.fn(),
   },
 }));
@@ -49,6 +50,19 @@ describe('ScriptByCodeHashPage', () => {
       },
     });
     vi.mocked(api.getCodeCell).mockResolvedValue({ txHash: null, outputIndex: null });
+    vi.mocked(api.getScriptOccupationChartByCodeHash).mockResolvedValue({
+      title: 'Occupation',
+      series: [
+        { key: 'occupied', label: 'Occupied', color: '#f59e0b' },
+        { key: 'unoccupied', label: 'Unoccupied', color: '#00c389' },
+      ],
+      data: [
+        {
+          date: '2024-01-15',
+          values: { occupied: '1000000000', unoccupied: '1500000000' },
+        },
+      ],
+    });
     vi.mocked(api.getCellsByScriptRef).mockResolvedValue(emptyCells);
   });
 
@@ -57,6 +71,7 @@ describe('ScriptByCodeHashPage', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Capacity Utilization')).toBeInTheDocument();
+      expect(screen.getByText('Occupation History')).toBeInTheDocument();
     });
 
     expect(screen.getByText(/^Occupied:/)).toBeInTheDocument();

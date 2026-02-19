@@ -1334,6 +1334,16 @@ export const api = {
     return fetchApi(`/scripts/${encodeURIComponent(name)}/charts/occupation`);
   },
 
+  getScriptOccupationChartByCodeHash: (
+    codeHash: string,
+    scriptKind?: 'lock' | 'type' | 'both'
+  ): Promise<StackedAreaChartResponse> => {
+    const query = new URLSearchParams();
+    query.set('code_hash', codeHash);
+    if (scriptKind && scriptKind !== 'both') query.set('script_kind', scriptKind);
+    return fetchApi(`/scripts/charts/occupation?${query}`);
+  },
+
   lookupScripts: async (codeHashes: string[]): Promise<ScriptLookupResponse> => {
     if (codeHashes.length === 0) return {};
     const res = await fetch(`${API_BASE}/scripts/lookup`, {

@@ -9,6 +9,7 @@ vi.mock('@/lib/api', () => ({
     getScript: vi.fn(),
     getScriptUsage: vi.fn(),
     getScriptOccupationChart: vi.fn(),
+    getScriptOccupationChartByCodeHash: vi.fn(),
     getCellsByScriptRef: vi.fn(),
   },
 }));
@@ -95,6 +96,7 @@ describe('ScriptDetailPage', () => {
     vi.mocked(api.getScript).mockResolvedValue(mockDeployments);
     vi.mocked(api.getScriptUsage).mockResolvedValue(mockUsage);
     vi.mocked(api.getScriptOccupationChart).mockResolvedValue(mockOccupationChart);
+    vi.mocked(api.getScriptOccupationChartByCodeHash).mockResolvedValue(mockOccupationChart);
     vi.mocked(api.getCellsByScriptRef).mockResolvedValue(emptyCells);
   });
 

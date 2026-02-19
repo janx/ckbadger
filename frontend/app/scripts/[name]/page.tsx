@@ -52,6 +52,24 @@ export default function ScriptDetailPage() {
     queryKey: ['script-occupation-chart', name],
     queryFn: () => api.getScriptOccupationChart(name),
   });
+  const selectedScriptKindForChart =
+    selectedDeployment?.scriptKind === 'lock' || selectedDeployment?.scriptKind === 'type'
+      ? selectedDeployment.scriptKind
+      : undefined;
+  const { data: selectedOccupationChart, isLoading: isSelectedOccupationChartLoading } = useQuery({
+    queryKey: [
+      'script-occupation-chart',
+      'deployment',
+      selectedDeployment?.codeHash,
+      selectedScriptKindForChart,
+    ],
+    queryFn: () =>
+      api.getScriptOccupationChartByCodeHash(
+        selectedDeployment!.codeHash,
+        selectedScriptKindForChart
+      ),
+    enabled: !!selectedDeployment,
+  });
 
   useEffect(() => {
     if (deployments && deployments.length > 0 && usage && !selectedDeployment) {
@@ -374,6 +392,24 @@ export default function ScriptDetailPage() {
                   />
                 </div>
               )}
+              <div className="border-b border-slate-800 px-4 py-4">
+                <div className="mb-3 text-xs text-slate-500">
+                  Historical occupied/unoccupied live capacity for the selected deployment.
+                </div>
+                {isSelectedOccupationChartLoading ? (
+                  <div className="py-6 text-center text-slate-500">
+                    Loading deployment history...
+                  </div>
+                ) : selectedOccupationChart && selectedOccupationChart.data.length > 0 ? (
+                  <StackedAreaChart
+                    data={selectedOccupationChart.data}
+                    series={selectedOccupationChart.series}
+                    height={220}
+                  />
+                ) : (
+                  <div className="py-6 text-center text-slate-500">No deployment history yet</div>
+                )}
+              </div>
               {isCellsLoading ? (
                 <div className="py-8 text-center text-slate-500">Loading cells...</div>
               ) : cellsData && cellsData.data.length > 0 ? (
