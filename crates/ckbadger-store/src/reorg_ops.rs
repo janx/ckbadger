@@ -47,6 +47,30 @@ fn should_delete_stats_for_replay(key: &[u8], cutoff_yyyymmdd: &[u8]) -> bool {
             let date = u32::from_be_bytes(suffix[32..36].try_into().unwrap_or([0; 4]));
             date >= cutoff_date
         }
+        // cluster_id(32) + date(4B u32 YYYYMMDD BE)
+        keys::STATS_PREFIX_CLUSTER_DAILY => {
+            let cutoff_date = std::str::from_utf8(cutoff_yyyymmdd)
+                .ok()
+                .and_then(|s| s.parse::<u32>().ok())
+                .unwrap_or(0);
+            if suffix.len() < 36 {
+                return false;
+            }
+            let date = u32::from_be_bytes(suffix[32..36].try_into().unwrap_or([0; 4]));
+            date >= cutoff_date
+        }
+        // spore_id(32) + date(4B u32 YYYYMMDD BE)
+        keys::STATS_PREFIX_SPORE_DAILY => {
+            let cutoff_date = std::str::from_utf8(cutoff_yyyymmdd)
+                .ok()
+                .and_then(|s| s.parse::<u32>().ok())
+                .unwrap_or(0);
+            if suffix.len() < 36 {
+                return false;
+            }
+            let date = u32::from_be_bytes(suffix[32..36].try_into().unwrap_or([0; 4]));
+            date >= cutoff_date
+        }
         _ => false,
     }
 }
@@ -289,6 +313,30 @@ mod tests {
         assert!(should_delete_stats_for_replay(&new_key, cutoff));
 
         let old_key = crate::keys::encode_token_daily_key(&type_hash, 20260209);
+        assert!(!should_delete_stats_for_replay(&old_key, cutoff));
+    }
+
+    #[test]
+    fn test_should_delete_stats_for_replay_cluster_daily_prefix() {
+        let cutoff = b"20260210";
+        let cluster_id = [0xCC; 32];
+
+        let new_key = crate::keys::encode_cluster_daily_key(&cluster_id, 20260211);
+        assert!(should_delete_stats_for_replay(&new_key, cutoff));
+
+        let old_key = crate::keys::encode_cluster_daily_key(&cluster_id, 20260209);
+        assert!(!should_delete_stats_for_replay(&old_key, cutoff));
+    }
+
+    #[test]
+    fn test_should_delete_stats_for_replay_spore_daily_prefix() {
+        let cutoff = b"20260210";
+        let spore_id = [0xDD; 32];
+
+        let new_key = crate::keys::encode_spore_daily_key(&spore_id, 20260211);
+        assert!(should_delete_stats_for_replay(&new_key, cutoff));
+
+        let old_key = crate::keys::encode_spore_daily_key(&spore_id, 20260209);
         assert!(!should_delete_stats_for_replay(&old_key, cutoff));
     }
 

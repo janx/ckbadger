@@ -574,6 +574,8 @@ interface SporeCluster {
   ownerAddress?: string;
   sporesCount: number;
   createdAtBlock: number;
+  liveCapacity?: string | null;
+  liveOccupiedCapacity?: string | null;
 }
 
 interface SporeNft {
@@ -587,6 +589,8 @@ interface SporeNft {
   ownerAddress?: string;
   isLive: boolean;
   createdAtBlock: number;
+  liveCapacity?: string | null;
+  liveOccupiedCapacity?: string | null;
 }
 
 interface ChartDataPoint {
@@ -1189,6 +1193,10 @@ export const api = {
     return fetchApi(`/spore/clusters/${clusterId}`);
   },
 
+  getSporeClusterOccupationChart: (clusterId: string): Promise<StackedAreaChartResponse> => {
+    return fetchApi(`/spore/clusters/${clusterId}/charts/occupation`);
+  },
+
   getSporeNfts: (params: CursorQueryParams = {}): Promise<CursorPaginatedResponse<SporeNft>> => {
     const query = new URLSearchParams();
     if (params.limit) query.set('limit', String(params.limit));
@@ -1198,6 +1206,10 @@ export const api = {
 
   getSporeNft: (sporeId: string): Promise<SporeNft> => {
     return fetchApi(`/spore/nfts/${sporeId}`);
+  },
+
+  getSporeNftOccupationChart: (sporeId: string): Promise<StackedAreaChartResponse> => {
+    return fetchApi(`/spore/nfts/${sporeId}/charts/occupation`);
   },
 
   getSporesByOwner: (

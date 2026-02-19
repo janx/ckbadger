@@ -6,6 +6,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
 use crate::warmup::{CachedAssetEntry, CACHE_KEY_ASSETS_DOB};
 use crate::AppState;
@@ -15,11 +16,19 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/spore/clusters", get(list_clusters))
         .route("/spore/clusters/{cluster_id}", get(get_cluster))
         .route(
+            "/spore/clusters/{cluster_id}/charts/occupation",
+            get(get_cluster_occupation_chart),
+        )
+        .route(
             "/spore/clusters/{cluster_id}/spores",
             get(get_spores_by_cluster),
         )
         .route("/spore/nfts", get(list_spores))
         .route("/spore/nfts/{spore_id}", get(get_spore))
+        .route(
+            "/spore/nfts/{spore_id}/charts/occupation",
+            get(get_spore_occupation_chart),
+        )
         .route("/spore/owner/{lock_hash}", get(get_spores_by_owner))
 }
 
@@ -44,6 +53,8 @@ pub struct ClusterResponse {
     pub owner_address: Option<String>,
     pub spores_count: i32,
     pub created_at_block: i64,
+    pub live_capacity: Option<String>,
+    pub live_occupied_capacity: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -59,10 +70,17 @@ pub struct SporeResponse {
     pub owner_address: Option<String>,
     pub is_live: bool,
     pub created_at_block: i64,
+    pub live_capacity: Option<String>,
+    pub live_occupied_capacity: Option<String>,
 }
 
 /// Convert a DobEntry from the store into a SporeResponse.
-fn spore_to_response(spore_id: &[u8], entry: &ckbadger_store::SporeEntry) -> SporeResponse {
+fn spore_to_response(
+    spore_id: &[u8],
+    entry: &ckbadger_store::SporeEntry,
+    live_capacity: Option<i64>,
+    live_occupied_capacity: Option<i64>,
+) -> SporeResponse {
     let (content_type, content_size) = match &entry.extra {
         ckbadger_store::DobExtra::Spore {
             content_type,
@@ -88,7 +106,80 @@ fn spore_to_response(spore_id: &[u8], entry: &ckbadger_store::SporeEntry) -> Spo
         owner_address: None,
         is_live: entry.is_live,
         created_at_block: entry.created_at_block,
+        live_capacity: live_capacity.map(|v| v.to_string()),
+        live_occupied_capacity: live_occupied_capacity.map(|v| v.to_string()),
     }
+}
+
+fn format_yyyymmdd_for_chart(date: u32) -> String {
+    let s = format!("{date:08}");
+    format!("{}-{}-{}", &s[0..4], &s[4..6], &s[6..8])
+}
+
+fn build_capacity_occupation_chart(
+    deltas: Vec<(u32, i64, i64)>,
+    title: String,
+) -> StackedAreaChartResponse {
+    let mut running_capacity: i128 = 0;
+    let mut running_occupied: i128 = 0;
+    let mut data = Vec::with_capacity(deltas.len());
+
+    for (date, capacity_delta, occupied_delta) in deltas {
+        running_capacity += capacity_delta as i128;
+        running_occupied += occupied_delta as i128;
+
+        if running_capacity < 0 {
+            running_capacity = 0;
+        }
+        if running_occupied < 0 {
+            running_occupied = 0;
+        }
+
+        let unoccupied = (running_capacity - running_occupied).max(0);
+        let mut values = std::collections::HashMap::new();
+        values.insert("occupied".to_string(), running_occupied.to_string());
+        values.insert("unoccupied".to_string(), unoccupied.to_string());
+
+        data.push(StackedAreaDataPoint {
+            date: format_yyyymmdd_for_chart(date),
+            values,
+        });
+    }
+
+    StackedAreaChartResponse {
+        data,
+        series: vec![
+            StackedAreaSeries {
+                key: "occupied".to_string(),
+                label: "Occupied".to_string(),
+                color: "#f59e0b".to_string(),
+            },
+            StackedAreaSeries {
+                key: "unoccupied".to_string(),
+                label: "Unoccupied".to_string(),
+                color: "#06b6d4".to_string(),
+            },
+        ],
+        title,
+    }
+}
+
+fn latest_capacity_from_chart(
+    chart: &StackedAreaChartResponse,
+) -> (Option<String>, Option<String>) {
+    if let Some(last) = chart.data.last() {
+        let occupied = last.values.get("occupied").cloned();
+        let unoccupied = last.values.get("unoccupied").cloned();
+        let capacity = match (&occupied, &unoccupied) {
+            (Some(o), Some(u)) => {
+                let total = o.parse::<i128>().unwrap_or(0) + u.parse::<i128>().unwrap_or(0);
+                Some(total.to_string())
+            }
+            _ => None,
+        };
+        return (capacity, occupied);
+    }
+    (Some("0".to_string()), Some("0".to_string()))
 }
 
 /// List clusters — use cached DOB assets list when available.
@@ -146,6 +237,8 @@ fn serve_clusters_from_cache(
                 owner_address: None,
                 spores_count: entry.transfers_count as i32, // transfers_count holds spore count for DOB
                 created_at_block,
+                live_capacity: None,
+                live_occupied_capacity: None,
             })
         })
         .collect();
@@ -239,6 +332,8 @@ fn serve_clusters_from_store(
                 owner_address: None,
                 spores_count: *spores_count,
                 created_at_block: *created_at_block,
+                live_capacity: None,
+                live_occupied_capacity: None,
             }
         })
         .collect();
@@ -288,7 +383,7 @@ async fn get_spores_by_cluster(
 
     let spores: Vec<SporeResponse> = page
         .into_iter()
-        .map(|(spore_id, entry)| spore_to_response(spore_id, entry))
+        .map(|(spore_id, entry)| spore_to_response(spore_id, entry, None, None))
         .collect();
 
     ok(CursorPaginatedResponse::without_total(
@@ -331,6 +426,27 @@ async fn get_cluster(
     let owner_lock_hash = cluster_entry
         .as_ref()
         .and_then(|e| e.owner_lock_hash.clone());
+    let daily = state
+        .store
+        .list_cluster_daily_deltas(&id)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let chart = build_capacity_occupation_chart(
+        daily
+            .into_iter()
+            .map(|(date, delta)| {
+                (
+                    date,
+                    delta.live_capacity_delta,
+                    delta.live_occupied_capacity_delta,
+                )
+            })
+            .collect(),
+        format!(
+            "{} Capacity Occupation",
+            name.clone().unwrap_or_else(|| "Spore Cluster".to_string())
+        ),
+    );
+    let (live_capacity, live_occupied_capacity) = latest_capacity_from_chart(&chart);
 
     ok(ClusterResponse {
         cluster_id: format!("0x{}", hex::encode(&id)),
@@ -343,6 +459,8 @@ async fn get_cluster(
         owner_address: None,
         spores_count: spores_count as i32,
         created_at_block,
+        live_capacity,
+        live_occupied_capacity,
     })
 }
 
@@ -378,7 +496,7 @@ async fn list_spores(
 
     let spores: Vec<SporeResponse> = page
         .into_iter()
-        .map(|(spore_id, entry)| spore_to_response(spore_id, entry))
+        .map(|(spore_id, entry)| spore_to_response(spore_id, entry, None, None))
         .collect();
 
     ok(CursorPaginatedResponse::without_total(
@@ -401,9 +519,109 @@ async fn get_spore(
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     match entry {
-        Some(entry) => ok(spore_to_response(&id, &entry)),
+        Some(entry) => {
+            let daily = state
+                .store
+                .list_spore_daily_deltas(&id)
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+            let chart = build_capacity_occupation_chart(
+                daily
+                    .into_iter()
+                    .map(|(date, delta)| {
+                        (
+                            date,
+                            delta.live_capacity_delta,
+                            delta.live_occupied_capacity_delta,
+                        )
+                    })
+                    .collect(),
+                "Spore Capacity Occupation".to_string(),
+            );
+            let (live_capacity, live_occupied_capacity) = latest_capacity_from_chart(&chart);
+            let cap = live_capacity.and_then(|v| v.parse::<i64>().ok());
+            let occ = live_occupied_capacity.and_then(|v| v.parse::<i64>().ok());
+            ok(spore_to_response(&id, &entry, cap, occ))
+        }
         None => Err(ApiError::not_found("Spore not found")),
     }
+}
+
+async fn get_cluster_occupation_chart(
+    State(state): State<Arc<AppState>>,
+    Path(cluster_id): Path<String>,
+) -> ApiResult<StackedAreaChartResponse> {
+    let id = hex::decode(cluster_id.strip_prefix("0x").unwrap_or(&cluster_id))
+        .map_err(|_| ApiError::bad_request("Invalid cluster ID"))?;
+
+    let cluster_entry = state
+        .store
+        .get_spore(&id)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let spores_count = state
+        .store
+        .count_spores_in_cluster(&id)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    if spores_count == 0 && cluster_entry.is_none() {
+        return Err(ApiError::not_found("Cluster not found"));
+    }
+
+    let name = cluster_entry
+        .as_ref()
+        .and_then(|e| e.name.clone())
+        .unwrap_or_else(|| "Spore Cluster".to_string());
+    let daily = state
+        .store
+        .list_cluster_daily_deltas(&id)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    ok(build_capacity_occupation_chart(
+        daily
+            .into_iter()
+            .map(|(date, delta)| {
+                (
+                    date,
+                    delta.live_capacity_delta,
+                    delta.live_occupied_capacity_delta,
+                )
+            })
+            .collect(),
+        format!("{name} Capacity Occupation"),
+    ))
+}
+
+async fn get_spore_occupation_chart(
+    State(state): State<Arc<AppState>>,
+    Path(spore_id): Path<String>,
+) -> ApiResult<StackedAreaChartResponse> {
+    let id = hex::decode(spore_id.strip_prefix("0x").unwrap_or(&spore_id))
+        .map_err(|_| ApiError::bad_request("Invalid spore ID"))?;
+
+    let entry = state
+        .store
+        .get_spore(&id)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    if entry.is_none() {
+        return Err(ApiError::not_found("Spore not found"));
+    }
+
+    let daily = state
+        .store
+        .list_spore_daily_deltas(&id)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    ok(build_capacity_occupation_chart(
+        daily
+            .into_iter()
+            .map(|(date, delta)| {
+                (
+                    date,
+                    delta.live_capacity_delta,
+                    delta.live_occupied_capacity_delta,
+                )
+            })
+            .collect(),
+        "Spore Capacity Occupation".to_string(),
+    ))
 }
 
 async fn get_spores_by_owner(
@@ -446,7 +664,7 @@ async fn get_spores_by_owner(
 
     let spores: Vec<SporeResponse> = page
         .into_iter()
-        .map(|(spore_id, entry)| spore_to_response(spore_id, entry))
+        .map(|(spore_id, entry)| spore_to_response(spore_id, entry, None, None))
         .collect();
 
     ok(CursorPaginatedResponse::without_total(

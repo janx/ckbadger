@@ -8,6 +8,7 @@ vi.mock('@/lib/api', () => ({
   api: {
     getSporeCluster: vi.fn(),
     getSporesByCluster: vi.fn(),
+    getSporeClusterOccupationChart: vi.fn(),
   },
 }));
 
@@ -30,6 +31,8 @@ const mockCluster = {
   ownerAddress: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq...',
   sporesCount: 5,
   createdAtBlock: 1000000,
+  liveCapacity: '100000000000',
+  liveOccupiedCapacity: '61000000000',
 };
 
 const mockSpores = {
@@ -76,6 +79,11 @@ const emptySpores = {
 describe('ClusterDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(api.getSporeClusterOccupationChart).mockResolvedValue({
+      title: 'Test Collection Capacity Occupation',
+      data: [],
+      series: [],
+    });
   });
 
   it('renders the page with header', async () => {
@@ -117,6 +125,17 @@ describe('ClusterDetailPage', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Spore Cluster')).toBeInTheDocument();
+    });
+  });
+
+  it('renders occupation history panel', async () => {
+    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
+    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
+
+    render(<ClusterDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Occupation History')).toBeInTheDocument();
     });
   });
 

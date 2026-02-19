@@ -14,6 +14,8 @@ import { PageHeader, Badge } from '@/components/ui/page-header';
 import { HexDisplay } from '@/components/ui/hex-display';
 import { DataField, DataGrid } from '@/components/ui/data-field';
 import { Address } from '@/components/ui/address';
+import { StackedAreaChart } from '@/components/ui/stacked-area-chart';
+import { formatCkbAmount, formatCkbCompact } from '@/lib/utils';
 
 export default function SporeDetailPage() {
   const params = useParams();
@@ -32,6 +34,12 @@ export default function SporeDetailPage() {
     queryKey: ['cluster', spore?.clusterId],
     queryFn: () => api.getSporeCluster(spore!.clusterId!),
     enabled: !!spore?.clusterId,
+  });
+
+  const { data: occupationChart, isLoading: isOccupationChartLoading } = useQuery({
+    queryKey: ['spore-occupation-chart', sporeId],
+    queryFn: () => api.getSporeNftOccupationChart(sporeId),
+    enabled: !!sporeId,
   });
 
   const formatNumber = (num: number) => {
@@ -144,7 +152,66 @@ export default function SporeDetailPage() {
                       #{formatNumber(spore.createdAtBlock)}
                     </Link>
                   </DataField>
+                  {spore.liveCapacity &&
+                    spore.liveOccupiedCapacity &&
+                    (() => {
+                      const totalBig = BigInt(spore.liveCapacity);
+                      const occupiedBig = BigInt(spore.liveOccupiedCapacity);
+                      if (totalBig <= BigInt(0)) return null;
+                      const freeBig = totalBig - occupiedBig;
+                      const ratio = Number((occupiedBig * BigInt(10000)) / totalBig) / 100;
+                      return (
+                        <DataField label="Capacity Utilization">
+                          <div className="w-full">
+                            <div className="mb-1 flex items-center justify-between">
+                              <span className="font-mono text-xs text-slate-400">
+                                {ratio.toFixed(1)}% occupied
+                              </span>
+                            </div>
+                            <div className="flex h-2.5 w-full overflow-hidden rounded-sm bg-slate-800">
+                              <div
+                                className="bg-amber transition-all duration-300"
+                                style={{ width: `${Math.max(ratio, 0.5)}%` }}
+                              />
+                              <div className="bg-terminal-green/30 flex-1" />
+                            </div>
+                            <div className="mt-1.5 flex items-center justify-between">
+                              <span
+                                className="text-amber font-mono text-xs"
+                                title={formatCkbAmount(spore.liveOccupiedCapacity).full + ' CKB'}
+                              >
+                                Occupied: {formatCkbCompact(spore.liveOccupiedCapacity).value} CKB
+                              </span>
+                              <span
+                                className="text-terminal-green font-mono text-xs"
+                                title={formatCkbAmount(freeBig.toString()).full + ' CKB'}
+                              >
+                                Unoccupied: {formatCkbCompact(freeBig.toString()).value} CKB
+                              </span>
+                            </div>
+                          </div>
+                        </DataField>
+                      );
+                    })()}
                 </DataGrid>
+              </TerminalPanelContent>
+            </TerminalPanel>
+
+            <TerminalPanel>
+              <TerminalPanelHeader indicator="none">Occupation History</TerminalPanelHeader>
+              <TerminalPanelContent>
+                <div className="mb-3 text-sm text-slate-400">
+                  Daily cumulative live CKB occupation for this NFT.
+                </div>
+                {isOccupationChartLoading ? (
+                  <div className="py-8 text-center text-slate-500">
+                    Loading occupation history...
+                  </div>
+                ) : occupationChart && occupationChart.data.length > 0 ? (
+                  <StackedAreaChart data={occupationChart.data} series={occupationChart.series} />
+                ) : (
+                  <div className="py-8 text-center text-slate-500">No occupation history yet</div>
+                )}
               </TerminalPanelContent>
             </TerminalPanel>
 

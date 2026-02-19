@@ -1,7 +1,8 @@
 use anyhow::Result;
+use std::collections::HashMap;
 
 use ckbadger_store::batch::StoreBatch;
-use ckbadger_store::types::{DobEntry, DobExtra, DobStandard};
+use ckbadger_store::types::{DobEntry, DobExtra, DobStandard, SporeTypeIndex};
 
 use crate::parser::{ParsedClusterCell, ParsedSporeCell};
 
@@ -181,6 +182,57 @@ impl BatchWriter {
         Ok(())
     }
 
+    pub fn update_spore_type_index_batch(
+        &self,
+        changes: &HashMap<Vec<u8>, SporeTypeIndex>,
+        batch: &mut StoreBatch,
+    ) -> Result<()> {
+        for (type_script_hash, index) in changes {
+            batch.put_spore_type_index(type_script_hash, index);
+        }
+        Ok(())
+    }
+
+    pub fn update_spore_daily_deltas_batch(
+        &self,
+        changes: &HashMap<(Vec<u8>, u32), (i64, i64)>,
+        batch: &mut StoreBatch,
+    ) -> Result<()> {
+        for ((spore_id, date), (capacity_delta, occupied_delta)) in changes {
+            if *capacity_delta == 0 && *occupied_delta == 0 {
+                continue;
+            }
+            let mut current = self
+                .store
+                .get_spore_daily_delta(spore_id, *date)?
+                .unwrap_or_default();
+            current.live_capacity_delta += *capacity_delta;
+            current.live_occupied_capacity_delta += *occupied_delta;
+            batch.put_spore_daily_delta(spore_id, *date, &current);
+        }
+        Ok(())
+    }
+
+    pub fn update_cluster_daily_deltas_batch(
+        &self,
+        changes: &HashMap<(Vec<u8>, u32), (i64, i64)>,
+        batch: &mut StoreBatch,
+    ) -> Result<()> {
+        for ((cluster_id, date), (capacity_delta, occupied_delta)) in changes {
+            if *capacity_delta == 0 && *occupied_delta == 0 {
+                continue;
+            }
+            let mut current = self
+                .store
+                .get_cluster_daily_delta(cluster_id, *date)?
+                .unwrap_or_default();
+            current.live_capacity_delta += *capacity_delta;
+            current.live_occupied_capacity_delta += *occupied_delta;
+            batch.put_cluster_daily_delta(cluster_id, *date, &current);
+        }
+        Ok(())
+    }
+
     pub fn get_spore_id_by_outpoint(
         &self,
         _tx_hash: &[u8],
@@ -204,5 +256,103 @@ impl BatchWriter {
         _output_indices: &[i16],
     ) -> Result<Vec<(Vec<u8>, i16, Vec<u8>)>> {
         Ok(Vec::new())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::writer::BatchWriter;
+    use ckbadger_store::store::CkbadgerStore;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_update_spore_daily_and_cluster_daily_deltas_batch_accumulates() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let writer = BatchWriter::new(Arc::new(store));
+
+        let spore_id = vec![0x11; 32];
+        let cluster_id = vec![0x22; 32];
+        let date = 20260219;
+
+        {
+            let mut batch = StoreBatch::new(writer.store());
+            let mut spore_changes = HashMap::new();
+            spore_changes.insert((spore_id.clone(), date), (100, 61));
+            writer
+                .update_spore_daily_deltas_batch(&spore_changes, &mut batch)
+                .unwrap();
+
+            let mut cluster_changes = HashMap::new();
+            cluster_changes.insert((cluster_id.clone(), date), (1000, 610));
+            writer
+                .update_cluster_daily_deltas_batch(&cluster_changes, &mut batch)
+                .unwrap();
+            batch.commit().unwrap();
+        }
+
+        {
+            let mut batch = StoreBatch::new(writer.store());
+            let mut spore_changes = HashMap::new();
+            spore_changes.insert((spore_id.clone(), date), (-20, -11));
+            writer
+                .update_spore_daily_deltas_batch(&spore_changes, &mut batch)
+                .unwrap();
+
+            let mut cluster_changes = HashMap::new();
+            cluster_changes.insert((cluster_id.clone(), date), (-200, -110));
+            writer
+                .update_cluster_daily_deltas_batch(&cluster_changes, &mut batch)
+                .unwrap();
+            batch.commit().unwrap();
+        }
+
+        let spore = writer
+            .store()
+            .get_spore_daily_delta(&spore_id, date)
+            .unwrap()
+            .unwrap();
+        assert_eq!(spore.live_capacity_delta, 80);
+        assert_eq!(spore.live_occupied_capacity_delta, 50);
+
+        let cluster = writer
+            .store()
+            .get_cluster_daily_delta(&cluster_id, date)
+            .unwrap()
+            .unwrap();
+        assert_eq!(cluster.live_capacity_delta, 800);
+        assert_eq!(cluster.live_occupied_capacity_delta, 500);
+    }
+
+    #[test]
+    fn test_update_spore_type_index_batch_writes_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let writer = BatchWriter::new(Arc::new(store));
+
+        let type_script_hash = vec![0x33; 32];
+        let mut changes = HashMap::new();
+        changes.insert(
+            type_script_hash.clone(),
+            SporeTypeIndex {
+                spore_id: vec![0x44; 32],
+                cluster_id: Some(vec![0x55; 32]),
+            },
+        );
+
+        let mut batch = StoreBatch::new(writer.store());
+        writer
+            .update_spore_type_index_batch(&changes, &mut batch)
+            .unwrap();
+        batch.commit().unwrap();
+
+        let loaded = writer
+            .store()
+            .get_spore_type_index(&type_script_hash)
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.spore_id, vec![0x44; 32]);
+        assert_eq!(loaded.cluster_id, Some(vec![0x55; 32]));
     }
 }

@@ -15,7 +15,7 @@ use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
 
 use ckbadger_store::batch::StoreBatch;
-use ckbadger_store::types::LiveCellInfo;
+use ckbadger_store::types::{LiveCellInfo, SporeTypeIndex};
 use ckbadger_store::CkbadgerStore;
 
 use crate::cache::CacheInvalidator;
@@ -945,6 +945,9 @@ impl Indexer {
             HashMap<(Vec<u8>, bool), (i64, i64, i64, i64, i64, i64)>, // script_usage_changes
             HashMap<(Vec<u8>, bool, u32), (i64, i64)>, // script_daily_changes
             HashMap<(Vec<u8>, u32), (i64, i64)>,   // token_daily_changes
+            HashMap<Vec<u8>, SporeTypeIndex>,      // spore_type_index_changes
+            HashMap<(Vec<u8>, u32), (i64, i64)>,   // spore_daily_changes
+            HashMap<(Vec<u8>, u32), (i64, i64)>,   // cluster_daily_changes
         );
 
         let (fetch_tx, mut fetch_rx) = mpsc::channel::<FetchedBatch>(self.config.pipeline_buffer);
@@ -1380,6 +1383,11 @@ impl Indexer {
                 let mut script_daily_changes: HashMap<(Vec<u8>, bool, u32), (i64, i64)> =
                     HashMap::new();
                 let mut token_daily_changes: HashMap<(Vec<u8>, u32), (i64, i64)> = HashMap::new();
+                let mut spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex> = HashMap::new();
+                let mut spore_daily_changes: HashMap<(Vec<u8>, u32), (i64, i64)> = HashMap::new();
+                let mut cluster_daily_changes: HashMap<(Vec<u8>, u32), (i64, i64)> = HashMap::new();
+                let mut spore_type_index_cache: HashMap<Vec<u8>, Option<SporeTypeIndex>> =
+                    HashMap::new();
 
                 for tx_data in &all_tx_data {
                     let date_yyyymmdd = ckbadger_store::keys::timestamp_ms_to_date(
@@ -1463,6 +1471,40 @@ impl Indexer {
                             daily_entry.0 += cell.capacity;
                             daily_entry.1 += cell_occupied;
                         }
+                        if let (Some(type_script_hash), Some(type_code_hash), Some(type_args)) = (
+                            cell.type_script_hash.as_ref(),
+                            cell.type_code_hash.as_ref(),
+                            cell.type_args.as_ref(),
+                        ) {
+                            if type_args.len() >= 32
+                                && SporeParser::is_spore_type_script(type_code_hash)
+                            {
+                                let spore_id = type_args[..32].to_vec();
+                                let cluster_id =
+                                    SporeParser::parse_spore_cluster_id_from_data(&cell.data);
+                                let index = SporeTypeIndex {
+                                    spore_id: spore_id.clone(),
+                                    cluster_id: cluster_id.clone(),
+                                };
+                                spore_type_index_cache
+                                    .insert(type_script_hash.clone(), Some(index.clone()));
+                                spore_type_index_changes.insert(type_script_hash.clone(), index);
+
+                                let spore_daily = spore_daily_changes
+                                    .entry((spore_id, date_yyyymmdd))
+                                    .or_insert((0, 0));
+                                spore_daily.0 += cell.capacity;
+                                spore_daily.1 += cell_occupied;
+
+                                if let Some(cluster_id) = cluster_id {
+                                    let cluster_daily = cluster_daily_changes
+                                        .entry((cluster_id, date_yyyymmdd))
+                                        .or_insert((0, 0));
+                                    cluster_daily.0 += cell.capacity;
+                                    cluster_daily.1 += cell_occupied;
+                                }
+                            }
+                        }
                     }
 
                     // Per-tx balance/consumption tracking
@@ -1522,6 +1564,41 @@ impl Indexer {
                                         .or_insert((0, 0));
                                     daily_entry.0 -= info.capacity;
                                     daily_entry.1 -= info.occupied_capacity;
+                                }
+                                if let (Some(type_script_hash), Some(type_code_hash)) =
+                                    (info.type_script_hash.as_ref(), info.type_code_hash.as_ref())
+                                {
+                                    if SporeParser::is_spore_type_script(type_code_hash) {
+                                        let spore_index = if let Some(cached) =
+                                            spore_type_index_cache.get(type_script_hash)
+                                        {
+                                            cached.clone()
+                                        } else {
+                                            let loaded = writer_for_parser
+                                                .store()
+                                                .get_spore_type_index(type_script_hash)
+                                                .ok()
+                                                .flatten();
+                                            spore_type_index_cache
+                                                .insert(type_script_hash.clone(), loaded.clone());
+                                            loaded
+                                        };
+                                        if let Some(index) = spore_index {
+                                            let spore_daily = spore_daily_changes
+                                                .entry((index.spore_id.clone(), date_yyyymmdd))
+                                                .or_insert((0, 0));
+                                            spore_daily.0 -= info.capacity;
+                                            spore_daily.1 -= info.occupied_capacity;
+
+                                            if let Some(cluster_id) = index.cluster_id {
+                                                let cluster_daily = cluster_daily_changes
+                                                    .entry((cluster_id, date_yyyymmdd))
+                                                    .or_insert((0, 0));
+                                                cluster_daily.0 -= info.capacity;
+                                                cluster_daily.1 -= info.occupied_capacity;
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1652,6 +1729,9 @@ impl Indexer {
                         script_usage_changes,
                         script_daily_changes,
                         token_daily_changes,
+                        spore_type_index_changes,
+                        spore_daily_changes,
+                        cluster_daily_changes,
                     ))
                     .await
                     .is_err()
@@ -1687,6 +1767,9 @@ impl Indexer {
                     script_usage_changes,
                     script_daily_changes,
                     token_daily_changes,
+                    spore_type_index_changes,
+                    spore_daily_changes,
+                    cluster_daily_changes,
                 ))) => {
                     let recv_wait_ms = t_recv.elapsed().as_secs_f64() * 1000.0;
                     let current_epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst);
@@ -1756,6 +1839,9 @@ impl Indexer {
                             script_usage_changes,
                             script_daily_changes,
                             token_daily_changes,
+                            spore_type_index_changes,
+                            spore_daily_changes,
+                            cluster_daily_changes,
                             chain_tip,
                         )
                         .await
@@ -2678,6 +2764,10 @@ impl Indexer {
             HashMap::new();
         let mut script_daily_changes: HashMap<(Vec<u8>, bool, u32), (i64, i64)> = HashMap::new();
         let mut token_daily_changes: HashMap<(Vec<u8>, u32), (i64, i64)> = HashMap::new();
+        let mut spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex> = HashMap::new();
+        let mut spore_daily_changes: HashMap<(Vec<u8>, u32), (i64, i64)> = HashMap::new();
+        let mut cluster_daily_changes: HashMap<(Vec<u8>, u32), (i64, i64)> = HashMap::new();
+        let mut spore_type_index_cache: HashMap<Vec<u8>, Option<SporeTypeIndex>> = HashMap::new();
         for tx_data in &all_tx_data {
             let date_yyyymmdd =
                 ckbadger_store::keys::timestamp_ms_to_date(tx_data.timestamp.timestamp_millis());
@@ -2729,6 +2819,37 @@ impl Indexer {
                     daily_entry.0 += cell.capacity;
                     daily_entry.1 += cell_occupied;
                 }
+                if let (Some(type_script_hash), Some(type_code_hash), Some(type_args)) = (
+                    cell.type_script_hash.as_ref(),
+                    cell.type_code_hash.as_ref(),
+                    cell.type_args.as_ref(),
+                ) {
+                    if type_args.len() >= 32 && SporeParser::is_spore_type_script(type_code_hash) {
+                        let spore_id = type_args[..32].to_vec();
+                        let cluster_id = SporeParser::parse_spore_cluster_id_from_data(&cell.data);
+                        let index = SporeTypeIndex {
+                            spore_id: spore_id.clone(),
+                            cluster_id: cluster_id.clone(),
+                        };
+                        spore_type_index_cache
+                            .insert(type_script_hash.clone(), Some(index.clone()));
+                        spore_type_index_changes.insert(type_script_hash.clone(), index);
+
+                        let spore_daily = spore_daily_changes
+                            .entry((spore_id, date_yyyymmdd))
+                            .or_insert((0, 0));
+                        spore_daily.0 += cell.capacity;
+                        spore_daily.1 += cell_occupied;
+
+                        if let Some(cluster_id) = cluster_id {
+                            let cluster_daily = cluster_daily_changes
+                                .entry((cluster_id, date_yyyymmdd))
+                                .or_insert((0, 0));
+                            cluster_daily.0 += cell.capacity;
+                            cluster_daily.1 += cell_occupied;
+                        }
+                    }
+                }
             }
         }
         for tx_data in &all_tx_data {
@@ -2776,6 +2897,40 @@ impl Indexer {
                                 .or_insert((0, 0));
                             daily_entry.0 -= info.capacity;
                             daily_entry.1 -= info.occupied_capacity;
+                        }
+                        if let (Some(type_script_hash), Some(type_code_hash)) =
+                            (info.type_script_hash.as_ref(), info.type_code_hash.as_ref())
+                        {
+                            if SporeParser::is_spore_type_script(type_code_hash) {
+                                let spore_index = if let Some(cached) =
+                                    spore_type_index_cache.get(type_script_hash)
+                                {
+                                    cached.clone()
+                                } else {
+                                    let loaded = self
+                                        .writer
+                                        .store()
+                                        .get_spore_type_index(type_script_hash)?;
+                                    spore_type_index_cache
+                                        .insert(type_script_hash.clone(), loaded.clone());
+                                    loaded
+                                };
+                                if let Some(index) = spore_index {
+                                    let spore_daily = spore_daily_changes
+                                        .entry((index.spore_id.clone(), date_yyyymmdd))
+                                        .or_insert((0, 0));
+                                    spore_daily.0 -= info.capacity;
+                                    spore_daily.1 -= info.occupied_capacity;
+
+                                    if let Some(cluster_id) = index.cluster_id {
+                                        let cluster_daily = cluster_daily_changes
+                                            .entry((cluster_id, date_yyyymmdd))
+                                            .or_insert((0, 0));
+                                        cluster_daily.0 -= info.capacity;
+                                        cluster_daily.1 -= info.occupied_capacity;
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -2850,6 +3005,22 @@ impl Indexer {
         if !token_daily_changes.is_empty() {
             self.writer
                 .update_token_daily_deltas_batch(&token_daily_changes, &mut consume_addr_batch)?;
+        }
+        if !spore_type_index_changes.is_empty() {
+            self.writer.update_spore_type_index_batch(
+                &spore_type_index_changes,
+                &mut consume_addr_batch,
+            )?;
+        }
+        if !spore_daily_changes.is_empty() {
+            self.writer
+                .update_spore_daily_deltas_batch(&spore_daily_changes, &mut consume_addr_batch)?;
+        }
+        if !cluster_daily_changes.is_empty() {
+            self.writer.update_cluster_daily_deltas_batch(
+                &cluster_daily_changes,
+                &mut consume_addr_batch,
+            )?;
         }
         {
             consume_addr_batch.commit()?;
@@ -3611,6 +3782,9 @@ impl Indexer {
         script_usage_changes: HashMap<(Vec<u8>, bool), (i64, i64, i64, i64, i64, i64)>,
         script_daily_changes: HashMap<(Vec<u8>, bool, u32), (i64, i64)>,
         token_daily_changes: HashMap<(Vec<u8>, u32), (i64, i64)>,
+        spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex>,
+        spore_daily_changes: HashMap<(Vec<u8>, u32), (i64, i64)>,
+        cluster_daily_changes: HashMap<(Vec<u8>, u32), (i64, i64)>,
         chain_tip: u64,
     ) -> Result<()> {
         if all_parsed_blocks.is_empty() {
@@ -4142,6 +4316,19 @@ impl Indexer {
                     }
                     if !token_daily_changes.is_empty() {
                         writer.update_token_daily_deltas_batch(&token_daily_changes, &mut batch)?;
+                    }
+                    if !spore_type_index_changes.is_empty() {
+                        writer
+                            .update_spore_type_index_batch(&spore_type_index_changes, &mut batch)?;
+                    }
+                    if !spore_daily_changes.is_empty() {
+                        writer.update_spore_daily_deltas_batch(&spore_daily_changes, &mut batch)?;
+                    }
+                    if !cluster_daily_changes.is_empty() {
+                        writer.update_cluster_daily_deltas_batch(
+                            &cluster_daily_changes,
+                            &mut batch,
+                        )?;
                     }
                     for (lock_hash, block_num, tx_idx, tx_hash) in &addr_tx_entries {
                         batch.put_addr_tx(lock_hash, *block_num, *tx_idx, tx_hash);
@@ -4936,6 +5123,18 @@ impl Indexer {
             if !token_daily_changes.is_empty() {
                 self.writer
                     .update_token_daily_deltas_batch(&token_daily_changes, &mut data_batch)?;
+            }
+            if !spore_type_index_changes.is_empty() {
+                self.writer
+                    .update_spore_type_index_batch(&spore_type_index_changes, &mut data_batch)?;
+            }
+            if !spore_daily_changes.is_empty() {
+                self.writer
+                    .update_spore_daily_deltas_batch(&spore_daily_changes, &mut data_batch)?;
+            }
+            if !cluster_daily_changes.is_empty() {
+                self.writer
+                    .update_cluster_daily_deltas_batch(&cluster_daily_changes, &mut data_batch)?;
             }
 
             // Write addr_txs entries

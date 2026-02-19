@@ -289,6 +289,34 @@ impl<'a> StoreBatch<'a> {
             .put_cf(self.store.cf_stats(), key, count.to_le_bytes());
     }
 
+    pub fn put_cluster_daily_delta(
+        &mut self,
+        cluster_id: &[u8],
+        date_yyyymmdd: u32,
+        delta: &ClusterDailyDelta,
+    ) {
+        let key = keys::encode_cluster_daily_key(cluster_id, date_yyyymmdd);
+        let value = bincode::serialize(delta).expect("serialize ClusterDailyDelta");
+        self.batch.put_cf(self.store.cf_stats(), key, &value);
+    }
+
+    pub fn put_spore_daily_delta(
+        &mut self,
+        spore_id: &[u8],
+        date_yyyymmdd: u32,
+        delta: &SporeDailyDelta,
+    ) {
+        let key = keys::encode_spore_daily_key(spore_id, date_yyyymmdd);
+        let value = bincode::serialize(delta).expect("serialize SporeDailyDelta");
+        self.batch.put_cf(self.store.cf_stats(), key, &value);
+    }
+
+    pub fn put_spore_type_index(&mut self, type_script_hash: &[u8], index: &SporeTypeIndex) {
+        let key = keys::encode_spore_type_index_key(type_script_hash);
+        let value = bincode::serialize(index).expect("serialize SporeTypeIndex");
+        self.batch.put_cf(self.store.cf_stats(), key, &value);
+    }
+
     pub fn delete_token_holder(&mut self, type_hash: &[u8], lock_hash: &[u8]) {
         let key = keys::encode_token_holder_key(type_hash, lock_hash);
         self.batch.delete_cf(self.store.cf_token_holders(), key);

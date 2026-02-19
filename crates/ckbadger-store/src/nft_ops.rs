@@ -1,8 +1,12 @@
 //! NFT (Spore, mNFT, DotBit) operations.
 
 use crate::batch::StoreBatch;
+use crate::keys;
 use crate::store::CkbadgerStore;
-use crate::types::{NftCollectionAggregate, NftEntry, SporeEntry};
+use crate::types::{
+    ClusterDailyDelta, NftCollectionAggregate, NftEntry, SporeDailyDelta, SporeEntry,
+    SporeTypeIndex,
+};
 
 impl CkbadgerStore {
     pub fn get_spore(&self, id: &[u8]) -> anyhow::Result<Option<SporeEntry>> {
@@ -75,6 +79,123 @@ impl CkbadgerStore {
             count += 1;
         }
         Ok(count)
+    }
+
+    pub fn get_spore_type_index(
+        &self,
+        type_script_hash: &[u8],
+    ) -> anyhow::Result<Option<SporeTypeIndex>> {
+        let key = keys::encode_spore_type_index_key(type_script_hash);
+        match self.get_cf(self.cf_stats(), &key)? {
+            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn put_spore_type_index_direct(
+        &self,
+        type_script_hash: &[u8],
+        index: &SporeTypeIndex,
+    ) -> anyhow::Result<()> {
+        let key = keys::encode_spore_type_index_key(type_script_hash);
+        let value = bincode::serialize(index)?;
+        self.put_cf(self.cf_stats(), &key, &value)
+    }
+
+    pub fn get_cluster_daily_delta(
+        &self,
+        cluster_id: &[u8],
+        date_yyyymmdd: u32,
+    ) -> anyhow::Result<Option<ClusterDailyDelta>> {
+        let key = keys::encode_cluster_daily_key(cluster_id, date_yyyymmdd);
+        match self.get_cf(self.cf_stats(), &key)? {
+            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn put_cluster_daily_delta(
+        &self,
+        cluster_id: &[u8],
+        date_yyyymmdd: u32,
+        delta: &ClusterDailyDelta,
+    ) -> anyhow::Result<()> {
+        let key = keys::encode_cluster_daily_key(cluster_id, date_yyyymmdd);
+        let value = bincode::serialize(delta)?;
+        self.put_cf(self.cf_stats(), &key, &value)
+    }
+
+    pub fn list_cluster_daily_deltas(
+        &self,
+        cluster_id: &[u8],
+    ) -> anyhow::Result<Vec<(u32, ClusterDailyDelta)>> {
+        let prefix = keys::encode_cluster_daily_prefix(cluster_id);
+        let iter = self.prefix_iterator_cf(self.cf_stats(), &prefix);
+        let mut results = Vec::new();
+
+        for item in iter.flatten() {
+            let (key, value) = item;
+            if !key.starts_with(&prefix) {
+                break;
+            }
+            if key.len() != keys::CLUSTER_DAILY_KEY_SIZE {
+                continue;
+            }
+            let (_, date) = keys::decode_cluster_daily_key(&key);
+            if let Ok(delta) = bincode::deserialize::<ClusterDailyDelta>(&value) {
+                results.push((date, delta));
+            }
+        }
+
+        Ok(results)
+    }
+
+    pub fn get_spore_daily_delta(
+        &self,
+        spore_id: &[u8],
+        date_yyyymmdd: u32,
+    ) -> anyhow::Result<Option<SporeDailyDelta>> {
+        let key = keys::encode_spore_daily_key(spore_id, date_yyyymmdd);
+        match self.get_cf(self.cf_stats(), &key)? {
+            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn put_spore_daily_delta(
+        &self,
+        spore_id: &[u8],
+        date_yyyymmdd: u32,
+        delta: &SporeDailyDelta,
+    ) -> anyhow::Result<()> {
+        let key = keys::encode_spore_daily_key(spore_id, date_yyyymmdd);
+        let value = bincode::serialize(delta)?;
+        self.put_cf(self.cf_stats(), &key, &value)
+    }
+
+    pub fn list_spore_daily_deltas(
+        &self,
+        spore_id: &[u8],
+    ) -> anyhow::Result<Vec<(u32, SporeDailyDelta)>> {
+        let prefix = keys::encode_spore_daily_prefix(spore_id);
+        let iter = self.prefix_iterator_cf(self.cf_stats(), &prefix);
+        let mut results = Vec::new();
+
+        for item in iter.flatten() {
+            let (key, value) = item;
+            if !key.starts_with(&prefix) {
+                break;
+            }
+            if key.len() != keys::SPORE_DAILY_KEY_SIZE {
+                continue;
+            }
+            let (_, date) = keys::decode_spore_daily_key(&key);
+            if let Ok(delta) = bincode::deserialize::<SporeDailyDelta>(&value) {
+                results.push((date, delta));
+            }
+        }
+
+        Ok(results)
     }
 
     pub fn get_nft(&self, id: &[u8]) -> anyhow::Result<Option<NftEntry>> {
@@ -175,7 +296,7 @@ impl CkbadgerStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::NftStandard;
+    use crate::types::{ClusterDailyDelta, NftStandard, SporeDailyDelta, SporeTypeIndex};
     use tempfile::TempDir;
 
     fn test_store() -> (TempDir, CkbadgerStore) {
@@ -251,5 +372,76 @@ mod tests {
         assert_eq!(agg.standard, NftStandard::MnftClass);
         assert_eq!(agg.total_count, 0);
         assert_eq!(agg.live_count, 0);
+    }
+
+    #[test]
+    fn test_spore_type_index_roundtrip() {
+        let (_dir, store) = test_store();
+        let type_script_hash = [0x11u8; 32];
+        let index = SporeTypeIndex {
+            spore_id: vec![0x22; 32],
+            cluster_id: Some(vec![0x33; 32]),
+        };
+
+        store
+            .put_spore_type_index_direct(&type_script_hash, &index)
+            .unwrap();
+
+        let loaded = store
+            .get_spore_type_index(&type_script_hash)
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.spore_id, index.spore_id);
+        assert_eq!(loaded.cluster_id, index.cluster_id);
+    }
+
+    #[test]
+    fn test_cluster_and_spore_daily_delta_roundtrip() {
+        let (_dir, store) = test_store();
+        let cluster_id = [0x44u8; 32];
+        let spore_id = [0x55u8; 32];
+
+        store
+            .put_cluster_daily_delta(
+                &cluster_id,
+                20260219,
+                &ClusterDailyDelta {
+                    live_capacity_delta: 1000,
+                    live_occupied_capacity_delta: 600,
+                },
+            )
+            .unwrap();
+        store
+            .put_spore_daily_delta(
+                &spore_id,
+                20260219,
+                &SporeDailyDelta {
+                    live_capacity_delta: 100,
+                    live_occupied_capacity_delta: 61,
+                },
+            )
+            .unwrap();
+
+        let cluster = store
+            .get_cluster_daily_delta(&cluster_id, 20260219)
+            .unwrap()
+            .unwrap();
+        assert_eq!(cluster.live_capacity_delta, 1000);
+        assert_eq!(cluster.live_occupied_capacity_delta, 600);
+
+        let spore = store
+            .get_spore_daily_delta(&spore_id, 20260219)
+            .unwrap()
+            .unwrap();
+        assert_eq!(spore.live_capacity_delta, 100);
+        assert_eq!(spore.live_occupied_capacity_delta, 61);
+
+        let cluster_list = store.list_cluster_daily_deltas(&cluster_id).unwrap();
+        assert_eq!(cluster_list.len(), 1);
+        assert_eq!(cluster_list[0].0, 20260219);
+
+        let spore_list = store.list_spore_daily_deltas(&spore_id).unwrap();
+        assert_eq!(spore_list.len(), 1);
+        assert_eq!(spore_list[0].0, 20260219);
     }
 }

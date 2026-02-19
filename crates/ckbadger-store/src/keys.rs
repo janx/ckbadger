@@ -108,6 +108,10 @@ pub mod stats_prefix {
     pub const NFT_HOURLY: u8 = 0x0E;
     pub const SCRIPT_DAILY: u8 = 0x0F;
     pub const TOKEN_DAILY: u8 = 0x10;
+    pub const CLUSTER_DAILY: u8 = 0x11;
+    pub const SPORE_DAILY: u8 = 0x12;
+    pub const SPORE_OUTPOINT: u8 = 0x13;
+    pub const SPORE_TYPE_INDEX: u8 = 0x14;
 }
 
 // Flat re-exports for convenience
@@ -127,6 +131,10 @@ pub const STATS_PREFIX_SPORE_HOURLY: u8 = stats_prefix::SPORE_HOURLY;
 pub const STATS_PREFIX_NFT_HOURLY: u8 = stats_prefix::NFT_HOURLY;
 pub const STATS_PREFIX_SCRIPT_DAILY: u8 = stats_prefix::SCRIPT_DAILY;
 pub const STATS_PREFIX_TOKEN_DAILY: u8 = stats_prefix::TOKEN_DAILY;
+pub const STATS_PREFIX_CLUSTER_DAILY: u8 = stats_prefix::CLUSTER_DAILY;
+pub const STATS_PREFIX_SPORE_DAILY: u8 = stats_prefix::SPORE_DAILY;
+pub const STATS_PREFIX_SPORE_OUTPOINT: u8 = stats_prefix::SPORE_OUTPOINT;
+pub const STATS_PREFIX_SPORE_TYPE_INDEX: u8 = stats_prefix::SPORE_TYPE_INDEX;
 
 /// Token transfers total count key: prefix(1B) + type_hash(32B) = 33 bytes
 pub fn encode_token_transfers_key(type_hash: &[u8]) -> Vec<u8> {
@@ -177,6 +185,84 @@ pub fn decode_token_daily_key(key: &[u8]) -> (Vec<u8>, u32) {
     let type_hash = key[1..33].to_vec();
     let date = u32::from_be_bytes(key[33..37].try_into().unwrap());
     (type_hash, date)
+}
+
+/// Cluster daily stats key: prefix(1B) + cluster_id(32B) + date(4B YYYYMMDD BE)
+pub const CLUSTER_DAILY_KEY_SIZE: usize = 37;
+
+pub fn encode_cluster_daily_key(
+    cluster_id: &[u8],
+    date_yyyymmdd: u32,
+) -> [u8; CLUSTER_DAILY_KEY_SIZE] {
+    let mut key = [0u8; CLUSTER_DAILY_KEY_SIZE];
+    key[0] = STATS_PREFIX_CLUSTER_DAILY;
+    key[1..33].copy_from_slice(&cluster_id[..32]);
+    key[33..37].copy_from_slice(&date_yyyymmdd.to_be_bytes());
+    key
+}
+
+pub fn encode_cluster_daily_prefix(cluster_id: &[u8]) -> [u8; 33] {
+    let mut prefix = [0u8; 33];
+    prefix[0] = STATS_PREFIX_CLUSTER_DAILY;
+    prefix[1..33].copy_from_slice(&cluster_id[..32]);
+    prefix
+}
+
+pub fn decode_cluster_daily_key(key: &[u8]) -> (Vec<u8>, u32) {
+    let cluster_id = key[1..33].to_vec();
+    let date = u32::from_be_bytes(key[33..37].try_into().unwrap());
+    (cluster_id, date)
+}
+
+/// Spore daily stats key: prefix(1B) + spore_id(32B) + date(4B YYYYMMDD BE)
+pub const SPORE_DAILY_KEY_SIZE: usize = 37;
+
+pub fn encode_spore_daily_key(spore_id: &[u8], date_yyyymmdd: u32) -> [u8; SPORE_DAILY_KEY_SIZE] {
+    let mut key = [0u8; SPORE_DAILY_KEY_SIZE];
+    key[0] = STATS_PREFIX_SPORE_DAILY;
+    key[1..33].copy_from_slice(&spore_id[..32]);
+    key[33..37].copy_from_slice(&date_yyyymmdd.to_be_bytes());
+    key
+}
+
+pub fn encode_spore_daily_prefix(spore_id: &[u8]) -> [u8; 33] {
+    let mut prefix = [0u8; 33];
+    prefix[0] = STATS_PREFIX_SPORE_DAILY;
+    prefix[1..33].copy_from_slice(&spore_id[..32]);
+    prefix
+}
+
+pub fn decode_spore_daily_key(key: &[u8]) -> (Vec<u8>, u32) {
+    let spore_id = key[1..33].to_vec();
+    let date = u32::from_be_bytes(key[33..37].try_into().unwrap());
+    (spore_id, date)
+}
+
+/// Spore outpoint lookup key: prefix(1B) + outpoint(34B)
+pub const SPORE_OUTPOINT_KEY_SIZE: usize = 35;
+
+pub fn encode_spore_outpoint_key(
+    tx_hash: &[u8],
+    output_index: i16,
+) -> [u8; SPORE_OUTPOINT_KEY_SIZE] {
+    let mut key = [0u8; SPORE_OUTPOINT_KEY_SIZE];
+    key[0] = STATS_PREFIX_SPORE_OUTPOINT;
+    key[1..35].copy_from_slice(&encode_outpoint(tx_hash, output_index));
+    key
+}
+
+pub fn decode_spore_outpoint_key(key: &[u8]) -> (Vec<u8>, i16) {
+    decode_outpoint(&key[1..35])
+}
+
+/// Spore type-script index key: prefix(1B) + type_script_hash(32B)
+pub const SPORE_TYPE_INDEX_KEY_SIZE: usize = 33;
+
+pub fn encode_spore_type_index_key(type_script_hash: &[u8]) -> [u8; SPORE_TYPE_INDEX_KEY_SIZE] {
+    let mut key = [0u8; SPORE_TYPE_INDEX_KEY_SIZE];
+    key[0] = STATS_PREFIX_SPORE_TYPE_INDEX;
+    key[1..33].copy_from_slice(&type_script_hash[..32]);
+    key
 }
 
 /// Zero-pad an ID to exactly 32 bytes. IDs shorter than 32 bytes (e.g. mNFT class_id = 24B)
@@ -460,6 +546,64 @@ mod tests {
         let key = encode_token_daily_key(&type_hash, 20240101);
         assert_eq!(prefix.len(), 33);
         assert!(key.starts_with(&prefix));
+    }
+
+    #[test]
+    fn test_cluster_daily_key_roundtrip() {
+        let cluster_id = [0x88u8; 32];
+        let key = encode_cluster_daily_key(&cluster_id, 20260219);
+        assert_eq!(key.len(), CLUSTER_DAILY_KEY_SIZE);
+        let (decoded_id, decoded_date) = decode_cluster_daily_key(&key);
+        assert_eq!(decoded_id, cluster_id.to_vec());
+        assert_eq!(decoded_date, 20260219);
+    }
+
+    #[test]
+    fn test_cluster_daily_prefix_is_prefix_of_full_key() {
+        let cluster_id = [0x22u8; 32];
+        let prefix = encode_cluster_daily_prefix(&cluster_id);
+        let key = encode_cluster_daily_key(&cluster_id, 20240101);
+        assert_eq!(prefix.len(), 33);
+        assert!(key.starts_with(&prefix));
+    }
+
+    #[test]
+    fn test_spore_daily_key_roundtrip() {
+        let spore_id = [0x99u8; 32];
+        let key = encode_spore_daily_key(&spore_id, 20260219);
+        assert_eq!(key.len(), SPORE_DAILY_KEY_SIZE);
+        let (decoded_id, decoded_date) = decode_spore_daily_key(&key);
+        assert_eq!(decoded_id, spore_id.to_vec());
+        assert_eq!(decoded_date, 20260219);
+    }
+
+    #[test]
+    fn test_spore_daily_prefix_is_prefix_of_full_key() {
+        let spore_id = [0x33u8; 32];
+        let prefix = encode_spore_daily_prefix(&spore_id);
+        let key = encode_spore_daily_key(&spore_id, 20240101);
+        assert_eq!(prefix.len(), 33);
+        assert!(key.starts_with(&prefix));
+    }
+
+    #[test]
+    fn test_spore_outpoint_key_roundtrip() {
+        let tx_hash = [0xABu8; 32];
+        let key = encode_spore_outpoint_key(&tx_hash, 7);
+        assert_eq!(key.len(), SPORE_OUTPOINT_KEY_SIZE);
+        assert_eq!(key[0], STATS_PREFIX_SPORE_OUTPOINT);
+        let (decoded_tx_hash, decoded_output_index) = decode_spore_outpoint_key(&key);
+        assert_eq!(decoded_tx_hash, tx_hash.to_vec());
+        assert_eq!(decoded_output_index, 7);
+    }
+
+    #[test]
+    fn test_spore_type_index_key_structure() {
+        let type_script_hash = [0xBCu8; 32];
+        let key = encode_spore_type_index_key(&type_script_hash);
+        assert_eq!(key.len(), SPORE_TYPE_INDEX_KEY_SIZE);
+        assert_eq!(key[0], STATS_PREFIX_SPORE_TYPE_INDEX);
+        assert_eq!(&key[1..33], &type_script_hash);
     }
 
     // ---- Activity key ----

@@ -7,8 +7,8 @@ use tower::ServiceExt;
 use ckbadger_api::{create_router, AppConfig};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
-    ClusterAggregate, DobEntry, DobExtra, DobStandard, ScriptDailyDelta, ScriptInfo,
-    TokenDailyDelta, TokenInfo,
+    ClusterAggregate, ClusterDailyDelta, DobEntry, DobExtra, DobStandard, ScriptDailyDelta,
+    ScriptInfo, SporeDailyDelta, TokenDailyDelta, TokenInfo,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -424,6 +424,155 @@ async fn test_spore_list_empty_db() {
 
     let response = app.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn test_cluster_occupation_chart_and_cluster_capacity_fields() {
+    let store = test_store();
+    let cluster_id = [0x42u8; 32];
+    let cluster_id_hex = format!("0x{}", hex::encode(cluster_id));
+
+    let cluster_entry = DobEntry {
+        standard: DobStandard::SporeCluster,
+        collection_id: None,
+        owner_lock_hash: Some(vec![0x11; 32]),
+        name: Some("Test Cluster".to_string()),
+        description: None,
+        is_live: true,
+        created_at_block: 123,
+        created_at_tx: vec![0x22; 32],
+        extra: DobExtra::SporeCluster,
+    };
+    store.put_spore_direct(&cluster_id, &cluster_entry).unwrap();
+    store
+        .put_cluster_daily_delta(
+            &cluster_id,
+            20240115,
+            &ClusterDailyDelta {
+                live_capacity_delta: 100,
+                live_occupied_capacity_delta: 60,
+            },
+        )
+        .unwrap();
+    store
+        .put_cluster_daily_delta(
+            &cluster_id,
+            20240116,
+            &ClusterDailyDelta {
+                live_capacity_delta: -20,
+                live_occupied_capacity_delta: -10,
+            },
+        )
+        .unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/spore/clusters/{}/charts/occupation",
+            cluster_id_hex
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["title"], "Test Cluster Capacity Occupation");
+    let data = json["data"].as_array().unwrap();
+    assert_eq!(data.len(), 2);
+    assert_eq!(data[0]["values"]["occupied"], "60");
+    assert_eq!(data[0]["values"]["unoccupied"], "40");
+    assert_eq!(data[1]["values"]["occupied"], "50");
+    assert_eq!(data[1]["values"]["unoccupied"], "30");
+
+    let request = Request::builder()
+        .uri(format!("/api/v1/spore/clusters/{}", cluster_id_hex))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["liveCapacity"], "80");
+    assert_eq!(json["liveOccupiedCapacity"], "50");
+}
+
+#[tokio::test]
+async fn test_spore_occupation_chart_and_spore_capacity_fields() {
+    let store = test_store();
+    let spore_id = [0x77u8; 32];
+    let spore_id_hex = format!("0x{}", hex::encode(spore_id));
+
+    let spore_entry = DobEntry {
+        standard: DobStandard::Spore,
+        collection_id: None,
+        owner_lock_hash: Some(vec![0xAA; 32]),
+        name: None,
+        description: None,
+        is_live: true,
+        created_at_block: 321,
+        created_at_tx: vec![0xBB; 32],
+        extra: DobExtra::Spore {
+            content_type: "image/png".to_string(),
+            content_length: 1024,
+        },
+    };
+    store.put_spore_direct(&spore_id, &spore_entry).unwrap();
+    store
+        .put_spore_daily_delta(
+            &spore_id,
+            20240115,
+            &SporeDailyDelta {
+                live_capacity_delta: 100,
+                live_occupied_capacity_delta: 61,
+            },
+        )
+        .unwrap();
+    store
+        .put_spore_daily_delta(
+            &spore_id,
+            20240116,
+            &SporeDailyDelta {
+                live_capacity_delta: -20,
+                live_occupied_capacity_delta: -11,
+            },
+        )
+        .unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/spore/nfts/{}/charts/occupation",
+            spore_id_hex
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["title"], "Spore Capacity Occupation");
+    let data = json["data"].as_array().unwrap();
+    assert_eq!(data.len(), 2);
+    assert_eq!(data[1]["values"]["occupied"], "50");
+    assert_eq!(data[1]["values"]["unoccupied"], "30");
+
+    let request = Request::builder()
+        .uri(format!("/api/v1/spore/nfts/{}", spore_id_hex))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["liveCapacity"], "80");
+    assert_eq!(json["liveOccupiedCapacity"], "50");
 }
 
 #[tokio::test]

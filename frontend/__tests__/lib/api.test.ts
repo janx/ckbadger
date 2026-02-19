@@ -225,6 +225,38 @@ describe('api', () => {
       expect(chart.title).toContain('Capacity Occupation');
     });
 
+    it('fetches spore cluster occupation chart', async () => {
+      server.use(
+        http.get('*/api/v1/spore/clusters/:clusterId/charts/occupation', ({ params }) => {
+          expect(params.clusterId).toBe('0xabcd');
+          return HttpResponse.json({
+            title: 'My Cluster Capacity Occupation',
+            data: [],
+            series: [],
+          });
+        })
+      );
+
+      const chart = await api.getSporeClusterOccupationChart('0xabcd');
+      expect(chart.title).toContain('Capacity Occupation');
+    });
+
+    it('fetches spore nft occupation chart', async () => {
+      server.use(
+        http.get('*/api/v1/spore/nfts/:sporeId/charts/occupation', ({ params }) => {
+          expect(params.sporeId).toBe('0x9999');
+          return HttpResponse.json({
+            title: 'Spore Capacity Occupation',
+            data: [],
+            series: [],
+          });
+        })
+      );
+
+      const chart = await api.getSporeNftOccupationChart('0x9999');
+      expect(chart.title).toContain('Capacity Occupation');
+    });
+
     it('builds query params for getAddressTokens', async () => {
       server.use(
         http.get('*/api/v1/addresses/:addr/tokens', ({ request }) => {

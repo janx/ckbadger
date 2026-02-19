@@ -8,6 +8,7 @@ vi.mock('@/lib/api', () => ({
   api: {
     getSporeNft: vi.fn(),
     getSporeCluster: vi.fn(),
+    getSporeNftOccupationChart: vi.fn(),
   },
 }));
 
@@ -31,11 +32,18 @@ const mockSpore = {
   ownerLockHash: '0x1111111111111111111111111111111111111111111111111111111111111111',
   isLive: true,
   createdAtBlock: 123456,
+  liveCapacity: '100000000000',
+  liveOccupiedCapacity: '61000000000',
 };
 
 describe('SporeDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(api.getSporeNftOccupationChart).mockResolvedValue({
+      title: 'Spore Capacity Occupation',
+      data: [],
+      series: [],
+    });
   });
 
   it('links back to NFT tab on assets page', async () => {
@@ -47,6 +55,16 @@ describe('SporeDetailPage', () => {
       const backLink = screen.getByText('← Back to NFTs');
       expect(backLink).toBeInTheDocument();
       expect(backLink.closest('a')).toHaveAttribute('href', '/assets?type=nft');
+    });
+  });
+
+  it('renders occupation history panel', async () => {
+    vi.mocked(api.getSporeNft).mockResolvedValue(mockSpore);
+
+    render(<SporeDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Occupation History')).toBeInTheDocument();
     });
   });
 });

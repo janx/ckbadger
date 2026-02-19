@@ -136,6 +136,10 @@ impl SporeParser {
             .collect()
     }
 
+    pub fn parse_spore_cluster_id_from_data(data: &[u8]) -> Option<Vec<u8>> {
+        Self::parse_spore_data(data).and_then(|parsed| parsed.cluster_id)
+    }
+
     fn parse_spore_data(data: &[u8]) -> Option<SporeData> {
         if data.len() < 16 {
             return None;
@@ -389,6 +393,15 @@ mod tests {
         let parsed = result.unwrap();
         assert!(parsed.cluster_id.is_some());
         assert_eq!(parsed.cluster_id.as_ref().unwrap().len(), 32);
+    }
+
+    #[test]
+    fn test_parse_spore_cluster_id_from_data() {
+        let cluster_id = [0xabu8; 32];
+        let data = create_spore_data("text/plain", b"hello world", Some(&cluster_id));
+
+        let parsed = SporeParser::parse_spore_cluster_id_from_data(&data).unwrap();
+        assert_eq!(parsed, cluster_id.to_vec());
     }
 
     #[test]

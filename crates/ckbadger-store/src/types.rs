@@ -512,6 +512,28 @@ pub struct TokenDailyDelta {
     pub live_occupied_capacity_delta: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ClusterDailyDelta {
+    /// Net live capacity change in shannons for this cluster's spores on a day.
+    pub live_capacity_delta: i64,
+    /// Net live occupied capacity change in shannons for this cluster's spores on a day.
+    pub live_occupied_capacity_delta: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SporeDailyDelta {
+    /// Net live capacity change in shannons for this spore on a day.
+    pub live_capacity_delta: i64,
+    /// Net live occupied capacity change in shannons for this spore on a day.
+    pub live_occupied_capacity_delta: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SporeTypeIndex {
+    pub spore_id: Vec<u8>,
+    pub cluster_id: Option<Vec<u8>>,
+}
+
 // ============================================
 // Group G2: HODL Wave
 // ============================================
@@ -746,6 +768,69 @@ mod tests {
         let delta = TokenDailyDelta::default();
         assert_eq!(delta.live_capacity_delta, 0);
         assert_eq!(delta.live_occupied_capacity_delta, 0);
+    }
+
+    // ---- ClusterDailyDelta ----
+
+    #[test]
+    fn test_cluster_daily_delta_roundtrip() {
+        let delta = ClusterDailyDelta {
+            live_capacity_delta: 321_000_000_000,
+            live_occupied_capacity_delta: -90_000_000_000,
+        };
+        let bytes = bincode::serialize(&delta).unwrap();
+        let decoded: ClusterDailyDelta = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.live_capacity_delta, 321_000_000_000);
+        assert_eq!(decoded.live_occupied_capacity_delta, -90_000_000_000);
+    }
+
+    #[test]
+    fn test_cluster_daily_delta_default() {
+        let delta = ClusterDailyDelta::default();
+        assert_eq!(delta.live_capacity_delta, 0);
+        assert_eq!(delta.live_occupied_capacity_delta, 0);
+    }
+
+    // ---- SporeDailyDelta ----
+
+    #[test]
+    fn test_spore_daily_delta_roundtrip() {
+        let delta = SporeDailyDelta {
+            live_capacity_delta: 111_000_000_000,
+            live_occupied_capacity_delta: -22_000_000_000,
+        };
+        let bytes = bincode::serialize(&delta).unwrap();
+        let decoded: SporeDailyDelta = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.live_capacity_delta, 111_000_000_000);
+        assert_eq!(decoded.live_occupied_capacity_delta, -22_000_000_000);
+    }
+
+    #[test]
+    fn test_spore_daily_delta_default() {
+        let delta = SporeDailyDelta::default();
+        assert_eq!(delta.live_capacity_delta, 0);
+        assert_eq!(delta.live_occupied_capacity_delta, 0);
+    }
+
+    // ---- SporeTypeIndex ----
+
+    #[test]
+    fn test_spore_type_index_roundtrip() {
+        let index = SporeTypeIndex {
+            spore_id: vec![0xAB; 32],
+            cluster_id: Some(vec![0xCD; 32]),
+        };
+        let bytes = bincode::serialize(&index).unwrap();
+        let decoded: SporeTypeIndex = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.spore_id, vec![0xAB; 32]);
+        assert_eq!(decoded.cluster_id, Some(vec![0xCD; 32]));
+    }
+
+    #[test]
+    fn test_spore_type_index_default() {
+        let index = SporeTypeIndex::default();
+        assert!(index.spore_id.is_empty());
+        assert!(index.cluster_id.is_none());
     }
 
     // ---- AddressDailyStats ----
