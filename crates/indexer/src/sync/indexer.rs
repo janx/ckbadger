@@ -942,7 +942,7 @@ impl Indexer {
             // Pre-computed in parser stage:
             HashMap<(Vec<u8>, i16), LiveCellInfo>, // batch_cell_infos
             HashMap<Vec<u8>, (i64, i32, i32, i64, i64, Vec<u8>, i64)>, // address_balance_changes
-            HashMap<(Vec<u8>, bool), (i64, i64, i64, i64)>, // script_usage_changes
+            HashMap<(Vec<u8>, bool), (i64, i64, i64, i64, i64, i64)>, // script_usage_changes
         );
 
         let (fetch_tx, mut fetch_rx) = mpsc::channel::<FetchedBatch>(self.config.pipeline_buffer);
@@ -1371,8 +1371,10 @@ impl Indexer {
                     Vec<u8>,
                     (i64, i32, i32, i64, i64, Vec<u8>, i64),
                 > = HashMap::new();
-                let mut script_usage_changes: HashMap<(Vec<u8>, bool), (i64, i64, i64, i64)> =
-                    HashMap::new();
+                let mut script_usage_changes: HashMap<
+                    (Vec<u8>, bool),
+                    (i64, i64, i64, i64, i64, i64),
+                > = HashMap::new();
 
                 for tx_data in &all_tx_data {
                     // cell_cache update
@@ -1406,19 +1408,35 @@ impl Indexer {
                     // script_usage_changes - outputs
                     for cell in &tx_data.cells {
                         let lock_key = (cell.lock_code_hash.clone(), false);
-                        let entry = script_usage_changes.entry(lock_key).or_insert((0, 0, 0, 0));
+                        let lock_script_size = 32 + 1 + cell.lock_args.len() as i64;
+                        let type_script_size = cell
+                            .type_args
+                            .as_ref()
+                            .map(|a| 32 + 1 + a.len() as i64)
+                            .unwrap_or(0);
+                        let cell_occupied =
+                            (8 + lock_script_size + type_script_size + cell.data_size as i64)
+                                * 100_000_000;
+                        let entry = script_usage_changes
+                            .entry(lock_key)
+                            .or_insert((0, 0, 0, 0, 0, 0));
                         entry.0 += 1;
                         entry.1 += 1;
                         entry.2 += cell.capacity;
                         entry.3 += cell.capacity;
+                        entry.4 += cell_occupied;
+                        entry.5 += cell_occupied;
                         if let Some(ref type_code_hash) = cell.type_code_hash {
                             let type_key = (type_code_hash.clone(), true);
-                            let entry =
-                                script_usage_changes.entry(type_key).or_insert((0, 0, 0, 0));
+                            let entry = script_usage_changes
+                                .entry(type_key)
+                                .or_insert((0, 0, 0, 0, 0, 0));
                             entry.0 += 1;
                             entry.1 += 1;
                             entry.2 += cell.capacity;
                             entry.3 += cell.capacity;
+                            entry.4 += cell_occupied;
+                            entry.5 += cell_occupied;
                         }
                     }
 
@@ -1448,17 +1466,20 @@ impl Indexer {
                                     .or_default() -= info.occupied_capacity;
                                 // script usage - inputs
                                 let lock_key = (info.lock_code_hash.clone(), false);
-                                let entry =
-                                    script_usage_changes.entry(lock_key).or_insert((0, 0, 0, 0));
+                                let entry = script_usage_changes
+                                    .entry(lock_key)
+                                    .or_insert((0, 0, 0, 0, 0, 0));
                                 entry.1 -= 1;
                                 entry.3 -= info.capacity;
+                                entry.5 -= info.occupied_capacity;
                                 if let Some(ref type_code_hash) = info.type_code_hash {
                                     let type_key = (type_code_hash.clone(), true);
                                     let entry = script_usage_changes
                                         .entry(type_key)
-                                        .or_insert((0, 0, 0, 0));
+                                        .or_insert((0, 0, 0, 0, 0, 0));
                                     entry.1 -= 1;
                                     entry.3 -= info.capacity;
+                                    entry.5 -= info.occupied_capacity;
                                 }
                             }
                         }
@@ -2605,23 +2626,39 @@ impl Indexer {
                 .collect();
 
         // Script usage
-        let mut script_usage_changes: HashMap<(Vec<u8>, bool), (i64, i64, i64, i64)> =
+        let mut script_usage_changes: HashMap<(Vec<u8>, bool), (i64, i64, i64, i64, i64, i64)> =
             HashMap::new();
         for tx_data in &all_tx_data {
             for cell in &tx_data.cells {
                 let lock_key = (cell.lock_code_hash.clone(), false);
-                let entry = script_usage_changes.entry(lock_key).or_insert((0, 0, 0, 0));
+                let lock_script_size = 32 + 1 + cell.lock_args.len() as i64;
+                let type_script_size = cell
+                    .type_args
+                    .as_ref()
+                    .map(|a| 32 + 1 + a.len() as i64)
+                    .unwrap_or(0);
+                let cell_occupied =
+                    (8 + lock_script_size + type_script_size + cell.data_size as i64) * 100_000_000;
+                let entry = script_usage_changes
+                    .entry(lock_key)
+                    .or_insert((0, 0, 0, 0, 0, 0));
                 entry.0 += 1;
                 entry.1 += 1;
                 entry.2 += cell.capacity;
                 entry.3 += cell.capacity;
+                entry.4 += cell_occupied;
+                entry.5 += cell_occupied;
                 if let Some(ref type_code_hash) = cell.type_code_hash {
                     let type_key = (type_code_hash.clone(), true);
-                    let entry = script_usage_changes.entry(type_key).or_insert((0, 0, 0, 0));
+                    let entry = script_usage_changes
+                        .entry(type_key)
+                        .or_insert((0, 0, 0, 0, 0, 0));
                     entry.0 += 1;
                     entry.1 += 1;
                     entry.2 += cell.capacity;
                     entry.3 += cell.capacity;
+                    entry.4 += cell_occupied;
+                    entry.5 += cell_occupied;
                 }
             }
         }
@@ -2637,15 +2674,20 @@ impl Indexer {
                         .or_else(|| batch_cell_infos.get(&key));
                     if let Some(info) = info {
                         let lock_key = (info.lock_code_hash.clone(), false);
-                        let entry = script_usage_changes.entry(lock_key).or_insert((0, 0, 0, 0));
+                        let entry = script_usage_changes
+                            .entry(lock_key)
+                            .or_insert((0, 0, 0, 0, 0, 0));
                         entry.1 -= 1;
                         entry.3 -= info.capacity;
+                        entry.5 -= info.occupied_capacity;
                         if let Some(ref type_code_hash) = info.type_code_hash {
                             let type_key = (type_code_hash.clone(), true);
-                            let entry =
-                                script_usage_changes.entry(type_key).or_insert((0, 0, 0, 0));
+                            let entry = script_usage_changes
+                                .entry(type_key)
+                                .or_insert((0, 0, 0, 0, 0, 0));
                             entry.1 -= 1;
                             entry.3 -= info.capacity;
+                            entry.5 -= info.occupied_capacity;
                         }
                     }
                 }
@@ -3470,7 +3512,7 @@ impl Indexer {
         input_cell_info: HashMap<(Vec<u8>, i16), LiveCellInfo>,
         batch_cell_infos: HashMap<(Vec<u8>, i16), LiveCellInfo>,
         address_balance_changes: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, Vec<u8>, i64)>,
-        script_usage_changes: HashMap<(Vec<u8>, bool), (i64, i64, i64, i64)>,
+        script_usage_changes: HashMap<(Vec<u8>, bool), (i64, i64, i64, i64, i64, i64)>,
         chain_tip: u64,
     ) -> Result<()> {
         if all_parsed_blocks.is_empty() {

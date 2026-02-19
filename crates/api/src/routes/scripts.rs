@@ -67,6 +67,8 @@ pub struct ScriptUsageResponse {
     pub live_cells_count: i64,
     pub capacity_sum: String,
     pub live_capacity_sum: String,
+    pub occupied_capacity_sum: String,
+    pub live_occupied_capacity_sum: String,
     pub by_deployment: Vec<DeploymentUsage>,
 }
 
@@ -79,6 +81,8 @@ pub struct DeploymentUsage {
     pub live_cells_count: i64,
     pub capacity_sum: String,
     pub live_capacity_sum: String,
+    pub occupied_capacity_sum: String,
+    pub live_occupied_capacity_sum: String,
 }
 
 /// Request body for bulk script lookup by code_hash
@@ -102,6 +106,7 @@ pub struct ScriptLookupInfo {
     pub code_cell_output_index: Option<i32>,
     pub live_cells_count: i64,
     pub live_capacity_sum: String,
+    pub live_occupied_capacity_sum: String,
 }
 
 /// Resolve the deployment code cell outpoint for a script.
@@ -249,6 +254,9 @@ async fn lookup_scripts(
             let live_capacity_sum = (info.lock_live_capacity_sum as i128
                 + info.type_live_capacity_sum as i128)
                 .to_string();
+            let live_occupied_capacity_sum = (info.lock_live_occupied_capacity_sum as i128
+                + info.type_live_occupied_capacity_sum as i128)
+                .to_string();
 
             let (code_cell_tx_hash, code_cell_output_index) =
                 resolve_code_cell(&info, &state.store);
@@ -265,6 +273,7 @@ async fn lookup_scripts(
                     code_cell_output_index,
                     live_cells_count,
                     live_capacity_sum,
+                    live_occupied_capacity_sum,
                 },
             );
         }
@@ -451,6 +460,8 @@ async fn get_script_usage(
             live_cells_count: 0,
             capacity_sum: "0".to_string(),
             live_capacity_sum: "0".to_string(),
+            occupied_capacity_sum: "0".to_string(),
+            live_occupied_capacity_sum: "0".to_string(),
             by_deployment: vec![],
         });
     }
@@ -459,6 +470,8 @@ async fn get_script_usage(
     let mut total_live: i64 = 0;
     let mut total_cap: u128 = 0;
     let mut total_live_cap: u128 = 0;
+    let mut total_occupied_cap: u128 = 0;
+    let mut total_live_occupied_cap: u128 = 0;
 
     let by_deployment: Vec<DeploymentUsage> = matching
         .into_iter()
@@ -469,11 +482,19 @@ async fn get_script_usage(
                 (info.lock_capacity_sum as i128 + info.type_capacity_sum as i128) as u128;
             let live_capacity_sum =
                 (info.lock_live_capacity_sum as i128 + info.type_live_capacity_sum as i128) as u128;
+            let occupied_capacity_sum = (info.lock_occupied_capacity_sum as i128
+                + info.type_occupied_capacity_sum as i128)
+                as u128;
+            let live_occupied_capacity_sum = (info.lock_live_occupied_capacity_sum as i128
+                + info.type_live_occupied_capacity_sum as i128)
+                as u128;
 
             total_cells += cells_count;
             total_live += live_cells_count;
             total_cap += capacity_sum;
             total_live_cap += live_capacity_sum;
+            total_occupied_cap += occupied_capacity_sum;
+            total_live_occupied_cap += live_occupied_capacity_sum;
 
             let script_kind = if info.lock_cells_count > 0 && info.type_cells_count > 0 {
                 Some("lock+type".to_string())
@@ -492,6 +513,8 @@ async fn get_script_usage(
                 live_cells_count,
                 capacity_sum: capacity_sum.to_string(),
                 live_capacity_sum: live_capacity_sum.to_string(),
+                occupied_capacity_sum: occupied_capacity_sum.to_string(),
+                live_occupied_capacity_sum: live_occupied_capacity_sum.to_string(),
             }
         })
         .collect();
@@ -502,6 +525,8 @@ async fn get_script_usage(
         live_cells_count: total_live,
         capacity_sum: total_cap.to_string(),
         live_capacity_sum: total_live_cap.to_string(),
+        occupied_capacity_sum: total_occupied_cap.to_string(),
+        live_occupied_capacity_sum: total_live_occupied_cap.to_string(),
         by_deployment,
     })
 }

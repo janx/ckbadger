@@ -17,6 +17,7 @@ import { PageHeader, Badge } from '@/components/ui/page-header';
 import { HexDisplay } from '@/components/ui/hex-display';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { Capacity } from '@/components/ui/capacity';
+import { CapacityUtilization } from '@/components/ui/capacity-utilization';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 
 type ScriptKind = 'lock' | 'type' | 'both';
@@ -163,6 +164,14 @@ export default function ScriptByCodeHashPage() {
                 </div>
               </div>
             </TerminalRow>
+            {knownScript && (
+              <div className="border-t border-slate-800 px-4 py-4">
+                <CapacityUtilization
+                  totalCapacity={knownScript.liveCapacitySum}
+                  occupiedCapacity={knownScript.liveOccupiedCapacitySum}
+                />
+              </div>
+            )}
           </TerminalPanelContent>
         </TerminalPanel>
 

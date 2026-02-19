@@ -680,6 +680,8 @@ interface DeploymentUsage {
   liveCellsCount: number;
   capacitySum: string;
   liveCapacitySum: string;
+  occupiedCapacitySum: string;
+  liveOccupiedCapacitySum: string;
 }
 
 interface ScriptUsage {
@@ -688,6 +690,8 @@ interface ScriptUsage {
   liveCellsCount: number;
   capacitySum: string;
   liveCapacitySum: string;
+  occupiedCapacitySum: string;
+  liveOccupiedCapacitySum: string;
   byDeployment: DeploymentUsage[];
 }
 
@@ -709,6 +713,7 @@ interface ScriptLookupInfo {
   codeCellOutputIndex: number | null;
   liveCellsCount: number;
   liveCapacitySum: string;
+  liveOccupiedCapacitySum: string;
 }
 
 type ScriptLookupResponse = Record<string, ScriptLookupInfo>;

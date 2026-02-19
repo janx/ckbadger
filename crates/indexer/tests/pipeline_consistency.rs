@@ -223,11 +223,11 @@ fn test_same_batch_cell_consumption() {
 fn test_script_usage_cell_creation() {
     let (store, writer) = setup_store();
     let lock_code_hash = vec![0x11u8; 32];
-    let mut changes: HashMap<(Vec<u8>, bool), (i64, i64, i64, i64)> = HashMap::new();
+    let mut changes: HashMap<(Vec<u8>, bool), (i64, i64, i64, i64, i64, i64)> = HashMap::new();
 
     changes.insert(
         (lock_code_hash.clone(), false),
-        (1, 1, 100_00000000, 100_00000000),
+        (1, 1, 100_00000000, 100_00000000, 61_00000000, 61_00000000),
     );
 
     let mut batch = StoreBatch::new(&store);
@@ -244,6 +244,8 @@ fn test_script_usage_cell_creation() {
     assert_eq!(info.lock_live_cells_count, 1);
     assert_eq!(info.lock_capacity_sum, 100_00000000);
     assert_eq!(info.lock_live_capacity_sum, 100_00000000);
+    assert_eq!(info.lock_occupied_capacity_sum, 61_00000000);
+    assert_eq!(info.lock_live_occupied_capacity_sum, 61_00000000);
 }
 
 #[test]
@@ -251,10 +253,11 @@ fn test_script_usage_cell_consumption() {
     let (store, writer) = setup_store();
     let lock_code_hash = vec![0x11u8; 32];
 
-    let mut create_changes: HashMap<(Vec<u8>, bool), (i64, i64, i64, i64)> = HashMap::new();
+    let mut create_changes: HashMap<(Vec<u8>, bool), (i64, i64, i64, i64, i64, i64)> =
+        HashMap::new();
     create_changes.insert(
         (lock_code_hash.clone(), false),
-        (1, 1, 100_00000000, 100_00000000),
+        (1, 1, 100_00000000, 100_00000000, 61_00000000, 61_00000000),
     );
     let mut batch = StoreBatch::new(&store);
     writer
@@ -262,8 +265,12 @@ fn test_script_usage_cell_consumption() {
         .unwrap();
     batch.commit().unwrap();
 
-    let mut consume_changes: HashMap<(Vec<u8>, bool), (i64, i64, i64, i64)> = HashMap::new();
-    consume_changes.insert((lock_code_hash.clone(), false), (0, -1, 0, -100_00000000));
+    let mut consume_changes: HashMap<(Vec<u8>, bool), (i64, i64, i64, i64, i64, i64)> =
+        HashMap::new();
+    consume_changes.insert(
+        (lock_code_hash.clone(), false),
+        (0, -1, 0, -100_00000000, 0, -61_00000000),
+    );
     let mut batch = StoreBatch::new(&store);
     writer
         .update_script_usage_batch(&consume_changes, &mut batch)
@@ -276,6 +283,8 @@ fn test_script_usage_cell_consumption() {
     assert_eq!(info.lock_live_cells_count, 0);
     assert_eq!(info.lock_capacity_sum, 100_00000000);
     assert_eq!(info.lock_live_capacity_sum, 0);
+    assert_eq!(info.lock_occupied_capacity_sum, 61_00000000);
+    assert_eq!(info.lock_live_occupied_capacity_sum, 0);
 }
 
 #[test]

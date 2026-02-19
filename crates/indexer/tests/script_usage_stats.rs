@@ -22,6 +22,8 @@ fn make_script_info_lock(
     capacity_sum: i64,
     live_capacity_sum: i64,
 ) -> ScriptInfo {
+    let occupied_capacity_sum = capacity_sum / 2;
+    let live_occupied_capacity_sum = live_capacity_sum / 2;
     ScriptInfo {
         code_hash: vec![code_hash_byte; 32],
         hash_type: 0,
@@ -35,10 +37,14 @@ fn make_script_info_lock(
         lock_live_cells_count: live_cells_count,
         lock_capacity_sum: capacity_sum,
         lock_live_capacity_sum: live_capacity_sum,
+        lock_occupied_capacity_sum: occupied_capacity_sum,
+        lock_live_occupied_capacity_sum: live_occupied_capacity_sum,
         type_cells_count: 0,
         type_live_cells_count: 0,
         type_capacity_sum: 0,
         type_live_capacity_sum: 0,
+        type_occupied_capacity_sum: 0,
+        type_live_occupied_capacity_sum: 0,
         dep_type_hash: None,
         dep_data_hash: None,
         code_cell_tx_hash: None,
@@ -53,6 +59,8 @@ fn make_script_info_type(
     capacity_sum: i64,
     live_capacity_sum: i64,
 ) -> ScriptInfo {
+    let occupied_capacity_sum = capacity_sum / 2;
+    let live_occupied_capacity_sum = live_capacity_sum / 2;
     ScriptInfo {
         code_hash: vec![code_hash_byte; 32],
         hash_type: 1,
@@ -66,10 +74,14 @@ fn make_script_info_type(
         lock_live_cells_count: 0,
         lock_capacity_sum: 0,
         lock_live_capacity_sum: 0,
+        lock_occupied_capacity_sum: 0,
+        lock_live_occupied_capacity_sum: 0,
         type_cells_count: cells_count,
         type_live_cells_count: live_cells_count,
         type_capacity_sum: capacity_sum,
         type_live_capacity_sum: live_capacity_sum,
+        type_occupied_capacity_sum: occupied_capacity_sum,
+        type_live_occupied_capacity_sum: live_occupied_capacity_sum,
         dep_type_hash: None,
         dep_data_hash: None,
         code_cell_tx_hash: None,
@@ -104,11 +116,15 @@ fn test_lock_script_usage_creation() {
     assert_eq!(retrieved.lock_live_cells_count, 3);
     assert_eq!(retrieved.lock_capacity_sum, 500_00000000);
     assert_eq!(retrieved.lock_live_capacity_sum, 300_00000000);
+    assert_eq!(retrieved.lock_occupied_capacity_sum, 250_00000000);
+    assert_eq!(retrieved.lock_live_occupied_capacity_sum, 150_00000000);
     // Type fields should be zero
     assert_eq!(retrieved.type_cells_count, 0);
     assert_eq!(retrieved.type_live_cells_count, 0);
     assert_eq!(retrieved.type_capacity_sum, 0);
     assert_eq!(retrieved.type_live_capacity_sum, 0);
+    assert_eq!(retrieved.type_occupied_capacity_sum, 0);
+    assert_eq!(retrieved.type_live_occupied_capacity_sum, 0);
 }
 
 #[test]
@@ -135,11 +151,15 @@ fn test_type_script_usage_creation() {
     assert_eq!(retrieved.type_live_cells_count, 8);
     assert_eq!(retrieved.type_capacity_sum, 1000_00000000);
     assert_eq!(retrieved.type_live_capacity_sum, 800_00000000);
+    assert_eq!(retrieved.type_occupied_capacity_sum, 500_00000000);
+    assert_eq!(retrieved.type_live_occupied_capacity_sum, 400_00000000);
     // Lock fields should be zero
     assert_eq!(retrieved.lock_cells_count, 0);
     assert_eq!(retrieved.lock_live_cells_count, 0);
     assert_eq!(retrieved.lock_capacity_sum, 0);
     assert_eq!(retrieved.lock_live_capacity_sum, 0);
+    assert_eq!(retrieved.lock_occupied_capacity_sum, 0);
+    assert_eq!(retrieved.lock_live_occupied_capacity_sum, 0);
 }
 
 #[test]
@@ -175,10 +195,14 @@ fn test_consume_cells_adjusts_stats() {
         lock_live_cells_count: 3,
         lock_capacity_sum: 500_00000000,
         lock_live_capacity_sum: 300_00000000,
+        lock_occupied_capacity_sum: 250_00000000,
+        lock_live_occupied_capacity_sum: 150_00000000,
         type_cells_count: 0,
         type_live_cells_count: 0,
         type_capacity_sum: 0,
         type_live_capacity_sum: 0,
+        type_occupied_capacity_sum: 0,
+        type_live_occupied_capacity_sum: 0,
         dep_type_hash: None,
         dep_data_hash: None,
         code_cell_tx_hash: None,
@@ -218,10 +242,14 @@ fn test_consume_cells_adjusts_stats() {
         lock_live_cells_count: 4,
         lock_capacity_sum: 650_00000000,
         lock_live_capacity_sum: 450_00000000,
+        lock_occupied_capacity_sum: 325_00000000,
+        lock_live_occupied_capacity_sum: 225_00000000,
         type_cells_count: 0,
         type_live_cells_count: 0,
         type_capacity_sum: 0,
         type_live_capacity_sum: 0,
+        type_occupied_capacity_sum: 0,
+        type_live_occupied_capacity_sum: 0,
         dep_type_hash: None,
         dep_data_hash: None,
         code_cell_tx_hash: None,

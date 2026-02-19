@@ -15,6 +15,7 @@ import { PageHeader, Badge } from '@/components/ui/page-header';
 import { HexDisplay } from '@/components/ui/hex-display';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { Capacity } from '@/components/ui/capacity';
+import { CapacityUtilization } from '@/components/ui/capacity-utilization';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api } from '@/lib/api';
 import { formatCkbCompact } from '@/lib/utils';
@@ -125,6 +126,9 @@ export default function ScriptDetailPage() {
 
   const usageByCodeHash = new Map(usage?.byDeployment.map((d) => [d.codeHash, d]) ?? []);
   const inferredScriptKind = usage?.byDeployment.find((d) => d.scriptKind)?.scriptKind;
+  const selectedDeploymentUsage = selectedDeployment
+    ? usageByCodeHash.get(selectedDeployment.codeHash)
+    : undefined;
 
   const handleDeploymentClick = (deployment: KnownScript) => {
     if (!deployment.hashType) return;
@@ -293,23 +297,31 @@ export default function ScriptDetailPage() {
                 );
               })}
               {usage && (
-                <div className="flex border-t border-slate-700 bg-slate-900/50 px-4 py-3 font-medium">
-                  <div className="w-56" />
-                  <div className="flex-1 pl-4 text-slate-400">Total</div>
-                  <div className="w-20" />
-                  <div className="w-20" />
-                  <div className="w-20" />
-                  <div className="text-terminal-green w-24 text-right font-mono">
-                    <span title={`Total: ${formatNumber(usage.cellsCount)}`}>
-                      {formatNumber(usage.liveCellsCount)}
-                    </span>
+                <>
+                  <div className="flex border-t border-slate-700 bg-slate-900/50 px-4 py-3 font-medium">
+                    <div className="w-56" />
+                    <div className="flex-1 pl-4 text-slate-400">Total</div>
+                    <div className="w-20" />
+                    <div className="w-20" />
+                    <div className="w-20" />
+                    <div className="text-terminal-green w-24 text-right font-mono">
+                      <span title={`Total: ${formatNumber(usage.cellsCount)}`}>
+                        {formatNumber(usage.liveCellsCount)}
+                      </span>
+                    </div>
+                    <div className="text-terminal-green w-28 text-right font-mono">
+                      <span title={`${formatCkbCompact(usage.liveCapacitySum).full} CKB`}>
+                        {formatCkbCompact(usage.liveCapacitySum).value}
+                      </span>
+                    </div>
                   </div>
-                  <div className="text-terminal-green w-28 text-right font-mono">
-                    <span title={`${formatCkbCompact(usage.liveCapacitySum).full} CKB`}>
-                      {formatCkbCompact(usage.liveCapacitySum).value}
-                    </span>
+                  <div className="border-t border-slate-800 px-4 py-4">
+                    <CapacityUtilization
+                      totalCapacity={usage.liveCapacitySum}
+                      occupiedCapacity={usage.liveOccupiedCapacitySum}
+                    />
                   </div>
-                </div>
+                </>
               )}
             </div>
           </TerminalPanelContent>
@@ -331,6 +343,15 @@ export default function ScriptDetailPage() {
               </div>
             </TerminalPanelHeader>
             <TerminalPanelContent padding="none">
+              {selectedDeploymentUsage && (
+                <div className="border-b border-slate-800 px-4 py-4">
+                  <CapacityUtilization
+                    totalCapacity={selectedDeploymentUsage.liveCapacitySum}
+                    occupiedCapacity={selectedDeploymentUsage.liveOccupiedCapacitySum}
+                    label="Selected Deployment Utilization"
+                  />
+                </div>
+              )}
               {isCellsLoading ? (
                 <div className="py-8 text-center text-slate-500">Loading cells...</div>
               ) : cellsData && cellsData.data.length > 0 ? (

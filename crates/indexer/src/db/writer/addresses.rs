@@ -125,7 +125,7 @@ impl BatchWriter {
     pub fn apply_script_usage_deltas(
         &self,
         existing: &HashMap<Vec<u8>, Option<ckbadger_store::types::ScriptInfo>>,
-        changes: &HashMap<(Vec<u8>, bool), (i64, i64, i64, i64)>,
+        changes: &HashMap<(Vec<u8>, bool), (i64, i64, i64, i64, i64, i64)>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
         if changes.is_empty() {
@@ -135,7 +135,17 @@ impl BatchWriter {
         let mut updated_map: HashMap<&Vec<u8>, ckbadger_store::types::ScriptInfo> =
             HashMap::with_capacity(existing.len());
 
-        for ((code_hash, is_type), (cells_delta, live_delta, cap_delta, live_cap_delta)) in changes
+        for (
+            (code_hash, is_type),
+            (
+                cells_delta,
+                live_delta,
+                cap_delta,
+                live_cap_delta,
+                occupied_delta,
+                live_occupied_delta,
+            ),
+        ) in changes
         {
             let info = updated_map.entry(code_hash).or_insert_with(|| {
                 existing
@@ -152,11 +162,15 @@ impl BatchWriter {
                 info.type_live_cells_count += live_delta;
                 info.type_capacity_sum += cap_delta;
                 info.type_live_capacity_sum += live_cap_delta;
+                info.type_occupied_capacity_sum += occupied_delta;
+                info.type_live_occupied_capacity_sum += live_occupied_delta;
             } else {
                 info.lock_cells_count += cells_delta;
                 info.lock_live_cells_count += live_delta;
                 info.lock_capacity_sum += cap_delta;
                 info.lock_live_capacity_sum += live_cap_delta;
+                info.lock_occupied_capacity_sum += occupied_delta;
+                info.lock_live_occupied_capacity_sum += live_occupied_delta;
             }
         }
 
@@ -169,7 +183,7 @@ impl BatchWriter {
 
     pub fn update_script_usage_batch(
         &self,
-        changes: &HashMap<(Vec<u8>, bool), (i64, i64, i64, i64)>,
+        changes: &HashMap<(Vec<u8>, bool), (i64, i64, i64, i64, i64, i64)>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
         if changes.is_empty() {
