@@ -1,4 +1,5 @@
 import { api } from '@/lib/api';
+import { DOTBIT_COLLECTION_ID } from '@/lib/nft-collections';
 import { server } from '../msw/server';
 import { http, HttpResponse } from 'msw';
 
@@ -278,6 +279,26 @@ describe('api', () => {
       expect(collection.liveOccupiedCapacity).toBe('600');
     });
 
+    it('normalizes dotbit alias for nft collection detail requests', async () => {
+      server.use(
+        http.get('*/api/v1/assets/nfts/:collectionId', ({ params }) => {
+          expect(params.collectionId).toBe(DOTBIT_COLLECTION_ID);
+          return HttpResponse.json({
+            collectionId: DOTBIT_COLLECTION_ID,
+            standard: 'dotbit',
+            name: '.bit',
+            totalCount: 10,
+            liveCount: 7,
+            liveCapacity: '1000',
+            liveOccupiedCapacity: '600',
+          });
+        })
+      );
+
+      const collection = await api.getNftCollection('.bit');
+      expect(collection.standard).toBe('dotbit');
+    });
+
     it('fetches nft collection occupation chart', async () => {
       server.use(
         http.get('*/api/v1/assets/nfts/:collectionId/charts/occupation', ({ params }) => {
@@ -291,6 +312,22 @@ describe('api', () => {
       );
 
       const chart = await api.getNftCollectionOccupationChart('0xcollection');
+      expect(chart.title).toContain('Capacity Occupation');
+    });
+
+    it('normalizes dotbit alias for nft collection requests', async () => {
+      server.use(
+        http.get('*/api/v1/assets/nfts/:collectionId/charts/occupation', ({ params }) => {
+          expect(params.collectionId).toBe(DOTBIT_COLLECTION_ID);
+          return HttpResponse.json({
+            title: '.bit Capacity Occupation',
+            data: [],
+            series: [],
+          });
+        })
+      );
+
+      const chart = await api.getNftCollectionOccupationChart('dotbit');
       expect(chart.title).toContain('Capacity Occupation');
     });
 

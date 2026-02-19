@@ -72,6 +72,35 @@ const mockClusterAssets = {
   nextCursor: null,
 };
 
+const mockDotbitNftAssets = {
+  data: [
+    {
+      id: '0x646f746269745f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f',
+      assetType: 'nft' as const,
+      standard: 'dotbit',
+      name: '.bit',
+      symbol: null,
+      iconUrl: null,
+      published: false,
+      famous: false,
+      tags: null,
+      holdersCount: 1200,
+      transfersCount: 9000,
+      transfers24h: 80,
+      decimals: null,
+      totalSupply: '200000',
+      contentType: null,
+      contentSize: null,
+      clusterId: null,
+      clusterName: null,
+    },
+  ],
+  total: 1,
+  limit: 20,
+  hasMore: false,
+  nextCursor: null,
+};
+
 const emptyAssets = {
   data: [],
   total: 0,
@@ -270,6 +299,19 @@ describe('AssetsPage', () => {
 
     await waitFor(() => {
       expect(screen.getAllByText('ON-CHAIN').length).toBeGreaterThan(0);
+    });
+  });
+
+  it('uses dotbit slug for dotbit NFT detail links', async () => {
+    vi.mocked(api.getAssets).mockResolvedValue(mockDotbitNftAssets);
+
+    render(<AssetsPage />);
+    fireEvent.click(screen.getByRole('button', { name: /NFTs/i }));
+
+    await waitFor(() => {
+      const link = screen.getByRole('link', { name: /\.bit/i });
+      expect(link).toHaveAttribute('href', '/nfts/dotbit');
+      expect(screen.getByText('DOTBIT')).toBeInTheDocument();
     });
   });
 

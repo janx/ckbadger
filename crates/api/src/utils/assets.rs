@@ -32,6 +32,23 @@ pub fn resolve_dob_collection_name(
     }
 }
 
+/// Resolve an NFT collection display name.
+///
+/// Priority:
+/// 1) non-empty aggregate name
+/// 2) standard fallback (currently ".bit" for dotbit)
+pub fn resolve_nft_collection_name(standard: &str, aggregate_name: Option<&str>) -> Option<String> {
+    if let Some(name) = non_empty_name(aggregate_name) {
+        return Some(name);
+    }
+
+    if standard.eq_ignore_ascii_case("dotbit") {
+        return Some(".bit".to_string());
+    }
+
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,5 +111,30 @@ mod tests {
         store.put_spore_direct(&cluster_id, &entry).unwrap();
 
         assert!(resolve_dob_collection_name(&store, &cluster_id, Some("  ")).is_none());
+    }
+
+    #[test]
+    fn resolve_nft_name_prefers_aggregate_name() {
+        assert_eq!(
+            resolve_nft_collection_name("dotbit", Some("  Dotbit Club  ")).as_deref(),
+            Some("Dotbit Club")
+        );
+    }
+
+    #[test]
+    fn resolve_nft_name_falls_back_to_dotbit_default() {
+        assert_eq!(
+            resolve_nft_collection_name("dotbit", None).as_deref(),
+            Some(".bit")
+        );
+        assert_eq!(
+            resolve_nft_collection_name("DOTBIT", Some("   ")).as_deref(),
+            Some(".bit")
+        );
+    }
+
+    #[test]
+    fn resolve_nft_name_returns_none_for_other_standards_without_name() {
+        assert!(resolve_nft_collection_name("m-nft", None).is_none());
     }
 }

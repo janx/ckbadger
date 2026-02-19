@@ -3,6 +3,7 @@ import { screen, waitFor } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import SporeDetailPage from '@/app/nfts/[sporeId]/page';
 import { api } from '@/lib/api';
+import { DOTBIT_COLLECTION_ID } from '@/lib/nft-collections';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -18,10 +19,12 @@ vi.mock('@/components/layout/header', () => ({
   Header: () => <div data-testid="header">Header</div>,
 }));
 
+let mockParams = {
+  sporeId: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
+};
+
 vi.mock('next/navigation', () => ({
-  useParams: () => ({
-    sporeId: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
-  }),
+  useParams: () => mockParams,
 }));
 
 const mockSpore = {
@@ -51,6 +54,9 @@ const mockCollection = {
 describe('SporeDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockParams = {
+      sporeId: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
+    };
     vi.mocked(api.getSporeNftOccupationChart).mockResolvedValue({
       title: 'Spore Capacity Occupation',
       data: [],
@@ -98,5 +104,29 @@ describe('SporeDetailPage', () => {
     expect(screen.getByText('Test Collection')).toBeInTheDocument();
     expect(screen.getByText('Capacity Utilization')).toBeInTheDocument();
     expect(screen.getByText('Occupation History')).toBeInTheDocument();
+  });
+
+  it('normalizes dotbit slug before querying collection API', async () => {
+    mockParams = { sporeId: 'dotbit' };
+    vi.mocked(api.getNftCollection).mockResolvedValue(mockCollection);
+
+    render(<SporeDetailPage />);
+
+    await waitFor(() => {
+      expect(api.getNftCollection).toHaveBeenCalledWith(DOTBIT_COLLECTION_ID);
+    });
+    expect(api.getSporeNft).not.toHaveBeenCalled();
+  });
+
+  it('normalizes .bit slug before querying collection API', async () => {
+    mockParams = { sporeId: '.bit' };
+    vi.mocked(api.getNftCollection).mockResolvedValue(mockCollection);
+
+    render(<SporeDetailPage />);
+
+    await waitFor(() => {
+      expect(api.getNftCollection).toHaveBeenCalledWith(DOTBIT_COLLECTION_ID);
+    });
+    expect(api.getSporeNft).not.toHaveBeenCalled();
   });
 });

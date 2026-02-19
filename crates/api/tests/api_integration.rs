@@ -694,6 +694,114 @@ async fn test_assets_nft_collection_occupation_chart_and_capacity_fields() {
 }
 
 #[tokio::test]
+async fn test_assets_nft_collection_accepts_dotbit_alias() {
+    let store = test_store();
+    let collection_id = b"dotbit_collection_______________".to_vec();
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_nft_collection_aggregate(
+        &collection_id,
+        &NftCollectionAggregate {
+            name: None,
+            standard: NftStandard::DotBit,
+            total_count: 200,
+            live_count: 120,
+        },
+    );
+    batch.commit().unwrap();
+
+    store
+        .put_nft_daily_delta(
+            &collection_id,
+            20240115,
+            &NftDailyDelta {
+                live_capacity_delta: 100,
+                live_occupied_capacity_delta: 60,
+            },
+        )
+        .unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/assets/nfts/dotbit/charts/occupation")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["title"], ".bit Capacity Occupation");
+    assert_eq!(json["data"][0]["values"]["occupied"], "60");
+    assert_eq!(json["data"][0]["values"]["unoccupied"], "40");
+
+    let request = Request::builder()
+        .uri("/api/v1/assets/nfts/dotbit")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["standard"], "dotbit");
+    assert_eq!(json["name"], ".bit");
+    assert_eq!(json["liveCapacity"], "100");
+    assert_eq!(json["liveOccupiedCapacity"], "60");
+
+    let request = Request::builder()
+        .uri("/api/v1/assets/nfts/DOTBIT/charts/occupation")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let request = Request::builder()
+        .uri("/api/v1/assets/nfts/%2Ebit")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["standard"], "dotbit");
+    assert_eq!(json["name"], ".bit");
+}
+
+#[tokio::test]
+async fn test_assets_nft_list_uses_dotbit_display_name_when_aggregate_name_missing() {
+    let store = test_store();
+    let collection_id = b"dotbit_collection_______________".to_vec();
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_nft_collection_aggregate(
+        &collection_id,
+        &NftCollectionAggregate {
+            name: None,
+            standard: NftStandard::DotBit,
+            total_count: 20,
+            live_count: 12,
+        },
+    );
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/assets?type=nft")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["data"][0]["name"], ".bit");
+    assert_eq!(json["data"][0]["standard"], "dotbit");
+}
+
+#[tokio::test]
 async fn test_hodl_wave_chart_empty_db() {
     let store = test_store();
     let config = test_config(store);

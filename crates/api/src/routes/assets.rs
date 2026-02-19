@@ -9,11 +9,13 @@ use std::sync::Arc;
 
 use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
-use crate::utils::resolve_dob_collection_name;
+use crate::utils::{resolve_dob_collection_name, resolve_nft_collection_name};
 use crate::warmup::{
     CachedAssetEntry, CACHE_KEY_ASSETS_DOB, CACHE_KEY_ASSETS_NFT, CACHE_KEY_ASSETS_TOKEN,
 };
 use crate::AppState;
+
+const DOTBIT_SENTINEL_COLLECTION: [u8; 32] = *b"dotbit_collection_______________";
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -229,6 +231,17 @@ fn format_yyyymmdd_for_chart(date_yyyymmdd: u32) -> String {
     format!("{}-{}-{}", &date[0..4], &date[4..6], &date[6..8])
 }
 
+fn decode_nft_collection_id(
+    raw: &str,
+) -> Result<Vec<u8>, (axum::http::StatusCode, Json<ApiError>)> {
+    let normalized = raw.to_ascii_lowercase();
+    if normalized == "dotbit" || normalized == ".bit" {
+        return Ok(DOTBIT_SENTINEL_COLLECTION.to_vec());
+    }
+    hex::decode(raw.strip_prefix("0x").unwrap_or(raw))
+        .map_err(|_| ApiError::bad_request("Invalid NFT collection ID"))
+}
+
 fn build_capacity_occupation_chart(
     deltas: Vec<(u32, i64, i64)>,
     title: String,
@@ -294,9 +307,7 @@ async fn get_nft_collection(
     State(state): State<Arc<AppState>>,
     Path(collection_id): Path<String>,
 ) -> ApiResult<NftCollectionDetailResponse> {
-    let collection_id_bytes =
-        hex::decode(collection_id.strip_prefix("0x").unwrap_or(&collection_id))
-            .map_err(|_| ApiError::bad_request("Invalid NFT collection ID"))?;
+    let collection_id_bytes = decode_nft_collection_id(&collection_id)?;
 
     let agg = state
         .store
@@ -323,10 +334,13 @@ async fn get_nft_collection(
     );
     let (live_capacity, live_occupied_capacity) = latest_capacity_from_chart(&chart);
 
+    let standard = agg.standard.asset_standard().to_string();
+    let name = resolve_nft_collection_name(&standard, agg.name.as_deref());
+
     ok(NftCollectionDetailResponse {
         collection_id: format!("0x{}", hex::encode(&collection_id_bytes)),
-        standard: agg.standard.asset_standard().to_string(),
-        name: agg.name,
+        standard,
+        name,
         total_count: agg.total_count,
         live_count: agg.live_count,
         live_capacity,
@@ -338,9 +352,7 @@ async fn get_nft_collection_occupation_chart(
     State(state): State<Arc<AppState>>,
     Path(collection_id): Path<String>,
 ) -> ApiResult<StackedAreaChartResponse> {
-    let collection_id_bytes =
-        hex::decode(collection_id.strip_prefix("0x").unwrap_or(&collection_id))
-            .map_err(|_| ApiError::bad_request("Invalid NFT collection ID"))?;
+    let collection_id_bytes = decode_nft_collection_id(&collection_id)?;
 
     let agg = state
         .store
@@ -352,8 +364,8 @@ async fn get_nft_collection_occupation_chart(
         .store
         .list_nft_daily_deltas(&collection_id_bytes)
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    let title = agg
-        .name
+    let standard = agg.standard.asset_standard().to_string();
+    let title = resolve_nft_collection_name(&standard, agg.name.as_deref())
         .unwrap_or_else(|| format!("0x{}", hex::encode(&collection_id_bytes)));
 
     ok(build_capacity_occupation_chart(
@@ -483,12 +495,14 @@ fn compute_nft_assets(
             continue;
         }
         let collection_hex = format!("0x{}", hex::encode(collection_id_bytes));
+        let standard = agg.standard.asset_standard().to_string();
+        let display_name = resolve_nft_collection_name(&standard, agg.name.as_deref());
 
         result.push(CachedAssetEntry {
             id: collection_hex.clone(),
             asset_type: "nft".to_string(),
-            standard: agg.standard.asset_standard().to_string(),
-            name: agg.name.clone(),
+            standard,
+            name: display_name.clone(),
             symbol: None,
             icon_url: None,
             holders_count: agg.live_count,
@@ -499,7 +513,7 @@ fn compute_nft_assets(
             content_type: None,
             content_size: None,
             cluster_id: Some(collection_hex.clone()),
-            cluster_name: agg.name.clone(),
+            cluster_name: display_name,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,

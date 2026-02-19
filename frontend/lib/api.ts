@@ -1,3 +1,5 @@
+import { normalizeNftAssetId } from '@/lib/nft-collections';
+
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api/v1';
 
 interface PaginatedResponse<T> {
@@ -1224,11 +1226,11 @@ export const api = {
   },
 
   getNftCollection: (collectionId: string): Promise<NftCollection> => {
-    return fetchApi(`/assets/nfts/${collectionId}`);
+    return fetchApi(`/assets/nfts/${normalizeNftAssetId(collectionId)}`);
   },
 
   getNftCollectionOccupationChart: (collectionId: string): Promise<StackedAreaChartResponse> => {
-    return fetchApi(`/assets/nfts/${collectionId}/charts/occupation`);
+    return fetchApi(`/assets/nfts/${normalizeNftAssetId(collectionId)}/charts/occupation`);
   },
 
   getSporesByOwner: (

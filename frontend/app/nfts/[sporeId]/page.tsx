@@ -15,6 +15,7 @@ import { HexDisplay } from '@/components/ui/hex-display';
 import { DataField, DataGrid } from '@/components/ui/data-field';
 import { Address } from '@/components/ui/address';
 import { StackedAreaChart } from '@/components/ui/stacked-area-chart';
+import { isDotbitAlias, normalizeNftAssetId } from '@/lib/nft-collections';
 import { formatCkbAmount, formatCkbCompact } from '@/lib/utils';
 
 function isNotFoundError(error: unknown): boolean {
@@ -67,15 +68,18 @@ function renderCapacityUtilization(
 
 export default function SporeDetailPage() {
   const params = useParams();
-  const assetId = params.sporeId as string;
+  const rawAssetId = params.sporeId as string;
+  const isDotbitCollection = isDotbitAlias(rawAssetId);
+  const assetId = normalizeNftAssetId(rawAssetId);
 
   const sporeQuery = useQuery({
-    queryKey: ['spore', assetId],
+    queryKey: ['spore', rawAssetId],
     queryFn: () => api.getSporeNft(assetId),
+    enabled: !isDotbitCollection,
     retry: false,
   });
   const spore = sporeQuery.data;
-  const shouldQueryCollection = !spore && isNotFoundError(sporeQuery.error);
+  const shouldQueryCollection = isDotbitCollection || (!spore && isNotFoundError(sporeQuery.error));
 
   const collectionQuery = useQuery({
     queryKey: ['nft-collection', assetId],

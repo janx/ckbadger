@@ -1,6 +1,6 @@
 use crate::cache::CacheTtl;
 use crate::routes::assets::AssetResponse;
-use crate::utils::resolve_dob_collection_name;
+use crate::utils::{resolve_dob_collection_name, resolve_nft_collection_name};
 use crate::AppState;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -215,12 +215,14 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
             .get(collection_id_bytes.as_slice())
             .copied()
             .unwrap_or(0);
+        let standard = agg.standard.asset_standard().to_string();
+        let display_name = resolve_nft_collection_name(&standard, agg.name.as_deref());
 
         nft_assets.push(CachedAssetEntry {
             id: collection_hex.clone(),
             asset_type: "nft".to_string(),
-            standard: agg.standard.asset_standard().to_string(),
-            name: agg.name.clone(),
+            standard,
+            name: display_name.clone(),
             symbol: None,
             icon_url: None,
             holders_count: agg.live_count,
@@ -231,7 +233,7 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
             content_type: None,
             content_size: None,
             cluster_id: Some(collection_hex.clone()),
-            cluster_name: agg.name.clone(),
+            cluster_name: display_name,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,

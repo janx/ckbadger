@@ -17,6 +17,7 @@ import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { api, Asset } from '@/lib/api';
+import { toNftDetailSlug } from '@/lib/nft-collections';
 
 type AssetTab = 'token' | 'nft' | 'dob';
 
@@ -43,7 +44,7 @@ function AssetTable({ assetType, search }: { assetType: AssetTab; search: string
   const getAssetLink = (asset: Asset) => {
     if (asset.assetType === 'token') return `/tokens/${asset.id}`;
     if (asset.assetType === 'dob') return `/clusters/${asset.id}`;
-    return `/nfts/${asset.id}`;
+    return `/nfts/${toNftDetailSlug(asset.id, asset.standard)}`;
   };
 
   const getAssetName = (asset: Asset) => {
@@ -62,7 +63,7 @@ function AssetTable({ assetType, search }: { assetType: AssetTab; search: string
 
   const getTypeBadgeLabel = (asset: Asset) => {
     if (asset.assetType === 'dob') return asset.standard.toUpperCase();
-    if (asset.assetType === 'nft') return 'NFT';
+    if (asset.assetType === 'nft') return asset.standard.toUpperCase();
     return asset.standard.toUpperCase();
   };
 
