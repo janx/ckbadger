@@ -212,6 +212,70 @@ fn split_secondary_issuance(
     (miner.max(0), dao.max(0), treasury.max(0))
 }
 
+type DaoConsumedRow = (i64, Vec<u8>, i16, String, i64, i16);
+type DaoConsumedMap = HashMap<(Vec<u8>, i16), DaoConsumedRow>;
+type DaoSameBatchMap = HashMap<(Vec<u8>, i16), i64>;
+
+#[allow(clippy::too_many_arguments)]
+fn accumulate_dao_snapshot_deltas_for_txs(
+    tx_slice: &[TxData],
+    block_date: NaiveDate,
+    dao_code_hash: &[u8],
+    consumed_dao_map: &DaoConsumedMap,
+    same_batch_dao_map: &mut DaoSameBatchMap,
+    daily_active_delta: &mut HashMap<NaiveDate, i128>,
+    daily_gross_deposit_delta: &mut HashMap<NaiveDate, i128>,
+    daily_new_deposits_delta: &mut HashMap<NaiveDate, i64>,
+) {
+    for tx_data in tx_slice {
+        let mut has_withdraw_request_output = false;
+
+        for (output_index, cell) in tx_data.cells.iter().enumerate() {
+            if let Some(ref type_code_hash) = cell.type_code_hash {
+                if type_code_hash == dao_code_hash && cell.data_size == 8 {
+                    if cell.data.len() == 8 && cell.data.iter().all(|&b| b == 0) {
+                        *daily_active_delta.entry(block_date).or_default() += cell.capacity as i128;
+                        *daily_gross_deposit_delta.entry(block_date).or_default() +=
+                            cell.capacity as i128;
+                        *daily_new_deposits_delta.entry(block_date).or_default() += 1;
+                        same_batch_dao_map
+                            .insert((tx_data.hash.to_vec(), output_index as i16), cell.capacity);
+                    } else if let Some(data) = tx_data.outputs_data.get(output_index) {
+                        let data_bytes = crate::rpc::parse_hex_to_bytes(data);
+                        if DaoParser::parse_deposit_block_number(&data_bytes).is_some() {
+                            has_withdraw_request_output = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        if tx_data.is_cellbase || !has_withdraw_request_output {
+            continue;
+        }
+
+        // Phase-1 withdrawal always consumes status=0 deposits. Match by consumed
+        // outpoint status, not by capacity, to avoid leaving stale active deposits.
+        for input in &tx_data.inputs {
+            let outpoint = (
+                input.previous_tx_hash.to_vec(),
+                input.previous_output_index as i16,
+            );
+            let mut maybe_cap: Option<i64> = same_batch_dao_map.get(&outpoint).copied();
+            if maybe_cap.is_none() {
+                if let Some((_, _, _, capacity_str, _, status)) = consumed_dao_map.get(&outpoint) {
+                    if *status == 0 {
+                        maybe_cap = capacity_str.parse::<i64>().ok();
+                    }
+                }
+            }
+            if let Some(capacity) = maybe_cap {
+                *daily_active_delta.entry(block_date).or_default() -= capacity as i128;
+            }
+        }
+    }
+}
+
 fn accumulate_secondary_issuance_deltas(
     stats: &mut BatchStats,
     parsed: &crate::parser::block::ParsedBlock,
@@ -225,12 +289,14 @@ fn accumulate_secondary_issuance_deltas(
     if let Some((prev_c, prev_s)) = *prev_dao_cs {
         let _c_delta = c - prev_c;
         let s_delta = s - prev_s;
-        *stats
-            .daily_secondary_non_miner_delta
-            .entry(block_date)
-            .or_default() += s_delta;
 
+        // Protocol upgrades can produce negative S deltas; they should not reduce
+        // user-facing cumulative issuance series. Track only positive growth.
         if s_delta > 0 {
+            *stats
+                .daily_secondary_non_miner_delta
+                .entry(block_date)
+                .or_default() += s_delta;
             // Derive miner share directly from C/U ratio to avoid compact-target
             // and primary-issuance approximation drift.
             let (miner, _, _) = split_secondary_issuance(c, u, 0, s_delta);
@@ -2852,65 +2918,16 @@ impl Indexer {
             }
 
             // DAO per-day deltas for snapshot accumulation
-            for tx_data in tx_slice {
-                let mut withdraw_request_caps: Vec<i64> = Vec::new();
-                for (output_index, cell) in tx_data.cells.iter().enumerate() {
-                    if let Some(ref type_code_hash) = cell.type_code_hash {
-                        if type_code_hash == &dao_code_hash_for_seq_stats && cell.data_size == 8 {
-                            if cell.data.len() == 8 && cell.data.iter().all(|&b| b == 0) {
-                                *batch_stats
-                                    .dao_daily_active_delta
-                                    .entry(block_date)
-                                    .or_default() += cell.capacity as i128;
-                                *batch_stats
-                                    .dao_daily_gross_deposit_delta
-                                    .entry(block_date)
-                                    .or_default() += cell.capacity as i128;
-                                *batch_stats
-                                    .dao_daily_new_deposits_delta
-                                    .entry(block_date)
-                                    .or_default() += 1;
-                                same_batch_dao_for_seq_stats.insert(
-                                    (tx_data.hash.to_vec(), output_index as i16),
-                                    cell.capacity,
-                                );
-                            } else if let Some(data) = tx_data.outputs_data.get(output_index) {
-                                let data_bytes = crate::rpc::parse_hex_to_bytes(data);
-                                if DaoParser::parse_deposit_block_number(&data_bytes).is_some() {
-                                    withdraw_request_caps.push(cell.capacity);
-                                }
-                            }
-                        }
-                    }
-                }
-                if !tx_data.is_cellbase && !withdraw_request_caps.is_empty() {
-                    for input in &tx_data.inputs {
-                        let outpoint = (
-                            input.previous_tx_hash.to_vec(),
-                            input.previous_output_index as i16,
-                        );
-                        let mut maybe_cap: Option<i64> =
-                            same_batch_dao_for_seq_stats.get(&outpoint).copied();
-                        if maybe_cap.is_none() {
-                            if let Some((_, _, _, capacity_str, _, status)) =
-                                consumed_dao_for_seq_stats.get(&outpoint)
-                            {
-                                if *status == 0 {
-                                    maybe_cap = capacity_str.parse::<i64>().ok();
-                                }
-                            }
-                        }
-                        if let Some(capacity) = maybe_cap {
-                            if withdraw_request_caps.contains(&capacity) {
-                                *batch_stats
-                                    .dao_daily_active_delta
-                                    .entry(block_date)
-                                    .or_default() -= capacity as i128;
-                            }
-                        }
-                    }
-                }
-            }
+            accumulate_dao_snapshot_deltas_for_txs(
+                tx_slice,
+                block_date,
+                &dao_code_hash_for_seq_stats,
+                &consumed_dao_for_seq_stats,
+                &mut same_batch_dao_for_seq_stats,
+                &mut batch_stats.dao_daily_active_delta,
+                &mut batch_stats.dao_daily_gross_deposit_delta,
+                &mut batch_stats.dao_daily_new_deposits_delta,
+            );
 
             batch_stats.dao_snapshot_dates.insert(block_date);
         }
@@ -4419,74 +4436,16 @@ impl Indexer {
                         block_tx_idx += tx_count_for_block;
 
                         // Exact DAO per-day deltas for snapshot accumulation in bulk mode.
-                        for tx_data in tx_slice {
-                            let mut withdraw_request_caps: Vec<i64> = Vec::new();
-
-                            for (output_index, cell) in tx_data.cells.iter().enumerate() {
-                                if let Some(ref type_code_hash) = cell.type_code_hash {
-                                    if type_code_hash == &dao_code_hash && cell.data_size == 8 {
-                                        if cell.data.len() == 8 && cell.data.iter().all(|&b| b == 0)
-                                        {
-                                            *stats
-                                                .dao_daily_active_delta
-                                                .entry(block_date)
-                                                .or_default() += cell.capacity as i128;
-                                            *stats
-                                                .dao_daily_gross_deposit_delta
-                                                .entry(block_date)
-                                                .or_default() += cell.capacity as i128;
-                                            *stats
-                                                .dao_daily_new_deposits_delta
-                                                .entry(block_date)
-                                                .or_default() += 1;
-                                            same_batch_dao_deposits.insert(
-                                                (tx_data.hash.to_vec(), output_index as i16),
-                                                cell.capacity,
-                                            );
-                                        } else if let Some(data) =
-                                            tx_data.outputs_data.get(output_index)
-                                        {
-                                            let data_bytes = crate::rpc::parse_hex_to_bytes(data);
-                                            if DaoParser::parse_deposit_block_number(&data_bytes)
-                                                .is_some()
-                                            {
-                                                withdraw_request_caps.push(cell.capacity);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            if !tx_data.is_cellbase && !withdraw_request_caps.is_empty() {
-                                for input in &tx_data.inputs {
-                                    let outpoint = (
-                                        input.previous_tx_hash.to_vec(),
-                                        input.previous_output_index as i16,
-                                    );
-                                    let mut maybe_cap: Option<i64> =
-                                        same_batch_dao_deposits.get(&outpoint).copied();
-
-                                    if maybe_cap.is_none() {
-                                        if let Some((_, _, _, capacity_str, _, status)) =
-                                            consumed_dao_map.get(&outpoint)
-                                        {
-                                            if *status == 0 {
-                                                maybe_cap = capacity_str.parse::<i64>().ok();
-                                            }
-                                        }
-                                    }
-
-                                    if let Some(capacity) = maybe_cap {
-                                        if withdraw_request_caps.contains(&capacity) {
-                                            *stats
-                                                .dao_daily_active_delta
-                                                .entry(block_date)
-                                                .or_default() -= capacity as i128;
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        accumulate_dao_snapshot_deltas_for_txs(
+                            tx_slice,
+                            block_date,
+                            &dao_code_hash,
+                            &consumed_dao_map,
+                            &mut same_batch_dao_deposits,
+                            &mut stats.dao_daily_active_delta,
+                            &mut stats.dao_daily_gross_deposit_delta,
+                            &mut stats.dao_daily_new_deposits_delta,
+                        );
 
                         let cells_created: i32 =
                             tx_slice.iter().map(|tx| tx.cells.len() as i32).sum();
@@ -5729,66 +5688,16 @@ impl Indexer {
                 }
 
                 // DAO per-day deltas for snapshot accumulation (mirrors T7 bulk path)
-                for tx_data in tx_slice {
-                    let mut withdraw_request_caps: Vec<i64> = Vec::new();
-                    for (output_index, cell) in tx_data.cells.iter().enumerate() {
-                        if let Some(ref type_code_hash) = cell.type_code_hash {
-                            if type_code_hash == &dao_code_hash_for_stats && cell.data_size == 8 {
-                                if cell.data.len() == 8 && cell.data.iter().all(|&b| b == 0) {
-                                    *batch_stats
-                                        .dao_daily_active_delta
-                                        .entry(block_date)
-                                        .or_default() += cell.capacity as i128;
-                                    *batch_stats
-                                        .dao_daily_gross_deposit_delta
-                                        .entry(block_date)
-                                        .or_default() += cell.capacity as i128;
-                                    *batch_stats
-                                        .dao_daily_new_deposits_delta
-                                        .entry(block_date)
-                                        .or_default() += 1;
-                                    same_batch_dao_for_stats.insert(
-                                        (tx_data.hash.to_vec(), output_index as i16),
-                                        cell.capacity,
-                                    );
-                                } else if let Some(data) = tx_data.outputs_data.get(output_index) {
-                                    let data_bytes = crate::rpc::parse_hex_to_bytes(data);
-                                    if DaoParser::parse_deposit_block_number(&data_bytes).is_some()
-                                    {
-                                        withdraw_request_caps.push(cell.capacity);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if !tx_data.is_cellbase && !withdraw_request_caps.is_empty() {
-                        for input in &tx_data.inputs {
-                            let outpoint = (
-                                input.previous_tx_hash.to_vec(),
-                                input.previous_output_index as i16,
-                            );
-                            let mut maybe_cap: Option<i64> =
-                                same_batch_dao_for_stats.get(&outpoint).copied();
-                            if maybe_cap.is_none() {
-                                if let Some((_, _, _, capacity_str, _, status)) =
-                                    consumed_dao_for_stats.get(&outpoint)
-                                {
-                                    if *status == 0 {
-                                        maybe_cap = capacity_str.parse::<i64>().ok();
-                                    }
-                                }
-                            }
-                            if let Some(capacity) = maybe_cap {
-                                if withdraw_request_caps.contains(&capacity) {
-                                    *batch_stats
-                                        .dao_daily_active_delta
-                                        .entry(block_date)
-                                        .or_default() -= capacity as i128;
-                                }
-                            }
-                        }
-                    }
-                }
+                accumulate_dao_snapshot_deltas_for_txs(
+                    tx_slice,
+                    block_date,
+                    &dao_code_hash_for_stats,
+                    &consumed_dao_for_stats,
+                    &mut same_batch_dao_for_stats,
+                    &mut batch_stats.dao_daily_active_delta,
+                    &mut batch_stats.dao_daily_gross_deposit_delta,
+                    &mut batch_stats.dao_daily_new_deposits_delta,
+                );
 
                 batch_stats.dao_snapshot_dates.insert(block_date);
             }
@@ -6584,6 +6493,60 @@ mod tests {
         }
     }
 
+    fn dummy_dao_cell(capacity: i64, is_deposit: bool) -> crate::parser::cell::ParsedCell {
+        crate::parser::cell::ParsedCell {
+            capacity,
+            lock_code_hash: vec![],
+            lock_hash_type: 0,
+            lock_args: vec![],
+            lock_script_hash: vec![],
+            type_code_hash: Some(crate::rpc::parse_hex_to_bytes(
+                crate::parser::dao::DAO_CODE_HASH,
+            )),
+            type_hash_type: Some(1),
+            type_args: Some(vec![]),
+            type_script_hash: None,
+            data_hash: vec![],
+            data_size: 8,
+            data: if is_deposit {
+                vec![0u8; 8]
+            } else {
+                1u64.to_le_bytes().to_vec()
+            },
+        }
+    }
+
+    fn dummy_tx_data(
+        hash: [u8; 32],
+        is_cellbase: bool,
+        inputs: Vec<crate::parser::transaction::ParsedInput>,
+        cells: Vec<crate::parser::cell::ParsedCell>,
+        outputs_data: Vec<String>,
+    ) -> TxData {
+        TxData {
+            hash,
+            block_number: 0,
+            block_hash: vec![],
+            tx_index: 0,
+            version: 0,
+            inputs_count: inputs.len() as i16,
+            outputs_count: cells.len() as i16,
+            witnesses_count: 0,
+            cell_deps_count: 0,
+            header_deps_count: 0,
+            is_cellbase,
+            inputs,
+            cells,
+            outputs_data,
+            total_input_capacity: 0,
+            total_output_capacity: 0,
+            fee: 0,
+            tx_size: 0,
+            cycles: None,
+            timestamp: Utc::now(),
+        }
+    }
+
     #[test]
     fn test_accumulate_secondary_issuance_deltas_tracks_exact_miner_and_non_miner() {
         let mut stats = BatchStats::default();
@@ -6608,7 +6571,7 @@ mod tests {
     }
 
     #[test]
-    fn test_accumulate_secondary_issuance_deltas_keeps_negative_adjustment_in_non_miner_only() {
+    fn test_accumulate_secondary_issuance_deltas_ignores_negative_adjustment() {
         let mut stats = BatchStats::default();
         let mut prev = Some((20_000_000_000_000_i128, 8_000_i128));
         let block = dummy_parsed_block(
@@ -6624,11 +6587,117 @@ mod tests {
 
         accumulate_secondary_issuance_deltas(&mut stats, &block, date, &mut prev);
 
-        assert_eq!(
-            stats.daily_secondary_non_miner_delta.get(&date),
-            Some(&-100)
-        );
+        assert!(!stats.daily_secondary_non_miner_delta.contains_key(&date));
         assert!(!stats.daily_secondary_miner_delta.contains_key(&date));
+    }
+
+    #[test]
+    fn test_accumulate_secondary_issuance_deltas_same_day_keeps_only_positive_s_growth() {
+        let mut stats = BatchStats::default();
+        let mut prev = Some((30_000_000_000_000_i128, 10_000_i128));
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
+
+        // First block in the day has an S drop (protocol adjustment).
+        let block_drop =
+            dummy_parsed_block(build_dao_field(30_000_000_000_500, 9_950, 100), 0, 1000);
+        accumulate_secondary_issuance_deltas(&mut stats, &block_drop, date, &mut prev);
+
+        // Later in the same day, normal positive growth resumes.
+        let block_growth =
+            dummy_parsed_block(build_dao_field(30_000_000_001_000, 10_120, 100), 0, 1000);
+        accumulate_secondary_issuance_deltas(&mut stats, &block_growth, date, &mut prev);
+
+        // Non-miner should track only positive growth (+170), ignoring the prior -50 drop.
+        assert_eq!(stats.daily_secondary_non_miner_delta.get(&date), Some(&170));
+    }
+
+    #[test]
+    fn test_accumulate_dao_snapshot_deltas_subtracts_phase1_even_when_capacity_differs() {
+        let block_date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
+        let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
+        let input_hash_vec = vec![0x11; 32];
+        let input_hash: [u8; 32] = input_hash_vec.clone().try_into().unwrap();
+
+        let tx = dummy_tx_data(
+            [0xAA; 32],
+            false,
+            vec![crate::parser::transaction::ParsedInput {
+                previous_tx_hash: input_hash,
+                previous_output_index: 0,
+                since: 0,
+            }],
+            vec![dummy_dao_cell(9_900_000_000, false)],
+            vec!["0x0100000000000000".to_string()],
+        );
+
+        let mut consumed_dao_map: DaoConsumedMap = HashMap::new();
+        consumed_dao_map.insert(
+            (input_hash_vec, 0),
+            (0, vec![], 0, "10000000000".to_string(), 0, 0),
+        );
+
+        let mut same_batch_dao_map: DaoSameBatchMap = HashMap::new();
+        let mut daily_active_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
+        let mut daily_gross_deposit_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
+        let mut daily_new_deposits_delta: HashMap<chrono::NaiveDate, i64> = HashMap::new();
+
+        accumulate_dao_snapshot_deltas_for_txs(
+            &[tx],
+            block_date,
+            &dao_code_hash,
+            &consumed_dao_map,
+            &mut same_batch_dao_map,
+            &mut daily_active_delta,
+            &mut daily_gross_deposit_delta,
+            &mut daily_new_deposits_delta,
+        );
+
+        assert_eq!(daily_active_delta.get(&block_date), Some(&-10_000_000_000));
+        assert!(daily_gross_deposit_delta.is_empty());
+        assert!(daily_new_deposits_delta.is_empty());
+    }
+
+    #[test]
+    fn test_accumulate_dao_snapshot_deltas_ignores_status1_inputs_for_phase1_subtraction() {
+        let block_date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
+        let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
+        let input_hash_vec = vec![0x22; 32];
+        let input_hash: [u8; 32] = input_hash_vec.clone().try_into().unwrap();
+
+        let tx = dummy_tx_data(
+            [0xBB; 32],
+            false,
+            vec![crate::parser::transaction::ParsedInput {
+                previous_tx_hash: input_hash,
+                previous_output_index: 0,
+                since: 0,
+            }],
+            vec![dummy_dao_cell(9_900_000_000, false)],
+            vec!["0x0100000000000000".to_string()],
+        );
+
+        let mut consumed_dao_map: DaoConsumedMap = HashMap::new();
+        consumed_dao_map.insert((input_hash_vec, 0), (0, vec![], 0, "123".to_string(), 0, 1));
+
+        let mut same_batch_dao_map: DaoSameBatchMap = HashMap::new();
+        let mut daily_active_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
+        let mut daily_gross_deposit_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
+        let mut daily_new_deposits_delta: HashMap<chrono::NaiveDate, i64> = HashMap::new();
+
+        accumulate_dao_snapshot_deltas_for_txs(
+            &[tx],
+            block_date,
+            &dao_code_hash,
+            &consumed_dao_map,
+            &mut same_batch_dao_map,
+            &mut daily_active_delta,
+            &mut daily_gross_deposit_delta,
+            &mut daily_new_deposits_delta,
+        );
+
+        assert!(daily_active_delta.is_empty());
+        assert!(daily_gross_deposit_delta.is_empty());
+        assert!(daily_new_deposits_delta.is_empty());
     }
 
     #[test]

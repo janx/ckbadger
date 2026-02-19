@@ -518,14 +518,16 @@ impl CkbadgerStore {
 
                             // Compute per-block secondary issuance breakdown
                             if let Some(ps) = prev_s {
-                                let s_delta = s - ps; // allow negative (protocol upgrade boundaries)
+                                let s_delta = s - ps;
                                 let entry = daily_secondary.entry(d).or_insert((0, 0));
                                 if s_delta > 0 {
                                     let denom = (c - u).max(1);
                                     let miner = s_delta * u.max(0) / denom;
                                     entry.0 += miner;
+                                    // Ignore protocol-adjustment decreases so cumulative user-facing
+                                    // issuance series remain monotonic.
+                                    entry.1 += s_delta;
                                 }
-                                entry.1 += s_delta;
                             }
                             prev_s = Some(s);
                         }
