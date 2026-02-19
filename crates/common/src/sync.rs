@@ -82,13 +82,23 @@ impl SyncStatusData {
     }
 
     pub fn init_sync_start(&mut self, start_block: i64, is_bulk_sync: bool) {
-        self.sync_started_block = start_block;
         if is_bulk_sync {
-            // Every bulk sync run should start a fresh timing window. Keeping
-            // stale values from prior runs makes elapsed/total durations misleading.
-            self.sync_started_at = Some(chrono::Utc::now().timestamp());
-            self.bulk_sync_completed_at = None;
-            self.bulk_sync_completed_block = None;
+            let should_start_new_bulk_session = self.sync_started_at.is_none()
+                || self.bulk_sync_completed_at.is_some()
+                || start_block < self.sync_started_block;
+
+            if should_start_new_bulk_session {
+                // New bulk session:
+                // - no prior start recorded
+                // - prior bulk already completed
+                // - rollback behind previously recorded start
+                self.sync_started_at = Some(chrono::Utc::now().timestamp());
+                self.sync_started_block = start_block;
+                self.bulk_sync_completed_at = None;
+                self.bulk_sync_completed_block = None;
+            }
+        } else {
+            self.sync_started_block = start_block;
         }
     }
 
@@ -375,7 +385,25 @@ mod tests {
     }
 
     #[test]
-    fn test_init_sync_start_resets_bulk_timing_for_new_bulk_run() {
+    fn test_init_sync_start_keeps_bulk_timing_for_resumed_bulk_session() {
+        let mut status = SyncStatusData {
+            sync_started_at: Some(123),
+            sync_started_block: 10,
+            bulk_sync_completed_at: None,
+            bulk_sync_completed_block: None,
+            ..Default::default()
+        };
+
+        status.init_sync_start(200, true);
+
+        assert_eq!(status.sync_started_at, Some(123));
+        assert_eq!(status.sync_started_block, 10);
+        assert_eq!(status.bulk_sync_completed_at, None);
+        assert_eq!(status.bulk_sync_completed_block, None);
+    }
+
+    #[test]
+    fn test_init_sync_start_resets_bulk_timing_for_new_bulk_run_after_completion() {
         let mut status = SyncStatusData {
             sync_started_at: Some(123),
             sync_started_block: 10,
@@ -409,6 +437,25 @@ mod tests {
         assert_eq!(status.sync_started_at, Some(123));
         assert_eq!(status.bulk_sync_completed_at, Some(456));
         assert_eq!(status.bulk_sync_completed_block, Some(999));
+    }
+
+    #[test]
+    fn test_init_sync_start_resets_bulk_timing_when_rolled_back_before_start() {
+        let mut status = SyncStatusData {
+            sync_started_at: Some(123),
+            sync_started_block: 1000,
+            bulk_sync_completed_at: None,
+            bulk_sync_completed_block: None,
+            ..Default::default()
+        };
+
+        status.init_sync_start(500, true);
+
+        assert_eq!(status.sync_started_block, 500);
+        assert!(status.sync_started_at.is_some());
+        assert_ne!(status.sync_started_at, Some(123));
+        assert_eq!(status.bulk_sync_completed_at, None);
+        assert_eq!(status.bulk_sync_completed_block, None);
     }
 
     #[test]
