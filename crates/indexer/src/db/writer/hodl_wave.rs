@@ -57,7 +57,7 @@ impl HodlWaveTracker {
         Self {
             capacity_by_creation_date,
             block_date_transitions,
-            holder_count: state.holder_count,
+            holder_count: state.holder_count.max(0),
             last_snapshot_date,
         }
     }
@@ -124,7 +124,7 @@ impl HodlWaveTracker {
         if old_live_cells == 0 && new_live_cells > 0 {
             self.holder_count += 1;
         } else if old_live_cells > 0 && new_live_cells == 0 {
-            self.holder_count -= 1;
+            self.holder_count = (self.holder_count - 1).max(0);
         }
     }
 
@@ -306,6 +306,13 @@ mod tests {
     }
 
     #[test]
+    fn test_holder_count_never_goes_negative() {
+        let mut tracker = HodlWaveTracker::new();
+        tracker.update_holder_count(3, 0);
+        assert_eq!(tracker.holder_count, 0);
+    }
+
+    #[test]
     fn test_maybe_snapshot_day_boundary() {
         let mut tracker = HodlWaveTracker::new();
         let jan15 = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
@@ -360,5 +367,17 @@ mod tests {
             restored.capacity_by_creation_date[&jan16],
             300_00000000_i128
         );
+    }
+
+    #[test]
+    fn test_from_state_clamps_negative_holder_count() {
+        let state = HodlTrackerState {
+            capacity_by_date: vec![],
+            date_transitions: vec![],
+            holder_count: -5,
+            last_snapshot_date: None,
+        };
+        let restored = HodlWaveTracker::from_state(state);
+        assert_eq!(restored.holder_count, 0);
     }
 }

@@ -166,6 +166,49 @@ fn fetch_explorer_daily(
     }
 }
 
+/// Fetch a single explorer statistic value from `/api/v1/statistics/{name}`.
+fn fetch_explorer_statistic_f64(
+    ctx: &CheckContext,
+    statistic: &str,
+    field: &str,
+) -> anyhow::Result<f64> {
+    let explorer_url = ctx
+        .explorer_url
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Explorer URL not set"))?;
+    let url = format!(
+        "{}/api/v1/statistics/{}",
+        explorer_url.trim_end_matches('/'),
+        statistic
+    );
+
+    let resp = ctx
+        .http
+        .get(&url)
+        .header("Content-Type", "application/vnd.api+json")
+        .header("Accept", "application/vnd.api+json")
+        .send()?;
+    let status = resp.status();
+    if !status.is_success() {
+        anyhow::bail!("GET {} returned {}", url, status);
+    }
+
+    let body: serde_json::Value = resp.json()?;
+    let raw = body
+        .get("data")
+        .and_then(|d| d.get("attributes"))
+        .and_then(|a| a.get(field))
+        .ok_or_else(|| anyhow::anyhow!("missing explorer field '{}'", field))?;
+
+    match raw {
+        serde_json::Value::String(s) => s.parse::<f64>().map_err(Into::into),
+        serde_json::Value::Number(n) => n
+            .as_f64()
+            .ok_or_else(|| anyhow::anyhow!("invalid explorer number '{}'", n)),
+        _ => anyhow::bail!("unexpected explorer value type for '{}'", field),
+    }
+}
+
 /// Perform the actual HTTP fetch from the explorer API.
 fn fetch_from_explorer_api(
     ctx: &CheckContext,
@@ -315,6 +358,27 @@ fn fetch_our_stacked_chart_sum(
         map.insert(normalize_date(&point.date), format!("{sum:.0}"));
     }
     Ok(map)
+}
+
+/// Derive weighted average block time (milliseconds) from distribution buckets.
+fn weighted_avg_block_time_ms_from_distribution(points: &[ChartDataPoint]) -> Option<f64> {
+    let mut weighted_sum_seconds = 0.0f64;
+    let mut ratio_sum = 0.0f64;
+
+    for point in points {
+        let bucket_seconds = point.date.parse::<f64>().ok()?;
+        let ratio = point.value.parse::<f64>().ok()?;
+        if bucket_seconds < 0.0 || ratio < 0.0 {
+            return None;
+        }
+        weighted_sum_seconds += bucket_seconds * ratio;
+        ratio_sum += ratio;
+    }
+
+    if ratio_sum <= 0.0 {
+        return None;
+    }
+    Some((weighted_sum_seconds / ratio_sum) * 1000.0)
 }
 
 // ---------------------------------------------------------------------------
@@ -619,7 +683,7 @@ fn compare_tolerance_f64_values(
 }
 
 // ============================================
-// Explorer checks (X1-X15)
+// Explorer checks (X1-X16)
 // ============================================
 
 /// X1: Compare /charts/transaction-count last 30 days vs explorer transactions_count.
@@ -1236,24 +1300,73 @@ impl Check for ExplorerTreasuryAmount {
     }
 }
 
+/// X16: Compare weighted average from /charts/block-time-distribution vs explorer average_block_time.
+pub struct ExplorerBlockTimeDistribution;
+
+impl Check for ExplorerBlockTimeDistribution {
+    fn name(&self) -> &'static str {
+        "explorer_block_time_distribution"
+    }
+    fn description(&self) -> &'static str {
+        "Derived average_block_time from distribution vs explorer statistic"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn requires_explorer(&self) -> bool {
+        true
+    }
+    fn estimated_total(&self, _ctx: &CheckContext) -> Option<u64> {
+        Some(1)
+    }
+    fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let distribution: ChartResponse = api_get(ctx, "charts/block-time-distribution")?;
+        let our_ms = weighted_avg_block_time_ms_from_distribution(&distribution.data)
+            .ok_or_else(|| anyhow::anyhow!("failed to derive avg block time from distribution"))?;
+        let explorer_ms =
+            fetch_explorer_statistic_f64(ctx, "average_block_time", "average_block_time")?;
+
+        let mut findings = vec![];
+        if let Some(f) = compare_tolerance_f64_values(
+            our_ms,
+            explorer_ms,
+            "latest",
+            "average_block_time_ms",
+            0.30,
+        ) {
+            findings.push(f);
+        }
+
+        if findings.is_empty() {
+            Ok(CheckResult::pass_with_detail(
+                1,
+                format!("ours={our_ms:.2}ms, explorer={explorer_ms:.2}ms"),
+            ))
+        } else {
+            Ok(CheckResult::fail(1, findings))
+        }
+    }
+}
+
 /// Return all explorer comparison checks.
 pub fn explorer_checks() -> Vec<Box<dyn Check>> {
     vec![
-        Box::new(ExplorerTxCount),             // X1
-        Box::new(ExplorerTotalDeposit),        // X2
-        Box::new(ExplorerHashRate),            // X3
-        Box::new(ExplorerDifficulty),          // X4
-        Box::new(ExplorerKnowledgeSize),       // X5
-        Box::new(ExplorerUncleRate),           // X6
-        Box::new(ExplorerLiveCellCount),       // X7
-        Box::new(ExplorerDeadCellCount),       // X8
-        Box::new(ExplorerDailyDeposit),        // X9
-        Box::new(ExplorerCirculationRatio),    // X10
-        Box::new(ExplorerCirculatingSupply),   // X11
-        Box::new(ExplorerBurnt),               // X12
-        Box::new(ExplorerDepositCompensation), // X13
-        Box::new(ExplorerMiningReward),        // X14
-        Box::new(ExplorerTreasuryAmount),      // X15
+        Box::new(ExplorerTxCount),               // X1
+        Box::new(ExplorerTotalDeposit),          // X2
+        Box::new(ExplorerHashRate),              // X3
+        Box::new(ExplorerDifficulty),            // X4
+        Box::new(ExplorerKnowledgeSize),         // X5
+        Box::new(ExplorerUncleRate),             // X6
+        Box::new(ExplorerLiveCellCount),         // X7
+        Box::new(ExplorerDeadCellCount),         // X8
+        Box::new(ExplorerDailyDeposit),          // X9
+        Box::new(ExplorerCirculationRatio),      // X10
+        Box::new(ExplorerCirculatingSupply),     // X11
+        Box::new(ExplorerBurnt),                 // X12
+        Box::new(ExplorerDepositCompensation),   // X13
+        Box::new(ExplorerMiningReward),          // X14
+        Box::new(ExplorerTreasuryAmount),        // X15
+        Box::new(ExplorerBlockTimeDistribution), // X16
     ]
 }
 
@@ -1447,5 +1560,42 @@ mod tests {
 
         assert!(!result.passed);
         assert_eq!(result.items_failed, 2);
+    }
+
+    #[test]
+    fn test_weighted_avg_block_time_ms_from_distribution() {
+        let points = vec![
+            ChartDataPoint {
+                date: "10".to_string(),
+                value: "50".to_string(),
+            },
+            ChartDataPoint {
+                date: "14".to_string(),
+                value: "50".to_string(),
+            },
+        ];
+        assert_eq!(
+            weighted_avg_block_time_ms_from_distribution(&points),
+            Some(12_000.0)
+        );
+    }
+
+    #[test]
+    fn test_weighted_avg_block_time_ms_from_distribution_rejects_zero_ratio_sum() {
+        let points = vec![ChartDataPoint {
+            date: "10".to_string(),
+            value: "0".to_string(),
+        }];
+        assert_eq!(weighted_avg_block_time_ms_from_distribution(&points), None);
+    }
+
+    #[test]
+    fn test_explorer_checks_registered() {
+        let checks = explorer_checks();
+        assert_eq!(checks.len(), 16);
+        let names: Vec<&str> = checks.iter().map(|c| c.name()).collect();
+        let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
+        assert_eq!(names.len(), unique.len(), "Duplicate check names found");
+        assert!(names.contains(&"explorer_block_time_distribution"));
     }
 }

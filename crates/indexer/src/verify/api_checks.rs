@@ -1,7 +1,7 @@
 //! API-based checks — validates data via the ckbadger REST API.
 //!
 //! Fast tier (F1-F6): few API calls, seconds.
-//! Sampling tier (S1-S7): N API calls or chart validation, minutes.
+//! Sampling tier (S1-S15): N API calls or chart validation, minutes.
 
 use super::checks::*;
 use super::report::format_number;
@@ -85,6 +85,8 @@ struct CellListResponse {
 struct ChartDataPoint {
     date: String,
     value: String,
+    #[serde(default)]
+    value2: Option<String>,
 }
 
 /// Stacked chart point with named series (e.g. cell-count, total-supply).
@@ -93,6 +95,21 @@ struct ChartDataPoint {
 struct StackedChartDataPoint {
     date: String,
     values: std::collections::HashMap<String, String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MinerDistributionDataPoint {
+    address: String,
+    blocks_mined: i64,
+    percentage: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MinerDistributionResponse {
+    data: Vec<MinerDistributionDataPoint>,
+    total_blocks: i64,
 }
 
 // ---------------------------------------------------------------------------
@@ -396,7 +413,7 @@ impl Check for DaoStatisticsSane {
 }
 
 // ============================================
-// SAMPLING CHECKS (S1-S7)
+// SAMPLING CHECKS (S1-S15)
 // ============================================
 
 /// S1: N random blocks: GET /blocks/{n} → hash, GET /blocks/{hash} → number matches.
@@ -747,7 +764,746 @@ impl Check for ChartTotalSupplyMonotonic {
     }
 }
 
-/// S7: N random blocks: compare API vs CKB RPC (hash, txCount). Skipped without --rpc-url.
+/// S7: GET /charts/block-time-distribution → buckets/ratios sane and sum ≈ 100%.
+pub struct ChartBlockTimeDistributionSane;
+
+impl Check for ChartBlockTimeDistributionSane {
+    fn name(&self) -> &'static str {
+        "chart_block_time_distribution_sane"
+    }
+    fn description(&self) -> &'static str {
+        "Block time distribution: buckets ordered, ratios in range, sum near 100%"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let chart: ChartWrapper<ChartDataPoint> = api_get(ctx, "charts/block-time-distribution")?;
+        let mut findings = vec![];
+        let mut prev_bucket: Option<f64> = None;
+        let mut ratio_sum = 0.0;
+        let mut has_non_zero = false;
+
+        if chart.data.is_empty() {
+            findings.push(Finding {
+                entity: "chart".to_string(),
+                details: vec!["no block-time distribution data points returned".to_string()],
+            });
+        }
+
+        for point in &chart.data {
+            match point.date.parse::<f64>() {
+                Ok(bucket) if bucket >= 0.0 => {
+                    if let Some(prev) = prev_bucket {
+                        if bucket < prev {
+                            findings.push(Finding {
+                                entity: point.date.clone(),
+                                details: vec![format!(
+                                    "bucket {} < previous bucket {} (not ordered)",
+                                    bucket, prev
+                                )],
+                            });
+                        }
+                    }
+                    prev_bucket = Some(bucket);
+                }
+                _ => findings.push(Finding {
+                    entity: point.date.clone(),
+                    details: vec![format!("invalid bucket '{}'", point.date)],
+                }),
+            }
+
+            match point.value.parse::<f64>() {
+                Ok(ratio) if (0.0..=100.0).contains(&ratio) => {
+                    ratio_sum += ratio;
+                    if ratio > 0.0 {
+                        has_non_zero = true;
+                    }
+                }
+                Ok(ratio) => findings.push(Finding {
+                    entity: point.date.clone(),
+                    details: vec![format!("ratio out of range [0,100]: {}", ratio)],
+                }),
+                Err(_) => findings.push(Finding {
+                    entity: point.date.clone(),
+                    details: vec![format!("invalid ratio '{}'", point.value)],
+                }),
+            }
+        }
+
+        if !chart.data.is_empty() && (ratio_sum - 100.0).abs() > 1.0 {
+            findings.push(Finding {
+                entity: "chart".to_string(),
+                details: vec![format!(
+                    "ratio sum = {:.3}% (expected around 100%)",
+                    ratio_sum
+                )],
+            });
+        }
+
+        if !chart.data.is_empty() && !has_non_zero {
+            findings.push(Finding {
+                entity: "chart".to_string(),
+                details: vec!["all bucket ratios are zero".to_string()],
+            });
+        }
+
+        let checked = chart.data.len() as u64;
+        if findings.is_empty() {
+            Ok(CheckResult::pass_with_detail(
+                checked,
+                format!("{} data points, ratio sum {:.3}%", checked, ratio_sum),
+            ))
+        } else {
+            Ok(CheckResult::fail(checked, findings))
+        }
+    }
+}
+
+/// S8: GET /charts/epoch-time-distribution → buckets/counts sane.
+pub struct ChartEpochTimeDistributionSane;
+
+impl Check for ChartEpochTimeDistributionSane {
+    fn name(&self) -> &'static str {
+        "chart_epoch_time_distribution_sane"
+    }
+    fn description(&self) -> &'static str {
+        "Epoch time distribution: buckets ordered, counts non-negative"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let chart: ChartWrapper<ChartDataPoint> = api_get(ctx, "charts/epoch-time-distribution")?;
+        let mut findings = vec![];
+        let mut prev_bucket: Option<f64> = None;
+        let mut total_count: i64 = 0;
+
+        if chart.data.is_empty() {
+            findings.push(Finding {
+                entity: "chart".to_string(),
+                details: vec!["no epoch-time distribution data points returned".to_string()],
+            });
+        }
+
+        for point in &chart.data {
+            match point.date.parse::<f64>() {
+                Ok(bucket) if bucket > 0.0 => {
+                    if let Some(prev) = prev_bucket {
+                        if bucket < prev {
+                            findings.push(Finding {
+                                entity: point.date.clone(),
+                                details: vec![format!(
+                                    "bucket {} < previous bucket {} (not ordered)",
+                                    bucket, prev
+                                )],
+                            });
+                        }
+                    }
+                    prev_bucket = Some(bucket);
+                }
+                _ => findings.push(Finding {
+                    entity: point.date.clone(),
+                    details: vec![format!("invalid epoch-time bucket '{}'", point.date)],
+                }),
+            }
+
+            match point.value.parse::<i64>() {
+                Ok(count) if count >= 0 => total_count += count,
+                Ok(count) => findings.push(Finding {
+                    entity: point.date.clone(),
+                    details: vec![format!("negative epoch count {}", count)],
+                }),
+                Err(_) => findings.push(Finding {
+                    entity: point.date.clone(),
+                    details: vec![format!("invalid epoch count '{}'", point.value)],
+                }),
+            }
+        }
+
+        if !chart.data.is_empty() && total_count <= 0 {
+            findings.push(Finding {
+                entity: "chart".to_string(),
+                details: vec!["epoch-time distribution total count is zero".to_string()],
+            });
+        }
+
+        let checked = chart.data.len() as u64;
+        if findings.is_empty() {
+            Ok(CheckResult::pass_with_detail(
+                checked,
+                format!("{} data points, total epochs {}", checked, total_count),
+            ))
+        } else {
+            Ok(CheckResult::fail(checked, findings))
+        }
+    }
+}
+
+/// S9: GET /charts/epoch-time-length → epoch sequence and values sane.
+pub struct ChartEpochTimeLengthSane;
+
+impl Check for ChartEpochTimeLengthSane {
+    fn name(&self) -> &'static str {
+        "chart_epoch_time_length_sane"
+    }
+    fn description(&self) -> &'static str {
+        "Epoch time length chart: epoch numbers ordered, hours/blocks positive"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let chart: ChartWrapper<ChartDataPoint> = api_get(ctx, "charts/epoch-time-length")?;
+        let mut findings = vec![];
+        let mut prev_epoch: Option<i64> = None;
+
+        if chart.data.is_empty() {
+            findings.push(Finding {
+                entity: "chart".to_string(),
+                details: vec!["no epoch-time-length data points returned".to_string()],
+            });
+        }
+
+        for point in &chart.data {
+            match point.date.parse::<i64>() {
+                Ok(epoch) if epoch >= 0 => {
+                    if let Some(prev) = prev_epoch {
+                        if epoch <= prev {
+                            findings.push(Finding {
+                                entity: point.date.clone(),
+                                details: vec![format!(
+                                    "epoch {} <= previous epoch {} (not strictly increasing)",
+                                    epoch, prev
+                                )],
+                            });
+                        }
+                    }
+                    prev_epoch = Some(epoch);
+                }
+                _ => findings.push(Finding {
+                    entity: point.date.clone(),
+                    details: vec![format!("invalid epoch number '{}'", point.date)],
+                }),
+            }
+
+            match point.value.parse::<f64>() {
+                Ok(hours) if hours > 0.0 => {}
+                Ok(hours) => findings.push(Finding {
+                    entity: point.date.clone(),
+                    details: vec![format!("epoch duration hours must be > 0, got {}", hours)],
+                }),
+                Err(_) => findings.push(Finding {
+                    entity: point.date.clone(),
+                    details: vec![format!("invalid epoch duration '{}'", point.value)],
+                }),
+            }
+
+            match point.value2.as_ref().and_then(|v| v.parse::<i64>().ok()) {
+                Some(blocks) if blocks > 0 => {}
+                Some(blocks) => findings.push(Finding {
+                    entity: point.date.clone(),
+                    details: vec![format!("epoch blocks must be > 0, got {}", blocks)],
+                }),
+                None => findings.push(Finding {
+                    entity: point.date.clone(),
+                    details: vec!["missing or invalid value2 (epoch blocks)".to_string()],
+                }),
+            }
+        }
+
+        let checked = chart.data.len() as u64;
+        if findings.is_empty() {
+            Ok(CheckResult::pass_with_detail(
+                checked,
+                format!("{} data points", checked),
+            ))
+        } else {
+            Ok(CheckResult::fail(checked, findings))
+        }
+    }
+}
+
+/// S10: GET /charts/average-block-time → positive values in expected range.
+pub struct ChartAverageBlockTimeSane;
+
+impl Check for ChartAverageBlockTimeSane {
+    fn name(&self) -> &'static str {
+        "chart_average_block_time_sane"
+    }
+    fn description(&self) -> &'static str {
+        "Average block time chart: positive values, dates ordered"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let chart: ChartWrapper<ChartDataPoint> = api_get(ctx, "charts/average-block-time")?;
+        let mut findings = vec![];
+        let mut prev_date = String::new();
+
+        if chart.data.is_empty() {
+            findings.push(Finding {
+                entity: "chart".to_string(),
+                details: vec!["no average-block-time data points returned".to_string()],
+            });
+        }
+
+        for point in &chart.data {
+            if !prev_date.is_empty() && point.date <= prev_date {
+                findings.push(Finding {
+                    entity: point.date.clone(),
+                    details: vec![format!(
+                        "date {} <= previous date {} (not ordered)",
+                        point.date, prev_date
+                    )],
+                });
+            }
+            prev_date = point.date.clone();
+
+            match point.value.parse::<f64>() {
+                Ok(seconds) if seconds > 0.0 && seconds <= 120.0 => {}
+                Ok(seconds) => findings.push(Finding {
+                    entity: point.date.clone(),
+                    details: vec![format!(
+                        "average block time out of expected range (0,120]: {}s",
+                        seconds
+                    )],
+                }),
+                Err(_) => findings.push(Finding {
+                    entity: point.date.clone(),
+                    details: vec![format!("invalid average block time '{}'", point.value)],
+                }),
+            }
+        }
+
+        let checked = chart.data.len() as u64;
+        if findings.is_empty() {
+            Ok(CheckResult::pass_with_detail(
+                checked,
+                format!("{} data points", checked),
+            ))
+        } else {
+            Ok(CheckResult::fail(checked, findings))
+        }
+    }
+}
+
+/// S11: GET /charts/miner-address-distribution → top list internally consistent.
+pub struct ChartMinerDistributionConsistency;
+
+impl Check for ChartMinerDistributionConsistency {
+    fn name(&self) -> &'static str {
+        "chart_miner_distribution_consistency"
+    }
+    fn description(&self) -> &'static str {
+        "Miner distribution: address format, totals, and percentages sane"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let chart: MinerDistributionResponse = api_get(ctx, "charts/miner-address-distribution")?;
+        let mut findings = vec![];
+        let mut sum_blocks = 0i64;
+        let mut sum_percentage = 0.0f64;
+
+        if chart.data.len() > 100 {
+            findings.push(Finding {
+                entity: "chart".to_string(),
+                details: vec![format!(
+                    "returned {} miners (expected at most 100)",
+                    chart.data.len()
+                )],
+            });
+        }
+        if chart.total_blocks < 0 {
+            findings.push(Finding {
+                entity: "chart".to_string(),
+                details: vec![format!("totalBlocks is negative: {}", chart.total_blocks)],
+            });
+        }
+        if chart.total_blocks > 0 && chart.data.is_empty() {
+            findings.push(Finding {
+                entity: "chart".to_string(),
+                details: vec!["totalBlocks > 0 but data is empty".to_string()],
+            });
+        }
+
+        for miner in &chart.data {
+            if !miner.address.starts_with("0x") || miner.address.len() != 66 {
+                findings.push(Finding {
+                    entity: miner.address.clone(),
+                    details: vec![format!(
+                        "invalid miner lock hash format: '{}'",
+                        miner.address
+                    )],
+                });
+            }
+
+            if miner.blocks_mined < 0 {
+                findings.push(Finding {
+                    entity: miner.address.clone(),
+                    details: vec![format!("negative blocksMined: {}", miner.blocks_mined)],
+                });
+            } else {
+                sum_blocks += miner.blocks_mined;
+            }
+
+            match miner.percentage.parse::<f64>() {
+                Ok(pct) if (0.0..=100.0).contains(&pct) => sum_percentage += pct,
+                Ok(pct) => findings.push(Finding {
+                    entity: miner.address.clone(),
+                    details: vec![format!("percentage out of range [0,100]: {}", pct)],
+                }),
+                Err(_) => findings.push(Finding {
+                    entity: miner.address.clone(),
+                    details: vec![format!("invalid percentage '{}'", miner.percentage)],
+                }),
+            }
+        }
+
+        if chart.total_blocks >= 0 && sum_blocks > chart.total_blocks {
+            findings.push(Finding {
+                entity: "chart".to_string(),
+                details: vec![format!(
+                    "sum(blocksMined)={} > totalBlocks={}",
+                    sum_blocks, chart.total_blocks
+                )],
+            });
+        }
+        if sum_percentage > 100.1 {
+            findings.push(Finding {
+                entity: "chart".to_string(),
+                details: vec![format!("sum(percentage)={:.4}% > 100%", sum_percentage)],
+            });
+        }
+
+        let checked = chart.data.len() as u64;
+        if findings.is_empty() {
+            Ok(CheckResult::pass_with_detail(
+                checked,
+                format!(
+                    "{} miners, sum(blocks)={}, sum(percentage)={:.4}%",
+                    checked, sum_blocks, sum_percentage
+                ),
+            ))
+        } else {
+            Ok(CheckResult::fail(checked, findings))
+        }
+    }
+}
+
+/// S12: GET /charts/nominal-apc → deterministic sequence sanity.
+pub struct ChartNominalApcSane;
+
+impl Check for ChartNominalApcSane {
+    fn name(&self) -> &'static str {
+        "chart_nominal_apc_sane"
+    }
+    fn description(&self) -> &'static str {
+        "Nominal APC chart: expected point count, 0.25y step, non-increasing values"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let chart: ChartWrapper<ChartDataPoint> = api_get(ctx, "charts/nominal-apc")?;
+        let mut findings = vec![];
+        let mut prev_year: Option<f64> = None;
+        let mut prev_value: Option<f64> = None;
+
+        if chart.data.len() != 81 {
+            findings.push(Finding {
+                entity: "chart".to_string(),
+                details: vec![format!(
+                    "expected 81 data points (0..20y at 0.25y), got {}",
+                    chart.data.len()
+                )],
+            });
+        }
+
+        for point in &chart.data {
+            let year = match point.date.parse::<f64>() {
+                Ok(y) if y >= 0.0 => y,
+                _ => {
+                    findings.push(Finding {
+                        entity: point.date.clone(),
+                        details: vec![format!("invalid year '{}'", point.date)],
+                    });
+                    continue;
+                }
+            };
+            let value = match point.value.parse::<f64>() {
+                Ok(v) if (0.0..=10.0).contains(&v) => v,
+                Ok(v) => {
+                    findings.push(Finding {
+                        entity: point.date.clone(),
+                        details: vec![format!("APC out of range [0,10]: {}", v)],
+                    });
+                    continue;
+                }
+                Err(_) => {
+                    findings.push(Finding {
+                        entity: point.date.clone(),
+                        details: vec![format!("invalid APC '{}'", point.value)],
+                    });
+                    continue;
+                }
+            };
+
+            if let Some(prev) = prev_year {
+                let step = year - prev;
+                if (step - 0.25).abs() > 0.0001 {
+                    findings.push(Finding {
+                        entity: point.date.clone(),
+                        details: vec![format!("year step is {}, expected 0.25", step)],
+                    });
+                }
+            }
+            if let Some(prev) = prev_value {
+                if value > prev + 1e-9 {
+                    findings.push(Finding {
+                        entity: point.date.clone(),
+                        details: vec![format!("APC increased: {:.6} -> {:.6}", prev, value)],
+                    });
+                }
+            }
+
+            prev_year = Some(year);
+            prev_value = Some(value);
+        }
+
+        let checked = chart.data.len() as u64;
+        if findings.is_empty() {
+            Ok(CheckResult::pass_with_detail(
+                checked,
+                format!("{} data points", checked),
+            ))
+        } else {
+            Ok(CheckResult::fail(checked, findings))
+        }
+    }
+}
+
+/// S13: GET /charts/inflation-rate → nominal/real relationship and timeline sanity.
+pub struct ChartInflationRateSane;
+
+impl Check for ChartInflationRateSane {
+    fn name(&self) -> &'static str {
+        "chart_inflation_rate_sane"
+    }
+    fn description(&self) -> &'static str {
+        "Inflation chart: expected point count, 0.5y step, nominal >= real"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let chart: ChartWrapper<ChartDataPoint> = api_get(ctx, "charts/inflation-rate")?;
+        let mut findings = vec![];
+        let mut prev_year: Option<f64> = None;
+        let mut prev_nominal: Option<f64> = None;
+
+        if chart.data.len() != 101 {
+            findings.push(Finding {
+                entity: "chart".to_string(),
+                details: vec![format!(
+                    "expected 101 data points (0..50y at 0.5y), got {}",
+                    chart.data.len()
+                )],
+            });
+        }
+
+        for point in &chart.data {
+            let year = match point.date.parse::<f64>() {
+                Ok(y) if y >= 0.0 => y,
+                _ => {
+                    findings.push(Finding {
+                        entity: point.date.clone(),
+                        details: vec![format!("invalid year '{}'", point.date)],
+                    });
+                    continue;
+                }
+            };
+            let nominal = match point.value.parse::<f64>() {
+                Ok(v) if v >= 0.0 => v,
+                Ok(v) => {
+                    findings.push(Finding {
+                        entity: point.date.clone(),
+                        details: vec![format!("nominal inflation is negative: {}", v)],
+                    });
+                    continue;
+                }
+                Err(_) => {
+                    findings.push(Finding {
+                        entity: point.date.clone(),
+                        details: vec![format!("invalid nominal inflation '{}'", point.value)],
+                    });
+                    continue;
+                }
+            };
+            let real = match point.value2.as_ref().and_then(|v| v.parse::<f64>().ok()) {
+                Some(v) if v >= 0.0 => v,
+                Some(v) => {
+                    findings.push(Finding {
+                        entity: point.date.clone(),
+                        details: vec![format!("real inflation is negative: {}", v)],
+                    });
+                    continue;
+                }
+                None => {
+                    findings.push(Finding {
+                        entity: point.date.clone(),
+                        details: vec!["missing or invalid real inflation value2".to_string()],
+                    });
+                    continue;
+                }
+            };
+
+            if real > nominal + 1e-9 {
+                findings.push(Finding {
+                    entity: point.date.clone(),
+                    details: vec![format!(
+                        "real inflation {:.6} > nominal inflation {:.6}",
+                        real, nominal
+                    )],
+                });
+            }
+            if let Some(prev) = prev_year {
+                let step = year - prev;
+                if (step - 0.5).abs() > 0.0001 {
+                    findings.push(Finding {
+                        entity: point.date.clone(),
+                        details: vec![format!("year step is {}, expected 0.5", step)],
+                    });
+                }
+            }
+            if let Some(prev) = prev_nominal {
+                if nominal > prev + 1e-9 {
+                    findings.push(Finding {
+                        entity: point.date.clone(),
+                        details: vec![format!(
+                            "nominal inflation increased: {:.6} -> {:.6}",
+                            prev, nominal
+                        )],
+                    });
+                }
+            }
+
+            prev_year = Some(year);
+            prev_nominal = Some(nominal);
+        }
+
+        let checked = chart.data.len() as u64;
+        if findings.is_empty() {
+            Ok(CheckResult::pass_with_detail(
+                checked,
+                format!("{} data points", checked),
+            ))
+        } else {
+            Ok(CheckResult::fail(checked, findings))
+        }
+    }
+}
+
+const HODL_WAVE_BANDS: [&str; 8] = [
+    "24h", "1d1w", "1w1m", "1m3m", "3m6m", "6m1y", "1y3y", "gt3y",
+];
+
+fn validate_required_holder_count(
+    values: &std::collections::HashMap<String, String>,
+) -> Option<String> {
+    match values.get("holderCount") {
+        Some(raw) if raw.parse::<u64>().is_ok() => None,
+        Some(raw) => Some(format!("invalid holderCount '{}'", raw)),
+        None => Some("missing holderCount".to_string()),
+    }
+}
+
+/// S14: GET /charts/hodl-wave → required series present and percentage sum sane.
+pub struct ChartHodlWaveConsistency;
+
+impl Check for ChartHodlWaveConsistency {
+    fn name(&self) -> &'static str {
+        "chart_hodl_wave_consistency"
+    }
+    fn description(&self) -> &'static str {
+        "HODL wave chart: required bands + holderCount present, percentages sum to ~100%"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let chart: ChartWrapper<StackedChartDataPoint> = api_get(ctx, "charts/hodl-wave")?;
+        let mut findings = vec![];
+        let mut prev_date = String::new();
+
+        if chart.data.is_empty() {
+            findings.push(Finding {
+                entity: "chart".to_string(),
+                details: vec!["no hodl-wave data points returned".to_string()],
+            });
+        }
+
+        for point in &chart.data {
+            if !prev_date.is_empty() && point.date <= prev_date {
+                findings.push(Finding {
+                    entity: point.date.clone(),
+                    details: vec![format!(
+                        "date {} <= previous date {} (not ordered)",
+                        point.date, prev_date
+                    )],
+                });
+            }
+            prev_date = point.date.clone();
+
+            let mut band_sum = 0.0f64;
+            for band in HODL_WAVE_BANDS {
+                match point.values.get(band).and_then(|v| v.parse::<f64>().ok()) {
+                    Some(v) if v >= 0.0 => band_sum += v,
+                    Some(v) => findings.push(Finding {
+                        entity: point.date.clone(),
+                        details: vec![format!("band {} has negative value {}", band, v)],
+                    }),
+                    None => findings.push(Finding {
+                        entity: point.date.clone(),
+                        details: vec![format!("missing or invalid band {}", band)],
+                    }),
+                }
+            }
+
+            if let Some(detail) = validate_required_holder_count(&point.values) {
+                findings.push(Finding {
+                    entity: point.date.clone(),
+                    details: vec![detail],
+                });
+            }
+
+            if band_sum > 0.0 && (band_sum - 100.0).abs() > 0.3 {
+                findings.push(Finding {
+                    entity: point.date.clone(),
+                    details: vec![format!(
+                        "band percentage sum is {:.4}% (expected around 100%)",
+                        band_sum
+                    )],
+                });
+            }
+        }
+
+        let checked = chart.data.len() as u64;
+        if findings.is_empty() {
+            Ok(CheckResult::pass_with_detail(
+                checked,
+                format!("{} data points", checked),
+            ))
+        } else {
+            Ok(CheckResult::fail(checked, findings))
+        }
+    }
+}
+
+/// S15: N random blocks: compare API vs CKB RPC (hash, txCount). Skipped without --rpc-url.
 pub struct RpcBlockSpotCheck;
 
 impl Check for RpcBlockSpotCheck {
@@ -921,6 +1677,14 @@ pub fn api_checks() -> Vec<Box<dyn Check>> {
         Box::new(ChartTxCountPositive),
         Box::new(ChartCellCountConsistency),
         Box::new(ChartTotalSupplyMonotonic),
+        Box::new(ChartBlockTimeDistributionSane),
+        Box::new(ChartEpochTimeDistributionSane),
+        Box::new(ChartEpochTimeLengthSane),
+        Box::new(ChartAverageBlockTimeSane),
+        Box::new(ChartMinerDistributionConsistency),
+        Box::new(ChartNominalApcSane),
+        Box::new(ChartInflationRateSane),
+        Box::new(ChartHodlWaveConsistency),
         Box::new(RpcBlockSpotCheck),
     ]
 }
@@ -945,11 +1709,19 @@ mod tests {
     #[test]
     fn test_api_checks_registered() {
         let checks = api_checks();
-        assert_eq!(checks.len(), 13);
+        assert_eq!(checks.len(), 21);
         // Verify names are unique
         let names: Vec<&str> = checks.iter().map(|c| c.name()).collect();
         let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
         assert_eq!(names.len(), unique.len(), "Duplicate check names found");
+        assert!(names.contains(&"chart_block_time_distribution_sane"));
+        assert!(names.contains(&"chart_epoch_time_distribution_sane"));
+        assert!(names.contains(&"chart_epoch_time_length_sane"));
+        assert!(names.contains(&"chart_average_block_time_sane"));
+        assert!(names.contains(&"chart_miner_distribution_consistency"));
+        assert!(names.contains(&"chart_nominal_apc_sane"));
+        assert!(names.contains(&"chart_inflation_rate_sane"));
+        assert!(names.contains(&"chart_hodl_wave_consistency"));
     }
 
     #[test]
@@ -964,7 +1736,7 @@ mod tests {
             .filter(|c| c.tier() == CheckTier::Sampling)
             .count();
         assert_eq!(fast_count, 6);
-        assert_eq!(sampling_count, 7);
+        assert_eq!(sampling_count, 15);
     }
 
     #[test]
@@ -1014,5 +1786,31 @@ mod tests {
         let findings = sync_complete_findings(&ss);
         assert_eq!(findings.len(), 1);
         assert!(findings[0].details[0].contains("isSyncing=true"));
+    }
+
+    #[test]
+    fn test_validate_required_holder_count_missing_is_error() {
+        let values = std::collections::HashMap::new();
+        assert_eq!(
+            validate_required_holder_count(&values),
+            Some("missing holderCount".to_string())
+        );
+    }
+
+    #[test]
+    fn test_validate_required_holder_count_invalid_is_error() {
+        let mut values = std::collections::HashMap::new();
+        values.insert("holderCount".to_string(), "not-a-number".to_string());
+        assert_eq!(
+            validate_required_holder_count(&values),
+            Some("invalid holderCount 'not-a-number'".to_string())
+        );
+    }
+
+    #[test]
+    fn test_validate_required_holder_count_valid_is_ok() {
+        let mut values = std::collections::HashMap::new();
+        values.insert("holderCount".to_string(), "42".to_string());
+        assert_eq!(validate_required_holder_count(&values), None);
     }
 }

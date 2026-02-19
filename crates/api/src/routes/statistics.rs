@@ -1492,12 +1492,26 @@ fn format_date_key(date_key: &str) -> String {
     }
 }
 
+fn hodl_wave_cache_has_holder_count(response: &StackedAreaChartResponse) -> bool {
+    response.data.iter().all(|point| {
+        point
+            .values
+            .get("holderCount")
+            .and_then(|v| v.parse::<i64>().ok())
+            .filter(|v| *v >= 0)
+            .is_some()
+    })
+}
+
 async fn get_hodl_wave_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<StackedAreaChartResponse> {
     let cache_key = "chart:hodl-wave";
     if let Some(cached) = state.cache.get::<StackedAreaChartResponse>(cache_key).await {
-        return ok(cached);
+        if hodl_wave_cache_has_holder_count(&cached) {
+            return ok(cached);
+        }
+        state.cache.delete(cache_key).await;
     }
 
     let waves = state
@@ -1654,5 +1668,68 @@ mod tests {
         // 8,640 blocks/day => 10,000ms avg block time
         let hash_rate = calculate_daily_hash_rate(1_000_000, 8_640);
         assert_eq!(hash_rate, 100.0);
+    }
+
+    #[test]
+    fn test_hodl_wave_cache_has_holder_count_true_when_all_present() {
+        let mut values = std::collections::HashMap::new();
+        values.insert("24h".to_string(), "1.00".to_string());
+        values.insert("holderCount".to_string(), "123".to_string());
+        let response = StackedAreaChartResponse {
+            data: vec![StackedAreaDataPoint {
+                date: "2026-02-19".to_string(),
+                values,
+            }],
+            series: vec![],
+            title: "CKB HODL Wave".to_string(),
+        };
+        assert!(hodl_wave_cache_has_holder_count(&response));
+    }
+
+    #[test]
+    fn test_hodl_wave_cache_has_holder_count_false_when_missing() {
+        let mut values = std::collections::HashMap::new();
+        values.insert("24h".to_string(), "1.00".to_string());
+        let response = StackedAreaChartResponse {
+            data: vec![StackedAreaDataPoint {
+                date: "2026-02-19".to_string(),
+                values,
+            }],
+            series: vec![],
+            title: "CKB HODL Wave".to_string(),
+        };
+        assert!(!hodl_wave_cache_has_holder_count(&response));
+    }
+
+    #[test]
+    fn test_hodl_wave_cache_has_holder_count_false_when_invalid() {
+        let mut values = std::collections::HashMap::new();
+        values.insert("24h".to_string(), "1.00".to_string());
+        values.insert("holderCount".to_string(), "not-a-number".to_string());
+        let response = StackedAreaChartResponse {
+            data: vec![StackedAreaDataPoint {
+                date: "2026-02-19".to_string(),
+                values,
+            }],
+            series: vec![],
+            title: "CKB HODL Wave".to_string(),
+        };
+        assert!(!hodl_wave_cache_has_holder_count(&response));
+    }
+
+    #[test]
+    fn test_hodl_wave_cache_has_holder_count_false_when_negative() {
+        let mut values = std::collections::HashMap::new();
+        values.insert("24h".to_string(), "1.00".to_string());
+        values.insert("holderCount".to_string(), "-1".to_string());
+        let response = StackedAreaChartResponse {
+            data: vec![StackedAreaDataPoint {
+                date: "2026-02-19".to_string(),
+                values,
+            }],
+            series: vec![],
+            title: "CKB HODL Wave".to_string(),
+        };
+        assert!(!hodl_wave_cache_has_holder_count(&response));
     }
 }

@@ -102,6 +102,16 @@ fn should_skip_address_balances(_bulk_sync_mode: bool) -> bool {
     false
 }
 
+/// Reconstruct pre-batch live cell count from persisted post-batch count and batch delta.
+///
+/// Address balances are written before HODL tracker updates, so reading `live_cells_count`
+/// from store returns post-batch state. We need pre-batch state to detect 0→>0 and >0→0
+/// holder transitions correctly.
+fn derive_pre_batch_live_cells(post_live_cells: i32, live_delta: i32) -> i32 {
+    let pre = post_live_cells as i64 - live_delta as i64;
+    pre.clamp(0, i32::MAX as i64) as i32
+}
+
 fn bump_pipeline_reset_epoch(epoch: &AtomicU64) -> u64 {
     epoch.fetch_add(1, Ordering::SeqCst) + 1
 }
@@ -6069,13 +6079,13 @@ impl Indexer {
             ),
         ) in address_balance_changes
         {
-            let prev_balance = store.get_addr_balance(lock_hash)?;
-            let old_live = prev_balance
+            let current_balance = store.get_addr_balance(lock_hash)?;
+            let post_live = current_balance
                 .as_ref()
                 .map(|b| b.live_cells_count)
                 .unwrap_or(0);
-            let new_live = (old_live + *live_delta).max(0);
-            tracker.update_holder_count(old_live, new_live);
+            let old_live = derive_pre_batch_live_cells(post_live, *live_delta);
+            tracker.update_holder_count(old_live, post_live);
         }
 
         // Phase 3: Persist tracker state
@@ -6435,6 +6445,21 @@ mod tests {
     fn test_address_balances_are_never_skipped_in_bulk_mode() {
         assert!(!should_skip_address_balances(true));
         assert!(!should_skip_address_balances(false));
+    }
+
+    #[test]
+    fn test_derive_pre_batch_live_cells_recovers_pre_state() {
+        // pre=0, delta=+3 => post=3
+        assert_eq!(derive_pre_batch_live_cells(3, 3), 0);
+        // pre=10, delta=-4 => post=6
+        assert_eq!(derive_pre_batch_live_cells(6, -4), 10);
+        // pre=2, delta=-5 => post clamped to 0
+        assert_eq!(derive_pre_batch_live_cells(0, -5), 5);
+    }
+
+    #[test]
+    fn test_derive_pre_batch_live_cells_clamps_to_zero() {
+        assert_eq!(derive_pre_batch_live_cells(0, 5), 0);
     }
 
     #[test]
