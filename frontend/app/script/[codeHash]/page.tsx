@@ -189,7 +189,11 @@ export default function ScriptByCodeHashPage() {
             {isOccupationChartLoading ? (
               <div className="py-8 text-center text-slate-500">Loading occupation history...</div>
             ) : occupationChart && occupationChart.data.length > 0 ? (
-              <StackedAreaChart data={occupationChart.data} series={occupationChart.series} />
+              <StackedAreaChart
+                data={occupationChart.data}
+                series={occupationChart.series}
+                valueUnit="shannon"
+              />
             ) : (
               <div className="py-8 text-center text-slate-500">No occupation history yet</div>
             )}

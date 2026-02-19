@@ -59,6 +59,7 @@ export function CapacityOccupationSection({
             data={occupationChart.data}
             series={occupationChart.series}
             height={180}
+            valueUnit="shannon"
           />
         ) : (
           <div className="py-6 text-center text-slate-500">No occupation history yet</div>

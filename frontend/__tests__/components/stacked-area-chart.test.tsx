@@ -47,4 +47,48 @@ describe('StackedAreaChart', () => {
     expect(screen.getByText('25.00%')).toBeInTheDocument();
     expect(screen.getByText('75.00%')).toBeInTheDocument();
   });
+
+  it('formats shannon values as CKB when valueUnit is shannon', () => {
+    render(
+      <StackedAreaChart
+        data={[
+          {
+            date: '2026-02-19',
+            values: {
+              occupied: '5940000000000000',
+              unoccupied: '4503000000000000000',
+            },
+          },
+        ]}
+        series={[
+          { key: 'occupied', label: 'Occupied', color: '#f59e0b' },
+          { key: 'unoccupied', label: 'Unoccupied', color: '#00c389' },
+        ]}
+        valueUnit="shannon"
+      />
+    );
+
+    const svg = document.querySelector('svg');
+    expect(svg).toBeTruthy();
+
+    Object.defineProperty(svg, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({
+        x: 0,
+        y: 0,
+        left: 0,
+        top: 0,
+        right: 600,
+        bottom: 240,
+        width: 600,
+        height: 240,
+        toJSON: () => ({}),
+      }),
+    });
+
+    fireEvent.mouseMove(svg!, { clientX: 10, clientY: 10 });
+
+    expect(screen.getByText('59.40M')).toBeInTheDocument();
+    expect(screen.getByText('45.03B')).toBeInTheDocument();
+  });
 });

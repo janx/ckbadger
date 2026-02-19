@@ -24,6 +24,7 @@ interface StackedAreaChartProps {
   interactive?: boolean;
   isPercentage?: boolean;
   overlayLine?: OverlayLine;
+  valueUnit?: 'raw' | 'shannon';
 }
 
 function formatValue(val: number | undefined, isPercentage = false): string {
@@ -43,6 +44,31 @@ function formatAxisValue(val: number, isPercentage = false): string {
   return val.toFixed(0);
 }
 
+function parseShannonToCkb(value: string): number {
+  const SHANNON = BigInt(100_000_000);
+  const ZERO = BigInt(0);
+  try {
+    const shannon = BigInt(value);
+    const isNegative = shannon < ZERO;
+    const abs = isNegative ? -shannon : shannon;
+    const whole = Number(abs / SHANNON);
+    const fraction = Number(abs % SHANNON) / 100_000_000;
+    if (!Number.isFinite(whole)) return 0;
+    const ckb = whole + fraction;
+    return isNegative ? -ckb : ckb;
+  } catch {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed / 100_000_000 : 0;
+  }
+}
+
+function parseChartValue(value: string | undefined, valueUnit: 'raw' | 'shannon'): number {
+  if (!value) return 0;
+  if (valueUnit === 'shannon') return parseShannonToCkb(value);
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 export function StackedAreaChart({
   data: fullData,
   series,
@@ -50,6 +76,7 @@ export function StackedAreaChart({
   interactive = true,
   isPercentage = false,
   overlayLine,
+  valueUnit = 'raw',
 }: StackedAreaChartProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
@@ -78,7 +105,7 @@ export function StackedAreaChart({
   const stackedValues = useMemo(() => {
     return data.map((d) => {
       const result: Record<string, number> = {};
-      const rawValues = series.map((s) => parseFloat(d.values[s.key] || '0') || 0);
+      const rawValues = series.map((s) => parseChartValue(d.values[s.key], valueUnit));
       const rawTotal = rawValues.reduce((sum, value) => sum + value, 0);
       const values =
         isPercentage && rawTotal > 0
@@ -96,7 +123,7 @@ export function StackedAreaChart({
       result.total = cumulative;
       return result;
     });
-  }, [data, series, isPercentage]);
+  }, [data, series, isPercentage, valueUnit]);
 
   const maxVal = useMemo(() => {
     if (isPercentage) return 100;
@@ -106,8 +133,8 @@ export function StackedAreaChart({
 
   const overlayValues = useMemo(() => {
     if (!overlayLine) return null;
-    return data.map((d) => parseFloat(d.values[overlayLine.key] || '0') || 0);
-  }, [data, overlayLine]);
+    return data.map((d) => parseChartValue(d.values[overlayLine.key], valueUnit));
+  }, [data, overlayLine, valueUnit]);
 
   const overlayMaxVal = useMemo(() => {
     if (!overlayValues) return 1;

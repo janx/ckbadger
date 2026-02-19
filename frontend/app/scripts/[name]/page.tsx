@@ -417,6 +417,7 @@ export default function ScriptDetailPage() {
                       data={selectedOccupationChart.data}
                       series={selectedOccupationChart.series}
                       height={220}
+                      valueUnit="shannon"
                     />
                   ) : (
                     <div className="py-6 text-center text-slate-500">No deployment history yet</div>
