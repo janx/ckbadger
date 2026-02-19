@@ -17,14 +17,13 @@ import { StatBlock, StatGrid } from '@/components/ui/stat-block';
 import { DataField } from '@/components/ui/data-field';
 import { HexDisplay } from '@/components/ui/hex-display';
 import { Address } from '@/components/ui/address';
-import { StackedAreaChart } from '@/components/ui/stacked-area-chart';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { OccupationRangeSelector } from '@/components/ui/occupation-range-selector';
+import { CapacityOccupationSection } from '@/components/ui/capacity-occupation-section';
 import { api, TokenHolder, TokenTransfer } from '@/lib/api';
 import { getOccupationRangeParams, OccupationRangeKey } from '@/lib/occupation-range';
-import { formatTimeAgo, formatCkbCompact, formatCkbAmount } from '@/lib/utils';
+import { formatTimeAgo, formatCkbCompact } from '@/lib/utils';
 
 export default function TokenDetailPage() {
   const params = useParams();
@@ -210,48 +209,6 @@ export default function TokenDetailPage() {
                   />
                 )}
               </StatGrid>
-              {token.totalCapacity != null &&
-                token.totalOccupiedCapacity != null &&
-                (() => {
-                  const totalBig = BigInt(token.totalCapacity);
-                  const occupiedBig = BigInt(token.totalOccupiedCapacity);
-                  if (totalBig <= BigInt(0)) return null;
-                  const freeBig = totalBig - occupiedBig;
-                  const ratio = Number((occupiedBig * BigInt(10000)) / totalBig) / 100;
-                  return (
-                    <div className="mt-6">
-                      <div className="mb-2 flex items-center justify-between">
-                        <span className="font-mono text-xs uppercase tracking-wider text-slate-500">
-                          Capacity Utilization
-                        </span>
-                        <span className="font-mono text-xs text-slate-400">
-                          {ratio.toFixed(1)}% occupied
-                        </span>
-                      </div>
-                      <div className="flex h-3 w-full overflow-hidden rounded-sm bg-slate-800">
-                        <div
-                          className="bg-amber transition-all duration-300"
-                          style={{ width: `${Math.max(ratio, 0.5)}%` }}
-                        />
-                        <div className="bg-terminal-green/30 flex-1" />
-                      </div>
-                      <div className="mt-1.5 flex items-center justify-between">
-                        <span
-                          className="text-amber font-mono text-xs"
-                          title={formatCkbAmount(token.totalOccupiedCapacity).full + ' CKB'}
-                        >
-                          Occupied: {formatCkbCompact(token.totalOccupiedCapacity).value} CKB
-                        </span>
-                        <span
-                          className="text-terminal-green font-mono text-xs"
-                          title={formatCkbAmount(freeBig.toString()).full + ' CKB'}
-                        >
-                          Unoccupied: {formatCkbCompact(freeBig.toString()).value} CKB
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })()}
               {token.description && (
                 <div className="mt-4 border-t border-slate-800 pt-4">
                   <div className="font-mono text-xs uppercase tracking-wider text-slate-500">
@@ -313,22 +270,16 @@ export default function TokenDetailPage() {
           )}
         </div>
 
-        <TerminalPanel className="mb-6">
-          <TerminalPanelHeader indicator="active">Occupation History</TerminalPanelHeader>
-          <TerminalPanelContent>
-            <div className="mb-3 text-xs text-slate-500">
-              Daily cumulative live CKB occupation for token cells.
-            </div>
-            <OccupationRangeSelector value={occupationRange} onChange={setOccupationRange} />
-            {isOccupationChartLoading ? (
-              <div className="py-8 text-center text-slate-500">Loading occupation history...</div>
-            ) : occupationChart && occupationChart.data.length > 0 ? (
-              <StackedAreaChart data={occupationChart.data} series={occupationChart.series} />
-            ) : (
-              <div className="py-8 text-center text-slate-500">No occupation history yet</div>
-            )}
-          </TerminalPanelContent>
-        </TerminalPanel>
+        <CapacityOccupationSection
+          className="mb-6"
+          description="Daily cumulative live CKB occupation for token cells."
+          occupationRange={occupationRange}
+          onOccupationRangeChange={setOccupationRange}
+          occupationChart={occupationChart}
+          isOccupationChartLoading={isOccupationChartLoading}
+          totalCapacity={token.totalCapacity}
+          occupiedCapacity={token.totalOccupiedCapacity}
+        />
 
         <TerminalPanel>
           <Tabs value={activeTab} onValueChange={setActiveTab}>

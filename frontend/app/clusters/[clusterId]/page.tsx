@@ -18,11 +18,9 @@ import { HexDisplay } from '@/components/ui/hex-display';
 import { DataField, DataGrid } from '@/components/ui/data-field';
 import { Address } from '@/components/ui/address';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
-import { StackedAreaChart } from '@/components/ui/stacked-area-chart';
-import { OccupationRangeSelector } from '@/components/ui/occupation-range-selector';
+import { CapacityOccupationSection } from '@/components/ui/capacity-occupation-section';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { getOccupationRangeParams, OccupationRangeKey } from '@/lib/occupation-range';
-import { formatCkbAmount, formatCkbCompact } from '@/lib/utils';
 
 export default function ClusterDetailPage() {
   const params = useParams();
@@ -142,47 +140,6 @@ export default function ClusterDetailPage() {
                       {formatNumber(cluster.sporesCount)}
                     </span>
                   </DataField>
-                  {cluster.liveCapacity &&
-                    cluster.liveOccupiedCapacity &&
-                    (() => {
-                      const totalBig = BigInt(cluster.liveCapacity);
-                      const occupiedBig = BigInt(cluster.liveOccupiedCapacity);
-                      if (totalBig <= BigInt(0)) return null;
-                      const freeBig = totalBig - occupiedBig;
-                      const ratio = Number((occupiedBig * BigInt(10000)) / totalBig) / 100;
-                      return (
-                        <DataField label="Capacity Utilization">
-                          <div className="w-full">
-                            <div className="mb-1 flex items-center justify-between">
-                              <span className="font-mono text-xs text-slate-400">
-                                {ratio.toFixed(1)}% occupied
-                              </span>
-                            </div>
-                            <div className="flex h-2.5 w-full overflow-hidden rounded-sm bg-slate-800">
-                              <div
-                                className="bg-amber transition-all duration-300"
-                                style={{ width: `${Math.max(ratio, 0.5)}%` }}
-                              />
-                              <div className="bg-terminal-green/30 flex-1" />
-                            </div>
-                            <div className="mt-1.5 flex items-center justify-between">
-                              <span
-                                className="text-amber font-mono text-xs"
-                                title={formatCkbAmount(cluster.liveOccupiedCapacity).full + ' CKB'}
-                              >
-                                Occupied: {formatCkbCompact(cluster.liveOccupiedCapacity).value} CKB
-                              </span>
-                              <span
-                                className="text-terminal-green font-mono text-xs"
-                                title={formatCkbAmount(freeBig.toString()).full + ' CKB'}
-                              >
-                                Unoccupied: {formatCkbCompact(freeBig.toString()).value} CKB
-                              </span>
-                            </div>
-                          </div>
-                        </DataField>
-                      );
-                    })()}
                   <DataField label="Creator">
                     {cluster.ownerAddress ? (
                       <Address address={cluster.ownerAddress} truncate={false} />
@@ -206,24 +163,15 @@ export default function ClusterDetailPage() {
           </div>
 
           <div className="space-y-6 lg:col-span-2">
-            <TerminalPanel>
-              <TerminalPanelHeader indicator="none">Occupation History</TerminalPanelHeader>
-              <TerminalPanelContent>
-                <div className="mb-3 text-sm text-slate-400">
-                  Daily cumulative live CKB occupation for this DOB collection.
-                </div>
-                <OccupationRangeSelector value={occupationRange} onChange={setOccupationRange} />
-                {isOccupationChartLoading ? (
-                  <div className="py-8 text-center text-slate-500">
-                    Loading occupation history...
-                  </div>
-                ) : occupationChart && occupationChart.data.length > 0 ? (
-                  <StackedAreaChart data={occupationChart.data} series={occupationChart.series} />
-                ) : (
-                  <div className="py-8 text-center text-slate-500">No occupation history yet</div>
-                )}
-              </TerminalPanelContent>
-            </TerminalPanel>
+            <CapacityOccupationSection
+              description="Daily cumulative live CKB occupation for this DOB collection."
+              occupationRange={occupationRange}
+              onOccupationRangeChange={setOccupationRange}
+              occupationChart={occupationChart}
+              isOccupationChartLoading={isOccupationChartLoading}
+              totalCapacity={cluster.liveCapacity}
+              occupiedCapacity={cluster.liveOccupiedCapacity}
+            />
 
             <TerminalPanel>
               <TerminalPanelHeader indicator="active">

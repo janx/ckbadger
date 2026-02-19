@@ -87,7 +87,7 @@ describe('SporeDetailPage', () => {
     render(<SporeDetailPage />);
 
     await waitFor(() => {
-      expect(screen.getByText('Occupation History')).toBeInTheDocument();
+      expect(screen.getByText('Capacity & Occupation')).toBeInTheDocument();
     });
   });
 
@@ -103,7 +103,7 @@ describe('SporeDetailPage', () => {
 
     expect(screen.getByText('Test Collection')).toBeInTheDocument();
     expect(screen.getByText('Capacity Utilization')).toBeInTheDocument();
-    expect(screen.getByText('Occupation History')).toBeInTheDocument();
+    expect(screen.getByText('Capacity & Occupation')).toBeInTheDocument();
   });
 
   it('normalizes dotbit slug before querying collection API', async () => {

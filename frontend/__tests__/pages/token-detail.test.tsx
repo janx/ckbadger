@@ -149,7 +149,7 @@ describe('TokenDetailPage', () => {
     render(<TokenDetailPage />);
 
     await waitFor(() => {
-      expect(screen.getByText('Occupation History')).toBeInTheDocument();
+      expect(screen.getByText('Capacity & Occupation')).toBeInTheDocument();
     });
   });
 });

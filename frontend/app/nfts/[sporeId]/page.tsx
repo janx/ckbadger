@@ -15,58 +15,12 @@ import { PageHeader, Badge } from '@/components/ui/page-header';
 import { HexDisplay } from '@/components/ui/hex-display';
 import { DataField, DataGrid } from '@/components/ui/data-field';
 import { Address } from '@/components/ui/address';
-import { StackedAreaChart } from '@/components/ui/stacked-area-chart';
-import { OccupationRangeSelector } from '@/components/ui/occupation-range-selector';
+import { CapacityOccupationSection } from '@/components/ui/capacity-occupation-section';
 import { isDotbitAlias, normalizeNftAssetId } from '@/lib/nft-collections';
 import { getOccupationRangeParams, OccupationRangeKey } from '@/lib/occupation-range';
-import { formatCkbAmount, formatCkbCompact } from '@/lib/utils';
 
 function isNotFoundError(error: unknown): boolean {
   return error instanceof Error && error.message.includes('404');
-}
-
-function renderCapacityUtilization(
-  liveCapacity: string | null | undefined,
-  liveOccupiedCapacity: string | null | undefined
-) {
-  if (!liveCapacity || !liveOccupiedCapacity) return null;
-  const totalBig = BigInt(liveCapacity);
-  const occupiedBig = BigInt(liveOccupiedCapacity);
-  if (totalBig <= BigInt(0)) return null;
-
-  const freeBig = totalBig - occupiedBig;
-  const ratio = Number((occupiedBig * BigInt(10000)) / totalBig) / 100;
-
-  return (
-    <DataField label="Capacity Utilization">
-      <div className="w-full">
-        <div className="mb-1 flex items-center justify-between">
-          <span className="font-mono text-xs text-slate-400">{ratio.toFixed(1)}% occupied</span>
-        </div>
-        <div className="flex h-2.5 w-full overflow-hidden rounded-sm bg-slate-800">
-          <div
-            className="bg-amber transition-all duration-300"
-            style={{ width: `${Math.max(ratio, 0.5)}%` }}
-          />
-          <div className="bg-terminal-green/30 flex-1" />
-        </div>
-        <div className="mt-1.5 flex items-center justify-between">
-          <span
-            className="text-amber font-mono text-xs"
-            title={formatCkbAmount(liveOccupiedCapacity).full + ' CKB'}
-          >
-            Occupied: {formatCkbCompact(liveOccupiedCapacity).value} CKB
-          </span>
-          <span
-            className="text-terminal-green font-mono text-xs"
-            title={formatCkbAmount(freeBig.toString()).full + ' CKB'}
-          >
-            Unoccupied: {formatCkbCompact(freeBig.toString()).value} CKB
-          </span>
-        </div>
-      </div>
-    </DataField>
-  );
 }
 
 export default function SporeDetailPage() {
@@ -210,35 +164,19 @@ export default function SporeDetailPage() {
                       {formatNumber(collection.totalCount)}
                     </span>
                   </DataField>
-                  {renderCapacityUtilization(
-                    collection.liveCapacity,
-                    collection.liveOccupiedCapacity
-                  )}
                 </DataGrid>
               </TerminalPanelContent>
             </TerminalPanel>
 
-            <TerminalPanel>
-              <TerminalPanelHeader indicator="none">Occupation History</TerminalPanelHeader>
-              <TerminalPanelContent>
-                <div className="mb-3 text-sm text-slate-400">
-                  Daily cumulative live CKB occupation for this NFT collection.
-                </div>
-                <OccupationRangeSelector value={occupationRange} onChange={setOccupationRange} />
-                {isCollectionOccupationChartLoading ? (
-                  <div className="py-8 text-center text-slate-500">
-                    Loading occupation history...
-                  </div>
-                ) : collectionOccupationChart && collectionOccupationChart.data.length > 0 ? (
-                  <StackedAreaChart
-                    data={collectionOccupationChart.data}
-                    series={collectionOccupationChart.series}
-                  />
-                ) : (
-                  <div className="py-8 text-center text-slate-500">No occupation history yet</div>
-                )}
-              </TerminalPanelContent>
-            </TerminalPanel>
+            <CapacityOccupationSection
+              description="Daily cumulative live CKB occupation for this NFT collection."
+              occupationRange={occupationRange}
+              onOccupationRangeChange={setOccupationRange}
+              occupationChart={collectionOccupationChart}
+              isOccupationChartLoading={isCollectionOccupationChartLoading}
+              totalCapacity={collection.liveCapacity}
+              occupiedCapacity={collection.liveOccupiedCapacity}
+            />
           </div>
         </main>
       </div>
@@ -317,29 +255,19 @@ export default function SporeDetailPage() {
                       #{formatNumber(spore.createdAtBlock)}
                     </Link>
                   </DataField>
-                  {renderCapacityUtilization(spore.liveCapacity, spore.liveOccupiedCapacity)}
                 </DataGrid>
               </TerminalPanelContent>
             </TerminalPanel>
 
-            <TerminalPanel>
-              <TerminalPanelHeader indicator="none">Occupation History</TerminalPanelHeader>
-              <TerminalPanelContent>
-                <div className="mb-3 text-sm text-slate-400">
-                  Daily cumulative live CKB occupation for this NFT.
-                </div>
-                <OccupationRangeSelector value={occupationRange} onChange={setOccupationRange} />
-                {isOccupationChartLoading ? (
-                  <div className="py-8 text-center text-slate-500">
-                    Loading occupation history...
-                  </div>
-                ) : occupationChart && occupationChart.data.length > 0 ? (
-                  <StackedAreaChart data={occupationChart.data} series={occupationChart.series} />
-                ) : (
-                  <div className="py-8 text-center text-slate-500">No occupation history yet</div>
-                )}
-              </TerminalPanelContent>
-            </TerminalPanel>
+            <CapacityOccupationSection
+              description="Daily cumulative live CKB occupation for this NFT."
+              occupationRange={occupationRange}
+              onOccupationRangeChange={setOccupationRange}
+              occupationChart={occupationChart}
+              isOccupationChartLoading={isOccupationChartLoading}
+              totalCapacity={spore.liveCapacity}
+              occupiedCapacity={spore.liveOccupiedCapacity}
+            />
 
             {cluster && (
               <TerminalPanel>
