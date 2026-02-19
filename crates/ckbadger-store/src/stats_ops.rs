@@ -702,6 +702,59 @@ impl CkbadgerStore {
         )
     }
 
+    // ---- Script daily deltas ----
+
+    pub fn get_script_daily_delta(
+        &self,
+        code_hash: &[u8],
+        is_type: bool,
+        date_yyyymmdd: u32,
+    ) -> anyhow::Result<Option<ScriptDailyDelta>> {
+        let key = keys::encode_script_daily_key(code_hash, is_type, date_yyyymmdd);
+        match self.get_cf(self.cf_stats(), &key)? {
+            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn put_script_daily_delta(
+        &self,
+        code_hash: &[u8],
+        is_type: bool,
+        date_yyyymmdd: u32,
+        delta: &ScriptDailyDelta,
+    ) -> anyhow::Result<()> {
+        let key = keys::encode_script_daily_key(code_hash, is_type, date_yyyymmdd);
+        let value = bincode::serialize(delta)?;
+        self.put_cf(self.cf_stats(), &key, &value)
+    }
+
+    pub fn list_script_daily_deltas(
+        &self,
+        code_hash: &[u8],
+        is_type: bool,
+    ) -> anyhow::Result<Vec<(u32, ScriptDailyDelta)>> {
+        let prefix = keys::encode_script_daily_prefix(code_hash, is_type);
+        let iter = self.prefix_iterator_cf(self.cf_stats(), &prefix);
+        let mut results = Vec::new();
+
+        for item in iter.flatten() {
+            let (key, value) = item;
+            if !key.starts_with(&prefix) {
+                break;
+            }
+            if key.len() != keys::SCRIPT_DAILY_KEY_SIZE {
+                continue;
+            }
+            let (_, _, date) = keys::decode_script_daily_key(&key);
+            if let Ok(delta) = bincode::deserialize::<ScriptDailyDelta>(&value) {
+                results.push((date, delta));
+            }
+        }
+
+        Ok(results)
+    }
+
     // ---- Script info ----
 
     pub fn get_script_info(&self, code_hash: &[u8]) -> anyhow::Result<Option<ScriptInfo>> {
@@ -829,6 +882,43 @@ mod tests {
         assert_eq!(retrieved.holder_count, 500);
         assert_eq!(retrieved.last_snapshot_date, Some("20240102".to_string()));
         assert_eq!(retrieved.date_transitions[1].0, 100);
+    }
+
+    #[test]
+    fn test_script_daily_delta_roundtrip_and_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap();
+        let code_hash = vec![0xAB; 32];
+
+        let d1 = ScriptDailyDelta {
+            live_capacity_delta: 1_000_000_000_000,
+            live_occupied_capacity_delta: 700_000_000_000,
+        };
+        let d2 = ScriptDailyDelta {
+            live_capacity_delta: -200_000_000_000,
+            live_occupied_capacity_delta: -120_000_000_000,
+        };
+        store
+            .put_script_daily_delta(&code_hash, false, 20240115, &d1)
+            .unwrap();
+        store
+            .put_script_daily_delta(&code_hash, false, 20240116, &d2)
+            .unwrap();
+
+        let loaded = store
+            .get_script_daily_delta(&code_hash, false, 20240115)
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.live_capacity_delta, d1.live_capacity_delta);
+        assert_eq!(
+            loaded.live_occupied_capacity_delta,
+            d1.live_occupied_capacity_delta
+        );
+
+        let listed = store.list_script_daily_deltas(&code_hash, false).unwrap();
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].0, 20240115);
+        assert_eq!(listed[1].0, 20240116);
     }
 
     /// Helper: write a DaoDailySnapshot directly to the store.

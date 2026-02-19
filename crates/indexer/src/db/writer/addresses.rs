@@ -2,7 +2,8 @@ use anyhow::Result;
 use std::collections::HashMap;
 
 use ckbadger_store::batch::StoreBatch;
-use ckbadger_store::types::AddressBalance;
+use ckbadger_store::keys;
+use ckbadger_store::types::{AddressBalance, ScriptDailyDelta};
 
 use super::BatchWriter;
 
@@ -207,5 +208,53 @@ impl BatchWriter {
         let refs: Vec<&Vec<u8>> = unique_code_hashes.iter().collect();
         let existing = self.read_script_info(&refs)?;
         self.apply_script_usage_deltas(&existing, changes, batch)
+    }
+
+    pub fn update_script_daily_deltas_batch(
+        &self,
+        changes: &HashMap<(Vec<u8>, bool, u32), (i64, i64)>,
+        batch: &mut StoreBatch,
+    ) -> Result<()> {
+        if changes.is_empty() {
+            return Ok(());
+        }
+
+        let mut keyed_changes: Vec<(Vec<u8>, i64, i64)> = Vec::with_capacity(changes.len());
+        for ((code_hash, is_type, date_yyyymmdd), (live_cap_delta, live_occupied_delta)) in changes
+        {
+            if *live_cap_delta == 0 && *live_occupied_delta == 0 {
+                continue;
+            }
+            keyed_changes.push((
+                keys::encode_script_daily_key(code_hash, *is_type, *date_yyyymmdd).to_vec(),
+                *live_cap_delta,
+                *live_occupied_delta,
+            ));
+        }
+
+        if keyed_changes.is_empty() {
+            return Ok(());
+        }
+
+        let cf_keys: Vec<_> = keyed_changes
+            .iter()
+            .map(|(key, _, _)| (self.store.cf_stats(), key.as_slice()))
+            .collect();
+        let existing_results = self.store.multi_get_cf(cf_keys);
+
+        for ((key, live_cap_delta, live_occupied_delta), existing_res) in
+            keyed_changes.into_iter().zip(existing_results.into_iter())
+        {
+            let mut existing: ScriptDailyDelta = match existing_res {
+                Ok(Some(value)) => bincode::deserialize(&value).unwrap_or_default(),
+                _ => ScriptDailyDelta::default(),
+            };
+            existing.live_capacity_delta += live_cap_delta;
+            existing.live_occupied_capacity_delta += live_occupied_delta;
+            let value = bincode::serialize(&existing)?;
+            batch.put_stats(&key, &value);
+        }
+
+        Ok(())
     }
 }

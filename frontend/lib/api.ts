@@ -1330,6 +1330,10 @@ export const api = {
     return fetchApi(`/scripts/${encodeURIComponent(name)}/usage`);
   },
 
+  getScriptOccupationChart: (name: string): Promise<StackedAreaChartResponse> => {
+    return fetchApi(`/scripts/${encodeURIComponent(name)}/charts/occupation`);
+  },
+
   lookupScripts: async (codeHashes: string[]): Promise<ScriptLookupResponse> => {
     if (codeHashes.length === 0) return {};
     const res = await fetch(`${API_BASE}/scripts/lookup`, {

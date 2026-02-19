@@ -8,6 +8,7 @@ vi.mock('@/lib/api', () => ({
   api: {
     getScript: vi.fn(),
     getScriptUsage: vi.fn(),
+    getScriptOccupationChart: vi.fn(),
     getCellsByScriptRef: vi.fn(),
   },
 }));
@@ -66,6 +67,20 @@ const mockUsage = {
   ],
 };
 
+const mockOccupationChart = {
+  title: 'SECP256K1_BLAKE160 Capacity Occupation',
+  series: [
+    { key: 'occupied', label: 'Occupied', color: '#f59e0b' },
+    { key: 'unoccupied', label: 'Unoccupied', color: '#00c389' },
+  ],
+  data: [
+    {
+      date: '2024-01-15',
+      values: { occupied: '6000000000', unoccupied: '4000000000' },
+    },
+  ],
+};
+
 const emptyCells = {
   data: [],
   total: 0,
@@ -79,6 +94,7 @@ describe('ScriptDetailPage', () => {
     vi.clearAllMocks();
     vi.mocked(api.getScript).mockResolvedValue(mockDeployments);
     vi.mocked(api.getScriptUsage).mockResolvedValue(mockUsage);
+    vi.mocked(api.getScriptOccupationChart).mockResolvedValue(mockOccupationChart);
     vi.mocked(api.getCellsByScriptRef).mockResolvedValue(emptyCells);
   });
 
@@ -88,6 +104,7 @@ describe('ScriptDetailPage', () => {
     await waitFor(() => {
       expect(screen.getByText('Capacity Utilization')).toBeInTheDocument();
       expect(screen.getByText('Selected Deployment Utilization')).toBeInTheDocument();
+      expect(screen.getByText('Occupation History')).toBeInTheDocument();
     });
 
     expect(screen.getAllByText(/^Occupied:/).length).toBeGreaterThan(0);

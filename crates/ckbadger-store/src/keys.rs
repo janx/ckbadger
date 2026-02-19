@@ -106,6 +106,7 @@ pub mod stats_prefix {
     pub const CLUSTER_OWNER: u8 = 0x0C;
     pub const SPORE_HOURLY: u8 = 0x0D;
     pub const NFT_HOURLY: u8 = 0x0E;
+    pub const SCRIPT_DAILY: u8 = 0x0F;
 }
 
 // Flat re-exports for convenience
@@ -123,6 +124,7 @@ pub const STATS_PREFIX_HODL_WAVE: u8 = stats_prefix::HODL_WAVE;
 pub const STATS_PREFIX_CLUSTER_OWNER: u8 = stats_prefix::CLUSTER_OWNER;
 pub const STATS_PREFIX_SPORE_HOURLY: u8 = stats_prefix::SPORE_HOURLY;
 pub const STATS_PREFIX_NFT_HOURLY: u8 = stats_prefix::NFT_HOURLY;
+pub const STATS_PREFIX_SCRIPT_DAILY: u8 = stats_prefix::SCRIPT_DAILY;
 
 /// Token transfers total count key: prefix(1B) + type_hash(32B) = 33 bytes
 pub fn encode_token_transfers_key(type_hash: &[u8]) -> Vec<u8> {
@@ -191,6 +193,35 @@ pub fn encode_nft_hourly_prefix(collection_id: &[u8]) -> Vec<u8> {
     key.push(STATS_PREFIX_NFT_HOURLY);
     key.extend_from_slice(&pad_id_32(collection_id));
     key
+}
+
+/// Script daily stats key:
+/// prefix(1B) + code_hash(32B) + script_kind(1B, 0=lock/1=type) + date(4B YYYYMMDD BE)
+pub const SCRIPT_DAILY_KEY_SIZE: usize = 38;
+
+pub fn encode_script_daily_key(code_hash: &[u8], is_type: bool, date_yyyymmdd: u32) -> [u8; 38] {
+    let mut key = [0u8; SCRIPT_DAILY_KEY_SIZE];
+    key[0] = STATS_PREFIX_SCRIPT_DAILY;
+    key[1..33].copy_from_slice(&code_hash[..32]);
+    key[33] = if is_type { 1 } else { 0 };
+    key[34..38].copy_from_slice(&date_yyyymmdd.to_be_bytes());
+    key
+}
+
+/// Prefix for scanning a script daily timeline by deployment and kind.
+pub fn encode_script_daily_prefix(code_hash: &[u8], is_type: bool) -> [u8; 34] {
+    let mut prefix = [0u8; 34];
+    prefix[0] = STATS_PREFIX_SCRIPT_DAILY;
+    prefix[1..33].copy_from_slice(&code_hash[..32]);
+    prefix[33] = if is_type { 1 } else { 0 };
+    prefix
+}
+
+pub fn decode_script_daily_key(key: &[u8]) -> (Vec<u8>, bool, u32) {
+    let code_hash = key[1..33].to_vec();
+    let is_type = key[33] == 1;
+    let date = u32::from_be_bytes(key[34..38].try_into().unwrap());
+    (code_hash, is_type, date)
 }
 
 /// Token transfer key: type_hash(32B) + block_num_desc(8B BE) + tx_idx(4B BE) = 44 bytes
@@ -464,6 +495,26 @@ mod tests {
         let lock_hash = [0xCCu8; 32];
         let key = encode_addr_daily_stats_key(&lock_hash, 20240101);
         assert!(key.starts_with(&lock_hash));
+    }
+
+    #[test]
+    fn test_script_daily_key_roundtrip() {
+        let code_hash = [0x55u8; 32];
+        let key = encode_script_daily_key(&code_hash, true, 20250219);
+        assert_eq!(key.len(), SCRIPT_DAILY_KEY_SIZE);
+        let (decoded_hash, decoded_is_type, decoded_date) = decode_script_daily_key(&key);
+        assert_eq!(decoded_hash, code_hash.to_vec());
+        assert!(decoded_is_type);
+        assert_eq!(decoded_date, 20250219);
+    }
+
+    #[test]
+    fn test_script_daily_prefix_is_prefix_of_full_key() {
+        let code_hash = [0x42u8; 32];
+        let prefix = encode_script_daily_prefix(&code_hash, false);
+        let full = encode_script_daily_key(&code_hash, false, 20240101);
+        assert_eq!(prefix.len(), 34);
+        assert!(full.starts_with(&prefix));
     }
 
     #[test]

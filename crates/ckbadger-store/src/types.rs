@@ -496,6 +496,14 @@ pub struct ScriptInfo {
     pub code_cell_output_index: Option<u32>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ScriptDailyDelta {
+    /// Net live capacity change in shannons for this script deployment + kind + day.
+    pub live_capacity_delta: i64,
+    /// Net live occupied capacity change in shannons for this script deployment + kind + day.
+    pub live_occupied_capacity_delta: i64,
+}
+
 // ============================================
 // Group G2: HODL Wave
 // ============================================
@@ -689,6 +697,27 @@ pub struct AddressDailyStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- ScriptDailyDelta ----
+
+    #[test]
+    fn test_script_daily_delta_roundtrip() {
+        let delta = ScriptDailyDelta {
+            live_capacity_delta: 123_000_000_000,
+            live_occupied_capacity_delta: -45_000_000_000,
+        };
+        let bytes = bincode::serialize(&delta).unwrap();
+        let decoded: ScriptDailyDelta = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.live_capacity_delta, 123_000_000_000);
+        assert_eq!(decoded.live_occupied_capacity_delta, -45_000_000_000);
+    }
+
+    #[test]
+    fn test_script_daily_delta_default() {
+        let delta = ScriptDailyDelta::default();
+        assert_eq!(delta.live_capacity_delta, 0);
+        assert_eq!(delta.live_occupied_capacity_delta, 0);
+    }
 
     // ---- AddressDailyStats ----
 

@@ -175,6 +175,22 @@ describe('api', () => {
       await api.getScripts({ network: 'mainnet', decoderType: 'lock', search: 'secp256k1' });
     });
 
+    it('fetches script occupation chart by script name', async () => {
+      server.use(
+        http.get('*/api/v1/scripts/:name/charts/occupation', ({ params }) => {
+          expect(params.name).toBe('SECP256K1_BLAKE160');
+          return HttpResponse.json({
+            title: 'SECP256K1_BLAKE160 Capacity Occupation',
+            data: [],
+            series: [],
+          });
+        })
+      );
+
+      const chart = await api.getScriptOccupationChart('SECP256K1_BLAKE160');
+      expect(chart.title).toContain('Capacity Occupation');
+    });
+
     it('builds query params for getAddressTokens', async () => {
       server.use(
         http.get('*/api/v1/addresses/:addr/tokens', ({ request }) => {

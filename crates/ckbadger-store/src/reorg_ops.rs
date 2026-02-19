@@ -23,6 +23,18 @@ fn should_delete_stats_for_replay(key: &[u8], cutoff_yyyymmdd: &[u8]) -> bool {
         keys::STATS_PREFIX_HOURLY => suffix.len() >= 10 && &suffix[..8] >= cutoff_yyyymmdd,
         // date+miner hash: YYYYMMDD + 32-byte lock hash
         keys::STATS_PREFIX_MINER => suffix.len() >= 40 && &suffix[..8] >= cutoff_yyyymmdd,
+        // code_hash(32) + kind(1) + date(4B u32 YYYYMMDD BE)
+        keys::STATS_PREFIX_SCRIPT_DAILY => {
+            let cutoff_date = std::str::from_utf8(cutoff_yyyymmdd)
+                .ok()
+                .and_then(|s| s.parse::<u32>().ok())
+                .unwrap_or(0);
+            if suffix.len() < 37 {
+                return false;
+            }
+            let date = u32::from_be_bytes(suffix[33..37].try_into().unwrap_or([0; 4]));
+            date >= cutoff_date
+        }
         _ => false,
     }
 }
@@ -242,6 +254,18 @@ mod tests {
         let miner_suffix = [b"20260210".as_slice(), &[0xAA; 32]].concat();
         let miner = crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_MINER, &miner_suffix);
         assert!(should_delete_stats_for_replay(&miner, cutoff));
+    }
+
+    #[test]
+    fn test_should_delete_stats_for_replay_script_daily_prefix() {
+        let cutoff = b"20260210";
+        let code_hash = [0xAA; 32];
+
+        let new_key = crate::keys::encode_script_daily_key(&code_hash, false, 20260211);
+        assert!(should_delete_stats_for_replay(&new_key, cutoff));
+
+        let old_key = crate::keys::encode_script_daily_key(&code_hash, true, 20260209);
+        assert!(!should_delete_stats_for_replay(&old_key, cutoff));
     }
 
     #[test]

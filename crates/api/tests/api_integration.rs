@@ -6,7 +6,9 @@ use tower::ServiceExt;
 
 use ckbadger_api::{create_router, AppConfig};
 use ckbadger_store::batch::StoreBatch;
-use ckbadger_store::types::{ClusterAggregate, DobEntry, DobExtra, DobStandard};
+use ckbadger_store::types::{
+    ClusterAggregate, DobEntry, DobExtra, DobStandard, ScriptDailyDelta, ScriptInfo,
+};
 use ckbadger_store::CkbadgerStore;
 
 fn test_store() -> Arc<CkbadgerStore> {
@@ -183,6 +185,104 @@ async fn test_scripts_list_empty_db() {
 
     let response = app.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn test_script_occupation_chart_aggregates_deployments() {
+    let store = test_store();
+
+    let code_hash_a = vec![0x11; 32];
+    let code_hash_b = vec![0x22; 32];
+    let name = "SECP256K1_BLAKE160".to_string();
+
+    store
+        .put_script_info_direct(
+            &code_hash_a,
+            &ScriptInfo {
+                code_hash: code_hash_a.clone(),
+                name: Some(name.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    store
+        .put_script_info_direct(
+            &code_hash_b,
+            &ScriptInfo {
+                code_hash: code_hash_b.clone(),
+                name: Some(name.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    store
+        .put_script_daily_delta(
+            &code_hash_a,
+            false,
+            20240115,
+            &ScriptDailyDelta {
+                live_capacity_delta: 100,
+                live_occupied_capacity_delta: 60,
+            },
+        )
+        .unwrap();
+    store
+        .put_script_daily_delta(
+            &code_hash_a,
+            false,
+            20240116,
+            &ScriptDailyDelta {
+                live_capacity_delta: -20,
+                live_occupied_capacity_delta: -10,
+            },
+        )
+        .unwrap();
+    store
+        .put_script_daily_delta(
+            &code_hash_b,
+            false,
+            20240115,
+            &ScriptDailyDelta {
+                live_capacity_delta: 50,
+                live_occupied_capacity_delta: 30,
+            },
+        )
+        .unwrap();
+    store
+        .put_script_daily_delta(
+            &code_hash_b,
+            false,
+            20240116,
+            &ScriptDailyDelta {
+                live_capacity_delta: 10,
+                live_occupied_capacity_delta: 5,
+            },
+        )
+        .unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/scripts/SECP256K1_BLAKE160/charts/occupation")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let data = json["data"].as_array().unwrap();
+    assert_eq!(json["title"], "SECP256K1_BLAKE160 Capacity Occupation");
+    assert_eq!(data.len(), 2);
+    assert_eq!(data[0]["date"], "2024-01-15");
+    assert_eq!(data[0]["values"]["occupied"], "90");
+    assert_eq!(data[0]["values"]["unoccupied"], "60");
+    assert_eq!(data[1]["date"], "2024-01-16");
+    assert_eq!(data[1]["values"]["occupied"], "85");
+    assert_eq!(data[1]["values"]["unoccupied"], "55");
 }
 
 #[tokio::test]

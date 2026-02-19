@@ -16,6 +16,7 @@ import { HexDisplay } from '@/components/ui/hex-display';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { Capacity } from '@/components/ui/capacity';
 import { CapacityUtilization } from '@/components/ui/capacity-utilization';
+import { StackedAreaChart } from '@/components/ui/stacked-area-chart';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api } from '@/lib/api';
 import { formatCkbCompact } from '@/lib/utils';
@@ -45,6 +46,11 @@ export default function ScriptDetailPage() {
   const { data: usage, isLoading: isUsageLoading } = useQuery({
     queryKey: ['script-usage', name],
     queryFn: () => api.getScriptUsage(name),
+  });
+
+  const { data: occupationChart, isLoading: isOccupationChartLoading } = useQuery({
+    queryKey: ['script-occupation-chart', name],
+    queryFn: () => api.getScriptOccupationChart(name),
   });
 
   useEffect(() => {
@@ -324,6 +330,22 @@ export default function ScriptDetailPage() {
                 </>
               )}
             </div>
+          </TerminalPanelContent>
+        </TerminalPanel>
+
+        <TerminalPanel className="mb-6">
+          <TerminalPanelHeader indicator="active">Occupation History</TerminalPanelHeader>
+          <TerminalPanelContent>
+            <div className="mb-3 text-xs text-slate-500">
+              Daily cumulative live CKB occupation for this script across all deployments.
+            </div>
+            {isOccupationChartLoading ? (
+              <div className="py-8 text-center text-slate-500">Loading occupation history...</div>
+            ) : occupationChart && occupationChart.data.length > 0 ? (
+              <StackedAreaChart data={occupationChart.data} series={occupationChart.series} />
+            ) : (
+              <div className="py-8 text-center text-slate-500">No occupation history yet</div>
+            )}
           </TerminalPanelContent>
         </TerminalPanel>
 

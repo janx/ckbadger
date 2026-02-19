@@ -943,6 +943,7 @@ impl Indexer {
             HashMap<(Vec<u8>, i16), LiveCellInfo>, // batch_cell_infos
             HashMap<Vec<u8>, (i64, i32, i32, i64, i64, Vec<u8>, i64)>, // address_balance_changes
             HashMap<(Vec<u8>, bool), (i64, i64, i64, i64, i64, i64)>, // script_usage_changes
+            HashMap<(Vec<u8>, bool, u32), (i64, i64)>, // script_daily_changes
         );
 
         let (fetch_tx, mut fetch_rx) = mpsc::channel::<FetchedBatch>(self.config.pipeline_buffer);
@@ -1375,8 +1376,13 @@ impl Indexer {
                     (Vec<u8>, bool),
                     (i64, i64, i64, i64, i64, i64),
                 > = HashMap::new();
+                let mut script_daily_changes: HashMap<(Vec<u8>, bool, u32), (i64, i64)> =
+                    HashMap::new();
 
                 for tx_data in &all_tx_data {
+                    let date_yyyymmdd = ckbadger_store::keys::timestamp_ms_to_date(
+                        tx_data.timestamp.timestamp_millis(),
+                    );
                     // cell_cache update
                     for (output_index, cell) in tx_data.cells.iter().enumerate() {
                         let lock_script_size = 32 + 1 + cell.lock_args.len() as i64;
@@ -1426,6 +1432,11 @@ impl Indexer {
                         entry.3 += cell.capacity;
                         entry.4 += cell_occupied;
                         entry.5 += cell_occupied;
+                        let daily_entry = script_daily_changes
+                            .entry((cell.lock_code_hash.clone(), false, date_yyyymmdd))
+                            .or_insert((0, 0));
+                        daily_entry.0 += cell.capacity;
+                        daily_entry.1 += cell_occupied;
                         if let Some(ref type_code_hash) = cell.type_code_hash {
                             let type_key = (type_code_hash.clone(), true);
                             let entry = script_usage_changes
@@ -1437,6 +1448,11 @@ impl Indexer {
                             entry.3 += cell.capacity;
                             entry.4 += cell_occupied;
                             entry.5 += cell_occupied;
+                            let daily_entry = script_daily_changes
+                                .entry((type_code_hash.clone(), true, date_yyyymmdd))
+                                .or_insert((0, 0));
+                            daily_entry.0 += cell.capacity;
+                            daily_entry.1 += cell_occupied;
                         }
                     }
 
@@ -1472,6 +1488,11 @@ impl Indexer {
                                 entry.1 -= 1;
                                 entry.3 -= info.capacity;
                                 entry.5 -= info.occupied_capacity;
+                                let daily_entry = script_daily_changes
+                                    .entry((info.lock_code_hash.clone(), false, date_yyyymmdd))
+                                    .or_insert((0, 0));
+                                daily_entry.0 -= info.capacity;
+                                daily_entry.1 -= info.occupied_capacity;
                                 if let Some(ref type_code_hash) = info.type_code_hash {
                                     let type_key = (type_code_hash.clone(), true);
                                     let entry = script_usage_changes
@@ -1480,6 +1501,11 @@ impl Indexer {
                                     entry.1 -= 1;
                                     entry.3 -= info.capacity;
                                     entry.5 -= info.occupied_capacity;
+                                    let daily_entry = script_daily_changes
+                                        .entry((type_code_hash.clone(), true, date_yyyymmdd))
+                                        .or_insert((0, 0));
+                                    daily_entry.0 -= info.capacity;
+                                    daily_entry.1 -= info.occupied_capacity;
                                 }
                             }
                         }
@@ -1608,6 +1634,7 @@ impl Indexer {
                         batch_cell_infos,
                         address_balance_changes,
                         script_usage_changes,
+                        script_daily_changes,
                     ))
                     .await
                     .is_err()
@@ -1641,6 +1668,7 @@ impl Indexer {
                     batch_cell_infos,
                     address_balance_changes,
                     script_usage_changes,
+                    script_daily_changes,
                 ))) => {
                     let recv_wait_ms = t_recv.elapsed().as_secs_f64() * 1000.0;
                     let current_epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst);
@@ -1708,6 +1736,7 @@ impl Indexer {
                             batch_cell_infos,
                             address_balance_changes,
                             script_usage_changes,
+                            script_daily_changes,
                             chain_tip,
                         )
                         .await
@@ -2628,7 +2657,10 @@ impl Indexer {
         // Script usage
         let mut script_usage_changes: HashMap<(Vec<u8>, bool), (i64, i64, i64, i64, i64, i64)> =
             HashMap::new();
+        let mut script_daily_changes: HashMap<(Vec<u8>, bool, u32), (i64, i64)> = HashMap::new();
         for tx_data in &all_tx_data {
+            let date_yyyymmdd =
+                ckbadger_store::keys::timestamp_ms_to_date(tx_data.timestamp.timestamp_millis());
             for cell in &tx_data.cells {
                 let lock_key = (cell.lock_code_hash.clone(), false);
                 let lock_script_size = 32 + 1 + cell.lock_args.len() as i64;
@@ -2648,6 +2680,11 @@ impl Indexer {
                 entry.3 += cell.capacity;
                 entry.4 += cell_occupied;
                 entry.5 += cell_occupied;
+                let daily_entry = script_daily_changes
+                    .entry((cell.lock_code_hash.clone(), false, date_yyyymmdd))
+                    .or_insert((0, 0));
+                daily_entry.0 += cell.capacity;
+                daily_entry.1 += cell_occupied;
                 if let Some(ref type_code_hash) = cell.type_code_hash {
                     let type_key = (type_code_hash.clone(), true);
                     let entry = script_usage_changes
@@ -2659,10 +2696,17 @@ impl Indexer {
                     entry.3 += cell.capacity;
                     entry.4 += cell_occupied;
                     entry.5 += cell_occupied;
+                    let daily_entry = script_daily_changes
+                        .entry((type_code_hash.clone(), true, date_yyyymmdd))
+                        .or_insert((0, 0));
+                    daily_entry.0 += cell.capacity;
+                    daily_entry.1 += cell_occupied;
                 }
             }
         }
         for tx_data in &all_tx_data {
+            let date_yyyymmdd =
+                ckbadger_store::keys::timestamp_ms_to_date(tx_data.timestamp.timestamp_millis());
             if !tx_data.is_cellbase {
                 for input in &tx_data.inputs {
                     let key = (
@@ -2680,6 +2724,11 @@ impl Indexer {
                         entry.1 -= 1;
                         entry.3 -= info.capacity;
                         entry.5 -= info.occupied_capacity;
+                        let daily_entry = script_daily_changes
+                            .entry((info.lock_code_hash.clone(), false, date_yyyymmdd))
+                            .or_insert((0, 0));
+                        daily_entry.0 -= info.capacity;
+                        daily_entry.1 -= info.occupied_capacity;
                         if let Some(ref type_code_hash) = info.type_code_hash {
                             let type_key = (type_code_hash.clone(), true);
                             let entry = script_usage_changes
@@ -2688,6 +2737,11 @@ impl Indexer {
                             entry.1 -= 1;
                             entry.3 -= info.capacity;
                             entry.5 -= info.occupied_capacity;
+                            let daily_entry = script_daily_changes
+                                .entry((type_code_hash.clone(), true, date_yyyymmdd))
+                                .or_insert((0, 0));
+                            daily_entry.0 -= info.capacity;
+                            daily_entry.1 -= info.occupied_capacity;
                         }
                     }
                 }
@@ -2754,6 +2808,10 @@ impl Indexer {
                     &mut consume_addr_batch,
                 )?;
             }
+        }
+        if !script_daily_changes.is_empty() {
+            self.writer
+                .update_script_daily_deltas_batch(&script_daily_changes, &mut consume_addr_batch)?;
         }
         {
             consume_addr_batch.commit()?;
@@ -3513,6 +3571,7 @@ impl Indexer {
         batch_cell_infos: HashMap<(Vec<u8>, i16), LiveCellInfo>,
         address_balance_changes: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, Vec<u8>, i64)>,
         script_usage_changes: HashMap<(Vec<u8>, bool), (i64, i64, i64, i64, i64, i64)>,
+        script_daily_changes: HashMap<(Vec<u8>, bool, u32), (i64, i64)>,
         chain_tip: u64,
     ) -> Result<()> {
         if all_parsed_blocks.is_empty() {
@@ -4037,6 +4096,10 @@ impl Indexer {
                             &script_usage_changes,
                             &mut batch,
                         )?;
+                    }
+                    if !script_daily_changes.is_empty() {
+                        writer
+                            .update_script_daily_deltas_batch(&script_daily_changes, &mut batch)?;
                     }
                     for (lock_hash, block_num, tx_idx, tx_hash) in &addr_tx_entries {
                         batch.put_addr_tx(lock_hash, *block_num, *tx_idx, tx_hash);
@@ -4823,6 +4886,10 @@ impl Indexer {
                         &mut data_batch,
                     )?;
                 }
+            }
+            if !script_daily_changes.is_empty() {
+                self.writer
+                    .update_script_daily_deltas_batch(&script_daily_changes, &mut data_batch)?;
             }
 
             // Write addr_txs entries

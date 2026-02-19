@@ -6,9 +6,10 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
+use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
 use crate::AppState;
 
@@ -19,6 +20,10 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/scripts/code-cell", get(get_code_cell))
         .route("/scripts/{name}", get(get_script))
         .route("/scripts/{name}/usage", get(get_script_usage))
+        .route(
+            "/scripts/{name}/charts/occupation",
+            get(get_script_occupation_chart),
+        )
 }
 
 #[derive(Debug, Deserialize)]
@@ -528,5 +533,89 @@ async fn get_script_usage(
         occupied_capacity_sum: total_occupied_cap.to_string(),
         live_occupied_capacity_sum: total_live_occupied_cap.to_string(),
         by_deployment,
+    })
+}
+
+fn format_yyyymmdd_for_chart(date_yyyymmdd: u32) -> String {
+    let date = format!("{date_yyyymmdd:08}");
+    format!("{}-{}-{}", &date[0..4], &date[4..6], &date[6..8])
+}
+
+async fn get_script_occupation_chart(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> ApiResult<StackedAreaChartResponse> {
+    let all_scripts = state
+        .store
+        .list_script_infos()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let matching: Vec<_> = all_scripts
+        .into_iter()
+        .filter(|(_, info)| info.name.as_deref() == Some(name.as_str()))
+        .collect();
+
+    let series = vec![
+        StackedAreaSeries {
+            key: "occupied".to_string(),
+            label: "Occupied".to_string(),
+            color: "#f59e0b".to_string(),
+        },
+        StackedAreaSeries {
+            key: "unoccupied".to_string(),
+            label: "Unoccupied".to_string(),
+            color: "#00c389".to_string(),
+        },
+    ];
+
+    if matching.is_empty() {
+        return ok(StackedAreaChartResponse {
+            data: vec![],
+            series,
+            title: format!("{name} Capacity Occupation"),
+        });
+    }
+
+    let mut daily_deltas: BTreeMap<u32, (i128, i128)> = BTreeMap::new();
+
+    for (_, info) in matching {
+        for is_type in [false, true] {
+            let deltas = state
+                .store
+                .list_script_daily_deltas(&info.code_hash, is_type)
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+            for (date, delta) in deltas {
+                let entry = daily_deltas.entry(date).or_insert((0, 0));
+                entry.0 += delta.live_capacity_delta as i128;
+                entry.1 += delta.live_occupied_capacity_delta as i128;
+            }
+        }
+    }
+
+    let mut cumulative_capacity: i128 = 0;
+    let mut cumulative_occupied: i128 = 0;
+    let mut data = Vec::with_capacity(daily_deltas.len());
+
+    for (date, (cap_delta, occupied_delta)) in daily_deltas {
+        cumulative_capacity = (cumulative_capacity + cap_delta).max(0);
+        cumulative_occupied = (cumulative_occupied + occupied_delta).max(0);
+        if cumulative_occupied > cumulative_capacity {
+            cumulative_occupied = cumulative_capacity;
+        }
+        let unoccupied = cumulative_capacity - cumulative_occupied;
+
+        data.push(StackedAreaDataPoint {
+            date: format_yyyymmdd_for_chart(date),
+            values: HashMap::from([
+                ("occupied".to_string(), cumulative_occupied.to_string()),
+                ("unoccupied".to_string(), unoccupied.to_string()),
+            ]),
+        });
+    }
+
+    ok(StackedAreaChartResponse {
+        data,
+        series,
+        title: format!("{name} Capacity Occupation"),
     })
 }
