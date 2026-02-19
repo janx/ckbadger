@@ -23,8 +23,8 @@ use crate::config::{Config, DEEP_FORK_DEPTH};
 use crate::db::writer::hodl_wave::HodlWaveTracker;
 use crate::db::{BatchWriter, ReorgResult, Repository, SecondaryIssuanceBreakdown};
 use crate::parser::{
-    BlockParser, CellParser, DaoParser, DotbitParser, MnftParser, SporeParser, TransactionParser,
-    UdtParser,
+    BlockParser, CellParser, DaoParser, DotbitParser, MnftParser, ScriptParser, SporeParser,
+    TransactionParser, UdtParser,
 };
 use ckb_store_reader::CkbChainReader;
 
@@ -758,6 +758,54 @@ impl Indexer {
 
     pub fn writer(&self) -> &BatchWriter {
         &self.writer
+    }
+
+    /// Parse UDT outputs from a transaction, with a fallback for label-known
+    /// token standards such as `xudt_compatible`.
+    fn parse_udt_cells_with_store_fallback(
+        &self,
+        tx: &crate::rpc::TransactionView,
+    ) -> Vec<crate::parser::ParsedUdtCell> {
+        let mut parsed = Vec::new();
+        let mut standard_cache: HashMap<Vec<u8>, Option<String>> = HashMap::new();
+
+        for (output, data_hex) in tx.outputs.iter().zip(tx.outputs_data.iter()) {
+            if let Some(cell) = UdtParser::parse_udt_cell(output, data_hex) {
+                parsed.push(cell);
+                continue;
+            }
+
+            let Some(type_script) = output.type_.as_ref() else {
+                continue;
+            };
+
+            let type_script_hash = ScriptParser::compute_script_hash(type_script);
+            let standard_hint = if let Some(cached) = standard_cache.get(&type_script_hash) {
+                cached.clone()
+            } else {
+                let looked_up = self
+                    .writer
+                    .store()
+                    .get_token(&type_script_hash)
+                    .ok()
+                    .flatten()
+                    .map(|info| info.standard);
+                standard_cache.insert(type_script_hash.clone(), looked_up.clone());
+                looked_up
+            };
+
+            let Some(standard_hint) = standard_hint else {
+                continue;
+            };
+
+            if let Some(cell) =
+                UdtParser::parse_udt_cell_with_standard_hint(output, data_hex, Some(&standard_hint))
+            {
+                parsed.push(cell);
+            }
+        }
+
+        parsed
     }
 
     pub fn rebuild_pause_flag(&self) -> Arc<std::sync::atomic::AtomicBool> {
@@ -3516,7 +3564,7 @@ impl Indexer {
                     continue;
                 }
                 let tx = &block_response.block.transactions[tx_idx];
-                let output_udts = UdtParser::parse_udt_cells(tx);
+                let output_udts = self.parse_udt_cells_with_store_fallback(tx);
                 for (output_index, udt_cell) in output_udts.iter().enumerate() {
                     batch_udt_cells.insert(
                         (tx_data.hash.to_vec(), output_index as i16),
@@ -4211,7 +4259,7 @@ impl Indexer {
                                         continue;
                                     }
                                     let tx = &block_response.block.transactions[tx_idx];
-                                    let output_udts = UdtParser::parse_udt_cells(tx);
+                                    let output_udts = self.parse_udt_cells_with_store_fallback(tx);
                                     for (output_index, udt_cell) in output_udts.iter().enumerate() {
                                         batch_udt_cells.insert(
                                             (tx_data.hash.to_vec(), output_index as i16),
@@ -5534,7 +5582,7 @@ impl Indexer {
                             continue;
                         }
                         let tx = &block_response.block.transactions[tx_idx];
-                        let output_udts = UdtParser::parse_udt_cells(tx);
+                        let output_udts = self.parse_udt_cells_with_store_fallback(tx);
                         for (output_index, udt_cell) in output_udts.iter().enumerate() {
                             batch_udt_cells.insert(
                                 (tx_data.hash.to_vec(), output_index as i16),

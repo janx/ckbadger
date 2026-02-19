@@ -25,9 +25,17 @@ impl UdtStandard {
         }
     }
 
+    pub fn from_standard_hint(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "sudt" => Some(UdtStandard::Sudt),
+            "xudt" | "xudt_compatible" => Some(UdtStandard::Xudt),
+            _ => None,
+        }
+    }
+
     pub fn parse(s: &str) -> Self {
         match s {
-            "xudt" => UdtStandard::Xudt,
+            "xudt" | "xudt_compatible" => UdtStandard::Xudt,
             _ => UdtStandard::Sudt,
         }
     }
@@ -107,14 +115,25 @@ impl UdtParser {
         tx.outputs
             .iter()
             .zip(tx.outputs_data.iter())
-            .filter_map(|(output, data_hex)| Self::parse_udt_cell(output, data_hex))
+            .filter_map(|(output, data_hex)| {
+                Self::parse_udt_cell_with_standard_hint(output, data_hex, None)
+            })
             .collect()
     }
 
     pub fn parse_udt_cell(output: &CellOutput, data_hex: &str) -> Option<ParsedUdtCell> {
+        Self::parse_udt_cell_with_standard_hint(output, data_hex, None)
+    }
+
+    pub fn parse_udt_cell_with_standard_hint(
+        output: &CellOutput,
+        data_hex: &str,
+        standard_hint: Option<&str>,
+    ) -> Option<ParsedUdtCell> {
         let type_script = output.type_.as_ref()?;
 
-        let standard = Self::is_udt_type_script(&type_script.code_hash, &type_script.hash_type)?;
+        let standard = Self::is_udt_type_script(&type_script.code_hash, &type_script.hash_type)
+            .or_else(|| standard_hint.and_then(UdtStandard::from_standard_hint))?;
 
         let data = parse_hex_to_bytes(data_hex);
         let amount = Self::parse_amount(&data)?;
@@ -407,8 +426,57 @@ mod tests {
     fn test_udt_standard_parse() {
         assert!(matches!(UdtStandard::parse("sudt"), UdtStandard::Sudt));
         assert!(matches!(UdtStandard::parse("xudt"), UdtStandard::Xudt));
+        assert!(matches!(
+            UdtStandard::parse("xudt_compatible"),
+            UdtStandard::Xudt
+        ));
         assert!(matches!(UdtStandard::parse("unknown"), UdtStandard::Sudt));
         assert!(matches!(UdtStandard::parse(""), UdtStandard::Sudt));
+    }
+
+    #[test]
+    fn test_udt_standard_from_standard_hint() {
+        assert!(matches!(
+            UdtStandard::from_standard_hint("sudt"),
+            Some(UdtStandard::Sudt)
+        ));
+        assert!(matches!(
+            UdtStandard::from_standard_hint("xudt"),
+            Some(UdtStandard::Xudt)
+        ));
+        assert!(matches!(
+            UdtStandard::from_standard_hint("xudt_compatible"),
+            Some(UdtStandard::Xudt)
+        ));
+        assert!(UdtStandard::from_standard_hint("omiga_inscription").is_none());
+    }
+
+    #[test]
+    fn test_parse_udt_cell_with_xudt_compatible_hint() {
+        let output = CellOutput {
+            capacity: "0x174876e800".to_string(),
+            lock: create_lock_script(),
+            type_: Some(Script {
+                code_hash: "0xbfa35a9c38a676682b65ade8f02be164d48632281477e36f8dc2f41f79e56bfc"
+                    .to_string(),
+                hash_type: "type".to_string(),
+                args: "0xd591ebdc69626647e056e13345fd830c8b876bb06aa07ba610479eb77153ea9f"
+                    .to_string(),
+            }),
+        };
+
+        // Unknown code hash should not be parsed as UDT without a standard hint.
+        assert!(UdtParser::parse_udt_cell(&output, "0x01000000000000000000000000000000").is_none());
+
+        let parsed = UdtParser::parse_udt_cell_with_standard_hint(
+            &output,
+            "0x01000000000000000000000000000000",
+            Some("xudt_compatible"),
+        )
+        .unwrap();
+
+        assert_eq!(parsed.amount, 1);
+        assert!(matches!(parsed.standard, UdtStandard::Xudt));
     }
 
     #[test]
