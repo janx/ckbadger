@@ -108,30 +108,30 @@ impl BatchWriter {
                     continue;
                 };
 
-                // Token metadata is the source of truth for standard/hash_type/type_args.
+                // Token metadata is the source of truth for whether this typed cell should be
+                // treated as UDT input.
+                // Without this guard, arbitrary typed cells can be misclassified as UDT burns.
+                let Some(token_info) = self.store.get_token(type_script_hash)? else {
+                    continue;
+                };
+                let Some(standard) =
+                    crate::parser::UdtStandard::from_standard_hint(&token_info.standard)
+                else {
+                    continue;
+                };
+
                 // LiveCellInfo from older schema versions may miss type_code_hash, so fall back
                 // to token metadata before dropping the input from UDT matching.
-                let token_info = self.store.get_token(type_script_hash)?;
                 let type_code_hash = info
                     .type_code_hash
                     .clone()
-                    .or_else(|| token_info.as_ref().map(|t| t.type_code_hash.clone()));
+                    .or_else(|| Some(token_info.type_code_hash.clone()));
                 let Some(type_code_hash) = type_code_hash else {
                     continue;
                 };
 
-                let hash_type = token_info
-                    .as_ref()
-                    .map(|t| t.hash_type as i16)
-                    .unwrap_or(0i16);
-                let type_args = token_info
-                    .as_ref()
-                    .map(|t| t.type_args.clone())
-                    .unwrap_or_default();
-                let standard = token_info
-                    .as_ref()
-                    .map(|t| t.standard.clone())
-                    .unwrap_or_default();
+                let hash_type = token_info.hash_type as i16;
+                let type_args = token_info.type_args.clone();
 
                 // Amount is stored in token_holders, but for consumed cells we may not have it.
                 // The amount for UDT cells comes from the cell data (first 16 bytes).
@@ -147,7 +147,7 @@ impl BatchWriter {
                         type_args,
                         info.lock_script_hash.clone(),
                         0u128, // amount — caller gets this from parsed output data
-                        standard,
+                        standard.as_str().to_string(),
                     ),
                 );
             }
@@ -476,5 +476,39 @@ mod tests {
         assert_eq!(entry.4, vec![0x22; 32]);
         assert_eq!(entry.5, 0u128);
         assert_eq!(entry.6, "sudt".to_string());
+    }
+
+    #[test]
+    fn test_get_udt_cells_info_batch_ignores_typed_cells_without_token_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+
+        let tx_hash = vec![0xEE; 32];
+        let output_index = 0i16;
+
+        // Typed cell exists, but token metadata does not. This must NOT be treated as UDT input.
+        let cell = LiveCellInfo {
+            capacity: 100_000_000,
+            created_at_block: 1,
+            lock_script_hash: vec![0x22; 32],
+            lock_code_hash: vec![0x33; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x44; 20],
+            type_script_hash: Some(vec![0x77; 32]),
+            type_code_hash: Some(vec![0x88; 32]),
+            data_size: 16,
+            occupied_capacity: 0,
+        };
+        let mut batch = StoreBatch::new(&store);
+        batch.put_cell(&tx_hash, output_index, &cell);
+        batch.commit().unwrap();
+
+        let outpoints = vec![(tx_hash.as_slice(), output_index)];
+        let result = writer.get_udt_cells_info_batch(&outpoints).unwrap();
+        assert!(
+            result.is_empty(),
+            "typed cell without token metadata should not be classified as UDT"
+        );
     }
 }
