@@ -233,6 +233,171 @@ async fn test_scripts_list_empty_db() {
 }
 
 #[tokio::test]
+async fn test_scripts_list_supports_cursor_pagination() {
+    let store = test_store();
+
+    for (code_byte, name) in [
+        (0x01u8, "A_SCRIPT"),
+        (0x02u8, "B_SCRIPT"),
+        (0x03u8, "C_SCRIPT"),
+    ] {
+        let code_hash = vec![code_byte; 32];
+        store
+            .put_script_info_direct(
+                &code_hash,
+                &ScriptInfo {
+                    code_hash: code_hash.clone(),
+                    hash_type: 1,
+                    name: Some(name.to_string()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/scripts?limit=2")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let page1 = json["data"].as_array().unwrap();
+    assert_eq!(page1.len(), 2);
+    assert_eq!(page1[0]["name"], "A_SCRIPT");
+    assert_eq!(page1[1]["name"], "B_SCRIPT");
+    assert_eq!(page1[0]["liveCapacitySum"], "0");
+    assert_eq!(page1[0]["liveOccupiedCapacitySum"], "0");
+    assert_eq!(json["total"], 3);
+    assert_eq!(json["limit"], 2);
+    assert_eq!(json["hasMore"], true);
+    assert_eq!(json["nextCursor"], "2");
+
+    let request = Request::builder()
+        .uri("/api/v1/scripts?limit=2&cursor=2")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let page2 = json["data"].as_array().unwrap();
+    assert_eq!(page2.len(), 1);
+    assert_eq!(page2[0]["name"], "C_SCRIPT");
+    assert_eq!(json["total"], 3);
+    assert_eq!(json["limit"], 2);
+    assert_eq!(json["hasMore"], false);
+    assert!(json["nextCursor"].is_null());
+}
+
+#[tokio::test]
+async fn test_scripts_list_sorts_before_cursor_pagination() {
+    let store = test_store();
+
+    for (code_byte, name, live_capacity_sum) in [
+        (0x01u8, "A_SCRIPT", 10i64),
+        (0x02u8, "B_SCRIPT", 30i64),
+        (0x03u8, "C_SCRIPT", 20i64),
+    ] {
+        let code_hash = vec![code_byte; 32];
+        store
+            .put_script_info_direct(
+                &code_hash,
+                &ScriptInfo {
+                    code_hash: code_hash.clone(),
+                    hash_type: 1,
+                    name: Some(name.to_string()),
+                    lock_live_capacity_sum: live_capacity_sum,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/scripts?limit=2&sort_key=capacity&sort_direction=desc")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let page1 = json["data"].as_array().unwrap();
+    assert_eq!(page1.len(), 2);
+    assert_eq!(page1[0]["name"], "B_SCRIPT");
+    assert_eq!(page1[1]["name"], "C_SCRIPT");
+    assert_eq!(page1[0]["liveCapacitySum"], "30");
+    assert_eq!(page1[1]["liveCapacitySum"], "20");
+    assert_eq!(json["nextCursor"], "2");
+    assert_eq!(json["hasMore"], true);
+
+    let request = Request::builder()
+        .uri("/api/v1/scripts?limit=2&cursor=2&sort_key=capacity&sort_direction=desc")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let page2 = json["data"].as_array().unwrap();
+    assert_eq!(page2.len(), 1);
+    assert_eq!(page2[0]["name"], "A_SCRIPT");
+    assert_eq!(page2[0]["liveCapacitySum"], "10");
+    assert_eq!(json["hasMore"], false);
+    assert!(json["nextCursor"].is_null());
+}
+
+#[tokio::test]
+async fn test_scripts_list_keeps_unknown_entries_distinct() {
+    let store = test_store();
+
+    for code_byte in [0x11u8, 0x22u8] {
+        let code_hash = vec![code_byte; 32];
+        store
+            .put_script_info_direct(
+                &code_hash,
+                &ScriptInfo {
+                    code_hash: code_hash.clone(),
+                    hash_type: 1,
+                    name: None,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/scripts?limit=20")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let data = json["data"].as_array().unwrap();
+    assert_eq!(json["total"], 2);
+    assert_eq!(data.len(), 2);
+    assert_eq!(data[0]["name"], "Unknown");
+    assert_eq!(data[1]["name"], "Unknown");
+    assert_ne!(data[0]["codeHash"], data[1]["codeHash"]);
+}
+
+#[tokio::test]
 async fn test_get_script_returns_deployments_sorted_by_deployed_at() {
     let store = test_store();
     let name = "SECP256K1_BLAKE160".to_string();

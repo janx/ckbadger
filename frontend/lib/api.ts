@@ -688,6 +688,8 @@ interface KnownScript {
   codeCellTxHash: string | null;
   codeCellOutputIndex: number | null;
   deployedAt?: number | null;
+  liveCapacitySum?: string;
+  liveOccupiedCapacitySum?: string;
 }
 
 interface DeploymentUsage {
@@ -718,6 +720,8 @@ interface ScriptQueryParams {
   network?: string;
   decoderType?: string;
   search?: string;
+  sortKey?: 'name' | 'kind' | 'description' | 'occupied' | 'capacity' | 'occupiedRatio';
+  sortDirection?: 'asc' | 'desc';
 }
 
 interface OccupationChartRangeParams {
@@ -1392,6 +1396,10 @@ export const api = {
     if (params.network) query.set('network', params.network);
     if (params.decoderType) query.set('decoder_type', params.decoderType);
     if (params.search) query.set('search', params.search);
+    if (params.sortKey) {
+      query.set('sort_key', params.sortKey === 'occupiedRatio' ? 'occupied_ratio' : params.sortKey);
+    }
+    if (params.sortDirection) query.set('sort_direction', params.sortDirection);
     return fetchApi(`/scripts?${query}`);
   },
 

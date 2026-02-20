@@ -7,11 +7,14 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
-use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
+use crate::response::{
+    decode_cursor_single, encode_cursor_single, ok, ApiError, ApiResult, CursorPaginatedResponse,
+};
 use crate::utils::parse_chart_date_range;
 use crate::AppState;
 
@@ -44,10 +47,40 @@ pub struct ListParams {
     #[allow(dead_code)]
     decoder_type: Option<String>,
     search: Option<String>,
+    #[serde(default = "default_script_sort_key")]
+    sort_key: ScriptSortKey,
+    #[serde(default = "default_sort_direction")]
+    sort_direction: SortDirection,
 }
 
 fn default_limit() -> i64 {
     20
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ScriptSortKey {
+    Name,
+    Kind,
+    Description,
+    Occupied,
+    Capacity,
+    OccupiedRatio,
+}
+
+fn default_script_sort_key() -> ScriptSortKey {
+    ScriptSortKey::Name
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum SortDirection {
+    Asc,
+    Desc,
+}
+
+fn default_sort_direction() -> SortDirection {
+    SortDirection::Asc
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -71,6 +104,8 @@ pub struct ScriptResponse {
     pub code_cell_tx_hash: Option<String>,
     pub code_cell_output_index: Option<i32>,
     pub deployed_at: Option<i64>,
+    pub live_capacity_sum: String,
+    pub live_occupied_capacity_sum: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -189,6 +224,111 @@ fn resolve_deployed_at(
         .map(|header| header.timestamp)
 }
 
+fn script_display_name(info: &ckbadger_store::ScriptInfo) -> &str {
+    info.name.as_deref().unwrap_or("Unknown")
+}
+
+fn script_kind_for_sort(info: &ckbadger_store::ScriptInfo) -> &str {
+    if info.lock_cells_count > 0 && info.type_cells_count > 0 {
+        "lock+type"
+    } else if info.lock_cells_count > 0 {
+        "lock"
+    } else if info.type_cells_count > 0 {
+        "type"
+    } else {
+        ""
+    }
+}
+
+fn live_capacity_sum_for_sort(info: &ckbadger_store::ScriptInfo) -> i128 {
+    (info.lock_live_capacity_sum as i128 + info.type_live_capacity_sum as i128).max(0)
+}
+
+fn live_occupied_capacity_sum_for_sort(info: &ckbadger_store::ScriptInfo) -> i128 {
+    (info.lock_live_occupied_capacity_sum as i128 + info.type_live_occupied_capacity_sum as i128)
+        .max(0)
+}
+
+fn occupied_ratio_for_sort(info: &ckbadger_store::ScriptInfo) -> Option<(i128, i128)> {
+    let capacity = live_capacity_sum_for_sort(info);
+    if capacity <= 0 {
+        return None;
+    }
+    Some((live_occupied_capacity_sum_for_sort(info), capacity))
+}
+
+fn apply_direction(ordering: Ordering, direction: SortDirection) -> Ordering {
+    match direction {
+        SortDirection::Asc => ordering,
+        SortDirection::Desc => ordering.reverse(),
+    }
+}
+
+fn compare_occupied_ratio(
+    left: Option<(i128, i128)>,
+    right: Option<(i128, i128)>,
+    direction: SortDirection,
+) -> Ordering {
+    match (left, right) {
+        (None, None) => Ordering::Equal,
+        (None, Some(_)) => Ordering::Greater,
+        (Some(_), None) => Ordering::Less,
+        (Some((left_occupied, left_capacity)), Some((right_occupied, right_capacity))) => {
+            let left_side = left_occupied * right_capacity;
+            let right_side = right_occupied * left_capacity;
+            apply_direction(left_side.cmp(&right_side), direction)
+        }
+    }
+}
+
+fn compare_script_entries(
+    left: &(Vec<u8>, ckbadger_store::ScriptInfo),
+    right: &(Vec<u8>, ckbadger_store::ScriptInfo),
+    sort_key: ScriptSortKey,
+    direction: SortDirection,
+) -> Ordering {
+    let compared = match sort_key {
+        ScriptSortKey::Name => apply_direction(
+            script_display_name(&left.1).cmp(script_display_name(&right.1)),
+            direction,
+        ),
+        ScriptSortKey::Kind => apply_direction(
+            script_kind_for_sort(&left.1).cmp(script_kind_for_sort(&right.1)),
+            direction,
+        ),
+        ScriptSortKey::Description => apply_direction(
+            left.1
+                .description
+                .as_deref()
+                .unwrap_or("")
+                .cmp(right.1.description.as_deref().unwrap_or("")),
+            direction,
+        ),
+        ScriptSortKey::Occupied => apply_direction(
+            live_occupied_capacity_sum_for_sort(&left.1)
+                .cmp(&live_occupied_capacity_sum_for_sort(&right.1)),
+            direction,
+        ),
+        ScriptSortKey::Capacity => apply_direction(
+            live_capacity_sum_for_sort(&left.1).cmp(&live_capacity_sum_for_sort(&right.1)),
+            direction,
+        ),
+        ScriptSortKey::OccupiedRatio => compare_occupied_ratio(
+            occupied_ratio_for_sort(&left.1),
+            occupied_ratio_for_sort(&right.1),
+            direction,
+        ),
+    };
+
+    if compared != Ordering::Equal {
+        return compared;
+    }
+
+    script_display_name(&left.1)
+        .cmp(script_display_name(&right.1))
+        .then_with(|| left.0.cmp(&right.0))
+}
+
 /// Convert a store ScriptInfo into an API ScriptResponse.
 fn script_info_to_response(
     info: &ckbadger_store::ScriptInfo,
@@ -224,6 +364,14 @@ fn script_info_to_response(
         code_cell_tx_hash.as_deref(),
         code_cell_output_index,
     );
+    let live_occupied_capacity_sum = (info.lock_live_occupied_capacity_sum as i128
+        + info.type_live_occupied_capacity_sum as i128)
+        .max(0)
+        .to_string();
+    let live_capacity_sum = (info.lock_live_capacity_sum as i128
+        + info.type_live_capacity_sum as i128)
+        .max(0)
+        .to_string();
 
     ScriptResponse {
         code_hash: format!("0x{}", hex::encode(&info.code_hash)),
@@ -244,6 +392,8 @@ fn script_info_to_response(
         code_cell_tx_hash,
         code_cell_output_index,
         deployed_at,
+        live_capacity_sum,
+        live_occupied_capacity_sum,
     }
 }
 
@@ -403,7 +553,7 @@ async fn list_scripts(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<ScriptResponse>> {
-    let _limit = params.limit.clamp(1, 100);
+    let limit = params.limit.clamp(1, 100) as usize;
     let network = params.network.as_deref().unwrap_or(&state.ckb_network);
 
     let all_scripts = state
@@ -431,37 +581,67 @@ async fn list_scripts(
         })
         .collect();
 
-    // Sort by name
+    // First sort by display name, then code hash to ensure deterministic dedup selection.
     filtered.sort_by(|a, b| {
-        let name_a = a.1.name.as_deref().unwrap_or("");
-        let name_b = b.1.name.as_deref().unwrap_or("");
-        name_a.cmp(name_b)
+        script_display_name(&a.1)
+            .cmp(script_display_name(&b.1))
+            .then_with(|| a.0.cmp(&b.0))
     });
 
-    // Deduplicate by name (take first occurrence)
-    let mut seen_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Deduplicate by known name (keep one deployment per known script name), but
+    // keep all Unknown entries distinct by code hash.
+    let mut seen_known_names: std::collections::HashSet<String> = std::collections::HashSet::new();
     let deduped: Vec<_> = filtered
         .into_iter()
         .filter(|(_, info)| {
-            let name = info.name.clone().unwrap_or_default();
-            seen_names.insert(name)
+            let Some(name) = info.name.as_ref() else {
+                return true;
+            };
+            let trimmed = name.trim();
+            if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("unknown") {
+                return true;
+            }
+            seen_known_names.insert(trimmed.to_string())
         })
         .collect();
 
+    // Apply requested ordering to the entire result set before pagination.
+    let mut deduped = deduped;
+    deduped.sort_by(|a, b| compare_script_entries(a, b, params.sort_key, params.sort_direction));
+
     let total = deduped.len() as i64;
 
-    let scripts: Vec<ScriptResponse> = deduped
+    let start_idx = params
+        .cursor
+        .as_deref()
+        .and_then(decode_cursor_single)
+        .and_then(|v| usize::try_from(v).ok())
+        .unwrap_or(0);
+
+    let page: Vec<_> = deduped
+        .into_iter()
+        .skip(start_idx)
+        .take(limit + 1)
+        .collect();
+    let has_more = page.len() > limit;
+    let page: Vec<_> = page.into_iter().take(limit).collect();
+
+    let next_cursor = if has_more {
+        Some(encode_cursor_single((start_idx + limit) as i64))
+    } else {
+        None
+    };
+
+    let scripts: Vec<ScriptResponse> = page
         .iter()
         .map(|(_, info)| script_info_to_response(info, network, &state))
         .collect();
 
-    let total_rows = scripts.len() as i64;
-
     ok(CursorPaginatedResponse::new(
         scripts,
-        total.max(total_rows),
-        total_rows,
-        None,
+        total,
+        limit as i64,
+        next_cursor,
     ))
 }
 
