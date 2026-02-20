@@ -756,7 +756,7 @@ async fn get_most_utilized_scripts_chart(
     );
 
     let response = MostUtilizedScriptsChartResponse {
-        title: "Most Utilized Scripts".to_string(),
+        title: "Scripts Occupied & Total CKBytes".to_string(),
         occupied_share,
         capacity_share,
     };
@@ -945,7 +945,7 @@ async fn get_most_utilized_assets_chart(
     );
 
     let response = MostUtilizedAssetsChartResponse {
-        title: "Most Utilized Assets".to_string(),
+        title: "Assets Occupied & Total CKBytes".to_string(),
         occupied_share,
         capacity_share,
     };

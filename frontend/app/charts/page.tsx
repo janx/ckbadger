@@ -177,7 +177,7 @@ function MostUtilizedScriptsPreview({
 }) {
   return (
     <ChartCard
-      title={data?.title ?? 'Loading...'}
+      title="Scripts Occupied & Total CKBytes"
       href={href}
       isLoading={!data}
       error={data === null}
@@ -206,7 +206,7 @@ function MostUtilizedAssetsPreview({
 }) {
   return (
     <ChartCard
-      title={data?.title ?? 'Loading...'}
+      title="Assets Occupied & Total CKBytes"
       href={href}
       isLoading={!data}
       error={data === null}

@@ -8,6 +8,8 @@ import {
   TerminalPanelContent,
   TerminalPanelHeader,
 } from '@/components/ui/terminal-panel';
+import { ChartCalculationNote } from '@/components/charts/chart-calculation-note';
+import { getChartDescription } from '@/components/charts/chart-calculation-descriptions';
 import { StackedAreaChart } from '@/components/ui/stacked-area-chart';
 import { api } from '@/lib/api';
 
@@ -50,7 +52,9 @@ export default function MostUtilizedScriptsPage() {
         </div>
 
         <TerminalPanel>
-          <TerminalPanelHeader indicator="active">Most Utilized Scripts</TerminalPanelHeader>
+          <TerminalPanelHeader indicator="active">
+            Scripts Occupied & Total CKBytes
+          </TerminalPanelHeader>
           <TerminalPanelContent className="space-y-8 p-6">
             {isLoading && (
               <div className="h-96 animate-pulse rounded border border-slate-800 bg-slate-900/50" />
@@ -94,6 +98,15 @@ export default function MostUtilizedScriptsPage() {
                   Drag to select range • Scroll to zoom • Middle-click drag to pan • Click Reset to
                   restore
                 </div>
+                <ChartCalculationNote
+                  description={
+                    getChartDescription('chart-most-utilized-scripts') ?? {
+                      overview:
+                        'Ranks scripts by occupied capacity and total live capacity share over time.',
+                      legendItems: [],
+                    }
+                  }
+                />
               </>
             )}
           </TerminalPanelContent>

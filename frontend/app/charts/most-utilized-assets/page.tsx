@@ -8,6 +8,8 @@ import {
   TerminalPanelContent,
   TerminalPanelHeader,
 } from '@/components/ui/terminal-panel';
+import { ChartCalculationNote } from '@/components/charts/chart-calculation-note';
+import { getChartDescription } from '@/components/charts/chart-calculation-descriptions';
 import { StackedAreaChart } from '@/components/ui/stacked-area-chart';
 import { api } from '@/lib/api';
 
@@ -50,7 +52,9 @@ export default function MostUtilizedAssetsPage() {
         </div>
 
         <TerminalPanel>
-          <TerminalPanelHeader indicator="active">Most Utilized Assets</TerminalPanelHeader>
+          <TerminalPanelHeader indicator="active">
+            Assets Occupied & Total CKBytes
+          </TerminalPanelHeader>
           <TerminalPanelContent className="space-y-8 p-6">
             {isLoading && (
               <div className="h-96 animate-pulse rounded border border-slate-800 bg-slate-900/50" />
@@ -64,7 +68,7 @@ export default function MostUtilizedAssetsPage() {
               <>
                 <section>
                   <h3 className="mb-3 font-mono text-sm uppercase tracking-wider text-slate-300">
-                    Occupied Share (%) - Top 20 + Others
+                    Occupied CKBytes Share (%) - Top 20 + Others
                   </h3>
                   <StackedAreaChart
                     data={data.occupiedShare.data}
@@ -78,7 +82,7 @@ export default function MostUtilizedAssetsPage() {
 
                 <section className="border-t border-slate-800 pt-6">
                   <h3 className="mb-3 font-mono text-sm uppercase tracking-wider text-slate-300">
-                    Total Cells Capacity Share (%) - Top 20 + Others
+                    Total CKBytes Share (%) - Top 20 + Others
                   </h3>
                   <StackedAreaChart
                     data={data.capacityShare.data}
@@ -94,6 +98,15 @@ export default function MostUtilizedAssetsPage() {
                   Drag to select range • Scroll to zoom • Middle-click drag to pan • Click Reset to
                   restore
                 </div>
+                <ChartCalculationNote
+                  description={
+                    getChartDescription('chart-most-utilized-assets') ?? {
+                      overview:
+                        'Ranks assets by occupied capacity and total live capacity share over time.',
+                      legendItems: [],
+                    }
+                  }
+                />
               </>
             )}
           </TerminalPanelContent>

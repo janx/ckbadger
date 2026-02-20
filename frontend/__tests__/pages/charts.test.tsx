@@ -131,7 +131,7 @@ const mockCellCountResponse = {
 };
 
 const mockMostUtilizedScriptsResponse: MostUtilizedScriptsChartResponse = {
-  title: 'Most Utilized Scripts',
+  title: 'Scripts Occupied & Total CKBytes',
   occupiedShare: {
     title: 'Top Scripts Occupied Share',
     data: [{ date: '2024-01-01', values: { top0: '100', others: '20' } }],
@@ -151,7 +151,7 @@ const mockMostUtilizedScriptsResponse: MostUtilizedScriptsChartResponse = {
 };
 
 const mockMostUtilizedAssetsResponse: MostUtilizedAssetsChartResponse = {
-  title: 'Most Utilized Assets',
+  title: 'Assets Occupied & Total CKBytes',
   occupiedShare: {
     title: 'Top Assets Occupied Share',
     data: [{ date: '2024-01-01', values: { top0: '120', others: '40' } }],
@@ -233,6 +233,8 @@ describe('ChartsPage', () => {
     expect(screen.getByText('Activities')).toBeInTheDocument();
     expect(screen.getByText('Common Knowledge Bytes')).toBeInTheDocument();
     expect(screen.getByText('Economics')).toBeInTheDocument();
+    expect(screen.getByText('Scripts Occupied & Total CKBytes')).toBeInTheDocument();
+    expect(screen.getByText('Assets Occupied & Total CKBytes')).toBeInTheDocument();
   });
 
   it('uses percentage mode in overview previews that are percentage charts', async () => {

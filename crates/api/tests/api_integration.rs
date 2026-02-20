@@ -287,7 +287,7 @@ async fn test_most_utilized_scripts_chart_ranks_by_occupied_and_capacity() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-    assert_eq!(json["title"], "Most Utilized Scripts");
+    assert_eq!(json["title"], "Scripts Occupied & Total CKBytes");
     let occupied_share = &json["occupiedShare"];
     let occupied_series = occupied_share["series"].as_array().unwrap();
     assert_eq!(occupied_series.len(), 4);
@@ -452,7 +452,7 @@ async fn test_most_utilized_assets_chart_ranks_mixed_asset_types() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-    assert_eq!(json["title"], "Most Utilized Assets");
+    assert_eq!(json["title"], "Assets Occupied & Total CKBytes");
     let occupied_share = &json["occupiedShare"];
     let occupied_series = occupied_share["series"].as_array().unwrap();
     assert_eq!(occupied_series[0]["label"], "NFT Collection (nft)");

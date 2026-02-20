@@ -22,7 +22,7 @@ describe('MostUtilizedScriptsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(api.getMostUtilizedScriptsChart).mockResolvedValue({
-      title: 'Most Utilized Scripts',
+      title: 'Scripts Occupied & Total CKBytes',
       occupiedShare: {
         title: 'Top Scripts Occupied Share',
         data: [{ date: '2024-01-01', values: { top0: '100', others: '20' } }],
@@ -46,7 +46,7 @@ describe('MostUtilizedScriptsPage', () => {
     render(<MostUtilizedScriptsPage />);
 
     expect(screen.getByTestId('header')).toBeInTheDocument();
-    expect(screen.getByText('Most Utilized Scripts')).toBeInTheDocument();
+    expect(screen.getByText('Scripts Occupied & Total CKBytes')).toBeInTheDocument();
 
     await waitFor(() => {
       expect(screen.getByText('Occupied Share (%) - Top 20 + Others')).toBeInTheDocument();
@@ -54,6 +54,12 @@ describe('MostUtilizedScriptsPage', () => {
         screen.getByText('Total Cells Capacity Share (%) - Top 20 + Others')
       ).toBeInTheDocument();
       expect(screen.getAllByTestId('stacked-area-chart')).toHaveLength(2);
+      expect(screen.getByText('Description')).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          'Ranks scripts by utilization in live state: occupied capacity and total cells capacity.'
+        )
+      ).toBeInTheDocument();
     });
   });
 });

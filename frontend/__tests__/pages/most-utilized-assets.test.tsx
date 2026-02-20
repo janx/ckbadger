@@ -22,7 +22,7 @@ describe('MostUtilizedAssetsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(api.getMostUtilizedAssetsChart).mockResolvedValue({
-      title: 'Most Utilized Assets',
+      title: 'Assets Occupied & Total CKBytes',
       occupiedShare: {
         title: 'Top Assets Occupied Share',
         data: [{ date: '2024-01-01', values: { top0: '100', others: '20' } }],
@@ -46,14 +46,18 @@ describe('MostUtilizedAssetsPage', () => {
     render(<MostUtilizedAssetsPage />);
 
     expect(screen.getByTestId('header')).toBeInTheDocument();
-    expect(screen.getByText('Most Utilized Assets')).toBeInTheDocument();
+    expect(screen.getByText('Assets Occupied & Total CKBytes')).toBeInTheDocument();
 
     await waitFor(() => {
-      expect(screen.getByText('Occupied Share (%) - Top 20 + Others')).toBeInTheDocument();
-      expect(
-        screen.getByText('Total Cells Capacity Share (%) - Top 20 + Others')
-      ).toBeInTheDocument();
+      expect(screen.getByText('Occupied CKBytes Share (%) - Top 20 + Others')).toBeInTheDocument();
+      expect(screen.getByText('Total CKBytes Share (%) - Top 20 + Others')).toBeInTheDocument();
       expect(screen.getAllByTestId('stacked-area-chart')).toHaveLength(2);
+      expect(screen.getByText('Description')).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          'Ranks token, NFT collection, and DOB collection assets by utilization in live state.'
+        )
+      ).toBeInTheDocument();
     });
   });
 });
