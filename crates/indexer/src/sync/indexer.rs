@@ -146,7 +146,7 @@ struct BatchStats {
     sync_totals: (i64, i64, i64),
     last_block: Option<(i64, Vec<u8>)>,
     hourly_stats: HashMap<DateTime<Utc>, (i32, i32, i32, i32, i64)>,
-    daily_stats: HashMap<NaiveDate, (i32, i32, i32, i32, i64, i64, i64)>,
+    daily_stats: HashMap<NaiveDate, (i32, i32, i32, i32, i64, i64, i64, i64, i64)>,
     daily_block_stats: HashMap<NaiveDate, (i128, i32, i32)>,
     miner_stats: HashMap<(NaiveDate, Vec<u8>), (i32, i64)>,
     epoch_stats: HashMap<i64, EpochAccum>,
@@ -3302,6 +3302,19 @@ impl Indexer {
                 .flat_map(|tx| tx.cells.iter())
                 .map(|cell| cell.data_size as i64)
                 .sum();
+            let occupied_capacity_created: i64 = tx_slice
+                .iter()
+                .flat_map(|tx| tx.cells.iter())
+                .map(|cell| {
+                    let lock_script_size = 32 + 1 + cell.lock_args.len() as i64;
+                    let type_script_size = cell
+                        .type_args
+                        .as_ref()
+                        .map(|args| 32 + 1 + args.len() as i64)
+                        .unwrap_or(0);
+                    (8 + lock_script_size + type_script_size + cell.data_size as i64) * 100_000_000
+                })
+                .sum();
             let data_size_consumed: i64 = tx_slice
                 .iter()
                 .filter(|tx| !tx.is_cellbase)
@@ -3317,6 +3330,25 @@ impl Indexer {
                         .or_else(|| batch_cell_infos.get(&key).map(|info| info.data_size as i64))
                 })
                 .sum();
+            let occupied_capacity_consumed: i64 = tx_slice
+                .iter()
+                .filter(|tx| !tx.is_cellbase)
+                .flat_map(|tx| tx.inputs.iter())
+                .filter_map(|input| {
+                    let key = (
+                        input.previous_tx_hash.to_vec(),
+                        input.previous_output_index as i16,
+                    );
+                    input_cell_info
+                        .get(&key)
+                        .map(|info| info.occupied_capacity)
+                        .or_else(|| {
+                            batch_cell_infos
+                                .get(&key)
+                                .map(|info| info.occupied_capacity)
+                        })
+                })
+                .sum();
 
             batch_stats.sync_totals.0 += parsed.transactions_count as i64;
             batch_stats.sync_totals.1 += cells_created as i64;
@@ -3330,8 +3362,10 @@ impl Indexer {
                 entry.2 += cells_created;
                 entry.3 += cells_consumed;
                 entry.4 += capacity_transferred;
-                entry.5 += data_size_added;
-                entry.6 += data_size_consumed;
+                entry.5 += occupied_capacity_created;
+                entry.6 += occupied_capacity_consumed;
+                entry.7 += data_size_added;
+                entry.8 += data_size_consumed;
             }
 
             batch_stats
@@ -4999,6 +5033,20 @@ impl Indexer {
                             .flat_map(|tx| tx.cells.iter())
                             .map(|cell| cell.data_size as i64)
                             .sum();
+                        let occupied_capacity_created: i64 = tx_slice
+                            .iter()
+                            .flat_map(|tx| tx.cells.iter())
+                            .map(|cell| {
+                                let lock_script_size = 32 + 1 + cell.lock_args.len() as i64;
+                                let type_script_size = cell
+                                    .type_args
+                                    .as_ref()
+                                    .map(|args| 32 + 1 + args.len() as i64)
+                                    .unwrap_or(0);
+                                (8 + lock_script_size + type_script_size + cell.data_size as i64)
+                                    * 100_000_000
+                            })
+                            .sum();
                         let data_size_consumed: i64 = tx_slice
                             .iter()
                             .filter(|tx| !tx.is_cellbase)
@@ -5016,6 +5064,25 @@ impl Indexer {
                                     })
                             })
                             .sum();
+                        let occupied_capacity_consumed: i64 = tx_slice
+                            .iter()
+                            .filter(|tx| !tx.is_cellbase)
+                            .flat_map(|tx| tx.inputs.iter())
+                            .filter_map(|input| {
+                                let key = (
+                                    input.previous_tx_hash.to_vec(),
+                                    input.previous_output_index as i16,
+                                );
+                                input_cell_info
+                                    .get(&key)
+                                    .map(|info| info.occupied_capacity)
+                                    .or_else(|| {
+                                        batch_cell_infos
+                                            .get(&key)
+                                            .map(|info| info.occupied_capacity)
+                                    })
+                            })
+                            .sum();
 
                         stats.sync_totals.0 += parsed.transactions_count as i64;
                         stats.sync_totals.1 += cells_created as i64;
@@ -5029,8 +5096,10 @@ impl Indexer {
                             entry.2 += cells_created;
                             entry.3 += cells_consumed;
                             entry.4 += capacity_transferred;
-                            entry.5 += data_size_added;
-                            entry.6 += data_size_consumed;
+                            entry.5 += occupied_capacity_created;
+                            entry.6 += occupied_capacity_consumed;
+                            entry.7 += data_size_added;
+                            entry.8 += data_size_consumed;
                         }
                         stats
                             .daily_dao_fields
@@ -6136,6 +6205,20 @@ impl Indexer {
                     .flat_map(|tx| tx.cells.iter())
                     .map(|cell| cell.data_size as i64)
                     .sum();
+                let occupied_capacity_created: i64 = tx_slice
+                    .iter()
+                    .flat_map(|tx| tx.cells.iter())
+                    .map(|cell| {
+                        let lock_script_size = 32 + 1 + cell.lock_args.len() as i64;
+                        let type_script_size = cell
+                            .type_args
+                            .as_ref()
+                            .map(|args| 32 + 1 + args.len() as i64)
+                            .unwrap_or(0);
+                        (8 + lock_script_size + type_script_size + cell.data_size as i64)
+                            * 100_000_000
+                    })
+                    .sum();
                 let data_size_consumed: i64 = tx_slice
                     .iter()
                     .filter(|tx| !tx.is_cellbase)
@@ -6153,6 +6236,25 @@ impl Indexer {
                             })
                     })
                     .sum();
+                let occupied_capacity_consumed: i64 = tx_slice
+                    .iter()
+                    .filter(|tx| !tx.is_cellbase)
+                    .flat_map(|tx| tx.inputs.iter())
+                    .filter_map(|input| {
+                        let key = (
+                            input.previous_tx_hash.to_vec(),
+                            input.previous_output_index as i16,
+                        );
+                        input_cell_info
+                            .get(&key)
+                            .map(|info| info.occupied_capacity)
+                            .or_else(|| {
+                                batch_cell_infos
+                                    .get(&key)
+                                    .map(|info| info.occupied_capacity)
+                            })
+                    })
+                    .sum();
 
                 batch_stats.sync_totals.0 += parsed.transactions_count as i64;
                 batch_stats.sync_totals.1 += cells_created as i64;
@@ -6166,8 +6268,10 @@ impl Indexer {
                     entry.2 += cells_created;
                     entry.3 += cells_consumed;
                     entry.4 += capacity_transferred;
-                    entry.5 += data_size_added;
-                    entry.6 += data_size_consumed;
+                    entry.5 += occupied_capacity_created;
+                    entry.6 += occupied_capacity_consumed;
+                    entry.7 += data_size_added;
+                    entry.8 += data_size_consumed;
                 }
                 batch_stats
                     .daily_dao_fields
@@ -6367,7 +6471,17 @@ impl Indexer {
         // Daily statistics (with block time data folded in)
         for (
             date,
-            (blocks, txs, created, consumed, capacity, data_size_added, data_size_consumed),
+            (
+                blocks,
+                txs,
+                created,
+                consumed,
+                capacity,
+                occupied_created,
+                occupied_consumed,
+                data_size_added,
+                data_size_consumed,
+            ),
         ) in &stats.daily_stats
         {
             let dao_field = stats.daily_dao_fields.get(date);
@@ -6379,6 +6493,8 @@ impl Indexer {
                 *created,
                 *consumed,
                 *capacity,
+                *occupied_created,
+                *occupied_consumed,
                 *data_size_added,
                 *data_size_consumed,
                 dao_field.map(|v| v.as_slice()),

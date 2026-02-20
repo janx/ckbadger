@@ -1321,6 +1321,22 @@ export const api = {
     return fetchApi('/charts/common-knowledge-composition');
   },
 
+  getCellAgeVsOccupiedCapacityChart: (): Promise<StackedAreaChartResponse> => {
+    return fetchApi('/charts/cell-age-vs-occupied-capacity');
+  },
+
+  getCapacityTurnoverRatioChart: (): Promise<ChartResponse> => {
+    return fetchApi('/charts/capacity-turnover-ratio');
+  },
+
+  getCellSizeDistributionChart: (): Promise<ChartResponse> => {
+    return fetchApi('/charts/cell-size-distribution');
+  },
+
+  getAddressCohortRetentionChart: (): Promise<ChartResponse> => {
+    return fetchApi('/charts/address-cohort-retention');
+  },
+
   getBlockTimeDistributionChart: (): Promise<ChartResponse> => {
     return fetchApi('/charts/block-time-distribution');
   },

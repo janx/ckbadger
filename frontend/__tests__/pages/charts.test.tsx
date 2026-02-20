@@ -14,6 +14,10 @@ vi.mock('@/lib/api', () => ({
     getCellCountChart: vi.fn(),
     getKnowledgeSizeChart: vi.fn(),
     getCommonKnowledgeCompositionChart: vi.fn(),
+    getCellAgeVsOccupiedCapacityChart: vi.fn(),
+    getCapacityTurnoverRatioChart: vi.fn(),
+    getCellSizeDistributionChart: vi.fn(),
+    getAddressCohortRetentionChart: vi.fn(),
     getBlockTimeDistributionChart: vi.fn(),
     getEpochTimeDistributionChart: vi.fn(),
     getAverageBlockTimeChart: vi.fn(),
@@ -134,6 +138,10 @@ describe('ChartsPage', () => {
     vi.mocked(api.getCellCountChart).mockResolvedValue(mockCellCountResponse);
     vi.mocked(api.getKnowledgeSizeChart).mockResolvedValue(mockChartResponse);
     vi.mocked(api.getCommonKnowledgeCompositionChart).mockResolvedValue(mockStackedAreaResponse);
+    vi.mocked(api.getCellAgeVsOccupiedCapacityChart).mockResolvedValue(mockStackedAreaResponse);
+    vi.mocked(api.getCapacityTurnoverRatioChart).mockResolvedValue(mockChartResponse);
+    vi.mocked(api.getCellSizeDistributionChart).mockResolvedValue(mockChartResponse);
+    vi.mocked(api.getAddressCohortRetentionChart).mockResolvedValue(mockChartResponse);
     vi.mocked(api.getBlockTimeDistributionChart).mockResolvedValue(mockChartResponse);
     vi.mocked(api.getEpochTimeDistributionChart).mockResolvedValue(mockChartResponse);
     vi.mocked(api.getAverageBlockTimeChart).mockResolvedValue(mockChartResponse);
@@ -190,7 +198,7 @@ describe('ChartsPage', () => {
 
     await waitFor(() => {
       expect(screen.getAllByTestId('stacked-area-percentage')).toHaveLength(2);
-      expect(screen.getAllByTestId('stacked-area-absolute')).toHaveLength(2);
+      expect(screen.getAllByTestId('stacked-area-absolute')).toHaveLength(3);
     });
   });
 });

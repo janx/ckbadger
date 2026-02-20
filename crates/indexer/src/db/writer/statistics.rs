@@ -82,6 +82,8 @@ impl BatchWriter {
         cells_created: i32,
         cells_consumed: i32,
         capacity_transferred: i64,
+        occupied_capacity_created: i64,
+        occupied_capacity_consumed: i64,
         data_size_added: i64,
         data_size_consumed: i64,
         dao_field: Option<&[u8]>,
@@ -129,6 +131,8 @@ impl BatchWriter {
                 s.cells_created += cells_created;
                 s.cells_consumed += cells_consumed;
                 s.capacity_transferred += capacity_transferred;
+                s.occupied_capacity_created += occupied_capacity_created;
+                s.occupied_capacity_consumed += occupied_capacity_consumed;
                 s.total_live_cells += (cells_created - cells_consumed) as i64;
                 s.total_dead_cells += cells_consumed as i64;
                 s.total_all_cells += cells_created as i64;
@@ -151,6 +155,8 @@ impl BatchWriter {
                     cells_created,
                     cells_consumed,
                     capacity_transferred,
+                    occupied_capacity_created,
+                    occupied_capacity_consumed,
                     total_live_cells: net_cells,
                     total_dead_cells: cells_consumed as i64,
                     total_all_cells: cells_created as i64,

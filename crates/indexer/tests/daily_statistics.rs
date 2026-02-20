@@ -21,6 +21,8 @@ fn test_daily_stats_put_get() {
         cells_created: 3000,
         cells_consumed: 2500,
         capacity_transferred: 50_000_000_000_000,
+        occupied_capacity_created: 0,
+        occupied_capacity_consumed: 0,
         total_live_cells: 100_000,
         total_dead_cells: 80_000,
         total_all_cells: 180_000,
@@ -39,6 +41,8 @@ fn test_daily_stats_put_get() {
     assert_eq!(retrieved.cells_created, 3000);
     assert_eq!(retrieved.cells_consumed, 2500);
     assert_eq!(retrieved.capacity_transferred, 50_000_000_000_000);
+    assert_eq!(retrieved.occupied_capacity_created, 0);
+    assert_eq!(retrieved.occupied_capacity_consumed, 0);
     assert_eq!(retrieved.total_live_cells, 100_000);
     assert_eq!(retrieved.total_dead_cells, 80_000);
     assert_eq!(retrieved.total_all_cells, 180_000);
@@ -200,6 +204,8 @@ fn test_list_daily_stats() {
             cells_created: 2000 + (i as i32 * 200),
             cells_consumed: 1500 + (i as i32 * 150),
             capacity_transferred: 10_000_000_000_000 * (i as i64 + 1),
+            occupied_capacity_created: 0,
+            occupied_capacity_consumed: 0,
             total_live_cells: 50_000 + (i as i64 * 1000),
             total_dead_cells: 40_000 + (i as i64 * 800),
             total_all_cells: 90_000 + (i as i64 * 1800),

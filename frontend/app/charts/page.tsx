@@ -193,6 +193,26 @@ export default function ChartsPage() {
     queryFn: () => api.getCommonKnowledgeCompositionChart(),
   });
 
+  const { data: cellAgeVsOccupiedCapacity } = useQuery({
+    queryKey: ['chart-cell-age-vs-occupied-capacity'],
+    queryFn: () => api.getCellAgeVsOccupiedCapacityChart(),
+  });
+
+  const { data: capacityTurnoverRatio } = useQuery({
+    queryKey: ['chart-capacity-turnover-ratio'],
+    queryFn: () => api.getCapacityTurnoverRatioChart(),
+  });
+
+  const { data: cellSizeDistribution } = useQuery({
+    queryKey: ['chart-cell-size-distribution'],
+    queryFn: () => api.getCellSizeDistributionChart(),
+  });
+
+  const { data: addressCohortRetention } = useQuery({
+    queryKey: ['chart-address-cohort-retention'],
+    queryFn: () => api.getAddressCohortRetentionChart(),
+  });
+
   const { data: blockTimeDistribution } = useQuery({
     queryKey: ['chart-block-time-distribution'],
     queryFn: () => api.getBlockTimeDistributionChart(),
@@ -305,6 +325,13 @@ export default function ChartsPage() {
             data={commonKnowledgeComposition}
             href="/charts/common-knowledge-composition"
           />
+          <StackedAreaPreview
+            data={cellAgeVsOccupiedCapacity}
+            href="/charts/cell-age-vs-occupied-capacity"
+          />
+          <LineChartPreview data={capacityTurnoverRatio} href="/charts/capacity-turnover-ratio" />
+          <LineChartPreview data={cellSizeDistribution} href="/charts/cell-size-distribution" />
+          <LineChartPreview data={addressCohortRetention} href="/charts/address-cohort-retention" />
         </ChartSection>
 
         <ChartSection title="Economics">

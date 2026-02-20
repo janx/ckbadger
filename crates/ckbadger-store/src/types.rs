@@ -450,6 +450,10 @@ pub struct DailyStats {
     pub cells_created: i32,
     pub cells_consumed: i32,
     pub capacity_transferred: i64,
+    #[serde(default)]
+    pub occupied_capacity_created: i64,
+    #[serde(default)]
+    pub occupied_capacity_consumed: i64,
     pub total_live_cells: i64,
     pub total_dead_cells: i64,
     pub total_all_cells: i64,

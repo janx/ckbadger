@@ -144,6 +144,24 @@ async fn test_charts_average_block_time_empty_db() {
 }
 
 #[tokio::test]
+async fn test_new_capacity_charts_empty_db() {
+    let store = test_store();
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    for uri in [
+        "/api/v1/charts/cell-age-vs-occupied-capacity",
+        "/api/v1/charts/capacity-turnover-ratio",
+        "/api/v1/charts/cell-size-distribution",
+        "/api/v1/charts/address-cohort-retention",
+    ] {
+        let request = Request::builder().uri(uri).body(Body::empty()).unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "uri={uri}");
+    }
+}
+
+#[tokio::test]
 async fn test_charts_block_time_distribution_with_data() {
     let store = test_store();
 

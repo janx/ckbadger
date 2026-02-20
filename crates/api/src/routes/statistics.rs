@@ -1,7 +1,7 @@
 #![allow(clippy::type_complexity)]
 
 use axum::{extract::State, routing::get, Router};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, NaiveDate, Utc};
 use ckb_types::utilities::compact_to_difficulty as ckb_compact_to_difficulty;
 use ckbadger_common::dao::GENESIS_BURNT;
 use ckbadger_common::sync::{
@@ -9,7 +9,7 @@ use ckbadger_common::sync::{
     SYNC_STATUS_REDIS_KEY,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use crate::cache::{CacheKeys, CacheTtl};
@@ -31,6 +31,22 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route(
             "/charts/common-knowledge-composition",
             get(get_common_knowledge_composition_chart),
+        )
+        .route(
+            "/charts/cell-age-vs-occupied-capacity",
+            get(get_cell_age_vs_occupied_capacity_chart),
+        )
+        .route(
+            "/charts/capacity-turnover-ratio",
+            get(get_capacity_turnover_ratio_chart),
+        )
+        .route(
+            "/charts/cell-size-distribution",
+            get(get_cell_size_distribution_chart),
+        )
+        .route(
+            "/charts/address-cohort-retention",
+            get(get_address_cohort_retention_chart),
         )
         .route(
             "/charts/block-time-distribution",
@@ -765,6 +781,366 @@ async fn get_common_knowledge_composition_chart(
 
     state.cache.set(cache_key, &response, CacheTtl::CHART).await;
 
+    ok(response)
+}
+
+fn load_block_date_transitions(
+    store: &ckbadger_store::CkbadgerStore,
+) -> Result<Vec<(i64, NaiveDate)>, String> {
+    if let Some(state) = store.get_hodl_tracker_state().map_err(|e| e.to_string())? {
+        let mut transitions: Vec<(i64, NaiveDate)> = state
+            .date_transitions
+            .into_iter()
+            .filter_map(|(block, date_str)| {
+                NaiveDate::parse_from_str(&date_str, "%Y%m%d")
+                    .ok()
+                    .map(|date| (block, date))
+            })
+            .collect();
+        transitions.sort_by_key(|(block, _)| *block);
+        transitions.dedup_by_key(|(block, _)| *block);
+        if !transitions.is_empty() {
+            return Ok(transitions);
+        }
+    }
+
+    let mut transitions: Vec<(i64, NaiveDate)> = Vec::new();
+    let mut last_date: Option<NaiveDate> = None;
+    let iter = store.iterator_cf(store.cf_block_headers(), rocksdb::IteratorMode::Start);
+    for item in iter.flatten() {
+        let (key, value) = item;
+        if key.len() != 8 {
+            continue;
+        }
+        let block_number = i64::from_be_bytes(key[..8].try_into().unwrap_or([0; 8]));
+        if let Ok(header) = bincode::deserialize::<ckbadger_store::CachedBlockHeader>(&value) {
+            if let Some(dt) = DateTime::from_timestamp_millis(header.timestamp) {
+                let date = ckbadger_common::block_date(dt);
+                if last_date != Some(date) {
+                    transitions.push((block_number, date));
+                    last_date = Some(date);
+                }
+            }
+        }
+    }
+    Ok(transitions)
+}
+
+fn block_number_to_date(transitions: &[(i64, NaiveDate)], block_number: i64) -> Option<NaiveDate> {
+    if transitions.is_empty() {
+        return None;
+    }
+    let idx =
+        transitions.partition_point(|(transition_block, _)| *transition_block <= block_number);
+    if idx == 0 {
+        Some(transitions[0].1)
+    } else {
+        Some(transitions[idx - 1].1)
+    }
+}
+
+fn current_snapshot_date(store: &ckbadger_store::CkbadgerStore) -> Result<NaiveDate, String> {
+    let tip = store.get_sync_tip_block().map_err(|e| e.to_string())?;
+    let date = tip
+        .and_then(|(_, header)| DateTime::from_timestamp_millis(header.timestamp))
+        .map(ckbadger_common::block_date)
+        .unwrap_or_else(|| ckbadger_common::block_date(Utc::now()));
+    Ok(date)
+}
+
+fn occupied_capacity_bucket_index(occupied_shannons: i128) -> usize {
+    let ckb_100 = 100_i128 * SHANNONS_PER_CKB;
+    let ckb_1k = 1_000_i128 * SHANNONS_PER_CKB;
+    let ckb_10k = 10_000_i128 * SHANNONS_PER_CKB;
+    let ckb_100k = 100_000_i128 * SHANNONS_PER_CKB;
+    let ckb_1m = 1_000_000_i128 * SHANNONS_PER_CKB;
+
+    if occupied_shannons < ckb_100 {
+        0
+    } else if occupied_shannons < ckb_1k {
+        1
+    } else if occupied_shannons < ckb_10k {
+        2
+    } else if occupied_shannons < ckb_100k {
+        3
+    } else if occupied_shannons < ckb_1m {
+        4
+    } else {
+        5
+    }
+}
+
+async fn get_cell_age_vs_occupied_capacity_chart(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<StackedAreaChartResponse> {
+    let cache_key = "chart:cell-age-vs-occupied-capacity:v1";
+    if let Some(cached) = state.cache.get::<StackedAreaChartResponse>(cache_key).await {
+        return ok(cached);
+    }
+
+    let snapshot_date = current_snapshot_date(state.store.as_ref()).map_err(ApiError::internal)?;
+    let transitions =
+        load_block_date_transitions(state.store.as_ref()).map_err(ApiError::internal)?;
+
+    let mut lt_1d: i128 = 0;
+    let mut d1_7d: i128 = 0;
+    let mut d7_30d: i128 = 0;
+    let mut d30_180d: i128 = 0;
+    let mut gt_180d: i128 = 0;
+
+    let iter = state
+        .store
+        .iterator_cf(state.store.cf_live_cells(), rocksdb::IteratorMode::Start);
+    for item in iter.flatten() {
+        let (_, value) = item;
+        let Ok(cell) = bincode::deserialize::<ckbadger_store::LiveCellInfo>(&value) else {
+            continue;
+        };
+        let Some(created_date) = block_number_to_date(&transitions, cell.created_at_block) else {
+            continue;
+        };
+        let age_days = (snapshot_date - created_date).num_days().max(0);
+        let occupied = (cell.occupied_capacity as i128).max(0);
+        match age_days {
+            0 => lt_1d += occupied,
+            1..=6 => d1_7d += occupied,
+            7..=29 => d7_30d += occupied,
+            30..=179 => d30_180d += occupied,
+            _ => gt_180d += occupied,
+        }
+    }
+
+    let snapshot_values = HashMap::from([
+        ("lt1d".to_string(), shannon_to_ckb_string(lt_1d)),
+        ("d1to7d".to_string(), shannon_to_ckb_string(d1_7d)),
+        ("d7to30d".to_string(), shannon_to_ckb_string(d7_30d)),
+        ("d30to180d".to_string(), shannon_to_ckb_string(d30_180d)),
+        ("gt180d".to_string(), shannon_to_ckb_string(gt_180d)),
+    ]);
+
+    let snapshot_label = snapshot_date.format("%Y-%m-%d").to_string();
+    let previous_label = (snapshot_date - Duration::days(1))
+        .format("%Y-%m-%d")
+        .to_string();
+
+    let response = StackedAreaChartResponse {
+        data: vec![
+            StackedAreaDataPoint {
+                date: previous_label,
+                values: snapshot_values.clone(),
+            },
+            StackedAreaDataPoint {
+                date: snapshot_label,
+                values: snapshot_values,
+            },
+        ],
+        series: vec![
+            StackedAreaSeries {
+                key: "lt1d".to_string(),
+                label: "< 1d".to_string(),
+                color: "#22c55e".to_string(),
+            },
+            StackedAreaSeries {
+                key: "d1to7d".to_string(),
+                label: "1-7d".to_string(),
+                color: "#84cc16".to_string(),
+            },
+            StackedAreaSeries {
+                key: "d7to30d".to_string(),
+                label: "7-30d".to_string(),
+                color: "#f59e0b".to_string(),
+            },
+            StackedAreaSeries {
+                key: "d30to180d".to_string(),
+                label: "30-180d".to_string(),
+                color: "#f97316".to_string(),
+            },
+            StackedAreaSeries {
+                key: "gt180d".to_string(),
+                label: "> 180d".to_string(),
+                color: "#ef4444".to_string(),
+            },
+        ],
+        title: "Cell Age vs Occupied Capacity".to_string(),
+    };
+
+    state.cache.set(cache_key, &response, CacheTtl::CHART).await;
+    ok(response)
+}
+
+async fn get_capacity_turnover_ratio_chart(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<ChartResponse> {
+    let cache_key = "chart:capacity-turnover-ratio:v1";
+    if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
+        return ok(cached);
+    }
+
+    let mut daily_stats = state
+        .store
+        .list_daily_stats_with_dates()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    daily_stats.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut rolling: VecDeque<(i128, i128)> = VecDeque::new();
+    let mut rolling_consumed_sum: i128 = 0;
+    let mut rolling_live_sum: i128 = 0;
+    let mut data = Vec::with_capacity(daily_stats.len());
+
+    for (date, stats) in daily_stats {
+        let live = stats.knowledge_size.unwrap_or(0).max(0);
+        let consumed = (stats.occupied_capacity_consumed as i128).max(0);
+
+        rolling.push_back((consumed, live));
+        rolling_consumed_sum += consumed;
+        rolling_live_sum += live;
+        if rolling.len() > 7 {
+            if let Some((old_consumed, old_live)) = rolling.pop_front() {
+                rolling_consumed_sum -= old_consumed;
+                rolling_live_sum -= old_live;
+            }
+        }
+
+        let daily_turnover = if live > 0 {
+            consumed as f64 * 100.0 / live as f64
+        } else {
+            0.0
+        };
+        let weekly_turnover = if rolling_live_sum > 0 {
+            rolling_consumed_sum as f64 * 100.0 / rolling_live_sum as f64
+        } else {
+            0.0
+        };
+
+        data.push(ChartDataPoint {
+            date: format_date_key(&date),
+            value: format!("{daily_turnover:.6}"),
+            value2: Some(format!("{weekly_turnover:.6}")),
+        });
+    }
+
+    let response = ChartResponse {
+        data,
+        title: "Capacity Turnover Ratio".to_string(),
+        y_axis_label: "Daily Turnover (%)".to_string(),
+        y2_axis_label: Some("Weekly Turnover (%)".to_string()),
+    };
+
+    state.cache.set(cache_key, &response, CacheTtl::CHART).await;
+    ok(response)
+}
+
+async fn get_cell_size_distribution_chart(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<ChartResponse> {
+    let cache_key = "chart:cell-size-distribution:v1";
+    if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
+        return ok(cached);
+    }
+
+    let bucket_labels = [
+        "<100 CKB",
+        "100-1k CKB",
+        "1k-10k CKB",
+        "10k-100k CKB",
+        "100k-1m CKB",
+        ">=1m CKB",
+    ];
+    let mut bucket_counts = vec![0_i128; bucket_labels.len()];
+    let mut bucket_occupied = vec![0_i128; bucket_labels.len()];
+
+    let iter = state
+        .store
+        .iterator_cf(state.store.cf_live_cells(), rocksdb::IteratorMode::Start);
+    for item in iter.flatten() {
+        let (_, value) = item;
+        let Ok(cell) = bincode::deserialize::<ckbadger_store::LiveCellInfo>(&value) else {
+            continue;
+        };
+        let occupied = (cell.occupied_capacity as i128).max(0);
+        let idx = occupied_capacity_bucket_index(occupied);
+        bucket_counts[idx] += 1;
+        bucket_occupied[idx] += occupied;
+    }
+
+    let data = bucket_labels
+        .iter()
+        .enumerate()
+        .map(|(idx, label)| ChartDataPoint {
+            date: (*label).to_string(),
+            value: bucket_counts[idx].to_string(),
+            value2: Some(shannon_to_ckb_string(bucket_occupied[idx])),
+        })
+        .collect();
+
+    let response = ChartResponse {
+        data,
+        title: "Cell Size Distribution".to_string(),
+        y_axis_label: "Live Cells".to_string(),
+        y2_axis_label: Some("Occupied Capacity (CKB)".to_string()),
+    };
+
+    state.cache.set(cache_key, &response, CacheTtl::CHART).await;
+    ok(response)
+}
+
+async fn get_address_cohort_retention_chart(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<ChartResponse> {
+    let cache_key = "chart:address-cohort-retention:v1";
+    if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
+        return ok(cached);
+    }
+
+    let transitions =
+        load_block_date_transitions(state.store.as_ref()).map_err(ApiError::internal)?;
+    let mut cohorts: BTreeMap<String, (i128, i128)> = BTreeMap::new();
+
+    let iter = state
+        .store
+        .iterator_cf(state.store.cf_addr_balance(), rocksdb::IteratorMode::Start);
+    for item in iter.flatten() {
+        let (_, value) = item;
+        let Ok(balance) = bincode::deserialize::<ckbadger_store::AddressBalance>(&value) else {
+            continue;
+        };
+        let Some(first_seen_date) = block_number_to_date(&transitions, balance.first_seen_block)
+        else {
+            continue;
+        };
+
+        let cohort = first_seen_date.format("%Y-%m").to_string();
+        let occupied = balance.occupied_capacity.max(0);
+        let total_balance = balance.balance.max(0);
+        let entry = cohorts.entry(cohort).or_insert((0, 0));
+        entry.0 += occupied;
+        entry.1 += total_balance;
+    }
+
+    let data = cohorts
+        .into_iter()
+        .map(|(cohort, (occupied, total_balance))| {
+            let retention = if total_balance > 0 {
+                occupied as f64 * 100.0 / total_balance as f64
+            } else {
+                0.0
+            };
+            ChartDataPoint {
+                date: cohort,
+                value: format!("{retention:.6}"),
+                value2: Some(shannon_to_ckb_string(occupied)),
+            }
+        })
+        .collect();
+
+    let response = ChartResponse {
+        data,
+        title: "Address Cohort Retention".to_string(),
+        y_axis_label: "Occupied / Balance (%)".to_string(),
+        y2_axis_label: Some("Occupied Capacity (CKB)".to_string()),
+    };
+
+    state.cache.set(cache_key, &response, CacheTtl::CHART).await;
     ok(response)
 }
 
@@ -2164,5 +2540,44 @@ mod tests {
             .unwrap();
         assert_eq!(at_1s.value, "100.000");
         assert_eq!(at_50s.value, "0.000");
+    }
+
+    #[test]
+    fn test_block_number_to_date_resolves_transition_ranges() {
+        let transitions = vec![
+            (0, NaiveDate::from_ymd_opt(2026, 2, 18).unwrap()),
+            (100, NaiveDate::from_ymd_opt(2026, 2, 19).unwrap()),
+            (220, NaiveDate::from_ymd_opt(2026, 2, 20).unwrap()),
+        ];
+
+        assert_eq!(
+            block_number_to_date(&transitions, 0),
+            NaiveDate::from_ymd_opt(2026, 2, 18)
+        );
+        assert_eq!(
+            block_number_to_date(&transitions, 150),
+            NaiveDate::from_ymd_opt(2026, 2, 19)
+        );
+        assert_eq!(
+            block_number_to_date(&transitions, 999),
+            NaiveDate::from_ymd_opt(2026, 2, 20)
+        );
+        assert_eq!(block_number_to_date(&[], 0), None);
+    }
+
+    #[test]
+    fn test_occupied_capacity_bucket_index_boundaries() {
+        assert_eq!(occupied_capacity_bucket_index(99 * SHANNONS_PER_CKB), 0);
+        assert_eq!(occupied_capacity_bucket_index(100 * SHANNONS_PER_CKB), 1);
+        assert_eq!(occupied_capacity_bucket_index(1_000 * SHANNONS_PER_CKB), 2);
+        assert_eq!(occupied_capacity_bucket_index(10_000 * SHANNONS_PER_CKB), 3);
+        assert_eq!(
+            occupied_capacity_bucket_index(100_000 * SHANNONS_PER_CKB),
+            4
+        );
+        assert_eq!(
+            occupied_capacity_bucket_index(1_000_000 * SHANNONS_PER_CKB),
+            5
+        );
     }
 }
