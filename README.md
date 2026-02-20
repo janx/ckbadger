@@ -372,7 +372,6 @@ ckbadger/
 │   ├── POSTMORTEM.md       # Historical bugs & lessons learned
 │   └── DAO_CALCULATIONS.md # DAO formula documentation
 ├── docker/                 # Dockerfiles (indexer, api, frontend)
-├── e2e/                    # Playwright E2E tests
 ├── .github/workflows/      # CI/CD pipelines
 └── docker-compose.yml      # Development setup
 ```
@@ -487,13 +486,11 @@ cd frontend && pnpm test:coverage        # With coverage
 cd frontend && pnpm type-check           # TypeScript (tsc --noEmit)
 cd frontend && pnpm lint                 # ESLint
 
-# E2E tests (requires running services)
-pnpm test:e2e                            # Playwright tests
 ```
 
 ### Test Coverage
 
-Coverage is verified in CI across Rust crates, frontend unit tests, and E2E flows.
+Coverage is verified in CI across Rust crates and frontend unit tests.
 
 ### CI/CD
 
@@ -501,7 +498,6 @@ GitHub Actions workflow runs on every push:
 
 - Rust: fmt check, clippy, unit tests, coverage (Codecov)
 - Frontend: type-check, lint, Vitest, coverage
-- E2E: Playwright with test store
 
 ## Comparison
 

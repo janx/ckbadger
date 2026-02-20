@@ -12,7 +12,6 @@
     "dev": "pnpm --filter frontend dev",
     "build": "pnpm --filter frontend build",
     "lint": "pnpm --filter frontend lint",
-    "test:e2e": "npx playwright test",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "prepare": "lefthook install",

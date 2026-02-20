@@ -110,9 +110,6 @@ cd frontend && pnpm test                 # Run Vitest
 cd frontend && pnpm test:coverage        # With coverage report
 cd frontend && npx vitest run            # Non-interactive
 
-# E2E Testing (requires running services)
-pnpm test:e2e                            # Playwright tests
-
 # Data Integrity Verification (requires running API at localhost:3001)
 cargo run -p ckbadger-indexer -- verify --depth fast        # Quick checks (seconds)
 cargo run -p ckbadger-indexer -- verify --depth sampling    # Sampling + explorer (minutes)
@@ -727,7 +724,6 @@ const DAO_OCCUPIED_CAPACITY: u64 = 102_00000000; // 102 CKB
 | API integration  | `crates/api/tests/api_integration.rs`   |
 | Frontend tests   | `frontend/__tests__/**/*.test.{ts,tsx}` |
 | MSW handlers     | `frontend/__tests__/msw/handlers.ts`    |
-| E2E tests        | `e2e/*.spec.ts`                         |
 | CI workflow      | `.github/workflows/ci.yml`              |
 
 ## Dependencies

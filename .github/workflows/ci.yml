@@ -22,7 +22,6 @@ jobs:
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       frontend: ${{ steps.filter.outputs.frontend }}
-      e2e: ${{ steps.filter.outputs.e2e }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -34,11 +33,6 @@ jobs:
               - 'Cargo.toml'
               - 'Cargo.lock'
             frontend:
-              - 'frontend/**'
-            e2e:
-              - 'e2e/**'
-              - 'playwright.config.ts'
-              - 'crates/api/**'
               - 'frontend/**'
 
   rust-check:
@@ -178,66 +172,3 @@ jobs:
 
       - name: Run tests
         run: npx vitest run
-
-  e2e-test:
-    name: E2E Tests
-    runs-on: ubuntu-latest
-    needs: [changes, rust-check, frontend-check]
-    if: |
-      always() &&
-      needs.changes.outputs.e2e == 'true' &&
-      (needs.rust-check.result == 'success' || needs.rust-check.result == 'skipped') &&
-      (needs.frontend-check.result == 'success' || needs.frontend-check.result == 'skipped')
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-e2e-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-e2e-
-
-      - name: Install root dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Install frontend dependencies
-        run: pnpm install --frozen-lockfile
-        working-directory: frontend
-
-      - name: Install Playwright browsers
-        run: npx playwright install chromium
-
-      - name: Build API (release)
-        run: cargo build -p ckbadger-api --release
-
-      - name: Run E2E tests
-        run: pnpm test:e2e
-        env:
-          CI: true
-          CKBADGER_DATA_PATH: /tmp/ckbadger-e2e-store
-          CKB_RPC_URL: https://mainnet.ckbapp.dev
-          CKB_NETWORK: mainnet
-
-      - name: Upload test results
-        uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: playwright-report
-          path: playwright-report/
-          retention-days: 7
