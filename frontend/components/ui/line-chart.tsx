@@ -3,6 +3,8 @@
 import { useState, useRef, useCallback, useMemo } from 'react';
 import { ChartDataPoint } from '@/lib/api';
 
+export type LineChartType = 'line' | 'bar';
+
 interface LineChartProps {
   data: ChartDataPoint[];
   yAxisLabel: string;
@@ -12,6 +14,7 @@ interface LineChartProps {
   height?: number;
   interactive?: boolean;
   defaultLogScale?: boolean;
+  chartType?: LineChartType;
 }
 
 function formatValue(val: number | undefined, isPercent = false): string {
@@ -42,6 +45,7 @@ export function LineChart({
   height: chartHeightProp = 240,
   interactive = true,
   defaultLogScale = false,
+  chartType = 'line',
 }: LineChartProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
@@ -84,6 +88,10 @@ export function LineChart({
     if (!isFinite(min)) min = 0;
     if (!isFinite(max) || max === 0) max = 1;
 
+    if (chartType === 'bar') {
+      min = 0;
+    }
+
     let max2 = -Infinity;
     for (const v of values2) {
       if (v > max2) max2 = v;
@@ -97,11 +105,17 @@ export function LineChart({
     }
 
     return { minVal: min * 0.9, maxVal: max * 1.1, minVal2: 0, maxVal2: max2 * 1.1 };
-  }, [values, values2, useLogScale]);
+  }, [values, values2, useLogScale, chartType]);
 
   const xScale = useCallback(
-    (i: number) => padding.left + (i / (data.length - 1 || 1)) * chartWidth,
-    [data.length, padding.left, chartWidth]
+    (i: number) => {
+      if (chartType === 'bar') {
+        const step = chartWidth / (data.length || 1);
+        return padding.left + step * (i + 0.5);
+      }
+      return padding.left + (i / (data.length - 1 || 1)) * chartWidth;
+    },
+    [chartType, chartWidth, data.length, padding.left]
   );
 
   const yScale = useCallback(
@@ -125,10 +139,14 @@ export function LineChart({
 
   const xScaleInverse = useCallback(
     (x: number) => {
+      if (chartType === 'bar') {
+        const step = chartWidth / (data.length || 1);
+        return Math.floor((x - padding.left) / step);
+      }
       const ratio = (x - padding.left) / chartWidth;
       return Math.round(ratio * (data.length - 1));
     },
-    [data.length, padding.left, chartWidth]
+    [chartType, chartWidth, data.length, padding.left]
   );
 
   const getMouseIndex = useCallback(
@@ -307,22 +325,33 @@ export function LineChart({
   );
 
   const pathD = useMemo(() => {
-    if (!data.length) return '';
+    if (chartType === 'bar' || !data.length) return '';
     const parts: string[] = new Array(data.length);
     for (let i = 0; i < data.length; i++) {
       parts[i] = `${i === 0 ? 'M' : 'L'} ${xScale(i)} ${yScale(values[i])}`;
     }
     return parts.join(' ');
-  }, [data.length, xScale, yScale, values]);
+  }, [chartType, data.length, xScale, yScale, values]);
 
   const path2D = useMemo(() => {
-    if (!values2.length) return '';
+    if (chartType === 'bar' || !values2.length) return '';
     const parts: string[] = new Array(data.length);
     for (let i = 0; i < data.length; i++) {
       parts[i] = `${i === 0 ? 'M' : 'L'} ${xScale(i)} ${y2Scale(values2[i])}`;
     }
     return parts.join(' ');
-  }, [data.length, xScale, y2Scale, values2]);
+  }, [chartType, data.length, xScale, y2Scale, values2]);
+
+  const barWidth = useMemo(() => {
+    if (chartType !== 'bar') return 0;
+    const step = chartWidth / (data.length || 1);
+    return Math.max(2, Math.min(40, step * 0.7));
+  }, [chartType, chartWidth, data.length]);
+
+  const barBaseline = useMemo(
+    () => (chartType === 'bar' ? yScale(useLogScale ? 1 : 0) : 0),
+    [chartType, yScale, useLogScale]
+  );
 
   const yTicks = useMemo(() => {
     if (useLogScale) {
@@ -447,8 +476,31 @@ export function LineChart({
           </text>
         ))}
 
-        <path d={pathD} fill="none" stroke={primaryColor} strokeWidth="2" />
-        {path2D && <path d={path2D} fill="none" stroke={secondaryColor} strokeWidth="2" />}
+        {chartType === 'line' && (
+          <path d={pathD} fill="none" stroke={primaryColor} strokeWidth="2" />
+        )}
+        {chartType === 'line' && path2D && (
+          <path d={path2D} fill="none" stroke={secondaryColor} strokeWidth="2" />
+        )}
+        {chartType === 'bar' &&
+          data.map((_, i) => {
+            const value = Math.max(values[i] ?? 0, useLogScale ? 1 : 0);
+            const barTop = yScale(value);
+            const y = Math.min(barTop, barBaseline);
+            const barHeight = Math.max(1, Math.abs(barBaseline - barTop));
+            return (
+              <rect
+                key={`bar-${data[i]?.date ?? i}`}
+                data-testid="bar-series-primary"
+                x={xScale(i) - barWidth / 2}
+                y={y}
+                width={barWidth}
+                height={barHeight}
+                fill={primaryColor}
+                fillOpacity={0.85}
+              />
+            );
+          })}
 
         {interactive && selectionStart !== null && selectionEnd !== null && (
           <rect
@@ -482,15 +534,31 @@ export function LineChart({
               stroke="#475569"
               strokeDasharray="3,3"
             />
-            <circle
-              cx={xScale(hoverIndex)}
-              cy={yScale(values[hoverIndex])}
-              r={4}
-              fill={primaryColor}
-              stroke="#fff"
-              strokeWidth={2}
-            />
-            {values2.length > 0 && values2[hoverIndex] !== undefined && (
+            {chartType === 'line' && (
+              <circle
+                cx={xScale(hoverIndex)}
+                cy={yScale(values[hoverIndex])}
+                r={4}
+                fill={primaryColor}
+                stroke="#fff"
+                strokeWidth={2}
+              />
+            )}
+            {chartType === 'bar' && (
+              <rect
+                x={xScale(hoverIndex) - barWidth / 2}
+                y={Math.min(yScale(Math.max(values[hoverIndex], useLogScale ? 1 : 0)), barBaseline)}
+                width={barWidth}
+                height={Math.max(
+                  1,
+                  Math.abs(barBaseline - yScale(Math.max(values[hoverIndex], useLogScale ? 1 : 0)))
+                )}
+                fill="transparent"
+                stroke="#ffffff"
+                strokeWidth={1}
+              />
+            )}
+            {chartType === 'line' && values2.length > 0 && values2[hoverIndex] !== undefined && (
               <circle
                 cx={xScale(hoverIndex)}
                 cy={y2Scale(values2[hoverIndex])}

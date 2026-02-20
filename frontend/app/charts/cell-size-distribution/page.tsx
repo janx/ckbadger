@@ -9,6 +9,7 @@ export default function CellSizeDistributionPage() {
       title="Cell Size Distribution"
       queryKey="chart-cell-size-distribution"
       queryFn={api.getCellSizeDistributionChart}
+      chartType="bar"
     />
   );
 }

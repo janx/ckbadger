@@ -1806,23 +1806,30 @@ fn draw_memory_stats(f: &mut Frame, app: &App, area: Rect) {
         ])
         .split(inner);
 
+    let (left, mid, right) = storage_runtime_columns(mem);
+    f.render_widget(Paragraph::new(left), cols[0]);
+    f.render_widget(Paragraph::new(mid), cols[1]);
+    f.render_widget(Paragraph::new(right), cols[2]);
+}
+
+fn storage_runtime_columns(
+    mem: &MemoryStatsData,
+) -> (Vec<Line<'static>>, Vec<Line<'static>>, Vec<Line<'static>>) {
+    let live_delta = runtime_live_delta(mem.live_cells_count, mem.total_live_cells);
+
     let left = vec![
+        metric_line(
+            "Live (cache)",
+            format_num_u64(mem.live_cells_count),
+            TERMINAL_GREEN,
+        ),
+        metric_line(
+            "Consumed",
+            format_num_u64(mem.consumed_cells_count),
+            FOREGROUND,
+        ),
         Line::from(vec![
-            Span::styled("Live Cells: ", Style::default().fg(SLATE_500)),
-            Span::styled(
-                format_num_u64(mem.live_cells_count),
-                Style::default().fg(TERMINAL_GREEN),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("Consumed:   ", Style::default().fg(SLATE_500)),
-            Span::styled(
-                format_num_u64(mem.consumed_cells_count),
-                Style::default().fg(FOREGROUND),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("Consumed Sz: ", Style::default().fg(SLATE_500)),
+            metric_label_span("Consumed Sz"),
             Span::styled(
                 format_bytes(mem.consumed_cells_bytes),
                 Style::default().fg(FOREGROUND),
@@ -1836,76 +1843,111 @@ fn draw_memory_stats(f: &mut Frame, app: &App, area: Rect) {
             ),
             Span::styled("]", Style::default().fg(SLATE_500)),
         ]),
-        Line::from(vec![
-            Span::styled("BlockHdrs:  ", Style::default().fg(SLATE_500)),
-            Span::styled(
-                format_num_u64(mem.block_headers_count),
-                Style::default().fg(TERMINAL_DIM),
-            ),
-        ]),
+        metric_line(
+            "Block Hdrs",
+            format_num_u64(mem.block_headers_count),
+            TERMINAL_DIM,
+        ),
     ];
-    f.render_widget(Paragraph::new(left), cols[0]);
 
     let mid = vec![
-        Line::from(vec![
-            Span::styled("RocksDB Total: ", Style::default().fg(SLATE_500)),
-            Span::styled(
-                format_bytes(mem.rocksdb_total_bytes),
-                Style::default().fg(TERMINAL_GREEN),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("Memtable:      ", Style::default().fg(SLATE_500)),
-            Span::styled(
-                format_bytes(mem.rocksdb_memtable_bytes),
-                Style::default().fg(FOREGROUND),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("Block Cache:   ", Style::default().fg(SLATE_500)),
-            Span::styled(
-                format_bytes(mem.rocksdb_block_cache_bytes),
-                Style::default().fg(FOREGROUND),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("TableReaders:  ", Style::default().fg(SLATE_500)),
-            Span::styled(
-                format_bytes(mem.rocksdb_table_readers_bytes),
-                Style::default().fg(TERMINAL_DIM),
-            ),
-        ]),
+        metric_line(
+            "RocksDB Total",
+            format_bytes(mem.rocksdb_total_bytes),
+            TERMINAL_GREEN,
+        ),
+        metric_line(
+            "Memtable",
+            format_bytes(mem.rocksdb_memtable_bytes),
+            FOREGROUND,
+        ),
+        metric_line(
+            "Block Cache",
+            format_bytes(mem.rocksdb_block_cache_bytes),
+            FOREGROUND,
+        ),
+        metric_line(
+            "TableReaders",
+            format_bytes(mem.rocksdb_table_readers_bytes),
+            TERMINAL_DIM,
+        ),
     ];
-    f.render_widget(Paragraph::new(mid), cols[1]);
 
     let right = vec![
+        metric_line(
+            "Chain Txs",
+            format_num(mem.total_transactions),
+            TERMINAL_GREEN,
+        ),
+        metric_line("Chain Cells", format_num(mem.total_cells), FOREGROUND),
         Line::from(vec![
-            Span::styled("Txs:  ", Style::default().fg(SLATE_500)),
-            Span::styled(
-                format_num(mem.total_transactions),
-                Style::default().fg(TERMINAL_GREEN),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("Cells:", Style::default().fg(SLATE_500)),
-            Span::styled(format_num(mem.total_cells), Style::default().fg(FOREGROUND)),
-        ]),
-        Line::from(vec![
-            Span::styled("Live: ", Style::default().fg(SLATE_500)),
+            metric_label_span("Live (sync)"),
             Span::styled(
                 format_num(mem.total_live_cells),
                 Style::default().fg(FOREGROUND),
             ),
-        ]),
-        Line::from(vec![
-            Span::styled("Addrs:", Style::default().fg(SLATE_500)),
+            Span::styled("  Δcache ", Style::default().fg(SLATE_500)),
             Span::styled(
-                format_num(mem.total_addresses),
-                Style::default().fg(TERMINAL_DIM),
+                format_signed_num_i128(live_delta),
+                Style::default().fg(live_delta_color(live_delta)),
             ),
         ]),
+        metric_line("Chain Addrs", format_num(mem.total_addresses), TERMINAL_DIM),
     ];
-    f.render_widget(Paragraph::new(right), cols[2]);
+
+    (left, mid, right)
+}
+
+fn metric_label_span(label: &str) -> Span<'static> {
+    Span::styled(format!("{label:<13}: "), Style::default().fg(SLATE_500))
+}
+
+fn metric_line(label: &str, value: String, value_color: Color) -> Line<'static> {
+    Line::from(vec![
+        metric_label_span(label),
+        Span::styled(value, Style::default().fg(value_color)),
+    ])
+}
+
+fn runtime_live_delta(cache_live_cells: u64, sync_live_cells: i64) -> i128 {
+    i128::from(cache_live_cells) - i128::from(sync_live_cells)
+}
+
+fn live_delta_color(delta: i128) -> Color {
+    if delta == 0 {
+        TERMINAL_GREEN
+    } else if delta.abs() <= 100 {
+        AMBER
+    } else {
+        ERROR_RED
+    }
+}
+
+fn format_signed_num_i128(value: i128) -> String {
+    if value > 0 {
+        format!("+{}", format_num_i128(value))
+    } else {
+        format_num_i128(value)
+    }
+}
+
+fn format_num_i128(value: i128) -> String {
+    if value < 0 {
+        return format!("-{}", format_num_commas_u128(value.unsigned_abs()));
+    }
+    format_num_commas_u128(value as u128)
+}
+
+fn format_num_commas_u128(value: u128) -> String {
+    let s = value.to_string();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    for (i, ch) in s.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out.chars().rev().collect()
 }
 
 fn draw_storage_health(f: &mut Frame, app: &App, area: Rect) {
@@ -2323,7 +2365,7 @@ fn format_hit_rate(hits: Option<u64>, misses: Option<u64>) -> String {
     }
 }
 
-fn consumed_bytes_source_label(source: &str) -> &str {
+fn consumed_bytes_source_label(source: &str) -> &'static str {
     match source {
         "live" => "live",
         "sst" => "sst",
@@ -2952,14 +2994,16 @@ mod tests {
         api_health_state, chart_height_warning, compact_overview_layout, compact_sync_layout,
         consumed_bytes_source_color, consumed_bytes_source_label, dense_right_lines,
         detail_right_lines, diagnostics_dense_panel, eta_confidence_label, format_age_secs,
-        format_hit_rate, format_num, format_num_commas, format_ratio, format_ttl, heartbeat_is_on,
-        io_rpc_jitter_line, overview_log_min_height, overview_services_min_height,
-        pipeline_bottleneck, pipeline_flow_state, rate_jitter, redis_health_state, redis_key_line,
-        redis_max_key_age, sparkline, stack_sync_charts, sync_bottleneck, trend_delta,
-        trim_for_panel, Color, CompactOverviewLayout, CompactSyncLayout, DiagnosticsViewMode,
-        SyncBottleneck, AMBER, ERROR_RED, TERMINAL_DIM, TERMINAL_GREEN,
+        format_hit_rate, format_num, format_num_commas, format_ratio, format_signed_num_i128,
+        format_ttl, heartbeat_is_on, io_rpc_jitter_line, overview_log_min_height,
+        overview_services_min_height, pipeline_bottleneck, pipeline_flow_state, rate_jitter,
+        redis_health_state, redis_key_line, redis_max_key_age, runtime_live_delta, sparkline,
+        stack_sync_charts, storage_runtime_columns, sync_bottleneck, trend_delta, trim_for_panel,
+        Color, CompactOverviewLayout, CompactSyncLayout, DiagnosticsViewMode, SyncBottleneck,
+        AMBER, ERROR_RED, TERMINAL_DIM, TERMINAL_GREEN,
     };
     use crate::db::{ApiServiceInfo, RedisServiceInfo};
+    use ckbadger_common::MemoryStatsData;
     use ratatui::layout::Rect;
     use ratatui::text::Line;
     use std::collections::VecDeque;
@@ -3358,5 +3402,39 @@ mod tests {
         assert!(!heartbeat_is_on(500));
         assert!(!heartbeat_is_on(999));
         assert!(heartbeat_is_on(1000));
+    }
+
+    #[test]
+    fn test_runtime_live_delta_signed_format() {
+        assert_eq!(runtime_live_delta(1_005, 1_000), 5);
+        assert_eq!(runtime_live_delta(995, 1_000), -5);
+        assert_eq!(format_signed_num_i128(5), "+5");
+        assert_eq!(format_signed_num_i128(-5), "-5");
+    }
+
+    #[test]
+    fn test_storage_runtime_columns_live_sync_line() {
+        let mem = MemoryStatsData {
+            live_cells_count: 1_428_835,
+            consumed_cells_count: 93_659_951,
+            consumed_cells_bytes: 7_860_000_000,
+            consumed_cells_bytes_source: "live".to_string(),
+            rocksdb_memtable_bytes: 48_060_000,
+            rocksdb_block_cache_bytes: 7_990_000_000,
+            rocksdb_table_readers_bytes: 4_920_000,
+            rocksdb_total_bytes: 8_050_000_000,
+            block_headers_count: 18_663_072,
+            total_transactions: 48_551_716,
+            total_cells: 95_088_803,
+            total_live_cells: 1_428_846,
+            total_addresses: 0,
+            ..Default::default()
+        };
+
+        let (_, _, right) = storage_runtime_columns(&mem);
+        let live_line = line_text(&right[2]);
+        assert!(live_line.contains("Live (sync)"));
+        assert!(live_line.contains("1,428,846"));
+        assert!(live_line.contains("Δcache -11"));
     }
 }

@@ -56,6 +56,8 @@ describe('KnowledgeSizePage', () => {
       expect(screen.getAllByTestId('line-chart')).toHaveLength(2);
       expect(screen.getAllByText('Utilization (%)').length).toBeGreaterThan(0);
       expect(screen.getAllByText('Net Flow (CKB/day)').length).toBeGreaterThan(0);
+      expect(screen.getByText('Description')).toBeInTheDocument();
+      expect(screen.getByText('Legend Item Calculation')).toBeInTheDocument();
     });
   });
 });

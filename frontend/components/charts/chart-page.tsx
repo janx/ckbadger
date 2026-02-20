@@ -8,7 +8,10 @@ import {
   TerminalPanelHeader,
   TerminalPanelContent,
 } from '@/components/ui/terminal-panel';
-import { LineChart } from '@/components/ui/line-chart';
+import { ChartCalculationNote } from '@/components/charts/chart-calculation-note';
+import { getChartDescription } from '@/components/charts/chart-calculation-descriptions';
+import type { ChartDescription } from '@/components/charts/chart-calculation-descriptions';
+import { LineChart, LineChartType } from '@/components/ui/line-chart';
 import { api, ChartResponse } from '@/lib/api';
 
 function ChartDataWarning({ show }: { show: boolean }) {
@@ -32,6 +35,8 @@ interface ChartPageProps {
   backLink?: string;
   backLabel?: string;
   defaultLogScale?: boolean;
+  chartType?: LineChartType;
+  description?: ChartDescription;
 }
 
 export function ChartPage({
@@ -41,6 +46,8 @@ export function ChartPage({
   backLink = '/charts',
   backLabel = 'Back to Charts',
   defaultLogScale = false,
+  chartType = 'line',
+  description,
 }: ChartPageProps) {
   const { data: networkStats } = useQuery({
     queryKey: ['network-stats'],
@@ -51,6 +58,13 @@ export function ChartPage({
     queryKey: [queryKey],
     queryFn,
   });
+  const resolvedDescription = data
+    ? (description ??
+      getChartDescription(queryKey, {
+        yAxisLabel: data.yAxisLabel,
+        y2AxisLabel: data.y2AxisLabel,
+      }))
+    : undefined;
 
   return (
     <div className="min-h-screen bg-slate-950">
@@ -86,13 +100,20 @@ export function ChartPage({
                   y2AxisLabel={data.y2AxisLabel}
                   height={400}
                   defaultLogScale={defaultLogScale}
+                  chartType={chartType}
                 />
                 <div className="mt-6 flex items-center justify-center gap-6 text-sm">
                   <div className="flex items-center gap-2">
-                    <span className="h-0.5 w-4 bg-purple-500" />
+                    <span
+                      className={
+                        chartType === 'bar'
+                          ? 'h-3 w-3 rounded bg-purple-500'
+                          : 'h-0.5 w-4 bg-purple-500'
+                      }
+                    />
                     <span className="text-slate-400">{data.yAxisLabel}</span>
                   </div>
-                  {data.y2AxisLabel && (
+                  {chartType === 'line' && data.y2AxisLabel && (
                     <div className="flex items-center gap-2">
                       <span className="bg-terminal-green h-0.5 w-4" />
                       <span className="text-slate-400">{data.y2AxisLabel}</span>
@@ -103,6 +124,7 @@ export function ChartPage({
                   Drag to select range • Scroll to zoom • Middle-click drag to pan • Click Reset to
                   restore
                 </div>
+                {resolvedDescription && <ChartCalculationNote description={resolvedDescription} />}
               </>
             )}
           </TerminalPanelContent>

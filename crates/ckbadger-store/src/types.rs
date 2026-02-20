@@ -676,6 +676,8 @@ pub struct MemoryStats {
     pub consumed_cells_bytes_source: &'static str,
     /// Estimated number of cached block headers.
     pub block_headers_count: usize,
+    /// Estimated number of address entries in addr_balance column family.
+    pub addr_balance_count: usize,
     /// Backward-compatible alias for live cell count.
     pub cells_count: usize,
     pub memory_bytes: usize,

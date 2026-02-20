@@ -8,6 +8,8 @@ import {
   TerminalPanelHeader,
   TerminalPanelContent,
 } from '@/components/ui/terminal-panel';
+import { ChartCalculationNote } from '@/components/charts/chart-calculation-note';
+import { getChartDescription } from '@/components/charts/chart-calculation-descriptions';
 import { MultiSeriesLineChart } from '@/components/ui/multi-series-line-chart';
 import { api } from '@/lib/api';
 
@@ -42,12 +44,24 @@ export default function CellCountPage() {
               </div>
             )}
             {data && (
-              <MultiSeriesLineChart
-                data={data.data}
-                series={data.series}
-                height={400}
-                defaultVisibleSeries={['liveCells']}
-              />
+              <>
+                <MultiSeriesLineChart
+                  data={data.data}
+                  series={data.series}
+                  height={400}
+                  defaultVisibleSeries={['liveCells']}
+                />
+                <ChartCalculationNote
+                  description={
+                    getChartDescription('chart-cell-count', {
+                      seriesLabels: data.series.map((s) => s.label),
+                    }) ?? {
+                      overview: 'Shows daily cell totals by state.',
+                      legendItems: [],
+                    }
+                  }
+                />
+              </>
             )}
           </TerminalPanelContent>
         </TerminalPanel>

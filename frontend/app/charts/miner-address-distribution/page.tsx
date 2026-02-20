@@ -9,6 +9,8 @@ import {
   TerminalPanelContent,
   TerminalRow,
 } from '@/components/ui/terminal-panel';
+import { ChartCalculationNote } from '@/components/charts/chart-calculation-note';
+import { getChartDescription } from '@/components/charts/chart-calculation-descriptions';
 import { PieChart } from '@/components/ui/pie-chart';
 import { api, MinerDistributionDataPoint } from '@/lib/api';
 
@@ -138,12 +140,24 @@ export default function MinerAddressDistributionPage() {
               </div>
             )}
             {data && pieData.length > 0 && (
-              <div className="flex justify-center">
-                <PieChart
-                  data={pieData}
-                  size={320}
-                  showLegend={true}
-                  formatValue={(v) => v.toFixed(2) + '%'}
+              <div>
+                <div className="flex justify-center">
+                  <PieChart
+                    data={pieData}
+                    size={320}
+                    showLegend={true}
+                    formatValue={(v) => v.toFixed(2) + '%'}
+                  />
+                </div>
+                <ChartCalculationNote
+                  description={
+                    getChartDescription('chart-miner-address-distribution', {
+                      seriesLabels: pieData.map((item) => item.label),
+                    }) ?? {
+                      overview: 'Shows block-production share by miner.',
+                      legendItems: [],
+                    }
+                  }
                 />
               </div>
             )}

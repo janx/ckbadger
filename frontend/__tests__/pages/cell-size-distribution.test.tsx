@@ -9,10 +9,19 @@ vi.mock('@/lib/api', () => ({
 }));
 
 vi.mock('@/components/charts/chart-page', () => ({
-  ChartPage: ({ title, queryKey }: { title: string; queryKey: string }) => (
+  ChartPage: ({
+    title,
+    queryKey,
+    chartType,
+  }: {
+    title: string;
+    queryKey: string;
+    chartType?: string;
+  }) => (
     <div>
       <span>{title}</span>
       <span>{queryKey}</span>
+      <span>{chartType}</span>
     </div>
   ),
 }));
@@ -22,5 +31,6 @@ describe('CellSizeDistributionPage', () => {
     render(<CellSizeDistributionPage />);
     expect(screen.getByText('Cell Size Distribution')).toBeInTheDocument();
     expect(screen.getByText('chart-cell-size-distribution')).toBeInTheDocument();
+    expect(screen.getByText('bar')).toBeInTheDocument();
   });
 });

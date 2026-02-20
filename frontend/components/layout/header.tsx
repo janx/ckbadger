@@ -6,6 +6,7 @@ import { SearchBar } from '@/components/search-bar';
 import { Logo } from '@/components/layout/logo';
 
 const navLinks = [
+  { href: '/pipeline', label: 'Pipeline' },
   { href: '/dao', label: 'DAO' },
   { href: '/assets', label: 'Assets' },
   { href: '/scripts', label: 'Scripts' },

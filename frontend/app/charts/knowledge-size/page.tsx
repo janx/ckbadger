@@ -9,6 +9,8 @@ import {
   TerminalPanelContent,
   TerminalPanelHeader,
 } from '@/components/ui/terminal-panel';
+import { ChartCalculationNote } from '@/components/charts/chart-calculation-note';
+import { getChartDescription } from '@/components/charts/chart-calculation-descriptions';
 import { LineChart } from '@/components/ui/line-chart';
 import { ChartDataPoint, api } from '@/lib/api';
 
@@ -104,6 +106,17 @@ export default function KnowledgeSizePage() {
                   Drag to select range • Scroll to zoom • Middle-click drag to pan • Click Reset to
                   restore
                 </div>
+                <ChartCalculationNote
+                  description={
+                    getChartDescription('chart-knowledge-size', {
+                      yAxisLabel: data.yAxisLabel,
+                      y2AxisLabel: data.y2AxisLabel,
+                    }) ?? {
+                      overview: 'Shows common knowledge size and day-over-day net flow.',
+                      legendItems: [],
+                    }
+                  }
+                />
               </>
             )}
           </TerminalPanelContent>

@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils';
 
 interface MempoolBlocksProps {
   latestBlocks?: Block[];
+  chrome?: 'card' | 'flat';
 }
 
 function formatFeeRate(rate: number): string {
@@ -292,7 +293,7 @@ function MempoolDivider() {
   );
 }
 
-export function MempoolBlocks({ latestBlocks }: MempoolBlocksProps) {
+export function MempoolBlocks({ latestBlocks, chrome = 'card' }: MempoolBlocksProps) {
   const { data: mempoolData, isLoading: mempoolLoading } = useQuery({
     queryKey: ['mempool-blocks'],
     queryFn: () => api.getMempoolBlocks(),
@@ -337,9 +338,14 @@ export function MempoolBlocks({ latestBlocks }: MempoolBlocksProps) {
     }
   });
 
+  const containerClassName =
+    chrome === 'flat'
+      ? 'rounded-2xl bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800/80 p-5'
+      : 'rounded-2xl border border-slate-700/50 bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800 p-5 shadow-xl';
+
   if (mempoolLoading && pendingBlocks.length === 0) {
     return (
-      <div className="rounded-2xl border border-slate-700/50 bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800 p-5 shadow-xl">
+      <div className={containerClassName}>
         <h2 className="mb-5 text-lg font-bold tracking-tight text-white sm:text-xl">
           Chain Tip Intelligence
         </h2>
@@ -361,7 +367,7 @@ export function MempoolBlocks({ latestBlocks }: MempoolBlocksProps) {
   const displayPendingBlocks = pendingBlocks.slice(0, 4).reverse();
 
   return (
-    <div className="rounded-2xl border border-slate-700/50 bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800 p-5 shadow-xl">
+    <div className={containerClassName}>
       <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <h2 className="text-lg font-bold tracking-tight text-white sm:text-xl">
           Chain Tip Intelligence

@@ -92,7 +92,7 @@ describe('ScriptsPage', () => {
     expect(screen.getByRole('link', { name: 'SECP256K1_BLAKE160' })).toBeInTheDocument();
     expect(screen.getByText('lock')).toBeInTheDocument();
     expect(screen.getByText('Capacity (CKB)')).toBeInTheDocument();
-    expect(screen.getByText('Occupied Ratio')).toBeInTheDocument();
+    expect(screen.getByText('Utilization Ratio')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Sort by Occupied (CKB)' })).toBeInTheDocument();
   });
 

@@ -1,74 +1,379 @@
 'use client';
 
 import { useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import Link from 'next/link';
+import { useQueries, useQuery } from '@tanstack/react-query';
 import {
   api,
   Block,
-  NetworkStats,
+  CursorPaginatedResponse,
   MempoolTransaction,
-  Transaction,
   PendingProposal,
+  Transaction,
 } from '@/lib/api';
-import { PackedContainer, TxItem, TxCategory } from './packed-container';
+import { buildMetricDomain, mapTxToScatterPoint } from './flow-metrics';
 
 interface ChainWaveProps {
   initialBlocks?: Block[];
-  stats?: NetworkStats | null;
+  showHeader?: boolean;
+  chrome?: 'card' | 'flat';
 }
 
-function FlowArrow() {
+type FlowStage = 'mempool' | 'proposed' | 'committed';
+
+interface FlowTxItem {
+  id: string;
+  size: number;
+  fee?: number | null;
+  feeRate?: number | null;
+  cycles?: number | null;
+  category: 'normal' | 'cellbase';
+}
+
+interface CommittedBlock {
+  block: Block;
+  items: FlowTxItem[];
+  totalCount: number;
+}
+
+const MAX_STAGE_ITEMS = 180;
+const MAX_BLOCK_ITEMS = 80;
+const MAX_COMMITTED_BLOCKS = 4;
+
+function toSafePositive(value: number | null | undefined, fallback: number): number {
+  if (typeof value !== 'number' || Number.isNaN(value) || !Number.isFinite(value) || value <= 0) {
+    return fallback;
+  }
+
+  return value;
+}
+
+function formatFeeRate(value: number | null | undefined): string {
+  if (!value || value <= 0) return 'N/A';
+  return `${value.toFixed(2)} sh/B`;
+}
+
+function formatCycles(value: number | null | undefined): string {
+  if (!value || value <= 0) return 'N/A';
+  return Math.round(value).toLocaleString();
+}
+
+function median(values: Array<number | null | undefined>): number | null {
+  const valid = values
+    .filter((value): value is number => value !== null && value !== undefined && value > 0)
+    .sort((a, b) => a - b);
+
+  if (valid.length === 0) return null;
+
+  const mid = Math.floor(valid.length / 2);
+  if (valid.length % 2 === 0) {
+    return (valid[mid - 1] + valid[mid]) / 2;
+  }
+
+  return valid[mid];
+}
+
+function stagePillClass(stage: FlowStage): string {
+  if (stage === 'mempool') return 'border-cyan-500/30 bg-cyan-500/10 text-cyan-200';
+  if (stage === 'proposed') return 'border-amber-500/30 bg-amber-500/10 text-amber-200';
+  return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200';
+}
+
+function bubbleColor(feeScore: number, stage: FlowStage, missing: boolean): string {
+  if (missing) return 'rgba(148, 163, 184, 0.6)';
+
+  const stageShift = stage === 'mempool' ? -8 : stage === 'proposed' ? 12 : 0;
+  const hue = 206 - feeScore * 150 + stageShift;
+  const saturation = 82;
+  const lightness = 40 + feeScore * 20;
+  return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+}
+
+function mempoolTxToItem(tx: MempoolTransaction): FlowTxItem {
+  return {
+    id: tx.txHash,
+    size: toSafePositive(tx.size, 200),
+    fee: tx.fee,
+    feeRate: tx.feeRate,
+    cycles: tx.cycles,
+    category: 'normal',
+  };
+}
+
+function proposalToItem(proposal: PendingProposal): FlowTxItem {
+  return {
+    id: proposal.fullTxHash || proposal.proposalId,
+    size: toSafePositive(proposal.size, 200),
+    fee: proposal.fee,
+    feeRate: proposal.feeRate,
+    cycles: proposal.cycles,
+    category: 'normal',
+  };
+}
+
+function blockTxToItem(tx: Transaction): FlowTxItem {
+  const feeNum = parseFloat(tx.fee) || 0;
+  const feeRate = tx.txSize && tx.txSize > 0 ? feeNum / tx.txSize : null;
+
+  return {
+    id: tx.hash,
+    size: toSafePositive(tx.txSize, 200),
+    fee: feeNum,
+    feeRate,
+    cycles: tx.cycles ?? null,
+    category: tx.isCellbase ? 'cellbase' : 'normal',
+  };
+}
+
+function StageFlowPill({
+  title,
+  subtitle,
+  value,
+  stage,
+}: {
+  title: string;
+  subtitle: string;
+  value: number;
+  stage: FlowStage;
+}) {
   return (
-    <div className="flex flex-col items-center justify-center px-1 sm:px-2">
-      <div className="flex items-center text-slate-500">
-        <div className="hidden h-0.5 w-3 bg-gradient-to-r from-slate-600 to-slate-500 sm:block sm:w-4" />
-        <svg width="10" height="14" viewBox="0 0 10 14" fill="none" className="text-slate-500">
-          <path
-            d="M2 2L7 7L2 12"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
+    <div className={`rounded-xl border px-3 py-2 ${stagePillClass(stage)}`}>
+      <div className="text-[11px] uppercase tracking-widest text-slate-300/70">{title}</div>
+      <div className="mt-1 flex items-center justify-between gap-3">
+        <div className="text-lg font-semibold text-white">{value.toLocaleString()}</div>
+        <div className="text-[11px] text-slate-300/70">{subtitle}</div>
       </div>
     </div>
   );
 }
 
-function mempoolTxToItem(tx: MempoolTransaction): TxItem {
-  return {
-    id: tx.txHash,
-    size: tx.size,
-    fee: tx.fee,
-    feeRate: tx.feeRate,
-    category: 'normal' as TxCategory,
-  };
+function StageConnector({ label }: { label: string }) {
+  return (
+    <div className="hidden items-center gap-1 px-2 lg:flex">
+      <div className="h-px w-6 bg-slate-700" />
+      <div className="relative">
+        <div className="h-2 w-2 rounded-full bg-amber-400/80" />
+        <div className="absolute inset-0 animate-ping rounded-full bg-amber-300/40" />
+      </div>
+      <div className="text-[10px] uppercase tracking-widest text-slate-500">{label}</div>
+      <div className="h-px w-6 bg-slate-700" />
+    </div>
+  );
 }
 
-function blockTxToItem(tx: Transaction): TxItem {
-  const feeNum = parseFloat(tx.fee) || 0;
-  const feeRate = tx.txSize && tx.txSize > 0 ? feeNum / tx.txSize : undefined;
-  return {
-    id: tx.hash,
-    size: tx.txSize ?? 500,
-    fee: feeNum,
-    feeRate,
-    category: tx.isCellbase ? 'cellbase' : 'normal',
-  };
+function TxMetricScatter({
+  items,
+  stage,
+  emptyText,
+  compact = false,
+}: {
+  items: FlowTxItem[];
+  stage: FlowStage;
+  emptyText: string;
+  compact?: boolean;
+}) {
+  const domain = useMemo(() => buildMetricDomain(items), [items]);
+  const points = useMemo(
+    () =>
+      items
+        .map((item) => ({ item, point: mapTxToScatterPoint(item, domain) }))
+        .sort((a, b) => a.point.radius - b.point.radius),
+    [domain, items]
+  );
+
+  return (
+    <div
+      className={`relative overflow-hidden rounded-xl border border-slate-700/60 bg-slate-950/50 ${
+        compact ? 'h-28' : 'h-52'
+      }`}
+    >
+      <div className="pointer-events-none absolute inset-0 grid grid-cols-4 grid-rows-4">
+        {Array.from({ length: 16 }, (_, idx) => (
+          <div key={idx} className="border border-slate-800/30" />
+        ))}
+      </div>
+
+      {points.length === 0 ? (
+        <div className="flex h-full items-center justify-center px-4 text-center text-xs text-slate-500">
+          {emptyText}
+        </div>
+      ) : (
+        <div className="absolute inset-0">
+          {points.map(({ item, point }) => {
+            const title = [
+              `TX: ${item.id.slice(0, 10)}...${item.id.slice(-6)}`,
+              `Size: ${item.size.toLocaleString()} B`,
+              `Fee Rate: ${formatFeeRate(item.feeRate)}`,
+              `Cycles: ${formatCycles(item.cycles)}`,
+            ].join('\n');
+
+            return (
+              <div
+                key={item.id}
+                className={`absolute rounded-full transition-transform duration-150 hover:scale-110 ${
+                  item.category === 'cellbase' ? 'ring-1 ring-emerald-300/90' : ''
+                }`}
+                style={{
+                  width: point.radius * 2,
+                  height: point.radius * 2,
+                  left: `calc(${point.x * 100}% - ${point.radius}px)`,
+                  top: `calc(${point.y * 100}% - ${point.radius}px)`,
+                  backgroundColor: bubbleColor(point.feeScore, stage, point.missingFeeRate),
+                  border: point.missingCycles
+                    ? '1px dashed rgba(148, 163, 184, 0.9)'
+                    : '1px solid rgba(226, 232, 240, 0.5)',
+                  opacity: point.missingCycles ? 0.55 : 0.86,
+                }}
+                title={title}
+              />
+            );
+          })}
+        </div>
+      )}
+
+      {!compact && (
+        <>
+          <div className="absolute bottom-1 left-2 text-[10px] uppercase tracking-widest text-slate-500">
+            Low fee rate
+          </div>
+          <div className="absolute bottom-1 right-2 text-[10px] uppercase tracking-widest text-slate-500">
+            High fee rate
+          </div>
+          <div className="absolute left-1 top-2 -rotate-90 text-[10px] uppercase tracking-widest text-slate-500">
+            High cycles
+          </div>
+          <div className="absolute bottom-2 left-1 -rotate-90 text-[10px] uppercase tracking-widest text-slate-500">
+            Low cycles
+          </div>
+        </>
+      )}
+    </div>
+  );
 }
 
-function proposalToItem(proposal: PendingProposal): TxItem {
-  return {
-    id: proposal.fullTxHash || proposal.proposalId,
-    size: proposal.size ?? 500,
-    fee: proposal.fee ?? undefined,
-    feeRate: proposal.feeRate ?? undefined,
-    category: 'normal' as TxCategory,
-  };
+function StageScatterCard({
+  title,
+  subtitle,
+  stage,
+  items,
+  totalCount,
+  emptyText,
+}: {
+  title: string;
+  subtitle: string;
+  stage: FlowStage;
+  items: FlowTxItem[];
+  totalCount: number;
+  emptyText: string;
+}) {
+  const medianFeeRate = useMemo(() => median(items.map((item) => item.feeRate)), [items]);
+  const medianCycles = useMemo(() => median(items.map((item) => item.cycles)), [items]);
+
+  return (
+    <div className="rounded-2xl border border-slate-700/50 bg-slate-900/60 p-4">
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-white sm:text-base">{title}</h3>
+          <div className="text-xs text-slate-400">{subtitle}</div>
+        </div>
+        <div className="text-right">
+          <div className="text-lg font-bold text-white">{totalCount.toLocaleString()}</div>
+          <div className="text-[11px] uppercase tracking-widest text-slate-500">txns</div>
+        </div>
+      </div>
+
+      <div className="mb-3 grid grid-cols-2 gap-2 text-xs">
+        <div className="rounded-lg border border-slate-700/50 bg-slate-950/60 px-2 py-1.5">
+          <div className="text-slate-500">Median fee rate</div>
+          <div className="font-medium text-slate-200">{formatFeeRate(medianFeeRate)}</div>
+        </div>
+        <div className="rounded-lg border border-slate-700/50 bg-slate-950/60 px-2 py-1.5">
+          <div className="text-slate-500">Median cycles</div>
+          <div className="font-medium text-slate-200">{formatCycles(medianCycles)}</div>
+        </div>
+      </div>
+
+      <TxMetricScatter items={items} stage={stage} emptyText={emptyText} />
+    </div>
+  );
 }
 
-export function ChainWave({ initialBlocks }: ChainWaveProps) {
+function CommittedBlocksStrip({ blocks }: { blocks: CommittedBlock[] }) {
+  if (blocks.length === 0) {
+    return (
+      <div className="rounded-2xl border border-slate-700/50 bg-slate-900/60 p-4 text-sm text-slate-500">
+        No committed blocks yet
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-2xl border border-slate-700/50 bg-slate-900/60 p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <div>
+          <h3 className="text-sm font-semibold text-white sm:text-base">Recent Committed Blocks</h3>
+          <div className="text-xs text-slate-400">New blocks stream in as txns get packed</div>
+        </div>
+        <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-xs text-emerald-200">
+          head #{blocks[0].block.number.toLocaleString()}
+        </div>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-2">
+        {blocks.map((entry, index) => (
+          <Link
+            key={entry.block.number}
+            href={`/blocks/${entry.block.number}`}
+            className="block rounded-xl border border-slate-700/60 bg-slate-950/60 p-3 transition-colors hover:border-emerald-500/50"
+          >
+            <div className="mb-2 flex items-center justify-between text-xs">
+              <div className="font-medium text-slate-200">
+                #{entry.block.number.toLocaleString()}
+              </div>
+              {index === 0 ? (
+                <span className="rounded-md border border-emerald-500/40 bg-emerald-500/20 px-1.5 py-0.5 text-[10px] uppercase tracking-widest text-emerald-200">
+                  New
+                </span>
+              ) : (
+                <span className="text-slate-500">{entry.totalCount.toLocaleString()} txns</span>
+              )}
+            </div>
+            <TxMetricScatter
+              items={entry.items}
+              stage="committed"
+              emptyText="No txns in this block"
+              compact
+            />
+          </Link>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TriMetricLegend() {
+  return (
+    <div className="mt-4 rounded-xl border border-slate-700/60 bg-slate-950/40 p-3">
+      <div className="text-xs uppercase tracking-widest text-slate-500">Tri-metric encoding</div>
+      <div className="mt-2 grid gap-2 text-xs text-slate-300 sm:grid-cols-3">
+        <div className="rounded-lg border border-slate-700/50 bg-slate-900/60 px-2 py-1.5">
+          Bubble size = txn size (bytes)
+        </div>
+        <div className="rounded-lg border border-slate-700/50 bg-slate-900/60 px-2 py-1.5">
+          X-axis = fee rate (shannons / byte)
+        </div>
+        <div className="rounded-lg border border-slate-700/50 bg-slate-900/60 px-2 py-1.5">
+          Y-axis = cycles (higher at top)
+        </div>
+      </div>
+      <div className="mt-2 text-[11px] text-slate-500">
+        Dashed bubble means cycles data is not available yet; green ring marks cellbase.
+      </div>
+    </div>
+  );
+}
+
+export function ChainWave({ initialBlocks, showHeader = true, chrome = 'card' }: ChainWaveProps) {
   const { data: mempoolTxs } = useQuery({
     queryKey: ['mempool-transactions'],
     queryFn: () => api.getMempoolTransactions(),
@@ -81,14 +386,14 @@ export function ChainWave({ initialBlocks }: ChainWaveProps) {
     refetchInterval: 5000,
   });
 
-  const { data: blocksData } = useQuery({
-    queryKey: ['chain-wave-tip-block'],
-    queryFn: () => api.getBlocks({ limit: 1 }),
+  const { data: blocksData } = useQuery<CursorPaginatedResponse<Block>>({
+    queryKey: ['chain-wave-block-stream'],
+    queryFn: () => api.getBlocks({ limit: MAX_COMMITTED_BLOCKS }),
     initialData: initialBlocks?.length
       ? {
-          data: initialBlocks.slice(0, 1),
-          total: 1,
-          limit: 1,
+          data: initialBlocks.slice(0, MAX_COMMITTED_BLOCKS),
+          total: initialBlocks.slice(0, MAX_COMMITTED_BLOCKS).length,
+          limit: MAX_COMMITTED_BLOCKS,
           hasMore: false,
           nextCursor: null,
         }
@@ -96,103 +401,115 @@ export function ChainWave({ initialBlocks }: ChainWaveProps) {
     refetchInterval: 10000,
   });
 
-  const tipBlock = blocksData?.data?.[0];
+  const committedBlocks = useMemo(
+    () => (blocksData?.data ?? []).slice(0, MAX_COMMITTED_BLOCKS),
+    [blocksData]
+  );
 
-  const { data: tipBlockTxs } = useQuery({
-    queryKey: ['block-transactions', tipBlock?.number],
-    queryFn: () =>
-      tipBlock
-        ? api.getTransactions({ blockNumber: tipBlock.number, limit: 200 })
-        : Promise.resolve({ data: [], total: 0, limit: 200, hasMore: false, nextCursor: null }),
-    enabled: !!tipBlock,
-    refetchInterval: 10000,
+  const blockTxQueries = useQueries({
+    queries: committedBlocks.map((block) => ({
+      queryKey: ['chain-wave-block-transactions', block.number],
+      queryFn: () => api.getTransactions({ blockNumber: block.number, limit: MAX_BLOCK_ITEMS }),
+      refetchInterval: 10000,
+    })),
   });
 
   const pendingItems = useMemo(() => {
     if (!mempoolTxs) return [];
-    return mempoolTxs.filter((tx) => tx.status === 'pending').map(mempoolTxToItem);
+    return mempoolTxs
+      .filter((tx) => tx.status === 'pending')
+      .map(mempoolTxToItem)
+      .slice(0, MAX_STAGE_ITEMS);
   }, [mempoolTxs]);
 
   const proposalItems = useMemo(() => {
     const proposals = pendingProposalsData?.proposals ?? [];
-    return proposals.map(proposalToItem);
+    return proposals.map(proposalToItem).slice(0, MAX_STAGE_ITEMS);
   }, [pendingProposalsData]);
 
-  const tipBlockItems = useMemo(() => {
-    if (!tipBlockTxs?.data) return [];
-    return tipBlockTxs.data.map(blockTxToItem);
-  }, [tipBlockTxs]);
+  const committedItemsByBlock = useMemo<CommittedBlock[]>(
+    () =>
+      committedBlocks.map((block, idx) => {
+        const query = blockTxQueries[idx];
+        const txs = query?.data?.data ?? [];
+        const items = txs.map(blockTxToItem).slice(0, MAX_BLOCK_ITEMS);
+        const totalCount = query?.data?.total ?? block.transactionsCount;
+        return { block, items, totalCount };
+      }),
+    [blockTxQueries, committedBlocks]
+  );
 
-  const globalMaxSize = useMemo(() => {
-    const allSizes = [
-      ...pendingItems.map((item) => item.size),
-      ...proposalItems.map((item) => item.size),
-      ...tipBlockItems.map((item) => item.size),
-    ];
-    if (allSizes.length === 0) return 10000;
-    return Math.max(...allSizes, 2000);
-  }, [pendingItems, proposalItems, tipBlockItems]);
+  const committedPreviewItems = useMemo(
+    () => committedItemsByBlock[0]?.items ?? [],
+    [committedItemsByBlock]
+  );
+
+  const containerClassName =
+    chrome === 'flat'
+      ? 'rounded-2xl bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800/80 p-4 sm:p-6'
+      : 'rounded-2xl border border-slate-700/50 bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800 p-4 shadow-xl sm:p-6';
 
   return (
-    <div className="rounded-2xl border border-slate-700/50 bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800 p-4 shadow-xl sm:p-6">
-      <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-lg font-bold tracking-tight text-white sm:text-xl">Transaction Flow</h2>
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] sm:text-xs">
-          <div className="flex items-center gap-1.5">
-            <div className="h-2.5 w-2.5 rounded-sm bg-slate-500/80" />
-            <span className="text-slate-400">Pending</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <div className="h-2.5 w-2.5 rounded-sm bg-amber-600/80" />
-            <span className="text-slate-400">Proposed</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <div className="h-2.5 w-2.5 rounded-sm bg-purple-600/80" />
-            <span className="text-slate-400">Committed</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <div className="h-2.5 w-2.5 rounded-sm bg-emerald-600/80" />
-            <span className="text-slate-400">Cellbase</span>
-          </div>
+    <div className={containerClassName}>
+      {showHeader && (
+        <div className="mb-4">
+          <h2 className="text-lg font-bold tracking-tight text-white sm:text-xl">
+            Transaction Flow Pipeline
+          </h2>
+          <p className="mt-1 text-sm text-slate-400">
+            Mempool txns move through proposal queue and are continuously committed into new blocks.
+          </p>
         </div>
-      </div>
+      )}
 
-      <div className="flex items-stretch gap-0">
-        <PackedContainer
+      <div className="mb-4 flex flex-col gap-2 lg:flex-row lg:items-center">
+        <StageFlowPill
           title="Mempool"
-          subtitle="Pending transactions"
-          type="mempool"
-          items={pendingItems}
-          totalCount={pendingItems.length}
-          emptyText="No pending transactions"
-          globalMaxSize={globalMaxSize}
+          subtitle="pending"
+          value={pendingItems.length}
+          stage="mempool"
         />
-
-        <FlowArrow />
-
-        <PackedContainer
+        <StageConnector label="propose" />
+        <StageFlowPill
           title="Proposed"
-          subtitle="Awaiting commit"
-          type="proposals"
-          items={proposalItems}
-          totalCount={proposalItems.length}
-          emptyText="No proposed txs"
-          globalMaxSize={globalMaxSize}
+          subtitle="waiting commit"
+          value={proposalItems.length}
+          stage="proposed"
         />
-
-        <FlowArrow />
-
-        <PackedContainer
-          title={`Block #${(tipBlock?.number ?? 0).toLocaleString()}`}
-          subtitle="Latest Committed"
-          type="tip"
-          items={tipBlockItems}
-          totalCount={tipBlockTxs?.total ?? tipBlockItems.length}
-          blockNumber={tipBlock?.number}
-          emptyText="No transactions"
-          globalMaxSize={globalMaxSize}
+        <StageConnector label="pack" />
+        <StageFlowPill
+          title="Committed"
+          subtitle="latest block txns"
+          value={committedPreviewItems.length}
+          stage="committed"
         />
       </div>
+
+      <div className="space-y-4">
+        <div className="grid gap-4 md:grid-cols-2">
+          <StageScatterCard
+            title="Mempool"
+            subtitle="Candidate txns waiting for proposal"
+            stage="mempool"
+            items={pendingItems}
+            totalCount={pendingItems.length}
+            emptyText="No pending transactions"
+          />
+
+          <StageScatterCard
+            title="Proposed Pool"
+            subtitle="Proposed txns waiting for commitment"
+            stage="proposed"
+            items={proposalItems}
+            totalCount={proposalItems.length}
+            emptyText="No proposed transactions"
+          />
+        </div>
+
+        <CommittedBlocksStrip blocks={committedItemsByBlock} />
+      </div>
+
+      <TriMetricLegend />
     </div>
   );
 }

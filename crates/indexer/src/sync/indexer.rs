@@ -15,7 +15,7 @@ use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
 
 use ckbadger_store::batch::StoreBatch;
-use ckbadger_store::types::{LiveCellInfo, NftTypeIndex, SporeTypeIndex};
+use ckbadger_store::types::{AddressBalance, LiveCellInfo, NftTypeIndex, SporeTypeIndex};
 use ckbadger_store::CkbadgerStore;
 
 use crate::cache::CacheInvalidator;
@@ -101,6 +101,26 @@ fn should_log_unresolved_retry(attempt: usize) -> bool {
 fn should_skip_address_balances(_bulk_sync_mode: bool) -> bool {
     // Address balances must always be updated inline to keep bulk sync exact.
     false
+}
+
+fn count_new_addresses(
+    changes: &HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8], i64)>,
+    existing: &HashMap<Vec<u8>, Option<AddressBalance>>,
+) -> i64 {
+    changes
+        .iter()
+        .filter(|(lock_hash, (_, live_delta, _, _, _, _, _))| {
+            if *live_delta <= 0 {
+                return false;
+            }
+            let prev_live = existing
+                .get(*lock_hash)
+                .and_then(|entry| entry.as_ref())
+                .map(|balance| balance.live_cells_count)
+                .unwrap_or(0);
+            prev_live <= 0
+        })
+        .count() as i64
 }
 
 fn classify_nft_collection_id(type_code_hash: &[u8], type_args: &[u8]) -> Option<Vec<u8>> {
@@ -868,7 +888,7 @@ impl Indexer {
             total_transactions: sync_status.total_transactions,
             total_cells: sync_status.total_cells_created,
             total_live_cells: sync_status.total_cells_created - sync_status.total_cells_consumed,
-            total_addresses: 0,
+            total_addresses: stats.addr_balance_count as i64,
             updated_at: chrono::Utc::now().timestamp(),
         }
     }
@@ -3139,6 +3159,7 @@ impl Indexer {
 
         let need_balances = !lock_hash_keys.is_empty();
         let need_scripts = !code_hash_refs.is_empty();
+        let mut batch_new_addresses = 0i64;
 
         if need_balances || need_scripts {
             let writer = &self.writer;
@@ -3159,8 +3180,10 @@ impl Indexer {
                 )
             });
             if let Some(existing) = existing_balances {
+                let existing = existing?;
+                batch_new_addresses = count_new_addresses(&changes_ref, &existing);
                 self.writer.apply_address_balance_deltas(
-                    &existing?,
+                    &existing,
                     &changes_ref,
                     &mut consume_addr_batch,
                 )?;
@@ -3967,7 +3990,7 @@ impl Indexer {
                     batch_stats.sync_totals.0,
                     batch_stats.sync_totals.1,
                     batch_stats.sync_totals.2,
-                    0,
+                    batch_new_addresses,
                     ema_rate_opt,
                 )
                 .await?;
@@ -4472,6 +4495,10 @@ impl Indexer {
             )
         };
         let prefetch_ms = t_prefetch.elapsed().as_secs_f64() * 1000.0;
+        let mut batch_new_addresses = 0i64;
+        if bulk_sync_mode && !skip_address_balances && !changes_ref.is_empty() {
+            batch_new_addresses = count_new_addresses(&changes_ref, &prefetched_addr_balances);
+        }
 
         let t_write = Instant::now();
         let mut batch_stats;
@@ -5362,8 +5389,10 @@ impl Indexer {
                     )
                 });
                 if let Some(existing) = existing_balances {
+                    let existing = existing?;
+                    batch_new_addresses = count_new_addresses(&changes_ref, &existing);
                     self.writer.apply_address_balance_deltas(
-                        &existing?,
+                        &existing,
                         &changes_ref,
                         &mut data_batch,
                     )?;
@@ -6405,7 +6434,7 @@ impl Indexer {
                     batch_stats.sync_totals.0,
                     batch_stats.sync_totals.1,
                     batch_stats.sync_totals.2,
-                    0,
+                    batch_new_addresses,
                     ema_rate_opt,
                 )
                 .await?;
@@ -7114,6 +7143,48 @@ mod tests {
     fn test_address_balances_are_never_skipped_in_bulk_mode() {
         assert!(!should_skip_address_balances(true));
         assert!(!should_skip_address_balances(false));
+    }
+
+    #[test]
+    fn test_count_new_addresses_counts_only_first_live_transitions() {
+        let mut changes: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8], i64)> = HashMap::new();
+        let addr_new = vec![0x11; 32];
+        let addr_existing_live = vec![0x22; 32];
+        let addr_existing_zero = vec![0x33; 32];
+        let tx_hash = [0xAA; 32];
+
+        changes.insert(addr_new.clone(), (100, 1, 1, 1, 1, &tx_hash, 10));
+        changes.insert(addr_existing_live.clone(), (50, 1, 1, 1, 1, &tx_hash, 5));
+        changes.insert(addr_existing_zero.clone(), (70, 2, 2, 1, 1, &tx_hash, 7));
+
+        let mut existing: HashMap<Vec<u8>, Option<AddressBalance>> = HashMap::new();
+        existing.insert(
+            addr_existing_live,
+            Some(AddressBalance {
+                live_cells_count: 3,
+                ..Default::default()
+            }),
+        );
+        existing.insert(
+            addr_existing_zero,
+            Some(AddressBalance {
+                live_cells_count: 0,
+                ..Default::default()
+            }),
+        );
+
+        assert_eq!(count_new_addresses(&changes, &existing), 2);
+    }
+
+    #[test]
+    fn test_count_new_addresses_ignores_non_positive_live_delta() {
+        let mut changes: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8], i64)> = HashMap::new();
+        let tx_hash = [0xBB; 32];
+        changes.insert(vec![0x44; 32], (0, 0, 0, 1, 1, &tx_hash, 0));
+        changes.insert(vec![0x55; 32], (-10, -1, 0, 1, 1, &tx_hash, -2));
+
+        let existing: HashMap<Vec<u8>, Option<AddressBalance>> = HashMap::new();
+        assert_eq!(count_new_addresses(&changes, &existing), 0);
     }
 
     #[test]

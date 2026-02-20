@@ -8,6 +8,8 @@ import {
   TerminalPanelContent,
   TerminalPanelHeader,
 } from '@/components/ui/terminal-panel';
+import { ChartCalculationNote } from '@/components/charts/chart-calculation-note';
+import { getChartDescription } from '@/components/charts/chart-calculation-descriptions';
 import { StackedAreaChart } from '@/components/ui/stacked-area-chart';
 import { api } from '@/lib/api';
 
@@ -58,6 +60,16 @@ export default function CellAgeVsOccupiedCapacityPage() {
                   Drag to select range • Scroll to zoom • Middle-click drag to pan • Click Reset to
                   restore
                 </div>
+                <ChartCalculationNote
+                  description={
+                    getChartDescription('chart-cell-age-vs-occupied-capacity', {
+                      seriesLabels: data.series.map((s) => s.label),
+                    }) ?? {
+                      overview: 'Shows occupied capacity split by cell age buckets.',
+                      legendItems: [],
+                    }
+                  }
+                />
               </>
             )}
           </TerminalPanelContent>

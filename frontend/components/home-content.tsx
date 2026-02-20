@@ -7,7 +7,7 @@ import { MiniStatsCards } from '@/components/mini-stats-cards';
 import { EpochProgress } from '@/components/chain-wave/epoch-progress';
 import { LatestBlocks } from '@/components/latest-blocks';
 import { LatestTransactions } from '@/components/latest-transactions';
-import { ChainWave } from '@/components/chain-wave';
+import { PipelinePreview } from '@/components/chain-wave/pipeline-preview';
 import { useRealtimeData } from '@/hooks/useRealtimeStore';
 import { api, NetworkStats, Block, Transaction, ChartResponse } from '@/lib/api';
 
@@ -59,7 +59,7 @@ export function HomeContent({ initialData }: HomeContentProps) {
       </div>
 
       <div className="mt-6">
-        <ChainWave initialBlocks={initialData.blocks} />
+        <PipelinePreview initialBlocks={initialData.blocks} />
       </div>
 
       <div className="mt-8 grid gap-6 lg:grid-cols-2">

@@ -9,6 +9,7 @@ export default function AddressCohortRetentionPage() {
       title="Address Cohort Retention"
       queryKey="chart-address-cohort-retention"
       queryFn={api.getAddressCohortRetentionChart}
+      chartType="bar"
     />
   );
 }

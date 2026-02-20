@@ -224,7 +224,7 @@ export default function ScriptsPage() {
                   {renderSortHeader('description', 'Description', 'flex-1 px-4')}
                   {renderSortHeader('occupied', 'Occupied (CKB)', 'w-28', 'right')}
                   {renderSortHeader('capacity', 'Capacity (CKB)', 'w-28', 'right')}
-                  {renderSortHeader('occupiedRatio', 'Occupied Ratio', 'w-24', 'right')}
+                  {renderSortHeader('occupiedRatio', 'Utilization Ratio', 'w-24', 'right')}
                 </div>
                 {scripts.map((script: KnownScript) => (
                   <TerminalRow key={script.codeHash}>

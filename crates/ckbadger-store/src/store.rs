@@ -618,6 +618,7 @@ impl CkbadgerStore {
         let mut consumed_cf_sst_files_bytes: Option<u64> = None;
         let mut consumed_cf_memtable_bytes: Option<u64> = None;
         let mut block_headers_count = 0usize;
+        let mut addr_balance_count = 0usize;
         let mut compaction_pending_bytes = 0u64;
         let mut num_running_compactions = 0u64;
         let mut sst_files_size = 0u64;
@@ -658,6 +659,7 @@ impl CkbadgerStore {
                         CF_LIVE_CELLS => live_cells_count = v as usize,
                         CF_CONSUMED_CELLS => consumed_cells_count = v as usize,
                         CF_BLOCK_HEADERS => block_headers_count = v as usize,
+                        CF_ADDR_BALANCE => addr_balance_count = v as usize,
                         _ => {}
                     }
                 }
@@ -728,6 +730,7 @@ impl CkbadgerStore {
             consumed_cells_bytes,
             consumed_cells_bytes_source,
             block_headers_count,
+            addr_balance_count,
             cells_count: live_cells_count,
             memory_bytes,
             memtable_bytes,
@@ -847,16 +850,27 @@ mod tests {
         store
             .put_cf(store.cf_block_headers(), b"hdr-k1", b"hdr-v1")
             .unwrap();
+        store
+            .put_addr_balance_direct(
+                b"addr-k1",
+                &crate::types::AddressBalance {
+                    balance: 1,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
 
         // Flush written keys so RocksDB estimate properties have observable values.
         store.db.flush_cf(store.cf_live_cells()).unwrap();
         store.db.flush_cf(store.cf_consumed_cells()).unwrap();
         store.db.flush_cf(store.cf_block_headers()).unwrap();
+        store.db.flush_cf(store.cf_addr_balance()).unwrap();
 
         let stats = store.memory_stats();
         assert!(stats.live_cells_count >= 1);
         assert!(stats.consumed_cells_count >= 1);
         assert!(stats.block_headers_count >= 1);
+        assert!(stats.addr_balance_count >= 1);
         assert_eq!(stats.cells_count, stats.live_cells_count);
         assert!(
             matches!(
