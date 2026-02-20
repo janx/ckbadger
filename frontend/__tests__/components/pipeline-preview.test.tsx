@@ -1,17 +1,22 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '../utils/test-utils';
+import { render, screen } from '../utils/test-utils';
 import { PipelinePreview } from '@/components/chain-wave/pipeline-preview';
-import { api } from '@/lib/api';
-import type { Block } from '@/lib/api';
+import { api, type Block } from '@/lib/api';
 
-vi.mock('@/lib/api', () => ({
-  api: {
-    getMempoolInfo: vi.fn(),
-    getMempoolTransactions: vi.fn(),
-    getPendingProposals: vi.fn(),
-    getBlocks: vi.fn(),
-    getTransactions: vi.fn(),
-  },
+vi.mock('@/components/mempool-blocks', () => ({
+  MempoolBlocks: ({
+    showTxnLens,
+    showHeader,
+    legendMode,
+  }: {
+    showTxnLens?: boolean;
+    showHeader?: boolean;
+    legendMode?: 'row' | 'none';
+  }) => (
+    <div data-testid="mempool-blocks">
+      lens:{String(showTxnLens)} header:{String(showHeader)} legend:{String(legendMode)}
+    </div>
+  ),
 }));
 
 function mockBlock(number: number, txCount: number): Block {
@@ -39,99 +44,55 @@ function mockBlock(number: number, txCount: number): Block {
   };
 }
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
-
 describe('PipelinePreview', () => {
-  it('renders compact tri-metric pipeline snapshot and link', async () => {
-    vi.spyOn(api, 'getMempoolInfo').mockResolvedValue({
-      pendingCount: 1200,
-      proposedCount: 320,
-      orphanCount: 10,
-      totalSize: 1_048_576,
-      totalCycles: 123_456_789,
-      minFeeRate: 1,
-      tipNumber: 1_000_000,
-      tipHash: '0xtip',
-      lastUpdatedAt: 1_700_000_000,
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('renders compact chain tip visualization with integrated txn lens', async () => {
+    vi.spyOn(api, 'getMempoolBlocks').mockResolvedValue({
+      pendingBlocks: [],
+      totalPendingCount: 128,
+      totalProposedCount: 0,
     });
-
-    vi.spyOn(api, 'getMempoolTransactions').mockResolvedValue([
-      {
-        txHash: '0xmempool-tx-1',
-        fee: 1000,
-        size: 320,
-        cycles: 1_200_000,
-        feeRate: 3.12,
+    vi.spyOn(api, 'getMempoolTransactions').mockResolvedValue(
+      Array.from({ length: 128 }, (_, index) => ({
+        txHash: `0xmempool-${index}`,
+        fee: 1000 + index,
+        size: 300 + index,
+        cycles: 1_000_000 + index,
+        feeRate: 2.5,
         ancestorsCount: 0,
-        timestamp: 1_700_000_000,
+        timestamp: 1700000000 + index,
         status: 'pending',
-      },
-    ]);
-
+      }))
+    );
     vi.spyOn(api, 'getPendingProposals').mockResolvedValue({
-      proposals: [
-        {
-          proposalId: '0xproposal111',
-          fullTxHash: '0xproposal-full-hash-111',
-          proposedAtBlock: 99,
-          proposedAtIndex: 1,
-          blocksUntilExpiry: 10,
-          fee: 2000,
-          size: 450,
-          cycles: 2_300_000,
-          feeRate: 4.44,
-        },
-      ],
+      proposals: [],
       tipBlockNumber: 100,
-      totalCount: 1,
+      totalCount: 41,
     });
 
     vi.spyOn(api, 'getBlocks').mockResolvedValue({
-      data: [mockBlock(100, 200), mockBlock(99, 180), mockBlock(98, 160)],
-      total: 3,
-      limit: 3,
-      hasMore: false,
-      nextCursor: null,
-    });
-
-    vi.spyOn(api, 'getTransactions').mockResolvedValue({
-      data: [
-        {
-          hash: '0xblocktx1',
-          blockNumber: 100,
-          blockHash: '0xblock100',
-          index: 0,
-          inputsCount: 1,
-          outputsCount: 2,
-          fee: '3200',
-          txSize: 600,
-          cycles: 1_800_000,
-          isCellbase: false,
-          timestamp: '2024-01-15T10:30:00Z',
-        },
-      ],
+      data: [mockBlock(100, 200)],
       total: 1,
-      limit: 40,
+      limit: 10,
       hasMore: false,
       nextCursor: null,
     });
 
     render(<PipelinePreview initialBlocks={[mockBlock(100, 200)]} />);
 
-    expect(await screen.findByText('Pipeline Snapshot')).toBeInTheDocument();
-    await waitFor(() => expect(api.getMempoolInfo).toHaveBeenCalled());
-    expect(api.getMempoolTransactions).toHaveBeenCalled();
-    expect(api.getPendingProposals).toHaveBeenCalled();
-    expect(api.getTransactions).toHaveBeenCalled();
-    expect(screen.getAllByText('Mempool').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Proposed').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Committed').length).toBeGreaterThan(0);
-    expect(screen.getByText('200')).toBeInTheDocument();
-    expect(screen.getByText('Bubble size = txn size')).toBeInTheDocument();
-    expect(screen.getByText('X = fee rate')).toBeInTheDocument();
-    expect(screen.getByText('Y = cycles')).toBeInTheDocument();
+    expect(await screen.findByText('Transaction Pipeline')).toBeInTheDocument();
+    expect(await screen.findByText(/Mempool \(128\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/Proposals \(41\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/New Committed \(199\)/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/w -> size \| h -> cycles \| x -> fee \| y -> fee rate/i)
+    ).toBeInTheDocument();
+    expect(screen.getByTestId('mempool-blocks')).toHaveTextContent('lens:true');
+    expect(screen.getByTestId('mempool-blocks')).toHaveTextContent('header:false');
+    expect(screen.getByTestId('mempool-blocks')).toHaveTextContent('legend:none');
     expect(screen.getByRole('link', { name: 'View full pipeline' })).toHaveAttribute(
       'href',
       '/pipeline'
