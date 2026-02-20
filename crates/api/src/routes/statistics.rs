@@ -9,6 +9,7 @@ use ckbadger_common::sync::{
     SYNC_STATUS_REDIS_KEY,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::cache::{CacheKeys, CacheTtl};
@@ -27,6 +28,10 @@ pub fn routes() -> Router<Arc<AppState>> {
         )
         .route("/charts/cell-count", get(get_cell_count_chart))
         .route("/charts/knowledge-size", get(get_knowledge_size_chart))
+        .route(
+            "/charts/common-knowledge-composition",
+            get(get_common_knowledge_composition_chart),
+        )
         .route(
             "/charts/block-time-distribution",
             get(get_block_time_distribution_chart),
@@ -492,28 +497,275 @@ async fn get_cell_count_chart(
 }
 
 async fn get_knowledge_size_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
+    let cache_key = "chart:knowledge-size:v2";
+    if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
+        return ok(cached);
+    }
+
     let daily_stats = state
         .store
         .list_daily_stats_with_dates()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
+    let snapshots = state
+        .store
+        .list_dao_daily_snapshots()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let circulating_by_date = build_circulating_supply_by_date_map(&snapshots);
+
     let data: Vec<ChartDataPoint> = daily_stats
         .into_iter()
         .filter_map(|(date_str, stats)| {
+            let snapshot_date = format_date_key(&date_str);
             stats.knowledge_size.map(|ks| ChartDataPoint {
-                date: format_date_for_chart(&date_str),
-                value: ks.to_string(),
-                value2: None,
+                date: snapshot_date.clone(),
+                value: shannon_to_ckb_string(ks),
+                value2: Some(
+                    circulating_by_date
+                        .get(&snapshot_date)
+                        .map(|circulating| {
+                            if *circulating > 0 {
+                                format!("{:.4}", ks as f64 * 100.0 / *circulating as f64)
+                            } else {
+                                "0.0000".to_string()
+                            }
+                        })
+                        .unwrap_or_else(|| "0.0000".to_string()),
+                ),
             })
         })
         .collect();
 
-    ok(ChartResponse {
+    let response = ChartResponse {
         data,
         title: "Common Knowledge Size".to_string(),
         y_axis_label: "CKB".to_string(),
-        y2_axis_label: None,
-    })
+        y2_axis_label: Some("Utilization (%)".to_string()),
+    };
+
+    state.cache.set(cache_key, &response, CacheTtl::CHART).await;
+
+    ok(response)
+}
+
+const SHANNONS_PER_CKB: i128 = 100_000_000;
+
+const DAO_CODE_HASHES: &[&str] =
+    &["0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e"];
+
+const UDT_CODE_HASHES: &[&str] = &[
+    "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5",
+    "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95",
+    "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb",
+];
+
+const NFT_SPORE_CODE_HASHES: &[&str] = &[
+    "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
+    "0xcfba73b58b6f30e70caed8a999748781b164ef9a1e218424a6fb55ebf641cb33",
+    "0x685a60219309029d01310311dba953d67029170ca4848a4ff638e57002130a0d",
+    "0xbbad126377d45f90a8ee120da988a2d7332c78ba8fd679aab478a19d6c133494",
+    "0x7366a61534fa7c7e6225ecc0d828ea3b5366adec2b58206f2ee84995fe030075",
+    "0x0bbe768b519d8ea7b96d58f1182eb7e6ef96c541fbd9526975077ee09f049058",
+    "0x598d793defef36e2eeba54a9b45130e4ca92822e1d193671f490950c3b856080",
+];
+
+fn parse_code_hash_set(hexes: &[&str]) -> HashSet<Vec<u8>> {
+    hexes
+        .iter()
+        .filter_map(|h| {
+            let raw = h.strip_prefix("0x").unwrap_or(h);
+            let bytes = hex::decode(raw).ok()?;
+            (bytes.len() == 32).then_some(bytes)
+        })
+        .collect()
+}
+
+fn shannon_to_ckb_string(value: i128) -> String {
+    let negative = value < 0;
+    let abs = value.abs();
+    let whole = abs / SHANNONS_PER_CKB;
+    let frac = abs % SHANNONS_PER_CKB;
+
+    if frac == 0 {
+        return if negative {
+            format!("-{whole}")
+        } else {
+            whole.to_string()
+        };
+    }
+
+    let mut frac_str = format!("{frac:08}");
+    while frac_str.ends_with('0') {
+        frac_str.pop();
+    }
+
+    if negative {
+        format!("-{whole}.{frac_str}")
+    } else {
+        format!("{whole}.{frac_str}")
+    }
+}
+
+fn build_circulating_supply_by_date_map(
+    snapshots: &[ckbadger_store::DaoDailySnapshot],
+) -> HashMap<String, i128> {
+    let mut by_date = HashMap::with_capacity(snapshots.len());
+
+    for snapshot in snapshots {
+        let Some(total_supply) = snapshot_total_issuance(snapshot) else {
+            continue;
+        };
+        let (_, _, cum_treasury) = snapshot_secondary_cumulative(snapshot);
+        let burnt = GENESIS_BURNT as i128 + cum_treasury;
+        let circulating = (total_supply - burnt - snapshot.total_deposited.max(0)).max(0);
+        by_date.insert(snapshot.date.clone(), circulating);
+    }
+
+    by_date
+}
+
+async fn get_common_knowledge_composition_chart(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<StackedAreaChartResponse> {
+    let cache_key = "chart:common-knowledge-composition:v1";
+    if let Some(cached) = state.cache.get::<StackedAreaChartResponse>(cache_key).await {
+        return ok(cached);
+    }
+
+    let daily_stats = state
+        .store
+        .list_daily_stats_with_dates()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let mut knowledge_by_date: BTreeMap<u32, i128> = BTreeMap::new();
+    for (date_key, stats) in daily_stats {
+        let Some(knowledge) = stats.knowledge_size else {
+            continue;
+        };
+        let Ok(date) = date_key.parse::<u32>() else {
+            continue;
+        };
+        knowledge_by_date.insert(date, knowledge.max(0));
+    }
+
+    if knowledge_by_date.is_empty() {
+        return ok(StackedAreaChartResponse {
+            data: vec![],
+            series: vec![],
+            title: "Common Knowledge Bytes Composition".to_string(),
+        });
+    }
+
+    let script_infos = state
+        .store
+        .list_script_infos()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let type_code_hashes: HashSet<Vec<u8>> = script_infos
+        .into_iter()
+        .map(|(code_hash, _)| code_hash)
+        .collect();
+
+    let dao_hashes = parse_code_hash_set(DAO_CODE_HASHES);
+    let udt_hashes = parse_code_hash_set(UDT_CODE_HASHES);
+    let nft_spore_hashes = parse_code_hash_set(NFT_SPORE_CODE_HASHES);
+
+    let mut type_daily_delta: HashMap<u32, i128> = HashMap::new();
+    let mut dao_daily_delta: HashMap<u32, i128> = HashMap::new();
+    let mut udt_daily_delta: HashMap<u32, i128> = HashMap::new();
+    let mut nft_spore_daily_delta: HashMap<u32, i128> = HashMap::new();
+
+    for code_hash in type_code_hashes {
+        let deltas = state
+            .store
+            .list_script_daily_deltas_in_range(&code_hash, true, None, None)
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        for (date, delta) in deltas {
+            let occupied_delta = delta.live_occupied_capacity_delta as i128;
+            *type_daily_delta.entry(date).or_insert(0) += occupied_delta;
+
+            if dao_hashes.contains(&code_hash) {
+                *dao_daily_delta.entry(date).or_insert(0) += occupied_delta;
+            } else if udt_hashes.contains(&code_hash) {
+                *udt_daily_delta.entry(date).or_insert(0) += occupied_delta;
+            } else if nft_spore_hashes.contains(&code_hash) {
+                *nft_spore_daily_delta.entry(date).or_insert(0) += occupied_delta;
+            }
+        }
+    }
+
+    let mut cumulative_type: i128 = 0;
+    let mut cumulative_dao: i128 = 0;
+    let mut cumulative_udt: i128 = 0;
+    let mut cumulative_nft_spore: i128 = 0;
+    let mut data = Vec::with_capacity(knowledge_by_date.len());
+
+    for (date, knowledge) in knowledge_by_date {
+        cumulative_type = (cumulative_type + type_daily_delta.remove(&date).unwrap_or(0)).max(0);
+        cumulative_dao = (cumulative_dao + dao_daily_delta.remove(&date).unwrap_or(0)).max(0);
+        cumulative_udt = (cumulative_udt + udt_daily_delta.remove(&date).unwrap_or(0)).max(0);
+        cumulative_nft_spore =
+            (cumulative_nft_spore + nft_spore_daily_delta.remove(&date).unwrap_or(0)).max(0);
+
+        let typed_effective = cumulative_type.min(knowledge).max(0);
+        let mut remaining_typed = typed_effective;
+        let dao = cumulative_dao.min(remaining_typed).max(0);
+        remaining_typed -= dao;
+        let udt = cumulative_udt.min(remaining_typed).max(0);
+        remaining_typed -= udt;
+        let nft_spore = cumulative_nft_spore.min(remaining_typed).max(0);
+        remaining_typed -= nft_spore;
+        let other_contracts = remaining_typed;
+        let transfer = (knowledge - typed_effective).max(0);
+
+        data.push(StackedAreaDataPoint {
+            date: format_date_key(&format!("{date:08}")),
+            values: HashMap::from([
+                ("transfer".to_string(), shannon_to_ckb_string(transfer)),
+                ("dao".to_string(), shannon_to_ckb_string(dao)),
+                ("udt".to_string(), shannon_to_ckb_string(udt)),
+                ("nftSpore".to_string(), shannon_to_ckb_string(nft_spore)),
+                (
+                    "otherContracts".to_string(),
+                    shannon_to_ckb_string(other_contracts),
+                ),
+            ]),
+        });
+    }
+
+    let response = StackedAreaChartResponse {
+        data,
+        series: vec![
+            StackedAreaSeries {
+                key: "transfer".to_string(),
+                label: "CKB Transfer".to_string(),
+                color: "#22c55e".to_string(),
+            },
+            StackedAreaSeries {
+                key: "dao".to_string(),
+                label: "DAO".to_string(),
+                color: "#f59e0b".to_string(),
+            },
+            StackedAreaSeries {
+                key: "udt".to_string(),
+                label: "UDT".to_string(),
+                color: "#3b82f6".to_string(),
+            },
+            StackedAreaSeries {
+                key: "nftSpore".to_string(),
+                label: "NFT (Spore)".to_string(),
+                color: "#ec4899".to_string(),
+            },
+            StackedAreaSeries {
+                key: "otherContracts".to_string(),
+                label: "Other Contracts".to_string(),
+                color: "#8b5cf6".to_string(),
+            },
+        ],
+        title: "Common Knowledge Bytes Composition".to_string(),
+    };
+
+    state.cache.set(cache_key, &response, CacheTtl::CHART).await;
+
+    ok(response)
 }
 
 async fn get_block_time_distribution_chart(
@@ -1705,6 +1957,32 @@ mod tests {
         assert_eq!(miner, 0);
         assert_eq!(dao, 8);
         assert_eq!(treasury, 0);
+    }
+
+    #[test]
+    fn test_shannon_to_ckb_string_formats_integer_and_fractional() {
+        assert_eq!(shannon_to_ckb_string(100_000_000), "1");
+        assert_eq!(shannon_to_ckb_string(123_456_789), "1.23456789");
+        assert_eq!(shannon_to_ckb_string(-123_400_000), "-1.234");
+    }
+
+    #[test]
+    fn test_parse_code_hash_set_keeps_only_valid_32_byte_hashes() {
+        let hashes = parse_code_hash_set(&[
+            "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e",
+            "0x1234",
+            "0xzzzz",
+        ]);
+        assert_eq!(hashes.len(), 1);
+    }
+
+    #[test]
+    fn test_build_circulating_supply_by_date_map_uses_total_minus_burnt_and_dao() {
+        let total = GENESIS_BURNT as i128 + 1_000_000;
+        let mut s = snapshot("2026-02-17", 100, total, 0, 0);
+        s.cum_treasury = 30;
+        let map = build_circulating_supply_by_date_map(&[s]);
+        assert_eq!(map.get("2026-02-17"), Some(&(1_000_000 - 30 - 100)));
     }
 
     #[test]

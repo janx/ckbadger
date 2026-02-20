@@ -1317,6 +1317,10 @@ export const api = {
     return fetchApi('/charts/knowledge-size');
   },
 
+  getCommonKnowledgeCompositionChart: (): Promise<StackedAreaChartResponse> => {
+    return fetchApi('/charts/common-knowledge-composition');
+  },
+
   getBlockTimeDistributionChart: (): Promise<ChartResponse> => {
     return fetchApi('/charts/block-time-distribution');
   },

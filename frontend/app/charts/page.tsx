@@ -188,6 +188,11 @@ export default function ChartsPage() {
     queryFn: () => api.getKnowledgeSizeChart(),
   });
 
+  const { data: commonKnowledgeComposition } = useQuery({
+    queryKey: ['chart-common-knowledge-composition'],
+    queryFn: () => api.getCommonKnowledgeCompositionChart(),
+  });
+
   const { data: blockTimeDistribution } = useQuery({
     queryKey: ['chart-block-time-distribution'],
     queryFn: () => api.getBlockTimeDistributionChart(),
@@ -291,8 +296,15 @@ export default function ChartsPage() {
             href="/charts/cell-count"
             defaultSeries="liveCells"
           />
-          <LineChartPreview data={knowledgeSize} href="/charts/knowledge-size" />
           <StackedAreaPreview data={hodlWave} href="/charts/hodl-wave" isPercentage />
+        </ChartSection>
+
+        <ChartSection title="Common Knowledge Bytes">
+          <LineChartPreview data={knowledgeSize} href="/charts/knowledge-size" />
+          <StackedAreaPreview
+            data={commonKnowledgeComposition}
+            href="/charts/common-knowledge-composition"
+          />
         </ChartSection>
 
         <ChartSection title="Economics">

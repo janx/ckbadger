@@ -13,6 +13,7 @@ vi.mock('@/lib/api', () => ({
     getTransactionCountChart: vi.fn(),
     getCellCountChart: vi.fn(),
     getKnowledgeSizeChart: vi.fn(),
+    getCommonKnowledgeCompositionChart: vi.fn(),
     getBlockTimeDistributionChart: vi.fn(),
     getEpochTimeDistributionChart: vi.fn(),
     getAverageBlockTimeChart: vi.fn(),
@@ -132,6 +133,7 @@ describe('ChartsPage', () => {
     vi.mocked(api.getTransactionCountChart).mockResolvedValue(mockChartResponse);
     vi.mocked(api.getCellCountChart).mockResolvedValue(mockCellCountResponse);
     vi.mocked(api.getKnowledgeSizeChart).mockResolvedValue(mockChartResponse);
+    vi.mocked(api.getCommonKnowledgeCompositionChart).mockResolvedValue(mockStackedAreaResponse);
     vi.mocked(api.getBlockTimeDistributionChart).mockResolvedValue(mockChartResponse);
     vi.mocked(api.getEpochTimeDistributionChart).mockResolvedValue(mockChartResponse);
     vi.mocked(api.getAverageBlockTimeChart).mockResolvedValue(mockChartResponse);
@@ -177,6 +179,7 @@ describe('ChartsPage', () => {
     expect(screen.getByText('Nervos DAO')).toBeInTheDocument();
     expect(screen.getByText('Block')).toBeInTheDocument();
     expect(screen.getByText('Activities')).toBeInTheDocument();
+    expect(screen.getByText('Common Knowledge Bytes')).toBeInTheDocument();
     expect(screen.getByText('Economics')).toBeInTheDocument();
   });
 
@@ -187,7 +190,7 @@ describe('ChartsPage', () => {
 
     await waitFor(() => {
       expect(screen.getAllByTestId('stacked-area-percentage')).toHaveLength(2);
-      expect(screen.getAllByTestId('stacked-area-absolute')).toHaveLength(1);
+      expect(screen.getAllByTestId('stacked-area-absolute')).toHaveLength(2);
     });
   });
 });
