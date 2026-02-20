@@ -103,38 +103,53 @@ impl BatchWriter {
             };
 
             if let Some(info) = cell_info {
-                // Only include cells that have a type script (UDT cells always have one)
-                if let (Some(ref type_script_hash), Some(ref type_code_hash)) =
-                    (&info.type_script_hash, &info.type_code_hash)
-                {
-                    // Look up the token to get standard info
-                    let token_info = self.store.get_token(type_script_hash)?;
-                    let standard = token_info
-                        .as_ref()
-                        .map(|t| t.standard.clone())
-                        .unwrap_or_default();
+                // Only include cells that have a type script hash (UDT cells always have one).
+                let Some(type_script_hash) = info.type_script_hash.as_ref() else {
+                    continue;
+                };
 
-                    // Amount is stored in token_holders, but for consumed cells we may not have it.
-                    // The amount for UDT cells comes from the cell data (first 16 bytes).
-                    // Since we don't store raw cell data, we rely on the token_holders balance.
-                    // For transfer detection, the parser already has the amount from the output data.
-                    // Return 0 as amount — the caller uses this primarily for type identification.
-                    result.insert(
-                        (tx_hash.to_vec(), output_index),
-                        (
-                            type_script_hash.clone(),
-                            type_code_hash.clone(),
-                            0i16, // hash_type — not stored in LiveCellInfo, will be in TokenInfo
-                            token_info
-                                .as_ref()
-                                .map(|t| t.type_args.clone())
-                                .unwrap_or_default(),
-                            info.lock_script_hash.clone(),
-                            0u128, // amount — caller gets this from parsed output data
-                            standard,
-                        ),
-                    );
-                }
+                // Token metadata is the source of truth for standard/hash_type/type_args.
+                // LiveCellInfo from older schema versions may miss type_code_hash, so fall back
+                // to token metadata before dropping the input from UDT matching.
+                let token_info = self.store.get_token(type_script_hash)?;
+                let type_code_hash = info
+                    .type_code_hash
+                    .clone()
+                    .or_else(|| token_info.as_ref().map(|t| t.type_code_hash.clone()));
+                let Some(type_code_hash) = type_code_hash else {
+                    continue;
+                };
+
+                let hash_type = token_info
+                    .as_ref()
+                    .map(|t| t.hash_type as i16)
+                    .unwrap_or(0i16);
+                let type_args = token_info
+                    .as_ref()
+                    .map(|t| t.type_args.clone())
+                    .unwrap_or_default();
+                let standard = token_info
+                    .as_ref()
+                    .map(|t| t.standard.clone())
+                    .unwrap_or_default();
+
+                // Amount is stored in token_holders, but for consumed cells we may not have it.
+                // The amount for UDT cells comes from the cell data (first 16 bytes).
+                // Since we don't store raw cell data, we rely on the token_holders balance.
+                // For transfer detection, the parser already has the amount from the output data.
+                // Return 0 as amount — caller uses this for type identification/matching.
+                result.insert(
+                    (tx_hash.to_vec(), output_index),
+                    (
+                        type_script_hash.clone(),
+                        type_code_hash,
+                        hash_type,
+                        type_args,
+                        info.lock_script_hash.clone(),
+                        0u128, // amount — caller gets this from parsed output data
+                        standard,
+                    ),
+                );
             }
         }
 
@@ -357,6 +372,8 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
+    use ckbadger_store::batch::StoreBatch;
+    use ckbadger_store::types::{LiveCellInfo, TokenInfo};
     use ckbadger_store::CkbadgerStore;
 
     #[test]
@@ -399,5 +416,65 @@ mod tests {
 
         let delta = store.get_token_daily_delta(&type_hash, 20240115).unwrap();
         assert!(delta.is_none());
+    }
+
+    #[test]
+    fn test_get_udt_cells_info_batch_falls_back_to_token_type_code_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+
+        let type_hash = vec![0xAB; 32];
+        let type_code_hash = vec![0xCD; 32];
+        let tx_hash = vec![0xEF; 32];
+        let output_index = 0i16;
+
+        // Token metadata exists, but the live cell intentionally misses type_code_hash.
+        let token = TokenInfo {
+            type_code_hash: type_code_hash.clone(),
+            hash_type: 1,
+            type_args: vec![0x11; 20],
+            standard: "sudt".to_string(),
+            name: None,
+            symbol: None,
+            decimals: None,
+            total_supply: Some(0),
+            holders_count: 0,
+            first_seen_block: 0,
+            icon_url: None,
+            description: None,
+            transfers_count: 0,
+        };
+        store.put_token_direct(&type_hash, &token).unwrap();
+
+        let cell = LiveCellInfo {
+            capacity: 100_000_000,
+            created_at_block: 1,
+            lock_script_hash: vec![0x22; 32],
+            lock_code_hash: vec![0x33; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x44; 20],
+            type_script_hash: Some(type_hash.clone()),
+            type_code_hash: None,
+            data_size: 16,
+            occupied_capacity: 0,
+        };
+        let mut batch = StoreBatch::new(&store);
+        batch.put_cell(&tx_hash, output_index, &cell);
+        batch.commit().unwrap();
+
+        let outpoints = vec![(tx_hash.as_slice(), output_index)];
+        let result = writer.get_udt_cells_info_batch(&outpoints).unwrap();
+        let entry = result
+            .get(&(tx_hash.clone(), output_index))
+            .expect("udt input should be resolved");
+
+        assert_eq!(entry.0, type_hash);
+        assert_eq!(entry.1, type_code_hash);
+        assert_eq!(entry.2, 1i16);
+        assert_eq!(entry.3, vec![0x11; 20]);
+        assert_eq!(entry.4, vec![0x22; 32]);
+        assert_eq!(entry.5, 0u128);
+        assert_eq!(entry.6, "sudt".to_string());
     }
 }
