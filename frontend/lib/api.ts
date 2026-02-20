@@ -669,6 +669,37 @@ interface StackedAreaChartResponse {
   title: string;
 }
 
+interface MostUtilizedScriptsChartItem {
+  name: string;
+  codeHash: string | null;
+  isKnownScript: boolean;
+  scriptKind: string;
+  occupiedCapacity: string;
+  totalCellsCapacity: string;
+}
+
+interface MostUtilizedScriptsChartResponse {
+  title: string;
+  byOccupied: MostUtilizedScriptsChartItem[];
+  byTotalCellsCapacity: MostUtilizedScriptsChartItem[];
+}
+
+interface MostUtilizedAssetsChartItem {
+  id: string;
+  assetType: 'token' | 'nft' | 'dob';
+  standard: string;
+  name: string;
+  symbol: string | null;
+  occupiedCapacity: string;
+  totalCellsCapacity: string;
+}
+
+interface MostUtilizedAssetsChartResponse {
+  title: string;
+  byOccupied: MostUtilizedAssetsChartItem[];
+  byTotalCellsCapacity: MostUtilizedAssetsChartItem[];
+}
+
 interface KnownScript {
   codeHash: string;
   name: string;
@@ -904,6 +935,10 @@ export type {
   StackedAreaDataPoint,
   StackedAreaSeries,
   StackedAreaChartResponse,
+  MostUtilizedScriptsChartItem,
+  MostUtilizedScriptsChartResponse,
+  MostUtilizedAssetsChartItem,
+  MostUtilizedAssetsChartResponse,
   CursorPaginatedResponse,
   PaginatedResponse,
   MempoolInfo,
@@ -1335,6 +1370,14 @@ export const api = {
 
   getAddressCohortRetentionChart: (): Promise<ChartResponse> => {
     return fetchApi('/charts/address-cohort-retention');
+  },
+
+  getMostUtilizedScriptsChart: (): Promise<MostUtilizedScriptsChartResponse> => {
+    return fetchApi('/charts/most-utilized-scripts');
+  },
+
+  getMostUtilizedAssetsChart: (): Promise<MostUtilizedAssetsChartResponse> => {
+    return fetchApi('/charts/most-utilized-assets');
   },
 
   getBlockTimeDistributionChart: (): Promise<ChartResponse> => {

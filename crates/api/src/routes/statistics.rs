@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use crate::cache::{CacheKeys, CacheTtl};
 use crate::response::{ok, ApiError, ApiResult};
-use crate::utils::format_duration;
+use crate::utils::{format_duration, resolve_dob_collection_name, resolve_nft_collection_name};
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -47,6 +47,14 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route(
             "/charts/address-cohort-retention",
             get(get_address_cohort_retention_chart),
+        )
+        .route(
+            "/charts/most-utilized-scripts",
+            get(get_most_utilized_scripts_chart),
+        )
+        .route(
+            "/charts/most-utilized-assets",
+            get(get_most_utilized_assets_chart),
         )
         .route(
             "/charts/block-time-distribution",
@@ -421,6 +429,401 @@ pub struct StackedAreaChartResponse {
     pub data: Vec<StackedAreaDataPoint>,
     pub series: Vec<StackedAreaSeries>,
     pub title: String,
+}
+
+const MOST_UTILIZED_LIMIT: usize = 20;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MostUtilizedScriptsChartItem {
+    pub name: String,
+    pub code_hash: Option<String>,
+    pub is_known_script: bool,
+    pub script_kind: String,
+    pub occupied_capacity: String,
+    pub total_cells_capacity: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MostUtilizedScriptsChartResponse {
+    pub title: String,
+    pub by_occupied: Vec<MostUtilizedScriptsChartItem>,
+    pub by_total_cells_capacity: Vec<MostUtilizedScriptsChartItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MostUtilizedAssetsChartItem {
+    pub id: String,
+    pub asset_type: String,
+    pub standard: String,
+    pub name: String,
+    pub symbol: Option<String>,
+    pub occupied_capacity: String,
+    pub total_cells_capacity: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MostUtilizedAssetsChartResponse {
+    pub title: String,
+    pub by_occupied: Vec<MostUtilizedAssetsChartItem>,
+    pub by_total_cells_capacity: Vec<MostUtilizedAssetsChartItem>,
+}
+
+#[derive(Debug, Clone)]
+struct ScriptUtilizationRow {
+    item: MostUtilizedScriptsChartItem,
+    occupied_capacity: i128,
+    total_cells_capacity: i128,
+}
+
+#[derive(Debug, Clone)]
+struct AssetUtilizationRow {
+    item: MostUtilizedAssetsChartItem,
+    occupied_capacity: i128,
+    total_cells_capacity: i128,
+}
+
+fn is_known_script_name(name: &str) -> bool {
+    let trimmed = name.trim();
+    !trimmed.is_empty() && !trimmed.eq_ignore_ascii_case("unknown")
+}
+
+fn script_kind_label(has_lock: bool, has_type: bool) -> String {
+    match (has_lock, has_type) {
+        (true, true) => "lock+type".to_string(),
+        (true, false) => "lock".to_string(),
+        (false, true) => "type".to_string(),
+        (false, false) => "unknown".to_string(),
+    }
+}
+
+fn accumulate_capacity_deltas<I>(deltas: I) -> (i128, i128)
+where
+    I: IntoIterator<Item = (i64, i64)>,
+{
+    let mut total_cells_capacity: i128 = 0;
+    let mut occupied_capacity: i128 = 0;
+
+    for (capacity_delta, occupied_delta) in deltas {
+        total_cells_capacity = (total_cells_capacity + capacity_delta as i128).max(0);
+        occupied_capacity = (occupied_capacity + occupied_delta as i128).max(0);
+        if occupied_capacity > total_cells_capacity {
+            occupied_capacity = total_cells_capacity;
+        }
+    }
+
+    (total_cells_capacity, occupied_capacity)
+}
+
+async fn get_most_utilized_scripts_chart(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<MostUtilizedScriptsChartResponse> {
+    let cache_key = "chart:most-utilized-scripts:v1";
+    if let Some(cached) = state
+        .cache
+        .get::<MostUtilizedScriptsChartResponse>(cache_key)
+        .await
+    {
+        return ok(cached);
+    }
+
+    #[derive(Debug)]
+    struct ScriptAggregate {
+        name: String,
+        code_hash: Option<String>,
+        is_known_script: bool,
+        has_lock: bool,
+        has_type: bool,
+        occupied_capacity: i128,
+        total_cells_capacity: i128,
+    }
+
+    let all_scripts = state
+        .store
+        .list_script_infos()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let mut aggregates: BTreeMap<String, ScriptAggregate> = BTreeMap::new();
+    for (code_hash, info) in all_scripts {
+        let code_hash_hex = format!("0x{}", hex::encode(&code_hash));
+        let raw_name = info.name.as_deref().unwrap_or("Unknown").trim();
+        let is_known_script = is_known_script_name(raw_name);
+        let key = if is_known_script {
+            format!("known:{raw_name}")
+        } else {
+            format!("unknown:{code_hash_hex}")
+        };
+
+        let aggregate = aggregates.entry(key).or_insert_with(|| ScriptAggregate {
+            name: if is_known_script {
+                raw_name.to_string()
+            } else {
+                code_hash_hex.clone()
+            },
+            code_hash: if is_known_script {
+                None
+            } else {
+                Some(code_hash_hex.clone())
+            },
+            is_known_script,
+            has_lock: false,
+            has_type: false,
+            occupied_capacity: 0,
+            total_cells_capacity: 0,
+        });
+
+        aggregate.has_lock |= info.lock_cells_count > 0;
+        aggregate.has_type |= info.type_cells_count > 0;
+        aggregate.occupied_capacity += (info.lock_live_occupied_capacity_sum as i128
+            + info.type_live_occupied_capacity_sum as i128)
+            .max(0);
+        aggregate.total_cells_capacity +=
+            (info.lock_live_capacity_sum as i128 + info.type_live_capacity_sum as i128).max(0);
+    }
+
+    let rows: Vec<ScriptUtilizationRow> = aggregates
+        .into_values()
+        .filter_map(|entry| {
+            let total_cells_capacity = entry.total_cells_capacity.max(0);
+            let occupied_capacity = entry.occupied_capacity.max(0).min(total_cells_capacity);
+            if total_cells_capacity <= 0 && occupied_capacity <= 0 {
+                return None;
+            }
+
+            Some(ScriptUtilizationRow {
+                item: MostUtilizedScriptsChartItem {
+                    name: entry.name,
+                    code_hash: entry.code_hash,
+                    is_known_script: entry.is_known_script,
+                    script_kind: script_kind_label(entry.has_lock, entry.has_type),
+                    occupied_capacity: occupied_capacity.to_string(),
+                    total_cells_capacity: total_cells_capacity.to_string(),
+                },
+                occupied_capacity,
+                total_cells_capacity,
+            })
+        })
+        .collect();
+
+    let mut by_occupied = rows.clone();
+    by_occupied.sort_by(|a, b| {
+        b.occupied_capacity
+            .cmp(&a.occupied_capacity)
+            .then_with(|| b.total_cells_capacity.cmp(&a.total_cells_capacity))
+            .then_with(|| a.item.name.cmp(&b.item.name))
+            .then_with(|| a.item.code_hash.cmp(&b.item.code_hash))
+    });
+    let by_occupied: Vec<MostUtilizedScriptsChartItem> = by_occupied
+        .into_iter()
+        .take(MOST_UTILIZED_LIMIT)
+        .map(|row| row.item)
+        .collect();
+
+    let mut by_total_cells_capacity = rows;
+    by_total_cells_capacity.sort_by(|a, b| {
+        b.total_cells_capacity
+            .cmp(&a.total_cells_capacity)
+            .then_with(|| b.occupied_capacity.cmp(&a.occupied_capacity))
+            .then_with(|| a.item.name.cmp(&b.item.name))
+            .then_with(|| a.item.code_hash.cmp(&b.item.code_hash))
+    });
+    let by_total_cells_capacity: Vec<MostUtilizedScriptsChartItem> = by_total_cells_capacity
+        .into_iter()
+        .take(MOST_UTILIZED_LIMIT)
+        .map(|row| row.item)
+        .collect();
+
+    let response = MostUtilizedScriptsChartResponse {
+        title: "Most Utilized Scripts".to_string(),
+        by_occupied,
+        by_total_cells_capacity,
+    };
+
+    state.cache.set(cache_key, &response, CacheTtl::CHART).await;
+    ok(response)
+}
+
+async fn get_most_utilized_assets_chart(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<MostUtilizedAssetsChartResponse> {
+    let cache_key = "chart:most-utilized-assets:v1";
+    if let Some(cached) = state
+        .cache
+        .get::<MostUtilizedAssetsChartResponse>(cache_key)
+        .await
+    {
+        return ok(cached);
+    }
+
+    let mut rows: Vec<AssetUtilizationRow> = Vec::new();
+
+    let tokens = state
+        .store
+        .list_tokens()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    for (type_hash, info) in tokens {
+        if info.name.is_none() && info.symbol.is_none() && info.holders_count == 0 {
+            continue;
+        }
+        let deltas = state
+            .store
+            .list_token_daily_deltas(&type_hash)
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        let (total_cells_capacity, occupied_capacity) =
+            accumulate_capacity_deltas(deltas.into_iter().map(|(_, delta)| {
+                (
+                    delta.live_capacity_delta,
+                    delta.live_occupied_capacity_delta,
+                )
+            }));
+        if total_cells_capacity <= 0 && occupied_capacity <= 0 {
+            continue;
+        }
+        let id = format!("0x{}", hex::encode(&type_hash));
+        rows.push(AssetUtilizationRow {
+            item: MostUtilizedAssetsChartItem {
+                id: id.clone(),
+                asset_type: "token".to_string(),
+                standard: info.standard.clone(),
+                name: info
+                    .symbol
+                    .clone()
+                    .or_else(|| info.name.clone())
+                    .unwrap_or(id),
+                symbol: info.symbol.clone(),
+                occupied_capacity: occupied_capacity.to_string(),
+                total_cells_capacity: total_cells_capacity.to_string(),
+            },
+            occupied_capacity,
+            total_cells_capacity,
+        });
+    }
+
+    let clusters = state
+        .store
+        .list_cluster_aggregates()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    for (cluster_id, agg) in clusters {
+        if agg.total_count == 0 {
+            continue;
+        }
+        let deltas = state
+            .store
+            .list_cluster_daily_deltas(&cluster_id)
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        let (total_cells_capacity, occupied_capacity) =
+            accumulate_capacity_deltas(deltas.into_iter().map(|(_, delta)| {
+                (
+                    delta.live_capacity_delta,
+                    delta.live_occupied_capacity_delta,
+                )
+            }));
+        if total_cells_capacity <= 0 && occupied_capacity <= 0 {
+            continue;
+        }
+
+        let id = format!("0x{}", hex::encode(&cluster_id));
+        let name =
+            resolve_dob_collection_name(state.store.as_ref(), &cluster_id, agg.name.as_deref())
+                .unwrap_or_else(|| id.clone());
+        rows.push(AssetUtilizationRow {
+            item: MostUtilizedAssetsChartItem {
+                id,
+                asset_type: "dob".to_string(),
+                standard: "spore".to_string(),
+                name,
+                symbol: None,
+                occupied_capacity: occupied_capacity.to_string(),
+                total_cells_capacity: total_cells_capacity.to_string(),
+            },
+            occupied_capacity,
+            total_cells_capacity,
+        });
+    }
+
+    let nft_collections = state
+        .store
+        .list_nft_collection_aggregates()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    for (collection_id, agg) in nft_collections {
+        if agg.total_count == 0 {
+            continue;
+        }
+        let deltas = state
+            .store
+            .list_nft_daily_deltas(&collection_id)
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        let (total_cells_capacity, occupied_capacity) =
+            accumulate_capacity_deltas(deltas.into_iter().map(|(_, delta)| {
+                (
+                    delta.live_capacity_delta,
+                    delta.live_occupied_capacity_delta,
+                )
+            }));
+        if total_cells_capacity <= 0 && occupied_capacity <= 0 {
+            continue;
+        }
+
+        let id = format!("0x{}", hex::encode(&collection_id));
+        let standard = agg.standard.asset_standard().to_string();
+        let name = resolve_nft_collection_name(&standard, agg.name.as_deref())
+            .unwrap_or_else(|| id.clone());
+        rows.push(AssetUtilizationRow {
+            item: MostUtilizedAssetsChartItem {
+                id,
+                asset_type: "nft".to_string(),
+                standard,
+                name,
+                symbol: None,
+                occupied_capacity: occupied_capacity.to_string(),
+                total_cells_capacity: total_cells_capacity.to_string(),
+            },
+            occupied_capacity,
+            total_cells_capacity,
+        });
+    }
+
+    let mut by_occupied = rows.clone();
+    by_occupied.sort_by(|a, b| {
+        b.occupied_capacity
+            .cmp(&a.occupied_capacity)
+            .then_with(|| b.total_cells_capacity.cmp(&a.total_cells_capacity))
+            .then_with(|| a.item.asset_type.cmp(&b.item.asset_type))
+            .then_with(|| a.item.name.cmp(&b.item.name))
+            .then_with(|| a.item.id.cmp(&b.item.id))
+    });
+    let by_occupied: Vec<MostUtilizedAssetsChartItem> = by_occupied
+        .into_iter()
+        .take(MOST_UTILIZED_LIMIT)
+        .map(|row| row.item)
+        .collect();
+
+    let mut by_total_cells_capacity = rows;
+    by_total_cells_capacity.sort_by(|a, b| {
+        b.total_cells_capacity
+            .cmp(&a.total_cells_capacity)
+            .then_with(|| b.occupied_capacity.cmp(&a.occupied_capacity))
+            .then_with(|| a.item.asset_type.cmp(&b.item.asset_type))
+            .then_with(|| a.item.name.cmp(&b.item.name))
+            .then_with(|| a.item.id.cmp(&b.item.id))
+    });
+    let by_total_cells_capacity: Vec<MostUtilizedAssetsChartItem> = by_total_cells_capacity
+        .into_iter()
+        .take(MOST_UTILIZED_LIMIT)
+        .map(|row| row.item)
+        .collect();
+
+    let response = MostUtilizedAssetsChartResponse {
+        title: "Most Utilized Assets".to_string(),
+        by_occupied,
+        by_total_cells_capacity,
+    };
+
+    state.cache.set(cache_key, &response, CacheTtl::CHART).await;
+    ok(response)
 }
 
 async fn get_transaction_count_chart(

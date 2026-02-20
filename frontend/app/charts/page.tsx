@@ -2,12 +2,20 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { Header } from '@/components/layout/header';
-import { LineChart } from '@/components/ui/line-chart';
+import { LineChart, LineChartType } from '@/components/ui/line-chart';
 import { PieChart } from '@/components/ui/pie-chart';
 import { StackedAreaChart } from '@/components/ui/stacked-area-chart';
 import { ChartCard, ChartSection } from '@/components/ui/chart-card';
 import { PageHeader } from '@/components/ui/page-header';
-import { api, ChartResponse, MinerDistributionResponse, StackedAreaChartResponse } from '@/lib/api';
+import {
+  api,
+  ChartResponse,
+  MinerDistributionResponse,
+  MostUtilizedAssetsChartResponse,
+  MostUtilizedScriptsChartResponse,
+  StackedAreaChartResponse,
+} from '@/lib/api';
+import { formatCkbCompact } from '@/lib/utils';
 
 function ChartDataWarning({ show }: { show: boolean }) {
   if (!show) return null;
@@ -23,7 +31,15 @@ function ChartDataWarning({ show }: { show: boolean }) {
   );
 }
 
-function LineChartPreview({ data, href }: { data: ChartResponse | undefined; href: string }) {
+function LineChartPreview({
+  data,
+  href,
+  chartType = 'line',
+}: {
+  data: ChartResponse | undefined;
+  href: string;
+  chartType?: LineChartType;
+}) {
   return (
     <ChartCard
       title={data?.title ?? 'Loading...'}
@@ -38,6 +54,7 @@ function LineChartPreview({ data, href }: { data: ChartResponse | undefined; hre
           y2AxisLabel={data.y2AxisLabel}
           height={160}
           interactive={false}
+          chartType={chartType}
         />
       )}
     </ChartCard>
@@ -152,6 +169,102 @@ function MinerDistributionPreview({
   );
 }
 
+function MostUtilizedScriptsPreview({
+  data,
+  href,
+}: {
+  data: MostUtilizedScriptsChartResponse | undefined;
+  href: string;
+}) {
+  const items = data?.byOccupied.slice(0, 3) ?? [];
+  const maxValue = items.reduce((max, item) => {
+    const value = BigInt(item.occupiedCapacity);
+    return value > max ? value : max;
+  }, BigInt(0));
+
+  return (
+    <ChartCard
+      title={data?.title ?? 'Loading...'}
+      href={href}
+      isLoading={!data}
+      error={data === null}
+      height={170}
+    >
+      {data && (
+        <div className="space-y-3">
+          {items.map((item, index) => {
+            const value = BigInt(item.occupiedCapacity);
+            const width = maxValue > BigInt(0) ? Number((value * BigInt(100)) / maxValue) : 0;
+            const compact = formatCkbCompact(item.occupiedCapacity);
+            return (
+              <div key={`${item.name}-${item.codeHash ?? index}`}>
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <span className="truncate font-mono text-xs text-slate-300">{item.name}</span>
+                  <span className="font-mono text-xs text-slate-400">{compact.value}</span>
+                </div>
+                <div className="h-1.5 w-full rounded bg-slate-800">
+                  <div
+                    className="bg-terminal-green h-1.5 rounded"
+                    style={{ width: `${Math.max(width, 2)}%` }}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </ChartCard>
+  );
+}
+
+function MostUtilizedAssetsPreview({
+  data,
+  href,
+}: {
+  data: MostUtilizedAssetsChartResponse | undefined;
+  href: string;
+}) {
+  const items = data?.byOccupied.slice(0, 3) ?? [];
+  const maxValue = items.reduce((max, item) => {
+    const value = BigInt(item.occupiedCapacity);
+    return value > max ? value : max;
+  }, BigInt(0));
+
+  return (
+    <ChartCard
+      title={data?.title ?? 'Loading...'}
+      href={href}
+      isLoading={!data}
+      error={data === null}
+      height={170}
+    >
+      {data && (
+        <div className="space-y-3">
+          {items.map((item) => {
+            const value = BigInt(item.occupiedCapacity);
+            const width = maxValue > BigInt(0) ? Number((value * BigInt(100)) / maxValue) : 0;
+            const compact = formatCkbCompact(item.occupiedCapacity);
+            return (
+              <div key={`${item.assetType}-${item.id}`}>
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <span className="truncate font-mono text-xs text-slate-300">{item.name}</span>
+                  <span className="font-mono text-xs text-slate-400">{compact.value}</span>
+                </div>
+                <div className="h-1.5 w-full rounded bg-slate-800">
+                  <div
+                    className="h-1.5 rounded bg-amber-500"
+                    style={{ width: `${Math.max(width, 2)}%` }}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </ChartCard>
+  );
+}
+
 export default function ChartsPage() {
   const { data: networkStats } = useQuery({
     queryKey: ['network-stats'],
@@ -211,6 +324,16 @@ export default function ChartsPage() {
   const { data: addressCohortRetention } = useQuery({
     queryKey: ['chart-address-cohort-retention'],
     queryFn: () => api.getAddressCohortRetentionChart(),
+  });
+
+  const { data: mostUtilizedScripts } = useQuery({
+    queryKey: ['chart-most-utilized-scripts'],
+    queryFn: () => api.getMostUtilizedScriptsChart(),
+  });
+
+  const { data: mostUtilizedAssets } = useQuery({
+    queryKey: ['chart-most-utilized-assets'],
+    queryFn: () => api.getMostUtilizedAssetsChart(),
   });
 
   const { data: blockTimeDistribution } = useQuery({
@@ -330,8 +453,24 @@ export default function ChartsPage() {
             href="/charts/cell-age-vs-occupied-capacity"
           />
           <LineChartPreview data={capacityTurnoverRatio} href="/charts/capacity-turnover-ratio" />
-          <LineChartPreview data={cellSizeDistribution} href="/charts/cell-size-distribution" />
-          <LineChartPreview data={addressCohortRetention} href="/charts/address-cohort-retention" />
+          <LineChartPreview
+            data={cellSizeDistribution}
+            href="/charts/cell-size-distribution"
+            chartType="bar"
+          />
+          <LineChartPreview
+            data={addressCohortRetention}
+            href="/charts/address-cohort-retention"
+            chartType="bar"
+          />
+          <MostUtilizedScriptsPreview
+            data={mostUtilizedScripts}
+            href="/charts/most-utilized-scripts"
+          />
+          <MostUtilizedAssetsPreview
+            data={mostUtilizedAssets}
+            href="/charts/most-utilized-assets"
+          />
         </ChartSection>
 
         <ChartSection title="Economics">

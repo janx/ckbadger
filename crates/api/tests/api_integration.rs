@@ -154,11 +154,254 @@ async fn test_new_capacity_charts_empty_db() {
         "/api/v1/charts/capacity-turnover-ratio",
         "/api/v1/charts/cell-size-distribution",
         "/api/v1/charts/address-cohort-retention",
+        "/api/v1/charts/most-utilized-scripts",
+        "/api/v1/charts/most-utilized-assets",
     ] {
         let request = Request::builder().uri(uri).body(Body::empty()).unwrap();
         let response = app.clone().oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK, "uri={uri}");
     }
+}
+
+#[tokio::test]
+async fn test_most_utilized_scripts_chart_ranks_by_occupied_and_capacity() {
+    let store = test_store();
+
+    let code_hash_a1 = vec![0x11; 32];
+    let code_hash_a2 = vec![0x12; 32];
+    let code_hash_b = vec![0x21; 32];
+    let code_hash_unknown = vec![0x31; 32];
+
+    store
+        .put_script_info_direct(
+            &code_hash_a1,
+            &ScriptInfo {
+                code_hash: code_hash_a1.clone(),
+                name: Some("Script A".to_string()),
+                lock_cells_count: 10,
+                lock_live_cells_count: 8,
+                lock_live_capacity_sum: 500,
+                lock_live_occupied_capacity_sum: 300,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    store
+        .put_script_info_direct(
+            &code_hash_a2,
+            &ScriptInfo {
+                code_hash: code_hash_a2.clone(),
+                name: Some("Script A".to_string()),
+                type_cells_count: 6,
+                type_live_cells_count: 5,
+                type_live_capacity_sum: 700,
+                type_live_occupied_capacity_sum: 500,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    store
+        .put_script_info_direct(
+            &code_hash_b,
+            &ScriptInfo {
+                code_hash: code_hash_b.clone(),
+                name: Some("Script B".to_string()),
+                lock_cells_count: 9,
+                lock_live_cells_count: 7,
+                lock_live_capacity_sum: 800,
+                lock_live_occupied_capacity_sum: 200,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    store
+        .put_script_info_direct(
+            &code_hash_unknown,
+            &ScriptInfo {
+                code_hash: code_hash_unknown.clone(),
+                name: None,
+                lock_cells_count: 4,
+                lock_live_cells_count: 4,
+                lock_live_capacity_sum: 600,
+                lock_live_occupied_capacity_sum: 550,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/charts/most-utilized-scripts")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["title"], "Most Utilized Scripts");
+    let by_occupied = json["byOccupied"].as_array().unwrap();
+    let by_capacity = json["byTotalCellsCapacity"].as_array().unwrap();
+
+    assert_eq!(by_occupied[0]["name"], "Script A");
+    assert_eq!(by_occupied[0]["occupiedCapacity"], "800");
+    assert_eq!(by_occupied[0]["totalCellsCapacity"], "1200");
+    assert_eq!(by_occupied[0]["scriptKind"], "lock+type");
+    assert_eq!(by_capacity[0]["name"], "Script A");
+    assert_eq!(by_capacity[0]["totalCellsCapacity"], "1200");
+
+    assert_eq!(by_occupied[1]["occupiedCapacity"], "550");
+    assert_eq!(by_occupied[1]["isKnownScript"], false);
+    assert_eq!(by_capacity[1]["name"], "Script B");
+    assert_eq!(by_capacity[1]["totalCellsCapacity"], "800");
+}
+
+#[tokio::test]
+async fn test_most_utilized_assets_chart_ranks_mixed_asset_types() {
+    let store = test_store();
+
+    let token_a = vec![0x41; 32];
+    let token_b = vec![0x42; 32];
+    let cluster_id = vec![0x51; 32];
+    let nft_collection_id = vec![0x61; 32];
+
+    store
+        .put_token_direct(
+            &token_a,
+            &TokenInfo {
+                type_code_hash: vec![0x01; 32],
+                hash_type: 1,
+                type_args: vec![0x02; 20],
+                standard: "xudt".to_string(),
+                name: Some("Token A".to_string()),
+                symbol: Some("A".to_string()),
+                decimals: Some(8),
+                total_supply: Some(1000),
+                holders_count: 10,
+                first_seen_block: 1,
+                icon_url: None,
+                description: None,
+                transfers_count: 0,
+            },
+        )
+        .unwrap();
+    store
+        .put_token_daily_delta(
+            &token_a,
+            20240101,
+            &TokenDailyDelta {
+                live_capacity_delta: 300,
+                live_occupied_capacity_delta: 250,
+            },
+        )
+        .unwrap();
+
+    store
+        .put_token_direct(
+            &token_b,
+            &TokenInfo {
+                type_code_hash: vec![0x03; 32],
+                hash_type: 1,
+                type_args: vec![0x04; 20],
+                standard: "xudt".to_string(),
+                name: Some("Token B".to_string()),
+                symbol: Some("B".to_string()),
+                decimals: Some(8),
+                total_supply: Some(1000),
+                holders_count: 11,
+                first_seen_block: 1,
+                icon_url: None,
+                description: None,
+                transfers_count: 0,
+            },
+        )
+        .unwrap();
+    store
+        .put_token_daily_delta(
+            &token_b,
+            20240101,
+            &TokenDailyDelta {
+                live_capacity_delta: 900,
+                live_occupied_capacity_delta: 100,
+            },
+        )
+        .unwrap();
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_cluster_aggregate(
+        &cluster_id,
+        &ClusterAggregate {
+            name: Some("DOB Cluster".to_string()),
+            description: None,
+            total_count: 5,
+            live_count: 5,
+            owner_count: 3,
+        },
+    );
+    batch.put_nft_collection_aggregate(
+        &nft_collection_id,
+        &NftCollectionAggregate {
+            name: Some("NFT Collection".to_string()),
+            standard: NftStandard::MnftClass,
+            total_count: 6,
+            live_count: 6,
+        },
+    );
+    batch.commit().unwrap();
+
+    store
+        .put_cluster_daily_delta(
+            &cluster_id,
+            20240101,
+            &ClusterDailyDelta {
+                live_capacity_delta: 500,
+                live_occupied_capacity_delta: 400,
+            },
+        )
+        .unwrap();
+    store
+        .put_nft_daily_delta(
+            &nft_collection_id,
+            20240101,
+            &NftDailyDelta {
+                live_capacity_delta: 700,
+                live_occupied_capacity_delta: 600,
+            },
+        )
+        .unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/charts/most-utilized-assets")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["title"], "Most Utilized Assets");
+    let by_occupied = json["byOccupied"].as_array().unwrap();
+    let by_capacity = json["byTotalCellsCapacity"].as_array().unwrap();
+
+    assert_eq!(by_occupied[0]["assetType"], "nft");
+    assert_eq!(by_occupied[0]["occupiedCapacity"], "600");
+    assert_eq!(by_occupied[1]["assetType"], "dob");
+    assert_eq!(by_occupied[1]["occupiedCapacity"], "400");
+
+    assert_eq!(by_capacity[0]["assetType"], "token");
+    assert_eq!(by_capacity[0]["symbol"], "B");
+    assert_eq!(by_capacity[0]["totalCellsCapacity"], "900");
+    assert_eq!(by_capacity[1]["assetType"], "nft");
+    assert_eq!(by_capacity[1]["totalCellsCapacity"], "700");
 }
 
 #[tokio::test]

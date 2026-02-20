@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import ChartsPage from '@/app/charts/page';
-import { api } from '@/lib/api';
+import { api, MostUtilizedAssetsChartResponse, MostUtilizedScriptsChartResponse } from '@/lib/api';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -18,6 +18,8 @@ vi.mock('@/lib/api', () => ({
     getCapacityTurnoverRatioChart: vi.fn(),
     getCellSizeDistributionChart: vi.fn(),
     getAddressCohortRetentionChart: vi.fn(),
+    getMostUtilizedScriptsChart: vi.fn(),
+    getMostUtilizedAssetsChart: vi.fn(),
     getBlockTimeDistributionChart: vi.fn(),
     getEpochTimeDistributionChart: vi.fn(),
     getAverageBlockTimeChart: vi.fn(),
@@ -128,6 +130,56 @@ const mockCellCountResponse = {
   ],
 };
 
+const mockMostUtilizedScriptsResponse: MostUtilizedScriptsChartResponse = {
+  title: 'Most Utilized Scripts',
+  byOccupied: [
+    {
+      name: 'SECP256K1_BLAKE160',
+      codeHash: null,
+      isKnownScript: true,
+      scriptKind: 'lock',
+      occupiedCapacity: '10000000000',
+      totalCellsCapacity: '20000000000',
+    },
+  ],
+  byTotalCellsCapacity: [
+    {
+      name: 'SECP256K1_BLAKE160',
+      codeHash: null,
+      isKnownScript: true,
+      scriptKind: 'lock',
+      occupiedCapacity: '10000000000',
+      totalCellsCapacity: '20000000000',
+    },
+  ],
+};
+
+const mockMostUtilizedAssetsResponse: MostUtilizedAssetsChartResponse = {
+  title: 'Most Utilized Assets',
+  byOccupied: [
+    {
+      id: '0x1234',
+      assetType: 'token',
+      standard: 'xudt',
+      name: 'CKBTEST',
+      symbol: 'CKBTEST',
+      occupiedCapacity: '15000000000',
+      totalCellsCapacity: '30000000000',
+    },
+  ],
+  byTotalCellsCapacity: [
+    {
+      id: '0x1234',
+      assetType: 'token',
+      standard: 'xudt',
+      name: 'CKBTEST',
+      symbol: 'CKBTEST',
+      occupiedCapacity: '15000000000',
+      totalCellsCapacity: '30000000000',
+    },
+  ],
+};
+
 describe('ChartsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -142,6 +194,8 @@ describe('ChartsPage', () => {
     vi.mocked(api.getCapacityTurnoverRatioChart).mockResolvedValue(mockChartResponse);
     vi.mocked(api.getCellSizeDistributionChart).mockResolvedValue(mockChartResponse);
     vi.mocked(api.getAddressCohortRetentionChart).mockResolvedValue(mockChartResponse);
+    vi.mocked(api.getMostUtilizedScriptsChart).mockResolvedValue(mockMostUtilizedScriptsResponse);
+    vi.mocked(api.getMostUtilizedAssetsChart).mockResolvedValue(mockMostUtilizedAssetsResponse);
     vi.mocked(api.getBlockTimeDistributionChart).mockResolvedValue(mockChartResponse);
     vi.mocked(api.getEpochTimeDistributionChart).mockResolvedValue(mockChartResponse);
     vi.mocked(api.getAverageBlockTimeChart).mockResolvedValue(mockChartResponse);
