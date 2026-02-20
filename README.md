@@ -14,6 +14,21 @@
 - **Local First** - Optimized for decentralized deployment on localhosts
 - **Agent Friendly** - Designed for AI-assisted development with clear structure and automation-friendly workflows
 
+## Performance Targets
+
+To keep the `Unrivaled Speed` principle concrete, performance work should report against these targets
+on localhost deployments:
+
+| Metric                              | Target                                                        | Measurement                                                                                                          |
+| ----------------------------------- | ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Database rebuild speed              | Maximize sustained throughput without correctness regressions | Record total sync duration and progress EMA (`blocks/sec`) from indexer logs                                         |
+| API latency (common read endpoints) | `p50 <= 10ms`, `p95 <= 50ms`, `p99 <= 100ms` on warm cache    | Benchmark `/api/v1` list/detail endpoints and report p50/p95/p99                                                     |
+| Correctness guardrail               | `0` verification failures after speed optimizations           | Run `cargo run -p ckbadger-indexer -- verify --depth fast` (and `--depth sampling` for aggregate/DAO/supply changes) |
+
+- Performance-affecting PRs should include before/after numbers.
+- Keep benchmark snapshots up to date in `docs/PERFORMANCE_RESULTS.md`.
+- For module ownership and entry points, see `docs/ARCHITECTURE_MAP.md`.
+
 ## Features
 
 ### Core Explorer

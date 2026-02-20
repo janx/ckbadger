@@ -9,6 +9,44 @@ Instructions for AI agents working on ckbadger - a CKB blockchain explorer.
 - **Local First** - Optimized for decentralized deployment on localhosts
 - **Agent Friendly** - Prefer clear, automation-friendly structure and workflows
 
+## Agent Task Template (MANDATORY)
+
+For any non-trivial task, use this structure in the final summary or PR description:
+
+```md
+## Goal
+
+- What problem is being solved
+
+## Principle Alignment
+
+- CKB Native:
+- Unrivaled Speed:
+- Local First:
+- Agent Friendly:
+
+## Scope
+
+- Files changed and why
+- Any storage/schema impact
+
+## Validation
+
+- Commands run:
+- Tests added/updated:
+- Verify checks:
+
+## Result
+
+- Behavior change summary
+- Re-sync required: yes/no
+- Follow-up items (if any)
+```
+
+**Principle Sync Rule**:
+
+- If principle wording changes, update both `README.md` and `CLAUDE.md` in the same commit.
+
 ## Development Status (IMPORTANT)
 
 **This is a project under active development, NOT running in production.**
