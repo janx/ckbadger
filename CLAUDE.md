@@ -125,10 +125,23 @@ cargo check && cargo clippy && cd frontend && pnpm type-check && pnpm lint
 pnpm format                              # Prettier (all files)
 
 # Local-first shortcuts
-make local-up                            # Start local dependencies
-make local-reset CONFIRM=1               # Delete local RocksDB data
+make local-up                            # Start local dependencies (ckb-node only in internal mode)
+make local-reset CONFIRM=1               # Delete local RocksDB + redis cache data
 make local-verify                        # Run verify --depth fast against local API
+make local-up CKB_NODE_MODE=internal     # Force internal mode for one run
+make local-up CKB_NODE_MODE=external     # Force external mode for one run
 ```
+
+`local-up` default mode comes from `.env`:
+
+- `COMPOSE_PROFILES=internal` => internal CKB (`redis + ckb-node`)
+- `COMPOSE_PROFILES` unset => external CKB (`redis` only)
+
+`local-reset CONFIRM=1` removes:
+
+- local `CKBADGER_DATA_PATH` (+ api secondary path)
+- Docker volumes `ckbadger-data` and `redis-data`
+- keeps `ckb-data` untouched
 
 ## Project Structure
 

@@ -156,10 +156,10 @@ docker compose -f docker-compose.minimal.yml up -d
 Use repository `Makefile` targets for the most common local workflow:
 
 ```bash
-# Start local dependencies (redis + ckb-node in internal mode)
+# Start local dependencies (always redis; ckb-node only in internal mode)
 make local-up
 
-# Reset local RocksDB (requires explicit confirmation)
+# Reset local RocksDB + redis cache data (keeps ckb-data)
 make local-reset CONFIRM=1
 
 # Run verification against local API
@@ -169,6 +169,20 @@ make local-verify
 make local-verify VERIFY_DEPTH=sampling VERIFY_RPC_URL=http://localhost:8114
 ```
 
+`make local-up` mode resolution:
+
+- If `.env` contains `COMPOSE_PROFILES=internal`, it starts `redis + ckb-node`
+- Otherwise it starts `redis` only (external CKB mode)
+- You can override per command:
+  - `make local-up CKB_NODE_MODE=internal`
+  - `make local-up CKB_NODE_MODE=external`
+
+`make local-reset CONFIRM=1` cleanup scope:
+
+- Deletes local RocksDB path (`CKBADGER_DATA_PATH`) and api secondary path
+- Deletes compose volumes `ckbadger-data` and `redis-data` (if present)
+- Keeps `ckb-data` volume (CKB chain data is not removed)
+
 ## Configuration
 
 ### Environment Variables
@@ -177,6 +191,10 @@ make local-verify VERIFY_DEPTH=sampling VERIFY_RPC_URL=http://localhost:8114
 # .env.example
 
 # CKB Node Configuration
+# For Makefile local-up mode selection:
+#   COMPOSE_PROFILES=internal  -> internal CKB node in Docker
+#   COMPOSE_PROFILES unset     -> external CKB node (host)
+#
 # For built-in node (--profile internal): uses http://ckb-node:8114 automatically
 # For external node: set your host's CKB RPC URL
 CKB_RPC_URL=http://host.docker.internal:8114  # macOS/Windows
