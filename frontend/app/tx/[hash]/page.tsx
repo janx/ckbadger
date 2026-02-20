@@ -337,6 +337,29 @@ interface TabProps {
   scriptLookup?: ScriptLookupResponse;
 }
 
+const UNKNOWN_SCRIPT_NAME = 'unknown';
+
+function hasKnownScriptName(name: string | null | undefined): boolean {
+  return Boolean(name && name.trim() && name.trim().toLowerCase() !== UNKNOWN_SCRIPT_NAME);
+}
+
+function getScriptHref({
+  codeHash,
+  hashType,
+  scriptKind,
+  scriptName,
+}: {
+  codeHash: string;
+  hashType: string | null | undefined;
+  scriptKind: 'lock' | 'type';
+  scriptName: string | null | undefined;
+}): string {
+  if (hasKnownScriptName(scriptName)) {
+    return `/scripts/${encodeURIComponent(scriptName!.trim())}`;
+  }
+  return `/script/${codeHash}?hashType=${encodeURIComponent(hashType ?? 'type')}&kind=${scriptKind}`;
+}
+
 function ScriptLabel({
   script,
   scriptLookup,
@@ -349,11 +372,18 @@ function ScriptLabel({
   if (!script) return null;
   const info = scriptLookup?.[script.codeHash];
   if (!info) return null;
+  const label = hasKnownScriptName(info.name) ? info.name.trim() : 'Unknown';
+  const href = getScriptHref({
+    codeHash: script.codeHash,
+    hashType: info.hashType,
+    scriptKind: type,
+    scriptName: info.name,
+  });
 
   return (
-    <Link href={`/scripts/${encodeURIComponent(info.name)}`}>
+    <Link href={href}>
       <Badge variant={type === 'lock' ? 'blue' : 'purple'} className="hover:opacity-80">
-        {info.name}
+        {label}
       </Badge>
     </Link>
   );
@@ -516,16 +546,26 @@ function ScriptsSummaryTab({ tx, scriptLookup }: TabProps) {
               className="flex items-center justify-between"
             >
               <div className="min-w-0 flex-1">
-                {script.name ? (
+                {script.name?.trim() ? (
                   <Link
-                    href={`/scripts/${encodeURIComponent(script.name)}`}
+                    href={getScriptHref({
+                      codeHash: script.codeHash,
+                      hashType: script.hashType,
+                      scriptKind: 'lock',
+                      scriptName: script.name,
+                    })}
                     className="text-terminal-green hover:underline"
                   >
-                    {script.name}
+                    {script.name.trim()}
                   </Link>
                 ) : (
                   <Link
-                    href={`/script/${script.codeHash}?hashType=${script.hashType}&kind=lock`}
+                    href={getScriptHref({
+                      codeHash: script.codeHash,
+                      hashType: script.hashType,
+                      scriptKind: 'lock',
+                      scriptName: script.name,
+                    })}
                     className="group"
                   >
                     <HexDisplay
@@ -558,16 +598,26 @@ function ScriptsSummaryTab({ tx, scriptLookup }: TabProps) {
               className="flex items-center justify-between"
             >
               <div className="min-w-0 flex-1">
-                {script.name ? (
+                {script.name?.trim() ? (
                   <Link
-                    href={`/scripts/${encodeURIComponent(script.name)}`}
+                    href={getScriptHref({
+                      codeHash: script.codeHash,
+                      hashType: script.hashType,
+                      scriptKind: 'type',
+                      scriptName: script.name,
+                    })}
                     className="text-terminal-green hover:underline"
                   >
-                    {script.name}
+                    {script.name.trim()}
                   </Link>
                 ) : (
                   <Link
-                    href={`/script/${script.codeHash}?hashType=${script.hashType}&kind=type`}
+                    href={getScriptHref({
+                      codeHash: script.codeHash,
+                      hashType: script.hashType,
+                      scriptKind: 'type',
+                      scriptName: script.name,
+                    })}
                     className="group"
                   >
                     <HexDisplay
