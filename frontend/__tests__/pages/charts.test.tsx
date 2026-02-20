@@ -132,52 +132,42 @@ const mockCellCountResponse = {
 
 const mockMostUtilizedScriptsResponse: MostUtilizedScriptsChartResponse = {
   title: 'Most Utilized Scripts',
-  byOccupied: [
-    {
-      name: 'SECP256K1_BLAKE160',
-      codeHash: null,
-      isKnownScript: true,
-      scriptKind: 'lock',
-      occupiedCapacity: '10000000000',
-      totalCellsCapacity: '20000000000',
-    },
-  ],
-  byTotalCellsCapacity: [
-    {
-      name: 'SECP256K1_BLAKE160',
-      codeHash: null,
-      isKnownScript: true,
-      scriptKind: 'lock',
-      occupiedCapacity: '10000000000',
-      totalCellsCapacity: '20000000000',
-    },
-  ],
+  occupiedShare: {
+    title: 'Top Scripts Occupied Share',
+    data: [{ date: '2024-01-01', values: { top0: '100', others: '20' } }],
+    series: [
+      { key: 'top0', label: 'SECP256K1_BLAKE160', color: '#00c389' },
+      { key: 'others', label: 'Others', color: '#64748b' },
+    ],
+  },
+  capacityShare: {
+    title: 'Top Scripts Capacity Share',
+    data: [{ date: '2024-01-01', values: { top0: '150', others: '30' } }],
+    series: [
+      { key: 'top0', label: 'SECP256K1_BLAKE160', color: '#00c389' },
+      { key: 'others', label: 'Others', color: '#64748b' },
+    ],
+  },
 };
 
 const mockMostUtilizedAssetsResponse: MostUtilizedAssetsChartResponse = {
   title: 'Most Utilized Assets',
-  byOccupied: [
-    {
-      id: '0x1234',
-      assetType: 'token',
-      standard: 'xudt',
-      name: 'CKBTEST',
-      symbol: 'CKBTEST',
-      occupiedCapacity: '15000000000',
-      totalCellsCapacity: '30000000000',
-    },
-  ],
-  byTotalCellsCapacity: [
-    {
-      id: '0x1234',
-      assetType: 'token',
-      standard: 'xudt',
-      name: 'CKBTEST',
-      symbol: 'CKBTEST',
-      occupiedCapacity: '15000000000',
-      totalCellsCapacity: '30000000000',
-    },
-  ],
+  occupiedShare: {
+    title: 'Top Assets Occupied Share',
+    data: [{ date: '2024-01-01', values: { top0: '120', others: '40' } }],
+    series: [
+      { key: 'top0', label: 'CKBTEST (token)', color: '#00c389' },
+      { key: 'others', label: 'Others', color: '#64748b' },
+    ],
+  },
+  capacityShare: {
+    title: 'Top Assets Capacity Share',
+    data: [{ date: '2024-01-01', values: { top0: '180', others: '60' } }],
+    series: [
+      { key: 'top0', label: 'CKBTEST (token)', color: '#00c389' },
+      { key: 'others', label: 'Others', color: '#64748b' },
+    ],
+  },
 };
 
 describe('ChartsPage', () => {
@@ -251,7 +241,7 @@ describe('ChartsPage', () => {
     render(<ChartsPage />);
 
     await waitFor(() => {
-      expect(screen.getAllByTestId('stacked-area-percentage')).toHaveLength(2);
+      expect(screen.getAllByTestId('stacked-area-percentage')).toHaveLength(4);
       expect(screen.getAllByTestId('stacked-area-absolute')).toHaveLength(3);
     });
   });

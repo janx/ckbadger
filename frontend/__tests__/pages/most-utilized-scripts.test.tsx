@@ -14,44 +14,46 @@ vi.mock('@/components/layout/header', () => ({
   Header: () => <div data-testid="header">Header</div>,
 }));
 
+vi.mock('@/components/ui/stacked-area-chart', () => ({
+  StackedAreaChart: () => <div data-testid="stacked-area-chart" />,
+}));
+
 describe('MostUtilizedScriptsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(api.getMostUtilizedScriptsChart).mockResolvedValue({
       title: 'Most Utilized Scripts',
-      byOccupied: [
-        {
-          name: 'SECP256K1_BLAKE160',
-          codeHash: null,
-          isKnownScript: true,
-          scriptKind: 'lock',
-          occupiedCapacity: '10000000000',
-          totalCellsCapacity: '20000000000',
-        },
-      ],
-      byTotalCellsCapacity: [
-        {
-          name: '0x' + '11'.repeat(32),
-          codeHash: '0x' + '11'.repeat(32),
-          isKnownScript: false,
-          scriptKind: 'type',
-          occupiedCapacity: '9000000000',
-          totalCellsCapacity: '30000000000',
-        },
-      ],
+      occupiedShare: {
+        title: 'Top Scripts Occupied Share',
+        data: [{ date: '2024-01-01', values: { top0: '100', others: '20' } }],
+        series: [
+          { key: 'top0', label: 'SECP256K1_BLAKE160', color: '#00c389' },
+          { key: 'others', label: 'Others', color: '#64748b' },
+        ],
+      },
+      capacityShare: {
+        title: 'Top Scripts Capacity Share',
+        data: [{ date: '2024-01-01', values: { top0: '200', others: '30' } }],
+        series: [
+          { key: 'top0', label: 'SECP256K1_BLAKE160', color: '#00c389' },
+          { key: 'others', label: 'Others', color: '#64748b' },
+        ],
+      },
     });
   });
 
-  it('renders both ranking tables', async () => {
+  it('renders occupied/capacity stacked charts', async () => {
     render(<MostUtilizedScriptsPage />);
 
     expect(screen.getByTestId('header')).toBeInTheDocument();
     expect(screen.getByText('Most Utilized Scripts')).toBeInTheDocument();
 
     await waitFor(() => {
-      expect(screen.getByText('Top 20 by Occupied CKB')).toBeInTheDocument();
-      expect(screen.getByText('Top 20 by Total Cells Capacity')).toBeInTheDocument();
-      expect(screen.getByText('SECP256K1_BLAKE160')).toBeInTheDocument();
+      expect(screen.getByText('Occupied Share (%) - Top 20 + Others')).toBeInTheDocument();
+      expect(
+        screen.getByText('Total Cells Capacity Share (%) - Top 20 + Others')
+      ).toBeInTheDocument();
+      expect(screen.getAllByTestId('stacked-area-chart')).toHaveLength(2);
     });
   });
 });

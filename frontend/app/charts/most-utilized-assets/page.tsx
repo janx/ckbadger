@@ -7,73 +7,25 @@ import {
   TerminalPanel,
   TerminalPanelContent,
   TerminalPanelHeader,
-  TerminalRow,
 } from '@/components/ui/terminal-panel';
-import { api, MostUtilizedAssetsChartItem } from '@/lib/api';
-import { toNftDetailSlug } from '@/lib/nft-collections';
-import { formatCkbCompact } from '@/lib/utils';
+import { StackedAreaChart } from '@/components/ui/stacked-area-chart';
+import { api } from '@/lib/api';
 
-function assetHref(item: MostUtilizedAssetsChartItem): string {
-  if (item.assetType === 'token') {
-    return `/tokens/${item.id}`;
-  }
-  if (item.assetType === 'dob') {
-    return `/clusters/${item.id}`;
-  }
-  return `/nfts/${toNftDetailSlug(item.id, item.standard)}`;
-}
-
-function MetricTable({
-  title,
-  items,
-  metricKey,
+function SeriesLegend({
+  series,
 }: {
-  title: string;
-  items: MostUtilizedAssetsChartItem[];
-  metricKey: 'occupiedCapacity' | 'totalCellsCapacity';
+  series: Array<{ key: string; label: string; color: string }>;
 }) {
-  const metricLabel = metricKey === 'occupiedCapacity' ? 'Occupied CKB' : 'Total Cells Capacity';
-
   return (
-    <div className="overflow-hidden rounded border border-slate-800">
-      <div className="border-b border-slate-800 bg-slate-900/50 px-4 py-3 font-mono text-xs uppercase tracking-wider text-slate-300">
-        {title}
-      </div>
-      <div className="flex border-b border-slate-800 bg-slate-900/30 px-4 py-2 font-mono text-xs uppercase tracking-wider text-slate-500">
-        <div className="w-12">Rank</div>
-        <div className="flex-1">Asset</div>
-        <div className="w-32 text-right">{metricLabel}</div>
-      </div>
-      {items.length === 0 && (
-        <div className="px-4 py-6 text-center text-sm text-slate-500">No utilized assets yet</div>
-      )}
-      {items.map((item, index) => {
-        const displayName = item.symbol || item.name;
-        const ckbValue = formatCkbCompact(item[metricKey]);
-
-        return (
-          <TerminalRow key={`${item.assetType}-${item.id}-${metricKey}`}>
-            <div className="flex items-center px-4">
-              <div className="w-12 font-mono text-slate-500">{index + 1}</div>
-              <div className="flex-1 overflow-hidden">
-                <Link
-                  href={assetHref(item)}
-                  className="text-terminal-green hover:text-terminal-green/80 block truncate font-mono text-sm transition-colors"
-                  title={displayName}
-                >
-                  {displayName}
-                </Link>
-                <div className="font-mono text-xs text-slate-500">
-                  {item.assetType.toUpperCase()} · {item.standard}
-                </div>
-              </div>
-              <div className="w-32 text-right font-mono text-sm text-slate-200">
-                <span title={`${ckbValue.full} CKB`}>{ckbValue.value}</span>
-              </div>
-            </div>
-          </TerminalRow>
-        );
-      })}
+    <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+      {series.map((item) => (
+        <div key={item.key} className="flex items-center gap-2 text-xs">
+          <span className="h-2.5 w-2.5 shrink-0 rounded" style={{ backgroundColor: item.color }} />
+          <span className="truncate font-mono text-slate-400" title={item.label}>
+            {item.label}
+          </span>
+        </div>
+      ))}
     </div>
   );
 }
@@ -99,7 +51,7 @@ export default function MostUtilizedAssetsPage() {
 
         <TerminalPanel>
           <TerminalPanelHeader indicator="active">Most Utilized Assets</TerminalPanelHeader>
-          <TerminalPanelContent className="space-y-6 p-6">
+          <TerminalPanelContent className="space-y-8 p-6">
             {isLoading && (
               <div className="h-96 animate-pulse rounded border border-slate-800 bg-slate-900/50" />
             )}
@@ -110,17 +62,37 @@ export default function MostUtilizedAssetsPage() {
             )}
             {data && (
               <>
-                <div className="grid gap-6 lg:grid-cols-2">
-                  <MetricTable
-                    title="Top 20 by Occupied CKB"
-                    items={data.byOccupied}
-                    metricKey="occupiedCapacity"
+                <section>
+                  <h3 className="mb-3 font-mono text-sm uppercase tracking-wider text-slate-300">
+                    Occupied Share (%) - Top 20 + Others
+                  </h3>
+                  <StackedAreaChart
+                    data={data.occupiedShare.data}
+                    series={data.occupiedShare.series}
+                    height={360}
+                    isPercentage
+                    valueUnit="shannon"
                   />
-                  <MetricTable
-                    title="Top 20 by Total Cells Capacity"
-                    items={data.byTotalCellsCapacity}
-                    metricKey="totalCellsCapacity"
+                  <SeriesLegend series={data.occupiedShare.series} />
+                </section>
+
+                <section className="border-t border-slate-800 pt-6">
+                  <h3 className="mb-3 font-mono text-sm uppercase tracking-wider text-slate-300">
+                    Total Cells Capacity Share (%) - Top 20 + Others
+                  </h3>
+                  <StackedAreaChart
+                    data={data.capacityShare.data}
+                    series={data.capacityShare.series}
+                    height={360}
+                    isPercentage
+                    valueUnit="shannon"
                   />
+                  <SeriesLegend series={data.capacityShare.series} />
+                </section>
+
+                <div className="text-center font-mono text-xs text-slate-600">
+                  Drag to select range • Scroll to zoom • Middle-click drag to pan • Click Reset to
+                  restore
                 </div>
               </>
             )}

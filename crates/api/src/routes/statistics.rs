@@ -435,55 +435,44 @@ const MOST_UTILIZED_LIMIT: usize = 20;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct MostUtilizedScriptsChartItem {
-    pub name: String,
-    pub code_hash: Option<String>,
-    pub is_known_script: bool,
-    pub script_kind: String,
-    pub occupied_capacity: String,
-    pub total_cells_capacity: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct MostUtilizedScriptsChartResponse {
     pub title: String,
-    pub by_occupied: Vec<MostUtilizedScriptsChartItem>,
-    pub by_total_cells_capacity: Vec<MostUtilizedScriptsChartItem>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MostUtilizedAssetsChartItem {
-    pub id: String,
-    pub asset_type: String,
-    pub standard: String,
-    pub name: String,
-    pub symbol: Option<String>,
-    pub occupied_capacity: String,
-    pub total_cells_capacity: String,
+    pub occupied_share: StackedAreaChartResponse,
+    pub capacity_share: StackedAreaChartResponse,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MostUtilizedAssetsChartResponse {
     pub title: String,
-    pub by_occupied: Vec<MostUtilizedAssetsChartItem>,
-    pub by_total_cells_capacity: Vec<MostUtilizedAssetsChartItem>,
+    pub occupied_share: StackedAreaChartResponse,
+    pub capacity_share: StackedAreaChartResponse,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum UtilizationMetric {
+    Occupied,
+    Capacity,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct EntityState {
+    total_cells_capacity: i128,
+    occupied_capacity: i128,
 }
 
 #[derive(Debug, Clone)]
-struct ScriptUtilizationRow {
-    item: MostUtilizedScriptsChartItem,
-    occupied_capacity: i128,
-    total_cells_capacity: i128,
+struct ScriptEntity {
+    key: String,
+    final_total_cells_capacity: i128,
+    final_occupied_capacity: i128,
 }
 
 #[derive(Debug, Clone)]
-struct AssetUtilizationRow {
-    item: MostUtilizedAssetsChartItem,
-    occupied_capacity: i128,
-    total_cells_capacity: i128,
+struct AssetEntity {
+    key: String,
+    final_total_cells_capacity: i128,
+    final_occupied_capacity: i128,
 }
 
 fn is_known_script_name(name: &str) -> bool {
@@ -491,13 +480,61 @@ fn is_known_script_name(name: &str) -> bool {
     !trimmed.is_empty() && !trimmed.eq_ignore_ascii_case("unknown")
 }
 
-fn script_kind_label(has_lock: bool, has_type: bool) -> String {
-    match (has_lock, has_type) {
-        (true, true) => "lock+type".to_string(),
-        (true, false) => "lock".to_string(),
-        (false, true) => "type".to_string(),
-        (false, false) => "unknown".to_string(),
+fn format_asset_label(name: &str, asset_type: &str) -> String {
+    format!("{name} ({asset_type})")
+}
+
+fn metric_value(state: &EntityState, metric: UtilizationMetric) -> i128 {
+    match metric {
+        UtilizationMetric::Occupied => state.occupied_capacity,
+        UtilizationMetric::Capacity => state.total_cells_capacity,
     }
+}
+
+fn utilization_palette(index: usize) -> &'static str {
+    const PALETTE: [&str; 20] = [
+        "#00c389", "#f59e0b", "#3b82f6", "#ef4444", "#8b5cf6", "#14b8a6", "#f97316", "#84cc16",
+        "#ec4899", "#06b6d4", "#eab308", "#22c55e", "#6366f1", "#fb7185", "#10b981", "#f43f5e",
+        "#0ea5e9", "#a855f7", "#65a30d", "#f97316",
+    ];
+    PALETTE[index % PALETTE.len()]
+}
+
+fn top_keys_by_metric<T>(
+    entities: &[T],
+    metric: UtilizationMetric,
+    key_of: impl Fn(&T) -> &str,
+    occupied_of: impl Fn(&T) -> i128,
+    capacity_of: impl Fn(&T) -> i128,
+) -> Vec<String> {
+    let mut keys: Vec<&T> = entities.iter().collect();
+    keys.sort_by(|a, b| {
+        let a_metric = match metric {
+            UtilizationMetric::Occupied => occupied_of(a),
+            UtilizationMetric::Capacity => capacity_of(a),
+        };
+        let b_metric = match metric {
+            UtilizationMetric::Occupied => occupied_of(b),
+            UtilizationMetric::Capacity => capacity_of(b),
+        };
+        let a_secondary = match metric {
+            UtilizationMetric::Occupied => capacity_of(a),
+            UtilizationMetric::Capacity => occupied_of(a),
+        };
+        let b_secondary = match metric {
+            UtilizationMetric::Occupied => capacity_of(b),
+            UtilizationMetric::Capacity => occupied_of(b),
+        };
+        b_metric
+            .cmp(&a_metric)
+            .then_with(|| b_secondary.cmp(&a_secondary))
+            .then_with(|| key_of(a).cmp(key_of(b)))
+    });
+
+    keys.into_iter()
+        .take(MOST_UTILIZED_LIMIT)
+        .map(|entry| key_of(entry).to_string())
+        .collect()
 }
 
 fn accumulate_capacity_deltas<I>(deltas: I) -> (i128, i128)
@@ -518,10 +555,102 @@ where
     (total_cells_capacity, occupied_capacity)
 }
 
+fn build_most_utilized_share_chart(
+    chart_title: String,
+    metric: UtilizationMetric,
+    top_keys: &[String],
+    labels_by_key: &HashMap<String, String>,
+    dates: &[u32],
+    deltas_by_date: &BTreeMap<u32, Vec<(String, i64, i64)>>,
+) -> StackedAreaChartResponse {
+    let mut states: HashMap<String, EntityState> = HashMap::new();
+    let mut total_cells_capacity: i128 = 0;
+    let mut total_occupied_capacity: i128 = 0;
+
+    let mut series: Vec<StackedAreaSeries> = top_keys
+        .iter()
+        .enumerate()
+        .map(|(index, key)| StackedAreaSeries {
+            key: format!("top{index}"),
+            label: labels_by_key
+                .get(key)
+                .cloned()
+                .unwrap_or_else(|| key.clone()),
+            color: utilization_palette(index).to_string(),
+        })
+        .collect();
+    series.push(StackedAreaSeries {
+        key: "others".to_string(),
+        label: "Others".to_string(),
+        color: "#64748b".to_string(),
+    });
+
+    let mut data: Vec<StackedAreaDataPoint> = Vec::with_capacity(dates.len());
+    for date in dates {
+        if let Some(deltas) = deltas_by_date.get(date) {
+            for (entity_key, capacity_delta, occupied_delta) in deltas {
+                let state = states.entry(entity_key.clone()).or_insert(EntityState {
+                    total_cells_capacity: 0,
+                    occupied_capacity: 0,
+                });
+
+                let old_capacity = state.total_cells_capacity;
+                let old_occupied = state.occupied_capacity;
+
+                let mut new_capacity = (old_capacity + *capacity_delta as i128).max(0);
+                let mut new_occupied = (old_occupied + *occupied_delta as i128).max(0);
+                if new_occupied > new_capacity {
+                    new_occupied = new_capacity;
+                }
+                if new_capacity < new_occupied {
+                    new_capacity = new_occupied;
+                }
+
+                state.total_cells_capacity = new_capacity;
+                state.occupied_capacity = new_occupied;
+
+                total_cells_capacity += new_capacity - old_capacity;
+                total_occupied_capacity += new_occupied - old_occupied;
+            }
+        }
+
+        let mut values: HashMap<String, String> = HashMap::new();
+        let mut selected_sum: i128 = 0;
+        for (index, key) in top_keys.iter().enumerate() {
+            let value = states
+                .get(key)
+                .map(|state| metric_value(state, metric))
+                .unwrap_or(0)
+                .max(0);
+            selected_sum += value;
+            values.insert(format!("top{index}"), value.to_string());
+        }
+
+        let total = match metric {
+            UtilizationMetric::Occupied => total_occupied_capacity,
+            UtilizationMetric::Capacity => total_cells_capacity,
+        }
+        .max(0);
+        let others = (total - selected_sum).max(0);
+        values.insert("others".to_string(), others.to_string());
+
+        data.push(StackedAreaDataPoint {
+            date: format_date_key(&format!("{date:08}")),
+            values,
+        });
+    }
+
+    StackedAreaChartResponse {
+        data,
+        series,
+        title: chart_title,
+    }
+}
+
 async fn get_most_utilized_scripts_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<MostUtilizedScriptsChartResponse> {
-    let cache_key = "chart:most-utilized-scripts:v1";
+    let cache_key = "chart:most-utilized-scripts:v2";
     if let Some(cached) = state
         .cache
         .get::<MostUtilizedScriptsChartResponse>(cache_key)
@@ -530,23 +659,15 @@ async fn get_most_utilized_scripts_chart(
         return ok(cached);
     }
 
-    #[derive(Debug)]
-    struct ScriptAggregate {
-        name: String,
-        code_hash: Option<String>,
-        is_known_script: bool,
-        has_lock: bool,
-        has_type: bool,
-        occupied_capacity: i128,
-        total_cells_capacity: i128,
-    }
-
     let all_scripts = state
         .store
         .list_script_infos()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let mut aggregates: BTreeMap<String, ScriptAggregate> = BTreeMap::new();
+    let mut labels_by_key: HashMap<String, String> = HashMap::new();
+    let mut final_by_key: HashMap<String, (i128, i128)> = HashMap::new();
+    let mut deltas_by_date: BTreeMap<u32, Vec<(String, i64, i64)>> = BTreeMap::new();
+
     for (code_hash, info) in all_scripts {
         let code_hash_hex = format!("0x{}", hex::encode(&code_hash));
         let raw_name = info.name.as_deref().unwrap_or("Unknown").trim();
@@ -557,89 +678,87 @@ async fn get_most_utilized_scripts_chart(
             format!("unknown:{code_hash_hex}")
         };
 
-        let aggregate = aggregates.entry(key).or_insert_with(|| ScriptAggregate {
-            name: if is_known_script {
-                raw_name.to_string()
-            } else {
-                code_hash_hex.clone()
-            },
-            code_hash: if is_known_script {
-                None
-            } else {
-                Some(code_hash_hex.clone())
-            },
-            is_known_script,
-            has_lock: false,
-            has_type: false,
-            occupied_capacity: 0,
-            total_cells_capacity: 0,
-        });
+        let label = if is_known_script {
+            raw_name.to_string()
+        } else {
+            code_hash_hex.clone()
+        };
+        labels_by_key.insert(key.clone(), label);
 
-        aggregate.has_lock |= info.lock_cells_count > 0;
-        aggregate.has_type |= info.type_cells_count > 0;
-        aggregate.occupied_capacity += (info.lock_live_occupied_capacity_sum as i128
-            + info.type_live_occupied_capacity_sum as i128)
-            .max(0);
-        aggregate.total_cells_capacity +=
+        let final_total_cells_capacity =
             (info.lock_live_capacity_sum as i128 + info.type_live_capacity_sum as i128).max(0);
+        let final_occupied_capacity = (info.lock_live_occupied_capacity_sum as i128
+            + info.type_live_occupied_capacity_sum as i128)
+            .max(0)
+            .min(final_total_cells_capacity);
+        let entry = final_by_key.entry(key.clone()).or_insert((0, 0));
+        entry.0 += final_total_cells_capacity;
+        entry.1 += final_occupied_capacity;
+
+        for is_type in [false, true] {
+            let deltas = state
+                .store
+                .list_script_daily_deltas(&code_hash, is_type)
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+            for (date, delta) in deltas {
+                deltas_by_date.entry(date).or_default().push((
+                    key.clone(),
+                    delta.live_capacity_delta,
+                    delta.live_occupied_capacity_delta,
+                ));
+            }
+        }
     }
 
-    let rows: Vec<ScriptUtilizationRow> = aggregates
-        .into_values()
-        .filter_map(|entry| {
-            let total_cells_capacity = entry.total_cells_capacity.max(0);
-            let occupied_capacity = entry.occupied_capacity.max(0).min(total_cells_capacity);
-            if total_cells_capacity <= 0 && occupied_capacity <= 0 {
-                return None;
-            }
-
-            Some(ScriptUtilizationRow {
-                item: MostUtilizedScriptsChartItem {
-                    name: entry.name,
-                    code_hash: entry.code_hash,
-                    is_known_script: entry.is_known_script,
-                    script_kind: script_kind_label(entry.has_lock, entry.has_type),
-                    occupied_capacity: occupied_capacity.to_string(),
-                    total_cells_capacity: total_cells_capacity.to_string(),
-                },
-                occupied_capacity,
-                total_cells_capacity,
-            })
+    let entities: Vec<ScriptEntity> = final_by_key
+        .iter()
+        .map(|(key, (capacity, occupied))| ScriptEntity {
+            key: key.clone(),
+            final_total_cells_capacity: (*capacity).max(0),
+            final_occupied_capacity: (*occupied).max(0).min((*capacity).max(0)),
+        })
+        .filter(|entity| {
+            entity.final_total_cells_capacity > 0 || entity.final_occupied_capacity > 0
         })
         .collect();
 
-    let mut by_occupied = rows.clone();
-    by_occupied.sort_by(|a, b| {
-        b.occupied_capacity
-            .cmp(&a.occupied_capacity)
-            .then_with(|| b.total_cells_capacity.cmp(&a.total_cells_capacity))
-            .then_with(|| a.item.name.cmp(&b.item.name))
-            .then_with(|| a.item.code_hash.cmp(&b.item.code_hash))
-    });
-    let by_occupied: Vec<MostUtilizedScriptsChartItem> = by_occupied
-        .into_iter()
-        .take(MOST_UTILIZED_LIMIT)
-        .map(|row| row.item)
-        .collect();
+    let top_occupied_keys = top_keys_by_metric(
+        &entities,
+        UtilizationMetric::Occupied,
+        |entity| &entity.key,
+        |entity| entity.final_occupied_capacity,
+        |entity| entity.final_total_cells_capacity,
+    );
+    let top_capacity_keys = top_keys_by_metric(
+        &entities,
+        UtilizationMetric::Capacity,
+        |entity| &entity.key,
+        |entity| entity.final_occupied_capacity,
+        |entity| entity.final_total_cells_capacity,
+    );
 
-    let mut by_total_cells_capacity = rows;
-    by_total_cells_capacity.sort_by(|a, b| {
-        b.total_cells_capacity
-            .cmp(&a.total_cells_capacity)
-            .then_with(|| b.occupied_capacity.cmp(&a.occupied_capacity))
-            .then_with(|| a.item.name.cmp(&b.item.name))
-            .then_with(|| a.item.code_hash.cmp(&b.item.code_hash))
-    });
-    let by_total_cells_capacity: Vec<MostUtilizedScriptsChartItem> = by_total_cells_capacity
-        .into_iter()
-        .take(MOST_UTILIZED_LIMIT)
-        .map(|row| row.item)
-        .collect();
+    let dates: Vec<u32> = deltas_by_date.keys().copied().collect();
+    let occupied_share = build_most_utilized_share_chart(
+        "Top Scripts Occupied Share".to_string(),
+        UtilizationMetric::Occupied,
+        &top_occupied_keys,
+        &labels_by_key,
+        &dates,
+        &deltas_by_date,
+    );
+    let capacity_share = build_most_utilized_share_chart(
+        "Top Scripts Capacity Share".to_string(),
+        UtilizationMetric::Capacity,
+        &top_capacity_keys,
+        &labels_by_key,
+        &dates,
+        &deltas_by_date,
+    );
 
     let response = MostUtilizedScriptsChartResponse {
         title: "Most Utilized Scripts".to_string(),
-        by_occupied,
-        by_total_cells_capacity,
+        occupied_share,
+        capacity_share,
     };
 
     state.cache.set(cache_key, &response, CacheTtl::CHART).await;
@@ -649,7 +768,7 @@ async fn get_most_utilized_scripts_chart(
 async fn get_most_utilized_assets_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<MostUtilizedAssetsChartResponse> {
-    let cache_key = "chart:most-utilized-assets:v1";
+    let cache_key = "chart:most-utilized-assets:v2";
     if let Some(cached) = state
         .cache
         .get::<MostUtilizedAssetsChartResponse>(cache_key)
@@ -658,7 +777,9 @@ async fn get_most_utilized_assets_chart(
         return ok(cached);
     }
 
-    let mut rows: Vec<AssetUtilizationRow> = Vec::new();
+    let mut labels_by_key: HashMap<String, String> = HashMap::new();
+    let mut entities: Vec<AssetEntity> = Vec::new();
+    let mut deltas_by_date: BTreeMap<u32, Vec<(String, i64, i64)>> = BTreeMap::new();
 
     let tokens = state
         .store
@@ -673,7 +794,7 @@ async fn get_most_utilized_assets_chart(
             .list_token_daily_deltas(&type_hash)
             .map_err(|e| ApiError::internal(e.to_string()))?;
         let (total_cells_capacity, occupied_capacity) =
-            accumulate_capacity_deltas(deltas.into_iter().map(|(_, delta)| {
+            accumulate_capacity_deltas(deltas.iter().map(|(_, delta)| {
                 (
                     delta.live_capacity_delta,
                     delta.live_occupied_capacity_delta,
@@ -683,23 +804,25 @@ async fn get_most_utilized_assets_chart(
             continue;
         }
         let id = format!("0x{}", hex::encode(&type_hash));
-        rows.push(AssetUtilizationRow {
-            item: MostUtilizedAssetsChartItem {
-                id: id.clone(),
-                asset_type: "token".to_string(),
-                standard: info.standard.clone(),
-                name: info
-                    .symbol
-                    .clone()
-                    .or_else(|| info.name.clone())
-                    .unwrap_or(id),
-                symbol: info.symbol.clone(),
-                occupied_capacity: occupied_capacity.to_string(),
-                total_cells_capacity: total_cells_capacity.to_string(),
-            },
-            occupied_capacity,
-            total_cells_capacity,
+        let name = info
+            .symbol
+            .clone()
+            .or_else(|| info.name.clone())
+            .unwrap_or_else(|| id.clone());
+        let entity_key = format!("token:{id}");
+        labels_by_key.insert(entity_key.clone(), format_asset_label(&name, "token"));
+        entities.push(AssetEntity {
+            key: entity_key.clone(),
+            final_total_cells_capacity: total_cells_capacity,
+            final_occupied_capacity: occupied_capacity.min(total_cells_capacity),
         });
+        for (date, delta) in deltas {
+            deltas_by_date.entry(date).or_default().push((
+                entity_key.clone(),
+                delta.live_capacity_delta,
+                delta.live_occupied_capacity_delta,
+            ));
+        }
     }
 
     let clusters = state
@@ -715,7 +838,7 @@ async fn get_most_utilized_assets_chart(
             .list_cluster_daily_deltas(&cluster_id)
             .map_err(|e| ApiError::internal(e.to_string()))?;
         let (total_cells_capacity, occupied_capacity) =
-            accumulate_capacity_deltas(deltas.into_iter().map(|(_, delta)| {
+            accumulate_capacity_deltas(deltas.iter().map(|(_, delta)| {
                 (
                     delta.live_capacity_delta,
                     delta.live_occupied_capacity_delta,
@@ -729,19 +852,20 @@ async fn get_most_utilized_assets_chart(
         let name =
             resolve_dob_collection_name(state.store.as_ref(), &cluster_id, agg.name.as_deref())
                 .unwrap_or_else(|| id.clone());
-        rows.push(AssetUtilizationRow {
-            item: MostUtilizedAssetsChartItem {
-                id,
-                asset_type: "dob".to_string(),
-                standard: "spore".to_string(),
-                name,
-                symbol: None,
-                occupied_capacity: occupied_capacity.to_string(),
-                total_cells_capacity: total_cells_capacity.to_string(),
-            },
-            occupied_capacity,
-            total_cells_capacity,
+        let entity_key = format!("dob:{id}");
+        labels_by_key.insert(entity_key.clone(), format_asset_label(&name, "dob"));
+        entities.push(AssetEntity {
+            key: entity_key.clone(),
+            final_total_cells_capacity: total_cells_capacity,
+            final_occupied_capacity: occupied_capacity.min(total_cells_capacity),
         });
+        for (date, delta) in deltas {
+            deltas_by_date.entry(date).or_default().push((
+                entity_key.clone(),
+                delta.live_capacity_delta,
+                delta.live_occupied_capacity_delta,
+            ));
+        }
     }
 
     let nft_collections = state
@@ -757,7 +881,7 @@ async fn get_most_utilized_assets_chart(
             .list_nft_daily_deltas(&collection_id)
             .map_err(|e| ApiError::internal(e.to_string()))?;
         let (total_cells_capacity, occupied_capacity) =
-            accumulate_capacity_deltas(deltas.into_iter().map(|(_, delta)| {
+            accumulate_capacity_deltas(deltas.iter().map(|(_, delta)| {
                 (
                     delta.live_capacity_delta,
                     delta.live_occupied_capacity_delta,
@@ -771,55 +895,59 @@ async fn get_most_utilized_assets_chart(
         let standard = agg.standard.asset_standard().to_string();
         let name = resolve_nft_collection_name(&standard, agg.name.as_deref())
             .unwrap_or_else(|| id.clone());
-        rows.push(AssetUtilizationRow {
-            item: MostUtilizedAssetsChartItem {
-                id,
-                asset_type: "nft".to_string(),
-                standard,
-                name,
-                symbol: None,
-                occupied_capacity: occupied_capacity.to_string(),
-                total_cells_capacity: total_cells_capacity.to_string(),
-            },
-            occupied_capacity,
-            total_cells_capacity,
+        let entity_key = format!("nft:{id}");
+        labels_by_key.insert(entity_key.clone(), format_asset_label(&name, "nft"));
+        entities.push(AssetEntity {
+            key: entity_key.clone(),
+            final_total_cells_capacity: total_cells_capacity,
+            final_occupied_capacity: occupied_capacity.min(total_cells_capacity),
         });
+        for (date, delta) in deltas {
+            deltas_by_date.entry(date).or_default().push((
+                entity_key.clone(),
+                delta.live_capacity_delta,
+                delta.live_occupied_capacity_delta,
+            ));
+        }
     }
 
-    let mut by_occupied = rows.clone();
-    by_occupied.sort_by(|a, b| {
-        b.occupied_capacity
-            .cmp(&a.occupied_capacity)
-            .then_with(|| b.total_cells_capacity.cmp(&a.total_cells_capacity))
-            .then_with(|| a.item.asset_type.cmp(&b.item.asset_type))
-            .then_with(|| a.item.name.cmp(&b.item.name))
-            .then_with(|| a.item.id.cmp(&b.item.id))
-    });
-    let by_occupied: Vec<MostUtilizedAssetsChartItem> = by_occupied
-        .into_iter()
-        .take(MOST_UTILIZED_LIMIT)
-        .map(|row| row.item)
-        .collect();
+    let top_occupied_keys = top_keys_by_metric(
+        &entities,
+        UtilizationMetric::Occupied,
+        |entity| &entity.key,
+        |entity| entity.final_occupied_capacity,
+        |entity| entity.final_total_cells_capacity,
+    );
+    let top_capacity_keys = top_keys_by_metric(
+        &entities,
+        UtilizationMetric::Capacity,
+        |entity| &entity.key,
+        |entity| entity.final_occupied_capacity,
+        |entity| entity.final_total_cells_capacity,
+    );
 
-    let mut by_total_cells_capacity = rows;
-    by_total_cells_capacity.sort_by(|a, b| {
-        b.total_cells_capacity
-            .cmp(&a.total_cells_capacity)
-            .then_with(|| b.occupied_capacity.cmp(&a.occupied_capacity))
-            .then_with(|| a.item.asset_type.cmp(&b.item.asset_type))
-            .then_with(|| a.item.name.cmp(&b.item.name))
-            .then_with(|| a.item.id.cmp(&b.item.id))
-    });
-    let by_total_cells_capacity: Vec<MostUtilizedAssetsChartItem> = by_total_cells_capacity
-        .into_iter()
-        .take(MOST_UTILIZED_LIMIT)
-        .map(|row| row.item)
-        .collect();
+    let dates: Vec<u32> = deltas_by_date.keys().copied().collect();
+    let occupied_share = build_most_utilized_share_chart(
+        "Top Assets Occupied Share".to_string(),
+        UtilizationMetric::Occupied,
+        &top_occupied_keys,
+        &labels_by_key,
+        &dates,
+        &deltas_by_date,
+    );
+    let capacity_share = build_most_utilized_share_chart(
+        "Top Assets Capacity Share".to_string(),
+        UtilizationMetric::Capacity,
+        &top_capacity_keys,
+        &labels_by_key,
+        &dates,
+        &deltas_by_date,
+    );
 
     let response = MostUtilizedAssetsChartResponse {
         title: "Most Utilized Assets".to_string(),
-        by_occupied,
-        by_total_cells_capacity,
+        occupied_share,
+        capacity_share,
     };
 
     state.cache.set(cache_key, &response, CacheTtl::CHART).await;

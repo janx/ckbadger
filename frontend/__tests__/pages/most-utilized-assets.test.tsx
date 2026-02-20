@@ -14,47 +14,46 @@ vi.mock('@/components/layout/header', () => ({
   Header: () => <div data-testid="header">Header</div>,
 }));
 
+vi.mock('@/components/ui/stacked-area-chart', () => ({
+  StackedAreaChart: () => <div data-testid="stacked-area-chart" />,
+}));
+
 describe('MostUtilizedAssetsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(api.getMostUtilizedAssetsChart).mockResolvedValue({
       title: 'Most Utilized Assets',
-      byOccupied: [
-        {
-          id: '0x' + '22'.repeat(32),
-          assetType: 'token',
-          standard: 'xudt',
-          name: 'Token A',
-          symbol: 'TA',
-          occupiedCapacity: '12000000000',
-          totalCellsCapacity: '20000000000',
-        },
-      ],
-      byTotalCellsCapacity: [
-        {
-          id: '0x' + '33'.repeat(32),
-          assetType: 'dob',
-          standard: 'spore',
-          name: 'Cluster A',
-          symbol: null,
-          occupiedCapacity: '9000000000',
-          totalCellsCapacity: '25000000000',
-        },
-      ],
+      occupiedShare: {
+        title: 'Top Assets Occupied Share',
+        data: [{ date: '2024-01-01', values: { top0: '100', others: '20' } }],
+        series: [
+          { key: 'top0', label: 'Token A (token)', color: '#00c389' },
+          { key: 'others', label: 'Others', color: '#64748b' },
+        ],
+      },
+      capacityShare: {
+        title: 'Top Assets Capacity Share',
+        data: [{ date: '2024-01-01', values: { top0: '200', others: '30' } }],
+        series: [
+          { key: 'top0', label: 'Cluster A (dob)', color: '#00c389' },
+          { key: 'others', label: 'Others', color: '#64748b' },
+        ],
+      },
     });
   });
 
-  it('renders both ranking tables', async () => {
+  it('renders occupied/capacity stacked charts', async () => {
     render(<MostUtilizedAssetsPage />);
 
     expect(screen.getByTestId('header')).toBeInTheDocument();
     expect(screen.getByText('Most Utilized Assets')).toBeInTheDocument();
 
     await waitFor(() => {
-      expect(screen.getByText('Top 20 by Occupied CKB')).toBeInTheDocument();
-      expect(screen.getByText('Top 20 by Total Cells Capacity')).toBeInTheDocument();
-      expect(screen.getByText('TA')).toBeInTheDocument();
-      expect(screen.getByText('Cluster A')).toBeInTheDocument();
+      expect(screen.getByText('Occupied Share (%) - Top 20 + Others')).toBeInTheDocument();
+      expect(
+        screen.getByText('Total Cells Capacity Share (%) - Top 20 + Others')
+      ).toBeInTheDocument();
+      expect(screen.getAllByTestId('stacked-area-chart')).toHaveLength(2);
     });
   });
 });

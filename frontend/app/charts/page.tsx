@@ -15,7 +15,6 @@ import {
   MostUtilizedScriptsChartResponse,
   StackedAreaChartResponse,
 } from '@/lib/api';
-import { formatCkbCompact } from '@/lib/utils';
 
 function ChartDataWarning({ show }: { show: boolean }) {
   if (!show) return null;
@@ -176,12 +175,6 @@ function MostUtilizedScriptsPreview({
   data: MostUtilizedScriptsChartResponse | undefined;
   href: string;
 }) {
-  const items = data?.byOccupied.slice(0, 3) ?? [];
-  const maxValue = items.reduce((max, item) => {
-    const value = BigInt(item.occupiedCapacity);
-    return value > max ? value : max;
-  }, BigInt(0));
-
   return (
     <ChartCard
       title={data?.title ?? 'Loading...'}
@@ -191,27 +184,14 @@ function MostUtilizedScriptsPreview({
       height={170}
     >
       {data && (
-        <div className="space-y-3">
-          {items.map((item, index) => {
-            const value = BigInt(item.occupiedCapacity);
-            const width = maxValue > BigInt(0) ? Number((value * BigInt(100)) / maxValue) : 0;
-            const compact = formatCkbCompact(item.occupiedCapacity);
-            return (
-              <div key={`${item.name}-${item.codeHash ?? index}`}>
-                <div className="mb-1 flex items-center justify-between gap-2">
-                  <span className="truncate font-mono text-xs text-slate-300">{item.name}</span>
-                  <span className="font-mono text-xs text-slate-400">{compact.value}</span>
-                </div>
-                <div className="h-1.5 w-full rounded bg-slate-800">
-                  <div
-                    className="bg-terminal-green h-1.5 rounded"
-                    style={{ width: `${Math.max(width, 2)}%` }}
-                  />
-                </div>
-              </div>
-            );
-          })}
-        </div>
+        <StackedAreaChart
+          data={data.occupiedShare.data}
+          series={data.occupiedShare.series}
+          height={160}
+          interactive={false}
+          isPercentage
+          valueUnit="shannon"
+        />
       )}
     </ChartCard>
   );
@@ -224,12 +204,6 @@ function MostUtilizedAssetsPreview({
   data: MostUtilizedAssetsChartResponse | undefined;
   href: string;
 }) {
-  const items = data?.byOccupied.slice(0, 3) ?? [];
-  const maxValue = items.reduce((max, item) => {
-    const value = BigInt(item.occupiedCapacity);
-    return value > max ? value : max;
-  }, BigInt(0));
-
   return (
     <ChartCard
       title={data?.title ?? 'Loading...'}
@@ -239,27 +213,14 @@ function MostUtilizedAssetsPreview({
       height={170}
     >
       {data && (
-        <div className="space-y-3">
-          {items.map((item) => {
-            const value = BigInt(item.occupiedCapacity);
-            const width = maxValue > BigInt(0) ? Number((value * BigInt(100)) / maxValue) : 0;
-            const compact = formatCkbCompact(item.occupiedCapacity);
-            return (
-              <div key={`${item.assetType}-${item.id}`}>
-                <div className="mb-1 flex items-center justify-between gap-2">
-                  <span className="truncate font-mono text-xs text-slate-300">{item.name}</span>
-                  <span className="font-mono text-xs text-slate-400">{compact.value}</span>
-                </div>
-                <div className="h-1.5 w-full rounded bg-slate-800">
-                  <div
-                    className="h-1.5 rounded bg-amber-500"
-                    style={{ width: `${Math.max(width, 2)}%` }}
-                  />
-                </div>
-              </div>
-            );
-          })}
-        </div>
+        <StackedAreaChart
+          data={data.occupiedShare.data}
+          series={data.occupiedShare.series}
+          height={160}
+          interactive={false}
+          isPercentage
+          valueUnit="shannon"
+        />
       )}
     </ChartCard>
   );

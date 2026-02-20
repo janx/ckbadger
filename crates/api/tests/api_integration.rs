@@ -228,6 +228,50 @@ async fn test_most_utilized_scripts_chart_ranks_by_occupied_and_capacity() {
             },
         )
         .unwrap();
+    store
+        .put_script_daily_delta(
+            &code_hash_a1,
+            false,
+            20240101,
+            &ScriptDailyDelta {
+                live_capacity_delta: 500,
+                live_occupied_capacity_delta: 300,
+            },
+        )
+        .unwrap();
+    store
+        .put_script_daily_delta(
+            &code_hash_a2,
+            true,
+            20240101,
+            &ScriptDailyDelta {
+                live_capacity_delta: 700,
+                live_occupied_capacity_delta: 500,
+            },
+        )
+        .unwrap();
+    store
+        .put_script_daily_delta(
+            &code_hash_b,
+            false,
+            20240101,
+            &ScriptDailyDelta {
+                live_capacity_delta: 800,
+                live_occupied_capacity_delta: 200,
+            },
+        )
+        .unwrap();
+    store
+        .put_script_daily_delta(
+            &code_hash_unknown,
+            false,
+            20240101,
+            &ScriptDailyDelta {
+                live_capacity_delta: 600,
+                live_occupied_capacity_delta: 550,
+            },
+        )
+        .unwrap();
 
     let config = test_config(store);
     let app = create_router(config).await;
@@ -244,20 +288,40 @@ async fn test_most_utilized_scripts_chart_ranks_by_occupied_and_capacity() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
     assert_eq!(json["title"], "Most Utilized Scripts");
-    let by_occupied = json["byOccupied"].as_array().unwrap();
-    let by_capacity = json["byTotalCellsCapacity"].as_array().unwrap();
+    let occupied_share = &json["occupiedShare"];
+    let occupied_series = occupied_share["series"].as_array().unwrap();
+    assert_eq!(occupied_series.len(), 4);
+    assert_eq!(occupied_series[0]["label"], "Script A");
+    assert_eq!(
+        occupied_series[1]["label"],
+        format!("0x{}", hex::encode(&code_hash_unknown))
+    );
+    assert_eq!(occupied_series[2]["label"], "Script B");
+    assert_eq!(occupied_series[3]["label"], "Others");
 
-    assert_eq!(by_occupied[0]["name"], "Script A");
-    assert_eq!(by_occupied[0]["occupiedCapacity"], "800");
-    assert_eq!(by_occupied[0]["totalCellsCapacity"], "1200");
-    assert_eq!(by_occupied[0]["scriptKind"], "lock+type");
-    assert_eq!(by_capacity[0]["name"], "Script A");
-    assert_eq!(by_capacity[0]["totalCellsCapacity"], "1200");
+    let occupied_data = occupied_share["data"].as_array().unwrap();
+    assert_eq!(occupied_data.len(), 1);
+    assert_eq!(occupied_data[0]["date"], "2024-01-01");
+    assert_eq!(occupied_data[0]["values"]["top0"], "800");
+    assert_eq!(occupied_data[0]["values"]["top1"], "550");
+    assert_eq!(occupied_data[0]["values"]["top2"], "200");
+    assert_eq!(occupied_data[0]["values"]["others"], "0");
 
-    assert_eq!(by_occupied[1]["occupiedCapacity"], "550");
-    assert_eq!(by_occupied[1]["isKnownScript"], false);
-    assert_eq!(by_capacity[1]["name"], "Script B");
-    assert_eq!(by_capacity[1]["totalCellsCapacity"], "800");
+    let capacity_share = &json["capacityShare"];
+    let capacity_series = capacity_share["series"].as_array().unwrap();
+    assert_eq!(capacity_series[0]["label"], "Script A");
+    assert_eq!(capacity_series[1]["label"], "Script B");
+    assert_eq!(
+        capacity_series[2]["label"],
+        format!("0x{}", hex::encode(&code_hash_unknown))
+    );
+    assert_eq!(capacity_series[3]["label"], "Others");
+
+    let capacity_data = capacity_share["data"].as_array().unwrap();
+    assert_eq!(capacity_data[0]["values"]["top0"], "1200");
+    assert_eq!(capacity_data[0]["values"]["top1"], "800");
+    assert_eq!(capacity_data[0]["values"]["top2"], "600");
+    assert_eq!(capacity_data[0]["values"]["others"], "0");
 }
 
 #[tokio::test]
@@ -389,19 +453,36 @@ async fn test_most_utilized_assets_chart_ranks_mixed_asset_types() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
     assert_eq!(json["title"], "Most Utilized Assets");
-    let by_occupied = json["byOccupied"].as_array().unwrap();
-    let by_capacity = json["byTotalCellsCapacity"].as_array().unwrap();
+    let occupied_share = &json["occupiedShare"];
+    let occupied_series = occupied_share["series"].as_array().unwrap();
+    assert_eq!(occupied_series[0]["label"], "NFT Collection (nft)");
+    assert_eq!(occupied_series[1]["label"], "DOB Cluster (dob)");
+    assert_eq!(occupied_series[2]["label"], "A (token)");
+    assert_eq!(occupied_series[3]["label"], "B (token)");
+    assert_eq!(occupied_series[4]["label"], "Others");
 
-    assert_eq!(by_occupied[0]["assetType"], "nft");
-    assert_eq!(by_occupied[0]["occupiedCapacity"], "600");
-    assert_eq!(by_occupied[1]["assetType"], "dob");
-    assert_eq!(by_occupied[1]["occupiedCapacity"], "400");
+    let occupied_data = occupied_share["data"].as_array().unwrap();
+    assert_eq!(occupied_data[0]["date"], "2024-01-01");
+    assert_eq!(occupied_data[0]["values"]["top0"], "600");
+    assert_eq!(occupied_data[0]["values"]["top1"], "400");
+    assert_eq!(occupied_data[0]["values"]["top2"], "250");
+    assert_eq!(occupied_data[0]["values"]["top3"], "100");
+    assert_eq!(occupied_data[0]["values"]["others"], "0");
 
-    assert_eq!(by_capacity[0]["assetType"], "token");
-    assert_eq!(by_capacity[0]["symbol"], "B");
-    assert_eq!(by_capacity[0]["totalCellsCapacity"], "900");
-    assert_eq!(by_capacity[1]["assetType"], "nft");
-    assert_eq!(by_capacity[1]["totalCellsCapacity"], "700");
+    let capacity_share = &json["capacityShare"];
+    let capacity_series = capacity_share["series"].as_array().unwrap();
+    assert_eq!(capacity_series[0]["label"], "B (token)");
+    assert_eq!(capacity_series[1]["label"], "NFT Collection (nft)");
+    assert_eq!(capacity_series[2]["label"], "DOB Cluster (dob)");
+    assert_eq!(capacity_series[3]["label"], "A (token)");
+    assert_eq!(capacity_series[4]["label"], "Others");
+
+    let capacity_data = capacity_share["data"].as_array().unwrap();
+    assert_eq!(capacity_data[0]["values"]["top0"], "900");
+    assert_eq!(capacity_data[0]["values"]["top1"], "700");
+    assert_eq!(capacity_data[0]["values"]["top2"], "500");
+    assert_eq!(capacity_data[0]["values"]["top3"], "300");
+    assert_eq!(capacity_data[0]["values"]["others"], "0");
 }
 
 #[tokio::test]
