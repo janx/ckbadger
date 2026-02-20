@@ -1,7 +1,7 @@
 'use client';
 
-import { useState } from 'react';
-import { useQuery, keepPreviousData } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
+import { useQueries, useQuery, keepPreviousData } from '@tanstack/react-query';
 import Link from 'next/link';
 import { Header } from '@/components/layout/header';
 import {
@@ -18,8 +18,18 @@ import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { api, Asset } from '@/lib/api';
 import { toNftDetailSlug } from '@/lib/nft-collections';
+import { formatCkbCompact } from '@/lib/utils';
 
 type AssetTab = 'token' | 'nft' | 'dob';
+type SortDirection = 'asc' | 'desc';
+type AssetSortKey =
+  | 'name'
+  | 'type'
+  | 'supply'
+  | 'transfers24h'
+  | 'holders'
+  | 'transfers'
+  | 'occupied';
 
 function normalizeAssetTab(value: string | null): AssetTab {
   if (value === 'nft' || value === 'dob' || value === 'token') {
@@ -30,12 +40,21 @@ function normalizeAssetTab(value: string | null): AssetTab {
 
 function AssetTable({ assetType, search }: { assetType: AssetTab; search: string | undefined }) {
   const pagination = useCursorPagination();
+  const [sortKey, setSortKey] = useState<AssetSortKey>('transfers24h');
+  const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
+
+  useEffect(() => {
+    setSortKey('transfers24h');
+    setSortDirection('desc');
+  }, [assetType]);
 
   const { data, isLoading } = useQuery({
     queryKey: ['assets', assetType, pagination.cursor, search],
     queryFn: () => api.getAssets({ limit: 20, type: assetType, cursor: pagination.cursor, search }),
     placeholderData: keepPreviousData,
   });
+
+  const assets = data?.data ?? [];
 
   const formatNumber = (num: number | string) => {
     return new Intl.NumberFormat().format(Number(num));
@@ -67,6 +86,121 @@ function AssetTable({ assetType, search }: { assetType: AssetTab; search: string
     return asset.standard.toUpperCase();
   };
 
+  const occupiedQueries = useQueries({
+    queries: assets.map((asset) => ({
+      queryKey: ['asset-occupied-capacity', asset.assetType, asset.id],
+      queryFn: async (): Promise<string | null> => {
+        if (asset.assetType === 'token') {
+          const token = await api.getToken(asset.id);
+          return token.totalOccupiedCapacity;
+        }
+        if (asset.assetType === 'nft') {
+          const collection = await api.getNftCollection(asset.id);
+          return collection.liveOccupiedCapacity;
+        }
+        const cluster = await api.getSporeCluster(asset.id);
+        return cluster.liveOccupiedCapacity ?? null;
+      },
+      staleTime: 60_000,
+    })),
+  });
+
+  const occupiedByAssetId = new Map<string, string | null>();
+  assets.forEach((asset, idx) => {
+    occupiedByAssetId.set(asset.id, occupiedQueries[idx]?.data ?? null);
+  });
+
+  const parseBigInt = (value: string | null | undefined): bigint | null => {
+    if (!value) return null;
+    try {
+      return BigInt(value);
+    } catch {
+      return null;
+    }
+  };
+
+  const compareNullableBigInt = (
+    a: bigint | null,
+    b: bigint | null,
+    direction: SortDirection
+  ): number => {
+    if (a === null && b === null) return 0;
+    if (a === null) return 1;
+    if (b === null) return -1;
+    if (a === b) return 0;
+    if (direction === 'asc') {
+      return a > b ? 1 : -1;
+    }
+    return a > b ? -1 : 1;
+  };
+
+  const toggleSort = (nextKey: AssetSortKey) => {
+    if (nextKey === sortKey) {
+      setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+      return;
+    }
+    setSortKey(nextKey);
+    setSortDirection(nextKey === 'name' || nextKey === 'type' ? 'asc' : 'desc');
+  };
+
+  const sortedAssets = [...assets];
+  const direction = sortDirection === 'asc' ? 1 : -1;
+
+  sortedAssets.sort((left, right) => {
+    let compared = 0;
+    let directed = false;
+
+    if (sortKey === 'name') {
+      compared = getAssetName(left).localeCompare(getAssetName(right));
+    } else if (sortKey === 'type') {
+      compared = getTypeBadgeLabel(left).localeCompare(getTypeBadgeLabel(right));
+    } else if (sortKey === 'supply') {
+      compared = compareNullableBigInt(
+        parseBigInt(left.totalSupply),
+        parseBigInt(right.totalSupply),
+        sortDirection
+      );
+      directed = true;
+    } else if (sortKey === 'transfers24h') {
+      compared = left.transfers24h - right.transfers24h;
+    } else if (sortKey === 'holders') {
+      compared = left.holdersCount - right.holdersCount;
+    } else if (sortKey === 'transfers') {
+      compared = left.transfersCount - right.transfersCount;
+    } else {
+      compared = compareNullableBigInt(
+        parseBigInt(occupiedByAssetId.get(left.id)),
+        parseBigInt(occupiedByAssetId.get(right.id)),
+        sortDirection
+      );
+      directed = true;
+    }
+
+    if (compared !== 0) {
+      return directed ? compared : compared * direction;
+    }
+    return getAssetName(left).localeCompare(getAssetName(right));
+  });
+
+  const renderSortHeader = (
+    key: AssetSortKey,
+    label: string,
+    className: string,
+    align: 'left' | 'right' = 'left'
+  ) => (
+    <button
+      type="button"
+      className={`${className} flex items-center gap-1 ${align === 'right' ? 'justify-end text-right' : ''}`}
+      onClick={() => toggleSort(key)}
+      aria-label={`Sort by ${label}`}
+    >
+      <span>{label}</span>
+      <span className={sortKey === key ? 'text-terminal-green' : 'text-slate-700'}>
+        {sortKey === key ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}
+      </span>
+    </button>
+  );
+
   if (isLoading) {
     return (
       <div className="space-y-2 py-4">
@@ -88,6 +222,9 @@ function AssetTable({ assetType, search }: { assetType: AssetTab; search: string
               <div className="w-28 shrink-0 text-right">
                 <div className="ml-auto h-4 w-16 rounded bg-slate-800" />
               </div>
+              <div className="w-32 shrink-0 text-right">
+                <div className="ml-auto h-4 w-16 rounded bg-slate-800" />
+              </div>
             </div>
           </TerminalRow>
         ))}
@@ -102,16 +239,19 @@ function AssetTable({ assetType, search }: { assetType: AssetTab; search: string
   return (
     <>
       <div className="flex border-b border-slate-800 bg-slate-900/50 px-4 py-2 font-mono text-xs uppercase tracking-wider text-slate-500">
-        <div className="flex-1">
-          {assetType === 'dob' ? 'Collection' : assetType === 'token' ? 'Token' : 'NFT'}
-        </div>
-        <div className="w-20 shrink-0">Type</div>
-        {assetType === 'dob' && <div className="w-24 shrink-0 text-right">DOBs</div>}
-        <div className="w-24 shrink-0 text-right">24h Txns</div>
-        <div className="w-28 shrink-0 text-right">Holders</div>
-        <div className="w-28 shrink-0 text-right">Transfers</div>
+        {renderSortHeader(
+          'name',
+          assetType === 'dob' ? 'Collection' : assetType === 'token' ? 'Token' : 'NFT',
+          'flex-1'
+        )}
+        {renderSortHeader('type', 'Type', 'w-20 shrink-0')}
+        {assetType === 'dob' && renderSortHeader('supply', 'DOBs', 'w-24 shrink-0', 'right')}
+        {renderSortHeader('transfers24h', '24h Txns', 'w-24 shrink-0', 'right')}
+        {renderSortHeader('holders', 'Holders', 'w-28 shrink-0', 'right')}
+        {renderSortHeader('transfers', 'Transfers', 'w-28 shrink-0', 'right')}
+        {renderSortHeader('occupied', 'Occupied', 'w-32 shrink-0', 'right')}
       </div>
-      {data.data.map((asset: Asset) => (
+      {sortedAssets.map((asset: Asset) => (
         <TerminalRow key={asset.id}>
           <div className="flex items-center">
             <div className="flex-1">
@@ -183,6 +323,16 @@ function AssetTable({ assetType, search }: { assetType: AssetTab; search: string
             </div>
             <div className="w-28 shrink-0 text-right font-mono text-slate-400">
               {formatNumber(asset.transfersCount)}
+            </div>
+            <div className="w-32 shrink-0 text-right font-mono text-slate-300">
+              {(() => {
+                const occupied = occupiedByAssetId.get(asset.id);
+                if (!occupied) {
+                  return <span className="text-slate-600">-</span>;
+                }
+                const compact = formatCkbCompact(occupied);
+                return <span title={`${compact.full} CKB`}>{compact.value}</span>;
+              })()}
             </div>
           </div>
         </TerminalRow>

@@ -7,6 +7,9 @@ import { api } from '@/lib/api';
 vi.mock('@/lib/api', () => ({
   api: {
     getAssets: vi.fn(),
+    getToken: vi.fn(),
+    getNftCollection: vi.fn(),
+    getSporeCluster: vi.fn(),
   },
 }));
 
@@ -109,10 +112,66 @@ const emptyAssets = {
   nextCursor: null,
 };
 
+const sortableTokenAssets = {
+  data: [
+    {
+      id: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      assetType: 'token' as const,
+      standard: 'xudt',
+      name: 'Alpha Token',
+      symbol: 'ALPHA',
+      iconUrl: null,
+      published: false,
+      famous: false,
+      tags: null,
+      holdersCount: 10,
+      transfersCount: 20,
+      transfers24h: 2,
+      decimals: 8,
+      totalSupply: '100000000',
+      contentType: null,
+      contentSize: null,
+      clusterId: null,
+      clusterName: null,
+    },
+    {
+      id: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      assetType: 'token' as const,
+      standard: 'xudt',
+      name: 'Beta Token',
+      symbol: 'BETA',
+      iconUrl: null,
+      published: false,
+      famous: false,
+      tags: null,
+      holdersCount: 20,
+      transfersCount: 10,
+      transfers24h: 1,
+      decimals: 8,
+      totalSupply: '200000000',
+      contentType: null,
+      contentSize: null,
+      clusterId: null,
+      clusterName: null,
+    },
+  ],
+  total: 2,
+  limit: 20,
+  hasMore: false,
+  nextCursor: null,
+};
+
 describe('AssetsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.history.replaceState(null, '', '/assets');
+    vi.mocked(api.getToken).mockImplementation(async () => ({ totalOccupiedCapacity: '0' }) as any);
+    vi.mocked(api.getNftCollection).mockImplementation(
+      async () => ({ liveOccupiedCapacity: '0' }) as any
+    );
+    vi.mocked(api.getSporeCluster).mockImplementation(
+      async () => ({ liveOccupiedCapacity: '0' }) as any
+    );
   });
 
   it('renders the page with header and title', async () => {
@@ -323,6 +382,30 @@ describe('AssetsPage', () => {
     await waitFor(() => {
       const verifiedIcon = document.querySelector('[title="Verified"]');
       expect(verifiedIcon).toBeInTheDocument();
+    });
+  });
+
+  it('renders occupied column and supports sorting by occupied', async () => {
+    vi.mocked(api.getAssets).mockResolvedValue(sortableTokenAssets);
+    vi.mocked(api.getToken).mockImplementation(async (typeHash: string) => {
+      const totalOccupiedCapacity =
+        typeHash === sortableTokenAssets.data[0].id ? '1000000000' : '5000000000';
+      return { totalOccupiedCapacity } as any;
+    });
+
+    render(<AssetsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Sort by Occupied' })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sort by Occupied' }));
+
+    await waitFor(() => {
+      const tokenLinks = screen
+        .getAllByRole('link')
+        .filter((link) => link.getAttribute('href')?.startsWith('/tokens/'));
+      expect(tokenLinks[0]).toHaveTextContent('BETA');
     });
   });
 });
