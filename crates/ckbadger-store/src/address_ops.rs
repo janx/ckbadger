@@ -235,6 +235,7 @@ impl CkbadgerStore {
     /// - balance
     /// - occupied_capacity
     /// - live_cells_count
+    /// - txs_count (from addr_txs index)
     ///
     /// Other fields are re-initialized conservatively.
     pub fn rebuild_addr_balances_from_live_cells(&self) -> anyhow::Result<usize> {
@@ -244,6 +245,7 @@ impl CkbadgerStore {
             balance: i128,
             occupied_capacity: i128,
             live_cells_count: i32,
+            txs_count: i64,
             first_seen_block: i64,
             first_seen_tx: Vec<u8>,
             last_activity_block: i64,
@@ -269,6 +271,7 @@ impl CkbadgerStore {
                     balance: 0,
                     occupied_capacity: 0,
                     live_cells_count: 0,
+                    txs_count: 0,
                     first_seen_block: info.created_at_block,
                     first_seen_tx: tx_hash.clone(),
                     last_activity_block: info.created_at_block,
@@ -286,6 +289,20 @@ impl CkbadgerStore {
             if info.created_at_block > entry.last_activity_block {
                 entry.last_activity_block = info.created_at_block;
                 entry.last_activity_tx = tx_hash;
+            }
+        }
+
+        // Rebuild tx count from addr_txs index.
+        // Count only addresses that still have live cells after rebuild.
+        let iter = self.iterator_cf(self.cf_addr_txs(), rocksdb::IteratorMode::Start);
+        for item in iter.flatten() {
+            let (key, _) = item;
+            // Key: lock_hash(32) + block_num(8) + tx_idx(4) = 44
+            if key.len() != 44 {
+                continue;
+            }
+            if let Some(entry) = agg_by_lock.get_mut(&key[..32]) {
+                entry.txs_count += 1;
             }
         }
 
@@ -316,7 +333,7 @@ impl CkbadgerStore {
                 occupied_capacity: agg.occupied_capacity.max(0),
                 live_cells_count: agg.live_cells_count.max(0),
                 total_cells_count: agg.live_cells_count.max(0) as i64,
-                txs_count: 0,
+                txs_count: agg.txs_count,
                 first_seen_block: agg.first_seen_block,
                 first_seen_tx: agg.first_seen_tx,
                 last_activity_block: agg.last_activity_block,
@@ -390,5 +407,34 @@ mod tests {
         assert_eq!(b.balance, 50);
         assert_eq!(b.occupied_capacity, 60);
         assert_eq!(b.live_cells_count, 1);
+    }
+
+    #[test]
+    fn test_rebuild_addr_balances_restores_txs_count_from_addr_txs() {
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let lock_a = vec![0xAA; 32];
+        let lock_b = vec![0xBB; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_cell(&[0x01; 32], 0, &make_cell(lock_a.clone(), 10, 100, 120));
+        batch.put_cell(&[0x02; 32], 0, &make_cell(lock_a.clone(), 11, 300, 320));
+        batch.put_cell(&[0x03; 32], 0, &make_cell(lock_b.clone(), 12, 50, 60));
+        batch.put_addr_tx(&lock_a, 10, 0, &[0x11; 32]);
+        batch.put_addr_tx(&lock_a, 11, 1, &[0x22; 32]);
+        batch.put_addr_tx(&lock_b, 12, 0, &[0x33; 32]);
+        // This address has no live cells; rebuild should not materialize addr_balance for it.
+        batch.put_addr_tx(&[0xCC; 32], 9, 0, &[0x44; 32]);
+        batch.commit().unwrap();
+
+        store.rebuild_addr_balances_from_live_cells().unwrap();
+
+        let a = store.get_addr_balance(&lock_a).unwrap().unwrap();
+        assert_eq!(a.txs_count, 2);
+
+        let b = store.get_addr_balance(&lock_b).unwrap().unwrap();
+        assert_eq!(b.txs_count, 1);
+
+        assert!(store.get_addr_balance(&[0xCC; 32]).unwrap().is_none());
     }
 }
