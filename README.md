@@ -7,11 +7,12 @@
 
 ## Overview
 
-**ckbadger** is a next-generation CKB blockchain explorer designed with three core principles:
+**ckbadger** is a next-generation CKB blockchain explorer designed with four core principles:
 
-- **Cell Model First** - Purpose-built for CKB's unique UTXO-like architecture, not a fork of EVM explorers
-- **Dual Deployment** - Runs locally on a Raspberry Pi or scales to production Kubernetes clusters
-- **Real-time by Default** - WebSocket-powered live updates for blocks, transactions, and cells
+- **CKB Native** - Make CKB concepts tangible instead of just-another-explorer
+- **Unrivaled Speed** - Lightning-fast database rebuilds and ultra-low-latency request processing
+- **Local First** - Optimized for decentralized deployment on localhosts
+- **Agent Friendly** - Designed for AI-assisted development with clear structure and automation-friendly workflows
 
 ## Features
 

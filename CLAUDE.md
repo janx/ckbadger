@@ -2,6 +2,13 @@
 
 Instructions for AI agents working on ckbadger - a CKB blockchain explorer.
 
+## Project Principles
+
+- **CKB Native** - Make CKB concepts tangible instead of just-another-explorer
+- **Unrivaled Speed** - Lightning-fast database rebuilds and ultra-low-latency request processing
+- **Local First** - Optimized for decentralized deployment on localhosts
+- **Agent Friendly** - Prefer clear, automation-friendly structure and workflows
+
 ## Development Status (IMPORTANT)
 
 **This is a project under active development, NOT running in production.**
