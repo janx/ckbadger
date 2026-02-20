@@ -2,8 +2,6 @@
 
 Historical fixes and their root causes. Reference this before implementing similar features.
 
-> **Note (2026-02)**: The storage engine was migrated from PostgreSQL to embedded RocksDB (`ckbadger-store`). SQL queries, table schemas, partition strategies, and file paths referencing PostgreSQL-specific code (e.g., `executor/statistics.rs`, `executor/index.rs`, `db/writer_v2.rs`) are historical. The lessons and domain knowledge (DAO calculations, CKB protocol rules, off-by-one errors) remain fully relevant.
-
 ---
 
 ## Category: NervosDAO
@@ -276,22 +274,12 @@ let ratio = deposit as f64 / circulating as f64;
 
 **Symptom**: Deposit-to-circulation ratio chart showing suspicious/incorrect historical values.
 
-**Root Cause**: `update_dao_daily_snapshot` fetched `cumulative_burnt` from `dao_statistics WHERE id = 1`, which contains the **current** cumulative value, not the historical value for that specific date. During batch sync, all historical snapshots received the same cumulative_burnt (the value at sync time).
+**Root Cause**: `update_dao_daily_snapshot` used a tip-level cumulative source for all dates, so historical days inherited the same value. During batch sync, this made every past snapshot read as if it were "today".
 
-```rust
-// WRONG: Uses current cumulative, not historical
-let secondary_issuance = sqlx::query_as::<_, (String, String, String)>(
-    "SELECT cumulative_burnt, ... FROM dao_statistics WHERE id = 1"
-)
+**Correct approach**:
 
-// CORRECT: First check previous day's snapshot for historical continuity
-let prev_snapshot = sqlx::query_as::<_, (String, String, String)>(
-    "SELECT cumulative_burnt, ... FROM dao_daily_snapshots WHERE date = $1"
-).bind(date - 1.day())
-
-// Fall back to dao_statistics only if no previous snapshot
-let secondary_issuance = prev_snapshot.unwrap_or_else(|| /* fetch from dao_statistics */);
-```
+1. Prefer previous day's snapshot as the cumulative base (historical continuity).
+2. Only fall back to current aggregate source when no previous snapshot exists.
 
 **Lesson**: When creating historical snapshots during batch sync, cumulative values must be derived from previous snapshots, not from the current aggregate table. The aggregate table reflects the tip, not historical state.
 
@@ -305,23 +293,12 @@ let secondary_issuance = prev_snapshot.unwrap_or_else(|| /* fetch from dao_stati
 
 **Symptom**: Secondary issuance chart showing abnormally low burnt percentage (~35% instead of ~65-70%).
 
-**Root Cause**: Commit `5ce76af` correctly fixed the issue with simple logic:
+**Root Cause**: Commit `5ce76af` correctly fixed the issue with a simple time-window predicate:
 
-```sql
-WHERE deposit_timestamp::date <= $1
-  AND (withdraw_timestamp IS NULL OR withdraw_timestamp::date > $1)
-```
+- Include deposits created on or before the target day.
+- Exclude deposits already withdrawn on or before that day.
 
-But 8 minutes later, commit `fbda36a` replaced it with complex status-based logic:
-
-```sql
-WHERE deposit_timestamp::date <= $1
-  AND (
-      status = 0
-      OR (status = 1 AND (withdraw_request_timestamp IS NULL OR withdraw_request_timestamp::date > $1))
-      OR (status = 2 AND withdraw_timestamp IS NOT NULL AND withdraw_timestamp::date > $1)
-  )
-```
+But 8 minutes later, commit `fbda36a` replaced it with complex status-branch logic.
 
 The complex logic is flawed because:
 
@@ -344,32 +321,17 @@ The complex logic is flawed because:
 
 **Symptom**: Secondary issuance chart showed burnt at ~64% instead of correct ~74%.
 
-**Root Cause**: The calculation used **current** `total_dao_deposits` (queried with `WHERE status = 0`) for all historical blocks, instead of the deposit amount **at that block's time**.
-
-```rust
-// WRONG: Uses current deposits for all blocks
-let total_dao_deposits = sqlx::query("SELECT SUM(capacity) FROM dao_deposits WHERE status = 0");
-let dao_compensation = non_miner * total_dao_deposits / (C - U);
-```
+**Root Cause**: The calculation used **current** `total_dao_deposits` for all historical blocks, instead of the deposit amount **at that block's time**.
 
 This caused early blocks to use inflated deposit values (~22% of total issuance) instead of the actual lower values at that time (~5-10%), resulting in overestimated `dao_compensation` and underestimated `burnt`.
 
 **Failed fix attempt**: Tried using DAO field `S` (secondary_pool) difference between blocks. But `S` is "total unissued secondary issuance" which equals `non_miner - claimed_compensation`, not `dao_compensation`. This made burnt nearly 0%.
 
-**Correct fix**: Query deposits active at that specific block number:
+**Correct fix**: Use deposits active at that specific block height:
 
-```rust
-// CORRECT: Query deposits at that block's point in time
-let total_dao_deposits = sqlx::query(
-    "SELECT SUM(capacity) FROM dao_deposits
-     WHERE deposit_block_number <= $1
-       AND (withdraw_block IS NULL OR withdraw_block > $1)"
-).bind(block_number);
-
-// RFC-0015 formula: dao_compensation = non_miner * deposit / (C - U)
-let dao_compensation = non_miner * total_dao_deposits / (C - U);
-let burnt = non_miner - dao_compensation;
-```
+- Include deposits created no later than the target block.
+- Exclude deposits consumed before or at that target boundary.
+- Then apply RFC-0015: `dao_compensation = non_miner * deposit / (C - U)`.
 
 **Key insight**:
 
@@ -393,19 +355,14 @@ let burnt = non_miner - dao_compensation;
 
 **Symptom**: Burnt percentage showing ~48% instead of correct ~72%. DAO compensation inflated.
 
-**Root Cause**: `get_dao_deposits_at_block` had two off-by-one errors in the SQL query.
+**Root Cause**: `get_dao_deposits_at_block` had two off-by-one errors in the active-deposit boundary conditions.
 
 Per RFC-0023, block N's secondary issuance distribution uses `U_{i-1}` and `C_{i-1}` (previous block's state). So for calculating block N's distribution, we need deposits active at end of block N-1.
 
-```sql
--- WRONG: Two off-by-one errors
-WHERE deposit_block_number <= $1    -- includes deposits at block N (not yet active)
-  AND (withdraw_block IS NULL OR withdraw_block > $1)  -- excludes withdrawals at block N (still active)
+Use state at end of `N-1`:
 
--- CORRECT: Use state at end of N-1
-WHERE deposit_block_number < $1     -- deposited before block N
-  AND (withdraw_block IS NULL OR withdraw_block >= $1)  -- not withdrawn before block N
-```
+- Deposit side: use `< N` instead of `<= N` (exclude deposits created at block `N`).
+- Withdraw side: use `>= N` instead of `> N` (include withdrawals that are still active at end of `N-1`).
 
 **Impact**:
 
@@ -510,17 +467,7 @@ prev_secondary_pool = secondary_pool;
 
 **Symptom**: `daily_statistics.cumulative_cells` and `cumulative_data_size` showed incorrect values, sometimes negative or resetting.
 
-**Root Cause**: INSERT path was using only today's delta instead of `prev_cumulative + delta`. The ON CONFLICT UPDATE path was correct, but INSERT was wrong.
-
-```sql
--- WRONG: INSERT with just delta
-VALUES ($1, ..., $3 - $4, $5 - $6)
-
--- CORRECT: Fetch previous cumulative, add delta
-SELECT cumulative_cells, cumulative_data_size
-FROM daily_statistics WHERE date < $1 ORDER BY date DESC LIMIT 1;
--- Then INSERT with prev + delta
-```
+**Root Cause**: INSERT path was using only today's delta instead of `prev_cumulative + delta`. The update path was correct, but first-write path was wrong.
 
 **Lesson**: Cumulative/rolling values need special handling on INSERT vs UPDATE. Test both paths - first record of the day (INSERT) vs subsequent records (UPDATE).
 
@@ -611,215 +558,6 @@ Test by wiping database and re-syncing from genesis.
 
 ---
 
-### STATS-007: Common Knowledge Size only accumulated, never decremented
-
-**Symptom**: "Common Knowledge Size" chart shows monotonically increasing values (~1.7GB), even though cells are constantly being consumed. The official CKB explorer shows ~156MB. This means `cells.consumed_at_block` was almost never being set (only 0.03% of cells had it populated).
-
-**Initial Analysis**: Thought `data_size_consumed` wasn't being calculated in statistics. But the code was updated correctly to use `net_data_size = data_size_added - data_size_consumed`.
-
-**Actual Root Cause**: During bulk sync, cell lookup in `get_cells_info_batch()` silently failed for most cells:
-
-1. Check RocksDB `live_cell_store` → miss (not populated during bulk sync startup)
-2. Check `consumed_cells` cache → miss (recently consumed only)
-3. Fallback to `live_cells` table → **only 4,836 records!** (not populated in bulk sync mode)
-4. **Missing**: No fallback to `cells` table
-
-Since lookups failed, `consume_cells_batch()` never received consumption data, so `cells.consumed_at_block` was never set (except for a tiny fraction).
-
-**Fix** (Feb 2026):
-
-1. Added fallback to `cells` table in `get_cells_info_batch()`:
-
-   ```rust
-   // STATS-007 fix: Fallback to cells table for bulk sync mode
-   let fallback_rows = sqlx::query_as(
-       "SELECT ... FROM cells c WHERE c.status = 0 ..."
-   )
-   ```
-
-2. Created `consumed_at_backfill` task to backfill historical data:
-
-   ```sql
-   UPDATE cells c SET
-       status = 1,
-       consumed_at_block = ti.tx_block_number,
-       consumed_by_tx = ti.tx_hash
-   FROM transaction_inputs ti
-   WHERE c.tx_hash = ti.previous_tx_hash
-     AND c.output_index = ti.previous_output_index
-     AND c.consumed_at_block IS NULL
-   ```
-
-3. After backfill: run `statistics_rebuild` task to recalculate `daily_statistics.total_data_size`
-
-**Lesson**: Multi-stage lookups with fallbacks must be tested with realistic data. Silent failures (returning empty results instead of errors) mask critical bugs. Add logging when fallback queries return significant results.
-
-**Files**: `crates/indexer/src/db/writer/cells.rs`, `crates/task-runner/src/executor/consumed.rs`
-
----
-
-## Category: Database & SQL
-
-### DB-001: Foreign key constraint violations (17fefa5)
-
-**Symptom**: Indexer failing with FK constraint errors during block processing.
-
-**Root Cause**: Insert order violated FK constraints. Was inserting inputs (which reference transactions) before inserting the transaction itself.
-
-**Correct order**:
-
-1. Insert transaction (parent)
-2. Insert outputs/cells
-3. Insert inputs and consume cells (after tx exists)
-
-**Lesson**: When tables have FK relationships, always insert parent records before children. Map out the dependency graph before implementing.
-
-**Files**: `crates/indexer/src/sync/indexer.rs`
-
----
-
-### DB-002: NUMERIC to float8 type mismatch (17fefa5)
-
-**Symptom**: SQL query error on statistics endpoint.
-
-**Root Cause**: PostgreSQL `AVG()` on timestamps returns `NUMERIC`, but Rust was expecting `f64`. Need explicit cast.
-
-```sql
--- Wrong
-SELECT AVG(EXTRACT(EPOCH FROM ...))
-
--- Correct
-SELECT AVG(EXTRACT(EPOCH FROM ...))::float8
-```
-
-**Lesson**: PostgreSQL aggregate functions may return unexpected types. Always check return types and cast explicitly.
-
-**Files**: `crates/api/src/routes/statistics.rs`
-
----
-
-### DB-003: SQL parameter type casting for numeric (cf6b6e0)
-
-**Symptom**: SQL errors when accumulating DAO statistics.
-
-**Root Cause**: String parameters being used in numeric operations need explicit `::numeric` cast.
-
-**Lesson**: When passing string representations of numbers to PostgreSQL for arithmetic, cast them explicitly.
-
-**Files**: `crates/indexer/src/db/writer.rs`
-
----
-
-### DB-004: CREATE INDEX CONCURRENTLY in SQLx migrations
-
-**Symptom**: Migration fails with `CREATE INDEX CONCURRENTLY cannot run inside a transaction block`.
-
-**Root Cause**: SQLx runs migrations inside transactions. PostgreSQL's `CREATE INDEX CONCURRENTLY` cannot run inside a transaction because it uses a special two-phase locking protocol.
-
-```sql
--- WRONG: Fails in SQLx migration
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_foo ON bar(col);
-
--- CORRECT: Use regular CREATE INDEX
-CREATE INDEX IF NOT EXISTS idx_foo ON bar(col);
-```
-
-**Lesson**: Don't use `CONCURRENTLY` in SQLx migrations. If you need non-blocking index creation on a large production table, run it manually outside the migration system.
-
----
-
-### DB-005: NUMERIC column to String type mismatch (c686e83)
-
-**Symptom**: Cell page and graph endpoints returning 500 errors.
-
-**Root Cause**: Capacity column is `NUMERIC` in PostgreSQL but Rust struct expects `String`. SQLx doesn't auto-convert.
-
-```sql
--- WRONG: Returns NUMERIC, Rust expects String
-SELECT capacity FROM cells WHERE ...
-
--- CORRECT: Cast to TEXT
-SELECT capacity::TEXT FROM cells WHERE ...
-```
-
-**Lesson**: When database columns store large numbers as NUMERIC (for precision) but API returns them as strings (for JSON compatibility), explicitly cast in SQL. This is common for blockchain amounts that exceed JavaScript's Number.MAX_SAFE_INTEGER.
-
-**Files**: `crates/api/src/routes/cells.rs`, `crates/api/src/routes/graph.rs`, `crates/api/src/routes/search.rs`
-
----
-
-### DB-006: N+1 query in DAO statistics (52992a4)
-
-**Symptom**: Slow DAO statistics calculation during indexing.
-
-**Root Cause**: `recalculate_dao_extended_statistics` was fetching block DAO fields individually for each deposit to calculate compensation.
-
-```rust
-// WRONG: N+1 queries
-for deposit in deposits {
-    let ar_deposit = fetch_block_dao(deposit.block_number);
-    let ar_withdraw = fetch_block_dao(deposit.withdraw_block_number);
-}
-
-// CORRECT: Single JOIN query
-SELECT d.*, b1.dao as deposit_dao, b2.dao as withdraw_dao
-FROM dao_deposits d
-JOIN blocks b1 ON d.deposit_block_number = b1.number
-LEFT JOIN blocks b2 ON d.withdraw_request_block_number = b2.number
-```
-
-**Lesson**: Batch operations on related data. Use JOINs to fetch associated records in one query rather than iterating.
-
-**Files**: `crates/indexer/src/db/writer.rs`
-
----
-
-### DB-007: Querying empty table instead of cells.data (096a7d5)
-
-**Symptom**: Token page holders list and total supply showing empty/zero.
-
-**Root Cause**: Token queries referenced `cell_data` table which was empty. The actual cell data is stored in `cells.data` column.
-
-```sql
--- WRONG: Querying separate table (empty)
-SELECT cd.data FROM cell_data cd WHERE cd.tx_hash = c.tx_hash
-
--- CORRECT: Query cells table directly
-SELECT c.data FROM cells c WHERE c.status = 0 AND ...
-```
-
-**Lesson**: When refactoring schema (e.g., moving data from separate table to column), update ALL queries that reference the old structure. Search codebase for all usages.
-
-**Files**: `crates/api/src/routes/tokens.rs`
-
----
-
-### DB-008: UDT amount parsing in SQL (096a7d5)
-
-**Symptom**: Token total supply showing incorrect values.
-
-**Root Cause**: UDT amounts are stored as little-endian u128 in first 16 bytes of cell data. PostgreSQL doesn't have u128, so need to parse manually.
-
-```sql
--- Parse little-endian u128 from cell data (first 8 bytes for u64)
-SELECT SUM(
-    get_byte(c.data, 0)::bigint
-    + get_byte(c.data, 1)::bigint * 256
-    + get_byte(c.data, 2)::bigint * 65536
-    + get_byte(c.data, 3)::bigint * 16777216
-    + get_byte(c.data, 4)::bigint * 4294967296
-    + get_byte(c.data, 5)::bigint * 1099511627776
-    + get_byte(c.data, 6)::bigint * 281474976710656
-    + get_byte(c.data, 7)::bigint * 72057594037927936
-) FROM cells c WHERE ...
-```
-
-**Lesson**: Binary data parsing in SQL is possible but verbose. Consider whether to parse in SQL (single query) or application (cleaner code, multiple queries). For aggregates across many rows, SQL parsing avoids N+1.
-
-**Files**: `crates/api/src/routes/tokens.rs`
-
----
-
 ## Category: Docker & Build
 
 ### BUILD-001: Rust version compatibility (0ebb92c, 3d5e392, 2dc515e)
@@ -852,18 +590,6 @@ SELECT SUM(
 
 ---
 
-### BUILD-003: Missing migrations in Docker (bdb7e17)
-
-**Symptom**: Indexer Docker container failing - can't find migrations.
-
-**Root Cause**: Forgot to COPY migrations directory in Dockerfile.
-
-**Lesson**: Always verify all runtime dependencies are included in Docker builds. Create a checklist for each service's required files.
-
-**Files**: `docker/Dockerfile.indexer`
-
----
-
 ### BUILD-004: Next.js typedRoutes breaking Docker (88072b9)
 
 **Symptom**: Docker build failing with TypeScript errors.
@@ -892,31 +618,23 @@ SELECT SUM(
 
 ## Quick Reference: Common Pitfalls
 
-| Area        | Pitfall                               | Prevention                                               |
-| ----------- | ------------------------------------- | -------------------------------------------------------- |
-| CKB Scripts | Confusing code_hash vs script_hash    | code_hash = script type, script_hash = instance identity |
-| CKB Scripts | Hardcoded hashes                      | Verify against chain, reference RFC-0024                 |
-| DAO         | Multi-phase tracking                  | Map full lifecycle before implementing                   |
-| DAO         | Compensation formula                  | Follow RFC-0023 exactly, use free_capacity               |
-| DAO         | DAO field parsing                     | 32 bytes, 4 x u64 LE, check byte offsets                 |
-| DAO         | APC calculation                       | Estimated = issuance/supply; Nominal = AR growth         |
-| DAO         | Point-in-time aggregations            | Filter out withdrawn deposits for historical snapshots   |
-| DAO         | Phase 2 withdrawal lookup             | Match by `withdraw_request_tx`, not `tx_hash`            |
-| Supply      | Using total_issuance as circulating   | Subtract 8.4B genesis burnt + secondary burnt            |
-| Supply      | Confusing issuance vs circulating     | Read `docs/DAO_CALCULATIONS.md` supply model             |
-| SQL         | Cumulative values                     | Test INSERT and UPDATE paths separately                  |
-| SQL         | Type mismatches                       | Cast explicitly: `::float8`, `::numeric`, `::TEXT`       |
-| SQL         | NUMERIC to String                     | Blockchain amounts need `::TEXT` cast for API responses  |
-| SQL         | FK violations                         | Insert parents before children                           |
-| SQL         | CONCURRENTLY in migrations            | Don't use; SQLx runs in transactions                     |
-| SQL         | Partition constraint only on children | ADD constraint to parent table (auto-attaches children)  |
-| SQL         | N+1 queries                           | Use JOINs to batch-fetch related records                 |
-| SQL         | Querying wrong table                  | Verify table/column names after schema refactors         |
-| Indexer     | Fields not in batch sync              | Ensure both real-time AND batch sync populate all fields |
-| Frontend    | Percentage double-multiply            | Establish API contract: ratio (0-1) or percent (0-100)   |
-| Docker      | Missing files                         | Verify all runtime deps are COPY'd                       |
-| Docker      | Network isolation                     | Use host network or proper bridging                      |
-| Charts      | Incomplete data                       | Exclude current incomplete period                        |
+| Area        | Pitfall                             | Prevention                                               |
+| ----------- | ----------------------------------- | -------------------------------------------------------- |
+| CKB Scripts | Confusing code_hash vs script_hash  | code_hash = script type, script_hash = instance identity |
+| CKB Scripts | Hardcoded hashes                    | Verify against chain, reference RFC-0024                 |
+| DAO         | Multi-phase tracking                | Map full lifecycle before implementing                   |
+| DAO         | Compensation formula                | Follow RFC-0023 exactly, use free_capacity               |
+| DAO         | DAO field parsing                   | 32 bytes, 4 x u64 LE, check byte offsets                 |
+| DAO         | APC calculation                     | Estimated = issuance/supply; Nominal = AR growth         |
+| DAO         | Point-in-time aggregations          | Filter out withdrawn deposits for historical snapshots   |
+| DAO         | Phase 2 withdrawal lookup           | Match by `withdraw_request_tx`, not `tx_hash`            |
+| Supply      | Using total_issuance as circulating | Subtract 8.4B genesis burnt + secondary burnt            |
+| Supply      | Confusing issuance vs circulating   | Read `docs/DAO_CALCULATIONS.md` supply model             |
+| Indexer     | Fields not in batch sync            | Ensure both real-time AND batch sync populate all fields |
+| Frontend    | Percentage double-multiply          | Establish API contract: ratio (0-1) or percent (0-100)   |
+| Docker      | Missing files                       | Verify all runtime deps are COPY'd                       |
+| Docker      | Network isolation                   | Use host network or proper bridging                      |
+| Charts      | Incomplete data                     | Exclude current incomplete period                        |
 
 ---
 
@@ -1006,23 +724,6 @@ afterAll(() => server.close());
 **Lesson**: MSW requires explicit lifecycle management. The `onUnhandledRequest: 'error'` option catches missing handlers early.
 
 **Files**: `frontend/__tests__/setup.ts`, `frontend/__tests__/msw/server.ts`
-
----
-
-### TEST-004: sqlx::test macro requires MIGRATOR constant (a55df69)
-
-**Symptom**: `#[sqlx::test]` macro fails with "MIGRATOR not found".
-
-**Root Cause**: sqlx's test macro expects a `MIGRATOR` constant for automatic database setup.
-
-```rust
-// crates/api/src/lib.rs
-pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../migrations/postgres");
-```
-
-**Lesson**: sqlx integration tests with `#[sqlx::test]` require explicit migrator setup. The macro path is relative to the crate root.
-
-**Files**: `crates/api/src/lib.rs`, `crates/api/Cargo.toml`
 
 ---
 
@@ -1225,85 +926,6 @@ if reorg_notify.swap(false, Ordering::SeqCst) {
 
 ## Category: Performance
 
-### PERF-001: Slow cell consumption due to partition scan (2026-01-24)
-
-**Symptom**: Sync speed dropped from 2000+ to ~100 blocks/sec as database grew. `consume_cells_batch` taking 3-4 seconds.
-
-**Root Cause**: The `cells` table is partitioned by `created_at_block` (10 partitions, 5M blocks each), but the UPDATE query used a JOIN with UNNEST which prevented PostgreSQL from pruning partitions.
-
-```sql
--- SLOW: PostgreSQL scans ALL 10 partitions
-UPDATE cells SET status = 1 ...
-FROM (SELECT * FROM UNNEST(...)) AS u
-WHERE cells.tx_hash = u.tx_hash
-  AND cells.created_at_block = u.created_at_block  -- Can't prune: value from joined data
-```
-
-**Solution**: Two-part fix:
-
-1. **`live_cells` table**: Non-partitioned lookup table for O(1) OutPoint resolution
-   - Contains only live cells (~1.7M vs 55M total)
-   - Primary key on `(tx_hash, output_index)` for fast lookups
-   - Maintained in sync: INSERT on cell creation, DELETE on consumption
-
-2. **Partition-aware UPDATE**: Group consumptions by partition and add explicit bounds
-   ```sql
-   -- FAST: PostgreSQL prunes to single partition
-   UPDATE cells SET status = 1 ...
-   WHERE cells.created_at_block >= $7  -- Partition lower bound
-     AND cells.created_at_block < $8   -- Partition upper bound
-   ```
-
-**Performance Impact**:
-| Metric | Before | After |
-|--------|--------|-------|
-| Sync speed | ~100 blocks/sec | ~290 blocks/sec |
-| UPDATE cells avg | 702ms | 24ms |
-| OutPoint lookup | 3.9s (scan 10 partitions) | 0.1ms (PK lookup) |
-
-**Key Insight**: When using partitioned tables, ensure hot-path queries include partition key bounds in WHERE clause, not just in JOIN conditions.
-
-**Files**:
-
-- `migrations/postgres/001_init.sql` - `live_cells` table
-- `crates/indexer/src/db/writer.rs` - `consume_cells_batch`, `get_cells_info_batch`
-- `crates/indexer/tests/live_cells.rs` - 8 tests including cross-partition
-
----
-
-### PERF-002: API live cells queries scanning partitioned table (2026-01-24)
-
-**Symptom**: `/api/v1/cells/live` endpoint slow (~255ms) when filtering by `lock_script_hash`.
-
-**Root Cause**: API queried `cells` table with `status = 0` filter, which scanned all 10 partitions even for simple COUNT queries.
-
-**Solution**:
-
-1. Added `lock_args` column to `live_cells` table (needed for API response)
-2. Changed API queries to use `live_cells` instead of `cells WHERE status = 0`
-
-```rust
-// Before: Scans 10 partitions
-"SELECT COUNT(*) FROM cells WHERE lock_script_hash = $1 AND status = 0"
-
-// After: Single table scan
-"SELECT COUNT(*) FROM live_cells WHERE lock_script_hash = $1"
-```
-
-**Performance Impact**:
-| Query | Before | After |
-|-------|--------|-------|
-| COUNT by lock_script_hash | 255ms | 15ms |
-| Paginated live cells | ~300ms | ~15ms |
-
-**Files**:
-
-- `migrations/postgres/001_init.sql` - Added `lock_args` to `live_cells`
-- `crates/indexer/src/db/writer.rs` - Write `lock_args` on insert/reorg
-- `crates/api/src/routes/cells.rs` - Query `live_cells` for live cell endpoints
-
----
-
 ### IDX-005: UDT burn/send-all transactions not tracked (2026-01-26)
 
 **Symptom**: Address page showed incorrect asset holdings:
@@ -1366,161 +988,6 @@ if has_udt_outputs || has_udt_inputs {
 
 ---
 
-### IDX-006: live_cells partition indexes failed to rebuild (2026-01-30)
-
-**Symptom**: After bulk sync completed and index rebuild triggered, 5 indexes on `live_cells` table failed with error "cannot create index on partitioned table concurrently".
-
-```
-Failed indexes: idx_live_cells_lock, idx_live_cells_lock_code, idx_live_cells_type,
-                idx_live_cells_type_code, idx_live_cells_block
-```
-
-**Root Cause**: Two bugs in `indexes.rs`:
-
-1. **Wrong partition type**: `live_cells` indexes were marked as `is_partitioned: false`, but `live_cells` is a HASH-partitioned table with 16 partitions. The code tried to create indexes directly on the parent table with `CREATE INDEX CONCURRENTLY`, which PostgreSQL doesn't support for partitioned tables.
-
-2. **Missing partition suffixes**: Even if marked as partitioned, the `PARTITION_SUFFIXES` constant only had 10 entries (`_p00` to `_p09`) for RANGE-partitioned tables, but `live_cells` has 16 HASH partitions (`_p00` to `_p15`).
-
-```rust
-// WRONG: live_cells marked as non-partitioned
-DeferrableIndex {
-    name: "idx_live_cells_lock",
-    table: "live_cells",
-    is_partitioned: false,  // BUG: Should be partitioned!
-    ...
-}
-
-// WRONG: Only 10 suffixes, but live_cells has 16 partitions
-const PARTITION_SUFFIXES: &[&str] = &["_p00", ..., "_p09"];
-```
-
-**Fix**: Introduced `PartitionType` enum to distinguish partition schemes:
-
-```rust
-enum PartitionType {
-    None,   // Not partitioned
-    Range,  // 10 partitions (_p00 to _p09) - blocks, cells, transactions, etc.
-    Hash,   // 16 partitions (_p00 to _p15) - live_cells
-}
-
-const RANGE_PARTITION_SUFFIXES: &[&str] = &["_p00", ..., "_p09"];
-const HASH_PARTITION_SUFFIXES: &[&str] = &["_p00", ..., "_p15"];
-```
-
-**Test Coverage Added**:
-
-- `test_hash_partitioned_indexes` - Verifies live_cells indexes use Hash type
-- `test_partition_suffix_counts` - Verifies 10 RANGE and 16 HASH suffixes
-- `test_live_cells_indexes_are_hash_partitioned` - Explicit check for live_cells
-
-**Lesson**: When a table uses a different partition scheme than others, it needs explicit handling. PostgreSQL `CREATE INDEX CONCURRENTLY` cannot be used on partitioned parent tables - indexes must be created on each partition individually.
-
-**Files**:
-
-- `crates/indexer/src/db/indexes.rs` - Added PartitionType enum, fixed live_cells indexes
-- `migrations/postgres/001_init.sql` - Documents live_cells HASH partitioning (16 partitions)
-
----
-
-### IDX-007: Task-runner dao_daily_snapshots rebuild missing cumulative fields (2026-02-01)
-
-**Symptom**: After database rebuild and running `statistics_rebuild` task, DAO charts, Total Supply chart, and Secondary Issuance chart showed incorrect or empty data.
-
-- Total Supply Chart: `burnt` layer only showed genesis burnt (8.4B), missing secondary burnt
-- Secondary Issuance Chart: Completely empty (no data points)
-- DAO Circulation Ratio: Potentially incorrect values
-
-**Root Cause**: The task-runner's `rebuild_dao_daily_snapshots` function in `crates/task-runner/src/executor/statistics.rs` was implemented incorrectly compared to the indexer's version in `crates/indexer/src/db/writer/statistics.rs`:
-
-1. **Missing cumulative fields**: Did not query `block_secondary_issuance` table, leaving `cumulative_burnt`, `cumulative_mining_reward`, `cumulative_deposit_compensation` as NULL
-2. **Wrong field names**: Used `total_deposited`, `active_deposits`, `unique_depositors` instead of schema fields `total_deposit`, `depositors_count`
-3. **Missing `dao_data`**: Did not store the raw DAO bytes
-4. **Wrong deposit query**: Used `withdraw_request_tx IS NULL` instead of timestamp-based logic
-
-```rust
-// WRONG: Task-runner implementation was completely different from indexer
-// - Did not query block_secondary_issuance for cumulative values
-// - Used wrong column names
-// - Used block-number based deposit logic instead of timestamp-based
-
-// CORRECT: Must match indexer's update_dao_daily_snapshot() exactly
-let secondary_issuance = sqlx::query_as::<_, (String, String, String)>(
-    r#"
-    SELECT
-        COALESCE(SUM(burnt), 0)::text,
-        COALESCE(SUM(miner_secondary), 0)::text,
-        COALESCE(SUM(dao_compensation), 0)::text
-    FROM block_secondary_issuance
-    WHERE block_timestamp::date <= $1
-    "#,
-)
-.bind(date)
-.fetch_one(pool)
-.await?;
-```
-
-**Impact**: Charts relying on `dao_daily_snapshots` displayed incorrect data:
-
-| Chart              | API Query              | Effect of NULL cumulative fields            |
-| ------------------ | ---------------------- | ------------------------------------------- |
-| Total Supply       | `cumulative_burnt`     | Only genesis 8.4B shown as burnt            |
-| Secondary Issuance | `cumulative_*` columns | WHERE clause filters all rows → empty chart |
-
-**Lesson**: When two codepaths (indexer sync vs task-runner rebuild) populate the same table, they MUST produce identical output. Add integration tests that verify the rebuild produces the same schema/values as incremental updates.
-
-**Test Coverage Added**: `crates/task-runner/tests/dao_daily_snapshot.rs` - 5 tests verifying cumulative fields, deposit totals, and DAO field parsing.
-
-**Files**:
-
-- `crates/task-runner/src/executor/statistics.rs` - Fixed `update_dao_daily_snapshot()`
-- `crates/task-runner/src/lib.rs` - Added lib.rs to export modules for testing
-- `crates/task-runner/tests/dao_daily_snapshot.rs` - New integration tests
-
----
-
-### PERF-003: UNIQUE constraints not dropped on partition tables (2026-02-05)
-
-**Symptom**: Bulk sync performance degraded ~37% (5,700 → 3,600 blocks/sec). Logs showed warnings:
-
-```
-WARN Failed to drop constraint cells_p00_created_at_block_tx_hash_output_index_key:
-  cannot drop inherited constraint "cells_p00_created_at_block_tx_hash_output_index_key"
-```
-
-**Root Cause**: `drop_deferrable_constraints()` tried to drop constraints on partition tables (e.g., `cells_p00`), but PostgreSQL partition constraints are inherited from the parent table and cannot be dropped directly on children.
-
-```rust
-// WRONG: Drop on partition tables
-for suffix in RANGE_PARTITION_SUFFIXES {
-    let table_name = format!("{}{}", constraint.table, suffix); // cells_p00
-    drop_constraint_if_exists(&table_name, &constraint_name)    // Fails!
-}
-
-// CORRECT: Drop on parent table
-let constraint_name = format!("{}_{}", constraint.table, constraint.name);
-drop_constraint_if_exists(constraint.table, &constraint_name)  // cells
-// PostgreSQL cascades to all partitions automatically
-```
-
-**Key Insight**: PostgreSQL partition inheritance is asymmetric:
-
-- **DROP**: Must target parent table (cascades to children)
-- **ADD**: Must target parent table (auto-attaches existing partition constraints). Adding ONLY to partitions is insufficient for `ON CONFLICT` — see TR-003.
-
-**Performance Impact**:
-
-| Metric        | Before (bug)  | After (fix) |
-| ------------- | ------------- | ----------- |
-| DB write time | 3-6s/10K      | ~1.5s/10K   |
-| Sync rate     | 3,600/sec     | 6,000+/sec  |
-| Slow INSERTs  | 2.3s (2 rows) | <100ms      |
-
-**Test Coverage Added**: `test_constraint_drop_uses_parent_table_name` in `crates/indexer/src/db/indexes.rs`
-
-**Files**: `crates/indexer/src/db/indexes.rs` - `drop_deferrable_constraints()`
-
----
-
 ## Category: Task Runner
 
 ### TR-001: Circular dependency in bulk sync detection deadlocks all rebuild tasks
@@ -1566,48 +1033,4 @@ return Ok(true);  // BUG: triggers immediate retry
 
 ---
 
-### TR-003: Parent table UNIQUE constraints missing after index rebuild (2026-02-05)
-
-**Symptom**: Indexer stuck at block 18,549,997, failing every ~30 seconds with:
-
-```
-ERROR: there is no unique or exclusion constraint matching the ON CONFLICT specification
-```
-
-**Root Cause**: `rebuild_partitioned_constraint()` in `crates/task-runner/src/executor/index.rs` added UNIQUE constraints to individual partitions (e.g., `cells_p00`, `cells_p01`...) but **never to the parent partitioned table** (e.g., `cells`). PostgreSQL's `INSERT ... ON CONFLICT` requires the constraint on the parent table — having it only on partitions is insufficient.
-
-**Affected tables** (all 5 `DEFERRABLE_CONSTRAINTS`):
-
-| Table                   | Constraint                                  |
-| ----------------------- | ------------------------------------------- |
-| `cells`                 | `(created_at_block, tx_hash, output_index)` |
-| `transaction_inputs`    | `(tx_block_number, tx_hash, input_index)`   |
-| `transaction_cell_deps` | `(tx_block_number, tx_hash, dep_index)`     |
-| `block_proposals`       | `(block_number, proposal_index)`            |
-| `uncle_blocks`          | `(block_number, uncle_index)`               |
-
-**Fix**: Added parent table constraint creation after all partition constraints are built (lines 447-472 of `index.rs`):
-
-```rust
-// After all partition constraints are created...
-let parent_constraint_name = format!("{}_{}", constraint.table, constraint.name);
-let add_parent_sql = format!(
-    "ALTER TABLE {} ADD CONSTRAINT {} UNIQUE ({})",
-    constraint.table, parent_constraint_name, constraint.columns
-);
-sqlx::query(&add_parent_sql).execute(pool).await?;
-```
-
-**Key Insight**: When you `ALTER TABLE parent ADD CONSTRAINT ... UNIQUE (...)` and partitions already have matching constraints, PostgreSQL automatically "attaches" them — no data scan needed.
-
-**Cross-reference**: PERF-003 previously had incorrect documentation stating "ADD: Can target individual partitions (task-runner rebuild does this correctly)" — this was the exact opposite of correct behavior and has been corrected.
-
-**Lesson**: When rebuilding constraints on partitioned tables, always add the constraint to the parent table. Partition-only constraints are invisible to `ON CONFLICT` on the parent. The immediate fix was to run `ALTER TABLE` on all 5 parent tables directly in psql, which instantly unblocked the indexer.
-
-**Test Coverage Added**: `test_rebuild_constraint_creates_parent_constraint` and `test_rebuild_constraint_enables_on_conflict` in `crates/task-runner/tests/index_rebuild_constraint.rs`.
-
-**Files**: `crates/task-runner/src/executor/index.rs` - `rebuild_partitioned_constraint()`
-
----
-
-_Last updated: 2026-02-10_
+_Last updated: 2026-02-20_
