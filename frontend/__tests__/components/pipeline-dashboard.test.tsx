@@ -9,7 +9,9 @@ vi.mock('@/components/chain-wave', () => ({
 }));
 
 vi.mock('@/components/mempool-blocks', () => ({
-  MempoolBlocks: () => <div data-testid="mempool-blocks">MempoolBlocks</div>,
+  MempoolBlocks: ({ showTxnLens }: { showTxnLens?: boolean }) => (
+    <div data-testid="mempool-blocks">lens:{String(showTxnLens)}</div>
+  ),
 }));
 
 function mockBlock(number: number): Block {
@@ -109,14 +111,14 @@ describe('PipelineDashboard', () => {
     );
 
     expect(screen.getByTestId('chain-wave')).toBeInTheDocument();
-    expect(screen.getByTestId('mempool-blocks')).toBeInTheDocument();
+    expect(screen.getByTestId('mempool-blocks')).toHaveTextContent('lens:true');
     expect(screen.queryByText('Flow Trend')).not.toBeInTheDocument();
     expect(screen.getByText('Recommended Fee Rates')).toBeInTheDocument();
-    expect(screen.getByText('Fastest')).toBeInTheDocument();
-    expect(screen.getByText('Half Hour')).toBeInTheDocument();
-    expect(screen.getByText('1 Hour')).toBeInTheDocument();
     expect(screen.getByText('F')).toBeInTheDocument();
-    expect(screen.getAllByText(/x min/i).length).toBeGreaterThan(0);
+    expect(screen.getByText('30m')).toBeInTheDocument();
+    expect(screen.getByText('Eco')).toBeInTheDocument();
+    expect(screen.getByText('Live Fee Ladder')).toBeInTheDocument();
+    expect(screen.getByText(/active tiers/i)).toBeInTheDocument();
     expect(screen.getByText('Mempool Health')).toBeInTheDocument();
     expect(screen.getByText('Health Score')).toBeInTheDocument();
     expect(screen.getByText(/until .* reaches warning/i)).toBeInTheDocument();

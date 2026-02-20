@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
+import { CommandPalette } from '@/components/command-palette';
 import { SearchBar } from '@/components/search-bar';
 import { Logo } from '@/components/layout/logo';
 
@@ -86,6 +87,8 @@ export function Header() {
           </nav>
         </div>
       )}
+
+      <CommandPalette />
     </header>
   );
 }

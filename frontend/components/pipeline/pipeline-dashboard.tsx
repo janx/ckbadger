@@ -6,7 +6,6 @@ import { useQuery } from '@tanstack/react-query';
 import { Block, api } from '@/lib/api';
 import { ChainWave } from '@/components/chain-wave';
 import { MempoolBlocks } from '@/components/mempool-blocks';
-import { SparkChart } from '@/components/ui/spark-chart';
 
 interface PipelineDashboardProps {
   initialBlocks?: Block[];
@@ -132,6 +131,11 @@ function formatFeeShannons(value: number | null | undefined): string {
 function formatFeeDelta(value: number): string {
   const sign = value > 0 ? '+' : '';
   return `${sign}${value.toFixed(2)} sh/B`;
+}
+
+function formatCompactFeeRate(value: number | undefined): string {
+  if (!value || value <= 0) return 'N/A';
+  return `${value.toFixed(2)} sh/B`;
 }
 
 function healthStatusLabel(status: HealthStatus): string {
@@ -293,6 +297,11 @@ export function PipelineDashboard({ initialBlocks = [] }: PipelineDashboardProps
     if (nonZeroFeerates.length === 0) return null;
     return Math.min(...nonZeroFeerates);
   }, [nonZeroFeerates]);
+
+  const activeFeeEntries = useMemo(
+    () => feeEntries.filter((entry) => (entry.value ?? 0) > 0),
+    [feeEntries]
+  );
 
   const feerateSpread = useMemo(() => {
     if (nonZeroFeerates.length < 2) return null;
@@ -458,7 +467,7 @@ export function PipelineDashboard({ initialBlocks = [] }: PipelineDashboardProps
 
   return (
     <div className="space-y-5">
-      <MempoolBlocks latestBlocks={initialBlocks} chrome="flat" />
+      <MempoolBlocks latestBlocks={initialBlocks} chrome="flat" showTxnLens />
 
       <section className={panelClassName}>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -477,25 +486,30 @@ export function PipelineDashboard({ initialBlocks = [] }: PipelineDashboardProps
 
         <div className="mt-3 rounded-xl bg-slate-950/60 p-3 ring-1 ring-inset ring-slate-800/70">
           <div className="mb-2 flex items-center justify-between text-[11px] text-slate-500">
-            <span className="uppercase tracking-widest">Unified Fee Ladder</span>
+            <span className="uppercase tracking-widest">Live Fee Ladder</span>
             <span>0 - {maxFeerate.toFixed(2)} sh/B</span>
           </div>
 
-          <div className="mb-2.5 grid grid-cols-3 gap-1 text-center text-[10px] uppercase tracking-widest text-slate-500">
-            <div className="rounded-sm bg-emerald-500/10 py-0.5 text-emerald-300/80">
-              Economy Zone
-            </div>
-            <div className="rounded-sm bg-amber-500/10 py-0.5 text-amber-300/80">Priority Zone</div>
-            <div className="rounded-sm bg-rose-500/10 py-0.5 text-rose-300/80">Urgent Zone</div>
-          </div>
+          <div className="relative h-32 overflow-hidden rounded-lg bg-slate-900/70 ring-1 ring-inset ring-slate-800/80">
+            <div className="absolute inset-y-0 left-0 w-1/3 bg-emerald-500/10" />
+            <div className="absolute inset-y-0 left-1/3 w-1/3 bg-amber-500/10" />
+            <div className="absolute inset-y-0 right-0 w-1/3 bg-rose-500/10" />
+            <div className="absolute bottom-6 left-0 right-0 h-px bg-gradient-to-r from-emerald-400/50 via-amber-300/60 to-rose-400/60" />
 
-          <div className="space-y-2.5">
-            {feeEntries.map((entry) => {
-              const rawValue = entry.value ?? 0;
-              const width = rawValue > 0 ? Math.max((rawValue / maxFeerate) * 100, 8) : 0;
-              const markerLeft = clamp(width, 3, 97);
-              const multiplier =
-                baseFeerate && rawValue > 0 ? `${(rawValue / baseFeerate).toFixed(2)}x min` : 'N/A';
+            <div className="absolute bottom-1 left-2 text-[10px] uppercase tracking-widest text-emerald-300/80">
+              Economy
+            </div>
+            <div className="absolute bottom-1 left-1/2 -translate-x-1/2 text-[10px] uppercase tracking-widest text-amber-300/80">
+              Priority
+            </div>
+            <div className="absolute bottom-1 right-2 text-[10px] uppercase tracking-widest text-rose-300/80">
+              Urgent
+            </div>
+
+            {activeFeeEntries.map((entry, index) => {
+              const value = entry.value ?? 0;
+              const left = clamp((value / maxFeerate) * 100, 2, 98);
+              const labelLeft = clamp(left, 10, 90);
               const historySeries = feeHistory[entry.label] ?? [];
               const trailValues = historySeries.slice(-FEE_TRAIL_POINTS);
               const delta =
@@ -503,80 +517,67 @@ export function PipelineDashboard({ initialBlocks = [] }: PipelineDashboardProps
                   ? trailValues[trailValues.length - 1] - trailValues[trailValues.length - 2]
                   : 0;
               const hasDelta = trailValues.length >= 2;
-              const sparkSeries = historySeries.slice(-FEE_HISTORY_WINDOW);
+              const isUpper = index % 2 === 0;
+              const bubbleTopClass = isUpper ? 'top-2' : 'top-12';
+              const stemClass = isUpper ? 'top-8 h-10' : 'top-14 h-6';
 
               return (
-                <div
-                  key={entry.label}
-                  className="grid grid-cols-[auto_1fr_112px] items-center gap-2"
-                >
-                  <div className="w-24 truncate text-xs text-slate-400">
-                    <span className="mr-1 rounded bg-slate-800/90 px-1 py-0.5 text-[10px] uppercase text-slate-300">
-                      {entry.shortLabel}
-                    </span>
-                    {entry.label}
-                  </div>
-
-                  <div className="relative h-6 overflow-hidden rounded-md bg-slate-800/80 ring-1 ring-inset ring-slate-700/70">
-                    <div className="absolute inset-0 bg-gradient-to-r from-emerald-500/15 via-amber-400/15 to-rose-500/20" />
-                    <div
-                      className={`absolute left-0 top-0 h-full rounded-md bg-gradient-to-r ${entry.tone}`}
-                      style={{ width: `${width}%` }}
-                    />
-                    {trailValues.map((value, idx) => {
-                      const left = clamp((value / maxFeerate) * 100, 3, 97);
-                      const isLatest = idx === trailValues.length - 1;
-                      const opacity = 0.18 + (idx / Math.max(trailValues.length - 1, 1)) * 0.45;
-
-                      return (
-                        <div
-                          key={`${entry.label}-trail-${idx}-${value}`}
-                          className={`absolute top-1/2 h-1.5 w-1.5 -translate-y-1/2 rounded-full ${
-                            isLatest ? 'bg-white/90' : 'bg-white/55'
-                          }`}
-                          style={{ left: `calc(${left}% - 3px)`, opacity }}
-                        />
-                      );
-                    })}
-                    {rawValue > 0 ? (
+                <div key={entry.label}>
+                  {trailValues.map((trailValue, trailIndex) => {
+                    const trailLeft = clamp((trailValue / maxFeerate) * 100, 2, 98);
+                    const opacity = 0.2 + (trailIndex / Math.max(trailValues.length - 1, 1)) * 0.4;
+                    return (
                       <div
-                        className="absolute top-1/2 h-2.5 w-2.5 -translate-y-1/2 rounded-full border border-white/70 bg-slate-100 shadow-[0_0_12px_rgba(226,232,240,0.45)]"
-                        style={{ left: `calc(${markerLeft}% - 5px)` }}
-                        title={`${entry.label}: ${formatShannonsPerByte(entry.value)}`}
+                        key={`${entry.label}-trail-${trailIndex}-${trailValue}`}
+                        className="absolute bottom-6 h-1.5 w-1.5 rounded-full bg-white/70"
+                        style={{ left: `calc(${trailLeft}% - 3px)`, opacity }}
                       />
-                    ) : null}
-                    <div className="absolute right-1 top-1/2 -translate-y-1/2 text-[11px] font-medium text-slate-100">
-                      {formatShannonsPerByte(entry.value)}
-                    </div>
-                  </div>
+                    );
+                  })}
 
-                  <div className="w-24 text-right text-[11px] text-slate-500">
-                    <div>{multiplier}</div>
+                  <div
+                    className={`absolute w-px bg-slate-200/50 ${stemClass}`}
+                    style={{ left: `${left}%` }}
+                  />
+
+                  <div
+                    className={`absolute -translate-x-1/2 rounded-md bg-slate-950/95 px-2 py-1 text-[10px] ring-1 ring-inset ring-slate-700/80 ${bubbleTopClass}`}
+                    style={{ left: `${labelLeft}%` }}
+                  >
+                    <div className="flex items-center gap-1.5 whitespace-nowrap">
+                      <span
+                        className="inline-block h-2 w-2 rounded-full"
+                        style={{ backgroundColor: entry.color }}
+                      />
+                      <span className="font-medium text-slate-200">{entry.shortLabel}</span>
+                      <span className="text-slate-400">{formatCompactFeeRate(entry.value)}</span>
+                    </div>
                     <div
                       className={
-                        hasDelta ? (delta >= 0 ? 'text-emerald-300/90' : 'text-rose-300/90') : ''
+                        hasDelta
+                          ? delta >= 0
+                            ? 'text-emerald-300'
+                            : 'text-rose-300'
+                          : 'text-slate-500'
                       }
                     >
                       {hasDelta ? formatFeeDelta(delta) : 'n/a'}
                     </div>
-                    {sparkSeries.length > 0 ? (
-                      <SparkChart
-                        data={sparkSeries}
-                        color={entry.color}
-                        height={20}
-                        className="mt-1 h-5"
-                      />
-                    ) : (
-                      <div className="mt-1 h-5 rounded bg-slate-800/40" />
-                    )}
                   </div>
+
+                  <div
+                    className="absolute bottom-6 h-3 w-3 -translate-x-1/2 rounded-full border border-white/70 bg-slate-100 shadow-[0_0_10px_rgba(226,232,240,0.45)]"
+                    style={{ left: `${left}%` }}
+                    title={`${entry.label}: ${formatShannonsPerByte(entry.value)}`}
+                  />
                 </div>
               );
             })}
           </div>
 
           <div className="mt-2 text-[11px] text-slate-500">
-            Min anchor: {formatShannonsPerByte(baseFeerate)}
+            Min anchor: {formatShannonsPerByte(baseFeerate)} · {activeFeeEntries.length} active
+            tiers
           </div>
         </div>
       </section>

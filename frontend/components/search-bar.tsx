@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { api, type SearchResult } from '@/lib/api';
+import { resolveSearchRoute } from '@/lib/search-routing';
 import { cn } from '@/lib/utils';
 
 interface SearchBarProps {
@@ -59,19 +60,7 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
       return;
     }
 
-    const trimmed = query.trim();
-
-    if (/^[0-9]+$/.test(trimmed)) {
-      router.push(`/blocks/${trimmed}`);
-    } else if (/^0x[a-fA-F0-9]{64}$/.test(trimmed)) {
-      router.push(`/tx/${trimmed}`);
-    } else if (trimmed.startsWith('ckb') || trimmed.startsWith('ckt')) {
-      router.push(`/address/${trimmed}`);
-    } else if (trimmed.includes('-')) {
-      router.push(`/cell/${trimmed}`);
-    } else {
-      router.push(`/search?q=${encodeURIComponent(trimmed)}`);
-    }
+    router.push(resolveSearchRoute(query));
 
     setIsOpen(false);
     setQuery('');
@@ -118,6 +107,7 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
         <div className="relative">
           <input
             ref={inputRef}
+            data-ckbadger-global-search="true"
             type="text"
             value={query}
             onChange={(e) => {

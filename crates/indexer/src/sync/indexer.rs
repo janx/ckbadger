@@ -103,6 +103,21 @@ fn should_skip_address_balances(_bulk_sync_mode: bool) -> bool {
     false
 }
 
+fn collect_committed_proposal_ids(txs: &[TxData]) -> Vec<String> {
+    let mut ids = HashSet::new();
+    for tx in txs {
+        if tx.is_cellbase {
+            continue;
+        }
+        // CKB proposal id is the first 10 bytes (20 hex chars) of tx hash.
+        ids.insert(hex::encode(&tx.hash[..10]));
+    }
+
+    let mut collected: Vec<String> = ids.into_iter().collect();
+    collected.sort();
+    collected
+}
+
 fn count_new_addresses(
     changes: &HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8], i64)>,
     existing: &HashMap<Vec<u8>, Option<AddressBalance>>,
@@ -3996,6 +4011,15 @@ impl Indexer {
                 .await?;
         }
 
+        if !bulk_sync_mode {
+            let committed_proposal_ids = collect_committed_proposal_ids(&all_tx_data);
+            if !committed_proposal_ids.is_empty() {
+                self.cache_invalidator
+                    .remove_committed_proposals(&committed_proposal_ids)
+                    .await;
+            }
+        }
+
         let stats_ms = t_stats.elapsed().as_secs_f64() * 1000.0;
         debug!(
             headers_ms = format!("{:.1}", headers_ms),
@@ -6439,6 +6463,15 @@ impl Indexer {
                 )
                 .await?;
         }
+
+        if !bulk_sync_mode {
+            let committed_proposal_ids = collect_committed_proposal_ids(&all_tx_data);
+            if !committed_proposal_ids.is_empty() {
+                self.cache_invalidator
+                    .remove_committed_proposals(&committed_proposal_ids)
+                    .await;
+            }
+        }
         let finalize_ms = t_finalize.elapsed().as_secs_f64() * 1000.0;
 
         let batch_tx_count = all_tx_data.len();
@@ -7123,6 +7156,29 @@ mod tests {
         assert!(sample.contains("0x1111111111111111:0"));
         assert!(sample.contains("0x2222222222222222:1"));
         assert!(!sample.contains("0x3333333333333333:2"));
+    }
+
+    #[test]
+    fn test_collect_committed_proposal_ids_uses_first_10_bytes_and_skips_cellbase() {
+        let tx1 = dummy_tx_data([0x11; 32], false, vec![], vec![], vec![]);
+        let tx2 = dummy_tx_data([0x22; 32], false, vec![], vec![], vec![]);
+        let tx3_cellbase = dummy_tx_data([0x33; 32], true, vec![], vec![], vec![]);
+
+        let ids = collect_committed_proposal_ids(&[tx1, tx2, tx3_cellbase]);
+
+        assert_eq!(ids.len(), 2);
+        assert_eq!(ids[0], "11111111111111111111");
+        assert_eq!(ids[1], "22222222222222222222");
+    }
+
+    #[test]
+    fn test_collect_committed_proposal_ids_deduplicates_identical_hashes() {
+        let tx_a = dummy_tx_data([0x44; 32], false, vec![], vec![], vec![]);
+        let tx_b = dummy_tx_data([0x44; 32], false, vec![], vec![], vec![]);
+
+        let ids = collect_committed_proposal_ids(&[tx_a, tx_b]);
+
+        assert_eq!(ids, vec!["44444444444444444444".to_string()]);
     }
 
     #[test]
