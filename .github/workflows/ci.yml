@@ -22,6 +22,8 @@ jobs:
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       frontend: ${{ steps.filter.outputs.frontend }}
+      api_routes: ${{ steps.filter.outputs.api_routes }}
+      api_integration: ${{ steps.filter.outputs.api_integration }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -34,6 +36,23 @@ jobs:
               - 'Cargo.lock'
             frontend:
               - 'frontend/**'
+            api_routes:
+              - 'crates/api/src/routes/**'
+            api_integration:
+              - 'crates/api/tests/api_integration.rs'
+
+  api-scope-guard:
+    name: API Scope Guard
+    needs: changes
+    if: needs.changes.outputs.api_routes == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure API route changes include integration test updates
+        env:
+          API_ROUTES_CHANGED: ${{ needs.changes.outputs.api_routes }}
+          API_INTEGRATION_CHANGED: ${{ needs.changes.outputs.api_integration }}
+        run: ./scripts/check-pr-scope.sh
 
   rust-check:
     name: Rust Check & Lint

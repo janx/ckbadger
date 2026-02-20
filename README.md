@@ -151,6 +151,24 @@ For resource-constrained environments (4GB RAM):
 docker compose -f docker-compose.minimal.yml up -d
 ```
 
+### Local-First Shortcuts
+
+Use repository `Makefile` targets for the most common local workflow:
+
+```bash
+# Start local dependencies (redis + ckb-node in internal mode)
+make local-up
+
+# Reset local RocksDB (requires explicit confirmation)
+make local-reset CONFIRM=1
+
+# Run verification against local API
+make local-verify
+
+# Sampling checks + RPC spot-checks
+make local-verify VERIFY_DEPTH=sampling VERIFY_RPC_URL=http://localhost:8114
+```
+
 ## Configuration
 
 ### Environment Variables

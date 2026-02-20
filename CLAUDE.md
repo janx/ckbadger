@@ -123,6 +123,11 @@ cargo check && cargo clippy && cd frontend && pnpm type-check && pnpm lint
 
 # Formatting
 pnpm format                              # Prettier (all files)
+
+# Local-first shortcuts
+make local-up                            # Start local dependencies
+make local-reset CONFIRM=1               # Delete local RocksDB data
+make local-verify                        # Run verify --depth fast against local API
 ```
 
 ## Project Structure
