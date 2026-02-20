@@ -801,14 +801,6 @@ interface MempoolBlocksResponse {
   totalProposedCount: number;
 }
 
-interface RecommendedFees {
-  fastestFee: number;
-  halfHourFee: number;
-  hourFee: number;
-  economyFee: number;
-  minimumFee: number;
-}
-
 interface PendingProposal {
   proposalId: string;
   fullTxHash: string | null;
@@ -924,7 +916,6 @@ export type {
   MempoolTransaction,
   MempoolBlock,
   MempoolBlocksResponse,
-  RecommendedFees,
   FeeRateRange,
   PendingProposal,
   PendingProposalsResponse,
@@ -1421,10 +1412,6 @@ export const api = {
 
   getMempoolBlocks: (): Promise<MempoolBlocksResponse> => {
     return fetchApi('/mempool/blocks');
-  },
-
-  getRecommendedFees: (): Promise<RecommendedFees> => {
-    return fetchApi('/mempool/fees');
   },
 
   getPendingProposals: (): Promise<PendingProposalsResponse> => {

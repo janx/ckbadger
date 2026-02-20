@@ -15,7 +15,6 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/mempool/info", get(get_mempool_info))
         .route("/mempool/transactions", get(get_mempool_transactions))
         .route("/mempool/blocks", get(get_mempool_blocks))
-        .route("/mempool/fees", get(get_recommended_fees))
         .route("/mempool/pending-proposals", get(get_pending_proposals))
 }
 
@@ -72,16 +71,6 @@ pub struct MempoolBlocksResponse {
     pub pending_blocks: Vec<MempoolBlock>,
     pub total_pending_count: u64,
     pub total_proposed_count: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RecommendedFees {
-    pub fastest_fee: f64,
-    pub half_hour_fee: f64,
-    pub hour_fee: f64,
-    pub economy_fee: f64,
-    pub minimum_fee: f64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -433,144 +422,6 @@ fn create_empty_block(index: u32) -> MempoolBlock {
         median_fee_rate: 0.0,
         estimated_time_minutes,
     }
-}
-
-async fn get_recommended_fees(State(state): State<Arc<AppState>>) -> ApiResult<RecommendedFees> {
-    let cache_key = "mempool:fees";
-    if let Some(cached) = state.cache.get::<RecommendedFees>(cache_key).await {
-        return ok(cached);
-    }
-
-    let info = fetch_tx_pool_info(&state.ckb_rpc_url)
-        .await
-        .map_err(ApiError::internal)?;
-
-    let min_fee_rate = parse_hex(&info.min_fee_rate) as f64;
-
-    let blocks_response = get_mempool_blocks_internal(&state).await;
-
-    let (fastest, half_hour, hour, economy) = match blocks_response {
-        Ok(blocks) if !blocks.pending_blocks.is_empty() => {
-            let fastest = blocks
-                .pending_blocks
-                .first()
-                .map(|b| b.fee_rate_range.max)
-                .unwrap_or(min_fee_rate)
-                .max(min_fee_rate);
-
-            let half_hour = blocks
-                .pending_blocks
-                .get(2)
-                .map(|b| b.median_fee_rate)
-                .unwrap_or(min_fee_rate)
-                .max(min_fee_rate);
-
-            let hour = blocks
-                .pending_blocks
-                .get(5)
-                .map(|b| b.median_fee_rate)
-                .unwrap_or(min_fee_rate)
-                .max(min_fee_rate);
-
-            let economy = blocks
-                .pending_blocks
-                .last()
-                .map(|b| b.fee_rate_range.min)
-                .unwrap_or(min_fee_rate)
-                .max(min_fee_rate);
-
-            (fastest, half_hour, hour, economy)
-        }
-        _ => (min_fee_rate, min_fee_rate, min_fee_rate, min_fee_rate),
-    };
-
-    let result = RecommendedFees {
-        fastest_fee: fastest,
-        half_hour_fee: half_hour,
-        hour_fee: hour,
-        economy_fee: economy,
-        minimum_fee: min_fee_rate,
-    };
-
-    state
-        .cache
-        .set(cache_key, &result, CacheTtl::MEMPOOL_INFO)
-        .await;
-
-    ok(result)
-}
-
-async fn get_mempool_blocks_internal(state: &AppState) -> Result<MempoolBlocksResponse, String> {
-    let pool = fetch_raw_tx_pool_verbose(&state.ckb_rpc_url).await?;
-
-    let mut all_txs: Vec<(String, u64, u64, u64, f64)> = Vec::new();
-
-    for (hash, entry) in pool.pending.iter().chain(pool.proposed.iter()) {
-        let size = parse_hex(&entry.size);
-        let fee = parse_hex(&entry.fee);
-        let cycles = parse_hex(&entry.cycles);
-        let fee_rate = if size > 0 {
-            fee as f64 / size as f64
-        } else {
-            0.0
-        };
-        all_txs.push((hash.clone(), size, fee, cycles, fee_rate));
-    }
-
-    all_txs.sort_by(|a, b| b.4.total_cmp(&a.4));
-
-    let mut pending_blocks: Vec<MempoolBlock> = Vec::new();
-    let mut current_block_txs: Vec<(u64, u64, u64, f64)> = Vec::new();
-    let mut current_size: u64 = 0;
-    let mut current_cycles: u64 = 0;
-
-    for (_hash, size, fee, cycles, fee_rate) in all_txs {
-        let would_exceed_size = current_size + size > CKB_BLOCK_SIZE_LIMIT;
-        let would_exceed_cycles = current_cycles + cycles > CKB_BLOCK_CYCLES_LIMIT;
-
-        if would_exceed_size || would_exceed_cycles {
-            if !current_block_txs.is_empty() {
-                let block = create_mempool_block(
-                    pending_blocks.len() as u32,
-                    &current_block_txs,
-                    current_size,
-                    current_cycles,
-                );
-                pending_blocks.push(block);
-            }
-            current_block_txs.clear();
-            current_size = 0;
-            current_cycles = 0;
-        }
-
-        current_block_txs.push((size, fee, cycles, fee_rate));
-        current_size += size;
-        current_cycles += cycles;
-
-        if pending_blocks.len() >= 8 {
-            break;
-        }
-    }
-
-    if !current_block_txs.is_empty() && pending_blocks.len() < 8 {
-        let block = create_mempool_block(
-            pending_blocks.len() as u32,
-            &current_block_txs,
-            current_size,
-            current_cycles,
-        );
-        pending_blocks.push(block);
-    }
-
-    while pending_blocks.len() < MIN_PENDING_BLOCKS {
-        pending_blocks.push(create_empty_block(pending_blocks.len() as u32));
-    }
-
-    Ok(MempoolBlocksResponse {
-        pending_blocks,
-        total_pending_count: pool.pending.len() as u64,
-        total_proposed_count: pool.proposed.len() as u64,
-    })
 }
 
 async fn get_pending_proposals(
