@@ -30,7 +30,6 @@ const COMMANDS: CommandItem[] = [
   { id: 'go-assets', label: 'Go to Assets', keywords: ['asset', 'token', 'nft'], href: '/assets' },
   { id: 'go-scripts', label: 'Go to Scripts', keywords: ['script'], href: '/scripts' },
   { id: 'go-charts', label: 'Go to Charts', keywords: ['chart', 'stats'], href: '/charts' },
-  { id: 'go-pipeline', label: 'Go to Pipeline', keywords: ['pipeline', 'sync'], href: '/pipeline' },
 ];
 
 const GOTO_CHORD_TIMEOUT_MS = 1200;

@@ -11,7 +11,7 @@ vi.mock('@/components/layout/logo', () => ({
 }));
 
 describe('Header', () => {
-  it('renders nav links with Pipeline before DAO', () => {
+  it('renders nav links without pipeline entry', () => {
     const { container } = render(<Header />);
 
     const desktopNav = container.querySelector('nav.hidden.shrink-0');
@@ -19,7 +19,7 @@ describe('Header', () => {
       (node.textContent ?? '').trim()
     );
 
-    expect(labels).toEqual(['Pipeline', 'DAO', 'Assets', 'Scripts', 'Charts']);
-    expect(desktopNav?.querySelector('a')?.getAttribute('href')).toBe('/pipeline');
+    expect(labels).toEqual(['DAO', 'Assets', 'Scripts', 'Charts']);
+    expect(desktopNav?.querySelector('a')?.getAttribute('href')).toBe('/dao');
   });
 });
