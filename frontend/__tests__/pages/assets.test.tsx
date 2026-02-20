@@ -165,12 +165,14 @@ describe('AssetsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.history.replaceState(null, '', '/assets');
-    vi.mocked(api.getToken).mockImplementation(async () => ({ totalOccupiedCapacity: '0' }) as any);
+    vi.mocked(api.getToken).mockImplementation(
+      async () => ({ totalOccupiedCapacity: '0', totalCapacity: '0' }) as any
+    );
     vi.mocked(api.getNftCollection).mockImplementation(
-      async () => ({ liveOccupiedCapacity: '0' }) as any
+      async () => ({ liveOccupiedCapacity: '0', liveCapacity: '0' }) as any
     );
     vi.mocked(api.getSporeCluster).mockImplementation(
-      async () => ({ liveOccupiedCapacity: '0' }) as any
+      async () => ({ liveOccupiedCapacity: '0', liveCapacity: '0' }) as any
     );
   });
 
@@ -385,18 +387,21 @@ describe('AssetsPage', () => {
     });
   });
 
-  it('renders occupied column and supports sorting by occupied', async () => {
+  it('renders occupied/capacity columns and supports sorting by occupied', async () => {
     vi.mocked(api.getAssets).mockResolvedValue(sortableTokenAssets);
     vi.mocked(api.getToken).mockImplementation(async (typeHash: string) => {
       const totalOccupiedCapacity =
         typeHash === sortableTokenAssets.data[0].id ? '1000000000' : '5000000000';
-      return { totalOccupiedCapacity } as any;
+      const totalCapacity =
+        typeHash === sortableTokenAssets.data[0].id ? '2000000000' : '9000000000';
+      return { totalOccupiedCapacity, totalCapacity } as any;
     });
 
     render(<AssetsPage />);
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Sort by Occupied' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Sort by Capacity' })).toBeInTheDocument();
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Sort by Occupied' }));
@@ -406,6 +411,31 @@ describe('AssetsPage', () => {
         .getAllByRole('link')
         .filter((link) => link.getAttribute('href')?.startsWith('/tokens/'));
       expect(tokenLinks[0]).toHaveTextContent('BETA');
+    });
+  });
+
+  it('supports sorting by capacity', async () => {
+    vi.mocked(api.getAssets).mockResolvedValue(sortableTokenAssets);
+    vi.mocked(api.getToken).mockImplementation(async (typeHash: string) => {
+      if (typeHash === sortableTokenAssets.data[0].id) {
+        return { totalOccupiedCapacity: '1000000000', totalCapacity: '8000000000' } as any;
+      }
+      return { totalOccupiedCapacity: '5000000000', totalCapacity: '2000000000' } as any;
+    });
+
+    render(<AssetsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Sort by Capacity' })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sort by Capacity' }));
+
+    await waitFor(() => {
+      const tokenLinks = screen
+        .getAllByRole('link')
+        .filter((link) => link.getAttribute('href')?.startsWith('/tokens/'));
+      expect(tokenLinks[0]).toHaveTextContent('ALPHA');
     });
   });
 });
