@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { waitFor, render as rtlRender } from '@testing-library/react';
-import { act, createTestQueryClient, render, screen } from '../utils/test-utils';
+import { act, createTestQueryClient, fireEvent, render, screen, within } from '../utils/test-utils';
 import { MempoolBlocks } from '@/components/mempool-blocks';
 import { api, Block } from '@/lib/api';
 
@@ -168,12 +168,31 @@ describe('MempoolBlocks', () => {
     expect(await screen.findByText('Mempool')).toBeInTheDocument();
     expect(await screen.findByText('Proposals')).toBeInTheDocument();
     expect(await screen.findByText('Next Block')).toBeInTheDocument();
-    expect(screen.getByText('Proposed:').parentElement).toHaveTextContent('Proposed:1');
-    expect(screen.getByText('Mempool:').parentElement).toHaveTextContent('Mempool:2');
+    const summaryRow = screen.getByTestId('pipeline-summary-row');
+    expect(within(summaryRow).getByText('Mempool (2)')).toBeInTheDocument();
+    expect(screen.getByText('Proposals (1)')).toBeInTheDocument();
+    expect(screen.getByText('New Committed (179)')).toBeInTheDocument();
+    expect(
+      within(summaryRow).getByText(/w -> size \| h -> cycles \| x -> fee \| y -> fee rate/i)
+    ).toBeInTheDocument();
 
     await waitFor(() => {
       expect(document.querySelectorAll('[data-tx-tooltip*="Stage:"]').length).toBeGreaterThan(0);
     });
+
+    const firstBubble = document.querySelector('[data-tx-tooltip]');
+    expect(firstBubble).toBeTruthy();
+    fireEvent.mouseEnter(firstBubble as Element, { clientX: 140, clientY: 120 });
+
+    const tooltip = await screen.findByTestId('tx-bubble-tooltip');
+    expect(tooltip).toHaveClass('fixed');
+
+    const minedBlockLink = document.querySelector('a[href="/blocks/100"]');
+    expect(minedBlockLink).toBeTruthy();
+    fireEvent.mouseEnter(minedBlockLink as Element, { clientX: 320, clientY: 260 });
+
+    const minedTooltip = await screen.findByTestId('mined-block-tooltip-100');
+    expect(minedTooltip).toHaveClass('fixed');
   });
 
   it('refreshes txn data queries immediately when new tip block arrives', async () => {

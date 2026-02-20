@@ -1,9 +1,12 @@
 'use client';
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query';
 import { api, MempoolBlock, Block, BlockFeeStats, Transaction, PendingProposal } from '@/lib/api';
+import { resolveBubbleOverlaps } from '@/lib/pipeline-bubble-layout';
+import { computeUniformShiftDeltaX } from '@/lib/pipeline-animation';
 import { cn } from '@/lib/utils';
 
 interface MempoolBlocksProps {
@@ -413,8 +416,11 @@ function txBubbleTitle(item: LensTxItem): string {
 function toTxBubble(item: LensTxItem, metrics: RectMetrics, jitterSeed: string): TxBubble {
   const jitterX = (seededUnit(`${jitterSeed}:x`) - 0.5) * 0.18;
   const jitterY = (seededUnit(`${jitterSeed}:y`) - 0.5) * 0.16;
-  const left = clamp01(metrics.feeScore + jitterX);
-  const top = clamp01(1 - metrics.feeRateScore + jitterY);
+  const rawLeft = clamp01(metrics.feeScore + jitterX);
+  const rawTop = clamp01(1 - metrics.feeRateScore + jitterY);
+  const plotPadding = 0.08;
+  const left = plotPadding + rawLeft * (1 - plotPadding * 2);
+  const top = plotPadding + rawTop * (1 - plotPadding * 2);
   const widthPx = 8 + metrics.sizeScore * 18;
   const heightPx = 6 + metrics.cyclesScore * 14;
 
@@ -463,6 +469,10 @@ function formatTimeAgo(timestamp: string): string {
   if (diff < 3600) return `${Math.floor(diff / 60)}m`;
   if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
   return `${Math.floor(diff / 86400)}d`;
+}
+
+function formatCount(value: number): string {
+  return value.toLocaleString();
 }
 
 function edgeFadeOpacity(distanceToEdge: number): number {
@@ -554,40 +564,85 @@ function Block2D({
 
 function TxBubbleLayer({ bubbles, showAxes = false }: { bubbles: TxBubble[]; showAxes?: boolean }) {
   const [hovered, setHovered] = useState<{ bubble: TxBubble; x: number; y: number } | null>(null);
-  const containerRef = useRef<HTMLDivElement | null>(null);
   if (bubbles.length === 0 && !showAxes) return null;
 
-  function toLocalPosition(event: React.MouseEvent<HTMLDivElement>): { x: number; y: number } {
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (!rect) return { x: event.clientX, y: event.clientY };
-    return {
-      x: event.clientX - rect.left,
-      y: event.clientY - rect.top,
-    };
-  }
+  const viewportWidth = typeof window === 'undefined' ? 1024 : window.innerWidth;
+  const viewportHeight = typeof window === 'undefined' ? 768 : window.innerHeight;
+  const tooltipWidth = 190;
+  const tooltipHeight = 126;
 
   const tooltipX = (() => {
-    if (!hovered || !containerRef.current) return 8;
-    return Math.max(8, Math.min(hovered.x + 10, containerRef.current.clientWidth - 190));
+    if (!hovered) return 8;
+    return Math.max(8, Math.min(hovered.x + 10, viewportWidth - tooltipWidth - 8));
   })();
 
   const tooltipY = (() => {
-    if (!hovered || !containerRef.current) return 8;
-    return Math.max(8, Math.min(hovered.y + 10, containerRef.current.clientHeight - 126));
+    if (!hovered) return 8;
+    return Math.max(8, Math.min(hovered.y + 10, viewportHeight - tooltipHeight - 8));
   })();
 
+  const tooltip = hovered ? (
+    <div
+      data-testid="tx-bubble-tooltip"
+      className="pointer-events-none fixed z-[9999] min-w-[196px] rounded-xl border border-slate-700/55 bg-slate-900/95 px-3 py-2.5 text-[10px] text-slate-100 shadow-2xl shadow-black/45 backdrop-blur-md"
+      style={{
+        left: tooltipX,
+        top: tooltipY,
+      }}
+    >
+      <div className="border-b border-slate-700/55 pb-1.5 font-mono text-[10px] tracking-wide text-slate-200">
+        {hovered.bubble.txLabel}
+      </div>
+      <div className="mt-1.5 text-slate-400">
+        Stage: <span className="font-medium text-slate-100">{hovered.bubble.stageLabel}</span>
+      </div>
+      {hovered.bubble.proposalLabel && (
+        <div className="text-slate-400">
+          Proposal: <span className="font-mono text-slate-100">{hovered.bubble.proposalLabel}</span>
+        </div>
+      )}
+      <div className="text-slate-400">
+        Size: <span className="font-mono text-slate-100">{hovered.bubble.sizeLabel}</span>
+      </div>
+      <div className="text-slate-400">
+        Fee: <span className="font-mono text-slate-100">{hovered.bubble.feeLabel}</span>
+      </div>
+      <div className="text-slate-400">
+        Fee rate: <span className="font-mono text-slate-100">{hovered.bubble.feeRateLabel}</span>
+      </div>
+      <div className="text-slate-400">
+        Cycles: <span className="font-mono text-slate-100">{hovered.bubble.cyclesLabel}</span>
+      </div>
+    </div>
+  ) : null;
+
   return (
-    <div ref={containerRef} className="absolute inset-0 z-10 overflow-visible">
+    <div className="absolute inset-0 z-10 overflow-visible">
       <div className="absolute inset-0 overflow-hidden rounded-[inherit]">
         {showAxes && (
           <>
-            <div className="pointer-events-none absolute inset-1.5 grid grid-cols-8 grid-rows-7">
+            <div className="pointer-events-none absolute inset-1 rounded-[inherit] bg-gradient-to-br from-white/[0.03] via-transparent to-cyan-300/[0.04]" />
+            {[0.33, 0.66].map((ratio) => (
+              <div
+                key={`vertical-guide-${ratio}`}
+                className="pointer-events-none absolute bottom-2 top-2 border-l border-dashed border-white/10"
+                style={{ left: `calc(${ratio * 100}% - 0.5px)` }}
+              />
+            ))}
+            {[0.33, 0.66].map((ratio) => (
+              <div
+                key={`horizontal-guide-${ratio}`}
+                className="pointer-events-none absolute left-2 right-2 border-t border-dashed border-white/10"
+                style={{ top: `calc(${ratio * 100}% - 0.5px)` }}
+              />
+            ))}
+            <div className="bg-white/28 pointer-events-none absolute bottom-2 left-2 right-2 h-px" />
+            <div className="bg-white/28 pointer-events-none absolute bottom-2 left-2 top-2 w-px" />
+            <div className="pointer-events-none absolute inset-1.5 grid grid-cols-8 grid-rows-7 opacity-30">
               {Array.from({ length: 56 }, (_, idx) => (
-                <div key={idx} className="border border-white/5" />
+                <div key={idx} className="border-white/6 border" />
               ))}
             </div>
-            <div className="pointer-events-none absolute bottom-2 left-2 right-2 h-px bg-white/10" />
-            <div className="pointer-events-none absolute bottom-2 left-2 top-2 w-px bg-white/10" />
           </>
         )}
         {bubbles.map((bubble) => (
@@ -606,52 +661,16 @@ function TxBubbleLayer({ bubbles, showAxes = false }: { bubbles: TxBubble[]; sho
             }}
             data-tx-tooltip={bubble.title}
             onMouseEnter={(event) => {
-              const pos = toLocalPosition(event);
-              setHovered({ bubble, x: pos.x, y: pos.y });
+              setHovered({ bubble, x: event.clientX, y: event.clientY });
             }}
             onMouseMove={(event) => {
-              const pos = toLocalPosition(event);
-              setHovered({ bubble, x: pos.x, y: pos.y });
+              setHovered({ bubble, x: event.clientX, y: event.clientY });
             }}
             onMouseLeave={() => setHovered(null)}
           />
         ))}
       </div>
-      {hovered && (
-        <div
-          className="pointer-events-none absolute z-[240] min-w-[196px] rounded-xl border border-slate-700/55 bg-slate-900/95 px-3 py-2.5 text-[10px] text-slate-100 shadow-2xl shadow-black/45 backdrop-blur-md"
-          style={{
-            left: tooltipX,
-            top: tooltipY,
-          }}
-        >
-          <div className="border-b border-slate-700/55 pb-1.5 font-mono text-[10px] tracking-wide text-slate-200">
-            {hovered.bubble.txLabel}
-          </div>
-          <div className="mt-1.5 text-slate-400">
-            Stage: <span className="font-medium text-slate-100">{hovered.bubble.stageLabel}</span>
-          </div>
-          {hovered.bubble.proposalLabel && (
-            <div className="text-slate-400">
-              Proposal:{' '}
-              <span className="font-mono text-slate-100">{hovered.bubble.proposalLabel}</span>
-            </div>
-          )}
-          <div className="text-slate-400">
-            Size: <span className="font-mono text-slate-100">{hovered.bubble.sizeLabel}</span>
-          </div>
-          <div className="text-slate-400">
-            Fee: <span className="font-mono text-slate-100">{hovered.bubble.feeLabel}</span>
-          </div>
-          <div className="text-slate-400">
-            Fee rate:{' '}
-            <span className="font-mono text-slate-100">{hovered.bubble.feeRateLabel}</span>
-          </div>
-          <div className="text-slate-400">
-            Cycles: <span className="font-mono text-slate-100">{hovered.bubble.cyclesLabel}</span>
-          </div>
-        </div>
-      )}
+      {tooltip && typeof document !== 'undefined' ? createPortal(tooltip, document.body) : null}
     </div>
   );
 }
@@ -789,9 +808,102 @@ function MinedBlock({
   const stats = feeStats && feeStats !== 'loading' ? feeStats : null;
   const gradient = getBlockColors(0, false);
   const borderClassName = 'border-purple-400/70';
+  const anchorRef = useRef<HTMLAnchorElement | null>(null);
+  const [isHovered, setIsHovered] = useState(false);
+  const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
+
+  useEffect(() => {
+    if (!isHovered) return;
+
+    const updateAnchorRect = () => {
+      if (!anchorRef.current) return;
+      setAnchorRect(anchorRef.current.getBoundingClientRect());
+    };
+
+    updateAnchorRect();
+    window.addEventListener('resize', updateAnchorRect);
+    window.addEventListener('scroll', updateAnchorRect, true);
+
+    return () => {
+      window.removeEventListener('resize', updateAnchorRect);
+      window.removeEventListener('scroll', updateAnchorRect, true);
+    };
+  }, [isHovered]);
+
+  const tooltipViewportWidth = typeof window === 'undefined' ? 1024 : window.innerWidth;
+  const tooltipWidth = 296;
+  const tooltipHeight = stats ? 206 : 146;
+
+  const tooltipLeft = anchorRect
+    ? Math.max(
+        8,
+        Math.min(
+          anchorRect.left + anchorRect.width / 2 - tooltipWidth / 2,
+          tooltipViewportWidth - tooltipWidth - 8
+        )
+      )
+    : 8;
+  const tooltipTop = anchorRect ? Math.max(8, anchorRect.top - tooltipHeight - 12) : 8;
+
+  const minedBlockTooltip = isHovered && anchorRect && typeof document !== 'undefined' && (
+    <div
+      data-testid={`mined-block-tooltip-${block.number}`}
+      className="pointer-events-none fixed z-[10000] w-[296px] rounded-xl border border-slate-700/50 bg-slate-900/95 px-4 py-3 text-xs text-white shadow-2xl backdrop-blur-sm"
+      style={{
+        left: tooltipLeft,
+        top: tooltipTop,
+      }}
+    >
+      <div className="flex flex-col gap-1.5">
+        <div className="border-b border-slate-700/50 pb-2 text-sm font-semibold">
+          Block #{block.number.toLocaleString()}
+        </div>
+        {stats && (
+          <>
+            <div className="flex justify-between gap-4">
+              <span className="text-slate-400">Avg Fee Rate:</span>
+              <span className="font-mono tabular-nums">
+                ~{formatFeeRate(stats.avgFeeRate)} shannons/B
+              </span>
+            </div>
+            <div className="flex justify-between gap-4">
+              <span className="text-slate-400">Fee Range:</span>
+              <span className="font-mono tabular-nums">
+                {formatFeeRate(stats.minFeeRate)} - {formatFeeRate(stats.maxFeeRate)}
+              </span>
+            </div>
+            <div className="flex justify-between gap-4">
+              <span className="text-slate-400">Size:</span>
+              <span>{formatBytes(stats.totalSize)}</span>
+            </div>
+          </>
+        )}
+        <div className="flex justify-between gap-4">
+          <span className="text-slate-400">Transactions:</span>
+          <span>{block.transactionsCount}</span>
+        </div>
+        <div className="flex justify-between gap-4">
+          <span className="text-slate-400">Proposals:</span>
+          <span>{block.proposalsCount ?? 0}</span>
+        </div>
+        <div className="flex justify-between gap-4">
+          <span className="text-slate-400">Time:</span>
+          <span>{formatTimeAgo(block.timestamp)} ago</span>
+        </div>
+      </div>
+    </div>
+  );
 
   return (
-    <Link href={`/blocks/${block.number}`} className="group/block flex flex-col items-center">
+    <Link
+      ref={anchorRef}
+      href={`/blocks/${block.number}`}
+      className="group/block flex flex-col items-center"
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+      onFocus={() => setIsHovered(true)}
+      onBlur={() => setIsHovered(false)}
+    >
       <div className="mb-1 font-mono text-xs font-semibold tabular-nums text-purple-400 transition-colors group-hover/block:text-purple-300 sm:text-sm">
         {block.number.toLocaleString()}
       </div>
@@ -855,47 +967,8 @@ function MinedBlock({
             </div>
           )}
         </Block2D>
-        <div className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-3 -translate-x-1/2 whitespace-nowrap rounded-xl border border-slate-700/50 bg-slate-900/95 px-4 py-3 text-xs text-white opacity-0 shadow-2xl backdrop-blur-sm transition-opacity group-hover/block:opacity-100">
-          <div className="flex min-w-[260px] flex-col gap-1.5">
-            <div className="border-b border-slate-700/50 pb-2 text-sm font-semibold">
-              Block #{block.number.toLocaleString()}
-            </div>
-            {stats && (
-              <>
-                <div className="flex justify-between gap-4">
-                  <span className="text-slate-400">Avg Fee Rate:</span>
-                  <span className="font-mono tabular-nums">
-                    ~{formatFeeRate(stats.avgFeeRate)} shannons/B
-                  </span>
-                </div>
-                <div className="flex justify-between gap-4">
-                  <span className="text-slate-400">Fee Range:</span>
-                  <span className="font-mono tabular-nums">
-                    {formatFeeRate(stats.minFeeRate)} - {formatFeeRate(stats.maxFeeRate)}
-                  </span>
-                </div>
-                <div className="flex justify-between gap-4">
-                  <span className="text-slate-400">Size:</span>
-                  <span>{formatBytes(stats.totalSize)}</span>
-                </div>
-              </>
-            )}
-            <div className="flex justify-between gap-4">
-              <span className="text-slate-400">Transactions:</span>
-              <span>{block.transactionsCount}</span>
-            </div>
-            <div className="flex justify-between gap-4">
-              <span className="text-slate-400">Proposals:</span>
-              <span>{block.proposalsCount ?? 0}</span>
-            </div>
-            <div className="flex justify-between gap-4">
-              <span className="text-slate-400">Time:</span>
-              <span>{formatTimeAgo(block.timestamp)} ago</span>
-            </div>
-          </div>
-          <div className="absolute left-1/2 top-full -translate-x-1/2 border-[6px] border-transparent border-t-slate-900/95" />
-        </div>
       </div>
+      {minedBlockTooltip ? createPortal(minedBlockTooltip, document.body) : null}
       {large && (
         <div className="mt-1.5 text-center text-[10px] sm:text-[11px]">
           {isLoading ? (
@@ -1211,34 +1284,40 @@ export function MempoolBlocks({
   const mempoolBubbles = useMemo(() => {
     if (!showTxnLens) return [];
 
-    return sampleItems(mempoolLensItems, 12)
+    const bubbles = sampleItems(mempoolLensItems, 12)
       .map((item) => {
         const metrics = mapTxToRectMetrics(item, lensDomain);
         return toTxBubble(item, metrics, `mempool-${item.id}`);
       })
       .sort((a, b) => a.widthPx * a.heightPx - b.widthPx * b.heightPx);
+
+    return resolveBubbleOverlaps(bubbles);
   }, [lensDomain, mempoolLensItems, showTxnLens]);
 
   const proposalBacklogBubbles = useMemo(() => {
     if (!showTxnLens) return [];
 
-    return sampleItems(backlogProposalLensItems, 12)
+    const bubbles = sampleItems(backlogProposalLensItems, 12)
       .map((item) => {
         const metrics = mapTxToRectMetrics(item, lensDomain);
         return toTxBubble(item, metrics, `proposal-backlog-${item.id}`);
       })
       .sort((a, b) => a.widthPx * a.heightPx - b.widthPx * b.heightPx);
+
+    return resolveBubbleOverlaps(bubbles);
   }, [backlogProposalLensItems, lensDomain, showTxnLens]);
 
   const nextProposalBubbles = useMemo(() => {
     if (!showTxnLens) return [];
 
-    return sampleItems(nextProposalLensItems, 12)
+    const bubbles = sampleItems(nextProposalLensItems, 12)
       .map((item) => {
         const metrics = mapTxToRectMetrics(item, lensDomain);
         return toTxBubble(item, metrics, `proposal-next-${item.id}`);
       })
       .sort((a, b) => a.widthPx * a.heightPx - b.widthPx * b.heightPx);
+
+    return resolveBubbleOverlaps(bubbles);
   }, [lensDomain, nextProposalLensItems, showTxnLens]);
 
   const committedBubblesByBlock = useMemo(() => {
@@ -1246,12 +1325,14 @@ export function MempoolBlocks({
     if (!showTxnLens) return mapped;
 
     displayedMinedBlocks.forEach((block) => {
-      const bubbles = (committedLensByBlock.get(block.number) ?? [])
-        .map((item) => {
-          const metrics = mapTxToRectMetrics(item, lensDomain);
-          return toTxBubble(item, metrics, `${block.number}-${item.id}`);
-        })
-        .sort((a, b) => a.widthPx * a.heightPx - b.widthPx * b.heightPx);
+      const bubbles = resolveBubbleOverlaps(
+        (committedLensByBlock.get(block.number) ?? [])
+          .map((item) => {
+            const metrics = mapTxToRectMetrics(item, lensDomain);
+            return toTxBubble(item, metrics, `${block.number}-${item.id}`);
+          })
+          .sort((a, b) => a.widthPx * a.heightPx - b.widthPx * b.heightPx)
+      );
       mapped.set(block.number, bubbles);
     });
 
@@ -1266,13 +1347,14 @@ export function MempoolBlocks({
     showTxnLens && pendingProposalsData
       ? pendingProposalsData.totalCount
       : (mempoolData?.totalProposedCount ?? 0);
+  const latestCommittedCount = minedBlocks[0]?.transactionsCount ?? 0;
+  const totalCommitted = latestCommittedCount > 0 ? latestCommittedCount - 1 : 0;
   const latestBlockNumber = minedBlocks[0]?.number ?? 0;
   const nextBlockNumber = latestBlockNumber + 1;
   const mempoolNodeId = `block-${nextBlockNumber + 2}`;
   const proposalsNodeId = `block-${nextBlockNumber + 1}`;
   const nextNodeId = `block-${nextBlockNumber}`;
   const blockNodeRefs = useRef<Map<string, HTMLDivElement>>(new Map());
-  const previousRectsRef = useRef<Map<string, DOMRect>>(new Map());
   const previousTipRef = useRef<number | null>(null);
   const previousTipForRefreshRef = useRef<number | null>(null);
   const animationFramesRef = useRef<number[]>([]);
@@ -1372,19 +1454,22 @@ export function MempoolBlocks({
         resetTimeoutRef.current = null;
       }
 
+      const orderedRects = visibleNodeIds
+        .map((nodeId) => currentRects.get(nodeId))
+        .filter((rect): rect is DOMRect => Boolean(rect));
+      const shiftDeltaX = computeUniformShiftDeltaX(orderedRects);
+
       visibleNodeIds.forEach((nodeId) => {
         const node = blockNodeRefs.current.get(nodeId);
         const nextRect = currentRects.get(nodeId);
         if (!node || !nextRect) return;
 
-        const prevRect = previousRectsRef.current.get(nodeId);
-        const deltaX = prevRect ? prevRect.left - nextRect.left : -24;
-        const shouldAnimate = Math.abs(deltaX) > 0.5;
+        const shouldAnimate = Math.abs(shiftDeltaX) > 0.5;
         if (!shouldAnimate) return;
 
         node.style.willChange = 'transform';
         node.style.transition = 'none';
-        node.style.transform = `translate3d(${deltaX}px, 0, 0)`;
+        node.style.transform = `translate3d(${shiftDeltaX}px, 0, 0)`;
       });
 
       const frame1 = requestAnimationFrame(() => {
@@ -1413,7 +1498,6 @@ export function MempoolBlocks({
       animationFramesRef.current.push(frame1);
     }
 
-    previousRectsRef.current = currentRects;
     if (latestBlockNumber > 0) {
       previousTipRef.current = latestBlockNumber;
     }
@@ -1455,26 +1539,31 @@ export function MempoolBlocks({
   return (
     <div className={containerClassName}>
       {showHeader && (
-        <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="mb-5">
           <h2 className="text-lg font-bold tracking-tight text-white sm:text-xl">
             Chain Tip Intelligence
           </h2>
-          <div className="flex items-center gap-4 text-xs sm:text-sm">
-            <div className="flex items-center gap-1.5">
-              <div className="h-2 w-2 rounded-full bg-emerald-500 shadow-sm shadow-emerald-500/50" />
-              <span className="text-slate-400">Proposed:</span>
-              <span className="font-semibold tabular-nums text-emerald-400">{totalProposed}</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <div className="h-2 w-2 rounded-full bg-amber-500 shadow-sm shadow-amber-500/50" />
-              <span className="text-slate-400">Mempool:</span>
-              <span className="font-semibold tabular-nums text-amber-400">{totalPending}</span>
-            </div>
+          <div
+            data-testid="pipeline-summary-row"
+            className="mt-1 flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between"
+          >
+            <p className="text-xs sm:text-sm">
+              <span className="text-cyan-300">Mempool ({formatCount(totalPending)})</span>
+              <span className="text-slate-500"> {'->'} </span>
+              <span className="text-emerald-300">Proposals ({formatCount(totalProposed)})</span>
+              <span className="text-slate-500"> {'->'} </span>
+              <span className="text-violet-300">New Committed ({formatCount(totalCommitted)})</span>
+            </p>
+            {legendMode === 'row' && (
+              <p className="text-[10px] text-slate-400 sm:text-right sm:text-[11px]">
+                w {'->'} size | h {'->'} cycles | x {'->'} fee | y {'->'} fee rate
+              </p>
+            )}
           </div>
         </div>
       )}
 
-      {legendMode === 'row' && (
+      {legendMode === 'row' && !showHeader && (
         <div className="mb-1 mt-1 flex items-center text-[10px] text-slate-500">
           <span>
             w {'->'} size | h {'->'} cycles | x {'->'} fee | y {'->'} fee rate

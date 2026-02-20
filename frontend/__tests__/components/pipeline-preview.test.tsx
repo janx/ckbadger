@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '../utils/test-utils';
+import { render, screen, within } from '../utils/test-utils';
 import { PipelinePreview } from '@/components/chain-wave/pipeline-preview';
 import { api, type Block } from '@/lib/api';
 
@@ -80,22 +80,19 @@ describe('PipelinePreview', () => {
       hasMore: false,
       nextCursor: null,
     });
-
     render(<PipelinePreview initialBlocks={[mockBlock(100, 200)]} />);
 
     expect(await screen.findByText('Transaction Pipeline')).toBeInTheDocument();
     expect(await screen.findByText(/Mempool \(128\)/i)).toBeInTheDocument();
     expect(screen.getByText(/Proposals \(41\)/i)).toBeInTheDocument();
     expect(screen.getByText(/New Committed \(199\)/i)).toBeInTheDocument();
+    const summaryRow = screen.getByTestId('pipeline-preview-summary-row');
+    expect(within(summaryRow).getByText(/Mempool \(128\)/i)).toBeInTheDocument();
     expect(
-      screen.getByText(/w -> size \| h -> cycles \| x -> fee \| y -> fee rate/i)
+      within(summaryRow).getByText(/w -> size \| h -> cycles \| x -> fee \| y -> fee rate/i)
     ).toBeInTheDocument();
     expect(screen.getByTestId('mempool-blocks')).toHaveTextContent('lens:true');
     expect(screen.getByTestId('mempool-blocks')).toHaveTextContent('header:false');
     expect(screen.getByTestId('mempool-blocks')).toHaveTextContent('legend:none');
-    expect(screen.getByRole('link', { name: 'View full pipeline' })).toHaveAttribute(
-      'href',
-      '/pipeline'
-    );
   });
 });

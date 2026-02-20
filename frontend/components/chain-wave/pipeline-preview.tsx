@@ -1,6 +1,5 @@
 'use client';
 
-import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import { api, Block } from '@/lib/api';
 import { MempoolBlocks } from '@/components/mempool-blocks';
@@ -40,7 +39,6 @@ export function PipelinePreview({ initialBlocks = [] }: PipelinePreviewProps) {
       : undefined,
     refetchInterval: 10000,
   });
-
   const proposalHashSet = new Set(
     (pendingProposalsData?.proposals ?? [])
       .map((proposal) => proposal.fullTxHash)
@@ -61,25 +59,20 @@ export function PipelinePreview({ initialBlocks = [] }: PipelinePreviewProps) {
 
   return (
     <section className="overflow-visible rounded-2xl bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800 p-4 ring-1 ring-inset ring-slate-700/70">
-      <div className="mb-2 flex items-start justify-between gap-3">
-        <div>
-          <h2 className="text-base font-semibold text-white sm:text-lg">Transaction Pipeline</h2>
-          <p className="mt-1 text-xs sm:text-sm">
+      <div className="mb-2">
+        <h2 className="text-base font-semibold text-white sm:text-lg">Transaction Pipeline</h2>
+        <div
+          data-testid="pipeline-preview-summary-row"
+          className="mt-1 flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between"
+        >
+          <p className="text-xs sm:text-sm">
             <span className="text-cyan-300">Mempool ({formatCount(mempoolCount)})</span>
             <span className="text-slate-500"> {'->'} </span>
             <span className="text-emerald-300">Proposals ({formatCount(proposalsCount)})</span>
             <span className="text-slate-500"> {'->'} </span>
             <span className="text-violet-300">New Committed ({formatCount(committedCount)})</span>
           </p>
-        </div>
-        <div className="flex flex-col items-end gap-1">
-          <Link
-            href="/pipeline"
-            className="bg-terminal-green/10 text-terminal-green ring-terminal-green/35 hover:bg-terminal-green/20 rounded-lg px-3 py-1.5 text-xs font-medium ring-1 ring-inset transition-colors"
-          >
-            View full pipeline
-          </Link>
-          <p className="text-right text-[10px] text-slate-400 sm:text-[11px]">
+          <p className="text-[10px] text-slate-400 sm:text-right sm:text-[11px]">
             w {'->'} size | h {'->'} cycles | x {'->'} fee | y {'->'} fee rate
           </p>
         </div>
