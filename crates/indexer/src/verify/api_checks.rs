@@ -1,13 +1,15 @@
 //! API-based checks — validates data via the ckbadger REST API.
 //!
 //! Fast tier (F1-F6): few API calls, seconds.
-//! Sampling tier (S1-S15): N API calls or chart validation, minutes.
+//! Sampling tier (S1-S18): N API calls or chart validation, minutes.
 
 use super::checks::*;
 use super::report::format_number;
 use super::sampling::LcgSampler;
+use ckbadger_common::dao::GENESIS_BURNT;
 
 const SYNC_COMPLETE_MAX_LAG_BLOCKS: i64 = 100;
+const SHANNONS_PER_CKB: i128 = 100_000_000;
 
 // ---------------------------------------------------------------------------
 // Lightweight API response types (deserialized from ckbadger API JSON).
@@ -57,6 +59,9 @@ struct DaoStatisticsResponse {
     total_deposited: String,
     estimated_apc: String,
     active_deposits: i64,
+    mining_reward: String,
+    deposit_compensation: String,
+    burnt: String,
 }
 
 #[derive(serde::Deserialize)]
@@ -413,7 +418,7 @@ impl Check for DaoStatisticsSane {
 }
 
 // ============================================
-// SAMPLING CHECKS (S1-S15)
+// SAMPLING CHECKS (S1-S18)
 // ============================================
 
 /// S1: N random blocks: GET /blocks/{n} → hash, GET /blocks/{hash} → number matches.
@@ -1421,6 +1426,50 @@ fn validate_required_holder_count(
     }
 }
 
+fn parse_non_negative_i128(raw: &str) -> Option<i128> {
+    let value = raw.trim().parse::<i128>().ok()?;
+    (value >= 0).then_some(value)
+}
+
+fn parse_ckb_to_shannons(raw: &str) -> Option<i128> {
+    let s = raw.trim();
+    if s.is_empty() || s.starts_with('-') {
+        return None;
+    }
+
+    let mut parts = s.split('.');
+    let whole = parts.next()?;
+    let frac = parts.next();
+    if parts.next().is_some() {
+        return None;
+    }
+
+    let whole_part = whole.parse::<i128>().ok()?;
+    let frac_part = match frac {
+        Some(f) => {
+            if f.len() > 8 || !f.chars().all(|c| c.is_ascii_digit()) {
+                return None;
+            }
+            let mut padded = f.to_string();
+            while padded.len() < 8 {
+                padded.push('0');
+            }
+            padded.parse::<i128>().ok()?
+        }
+        None => 0,
+    };
+
+    Some(whole_part * SHANNONS_PER_CKB + frac_part)
+}
+
+fn shannons_to_rounded_whole_ckb(shannons: i128) -> Option<i128> {
+    if shannons < 0 {
+        return None;
+    }
+    let rounded = format!("{:.0}", shannons as f64 / SHANNONS_PER_CKB as f64);
+    rounded.parse::<i128>().ok()
+}
+
 /// S14: GET /charts/hodl-wave → required series present and percentage sum sane.
 pub struct ChartHodlWaveConsistency;
 
@@ -1503,7 +1552,278 @@ impl Check for ChartHodlWaveConsistency {
     }
 }
 
-/// S15: N random blocks: compare API vs CKB RPC (hash, txCount). Skipped without --rpc-url.
+/// S15: GET /charts/knowledge-size and /charts/common-knowledge-composition are exactly aligned.
+pub struct ChartKnowledgeCompositionExact;
+
+impl Check for ChartKnowledgeCompositionExact {
+    fn name(&self) -> &'static str {
+        "chart_knowledge_composition_exact"
+    }
+    fn description(&self) -> &'static str {
+        "Knowledge size equals exact sum of composition series (shannons)"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let knowledge: ChartWrapper<ChartDataPoint> = api_get(ctx, "charts/knowledge-size")?;
+        let composition: ChartWrapper<StackedChartDataPoint> =
+            api_get(ctx, "charts/common-knowledge-composition")?;
+
+        let mut findings = vec![];
+        let mut knowledge_by_date = std::collections::HashMap::<String, i128>::new();
+        for point in &knowledge.data {
+            match parse_ckb_to_shannons(&point.value) {
+                Some(v) => {
+                    knowledge_by_date.insert(point.date.clone(), v);
+                }
+                None => findings.push(Finding {
+                    entity: point.date.clone(),
+                    details: vec![format!("invalid knowledge-size value '{}'", point.value)],
+                }),
+            }
+        }
+
+        let mut checked = 0u64;
+        for point in &composition.data {
+            let mut sum = 0i128;
+            for key in ["transfer", "dao", "udt", "nftSpore", "otherContracts"] {
+                let raw = point.values.get(key).map(|v| v.as_str()).unwrap_or("");
+                match parse_ckb_to_shannons(raw) {
+                    Some(v) => sum += v,
+                    None => findings.push(Finding {
+                        entity: point.date.clone(),
+                        details: vec![format!(
+                            "missing or invalid composition series '{}' value '{}'",
+                            key, raw
+                        )],
+                    }),
+                }
+            }
+
+            if let Some(expected) = knowledge_by_date.get(&point.date) {
+                checked += 1;
+                if sum != *expected {
+                    findings.push(Finding {
+                        entity: point.date.clone(),
+                        details: vec![format!(
+                            "composition sum {} shannons != knowledge size {} shannons",
+                            sum, expected
+                        )],
+                    });
+                }
+            }
+        }
+
+        if checked == 0 {
+            return Ok(CheckResult::pass_with_detail(
+                0,
+                "no overlapping dates between knowledge and composition charts".to_string(),
+            ));
+        }
+
+        if findings.is_empty() {
+            Ok(CheckResult::pass_with_detail(
+                checked,
+                format!("{} overlapping date points", checked),
+            ))
+        } else {
+            Ok(CheckResult::fail(checked, findings))
+        }
+    }
+}
+
+/// S16: Latest /charts/secondary-issuance must match /dao/statistics cumulative fields.
+pub struct SecondaryIssuanceMatchesDaoStatistics;
+
+impl Check for SecondaryIssuanceMatchesDaoStatistics {
+    fn name(&self) -> &'static str {
+        "secondary_issuance_matches_dao_statistics"
+    }
+    fn description(&self) -> &'static str {
+        "Latest secondary issuance chart equals DAO statistics (same rounded CKB)"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let dao: DaoStatisticsResponse = api_get(ctx, "dao/statistics")?;
+        let secondary: ChartWrapper<StackedChartDataPoint> =
+            api_get(ctx, "charts/secondary-issuance")?;
+
+        let Some(latest) = secondary.data.last() else {
+            return Ok(CheckResult::pass_with_detail(
+                0,
+                "secondary-issuance chart is empty".to_string(),
+            ));
+        };
+
+        let mut findings = vec![];
+
+        let chart_compensation = latest
+            .values
+            .get("compensation")
+            .and_then(|v| parse_non_negative_i128(v));
+        let chart_mining = latest
+            .values
+            .get("mining")
+            .and_then(|v| parse_non_negative_i128(v));
+        let chart_burnt = latest
+            .values
+            .get("burnt")
+            .and_then(|v| parse_non_negative_i128(v));
+
+        let stats_compensation = parse_non_negative_i128(&dao.deposit_compensation)
+            .and_then(shannons_to_rounded_whole_ckb);
+        let stats_mining =
+            parse_non_negative_i128(&dao.mining_reward).and_then(shannons_to_rounded_whole_ckb);
+        let stats_burnt =
+            parse_non_negative_i128(&dao.burnt).and_then(shannons_to_rounded_whole_ckb);
+
+        match (chart_compensation, stats_compensation) {
+            (Some(chart), Some(stats)) if chart != stats => findings.push(Finding {
+                entity: latest.date.clone(),
+                details: vec![format!(
+                    "compensation chart={} != dao_statistics={}",
+                    chart, stats
+                )],
+            }),
+            (None, _) | (_, None) => findings.push(Finding {
+                entity: latest.date.clone(),
+                details: vec!["missing or invalid compensation value".to_string()],
+            }),
+            _ => {}
+        }
+
+        match (chart_mining, stats_mining) {
+            (Some(chart), Some(stats)) if chart != stats => findings.push(Finding {
+                entity: latest.date.clone(),
+                details: vec![format!(
+                    "mining chart={} != dao_statistics={}",
+                    chart, stats
+                )],
+            }),
+            (None, _) | (_, None) => findings.push(Finding {
+                entity: latest.date.clone(),
+                details: vec!["missing or invalid mining value".to_string()],
+            }),
+            _ => {}
+        }
+
+        match (chart_burnt, stats_burnt) {
+            (Some(chart), Some(stats)) if chart != stats => findings.push(Finding {
+                entity: latest.date.clone(),
+                details: vec![format!("burnt chart={} != dao_statistics={}", chart, stats)],
+            }),
+            (None, _) | (_, None) => findings.push(Finding {
+                entity: latest.date.clone(),
+                details: vec!["missing or invalid burnt value".to_string()],
+            }),
+            _ => {}
+        }
+
+        if findings.is_empty() {
+            Ok(CheckResult::pass_with_detail(
+                1,
+                format!("matched at {}", latest.date),
+            ))
+        } else {
+            Ok(CheckResult::fail(1, findings))
+        }
+    }
+}
+
+/// S17: For overlapping dates, total-supply burnt minus secondary burnt must equal genesis burnt.
+pub struct BurntSupplyGenesisInvariant;
+
+impl Check for BurntSupplyGenesisInvariant {
+    fn name(&self) -> &'static str {
+        "burnt_supply_genesis_invariant"
+    }
+    fn description(&self) -> &'static str {
+        "total-supply.burnt - secondary-issuance.burnt equals genesis burnt (8.4B CKB)"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let total_supply: ChartWrapper<StackedChartDataPoint> =
+            api_get(ctx, "charts/total-supply")?;
+        let secondary: ChartWrapper<StackedChartDataPoint> =
+            api_get(ctx, "charts/secondary-issuance")?;
+
+        let mut findings = vec![];
+        let mut secondary_burnt_by_date = std::collections::HashMap::<String, i128>::new();
+        for point in &secondary.data {
+            if let Some(burnt) = point
+                .values
+                .get("burnt")
+                .and_then(|v| parse_non_negative_i128(v))
+            {
+                secondary_burnt_by_date.insert(point.date.clone(), burnt);
+            } else {
+                findings.push(Finding {
+                    entity: point.date.clone(),
+                    details: vec!["missing or invalid secondary burnt value".to_string()],
+                });
+            }
+        }
+
+        let expected_gap_ckb = (GENESIS_BURNT as i128) / SHANNONS_PER_CKB;
+        let mut checked = 0u64;
+
+        for point in &total_supply.data {
+            let Some(secondary_burnt) = secondary_burnt_by_date.get(&point.date) else {
+                continue;
+            };
+
+            let total_burnt = match point
+                .values
+                .get("burnt")
+                .and_then(|v| parse_non_negative_i128(v))
+            {
+                Some(v) => v,
+                None => {
+                    findings.push(Finding {
+                        entity: point.date.clone(),
+                        details: vec!["missing or invalid total-supply burnt value".to_string()],
+                    });
+                    continue;
+                }
+            };
+
+            checked += 1;
+            let gap = total_burnt - *secondary_burnt;
+            if gap != expected_gap_ckb {
+                findings.push(Finding {
+                    entity: point.date.clone(),
+                    details: vec![format!(
+                        "burnt gap={} CKB, expected {} CKB",
+                        gap, expected_gap_ckb
+                    )],
+                });
+            }
+        }
+
+        if checked == 0 {
+            return Ok(CheckResult::pass_with_detail(
+                0,
+                "no overlapping dates with secondary issuance chart".to_string(),
+            ));
+        }
+
+        if findings.is_empty() {
+            Ok(CheckResult::pass_with_detail(
+                checked,
+                format!("{} overlapping date points", checked),
+            ))
+        } else {
+            Ok(CheckResult::fail(checked, findings))
+        }
+    }
+}
+
+/// S18: N random blocks: compare API vs CKB RPC (hash, txCount). Skipped without --rpc-url.
 pub struct RpcBlockSpotCheck;
 
 impl Check for RpcBlockSpotCheck {
@@ -1585,7 +1905,7 @@ impl Check for RpcBlockSpotCheck {
 }
 
 // ---------------------------------------------------------------------------
-// CKB RPC helpers (blocking, used only by S7)
+// CKB RPC helpers (blocking, used only by S18)
 // ---------------------------------------------------------------------------
 
 #[derive(serde::Serialize)]
@@ -1685,6 +2005,9 @@ pub fn api_checks() -> Vec<Box<dyn Check>> {
         Box::new(ChartNominalApcSane),
         Box::new(ChartInflationRateSane),
         Box::new(ChartHodlWaveConsistency),
+        Box::new(ChartKnowledgeCompositionExact),
+        Box::new(SecondaryIssuanceMatchesDaoStatistics),
+        Box::new(BurntSupplyGenesisInvariant),
         Box::new(RpcBlockSpotCheck),
     ]
 }
@@ -1709,7 +2032,7 @@ mod tests {
     #[test]
     fn test_api_checks_registered() {
         let checks = api_checks();
-        assert_eq!(checks.len(), 21);
+        assert_eq!(checks.len(), 24);
         // Verify names are unique
         let names: Vec<&str> = checks.iter().map(|c| c.name()).collect();
         let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
@@ -1722,6 +2045,9 @@ mod tests {
         assert!(names.contains(&"chart_nominal_apc_sane"));
         assert!(names.contains(&"chart_inflation_rate_sane"));
         assert!(names.contains(&"chart_hodl_wave_consistency"));
+        assert!(names.contains(&"chart_knowledge_composition_exact"));
+        assert!(names.contains(&"secondary_issuance_matches_dao_statistics"));
+        assert!(names.contains(&"burnt_supply_genesis_invariant"));
     }
 
     #[test]
@@ -1736,7 +2062,7 @@ mod tests {
             .filter(|c| c.tier() == CheckTier::Sampling)
             .count();
         assert_eq!(fast_count, 6);
-        assert_eq!(sampling_count, 15);
+        assert_eq!(sampling_count, 18);
     }
 
     #[test]
@@ -1812,5 +2138,30 @@ mod tests {
         let mut values = std::collections::HashMap::new();
         values.insert("holderCount".to_string(), "42".to_string());
         assert_eq!(validate_required_holder_count(&values), None);
+    }
+
+    #[test]
+    fn test_parse_ckb_to_shannons_parses_exact_values() {
+        assert_eq!(parse_ckb_to_shannons("1"), Some(100_000_000));
+        assert_eq!(parse_ckb_to_shannons("1.5"), Some(150_000_000));
+        assert_eq!(parse_ckb_to_shannons("1.00000001"), Some(100_000_001));
+        assert_eq!(parse_ckb_to_shannons("0"), Some(0));
+    }
+
+    #[test]
+    fn test_parse_ckb_to_shannons_rejects_invalid_values() {
+        assert_eq!(parse_ckb_to_shannons(""), None);
+        assert_eq!(parse_ckb_to_shannons("-1"), None);
+        assert_eq!(parse_ckb_to_shannons("1.123456789"), None);
+        assert_eq!(parse_ckb_to_shannons("1.2.3"), None);
+        assert_eq!(parse_ckb_to_shannons("abc"), None);
+    }
+
+    #[test]
+    fn test_shannons_to_rounded_whole_ckb_matches_chart_rounding() {
+        assert_eq!(shannons_to_rounded_whole_ckb(149_999_999), Some(1));
+        assert_eq!(shannons_to_rounded_whole_ckb(150_000_000), Some(2));
+        assert_eq!(shannons_to_rounded_whole_ckb(0), Some(0));
+        assert_eq!(shannons_to_rounded_whole_ckb(-1), None);
     }
 }

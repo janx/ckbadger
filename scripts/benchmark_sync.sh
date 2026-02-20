@@ -5,8 +5,12 @@ set -e
 START_BLOCK=0
 END_BLOCK=10000000
 CHECKPOINTS="1000000,5000000,10000000"
-OUTPUT_FILE="benchmark_results.csv"
 QUICK_MODE=false
+
+OUTPUT_DIR="${OUTPUT_DIR:-artifacts/perf}"
+RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
+OUTPUT_FILE=""
+SUMMARY_FILE=""
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -26,32 +30,35 @@ OPTIONS:
                          (default: 1000000,5000000,10000000)
   --quick                Quick mode: sync first 100K blocks only
                          (sets --end 100000 --checkpoints 50000,100000)
-  --output FILE          Output CSV file (default: benchmark_results.csv)
+  --output FILE          Output CSV file (default: artifacts/perf/benchmark_sync_<timestamp>.csv)
+  --output-dir DIR       Output directory for generated artifacts (default: artifacts/perf)
   --help                 Show this help message
 
 ENVIRONMENT VARIABLES:
   CKBADGER_DATA_PATH     Path to ckbadger-store RocksDB data (required)
   CKB_RPC_URL            CKB node RPC URL (optional, for reference)
+  OUTPUT_DIR             Default output directory (overridden by --output-dir)
 
 EXAMPLES:
   # Full benchmark with default checkpoints
   ./scripts/benchmark_sync.sh
 
-  # Quick test for CI
+  # Quick test
   ./scripts/benchmark_sync.sh --quick
 
   # Custom checkpoints
   ./scripts/benchmark_sync.sh --checkpoints "500000,1000000,2000000"
 
-  # Custom output file
-  ./scripts/benchmark_sync.sh --output my_results.csv
+  # Custom output directory
+  ./scripts/benchmark_sync.sh --output-dir artifacts/perf
 
 NOTES:
   - This script monitors a running indexer process
   - It does NOT start or stop the indexer
   - Requires CKBADGER_DATA_PATH environment variable
+  - Requires indexer logs available at /tmp/ckbadger-indexer.log
   - Outputs CSV format with columns:
-    checkpoint, blocks_synced, duration_sec, blocks_per_sec, memory_mb
+    checkpoint,blocks_synced,duration_sec,blocks_per_sec,memory_mb
 
 EOF
 }
@@ -92,6 +99,10 @@ while [[ $# -gt 0 ]]; do
             OUTPUT_FILE="$2"
             shift 2
             ;;
+        --output-dir)
+            OUTPUT_DIR="$2"
+            shift 2
+            ;;
         --help)
             print_help
             exit 0
@@ -109,15 +120,25 @@ if [ -z "$CKBADGER_DATA_PATH" ]; then
     exit 1
 fi
 
+if [ -z "$OUTPUT_FILE" ]; then
+    OUTPUT_FILE="${OUTPUT_DIR}/benchmark_sync_${RUN_ID}.csv"
+fi
+
+if [ -z "$SUMMARY_FILE" ]; then
+    SUMMARY_FILE="${OUTPUT_DIR}/benchmark_sync_${RUN_ID}.md"
+fi
+
+mkdir -p "$(dirname "$OUTPUT_FILE")"
+mkdir -p "$(dirname "$SUMMARY_FILE")"
+
 get_tip_block() {
-    # Read tip block from the running indexer's log output or RocksDB
-    # The indexer logs tip block periodically; we parse the most recent one
-    local pid=$(get_indexer_pid)
+    local pid
+    pid=$(get_indexer_pid)
     if [ -z "$pid" ]; then
         echo ""
         return
     fi
-    # Try reading from /proc/<pid>/fd/1 or fall back to log file
+
     local log_file="/tmp/ckbadger-indexer.log"
     if [ -f "$log_file" ]; then
         grep -oP 'tip_block_number=\K[0-9]+' "$log_file" 2>/dev/null | tail -1
@@ -134,7 +155,8 @@ get_memory_mb() {
     fi
 
     if command -v ps &> /dev/null; then
-        local rss=$(ps -o rss= -p "$pid" 2>/dev/null || echo "0")
+        local rss
+        rss=$(ps -o rss= -p "$pid" 2>/dev/null || echo "0")
         echo $((rss / 1024))
     else
         echo "0"
@@ -153,10 +175,12 @@ else
 fi
 
 log_info "Benchmark Configuration:"
+log_info "  Run ID: $RUN_ID"
 log_info "  Start Block: $START_BLOCK"
 log_info "  End Block: $END_BLOCK"
 log_info "  Checkpoints: $CHECKPOINTS"
 log_info "  Output File: $OUTPUT_FILE"
+log_info "  Summary File: $SUMMARY_FILE"
 log_info "  Data Path: $CKBADGER_DATA_PATH"
 if [ "$QUICK_MODE" = true ]; then
     log_info "  Mode: QUICK (100K blocks)"
@@ -243,16 +267,38 @@ done
 TOTAL_TIME=$(($(date +%s) - BENCHMARK_START_TIME))
 FINAL_TIP=$(get_tip_block)
 TOTAL_BLOCKS=$((FINAL_TIP - INITIAL_TIP))
+OVERALL_RATE=0
+if [ "$TOTAL_TIME" -gt 0 ]; then
+    OVERALL_RATE=$((TOTAL_BLOCKS / TOTAL_TIME))
+fi
+
+{
+    echo "# Sync Benchmark Summary"
+    echo ""
+    echo "- Run ID: $RUN_ID"
+    echo "- Generated at (UTC): $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "- Data path: \`$CKBADGER_DATA_PATH\`"
+    echo "- Start tip: $INITIAL_TIP"
+    echo "- End tip: $FINAL_TIP"
+    echo "- Total blocks synced: $TOTAL_BLOCKS"
+    echo "- Total duration (sec): $TOTAL_TIME"
+    echo "- Overall rate (blocks/sec): $OVERALL_RATE"
+    echo "- CSV artifact: \`$OUTPUT_FILE\`"
+    echo ""
+    echo "## Checkpoint Results"
+    echo ""
+    echo "\`\`\`csv"
+    cat "$OUTPUT_FILE"
+    echo "\`\`\`"
+} > "$SUMMARY_FILE"
 
 echo "" >&2
 log_info "Benchmark Complete!"
 log_info "  Total blocks synced: $TOTAL_BLOCKS"
 log_info "  Total time: ${TOTAL_TIME}s"
-if [ "$TOTAL_TIME" -gt 0 ]; then
-    OVERALL_RATE=$((TOTAL_BLOCKS / TOTAL_TIME))
-    log_info "  Overall rate: ${OVERALL_RATE} blocks/sec"
-fi
+log_info "  Overall rate: ${OVERALL_RATE} blocks/sec"
 log_info "  Results saved to: $OUTPUT_FILE"
+log_info "  Summary saved to: $SUMMARY_FILE"
 echo "" >&2
 
 log_info "Results:"

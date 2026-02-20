@@ -1,119 +1,102 @@
 # Performance Benchmark Results
 
-> **Note (2026-02)**: This document records historical benchmarks from the PostgreSQL-based indexer (Jan 2026). The storage engine has since been replaced with embedded RocksDB (`ckbadger-store`), which eliminated the PostgreSQL COPY bottleneck described below. These results are preserved for historical reference only and do not reflect current architecture or performance.
+> Last updated: 2026-02-20
+>
+> This document is the source of truth for `Unrivaled Speed` measurement in the RocksDB-based
+> architecture. Historical PostgreSQL numbers are retained only for context.
 
-## Overview
+## Goal
 
-This document tracks the performance of the CKB indexer with the in-memory LiveCellStore optimization.
+Track performance using a reproducible localhost protocol and publish comparable benchmark artifacts
+for every performance-affecting change.
 
-**Target**: 5000+ blocks/sec sustained at 10M block height
-**Achieved**: ~1500-2800 blocks/sec (40-150% improvement over baseline)
+## Current Architecture Baseline (RocksDB)
 
-## Benchmark Configuration
+All current benchmarks must target:
 
-### Hardware
+- `ckbadger-store` (embedded RocksDB)
+- `ckbadger-indexer` pipeline mode
+- `ckbadger-api` `/api/v1` endpoints
 
-- CPU: Linux x86_64 (development machine)
-- RAM: Available for 8GB LiveCellStore limit
-- Storage: Local SSD
+## Measurement Protocol
 
-### Software
+### 1) Sync Throughput
 
-- PostgreSQL version: 15 (Docker)
-- CKB node version: v0.204.0
-- Indexer configuration:
-  - `--live-cell-flush-interval`: 100 batches (default)
-  - `--pipeline-enabled`: true
-  - `--batch-size`: 10000
-  - `--copy-pool-size`: 24
-  - `CKB_DATA_PATH`: not set (using JSON-RPC, not direct RocksDB reads)
+Prerequisites:
 
-## Benchmark Results (2026-01-28)
+- `CKBADGER_DATA_PATH` points to the benchmark database
+- indexer logs are written to `/tmp/ckbadger-indexer.log`
 
-### Checkpoint Performance
+Commands:
 
-| Checkpoint | Blocks Synced | Duration (sec) | Blocks/sec | Memory (MB) | Live Cells |
-| ---------- | ------------- | -------------- | ---------- | ----------- | ---------- |
-| 1M         | 1,000,000     | ~470           | ~2,100     | 3,400       | 1,400,000  |
-| 2M         | 1,000,000     | ~340           | ~2,900     | 3,900       | 2,600,000  |
-| 3M         | 1,000,000     | ~360           | ~2,800     | 4,100       | 3,900,000  |
-| 4M         | 1,000,000     | ~530           | ~1,900     | 4,200       | 5,400,000  |
-| 5M         | 1,000,000     | ~640           | ~1,550     | 6,500       | 7,200,000  |
+```bash
+# Example: start indexer and tee logs
+CKBADGER_DATA_PATH=./data/ckbadger-store \
+  cargo run -p ckbadger-indexer 2>&1 | tee /tmp/ckbadger-indexer.log
 
-**Overall Average**: ~2,000 blocks/sec from genesis to 5M blocks
+# Run sync benchmark monitor (quick mode)
+CKBADGER_DATA_PATH=./data/ckbadger-store \
+  ./scripts/benchmark_sync.sh --quick --output-dir artifacts/perf
+```
 
-### Performance by Block Range
+Artifacts:
 
-| Block Range | Average Rate | Notes                      |
-| ----------- | ------------ | -------------------------- |
-| 0 - 1M      | ~2,100 blk/s | Initial sync, genesis data |
-| 1M - 3M     | ~2,800 blk/s | Peak performance           |
-| 3M - 4M     | ~1,900 blk/s | Increasing live cells      |
-| 4M - 5M     | ~1,550 blk/s | 7M+ live cells             |
+- `artifacts/perf/benchmark_sync_<timestamp>.csv`
+- `artifacts/perf/benchmark_sync_<timestamp>.md`
 
-### Memory Usage
+### 2) API Latency (p50/p95/p99)
 
-- Peak memory during sync: **6.5 GB** (at 5M blocks)
-- LiveCellStore memory: ~6 GB for 7.2M live cells
-- Memory per live cell: ~850 bytes (including HashMap overhead)
-- Well under 8GB limit throughout sync
+Commands:
 
-### Comparison to Baseline
+```bash
+API_URL=http://localhost:3001 ./scripts/run-load-tests.sh quick --output-dir artifacts/perf
+```
 
-| Metric       | Baseline (8.5M blocks) | Optimized (5M blocks) | Improvement  |
-| ------------ | ---------------------- | --------------------- | ------------ |
-| Sync rate    | ~1,100 blk/s           | ~1,550-2,800 blk/s    | 40-150%      |
-| Memory       | N/A                    | 6.5 GB                | Within limit |
-| Cell lookups | DB queries             | In-memory O(1)        | ~1000x       |
+Artifacts:
 
-## Analysis
+- `artifacts/perf/load_test_<timestamp>.log`
+- `artifacts/perf/load_test_<timestamp>_k6_summary.json` (when k6 tests run)
+- `artifacts/perf/load_test_<timestamp>.md`
 
-### Why Target Not Fully Met
+### 3) Correctness Guardrail
 
-The 5000+ blocks/sec target was not achieved. Analysis:
+Commands:
 
-1. **DB Write Bottleneck**: Even with bulk sync mode, COPY operations to PostgreSQL take ~10-13 seconds per 10K block batch
-2. **Live Cell Growth**: As live cells grow (7M+ at 5M blocks), memory operations increase
-3. **DAO Statistics**: DAO stats calculation adds overhead every 10K blocks
+```bash
+cargo run -p ckbadger-indexer -- verify --depth fast
+# For DAO/supply/aggregate changes:
+cargo run -p ckbadger-indexer -- verify --depth sampling
+```
 
-### What Worked Well
+Requirement:
 
-1. **In-Memory LiveCellStore**: Eliminated DB lookups for cell consumption
-2. **Bulk Sync Mode**: Skipped UPDATE/DELETE operations during bulk sync
-3. **Deferred Indexes**: 258 indexes dropped during initial sync
-4. **Memory Efficiency**: 6.5GB for 7.2M cells (well under 8GB limit)
+- performance optimization is not accepted if verify checks regress.
 
-### Potential Further Optimizations
+## Reporting Template (Fill Per Run)
 
-1. **Parallel COPY**: Increase `copy_pool_size` beyond 24
-2. **Batch Size Tuning**: Experiment with larger batch sizes
-3. **PostgreSQL Tuning**: Apply server-level tuning (wal_level=minimal, fsync=off)
-4. **Hardware**: NVMe SSD, more RAM for PostgreSQL shared_buffers
+| Metric                | Result | Target                                   | Notes                            |
+| --------------------- | ------ | ---------------------------------------- | -------------------------------- |
+| Sync throughput (EMA) | TODO   | maximize without correctness regressions | include block range and hardware |
+| API latency p50       | TODO   | <= 10ms                                  | warm cache                       |
+| API latency p95       | TODO   | <= 50ms                                  | warm cache                       |
+| API latency p99       | TODO   | <= 100ms                                 | warm cache                       |
+| Verify failures       | TODO   | 0                                        | include `fast` / `sampling`      |
 
-## Crash Recovery
+## CI / Nightly
 
-- LiveCellStore persists to RocksDB on disk, enabling instant restart
-- Periodic flush ensures durability (every 100 batches by default)
+Nightly performance smoke runs are defined in `.github/workflows/perf-nightly.yml`.
 
-## Conclusion
+- Trigger: schedule + manual dispatch
+- Output: `artifacts/perf/*` uploaded as workflow artifacts
+- Recommended secret: `PERF_API_URL` (target API base URL)
 
-The LiveCellStore optimization provides a **40-150% improvement** over the baseline sync rate. While the 5000+ blocks/sec target was not achieved, the implementation:
+## Legacy Benchmarks (PostgreSQL Era)
 
-1. ✅ Eliminates the UPDATE bottleneck on the cells table
-2. ✅ Provides O(1) cell lookups via in-memory HashMap
-3. ✅ Stays well under the 8GB memory limit
-4. ✅ Maintains data integrity with periodic flushes
-5. ✅ Supports crash recovery via DB rebuild
+The previous benchmark set (2026-01-28, PostgreSQL/COPY bottleneck) is no longer representative of
+current architecture and should not be used for decision making.
 
-The remaining bottleneck is PostgreSQL COPY performance, which could be addressed with:
+Legacy snapshot summary:
 
-- Server-level PostgreSQL tuning
-- Hardware improvements (faster storage)
-- Further parallelization of COPY operations
-- **Direct CKB RocksDB reads** (`CKB_DATA_PATH`): Eliminates RPC latency entirely (~0.1ms vs ~15ms per block). This was not enabled during the benchmark above but is expected to significantly improve fetch stage throughput.
-
----
-
-_Last updated: 2026-01-28_
-_Benchmark: Fresh sync from genesis to 5M blocks_
-_Status: COMPLETE - Target partially met (40-150% improvement achieved)_
+- Reported range: ~1500-2800 blocks/sec
+- Primary bottleneck: PostgreSQL COPY/write path
+- Status: historical reference only

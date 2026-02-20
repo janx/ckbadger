@@ -1,0 +1,88 @@
+name: Performance Nightly
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_url:
+        description: 'Target API base URL (for example: http://localhost:3001)'
+        required: false
+        type: string
+      test_type:
+        description: 'Load test type to run'
+        required: false
+        default: quick
+        type: choice
+        options:
+          - quick
+          - full
+          - wrk
+          - all
+  schedule:
+    - cron: '0 2 * * *'
+
+jobs:
+  perf-smoke:
+    name: Performance Smoke
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve runtime parameters
+        id: params
+        shell: bash
+        run: |
+          TEST_TYPE="quick"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.test_type }}" ]; then
+            TEST_TYPE="${{ inputs.test_type }}"
+          fi
+
+          API_URL="${{ inputs.api_url }}"
+          if [ -z "$API_URL" ]; then
+            API_URL="${{ secrets.PERF_API_URL }}"
+          fi
+
+          echo "test_type=$TEST_TYPE" >> "$GITHUB_OUTPUT"
+          echo "api_url=$API_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare artifact directory
+        run: mkdir -p artifacts/perf
+
+      - name: Document skipped run when API URL is missing
+        if: steps.params.outputs.api_url == ''
+        shell: bash
+        run: |
+          cat > artifacts/perf/skipped.md << 'EOT'
+          # Performance Nightly Skipped
+
+          No API target URL was configured.
+
+          Configure one of:
+
+          - `workflow_dispatch` input `api_url`
+          - repository secret `PERF_API_URL`
+
+          Then re-run this workflow.
+          EOT
+
+      - name: Setup k6
+        if: steps.params.outputs.api_url != '' && (steps.params.outputs.test_type == 'quick' || steps.params.outputs.test_type == 'full' || steps.params.outputs.test_type == 'all')
+        uses: grafana/setup-k6-action@v1
+
+      - name: Run API load tests
+        if: steps.params.outputs.api_url != ''
+        env:
+          API_URL: ${{ steps.params.outputs.api_url }}
+        run: |
+          ./scripts/run-load-tests.sh "${{ steps.params.outputs.test_type }}" --output-dir artifacts/perf
+
+      - name: Upload performance artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-nightly-${{ github.run_number }}
+          path: artifacts/perf/
+          retention-days: 14
