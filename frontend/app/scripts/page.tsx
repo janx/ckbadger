@@ -15,10 +15,12 @@ import { PageHeader, Badge } from '@/components/ui/page-header';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, KnownScript } from '@/lib/api';
-import { formatCkbCompact } from '@/lib/utils';
+import { formatCkbCompact, truncateHash } from '@/lib/utils';
 
 type SortDirection = 'asc' | 'desc';
 type ScriptSortKey = 'name' | 'kind' | 'description' | 'occupied' | 'capacity' | 'occupiedRatio';
+const UNKNOWN_SCRIPT_NAME = 'unknown';
+const UNLABELED_SCRIPT_LABEL = 'Unlabeled';
 
 export default function ScriptsPage() {
   const pagination = useCursorPagination();
@@ -117,6 +119,15 @@ export default function ScriptsPage() {
   );
 
   const scripts = data?.data ?? [];
+  const hasKnownScriptName = (name: string | null | undefined): boolean =>
+    Boolean(name && name.trim() && name.trim().toLowerCase() !== UNKNOWN_SCRIPT_NAME);
+  const getScriptHashTypeLabel = (script: KnownScript): string => script.hashType ?? 'type';
+  const getScriptRefDisplay = (script: KnownScript): string =>
+    `${getScriptHashTypeLabel(script)} · ${truncateHash(script.codeHash, 10, 8)}`;
+  const getScriptRefFull = (script: KnownScript): string => {
+    const hashType = getScriptHashTypeLabel(script);
+    return `${hashType}:${script.codeHash}`;
+  };
   const isScriptHashType = (value: string | null): value is 'type' | 'data' | 'data1' | 'data2' =>
     value === 'type' || value === 'data' || value === 'data1' || value === 'data2';
   const normalizeScriptKind = (value: string | null): 'lock' | 'type' | 'both' | undefined => {
@@ -125,8 +136,8 @@ export default function ScriptsPage() {
     return undefined;
   };
   const getScriptHref = (script: KnownScript): string => {
-    if (script.name !== 'Unknown') {
-      return `/scripts/${encodeURIComponent(script.name)}`;
+    if (hasKnownScriptName(script.name)) {
+      return `/scripts/${encodeURIComponent(script.name!.trim())}`;
     }
 
     const query = new URLSearchParams();
@@ -219,12 +230,22 @@ export default function ScriptsPage() {
                   <TerminalRow key={script.codeHash}>
                     <div className="flex items-center">
                       <div className="w-44">
-                        <Link
-                          href={getScriptHref(script)}
-                          className="text-terminal-green font-medium hover:underline"
-                        >
-                          {script.name}
-                        </Link>
+                        {hasKnownScriptName(script.name) ? (
+                          <Link
+                            href={getScriptHref(script)}
+                            className="text-terminal-green font-medium hover:underline"
+                          >
+                            {script.name!.trim()}
+                          </Link>
+                        ) : (
+                          <Link
+                            href={getScriptHref(script)}
+                            className="hover:text-terminal-green font-medium text-slate-300 hover:underline"
+                            title={getScriptRefFull(script)}
+                          >
+                            {UNLABELED_SCRIPT_LABEL}
+                          </Link>
+                        )}
                       </div>
                       <div className="w-16">
                         {script.scriptKind ? (
@@ -236,7 +257,16 @@ export default function ScriptsPage() {
                         )}
                       </div>
                       <div className="flex-1 truncate px-4 text-sm text-slate-400">
-                        {script.description}
+                        {hasKnownScriptName(script.name) ? (
+                          script.description
+                        ) : (
+                          <span
+                            title={getScriptRefFull(script)}
+                            className="font-mono text-xs text-slate-500"
+                          >
+                            {getScriptRefDisplay(script)}
+                          </span>
+                        )}
                       </div>
                       <div className="w-28 text-right font-mono text-slate-300">
                         {(() => {

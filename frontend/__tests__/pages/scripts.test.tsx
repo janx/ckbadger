@@ -133,6 +133,9 @@ describe('ScriptsPage', () => {
 
   it('routes Unknown script entries to code-hash detail page', async () => {
     const unknownCodeHash = '0x010445a300000000000000000000000000000000000000000000000000000001';
+    const unknownScriptRefLabel = 'Unlabeled';
+    const unknownScriptRefDisplay = 'type · 0x010445a3...00000001';
+    const unknownScriptRefFull = `type:${unknownCodeHash}`;
     vi.mocked(api.getScripts).mockResolvedValue({
       data: [
         {
@@ -170,12 +173,17 @@ describe('ScriptsPage', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByRole('link', { name: 'Unknown' })).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: unknownScriptRefLabel })).toBeInTheDocument();
     });
 
-    expect(screen.getByRole('link', { name: 'Unknown' })).toHaveAttribute(
+    expect(screen.getByText(unknownScriptRefDisplay)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: unknownScriptRefLabel })).toHaveAttribute(
       'href',
       `/script/${encodeURIComponent(unknownCodeHash)}?hashType=type&kind=type`
+    );
+    expect(screen.getByRole('link', { name: unknownScriptRefLabel })).toHaveAttribute(
+      'title',
+      unknownScriptRefFull
     );
   });
 });
