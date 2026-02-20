@@ -93,6 +93,33 @@ describe('CommandPalette', () => {
     expect(pushMock).toHaveBeenCalledWith('/assets');
   });
 
+  it('navigates to scripts with g s chord', () => {
+    render(<CommandPalette />);
+
+    fireEvent.keyDown(window, { key: 'g' });
+    fireEvent.keyDown(window, { key: 's' });
+
+    expect(pushMock).toHaveBeenCalledWith('/scripts');
+  });
+
+  it('navigates to home with g h chord', () => {
+    render(<CommandPalette />);
+
+    fireEvent.keyDown(window, { key: 'g' });
+    fireEvent.keyDown(window, { key: 'h' });
+
+    expect(pushMock).toHaveBeenCalledWith('/');
+  });
+
+  it('navigates to charts with g c chord', () => {
+    render(<CommandPalette />);
+
+    fireEvent.keyDown(window, { key: 'g' });
+    fireEvent.keyDown(window, { key: 'c' });
+
+    expect(pushMock).toHaveBeenCalledWith('/charts');
+  });
+
   it('opens shortcut help panel with question mark', () => {
     render(<CommandPalette />);
 

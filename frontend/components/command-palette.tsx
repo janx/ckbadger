@@ -35,10 +35,13 @@ const COMMANDS: CommandItem[] = [
 const GOTO_CHORD_TIMEOUT_MS = 1200;
 
 const GOTO_SHORTCUTS: Record<string, { href?: string; focusSearch?: boolean }> = {
+  h: { href: '/' },
   b: { href: '/blocks' },
   t: { href: '/transactions' },
   d: { href: '/dao' },
   a: { href: '/assets' },
+  s: { href: '/scripts' },
+  c: { href: '/charts' },
 };
 
 const SHORTCUT_HINTS: ShortcutHint[] = [
@@ -49,6 +52,9 @@ const SHORTCUT_HINTS: ShortcutHint[] = [
   { keys: 'g t', description: 'Go to Transactions' },
   { keys: 'g d', description: 'Go to DAO' },
   { keys: 'g a', description: 'Go to Assets' },
+  { keys: 'g s', description: 'Go to Scripts' },
+  { keys: 'g c', description: 'Go to Charts' },
+  { keys: 'g h', description: 'Go to Home' },
   { keys: 'Esc', description: 'Close panel' },
 ];
 
