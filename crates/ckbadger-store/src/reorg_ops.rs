@@ -672,6 +672,16 @@ impl CkbadgerStore {
             "Rollback cleanup address balance rebuild complete"
         );
 
+        // Rebuild script usage aggregates from live/consumed cells so script_info
+        // remains consistent after startup rollback/reorg replay.
+        info!("Rollback cleanup rebuilding script_info from cells");
+        let rebuilt_script_infos = self.rebuild_script_infos_from_cells()?;
+        info!(
+            rebuilt_script_infos,
+            elapsed_secs = format!("{:.1}", rollback_started_at.elapsed().as_secs_f64()),
+            "Rollback cleanup script info rebuild complete"
+        );
+
         // Keep sync_status tip aligned with the rolled-back chain head.
         let tip_hash = if rollback_to >= 0 {
             self.get_block_header(rollback_to)?
@@ -716,7 +726,9 @@ mod tests {
     use crate::batch::StoreBatch;
     use crate::keys;
     use crate::store::CkbadgerStore;
-    use crate::types::{AddressBalance, CachedBlockHeader, DaoDepositCacheEntry, LiveCellInfo};
+    use crate::types::{
+        AddressBalance, CachedBlockHeader, DaoDepositCacheEntry, LiveCellInfo, ScriptInfo,
+    };
 
     #[test]
     fn test_should_delete_stats_for_replay_daily_prefix() {
@@ -902,6 +914,91 @@ mod tests {
         assert_eq!(rebuilt.balance, 100);
         assert_eq!(rebuilt.occupied_capacity, 100);
         assert_eq!(rebuilt.live_cells_count, 1);
+    }
+
+    #[test]
+    fn test_rollback_rebuilds_script_info_from_cells() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let lock_code_hash = vec![0x7A; 32];
+
+        let header1 = CachedBlockHeader {
+            hash: vec![0x01; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+        let header2 = CachedBlockHeader {
+            hash: vec![0x02; 32],
+            timestamp: 1_700_000_010_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+        let keep_live = LiveCellInfo {
+            capacity: 100,
+            created_at_block: 1,
+            lock_script_hash: vec![0xAA; 32],
+            lock_code_hash: lock_code_hash.clone(),
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 60,
+        };
+        let rollback_live = LiveCellInfo {
+            capacity: 300,
+            created_at_block: 2,
+            lock_script_hash: vec![0xBB; 32],
+            lock_code_hash: lock_code_hash.clone(),
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 180,
+        };
+
+        let stale_script_info = ScriptInfo {
+            code_hash: lock_code_hash.clone(),
+            hash_type: 1,
+            name: Some("Rollback Script".to_string()),
+            lock_cells_count: 99,
+            lock_live_cells_count: 99,
+            lock_capacity_sum: 9_999,
+            lock_live_capacity_sum: 9_999,
+            lock_occupied_capacity_sum: 8_888,
+            lock_live_occupied_capacity_sum: 8_888,
+            ..Default::default()
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(1, &header1);
+        batch.put_block_header(2, &header2);
+        batch.put_cell(&[0x10; 32], 0, &keep_live);
+        batch.put_cell(&[0x20; 32], 0, &rollback_live);
+        batch.put_script_info(&lock_code_hash, &stale_script_info);
+        batch.commit().unwrap();
+
+        store.rollback_to_block(1).unwrap();
+
+        let rebuilt = store.get_script_info(&lock_code_hash).unwrap().unwrap();
+        assert_eq!(rebuilt.name.as_deref(), Some("Rollback Script"));
+        assert_eq!(rebuilt.hash_type, 1);
+        assert_eq!(rebuilt.lock_cells_count, 1);
+        assert_eq!(rebuilt.lock_live_cells_count, 1);
+        assert_eq!(rebuilt.lock_capacity_sum, 100);
+        assert_eq!(rebuilt.lock_live_capacity_sum, 100);
+        assert_eq!(rebuilt.lock_occupied_capacity_sum, 60);
+        assert_eq!(rebuilt.lock_live_occupied_capacity_sum, 60);
     }
 
     #[test]

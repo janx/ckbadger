@@ -447,6 +447,21 @@ describe('api', () => {
 
       await expect(api.getNetworkStats()).rejects.toThrow('API error: 500');
     });
+
+    it('includes backend error message when present', async () => {
+      server.use(
+        http.get('*/api/v1/statistics/network', () => {
+          return HttpResponse.json(
+            { error: 'internal_error', message: 'negative live capacity in list scripts' },
+            { status: 500 }
+          );
+        })
+      );
+
+      await expect(api.getNetworkStats()).rejects.toThrow(
+        'API error: 500 - negative live capacity in list scripts'
+      );
+    });
   });
 
   describe('specific endpoints', () => {

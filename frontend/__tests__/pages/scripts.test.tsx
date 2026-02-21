@@ -186,4 +186,19 @@ describe('ScriptsPage', () => {
       unknownScriptRefFull
     );
   });
+
+  it('shows API errors instead of empty-state message', async () => {
+    vi.mocked(api.getScripts).mockRejectedValue(
+      new Error('API error: 500 - negative live capacity in list scripts')
+    );
+
+    render(<ScriptsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Failed to load scripts')).toBeInTheDocument();
+    });
+
+    expect(screen.getByText(/negative live capacity in list scripts/i)).toBeInTheDocument();
+    expect(screen.queryByText('No scripts found')).toBeNull();
+  });
 });

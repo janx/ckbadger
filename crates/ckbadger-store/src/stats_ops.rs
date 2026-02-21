@@ -850,11 +850,386 @@ impl CkbadgerStore {
         }
         Ok(results)
     }
+
+    /// Rebuild script usage aggregates from current cell state.
+    ///
+    /// Source of truth:
+    /// - live cells: contribute to both total and live counters
+    /// - consumed cells: contribute to total counters only
+    ///
+    /// Metadata fields (name/category/website/description/hash_type/deployment refs) are preserved.
+    pub fn rebuild_script_infos_from_cells(&self) -> anyhow::Result<usize> {
+        use std::collections::{HashMap, HashSet};
+
+        fn reset_usage(info: &mut ScriptInfo) {
+            info.cells_count = 0;
+            info.capacity_used = 0;
+            info.lock_cells_count = 0;
+            info.lock_live_cells_count = 0;
+            info.lock_capacity_sum = 0;
+            info.lock_live_capacity_sum = 0;
+            info.lock_occupied_capacity_sum = 0;
+            info.lock_live_occupied_capacity_sum = 0;
+            info.type_cells_count = 0;
+            info.type_live_cells_count = 0;
+            info.type_capacity_sum = 0;
+            info.type_live_capacity_sum = 0;
+            info.type_occupied_capacity_sum = 0;
+            info.type_live_occupied_capacity_sum = 0;
+        }
+
+        fn bytes_to_hex(bytes: &[u8]) -> String {
+            use std::fmt::Write as _;
+
+            let mut out = String::with_capacity(bytes.len() * 2);
+            for b in bytes {
+                let _ = write!(&mut out, "{:02x}", b);
+            }
+            out
+        }
+
+        fn checked_add_i64(
+            code_hash: &[u8],
+            script_kind: &str,
+            metric: &str,
+            current: i64,
+            delta: i64,
+        ) -> anyhow::Result<i64> {
+            let next = current.checked_add(delta).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "script rebuild overflow: code_hash=0x{}, kind={}, metric={}, current={}, delta={}",
+                    bytes_to_hex(code_hash),
+                    script_kind,
+                    metric,
+                    current,
+                    delta
+                )
+            })?;
+            if next < 0 {
+                anyhow::bail!(
+                    "script rebuild underflow: code_hash=0x{}, kind={}, metric={}, current={}, delta={}, next={}",
+                    bytes_to_hex(code_hash),
+                    script_kind,
+                    metric,
+                    current,
+                    delta,
+                    next
+                );
+            }
+            Ok(next)
+        }
+
+        fn apply_script_cell_usage(
+            info: &mut ScriptInfo,
+            is_type: bool,
+            capacity: i64,
+            occupied_capacity: i64,
+            is_live: bool,
+        ) -> anyhow::Result<()> {
+            if capacity < 0 {
+                anyhow::bail!(
+                    "script rebuild found negative cell capacity: code_hash=0x{}, capacity={}",
+                    bytes_to_hex(&info.code_hash),
+                    capacity
+                );
+            }
+            if occupied_capacity < 0 {
+                anyhow::bail!(
+                    "script rebuild found negative occupied capacity: code_hash=0x{}, occupied_capacity={}",
+                    bytes_to_hex(&info.code_hash),
+                    occupied_capacity
+                );
+            }
+            if occupied_capacity > capacity {
+                anyhow::bail!(
+                    "script rebuild found occupied capacity exceeding capacity: code_hash=0x{}, occupied_capacity={}, capacity={}",
+                    bytes_to_hex(&info.code_hash),
+                    occupied_capacity,
+                    capacity
+                );
+            }
+
+            let live_count_delta = if is_live { 1 } else { 0 };
+            let live_cap_delta = if is_live { capacity } else { 0 };
+            let live_occupied_delta = if is_live { occupied_capacity } else { 0 };
+
+            if is_type {
+                info.type_cells_count = checked_add_i64(
+                    &info.code_hash,
+                    "type",
+                    "cells_count",
+                    info.type_cells_count,
+                    1,
+                )?;
+                info.type_live_cells_count = checked_add_i64(
+                    &info.code_hash,
+                    "type",
+                    "live_cells_count",
+                    info.type_live_cells_count,
+                    live_count_delta,
+                )?;
+                info.type_capacity_sum = checked_add_i64(
+                    &info.code_hash,
+                    "type",
+                    "capacity_sum",
+                    info.type_capacity_sum,
+                    capacity,
+                )?;
+                info.type_live_capacity_sum = checked_add_i64(
+                    &info.code_hash,
+                    "type",
+                    "live_capacity_sum",
+                    info.type_live_capacity_sum,
+                    live_cap_delta,
+                )?;
+                info.type_occupied_capacity_sum = checked_add_i64(
+                    &info.code_hash,
+                    "type",
+                    "occupied_capacity_sum",
+                    info.type_occupied_capacity_sum,
+                    occupied_capacity,
+                )?;
+                info.type_live_occupied_capacity_sum = checked_add_i64(
+                    &info.code_hash,
+                    "type",
+                    "live_occupied_capacity_sum",
+                    info.type_live_occupied_capacity_sum,
+                    live_occupied_delta,
+                )?;
+                if info.type_occupied_capacity_sum > info.type_capacity_sum {
+                    anyhow::bail!(
+                        "script rebuild invalid type totals: code_hash=0x{}, occupied_capacity_sum={}, capacity_sum={}",
+                        bytes_to_hex(&info.code_hash),
+                        info.type_occupied_capacity_sum,
+                        info.type_capacity_sum
+                    );
+                }
+                if info.type_live_occupied_capacity_sum > info.type_live_capacity_sum {
+                    anyhow::bail!(
+                        "script rebuild invalid type live totals: code_hash=0x{}, live_occupied_capacity_sum={}, live_capacity_sum={}",
+                        bytes_to_hex(&info.code_hash),
+                        info.type_live_occupied_capacity_sum,
+                        info.type_live_capacity_sum
+                    );
+                }
+            } else {
+                info.lock_cells_count = checked_add_i64(
+                    &info.code_hash,
+                    "lock",
+                    "cells_count",
+                    info.lock_cells_count,
+                    1,
+                )?;
+                info.lock_live_cells_count = checked_add_i64(
+                    &info.code_hash,
+                    "lock",
+                    "live_cells_count",
+                    info.lock_live_cells_count,
+                    live_count_delta,
+                )?;
+                info.lock_capacity_sum = checked_add_i64(
+                    &info.code_hash,
+                    "lock",
+                    "capacity_sum",
+                    info.lock_capacity_sum,
+                    capacity,
+                )?;
+                info.lock_live_capacity_sum = checked_add_i64(
+                    &info.code_hash,
+                    "lock",
+                    "live_capacity_sum",
+                    info.lock_live_capacity_sum,
+                    live_cap_delta,
+                )?;
+                info.lock_occupied_capacity_sum = checked_add_i64(
+                    &info.code_hash,
+                    "lock",
+                    "occupied_capacity_sum",
+                    info.lock_occupied_capacity_sum,
+                    occupied_capacity,
+                )?;
+                info.lock_live_occupied_capacity_sum = checked_add_i64(
+                    &info.code_hash,
+                    "lock",
+                    "live_occupied_capacity_sum",
+                    info.lock_live_occupied_capacity_sum,
+                    live_occupied_delta,
+                )?;
+                if info.lock_occupied_capacity_sum > info.lock_capacity_sum {
+                    anyhow::bail!(
+                        "script rebuild invalid lock totals: code_hash=0x{}, occupied_capacity_sum={}, capacity_sum={}",
+                        bytes_to_hex(&info.code_hash),
+                        info.lock_occupied_capacity_sum,
+                        info.lock_capacity_sum
+                    );
+                }
+                if info.lock_live_occupied_capacity_sum > info.lock_live_capacity_sum {
+                    anyhow::bail!(
+                        "script rebuild invalid lock live totals: code_hash=0x{}, live_occupied_capacity_sum={}, live_capacity_sum={}",
+                        bytes_to_hex(&info.code_hash),
+                        info.lock_live_occupied_capacity_sum,
+                        info.lock_live_capacity_sum
+                    );
+                }
+            }
+
+            info.cells_count = info
+                .lock_cells_count
+                .checked_add(info.type_cells_count)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "script rebuild cells_count overflow: code_hash=0x{}, lock_cells_count={}, type_cells_count={}",
+                        bytes_to_hex(&info.code_hash),
+                        info.lock_cells_count,
+                        info.type_cells_count
+                    )
+                })?;
+            info.capacity_used =
+                i128::from(info.lock_capacity_sum) + i128::from(info.type_capacity_sum);
+            Ok(())
+        }
+
+        let mut info_by_code_hash: HashMap<Vec<u8>, ScriptInfo> = HashMap::new();
+        for (key, mut info) in self.list_script_infos()? {
+            reset_usage(&mut info);
+            info_by_code_hash.insert(key, info);
+        }
+
+        let mut seen_consumed_outpoints: HashSet<Vec<u8>> = HashSet::new();
+        let live_iter = self.iterator_cf(self.cf_live_cells(), rocksdb::IteratorMode::Start);
+        for item in live_iter.flatten() {
+            let (key, value) = item;
+            let cell: LiveCellInfo = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize live cell while rebuilding script info: outpoint=0x{}, error={}",
+                    bytes_to_hex(&key),
+                    e
+                )
+            })?;
+
+            let lock_code_hash = cell.lock_code_hash.clone();
+            let lock_info = info_by_code_hash
+                .entry(lock_code_hash.clone())
+                .or_insert_with(|| ScriptInfo {
+                    code_hash: lock_code_hash,
+                    ..Default::default()
+                });
+            apply_script_cell_usage(
+                lock_info,
+                false,
+                cell.capacity,
+                cell.occupied_capacity,
+                true,
+            )?;
+
+            if let Some(type_code_hash) = cell.type_code_hash.clone() {
+                let type_info = info_by_code_hash
+                    .entry(type_code_hash.clone())
+                    .or_insert_with(|| ScriptInfo {
+                        code_hash: type_code_hash,
+                        ..Default::default()
+                    });
+                apply_script_cell_usage(
+                    type_info,
+                    true,
+                    cell.capacity,
+                    cell.occupied_capacity,
+                    true,
+                )?;
+            }
+        }
+
+        let consumed_iter =
+            self.iterator_cf(self.cf_consumed_cells(), rocksdb::IteratorMode::Start);
+        for item in consumed_iter.flatten() {
+            let (key, value) = item;
+            if !seen_consumed_outpoints.insert(key.to_vec()) {
+                continue;
+            }
+            let consumed = decode_consumed_cell_info(&value).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "failed to decode consumed cell while rebuilding script info: outpoint=0x{}",
+                    bytes_to_hex(&key)
+                )
+            })?;
+            let cell = consumed.cell;
+
+            let lock_code_hash = cell.lock_code_hash.clone();
+            let lock_info = info_by_code_hash
+                .entry(lock_code_hash.clone())
+                .or_insert_with(|| ScriptInfo {
+                    code_hash: lock_code_hash,
+                    ..Default::default()
+                });
+            apply_script_cell_usage(
+                lock_info,
+                false,
+                cell.capacity,
+                cell.occupied_capacity,
+                false,
+            )?;
+
+            if let Some(type_code_hash) = cell.type_code_hash.clone() {
+                let type_info = info_by_code_hash
+                    .entry(type_code_hash.clone())
+                    .or_insert_with(|| ScriptInfo {
+                        code_hash: type_code_hash,
+                        ..Default::default()
+                    });
+                apply_script_cell_usage(
+                    type_info,
+                    true,
+                    cell.capacity,
+                    cell.occupied_capacity,
+                    false,
+                )?;
+            }
+        }
+
+        let mut clear_batch = rocksdb::WriteBatch::default();
+        let mut cleared = 0usize;
+        let iter = self.iterator_cf(self.cf_script_info(), rocksdb::IteratorMode::Start);
+        for item in iter.flatten() {
+            let (key, _) = item;
+            clear_batch.delete_cf(self.cf_script_info(), &key);
+            cleared += 1;
+            #[allow(clippy::manual_is_multiple_of)]
+            if cleared % 20_000 == 0 {
+                self.write_batch(std::mem::take(&mut clear_batch))?;
+                clear_batch = rocksdb::WriteBatch::default();
+            }
+        }
+        if !clear_batch.is_empty() {
+            self.write_batch(clear_batch)?;
+        }
+
+        let mut entries: Vec<(Vec<u8>, ScriptInfo)> = info_by_code_hash.into_iter().collect();
+        entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+        let mut write_batch = crate::batch::StoreBatch::new(self);
+        let mut written = 0usize;
+        for (code_hash, info) in entries {
+            write_batch.put_script_info(&code_hash, &info);
+            written += 1;
+            #[allow(clippy::manual_is_multiple_of)]
+            if written % 20_000 == 0 {
+                write_batch.commit()?;
+                write_batch = crate::batch::StoreBatch::new(self);
+            }
+        }
+        #[allow(clippy::manual_is_multiple_of)]
+        if written % 20_000 != 0 {
+            write_batch.commit()?;
+        }
+
+        Ok(written)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::batch::StoreBatch;
     use crate::CkbadgerStore;
 
     #[test]
@@ -990,6 +1365,127 @@ mod tests {
             .unwrap();
         assert_eq!(ranged.len(), 1);
         assert_eq!(ranged[0].0, 20240116);
+    }
+
+    #[test]
+    fn test_rebuild_script_infos_from_cells_preserves_metadata_and_recomputes_usage() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap();
+
+        let lock_code_hash = vec![0x11; 32];
+        let type_code_hash = vec![0x22; 32];
+        let unused_code_hash = vec![0x33; 32];
+
+        let lock_live = LiveCellInfo {
+            capacity: 1_000,
+            created_at_block: 1,
+            lock_script_hash: vec![0xAA; 32],
+            lock_code_hash: lock_code_hash.clone(),
+            lock_hash_type: 1,
+            lock_args: vec![0x01, 0x02],
+            type_script_hash: Some(vec![0xBB; 32]),
+            type_code_hash: Some(type_code_hash.clone()),
+            type_args: Some(vec![0x03, 0x04]),
+            data_size: 16,
+            occupied_capacity: 700,
+        };
+        let lock_consumed = LiveCellInfo {
+            capacity: 400,
+            created_at_block: 1,
+            lock_script_hash: vec![0xCC; 32],
+            lock_code_hash: lock_code_hash.clone(),
+            lock_hash_type: 1,
+            lock_args: vec![0x05],
+            type_script_hash: Some(vec![0xDD; 32]),
+            type_code_hash: Some(type_code_hash.clone()),
+            type_args: Some(vec![0x06]),
+            data_size: 8,
+            occupied_capacity: 250,
+        };
+
+        let mut bad_lock_info = ScriptInfo {
+            code_hash: lock_code_hash.clone(),
+            hash_type: 1,
+            name: Some("Lock Script".to_string()),
+            description: Some("kept".to_string()),
+            website: Some("https://example.com/lock".to_string()),
+            lock_live_capacity_sum: -9_999,
+            lock_live_cells_count: -9,
+            ..Default::default()
+        };
+        // Keep non-usage metadata-only fields to ensure rebuild doesn't wipe them.
+        bad_lock_info.dep_type_hash = Some(vec![0x44; 32]);
+        bad_lock_info.dep_data_hash = Some(vec![0x55; 32]);
+
+        let bad_type_info = ScriptInfo {
+            code_hash: type_code_hash.clone(),
+            hash_type: 0,
+            name: Some("Type Script".to_string()),
+            description: Some("kept-type".to_string()),
+            type_live_capacity_sum: -7_777,
+            type_live_cells_count: -7,
+            ..Default::default()
+        };
+
+        let unused_info = ScriptInfo {
+            code_hash: unused_code_hash.clone(),
+            hash_type: 2,
+            name: Some("Unused Script".to_string()),
+            description: Some("unused".to_string()),
+            ..Default::default()
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_cell(&[0x01; 32], 0, &lock_live);
+        batch.put_consumed_cell(&[0x02; 32], 1, &lock_consumed, 5);
+        batch.put_script_info(&lock_code_hash, &bad_lock_info);
+        batch.put_script_info(&type_code_hash, &bad_type_info);
+        batch.put_script_info(&unused_code_hash, &unused_info);
+        batch.commit().unwrap();
+
+        let rebuilt = store.rebuild_script_infos_from_cells().unwrap();
+        assert_eq!(rebuilt, 3);
+
+        let lock_info = store.get_script_info(&lock_code_hash).unwrap().unwrap();
+        assert_eq!(lock_info.name.as_deref(), Some("Lock Script"));
+        assert_eq!(lock_info.description.as_deref(), Some("kept"));
+        assert_eq!(
+            lock_info.website.as_deref(),
+            Some("https://example.com/lock")
+        );
+        assert_eq!(lock_info.hash_type, 1);
+        assert_eq!(lock_info.dep_type_hash, Some(vec![0x44; 32]));
+        assert_eq!(lock_info.dep_data_hash, Some(vec![0x55; 32]));
+        assert_eq!(lock_info.lock_cells_count, 2);
+        assert_eq!(lock_info.lock_live_cells_count, 1);
+        assert_eq!(lock_info.lock_capacity_sum, 1_400);
+        assert_eq!(lock_info.lock_live_capacity_sum, 1_000);
+        assert_eq!(lock_info.lock_occupied_capacity_sum, 950);
+        assert_eq!(lock_info.lock_live_occupied_capacity_sum, 700);
+        assert_eq!(lock_info.cells_count, 2);
+        assert_eq!(lock_info.capacity_used, 1_400);
+
+        let type_info = store.get_script_info(&type_code_hash).unwrap().unwrap();
+        assert_eq!(type_info.name.as_deref(), Some("Type Script"));
+        assert_eq!(type_info.description.as_deref(), Some("kept-type"));
+        assert_eq!(type_info.type_cells_count, 2);
+        assert_eq!(type_info.type_live_cells_count, 1);
+        assert_eq!(type_info.type_capacity_sum, 1_400);
+        assert_eq!(type_info.type_live_capacity_sum, 1_000);
+        assert_eq!(type_info.type_occupied_capacity_sum, 950);
+        assert_eq!(type_info.type_live_occupied_capacity_sum, 700);
+        assert_eq!(type_info.cells_count, 2);
+        assert_eq!(type_info.capacity_used, 1_400);
+
+        let unused_after = store.get_script_info(&unused_code_hash).unwrap().unwrap();
+        assert_eq!(unused_after.name.as_deref(), Some("Unused Script"));
+        assert_eq!(unused_after.hash_type, 2);
+        assert_eq!(unused_after.lock_cells_count, 0);
+        assert_eq!(unused_after.lock_live_cells_count, 0);
+        assert_eq!(unused_after.type_cells_count, 0);
+        assert_eq!(unused_after.type_live_cells_count, 0);
+        assert_eq!(unused_after.cells_count, 0);
+        assert_eq!(unused_after.capacity_used, 0);
     }
 
     /// Helper: write a DaoDailySnapshot directly to the store.

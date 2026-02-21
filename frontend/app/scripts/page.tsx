@@ -35,7 +35,7 @@ export default function ScriptsPage() {
   const [sortKey, setSortKey] = useState<ScriptSortKey>('capacity');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, error } = useQuery({
     queryKey: ['scripts', pagination.cursor, decoderType, search, sortKey, sortDirection],
     queryFn: () =>
       api.getScripts({
@@ -124,6 +124,7 @@ export default function ScriptsPage() {
   );
 
   const scripts = data?.data ?? [];
+  const errorMessage = error instanceof Error ? error.message : 'Unknown error';
   const hasKnownScriptName = (name: string | null | undefined): boolean =>
     Boolean(name && name.trim() && name.trim().toLowerCase() !== UNKNOWN_SCRIPT_NAME);
   const getScriptRefDisplay = (script: KnownScript): string =>
@@ -217,6 +218,11 @@ export default function ScriptsPage() {
                     </div>
                   </TerminalRow>
                 ))}
+              </div>
+            ) : isError ? (
+              <div className="py-8 text-center">
+                <p className="font-mono text-sm text-red-300">Failed to load scripts</p>
+                <p className="mt-2 font-mono text-xs text-red-400">{errorMessage}</p>
               </div>
             ) : data?.data?.length ? (
               <>

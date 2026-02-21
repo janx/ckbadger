@@ -888,7 +888,16 @@ interface TransactionLifecycle {
 async function fetchApi<T>(endpoint: string): Promise<T> {
   const res = await fetch(`${API_BASE}${endpoint}`);
   if (!res.ok) {
-    throw new Error(`API error: ${res.status}`);
+    let detail = '';
+    try {
+      const payload = (await res.json()) as { message?: unknown };
+      if (typeof payload?.message === 'string' && payload.message.trim().length > 0) {
+        detail = payload.message.trim();
+      }
+    } catch {
+      // Ignore parse failures and keep the status-only error.
+    }
+    throw new Error(detail ? `API error: ${res.status} - ${detail}` : `API error: ${res.status}`);
   }
   return res.json();
 }
