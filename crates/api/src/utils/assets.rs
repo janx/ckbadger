@@ -10,6 +10,25 @@ fn non_empty_name(name: Option<&str>) -> Option<String> {
     }
 }
 
+/// Accumulate live capacity/occupied capacity from ordered daily deltas.
+pub fn accumulate_live_capacity<I>(deltas: I) -> (i128, i128)
+where
+    I: IntoIterator<Item = (i64, i64)>,
+{
+    let mut live_capacity: i128 = 0;
+    let mut live_occupied: i128 = 0;
+
+    for (capacity_delta, occupied_delta) in deltas {
+        live_capacity = (live_capacity + capacity_delta as i128).max(0);
+        live_occupied = (live_occupied + occupied_delta as i128).max(0);
+        if live_occupied > live_capacity {
+            live_occupied = live_capacity;
+        }
+    }
+
+    (live_capacity, live_occupied)
+}
+
 /// Resolve a DOB collection display name.
 ///
 /// Priority:
@@ -136,5 +155,13 @@ mod tests {
     #[test]
     fn resolve_nft_name_returns_none_for_other_standards_without_name() {
         assert!(resolve_nft_collection_name("m-nft", None).is_none());
+    }
+
+    #[test]
+    fn accumulate_live_capacity_clamps_negative_and_occupied_upper_bound() {
+        let deltas = vec![(100, 60), (-30, -10), (-100, 0), (20, 50)];
+        let (capacity, occupied) = accumulate_live_capacity(deltas);
+        assert_eq!(capacity, 20);
+        assert_eq!(occupied, 20);
     }
 }

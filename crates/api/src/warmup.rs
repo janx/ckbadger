@@ -1,7 +1,9 @@
 use crate::cache::CacheTtl;
 use crate::routes::assets::AssetResponse;
 use crate::routes::statistics::build_block_time_distribution_response;
-use crate::utils::{resolve_dob_collection_name, resolve_nft_collection_name};
+use crate::utils::{
+    accumulate_live_capacity, resolve_dob_collection_name, resolve_nft_collection_name,
+};
 use crate::AppState;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -15,7 +17,7 @@ pub const CACHE_KEY_ASSETS_TOKEN: &str = "assets:token";
 pub const CACHE_KEY_ASSETS_DOB: &str = "assets:dob";
 pub const CACHE_KEY_ASSETS_NFT: &str = "assets:nft";
 
-/// Cached asset entry — pre-computed and sorted, ready for API serving.
+/// Cached asset entry with pre-computed metrics, ready for API serving.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct CachedAssetEntry {
     pub id: String,
@@ -33,6 +35,8 @@ pub struct CachedAssetEntry {
     pub content_size: Option<i32>,
     pub cluster_id: Option<String>,
     pub cluster_name: Option<String>,
+    pub live_capacity: Option<String>,
+    pub live_occupied_capacity: Option<String>,
     // Token-specific fields (None for DOB/NFT entries)
     pub type_code_hash: Option<String>,
     pub type_hash_type: Option<String>,
@@ -61,6 +65,8 @@ impl CachedAssetEntry {
             content_size: self.content_size,
             cluster_id: self.cluster_id.clone(),
             cluster_name: self.cluster_name.clone(),
+            live_capacity: self.live_capacity.clone(),
+            live_occupied_capacity: self.live_occupied_capacity.clone(),
         }
     }
 }
@@ -117,6 +123,14 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
         }
 
         let transfers_24h = transfers_24h_map.get(hash.as_slice()).copied().unwrap_or(0);
+        let token_daily = state.store.list_token_daily_deltas(hash)?;
+        let (live_capacity, live_occupied_capacity) =
+            accumulate_live_capacity(token_daily.into_iter().map(|(_, delta)| {
+                (
+                    delta.live_capacity_delta,
+                    delta.live_occupied_capacity_delta,
+                )
+            }));
 
         token_assets.push(CachedAssetEntry {
             id: format!("0x{}", hex::encode(hash)),
@@ -134,6 +148,8 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
             content_size: None,
             cluster_id: None,
             cluster_name: None,
+            live_capacity: Some(live_capacity.to_string()),
+            live_occupied_capacity: Some(live_occupied_capacity.to_string()),
             type_code_hash: Some(format!("0x{}", hex::encode(&info.type_code_hash))),
             type_hash_type: Some(hash_type_to_string(info.hash_type)),
             type_args: Some(format!("0x{}", hex::encode(&info.type_args))),
@@ -170,6 +186,14 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
             .get(cluster_id_bytes.as_slice())
             .copied()
             .unwrap_or(0);
+        let cluster_daily = state.store.list_cluster_daily_deltas(cluster_id_bytes)?;
+        let (live_capacity, live_occupied_capacity) =
+            accumulate_live_capacity(cluster_daily.into_iter().map(|(_, delta)| {
+                (
+                    delta.live_capacity_delta,
+                    delta.live_occupied_capacity_delta,
+                )
+            }));
 
         dob_assets.push(CachedAssetEntry {
             id: cluster_hex.clone(),
@@ -187,6 +211,8 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
             content_size: None,
             cluster_id: Some(cluster_hex),
             cluster_name: display_name,
+            live_capacity: Some(live_capacity.to_string()),
+            live_occupied_capacity: Some(live_occupied_capacity.to_string()),
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
@@ -218,6 +244,14 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
             .unwrap_or(0);
         let standard = agg.standard.asset_standard().to_string();
         let display_name = resolve_nft_collection_name(&standard, agg.name.as_deref());
+        let nft_daily = state.store.list_nft_daily_deltas(collection_id_bytes)?;
+        let (live_capacity, live_occupied_capacity) =
+            accumulate_live_capacity(nft_daily.into_iter().map(|(_, delta)| {
+                (
+                    delta.live_capacity_delta,
+                    delta.live_occupied_capacity_delta,
+                )
+            }));
 
         nft_assets.push(CachedAssetEntry {
             id: collection_hex.clone(),
@@ -235,6 +269,8 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
             content_size: None,
             cluster_id: Some(collection_hex.clone()),
             cluster_name: display_name,
+            live_capacity: Some(live_capacity.to_string()),
+            live_occupied_capacity: Some(live_occupied_capacity.to_string()),
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useQueries, useQuery, keepPreviousData } from '@tanstack/react-query';
+import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import Link from 'next/link';
 import { Header } from '@/components/layout/header';
 import {
@@ -32,11 +32,6 @@ type AssetSortKey =
   | 'occupied'
   | 'capacity';
 
-interface AssetCapacityData {
-  occupied: string | null;
-  capacity: string | null;
-}
-
 function normalizeAssetTab(value: string | null): AssetTab {
   if (value === 'nft' || value === 'dob' || value === 'token') {
     return value;
@@ -52,11 +47,20 @@ function AssetTable({ assetType, search }: { assetType: AssetTab; search: string
   useEffect(() => {
     setSortKey('capacity');
     setSortDirection('desc');
+    pagination.reset();
   }, [assetType]);
 
   const { data, isLoading } = useQuery({
-    queryKey: ['assets', assetType, pagination.cursor, search],
-    queryFn: () => api.getAssets({ limit: 20, type: assetType, cursor: pagination.cursor, search }),
+    queryKey: ['assets', assetType, pagination.cursor, search, sortKey, sortDirection],
+    queryFn: () =>
+      api.getAssets({
+        limit: 20,
+        type: assetType,
+        cursor: pagination.cursor,
+        search,
+        sortKey,
+        sortDirection,
+      }),
     placeholderData: keepPreviousData,
   });
 
@@ -92,117 +96,15 @@ function AssetTable({ assetType, search }: { assetType: AssetTab; search: string
     return asset.standard.toUpperCase();
   };
 
-  const occupiedQueries = useQueries({
-    queries: assets.map((asset) => ({
-      queryKey: ['asset-capacity-data', asset.assetType, asset.id],
-      queryFn: async (): Promise<AssetCapacityData> => {
-        if (asset.assetType === 'token') {
-          const token = await api.getToken(asset.id);
-          return {
-            occupied: token.totalOccupiedCapacity ?? null,
-            capacity: token.totalCapacity ?? null,
-          };
-        }
-        if (asset.assetType === 'nft') {
-          const collection = await api.getNftCollection(asset.id);
-          return {
-            occupied: collection.liveOccupiedCapacity ?? null,
-            capacity: collection.liveCapacity ?? null,
-          };
-        }
-        const cluster = await api.getSporeCluster(asset.id);
-        return {
-          occupied: cluster.liveOccupiedCapacity ?? null,
-          capacity: cluster.liveCapacity ?? null,
-        };
-      },
-      staleTime: 60_000,
-    })),
-  });
-
-  const capacityDataByAssetId = new Map<string, AssetCapacityData | null>();
-  assets.forEach((asset, idx) => {
-    capacityDataByAssetId.set(asset.id, occupiedQueries[idx]?.data ?? null);
-  });
-
-  const parseBigInt = (value: string | null | undefined): bigint | null => {
-    if (!value) return null;
-    try {
-      return BigInt(value);
-    } catch {
-      return null;
-    }
-  };
-
-  const compareNullableBigInt = (
-    a: bigint | null,
-    b: bigint | null,
-    direction: SortDirection
-  ): number => {
-    if (a === null && b === null) return 0;
-    if (a === null) return 1;
-    if (b === null) return -1;
-    if (a === b) return 0;
-    if (direction === 'asc') {
-      return a > b ? 1 : -1;
-    }
-    return a > b ? -1 : 1;
-  };
-
   const toggleSort = (nextKey: AssetSortKey) => {
     if (nextKey === sortKey) {
       setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
-      return;
-    }
-    setSortKey(nextKey);
-    setSortDirection(nextKey === 'name' || nextKey === 'type' ? 'asc' : 'desc');
-  };
-
-  const sortedAssets = [...assets];
-  const direction = sortDirection === 'asc' ? 1 : -1;
-
-  sortedAssets.sort((left, right) => {
-    let compared = 0;
-    let directed = false;
-
-    if (sortKey === 'name') {
-      compared = getAssetName(left).localeCompare(getAssetName(right));
-    } else if (sortKey === 'type') {
-      compared = getTypeBadgeLabel(left).localeCompare(getTypeBadgeLabel(right));
-    } else if (sortKey === 'supply') {
-      compared = compareNullableBigInt(
-        parseBigInt(left.totalSupply),
-        parseBigInt(right.totalSupply),
-        sortDirection
-      );
-      directed = true;
-    } else if (sortKey === 'transfers24h') {
-      compared = left.transfers24h - right.transfers24h;
-    } else if (sortKey === 'holders') {
-      compared = left.holdersCount - right.holdersCount;
-    } else if (sortKey === 'transfers') {
-      compared = left.transfersCount - right.transfersCount;
-    } else if (sortKey === 'occupied') {
-      compared = compareNullableBigInt(
-        parseBigInt(capacityDataByAssetId.get(left.id)?.occupied),
-        parseBigInt(capacityDataByAssetId.get(right.id)?.occupied),
-        sortDirection
-      );
-      directed = true;
     } else {
-      compared = compareNullableBigInt(
-        parseBigInt(capacityDataByAssetId.get(left.id)?.capacity),
-        parseBigInt(capacityDataByAssetId.get(right.id)?.capacity),
-        sortDirection
-      );
-      directed = true;
+      setSortKey(nextKey);
+      setSortDirection(nextKey === 'name' || nextKey === 'type' ? 'asc' : 'desc');
     }
-
-    if (compared !== 0) {
-      return directed ? compared : compared * direction;
-    }
-    return getAssetName(left).localeCompare(getAssetName(right));
-  });
+    pagination.reset();
+  };
 
   const renderSortHeader = (
     key: AssetSortKey,
@@ -277,7 +179,7 @@ function AssetTable({ assetType, search }: { assetType: AssetTab; search: string
         {renderSortHeader('occupied', 'Occupied', 'w-32 shrink-0', 'right')}
         {renderSortHeader('capacity', 'Capacity', 'w-32 shrink-0', 'right')}
       </div>
-      {sortedAssets.map((asset: Asset) => (
+      {assets.map((asset: Asset) => (
         <TerminalRow key={asset.id}>
           <div className="flex items-center">
             <div className="flex-1">
@@ -352,7 +254,7 @@ function AssetTable({ assetType, search }: { assetType: AssetTab; search: string
             </div>
             <div className="w-32 shrink-0 text-right font-mono text-slate-300">
               {(() => {
-                const occupied = capacityDataByAssetId.get(asset.id)?.occupied ?? null;
+                const occupied = asset.liveOccupiedCapacity;
                 if (!occupied) {
                   return <span className="text-slate-600">-</span>;
                 }
@@ -362,7 +264,7 @@ function AssetTable({ assetType, search }: { assetType: AssetTab; search: string
             </div>
             <div className="w-32 shrink-0 text-right font-mono text-slate-300">
               {(() => {
-                const capacity = capacityDataByAssetId.get(asset.id)?.capacity ?? null;
+                const capacity = asset.liveCapacity;
                 if (!capacity) {
                   return <span className="text-slate-600">-</span>;
                 }

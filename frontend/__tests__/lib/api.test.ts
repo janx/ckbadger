@@ -176,6 +176,26 @@ describe('api', () => {
       await api.getScripts({ network: 'mainnet', decoderType: 'lock', search: 'secp256k1' });
     });
 
+    it('builds query params for getAssets with sorting', async () => {
+      server.use(
+        http.get('*/api/v1/assets', ({ request }) => {
+          const url = new URL(request.url);
+          expect(url.searchParams.get('type')).toBe('token');
+          expect(url.searchParams.get('sort_key')).toBe('transfers_24h');
+          expect(url.searchParams.get('sort_direction')).toBe('asc');
+          return HttpResponse.json({
+            data: [],
+            total: 0,
+            limit: 20,
+            hasMore: false,
+            nextCursor: null,
+          });
+        })
+      );
+
+      await api.getAssets({ type: 'token', sortKey: 'transfers24h', sortDirection: 'asc' });
+    });
+
     it('fetches script occupation chart by script name', async () => {
       server.use(
         http.get('*/api/v1/scripts/:name/charts/occupation', ({ params }) => {

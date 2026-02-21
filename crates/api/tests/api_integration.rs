@@ -1895,6 +1895,117 @@ async fn test_assets_dob_uses_cluster_entry_name_when_aggregate_name_missing() {
 }
 
 #[tokio::test]
+async fn test_assets_list_defaults_to_capacity_sort_and_supports_cursor_pagination() {
+    let store = test_store();
+    let token_a = [0x11u8; 32];
+    let token_b = [0x22u8; 32];
+
+    store
+        .put_token_direct(
+            &token_a,
+            &TokenInfo {
+                type_code_hash: vec![0xAA; 32],
+                hash_type: 1,
+                type_args: vec![0x01; 20],
+                standard: "xudt".to_string(),
+                name: Some("Alpha Token".to_string()),
+                symbol: Some("ALPHA".to_string()),
+                decimals: Some(8),
+                total_supply: Some(1000),
+                holders_count: 10,
+                first_seen_block: 1,
+                icon_url: None,
+                description: None,
+                transfers_count: 1,
+            },
+        )
+        .unwrap();
+    store
+        .put_token_direct(
+            &token_b,
+            &TokenInfo {
+                type_code_hash: vec![0xBB; 32],
+                hash_type: 1,
+                type_args: vec![0x02; 20],
+                standard: "xudt".to_string(),
+                name: Some("Beta Token".to_string()),
+                symbol: Some("BETA".to_string()),
+                decimals: Some(8),
+                total_supply: Some(2000),
+                holders_count: 20,
+                first_seen_block: 1,
+                icon_url: None,
+                description: None,
+                transfers_count: 2,
+            },
+        )
+        .unwrap();
+
+    store
+        .put_token_daily_delta(
+            &token_a,
+            20240115,
+            &TokenDailyDelta {
+                live_capacity_delta: 100,
+                live_occupied_capacity_delta: 60,
+            },
+        )
+        .unwrap();
+    store
+        .put_token_daily_delta(
+            &token_b,
+            20240115,
+            &TokenDailyDelta {
+                live_capacity_delta: 300,
+                live_occupied_capacity_delta: 120,
+            },
+        )
+        .unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/assets?type=token&limit=1")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"][0]["id"], format!("0x{}", hex::encode(token_b)));
+    assert_eq!(json["data"][0]["liveCapacity"], "300");
+    assert_eq!(json["data"][0]["liveOccupiedCapacity"], "120");
+
+    let next_cursor = json["nextCursor"].as_str().unwrap();
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/assets?type=token&limit=1&sort_key=capacity&sort_direction=desc&cursor={next_cursor}"
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"][0]["id"], format!("0x{}", hex::encode(token_a)));
+    assert!(json["nextCursor"].is_null());
+
+    let request = Request::builder()
+        .uri("/api/v1/assets?type=token&sort_key=capacity&sort_direction=asc")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"][0]["id"], format!("0x{}", hex::encode(token_a)));
+}
+
+#[tokio::test]
 async fn test_assets_nft_collection_occupation_chart_and_capacity_fields() {
     let store = test_store();
     let collection_id = [0x24u8; 24];

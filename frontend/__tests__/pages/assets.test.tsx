@@ -38,6 +38,8 @@ const mockTokenAssets = {
       contentSize: null,
       clusterId: null,
       clusterName: null,
+      liveCapacity: '2000000000',
+      liveOccupiedCapacity: '1000000000',
     },
   ],
   total: 1,
@@ -67,6 +69,8 @@ const mockClusterAssets = {
       contentSize: null,
       clusterId: '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
       clusterName: 'Test Collection',
+      liveCapacity: '9000000000',
+      liveOccupiedCapacity: '5000000000',
     },
   ],
   total: 1,
@@ -96,6 +100,8 @@ const mockDotbitNftAssets = {
       contentSize: null,
       clusterId: null,
       clusterName: null,
+      liveCapacity: '7000000000',
+      liveOccupiedCapacity: '3000000000',
     },
   ],
   total: 1,
@@ -133,6 +139,8 @@ const sortableTokenAssets = {
       contentSize: null,
       clusterId: null,
       clusterName: null,
+      liveCapacity: '2000000000',
+      liveOccupiedCapacity: '1000000000',
     },
     {
       id: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
@@ -153,6 +161,8 @@ const sortableTokenAssets = {
       contentSize: null,
       clusterId: null,
       clusterName: null,
+      liveCapacity: '9000000000',
+      liveOccupiedCapacity: '5000000000',
     },
   ],
   total: 2,
@@ -165,15 +175,6 @@ describe('AssetsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.history.replaceState(null, '', '/assets');
-    vi.mocked(api.getToken).mockImplementation(
-      async () => ({ totalOccupiedCapacity: '0', totalCapacity: '0' }) as any
-    );
-    vi.mocked(api.getNftCollection).mockImplementation(
-      async () => ({ liveOccupiedCapacity: '0', liveCapacity: '0' }) as any
-    );
-    vi.mocked(api.getSporeCluster).mockImplementation(
-      async () => ({ liveOccupiedCapacity: '0', liveCapacity: '0' }) as any
-    );
   });
 
   it('renders the page with header and title', async () => {
@@ -388,14 +389,12 @@ describe('AssetsPage', () => {
   });
 
   it('renders occupied/capacity columns and supports sorting by occupied', async () => {
-    vi.mocked(api.getAssets).mockResolvedValue(sortableTokenAssets);
-    vi.mocked(api.getToken).mockImplementation(async (typeHash: string) => {
-      const totalOccupiedCapacity =
-        typeHash === sortableTokenAssets.data[0].id ? '1000000000' : '5000000000';
-      const totalCapacity =
-        typeHash === sortableTokenAssets.data[0].id ? '2000000000' : '9000000000';
-      return { totalOccupiedCapacity, totalCapacity } as any;
-    });
+    vi.mocked(api.getAssets)
+      .mockResolvedValueOnce(sortableTokenAssets)
+      .mockResolvedValueOnce({
+        ...sortableTokenAssets,
+        data: [sortableTokenAssets.data[1], sortableTokenAssets.data[0]],
+      });
 
     render(<AssetsPage />);
 
@@ -407,6 +406,9 @@ describe('AssetsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Sort by Occupied' }));
 
     await waitFor(() => {
+      expect(api.getAssets).toHaveBeenLastCalledWith(
+        expect.objectContaining({ sortKey: 'occupied', sortDirection: 'desc' })
+      );
       const tokenLinks = screen
         .getAllByRole('link')
         .filter((link) => link.getAttribute('href')?.startsWith('/tokens/'));
@@ -416,30 +418,23 @@ describe('AssetsPage', () => {
 
   it('defaults to sorting by capacity in descending order', async () => {
     vi.mocked(api.getAssets).mockResolvedValue(sortableTokenAssets);
-    vi.mocked(api.getToken).mockImplementation(async (typeHash: string) => {
-      const totalCapacity =
-        typeHash === sortableTokenAssets.data[0].id ? '2000000000' : '9000000000';
-      return { totalOccupiedCapacity: '0', totalCapacity } as any;
-    });
 
     render(<AssetsPage />);
 
     await waitFor(() => {
-      const tokenLinks = screen
-        .getAllByRole('link')
-        .filter((link) => link.getAttribute('href')?.startsWith('/tokens/'));
-      expect(tokenLinks[0]).toHaveTextContent('BETA');
+      expect(api.getAssets).toHaveBeenCalledWith(
+        expect.objectContaining({ sortKey: 'capacity', sortDirection: 'desc' })
+      );
     });
   });
 
   it('supports sorting by capacity', async () => {
-    vi.mocked(api.getAssets).mockResolvedValue(sortableTokenAssets);
-    vi.mocked(api.getToken).mockImplementation(async (typeHash: string) => {
-      if (typeHash === sortableTokenAssets.data[0].id) {
-        return { totalOccupiedCapacity: '1000000000', totalCapacity: '8000000000' } as any;
-      }
-      return { totalOccupiedCapacity: '5000000000', totalCapacity: '2000000000' } as any;
-    });
+    vi.mocked(api.getAssets)
+      .mockResolvedValueOnce(sortableTokenAssets)
+      .mockResolvedValueOnce({
+        ...sortableTokenAssets,
+        data: [sortableTokenAssets.data[0], sortableTokenAssets.data[1]],
+      });
 
     render(<AssetsPage />);
 
@@ -450,10 +445,13 @@ describe('AssetsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Sort by Capacity' }));
 
     await waitFor(() => {
+      expect(api.getAssets).toHaveBeenLastCalledWith(
+        expect.objectContaining({ sortKey: 'capacity', sortDirection: 'asc' })
+      );
       const tokenLinks = screen
         .getAllByRole('link')
         .filter((link) => link.getAttribute('href')?.startsWith('/tokens/'));
-      expect(tokenLinks[0]).toHaveTextContent('BETA');
+      expect(tokenLinks[0]).toHaveTextContent('ALPHA');
     });
   });
 });

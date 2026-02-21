@@ -4,13 +4,15 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
 use crate::utils::{
-    parse_chart_date_range, resolve_dob_collection_name, resolve_nft_collection_name,
+    accumulate_live_capacity, parse_chart_date_range, resolve_dob_collection_name,
+    resolve_nft_collection_name,
 };
 use crate::warmup::{
     CachedAssetEntry, CACHE_KEY_ASSETS_DOB, CACHE_KEY_ASSETS_NFT, CACHE_KEY_ASSETS_TOKEN,
@@ -37,6 +39,10 @@ pub struct ListParams {
     asset_type: Option<String>,
     cursor: Option<String>,
     search: Option<String>,
+    #[serde(default = "default_asset_sort_key")]
+    sort_key: AssetSortKey,
+    #[serde(default = "default_sort_direction")]
+    sort_direction: SortDirection,
 }
 
 #[derive(Debug, Deserialize)]
@@ -47,6 +53,34 @@ pub struct ChartRangeParams {
 
 fn default_limit() -> i64 {
     20
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum AssetSortKey {
+    Name,
+    Type,
+    Supply,
+    Transfers24h,
+    Holders,
+    Transfers,
+    Occupied,
+    Capacity,
+}
+
+fn default_asset_sort_key() -> AssetSortKey {
+    AssetSortKey::Capacity
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum SortDirection {
+    Asc,
+    Desc,
+}
+
+fn default_sort_direction() -> SortDirection {
+    SortDirection::Desc
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -70,6 +104,8 @@ pub struct AssetResponse {
     pub content_size: Option<i32>,
     pub cluster_id: Option<String>,
     pub cluster_name: Option<String>,
+    pub live_capacity: Option<String>,
+    pub live_occupied_capacity: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -99,18 +135,15 @@ async fn list_assets(
         search_lower.as_deref(),
         limit,
         params.cursor.as_deref(),
+        params.sort_key,
+        params.sort_direction,
     )?;
 
     let has_more = rows.len() as i64 > limit;
     let rows: Vec<_> = rows.into_iter().take(limit as usize).collect();
 
     let next_cursor = if has_more {
-        rows.last().map(|r| {
-            format!(
-                "{}:{}:{}:{}",
-                r.transfers_24h, r.holders_count, r.id, r.asset_type
-            )
-        })
+        rows.last().map(|r| format!("{}:{}", r.asset_type, r.id))
     } else {
         None
     };
@@ -131,6 +164,8 @@ fn fetch_assets_cached(
     search: Option<&str>,
     limit: i64,
     cursor: Option<&str>,
+    sort_key: AssetSortKey,
+    sort_direction: SortDirection,
 ) -> Result<(i64, Vec<AssetResponse>), (axum::http::StatusCode, Json<ApiError>)> {
     let mut all_cached: Vec<CachedAssetEntry> = Vec::new();
 
@@ -188,18 +223,11 @@ fn fetch_assets_cached(
 
     let total = all_cached.len() as i64;
 
-    // Sort: transfers_24h DESC, holders_count DESC, asset_type ASC, id DESC
-    all_cached.sort_by(|a, b| {
-        b.transfers_24h
-            .cmp(&a.transfers_24h)
-            .then_with(|| b.holders_count.cmp(&a.holders_count))
-            .then_with(|| a.asset_type.cmp(&b.asset_type))
-            .then_with(|| b.id.cmp(&a.id))
-    });
+    all_cached.sort_by(|a, b| compare_asset_entries(a, b, sort_key, sort_direction));
 
     // Apply cursor-based pagination: skip items up to and including the cursor item
     if let Some(cursor_str) = cursor {
-        if let Some((_c_transfers, _c_holders, c_id, c_type)) = parse_asset_cursor(cursor_str) {
+        if let Some((c_type, c_id)) = parse_asset_cursor(cursor_str) {
             // Find the cursor item by its unique (id, asset_type) and skip past it
             if let Some(pos) = all_cached
                 .iter()
@@ -220,18 +248,108 @@ fn fetch_assets_cached(
     Ok((total, assets))
 }
 
-/// Parse cursor string: "transfers_24h:holders_count:id:asset_type"
-fn parse_asset_cursor(cursor: &str) -> Option<(i64, i64, String, String)> {
-    let parts: Vec<&str> = cursor.splitn(4, ':').collect();
-    if parts.len() == 4 {
-        let transfers = parts[0].parse::<i64>().ok()?;
-        let holders = parts[1].parse::<i64>().ok()?;
-        let id = parts[2].to_string();
-        let asset_type = parts[3].to_string();
-        Some((transfers, holders, id, asset_type))
-    } else {
-        None
+/// Parse cursor string.
+/// New format: "asset_type:id"
+/// Legacy format: "transfers_24h:holders_count:id:asset_type"
+fn parse_asset_cursor(cursor: &str) -> Option<(String, String)> {
+    let parts: Vec<&str> = cursor.splitn(2, ':').collect();
+    if parts.len() == 2 && matches!(parts[0], "token" | "nft" | "dob") {
+        return Some((parts[0].to_string(), parts[1].to_string()));
     }
+
+    let legacy_parts: Vec<&str> = cursor.splitn(4, ':').collect();
+    if legacy_parts.len() == 4 {
+        return Some((legacy_parts[3].to_string(), legacy_parts[2].to_string()));
+    }
+
+    None
+}
+
+fn apply_direction(ordering: Ordering, direction: SortDirection) -> Ordering {
+    match direction {
+        SortDirection::Asc => ordering,
+        SortDirection::Desc => ordering.reverse(),
+    }
+}
+
+fn parse_i128_opt(value: Option<&str>) -> Option<i128> {
+    value?.parse::<i128>().ok()
+}
+
+fn compare_optional_i128(
+    left: Option<i128>,
+    right: Option<i128>,
+    direction: SortDirection,
+) -> Ordering {
+    match (left, right) {
+        (None, None) => Ordering::Equal,
+        (None, Some(_)) => Ordering::Greater,
+        (Some(_), None) => Ordering::Less,
+        (Some(l), Some(r)) => apply_direction(l.cmp(&r), direction),
+    }
+}
+
+fn asset_display_name(entry: &CachedAssetEntry) -> String {
+    if entry.asset_type == "token" {
+        entry
+            .symbol
+            .clone()
+            .or_else(|| entry.name.clone())
+            .unwrap_or_else(|| "Unknown Token".to_string())
+    } else {
+        entry
+            .name
+            .clone()
+            .unwrap_or_else(|| "Unnamed Collection".to_string())
+    }
+}
+
+fn compare_asset_entries(
+    left: &CachedAssetEntry,
+    right: &CachedAssetEntry,
+    sort_key: AssetSortKey,
+    direction: SortDirection,
+) -> Ordering {
+    let compared = match sort_key {
+        AssetSortKey::Name => apply_direction(
+            asset_display_name(left).cmp(&asset_display_name(right)),
+            direction,
+        ),
+        AssetSortKey::Type => apply_direction(left.standard.cmp(&right.standard), direction),
+        AssetSortKey::Supply => compare_optional_i128(
+            parse_i128_opt(left.total_supply.as_deref()),
+            parse_i128_opt(right.total_supply.as_deref()),
+            direction,
+        ),
+        AssetSortKey::Transfers24h => {
+            apply_direction(left.transfers_24h.cmp(&right.transfers_24h), direction)
+        }
+        AssetSortKey::Holders => {
+            apply_direction(left.holders_count.cmp(&right.holders_count), direction)
+        }
+        AssetSortKey::Transfers => {
+            apply_direction(left.transfers_count.cmp(&right.transfers_count), direction)
+        }
+        AssetSortKey::Occupied => compare_optional_i128(
+            parse_i128_opt(left.live_occupied_capacity.as_deref()),
+            parse_i128_opt(right.live_occupied_capacity.as_deref()),
+            direction,
+        ),
+        AssetSortKey::Capacity => compare_optional_i128(
+            parse_i128_opt(left.live_capacity.as_deref()),
+            parse_i128_opt(right.live_capacity.as_deref()),
+            direction,
+        ),
+    };
+
+    if compared != Ordering::Equal {
+        return compared;
+    }
+
+    asset_display_name(left)
+        .cmp(&asset_display_name(right))
+        .then_with(|| left.asset_type.cmp(&right.asset_type))
+        .then_with(|| left.id.cmp(&right.id))
 }
 
 fn format_yyyymmdd_for_chart(date_yyyymmdd: u32) -> String {
@@ -454,6 +572,17 @@ fn compute_token_assets(
         }
 
         let transfers_24h = transfers_24h_map.get(hash.as_slice()).copied().unwrap_or(0);
+        let token_daily = state
+            .store
+            .list_token_daily_deltas(hash)
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        let (live_capacity, live_occupied_capacity) =
+            accumulate_live_capacity(token_daily.into_iter().map(|(_, delta)| {
+                (
+                    delta.live_capacity_delta,
+                    delta.live_occupied_capacity_delta,
+                )
+            }));
 
         result.push(CachedAssetEntry {
             id: format!("0x{}", hex::encode(hash)),
@@ -471,6 +600,8 @@ fn compute_token_assets(
             content_size: None,
             cluster_id: None,
             cluster_name: None,
+            live_capacity: Some(live_capacity.to_string()),
+            live_occupied_capacity: Some(live_occupied_capacity.to_string()),
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
@@ -501,6 +632,17 @@ fn compute_dob_assets(
             cluster_id_bytes,
             agg.name.as_deref(),
         );
+        let cluster_daily = state
+            .store
+            .list_cluster_daily_deltas(cluster_id_bytes)
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        let (live_capacity, live_occupied_capacity) =
+            accumulate_live_capacity(cluster_daily.into_iter().map(|(_, delta)| {
+                (
+                    delta.live_capacity_delta,
+                    delta.live_occupied_capacity_delta,
+                )
+            }));
 
         result.push(CachedAssetEntry {
             id: cluster_hex.clone(),
@@ -518,6 +660,8 @@ fn compute_dob_assets(
             content_size: None,
             cluster_id: Some(cluster_hex),
             cluster_name: display_name,
+            live_capacity: Some(live_capacity.to_string()),
+            live_occupied_capacity: Some(live_occupied_capacity.to_string()),
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
@@ -545,6 +689,17 @@ fn compute_nft_assets(
         let collection_hex = format!("0x{}", hex::encode(collection_id_bytes));
         let standard = agg.standard.asset_standard().to_string();
         let display_name = resolve_nft_collection_name(&standard, agg.name.as_deref());
+        let nft_daily = state
+            .store
+            .list_nft_daily_deltas(collection_id_bytes)
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        let (live_capacity, live_occupied_capacity) =
+            accumulate_live_capacity(nft_daily.into_iter().map(|(_, delta)| {
+                (
+                    delta.live_capacity_delta,
+                    delta.live_occupied_capacity_delta,
+                )
+            }));
 
         result.push(CachedAssetEntry {
             id: collection_hex.clone(),
@@ -562,6 +717,8 @@ fn compute_nft_assets(
             content_size: None,
             cluster_id: Some(collection_hex.clone()),
             cluster_name: display_name,
+            live_capacity: Some(live_capacity.to_string()),
+            live_occupied_capacity: Some(live_occupied_capacity.to_string()),
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,

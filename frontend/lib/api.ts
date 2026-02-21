@@ -494,6 +494,8 @@ interface Asset {
   contentSize: number | null;
   clusterId: string | null;
   clusterName: string | null;
+  liveCapacity: string | null;
+  liveOccupiedCapacity: string | null;
 }
 
 interface AssetQueryParams {
@@ -501,6 +503,16 @@ interface AssetQueryParams {
   type?: 'token' | 'nft' | 'dob';
   cursor?: string;
   search?: string;
+  sortKey?:
+    | 'name'
+    | 'type'
+    | 'supply'
+    | 'transfers24h'
+    | 'holders'
+    | 'transfers'
+    | 'occupied'
+    | 'capacity';
+  sortDirection?: 'asc' | 'desc';
 }
 
 interface TokenHolderParams {
@@ -1146,6 +1158,10 @@ export const api = {
     if (params.type) query.set('type', params.type);
     if (params.cursor) query.set('cursor', params.cursor);
     if (params.search) query.set('search', params.search);
+    if (params.sortKey) {
+      query.set('sort_key', params.sortKey === 'transfers24h' ? 'transfers_24h' : params.sortKey);
+    }
+    if (params.sortDirection) query.set('sort_direction', params.sortDirection);
     return fetchApi(`/assets?${query}`);
   },
 
