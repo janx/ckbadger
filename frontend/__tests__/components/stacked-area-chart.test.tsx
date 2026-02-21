@@ -91,4 +91,45 @@ describe('StackedAreaChart', () => {
     expect(screen.getByText('59.40M')).toBeInTheDocument();
     expect(screen.getByText('45.03B')).toBeInTheDocument();
   });
+
+  it('truncates long hash labels in tooltip to avoid overflow', () => {
+    const longHashLabel = '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
+    render(
+      <StackedAreaChart
+        data={[
+          {
+            date: '2026-02-19',
+            values: {
+              longHash: '42',
+            },
+          },
+        ]}
+        series={[{ key: 'longHash', label: longHashLabel, color: '#38bdf8' }]}
+        isPercentage
+      />
+    );
+
+    const svg = document.querySelector('svg');
+    expect(svg).toBeTruthy();
+
+    Object.defineProperty(svg, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({
+        x: 0,
+        y: 0,
+        left: 0,
+        top: 0,
+        right: 600,
+        bottom: 240,
+        width: 600,
+        height: 240,
+        toJSON: () => ({}),
+      }),
+    });
+
+    fireEvent.mouseMove(svg!, { clientX: 10, clientY: 10 });
+
+    expect(screen.getByText('0x12345678...90abcdef:')).toBeInTheDocument();
+    expect(screen.queryByText(`${longHashLabel}:`)).not.toBeInTheDocument();
+  });
 });

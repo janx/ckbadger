@@ -182,7 +182,11 @@ describe('ScriptDetailPage', () => {
     expect(screen.getAllByText('Cells').length).toBeGreaterThan(0);
     expect(screen.queryByText('Occupation History')).not.toBeInTheDocument();
     expect(screen.queryByText('Selected Deployment Utilization')).not.toBeInTheDocument();
-    expect(screen.getByTestId('script-ref-semantics')).toBeInTheDocument();
+    const refSemantics = screen.getByTestId('script-ref-semantics');
+    expect(refSemantics).toBeInTheDocument();
+    expect(
+      within(refSemantics).getByRole('link', { name: 'Reference doc: data vs type hash semantics' })
+    ).toHaveAttribute('href', 'https://docs.nervos.org/docs/tech-explanation/data-type-diff');
     expect(screen.getAllByText('Script Ref').length).toBeGreaterThan(0);
     expect(screen.getAllByText(/^Occupied:/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/^Unoccupied:/).length).toBeGreaterThan(0);

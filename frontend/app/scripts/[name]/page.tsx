@@ -404,6 +404,14 @@ export default function ScriptDetailPage() {
                   `type` favors upgradability; `data` family favors deterministic, reproducible
                   execution.
                 </div>
+                <a
+                  href="https://docs.nervos.org/docs/tech-explanation/data-type-diff"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-terminal-green mt-2 inline-block text-xs hover:underline"
+                >
+                  Reference doc: data vs type hash semantics
+                </a>
               </div>
             </div>
             <div className="overflow-x-auto">

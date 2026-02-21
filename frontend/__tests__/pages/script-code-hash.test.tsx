@@ -87,6 +87,9 @@ describe('ScriptByCodeHashPage', () => {
     expect(screen.getByText('Reference Semantics')).toBeInTheDocument();
     expect(screen.getByText(/bytecode hash ref family \(data\/data1\/data2\)/)).toBeInTheDocument();
     expect(screen.getByText(/Tradeoff: choose type for upgradeability/)).toBeInTheDocument();
+    expect(
+      screen.getByRole('link', { name: 'Reference doc: data vs type hash semantics' })
+    ).toHaveAttribute('href', 'https://docs.nervos.org/docs/tech-explanation/data-type-diff');
     expect(screen.getByText('type (upgradeable ref)')).toBeInTheDocument();
     expect(screen.getByText('Type + Data')).toBeInTheDocument();
     expect(

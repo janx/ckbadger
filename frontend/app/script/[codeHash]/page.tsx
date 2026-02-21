@@ -334,6 +334,16 @@ export default function ScriptByCodeHashPage() {
                   Tradeoff: choose type for upgradeability, choose data/data1/data2 for fixed code
                   behavior.
                 </div>
+                <div>
+                  <a
+                    href="https://docs.nervos.org/docs/tech-explanation/data-type-diff"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-terminal-green hover:underline"
+                  >
+                    Reference doc: data vs type hash semantics
+                  </a>
+                </div>
               </div>
             </div>
             {knownScript && (

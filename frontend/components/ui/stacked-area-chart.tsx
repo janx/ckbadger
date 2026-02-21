@@ -27,6 +27,8 @@ interface StackedAreaChartProps {
   valueUnit?: 'raw' | 'shannon';
 }
 
+const TOOLTIP_WIDTH = 240;
+
 function formatValue(val: number | undefined, isPercentage = false): string {
   if (val === undefined || val === null || isNaN(val)) return '-';
   if (isPercentage) return `${val.toFixed(2)}%`;
@@ -67,6 +69,17 @@ function parseChartValue(value: string | undefined, valueUnit: 'raw' | 'shannon'
   if (valueUnit === 'shannon') return parseShannonToCkb(value);
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function formatTooltipLabel(label: string): string {
+  // Script hash labels are common on occupation charts; keep both head and tail.
+  if (label.startsWith('0x') && label.length > 20) {
+    return `${label.slice(0, 10)}...${label.slice(-8)}`;
+  }
+  if (label.length > 24) {
+    return `${label.slice(0, 21)}...`;
+  }
+  return label;
 }
 
 export function StackedAreaChart({
@@ -496,12 +509,12 @@ export function StackedAreaChart({
 
         {hoverIndex !== null && hoverIndex < data.length && data[hoverIndex] && (
           <g
-            transform={`translate(${Math.min(xScale(hoverIndex) + 10, width - 160)}, ${padding.top + 10})`}
+            transform={`translate(${Math.min(xScale(hoverIndex) + 10, width - TOOLTIP_WIDTH - 10)}, ${padding.top + 10})`}
           >
             <rect
               x={0}
               y={0}
-              width={150}
+              width={TOOLTIP_WIDTH}
               height={20 + series.length * 14 + (overlayLine ? 14 : 0)}
               rx={4}
               fill="#0f172a"
@@ -524,8 +537,9 @@ export function StackedAreaChart({
                 className="fill-slate-400 font-mono tabular-nums"
                 fontSize={10}
               >
+                <title>{s.label}</title>
                 <tspan fill={s.color}>● </tspan>
-                <tspan>{s.label}: </tspan>
+                <tspan>{formatTooltipLabel(s.label)}: </tspan>
                 <tspan className="fill-white">
                   {formatValue(stackedValues[hoverIndex][s.key], isPercentage)}
                 </tspan>
@@ -538,8 +552,9 @@ export function StackedAreaChart({
                 className="fill-slate-400 font-mono tabular-nums"
                 fontSize={10}
               >
+                <title>{overlayLine.label}</title>
                 <tspan fill={overlayLine.color}>━ </tspan>
-                <tspan>{overlayLine.label}: </tspan>
+                <tspan>{formatTooltipLabel(overlayLine.label)}: </tspan>
                 <tspan className="fill-white">{formatValue(overlayValues[hoverIndex])}</tspan>
               </text>
             )}
