@@ -111,6 +111,10 @@ const mockLargeDataCell = {
   data: `0x${'ab'.repeat(2048)}`,
 };
 
+const UNKNOWN_CODE_HASH = '0x709f3fda1234567890abcdef1234567890abcdef1234567890abcdefcce08649';
+const DEPLOYMENT_TYPE_HASH = '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
+const DEPLOYMENT_DATA_HASH = '0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649';
+
 vi.mock('@/lib/api', () => ({
   api: {
     getCell: vi.fn(),
@@ -214,6 +218,49 @@ describe('CellDetailPage', () => {
     expect(screen.getByText('Compensation Earned')).toBeInTheDocument();
     const ckbElements = screen.getAllByText(/CKB$/);
     expect(ckbElements.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('routes unknown script deployment entries to code-hash detail page', async () => {
+    mockGetCell.mockResolvedValue({
+      ...mockCellWithDao,
+      codeCellOf: [
+        {
+          name: 'Unknown',
+          codeHash: UNKNOWN_CODE_HASH,
+          hashType: 'data',
+          deploymentTypeHash: DEPLOYMENT_TYPE_HASH,
+          deploymentDataHash: DEPLOYMENT_DATA_HASH,
+        },
+        {
+          name: 'Default Lock',
+          codeHash: DEPLOYMENT_TYPE_HASH,
+          hashType: 'type',
+          deploymentTypeHash: DEPLOYMENT_TYPE_HASH,
+          deploymentDataHash: DEPLOYMENT_DATA_HASH,
+        },
+      ],
+    });
+
+    renderWithQueryClient(<CellDetailPage />);
+
+    const unknownLink = await screen.findByRole('link', { name: 'Unknown' });
+    expect(unknownLink).toHaveAttribute(
+      'href',
+      `/script/${DEPLOYMENT_TYPE_HASH}?hashType=type&kind=both`
+    );
+    expect(document.querySelector('a[href="/scripts/Unknown"]')).toBeNull();
+
+    expect(screen.getByRole('link', { name: 'Default Lock' })).toHaveAttribute(
+      'href',
+      '/scripts/Default%20Lock'
+    );
+    expect(
+      document.querySelector(`a[href="/script/${DEPLOYMENT_TYPE_HASH}?hashType=type&kind=both"]`)
+    ).toBeTruthy();
+    expect(
+      document.querySelector(`a[href="/script/${DEPLOYMENT_DATA_HASH}?hashType=data&kind=both"]`)
+    ).toBeTruthy();
+    expect(screen.getByText(/bytecode-hash family/)).toBeInTheDocument();
   });
 
   it('renders withdrawing DAO cell status correctly', async () => {

@@ -20,6 +20,7 @@ import { Address } from '@/components/ui/address';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { CellGraph } from '@/components/cell-graph';
 import { api, type CellDep, type GraphNode, type ScriptLookupResponse } from '@/lib/api';
+import { getScriptRefBadgeLabel, getScriptRefQueryHashType } from '@/lib/script-ref';
 import { formatTimeAgo, formatCkbAmount } from '@/lib/utils';
 import { useCyclesCalculation } from '@/hooks/useCyclesCalculation';
 
@@ -504,7 +505,7 @@ function getScriptHref({
   if (hasKnownScriptName(scriptName)) {
     return `/scripts/${encodeURIComponent(scriptName!.trim())}`;
   }
-  return `/script/${codeHash}?hashType=${encodeURIComponent(hashType ?? 'type')}&kind=${scriptKind}`;
+  return `/script/${codeHash}?hashType=${encodeURIComponent(getScriptRefQueryHashType(hashType))}&kind=${scriptKind}`;
 }
 
 function ScriptLabel({
@@ -723,9 +724,12 @@ function ScriptsSummaryTab({ tx, scriptLookup }: TabProps) {
                   </Link>
                 )}
               </div>
-              <Badge variant="gray">
-                {script.count} cell{script.count > 1 ? 's' : ''}
-              </Badge>
+              <div className="flex items-center gap-2">
+                <Badge variant="gray">{getScriptRefBadgeLabel(script.hashType)}</Badge>
+                <Badge variant="gray">
+                  {script.count} cell{script.count > 1 ? 's' : ''}
+                </Badge>
+              </div>
             </TerminalRow>
           ))}
           {scriptSummary.lockScripts.size === 0 && (
@@ -775,9 +779,12 @@ function ScriptsSummaryTab({ tx, scriptLookup }: TabProps) {
                   </Link>
                 )}
               </div>
-              <Badge variant="gray">
-                {script.count} cell{script.count > 1 ? 's' : ''}
-              </Badge>
+              <div className="flex items-center gap-2">
+                <Badge variant="gray">{getScriptRefBadgeLabel(script.hashType)}</Badge>
+                <Badge variant="gray">
+                  {script.count} cell{script.count > 1 ? 's' : ''}
+                </Badge>
+              </div>
             </TerminalRow>
           ))}
           {scriptSummary.typeScripts.size === 0 && (

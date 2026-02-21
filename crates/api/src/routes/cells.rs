@@ -11,6 +11,7 @@ use ckbadger_common::dao::{
 };
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::cache::{CacheKeys, CacheTtl};
@@ -18,7 +19,9 @@ use crate::response::{
     decode_cursor, encode_cursor, ok, ApiError, ApiResult, CursorPaginatedResponse,
 };
 use crate::utils::{
-    address_to_lock_script_hash, is_ckb_address, script_to_address, shannon_to_ckb,
+    address_to_lock_script_hash, deployment_key_for_script, deployment_reference_hashes,
+    is_ckb_address, is_known_script_name, merge_script_info_for_reference,
+    resolve_code_hash_for_hash_type, script_to_address, shannon_to_ckb,
 };
 use crate::AppState;
 use ckbadger_store::keys;
@@ -186,6 +189,10 @@ pub struct CodeCellScript {
     pub name: String,
     pub code_hash: String,
     pub hash_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deployment_type_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deployment_data_hash: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -581,19 +588,46 @@ async fn list_cells_by_script(
     )
     .map_err(|_| ApiError::bad_request("Invalid code_hash hex"))?;
 
-    let _hash_type_num = parse_hash_type(&params.hash_type).ok_or_else(|| {
+    let hash_type_num = parse_hash_type(&params.hash_type).ok_or_else(|| {
         ApiError::bad_request("Invalid hash_type. Must be one of: data, type, data1, data2")
     })?;
 
+    let all_script_infos: Vec<ckbadger_store::ScriptInfo> = state
+        .store
+        .list_script_infos()
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .into_iter()
+        .map(|(_, info)| info)
+        .collect();
+
+    // "type" references are not universally available. If this deployment has no type reference,
+    // return empty instead of silently mapping to data-family references.
+    if hash_type_num == 1 {
+        if let Some(info) = merge_script_info_for_reference(&all_script_infos, &code_hash_bytes) {
+            let (type_ref, _) = deployment_reference_hashes(&info);
+            if type_ref.is_none() {
+                return ok(CursorPaginatedResponse::new(
+                    Vec::new(),
+                    0,
+                    limit as i64,
+                    None,
+                ));
+            }
+        }
+    }
+
+    let resolved_code_hash =
+        resolve_code_hash_for_hash_type(&all_script_infos, &code_hash_bytes, &params.hash_type)
+            .unwrap_or_else(|| code_hash_bytes.clone());
+
     let script_kind = params.script_kind.as_str();
 
-    // Look up script info from the store to get pre-aggregated count
-    let script_info = state
-        .store
-        .get_script_info(&code_hash_bytes)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    // Look up script info from the resolved reference hash to get count.
+    let script_info = all_script_infos
+        .iter()
+        .find(|info| info.code_hash == resolved_code_hash);
 
-    let total: i64 = match (script_kind, &script_info) {
+    let total: i64 = match (script_kind, script_info) {
         ("lock", Some(si)) => si.lock_live_cells_count,
         ("type", Some(si)) => si.type_live_cells_count,
         (_, Some(si)) => si.lock_live_cells_count + si.type_live_cells_count,
@@ -611,21 +645,21 @@ async fn list_cells_by_script(
     let results: Vec<(Vec<u8>, i16, ckbadger_store::LiveCellInfo)> = match script_kind {
         "lock" => state
             .store
-            .list_cells_by_lock_code_hash(&code_hash_bytes, fetch_limit, after_key_ref)
+            .list_cells_by_lock_code_hash(&resolved_code_hash, fetch_limit, after_key_ref)
             .map_err(|e| ApiError::internal(e.to_string()))?,
         "type" => state
             .store
-            .list_cells_by_type_code_hash(&code_hash_bytes, fetch_limit, after_key_ref)
+            .list_cells_by_type_code_hash(&resolved_code_hash, fetch_limit, after_key_ref)
             .map_err(|e| ApiError::internal(e.to_string()))?,
         _ => {
             // "both": merge results from lock and type indexes
             let mut merged = state
                 .store
-                .list_cells_by_lock_code_hash(&code_hash_bytes, fetch_limit, after_key_ref)
+                .list_cells_by_lock_code_hash(&resolved_code_hash, fetch_limit, after_key_ref)
                 .map_err(|e| ApiError::internal(e.to_string()))?;
             let type_results = state
                 .store
-                .list_cells_by_type_code_hash(&code_hash_bytes, fetch_limit, after_key_ref)
+                .list_cells_by_type_code_hash(&resolved_code_hash, fetch_limit, after_key_ref)
                 .map_err(|e| ApiError::internal(e.to_string()))?;
             for r in type_results {
                 if merged.len() >= fetch_limit {
@@ -646,7 +680,7 @@ async fn list_cells_by_script(
     let next_cursor = if has_more {
         results.last().map(|(tx_hash, output_index, info)| {
             encode_cell_cursor(
-                &code_hash_bytes,
+                &resolved_code_hash,
                 info.created_at_block,
                 tx_hash,
                 *output_index,
@@ -797,34 +831,68 @@ fn lookup_code_cell_scripts(
     data_hash: &[u8],
     type_script_hash: Option<&Vec<u8>>,
 ) -> Option<Vec<CodeCellScript>> {
-    let mut scripts = Vec::new();
+    let all_script_infos: Vec<ckbadger_store::ScriptInfo> = store
+        .list_script_infos()
+        .ok()?
+        .into_iter()
+        .map(|(_, info)| info)
+        .collect();
 
-    // Look up by data hash (for data/data1/data2 hash types)
-    if let Ok(Some(si)) = store.get_script_info(data_hash) {
-        let hash_type_str = match si.hash_type {
-            0 => "data",
-            2 => "data1",
-            4 => "data2",
-            _ => "data",
+    let mut scripts: Vec<CodeCellScript> = Vec::new();
+    let mut deployment_index: HashMap<Vec<u8>, usize> = HashMap::new();
+
+    let mut upsert = |reference_hash: &[u8], hash_type_hint: &str| {
+        let Some(resolved) = merge_script_info_for_reference(&all_script_infos, reference_hash)
+        else {
+            return;
         };
-        scripts.push(CodeCellScript {
-            name: si.name.unwrap_or_else(|| "Unknown".to_string()),
-            code_hash: format!("0x{}", hex::encode(&si.code_hash)),
-            hash_type: hash_type_str.to_string(),
-        });
-    }
 
-    // Look up by type script hash (for "type" hash type)
-    if let Some(type_hash) = type_script_hash {
-        if let Ok(Some(si)) = store.get_script_info(type_hash) {
-            if si.hash_type == 1 {
-                scripts.push(CodeCellScript {
-                    name: si.name.unwrap_or_else(|| "Unknown".to_string()),
-                    code_hash: format!("0x{}", hex::encode(&si.code_hash)),
-                    hash_type: "type".to_string(),
-                });
+        let deployment_key = deployment_key_for_script(&resolved);
+        let code_hash_for_link =
+            resolve_code_hash_for_hash_type(&all_script_infos, reference_hash, "type")
+                .unwrap_or_else(|| reference_hash.to_vec());
+        let (deployment_type_hash, deployment_data_hash) = deployment_reference_hashes(&resolved);
+        let name = resolved.name.unwrap_or_else(|| "Unknown".to_string());
+
+        let entry = CodeCellScript {
+            name,
+            code_hash: format!("0x{}", hex::encode(code_hash_for_link)),
+            hash_type: hash_type_hint.to_string(),
+            deployment_type_hash: deployment_type_hash
+                .as_ref()
+                .map(|h| format!("0x{}", hex::encode(h))),
+            deployment_data_hash: deployment_data_hash
+                .as_ref()
+                .map(|h| format!("0x{}", hex::encode(h))),
+        };
+
+        if let Some(idx) = deployment_index.get(&deployment_key).copied() {
+            let existing = &mut scripts[idx];
+            if !is_known_script_name(Some(existing.name.as_str()))
+                && is_known_script_name(Some(entry.name.as_str()))
+            {
+                existing.name = entry.name.clone();
             }
+            if existing.hash_type != "type" && entry.hash_type == "type" {
+                existing.hash_type = "type".to_string();
+                existing.code_hash = entry.code_hash.clone();
+            }
+            if existing.deployment_type_hash.is_none() {
+                existing.deployment_type_hash = entry.deployment_type_hash.clone();
+            }
+            if existing.deployment_data_hash.is_none() {
+                existing.deployment_data_hash = entry.deployment_data_hash.clone();
+            }
+            return;
         }
+
+        deployment_index.insert(deployment_key, scripts.len());
+        scripts.push(entry);
+    };
+
+    upsert(data_hash, "data");
+    if let Some(type_hash) = type_script_hash {
+        upsert(type_hash, "type");
     }
 
     if scripts.is_empty() {

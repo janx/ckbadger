@@ -15,6 +15,11 @@ import { PageHeader, Badge } from '@/components/ui/page-header';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, KnownScript } from '@/lib/api';
+import {
+  getScriptRefBadgeLabel,
+  getScriptRefVerboseLabel,
+  normalizeScriptRefHashType,
+} from '@/lib/script-ref';
 import { formatCkbCompact, truncateHash } from '@/lib/utils';
 
 type SortDirection = 'asc' | 'desc';
@@ -121,15 +126,12 @@ export default function ScriptsPage() {
   const scripts = data?.data ?? [];
   const hasKnownScriptName = (name: string | null | undefined): boolean =>
     Boolean(name && name.trim() && name.trim().toLowerCase() !== UNKNOWN_SCRIPT_NAME);
-  const getScriptHashTypeLabel = (script: KnownScript): string => script.hashType ?? 'type';
   const getScriptRefDisplay = (script: KnownScript): string =>
-    `${getScriptHashTypeLabel(script)} · ${truncateHash(script.codeHash, 10, 8)}`;
+    `${getScriptRefBadgeLabel(script.hashType)} · ${truncateHash(script.codeHash, 10, 8)}`;
   const getScriptRefFull = (script: KnownScript): string => {
-    const hashType = getScriptHashTypeLabel(script);
+    const hashType = getScriptRefVerboseLabel(script.hashType);
     return `${hashType}:${script.codeHash}`;
   };
-  const isScriptHashType = (value: string | null): value is 'type' | 'data' | 'data1' | 'data2' =>
-    value === 'type' || value === 'data' || value === 'data1' || value === 'data2';
   const normalizeScriptKind = (value: string | null): 'lock' | 'type' | 'both' | undefined => {
     if (value === 'lock' || value === 'type' || value === 'both') return value;
     if (value === 'lock+type') return 'both';
@@ -141,7 +143,7 @@ export default function ScriptsPage() {
     }
 
     const query = new URLSearchParams();
-    const hashType = isScriptHashType(script.hashType) ? script.hashType : null;
+    const hashType = normalizeScriptRefHashType(script.hashType);
     const kind = normalizeScriptKind(script.scriptKind);
     if (hashType) query.set('hashType', hashType);
     if (kind) query.set('kind', kind);

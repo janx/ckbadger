@@ -15,7 +15,10 @@ use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedA
 use crate::response::{
     decode_cursor_single, encode_cursor_single, ok, ApiError, ApiResult, CursorPaginatedResponse,
 };
-use crate::utils::parse_chart_date_range;
+use crate::utils::{
+    deployment_reference_hashes, is_known_script_name, merge_script_info_for_reference,
+    parse_chart_date_range, related_code_hashes_for_reference,
+};
 use crate::AppState;
 
 type ApiRouteError = (StatusCode, Json<ApiError>);
@@ -151,6 +154,8 @@ pub struct ScriptLookupInfo {
     pub script_kind: Option<String>,
     pub decoder_type: Option<String>,
     pub hash_type: Option<String>,
+    pub deployment_type_hash: Option<String>,
+    pub deployment_data_hash: Option<String>,
     pub code_cell_tx_hash: Option<String>,
     pub code_cell_output_index: Option<i32>,
     pub live_cells_count: i64,
@@ -372,6 +377,7 @@ fn script_info_to_response(
         + info.type_live_capacity_sum as i128)
         .max(0)
         .to_string();
+    let (deployment_type_hash, deployment_data_hash) = deployment_reference_hashes(info);
 
     ScriptResponse {
         code_hash: format!("0x{}", hex::encode(&info.code_hash)),
@@ -384,8 +390,12 @@ fn script_info_to_response(
         decoder_type: None,
         network: network.to_string(),
         hash_type: hash_type_str,
-        data_hash: None,
-        type_hash: None,
+        data_hash: deployment_data_hash
+            .as_ref()
+            .map(|h| format!("0x{}", hex::encode(h))),
+        type_hash: deployment_type_hash
+            .as_ref()
+            .map(|h| format!("0x{}", hex::encode(h))),
         tag: None,
         deprecated: false,
         is_system: false,
@@ -420,15 +430,18 @@ async fn lookup_scripts(
     let code_hash_bytes =
         code_hash_bytes.map_err(|_| ApiError::bad_request("Invalid hex in code_hashes"))?;
 
+    let all_script_infos: Vec<ckbadger_store::ScriptInfo> = state
+        .store
+        .list_script_infos()
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .into_iter()
+        .map(|(_, info)| info)
+        .collect();
+
     let mut result: HashMap<String, ScriptLookupInfo> = HashMap::new();
 
     for code_hash in &code_hash_bytes {
-        let info = state
-            .store
-            .get_script_info(code_hash)
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-
-        if let Some(info) = info {
+        if let Some(info) = merge_script_info_for_reference(&all_script_infos, code_hash) {
             let code_hash_hex = format!("0x{}", hex::encode(code_hash));
 
             let script_kind = if info.lock_cells_count > 0 && info.type_cells_count > 0 {
@@ -459,6 +472,7 @@ async fn lookup_scripts(
 
             let (code_cell_tx_hash, code_cell_output_index) =
                 resolve_code_cell(&info, &state.store);
+            let (deployment_type_hash, deployment_data_hash) = deployment_reference_hashes(&info);
 
             result.insert(
                 code_hash_hex.clone(),
@@ -468,6 +482,12 @@ async fn lookup_scripts(
                     script_kind,
                     decoder_type: None,
                     hash_type: hash_type_str,
+                    deployment_type_hash: deployment_type_hash
+                        .as_ref()
+                        .map(|h| format!("0x{}", hex::encode(h))),
+                    deployment_data_hash: deployment_data_hash
+                        .as_ref()
+                        .map(|h| format!("0x{}", hex::encode(h))),
                     code_cell_tx_hash,
                     code_cell_output_index,
                     live_cells_count,
@@ -522,7 +542,15 @@ async fn get_code_cell(
     )
     .map_err(|_| ApiError::bad_request("Invalid code_hash hex"))?;
 
-    // Build a minimal ScriptInfo for resolve_code_cell
+    let all_script_infos: Vec<ckbadger_store::ScriptInfo> = state
+        .store
+        .list_script_infos()
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .into_iter()
+        .map(|(_, info)| info)
+        .collect();
+
+    // Build a minimal ScriptInfo for resolve_code_cell when this hash is unknown.
     let hash_type = match params.hash_type.as_str() {
         "data" => 0,
         "type" => 1,
@@ -530,11 +558,7 @@ async fn get_code_cell(
         "data2" => 4,
         _ => 0,
     };
-    let script_info = state
-        .store
-        .get_script_info(&code_hash_bytes)
-        .ok()
-        .flatten()
+    let script_info = merge_script_info_for_reference(&all_script_infos, &code_hash_bytes)
         .unwrap_or_else(|| ckbadger_store::ScriptInfo {
             code_hash: code_hash_bytes,
             hash_type,
@@ -580,6 +604,19 @@ async fn list_scripts(
             true
         })
         .collect();
+
+    let all_filtered_infos: Vec<ckbadger_store::ScriptInfo> =
+        filtered.iter().map(|(_, info)| info.clone()).collect();
+    filtered.retain(|(_, info)| {
+        if is_known_script_name(info.name.as_deref()) {
+            return true;
+        }
+        let Some(resolved) = merge_script_info_for_reference(&all_filtered_infos, &info.code_hash)
+        else {
+            return true;
+        };
+        !is_known_script_name(resolved.name.as_deref())
+    });
 
     // First sort by display name, then code hash to ensure deterministic dedup selection.
     filtered.sort_by(|a, b| {
@@ -965,11 +1002,26 @@ async fn get_script_occupation_chart_by_code_hash(
         .map_err(|msg| ApiError::bad_request(&msg))?;
 
     let code_hash = parse_code_hash_hex(&params.code_hash)?;
-    let kind_filter = parse_script_kind_filter(params.script_kind.as_deref())?;
-    let targets = kind_filter
+    let all_script_infos: Vec<ckbadger_store::ScriptInfo> = state
+        .store
+        .list_script_infos()
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .into_iter()
-        .map(|is_type| (code_hash.clone(), is_type))
+        .map(|(_, info)| info)
         .collect();
+    let related_hashes = related_code_hashes_for_reference(&all_script_infos, &code_hash);
+    let target_hashes = if related_hashes.is_empty() {
+        vec![code_hash.clone()]
+    } else {
+        related_hashes
+    };
+    let kind_filter = parse_script_kind_filter(params.script_kind.as_deref())?;
+    let mut targets = Vec::new();
+    for target_hash in target_hashes {
+        for is_type in &kind_filter {
+            targets.push((target_hash.clone(), *is_type));
+        }
+    }
 
     ok(build_script_occupation_chart(
         &state,

@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { Hash } from './hash';
+import { getScriptRefBadgeLabel } from '@/lib/script-ref';
 import { cn } from '@/lib/utils';
 import type { ScriptLookupInfo } from '@/lib/api';
 
@@ -81,7 +82,7 @@ export function ScriptView({
           <div className="flex items-start gap-2">
             <span className="w-20 shrink-0 text-slate-500">hash_type:</span>
             <span className="text-terminal-green rounded bg-slate-800 px-2 py-0.5 text-xs">
-              {script.hashType}
+              {getScriptRefBadgeLabel(script.hashType)}
             </span>
           </div>
           <div className="flex items-start gap-2">

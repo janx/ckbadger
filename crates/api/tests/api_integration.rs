@@ -895,12 +895,322 @@ async fn test_scripts_list_keeps_unknown_entries_distinct() {
 }
 
 #[tokio::test]
+async fn test_script_lookup_and_code_cell_resolve_deployment_reference_alias() {
+    let store = test_store();
+
+    let data_hash = vec![0x70; 32];
+    let type_hash = vec![0x9b; 32];
+    let code_cell_tx_hash = vec![0xe2; 32];
+    let code_cell_output_index = 1i16;
+
+    store
+        .put_script_info_direct(
+            &type_hash,
+            &ScriptInfo {
+                code_hash: type_hash.clone(),
+                hash_type: 1,
+                name: Some("Default Lock".to_string()),
+                dep_type_hash: Some(type_hash.clone()),
+                dep_data_hash: Some(data_hash.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    store
+        .put_script_info_direct(
+            &data_hash,
+            &ScriptInfo {
+                code_hash: data_hash.clone(),
+                hash_type: 0,
+                lock_live_cells_count: 10,
+                lock_live_capacity_sum: 1_000_000_000,
+                lock_live_occupied_capacity_sum: 600_000_000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_cell(
+        &code_cell_tx_hash,
+        code_cell_output_index,
+        &LiveCellInfo {
+            capacity: 100_00000000,
+            created_at_block: 123,
+            lock_script_hash: vec![0x11; 32],
+            lock_code_hash: vec![0x22; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: Some(type_hash.clone()),
+            type_code_hash: Some(vec![0x33; 32]),
+            type_args: Some(vec![]),
+            data_size: 0,
+            occupied_capacity: 61_00000000,
+        },
+    );
+    batch.put_cell_by_type(&type_hash, 123, &code_cell_tx_hash, code_cell_output_index);
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let data_hash_hex = format!("0x{}", hex::encode(&data_hash));
+    let code_cell_tx_hash_hex = format!("0x{}", hex::encode(&code_cell_tx_hash));
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/scripts/lookup")
+        .header("content-type", "application/json")
+        .body(Body::from(format!(
+            r#"{{"codeHashes":["{}"]}}"#,
+            data_hash_hex
+        )))
+        .unwrap();
+
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json[&data_hash_hex]["name"], "Default Lock");
+    assert_eq!(json[&data_hash_hex]["hashType"], "data");
+    assert_eq!(
+        json[&data_hash_hex]["codeCellTxHash"],
+        code_cell_tx_hash_hex
+    );
+    assert_eq!(json[&data_hash_hex]["codeCellOutputIndex"], 1);
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/scripts/code-cell?code_hash={}&hash_type=data",
+            data_hash_hex
+        ))
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["txHash"], code_cell_tx_hash_hex);
+    assert_eq!(json["outputIndex"], 1);
+}
+
+#[tokio::test]
+async fn test_scripts_list_merges_unknown_reference_into_known_deployment() {
+    let store = test_store();
+
+    let data_hash = vec![0x70; 32];
+    let type_hash = vec![0x9b; 32];
+
+    store
+        .put_script_info_direct(
+            &type_hash,
+            &ScriptInfo {
+                code_hash: type_hash.clone(),
+                hash_type: 1,
+                name: Some("Default Lock".to_string()),
+                dep_type_hash: Some(type_hash.clone()),
+                dep_data_hash: Some(data_hash.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    store
+        .put_script_info_direct(
+            &data_hash,
+            &ScriptInfo {
+                code_hash: data_hash.clone(),
+                hash_type: 0,
+                name: None,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/scripts?limit=20")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let data = json["data"].as_array().unwrap();
+
+    assert_eq!(json["total"], 1);
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0]["name"], "Default Lock");
+}
+
+#[tokio::test]
+async fn test_cells_by_script_resolves_reference_hash_type_alias() {
+    let store = test_store();
+
+    let data_hash = vec![0x70; 32];
+    let type_hash = vec![0x9b; 32];
+    let tx_hash = vec![0xab; 32];
+
+    store
+        .put_script_info_direct(
+            &type_hash,
+            &ScriptInfo {
+                code_hash: type_hash.clone(),
+                hash_type: 1,
+                name: Some("Default Lock".to_string()),
+                dep_type_hash: Some(type_hash.clone()),
+                dep_data_hash: Some(data_hash.clone()),
+                lock_live_cells_count: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    store
+        .put_script_info_direct(
+            &data_hash,
+            &ScriptInfo {
+                code_hash: data_hash.clone(),
+                hash_type: 0,
+                name: None,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_cell(
+        &tx_hash,
+        0,
+        &LiveCellInfo {
+            capacity: 100_00000000,
+            created_at_block: 123,
+            lock_script_hash: vec![0x11; 32],
+            lock_code_hash: type_hash.clone(),
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 61_00000000,
+        },
+    );
+    batch.put_cell_by_lock_code(&type_hash, 123, &tx_hash, 0);
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/cells/by-script?code_hash=0x{}&hash_type=type&script_kind=lock&limit=20",
+            hex::encode(&data_hash)
+        ))
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let data = json["data"].as_array().unwrap();
+
+    assert_eq!(json["total"], 1);
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0]["txHash"], format!("0x{}", hex::encode(&tx_hash)));
+}
+
+#[tokio::test]
+async fn test_cells_by_script_type_request_returns_empty_for_data_only_deployment() {
+    let store = test_store();
+
+    let data_hash = vec![0x70; 32];
+    let tx_hash = vec![0xab; 32];
+
+    store
+        .put_script_info_direct(
+            &data_hash,
+            &ScriptInfo {
+                code_hash: data_hash.clone(),
+                hash_type: 0,
+                lock_live_cells_count: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_cell(
+        &tx_hash,
+        0,
+        &LiveCellInfo {
+            capacity: 100_00000000,
+            created_at_block: 123,
+            lock_script_hash: vec![0x11; 32],
+            lock_code_hash: data_hash.clone(),
+            lock_hash_type: 0,
+            lock_args: vec![],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 61_00000000,
+        },
+    );
+    batch.put_cell_by_lock_code(&data_hash, 123, &tx_hash, 0);
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let data_hash_hex = format!("0x{}", hex::encode(&data_hash));
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/cells/by-script?code_hash={}&hash_type=data&script_kind=lock&limit=20",
+            data_hash_hex
+        ))
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["total"], 1);
+    assert_eq!(json["data"].as_array().unwrap().len(), 1);
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/cells/by-script?code_hash={}&hash_type=type&script_kind=lock&limit=20",
+            data_hash_hex
+        ))
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["total"], 0);
+    assert_eq!(json["data"].as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
 async fn test_get_script_returns_deployments_sorted_by_deployed_at() {
     let store = test_store();
     let name = "SECP256K1_BLAKE160".to_string();
 
     let older_code_hash = vec![0x11; 32];
     let newer_code_hash = vec![0x22; 32];
+    let older_data_hash = vec![0x33; 32];
+    let newer_data_hash = vec![0x44; 32];
     let older_tx_hash = vec![0xaa; 32];
     let newer_tx_hash = vec![0xbb; 32];
 
@@ -911,6 +1221,8 @@ async fn test_get_script_returns_deployments_sorted_by_deployed_at() {
                 code_hash: older_code_hash.clone(),
                 hash_type: 1, // type
                 name: Some(name.clone()),
+                dep_type_hash: Some(older_code_hash.clone()),
+                dep_data_hash: Some(older_data_hash.clone()),
                 ..Default::default()
             },
         )
@@ -922,6 +1234,8 @@ async fn test_get_script_returns_deployments_sorted_by_deployed_at() {
                 code_hash: newer_code_hash.clone(),
                 hash_type: 1, // type
                 name: Some(name.clone()),
+                dep_type_hash: Some(newer_code_hash.clone()),
+                dep_data_hash: Some(newer_data_hash.clone()),
                 ..Default::default()
             },
         )
@@ -1015,10 +1329,26 @@ async fn test_get_script_returns_deployments_sorted_by_deployed_at() {
         items[0]["codeHash"],
         serde_json::Value::String(format!("0x{}", hex::encode(&newer_code_hash)))
     );
+    assert_eq!(
+        items[0]["typeHash"],
+        serde_json::Value::String(format!("0x{}", hex::encode(&newer_code_hash)))
+    );
+    assert_eq!(
+        items[0]["dataHash"],
+        serde_json::Value::String(format!("0x{}", hex::encode(&newer_data_hash)))
+    );
     assert_eq!(items[0]["deployedAt"], newer_timestamp);
     assert_eq!(
         items[1]["codeHash"],
         serde_json::Value::String(format!("0x{}", hex::encode(&older_code_hash)))
+    );
+    assert_eq!(
+        items[1]["typeHash"],
+        serde_json::Value::String(format!("0x{}", hex::encode(&older_code_hash)))
+    );
+    assert_eq!(
+        items[1]["dataHash"],
+        serde_json::Value::String(format!("0x{}", hex::encode(&older_data_hash)))
     );
     assert_eq!(items[1]["deployedAt"], older_timestamp);
 }

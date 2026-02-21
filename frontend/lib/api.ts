@@ -1,4 +1,5 @@
 import { normalizeNftAssetId } from '@/lib/nft-collections';
+import type { ScriptRefHashType } from '@/lib/script-ref';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api/v1';
 
@@ -192,6 +193,8 @@ interface CodeCellScript {
   name: string;
   codeHash: string;
   hashType: string;
+  deploymentTypeHash?: string | null;
+  deploymentDataHash?: string | null;
 }
 
 interface CellDaoInfo {
@@ -757,6 +760,8 @@ interface ScriptLookupInfo {
   scriptKind: string | null;
   decoderType: string | null;
   hashType: string | null;
+  deploymentTypeHash?: string | null;
+  deploymentDataHash?: string | null;
   codeCellTxHash: string | null;
   codeCellOutputIndex: number | null;
   liveCellsCount: number;
@@ -1079,7 +1084,7 @@ export const api = {
 
   getCellsByScriptRef: (params: {
     codeHash: string;
-    hashType: string;
+    hashType: ScriptRefHashType;
     scriptKind?: 'lock' | 'type' | 'both';
     limit?: number;
     cursor?: string;
@@ -1492,7 +1497,7 @@ export const api = {
 
   getCodeCell: (
     codeHash: string,
-    hashType: string
+    hashType: ScriptRefHashType
   ): Promise<{ txHash: string | null; outputIndex: number | null }> => {
     const query = new URLSearchParams();
     query.set('code_hash', codeHash);

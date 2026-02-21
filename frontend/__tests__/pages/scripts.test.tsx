@@ -135,7 +135,7 @@ describe('ScriptsPage', () => {
     const unknownCodeHash = '0x010445a300000000000000000000000000000000000000000000000000000001';
     const unknownScriptRefLabel = 'Unlabeled';
     const unknownScriptRefDisplay = 'type · 0x010445a3...00000001';
-    const unknownScriptRefFull = `type:${unknownCodeHash}`;
+    const unknownScriptRefFull = `type ref:${unknownCodeHash}`;
     vi.mocked(api.getScripts).mockResolvedValue({
       data: [
         {
