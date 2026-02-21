@@ -17,7 +17,9 @@ use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
 
 use ckbadger_store::batch::StoreBatch;
-use ckbadger_store::types::{AddressBalance, LiveCellInfo, NftTypeIndex, SporeTypeIndex};
+use ckbadger_store::types::{
+    AddressBalance, CachedBlockHeader, HodlTrackerState, LiveCellInfo, NftTypeIndex, SporeTypeIndex,
+};
 use ckbadger_store::CkbadgerStore;
 
 use crate::cache::CacheInvalidator;
@@ -75,6 +77,22 @@ fn decode_startup_phase(phase: u8) -> Option<&'static str> {
     match phase {
         STARTUP_PHASE_ROLLBACK_CLEANUP => Some("rollback_cleanup"),
         _ => None,
+    }
+}
+
+fn should_rebuild_hodl_tracker_state(state: Option<&HodlTrackerState>, tip_block: i64) -> bool {
+    if tip_block <= 0 {
+        return false;
+    }
+    match state {
+        None => true,
+        Some(state) => {
+            state.date_transitions.is_empty()
+                || state
+                    .date_transitions
+                    .last()
+                    .is_some_and(|(last_block, _)| *last_block > tip_block)
+        }
     }
 }
 
@@ -861,6 +879,7 @@ fn checked_u128_to_i64(value: u128, label: &str) -> Result<i64> {
 fn checked_tx_fee(
     total_input_capacity: i64,
     total_output_capacity: i64,
+    has_dao_input: bool,
     tx_hash: &[u8],
     block_number: i64,
 ) -> Result<i64> {
@@ -875,6 +894,9 @@ fn checked_tx_fee(
     }
 
     if total_input_capacity < total_output_capacity {
+        if has_dao_input {
+            return Ok(0);
+        }
         bail!(
             "tx fee underflow: block={}, tx_hash={}, total_input_capacity={}, total_output_capacity={}",
             block_number,
@@ -1644,6 +1666,7 @@ impl Indexer {
             info!("Startup rollback cleanup phase completed");
         }
         init_result?;
+        self.reconcile_hodl_tracker_with_tip(actual_start)?;
 
         self.maybe_start_label_import();
 
@@ -2164,8 +2187,11 @@ impl Indexer {
                 }
 
                 // Pass 2: Compute input capacity + fee
+                let dao_code_hash =
+                    crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
                 for tx_data in &mut all_tx_data {
                     if !tx_data.is_cellbase {
+                        let mut has_dao_input = false;
                         for input in &tx_data.inputs {
                             let key = (
                                 input.previous_tx_hash.to_vec(),
@@ -2173,13 +2199,22 @@ impl Indexer {
                             );
                             if let Some(info) = input_cell_info.get(&key) {
                                 tx_data.total_input_capacity += info.capacity;
+                                if info.type_code_hash.as_deref() == Some(dao_code_hash.as_slice())
+                                {
+                                    has_dao_input = true;
+                                }
                             } else if let Some(info) = batch_cell_infos.get(&key) {
                                 tx_data.total_input_capacity += info.capacity;
+                                if info.type_code_hash.as_deref() == Some(dao_code_hash.as_slice())
+                                {
+                                    has_dao_input = true;
+                                }
                             }
                         }
                         tx_data.fee = match checked_tx_fee(
                             tx_data.total_input_capacity,
                             tx_data.total_output_capacity,
+                            has_dao_input,
                             &tx_data.hash,
                             tx_data.block_number,
                         ) {
@@ -2745,6 +2780,14 @@ impl Indexer {
                             .cleanup_batch_range(start_block as i64, end_block as i64)
                         {
                             error!("Failed to cleanup partial batch: {:?}", cleanup_err);
+                        } else if let Err(rebuild_err) =
+                            self.rebuild_hodl_tracker_from_store(start_block as i64 - 1)
+                        {
+                            error!(
+                                "Failed to rebuild HODL tracker after batch cleanup: {:?}",
+                                rebuild_err
+                            );
+                            return Err(rebuild_err);
                         }
                         self.request_pipeline_reset("batch write failed");
                         Self::drain_channel(&mut parse_rx).await;
@@ -3005,6 +3048,14 @@ impl Indexer {
                 .cleanup_batch_range(start_block as i64, end_block as i64)
             {
                 error!("Failed to cleanup partial batch: {:?}", cleanup_err);
+            } else if let Err(rebuild_err) =
+                self.rebuild_hodl_tracker_from_store(start_block as i64 - 1)
+            {
+                error!(
+                    "Failed to rebuild HODL tracker after batch cleanup: {:?}",
+                    rebuild_err
+                );
+                return Err(rebuild_err);
             }
             return Err(e);
         }
@@ -3325,8 +3376,10 @@ impl Indexer {
             ));
         }
 
+        let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
         for tx_data in &mut all_tx_data {
             if !tx_data.is_cellbase {
+                let mut has_dao_input = false;
                 for input in &tx_data.inputs {
                     let key = (
                         input.previous_tx_hash.to_vec(),
@@ -3334,13 +3387,20 @@ impl Indexer {
                     );
                     if let Some(info) = input_cell_info.get(&key) {
                         tx_data.total_input_capacity += info.capacity;
+                        if info.type_code_hash.as_deref() == Some(dao_code_hash.as_slice()) {
+                            has_dao_input = true;
+                        }
                     } else if let Some(info) = batch_cell_infos.get(&key) {
                         tx_data.total_input_capacity += info.capacity;
+                        if info.type_code_hash.as_deref() == Some(dao_code_hash.as_slice()) {
+                            has_dao_input = true;
+                        }
                     }
                 }
                 tx_data.fee = checked_tx_fee(
                     tx_data.total_input_capacity,
                     tx_data.total_output_capacity,
+                    has_dao_input,
                     &tx_data.hash,
                     tx_data.block_number,
                 )?;
@@ -7424,6 +7484,150 @@ impl Indexer {
 
     // === update_hodl_wave ===
 
+    fn reconcile_hodl_tracker_with_tip(&self, tip_block: i64) -> Result<()> {
+        let state = self.writer.store().get_hodl_tracker_state()?;
+        if should_rebuild_hodl_tracker_state(state.as_ref(), tip_block) {
+            info!(
+                tip_block,
+                "HODL tracker state is out of sync with DB tip, rebuilding from store"
+            );
+            self.rebuild_hodl_tracker_from_store(tip_block)?;
+        }
+
+        Ok(())
+    }
+
+    fn rebuild_hodl_tracker_from_store(&self, tip_block: i64) -> Result<()> {
+        let store = self.writer.store();
+        if tip_block < 0 {
+            let tracker = HodlWaveTracker::new();
+            store.put_hodl_tracker_state(&tracker.to_state())?;
+            let mut guard = self.hodl_tracker.lock().unwrap();
+            *guard = tracker;
+            info!("Rebuilt HODL tracker from empty state (tip before genesis)");
+            return Ok(());
+        }
+
+        let mut transitions: Vec<(i64, NaiveDate)> = Vec::new();
+        let mut headers_scanned = 0u64;
+        let header_iter = store.iterator_cf(store.cf_block_headers(), rocksdb::IteratorMode::Start);
+        for item in header_iter.flatten() {
+            let (key, value) = item;
+            if key.len() < 8 {
+                continue;
+            }
+            let block_number = ckbadger_store::keys::decode_block_num(&key[..8]);
+            if block_number > tip_block {
+                break;
+            }
+            let header: CachedBlockHeader = bincode::deserialize(&value).map_err(|e| {
+                anyhow!(
+                    "failed to deserialize block header while rebuilding HODL tracker: block={}, error={}",
+                    block_number,
+                    e
+                )
+            })?;
+            let block_date = chrono::DateTime::<Utc>::from_timestamp_millis(header.timestamp)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "invalid block timestamp while rebuilding HODL tracker: block={}, timestamp_ms={}",
+                        block_number,
+                        header.timestamp
+                    )
+                })?
+                .date_naive();
+            match transitions.last() {
+                Some((_, last_date)) if *last_date == block_date => {}
+                _ => transitions.push((block_number, block_date)),
+            }
+            headers_scanned += 1;
+        }
+
+        if transitions.is_empty() {
+            bail!(
+                "cannot rebuild HODL tracker: no block-date transitions up to tip {}",
+                tip_block
+            );
+        }
+
+        let mut capacity_by_date: HashMap<NaiveDate, i128> = HashMap::new();
+        let mut live_cells_scanned = 0u64;
+        let live_iter = store.iterator_cf(store.cf_live_cells(), rocksdb::IteratorMode::Start);
+        for item in live_iter.flatten() {
+            let (_key, value) = item;
+            let info: LiveCellInfo = bincode::deserialize(&value).map_err(|e| {
+                anyhow!(
+                    "failed to deserialize live cell while rebuilding HODL tracker: error={}",
+                    e
+                )
+            })?;
+            if info.created_at_block > tip_block {
+                continue;
+            }
+
+            let idx = transitions.partition_point(|(b, _)| *b <= info.created_at_block);
+            let creation_date = if idx == 0 {
+                transitions[0].1
+            } else {
+                transitions[idx - 1].1
+            };
+            *capacity_by_date.entry(creation_date).or_insert(0) += info.capacity as i128;
+            live_cells_scanned += 1;
+        }
+
+        let mut holder_count = 0i64;
+        let mut balances_scanned = 0u64;
+        let balances_iter =
+            store.iterator_cf(store.cf_addr_balance(), rocksdb::IteratorMode::Start);
+        for item in balances_iter.flatten() {
+            let (_key, value) = item;
+            let balance: AddressBalance = bincode::deserialize(&value).map_err(|e| {
+                anyhow!(
+                    "failed to deserialize address balance while rebuilding HODL tracker: error={}",
+                    e
+                )
+            })?;
+            balances_scanned += 1;
+            if balance.live_cells_count > 0 {
+                holder_count += 1;
+            }
+        }
+
+        let mut capacity_by_date_vec: Vec<(String, i128)> = capacity_by_date
+            .into_iter()
+            .map(|(date, cap)| (date.format("%Y%m%d").to_string(), cap))
+            .collect();
+        capacity_by_date_vec.sort_by(|a, b| a.0.cmp(&b.0));
+        let date_transitions = transitions
+            .iter()
+            .map(|(block, date)| (*block, date.format("%Y%m%d").to_string()))
+            .collect();
+        let last_snapshot_date = transitions
+            .last()
+            .map(|(_, d)| d.format("%Y%m%d").to_string());
+
+        let state = HodlTrackerState {
+            capacity_by_date: capacity_by_date_vec,
+            date_transitions,
+            holder_count,
+            last_snapshot_date,
+        };
+        store.put_hodl_tracker_state(&state)?;
+
+        let mut tracker = self.hodl_tracker.lock().unwrap();
+        *tracker = HodlWaveTracker::from_state(state);
+
+        info!(
+            tip_block,
+            headers_scanned,
+            live_cells_scanned,
+            balances_scanned,
+            holder_count,
+            "Rebuilt HODL tracker from store after rollback"
+        );
+        Ok(())
+    }
+
     /// Feed parsed block data into the HODL wave tracker and write snapshots at day boundaries.
     fn update_hodl_wave(
         &self,
@@ -8374,14 +8578,20 @@ mod tests {
 
     #[test]
     fn test_checked_tx_fee_returns_difference() {
-        let fee = checked_tx_fee(1000, 900, &[0u8; 32], 42).unwrap();
+        let fee = checked_tx_fee(1000, 900, false, &[0u8; 32], 42).unwrap();
         assert_eq!(fee, 100);
     }
 
     #[test]
     fn test_checked_tx_fee_errors_on_underflow() {
-        let err = checked_tx_fee(900, 1000, &[1u8; 32], 42).unwrap_err();
+        let err = checked_tx_fee(900, 1000, false, &[1u8; 32], 42).unwrap_err();
         assert!(err.to_string().contains("tx fee underflow"));
+    }
+
+    #[test]
+    fn test_checked_tx_fee_allows_underflow_for_dao_inputs() {
+        let fee = checked_tx_fee(900, 1000, true, &[2u8; 32], 42).unwrap();
+        assert_eq!(fee, 0);
     }
 
     #[test]
@@ -8862,5 +9072,35 @@ mod tests {
             Some("rollback_cleanup")
         );
         assert_eq!(decode_startup_phase(99), None);
+    }
+
+    #[test]
+    fn test_should_rebuild_hodl_tracker_state_rules() {
+        assert!(!should_rebuild_hodl_tracker_state(None, 0));
+        assert!(should_rebuild_hodl_tracker_state(None, 1));
+
+        let empty = HodlTrackerState {
+            capacity_by_date: vec![],
+            date_transitions: vec![],
+            holder_count: 0,
+            last_snapshot_date: None,
+        };
+        assert!(should_rebuild_hodl_tracker_state(Some(&empty), 100));
+
+        let aligned = HodlTrackerState {
+            capacity_by_date: vec![("20240101".to_string(), 1)],
+            date_transitions: vec![(0, "20240101".to_string()), (100, "20240102".to_string())],
+            holder_count: 1,
+            last_snapshot_date: Some("20240102".to_string()),
+        };
+        assert!(!should_rebuild_hodl_tracker_state(Some(&aligned), 100));
+
+        let ahead = HodlTrackerState {
+            capacity_by_date: vec![("20240101".to_string(), 1)],
+            date_transitions: vec![(0, "20240101".to_string()), (101, "20240102".to_string())],
+            holder_count: 1,
+            last_snapshot_date: Some("20240102".to_string()),
+        };
+        assert!(should_rebuild_hodl_tracker_state(Some(&ahead), 100));
     }
 }

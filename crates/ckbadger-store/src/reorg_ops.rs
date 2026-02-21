@@ -144,6 +144,134 @@ impl RollbackStageProgress {
     }
 }
 
+fn clear_dao_withdraw_request_fields(entry: &mut DaoDepositCacheEntry) {
+    entry.withdraw_request_tx = None;
+    entry.withdraw_request_block = None;
+    entry.withdraw_request_ar = None;
+}
+
+fn clear_dao_withdraw_completion_fields(entry: &mut DaoDepositCacheEntry) {
+    entry.withdraw_block = None;
+    entry.withdraw_tx = None;
+    entry.compensation = None;
+}
+
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(&mut out, "{:02x}", b);
+    }
+    out
+}
+
+fn normalize_dao_entry_for_rollback(
+    entry: &mut DaoDepositCacheEntry,
+    rollback_to: i64,
+) -> anyhow::Result<bool> {
+    let mut changed = false;
+
+    if let Some(request_block) = entry.withdraw_request_block {
+        if request_block > rollback_to {
+            if entry.status != 0 {
+                entry.status = 0;
+                changed = true;
+            }
+            if entry.withdraw_request_tx.is_some()
+                || entry.withdraw_request_block.is_some()
+                || entry.withdraw_request_ar.is_some()
+            {
+                clear_dao_withdraw_request_fields(entry);
+                changed = true;
+            }
+            if entry.withdraw_block.is_some()
+                || entry.withdraw_tx.is_some()
+                || entry.compensation.is_some()
+            {
+                clear_dao_withdraw_completion_fields(entry);
+                changed = true;
+            }
+        }
+    }
+
+    if let Some(withdraw_block) = entry.withdraw_block {
+        if withdraw_block > rollback_to {
+            if entry.status != 1 {
+                entry.status = 1;
+                changed = true;
+            }
+            if entry.withdraw_block.is_some()
+                || entry.withdraw_tx.is_some()
+                || entry.compensation.is_some()
+            {
+                clear_dao_withdraw_completion_fields(entry);
+                changed = true;
+            }
+        }
+    }
+
+    match entry.status {
+        0 => {
+            if entry.withdraw_request_tx.is_some()
+                || entry.withdraw_request_block.is_some()
+                || entry.withdraw_request_ar.is_some()
+            {
+                clear_dao_withdraw_request_fields(entry);
+                changed = true;
+            }
+            if entry.withdraw_block.is_some()
+                || entry.withdraw_tx.is_some()
+                || entry.compensation.is_some()
+            {
+                clear_dao_withdraw_completion_fields(entry);
+                changed = true;
+            }
+        }
+        1 => {
+            if entry.withdraw_request_tx.is_none() || entry.withdraw_request_block.is_none() {
+                anyhow::bail!(
+                    "inconsistent DAO entry after rollback normalization: status=1 missing request fields, deposit_block={}",
+                    entry.deposit_block_number
+                );
+            }
+            if entry.withdraw_block.is_some()
+                || entry.withdraw_tx.is_some()
+                || entry.compensation.is_some()
+            {
+                clear_dao_withdraw_completion_fields(entry);
+                changed = true;
+            }
+        }
+        2 => {
+            if entry.withdraw_request_tx.is_none() || entry.withdraw_request_block.is_none() {
+                anyhow::bail!(
+                    "inconsistent DAO entry after rollback normalization: status=2 missing request fields, deposit_block={}",
+                    entry.deposit_block_number
+                );
+            }
+            if entry.withdraw_block.is_none()
+                || entry.withdraw_tx.is_none()
+                || entry.compensation.is_none()
+            {
+                anyhow::bail!(
+                    "inconsistent DAO entry after rollback normalization: status=2 missing completion fields, deposit_block={}",
+                    entry.deposit_block_number
+                );
+            }
+        }
+        other => {
+            anyhow::bail!(
+                "invalid DAO status in rollback normalization: status={}, deposit_block={}",
+                other,
+                entry.deposit_block_number
+            );
+        }
+    }
+
+    Ok(changed)
+}
+
 impl CkbadgerStore {
     /// Atomic rollback across all CFs to a given block number.
     /// Deletes all data for blocks > rollback_to.
@@ -328,7 +456,99 @@ impl CkbadgerStore {
         }
         stage.finish(cells_restored);
 
-        // 5. Delete date-scoped stats entries from replay cutoff date onward.
+        // 5. Repair DAO deposits across the rollback boundary.
+        let mut dao_deposits_deleted = 0u64;
+        let mut dao_deposits_repaired = 0u64;
+        let mut stage = RollbackStageProgress::new("repair_dao_deposits");
+        let iter = self.iterator_cf(self.cf_dao_deposits(), IteratorMode::Start);
+        for item in iter.flatten() {
+            let (key, value) = item;
+            let mut entry: DaoDepositCacheEntry = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize dao_deposit during rollback: outpoint=0x{}, error={}",
+                    bytes_to_hex(&key),
+                    e
+                )
+            })?;
+
+            if entry.deposit_block_number > rollback_to {
+                batch.delete_cf(self.cf_dao_deposits(), &key);
+                dao_deposits_deleted += 1;
+                stage.tick(dao_deposits_deleted + dao_deposits_repaired);
+                continue;
+            }
+
+            let changed =
+                normalize_dao_entry_for_rollback(&mut entry, rollback_to).map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to normalize dao_deposit during rollback: outpoint=0x{}, {}",
+                        bytes_to_hex(&key),
+                        e
+                    )
+                })?;
+            if changed {
+                let encoded = bincode::serialize(&entry).map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to serialize repaired dao_deposit during rollback: outpoint=0x{}, error={}",
+                        bytes_to_hex(&key),
+                        e
+                    )
+                })?;
+                batch.put_cf(self.cf_dao_deposits(), &key, &encoded);
+                dao_deposits_repaired += 1;
+            }
+            stage.tick(dao_deposits_deleted + dao_deposits_repaired);
+        }
+        stage.finish(dao_deposits_deleted + dao_deposits_repaired);
+
+        // 6. Rebuild dao_by_withdraw_tx index from repaired dao_deposits.
+        let mut dao_withdraw_index_deleted = 0u64;
+        let mut stage = RollbackStageProgress::new("rebuild_dao_withdraw_index_clear");
+        let iter = self.iterator_cf(self.cf_dao_by_withdraw_tx(), IteratorMode::Start);
+        for item in iter.flatten() {
+            let (key, _) = item;
+            batch.delete_cf(self.cf_dao_by_withdraw_tx(), &key);
+            dao_withdraw_index_deleted += 1;
+            stage.tick(dao_withdraw_index_deleted);
+        }
+        stage.finish(dao_withdraw_index_deleted);
+
+        let mut dao_withdraw_index_rebuilt = 0u64;
+        let mut stage = RollbackStageProgress::new("rebuild_dao_withdraw_index_fill");
+        let iter = self.iterator_cf(self.cf_dao_deposits(), IteratorMode::Start);
+        for item in iter.flatten() {
+            let (key, value) = item;
+            let entry: DaoDepositCacheEntry = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize dao_deposit while rebuilding dao_by_withdraw_tx: outpoint=0x{}, error={}",
+                    bytes_to_hex(&key),
+                    e
+                )
+            })?;
+
+            if entry.status >= 1 {
+                let request_block = entry.withdraw_request_block.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "dao deposit missing withdraw_request_block while rebuilding dao_by_withdraw_tx: outpoint=0x{}",
+                        bytes_to_hex(&key)
+                    )
+                })?;
+                let request_tx = entry.withdraw_request_tx.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "dao deposit missing withdraw_request_tx while rebuilding dao_by_withdraw_tx: outpoint=0x{}",
+                        bytes_to_hex(&key)
+                    )
+                })?;
+                if request_block <= rollback_to {
+                    batch.put_cf(self.cf_dao_by_withdraw_tx(), &request_tx, &key);
+                    dao_withdraw_index_rebuilt += 1;
+                }
+            }
+            stage.tick(dao_withdraw_index_rebuilt);
+        }
+        stage.finish(dao_withdraw_index_rebuilt);
+
+        // 7. Delete date-scoped stats entries from replay cutoff date onward.
         // These are additive snapshots and would be double-counted after replay.
         if let Some(cutoff) = replay_cutoff_date.as_deref() {
             let mut stats_removed = 0u64;
@@ -345,7 +565,7 @@ impl CkbadgerStore {
             stage.finish(stats_removed);
         }
 
-        // 7. Delete block issuance > rollback_to
+        // 8. Delete block issuance > rollback_to
         let mut issuance_removed = 0u64;
         let mut stage = RollbackStageProgress::new("delete_block_issuance");
         let start_key = keys::encode_block_num(rollback_to + 1);
@@ -361,7 +581,7 @@ impl CkbadgerStore {
         }
         stage.finish(issuance_removed);
 
-        // 8. Delete addr_txs entries > rollback_to
+        // 9. Delete addr_txs entries > rollback_to
         // Key: lock_hash(32) + block_num(8) + tx_idx(4) = 44
         let mut addr_txs_removed = 0u64;
         let mut stage = RollbackStageProgress::new("delete_addr_txs");
@@ -379,7 +599,7 @@ impl CkbadgerStore {
         }
         stage.finish(addr_txs_removed);
 
-        // 9a. Delete activities entries > rollback_to
+        // 10. Delete activities entries > rollback_to
         // Key: lock_hash(32) + block_num_desc(8) + tx_idx(4) = 44
         let mut activities_removed = 0u64;
         let mut stage = RollbackStageProgress::new("delete_activities");
@@ -397,7 +617,7 @@ impl CkbadgerStore {
         }
         stage.finish(activities_removed);
 
-        // 9. Delete token_transfers entries > rollback_to
+        // 11. Delete token_transfers entries > rollback_to
         // Key: type_hash(32) + block_num_desc(8) + tx_idx(4) = 44
         let mut token_transfers_removed = 0u64;
         let mut stage = RollbackStageProgress::new("delete_token_transfers");
@@ -482,7 +702,7 @@ mod tests {
     use crate::batch::StoreBatch;
     use crate::keys;
     use crate::store::CkbadgerStore;
-    use crate::types::{AddressBalance, CachedBlockHeader, LiveCellInfo};
+    use crate::types::{AddressBalance, CachedBlockHeader, DaoDepositCacheEntry, LiveCellInfo};
 
     #[test]
     fn test_should_delete_stats_for_replay_daily_prefix() {
@@ -733,6 +953,152 @@ mod tests {
             .get_cf(store.cf_consumed_cells(), &outpoint_key)
             .unwrap();
         assert!(consumed_raw.is_none());
+    }
+
+    #[test]
+    fn test_rollback_repairs_dao_deposits_and_withdraw_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+
+        let header1 = CachedBlockHeader {
+            hash: vec![0x01; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+        let header2 = CachedBlockHeader {
+            hash: vec![0x02; 32],
+            timestamp: 1_700_000_010_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+        let header3 = CachedBlockHeader {
+            hash: vec![0x03; 32],
+            timestamp: 1_700_000_020_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+
+        let tx_a = vec![0xAA; 32];
+        let tx_b = vec![0xBB; 32];
+        let tx_c = vec![0xCC; 32];
+        let request_tx_a = vec![0x11; 32];
+        let request_tx_b = vec![0x22; 32];
+        let orphan_request_tx = vec![0x33; 32];
+
+        let outpoint_a = keys::encode_outpoint(&tx_a, 0);
+        let outpoint_b = keys::encode_outpoint(&tx_b, 0);
+        let outpoint_c = keys::encode_outpoint(&tx_c, 0);
+        let orphan_outpoint = keys::encode_outpoint(&[0xFF; 32], 0);
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(1, &header1);
+        batch.put_block_header(2, &header2);
+        batch.put_block_header(3, &header3);
+
+        // request_block > rollback target, should revert to status=0.
+        batch.put_dao_deposit(
+            &outpoint_a,
+            &DaoDepositCacheEntry {
+                capacity: 100,
+                deposit_block_number: 1,
+                lock_script_hash: vec![0xA1; 32],
+                deposit_ar: 1,
+                status: 1,
+                withdraw_request_tx: Some(request_tx_a.clone()),
+                withdraw_request_block: Some(2),
+                withdraw_request_ar: Some(1),
+                withdraw_block: None,
+                withdraw_tx: None,
+                compensation: None,
+            },
+        );
+        batch.put_dao_by_withdraw_tx(&request_tx_a, &outpoint_a);
+
+        // withdraw_block > rollback target but request_block <= rollback target,
+        // should revert to status=1 and keep withdraw_request mapping.
+        batch.put_dao_deposit(
+            &outpoint_b,
+            &DaoDepositCacheEntry {
+                capacity: 200,
+                deposit_block_number: 1,
+                lock_script_hash: vec![0xB1; 32],
+                deposit_ar: 1,
+                status: 2,
+                withdraw_request_tx: Some(request_tx_b.clone()),
+                withdraw_request_block: Some(1),
+                withdraw_request_ar: Some(1),
+                withdraw_block: Some(3),
+                withdraw_tx: Some(vec![0x44; 32]),
+                compensation: Some(10),
+            },
+        );
+        batch.put_dao_by_withdraw_tx(&request_tx_b, &outpoint_b);
+
+        // deposit block > rollback target, should be deleted.
+        batch.put_dao_deposit(
+            &outpoint_c,
+            &DaoDepositCacheEntry {
+                capacity: 300,
+                deposit_block_number: 2,
+                lock_script_hash: vec![0xC1; 32],
+                deposit_ar: 1,
+                status: 0,
+                withdraw_request_tx: None,
+                withdraw_request_block: None,
+                withdraw_request_ar: None,
+                withdraw_block: None,
+                withdraw_tx: None,
+                compensation: None,
+            },
+        );
+
+        // Orphan mapping should be cleared during index rebuild.
+        batch.put_dao_by_withdraw_tx(&orphan_request_tx, &orphan_outpoint);
+        batch.commit().unwrap();
+
+        store.rollback_to_block(1).unwrap();
+
+        let repaired_a = store.get_dao_deposit(&outpoint_a).unwrap().unwrap();
+        assert_eq!(repaired_a.status, 0);
+        assert!(repaired_a.withdraw_request_block.is_none());
+        assert!(repaired_a.withdraw_request_tx.is_none());
+        assert!(repaired_a.withdraw_block.is_none());
+        assert!(repaired_a.compensation.is_none());
+
+        let repaired_b = store.get_dao_deposit(&outpoint_b).unwrap().unwrap();
+        assert_eq!(repaired_b.status, 1);
+        assert_eq!(repaired_b.withdraw_request_block, Some(1));
+        assert_eq!(repaired_b.withdraw_request_tx, Some(request_tx_b.clone()));
+        assert!(repaired_b.withdraw_block.is_none());
+        assert!(repaired_b.withdraw_tx.is_none());
+        assert!(repaired_b.compensation.is_none());
+
+        assert!(store.get_dao_deposit(&outpoint_c).unwrap().is_none());
+        assert!(store
+            .get_dao_deposit_by_withdraw_tx(&request_tx_a)
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            store
+                .get_dao_deposit_by_withdraw_tx(&request_tx_b)
+                .unwrap()
+                .unwrap(),
+            outpoint_b
+        );
+        assert!(store
+            .get_dao_deposit_by_withdraw_tx(&orphan_request_tx)
+            .unwrap()
+            .is_none());
     }
 
     #[test]

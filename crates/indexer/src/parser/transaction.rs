@@ -142,18 +142,30 @@ impl TransactionParser {
                     "input.previous_output.index",
                 )
                 .map_err(|e| anyhow!("invalid tx input #{}: {}", input_idx, e))?;
-                let previous_output_index_i16 =
-                    i16::try_from(previous_output_index_u32).map_err(|_| {
-                        anyhow!(
-                            "invalid tx input #{}: input.previous_output.index exceeds i16 range: {}",
-                            input_idx,
-                            previous_output_index_u32
-                        )
-                    })?;
+                let previous_output_index = if previous_output_index_u32 == u32::MAX {
+                    if previous_tx_hash == [0u8; 32] {
+                        -1
+                    } else {
+                        return Err(anyhow!(
+                            "invalid tx input #{}: input.previous_output.index uses cellbase sentinel 0xffffffff with non-zero tx hash",
+                            input_idx
+                        ));
+                    }
+                } else {
+                    let previous_output_index_i16 =
+                        i16::try_from(previous_output_index_u32).map_err(|_| {
+                            anyhow!(
+                                "invalid tx input #{}: input.previous_output.index exceeds i16 range: {}",
+                                input_idx,
+                                previous_output_index_u32
+                            )
+                        })?;
+                    i32::from(previous_output_index_i16)
+                };
 
                 Ok(ParsedInput {
                     previous_tx_hash,
-                    previous_output_index: i32::from(previous_output_index_i16),
+                    previous_output_index,
                     since: Self::parse_since(&input.since),
                 })
             })
@@ -411,6 +423,16 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_inputs_accepts_cellbase_sentinel_outpoint() {
+        let tx = create_cellbase_tx();
+        let inputs = TransactionParser::parse_inputs(&tx).unwrap();
+
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].previous_tx_hash, [0u8; 32]);
+        assert_eq!(inputs[0].previous_output_index, -1);
+    }
+
+    #[test]
     fn test_parse_since_absolute() {
         let since_hex = "0x400000000a000001";
         let since = TransactionParser::parse_since(since_hex);
@@ -495,6 +517,16 @@ mod tests {
         tx.inputs[0].previous_output.index = "0x10000".to_string();
         let err = TransactionParser::parse_inputs(&tx).unwrap_err();
         assert!(err.to_string().contains("exceeds i16 range"));
+    }
+
+    #[test]
+    fn test_parse_inputs_rejects_cellbase_sentinel_with_non_zero_tx_hash() {
+        let mut tx = create_normal_tx();
+        tx.inputs[0].previous_output.index = "0xffffffff".to_string();
+        let err = TransactionParser::parse_inputs(&tx).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("cellbase sentinel 0xffffffff with non-zero tx hash"));
     }
 
     #[test]
