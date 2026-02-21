@@ -4388,6 +4388,7 @@ impl Indexer {
 
         {
             let mut nft_batch = StoreBatch::new(self.writer.store());
+            let mut spore_state = self.writer.new_spore_batch_state();
             let mut block_tx_idx = 0usize;
             for (block_idx, block_response) in blocks.iter().enumerate() {
                 let parsed = &all_parsed_blocks[block_idx];
@@ -4405,6 +4406,7 @@ impl Indexer {
                                 parsed.number,
                                 &tx_data.hash,
                                 &mut nft_batch,
+                                &mut spore_state,
                             )?;
                         }
                         for (output_index, spore) in
@@ -4418,6 +4420,7 @@ impl Indexer {
                                 parsed.number,
                                 parsed.timestamp.timestamp_millis(),
                                 &mut nft_batch,
+                                &mut spore_state,
                             )?;
                             self.writer
                                 .insert_spore_content(&spore.spore_id, &spore.content)?;
@@ -4472,6 +4475,7 @@ impl Indexer {
         // Spore consumption (live sync only)
         if !self.is_bulk_sync_active() {
             let mut consume_batch = StoreBatch::new(self.writer.store());
+            let mut spore_state = self.writer.new_spore_batch_state();
             let mut block_tx_idx = 0usize;
             for (block_idx, block_response) in blocks.iter().enumerate() {
                 let parsed = &all_parsed_blocks[block_idx];
@@ -4503,6 +4507,7 @@ impl Indexer {
                                     parsed.number,
                                     &tx_data.hash,
                                     &mut consume_batch,
+                                    &mut spore_state,
                                 )?;
                             }
                         }
@@ -5460,6 +5465,7 @@ impl Indexer {
                 let h6 = s.spawn(|| -> Result<f64> {
                     let t = Instant::now();
                     let mut batch = StoreBatch::new(store);
+                    let mut spore_state = writer.new_spore_batch_state();
                     let mut block_tx_idx = 0usize;
                     for (block_idx, block_response) in blocks.iter().enumerate() {
                         let parsed = &all_parsed_blocks[block_idx];
@@ -5477,6 +5483,7 @@ impl Indexer {
                                         parsed.number,
                                         &tx_data.hash,
                                         &mut batch,
+                                        &mut spore_state,
                                     )?;
                                 }
                                 for (output_index, spore) in
@@ -5489,6 +5496,7 @@ impl Indexer {
                                         parsed.number,
                                         ts_ms,
                                         &mut batch,
+                                        &mut spore_state,
                                     )?;
                                     writer.insert_spore_content(&spore.spore_id, &spore.content)?;
                                 }
@@ -6450,6 +6458,10 @@ impl Indexer {
             // Group C: NFT/Spore processing
             {
                 let mut batch_spore_ids: HashSet<Vec<u8>> = HashSet::new();
+                let mut batch_mnft_token_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>> =
+                    HashMap::new();
+                let mut batch_dotbit_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>> = HashMap::new();
+                let mut spore_state = self.writer.new_spore_batch_state();
                 let mut block_tx_idx = 0usize;
                 for (block_idx, block_response) in blocks.iter().enumerate() {
                     let parsed = &all_parsed_blocks[block_idx];
@@ -6466,6 +6478,7 @@ impl Indexer {
                                     parsed.number,
                                     &tx_data.hash,
                                     &mut data_batch,
+                                    &mut spore_state,
                                 )?;
                             }
                             for (output_index, spore) in
@@ -6479,6 +6492,7 @@ impl Indexer {
                                     parsed.number,
                                     ts_ms,
                                     &mut data_batch,
+                                    &mut spore_state,
                                 )?;
                                 self.writer
                                     .insert_spore_content(&spore.spore_id, &spore.content)?;
@@ -6514,6 +6528,10 @@ impl Indexer {
                                 ts_ms,
                                 &mut data_batch,
                             )?;
+                            batch_mnft_token_outpoints.insert(
+                                (tx_data.hash.to_vec(), output_index as i16),
+                                token.token_id.clone(),
+                            );
                         }
                         for (output_index, account) in
                             DotbitParser::parse_accounts(tx).iter().enumerate()
@@ -6526,6 +6544,10 @@ impl Indexer {
                                 ts_ms,
                                 &mut data_batch,
                             )?;
+                            batch_dotbit_outpoints.insert(
+                                (tx_data.hash.to_vec(), output_index as i16),
+                                account.account_id.clone(),
+                            );
                         }
                     }
                 }
@@ -6581,14 +6603,38 @@ impl Indexer {
                             .into_iter()
                             .map(|(h, i, id)| ((h, i), id))
                             .collect();
+                        let mut spore_map = spore_map;
+                        for (idx, tx_hash) in all_prev_tx_hashes.iter().enumerate() {
+                            let key = (tx_hash.clone(), all_prev_indices[idx]);
+                            if spore_map.contains_key(&key) {
+                                continue;
+                            }
+                            if let Some(spore_id) = spore_state
+                                .get_cached_spore_id_by_outpoint(tx_hash, all_prev_indices[idx])
+                            {
+                                spore_map.insert(key, spore_id);
+                            }
+                        }
                         let mnft_map: HashMap<(Vec<u8>, i16), Vec<u8>> = mnft_results
                             .into_iter()
                             .map(|(h, i, id)| ((h, i), id))
                             .collect();
+                        let mut mnft_map = mnft_map;
+                        for (key, token_id) in &batch_mnft_token_outpoints {
+                            mnft_map
+                                .entry(key.clone())
+                                .or_insert_with(|| token_id.clone());
+                        }
                         let dotbit_map: HashMap<(Vec<u8>, i16), Vec<u8>> = dotbit_results
                             .into_iter()
                             .map(|(h, i, id)| ((h, i), id))
                             .collect();
+                        let mut dotbit_map = dotbit_map;
+                        for (key, account_id) in &batch_dotbit_outpoints {
+                            dotbit_map
+                                .entry(key.clone())
+                                .or_insert_with(|| account_id.clone());
+                        }
                         for (i, (block_number, consuming_tx_hash)) in
                             outpoint_context.iter().enumerate()
                         {
@@ -6600,6 +6646,7 @@ impl Indexer {
                                         *block_number,
                                         consuming_tx_hash,
                                         &mut data_batch,
+                                        &mut spore_state,
                                     )?;
                                 }
                             }

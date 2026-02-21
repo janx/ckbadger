@@ -114,6 +114,9 @@ pub mod stats_prefix {
     pub const SPORE_TYPE_INDEX: u8 = 0x14;
     pub const NFT_DAILY: u8 = 0x15;
     pub const NFT_TYPE_INDEX: u8 = 0x16;
+    pub const MNFT_CLASS_OUTPOINT: u8 = 0x17;
+    pub const MNFT_TOKEN_OUTPOINT: u8 = 0x18;
+    pub const DOTBIT_ACCOUNT_OUTPOINT: u8 = 0x19;
 }
 
 // Flat re-exports for convenience
@@ -139,6 +142,9 @@ pub const STATS_PREFIX_SPORE_OUTPOINT: u8 = stats_prefix::SPORE_OUTPOINT;
 pub const STATS_PREFIX_SPORE_TYPE_INDEX: u8 = stats_prefix::SPORE_TYPE_INDEX;
 pub const STATS_PREFIX_NFT_DAILY: u8 = stats_prefix::NFT_DAILY;
 pub const STATS_PREFIX_NFT_TYPE_INDEX: u8 = stats_prefix::NFT_TYPE_INDEX;
+pub const STATS_PREFIX_MNFT_CLASS_OUTPOINT: u8 = stats_prefix::MNFT_CLASS_OUTPOINT;
+pub const STATS_PREFIX_MNFT_TOKEN_OUTPOINT: u8 = stats_prefix::MNFT_TOKEN_OUTPOINT;
+pub const STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT: u8 = stats_prefix::DOTBIT_ACCOUNT_OUTPOINT;
 
 /// Token transfers total count key: prefix(1B) + type_hash(32B) = 33 bytes
 pub fn encode_token_transfers_key(type_hash: &[u8]) -> Vec<u8> {
@@ -257,6 +263,45 @@ pub fn encode_spore_outpoint_key(
 
 pub fn decode_spore_outpoint_key(key: &[u8]) -> (Vec<u8>, i16) {
     decode_outpoint(&key[1..35])
+}
+
+/// mNFT class outpoint lookup key: prefix(1B) + outpoint(34B)
+pub const MNFT_CLASS_OUTPOINT_KEY_SIZE: usize = 35;
+
+pub fn encode_mnft_class_outpoint_key(
+    tx_hash: &[u8],
+    output_index: i16,
+) -> [u8; MNFT_CLASS_OUTPOINT_KEY_SIZE] {
+    let mut key = [0u8; MNFT_CLASS_OUTPOINT_KEY_SIZE];
+    key[0] = STATS_PREFIX_MNFT_CLASS_OUTPOINT;
+    key[1..35].copy_from_slice(&encode_outpoint(tx_hash, output_index));
+    key
+}
+
+/// mNFT token outpoint lookup key: prefix(1B) + outpoint(34B)
+pub const MNFT_TOKEN_OUTPOINT_KEY_SIZE: usize = 35;
+
+pub fn encode_mnft_token_outpoint_key(
+    tx_hash: &[u8],
+    output_index: i16,
+) -> [u8; MNFT_TOKEN_OUTPOINT_KEY_SIZE] {
+    let mut key = [0u8; MNFT_TOKEN_OUTPOINT_KEY_SIZE];
+    key[0] = STATS_PREFIX_MNFT_TOKEN_OUTPOINT;
+    key[1..35].copy_from_slice(&encode_outpoint(tx_hash, output_index));
+    key
+}
+
+/// .bit account outpoint lookup key: prefix(1B) + outpoint(34B)
+pub const DOTBIT_ACCOUNT_OUTPOINT_KEY_SIZE: usize = 35;
+
+pub fn encode_dotbit_account_outpoint_key(
+    tx_hash: &[u8],
+    output_index: i16,
+) -> [u8; DOTBIT_ACCOUNT_OUTPOINT_KEY_SIZE] {
+    let mut key = [0u8; DOTBIT_ACCOUNT_OUTPOINT_KEY_SIZE];
+    key[0] = STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT;
+    key[1..35].copy_from_slice(&encode_outpoint(tx_hash, output_index));
+    key
 }
 
 /// Spore type-script index key: prefix(1B) + type_script_hash(32B)
@@ -633,6 +678,39 @@ mod tests {
         let (decoded_tx_hash, decoded_output_index) = decode_spore_outpoint_key(&key);
         assert_eq!(decoded_tx_hash, tx_hash.to_vec());
         assert_eq!(decoded_output_index, 7);
+    }
+
+    #[test]
+    fn test_mnft_class_outpoint_key_structure() {
+        let tx_hash = [0xACu8; 32];
+        let key = encode_mnft_class_outpoint_key(&tx_hash, 8);
+        assert_eq!(key.len(), MNFT_CLASS_OUTPOINT_KEY_SIZE);
+        assert_eq!(key[0], STATS_PREFIX_MNFT_CLASS_OUTPOINT);
+        let (decoded_tx_hash, decoded_output_index) = decode_outpoint(&key[1..35]);
+        assert_eq!(decoded_tx_hash, tx_hash.to_vec());
+        assert_eq!(decoded_output_index, 8);
+    }
+
+    #[test]
+    fn test_mnft_token_outpoint_key_structure() {
+        let tx_hash = [0xADu8; 32];
+        let key = encode_mnft_token_outpoint_key(&tx_hash, 9);
+        assert_eq!(key.len(), MNFT_TOKEN_OUTPOINT_KEY_SIZE);
+        assert_eq!(key[0], STATS_PREFIX_MNFT_TOKEN_OUTPOINT);
+        let (decoded_tx_hash, decoded_output_index) = decode_outpoint(&key[1..35]);
+        assert_eq!(decoded_tx_hash, tx_hash.to_vec());
+        assert_eq!(decoded_output_index, 9);
+    }
+
+    #[test]
+    fn test_dotbit_account_outpoint_key_structure() {
+        let tx_hash = [0xAEu8; 32];
+        let key = encode_dotbit_account_outpoint_key(&tx_hash, 10);
+        assert_eq!(key.len(), DOTBIT_ACCOUNT_OUTPOINT_KEY_SIZE);
+        assert_eq!(key[0], STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT);
+        let (decoded_tx_hash, decoded_output_index) = decode_outpoint(&key[1..35]);
+        assert_eq!(decoded_tx_hash, tx_hash.to_vec());
+        assert_eq!(decoded_output_index, 10);
     }
 
     #[test]

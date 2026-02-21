@@ -60,7 +60,7 @@ impl BatchWriter {
         &self,
         class: &ParsedMnftClass,
         tx_hash: &[u8],
-        _output_index: i16,
+        output_index: i16,
         block_number: i64,
         batch: &mut StoreBatch,
     ) -> Result<()> {
@@ -94,8 +94,7 @@ impl BatchWriter {
         agg.name = class.name.clone();
         agg.standard = NftStandard::MnftClass;
         batch.put_nft_collection_aggregate(&class.class_id, &agg);
-
-        let _ = tx_hash;
+        batch.put_mnft_class_outpoint(tx_hash, output_index, &class.class_id);
         Ok(())
     }
 
@@ -116,17 +115,18 @@ impl BatchWriter {
 
     pub fn get_mnft_class_id_by_outpoint(
         &self,
-        _tx_hash: &[u8],
-        _output_index: i16,
+        tx_hash: &[u8],
+        output_index: i16,
     ) -> Result<Option<Vec<u8>>> {
-        Ok(None)
+        self.store
+            .get_mnft_class_id_by_outpoint(tx_hash, output_index)
     }
 
     pub fn insert_mnft_token(
         &self,
         token: &ParsedMnftToken,
         tx_hash: &[u8],
-        _output_index: i16,
+        output_index: i16,
         block_number: i64,
         timestamp_ms: i64,
         batch: &mut StoreBatch,
@@ -171,8 +171,7 @@ impl BatchWriter {
             };
             batch.put_nft_hourly_transfer(&token.class_id, hour_bucket, current + 1);
         }
-
-        let _ = tx_hash;
+        batch.put_mnft_token_outpoint(tx_hash, output_index, &token.token_id);
         Ok(())
     }
 
@@ -204,21 +203,25 @@ impl BatchWriter {
 
     pub fn get_mnft_token_id_by_outpoint(
         &self,
-        _tx_hash: &[u8],
-        _output_index: i16,
+        tx_hash: &[u8],
+        output_index: i16,
     ) -> Result<Option<Vec<u8>>> {
-        // In RocksDB model, token_id comes from type script args during parsing.
-        Ok(None)
+        self.store
+            .get_mnft_token_id_by_outpoint(tx_hash, output_index)
     }
 
     /// Batch lookup: find token_ids for multiple outpoints.
-    /// In the RocksDB model, token_id comes from type script args during parsing.
     pub fn get_mnft_token_ids_by_outpoints_batch(
         &self,
-        _tx_hashes: &[Vec<u8>],
-        _output_indices: &[i16],
+        tx_hashes: &[Vec<u8>],
+        output_indices: &[i16],
     ) -> Result<Vec<(Vec<u8>, i16, Vec<u8>)>> {
-        Ok(Vec::new())
+        let outpoints: Vec<(&[u8], i16)> = tx_hashes
+            .iter()
+            .zip(output_indices.iter())
+            .map(|(hash, idx)| (hash.as_slice(), *idx))
+            .collect();
+        Ok(self.store.get_mnft_token_ids_by_outpoints_batch(&outpoints))
     }
 
     pub fn update_nft_type_index_batch(
@@ -322,5 +325,63 @@ mod tests {
             .get_nft_daily_delta(&collection_id, date)
             .unwrap();
         assert!(daily.is_none());
+    }
+
+    #[test]
+    fn test_mnft_outpoint_lookups_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let writer = BatchWriter::new(Arc::new(store));
+
+        let class = ParsedMnftClass {
+            class_id: vec![0x11; 24],
+            type_script_hash: vec![0x21; 32],
+            issuer_id: vec![0x31; 20],
+            name: Some("Class".to_string()),
+            description: None,
+            renderer: None,
+            total: 0,
+            issued: 0,
+            configure: 0,
+            owner_lock_hash: vec![0x41; 32],
+        };
+        let token = ParsedMnftToken {
+            token_id: vec![0x12; 28],
+            type_script_hash: vec![0x22; 32],
+            class_id: class.class_id.clone(),
+            token_index: 1,
+            characteristic: vec![],
+            configure: 0,
+            state: 0,
+            owner_lock_hash: vec![0x42; 32],
+        };
+        let tx_hash = vec![0x51; 32];
+
+        let mut batch = StoreBatch::new(writer.store());
+        writer
+            .insert_mnft_class(&class, &tx_hash, 7, 1, &mut batch)
+            .unwrap();
+        writer
+            .insert_mnft_token(&token, &tx_hash, 8, 1, 0, &mut batch)
+            .unwrap();
+        batch.commit().unwrap();
+
+        let loaded_class = writer
+            .get_mnft_class_id_by_outpoint(&tx_hash, 7)
+            .unwrap()
+            .unwrap();
+        let loaded_token = writer
+            .get_mnft_token_id_by_outpoint(&tx_hash, 8)
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded_class, class.class_id);
+        assert_eq!(loaded_token, token.token_id);
+
+        let batch_loaded = writer
+            .get_mnft_token_ids_by_outpoints_batch(std::slice::from_ref(&tx_hash), &[8])
+            .unwrap();
+        assert_eq!(batch_loaded.len(), 1);
+        assert_eq!(batch_loaded[0].0, tx_hash);
+        assert_eq!(batch_loaded[0].1, 8);
     }
 }

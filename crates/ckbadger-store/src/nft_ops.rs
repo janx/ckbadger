@@ -102,6 +102,129 @@ impl CkbadgerStore {
         self.put_cf(self.cf_stats(), &key, &value)
     }
 
+    pub fn get_spore_id_by_outpoint(
+        &self,
+        tx_hash: &[u8],
+        output_index: i16,
+    ) -> anyhow::Result<Option<Vec<u8>>> {
+        let key = keys::encode_spore_outpoint_key(tx_hash, output_index);
+        match self.get_cf(self.cf_stats(), &key)? {
+            Some(value) if value.len() >= 32 => Ok(Some(value[..32].to_vec())),
+            _ => Ok(None),
+        }
+    }
+
+    pub fn get_spore_ids_by_outpoints_batch(
+        &self,
+        outpoints: &[(&[u8], i16)],
+    ) -> Vec<(Vec<u8>, i16, Vec<u8>)> {
+        let cf = self.cf_stats();
+        let keys: Vec<[u8; keys::SPORE_OUTPOINT_KEY_SIZE]> = outpoints
+            .iter()
+            .map(|(tx_hash, idx)| keys::encode_spore_outpoint_key(tx_hash, *idx))
+            .collect();
+        let cf_keys: Vec<(&rocksdb::ColumnFamily, &[u8])> =
+            keys.iter().map(|k| (cf, k.as_slice())).collect();
+        let values = self.multi_get_cf(cf_keys);
+
+        let mut results = Vec::new();
+        for (i, value_result) in values.into_iter().enumerate() {
+            if let Ok(Some(value)) = value_result {
+                if value.len() >= 32 {
+                    let (tx_hash, idx) = outpoints[i];
+                    results.push((tx_hash.to_vec(), idx, value[..32].to_vec()));
+                }
+            }
+        }
+        results
+    }
+
+    pub fn get_mnft_class_id_by_outpoint(
+        &self,
+        tx_hash: &[u8],
+        output_index: i16,
+    ) -> anyhow::Result<Option<Vec<u8>>> {
+        let key = keys::encode_mnft_class_outpoint_key(tx_hash, output_index);
+        match self.get_cf(self.cf_stats(), &key)? {
+            Some(value) if !value.is_empty() => Ok(Some(value)),
+            _ => Ok(None),
+        }
+    }
+
+    pub fn get_mnft_token_id_by_outpoint(
+        &self,
+        tx_hash: &[u8],
+        output_index: i16,
+    ) -> anyhow::Result<Option<Vec<u8>>> {
+        let key = keys::encode_mnft_token_outpoint_key(tx_hash, output_index);
+        match self.get_cf(self.cf_stats(), &key)? {
+            Some(value) if !value.is_empty() => Ok(Some(value)),
+            _ => Ok(None),
+        }
+    }
+
+    pub fn get_mnft_token_ids_by_outpoints_batch(
+        &self,
+        outpoints: &[(&[u8], i16)],
+    ) -> Vec<(Vec<u8>, i16, Vec<u8>)> {
+        let cf = self.cf_stats();
+        let keys: Vec<[u8; keys::MNFT_TOKEN_OUTPOINT_KEY_SIZE]> = outpoints
+            .iter()
+            .map(|(tx_hash, idx)| keys::encode_mnft_token_outpoint_key(tx_hash, *idx))
+            .collect();
+        let cf_keys: Vec<(&rocksdb::ColumnFamily, &[u8])> =
+            keys.iter().map(|k| (cf, k.as_slice())).collect();
+        let values = self.multi_get_cf(cf_keys);
+
+        let mut results = Vec::new();
+        for (i, value_result) in values.into_iter().enumerate() {
+            if let Ok(Some(value)) = value_result {
+                if !value.is_empty() {
+                    let (tx_hash, idx) = outpoints[i];
+                    results.push((tx_hash.to_vec(), idx, value));
+                }
+            }
+        }
+        results
+    }
+
+    pub fn get_dotbit_account_id_by_outpoint(
+        &self,
+        tx_hash: &[u8],
+        output_index: i16,
+    ) -> anyhow::Result<Option<Vec<u8>>> {
+        let key = keys::encode_dotbit_account_outpoint_key(tx_hash, output_index);
+        match self.get_cf(self.cf_stats(), &key)? {
+            Some(value) if !value.is_empty() => Ok(Some(value)),
+            _ => Ok(None),
+        }
+    }
+
+    pub fn get_dotbit_account_ids_by_outpoints_batch(
+        &self,
+        outpoints: &[(&[u8], i16)],
+    ) -> Vec<(Vec<u8>, i16, Vec<u8>)> {
+        let cf = self.cf_stats();
+        let keys: Vec<[u8; keys::DOTBIT_ACCOUNT_OUTPOINT_KEY_SIZE]> = outpoints
+            .iter()
+            .map(|(tx_hash, idx)| keys::encode_dotbit_account_outpoint_key(tx_hash, *idx))
+            .collect();
+        let cf_keys: Vec<(&rocksdb::ColumnFamily, &[u8])> =
+            keys.iter().map(|k| (cf, k.as_slice())).collect();
+        let values = self.multi_get_cf(cf_keys);
+
+        let mut results = Vec::new();
+        for (i, value_result) in values.into_iter().enumerate() {
+            if let Ok(Some(value)) = value_result {
+                if !value.is_empty() {
+                    let (tx_hash, idx) = outpoints[i];
+                    results.push((tx_hash.to_vec(), idx, value));
+                }
+            }
+        }
+        results
+    }
+
     pub fn get_nft_type_index(
         &self,
         type_script_hash: &[u8],
@@ -522,6 +645,80 @@ mod tests {
             .unwrap();
         assert_eq!(loaded.spore_id, index.spore_id);
         assert_eq!(loaded.cluster_id, index.cluster_id);
+    }
+
+    #[test]
+    fn test_spore_outpoint_roundtrip_and_batch_lookup() {
+        let (_dir, store) = test_store();
+        let tx_a = [0xA1u8; 32];
+        let tx_b = [0xB2u8; 32];
+        let spore_a = [0x11u8; 32];
+        let spore_b = [0x22u8; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_spore_outpoint(&tx_a, 1, &spore_a);
+        batch.put_spore_outpoint(&tx_b, 2, &spore_b);
+        batch.commit().unwrap();
+
+        let single = store.get_spore_id_by_outpoint(&tx_a, 1).unwrap().unwrap();
+        assert_eq!(single, spore_a.to_vec());
+        assert!(store.get_spore_id_by_outpoint(&tx_a, 9).unwrap().is_none());
+
+        let outpoints: Vec<(&[u8], i16)> = vec![(&tx_a, 1), (&tx_b, 2), (&tx_a, 9)];
+        let results = store.get_spore_ids_by_outpoints_batch(&outpoints);
+        assert_eq!(results.len(), 2);
+        assert!(results
+            .iter()
+            .any(|(tx, idx, id)| tx == tx_a.as_slice() && *idx == 1 && id == spore_a.as_slice()));
+        assert!(results
+            .iter()
+            .any(|(tx, idx, id)| tx == tx_b.as_slice() && *idx == 2 && id == spore_b.as_slice()));
+    }
+
+    #[test]
+    fn test_mnft_and_dotbit_outpoint_roundtrip_and_batch_lookup() {
+        let (_dir, store) = test_store();
+        let tx_a = [0xC1u8; 32];
+        let tx_b = [0xC2u8; 32];
+        let mnft_class_id = [0x31u8; 24];
+        let mnft_token_id = [0x41u8; 28];
+        let dotbit_account_id = [0x51u8; 20];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_mnft_class_outpoint(&tx_a, 3, &mnft_class_id);
+        batch.put_mnft_token_outpoint(&tx_a, 4, &mnft_token_id);
+        batch.put_dotbit_account_outpoint(&tx_b, 5, &dotbit_account_id);
+        batch.commit().unwrap();
+
+        let class_id = store
+            .get_mnft_class_id_by_outpoint(&tx_a, 3)
+            .unwrap()
+            .unwrap();
+        let token_id = store
+            .get_mnft_token_id_by_outpoint(&tx_a, 4)
+            .unwrap()
+            .unwrap();
+        let dotbit_id = store
+            .get_dotbit_account_id_by_outpoint(&tx_b, 5)
+            .unwrap()
+            .unwrap();
+        assert_eq!(class_id, mnft_class_id.to_vec());
+        assert_eq!(token_id, mnft_token_id.to_vec());
+        assert_eq!(dotbit_id, dotbit_account_id.to_vec());
+
+        let mnft_outpoints: Vec<(&[u8], i16)> = vec![(&tx_a, 4), (&tx_a, 9)];
+        let mnft_results = store.get_mnft_token_ids_by_outpoints_batch(&mnft_outpoints);
+        assert_eq!(mnft_results.len(), 1);
+        assert_eq!(mnft_results[0].0, tx_a.to_vec());
+        assert_eq!(mnft_results[0].1, 4);
+        assert_eq!(mnft_results[0].2, mnft_token_id.to_vec());
+
+        let dotbit_outpoints: Vec<(&[u8], i16)> = vec![(&tx_b, 5), (&tx_b, 8)];
+        let dotbit_results = store.get_dotbit_account_ids_by_outpoints_batch(&dotbit_outpoints);
+        assert_eq!(dotbit_results.len(), 1);
+        assert_eq!(dotbit_results[0].0, tx_b.to_vec());
+        assert_eq!(dotbit_results[0].1, 5);
+        assert_eq!(dotbit_results[0].2, dotbit_account_id.to_vec());
     }
 
     #[test]

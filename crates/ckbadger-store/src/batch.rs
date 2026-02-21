@@ -355,6 +355,36 @@ impl<'a> StoreBatch<'a> {
         self.batch.put_cf(self.store.cf_stats(), key, &value);
     }
 
+    pub fn put_spore_outpoint(&mut self, tx_hash: &[u8], output_index: i16, spore_id: &[u8]) {
+        let key = keys::encode_spore_outpoint_key(tx_hash, output_index);
+        self.batch.put_cf(self.store.cf_stats(), key, spore_id);
+    }
+
+    pub fn delete_spore_outpoint(&mut self, tx_hash: &[u8], output_index: i16) {
+        let key = keys::encode_spore_outpoint_key(tx_hash, output_index);
+        self.batch.delete_cf(self.store.cf_stats(), key);
+    }
+
+    pub fn put_mnft_class_outpoint(&mut self, tx_hash: &[u8], output_index: i16, class_id: &[u8]) {
+        let key = keys::encode_mnft_class_outpoint_key(tx_hash, output_index);
+        self.batch.put_cf(self.store.cf_stats(), key, class_id);
+    }
+
+    pub fn put_mnft_token_outpoint(&mut self, tx_hash: &[u8], output_index: i16, token_id: &[u8]) {
+        let key = keys::encode_mnft_token_outpoint_key(tx_hash, output_index);
+        self.batch.put_cf(self.store.cf_stats(), key, token_id);
+    }
+
+    pub fn put_dotbit_account_outpoint(
+        &mut self,
+        tx_hash: &[u8],
+        output_index: i16,
+        account_id: &[u8],
+    ) {
+        let key = keys::encode_dotbit_account_outpoint_key(tx_hash, output_index);
+        self.batch.put_cf(self.store.cf_stats(), key, account_id);
+    }
+
     pub fn delete_token_holder(&mut self, type_hash: &[u8], lock_hash: &[u8]) {
         let key = keys::encode_token_holder_key(type_hash, lock_hash);
         self.batch.delete_cf(self.store.cf_token_holders(), key);
