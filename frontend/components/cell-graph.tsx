@@ -4,6 +4,7 @@ import dynamic from 'next/dynamic';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { GraphNode, GraphLink } from '@/lib/api';
 import type { ForceGraphMethods, NodeObject, LinkObject } from 'react-force-graph-2d';
+import { isFocusedCellNode, type FocusCellTarget } from '@/components/cell-graph-utils';
 
 type ForceNode = NodeObject;
 type ForceLink = LinkObject;
@@ -21,26 +22,34 @@ interface CellGraphProps {
   nodes: GraphNode[];
   links: GraphLink[];
   onNodeClick?: (node: GraphNode) => void;
+  focusCell?: FocusCellTarget;
   width?: number;
   height?: number;
 }
 
 const NODE_COLORS = {
   cell: {
-    live: '#22c55e',
-    dead: '#ef4444',
+    live: '#34d399',
+    dead: '#fb7185',
   } as Record<string, string>,
-  transaction: '#3b82f6',
+  transaction: '#60a5fa',
 };
 
 const LINK_COLORS: Record<string, string> = {
-  creates: '#22c55e',
-  output: '#22c55e',
-  consumed_by: '#ef4444',
-  input: '#ef4444',
+  creates: '#6ee7b7',
+  output: '#6ee7b7',
+  consumed_by: '#fda4af',
+  input: '#fda4af',
 };
 
-export function CellGraph({ nodes, links, onNodeClick, width, height = 500 }: CellGraphProps) {
+export function CellGraph({
+  nodes,
+  links,
+  onNodeClick,
+  focusCell,
+  width,
+  height = 500,
+}: CellGraphProps) {
   const graphRef = useRef<ForceGraphMethods | undefined>(undefined);
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState<number | null>(width ?? null);
@@ -118,7 +127,8 @@ export function CellGraph({ nodes, links, onNodeClick, width, height = 500 }: Ce
     (node: ForceNode, ctx: CanvasRenderingContext2D, globalScale: number) => {
       const label = (node.label as string) || '';
       const fontSize = 12 / globalScale;
-      const nodeSize = node.nodeType === 'transaction' ? 8 : 6;
+      const isFocused = isFocusedCellNode(node as unknown as GraphNode, focusCell);
+      const nodeSize = node.nodeType === 'transaction' ? 8 : isFocused ? 8 : 6;
       const x = node.x ?? 0;
       const y = node.y ?? 0;
 
@@ -137,19 +147,27 @@ export function CellGraph({ nodes, links, onNodeClick, width, height = 500 }: Ce
       ctx.fillStyle = getNodeColor(node);
       ctx.fill();
 
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
       ctx.lineWidth = 1 / globalScale;
       ctx.stroke();
+
+      if (isFocused) {
+        ctx.beginPath();
+        ctx.arc(x, y, nodeSize + 2.5 / globalScale, 0, 2 * Math.PI, false);
+        ctx.strokeStyle = '#fcd34d';
+        ctx.lineWidth = 1.4 / globalScale;
+        ctx.stroke();
+      }
 
       if (globalScale > 0.5) {
         ctx.font = `${fontSize}px sans-serif`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'top';
-        ctx.fillStyle = '#d1d5db';
+        ctx.fillStyle = isFocused ? '#fde68a' : '#d1d5db';
         ctx.fillText(label, x, y + nodeSize + 2);
       }
     },
-    [getNodeColor]
+    [focusCell, getNodeColor]
   );
 
   const handleNodeClick = useCallback(
@@ -163,13 +181,14 @@ export function CellGraph({ nodes, links, onNodeClick, width, height = 500 }: Ce
 
   const nodePointerAreaPaint = useCallback(
     (node: ForceNode, color: string, ctx: CanvasRenderingContext2D) => {
-      const nodeSize = node.nodeType === 'transaction' ? 10 : 8;
+      const isFocused = isFocusedCellNode(node as unknown as GraphNode, focusCell);
+      const nodeSize = node.nodeType === 'transaction' ? 10 : isFocused ? 11 : 8;
       ctx.fillStyle = color;
       ctx.beginPath();
       ctx.arc(node.x ?? 0, node.y ?? 0, nodeSize, 0, 2 * Math.PI, false);
       ctx.fill();
     },
-    []
+    [focusCell]
   );
 
   if (nodes.length === 0) {
@@ -195,14 +214,14 @@ export function CellGraph({ nodes, links, onNodeClick, width, height = 500 }: Ce
         graphData={graphData}
         width={resolvedWidth}
         height={height}
-        backgroundColor="#0f0f1a"
+        backgroundColor="#0b1020"
         nodeCanvasObject={drawNode}
         nodePointerAreaPaint={nodePointerAreaPaint}
         linkColor={getLinkColor}
-        linkDirectionalArrowLength={6}
+        linkDirectionalArrowLength={5}
         linkDirectionalArrowRelPos={1}
         linkCurvature={0.1}
-        linkWidth={1.5}
+        linkWidth={1.2}
         onNodeClick={handleNodeClick}
         cooldownTicks={100}
         d3AlphaDecay={0.02}

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CellDetailPage from '@/app/cell/[outpoint]/page';
 
@@ -174,15 +174,23 @@ describe('CellDetailPage', () => {
     expect(screen.getByText('Capacity Field')).toBeInTheDocument();
     expect(screen.getByText('Cell Data')).toBeInTheDocument();
     expect(screen.getByText(/^Formula:/)).toBeInTheDocument();
+    expect(screen.getByText(/53B/)).toBeInTheDocument();
 
-    const guides = screen.getByTestId('byte-composition-guides');
     const legend = screen.getByTestId('byte-composition-legend');
 
-    expect(guides.className).toContain('h-3');
-    expect(legend.className).toContain('mt-1');
-    expect(legend.className).not.toContain('-mt-');
+    expect(screen.queryByTestId('byte-composition-guides')).not.toBeInTheDocument();
+    expect(legend.className).toContain('mt-2');
+    expect(legend.querySelector('.grid')).toBeTruthy();
 
-    expect(screen.getByText('Cell Relationship')).toBeInTheDocument();
+    expect(screen.getByText('Overview')).toBeInTheDocument();
+    expect(screen.getByText('Address')).toBeInTheDocument();
+    expect(screen.queryByText('Cell Relationship')).not.toBeInTheDocument();
+    const sidePanels = screen.getByTestId('cell-side-panels');
+    const addressPanel = within(sidePanels).getByTestId('cell-address-panel');
+    const lockScriptHeader = within(sidePanels).getByText('Lock Script');
+    expect(
+      addressPanel.compareDocumentPosition(lockScriptHeader) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Lifecycle' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Graph' })).toBeInTheDocument();
     expect(screen.getByTestId('cell-relationship-lifecycle')).toBeInTheDocument();
@@ -233,7 +241,10 @@ describe('CellDetailPage', () => {
     renderWithQueryClient(<CellDetailPage />);
 
     await waitFor(() => {
-      expect(screen.getByText(/DATA\s+\(first 1024 common knowledge bytes\)/)).toBeInTheDocument();
+      expect(screen.getByText('DATA')).toBeInTheDocument();
+      expect(screen.getByText('Preview')).toBeInTheDocument();
+      expect(screen.getByText('2,048 bytes')).toBeInTheDocument();
+      expect(screen.getByText('Truncated at the 1,024-th byte')).toBeInTheDocument();
     });
 
     expect(screen.getByText('... 1,024 more bytes')).toBeInTheDocument();

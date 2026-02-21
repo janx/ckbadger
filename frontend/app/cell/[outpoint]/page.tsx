@@ -12,7 +12,6 @@ import {
   TerminalRow,
 } from '@/components/ui/terminal-panel';
 import { PageHeader, Badge } from '@/components/ui/page-header';
-import { DataField } from '@/components/ui/data-field';
 import { HexDisplay } from '@/components/ui/hex-display';
 import { Address } from '@/components/ui/address';
 import { Capacity } from '@/components/ui/capacity';
@@ -21,6 +20,7 @@ import { CellGraph } from '@/components/cell-graph';
 import { api, type GraphNode } from '@/lib/api';
 
 type RelationshipView = 'lifecycle' | 'graph';
+const DATA_PREVIEW_LIMIT_BYTES = 1024;
 
 function shortenHash(hash: string, leading: number = 10, trailing: number = 8): string {
   if (hash.length <= leading + trailing + 3) {
@@ -93,25 +93,25 @@ export default function CellDetailPage() {
         key: 'capacityFieldBytes',
         label: 'Capacity Field',
         bytes: Math.max(0, breakdown.capacityFieldBytes),
-        colorClass: 'bg-cyan-500',
+        colorClass: 'bg-cyan-400',
       },
       {
         key: 'lockScriptBytes',
         label: 'Lock Script',
         bytes: Math.max(0, breakdown.lockScriptBytes),
-        colorClass: 'bg-blue-500',
+        colorClass: 'bg-blue-400',
       },
       {
         key: 'typeScriptBytes',
         label: 'Type Script',
         bytes: Math.max(0, breakdown.typeScriptBytes),
-        colorClass: 'bg-violet-500',
+        colorClass: 'bg-violet-400',
       },
       {
         key: 'dataBytes',
         label: 'Cell Data',
         bytes: Math.max(0, breakdown.dataBytes),
-        colorClass: 'bg-emerald-500',
+        colorClass: 'bg-emerald-400',
       },
     ];
 
@@ -246,6 +246,9 @@ export default function CellDetailPage() {
   const isLive = cell.status === 'live';
   const lockScriptInfo = cell.lock?.codeHash ? scriptLookup?.[cell.lock.codeHash] : undefined;
   const typeScriptInfo = cell.type?.codeHash ? scriptLookup?.[cell.type.codeHash] : undefined;
+  const receivedDataBytes = cell.data ? Math.max(0, cell.data.replace(/^0x/, '').length / 2) : 0;
+  const dataPreviewBytes = Math.min(receivedDataBytes, DATA_PREVIEW_LIMIT_BYTES);
+  const isDataPreviewTruncated = cell.dataSize > dataPreviewBytes;
 
   return (
     <div className="min-h-screen bg-slate-950">
@@ -264,28 +267,28 @@ export default function CellDetailPage() {
         />
 
         {capacityView && (
-          <TerminalPanel className="mb-6" glow>
+          <TerminalPanel className="mb-6">
             <TerminalPanelHeader indicator="active">Capacity</TerminalPanelHeader>
             <TerminalPanelContent>
               <div className="grid gap-4 md:grid-cols-3">
-                <div className="border-terminal-green/20 bg-terminal-green/5 rounded border p-3">
+                <div className="rounded border border-slate-700/70 bg-slate-900/60 p-3">
                   <div className="mb-1 text-xs uppercase tracking-wide text-slate-400">
                     Total Capacity
                   </div>
                   <Capacity
                     value={capacityView.totalCapacity}
-                    className="text-terminal-green text-lg"
+                    className="text-lg text-emerald-300"
                     animate={false}
                   />
                 </div>
-                <div className="rounded border border-cyan-500/20 bg-cyan-500/5 p-3">
+                <div className="rounded border border-slate-700/70 bg-slate-900/60 p-3">
                   <div className="mb-1 text-xs uppercase tracking-wide text-slate-400">
                     Occupied Capacity
                   </div>
                   {capacityView.occupied !== null ? (
                     <Capacity
                       value={capacityView.occupied}
-                      className="text-lg text-cyan-300"
+                      className="text-lg text-sky-300"
                       animate={false}
                     />
                   ) : (
@@ -317,8 +320,8 @@ export default function CellDetailPage() {
                         </div>
                       )}
                     </div>
-                    <div className="overflow-hidden rounded border border-slate-700 bg-slate-900">
-                      <div className="flex h-3.5 w-full">
+                    <div className="overflow-hidden rounded border border-slate-700/80 bg-slate-900/80">
+                      <div className="flex h-3 w-full">
                         {capacityView.segments.map((segment) =>
                           segment.percent > 0 ? (
                             <div
@@ -327,8 +330,8 @@ export default function CellDetailPage() {
                                 hoveredSegmentKey === null
                                   ? ''
                                   : hoveredSegmentKey === segment.key
-                                    ? 'brightness-125'
-                                    : 'opacity-35'
+                                    ? 'brightness-110'
+                                    : 'opacity-45'
                               }`}
                               style={{ width: `${segment.percent}%` }}
                               title={`${segment.label}: ${segment.bytes.toLocaleString()} bytes (${segment.percent.toFixed(2)}%)`}
@@ -339,59 +342,35 @@ export default function CellDetailPage() {
                         )}
                       </div>
                     </div>
-
-                    <div
-                      data-testid="byte-composition-guides"
-                      className="relative z-10 mt-1 flex h-3 w-full"
-                    >
-                      {capacityView.segments.map((segment) => (
-                        <div
-                          key={`${segment.key}-guide`}
-                          className="relative"
-                          style={{ width: `${segment.percent}%` }}
-                        >
-                          {segment.percent > 0 ? (
-                            <span
-                              className={`absolute left-1/2 top-0 h-3 w-px -translate-x-1/2 ${
-                                segment.colorClass
-                              } transition-opacity ${
-                                hoveredSegmentKey === null || hoveredSegmentKey === segment.key
-                                  ? 'opacity-60'
-                                  : 'opacity-20'
-                              }`}
-                            />
-                          ) : null}
-                        </div>
-                      ))}
-                    </div>
                   </div>
 
-                  <div
-                    data-testid="byte-composition-legend"
-                    className="relative z-0 mt-1 overflow-x-auto pb-0.5"
-                  >
-                    <div className="inline-flex min-w-full flex-nowrap gap-2">
+                  <div data-testid="byte-composition-legend" className="relative z-0 mt-2">
+                    <div
+                      className="grid gap-1.5"
+                      style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}
+                    >
                       {capacityView.segments.map((segment) => (
                         <button
                           key={segment.key}
                           type="button"
-                          className={`inline-flex items-center gap-2 whitespace-nowrap rounded border px-2.5 py-1 text-xs transition-all ${
+                          className={`inline-flex min-w-0 items-center justify-between gap-1 rounded border px-2 py-1 text-xs transition-all ${
                             hoveredSegmentKey === null
-                              ? 'border-slate-700/60 bg-slate-900/50 text-slate-300'
+                              ? 'border-slate-700/50 bg-slate-900/60 text-slate-300'
                               : hoveredSegmentKey === segment.key
-                                ? 'border-slate-500 bg-slate-800 text-white'
-                                : 'border-slate-800/60 bg-slate-900/30 text-slate-500'
+                                ? 'border-slate-500/80 bg-slate-800/80 text-white'
+                                : 'border-slate-800/60 bg-slate-900/40 text-slate-500'
                           }`}
                           onMouseEnter={() => setHoveredSegmentKey(segment.key)}
                           onMouseLeave={() => setHoveredSegmentKey(null)}
                         >
-                          <span className={`h-2.5 w-2.5 rounded-full ${segment.colorClass}`} />
-                          <span>{segment.label}</span>
-                          <span className="font-mono text-slate-400">
-                            {segment.bytes.toLocaleString()}B
+                          <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+                            <span
+                              className={`h-2 w-2 shrink-0 rounded-full ${segment.colorClass}`}
+                            />
+                            <span className="truncate">{segment.label}</span>
                           </span>
-                          <span className="font-mono text-slate-500">
-                            {segment.percent.toFixed(2)}%
+                          <span className="shrink-0 font-mono text-[11px] text-slate-500">
+                            {segment.bytes.toLocaleString()}B · {segment.percent.toFixed(2)}%
                           </span>
                         </button>
                       ))}
@@ -407,101 +386,11 @@ export default function CellDetailPage() {
           </TerminalPanel>
         )}
 
-        <div className="grid gap-6 lg:grid-cols-2 lg:items-start">
-          <TerminalPanel glow>
-            <TerminalPanelHeader indicator={isLive ? 'active' : 'inactive'}>
-              Overview
-            </TerminalPanelHeader>
-            <TerminalPanelContent>
-              <div className="space-y-1">
-                <DataField label="Address">
-                  <div className="flex items-center gap-2">
-                    {cell.address ? (
-                      <Address address={cell.address} />
-                    ) : (
-                      <Link
-                        href={`/address/${cell.lockScriptHash}`}
-                        className="text-terminal-green hover:underline"
-                      >
-                        <HexDisplay value={cell.lockScriptHash} />
-                      </Link>
-                    )}
-                    {lockScriptInfo && (
-                      <Link
-                        href={`/scripts/${encodeURIComponent(lockScriptInfo.name)}`}
-                        className="text-blue-400 hover:underline"
-                      >
-                        <Badge variant="blue">{lockScriptInfo.name}</Badge>
-                      </Link>
-                    )}
-                  </div>
-                </DataField>
-                <DataField label="Created at Block">
-                  <Link
-                    href={`/blocks/${cell.createdAtBlock}`}
-                    className="text-terminal-green hover:underline"
-                  >
-                    #{cell.createdAtBlock.toLocaleString()}
-                  </Link>
-                </DataField>
-                <DataField label="Transaction">
-                  <Link href={`/tx/${cell.txHash}`} className="text-amber hover:underline">
-                    <HexDisplay value={cell.txHash} color="amber" />
-                  </Link>
-                </DataField>
-                {!isLive && cell.consumedAtBlock && (
-                  <>
-                    <DataField label="Consumed at Block">
-                      <Link
-                        href={`/blocks/${cell.consumedAtBlock}`}
-                        className="text-red-400 hover:underline"
-                      >
-                        #{cell.consumedAtBlock.toLocaleString()}
-                      </Link>
-                    </DataField>
-                    {cell.consumedByTx && (
-                      <DataField label="Consumed by TX">
-                        <Link
-                          href={`/tx/${cell.consumedByTx}`}
-                          className="text-red-400 hover:underline"
-                        >
-                          <HexDisplay value={cell.consumedByTx} color="amber" />
-                        </Link>
-                      </DataField>
-                    )}
-                  </>
-                )}
-                <DataField label="Data Size">
-                  <span className="text-white">
-                    {cell.dataSize > 0 ? `${cell.dataSize.toLocaleString()} bytes` : 'Empty'}
-                  </span>
-                </DataField>
-              </div>
-
-              {cell.cellType === 'genesis_special_burn' && (
-                <div className="border-amber/30 bg-amber/10 mt-4 rounded-lg border p-4">
-                  <div className="text-amber text-sm font-medium">Genesis Special Burn Cell</div>
-                  <div className="mt-2 text-sm text-slate-300">
-                    <p>
-                      This cell contains 8.4B CKB burnt at genesis (25% of 33.6B initial issuance).
-                      For secondary issuance calculation,{' '}
-                      <strong className="text-amber">5.04B CKB (60%)</strong> is treated as
-                      &ldquo;occupied&rdquo; capacity, ensuring miners receive secondary rewards.
-                    </p>
-                    <p className="mt-2">
-                      <span className="text-slate-400">Virtual Occupied Capacity: </span>
-                      <span className="text-amber font-mono">5,040,000,000 CKB</span>
-                    </p>
-                  </div>
-                </div>
-              )}
-            </TerminalPanelContent>
-          </TerminalPanel>
-
-          <TerminalPanel>
+        <div className="grid gap-6 lg:grid-cols-2 lg:items-stretch">
+          <TerminalPanel className="h-full">
             <TerminalPanelHeader indicator="active">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <span>Cell Relationship</span>
+                <span>Overview</span>
                 {relationshipStats.nodeCount > 0 && (
                   <span className="text-xs text-slate-500">
                     {relationshipStats.nodeCount} nodes / {relationshipStats.linkCount} links
@@ -516,7 +405,7 @@ export default function CellDetailPage() {
                     type="button"
                     className={`rounded px-2.5 py-1 text-xs transition-colors ${
                       relationshipView === 'lifecycle'
-                        ? 'bg-terminal-green/15 text-terminal-green'
+                        ? 'bg-slate-800 text-slate-100 ring-1 ring-slate-700'
                         : 'text-slate-400 hover:text-slate-200'
                     }`}
                     onClick={() => setRelationshipView('lifecycle')}
@@ -527,7 +416,7 @@ export default function CellDetailPage() {
                     type="button"
                     className={`rounded px-2.5 py-1 text-xs transition-colors ${
                       relationshipView === 'graph'
-                        ? 'bg-cyan-500/15 text-cyan-300'
+                        ? 'bg-slate-800 text-slate-100 ring-1 ring-slate-700'
                         : 'text-slate-400 hover:text-slate-200'
                     }`}
                     onClick={() => setRelationshipView('graph')}
@@ -544,7 +433,7 @@ export default function CellDetailPage() {
                         <span className="text-slate-500">TX</span>
                         <Link
                           href={`/tx/${cell.txHash}`}
-                          className="text-amber font-mono hover:underline"
+                          className="font-mono text-amber-300 hover:underline"
                         >
                           {shortenHash(cell.txHash)}
                         </Link>
@@ -552,7 +441,7 @@ export default function CellDetailPage() {
                         <span className="text-slate-500">at</span>
                         <Link
                           href={`/blocks/${cell.createdAtBlock}`}
-                          className="text-terminal-green hover:underline"
+                          className="text-emerald-300 hover:underline"
                         >
                           #{cell.createdAtBlock.toLocaleString()}
                         </Link>
@@ -582,7 +471,7 @@ export default function CellDetailPage() {
                         Upstream Inputs ({relationshipStats.upstreamInputs.length})
                       </div>
                       {relationshipStats.upstreamInputs.length > 0 ? (
-                        <div className="mt-2 space-y-1.5">
+                        <div className="mt-2 max-h-56 space-y-1.5 overflow-y-auto pr-1 [scrollbar-color:rgb(71_85_105)_transparent] [scrollbar-width:thin]">
                           {relationshipStats.upstreamInputs.map((input) => (
                             <div
                               key={`${input.txHash}-${input.outputIndex}`}
@@ -590,7 +479,7 @@ export default function CellDetailPage() {
                             >
                               <Link
                                 href={`/cell/${input.txHash}-${input.outputIndex}`}
-                                className="font-mono text-cyan-300 hover:underline"
+                                className="font-mono text-sky-300 hover:underline"
                               >
                                 {shortenHash(input.txHash)}:{input.outputIndex}
                               </Link>
@@ -624,7 +513,7 @@ export default function CellDetailPage() {
                             <span className="text-slate-500">TX</span>
                             <Link
                               href={`/tx/${cell.consumedByTx}`}
-                              className="font-mono text-red-400 hover:underline"
+                              className="font-mono text-rose-300 hover:underline"
                             >
                               {shortenHash(cell.consumedByTx)}
                             </Link>
@@ -633,7 +522,7 @@ export default function CellDetailPage() {
                                 <span className="text-slate-500">at</span>
                                 <Link
                                   href={`/blocks/${cell.consumedAtBlock}`}
-                                  className="text-red-400 hover:underline"
+                                  className="text-rose-300 hover:underline"
                                 >
                                   #{cell.consumedAtBlock.toLocaleString()}
                                 </Link>
@@ -649,59 +538,114 @@ export default function CellDetailPage() {
                     )}
                   </div>
                 ) : graphData && graphData.nodes.length > 0 ? (
-                  <CellGraph
-                    nodes={graphData.nodes}
-                    links={graphData.links}
-                    onNodeClick={handleGraphNodeClick}
-                    width={undefined}
-                    height={relationshipStats.graphHeight}
-                  />
+                  <div className="space-y-2">
+                    <div className="rounded border border-slate-700/70 bg-slate-900/70 px-3 py-2 text-xs text-slate-400">
+                      <span className="inline-flex items-center gap-2">
+                        <span className="h-2 w-2 rounded-full bg-amber-300" />
+                        Current cell node is highlighted.
+                      </span>
+                    </div>
+                    <CellGraph
+                      nodes={graphData.nodes}
+                      links={graphData.links}
+                      onNodeClick={handleGraphNodeClick}
+                      focusCell={{ txHash: cell.txHash, outputIndex: cell.outputIndex }}
+                      width={undefined}
+                      height={relationshipStats.graphHeight}
+                    />
+                  </div>
                 ) : (
                   <div className="flex h-[220px] items-center justify-center text-sm text-slate-500">
                     Graph data unavailable
                   </div>
                 )}
               </div>
-            </TerminalPanelContent>
-          </TerminalPanel>
-        </div>
 
-        <div className="mt-6 grid gap-6 lg:grid-cols-2">
-          <TerminalPanel>
-            <TerminalPanelHeader indicator="none">
-              <div className="flex items-center gap-2">
-                <span>Lock Script</span>
-                {lockScriptInfo && (
-                  <Link href={`/scripts/${encodeURIComponent(lockScriptInfo.name)}`}>
-                    <Badge variant="blue">{lockScriptInfo.name}</Badge>
-                  </Link>
-                )}
-              </div>
-            </TerminalPanelHeader>
-            <TerminalPanelContent>
-              <ScriptView script={cell.lock ?? null} collapsible={false} />
+              {cell.cellType === 'genesis_special_burn' && (
+                <div className="border-amber/30 bg-amber/10 mt-4 rounded-lg border p-4">
+                  <div className="text-amber text-sm font-medium">Genesis Special Burn Cell</div>
+                  <div className="mt-2 text-sm text-slate-300">
+                    <p>
+                      This cell contains 8.4B CKB burnt at genesis (25% of 33.6B initial issuance).
+                      For secondary issuance calculation,{' '}
+                      <strong className="text-amber">5.04B CKB (60%)</strong> is treated as
+                      &ldquo;occupied&rdquo; capacity, ensuring miners receive secondary rewards.
+                    </p>
+                    <p className="mt-2">
+                      <span className="text-slate-400">Virtual Occupied Capacity: </span>
+                      <span className="text-amber font-mono">5,040,000,000 CKB</span>
+                    </p>
+                  </div>
+                </div>
+              )}
             </TerminalPanelContent>
           </TerminalPanel>
 
-          <TerminalPanel>
-            <TerminalPanelHeader indicator="none">
-              <div className="flex items-center gap-2">
-                <span>Type Script</span>
-                {typeScriptInfo && (
-                  <Link href={`/scripts/${encodeURIComponent(typeScriptInfo.name)}`}>
-                    <Badge variant="purple">{typeScriptInfo.name}</Badge>
-                  </Link>
-                )}
-              </div>
-            </TerminalPanelHeader>
-            <TerminalPanelContent>
-              <ScriptView script={cell.type ?? null} collapsible={false} />
-            </TerminalPanelContent>
-          </TerminalPanel>
+          <div data-testid="cell-side-panels" className="space-y-6">
+            <div data-testid="cell-address-panel">
+              <TerminalPanel>
+                <TerminalPanelHeader indicator="none">Address</TerminalPanelHeader>
+                <TerminalPanelContent>
+                  <div className="flex flex-wrap items-center gap-2 text-sm text-slate-200">
+                    {cell.address ? (
+                      <Address address={cell.address} />
+                    ) : (
+                      <Link
+                        href={`/address/${cell.lockScriptHash}`}
+                        className="text-emerald-300 hover:underline"
+                      >
+                        <HexDisplay value={cell.lockScriptHash} />
+                      </Link>
+                    )}
+                    {lockScriptInfo && (
+                      <Link
+                        href={`/scripts/${encodeURIComponent(lockScriptInfo.name)}`}
+                        className="text-blue-400 hover:underline"
+                      >
+                        <Badge variant="blue">{lockScriptInfo.name}</Badge>
+                      </Link>
+                    )}
+                  </div>
+                </TerminalPanelContent>
+              </TerminalPanel>
+            </div>
+
+            <TerminalPanel>
+              <TerminalPanelHeader indicator="none">
+                <div className="flex items-center gap-2">
+                  <span>Lock Script</span>
+                  {lockScriptInfo && (
+                    <Link href={`/scripts/${encodeURIComponent(lockScriptInfo.name)}`}>
+                      <Badge variant="blue">{lockScriptInfo.name}</Badge>
+                    </Link>
+                  )}
+                </div>
+              </TerminalPanelHeader>
+              <TerminalPanelContent>
+                <ScriptView script={cell.lock ?? null} collapsible={false} />
+              </TerminalPanelContent>
+            </TerminalPanel>
+
+            <TerminalPanel>
+              <TerminalPanelHeader indicator="none">
+                <div className="flex items-center gap-2">
+                  <span>Type Script</span>
+                  {typeScriptInfo && (
+                    <Link href={`/scripts/${encodeURIComponent(typeScriptInfo.name)}`}>
+                      <Badge variant="purple">{typeScriptInfo.name}</Badge>
+                    </Link>
+                  )}
+                </div>
+              </TerminalPanelHeader>
+              <TerminalPanelContent>
+                <ScriptView script={cell.type ?? null} collapsible={false} />
+              </TerminalPanelContent>
+            </TerminalPanel>
+          </div>
         </div>
 
         {cell.daoInfo && (
-          <TerminalPanel className="mt-6" glow>
+          <TerminalPanel className="mt-6">
             <TerminalPanelHeader indicator="active">
               <div className="flex items-center gap-2">
                 <span>Nervos DAO</span>
@@ -728,7 +672,7 @@ export default function CellDetailPage() {
                   <div className="text-xs text-slate-500">Deposit Block</div>
                   <Link
                     href={`/blocks/${cell.daoInfo.depositBlockNumber}`}
-                    className="text-terminal-green hover:underline"
+                    className="text-emerald-300 hover:underline"
                   >
                     #{cell.daoInfo.depositBlockNumber.toLocaleString()}
                   </Link>
@@ -744,7 +688,7 @@ export default function CellDetailPage() {
                     <div className="text-xs text-slate-500">Withdraw Request</div>
                     <Link
                       href={`/blocks/${cell.daoInfo.withdrawRequestBlock}`}
-                      className="text-amber hover:underline"
+                      className="text-amber-300 hover:underline"
                     >
                       #{cell.daoInfo.withdrawRequestBlock.toLocaleString()}
                     </Link>
@@ -763,7 +707,7 @@ export default function CellDetailPage() {
                     <div className="text-xs text-slate-500">Withdrawn Block</div>
                     <Link
                       href={`/blocks/${cell.daoInfo.withdrawBlock}`}
-                      className="text-red-400 hover:underline"
+                      className="text-rose-300 hover:underline"
                     >
                       #{cell.daoInfo.withdrawBlock.toLocaleString()}
                     </Link>
@@ -780,7 +724,7 @@ export default function CellDetailPage() {
                 {cell.daoInfo.compensation && (
                   <div>
                     <div className="text-xs text-slate-500">Compensation Earned</div>
-                    <span className="text-terminal-green font-mono">
+                    <span className="font-mono text-emerald-300">
                       {cell.daoInfo.compensationCkb
                         ? `${Number(cell.daoInfo.compensationCkb).toLocaleString()} CKB`
                         : `${Number(cell.daoInfo.compensation).toLocaleString()} Shannon`}
@@ -811,7 +755,7 @@ export default function CellDetailPage() {
                       <div className="flex items-center gap-3">
                         <Link
                           href={`/scripts/${encodeURIComponent(script.name)}`}
-                          className="text-terminal-green text-lg font-medium hover:underline"
+                          className="text-lg font-medium text-emerald-300 hover:underline"
                         >
                           {script.name}
                         </Link>
@@ -848,7 +792,7 @@ export default function CellDetailPage() {
                       </span>
                       <Link
                         href={`/cell/${item.txHash}-${item.outputIndex}`}
-                        className="text-terminal-green hover:underline"
+                        className="text-emerald-300 hover:underline"
                       >
                         <HexDisplay value={`${item.txHash}:${item.outputIndex}`} />
                       </Link>
@@ -868,26 +812,42 @@ export default function CellDetailPage() {
         {cell.dataSize > 0 && (
           <TerminalPanel className="mt-6" variant="inset">
             <TerminalPanelHeader indicator="none">
-              <div className="flex items-center gap-2">
-                <span>DATA (first 1024 common knowledge bytes)</span>
-                {cell.data && (cell.data.length - 2) / 2 < cell.dataSize && (
-                  <Badge variant="amber">
-                    Truncated ({cell.dataSize.toLocaleString()} bytes total)
-                  </Badge>
-                )}
-              </div>
+              <span>DATA</span>
             </TerminalPanelHeader>
             <TerminalPanelContent>
+              <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
+                <div className="inline-flex items-center gap-2 rounded border border-slate-700/70 bg-slate-900/70 px-2.5 py-1.5">
+                  <span className="uppercase tracking-wide text-slate-400">Total</span>
+                  <span className="font-mono text-white">
+                    {cell.dataSize.toLocaleString()} bytes
+                  </span>
+                </div>
+                <div
+                  className={`inline-flex items-center gap-2 rounded border px-2.5 py-1.5 ${
+                    isDataPreviewTruncated
+                      ? 'border-amber/30 bg-amber/10'
+                      : 'border-emerald-500/20 bg-emerald-500/5'
+                  }`}
+                >
+                  <span className="uppercase tracking-wide text-slate-400">Preview</span>
+                  {isDataPreviewTruncated ? (
+                    <span className="text-amber font-mono">
+                      Truncated at the {dataPreviewBytes.toLocaleString()}-th byte
+                    </span>
+                  ) : (
+                    <span className="text-emerald-300">Full data shown</span>
+                  )}
+                </div>
+              </div>
+
               <div className="overflow-x-auto rounded-md border border-slate-800 bg-slate-950 p-4 font-mono text-xs">
                 {(() => {
                   const rawData = cell.data ? cell.data.replace(/^0x/, '') : '';
                   if (!rawData) return <div className="text-slate-500">0x</div>;
 
                   const BYTES_PER_ROW = 24;
-                  const MAX_DISPLAY_BYTES = 1024;
-                  const receivedBytes = rawData.length / 2;
                   const actualTotalBytes = cell.dataSize;
-                  const displayBytes = Math.min(receivedBytes, MAX_DISPLAY_BYTES);
+                  const displayBytes = dataPreviewBytes;
                   const displayHex = rawData.slice(0, displayBytes * 2);
 
                   const rows = [];
@@ -895,7 +855,7 @@ export default function CellDetailPage() {
                     rows.push(displayHex.slice(i, i + BYTES_PER_ROW * 2));
                   }
 
-                  const remainingBytes = actualTotalBytes - displayBytes;
+                  const remainingBytes = Math.max(0, actualTotalBytes - displayBytes);
 
                   return (
                     <div className="min-w-max">
