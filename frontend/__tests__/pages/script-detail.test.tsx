@@ -181,7 +181,8 @@ describe('ScriptDetailPage', () => {
     expect(screen.getAllByText('Cells').length).toBeGreaterThan(0);
     expect(screen.queryByText('Occupation History')).not.toBeInTheDocument();
     expect(screen.queryByText('Selected Deployment Utilization')).not.toBeInTheDocument();
-    expect(screen.getByText('Reference Semantics')).toBeInTheDocument();
+    expect(screen.getByTestId('script-ref-semantics')).toBeInTheDocument();
+    expect(screen.getAllByText('Script Ref').length).toBeGreaterThan(0);
     expect(screen.getAllByText(/^Occupied:/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/^Unoccupied:/).length).toBeGreaterThan(0);
     expect(screen.getAllByText('bytecode(data)').length).toBeGreaterThan(0);
