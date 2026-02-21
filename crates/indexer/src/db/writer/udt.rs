@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use std::collections::HashMap;
 use tracing::warn;
 
@@ -235,7 +235,16 @@ impl BatchWriter {
             let mut updated = match existing {
                 Some(mut info) => {
                     let supply = info.total_supply.get_or_insert(0);
-                    *supply = (*supply + update.supply_delta).max(0);
+                    let next_supply = *supply + update.supply_delta;
+                    if next_supply < 0 {
+                        bail!(
+                            "token supply underflow: type_hash=0x{}, supply={}, delta={}",
+                            hex::encode(type_hash),
+                            *supply,
+                            update.supply_delta
+                        );
+                    }
+                    *supply = next_supply;
                     info
                 }
                 None => TokenInfo {
@@ -329,7 +338,16 @@ impl BatchWriter {
         for ((type_hash, lock_hash), delta) in &balance_changes {
             let existing = self.store.get_token_holder_balance(type_hash, lock_hash)?;
             let old_balance = existing.unwrap_or(0);
-            let new_balance = (old_balance + delta).max(0);
+            let new_balance = old_balance + delta;
+            if new_balance < 0 {
+                bail!(
+                    "token holder balance underflow: type_hash=0x{}, lock_hash=0x{}, balance={}, delta={}",
+                    hex::encode(type_hash),
+                    hex::encode(lock_hash),
+                    old_balance,
+                    delta
+                );
+            }
 
             if old_balance == 0 && new_balance > 0 {
                 // New holder
@@ -357,7 +375,16 @@ impl BatchWriter {
                     .or_else(|| self.store.get_token(type_hash).ok().flatten());
 
                 if let Some(mut info) = info {
-                    info.holders_count = (info.holders_count + holder_delta).max(0);
+                    let next_holders_count = info.holders_count + holder_delta;
+                    if next_holders_count < 0 {
+                        bail!(
+                            "token holders count underflow: type_hash=0x{}, holders_count={}, delta={}",
+                            hex::encode(type_hash),
+                            info.holders_count,
+                            holder_delta
+                        );
+                    }
+                    info.holders_count = next_holders_count;
                     batch.put_token(type_hash, &info);
                 }
             }
@@ -673,5 +700,125 @@ mod tests {
         assert_eq!(updated.max_supply, Some(1_000_000));
         assert_eq!(updated.total_supply, Some(42));
         assert_eq!(updated.transfers_count, 5);
+    }
+
+    #[test]
+    fn test_process_udt_transfers_batch_errors_on_supply_underflow() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+
+        let type_hash = vec![0xAC; 32];
+        let lock_hash = vec![0x44; 32];
+        let token = TokenInfo {
+            type_code_hash: vec![0xCD; 32],
+            hash_type: 1,
+            type_args: vec![0x11; 20],
+            standard: "sudt".to_string(),
+            name: None,
+            symbol: None,
+            decimals: Some(8),
+            total_supply: Some(10),
+            max_supply: None,
+            holders_count: 1,
+            first_seen_block: 100,
+            icon_url: None,
+            description: None,
+            transfers_count: 5,
+        };
+        store.put_token_direct(&type_hash, &token).unwrap();
+
+        let mut setup = StoreBatch::new(&store);
+        setup.put_token_holder(&type_hash, &lock_hash, 100);
+        setup.commit().unwrap();
+
+        let transfer = ParsedUdtTransfer {
+            type_script_hash: type_hash.clone(),
+            type_code_hash: vec![0xCD; 32],
+            type_hash_type: 1,
+            type_args: vec![0x11; 20],
+            from_lock_hash: Some(lock_hash),
+            to_lock_hash: Vec::new(),
+            amount: 20u128,
+            standard: crate::parser::UdtStandard::Sudt,
+            is_mint: false,
+            is_burn: true,
+        };
+        let tx_hash = [0xE1; 32];
+        let transfers = vec![(&transfer, tx_hash.as_slice(), 200i64)];
+        let mut block_timestamps = HashMap::new();
+        block_timestamps.insert(200i64, 1_700_000_100_000i64);
+        let max_supply_observations = HashMap::new();
+
+        let mut batch = StoreBatch::new(&store);
+        let err = writer
+            .process_udt_transfers_batch(
+                &transfers,
+                &max_supply_observations,
+                &block_timestamps,
+                &mut batch,
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("supply underflow"));
+    }
+
+    #[test]
+    fn test_process_udt_transfers_batch_errors_on_holders_count_underflow() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+
+        let type_hash = vec![0xAD; 32];
+        let lock_hash = vec![0x55; 32];
+        let token = TokenInfo {
+            type_code_hash: vec![0xCD; 32],
+            hash_type: 1,
+            type_args: vec![0x11; 20],
+            standard: "sudt".to_string(),
+            name: None,
+            symbol: None,
+            decimals: Some(8),
+            total_supply: Some(100),
+            max_supply: None,
+            holders_count: 0,
+            first_seen_block: 100,
+            icon_url: None,
+            description: None,
+            transfers_count: 5,
+        };
+        store.put_token_direct(&type_hash, &token).unwrap();
+
+        let mut setup = StoreBatch::new(&store);
+        setup.put_token_holder(&type_hash, &lock_hash, 5);
+        setup.commit().unwrap();
+
+        let transfer = ParsedUdtTransfer {
+            type_script_hash: type_hash.clone(),
+            type_code_hash: vec![0xCD; 32],
+            type_hash_type: 1,
+            type_args: vec![0x11; 20],
+            from_lock_hash: Some(lock_hash),
+            to_lock_hash: Vec::new(),
+            amount: 5u128,
+            standard: crate::parser::UdtStandard::Sudt,
+            is_mint: false,
+            is_burn: true,
+        };
+        let tx_hash = [0xE2; 32];
+        let transfers = vec![(&transfer, tx_hash.as_slice(), 201i64)];
+        let mut block_timestamps = HashMap::new();
+        block_timestamps.insert(201i64, 1_700_000_200_000i64);
+        let max_supply_observations = HashMap::new();
+
+        let mut batch = StoreBatch::new(&store);
+        let err = writer
+            .process_udt_transfers_batch(
+                &transfers,
+                &max_supply_observations,
+                &block_timestamps,
+                &mut batch,
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("holders count underflow"));
     }
 }

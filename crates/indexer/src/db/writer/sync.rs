@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use tracing::{info, warn};
 
 use ckbadger_store::keys;
@@ -85,6 +85,12 @@ impl BatchWriter {
     }
 
     pub fn init_sync_start(&self, start_block: i64, is_bulk_sync: bool) -> Result<()> {
+        if start_block < -1 {
+            bail!(
+                "invalid startup sync tip: start_block={} (expected >= -1)",
+                start_block
+            );
+        }
         let next_block = start_block + 1;
         if self.has_partial_data_after_block(start_block)? {
             info!(
@@ -106,7 +112,7 @@ impl BatchWriter {
         }
 
         // Align persistent sync tip to the startup tip to avoid stale sync_status metadata.
-        let tip_number = start_block.max(0);
+        let tip_number = if start_block < 0 { 0 } else { start_block };
         let tip_hash = if start_block >= 0 {
             self.store.get_block_header(start_block)?.map(|h| h.hash)
         } else {
@@ -334,5 +340,12 @@ mod tests {
         assert_eq!(status.total_cells_created, 28);
         assert_eq!(status.total_cells_consumed, 6);
         assert!(status.last_synced_at > 0);
+    }
+
+    #[test]
+    fn test_init_sync_start_errors_when_start_block_below_minus_one() {
+        let (_dir, _store, writer) = setup();
+        let err = writer.init_sync_start(-2, false).unwrap_err();
+        assert!(err.to_string().contains("expected >= -1"));
     }
 }

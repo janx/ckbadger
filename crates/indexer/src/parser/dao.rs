@@ -89,7 +89,7 @@ impl DaoParser {
 
         Some(ParsedDaoCell {
             lock_script_hash,
-            capacity: Self::parse_capacity_i64(&output.capacity),
+            capacity: Self::parse_capacity_i64(&output.capacity)?,
             state,
             deposit_block_number,
         })
@@ -161,8 +161,7 @@ impl DaoParser {
 
                 let deposit_block_number = dao_cell.deposit_block_number?;
 
-                let input_idx = idx.min(input_cells.len().saturating_sub(1));
-                let (orig_tx, orig_idx, _, _) = input_cells.get(input_idx)?;
+                let (orig_tx, orig_idx, _, _) = input_cells.get(idx)?;
 
                 Some(ParsedDaoWithdrawRequest {
                     tx_hash: tx_hash.to_vec(),
@@ -190,22 +189,27 @@ impl DaoParser {
         occupied_capacity: u128,
         ar_deposit: u64,
         ar_withdraw_request: u64,
-    ) -> u128 {
+    ) -> Option<u128> {
         if ar_deposit == 0 {
-            return 0;
+            return Some(0);
         }
 
-        let free_capacity = capacity.saturating_sub(occupied_capacity);
+        if capacity < occupied_capacity {
+            return None;
+        }
+        let free_capacity = capacity - occupied_capacity;
 
         let ar_deposit = ar_deposit as u128;
         let ar_withdraw_request = ar_withdraw_request as u128;
 
-        (free_capacity * ar_withdraw_request / ar_deposit).saturating_sub(free_capacity)
+        let gross = free_capacity.checked_mul(ar_withdraw_request)? / ar_deposit;
+        gross.checked_sub(free_capacity)
     }
 
-    fn parse_capacity_i64(capacity_hex: &str) -> i64 {
+    fn parse_capacity_i64(capacity_hex: &str) -> Option<i64> {
         let hex = capacity_hex.strip_prefix("0x").unwrap_or(capacity_hex);
-        u64::from_str_radix(hex, 16).unwrap_or(0) as i64
+        let cap = u64::from_str_radix(hex, 16).ok()?;
+        i64::try_from(cap).ok()
     }
 }
 
@@ -293,7 +297,7 @@ mod tests {
         let ar_withdraw: u64 = 10_100_000_000_000_000;
 
         let compensation =
-            DaoParser::calculate_compensation(capacity, occupied, ar_deposit, ar_withdraw);
+            DaoParser::calculate_compensation(capacity, occupied, ar_deposit, ar_withdraw).unwrap();
 
         let free_capacity = capacity - occupied;
         let expected = (free_capacity * ar_withdraw as u128 / ar_deposit as u128) - free_capacity;
@@ -302,22 +306,41 @@ mod tests {
 
     #[test]
     fn test_calculate_compensation_zero_ar_deposit() {
-        let compensation = DaoParser::calculate_compensation(100, 50, 0, 100);
+        let compensation = DaoParser::calculate_compensation(100, 50, 0, 100).unwrap();
         assert_eq!(compensation, 0);
     }
 
     #[test]
     fn test_calculate_compensation_no_growth() {
         let ar = 10_000_000_000_000_000u64;
-        let compensation = DaoParser::calculate_compensation(200_00000000, 102_00000000, ar, ar);
+        let compensation =
+            DaoParser::calculate_compensation(200_00000000, 102_00000000, ar, ar).unwrap();
         assert_eq!(compensation, 0);
     }
 
     #[test]
+    fn test_calculate_compensation_returns_none_when_capacity_below_occupied() {
+        let compensation = DaoParser::calculate_compensation(100, 200, 10, 11);
+        assert!(compensation.is_none());
+    }
+
+    #[test]
     fn test_parse_capacity_i64() {
-        assert_eq!(DaoParser::parse_capacity_i64("0x2540be400"), 10_000_000_000);
-        assert_eq!(DaoParser::parse_capacity_i64("2540be400"), 10_000_000_000);
-        assert_eq!(DaoParser::parse_capacity_i64("0x0"), 0);
+        assert_eq!(
+            DaoParser::parse_capacity_i64("0x2540be400"),
+            Some(10_000_000_000)
+        );
+        assert_eq!(
+            DaoParser::parse_capacity_i64("2540be400"),
+            Some(10_000_000_000)
+        );
+        assert_eq!(DaoParser::parse_capacity_i64("0x0"), Some(0));
+    }
+
+    #[test]
+    fn test_parse_capacity_i64_invalid_returns_none() {
+        assert_eq!(DaoParser::parse_capacity_i64("0xzz"), None);
+        assert_eq!(DaoParser::parse_capacity_i64("not_hex"), None);
     }
 
     #[test]
@@ -369,6 +392,55 @@ mod tests {
         let deposits = DaoParser::parse_deposits_from_cells(&[0; 32], &cells);
         assert_eq!(deposits.len(), 0);
     }
+
+    #[test]
+    fn test_parse_withdraw_requests_does_not_fallback_to_last_input() {
+        let dao_code_hash = DAO_CODE_HASH.to_string();
+        let lock = crate::rpc::Script {
+            code_hash: "0x".to_string() + &"11".repeat(32),
+            hash_type: "type".to_string(),
+            args: "0x".to_string(),
+        };
+        let dao_type = crate::rpc::Script {
+            code_hash: dao_code_hash,
+            hash_type: "type".to_string(),
+            args: "0x".to_string(),
+        };
+        let output = crate::rpc::CellOutput {
+            capacity: "0x174876e800".to_string(),
+            lock: lock.clone(),
+            type_: Some(dao_type.clone()),
+        };
+        let tx = crate::rpc::TransactionView {
+            hash: "0x".to_string() + &"aa".repeat(32),
+            version: "0x0".to_string(),
+            cell_deps: vec![],
+            header_deps: vec![],
+            inputs: vec![],
+            outputs: vec![output.clone(), output],
+            outputs_data: vec![
+                "0x0100000000000000".to_string(),
+                "0x0200000000000000".to_string(),
+            ],
+            witnesses: vec![],
+        };
+
+        let input_cells = vec![(
+            vec![0xAB; 32],
+            0,
+            crate::rpc::CellOutput {
+                capacity: "0x174876e800".to_string(),
+                lock,
+                type_: Some(dao_type),
+            },
+            "0x00".to_string(),
+        )];
+
+        let parsed = DaoParser::parse_withdraw_requests(&tx, &[0xCC; 32], &input_cells);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].original_tx_hash, vec![0xAB; 32]);
+        assert_eq!(parsed[0].original_output_index, 0);
+    }
 }
 
 #[cfg(test)]
@@ -391,7 +463,7 @@ mod proptest_tests {
                 occupied,
                 ar_deposit,
                 ar_withdraw
-            );
+            ).unwrap();
 
             prop_assert!(compensation <= capacity);
         }
@@ -410,7 +482,7 @@ mod proptest_tests {
                 occupied,
                 ar_deposit,
                 ar_withdraw
-            );
+            ).unwrap();
 
             let max_possible = capacity.saturating_mul(ar_multiplier as u128);
             prop_assert!(

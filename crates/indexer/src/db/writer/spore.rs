@@ -1,13 +1,11 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use std::collections::HashMap;
 
+use crate::parser::{ParsedClusterCell, ParsedSporeCell};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
 use ckbadger_store::types::{ClusterAggregate, DobEntry, DobExtra, DobStandard, SporeTypeIndex};
 use ckbadger_store::CkbadgerStore;
-use tracing::warn;
-
-use crate::parser::{ParsedClusterCell, ParsedSporeCell};
 
 use super::BatchWriter;
 
@@ -155,14 +153,22 @@ impl BatchWriter {
             let old_count =
                 state.get_cluster_owner_count(self.store.as_ref(), cluster_id, old_lock)?;
             if old_count <= 0 {
-                warn!(
-                    cluster_id = %hex::encode(cluster_id),
-                    lock_hash = %hex::encode(old_lock),
-                    "spore owner decrement skipped because owner count is already zero"
+                bail!(
+                    "spore owner count underflow: cluster_id=0x{}, lock_hash=0x{}, owner_count={}",
+                    hex::encode(cluster_id),
+                    hex::encode(old_lock),
+                    old_count
                 );
             } else if old_count == 1 {
+                if agg.owner_count <= 0 {
+                    bail!(
+                        "spore aggregate owner_count underflow: cluster_id=0x{}, owner_count={}",
+                        hex::encode(cluster_id),
+                        agg.owner_count
+                    );
+                }
                 state.delete_cluster_owner(cluster_id, old_lock, batch);
-                agg.owner_count = agg.owner_count.saturating_sub(1);
+                agg.owner_count -= 1;
             } else {
                 state.put_cluster_owner_count(cluster_id, old_lock, old_count - 1, batch);
             }
@@ -172,9 +178,15 @@ impl BatchWriter {
             let cur_count =
                 state.get_cluster_owner_count(self.store.as_ref(), cluster_id, new_lock)?;
             if cur_count == 0 {
-                agg.owner_count = agg.owner_count.saturating_add(1);
+                agg.owner_count = agg
+                    .owner_count
+                    .checked_add(1)
+                    .ok_or_else(|| anyhow::anyhow!("spore aggregate owner_count overflow"))?;
             }
-            state.put_cluster_owner_count(cluster_id, new_lock, cur_count.saturating_add(1), batch);
+            let next = cur_count
+                .checked_add(1)
+                .ok_or_else(|| anyhow::anyhow!("spore owner count overflow"))?;
+            state.put_cluster_owner_count(cluster_id, new_lock, next, batch);
         }
 
         Ok(())
@@ -269,7 +281,14 @@ impl BatchWriter {
                 if was_live {
                     let mut old_agg =
                         state.get_cluster_aggregate(self.store.as_ref(), old_cluster_id)?;
-                    old_agg.live_count = old_agg.live_count.saturating_sub(1);
+                    if old_agg.live_count <= 0 {
+                        bail!(
+                            "spore aggregate live_count underflow on cluster move: cluster_id=0x{}, live_count={}",
+                            hex::encode(old_cluster_id),
+                            old_agg.live_count
+                        );
+                    }
+                    old_agg.live_count -= 1;
                     self.apply_owner_transition(
                         old_cluster_id,
                         old_owner.as_deref(),
@@ -356,7 +375,14 @@ impl BatchWriter {
             // Update cluster aggregate
             if let Some(ref cid) = cluster_id {
                 let mut agg = state.get_cluster_aggregate(self.store.as_ref(), cid)?;
-                agg.live_count = agg.live_count.saturating_sub(1);
+                if agg.live_count <= 0 {
+                    bail!(
+                        "spore aggregate live_count underflow on consume: cluster_id=0x{}, live_count={}",
+                        hex::encode(cid),
+                        agg.live_count
+                    );
+                }
+                agg.live_count -= 1;
                 self.apply_owner_transition(
                     cid,
                     old_owner.as_deref(),
@@ -679,7 +705,7 @@ mod tests {
     }
 
     #[test]
-    fn test_insert_spore_cell_does_not_decrement_owner_count_below_zero() {
+    fn test_insert_spore_cell_errors_on_owner_count_underflow() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
@@ -707,7 +733,7 @@ mod tests {
 
         let mut batch = StoreBatch::new(writer.store());
         let mut state = writer.new_spore_batch_state();
-        writer
+        let err = writer
             .insert_spore_cell(
                 &make_parsed_spore(&spore_id, &cluster_id, &owner_new),
                 &[0x03; 32],
@@ -717,17 +743,86 @@ mod tests {
                 &mut batch,
                 &mut state,
             )
-            .unwrap();
-        batch.commit().unwrap();
+            .unwrap_err();
+        assert!(err.to_string().contains("owner count underflow"));
+    }
 
-        let agg = store.get_cluster_aggregate(&cluster_id).unwrap().unwrap();
-        assert_eq!(agg.owner_count, 1);
-        assert_eq!(
-            store
-                .get_cluster_owner_count(&cluster_id, &owner_new)
-                .unwrap(),
-            1
-        );
+    #[test]
+    fn test_insert_spore_cell_errors_on_live_count_underflow() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+
+        let old_cluster = vec![0x41; 32];
+        let new_cluster = vec![0x42; 32];
+        let spore_id = vec![0x43; 32];
+        let owner_old = vec![0x44; 32];
+        let owner_new = vec![0x45; 32];
+
+        {
+            let mut seed = StoreBatch::new(&store);
+            seed.put_spore(&spore_id, &make_spore_entry(&old_cluster, &owner_old));
+            seed.put_cluster_aggregate(
+                &old_cluster,
+                &ClusterAggregate {
+                    total_count: 1,
+                    live_count: 0,
+                    owner_count: 1,
+                    ..Default::default()
+                },
+            );
+            seed.put_cluster_owner_count(&old_cluster, &owner_old, 1);
+            seed.commit().unwrap();
+        }
+
+        let mut batch = StoreBatch::new(writer.store());
+        let mut state = writer.new_spore_batch_state();
+        let err = writer
+            .insert_spore_cell(
+                &make_parsed_spore(&spore_id, &new_cluster, &owner_new),
+                &[0x05; 32],
+                0,
+                12,
+                10_800_000,
+                &mut batch,
+                &mut state,
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("live_count underflow"));
+    }
+
+    #[test]
+    fn test_consume_spore_errors_on_live_count_underflow() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+
+        let cluster_id = vec![0x51; 32];
+        let spore_id = vec![0x61; 32];
+        let owner = vec![0x71; 32];
+
+        {
+            let mut seed = StoreBatch::new(&store);
+            seed.put_spore(&spore_id, &make_spore_entry(&cluster_id, &owner));
+            seed.put_cluster_aggregate(
+                &cluster_id,
+                &ClusterAggregate {
+                    total_count: 1,
+                    live_count: 0,
+                    owner_count: 1,
+                    ..Default::default()
+                },
+            );
+            seed.put_cluster_owner_count(&cluster_id, &owner, 1);
+            seed.commit().unwrap();
+        }
+
+        let mut batch = StoreBatch::new(writer.store());
+        let mut state = writer.new_spore_batch_state();
+        let err = writer
+            .consume_spore(&spore_id, 100, &[0xAA; 32], &mut batch, &mut state)
+            .unwrap_err();
+        assert!(err.to_string().contains("live_count underflow"));
     }
 
     #[test]

@@ -119,13 +119,17 @@ impl BlockParser {
     }
 
     fn parse_hex_u64(hex: &str) -> u64 {
+        let raw = hex;
         let hex = hex.strip_prefix("0x").unwrap_or(hex);
-        u64::from_str_radix(hex, 16).unwrap_or(0)
+        u64::from_str_radix(hex, 16)
+            .unwrap_or_else(|e| panic!("invalid block hex '{}': {}", raw, e))
     }
 
     fn parse_hex_u128(hex: &str) -> u128 {
+        let raw = hex;
         let hex = hex.strip_prefix("0x").unwrap_or(hex);
-        u128::from_str_radix(hex, 16).unwrap_or(0)
+        u128::from_str_radix(hex, 16)
+            .unwrap_or_else(|e| panic!("invalid block hex '{}': {}", raw, e))
     }
 }
 
@@ -256,10 +260,9 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_hex_u64_invalid_returns_zero() {
-        assert_eq!(BlockParser::parse_hex_u64("not_hex"), 0);
-        assert_eq!(BlockParser::parse_hex_u64(""), 0);
-        assert_eq!(BlockParser::parse_hex_u64("0xZZZ"), 0);
+    #[should_panic(expected = "invalid block hex")]
+    fn test_parse_hex_u64_invalid_panics() {
+        let _ = BlockParser::parse_hex_u64("not_hex");
     }
 
     #[test]

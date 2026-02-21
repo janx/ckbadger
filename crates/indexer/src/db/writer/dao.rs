@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{anyhow, bail, Result};
 use chrono::{DateTime, Utc};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
@@ -79,6 +79,42 @@ fn extract_ar_from_dao(dao: &[u8]) -> Option<u64> {
     Some(u64::from_le_bytes(bytes))
 }
 
+fn calculate_dao_compensation_from_ar(
+    capacity: i64,
+    ar_deposit: u64,
+    ar_withdraw: u64,
+) -> Result<i64> {
+    if ar_deposit == 0 {
+        return Ok(0);
+    }
+
+    let capacity_u128 = u128::try_from(capacity)
+        .map_err(|_| anyhow!("DAO capacity is negative: capacity={}", capacity))?;
+    let occupied = DAO_OCCUPIED_CAPACITY as u128;
+    if capacity_u128 < occupied {
+        bail!(
+            "DAO capacity below occupied capacity: capacity={}, occupied={}",
+            capacity,
+            DAO_OCCUPIED_CAPACITY
+        );
+    }
+    let free_capacity = capacity_u128 - occupied;
+    let gross = free_capacity
+        .checked_mul(ar_withdraw as u128)
+        .ok_or_else(|| anyhow!("DAO compensation multiply overflow"))?
+        / (ar_deposit as u128);
+    let compensation_u128 = gross.checked_sub(free_capacity).ok_or_else(|| {
+        anyhow!(
+            "DAO compensation underflow: free_capacity={}, ar_deposit={}, ar_withdraw={}",
+            free_capacity,
+            ar_deposit,
+            ar_withdraw
+        )
+    })?;
+    i64::try_from(compensation_u128)
+        .map_err(|_| anyhow!("DAO compensation exceeds i64: {}", compensation_u128))
+}
+
 impl BatchWriter {
     pub fn get_block_dao_field(&self, block_number: i64) -> Result<Option<Vec<u8>>> {
         if let Some(header) = self.store.get_block_header(block_number)? {
@@ -151,13 +187,11 @@ impl BatchWriter {
             {
                 if let Ok(mut entry) = bincode::deserialize::<DaoDepositCacheEntry>(&value) {
                     let request_block = entry.withdraw_request_block.unwrap_or(block_number);
-                    let compensation = self
-                        .calculate_dao_compensation(
-                            entry.capacity,
-                            entry.deposit_block_number,
-                            request_block,
-                        )?
-                        .unwrap_or(0);
+                    let compensation = self.calculate_dao_compensation(
+                        entry.capacity,
+                        entry.deposit_block_number,
+                        request_block,
+                    )?;
 
                     entry.status = 2;
                     entry.withdraw_block = Some(block_number);
@@ -247,7 +281,13 @@ impl BatchWriter {
             status,
         ) in consumed_dao_deposits
         {
-            let capacity: i64 = capacity_str.parse().unwrap_or(0);
+            let capacity: i64 = capacity_str.parse().map_err(|e| {
+                anyhow!(
+                    "invalid DAO capacity string: value='{}', error={}",
+                    capacity_str,
+                    e
+                )
+            })?;
             let outpoint_key = keys::encode_outpoint(original_tx_hash, *original_output_index);
 
             if *status == 0 {
@@ -273,33 +313,41 @@ impl BatchWriter {
                 }
             } else if *status == 1 {
                 // Phase 2: withdraw_request -> withdrawal complete
-                let request_block = if let Some(value) = self
+                let Some(value) = self
                     .store
                     .get_cf(self.store.cf_dao_deposits(), &outpoint_key)?
-                {
-                    bincode::deserialize::<DaoDepositCacheEntry>(&value)
-                        .ok()
-                        .and_then(|e| e.withdraw_request_block)
-                        .unwrap_or(block_number)
-                } else {
-                    block_number
+                else {
+                    bail!(
+                        "DAO deposit entry missing during withdrawal completion: tx_hash=0x{}, output_index={}",
+                        hex::encode(original_tx_hash),
+                        original_output_index
+                    );
                 };
+                let entry: DaoDepositCacheEntry = bincode::deserialize(&value).map_err(|e| {
+                    anyhow!(
+                        "failed to deserialize DAO deposit entry: tx_hash=0x{}, output_index={}, error={}",
+                        hex::encode(original_tx_hash),
+                        original_output_index,
+                        e
+                    )
+                })?;
+                let request_block = entry.withdraw_request_block.ok_or_else(|| {
+                    anyhow!(
+                        "withdraw request block missing for status=1 deposit: tx_hash=0x{}, output_index={}",
+                        hex::encode(original_tx_hash),
+                        original_output_index
+                    )
+                })?;
 
                 let compensation =
                     self.calculate_dao_compensation(capacity, *deposit_block, request_block)?;
 
-                if let Some(value) = self
-                    .store
-                    .get_cf(self.store.cf_dao_deposits(), &outpoint_key)?
-                {
-                    if let Ok(mut entry) = bincode::deserialize::<DaoDepositCacheEntry>(&value) {
-                        entry.status = 2;
-                        entry.withdraw_block = Some(block_number);
-                        entry.withdraw_tx = Some(consuming_tx_hash.to_vec());
-                        entry.compensation = Some(compensation.unwrap_or(0));
-                        batch.put_dao_deposit(&outpoint_key, &entry);
-                    }
-                }
+                let mut entry = entry;
+                entry.status = 2;
+                entry.withdraw_block = Some(block_number);
+                entry.withdraw_tx = Some(consuming_tx_hash.to_vec());
+                entry.compensation = Some(compensation);
+                batch.put_dao_deposit(&outpoint_key, &entry);
             }
         }
         Ok(())
@@ -310,7 +358,7 @@ impl BatchWriter {
         capacity: i64,
         deposit_block: i64,
         withdraw_request_block: i64,
-    ) -> Result<Option<i64>> {
+    ) -> Result<i64> {
         let deposit_dao = self.get_block_dao_field(deposit_block)?;
         let withdraw_dao = self.get_block_dao_field(withdraw_request_block)?;
 
@@ -318,19 +366,16 @@ impl BatchWriter {
             (Some(d), Some(w)) => {
                 let ar_deposit = extract_ar_from_dao(&d).unwrap_or(1);
                 let ar_withdraw = extract_ar_from_dao(&w).unwrap_or(1);
-
-                if ar_deposit == 0 {
-                    return Ok(Some(0));
-                }
-
-                let capacity_u128 = capacity as u128;
-                let free_capacity = capacity_u128.saturating_sub(DAO_OCCUPIED_CAPACITY as u128);
-                let compensation = (free_capacity * ar_withdraw as u128 / ar_deposit as u128)
-                    .saturating_sub(free_capacity);
-
-                Ok(Some(compensation as i64))
+                let compensation =
+                    calculate_dao_compensation_from_ar(capacity, ar_deposit, ar_withdraw)?;
+                Ok(compensation)
             }
-            _ => Ok(None),
+            _ => bail!(
+                "missing DAO field for compensation: capacity={}, deposit_block={}, request_block={}",
+                capacity,
+                deposit_block,
+                withdraw_request_block
+            ),
         }
     }
 
@@ -473,7 +518,13 @@ impl BatchWriter {
                 status,
             ) in ctx.consumed_deposits()
             {
-                let capacity: i64 = capacity_str.parse().unwrap_or(0);
+                let capacity: i64 = capacity_str.parse().map_err(|e| {
+                    anyhow!(
+                        "invalid DAO capacity string: value='{}', error={}",
+                        capacity_str,
+                        e
+                    )
+                })?;
                 let outpoint_key = keys::encode_outpoint(original_tx_hash, *original_output_index);
 
                 if *status == 0 {
@@ -516,32 +567,31 @@ impl BatchWriter {
                         .and_then(|e| e.withdraw_request_block)
                         .unwrap_or(ctx.block_number());
 
-                    let compensation = if let (Some(dep_dao), Some(req_dao)) = (
-                        dao_fields.get(deposit_block),
-                        dao_fields.get(&request_block),
-                    ) {
+                    if let Some(mut entry) = maybe_entry {
+                        let dep_dao = dao_fields.get(deposit_block).ok_or_else(|| {
+                            anyhow!("missing DAO field for deposit block {}", deposit_block)
+                        })?;
+                        let req_dao = dao_fields.get(&request_block).ok_or_else(|| {
+                            anyhow!(
+                                "missing DAO field for withdraw request block {}",
+                                request_block
+                            )
+                        })?;
                         let ar_deposit = extract_ar_from_dao(dep_dao).unwrap_or(1);
                         let ar_withdraw = extract_ar_from_dao(req_dao).unwrap_or(1);
-                        if ar_deposit > 0 {
-                            let cap_u128 = capacity as u128;
-                            let free = cap_u128.saturating_sub(DAO_OCCUPIED_CAPACITY as u128);
-                            Some(
-                                ((free * ar_withdraw as u128 / ar_deposit as u128)
-                                    .saturating_sub(free)) as i64,
-                            )
-                        } else {
-                            Some(0)
-                        }
-                    } else {
-                        None
-                    };
-
-                    if let Some(mut entry) = maybe_entry {
+                        let compensation =
+                            calculate_dao_compensation_from_ar(capacity, ar_deposit, ar_withdraw)?;
                         entry.status = 2;
                         entry.withdraw_block = Some(ctx.block_number());
                         entry.withdraw_tx = Some(ctx.consuming_tx_hash().to_vec());
-                        entry.compensation = Some(compensation.unwrap_or(0));
+                        entry.compensation = Some(compensation);
                         batch.put_dao_deposit(&outpoint_key, &entry);
+                    } else {
+                        bail!(
+                            "DAO deposit entry missing during withdrawal completion: tx_hash=0x{}, output_index={}",
+                            hex::encode(original_tx_hash),
+                            original_output_index
+                        );
                     }
                 }
             }
@@ -576,6 +626,47 @@ impl BatchWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ckbadger_store::types::CachedBlockHeader;
+
+    #[derive(Clone)]
+    struct BatchCtx {
+        consumed: Vec<(i64, Vec<u8>, i16, String, i64, i16)>,
+        new_outputs: Vec<(Vec<u8>, i16, Vec<u8>, i64, u64)>,
+        block_num: i64,
+        consuming_tx: Vec<u8>,
+    }
+
+    impl DaoWithdrawalContextTrait for BatchCtx {
+        fn consumed_deposits(&self) -> &[(i64, Vec<u8>, i16, String, i64, i16)] {
+            &self.consumed
+        }
+        fn new_dao_outputs(&self) -> &[(Vec<u8>, i16, Vec<u8>, i64, u64)] {
+            &self.new_outputs
+        }
+        fn block_number(&self) -> i64 {
+            self.block_num
+        }
+        fn consuming_tx_hash(&self) -> &[u8] {
+            &self.consuming_tx
+        }
+        fn timestamp(&self) -> chrono::DateTime<chrono::Utc> {
+            chrono::Utc::now()
+        }
+    }
+
+    fn header_with_ar(ar: u64) -> CachedBlockHeader {
+        let mut dao = vec![0u8; 32];
+        dao[8..16].copy_from_slice(&ar.to_le_bytes());
+        CachedBlockHeader {
+            hash: vec![0x11; 32],
+            timestamp: 1_704_067_200_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao,
+            transactions_count: 1,
+        }
+    }
 
     #[test]
     fn test_build_dao_cache_entry_sets_defaults() {
@@ -689,6 +780,242 @@ mod tests {
 
         let result = dedup_tx_hashes(&input);
         assert_eq!(result.len(), 100);
+    }
+
+    #[test]
+    fn test_calculate_dao_compensation_from_ar_errors_on_capacity_below_occupied() {
+        let err = calculate_dao_compensation_from_ar(100_00000000, 100, 110).unwrap_err();
+        assert!(err.to_string().contains("below occupied"));
+    }
+
+    #[test]
+    fn test_calculate_dao_compensation_from_ar_errors_on_ar_underflow() {
+        let err = calculate_dao_compensation_from_ar(200_00000000, 100, 90).unwrap_err();
+        assert!(err.to_string().contains("underflow"));
+    }
+
+    #[test]
+    fn test_process_dao_withdrawals_batch_errors_on_invalid_capacity_string() {
+        use ckbadger_store::batch::StoreBatch;
+        use ckbadger_store::CkbadgerStore;
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = super::super::BatchWriter::new(store.clone());
+
+        let deposit_tx_hash = vec![0xAA; 32];
+        let deposit_output_index: i16 = 0;
+        let deposit_capacity: i64 = 500_00000000;
+        let deposit_block: i64 = 100;
+        let outpoint_key =
+            ckbadger_store::keys::encode_outpoint(&deposit_tx_hash, deposit_output_index);
+        let mut pending_deposits: HashMap<[u8; 34], DaoDepositCacheEntry> = HashMap::new();
+        pending_deposits.insert(
+            outpoint_key,
+            DaoDepositCacheEntry {
+                capacity: deposit_capacity,
+                deposit_block_number: deposit_block,
+                lock_script_hash: vec![0xBB; 32],
+                deposit_ar: 10000000000000000,
+                status: 0,
+                withdraw_request_tx: None,
+                withdraw_request_block: None,
+                withdraw_request_ar: None,
+                withdraw_block: None,
+                withdraw_tx: None,
+                compensation: None,
+            },
+        );
+
+        let ctx = BatchCtx {
+            consumed: vec![(
+                0,
+                deposit_tx_hash,
+                deposit_output_index,
+                "not-a-number".to_string(),
+                deposit_block,
+                0,
+            )],
+            new_outputs: vec![],
+            block_num: 200,
+            consuming_tx: vec![0xCC; 32],
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        let err = writer
+            .process_dao_withdrawals_batch(&[ctx], &mut batch, &pending_deposits)
+            .unwrap_err();
+        assert!(err.to_string().contains("invalid DAO capacity string"));
+    }
+
+    #[test]
+    fn test_process_dao_withdrawals_batch_errors_on_capacity_below_occupied() {
+        use ckbadger_store::batch::StoreBatch;
+        use ckbadger_store::CkbadgerStore;
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = super::super::BatchWriter::new(store.clone());
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(100, &header_with_ar(10));
+        batch.put_block_header(110, &header_with_ar(11));
+        batch.commit().unwrap();
+
+        let deposit_tx_hash = vec![0xAA; 32];
+        let deposit_output_index: i16 = 0;
+        let outpoint_key =
+            ckbadger_store::keys::encode_outpoint(&deposit_tx_hash, deposit_output_index);
+        let mut pending_deposits: HashMap<[u8; 34], DaoDepositCacheEntry> = HashMap::new();
+        pending_deposits.insert(
+            outpoint_key,
+            DaoDepositCacheEntry {
+                capacity: 100_00000000,
+                deposit_block_number: 100,
+                lock_script_hash: vec![0xBB; 32],
+                deposit_ar: 10,
+                status: 1,
+                withdraw_request_tx: Some(vec![0xDD; 32]),
+                withdraw_request_block: Some(110),
+                withdraw_request_ar: Some(11),
+                withdraw_block: None,
+                withdraw_tx: None,
+                compensation: None,
+            },
+        );
+
+        let ctx = BatchCtx {
+            consumed: vec![(
+                0,
+                deposit_tx_hash,
+                deposit_output_index,
+                "10000000000".to_string(),
+                100,
+                1,
+            )],
+            new_outputs: vec![],
+            block_num: 120,
+            consuming_tx: vec![0xEE; 32],
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        let err = writer
+            .process_dao_withdrawals_batch(&[ctx], &mut batch, &pending_deposits)
+            .unwrap_err();
+        assert!(err.to_string().contains("below occupied"));
+    }
+
+    #[test]
+    fn test_process_dao_withdrawals_errors_when_request_block_missing() {
+        use ckbadger_store::batch::StoreBatch;
+        use ckbadger_store::CkbadgerStore;
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = super::super::BatchWriter::new(store.clone());
+
+        let original_tx_hash = vec![0xAA; 32];
+        let original_output_index = 0i16;
+        let outpoint_key =
+            ckbadger_store::keys::encode_outpoint(&original_tx_hash, original_output_index);
+
+        // status=1 but withdraw_request_block missing should be treated as inconsistent state.
+        let entry = DaoDepositCacheEntry {
+            capacity: 500_00000000,
+            deposit_block_number: 100,
+            lock_script_hash: vec![0xBB; 32],
+            deposit_ar: 10,
+            status: 1,
+            withdraw_request_tx: Some(vec![0xCC; 32]),
+            withdraw_request_block: None,
+            withdraw_request_ar: Some(11),
+            withdraw_block: None,
+            withdraw_tx: None,
+            compensation: None,
+        };
+        let mut batch = StoreBatch::new(&store);
+        batch.put_dao_deposit(&outpoint_key, &entry);
+        batch.commit().unwrap();
+
+        let consumed = vec![(
+            0,
+            original_tx_hash.clone(),
+            original_output_index,
+            "50000000000".to_string(),
+            100,
+            1,
+        )];
+        let mut batch = StoreBatch::new(&store);
+        let err = writer
+            .process_dao_withdrawals(
+                &consumed,
+                &[],
+                120,
+                &[0xDD; 32],
+                chrono::Utc::now(),
+                &mut batch,
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("withdraw request block missing"));
+    }
+
+    #[test]
+    fn test_process_dao_withdrawals_errors_when_dao_field_missing_for_compensation() {
+        use ckbadger_store::batch::StoreBatch;
+        use ckbadger_store::CkbadgerStore;
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = super::super::BatchWriter::new(store.clone());
+
+        let original_tx_hash = vec![0xAB; 32];
+        let original_output_index = 1i16;
+        let outpoint_key =
+            ckbadger_store::keys::encode_outpoint(&original_tx_hash, original_output_index);
+
+        let entry = DaoDepositCacheEntry {
+            capacity: 500_00000000,
+            deposit_block_number: 100,
+            lock_script_hash: vec![0xBC; 32],
+            deposit_ar: 10,
+            status: 1,
+            withdraw_request_tx: Some(vec![0xCD; 32]),
+            withdraw_request_block: Some(110),
+            withdraw_request_ar: Some(11),
+            withdraw_block: None,
+            withdraw_tx: None,
+            compensation: None,
+        };
+        let mut batch = StoreBatch::new(&store);
+        batch.put_dao_deposit(&outpoint_key, &entry);
+        batch.commit().unwrap();
+
+        let consumed = vec![(
+            0,
+            original_tx_hash.clone(),
+            original_output_index,
+            "50000000000".to_string(),
+            100,
+            1,
+        )];
+        let mut batch = StoreBatch::new(&store);
+        let err = writer
+            .process_dao_withdrawals(
+                &consumed,
+                &[],
+                120,
+                &[0xDE; 32],
+                chrono::Utc::now(),
+                &mut batch,
+            )
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("missing DAO field for compensation"));
     }
 
     /// Regression test: same-batch deposits must be updated to status=1

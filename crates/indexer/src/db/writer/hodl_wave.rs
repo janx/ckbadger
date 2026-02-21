@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 
+use anyhow::{bail, Result};
 use chrono::NaiveDate;
 use ckbadger_store::{DailyHodlWave, HodlTrackerState};
 
@@ -57,7 +58,7 @@ impl HodlWaveTracker {
         Self {
             capacity_by_creation_date,
             block_date_transitions,
-            holder_count: state.holder_count.max(0),
+            holder_count: state.holder_count,
             last_snapshot_date,
         }
     }
@@ -104,28 +105,83 @@ impl HodlWaveTracker {
     }
 
     /// A cell was consumed. Look up its creation date from block number and subtract capacity.
-    pub fn cell_consumed(&mut self, created_at_block: i64, capacity: i64) {
-        if let Some(creation_date) = self.block_number_to_date(created_at_block) {
-            let entry = self
-                .capacity_by_creation_date
-                .entry(creation_date)
-                .or_insert(0);
-            *entry -= capacity as i128;
-            if *entry <= 0 {
-                self.capacity_by_creation_date.remove(&creation_date);
-            }
+    pub fn cell_consumed(&mut self, created_at_block: i64, capacity: i64) -> Result<()> {
+        if capacity <= 0 {
+            bail!(
+                "invalid consumed cell capacity: created_at_block={}, capacity={}",
+                created_at_block,
+                capacity
+            );
         }
+
+        let creation_date = self.block_number_to_date(created_at_block).ok_or_else(|| {
+            anyhow::anyhow!(
+                "missing block-date transition for consumed cell: created_at_block={}, transitions={}",
+                created_at_block,
+                self.block_date_transitions.len()
+            )
+        })?;
+
+        let current = self
+            .capacity_by_creation_date
+            .get(&creation_date)
+            .copied()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "missing live capacity bucket for consumed cell: created_at_block={}, creation_date={}",
+                    created_at_block,
+                    creation_date
+                )
+            })?;
+
+        let next = current.checked_sub(capacity as i128).ok_or_else(|| {
+            anyhow::anyhow!(
+                "capacity subtraction overflow: current={}, capacity={}",
+                current,
+                capacity
+            )
+        })?;
+
+        if next < 0 {
+            bail!(
+                "live capacity underflow on consume: created_at_block={}, creation_date={}, current={}, capacity={}",
+                created_at_block,
+                creation_date,
+                current,
+                capacity
+            );
+        }
+
+        if next == 0 {
+            self.capacity_by_creation_date.remove(&creation_date);
+        } else {
+            self.capacity_by_creation_date.insert(creation_date, next);
+        }
+
+        Ok(())
     }
 
     /// Track holder count transitions based on live cell count changes.
     /// old_live=0, new_live>0 → new holder (+1)
     /// old_live>0, new_live=0 → lost holder (-1)
-    pub fn update_holder_count(&mut self, old_live_cells: i32, new_live_cells: i32) {
+    pub fn update_holder_count(&mut self, old_live_cells: i32, new_live_cells: i32) -> Result<()> {
         if old_live_cells == 0 && new_live_cells > 0 {
-            self.holder_count += 1;
+            self.holder_count = self
+                .holder_count
+                .checked_add(1)
+                .ok_or_else(|| anyhow::anyhow!("holder_count overflow"))?;
         } else if old_live_cells > 0 && new_live_cells == 0 {
-            self.holder_count = (self.holder_count - 1).max(0);
+            if self.holder_count <= 0 {
+                bail!(
+                    "holder_count underflow: holder_count={}, old_live_cells={}, new_live_cells={}",
+                    self.holder_count,
+                    old_live_cells,
+                    new_live_cells
+                );
+            }
+            self.holder_count -= 1;
         }
+        Ok(())
     }
 
     /// Check if a day boundary was crossed. If so, compute and return a snapshot
@@ -213,7 +269,7 @@ mod tests {
         let date = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
         tracker.record_block_date(100, date);
         tracker.cell_created(date, 200_00000000);
-        tracker.cell_consumed(100, 50_00000000);
+        tracker.cell_consumed(100, 50_00000000).unwrap();
         assert_eq!(tracker.capacity_by_creation_date[&date], 150_00000000_i128);
     }
 
@@ -223,8 +279,29 @@ mod tests {
         let date = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
         tracker.record_block_date(100, date);
         tracker.cell_created(date, 100_00000000);
-        tracker.cell_consumed(100, 100_00000000);
+        tracker.cell_consumed(100, 100_00000000).unwrap();
         assert!(!tracker.capacity_by_creation_date.contains_key(&date));
+    }
+
+    #[test]
+    fn test_cell_consumed_errors_on_underflow() {
+        let mut tracker = HodlWaveTracker::new();
+        let date = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
+        tracker.record_block_date(100, date);
+        tracker.cell_created(date, 100_00000000);
+
+        let err = tracker.cell_consumed(100, 150_00000000).unwrap_err();
+        assert!(err.to_string().contains("underflow"));
+    }
+
+    #[test]
+    fn test_cell_consumed_errors_when_no_matching_live_bucket() {
+        let mut tracker = HodlWaveTracker::new();
+        let date = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
+        tracker.record_block_date(100, date);
+
+        let err = tracker.cell_consumed(100, 10_00000000).unwrap_err();
+        assert!(err.to_string().contains("missing live capacity bucket"));
     }
 
     #[test]
@@ -289,27 +366,27 @@ mod tests {
         let mut tracker = HodlWaveTracker::new();
         assert_eq!(tracker.holder_count, 0);
         // New holder: 0 → 1
-        tracker.update_holder_count(0, 1);
+        tracker.update_holder_count(0, 1).unwrap();
         assert_eq!(tracker.holder_count, 1);
         // Existing holder gets more cells: 1 → 5 (no change)
-        tracker.update_holder_count(1, 5);
+        tracker.update_holder_count(1, 5).unwrap();
         assert_eq!(tracker.holder_count, 1);
         // Another new holder
-        tracker.update_holder_count(0, 3);
+        tracker.update_holder_count(0, 3).unwrap();
         assert_eq!(tracker.holder_count, 2);
         // First holder loses all cells: 5 → 0
-        tracker.update_holder_count(5, 0);
+        tracker.update_holder_count(5, 0).unwrap();
         assert_eq!(tracker.holder_count, 1);
         // 0 → 0 (no change)
-        tracker.update_holder_count(0, 0);
+        tracker.update_holder_count(0, 0).unwrap();
         assert_eq!(tracker.holder_count, 1);
     }
 
     #[test]
-    fn test_holder_count_never_goes_negative() {
+    fn test_holder_count_underflow_errors() {
         let mut tracker = HodlWaveTracker::new();
-        tracker.update_holder_count(3, 0);
-        assert_eq!(tracker.holder_count, 0);
+        let err = tracker.update_holder_count(3, 0).unwrap_err();
+        assert!(err.to_string().contains("underflow"));
     }
 
     #[test]

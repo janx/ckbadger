@@ -145,6 +145,12 @@ impl CkbadgerStore {
     /// Atomic rollback across all CFs to a given block number.
     /// Deletes all data for blocks > rollback_to.
     pub fn rollback_to_block(&self, rollback_to: i64) -> anyhow::Result<RollbackResult> {
+        if rollback_to < -1 {
+            anyhow::bail!(
+                "invalid rollback target: rollback_to={} (expected >= -1)",
+                rollback_to
+            );
+        }
         let mut batch = WriteBatch::default();
         let mut blocks_removed = 0u64;
         let mut txs_removed = 0u64;
@@ -437,7 +443,7 @@ impl CkbadgerStore {
         } else {
             Vec::new()
         };
-        let tip_number = rollback_to.max(0);
+        let tip_number = if rollback_to < 0 { 0 } else { rollback_to };
         self.update_sync_status(|status| {
             status.tip_block_number = tip_number;
             status.tip_block_hash = tip_hash.clone();
@@ -715,5 +721,13 @@ mod tests {
             .get_cf(store.cf_consumed_cells(), &outpoint_key)
             .unwrap();
         assert!(consumed_raw.is_none());
+    }
+
+    #[test]
+    fn test_rollback_to_block_errors_when_target_below_minus_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let err = store.rollback_to_block(-2).unwrap_err();
+        assert!(err.to_string().contains("expected >= -1"));
     }
 }

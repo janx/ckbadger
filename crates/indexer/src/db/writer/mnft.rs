@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use std::collections::HashMap;
 
 use ckbadger_store::batch::StoreBatch;
@@ -183,6 +183,12 @@ impl BatchWriter {
         batch: &mut StoreBatch,
     ) -> Result<()> {
         if let Some(mut entry) = self.store.get_nft(token_id)? {
+            if !entry.is_live {
+                bail!(
+                    "mnft token already consumed: token_id=0x{}",
+                    hex::encode(token_id)
+                );
+            }
             let collection_id = entry.collection_id.clone();
             entry.is_live = false;
             entry.owner_lock_hash = None;
@@ -190,12 +196,27 @@ impl BatchWriter {
 
             // Decrement collection's live_count
             if let Some(ref cid) = collection_id {
-                let mut agg = self
-                    .store
-                    .get_nft_collection_aggregate(cid)?
-                    .unwrap_or_default();
+                let Some(mut agg) = self.store.get_nft_collection_aggregate(cid)? else {
+                    bail!(
+                        "mnft collection aggregate missing: class_id=0x{}, token_id=0x{}",
+                        hex::encode(cid),
+                        hex::encode(token_id)
+                    );
+                };
+                if agg.live_count <= 0 {
+                    bail!(
+                        "mnft collection live_count underflow: class_id=0x{}, live_count={}",
+                        hex::encode(cid),
+                        agg.live_count
+                    );
+                }
                 agg.live_count -= 1;
                 batch.put_nft_collection_aggregate(cid, &agg);
+            } else {
+                bail!(
+                    "mnft token missing class_id: token_id=0x{}",
+                    hex::encode(token_id)
+                );
             }
         }
         Ok(())
@@ -383,5 +404,113 @@ mod tests {
         assert_eq!(batch_loaded.len(), 1);
         assert_eq!(batch_loaded[0].0, tx_hash);
         assert_eq!(batch_loaded[0].1, 8);
+    }
+
+    #[test]
+    fn test_consume_mnft_token_errors_on_live_count_underflow() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let writer = BatchWriter::new(Arc::new(store));
+
+        let class = ParsedMnftClass {
+            class_id: vec![0x11; 24],
+            type_script_hash: vec![0x21; 32],
+            issuer_id: vec![0x31; 20],
+            name: Some("Class".to_string()),
+            description: None,
+            renderer: None,
+            total: 0,
+            issued: 0,
+            configure: 0,
+            owner_lock_hash: vec![0x41; 32],
+        };
+        let token = ParsedMnftToken {
+            token_id: vec![0x12; 28],
+            type_script_hash: vec![0x22; 32],
+            class_id: class.class_id.clone(),
+            token_index: 1,
+            characteristic: vec![],
+            configure: 0,
+            state: 0,
+            owner_lock_hash: vec![0x42; 32],
+        };
+        let tx_hash = vec![0x51; 32];
+
+        let mut batch = StoreBatch::new(writer.store());
+        writer
+            .insert_mnft_class(&class, &tx_hash, 7, 1, &mut batch)
+            .unwrap();
+        writer
+            .insert_mnft_token(&token, &tx_hash, 8, 1, 0, &mut batch)
+            .unwrap();
+        batch.commit().unwrap();
+
+        let mut agg = writer
+            .store()
+            .get_nft_collection_aggregate(&class.class_id)
+            .unwrap()
+            .unwrap();
+        agg.live_count = 0;
+        let mut batch = StoreBatch::new(writer.store());
+        batch.put_nft_collection_aggregate(&class.class_id, &agg);
+        batch.commit().unwrap();
+
+        let mut batch = StoreBatch::new(writer.store());
+        let err = writer
+            .consume_mnft_token(&token.token_id, 2, &tx_hash, &mut batch)
+            .unwrap_err();
+        assert!(err.to_string().contains("live_count underflow"));
+    }
+
+    #[test]
+    fn test_consume_mnft_token_errors_on_double_consume() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let writer = BatchWriter::new(Arc::new(store));
+
+        let class = ParsedMnftClass {
+            class_id: vec![0x11; 24],
+            type_script_hash: vec![0x21; 32],
+            issuer_id: vec![0x31; 20],
+            name: Some("Class".to_string()),
+            description: None,
+            renderer: None,
+            total: 0,
+            issued: 0,
+            configure: 0,
+            owner_lock_hash: vec![0x41; 32],
+        };
+        let token = ParsedMnftToken {
+            token_id: vec![0x12; 28],
+            type_script_hash: vec![0x22; 32],
+            class_id: class.class_id.clone(),
+            token_index: 1,
+            characteristic: vec![],
+            configure: 0,
+            state: 0,
+            owner_lock_hash: vec![0x42; 32],
+        };
+        let tx_hash = vec![0x51; 32];
+
+        let mut batch = StoreBatch::new(writer.store());
+        writer
+            .insert_mnft_class(&class, &tx_hash, 7, 1, &mut batch)
+            .unwrap();
+        writer
+            .insert_mnft_token(&token, &tx_hash, 8, 1, 0, &mut batch)
+            .unwrap();
+        batch.commit().unwrap();
+
+        let mut batch = StoreBatch::new(writer.store());
+        writer
+            .consume_mnft_token(&token.token_id, 2, &tx_hash, &mut batch)
+            .unwrap();
+        batch.commit().unwrap();
+
+        let mut batch = StoreBatch::new(writer.store());
+        let err = writer
+            .consume_mnft_token(&token.token_id, 3, &tx_hash, &mut batch)
+            .unwrap_err();
+        assert!(err.to_string().contains("already consumed"));
     }
 }

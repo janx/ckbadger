@@ -64,7 +64,9 @@ impl CellParser {
 
     fn parse_capacity_i64(capacity_hex: &str) -> i64 {
         let hex = capacity_hex.strip_prefix("0x").unwrap_or(capacity_hex);
-        u64::from_str_radix(hex, 16).unwrap_or(0) as i64
+        u64::from_str_radix(hex, 16)
+            .unwrap_or_else(|e| panic!("invalid cell capacity hex '{}': {}", capacity_hex, e))
+            as i64
     }
 }
 
@@ -149,9 +151,9 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_capacity_i64_invalid() {
-        assert_eq!(CellParser::parse_capacity_i64("invalid"), 0);
-        assert_eq!(CellParser::parse_capacity_i64(""), 0);
+    #[should_panic(expected = "invalid cell capacity hex")]
+    fn test_parse_capacity_i64_invalid_panics() {
+        let _ = CellParser::parse_capacity_i64("invalid");
     }
 
     #[test]

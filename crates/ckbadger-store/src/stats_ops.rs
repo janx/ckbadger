@@ -474,7 +474,14 @@ impl CkbadgerStore {
                         is_new_deposit: false,
                         is_withdrawal_complete: entry.status == 2,
                         compensation: if entry.status == 2 {
-                            entry.compensation.unwrap_or(0) as i128
+                            entry.compensation.ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "dao deposit status=2 missing compensation: deposit_block={}, withdraw_request_block={:?}, lock_hash={:?}",
+                                    entry.deposit_block_number,
+                                    entry.withdraw_request_block,
+                                    entry.lock_script_hash
+                                )
+                            })? as i128
                         } else {
                             0
                         },
@@ -521,8 +528,17 @@ impl CkbadgerStore {
                                 let s_delta = s - ps;
                                 let entry = daily_secondary.entry(d).or_insert((0, 0));
                                 if s_delta > 0 {
-                                    let denom = (c - u).max(1);
-                                    let miner = s_delta * u.max(0) / denom;
+                                    let denom = c - u;
+                                    if denom <= 0 {
+                                        anyhow::bail!(
+                                            "invalid DAO C/U relationship while rebuilding secondary issuance: date={}, C={}, U={}, s_delta={}",
+                                            d,
+                                            c,
+                                            u,
+                                            s_delta
+                                        );
+                                    }
+                                    let miner = s_delta * u / denom;
                                     entry.0 += miner;
                                     // Ignore protocol-adjustment decreases so cumulative user-facing
                                     // issuance series remain monotonic.
@@ -565,6 +581,15 @@ impl CkbadgerStore {
         for (date, day_events) in &daily_events {
             for ev in day_events {
                 running_total += ev.capacity_delta;
+                if running_total < 0 {
+                    anyhow::bail!(
+                        "dao total_deposited underflow: date={}, running_total={}, capacity_delta={}, lock_hash={:?}",
+                        date,
+                        running_total,
+                        ev.capacity_delta,
+                        ev.lock_script_hash
+                    );
+                }
 
                 if ev.is_new_deposit {
                     cumulative_deposits += 1;
@@ -577,8 +602,16 @@ impl CkbadgerStore {
                     let count = active_depositors
                         .entry(ev.lock_script_hash.clone())
                         .or_insert(0);
-                    *count -= 1;
                     if *count <= 0 {
+                        anyhow::bail!(
+                            "dao depositors_count underflow: date={}, lock_hash={:?}, current_count={}",
+                            date,
+                            ev.lock_script_hash,
+                            *count
+                        );
+                    }
+                    *count -= 1;
+                    if *count == 0 {
                         active_depositors.remove(&ev.lock_script_hash);
                     }
                     if ev.is_withdrawal_complete {
@@ -594,8 +627,17 @@ impl CkbadgerStore {
                 if daily_non_miner > 0 {
                     // Split non-miner into dao and treasury using dao_ratio
                     let (c, _s, u) = daily_dao_csu.get(date).copied().unwrap_or((0, 0, 0));
-                    let denom = (c - u).max(1);
-                    let deposited = running_total.max(0);
+                    let denom = c - u;
+                    if denom <= 0 {
+                        anyhow::bail!(
+                            "invalid DAO C/U relationship while splitting non-miner issuance: date={}, C={}, U={}, daily_non_miner={}",
+                            date,
+                            c,
+                            u,
+                            daily_non_miner
+                        );
+                    }
+                    let deposited = running_total;
                     let daily_dao_share = daily_non_miner * deposited / denom;
                     let daily_treasury_share = daily_non_miner - daily_dao_share;
                     cum_dao += daily_dao_share;
@@ -1225,5 +1267,158 @@ mod tests {
         // Miner should only account for the positive portion
         assert!(total_miner >= 0);
         assert!(total_dao >= 0);
+    }
+
+    #[test]
+    fn test_rebuild_dao_daily_snapshots_errors_on_negative_running_total() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap();
+
+        let header_withdraw = CachedBlockHeader {
+            hash: vec![0x05; 32],
+            timestamp: 1_704_067_200_000, // 2024-01-01 UTC
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+        let header_deposit = CachedBlockHeader {
+            hash: vec![0x0A; 32],
+            timestamp: 1_704_153_600_000, // 2024-01-02 UTC
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+
+        let deposit = DaoDepositCacheEntry {
+            capacity: 100_00000000,
+            deposit_block_number: 10,
+            lock_script_hash: vec![0x44; 32],
+            deposit_ar: 0,
+            status: 1,
+            withdraw_request_tx: Some(vec![0x77; 32]),
+            withdraw_request_block: Some(5),
+            withdraw_request_ar: Some(0),
+            withdraw_block: None,
+            withdraw_tx: None,
+            compensation: None,
+        };
+
+        let mut batch = crate::batch::StoreBatch::new(&store);
+        batch.put_block_header(5, &header_withdraw);
+        batch.put_block_header(10, &header_deposit);
+        batch.put_dao_deposit(&[0x11; 34], &deposit);
+        batch.commit().unwrap();
+
+        let err = store.rebuild_dao_daily_snapshots().unwrap_err();
+        assert!(err.to_string().contains("total_deposited underflow"));
+    }
+
+    #[test]
+    fn test_rebuild_dao_daily_snapshots_errors_on_missing_compensation_for_status2() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap();
+
+        let header_deposit = CachedBlockHeader {
+            hash: vec![0x05; 32],
+            timestamp: 1_704_067_200_000, // 2024-01-01 UTC
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+        let header_withdraw_request = CachedBlockHeader {
+            hash: vec![0x0A; 32],
+            timestamp: 1_704_153_600_000, // 2024-01-02 UTC
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+
+        let deposit = DaoDepositCacheEntry {
+            capacity: 100_00000000,
+            deposit_block_number: 5,
+            lock_script_hash: vec![0x44; 32],
+            deposit_ar: 0,
+            status: 2,
+            withdraw_request_tx: Some(vec![0x77; 32]),
+            withdraw_request_block: Some(10),
+            withdraw_request_ar: Some(0),
+            withdraw_block: Some(11),
+            withdraw_tx: Some(vec![0x88; 32]),
+            compensation: None,
+        };
+
+        let mut batch = crate::batch::StoreBatch::new(&store);
+        batch.put_block_header(5, &header_deposit);
+        batch.put_block_header(10, &header_withdraw_request);
+        batch.put_dao_deposit(&[0x22; 34], &deposit);
+        batch.commit().unwrap();
+
+        let err = store.rebuild_dao_daily_snapshots().unwrap_err();
+        assert!(err.to_string().contains("missing compensation"));
+    }
+
+    #[test]
+    fn test_rebuild_dao_daily_snapshots_errors_on_invalid_c_u_relationship() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap();
+
+        let mut dao_day1 = vec![0u8; 32];
+        dao_day1[0..8].copy_from_slice(&(1_000u64).to_le_bytes()); // C
+        dao_day1[16..24].copy_from_slice(&(100u64).to_le_bytes()); // S
+        dao_day1[24..32].copy_from_slice(&(900u64).to_le_bytes()); // U
+
+        let mut dao_day2 = vec![0u8; 32];
+        dao_day2[0..8].copy_from_slice(&(900u64).to_le_bytes()); // C
+        dao_day2[16..24].copy_from_slice(&(200u64).to_le_bytes()); // S (positive delta)
+        dao_day2[24..32].copy_from_slice(&(900u64).to_le_bytes()); // U -> C-U == 0 (invalid)
+
+        let header_day1 = CachedBlockHeader {
+            hash: vec![0x10; 32],
+            timestamp: 1_704_067_200_000, // 2024-01-01 UTC
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: dao_day1,
+            transactions_count: 1,
+        };
+        let header_day2 = CachedBlockHeader {
+            hash: vec![0x11; 32],
+            timestamp: 1_704_153_600_000, // 2024-01-02 UTC
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: dao_day2,
+            transactions_count: 1,
+        };
+        let deposit = DaoDepositCacheEntry {
+            capacity: 100_00000000,
+            deposit_block_number: 1,
+            lock_script_hash: vec![0x44; 32],
+            deposit_ar: 0,
+            status: 0,
+            withdraw_request_tx: None,
+            withdraw_request_block: None,
+            withdraw_request_ar: None,
+            withdraw_block: None,
+            withdraw_tx: None,
+            compensation: None,
+        };
+
+        let mut batch = crate::batch::StoreBatch::new(&store);
+        batch.put_block_header(1, &header_day1);
+        batch.put_block_header(2, &header_day2);
+        batch.put_dao_deposit(&[0x33; 34], &deposit);
+        batch.commit().unwrap();
+
+        let err = store.rebuild_dao_daily_snapshots().unwrap_err();
+        assert!(err.to_string().contains("invalid DAO C/U relationship"));
     }
 }

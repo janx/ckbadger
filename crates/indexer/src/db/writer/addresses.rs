@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use std::collections::HashMap;
 
 use ckbadger_store::batch::StoreBatch;
@@ -54,27 +54,89 @@ impl BatchWriter {
             let updated = match prev {
                 Some(bal) => {
                     let mut bal = bal.clone();
-                    bal.balance += *balance_delta as i128;
-                    bal.occupied_capacity =
-                        (bal.occupied_capacity + *occupied_delta as i128).max(0);
-                    bal.live_cells_count = (bal.live_cells_count + *live_delta).max(0);
-                    bal.total_cells_count += *total_delta as i64;
-                    bal.txs_count += tx_delta;
+                    let next_balance = bal.balance + *balance_delta as i128;
+                    if next_balance < 0 {
+                        bail!(
+                            "address balance underflow: lock_hash=0x{}, balance={}, delta={}",
+                            hex::encode(lock_hash),
+                            bal.balance,
+                            balance_delta
+                        );
+                    }
+                    let next_occupied = bal.occupied_capacity + *occupied_delta as i128;
+                    if next_occupied < 0 {
+                        bail!(
+                            "address occupied capacity underflow: lock_hash=0x{}, occupied_capacity={}, delta={}",
+                            hex::encode(lock_hash),
+                            bal.occupied_capacity,
+                            occupied_delta
+                        );
+                    }
+                    let next_live_cells = bal.live_cells_count + *live_delta;
+                    if next_live_cells < 0 {
+                        bail!(
+                            "address live_cells_count underflow: lock_hash=0x{}, live_cells_count={}, delta={}",
+                            hex::encode(lock_hash),
+                            bal.live_cells_count,
+                            live_delta
+                        );
+                    }
+                    let next_total_cells = bal.total_cells_count + *total_delta as i64;
+                    if next_total_cells < 0 {
+                        bail!(
+                            "address total_cells_count underflow: lock_hash=0x{}, total_cells_count={}, delta={}",
+                            hex::encode(lock_hash),
+                            bal.total_cells_count,
+                            total_delta
+                        );
+                    }
+                    let next_txs_count = bal.txs_count + tx_delta;
+                    if next_txs_count < 0 {
+                        bail!(
+                            "address txs_count underflow: lock_hash=0x{}, txs_count={}, delta={}",
+                            hex::encode(lock_hash),
+                            bal.txs_count,
+                            tx_delta
+                        );
+                    }
+                    bal.balance = next_balance;
+                    bal.occupied_capacity = next_occupied;
+                    bal.live_cells_count = next_live_cells;
+                    bal.total_cells_count = next_total_cells;
+                    bal.txs_count = next_txs_count;
                     bal.last_activity_block = *block_num;
                     bal.last_activity_tx = tx_hash.to_vec();
                     bal
                 }
-                None => AddressBalance {
-                    balance: *balance_delta as i128,
-                    occupied_capacity: (*occupied_delta as i128).max(0),
-                    live_cells_count: (*live_delta).max(0),
-                    total_cells_count: (*total_delta).max(0) as i64,
-                    txs_count: *tx_delta,
-                    first_seen_block: *block_num,
-                    first_seen_tx: tx_hash.to_vec(),
-                    last_activity_block: *block_num,
-                    last_activity_tx: tx_hash.to_vec(),
-                },
+                None => {
+                    if *balance_delta < 0
+                        || *occupied_delta < 0
+                        || *live_delta < 0
+                        || *total_delta < 0
+                        || *tx_delta < 0
+                    {
+                        bail!(
+                            "address delta underflow for unseen address: lock_hash=0x{}, balance_delta={}, occupied_delta={}, live_delta={}, total_delta={}, tx_delta={}",
+                            hex::encode(lock_hash),
+                            balance_delta,
+                            occupied_delta,
+                            live_delta,
+                            total_delta,
+                            tx_delta
+                        );
+                    }
+                    AddressBalance {
+                        balance: *balance_delta as i128,
+                        occupied_capacity: *occupied_delta as i128,
+                        live_cells_count: *live_delta,
+                        total_cells_count: *total_delta as i64,
+                        txs_count: *tx_delta,
+                        first_seen_block: *block_num,
+                        first_seen_tx: tx_hash.to_vec(),
+                        last_activity_block: *block_num,
+                        last_activity_tx: tx_hash.to_vec(),
+                    }
+                }
             };
 
             batch.put_addr_balance(lock_hash, &updated);

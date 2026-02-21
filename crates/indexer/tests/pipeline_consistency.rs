@@ -401,13 +401,13 @@ fn test_address_balance_occupied_delta_applied() {
 }
 
 #[test]
-fn test_address_balance_occupied_clamped_at_zero() {
+fn test_address_balance_occupied_underflow_errors() {
     let (store, writer) = setup_store();
     let lock_hash = vec![0xCCu8; 32];
     let tx_hash = vec![0x01u8; 32];
 
     // Apply a negative occupied_delta larger than what exists (0)
-    // Should be clamped to 0, not go negative
+    // Should fail fast instead of silently clamping.
     let changes: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8], i64)> = [(
         lock_hash.clone(),
         (
@@ -423,16 +423,10 @@ fn test_address_balance_occupied_clamped_at_zero() {
     .into_iter()
     .collect();
     let mut batch = StoreBatch::new(&store);
-    writer
+    let err = writer
         .update_address_balances_batch(&changes, &mut batch)
-        .unwrap();
-    batch.commit().unwrap();
-
-    let balance = store.get_addr_balance(&lock_hash).unwrap().unwrap();
-    assert_eq!(
-        balance.occupied_capacity, 0,
-        "occupied_capacity should be clamped to 0"
-    );
+        .unwrap_err();
+    assert!(err.to_string().contains("underflow"));
 }
 
 #[test]

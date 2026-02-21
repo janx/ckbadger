@@ -14,6 +14,14 @@
 - **Local First** - Optimized for decentralized deployment on localhosts
 - **Agent Friendly** - Designed for AI-assisted development with clear structure and automation-friendly workflows
 
+## Coding Principles
+
+- **Fail Fast, Fail Early** - Never hide invariant violations with silent fallbacks, lower-bound clamps, or default-zero repairs; fail immediately with actionable context
+
+Correctness issues must be fixed at the source path. Do not add silent guards (for example
+`max(0)`, `saturating_sub`, or `unwrap_or(0)` on invariant-critical paths) to mask inconsistent
+state transitions.
+
 ## Performance Targets
 
 To keep the `Unrivaled Speed` principle concrete, performance work should report against these targets

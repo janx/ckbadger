@@ -1,4 +1,5 @@
 use crate::rpc::{parse_hex_to_bytes, CellOutput, TransactionView};
+use std::collections::BTreeMap;
 
 use super::script::ScriptParser;
 
@@ -158,6 +159,146 @@ impl UdtParser {
         })
     }
 
+    pub fn build_transfers_from_cells(
+        input_udts: &[ParsedUdtCell],
+        output_udts: &[ParsedUdtCell],
+    ) -> Vec<ParsedUdtTransfer> {
+        #[derive(Default)]
+        struct TokenFlow {
+            type_code_hash: Vec<u8>,
+            type_hash_type: i16,
+            type_args: Vec<u8>,
+            standard: Option<UdtStandard>,
+            inputs_by_lock: BTreeMap<Vec<u8>, u128>,
+            outputs_by_lock: BTreeMap<Vec<u8>, u128>,
+        }
+
+        impl TokenFlow {
+            fn set_meta_from(&mut self, cell: &ParsedUdtCell) {
+                if self.standard.is_none() {
+                    self.type_code_hash = cell.type_code_hash.clone();
+                    self.type_hash_type = cell.type_hash_type;
+                    self.type_args = cell.type_args.clone();
+                    self.standard = Some(cell.standard.clone());
+                }
+            }
+        }
+
+        let mut flows: BTreeMap<Vec<u8>, TokenFlow> = BTreeMap::new();
+
+        for input in input_udts {
+            let flow = flows.entry(input.type_script_hash.clone()).or_default();
+            flow.set_meta_from(input);
+            *flow
+                .inputs_by_lock
+                .entry(input.lock_script_hash.clone())
+                .or_insert(0) += input.amount;
+        }
+
+        for output in output_udts {
+            let flow = flows.entry(output.type_script_hash.clone()).or_default();
+            flow.set_meta_from(output);
+            *flow
+                .outputs_by_lock
+                .entry(output.lock_script_hash.clone())
+                .or_insert(0) += output.amount;
+        }
+
+        let mut transfers = Vec::new();
+
+        for (type_script_hash, flow) in flows {
+            let Some(standard) = flow.standard.clone() else {
+                continue;
+            };
+
+            let mut senders: Vec<(Vec<u8>, u128)> = flow
+                .inputs_by_lock
+                .iter()
+                .filter_map(|(lock, in_amt)| {
+                    let out_amt = flow.outputs_by_lock.get(lock).copied().unwrap_or(0);
+                    (in_amt > &out_amt).then_some((lock.clone(), in_amt - out_amt))
+                })
+                .collect();
+
+            let mut receivers: Vec<(Vec<u8>, u128)> = flow
+                .outputs_by_lock
+                .iter()
+                .filter_map(|(lock, out_amt)| {
+                    let in_amt = flow.inputs_by_lock.get(lock).copied().unwrap_or(0);
+                    (out_amt > &in_amt).then_some((lock.clone(), out_amt - in_amt))
+                })
+                .collect();
+
+            let mut sender_idx = 0usize;
+            let mut receiver_idx = 0usize;
+            while sender_idx < senders.len() && receiver_idx < receivers.len() {
+                let amount = senders[sender_idx].1.min(receivers[receiver_idx].1);
+                if amount > 0 {
+                    transfers.push(ParsedUdtTransfer {
+                        type_script_hash: type_script_hash.clone(),
+                        type_code_hash: flow.type_code_hash.clone(),
+                        type_hash_type: flow.type_hash_type,
+                        type_args: flow.type_args.clone(),
+                        from_lock_hash: Some(senders[sender_idx].0.clone()),
+                        to_lock_hash: receivers[receiver_idx].0.clone(),
+                        amount,
+                        standard: standard.clone(),
+                        is_mint: false,
+                        is_burn: false,
+                    });
+                }
+
+                senders[sender_idx].1 -= amount;
+                receivers[receiver_idx].1 -= amount;
+
+                if senders[sender_idx].1 == 0 {
+                    sender_idx += 1;
+                }
+                if receivers[receiver_idx].1 == 0 {
+                    receiver_idx += 1;
+                }
+            }
+
+            for (lock, amount) in receivers.into_iter().skip(receiver_idx) {
+                if amount == 0 {
+                    continue;
+                }
+                transfers.push(ParsedUdtTransfer {
+                    type_script_hash: type_script_hash.clone(),
+                    type_code_hash: flow.type_code_hash.clone(),
+                    type_hash_type: flow.type_hash_type,
+                    type_args: flow.type_args.clone(),
+                    from_lock_hash: None,
+                    to_lock_hash: lock,
+                    amount,
+                    standard: standard.clone(),
+                    is_mint: true,
+                    is_burn: false,
+                });
+            }
+
+            for (lock, amount) in senders.into_iter().skip(sender_idx) {
+                if amount == 0 {
+                    continue;
+                }
+                transfers.push(ParsedUdtTransfer {
+                    type_script_hash: type_script_hash.clone(),
+                    type_code_hash: flow.type_code_hash.clone(),
+                    type_hash_type: flow.type_hash_type,
+                    type_args: flow.type_args.clone(),
+                    from_lock_hash: Some(lock),
+                    to_lock_hash: Vec::new(),
+                    amount,
+                    standard: standard.clone(),
+                    is_mint: false,
+                    is_burn: true,
+                });
+            }
+        }
+
+        transfers
+    }
+
     pub fn parse_transfers(
         tx: &TransactionView,
         input_cells: &[(CellOutput, String)],
@@ -169,52 +310,7 @@ impl UdtParser {
             .filter_map(|(output, data_hex)| Self::parse_udt_cell(output, data_hex))
             .collect();
 
-        let mut transfers = Vec::new();
-
-        for out_udt in &output_udts {
-            let matching_input = input_udts
-                .iter()
-                .find(|inp| inp.type_script_hash == out_udt.type_script_hash);
-
-            let is_mint = matching_input.is_none();
-            let from_lock_hash = matching_input.map(|inp| inp.lock_script_hash.clone());
-
-            transfers.push(ParsedUdtTransfer {
-                type_script_hash: out_udt.type_script_hash.clone(),
-                type_code_hash: out_udt.type_code_hash.clone(),
-                type_hash_type: out_udt.type_hash_type,
-                type_args: out_udt.type_args.clone(),
-                from_lock_hash,
-                to_lock_hash: out_udt.lock_script_hash.clone(),
-                amount: out_udt.amount,
-                standard: out_udt.standard.clone(),
-                is_mint,
-                is_burn: false,
-            });
-        }
-
-        for inp_udt in &input_udts {
-            let has_matching_output = output_udts
-                .iter()
-                .any(|out| out.type_script_hash == inp_udt.type_script_hash);
-
-            if !has_matching_output {
-                transfers.push(ParsedUdtTransfer {
-                    type_script_hash: inp_udt.type_script_hash.clone(),
-                    type_code_hash: inp_udt.type_code_hash.clone(),
-                    type_hash_type: inp_udt.type_hash_type,
-                    type_args: inp_udt.type_args.clone(),
-                    from_lock_hash: Some(inp_udt.lock_script_hash.clone()),
-                    to_lock_hash: Vec::new(),
-                    amount: inp_udt.amount,
-                    standard: inp_udt.standard.clone(),
-                    is_mint: false,
-                    is_burn: true,
-                });
-            }
-        }
-
-        transfers
+        Self::build_transfers_from_cells(&input_udts, &output_udts)
     }
 }
 
@@ -600,5 +696,53 @@ mod tests {
         assert_eq!(transfer.amount, amount);
         assert!(transfer.from_lock_hash.is_some());
         assert!(!transfer.to_lock_hash.is_empty());
+    }
+
+    #[test]
+    fn test_build_transfers_from_cells_multi_input_keeps_exact_deltas() {
+        let type_script_hash = vec![0x11; 32];
+        let type_code_hash = vec![0x22; 32];
+        let type_args = vec![0x33; 20];
+        let lock_a = vec![0xA1; 32];
+        let lock_b = vec![0xB2; 32];
+        let lock_c = vec![0xC3; 32];
+
+        let mk_cell = |lock: &[u8], amount: u128| ParsedUdtCell {
+            type_script_hash: type_script_hash.clone(),
+            type_code_hash: type_code_hash.clone(),
+            type_hash_type: 1,
+            type_args: type_args.clone(),
+            lock_script_hash: lock.to_vec(),
+            amount,
+            standard: UdtStandard::Sudt,
+        };
+
+        // in: A=100, B=50; out: C=120 => A=-100, B=-50, C=+120, burn=30
+        let inputs = vec![mk_cell(&lock_a, 100), mk_cell(&lock_b, 50)];
+        let outputs = vec![mk_cell(&lock_c, 120)];
+
+        let transfers = UdtParser::build_transfers_from_cells(&inputs, &outputs);
+
+        let mut balance_delta: BTreeMap<Vec<u8>, i128> = BTreeMap::new();
+        let mut supply_delta: i128 = 0;
+        for transfer in transfers {
+            if let Some(from) = transfer.from_lock_hash {
+                *balance_delta.entry(from).or_default() -= transfer.amount as i128;
+            }
+            if !transfer.to_lock_hash.is_empty() {
+                *balance_delta.entry(transfer.to_lock_hash).or_default() += transfer.amount as i128;
+            }
+            if transfer.is_mint {
+                supply_delta += transfer.amount as i128;
+            }
+            if transfer.is_burn {
+                supply_delta -= transfer.amount as i128;
+            }
+        }
+
+        assert_eq!(balance_delta.get(&lock_a), Some(&-100));
+        assert_eq!(balance_delta.get(&lock_b), Some(&-50));
+        assert_eq!(balance_delta.get(&lock_c), Some(&120));
+        assert_eq!(supply_delta, -30);
     }
 }

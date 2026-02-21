@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use anyhow::{anyhow, bail, Result};
 use chrono::{DateTime, NaiveDate, Timelike, Utc};
 use ckb_hash::new_blake2b;
 use ckbadger_common::{LabelImportConfig, PipelineProgressData};
@@ -654,9 +654,23 @@ fn classify_nft_collection_id(type_code_hash: &[u8], type_args: &[u8]) -> Option
 /// Address balances are written before HODL tracker updates, so reading `live_cells_count`
 /// from store returns post-batch state. We need pre-batch state to detect 0→>0 and >0→0
 /// holder transitions correctly.
-fn derive_pre_batch_live_cells(post_live_cells: i32, live_delta: i32) -> i32 {
+fn derive_pre_batch_live_cells(post_live_cells: i32, live_delta: i32) -> Result<i32> {
     let pre = post_live_cells as i64 - live_delta as i64;
-    pre.clamp(0, i32::MAX as i64) as i32
+    if pre < 0 {
+        bail!(
+            "pre-batch live cells underflow: post_live_cells={}, live_delta={}",
+            post_live_cells,
+            live_delta
+        );
+    }
+    if pre > i32::MAX as i64 {
+        bail!(
+            "pre-batch live cells overflow: post_live_cells={}, live_delta={}",
+            post_live_cells,
+            live_delta
+        );
+    }
+    Ok(pre as i32)
 }
 
 fn bump_pipeline_reset_epoch(epoch: &AtomicU64) -> u64 {
@@ -754,20 +768,116 @@ fn split_secondary_issuance(
     occupied_capacity: i128,
     total_deposited: i128,
     non_miner_secondary: i128,
-) -> (i128, i128, i128) {
-    if non_miner_secondary <= 0 || total_issuance <= occupied_capacity {
-        return (0, 0, 0);
+) -> Result<(i128, i128, i128)> {
+    if non_miner_secondary <= 0 {
+        return Ok((0, 0, 0));
     }
 
-    let denom = (total_issuance - occupied_capacity).max(1);
-    let deposited = total_deposited.max(0);
-    let occupied = occupied_capacity.max(0);
+    if total_issuance < 0 || occupied_capacity < 0 || total_deposited < 0 {
+        bail!(
+            "negative input in secondary issuance split: total_issuance={}, occupied_capacity={}, total_deposited={}, non_miner_secondary={}",
+            total_issuance,
+            occupied_capacity,
+            total_deposited,
+            non_miner_secondary
+        );
+    }
 
-    let miner = non_miner_secondary * occupied / denom;
-    let dao = non_miner_secondary * deposited / denom;
+    if total_issuance <= occupied_capacity {
+        bail!(
+            "invalid DAO C/U relationship: total_issuance={}, occupied_capacity={}, non_miner_secondary={}",
+            total_issuance,
+            occupied_capacity,
+            non_miner_secondary
+        );
+    }
+
+    let denom = total_issuance - occupied_capacity;
+    if total_deposited > denom {
+        bail!(
+            "dao deposited exceeds liquid supply: total_deposited={}, liquid_supply={}, total_issuance={}, occupied_capacity={}",
+            total_deposited,
+            denom,
+            total_issuance,
+            occupied_capacity
+        );
+    }
+
+    let miner = non_miner_secondary * occupied_capacity / denom;
+    let dao = non_miner_secondary * total_deposited / denom;
     let treasury = non_miner_secondary - dao;
 
-    (miner.max(0), dao.max(0), treasury.max(0))
+    if miner < 0 || dao < 0 || treasury < 0 {
+        bail!(
+            "secondary issuance split produced negative component: miner={}, dao={}, treasury={}, non_miner_secondary={}",
+            miner,
+            dao,
+            treasury,
+            non_miner_secondary
+        );
+    }
+
+    Ok((miner, dao, treasury))
+}
+
+fn parse_prefixed_hex_u128(field: &str, label: &str) -> Result<u128> {
+    let Some(hex) = field.strip_prefix("0x") else {
+        bail!("{} missing 0x prefix: {}", label, field);
+    };
+    u128::from_str_radix(hex, 16)
+        .map_err(|e| anyhow::anyhow!("invalid {} hex '{}': {}", label, field, e))
+}
+
+fn checked_sub_u128(lhs: u128, rhs: u128, label: &str) -> Result<u128> {
+    lhs.checked_sub(rhs)
+        .ok_or_else(|| anyhow::anyhow!("{} underflow: lhs={}, rhs={}", label, lhs, rhs))
+}
+
+fn checked_u128_to_i64(value: u128, label: &str) -> Result<i64> {
+    i64::try_from(value).map_err(|_| anyhow::anyhow!("{} exceeds i64: {}", label, value))
+}
+
+fn checked_tx_fee(
+    total_input_capacity: i64,
+    total_output_capacity: i64,
+    tx_hash: &[u8],
+    block_number: i64,
+) -> Result<i64> {
+    if total_input_capacity < 0 || total_output_capacity < 0 {
+        bail!(
+            "negative tx capacity: block={}, tx_hash={}, total_input_capacity={}, total_output_capacity={}",
+            block_number,
+            hex::encode(tx_hash),
+            total_input_capacity,
+            total_output_capacity
+        );
+    }
+
+    if total_input_capacity < total_output_capacity {
+        bail!(
+            "tx fee underflow: block={}, tx_hash={}, total_input_capacity={}, total_output_capacity={}",
+            block_number,
+            hex::encode(tx_hash),
+            total_input_capacity,
+            total_output_capacity
+        );
+    }
+
+    total_input_capacity.checked_sub(total_output_capacity).ok_or_else(|| {
+        anyhow::anyhow!(
+            "tx fee subtraction overflow: block={}, tx_hash={}, total_input_capacity={}, total_output_capacity={}",
+            block_number,
+            hex::encode(tx_hash),
+            total_input_capacity,
+            total_output_capacity
+        )
+    })
+}
+
+fn extract_ar_i64_from_dao(dao: &[u8], block_number: i64) -> Result<i64> {
+    let ar = DaoParser::extract_ar_from_dao_field(dao)
+        .ok_or_else(|| anyhow!("missing AR in DAO field at block {}", block_number))?;
+    i64::try_from(ar).map_err(|_| anyhow!("DAO AR exceeds i64 at block {}: {}", block_number, ar))
 }
 
 type DaoConsumedRow = (i64, Vec<u8>, i16, String, i64, i16);
@@ -839,9 +949,9 @@ fn accumulate_secondary_issuance_deltas(
     parsed: &crate::parser::block::ParsedBlock,
     block_date: NaiveDate,
     prev_dao_cs: &mut Option<(i128, i128)>,
-) {
+) -> Result<()> {
     let Some((c, s, u)) = extract_dao_csu(&parsed.dao) else {
-        return;
+        return Ok(());
     };
 
     if let Some((prev_c, prev_s)) = *prev_dao_cs {
@@ -857,7 +967,7 @@ fn accumulate_secondary_issuance_deltas(
                 .or_default() += s_delta;
             // Derive miner share directly from C/U ratio to avoid compact-target
             // and primary-issuance approximation drift.
-            let (miner, _, _) = split_secondary_issuance(c, u, 0, s_delta);
+            let (miner, _, _) = split_secondary_issuance(c, u, 0, s_delta)?;
             *stats
                 .daily_secondary_miner_delta
                 .entry(block_date)
@@ -866,6 +976,7 @@ fn accumulate_secondary_issuance_deltas(
     }
 
     *prev_dao_cs = Some((c, s));
+    Ok(())
 }
 
 #[derive(Default)]
@@ -1804,9 +1915,18 @@ impl Indexer {
 
                 let blocks_ref = Arc::clone(&blocks);
                 let (all_parsed_blocks, mut all_tx_data, all_input_outpoints) =
-                    tokio::task::spawn_blocking(move || parse_blocks_parallel(&blocks_ref))
+                    match tokio::task::spawn_blocking(move || parse_blocks_parallel(&blocks_ref))
                         .await
-                        .unwrap_or_else(|_| (vec![], vec![], vec![]));
+                    {
+                        Ok(parsed) => parsed,
+                        Err(e) => {
+                            error!(
+                                start_block,
+                                end_block, "Parser: parse_blocks_parallel task panicked: {}", e
+                            );
+                            return;
+                        }
+                    };
 
                 if all_parsed_blocks.is_empty() {
                     continue;
@@ -1991,9 +2111,25 @@ impl Indexer {
                                 tx_data.total_input_capacity += info.capacity;
                             }
                         }
-                        tx_data.fee = tx_data
-                            .total_input_capacity
-                            .saturating_sub(tx_data.total_output_capacity);
+                        tx_data.fee = match checked_tx_fee(
+                            tx_data.total_input_capacity,
+                            tx_data.total_output_capacity,
+                            &tx_data.hash,
+                            tx_data.block_number,
+                        ) {
+                            Ok(fee) => fee,
+                            Err(err) => {
+                                error!(
+                                    start_block,
+                                    end_block,
+                                    tx_hash = %hex::encode(tx_data.hash),
+                                    block_number = tx_data.block_number,
+                                    "Parser: invalid tx fee accounting: {}",
+                                    err
+                                );
+                                return;
+                            }
+                        };
                     }
                 }
 
@@ -3134,9 +3270,12 @@ impl Indexer {
                         tx_data.total_input_capacity += info.capacity;
                     }
                 }
-                tx_data.fee = tx_data
-                    .total_input_capacity
-                    .saturating_sub(tx_data.total_output_capacity);
+                tx_data.fee = checked_tx_fee(
+                    tx_data.total_input_capacity,
+                    tx_data.total_output_capacity,
+                    &tx_data.hash,
+                    tx_data.block_number,
+                )?;
             }
         }
 
@@ -3853,7 +3992,7 @@ impl Indexer {
                 parsed,
                 block_date,
                 &mut prev_dao_cs,
-            );
+            )?;
             let tx_count_for_block = parsed.transactions_count as usize;
             let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
             block_tx_idx += tx_count_for_block;
@@ -4055,7 +4194,7 @@ impl Indexer {
                 let tx_count_for_block = parsed.transactions_count as usize;
                 let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
                 block_tx_idx += tx_count_for_block;
-                let ar = DaoParser::extract_ar_from_dao_field(&parsed.dao).unwrap_or(0) as i64;
+                let ar = extract_ar_i64_from_dao(&parsed.dao, parsed.number)?;
                 for tx_data in tx_slice {
                     let dao_deposits =
                         DaoParser::parse_deposits_from_cells(&tx_data.hash, &tx_data.cells);
@@ -4311,53 +4450,11 @@ impl Indexer {
                     }
                 }
 
-                for out_udt in &ctx.output_udts {
-                    let matching_input = input_udts
-                        .iter()
-                        .find(|inp| inp.type_script_hash == out_udt.type_script_hash);
-                    let is_mint = matching_input.is_none();
-                    let from_lock_hash = matching_input.map(|inp| inp.lock_script_hash.clone());
-                    all_transfers.push((
-                        crate::parser::ParsedUdtTransfer {
-                            type_script_hash: out_udt.type_script_hash.clone(),
-                            type_code_hash: out_udt.type_code_hash.clone(),
-                            type_hash_type: out_udt.type_hash_type,
-                            type_args: out_udt.type_args.clone(),
-                            from_lock_hash,
-                            to_lock_hash: out_udt.lock_script_hash.clone(),
-                            amount: out_udt.amount,
-                            standard: out_udt.standard.clone(),
-                            is_mint,
-                            is_burn: false,
-                        },
-                        ctx.tx_hash.clone(),
-                        ctx.block_number,
-                    ));
-                }
-
-                for inp_udt in &input_udts {
-                    let has_matching_output = ctx
-                        .output_udts
-                        .iter()
-                        .any(|out| out.type_script_hash == inp_udt.type_script_hash);
-                    if !has_matching_output {
-                        all_transfers.push((
-                            crate::parser::ParsedUdtTransfer {
-                                type_script_hash: inp_udt.type_script_hash.clone(),
-                                type_code_hash: inp_udt.type_code_hash.clone(),
-                                type_hash_type: inp_udt.type_hash_type,
-                                type_args: inp_udt.type_args.clone(),
-                                from_lock_hash: Some(inp_udt.lock_script_hash.clone()),
-                                to_lock_hash: Vec::new(),
-                                amount: inp_udt.amount,
-                                standard: inp_udt.standard.clone(),
-                                is_mint: false,
-                                is_burn: true,
-                            },
-                            ctx.tx_hash.clone(),
-                            ctx.block_number,
-                        ));
-                    }
+                for transfer in crate::parser::UdtParser::build_transfers_from_cells(
+                    &input_udts,
+                    &ctx.output_udts,
+                ) {
+                    all_transfers.push((transfer, ctx.tx_hash.clone(), ctx.block_number));
                 }
             }
 
@@ -5173,8 +5270,7 @@ impl Indexer {
                         let tx_slice =
                             &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
                         block_tx_idx += tx_count_for_block;
-                        let ar =
-                            DaoParser::extract_ar_from_dao_field(&parsed.dao).unwrap_or(0) as i64;
+                        let ar = extract_ar_i64_from_dao(&parsed.dao, parsed.number)?;
                         for tx_data in tx_slice {
                             let dao_deposits =
                                 DaoParser::parse_deposits_from_cells(&tx_data.hash, &tx_data.cells);
@@ -5388,53 +5484,15 @@ impl Indexer {
                                     input_udts.push(udt_cell.clone());
                                 }
                             }
-                            for out_udt in &ctx.output_udts {
-                                let matching_input = input_udts
-                                    .iter()
-                                    .find(|inp| inp.type_script_hash == out_udt.type_script_hash);
-                                let is_mint = matching_input.is_none();
-                                let from_lock_hash =
-                                    matching_input.map(|inp| inp.lock_script_hash.clone());
+                            for transfer in crate::parser::UdtParser::build_transfers_from_cells(
+                                &input_udts,
+                                &ctx.output_udts,
+                            ) {
                                 all_transfers.push((
-                                    crate::parser::ParsedUdtTransfer {
-                                        type_script_hash: out_udt.type_script_hash.clone(),
-                                        type_code_hash: out_udt.type_code_hash.clone(),
-                                        type_hash_type: out_udt.type_hash_type,
-                                        type_args: out_udt.type_args.clone(),
-                                        from_lock_hash,
-                                        to_lock_hash: out_udt.lock_script_hash.clone(),
-                                        amount: out_udt.amount,
-                                        standard: out_udt.standard.clone(),
-                                        is_mint,
-                                        is_burn: false,
-                                    },
+                                    transfer,
                                     ctx.tx_hash.clone(),
                                     ctx.block_number,
                                 ));
-                            }
-                            for inp_udt in &input_udts {
-                                let has_matching_output = ctx
-                                    .output_udts
-                                    .iter()
-                                    .any(|out| out.type_script_hash == inp_udt.type_script_hash);
-                                if !has_matching_output {
-                                    all_transfers.push((
-                                        crate::parser::ParsedUdtTransfer {
-                                            type_script_hash: inp_udt.type_script_hash.clone(),
-                                            type_code_hash: inp_udt.type_code_hash.clone(),
-                                            type_hash_type: inp_udt.type_hash_type,
-                                            type_args: inp_udt.type_args.clone(),
-                                            from_lock_hash: Some(inp_udt.lock_script_hash.clone()),
-                                            to_lock_hash: Vec::new(),
-                                            amount: inp_udt.amount,
-                                            standard: inp_udt.standard.clone(),
-                                            is_mint: false,
-                                            is_burn: true,
-                                        },
-                                        ctx.tx_hash.clone(),
-                                        ctx.block_number,
-                                    ));
-                                }
                             }
                         }
 
@@ -5595,7 +5653,7 @@ impl Indexer {
                             parsed,
                             block_date,
                             &mut prev_dao_cs,
-                        );
+                        )?;
                         let tx_count_for_block = parsed.transactions_count as usize;
                         let tx_slice =
                             &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
@@ -6022,7 +6080,7 @@ impl Indexer {
                     let tx_count_for_block = parsed.transactions_count as usize;
                     let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
                     block_tx_idx += tx_count_for_block;
-                    let ar = DaoParser::extract_ar_from_dao_field(&parsed.dao).unwrap_or(0) as i64;
+                    let ar = extract_ar_i64_from_dao(&parsed.dao, parsed.number)?;
                     for tx_data in tx_slice {
                         let dao_deposits =
                             DaoParser::parse_deposits_from_cells(&tx_data.hash, &tx_data.cells);
@@ -6386,53 +6444,11 @@ impl Indexer {
                                 input_udts.push(udt_cell.clone());
                             }
                         }
-                        for out_udt in &ctx.output_udts {
-                            let matching_input = input_udts
-                                .iter()
-                                .find(|inp| inp.type_script_hash == out_udt.type_script_hash);
-                            let is_mint = matching_input.is_none();
-                            let from_lock_hash =
-                                matching_input.map(|inp| inp.lock_script_hash.clone());
-                            all_transfers.push((
-                                crate::parser::ParsedUdtTransfer {
-                                    type_script_hash: out_udt.type_script_hash.clone(),
-                                    type_code_hash: out_udt.type_code_hash.clone(),
-                                    type_hash_type: out_udt.type_hash_type,
-                                    type_args: out_udt.type_args.clone(),
-                                    from_lock_hash,
-                                    to_lock_hash: out_udt.lock_script_hash.clone(),
-                                    amount: out_udt.amount,
-                                    standard: out_udt.standard.clone(),
-                                    is_mint,
-                                    is_burn: false,
-                                },
-                                ctx.tx_hash.clone(),
-                                ctx.block_number,
-                            ));
-                        }
-                        for inp_udt in &input_udts {
-                            let has_matching_output = ctx
-                                .output_udts
-                                .iter()
-                                .any(|out| out.type_script_hash == inp_udt.type_script_hash);
-                            if !has_matching_output {
-                                all_transfers.push((
-                                    crate::parser::ParsedUdtTransfer {
-                                        type_script_hash: inp_udt.type_script_hash.clone(),
-                                        type_code_hash: inp_udt.type_code_hash.clone(),
-                                        type_hash_type: inp_udt.type_hash_type,
-                                        type_args: inp_udt.type_args.clone(),
-                                        from_lock_hash: Some(inp_udt.lock_script_hash.clone()),
-                                        to_lock_hash: Vec::new(),
-                                        amount: inp_udt.amount,
-                                        standard: inp_udt.standard.clone(),
-                                        is_mint: false,
-                                        is_burn: true,
-                                    },
-                                    ctx.tx_hash.clone(),
-                                    ctx.block_number,
-                                ));
-                            }
+                        for transfer in crate::parser::UdtParser::build_transfers_from_cells(
+                            &input_udts,
+                            &ctx.output_udts,
+                        ) {
+                            all_transfers.push((transfer, ctx.tx_hash.clone(), ctx.block_number));
                         }
                     }
 
@@ -6825,7 +6841,7 @@ impl Indexer {
                     parsed,
                     block_date,
                     &mut prev_dao_cs,
-                );
+                )?;
                 let tx_count_for_block = parsed.transactions_count as usize;
                 let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
                 block_tx_idx += tx_count_for_block;
@@ -7280,7 +7296,7 @@ impl Indexer {
                                     occupied_capacity,
                                     running_total_deposited,
                                     non_miner,
-                                )
+                                )?
                             } else {
                                 // Ignore negative S adjustments in user-facing cumulative
                                 // charts to keep the series monotonic.
@@ -7294,7 +7310,7 @@ impl Indexer {
                                     occupied_capacity,
                                     running_total_deposited,
                                     s_delta,
-                                )
+                                )?
                             } else {
                                 (0, 0, 0)
                             }
@@ -7370,7 +7386,7 @@ impl Indexer {
                             .get(&key)
                             .or_else(|| batch_cell_infos.get(&key));
                         if let Some(info) = info {
-                            tracker.cell_consumed(info.created_at_block, info.capacity);
+                            tracker.cell_consumed(info.created_at_block, info.capacity)?;
                         }
                     }
                 }
@@ -7403,8 +7419,8 @@ impl Indexer {
                 .as_ref()
                 .map(|b| b.live_cells_count)
                 .unwrap_or(0);
-            let old_live = derive_pre_batch_live_cells(post_live, *live_delta);
-            tracker.update_holder_count(old_live, post_live);
+            let old_live = derive_pre_batch_live_cells(post_live, *live_delta)?;
+            tracker.update_holder_count(old_live, post_live)?;
         }
 
         // Phase 3: Persist tracker state
@@ -7569,44 +7585,51 @@ impl Indexer {
             None => return Ok(()),
         };
 
-        let secondary_issuance: u128 = economic_state
-            .issuance
-            .secondary
-            .strip_prefix("0x")
-            .and_then(|s| u128::from_str_radix(s, 16).ok())
-            .unwrap_or(0);
+        let secondary_issuance: u128 =
+            parse_prefixed_hex_u128(&economic_state.issuance.secondary, "secondary issuance")?;
 
-        let miner_secondary: u128 = economic_state
-            .miner_reward
-            .secondary
-            .strip_prefix("0x")
-            .and_then(|s| u128::from_str_radix(s, 16).ok())
-            .unwrap_or(0);
+        let miner_secondary: u128 =
+            parse_prefixed_hex_u128(&economic_state.miner_reward.secondary, "miner secondary")?;
 
-        let non_miner_secondary = secondary_issuance.saturating_sub(miner_secondary);
+        let non_miner_secondary = checked_sub_u128(
+            secondary_issuance,
+            miner_secondary,
+            "secondary_issuance - miner_secondary",
+        )?;
 
         // Calculate dao_compensation and burnt using RFC-0015 formula
         // dao_compensation = non_miner * deposit / (C - U)
         // burnt = non_miner * liquid / (C - U) where liquid = C - U - deposit
         let total_issuance = dao_field.total_issuance as u128;
         let occupied = dao_field.occupied_capacity as u128;
-        let denominator = total_issuance.saturating_sub(occupied);
+        let denominator = checked_sub_u128(
+            total_issuance,
+            occupied,
+            "total_issuance - occupied_capacity",
+        )?;
 
         let (dao_compensation, burnt) = if denominator > 0 {
             let total_dao_deposits: u128 = self.writer.get_dao_deposits_at_block(block_number)?;
 
-            let dao_share = (non_miner_secondary * total_dao_deposits) / denominator;
-            let burnt_share = non_miner_secondary.saturating_sub(dao_share);
+            let dao_share = non_miner_secondary
+                .checked_mul(total_dao_deposits)
+                .ok_or_else(|| anyhow::anyhow!("dao_share multiply overflow"))?
+                / denominator;
+            let burnt_share = checked_sub_u128(
+                non_miner_secondary,
+                dao_share,
+                "non_miner_secondary - dao_share",
+            )?;
             (dao_share, burnt_share)
         } else {
             (0, non_miner_secondary)
         };
 
         let breakdown = SecondaryIssuanceBreakdown {
-            secondary_issuance: secondary_issuance as i64,
-            miner_secondary: miner_secondary as i64,
-            dao_compensation: dao_compensation as i64,
-            burnt: burnt as i64,
+            secondary_issuance: checked_u128_to_i64(secondary_issuance, "secondary_issuance")?,
+            miner_secondary: checked_u128_to_i64(miner_secondary, "miner_secondary")?,
+            dao_compensation: checked_u128_to_i64(dao_compensation, "dao_compensation")?,
+            burnt: checked_u128_to_i64(burnt, "burnt")?,
         };
 
         let mut batch = StoreBatch::new(self.writer.store());
@@ -8185,21 +8208,70 @@ mod tests {
     #[test]
     fn test_derive_pre_batch_live_cells_recovers_pre_state() {
         // pre=0, delta=+3 => post=3
-        assert_eq!(derive_pre_batch_live_cells(3, 3), 0);
+        assert_eq!(derive_pre_batch_live_cells(3, 3).unwrap(), 0);
         // pre=10, delta=-4 => post=6
-        assert_eq!(derive_pre_batch_live_cells(6, -4), 10);
-        // pre=2, delta=-5 => post clamped to 0
-        assert_eq!(derive_pre_batch_live_cells(0, -5), 5);
+        assert_eq!(derive_pre_batch_live_cells(6, -4).unwrap(), 10);
+        // pre=5, delta=-5 => post=0
+        assert_eq!(derive_pre_batch_live_cells(0, -5).unwrap(), 5);
     }
 
     #[test]
-    fn test_derive_pre_batch_live_cells_clamps_to_zero() {
-        assert_eq!(derive_pre_batch_live_cells(0, 5), 0);
+    fn test_derive_pre_batch_live_cells_errors_on_negative_pre_state() {
+        let err = derive_pre_batch_live_cells(0, 5).unwrap_err();
+        assert!(err.to_string().contains("underflow"));
     }
 
     #[test]
     fn test_secondary_issuance_backfill_threshold_is_1000() {
         assert_eq!(SECONDARY_ISSUANCE_BACKFILL_THRESHOLD, 1000);
+    }
+
+    #[test]
+    fn test_parse_prefixed_hex_u128_errors_on_invalid_input() {
+        let err = parse_prefixed_hex_u128("1234", "test field").unwrap_err();
+        assert!(err.to_string().contains("missing 0x prefix"));
+
+        let err = parse_prefixed_hex_u128("0xzz", "test field").unwrap_err();
+        assert!(err.to_string().contains("invalid test field hex"));
+    }
+
+    #[test]
+    fn test_checked_sub_u128_errors_on_underflow() {
+        let err = checked_sub_u128(1, 2, "a - b").unwrap_err();
+        assert!(err.to_string().contains("underflow"));
+    }
+
+    #[test]
+    fn test_checked_u128_to_i64_errors_on_overflow() {
+        let err = checked_u128_to_i64((i64::MAX as u128) + 1, "x").unwrap_err();
+        assert!(err.to_string().contains("exceeds i64"));
+    }
+
+    #[test]
+    fn test_checked_tx_fee_returns_difference() {
+        let fee = checked_tx_fee(1000, 900, &[0u8; 32], 42).unwrap();
+        assert_eq!(fee, 100);
+    }
+
+    #[test]
+    fn test_checked_tx_fee_errors_on_underflow() {
+        let err = checked_tx_fee(900, 1000, &[1u8; 32], 42).unwrap_err();
+        assert!(err.to_string().contains("tx fee underflow"));
+    }
+
+    #[test]
+    fn test_extract_ar_i64_from_dao_errors_on_short_field() {
+        let err = extract_ar_i64_from_dao(&[0u8; 8], 42).unwrap_err();
+        assert!(err.to_string().contains("missing AR"));
+    }
+
+    #[test]
+    fn test_extract_ar_i64_from_dao_parses_valid_field() {
+        let mut dao = vec![0u8; 32];
+        let ar: u64 = 10_000_000_000_000_000;
+        dao[8..16].copy_from_slice(&ar.to_le_bytes());
+        let parsed = extract_ar_i64_from_dao(&dao, 42).unwrap();
+        assert_eq!(parsed, ar as i64);
     }
 
     #[test]
@@ -8323,13 +8395,25 @@ mod tests {
         let block = dummy_parsed_block(build_dao_field(c as u64, s as u64, u as u64), 0, 1000);
         let date = ckbadger_common::block_date(block.timestamp);
 
-        accumulate_secondary_issuance_deltas(&mut stats, &block, date, &mut prev);
+        accumulate_secondary_issuance_deltas(&mut stats, &block, date, &mut prev).unwrap();
 
         assert_eq!(stats.daily_secondary_non_miner_delta.get(&date), Some(&600));
         assert_eq!(
             stats.daily_secondary_miner_delta.get(&date),
             Some(&expected_miner)
         );
+    }
+
+    #[test]
+    fn test_split_secondary_issuance_errors_on_negative_inputs() {
+        let err = split_secondary_issuance(1000, 100, -1, 10).unwrap_err();
+        assert!(err.to_string().contains("negative input"));
+    }
+
+    #[test]
+    fn test_split_secondary_issuance_errors_when_deposited_exceeds_liquid_supply() {
+        let err = split_secondary_issuance(1000, 900, 200, 10).unwrap_err();
+        assert!(err.to_string().contains("exceeds liquid supply"));
     }
 
     #[test]
@@ -8347,7 +8431,7 @@ mod tests {
         );
         let date = ckbadger_common::block_date(block.timestamp);
 
-        accumulate_secondary_issuance_deltas(&mut stats, &block, date, &mut prev);
+        accumulate_secondary_issuance_deltas(&mut stats, &block, date, &mut prev).unwrap();
 
         assert!(!stats.daily_secondary_non_miner_delta.contains_key(&date));
         assert!(!stats.daily_secondary_miner_delta.contains_key(&date));
@@ -8362,12 +8446,12 @@ mod tests {
         // First block in the day has an S drop (protocol adjustment).
         let block_drop =
             dummy_parsed_block(build_dao_field(30_000_000_000_500, 9_950, 100), 0, 1000);
-        accumulate_secondary_issuance_deltas(&mut stats, &block_drop, date, &mut prev);
+        accumulate_secondary_issuance_deltas(&mut stats, &block_drop, date, &mut prev).unwrap();
 
         // Later in the same day, normal positive growth resumes.
         let block_growth =
             dummy_parsed_block(build_dao_field(30_000_000_001_000, 10_120, 100), 0, 1000);
-        accumulate_secondary_issuance_deltas(&mut stats, &block_growth, date, &mut prev);
+        accumulate_secondary_issuance_deltas(&mut stats, &block_growth, date, &mut prev).unwrap();
 
         // Non-miner should track only positive growth (+170), ignoring the prior -50 drop.
         assert_eq!(stats.daily_secondary_non_miner_delta.get(&date), Some(&170));

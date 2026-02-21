@@ -147,13 +147,17 @@ impl TransactionParser {
     }
 
     fn parse_since(since_hex: &str) -> i64 {
+        let raw = since_hex;
         let hex = since_hex.strip_prefix("0x").unwrap_or(since_hex);
-        u64::from_str_radix(hex, 16).unwrap_or(0) as i64
+        u64::from_str_radix(hex, 16)
+            .unwrap_or_else(|e| panic!("invalid since hex '{}': {}", raw, e)) as i64
     }
 
     fn parse_capacity_u128(capacity_hex: &str) -> u128 {
+        let raw = capacity_hex;
         let hex = capacity_hex.strip_prefix("0x").unwrap_or(capacity_hex);
-        u64::from_str_radix(hex, 16).unwrap_or(0) as u128
+        u64::from_str_radix(hex, 16)
+            .unwrap_or_else(|e| panic!("invalid capacity hex '{}': {}", raw, e)) as u128
     }
 }
 
@@ -331,6 +335,12 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "invalid since hex")]
+    fn test_parse_since_invalid_panics() {
+        let _ = TransactionParser::parse_since("invalid");
+    }
+
+    #[test]
     fn test_parse_cell_deps() {
         let tx = create_normal_tx();
         let cell_deps = TransactionParser::parse_cell_deps(&tx);
@@ -380,7 +390,12 @@ mod tests {
             100_000_000_000u128
         );
         assert_eq!(TransactionParser::parse_capacity_u128("0x0"), 0u128);
-        assert_eq!(TransactionParser::parse_capacity_u128("invalid"), 0u128);
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid capacity hex")]
+    fn test_parse_capacity_u128_invalid_panics() {
+        let _ = TransactionParser::parse_capacity_u128("invalid");
     }
 
     #[test]

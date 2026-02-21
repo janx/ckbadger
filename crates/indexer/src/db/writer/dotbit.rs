@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{NftCollectionAggregate, NftEntry, NftExtra, NftStandard};
@@ -79,15 +79,29 @@ impl BatchWriter {
         batch: &mut StoreBatch,
     ) -> Result<()> {
         if let Some(mut entry) = self.store.get_nft(account_id)? {
+            if !entry.is_live {
+                bail!(
+                    "dotbit account already consumed: account_id=0x{}",
+                    hex::encode(account_id)
+                );
+            }
             entry.is_live = false;
             entry.owner_lock_hash = None;
             batch.put_nft(account_id, &entry);
 
             // Decrement collection's live_count
-            let mut agg = self
+            let Some(mut agg) = self
                 .store
                 .get_nft_collection_aggregate(&DOTBIT_SENTINEL_COLLECTION)?
-                .unwrap_or_default();
+            else {
+                bail!("dotbit collection aggregate missing");
+            };
+            if agg.live_count <= 0 {
+                bail!(
+                    "dotbit collection live_count underflow: live_count={}",
+                    agg.live_count
+                );
+            }
             agg.live_count -= 1;
             batch.put_nft_collection_aggregate(&DOTBIT_SENTINEL_COLLECTION, &agg);
         }
@@ -160,5 +174,77 @@ mod tests {
         assert_eq!(batch_loaded.len(), 1);
         assert_eq!(batch_loaded[0].0, tx_hash);
         assert_eq!(batch_loaded[0].1, 6);
+    }
+
+    #[test]
+    fn test_consume_dotbit_account_errors_on_live_count_underflow() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let writer = BatchWriter::new(Arc::new(store));
+
+        let account = ParsedDotbitAccount {
+            account_id: vec![0x11; 20],
+            type_script_hash: vec![0x21; 32],
+            next_account_id: None,
+            expired_at: None,
+            owner_lock_hash: vec![0x31; 32],
+        };
+        let tx_hash = vec![0x41; 32];
+
+        let mut batch = StoreBatch::new(writer.store());
+        writer
+            .insert_dotbit_account(&account, &tx_hash, 6, 1, 0, &mut batch)
+            .unwrap();
+        batch.commit().unwrap();
+
+        let mut agg = writer
+            .store()
+            .get_nft_collection_aggregate(&DOTBIT_SENTINEL_COLLECTION)
+            .unwrap()
+            .unwrap();
+        agg.live_count = 0;
+        let mut batch = StoreBatch::new(writer.store());
+        batch.put_nft_collection_aggregate(&DOTBIT_SENTINEL_COLLECTION, &agg);
+        batch.commit().unwrap();
+
+        let mut batch = StoreBatch::new(writer.store());
+        let err = writer
+            .consume_dotbit_account(&account.account_id, 2, &tx_hash, &mut batch)
+            .unwrap_err();
+        assert!(err.to_string().contains("live_count underflow"));
+    }
+
+    #[test]
+    fn test_consume_dotbit_account_errors_on_double_consume() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let writer = BatchWriter::new(Arc::new(store));
+
+        let account = ParsedDotbitAccount {
+            account_id: vec![0x11; 20],
+            type_script_hash: vec![0x21; 32],
+            next_account_id: None,
+            expired_at: None,
+            owner_lock_hash: vec![0x31; 32],
+        };
+        let tx_hash = vec![0x41; 32];
+
+        let mut batch = StoreBatch::new(writer.store());
+        writer
+            .insert_dotbit_account(&account, &tx_hash, 6, 1, 0, &mut batch)
+            .unwrap();
+        batch.commit().unwrap();
+
+        let mut batch = StoreBatch::new(writer.store());
+        writer
+            .consume_dotbit_account(&account.account_id, 2, &tx_hash, &mut batch)
+            .unwrap();
+        batch.commit().unwrap();
+
+        let mut batch = StoreBatch::new(writer.store());
+        let err = writer
+            .consume_dotbit_account(&account.account_id, 3, &tx_hash, &mut batch)
+            .unwrap_err();
+        assert!(err.to_string().contains("already consumed"));
     }
 }

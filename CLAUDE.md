@@ -47,6 +47,12 @@ For any non-trivial task, use this structure in the final summary or PR descript
 
 - If principle wording changes, update both `README.md` and `CLAUDE.md` in the same commit.
 
+## Coding Principles (MANDATORY)
+
+- **Fail Fast, Fail Early** - Never hide invariant violations with silent fallbacks, lower-bound clamps, or default-zero repairs; fail immediately with actionable context
+- Do not add silent guards to mask bad states on correctness-critical paths (for example `max(0)`, `saturating_sub`, `unwrap_or(0)`).
+- If an invariant is violated, return/raise an error with enough context (block/tx/key/date) to locate the upstream bug quickly.
+
 ## Development Status (IMPORTANT)
 
 **This is a project under active development, NOT running in production.**

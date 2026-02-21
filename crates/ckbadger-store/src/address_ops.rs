@@ -328,11 +328,20 @@ impl CkbadgerStore {
         let mut write_batch = crate::batch::StoreBatch::new(self);
         let mut written = 0usize;
         for (lock_hash, agg) in agg_by_lock {
+            if agg.balance < 0 || agg.occupied_capacity < 0 || agg.live_cells_count < 0 {
+                anyhow::bail!(
+                    "rebuild addr_balance negative aggregate: lock_hash={:?}, balance={}, occupied_capacity={}, live_cells_count={}",
+                    lock_hash,
+                    agg.balance,
+                    agg.occupied_capacity,
+                    agg.live_cells_count
+                );
+            }
             let balance = AddressBalance {
                 balance: agg.balance,
-                occupied_capacity: agg.occupied_capacity.max(0),
-                live_cells_count: agg.live_cells_count.max(0),
-                total_cells_count: agg.live_cells_count.max(0) as i64,
+                occupied_capacity: agg.occupied_capacity,
+                live_cells_count: agg.live_cells_count,
+                total_cells_count: agg.live_cells_count as i64,
                 txs_count: agg.txs_count,
                 first_seen_block: agg.first_seen_block,
                 first_seen_tx: agg.first_seen_tx,
@@ -437,5 +446,19 @@ mod tests {
         assert_eq!(b.txs_count, 1);
 
         assert!(store.get_addr_balance(&[0xCC; 32]).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_rebuild_addr_balances_errors_on_negative_aggregate() {
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let lock_a = vec![0xAA; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_cell(&[0x01; 32], 0, &make_cell(lock_a.clone(), 10, -1, -1));
+        batch.commit().unwrap();
+
+        let err = store.rebuild_addr_balances_from_live_cells().unwrap_err();
+        assert!(err.to_string().contains("negative aggregate"));
     }
 }
