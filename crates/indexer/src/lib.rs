@@ -4,6 +4,7 @@ pub mod db;
 pub mod label_import;
 pub mod parser;
 pub mod rpc;
+pub mod runtime_diag;
 pub mod sync;
 pub mod verify;
 

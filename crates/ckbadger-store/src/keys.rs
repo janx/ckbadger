@@ -525,6 +525,7 @@ pub fn timestamp_ms_to_date(timestamp_ms: i64) -> u32 {
 pub mod sync_meta_keys {
     pub const TIP_BLOCK: &[u8] = b"tip_block";
     pub const SYNC_STATUS: &[u8] = b"sync_status";
+    pub const RUNTIME_STATUS: &[u8] = b"runtime_status";
     pub const DEEP_FORK: &[u8] = b"deep_fork";
     pub const REORG_EVENTS: &[u8] = b"reorg_events";
     pub const HODL_TRACKER: &[u8] = b"hodl_tracker";

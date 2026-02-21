@@ -7,7 +7,8 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use ckb_store_reader::CkbChainReader;
 use ckbadger_common::LabelImportConfig;
 use ckbadger_indexer::{
-    db::Repository, label_import::run_label_import, sync::Indexer, verify, Config,
+    db::Repository, label_import::run_label_import, runtime_diag::generate_run_id,
+    runtime_diag::read_cgroup_memory_snapshot, sync::Indexer, verify, Config,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -173,6 +174,7 @@ async fn run_sync(args: Cli) -> Result<()> {
 
     // One-time backfill: rebuild avg_block_time_ms from block headers
     let mut sync_status = store.get_sync_status()?;
+    let previous_runtime = store.get_runtime_status()?;
     if !sync_status.avg_block_time_rebuilt && sync_status.tip_block_number > 0 {
         info!("avg_block_time migration: rebuilding from block headers...");
         let updated = store.rebuild_avg_block_times()?;
@@ -208,6 +210,45 @@ async fn run_sync(args: Cli) -> Result<()> {
             sync_status.tip_block_number
         );
     }
+    let run_id = generate_run_id();
+    let startup_cgroup = read_cgroup_memory_snapshot();
+    if previous_runtime.active_run_id.is_some() {
+        info!(
+            run_id = %run_id,
+            previous_active_run_id = ?previous_runtime.active_run_id,
+            previous_last_run_id = ?previous_runtime.last_run_id,
+            previous_last_shutdown_reason = ?previous_runtime.last_shutdown_reason,
+            previous_last_exit_code = ?previous_runtime.last_exit_code,
+            previous_last_heartbeat_at = previous_runtime.last_heartbeat_at,
+            previous_last_heartbeat_block = previous_runtime.last_heartbeat_block,
+            previous_last_incident_id = ?previous_runtime.last_incident_id,
+            cgroup_memory_current_bytes = startup_cgroup.memory_current_bytes,
+            cgroup_memory_max_bytes = startup_cgroup.memory_max_bytes,
+            cgroup_memory_max_raw = ?startup_cgroup.memory_max_raw,
+            cgroup_oom_events = startup_cgroup.oom_events,
+            cgroup_oom_kill_events = startup_cgroup.oom_kill_events,
+            "Detected previous run without graceful shutdown marker"
+        );
+    } else {
+        info!(
+            run_id = %run_id,
+            previous_last_run_id = ?previous_runtime.last_run_id,
+            previous_last_shutdown_reason = ?previous_runtime.last_shutdown_reason,
+            previous_last_exit_code = ?previous_runtime.last_exit_code,
+            previous_last_heartbeat_at = previous_runtime.last_heartbeat_at,
+            previous_last_heartbeat_block = previous_runtime.last_heartbeat_block,
+            previous_last_incident_id = ?previous_runtime.last_incident_id,
+            cgroup_memory_current_bytes = startup_cgroup.memory_current_bytes,
+            cgroup_memory_max_bytes = startup_cgroup.memory_max_bytes,
+            cgroup_memory_max_raw = ?startup_cgroup.memory_max_raw,
+            cgroup_oom_events = startup_cgroup.oom_events,
+            cgroup_oom_kill_events = startup_cgroup.oom_kill_events,
+            "Runtime diagnostics at startup"
+        );
+    }
+    store.mark_runtime_run_start(&run_id, db_tip)?;
+    info!(run_id = %run_id, startup_tip = db_tip, "Runtime run marker persisted");
+
     let is_fresh_sync = db_tip == 0 && db_tip_hash.is_none();
 
     if is_fresh_sync {
@@ -218,7 +259,7 @@ async fn run_sync(args: Cli) -> Result<()> {
 
     info!("Connecting to CKB node: {}", config.ckb_rpc_url);
 
-    let indexer = Indexer::new(config.clone(), store.clone()).await?;
+    let indexer = Indexer::new(run_id, config.clone(), store.clone()).await?;
     let indexer = Arc::new(indexer);
 
     let data_source = if indexer.is_direct_db_read() {
@@ -239,6 +280,7 @@ async fn run_sync(args: Cli) -> Result<()> {
 
             let (perf_rpc_ms, perf_db_ms) = indexer_for_progress.perf_snapshot_ms();
             let pipeline = indexer_for_progress.pipeline_progress_snapshot();
+            indexer_for_progress.record_runtime_heartbeat(progress.current());
             let sync_data = ckbadger_common::SyncProgressData {
                 current_block: progress.current(),
                 target_block: progress.target(),
@@ -274,6 +316,7 @@ async fn run_sync(args: Cli) -> Result<()> {
                 .await;
 
             info!(
+                run_id = %indexer_for_progress.run_id(),
                 memtable_mb = memory_stats.rocksdb_memtable_bytes / (1024 * 1024),
                 block_cache_mb = memory_stats.rocksdb_block_cache_bytes / (1024 * 1024),
                 compaction_pending_mb = memory_stats.compaction_pending_bytes / (1024 * 1024),
@@ -291,6 +334,7 @@ async fn run_sync(args: Cli) -> Result<()> {
 
             if indexer_for_progress.is_bulk_sync_active() {
                 info!(
+                    run_id = %indexer_for_progress.run_id(),
                     source = data_source,
                     progress_pct = format!("{:.2}", progress.progress_percentage()),
                     current = progress.current(),
@@ -302,6 +346,7 @@ async fn run_sync(args: Cli) -> Result<()> {
                 );
             } else {
                 info!(
+                    run_id = %indexer_for_progress.run_id(),
                     "[{}] Synced to block {} (tip: {}, {} behind)",
                     data_source,
                     progress.current(),
@@ -317,6 +362,7 @@ async fn run_sync(args: Cli) -> Result<()> {
         match tokio::signal::ctrl_c().await {
             Ok(()) => {
                 info!("Received shutdown signal, shutting down gracefully...");
+                indexer_for_shutdown.mark_runtime_shutdown("graceful_shutdown", 0);
                 // RocksDB handles durability automatically via WAL
                 let _ = indexer_for_shutdown; // keep alive until shutdown
                 std::process::exit(0);
@@ -327,7 +373,15 @@ async fn run_sync(args: Cli) -> Result<()> {
         }
     });
 
-    indexer.run().await
+    let run_result = indexer.run().await;
+    match &run_result {
+        Ok(_) => indexer.mark_runtime_shutdown("run_completed", 0),
+        Err(e) => {
+            tracing::error!("Indexer terminated with error: {}", e);
+            indexer.mark_runtime_shutdown("run_error", 1);
+        }
+    }
+    run_result
 }
 
 async fn run_label_import_command(

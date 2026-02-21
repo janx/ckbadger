@@ -2,7 +2,7 @@
 
 use crate::keys::sync_meta_keys;
 use crate::store::CkbadgerStore;
-use crate::types::{DeepForkInfo, SyncStatus};
+use crate::types::{DeepForkInfo, RuntimeStatus, SyncStatus};
 
 impl CkbadgerStore {
     pub fn get_sync_status(&self) -> anyhow::Result<SyncStatus> {
@@ -24,6 +24,83 @@ impl CkbadgerStore {
         let mut status = self.get_sync_status()?;
         update_fn(&mut status);
         self.set_sync_status(&status)
+    }
+
+    pub fn get_runtime_status(&self) -> anyhow::Result<RuntimeStatus> {
+        match self.get_cf(self.cf_sync_meta(), sync_meta_keys::RUNTIME_STATUS)? {
+            Some(value) => Ok(bincode::deserialize(&value)?),
+            None => Ok(RuntimeStatus::default()),
+        }
+    }
+
+    pub fn set_runtime_status(&self, status: &RuntimeStatus) -> anyhow::Result<()> {
+        let value = bincode::serialize(status)?;
+        self.put_cf(self.cf_sync_meta(), sync_meta_keys::RUNTIME_STATUS, &value)
+    }
+
+    pub fn update_runtime_status<F>(&self, update_fn: F) -> anyhow::Result<()>
+    where
+        F: FnOnce(&mut RuntimeStatus),
+    {
+        let mut status = self.get_runtime_status()?;
+        update_fn(&mut status);
+        self.set_runtime_status(&status)
+    }
+
+    pub fn mark_runtime_run_start(&self, run_id: &str, tip_block: i64) -> anyhow::Result<()> {
+        let now = chrono::Utc::now().timestamp();
+        self.update_runtime_status(|status| {
+            status.active_run_id = Some(run_id.to_string());
+            status.last_run_id = Some(run_id.to_string());
+            status.run_started_at = now;
+            status.last_heartbeat_at = now;
+            status.last_heartbeat_block = tip_block;
+        })
+    }
+
+    pub fn mark_runtime_heartbeat(&self, run_id: &str, current_block: i64) -> anyhow::Result<()> {
+        let now = chrono::Utc::now().timestamp();
+        self.update_runtime_status(|status| {
+            if status.active_run_id.as_deref() != Some(run_id) {
+                status.active_run_id = Some(run_id.to_string());
+                status.last_run_id = Some(run_id.to_string());
+            }
+            status.last_heartbeat_at = now;
+            status.last_heartbeat_block = current_block;
+        })
+    }
+
+    pub fn mark_runtime_shutdown(
+        &self,
+        run_id: &str,
+        reason: &str,
+        exit_code: i32,
+    ) -> anyhow::Result<()> {
+        let now = chrono::Utc::now().timestamp();
+        self.update_runtime_status(|status| {
+            if status.active_run_id.as_deref() == Some(run_id) {
+                status.active_run_id = None;
+            }
+            status.last_run_id = Some(run_id.to_string());
+            status.last_shutdown_reason = Some(reason.to_string());
+            status.last_exit_code = Some(exit_code);
+            status.last_heartbeat_at = now;
+        })
+    }
+
+    pub fn mark_runtime_incident(
+        &self,
+        run_id: &str,
+        incident_id: &str,
+        summary: &str,
+    ) -> anyhow::Result<()> {
+        let now = chrono::Utc::now().timestamp();
+        self.update_runtime_status(|status| {
+            status.last_run_id = Some(run_id.to_string());
+            status.last_incident_id = Some(incident_id.to_string());
+            status.last_incident_at = now;
+            status.last_incident_summary = Some(summary.to_string());
+        })
     }
 
     /// Get sync tip (block number and hash) from the sync_status.
@@ -93,5 +170,56 @@ impl CkbadgerStore {
         } else {
             Ok(true)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_runtime_status_lifecycle() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+
+        let initial = store.get_runtime_status().unwrap();
+        assert!(initial.active_run_id.is_none());
+
+        store.mark_runtime_run_start("run-1", 120).unwrap();
+        let running = store.get_runtime_status().unwrap();
+        assert_eq!(running.active_run_id.as_deref(), Some("run-1"));
+        assert_eq!(running.last_run_id.as_deref(), Some("run-1"));
+        assert_eq!(running.last_heartbeat_block, 120);
+        assert!(running.run_started_at > 0);
+
+        store.mark_runtime_heartbeat("run-1", 130).unwrap();
+        let heartbeat = store.get_runtime_status().unwrap();
+        assert_eq!(heartbeat.active_run_id.as_deref(), Some("run-1"));
+        assert_eq!(heartbeat.last_heartbeat_block, 130);
+
+        store
+            .mark_runtime_incident("run-1", "run-1-inc-000001", "pipeline batch mismatch")
+            .unwrap();
+        let incident = store.get_runtime_status().unwrap();
+        assert_eq!(
+            incident.last_incident_id.as_deref(),
+            Some("run-1-inc-000001")
+        );
+        assert_eq!(
+            incident.last_incident_summary.as_deref(),
+            Some("pipeline batch mismatch")
+        );
+
+        store
+            .mark_runtime_shutdown("run-1", "graceful_shutdown", 0)
+            .unwrap();
+        let shutdown = store.get_runtime_status().unwrap();
+        assert!(shutdown.active_run_id.is_none());
+        assert_eq!(shutdown.last_run_id.as_deref(), Some("run-1"));
+        assert_eq!(
+            shutdown.last_shutdown_reason.as_deref(),
+            Some("graceful_shutdown")
+        );
+        assert_eq!(shutdown.last_exit_code, Some(0));
     }
 }

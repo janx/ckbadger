@@ -682,6 +682,30 @@ pub struct SyncStatus {
     pub address_balances_rebuilt_from_live_cells: bool,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeStatus {
+    #[serde(default)]
+    pub active_run_id: Option<String>,
+    #[serde(default)]
+    pub last_run_id: Option<String>,
+    #[serde(default)]
+    pub run_started_at: i64,
+    #[serde(default)]
+    pub last_heartbeat_at: i64,
+    #[serde(default)]
+    pub last_heartbeat_block: i64,
+    #[serde(default)]
+    pub last_shutdown_reason: Option<String>,
+    #[serde(default)]
+    pub last_exit_code: Option<i32>,
+    #[serde(default)]
+    pub last_incident_id: Option<String>,
+    #[serde(default)]
+    pub last_incident_at: i64,
+    #[serde(default)]
+    pub last_incident_summary: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeepForkInfo {
     pub db_tip: i64,

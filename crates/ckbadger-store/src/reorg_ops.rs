@@ -122,11 +122,18 @@ impl RollbackStageProgress {
     fn tick(&mut self, affected: u64) {
         self.scanned += 1;
         if should_log_rollback_progress(self.scanned, self.last_log_at.elapsed()) {
+            let elapsed_secs = self.started_at.elapsed().as_secs_f64();
+            let scanned_per_sec = if elapsed_secs > 0.0 {
+                self.scanned as f64 / elapsed_secs
+            } else {
+                0.0
+            };
             info!(
                 stage = self.stage,
                 scanned = self.scanned,
                 affected,
-                elapsed_secs = format!("{:.1}", self.started_at.elapsed().as_secs_f64()),
+                elapsed_secs = format!("{:.1}", elapsed_secs),
+                scanned_per_sec = format!("{:.1}", scanned_per_sec),
                 "Rollback cleanup in progress"
             );
             self.last_log_at = Instant::now();
@@ -134,11 +141,18 @@ impl RollbackStageProgress {
     }
 
     fn finish(&self, affected: u64) {
+        let elapsed_secs = self.started_at.elapsed().as_secs_f64();
+        let scanned_per_sec = if elapsed_secs > 0.0 {
+            self.scanned as f64 / elapsed_secs
+        } else {
+            0.0
+        };
         info!(
             stage = self.stage,
             scanned = self.scanned,
             affected,
-            elapsed_secs = format!("{:.1}", self.started_at.elapsed().as_secs_f64()),
+            elapsed_secs = format!("{:.1}", elapsed_secs),
+            scanned_per_sec = format!("{:.1}", scanned_per_sec),
             "Rollback cleanup stage complete"
         );
     }

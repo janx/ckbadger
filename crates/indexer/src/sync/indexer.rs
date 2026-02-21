@@ -1,18 +1,20 @@
 #![allow(clippy::type_complexity)]
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, NaiveDate, Timelike, Utc};
 use ckb_hash::new_blake2b;
 use ckbadger_common::{LabelImportConfig, PipelineProgressData};
 use dashmap::DashMap;
 use futures::stream::{FuturesOrdered, StreamExt};
 use rayon::prelude::*;
+use serde::Serialize;
 use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
 
@@ -33,6 +35,10 @@ use crate::parser::{
 use ckb_store_reader::CkbChainReader;
 
 use crate::rpc::{BlockResponseWithCycles, CkbRpcClient, DaoField};
+use crate::runtime_diag::{
+    generate_incident_id, read_cgroup_memory_snapshot, CgroupMemorySnapshot, FlightEvent,
+    FlightRecorder,
+};
 
 use super::SyncProgress;
 
@@ -66,6 +72,7 @@ const TOKEN_INFO_TAG_TOTAL_SUPPLY: u32 = 1;
 const TOKEN_INFO_TOTAL_SUPPLY_DATA_LEN: usize = 16;
 const STARTUP_PHASE_NONE: u8 = 0;
 const STARTUP_PHASE_ROLLBACK_CLEANUP: u8 = 1;
+const FLIGHT_RECORDER_CAPACITY: usize = 200;
 static OMNILOCK_CODE_HASHES: OnceLock<Vec<Vec<u8>>> = OnceLock::new();
 
 #[derive(Debug, Clone)]
@@ -78,6 +85,21 @@ fn decode_startup_phase(phase: u8) -> Option<&'static str> {
         STARTUP_PHASE_ROLLBACK_CLEANUP => Some("rollback_cleanup"),
         _ => None,
     }
+}
+
+#[derive(Debug, Serialize)]
+struct IncidentReport {
+    incident_id: String,
+    run_id: String,
+    created_at: i64,
+    reason: String,
+    detail: String,
+    startup_phase: Option<String>,
+    pipeline_reset_epoch: u64,
+    sync_tip_block: i64,
+    sync_tip_hash: String,
+    cgroup_memory: CgroupMemorySnapshot,
+    recent_events: Vec<FlightEvent>,
 }
 
 fn should_rebuild_hodl_tracker_state(state: Option<&HodlTrackerState>, tip_block: i64) -> bool {
@@ -1382,6 +1404,7 @@ const CACHE_INVALIDATION_INTERVAL: u64 = 10_000;
 const SECONDARY_ISSUANCE_BACKFILL_THRESHOLD: u64 = 1000;
 
 pub struct Indexer {
+    run_id: String,
     config: Config,
     rpc: CkbRpcClient,
     repo: Repository,
@@ -1399,13 +1422,16 @@ pub struct Indexer {
     reorg_notify_flag: Arc<std::sync::atomic::AtomicBool>,
     startup_phase: AtomicU8,
     pipeline_reset_epoch: Arc<AtomicU64>,
+    incident_seq: AtomicU64,
+    flight_recorder: FlightRecorder,
+    incident_dir: PathBuf,
     label_import_started: std::sync::atomic::AtomicBool,
     ckb_store: Option<Arc<CkbChainReader>>,
     hodl_tracker: std::sync::Mutex<HodlWaveTracker>,
 }
 
 impl Indexer {
-    pub async fn new(config: Config, store: Arc<CkbadgerStore>) -> Result<Self> {
+    pub async fn new(run_id: String, config: Config, store: Arc<CkbadgerStore>) -> Result<Self> {
         let rpc = CkbRpcClient::new(&config.ckb_rpc_url);
         let cache_invalidator = CacheInvalidator::new(config.redis_url.as_deref()).await;
 
@@ -1456,7 +1482,10 @@ impl Indexer {
             }
         };
 
+        let incident_dir = PathBuf::from(&config.data_path).join("incidents");
+
         Ok(Self {
+            run_id,
             config,
             rpc,
             repo,
@@ -1476,6 +1505,9 @@ impl Indexer {
             reorg_notify_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             startup_phase: AtomicU8::new(STARTUP_PHASE_NONE),
             pipeline_reset_epoch: Arc::new(AtomicU64::new(0)),
+            incident_seq: AtomicU64::new(0),
+            flight_recorder: FlightRecorder::new(FLIGHT_RECORDER_CAPACITY),
+            incident_dir,
             label_import_started: std::sync::atomic::AtomicBool::new(false),
             ckb_store,
             hodl_tracker: std::sync::Mutex::new(hodl_tracker),
@@ -1558,10 +1590,153 @@ impl Indexer {
         self.ckb_store.clone()
     }
 
-    fn request_pipeline_reset(&self, reason: &'static str) {
+    pub fn run_id(&self) -> &str {
+        &self.run_id
+    }
+
+    pub fn record_runtime_heartbeat(&self, current_block: u64) {
+        if let Err(e) = self
+            .writer
+            .store()
+            .mark_runtime_heartbeat(&self.run_id, current_block as i64)
+        {
+            warn!(
+                run_id = %self.run_id,
+                current_block,
+                error = %e,
+                "Failed to persist runtime heartbeat"
+            );
+        }
+    }
+
+    pub fn mark_runtime_shutdown(&self, reason: &str, exit_code: i32) {
+        if let Err(e) = self
+            .writer
+            .store()
+            .mark_runtime_shutdown(&self.run_id, reason, exit_code)
+        {
+            warn!(
+                run_id = %self.run_id,
+                reason,
+                exit_code,
+                error = %e,
+                "Failed to persist runtime shutdown reason"
+            );
+        }
+    }
+
+    fn record_flight_event(&self, event: &str, detail: impl Into<String>) {
+        self.flight_recorder.record(event, detail);
+    }
+
+    fn next_incident_id(&self) -> String {
+        let sequence = self.incident_seq.fetch_add(1, Ordering::SeqCst) + 1;
+        generate_incident_id(&self.run_id, sequence)
+    }
+
+    fn write_incident_report(
+        &self,
+        incident_id: &str,
+        reason: &str,
+        detail: &str,
+    ) -> anyhow::Result<PathBuf> {
+        let sync_status = self.writer.store().get_sync_status()?;
+        let report = IncidentReport {
+            incident_id: incident_id.to_string(),
+            run_id: self.run_id.clone(),
+            created_at: chrono::Utc::now().timestamp(),
+            reason: reason.to_string(),
+            detail: detail.to_string(),
+            startup_phase: self.startup_phase(),
+            pipeline_reset_epoch: self.pipeline_reset_epoch.load(Ordering::SeqCst),
+            sync_tip_block: sync_status.tip_block_number,
+            sync_tip_hash: if sync_status.tip_block_hash.is_empty() {
+                "0x".to_string()
+            } else {
+                format!("0x{}", hex::encode(sync_status.tip_block_hash))
+            },
+            cgroup_memory: read_cgroup_memory_snapshot(),
+            recent_events: self.flight_recorder.snapshot(),
+        };
+
+        std::fs::create_dir_all(&self.incident_dir)?;
+        let path = self.incident_dir.join(format!("{}.json", incident_id));
+        let encoded = serde_json::to_vec_pretty(&report)?;
+        std::fs::write(&path, encoded)?;
+        Ok(path)
+    }
+
+    fn report_incident(&self, reason: &str, detail: impl Into<String>) -> String {
+        let detail = detail.into();
+        let incident_id = self.next_incident_id();
+        self.record_flight_event(
+            "incident",
+            format!(
+                "incident_id={} reason={} detail={}",
+                incident_id, reason, detail
+            ),
+        );
+
+        if let Err(e) =
+            self.writer
+                .store()
+                .mark_runtime_incident(&self.run_id, &incident_id, reason)
+        {
+            warn!(
+                run_id = %self.run_id,
+                incident_id = %incident_id,
+                error = %e,
+                "Failed to persist runtime incident marker"
+            );
+        }
+
+        match self.write_incident_report(&incident_id, reason, &detail) {
+            Ok(path) => {
+                info!(
+                    run_id = %self.run_id,
+                    incident_id = %incident_id,
+                    path = %path.display(),
+                    "Incident report written"
+                );
+            }
+            Err(e) => {
+                warn!(
+                    run_id = %self.run_id,
+                    incident_id = %incident_id,
+                    error = %e,
+                    "Failed to write incident report"
+                );
+            }
+        }
+
+        incident_id
+    }
+
+    fn request_pipeline_reset(
+        &self,
+        reason: &'static str,
+        expected_start: Option<u64>,
+        got_start: Option<u64>,
+        writer_queue_depth: Option<usize>,
+    ) {
         let epoch = bump_pipeline_reset_epoch(&self.pipeline_reset_epoch);
         self.reorg_notify_flag.store(true, Ordering::SeqCst);
-        info!(epoch, reason, "Pipeline reset requested");
+        info!(
+            run_id = %self.run_id,
+            epoch,
+            reason,
+            expected_start = ?expected_start,
+            got_start = ?got_start,
+            writer_queue_depth = ?writer_queue_depth,
+            "Pipeline reset requested"
+        );
+        self.record_flight_event(
+            "pipeline_reset",
+            format!(
+                "epoch={} reason={} expected_start={:?} got_start={:?} writer_queue_depth={:?}",
+                epoch, reason, expected_start, got_start, writer_queue_depth
+            ),
+        );
     }
 
     /// Snapshot the current perf stats: (fetch_ms, db_ms).
@@ -1620,12 +1795,21 @@ impl Indexer {
     pub async fn run(&self) -> Result<()> {
         let blocks_behind = self.progress.blocks_remaining();
         info!(
+            run_id = %self.run_id,
             "Starting indexer (pipeline={}, {} blocks behind, threshold={})",
             self.config.pipeline_enabled, blocks_behind, self.config.bulk_sync_threshold
+        );
+        self.record_flight_event(
+            "run_start",
+            format!(
+                "pipeline_enabled={} blocks_behind={} bulk_threshold={}",
+                self.config.pipeline_enabled, blocks_behind, self.config.bulk_sync_threshold
+            ),
         );
 
         if blocks_behind > self.config.bulk_sync_threshold {
             info!(
+                run_id = %self.run_id,
                 "Bulk sync auto-enabled: {} blocks behind > {} threshold",
                 blocks_behind, self.config.bulk_sync_threshold,
             );
@@ -1650,8 +1834,13 @@ impl Indexer {
             self.startup_phase
                 .store(STARTUP_PHASE_ROLLBACK_CLEANUP, Ordering::SeqCst);
             info!(
+                run_id = %self.run_id,
                 from_block = actual_start + 1,
                 "Startup rollback cleanup phase started"
+            );
+            self.record_flight_event(
+                "startup_cleanup_started",
+                format!("from_block={}", actual_start + 1),
             );
         }
 
@@ -1663,7 +1852,11 @@ impl Indexer {
         self.startup_phase
             .store(STARTUP_PHASE_NONE, Ordering::SeqCst);
         if cleanup_needed {
-            info!("Startup rollback cleanup phase completed");
+            info!(
+                run_id = %self.run_id,
+                "Startup rollback cleanup phase completed"
+            );
+            self.record_flight_event("startup_cleanup_completed", "ok");
         }
         init_result?;
         self.reconcile_hodl_tracker_with_tip(actual_start)?;
@@ -1734,7 +1927,14 @@ impl Indexer {
                     sleep(Duration::from_secs(30)).await;
                 }
                 Err(e) => {
-                    error!("Sync error: {}", e);
+                    let incident_id =
+                        self.report_incident("sync_batch_failed", format!("error={:?}", e));
+                    error!(
+                        run_id = %self.run_id,
+                        incident_id = %incident_id,
+                        error = ?e,
+                        "Sync error"
+                    );
                     sleep(Duration::from_secs(5)).await;
                 }
             }
@@ -2717,11 +2917,21 @@ impl Indexer {
                     };
 
                     if start_block != expected_start {
+                        let writer_queue_depth = parse_tx_for_writer_depth.max_capacity()
+                            - parse_tx_for_writer_depth.capacity();
                         warn!(
-                            "Pipeline batch mismatch: expected {}, got {}. Draining stale batches.",
-                            expected_start, start_block
+                            run_id = %self.run_id,
+                            expected_start,
+                            got_start = start_block,
+                            writer_queue_depth,
+                            "Pipeline batch mismatch: draining stale batches"
                         );
-                        self.request_pipeline_reset("pipeline batch mismatch");
+                        self.request_pipeline_reset(
+                            "pipeline batch mismatch",
+                            Some(expected_start),
+                            Some(start_block),
+                            Some(writer_queue_depth),
+                        );
                         Self::drain_channel(&mut parse_rx).await;
                         continue;
                     }
@@ -2736,13 +2946,23 @@ impl Indexer {
                                 {
                                     Some(ReorgAction::Handled(_)) => {
                                         info!("Reorg handled, draining stale batches");
-                                        self.request_pipeline_reset("reorg handled");
+                                        self.request_pipeline_reset(
+                                            "reorg handled",
+                                            None,
+                                            None,
+                                            None,
+                                        );
                                         Self::drain_channel(&mut parse_rx).await;
                                         continue;
                                     }
                                     Some(ReorgAction::DeepForkPaused) => {
                                         warn!("Deep fork detected, sync paused");
-                                        self.request_pipeline_reset("deep fork paused");
+                                        self.request_pipeline_reset(
+                                            "deep fork paused",
+                                            None,
+                                            None,
+                                            None,
+                                        );
                                         Self::drain_channel(&mut parse_rx).await;
                                         sleep(Duration::from_secs(30)).await;
                                         continue;
@@ -2774,7 +2994,22 @@ impl Indexer {
                         )
                         .await
                     {
-                        error!("Sync error: {:?}", e);
+                        let incident_id = self.report_incident(
+                            "pipeline_batch_write_failed",
+                            format!(
+                                "start_block={} end_block={} chain_tip={} error={:?}",
+                                start_block, end_block, chain_tip, e
+                            ),
+                        );
+                        error!(
+                            run_id = %self.run_id,
+                            incident_id = %incident_id,
+                            start_block,
+                            end_block,
+                            chain_tip,
+                            error = ?e,
+                            "Sync error while writing parsed batch"
+                        );
                         if let Err(cleanup_err) = self
                             .writer
                             .cleanup_batch_range(start_block as i64, end_block as i64)
@@ -2789,7 +3024,7 @@ impl Indexer {
                             );
                             return Err(rebuild_err);
                         }
-                        self.request_pipeline_reset("batch write failed");
+                        self.request_pipeline_reset("batch write failed", None, None, None);
                         Self::drain_channel(&mut parse_rx).await;
                         sleep(Duration::from_secs(5)).await;
                         continue;
@@ -3057,7 +3292,12 @@ impl Indexer {
                 );
                 return Err(rebuild_err);
             }
-            return Err(e);
+            return Err(e).with_context(|| {
+                format!(
+                    "sync_blocks_batch failed for range {}-{} (chain_tip={})",
+                    start_block, end_block, chain_tip
+                )
+            });
         }
         let db_elapsed = db_start.elapsed();
         self.perf.add_db_write(db_elapsed);

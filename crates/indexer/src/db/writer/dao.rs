@@ -569,12 +569,28 @@ impl BatchWriter {
 
                     if let Some(mut entry) = maybe_entry {
                         let dep_dao = dao_fields.get(deposit_block).ok_or_else(|| {
-                            anyhow!("missing DAO field for deposit block {}", deposit_block)
+                            anyhow!(
+                                "missing DAO field for deposit block {} while completing DAO withdraw: block={}, consuming_tx=0x{}, deposit_outpoint=0x{}:{}",
+                                deposit_block,
+                                ctx.block_number(),
+                                hex::encode(ctx.consuming_tx_hash()),
+                                hex::encode(original_tx_hash),
+                                original_output_index
+                            )
                         })?;
                         let req_dao = dao_fields.get(&request_block).ok_or_else(|| {
                             anyhow!(
-                                "missing DAO field for withdraw request block {}",
-                                request_block
+                                "missing DAO field for withdraw request block {} while completing DAO withdraw: block={}, consuming_tx=0x{}, deposit_outpoint=0x{}:{}, request_tx=0x{}",
+                                request_block,
+                                ctx.block_number(),
+                                hex::encode(ctx.consuming_tx_hash()),
+                                hex::encode(original_tx_hash),
+                                original_output_index,
+                                entry
+                                    .withdraw_request_tx
+                                    .as_ref()
+                                    .map(hex::encode)
+                                    .unwrap_or_else(|| "<missing>".to_string())
                             )
                         })?;
                         let ar_deposit = extract_ar_from_dao(dep_dao).unwrap_or(1);
