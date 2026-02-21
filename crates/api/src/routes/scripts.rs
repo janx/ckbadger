@@ -16,8 +16,8 @@ use crate::response::{
     decode_cursor_single, encode_cursor_single, ok, ApiError, ApiResult, CursorPaginatedResponse,
 };
 use crate::utils::{
-    deployment_reference_hashes, is_known_script_name, merge_script_info_for_reference,
-    parse_chart_date_range, related_code_hashes_for_reference,
+    apply_live_capacity_delta, deployment_reference_hashes, is_known_script_name,
+    merge_script_info_for_reference, parse_chart_date_range, related_code_hashes_for_reference,
 };
 use crate::AppState;
 
@@ -245,13 +245,47 @@ fn script_kind_for_sort(info: &ckbadger_store::ScriptInfo) -> &str {
     }
 }
 
+fn checked_capacity_totals(
+    info: &ckbadger_store::ScriptInfo,
+    context: &str,
+) -> Result<(i128, i128), ApiRouteError> {
+    let capacity = info.lock_live_capacity_sum as i128 + info.type_live_capacity_sum as i128;
+    let occupied =
+        info.lock_live_occupied_capacity_sum as i128 + info.type_live_occupied_capacity_sum as i128;
+    if capacity < 0 {
+        return Err(ApiError::internal(format!(
+            "negative live capacity in {}: code_hash=0x{}, capacity={}",
+            context,
+            hex::encode(&info.code_hash),
+            capacity
+        )));
+    }
+    if occupied < 0 {
+        return Err(ApiError::internal(format!(
+            "negative live occupied capacity in {}: code_hash=0x{}, occupied={}",
+            context,
+            hex::encode(&info.code_hash),
+            occupied
+        )));
+    }
+    if occupied > capacity {
+        return Err(ApiError::internal(format!(
+            "live occupied capacity exceeds total in {}: code_hash=0x{}, occupied={}, capacity={}",
+            context,
+            hex::encode(&info.code_hash),
+            occupied,
+            capacity
+        )));
+    }
+    Ok((capacity, occupied))
+}
+
 fn live_capacity_sum_for_sort(info: &ckbadger_store::ScriptInfo) -> i128 {
-    (info.lock_live_capacity_sum as i128 + info.type_live_capacity_sum as i128).max(0)
+    info.lock_live_capacity_sum as i128 + info.type_live_capacity_sum as i128
 }
 
 fn live_occupied_capacity_sum_for_sort(info: &ckbadger_store::ScriptInfo) -> i128 {
-    (info.lock_live_occupied_capacity_sum as i128 + info.type_live_occupied_capacity_sum as i128)
-        .max(0)
+    info.lock_live_occupied_capacity_sum as i128 + info.type_live_occupied_capacity_sum as i128
 }
 
 fn occupied_ratio_for_sort(info: &ckbadger_store::ScriptInfo) -> Option<(i128, i128)> {
@@ -339,7 +373,7 @@ fn script_info_to_response(
     info: &ckbadger_store::ScriptInfo,
     network: &str,
     state: &AppState,
-) -> ScriptResponse {
+) -> Result<ScriptResponse, ApiRouteError> {
     let hash_type_str = match info.hash_type {
         0 => Some("data".to_string()),
         1 => Some("type".to_string()),
@@ -369,17 +403,12 @@ fn script_info_to_response(
         code_cell_tx_hash.as_deref(),
         code_cell_output_index,
     );
-    let live_occupied_capacity_sum = (info.lock_live_occupied_capacity_sum as i128
-        + info.type_live_occupied_capacity_sum as i128)
-        .max(0)
-        .to_string();
-    let live_capacity_sum = (info.lock_live_capacity_sum as i128
-        + info.type_live_capacity_sum as i128)
-        .max(0)
-        .to_string();
+    let (live_capacity, live_occupied) = checked_capacity_totals(info, "script response")?;
+    let live_occupied_capacity_sum = live_occupied.to_string();
+    let live_capacity_sum = live_capacity.to_string();
     let (deployment_type_hash, deployment_data_hash) = deployment_reference_hashes(info);
 
-    ScriptResponse {
+    Ok(ScriptResponse {
         code_hash: format!("0x{}", hex::encode(&info.code_hash)),
         name: info.name.clone().unwrap_or_else(|| "Unknown".to_string()),
         description: info.description.clone(),
@@ -404,7 +433,7 @@ fn script_info_to_response(
         deployed_at,
         live_capacity_sum,
         live_occupied_capacity_sum,
-    }
+    })
 }
 
 async fn lookup_scripts(
@@ -644,6 +673,9 @@ async fn list_scripts(
 
     // Apply requested ordering to the entire result set before pagination.
     let mut deduped = deduped;
+    for (_, info) in &deduped {
+        checked_capacity_totals(info, "list scripts")?;
+    }
     deduped.sort_by(|a, b| compare_script_entries(a, b, params.sort_key, params.sort_direction));
 
     let total = deduped.len() as i64;
@@ -672,7 +704,7 @@ async fn list_scripts(
     let scripts: Vec<ScriptResponse> = page
         .iter()
         .map(|(_, info)| script_info_to_response(info, network, &state))
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
 
     ok(CursorPaginatedResponse::new(
         scripts,
@@ -701,11 +733,14 @@ async fn get_script(
     if matching.is_empty() {
         return Err(ApiError::not_found("Script not found"));
     }
+    for (_, info) in &matching {
+        checked_capacity_totals(info, "get script")?;
+    }
 
     let mut scripts: Vec<ScriptResponse> = matching
         .iter()
         .map(|(_, info)| script_info_to_response(info, network, &state))
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
 
     // Propagate script_kind from deployments that have usage stats to those that don't.
     // All deployments of the same script serve the same purpose (lock/type).
@@ -847,6 +882,27 @@ fn parse_code_hash_hex(code_hash: &str) -> Result<Vec<u8>, ApiRouteError> {
     Ok(decoded)
 }
 
+fn apply_script_chart_delta(
+    cumulative_capacity: i128,
+    cumulative_occupied: i128,
+    cap_delta: i128,
+    occupied_delta: i128,
+    context: &str,
+) -> Result<(i128, i128), ApiRouteError> {
+    let cap_delta_i64 = i64::try_from(cap_delta)
+        .map_err(|_| ApiError::internal(format!("{} capacity delta exceeds i64", context)))?;
+    let occupied_delta_i64 = i64::try_from(occupied_delta)
+        .map_err(|_| ApiError::internal(format!("{} occupied delta exceeds i64", context)))?;
+    apply_live_capacity_delta(
+        cumulative_capacity,
+        cumulative_occupied,
+        cap_delta_i64,
+        occupied_delta_i64,
+        context,
+    )
+    .map_err(|e| ApiError::internal(e.to_string()))
+}
+
 fn build_script_occupation_chart(
     state: &AppState,
     targets: Vec<(Vec<u8>, bool)>,
@@ -902,11 +958,13 @@ fn build_script_occupation_chart(
             }
         }
         for (_, (cap_delta, occupied_delta)) in baseline_daily {
-            cumulative_capacity = (cumulative_capacity + cap_delta).max(0);
-            cumulative_occupied = (cumulative_occupied + occupied_delta).max(0);
-            if cumulative_occupied > cumulative_capacity {
-                cumulative_occupied = cumulative_capacity;
-            }
+            (cumulative_capacity, cumulative_occupied) = apply_script_chart_delta(
+                cumulative_capacity,
+                cumulative_occupied,
+                cap_delta,
+                occupied_delta,
+                "building script baseline occupation chart",
+            )?;
         }
     }
 
@@ -925,11 +983,13 @@ fn build_script_occupation_chart(
 
     let mut data = Vec::with_capacity(daily_deltas.len());
     for (date, (cap_delta, occupied_delta)) in daily_deltas {
-        cumulative_capacity = (cumulative_capacity + cap_delta).max(0);
-        cumulative_occupied = (cumulative_occupied + occupied_delta).max(0);
-        if cumulative_occupied > cumulative_capacity {
-            cumulative_occupied = cumulative_capacity;
-        }
+        (cumulative_capacity, cumulative_occupied) = apply_script_chart_delta(
+            cumulative_capacity,
+            cumulative_occupied,
+            cap_delta,
+            occupied_delta,
+            &format!("building script occupation chart at date {}", date),
+        )?;
         let unoccupied = cumulative_capacity - cumulative_occupied;
         data.push(StackedAreaDataPoint {
             date: format_yyyymmdd_for_chart(date),
@@ -1030,4 +1090,59 @@ async fn get_script_occupation_chart_by_code_hash(
         from_date,
         to_date,
     )?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{apply_script_chart_delta, checked_capacity_totals};
+    use axum::http::StatusCode;
+    use ckbadger_store::ScriptInfo;
+
+    #[test]
+    fn apply_script_chart_delta_errors_on_i64_overflow() {
+        let err = apply_script_chart_delta(0, 0, i128::from(i64::MAX) + 1, 0, "script chart")
+            .unwrap_err();
+        assert_eq!(err.0, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(err.1 .0.message.contains("capacity delta exceeds i64"));
+    }
+
+    #[test]
+    fn apply_script_chart_delta_errors_on_invariant_violation() {
+        let err = apply_script_chart_delta(10, 5, 0, 10, "script chart").unwrap_err();
+        assert_eq!(err.0, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(err
+            .1
+             .0
+            .message
+            .contains("live occupied capacity exceeds live capacity"));
+    }
+
+    #[test]
+    fn checked_capacity_totals_errors_on_negative_capacity() {
+        let info = ScriptInfo {
+            code_hash: vec![0xAA; 32],
+            lock_live_capacity_sum: -1,
+            ..Default::default()
+        };
+        let err = checked_capacity_totals(&info, "test").unwrap_err();
+        assert_eq!(err.0, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(err.1 .0.message.contains("negative live capacity"));
+    }
+
+    #[test]
+    fn checked_capacity_totals_errors_when_occupied_exceeds_capacity() {
+        let info = ScriptInfo {
+            code_hash: vec![0xBB; 32],
+            lock_live_capacity_sum: 100,
+            lock_live_occupied_capacity_sum: 101,
+            ..Default::default()
+        };
+        let err = checked_capacity_totals(&info, "test").unwrap_err();
+        assert_eq!(err.0, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(err
+            .1
+             .0
+            .message
+            .contains("live occupied capacity exceeds total"));
+    }
 }

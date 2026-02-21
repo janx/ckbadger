@@ -131,7 +131,14 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
                     delta.live_capacity_delta,
                     delta.live_occupied_capacity_delta,
                 )
-            }));
+            }))
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "invalid token daily capacity deltas for type_hash=0x{}: {}",
+                    hex::encode(hash),
+                    e
+                )
+            })?;
 
         token_assets.push(CachedAssetEntry {
             id: format!("0x{}", hex::encode(hash)),
@@ -195,7 +202,14 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
                     delta.live_capacity_delta,
                     delta.live_occupied_capacity_delta,
                 )
-            }));
+            }))
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "invalid cluster daily capacity deltas for cluster_id=0x{}: {}",
+                    hex::encode(cluster_id_bytes),
+                    e
+                )
+            })?;
 
         dob_assets.push(CachedAssetEntry {
             id: cluster_hex.clone(),
@@ -254,7 +268,14 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
                     delta.live_capacity_delta,
                     delta.live_occupied_capacity_delta,
                 )
-            }));
+            }))
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "invalid NFT daily capacity deltas for collection_id=0x{}: {}",
+                    hex::encode(collection_id_bytes),
+                    e
+                )
+            })?;
 
         nft_assets.push(CachedAssetEntry {
             id: collection_hex.clone(),

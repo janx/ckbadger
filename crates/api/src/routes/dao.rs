@@ -14,6 +14,7 @@ use crate::utils::shannon_to_ckb;
 use crate::AppState;
 
 const CHART_CACHE_TTL: Duration = Duration::from_secs(3600);
+type ApiRouteError = (axum::http::StatusCode, axum::Json<ApiError>);
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -294,27 +295,53 @@ async fn get_deposits_by_address(
 
 const DAO_OCCUPIED_CAPACITY: u128 = 102_00000000;
 
-fn snapshot_secondary_burnt(snapshot: &ckbadger_store::DaoDailySnapshot) -> u128 {
-    snapshot.cum_treasury.max(0) as u128
-}
-
-fn snapshot_estimated_apc(snapshot: &ckbadger_store::DaoDailySnapshot) -> Option<String> {
-    let total_issuance = u64::try_from(snapshot.total_issuance).ok()?;
-    if total_issuance == 0 {
-        return None;
+fn snapshot_secondary_burnt(
+    snapshot: &ckbadger_store::DaoDailySnapshot,
+) -> Result<u128, ApiRouteError> {
+    if snapshot.cum_treasury < 0 {
+        return Err(ApiError::internal(format!(
+            "negative cum_treasury in dao_daily_snapshots for {}: {}",
+            snapshot.date, snapshot.cum_treasury
+        )));
     }
-    let apc = calculate_estimated_apc(total_issuance, snapshot_secondary_burnt(snapshot));
-    (apc > 0.0).then(|| format!("{:.2}", apc))
+    Ok(snapshot.cum_treasury as u128)
 }
 
-fn snapshot_circulating_supply(snapshot: &ckbadger_store::DaoDailySnapshot) -> Option<i128> {
+fn snapshot_estimated_apc(
+    snapshot: &ckbadger_store::DaoDailySnapshot,
+) -> Result<Option<String>, ApiRouteError> {
+    let Ok(total_issuance) = u64::try_from(snapshot.total_issuance) else {
+        return Ok(None);
+    };
+    if total_issuance == 0 {
+        return Ok(None);
+    }
+    let apc = calculate_estimated_apc(total_issuance, snapshot_secondary_burnt(snapshot)?);
+    Ok((apc > 0.0).then(|| format!("{:.2}", apc)))
+}
+
+fn snapshot_circulating_supply(
+    snapshot: &ckbadger_store::DaoDailySnapshot,
+) -> Result<Option<i128>, ApiRouteError> {
     const GENESIS_BURNT: i128 = 8_400_000_000 * 100_000_000;
     let total_issuance = snapshot.total_issuance;
     if total_issuance <= 0 {
-        return None;
+        return Ok(None);
     }
-    let secondary_burnt = snapshot.cum_treasury.max(0);
-    Some(total_issuance - GENESIS_BURNT - secondary_burnt)
+    if snapshot.cum_treasury < 0 {
+        return Err(ApiError::internal(format!(
+            "negative cum_treasury in dao_daily_snapshots for {}: {}",
+            snapshot.date, snapshot.cum_treasury
+        )));
+    }
+    let circulating = total_issuance - GENESIS_BURNT - snapshot.cum_treasury;
+    if circulating < 0 {
+        return Err(ApiError::internal(format!(
+            "negative circulating supply for {}: total_issuance={}, burnt={}, cum_treasury={}",
+            snapshot.date, total_issuance, GENESIS_BURNT, snapshot.cum_treasury
+        )));
+    }
+    Ok(Some(circulating))
 }
 
 async fn get_address_dao_summary(
@@ -384,12 +411,36 @@ async fn get_address_dao_summary(
     for (_, entry) in my_deposits.iter().filter(|(_, e)| {
         (e.status == 0 || e.status == 1) && e.deposit_block_number <= latest_block_number
     }) {
+        if entry.capacity < 0 {
+            return Err(ApiError::internal(format!(
+                "negative DAO deposit capacity: deposit_block={}, lock_script_hash=0x{}, capacity={}",
+                entry.deposit_block_number,
+                hex::encode(&entry.lock_script_hash),
+                entry.capacity
+            )));
+        }
         let capacity = entry.capacity as u128;
-        let free_capacity = capacity.saturating_sub(DAO_OCCUPIED_CAPACITY);
+        let free_capacity = capacity.checked_sub(DAO_OCCUPIED_CAPACITY).ok_or_else(|| {
+            ApiError::internal(format!(
+                "DAO deposit capacity below occupied capacity: deposit_block={}, lock_script_hash=0x{}, capacity={}",
+                entry.deposit_block_number,
+                hex::encode(&entry.lock_script_hash),
+                capacity
+            ))
+        })?;
         let ar_deposit = entry.deposit_ar as u64;
         if ar_deposit > 0 && latest_ar > ar_deposit {
-            let compensation = (free_capacity * latest_ar as u128 / ar_deposit as u128)
-                .saturating_sub(free_capacity);
+            let gross = free_capacity * latest_ar as u128 / ar_deposit as u128;
+            let compensation = gross.checked_sub(free_capacity).ok_or_else(|| {
+                ApiError::internal(format!(
+                    "DAO compensation underflow: deposit_block={}, lock_script_hash=0x{}, free_capacity={}, ar_deposit={}, latest_ar={}",
+                    entry.deposit_block_number,
+                    hex::encode(&entry.lock_script_hash),
+                    free_capacity,
+                    ar_deposit,
+                    latest_ar
+                ))
+            })?;
             total_unclaimed += compensation;
         }
     }
@@ -399,7 +450,9 @@ async fn get_address_dao_summary(
         .list_dao_daily_snapshots()
         .ok()
         .and_then(|snapshots| snapshots.last().cloned())
-        .and_then(|s| snapshot_estimated_apc(&s))
+        .map(|s| snapshot_estimated_apc(&s))
+        .transpose()?
+        .flatten()
         .unwrap_or_default();
 
     let total_locked_str = total_locked.to_string();
@@ -484,12 +537,36 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
         .iter()
         .filter(|(_, e)| e.deposit_block_number <= latest_block_number)
     {
+        if entry.capacity < 0 {
+            return Err(ApiError::internal(format!(
+                "negative DAO deposit capacity: deposit_block={}, lock_script_hash=0x{}, capacity={}",
+                entry.deposit_block_number,
+                hex::encode(&entry.lock_script_hash),
+                entry.capacity
+            )));
+        }
         let capacity = entry.capacity as u128;
-        let free_capacity = capacity.saturating_sub(DAO_OCCUPIED_CAPACITY);
+        let free_capacity = capacity.checked_sub(DAO_OCCUPIED_CAPACITY).ok_or_else(|| {
+            ApiError::internal(format!(
+                "DAO deposit capacity below occupied capacity: deposit_block={}, lock_script_hash=0x{}, capacity={}",
+                entry.deposit_block_number,
+                hex::encode(&entry.lock_script_hash),
+                capacity
+            ))
+        })?;
         let ar_deposit = entry.deposit_ar as u64;
         if ar_deposit > 0 && latest_ar > ar_deposit {
-            let compensation = (free_capacity * latest_ar as u128 / ar_deposit as u128)
-                .saturating_sub(free_capacity);
+            let gross = free_capacity * latest_ar as u128 / ar_deposit as u128;
+            let compensation = gross.checked_sub(free_capacity).ok_or_else(|| {
+                ApiError::internal(format!(
+                    "DAO compensation underflow: deposit_block={}, lock_script_hash=0x{}, free_capacity={}, ar_deposit={}, latest_ar={}",
+                    entry.deposit_block_number,
+                    hex::encode(&entry.lock_script_hash),
+                    free_capacity,
+                    ar_deposit,
+                    latest_ar
+                ))
+            })?;
             total_unclaimed += compensation;
         }
     }
@@ -499,27 +576,42 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
         .list_dao_daily_snapshots()
         .ok()
         .and_then(|snapshots| snapshots.last().cloned());
-    let estimated_apc = latest_snapshot
-        .as_ref()
-        .and_then(snapshot_estimated_apc)
-        .unwrap_or_default();
+    let estimated_apc = match latest_snapshot.as_ref() {
+        Some(snapshot) => snapshot_estimated_apc(snapshot)?.unwrap_or_default(),
+        None => String::new(),
+    };
 
     let avg_days = epochs_to_days(avg_epochs);
 
     let total_deposited_str = total_deposited.to_string();
     let total_comp_str = total_compensation_paid.to_string();
-    let mining_reward = latest_snapshot
-        .as_ref()
-        .map(|s| s.cum_miner_secondary.max(0).to_string())
-        .unwrap_or_else(|| "0".to_string());
-    let deposit_compensation = latest_snapshot
-        .as_ref()
-        .map(|s| s.cum_dao_compensation.max(0).to_string())
-        .unwrap_or_else(|| "0".to_string());
-    let burnt = latest_snapshot
-        .as_ref()
-        .map(|s| s.cum_treasury.max(0).to_string())
-        .unwrap_or_else(|| "0".to_string());
+    let (mining_reward, deposit_compensation, burnt) = if let Some(s) = latest_snapshot.as_ref() {
+        if s.cum_miner_secondary < 0 {
+            return Err(ApiError::internal(format!(
+                "negative cum_miner_secondary in dao_daily_snapshots for {}: {}",
+                s.date, s.cum_miner_secondary
+            )));
+        }
+        if s.cum_dao_compensation < 0 {
+            return Err(ApiError::internal(format!(
+                "negative cum_dao_compensation in dao_daily_snapshots for {}: {}",
+                s.date, s.cum_dao_compensation
+            )));
+        }
+        if s.cum_treasury < 0 {
+            return Err(ApiError::internal(format!(
+                "negative cum_treasury in dao_daily_snapshots for {}: {}",
+                s.date, s.cum_treasury
+            )));
+        }
+        (
+            s.cum_miner_secondary.to_string(),
+            s.cum_dao_compensation.to_string(),
+            s.cum_treasury.to_string(),
+        )
+    } else {
+        ("0".to_string(), "0".to_string(), "0".to_string())
+    };
 
     ok(DaoStatisticsResponse {
         total_deposited: total_deposited_str.clone(),
@@ -587,24 +679,48 @@ async fn calculate_compensation(
 
     let (ar_deposit, ar_withdraw) = match (deposit_dao, withdraw_dao) {
         (Some(d), Some(w)) => {
-            let ar_d = extract_ar(&d).unwrap_or(1);
-            let ar_w = extract_ar(&w).unwrap_or(1);
+            let ar_d = extract_ar(&d).ok_or_else(|| {
+                ApiError::internal(format!(
+                    "invalid DAO field in deposit block header: block_number={}",
+                    params.deposit_block
+                ))
+            })?;
+            let ar_w = extract_ar(&w).ok_or_else(|| {
+                ApiError::internal(format!(
+                    "invalid DAO field in withdraw block header: block_number={}",
+                    withdraw_block
+                ))
+            })?;
             (ar_d, ar_w)
         }
-        _ => (1u64, 1u64),
+        _ => {
+            return Err(ApiError::bad_request(
+                "Unable to load deposit/withdraw block headers for compensation calculation",
+            ));
+        }
     };
 
     let occupied = 102_00000000u128;
-    let free = capacity.saturating_sub(occupied);
+    let free = capacity
+        .checked_sub(occupied)
+        .ok_or_else(|| ApiError::bad_request("Capacity must be at least 102 CKB"))?;
     let compensation = if ar_deposit > 0 {
-        (free * ar_withdraw as u128 / ar_deposit as u128).saturating_sub(free)
+        let gross = free * ar_withdraw as u128 / ar_deposit as u128;
+        gross
+            .checked_sub(free)
+            .ok_or_else(|| ApiError::internal("DAO compensation underflow"))?
     } else {
         0
     };
 
     let total = capacity + compensation;
 
-    let blocks_held = (withdraw_block - params.deposit_block).max(0) as f64;
+    if withdraw_block < params.deposit_block {
+        return Err(ApiError::bad_request(
+            "withdraw_block must be greater than or equal to deposit_block",
+        ));
+    }
+    let blocks_held = (withdraw_block - params.deposit_block) as f64;
     let years = blocks_held / (365.25 * 24.0 * 60.0 * 60.0 / 8.0);
     let apc = if years > 0.0 && free > 0 {
         (compensation as f64 / free as f64 / years) * 100.0
@@ -706,17 +822,32 @@ async fn get_daily_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResul
     // to match the official explorer's daily_dao_deposit metric.
     let data: Vec<ChartDataPoint> = snapshots
         .windows(2)
-        .map(|w| {
-            let daily_deposited =
-                (w[1].cumulative_deposit_amount - w[0].cumulative_deposit_amount).max(0);
-            let daily_deposits = (w[1].new_deposits - w[0].new_deposits).max(0);
-            ChartDataPoint {
+        .map(|w| -> Result<ChartDataPoint, ApiRouteError> {
+            let daily_deposited = w[1]
+                .cumulative_deposit_amount
+                .checked_sub(w[0].cumulative_deposit_amount)
+                .ok_or_else(|| {
+                    ApiError::internal(format!(
+                        "cumulative_deposit_amount decreased between {} and {}",
+                        w[0].date, w[1].date
+                    ))
+                })?;
+            let daily_deposits = w[1]
+                .new_deposits
+                .checked_sub(w[0].new_deposits)
+                .ok_or_else(|| {
+                    ApiError::internal(format!(
+                        "new_deposits decreased between {} and {}",
+                        w[0].date, w[1].date
+                    ))
+                })?;
+            Ok(ChartDataPoint {
                 date: w[1].date.clone(),
                 value: shannon_to_ckb(&daily_deposited.to_string()),
                 value2: Some(daily_deposits.to_string()),
-            }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
 
     let response = ChartResponse {
         data,
@@ -744,7 +875,7 @@ async fn get_circulation_ratio_chart(
 
     let mut data = Vec::with_capacity(snapshots.len());
     for s in &snapshots {
-        let Some(circulating) = snapshot_circulating_supply(s) else {
+        let Some(circulating) = snapshot_circulating_supply(s)? else {
             return Err(ApiError::internal(format!(
                 "missing DAO snapshot total_issuance for {}. delete RocksDB and re-sync from genesis",
                 s.date
@@ -753,7 +884,13 @@ async fn get_circulation_ratio_chart(
         if circulating <= 0 {
             continue;
         }
-        let deposited = s.total_deposited.max(0) as f64;
+        if s.total_deposited < 0 {
+            return Err(ApiError::internal(format!(
+                "negative total_deposited in dao_daily_snapshots for {}: {}",
+                s.date, s.total_deposited
+            )));
+        }
+        let deposited = s.total_deposited as f64;
         let ratio = (deposited / circulating as f64) * 100.0;
         data.push(ChartDataPoint {
             date: s.date.clone(),
@@ -796,14 +933,19 @@ mod tests {
     }
 
     #[test]
-    fn test_snapshot_secondary_burnt_clamps_negative() {
-        assert_eq!(snapshot_secondary_burnt(&snapshot(1, -10)), 0);
-        assert_eq!(snapshot_secondary_burnt(&snapshot(1, 25)), 25);
+    fn test_snapshot_secondary_burnt_errors_on_negative() {
+        let err = snapshot_secondary_burnt(&snapshot(1, -10)).unwrap_err();
+        assert!(err.1 .0.message.contains("negative cum_treasury"));
+    }
+
+    #[test]
+    fn test_snapshot_secondary_burnt_returns_value() {
+        assert_eq!(snapshot_secondary_burnt(&snapshot(1, 25)).unwrap(), 25);
     }
 
     #[test]
     fn test_snapshot_estimated_apc_requires_total_issuance() {
-        assert!(snapshot_estimated_apc(&snapshot(0, 0)).is_none());
+        assert!(snapshot_estimated_apc(&snapshot(0, 0)).unwrap().is_none());
     }
 
     #[test]
@@ -812,6 +954,6 @@ mod tests {
         let cum_treasury = 20_000_000_000_000_000i128;
         let s = snapshot(total_issuance, cum_treasury);
         let expected = total_issuance - (8_400_000_000i128 * 100_000_000i128) - cum_treasury;
-        assert_eq!(snapshot_circulating_supply(&s), Some(expected));
+        assert_eq!(snapshot_circulating_supply(&s).unwrap(), Some(expected));
     }
 }

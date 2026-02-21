@@ -8,9 +8,17 @@ use crate::keys;
 use crate::store::*;
 use crate::types::*;
 
-fn should_delete_stats_for_replay(key: &[u8], cutoff_yyyymmdd: &[u8]) -> bool {
+fn parse_cutoff_date_yyyymmdd(cutoff_yyyymmdd: &[u8]) -> anyhow::Result<u32> {
+    let cutoff_str = std::str::from_utf8(cutoff_yyyymmdd)
+        .map_err(|e| anyhow::anyhow!("invalid cutoff date utf8 {:?}: {}", cutoff_yyyymmdd, e))?;
+    cutoff_str
+        .parse::<u32>()
+        .map_err(|e| anyhow::anyhow!("invalid cutoff date '{}': {}", cutoff_str, e))
+}
+
+fn should_delete_stats_for_replay(key: &[u8], cutoff_yyyymmdd: &[u8]) -> anyhow::Result<bool> {
     if key.is_empty() {
-        return false;
+        return Ok(false);
     }
     let prefix = key[0];
     let suffix = &key[1..];
@@ -20,72 +28,67 @@ fn should_delete_stats_for_replay(key: &[u8], cutoff_yyyymmdd: &[u8]) -> bool {
         keys::STATS_PREFIX_DAILY
         | keys::STATS_PREFIX_DAILY_BLOCK
         | keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT
-        | keys::STATS_PREFIX_HODL_WAVE => suffix.len() >= 8 && &suffix[..8] >= cutoff_yyyymmdd,
+        | keys::STATS_PREFIX_HODL_WAVE => Ok(suffix.len() >= 8 && &suffix[..8] >= cutoff_yyyymmdd),
         // hour scoped: YYYYMMDDHH
-        keys::STATS_PREFIX_HOURLY => suffix.len() >= 10 && &suffix[..8] >= cutoff_yyyymmdd,
+        keys::STATS_PREFIX_HOURLY => Ok(suffix.len() >= 10 && &suffix[..8] >= cutoff_yyyymmdd),
         // date+miner hash: YYYYMMDD + 32-byte lock hash
-        keys::STATS_PREFIX_MINER => suffix.len() >= 40 && &suffix[..8] >= cutoff_yyyymmdd,
+        keys::STATS_PREFIX_MINER => Ok(suffix.len() >= 40 && &suffix[..8] >= cutoff_yyyymmdd),
         // code_hash(32) + kind(1) + date(4B u32 YYYYMMDD BE)
         keys::STATS_PREFIX_SCRIPT_DAILY => {
-            let cutoff_date = std::str::from_utf8(cutoff_yyyymmdd)
-                .ok()
-                .and_then(|s| s.parse::<u32>().ok())
-                .unwrap_or(0);
+            let cutoff_date = parse_cutoff_date_yyyymmdd(cutoff_yyyymmdd)?;
             if suffix.len() < 37 {
-                return false;
+                return Ok(false);
             }
-            let date = u32::from_be_bytes(suffix[33..37].try_into().unwrap_or([0; 4]));
-            date >= cutoff_date
+            let date = u32::from_be_bytes(suffix[33..37].try_into().map_err(|_| {
+                anyhow::anyhow!("invalid script_daily suffix length: {}", suffix.len())
+            })?);
+            Ok(date >= cutoff_date)
         }
         // type_hash(32) + date(4B u32 YYYYMMDD BE)
         keys::STATS_PREFIX_TOKEN_DAILY => {
-            let cutoff_date = std::str::from_utf8(cutoff_yyyymmdd)
-                .ok()
-                .and_then(|s| s.parse::<u32>().ok())
-                .unwrap_or(0);
+            let cutoff_date = parse_cutoff_date_yyyymmdd(cutoff_yyyymmdd)?;
             if suffix.len() < 36 {
-                return false;
+                return Ok(false);
             }
-            let date = u32::from_be_bytes(suffix[32..36].try_into().unwrap_or([0; 4]));
-            date >= cutoff_date
+            let date = u32::from_be_bytes(suffix[32..36].try_into().map_err(|_| {
+                anyhow::anyhow!("invalid token_daily suffix length: {}", suffix.len())
+            })?);
+            Ok(date >= cutoff_date)
         }
         // cluster_id(32) + date(4B u32 YYYYMMDD BE)
         keys::STATS_PREFIX_CLUSTER_DAILY => {
-            let cutoff_date = std::str::from_utf8(cutoff_yyyymmdd)
-                .ok()
-                .and_then(|s| s.parse::<u32>().ok())
-                .unwrap_or(0);
+            let cutoff_date = parse_cutoff_date_yyyymmdd(cutoff_yyyymmdd)?;
             if suffix.len() < 36 {
-                return false;
+                return Ok(false);
             }
-            let date = u32::from_be_bytes(suffix[32..36].try_into().unwrap_or([0; 4]));
-            date >= cutoff_date
+            let date = u32::from_be_bytes(suffix[32..36].try_into().map_err(|_| {
+                anyhow::anyhow!("invalid cluster_daily suffix length: {}", suffix.len())
+            })?);
+            Ok(date >= cutoff_date)
         }
         // spore_id(32) + date(4B u32 YYYYMMDD BE)
         keys::STATS_PREFIX_SPORE_DAILY => {
-            let cutoff_date = std::str::from_utf8(cutoff_yyyymmdd)
-                .ok()
-                .and_then(|s| s.parse::<u32>().ok())
-                .unwrap_or(0);
+            let cutoff_date = parse_cutoff_date_yyyymmdd(cutoff_yyyymmdd)?;
             if suffix.len() < 36 {
-                return false;
+                return Ok(false);
             }
-            let date = u32::from_be_bytes(suffix[32..36].try_into().unwrap_or([0; 4]));
-            date >= cutoff_date
+            let date = u32::from_be_bytes(suffix[32..36].try_into().map_err(|_| {
+                anyhow::anyhow!("invalid spore_daily suffix length: {}", suffix.len())
+            })?);
+            Ok(date >= cutoff_date)
         }
         // collection_id(32 padded) + date(4B u32 YYYYMMDD BE)
         keys::STATS_PREFIX_NFT_DAILY => {
-            let cutoff_date = std::str::from_utf8(cutoff_yyyymmdd)
-                .ok()
-                .and_then(|s| s.parse::<u32>().ok())
-                .unwrap_or(0);
+            let cutoff_date = parse_cutoff_date_yyyymmdd(cutoff_yyyymmdd)?;
             if suffix.len() < 36 {
-                return false;
+                return Ok(false);
             }
-            let date = u32::from_be_bytes(suffix[32..36].try_into().unwrap_or([0; 4]));
-            date >= cutoff_date
+            let date = u32::from_be_bytes(suffix[32..36].try_into().map_err(|_| {
+                anyhow::anyhow!("invalid nft_daily suffix length: {}", suffix.len())
+            })?);
+            Ok(date >= cutoff_date)
         }
-        _ => false,
+        _ => Ok(false),
     }
 }
 
@@ -333,7 +336,7 @@ impl CkbadgerStore {
             let iter = self.iterator_cf(self.cf_stats(), IteratorMode::Start);
             for item in iter.flatten() {
                 let (key, _) = item;
-                if should_delete_stats_for_replay(&key, cutoff.as_bytes()) {
+                if should_delete_stats_for_replay(&key, cutoff.as_bytes())? {
                     batch.delete_cf(self.cf_stats(), &key);
                     stats_removed += 1;
                 }
@@ -485,21 +488,21 @@ mod tests {
     fn test_should_delete_stats_for_replay_daily_prefix() {
         let cutoff = b"20260210";
         let key = crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_DAILY, b"20260211");
-        assert!(should_delete_stats_for_replay(&key, cutoff));
+        assert!(should_delete_stats_for_replay(&key, cutoff).unwrap());
 
         let key_old = crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_DAILY, b"20260209");
-        assert!(!should_delete_stats_for_replay(&key_old, cutoff));
+        assert!(!should_delete_stats_for_replay(&key_old, cutoff).unwrap());
     }
 
     #[test]
     fn test_should_delete_stats_for_replay_hourly_and_miner_prefix() {
         let cutoff = b"20260210";
         let hourly = crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_HOURLY, b"2026021001");
-        assert!(should_delete_stats_for_replay(&hourly, cutoff));
+        assert!(should_delete_stats_for_replay(&hourly, cutoff).unwrap());
 
         let miner_suffix = [b"20260210".as_slice(), &[0xAA; 32]].concat();
         let miner = crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_MINER, &miner_suffix);
-        assert!(should_delete_stats_for_replay(&miner, cutoff));
+        assert!(should_delete_stats_for_replay(&miner, cutoff).unwrap());
     }
 
     #[test]
@@ -508,10 +511,10 @@ mod tests {
         let code_hash = [0xAA; 32];
 
         let new_key = crate::keys::encode_script_daily_key(&code_hash, false, 20260211);
-        assert!(should_delete_stats_for_replay(&new_key, cutoff));
+        assert!(should_delete_stats_for_replay(&new_key, cutoff).unwrap());
 
         let old_key = crate::keys::encode_script_daily_key(&code_hash, true, 20260209);
-        assert!(!should_delete_stats_for_replay(&old_key, cutoff));
+        assert!(!should_delete_stats_for_replay(&old_key, cutoff).unwrap());
     }
 
     #[test]
@@ -520,10 +523,10 @@ mod tests {
         let type_hash = [0xBB; 32];
 
         let new_key = crate::keys::encode_token_daily_key(&type_hash, 20260211);
-        assert!(should_delete_stats_for_replay(&new_key, cutoff));
+        assert!(should_delete_stats_for_replay(&new_key, cutoff).unwrap());
 
         let old_key = crate::keys::encode_token_daily_key(&type_hash, 20260209);
-        assert!(!should_delete_stats_for_replay(&old_key, cutoff));
+        assert!(!should_delete_stats_for_replay(&old_key, cutoff).unwrap());
     }
 
     #[test]
@@ -532,10 +535,10 @@ mod tests {
         let cluster_id = [0xCC; 32];
 
         let new_key = crate::keys::encode_cluster_daily_key(&cluster_id, 20260211);
-        assert!(should_delete_stats_for_replay(&new_key, cutoff));
+        assert!(should_delete_stats_for_replay(&new_key, cutoff).unwrap());
 
         let old_key = crate::keys::encode_cluster_daily_key(&cluster_id, 20260209);
-        assert!(!should_delete_stats_for_replay(&old_key, cutoff));
+        assert!(!should_delete_stats_for_replay(&old_key, cutoff).unwrap());
     }
 
     #[test]
@@ -544,10 +547,10 @@ mod tests {
         let spore_id = [0xDD; 32];
 
         let new_key = crate::keys::encode_spore_daily_key(&spore_id, 20260211);
-        assert!(should_delete_stats_for_replay(&new_key, cutoff));
+        assert!(should_delete_stats_for_replay(&new_key, cutoff).unwrap());
 
         let old_key = crate::keys::encode_spore_daily_key(&spore_id, 20260209);
-        assert!(!should_delete_stats_for_replay(&old_key, cutoff));
+        assert!(!should_delete_stats_for_replay(&old_key, cutoff).unwrap());
     }
 
     #[test]
@@ -556,10 +559,19 @@ mod tests {
         let collection_id = [0xEE; 24];
 
         let new_key = crate::keys::encode_nft_daily_key(&collection_id, 20260211);
-        assert!(should_delete_stats_for_replay(&new_key, cutoff));
+        assert!(should_delete_stats_for_replay(&new_key, cutoff).unwrap());
 
         let old_key = crate::keys::encode_nft_daily_key(&collection_id, 20260209);
-        assert!(!should_delete_stats_for_replay(&old_key, cutoff));
+        assert!(!should_delete_stats_for_replay(&old_key, cutoff).unwrap());
+    }
+
+    #[test]
+    fn test_should_delete_stats_for_replay_errors_on_invalid_cutoff_date() {
+        let cutoff = b"invalid-cutoff";
+        let code_hash = [0xAA; 32];
+        let key = crate::keys::encode_script_daily_key(&code_hash, false, 20260211);
+        let err = should_delete_stats_for_replay(&key, cutoff).unwrap_err();
+        assert!(err.to_string().contains("invalid cutoff date"));
     }
 
     #[test]

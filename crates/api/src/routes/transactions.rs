@@ -20,6 +20,16 @@ use crate::AppState;
 
 /// (block_number, tx_hash, tx_index, tx_index_entry, block_hash)
 type TxListEntry = (i64, Vec<u8>, i32, ckbadger_store::TxIndexEntry, Vec<u8>);
+type RouteError = (axum::http::StatusCode, axum::Json<ApiError>);
+type TxIoBundle = (
+    Vec<TransactionInputResponse>,
+    Vec<TransactionOutputResponse>,
+    u128,
+    u128,
+    u128,
+    u128,
+    u128,
+);
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -624,7 +634,7 @@ async fn get_transaction_detail(
                     &state.store,
                     &state.ckb_network,
                     block_number,
-                )
+                )?
             } else {
                 empty_inputs_outputs()
             }
@@ -694,15 +704,7 @@ fn build_inputs_outputs_from_ckb(
     store: &ckbadger_store::CkbadgerStore,
     network: &str,
     block_number: i64,
-) -> (
-    Vec<TransactionInputResponse>,
-    Vec<TransactionOutputResponse>,
-    u128,
-    u128,
-    u128,
-    u128,
-    u128,
-) {
+) -> Result<TxIoBundle, RouteError> {
     use ckb_types::prelude::*;
 
     let rpc_tx = ckb_store_reader::convert_transaction_view(tx_view);
@@ -912,10 +914,27 @@ fn build_inputs_outputs_from_ckb(
         })
         .collect();
 
-    // Compute fee
-    let computed_fee = inputs_capacity.saturating_sub(outputs_capacity);
+    let is_cellbase = rpc_tx.inputs.first().is_some_and(|input| {
+        input.previous_output.tx_hash
+            == "0x0000000000000000000000000000000000000000000000000000000000000000"
+    });
 
-    (
+    // Compute fee strictly: non-cellbase tx must satisfy inputs >= outputs.
+    let computed_fee = if is_cellbase {
+        0
+    } else {
+        inputs_capacity.checked_sub(outputs_capacity).ok_or_else(|| {
+            ApiError::internal(format!(
+                "transaction inputs/outputs invariant broken at block {}: tx_hash=0x{}, inputs_capacity={}, outputs_capacity={}",
+                block_number,
+                hex::encode(tx_view.hash().raw_data()),
+                inputs_capacity,
+                outputs_capacity
+            ))
+        })?
+    };
+
+    Ok((
         inputs,
         outputs,
         inputs_capacity,
@@ -923,7 +942,7 @@ fn build_inputs_outputs_from_ckb(
         inputs_occupied_capacity,
         outputs_occupied_capacity,
         computed_fee,
-    )
+    ))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1244,8 +1263,18 @@ async fn get_transaction_lifecycle(
         let ckb_store_c = ckb_store.clone();
         let short_hash_c = short_hash.clone();
         tokio::task::spawn_blocking(move || -> Option<(i64, Vec<u8>, i64)> {
-            let start = (commit_block_number - 10).max(0);
-            let end = (commit_block_number - 2).max(0);
+            if commit_block_number < 2 {
+                return None;
+            }
+            let start = if commit_block_number > 10 {
+                commit_block_number - 10
+            } else {
+                0
+            };
+            let end = commit_block_number - 2;
+            if start > end {
+                return None;
+            }
             for bn in start..=end {
                 if let Ok(Some(header)) = store_c.get_block_header(bn) {
                     if header.hash.len() == 32 {

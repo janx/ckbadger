@@ -11,8 +11,8 @@ use std::sync::Arc;
 use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
 use crate::utils::{
-    accumulate_live_capacity, parse_chart_date_range, resolve_dob_collection_name,
-    resolve_nft_collection_name,
+    accumulate_live_capacity, apply_live_capacity_delta, parse_chart_date_range,
+    resolve_dob_collection_name, resolve_nft_collection_name,
 };
 use crate::warmup::{
     CachedAssetEntry, CACHE_KEY_ASSETS_DOB, CACHE_KEY_ASSETS_NFT, CACHE_KEY_ASSETS_TOKEN,
@@ -371,7 +371,7 @@ fn decode_nft_collection_id(
 fn build_capacity_occupation_chart(
     deltas: Vec<(u32, i64, i64)>,
     title: String,
-) -> StackedAreaChartResponse {
+) -> anyhow::Result<StackedAreaChartResponse> {
     build_capacity_occupation_chart_with_initial(deltas, title, 0, 0)
 }
 
@@ -380,20 +380,38 @@ fn build_capacity_occupation_chart_with_initial(
     title: String,
     initial_capacity: i128,
     initial_occupied: i128,
-) -> StackedAreaChartResponse {
-    let mut cumulative_capacity = initial_capacity.max(0);
-    let mut cumulative_occupied = initial_occupied.max(0);
-    if cumulative_occupied > cumulative_capacity {
-        cumulative_occupied = cumulative_capacity;
+) -> anyhow::Result<StackedAreaChartResponse> {
+    if initial_capacity < 0 {
+        anyhow::bail!(
+            "invalid initial capacity for occupation chart: {}",
+            initial_capacity
+        );
     }
+    if initial_occupied < 0 {
+        anyhow::bail!(
+            "invalid initial occupied capacity for occupation chart: {}",
+            initial_occupied
+        );
+    }
+    if initial_occupied > initial_capacity {
+        anyhow::bail!(
+            "invalid initial occupied/capacity for occupation chart: occupied={}, capacity={}",
+            initial_occupied,
+            initial_capacity
+        );
+    }
+    let mut cumulative_capacity = initial_capacity;
+    let mut cumulative_occupied = initial_occupied;
     let mut data = Vec::with_capacity(deltas.len());
 
     for (date, cap_delta, occupied_delta) in deltas {
-        cumulative_capacity = (cumulative_capacity + cap_delta as i128).max(0);
-        cumulative_occupied = (cumulative_occupied + occupied_delta as i128).max(0);
-        if cumulative_occupied > cumulative_capacity {
-            cumulative_occupied = cumulative_capacity;
-        }
+        (cumulative_capacity, cumulative_occupied) = apply_live_capacity_delta(
+            cumulative_capacity,
+            cumulative_occupied,
+            cap_delta,
+            occupied_delta,
+            &format!("building occupation chart at date {}", date),
+        )?;
         let unoccupied = cumulative_capacity - cumulative_occupied;
 
         data.push(StackedAreaDataPoint {
@@ -405,7 +423,7 @@ fn build_capacity_occupation_chart_with_initial(
         });
     }
 
-    StackedAreaChartResponse {
+    Ok(StackedAreaChartResponse {
         data,
         series: vec![
             StackedAreaSeries {
@@ -420,7 +438,7 @@ fn build_capacity_occupation_chart_with_initial(
             },
         ],
         title,
-    }
+    })
 }
 
 fn latest_capacity_from_chart(chart: &StackedAreaChartResponse) -> (String, String) {
@@ -469,7 +487,8 @@ async fn get_nft_collection(
             })
             .collect(),
         "NFT Collection Capacity Occupation".to_string(),
-    );
+    )
+    .map_err(|e| ApiError::internal(e.to_string()))?;
     let (live_capacity, live_occupied_capacity) = latest_capacity_from_chart(&chart);
 
     let standard = agg.standard.asset_standard().to_string();
@@ -518,11 +537,14 @@ async fn get_nft_collection_occupation_chart(
             )
             .map_err(|e| ApiError::internal(e.to_string()))?;
         for (_, delta) in baseline {
-            base_capacity = (base_capacity + delta.live_capacity_delta as i128).max(0);
-            base_occupied = (base_occupied + delta.live_occupied_capacity_delta as i128).max(0);
-            if base_occupied > base_capacity {
-                base_occupied = base_capacity;
-            }
+            (base_capacity, base_occupied) = apply_live_capacity_delta(
+                base_capacity,
+                base_occupied,
+                delta.live_capacity_delta,
+                delta.live_occupied_capacity_delta,
+                "building NFT baseline occupation chart",
+            )
+            .map_err(|e| ApiError::internal(e.to_string()))?;
         }
         (base_capacity, base_occupied)
     } else {
@@ -546,7 +568,8 @@ async fn get_nft_collection_occupation_chart(
         format!("{title} Capacity Occupation"),
         initial_capacity,
         initial_occupied,
-    ))
+    )
+    .map_err(|e| ApiError::internal(e.to_string()))?)
 }
 
 /// Fallback: compute token assets directly using batch 24h scan (when cache is cold).
@@ -582,7 +605,8 @@ fn compute_token_assets(
                     delta.live_capacity_delta,
                     delta.live_occupied_capacity_delta,
                 )
-            }));
+            }))
+            .map_err(|e| ApiError::internal(e.to_string()))?;
 
         result.push(CachedAssetEntry {
             id: format!("0x{}", hex::encode(hash)),
@@ -643,7 +667,8 @@ fn compute_dob_assets(
                     delta.live_capacity_delta,
                     delta.live_occupied_capacity_delta,
                 )
-            }));
+            }))
+            .map_err(|e| ApiError::internal(e.to_string()))?;
 
         result.push(CachedAssetEntry {
             id: cluster_hex.clone(),
@@ -701,7 +726,8 @@ fn compute_nft_assets(
                     delta.live_capacity_delta,
                     delta.live_occupied_capacity_delta,
                 )
-            }));
+            }))
+            .map_err(|e| ApiError::internal(e.to_string()))?;
 
         result.push(CachedAssetEntry {
             id: collection_hex.clone(),

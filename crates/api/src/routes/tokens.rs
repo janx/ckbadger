@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
-use crate::utils::parse_chart_date_range;
+use crate::utils::{apply_live_capacity_delta, parse_chart_date_range};
 use crate::warmup::{CachedAssetEntry, CACHE_KEY_ASSETS_TOKEN};
 use crate::AppState;
 
@@ -669,12 +669,14 @@ async fn get_token_occupation_chart(
             .list_token_daily_deltas_in_range(&hash, None, Some(from.saturating_sub(1)))
             .map_err(|e| ApiError::internal(e.to_string()))?;
         for (_, delta) in baseline {
-            cumulative_capacity = (cumulative_capacity + delta.live_capacity_delta as i128).max(0);
-            cumulative_occupied =
-                (cumulative_occupied + delta.live_occupied_capacity_delta as i128).max(0);
-            if cumulative_occupied > cumulative_capacity {
-                cumulative_occupied = cumulative_capacity;
-            }
+            (cumulative_capacity, cumulative_occupied) = apply_live_capacity_delta(
+                cumulative_capacity,
+                cumulative_occupied,
+                delta.live_capacity_delta,
+                delta.live_occupied_capacity_delta,
+                "building token baseline occupation chart",
+            )
+            .map_err(|e| ApiError::internal(e.to_string()))?;
         }
     }
 
@@ -685,12 +687,14 @@ async fn get_token_occupation_chart(
 
     let mut data = Vec::with_capacity(deltas.len());
     for (date, delta) in deltas {
-        cumulative_capacity = (cumulative_capacity + delta.live_capacity_delta as i128).max(0);
-        cumulative_occupied =
-            (cumulative_occupied + delta.live_occupied_capacity_delta as i128).max(0);
-        if cumulative_occupied > cumulative_capacity {
-            cumulative_occupied = cumulative_capacity;
-        }
+        (cumulative_capacity, cumulative_occupied) = apply_live_capacity_delta(
+            cumulative_capacity,
+            cumulative_occupied,
+            delta.live_capacity_delta,
+            delta.live_occupied_capacity_delta,
+            &format!("building token occupation chart at date {}", date),
+        )
+        .map_err(|e| ApiError::internal(e.to_string()))?;
         let unoccupied = cumulative_capacity - cumulative_occupied;
 
         data.push(StackedAreaDataPoint {

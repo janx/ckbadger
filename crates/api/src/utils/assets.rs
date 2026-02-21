@@ -1,3 +1,4 @@
+use anyhow::{anyhow, bail, Result};
 use ckbadger_store::types::DobStandard;
 use ckbadger_store::CkbadgerStore;
 
@@ -10,23 +11,68 @@ fn non_empty_name(name: Option<&str>) -> Option<String> {
     }
 }
 
+/// Apply one daily delta to live/occupied capacity with strict invariant checks.
+pub fn apply_live_capacity_delta(
+    live_capacity: i128,
+    live_occupied: i128,
+    capacity_delta: i64,
+    occupied_delta: i64,
+    context: &str,
+) -> Result<(i128, i128)> {
+    let next_capacity = live_capacity + capacity_delta as i128;
+    if next_capacity < 0 {
+        bail!(
+            "live capacity underflow while {}: prev={}, delta={}, next={}",
+            context,
+            live_capacity,
+            capacity_delta,
+            next_capacity
+        );
+    }
+
+    let next_occupied = live_occupied + occupied_delta as i128;
+    if next_occupied < 0 {
+        bail!(
+            "live occupied capacity underflow while {}: prev={}, delta={}, next={}",
+            context,
+            live_occupied,
+            occupied_delta,
+            next_occupied
+        );
+    }
+
+    if next_occupied > next_capacity {
+        bail!(
+            "live occupied capacity exceeds live capacity while {}: occupied={}, capacity={}",
+            context,
+            next_occupied,
+            next_capacity
+        );
+    }
+
+    Ok((next_capacity, next_occupied))
+}
+
 /// Accumulate live capacity/occupied capacity from ordered daily deltas.
-pub fn accumulate_live_capacity<I>(deltas: I) -> (i128, i128)
+pub fn accumulate_live_capacity<I>(deltas: I) -> Result<(i128, i128)>
 where
     I: IntoIterator<Item = (i64, i64)>,
 {
     let mut live_capacity: i128 = 0;
     let mut live_occupied: i128 = 0;
 
-    for (capacity_delta, occupied_delta) in deltas {
-        live_capacity = (live_capacity + capacity_delta as i128).max(0);
-        live_occupied = (live_occupied + occupied_delta as i128).max(0);
-        if live_occupied > live_capacity {
-            live_occupied = live_capacity;
-        }
+    for (idx, (capacity_delta, occupied_delta)) in deltas.into_iter().enumerate() {
+        (live_capacity, live_occupied) = apply_live_capacity_delta(
+            live_capacity,
+            live_occupied,
+            capacity_delta,
+            occupied_delta,
+            "accumulating live capacity",
+        )
+        .map_err(|e| anyhow!("delta #{} invalid: {}", idx + 1, e))?;
     }
 
-    (live_capacity, live_occupied)
+    Ok((live_capacity, live_occupied))
 }
 
 /// Resolve a DOB collection display name.
@@ -158,10 +204,33 @@ mod tests {
     }
 
     #[test]
-    fn accumulate_live_capacity_clamps_negative_and_occupied_upper_bound() {
-        let deltas = vec![(100, 60), (-30, -10), (-100, 0), (20, 50)];
-        let (capacity, occupied) = accumulate_live_capacity(deltas);
-        assert_eq!(capacity, 20);
-        assert_eq!(occupied, 20);
+    fn accumulate_live_capacity_sums_valid_deltas() {
+        let deltas = vec![(100, 60), (-30, -10), (20, 5)];
+        let (capacity, occupied) = accumulate_live_capacity(deltas).unwrap();
+        assert_eq!(capacity, 90);
+        assert_eq!(occupied, 55);
+    }
+
+    #[test]
+    fn accumulate_live_capacity_errors_on_negative_capacity() {
+        let deltas = vec![(100, 60), (-150, -10)];
+        let err = accumulate_live_capacity(deltas).unwrap_err();
+        assert!(err.to_string().contains("live capacity underflow"));
+    }
+
+    #[test]
+    fn accumulate_live_capacity_errors_on_negative_occupied() {
+        let deltas = vec![(100, 60), (0, -80)];
+        let err = accumulate_live_capacity(deltas).unwrap_err();
+        assert!(err.to_string().contains("live occupied capacity underflow"));
+    }
+
+    #[test]
+    fn accumulate_live_capacity_errors_when_occupied_exceeds_capacity() {
+        let deltas = vec![(100, 60), (-30, -10), (0, 50)];
+        let err = accumulate_live_capacity(deltas).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("live occupied capacity exceeds live capacity"));
     }
 }

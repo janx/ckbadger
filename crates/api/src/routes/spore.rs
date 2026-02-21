@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
-use crate::utils::parse_chart_date_range;
+use crate::utils::{apply_live_capacity_delta, parse_chart_date_range};
 use crate::warmup::{CachedAssetEntry, CACHE_KEY_ASSETS_DOB};
 use crate::AppState;
 
@@ -126,7 +126,7 @@ fn format_yyyymmdd_for_chart(date: u32) -> String {
 fn build_capacity_occupation_chart(
     deltas: Vec<(u32, i64, i64)>,
     title: String,
-) -> StackedAreaChartResponse {
+) -> anyhow::Result<StackedAreaChartResponse> {
     build_capacity_occupation_chart_with_initial(deltas, title, 0, 0)
 }
 
@@ -135,26 +135,39 @@ fn build_capacity_occupation_chart_with_initial(
     title: String,
     initial_capacity: i128,
     initial_occupied: i128,
-) -> StackedAreaChartResponse {
-    let mut running_capacity = initial_capacity.max(0);
-    let mut running_occupied = initial_occupied.max(0);
-    if running_occupied > running_capacity {
-        running_occupied = running_capacity;
+) -> anyhow::Result<StackedAreaChartResponse> {
+    if initial_capacity < 0 {
+        anyhow::bail!(
+            "invalid initial capacity for spore chart: {}",
+            initial_capacity
+        );
     }
+    if initial_occupied < 0 {
+        anyhow::bail!(
+            "invalid initial occupied capacity for spore chart: {}",
+            initial_occupied
+        );
+    }
+    if initial_occupied > initial_capacity {
+        anyhow::bail!(
+            "invalid initial occupied/capacity for spore chart: occupied={}, capacity={}",
+            initial_occupied,
+            initial_capacity
+        );
+    }
+    let mut running_capacity = initial_capacity;
+    let mut running_occupied = initial_occupied;
     let mut data = Vec::with_capacity(deltas.len());
 
     for (date, capacity_delta, occupied_delta) in deltas {
-        running_capacity += capacity_delta as i128;
-        running_occupied += occupied_delta as i128;
-
-        if running_capacity < 0 {
-            running_capacity = 0;
-        }
-        if running_occupied < 0 {
-            running_occupied = 0;
-        }
-
-        let unoccupied = (running_capacity - running_occupied).max(0);
+        (running_capacity, running_occupied) = apply_live_capacity_delta(
+            running_capacity,
+            running_occupied,
+            capacity_delta,
+            occupied_delta,
+            &format!("building spore occupation chart at date {}", date),
+        )?;
+        let unoccupied = running_capacity - running_occupied;
         let mut values = std::collections::HashMap::new();
         values.insert("occupied".to_string(), running_occupied.to_string());
         values.insert("unoccupied".to_string(), unoccupied.to_string());
@@ -165,7 +178,7 @@ fn build_capacity_occupation_chart_with_initial(
         });
     }
 
-    StackedAreaChartResponse {
+    Ok(StackedAreaChartResponse {
         data,
         series: vec![
             StackedAreaSeries {
@@ -180,7 +193,7 @@ fn build_capacity_occupation_chart_with_initial(
             },
         ],
         title,
-    }
+    })
 }
 
 fn latest_capacity_from_chart(
@@ -464,7 +477,8 @@ async fn get_cluster(
             "{} Capacity Occupation",
             name.clone().unwrap_or_else(|| "Spore Cluster".to_string())
         ),
-    );
+    )
+    .map_err(|e| ApiError::internal(e.to_string()))?;
     let (live_capacity, live_occupied_capacity) = latest_capacity_from_chart(&chart);
 
     ok(ClusterResponse {
@@ -555,7 +569,8 @@ async fn get_spore(
                     })
                     .collect(),
                 "Spore Capacity Occupation".to_string(),
-            );
+            )
+            .map_err(|e| ApiError::internal(e.to_string()))?;
             let (live_capacity, live_occupied_capacity) = latest_capacity_from_chart(&chart);
             let cap = live_capacity.and_then(|v| v.parse::<i64>().ok());
             let occ = live_occupied_capacity.and_then(|v| v.parse::<i64>().ok());
@@ -604,11 +619,14 @@ async fn get_cluster_occupation_chart(
             .list_cluster_daily_deltas_in_range(&id, None, Some(from.saturating_sub(1)))
             .map_err(|e| ApiError::internal(e.to_string()))?;
         for (_, delta) in baseline {
-            base_capacity = (base_capacity + delta.live_capacity_delta as i128).max(0);
-            base_occupied = (base_occupied + delta.live_occupied_capacity_delta as i128).max(0);
-            if base_occupied > base_capacity {
-                base_occupied = base_capacity;
-            }
+            (base_capacity, base_occupied) = apply_live_capacity_delta(
+                base_capacity,
+                base_occupied,
+                delta.live_capacity_delta,
+                delta.live_occupied_capacity_delta,
+                "building cluster baseline occupation chart",
+            )
+            .map_err(|e| ApiError::internal(e.to_string()))?;
         }
         (base_capacity, base_occupied)
     } else {
@@ -629,7 +647,8 @@ async fn get_cluster_occupation_chart(
         format!("{name} Capacity Occupation"),
         initial_capacity,
         initial_occupied,
-    ))
+    )
+    .map_err(|e| ApiError::internal(e.to_string()))?)
 }
 
 async fn get_spore_occupation_chart(
@@ -663,11 +682,14 @@ async fn get_spore_occupation_chart(
             .list_spore_daily_deltas_in_range(&id, None, Some(from.saturating_sub(1)))
             .map_err(|e| ApiError::internal(e.to_string()))?;
         for (_, delta) in baseline {
-            base_capacity = (base_capacity + delta.live_capacity_delta as i128).max(0);
-            base_occupied = (base_occupied + delta.live_occupied_capacity_delta as i128).max(0);
-            if base_occupied > base_capacity {
-                base_occupied = base_capacity;
-            }
+            (base_capacity, base_occupied) = apply_live_capacity_delta(
+                base_capacity,
+                base_occupied,
+                delta.live_capacity_delta,
+                delta.live_occupied_capacity_delta,
+                "building spore baseline occupation chart",
+            )
+            .map_err(|e| ApiError::internal(e.to_string()))?;
         }
         (base_capacity, base_occupied)
     } else {
@@ -688,7 +710,8 @@ async fn get_spore_occupation_chart(
         "Spore Capacity Occupation".to_string(),
         initial_capacity,
         initial_occupied,
-    ))
+    )
+    .map_err(|e| ApiError::internal(e.to_string()))?)
 }
 
 async fn get_spores_by_owner(

@@ -5,7 +5,8 @@ pub mod script_resolution;
 
 pub use address::{address_to_lock_script_hash, is_ckb_address, script_to_address};
 pub use assets::{
-    accumulate_live_capacity, resolve_dob_collection_name, resolve_nft_collection_name,
+    accumulate_live_capacity, apply_live_capacity_delta, resolve_dob_collection_name,
+    resolve_nft_collection_name,
 };
 pub use format::{
     format_duration, parse_chart_date_range, parse_chart_date_yyyymmdd, shannon_to_ckb,

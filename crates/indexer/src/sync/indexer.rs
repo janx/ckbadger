@@ -828,6 +828,27 @@ fn parse_prefixed_hex_u128(field: &str, label: &str) -> Result<u128> {
         .map_err(|e| anyhow::anyhow!("invalid {} hex '{}': {}", label, field, e))
 }
 
+fn parse_prefixed_hex_u32(field: &str, label: &str) -> Result<u32> {
+    let Some(hex) = field.strip_prefix("0x") else {
+        bail!("{} missing 0x prefix: {}", label, field);
+    };
+    u32::from_str_radix(hex, 16)
+        .map_err(|e| anyhow::anyhow!("invalid {} hex '{}': {}", label, field, e))
+}
+
+fn parse_prefixed_hex_u64(field: &str, label: &str) -> Result<u64> {
+    let Some(hex) = field.strip_prefix("0x") else {
+        bail!("{} missing 0x prefix: {}", label, field);
+    };
+    u64::from_str_radix(hex, 16)
+        .map_err(|e| anyhow::anyhow!("invalid {} hex '{}': {}", label, field, e))
+}
+
+fn parse_outpoint_index_i16(field: &str, label: &str) -> Result<i16> {
+    let value = parse_prefixed_hex_u32(field, label)?;
+    i16::try_from(value).map_err(|_| anyhow::anyhow!("{} exceeds i16 range: {}", label, value))
+}
+
 fn checked_sub_u128(lhs: u128, rhs: u128, label: &str) -> Result<u128> {
     lhs.checked_sub(rhs)
         .ok_or_else(|| anyhow::anyhow!("{} underflow: lhs={}, rhs={}", label, lhs, rhs))
@@ -878,6 +899,20 @@ fn extract_ar_i64_from_dao(dao: &[u8], block_number: i64) -> Result<i64> {
     let ar = DaoParser::extract_ar_from_dao_field(dao)
         .ok_or_else(|| anyhow!("missing AR in DAO field at block {}", block_number))?;
     i64::try_from(ar).map_err(|_| anyhow!("DAO AR exceeds i64 at block {}: {}", block_number, ar))
+}
+
+fn dao_csu_for_snapshot_date(stats: &BatchStats, date: NaiveDate) -> Result<(i128, i128, i128)> {
+    let field = stats
+        .daily_dao_fields
+        .get(&date)
+        .ok_or_else(|| anyhow!("missing DAO field for snapshot date {}", date))?;
+    extract_dao_csu(field).ok_or_else(|| {
+        anyhow!(
+            "invalid DAO field bytes for snapshot date {}: len={}",
+            date,
+            field.len()
+        )
+    })
 }
 
 type DaoConsumedRow = (i64, Vec<u8>, i16, String, i64, i16);
@@ -1212,69 +1247,93 @@ struct TxData {
 
 fn parse_blocks_parallel(
     blocks: &[BlockResponseWithCycles],
-) -> (
+) -> Result<(
     Vec<crate::parser::block::ParsedBlock>,
     Vec<TxData>,
     Vec<(Vec<u8>, i16)>,
-) {
-    let mut parsed_results: Vec<(usize, crate::parser::block::ParsedBlock, Vec<TxData>)> = blocks
-        .par_iter()
-        .enumerate()
-        .map(|(block_idx, block_response)| {
-            let block = &block_response.block;
-            let parsed = BlockParser::parse(block);
-            let mut tx_data_for_block: Vec<TxData> = block
-                .transactions
-                .par_iter()
-                .enumerate()
-                .map(|(tx_index, tx)| {
-                    let parsed_tx = TransactionParser::parse(tx);
-                    let inputs = TransactionParser::parse_inputs(tx);
-                    let cells = CellParser::parse_outputs(tx);
-                    let witnesses: Vec<String> = tx.witnesses.clone();
-                    let outputs_data: Vec<String> = tx.outputs_data.clone();
-                    let total_output_capacity: i64 = cells.iter().map(|c| c.capacity).sum();
-                    let cycles = if tx_index == 0 {
-                        None
-                    } else {
-                        block_response
-                            .cycles
-                            .as_ref()
-                            .and_then(|c| c.get(tx_index - 1))
-                            .and_then(|hex| {
-                                let hex = hex.strip_prefix("0x").unwrap_or(hex);
-                                u64::from_str_radix(hex, 16).ok().map(|v| v as i64)
-                            })
-                    };
-                    TxData {
-                        hash: parsed_tx.hash,
-                        block_number: parsed.number,
-                        block_hash: parsed.hash.clone(),
-                        tx_index: tx_index as i32,
-                        version: parsed_tx.version,
-                        inputs_count: parsed_tx.inputs_count as i16,
-                        outputs_count: parsed_tx.outputs_count as i16,
-                        witnesses_count: parsed_tx.witnesses_count as i16,
-                        cell_deps_count: parsed_tx.cell_deps_count as i16,
-                        header_deps_count: parsed_tx.header_deps_count as i16,
-                        is_cellbase: parsed_tx.is_cellbase,
-                        inputs,
-                        cells,
-                        witnesses,
-                        outputs_data,
-                        total_input_capacity: 0,
-                        total_output_capacity,
-                        fee: 0,
-                        tx_size: parsed_tx.tx_size,
-                        cycles,
-                        timestamp: parsed.timestamp,
-                    }
-                })
-                .collect();
-            tx_data_for_block.sort_by_key(|td| td.tx_index);
-            (block_idx, parsed, tx_data_for_block)
-        })
-        .collect();
+)> {
+    let parsed_results_raw: Vec<Result<(usize, crate::parser::block::ParsedBlock, Vec<TxData>)>> =
+        blocks
+            .par_iter()
+            .enumerate()
+            .map(|(block_idx, block_response)| -> Result<_> {
+                let block = &block_response.block;
+                let parsed = BlockParser::parse(block);
+                let tx_data_for_block_raw: Vec<Result<TxData>> = block
+                    .transactions
+                    .par_iter()
+                    .enumerate()
+                    .map(|(tx_index, tx)| -> Result<_> {
+                        let parsed_tx = TransactionParser::parse(tx).map_err(|e| {
+                            anyhow!(
+                                "failed to parse tx metadata for tx {} in block {}: {}",
+                                tx.hash,
+                                parsed.number,
+                                e
+                            )
+                        })?;
+                        let inputs = TransactionParser::parse_inputs(tx).map_err(|e| {
+                            anyhow!(
+                                "failed to parse tx inputs for tx {} in block {}: {}",
+                                tx.hash,
+                                parsed.number,
+                                e
+                            )
+                        })?;
+                        let cells = CellParser::parse_outputs(tx);
+                        let witnesses: Vec<String> = tx.witnesses.clone();
+                        let outputs_data: Vec<String> = tx.outputs_data.clone();
+                        let total_output_capacity: i64 = cells.iter().map(|c| c.capacity).sum();
+                        let cycles = if tx_index == 0 {
+                            None
+                        } else {
+                            block_response
+                                .cycles
+                                .as_ref()
+                                .and_then(|c| c.get(tx_index - 1))
+                                .and_then(|hex| {
+                                    let hex = hex.strip_prefix("0x").unwrap_or(hex);
+                                    u64::from_str_radix(hex, 16).ok().map(|v| v as i64)
+                                })
+                        };
+                        Ok(TxData {
+                            hash: parsed_tx.hash,
+                            block_number: parsed.number,
+                            block_hash: parsed.hash.clone(),
+                            tx_index: tx_index as i32,
+                            version: parsed_tx.version,
+                            inputs_count: parsed_tx.inputs_count as i16,
+                            outputs_count: parsed_tx.outputs_count as i16,
+                            witnesses_count: parsed_tx.witnesses_count as i16,
+                            cell_deps_count: parsed_tx.cell_deps_count as i16,
+                            header_deps_count: parsed_tx.header_deps_count as i16,
+                            is_cellbase: parsed_tx.is_cellbase,
+                            inputs,
+                            cells,
+                            witnesses,
+                            outputs_data,
+                            total_input_capacity: 0,
+                            total_output_capacity,
+                            fee: 0,
+                            tx_size: parsed_tx.tx_size,
+                            cycles,
+                            timestamp: parsed.timestamp,
+                        })
+                    })
+                    .collect();
+                let mut tx_data_for_block = Vec::with_capacity(tx_data_for_block_raw.len());
+                for tx_data in tx_data_for_block_raw {
+                    tx_data_for_block.push(tx_data?);
+                }
+                tx_data_for_block.sort_by_key(|td| td.tx_index);
+                Ok((block_idx, parsed, tx_data_for_block))
+            })
+            .collect();
+    let mut parsed_results: Vec<(usize, crate::parser::block::ParsedBlock, Vec<TxData>)> =
+        Vec::with_capacity(parsed_results_raw.len());
+    for parsed in parsed_results_raw {
+        parsed_results.push(parsed?);
+    }
     parsed_results.sort_by_key(|(idx, _, _)| *idx);
 
     let mut all_parsed_blocks = Vec::with_capacity(parsed_results.len());
@@ -1294,7 +1353,7 @@ fn parse_blocks_parallel(
         all_tx_data.extend(tx_data_list);
         all_parsed_blocks.push(parsed);
     }
-    (all_parsed_blocks, all_tx_data, all_input_outpoints)
+    Ok((all_parsed_blocks, all_tx_data, all_input_outpoints))
 }
 
 const CACHE_INVALIDATION_INTERVAL: u64 = 10_000;
@@ -1918,7 +1977,14 @@ impl Indexer {
                     match tokio::task::spawn_blocking(move || parse_blocks_parallel(&blocks_ref))
                         .await
                     {
-                        Ok(parsed) => parsed,
+                        Ok(Ok(parsed)) => parsed,
+                        Ok(Err(e)) => {
+                            error!(
+                                start_block,
+                                end_block, "Parser: parse_blocks_parallel failed: {}", e
+                            );
+                            return;
+                        }
                         Err(e) => {
                             error!(
                                 start_block,
@@ -3160,7 +3226,9 @@ impl Indexer {
 
         let blocks_clone: Vec<BlockResponseWithCycles> = blocks.to_vec();
         let (all_parsed_blocks, mut all_tx_data, all_input_outpoints) =
-            tokio::task::spawn_blocking(move || parse_blocks_parallel(&blocks_clone)).await?;
+            tokio::task::spawn_blocking(move || parse_blocks_parallel(&blocks_clone))
+                .await
+                .map_err(|e| anyhow!("parse_blocks_parallel task panicked: {}", e))??;
 
         let end_block = all_parsed_blocks
             .last()
@@ -3383,7 +3451,7 @@ impl Indexer {
                     .insert_block_proposals_batch(parsed_block.number, &parsed_block.proposals)?;
                 if !self.is_bulk_sync_active() {
                     self.cache_block_proposals(&parsed_block.proposals, parsed_block.number)
-                        .await;
+                        .await?;
                 }
             }
         }
@@ -4588,15 +4656,21 @@ impl Indexer {
                     for input in &tx.inputs {
                         let prev_tx_hash =
                             crate::rpc::parse_hex_to_bytes(&input.previous_output.tx_hash);
-                        let prev_index = input
-                            .previous_output
-                            .index
-                            .strip_prefix("0x")
-                            .and_then(|s| u32::from_str_radix(s, 16).ok())
-                            .unwrap_or(0);
+                        let prev_index = parse_outpoint_index_i16(
+                            &input.previous_output.index,
+                            "input.previous_output.index",
+                        )
+                        .map_err(|e| {
+                            anyhow!(
+                                "invalid consumed spore input index at block {}, tx 0x{}: {}",
+                                parsed.number,
+                                hex::encode(tx_data.hash),
+                                e
+                            )
+                        })?;
                         let consumed_spore_id = self
                             .writer
-                            .get_spore_id_by_outpoint(&prev_tx_hash, prev_index as i16)?;
+                            .get_spore_id_by_outpoint(&prev_tx_hash, prev_index)?;
                         if let Some(spore_id) = consumed_spore_id {
                             if !batch_spore_ids.contains(&spore_id) {
                                 self.writer.consume_spore(
@@ -4856,7 +4930,7 @@ impl Indexer {
                 }
                 if !self.is_bulk_sync_active() {
                     self.cache_block_proposals(&parsed_block.proposals, parsed_block.number)
-                        .await;
+                        .await?;
                 }
             }
         }
@@ -6588,13 +6662,18 @@ impl Indexer {
                             for input in &tx.inputs {
                                 let prev_tx_hash =
                                     crate::rpc::parse_hex_to_bytes(&input.previous_output.tx_hash);
-                                let prev_index = input
-                                    .previous_output
-                                    .index
-                                    .strip_prefix("0x")
-                                    .and_then(|s| u32::from_str_radix(s, 16).ok())
-                                    .unwrap_or(0)
-                                    as i16;
+                                let prev_index = parse_outpoint_index_i16(
+                                    &input.previous_output.index,
+                                    "input.previous_output.index",
+                                )
+                                .map_err(|e| {
+                                    anyhow!(
+                                        "invalid input index while prefetching outpoints at block {}, tx 0x{}: {}",
+                                        parsed.number,
+                                        hex::encode(tx_data.hash),
+                                        e
+                                    )
+                                })?;
                                 all_prev_tx_hashes.push(prev_tx_hash);
                                 all_prev_indices.push(prev_index);
                                 outpoint_context.push((parsed.number, tx_data.hash.to_vec()));
@@ -7281,11 +7360,8 @@ impl Indexer {
                         .unwrap_or(0);
 
                     // Extract C, S, U from the DAO header field for this date.
-                    let (total_issuance, secondary_pool, occupied_capacity) = stats
-                        .daily_dao_fields
-                        .get(date)
-                        .and_then(|field| extract_dao_csu(field))
-                        .unwrap_or((0, 0, 0));
+                    let (total_issuance, secondary_pool, occupied_capacity) =
+                        dao_csu_for_snapshot_date(stats, *date)?;
                     let daily_non_miner = stats.daily_secondary_non_miner_delta.get(date).copied();
                     let (daily_miner, daily_dao_share, daily_treasury_share) = if total_issuance > 0
                     {
@@ -7646,11 +7722,11 @@ impl Indexer {
 
     // === cache_block_proposals ===
 
-    async fn cache_block_proposals(&self, proposals: &[Vec<u8>], block_number: i64) {
+    async fn cache_block_proposals(&self, proposals: &[Vec<u8>], block_number: i64) -> Result<()> {
         use ckbadger_common::CachedProposal;
 
         if proposals.is_empty() || !self.cache_invalidator.is_enabled() {
-            return;
+            return Ok(());
         }
 
         let mempool = match self.rpc.get_raw_tx_pool_verbose().await {
@@ -7665,7 +7741,7 @@ impl Indexer {
                     })
                     .collect();
                 self.cache_invalidator.cache_proposals(&cached).await;
-                return;
+                return Ok(());
             }
         };
 
@@ -7681,16 +7757,18 @@ impl Indexer {
             let proposal_id = hex::encode(proposal_bytes);
 
             if let Some(entry) = all_mempool_txs.get(&proposal_id) {
-                let fee = crate::rpc::parse_hex_to_bytes(&entry.fee);
-                let fee_u64 = if fee.len() >= 8 {
-                    u64::from_be_bytes(fee[fee.len() - 8..].try_into().unwrap_or_default())
-                } else {
-                    u64::from_str_radix(entry.fee.trim_start_matches("0x"), 16).unwrap_or(0)
-                };
+                let fee_u64 =
+                    parse_prefixed_hex_u64(&entry.fee, "mempool proposal fee").map_err(|e| {
+                        anyhow!("invalid mempool fee for proposal {}: {}", proposal_id, e)
+                    })?;
                 let size =
-                    u64::from_str_radix(entry.size.trim_start_matches("0x"), 16).unwrap_or(0);
-                let cycles =
-                    u64::from_str_radix(entry.cycles.trim_start_matches("0x"), 16).unwrap_or(0);
+                    parse_prefixed_hex_u64(&entry.size, "mempool proposal size").map_err(|e| {
+                        anyhow!("invalid mempool size for proposal {}: {}", proposal_id, e)
+                    })?;
+                let cycles = parse_prefixed_hex_u64(&entry.cycles, "mempool proposal cycles")
+                    .map_err(|e| {
+                        anyhow!("invalid mempool cycles for proposal {}: {}", proposal_id, e)
+                    })?;
 
                 cached_proposals.push(CachedProposal::new_with_details(
                     proposal_id,
@@ -7716,6 +7794,8 @@ impl Indexer {
         self.cache_invalidator
             .cleanup_expired_proposals(block_number)
             .await;
+
+        Ok(())
     }
 }
 
@@ -8233,6 +8313,51 @@ mod tests {
 
         let err = parse_prefixed_hex_u128("0xzz", "test field").unwrap_err();
         assert!(err.to_string().contains("invalid test field hex"));
+    }
+
+    #[test]
+    fn test_parse_prefixed_hex_u32_errors_on_invalid_input() {
+        let err = parse_prefixed_hex_u32("1234", "test field").unwrap_err();
+        assert!(err.to_string().contains("missing 0x prefix"));
+
+        let err = parse_prefixed_hex_u32("0xzz", "test field").unwrap_err();
+        assert!(err.to_string().contains("invalid test field hex"));
+    }
+
+    #[test]
+    fn test_parse_prefixed_hex_u64_errors_on_invalid_input() {
+        let err = parse_prefixed_hex_u64("1234", "test field").unwrap_err();
+        assert!(err.to_string().contains("missing 0x prefix"));
+
+        let err = parse_prefixed_hex_u64("0xzz", "test field").unwrap_err();
+        assert!(err.to_string().contains("invalid test field hex"));
+    }
+
+    #[test]
+    fn test_parse_outpoint_index_i16_errors_on_overflow() {
+        let err = parse_outpoint_index_i16("0x10000", "index").unwrap_err();
+        assert!(err.to_string().contains("exceeds i16 range"));
+    }
+
+    #[test]
+    fn test_dao_csu_for_snapshot_date_errors_when_field_missing() {
+        let stats = BatchStats::default();
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 2, 21).unwrap();
+        let err = dao_csu_for_snapshot_date(&stats, date).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("missing DAO field for snapshot date"));
+    }
+
+    #[test]
+    fn test_dao_csu_for_snapshot_date_errors_on_invalid_field_length() {
+        let mut stats = BatchStats::default();
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 2, 21).unwrap();
+        stats.daily_dao_fields.insert(date, vec![0u8; 8]);
+        let err = dao_csu_for_snapshot_date(&stats, date).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("invalid DAO field bytes for snapshot date"));
     }
 
     #[test]

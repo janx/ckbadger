@@ -14,8 +14,13 @@ use std::sync::Arc;
 
 use crate::cache::{CacheKeys, CacheTtl};
 use crate::response::{ok, ApiError, ApiResult};
-use crate::utils::{format_duration, resolve_dob_collection_name, resolve_nft_collection_name};
+use crate::utils::{
+    apply_live_capacity_delta, format_duration, resolve_dob_collection_name,
+    resolve_nft_collection_name,
+};
 use crate::AppState;
+
+type ApiRouteError = (axum::http::StatusCode, axum::Json<ApiError>);
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -537,22 +542,46 @@ fn top_keys_by_metric<T>(
         .collect()
 }
 
-fn accumulate_capacity_deltas<I>(deltas: I) -> (i128, i128)
+fn apply_capacity_delta_i128(
+    total_cells_capacity: i128,
+    occupied_capacity: i128,
+    capacity_delta: i128,
+    occupied_delta: i128,
+    context: &str,
+) -> Result<(i128, i128), ApiRouteError> {
+    let capacity_delta_i64 = i64::try_from(capacity_delta)
+        .map_err(|_| ApiError::internal(format!("{} capacity delta exceeds i64", context)))?;
+    let occupied_delta_i64 = i64::try_from(occupied_delta)
+        .map_err(|_| ApiError::internal(format!("{} occupied delta exceeds i64", context)))?;
+    apply_live_capacity_delta(
+        total_cells_capacity,
+        occupied_capacity,
+        capacity_delta_i64,
+        occupied_delta_i64,
+        context,
+    )
+    .map_err(|e| ApiError::internal(e.to_string()))
+}
+
+fn accumulate_capacity_deltas<I>(deltas: I) -> Result<(i128, i128), ApiRouteError>
 where
     I: IntoIterator<Item = (i64, i64)>,
 {
     let mut total_cells_capacity: i128 = 0;
     let mut occupied_capacity: i128 = 0;
 
-    for (capacity_delta, occupied_delta) in deltas {
-        total_cells_capacity = (total_cells_capacity + capacity_delta as i128).max(0);
-        occupied_capacity = (occupied_capacity + occupied_delta as i128).max(0);
-        if occupied_capacity > total_cells_capacity {
-            occupied_capacity = total_cells_capacity;
-        }
+    for (idx, (capacity_delta, occupied_delta)) in deltas.into_iter().enumerate() {
+        (total_cells_capacity, occupied_capacity) = apply_live_capacity_delta(
+            total_cells_capacity,
+            occupied_capacity,
+            capacity_delta,
+            occupied_delta,
+            &format!("accumulating capacity deltas at step {}", idx + 1),
+        )
+        .map_err(|e| ApiError::internal(e.to_string()))?;
     }
 
-    (total_cells_capacity, occupied_capacity)
+    Ok((total_cells_capacity, occupied_capacity))
 }
 
 fn build_most_utilized_share_chart(
@@ -562,7 +591,7 @@ fn build_most_utilized_share_chart(
     labels_by_key: &HashMap<String, String>,
     dates: &[u32],
     deltas_by_date: &BTreeMap<u32, Vec<(String, i64, i64)>>,
-) -> StackedAreaChartResponse {
+) -> Result<StackedAreaChartResponse, ApiRouteError> {
     let mut states: HashMap<String, EntityState> = HashMap::new();
     let mut total_cells_capacity: i128 = 0;
     let mut total_occupied_capacity: i128 = 0;
@@ -597,14 +626,17 @@ fn build_most_utilized_share_chart(
                 let old_capacity = state.total_cells_capacity;
                 let old_occupied = state.occupied_capacity;
 
-                let mut new_capacity = (old_capacity + *capacity_delta as i128).max(0);
-                let mut new_occupied = (old_occupied + *occupied_delta as i128).max(0);
-                if new_occupied > new_capacity {
-                    new_occupied = new_capacity;
-                }
-                if new_capacity < new_occupied {
-                    new_capacity = new_occupied;
-                }
+                let (new_capacity, new_occupied) = apply_live_capacity_delta(
+                    old_capacity,
+                    old_occupied,
+                    *capacity_delta,
+                    *occupied_delta,
+                    &format!(
+                        "building most-utilized share chart for {} on date {}",
+                        entity_key, date
+                    ),
+                )
+                .map_err(|e| ApiError::internal(e.to_string()))?;
 
                 state.total_cells_capacity = new_capacity;
                 state.occupied_capacity = new_occupied;
@@ -620,8 +652,13 @@ fn build_most_utilized_share_chart(
             let value = states
                 .get(key)
                 .map(|state| metric_value(state, metric))
-                .unwrap_or(0)
-                .max(0);
+                .unwrap_or(0);
+            if value < 0 {
+                return Err(ApiError::internal(format!(
+                    "negative metric value for top key '{}' on date {}: {}",
+                    key, date, value
+                )));
+            }
             selected_sum += value;
             values.insert(format!("top{index}"), value.to_string());
         }
@@ -629,9 +666,20 @@ fn build_most_utilized_share_chart(
         let total = match metric {
             UtilizationMetric::Occupied => total_occupied_capacity,
             UtilizationMetric::Capacity => total_cells_capacity,
+        };
+        if total < 0 {
+            return Err(ApiError::internal(format!(
+                "negative total metric on date {}: {}",
+                date, total
+            )));
         }
-        .max(0);
-        let others = (total - selected_sum).max(0);
+        if selected_sum > total {
+            return Err(ApiError::internal(format!(
+                "selected sum exceeds total on date {}: selected={}, total={}",
+                date, selected_sum, total
+            )));
+        }
+        let others = total - selected_sum;
         values.insert("others".to_string(), others.to_string());
 
         data.push(StackedAreaDataPoint {
@@ -640,11 +688,11 @@ fn build_most_utilized_share_chart(
         });
     }
 
-    StackedAreaChartResponse {
+    Ok(StackedAreaChartResponse {
         data,
         series,
         title: chart_title,
-    }
+    })
 }
 
 async fn get_most_utilized_scripts_chart(
@@ -686,11 +734,27 @@ async fn get_most_utilized_scripts_chart(
         labels_by_key.insert(key.clone(), label);
 
         let final_total_cells_capacity =
-            (info.lock_live_capacity_sum as i128 + info.type_live_capacity_sum as i128).max(0);
-        let final_occupied_capacity = (info.lock_live_occupied_capacity_sum as i128
-            + info.type_live_occupied_capacity_sum as i128)
-            .max(0)
-            .min(final_total_cells_capacity);
+            info.lock_live_capacity_sum as i128 + info.type_live_capacity_sum as i128;
+        let final_occupied_capacity = info.lock_live_occupied_capacity_sum as i128
+            + info.type_live_occupied_capacity_sum as i128;
+        if final_total_cells_capacity < 0 {
+            return Err(ApiError::internal(format!(
+                "negative script total capacity for key {}: {}",
+                key, final_total_cells_capacity
+            )));
+        }
+        if final_occupied_capacity < 0 {
+            return Err(ApiError::internal(format!(
+                "negative script occupied capacity for key {}: {}",
+                key, final_occupied_capacity
+            )));
+        }
+        if final_occupied_capacity > final_total_cells_capacity {
+            return Err(ApiError::internal(format!(
+                "script occupied capacity exceeds total for key {}: occupied={}, total={}",
+                key, final_occupied_capacity, final_total_cells_capacity
+            )));
+        }
         let entry = final_by_key.entry(key.clone()).or_insert((0, 0));
         entry.0 += final_total_cells_capacity;
         entry.1 += final_occupied_capacity;
@@ -710,13 +774,36 @@ async fn get_most_utilized_scripts_chart(
         }
     }
 
-    let entities: Vec<ScriptEntity> = final_by_key
+    let entities_unfiltered: Vec<ScriptEntity> = final_by_key
         .iter()
-        .map(|(key, (capacity, occupied))| ScriptEntity {
-            key: key.clone(),
-            final_total_cells_capacity: (*capacity).max(0),
-            final_occupied_capacity: (*occupied).max(0).min((*capacity).max(0)),
+        .map(|(key, (capacity, occupied))| -> Result<ScriptEntity, ApiRouteError> {
+            if *capacity < 0 {
+                return Err(ApiError::internal(format!(
+                    "negative aggregated script total capacity for key {}: {}",
+                    key, capacity
+                )));
+            }
+            if *occupied < 0 {
+                return Err(ApiError::internal(format!(
+                    "negative aggregated script occupied capacity for key {}: {}",
+                    key, occupied
+                )));
+            }
+            if *occupied > *capacity {
+                return Err(ApiError::internal(format!(
+                    "aggregated script occupied capacity exceeds total for key {}: occupied={}, total={}",
+                    key, occupied, capacity
+                )));
+            }
+            Ok(ScriptEntity {
+                key: key.clone(),
+                final_total_cells_capacity: *capacity,
+                final_occupied_capacity: *occupied,
+            })
         })
+        .collect::<Result<Vec<_>, _>>()?;
+    let entities: Vec<ScriptEntity> = entities_unfiltered
+        .into_iter()
         .filter(|entity| {
             entity.final_total_cells_capacity > 0 || entity.final_occupied_capacity > 0
         })
@@ -745,7 +832,7 @@ async fn get_most_utilized_scripts_chart(
         &labels_by_key,
         &dates,
         &deltas_by_date,
-    );
+    )?;
     let capacity_share = build_most_utilized_share_chart(
         "Top Scripts Capacity Share".to_string(),
         UtilizationMetric::Capacity,
@@ -753,7 +840,7 @@ async fn get_most_utilized_scripts_chart(
         &labels_by_key,
         &dates,
         &deltas_by_date,
-    );
+    )?;
 
     let response = MostUtilizedScriptsChartResponse {
         title: "Scripts Occupied & Total CKBytes".to_string(),
@@ -799,7 +886,7 @@ async fn get_most_utilized_assets_chart(
                     delta.live_capacity_delta,
                     delta.live_occupied_capacity_delta,
                 )
-            }));
+            }))?;
         if total_cells_capacity <= 0 && occupied_capacity <= 0 {
             continue;
         }
@@ -811,10 +898,16 @@ async fn get_most_utilized_assets_chart(
             .unwrap_or_else(|| id.clone());
         let entity_key = format!("token:{id}");
         labels_by_key.insert(entity_key.clone(), format_asset_label(&name, "token"));
+        if occupied_capacity > total_cells_capacity {
+            return Err(ApiError::internal(format!(
+                "token occupied capacity exceeds total for {}: occupied={}, total={}",
+                entity_key, occupied_capacity, total_cells_capacity
+            )));
+        }
         entities.push(AssetEntity {
             key: entity_key.clone(),
             final_total_cells_capacity: total_cells_capacity,
-            final_occupied_capacity: occupied_capacity.min(total_cells_capacity),
+            final_occupied_capacity: occupied_capacity,
         });
         for (date, delta) in deltas {
             deltas_by_date.entry(date).or_default().push((
@@ -843,7 +936,7 @@ async fn get_most_utilized_assets_chart(
                     delta.live_capacity_delta,
                     delta.live_occupied_capacity_delta,
                 )
-            }));
+            }))?;
         if total_cells_capacity <= 0 && occupied_capacity <= 0 {
             continue;
         }
@@ -854,10 +947,16 @@ async fn get_most_utilized_assets_chart(
                 .unwrap_or_else(|| id.clone());
         let entity_key = format!("dob:{id}");
         labels_by_key.insert(entity_key.clone(), format_asset_label(&name, "dob"));
+        if occupied_capacity > total_cells_capacity {
+            return Err(ApiError::internal(format!(
+                "DOB occupied capacity exceeds total for {}: occupied={}, total={}",
+                entity_key, occupied_capacity, total_cells_capacity
+            )));
+        }
         entities.push(AssetEntity {
             key: entity_key.clone(),
             final_total_cells_capacity: total_cells_capacity,
-            final_occupied_capacity: occupied_capacity.min(total_cells_capacity),
+            final_occupied_capacity: occupied_capacity,
         });
         for (date, delta) in deltas {
             deltas_by_date.entry(date).or_default().push((
@@ -886,7 +985,7 @@ async fn get_most_utilized_assets_chart(
                     delta.live_capacity_delta,
                     delta.live_occupied_capacity_delta,
                 )
-            }));
+            }))?;
         if total_cells_capacity <= 0 && occupied_capacity <= 0 {
             continue;
         }
@@ -897,10 +996,16 @@ async fn get_most_utilized_assets_chart(
             .unwrap_or_else(|| id.clone());
         let entity_key = format!("nft:{id}");
         labels_by_key.insert(entity_key.clone(), format_asset_label(&name, "nft"));
+        if occupied_capacity > total_cells_capacity {
+            return Err(ApiError::internal(format!(
+                "NFT occupied capacity exceeds total for {}: occupied={}, total={}",
+                entity_key, occupied_capacity, total_cells_capacity
+            )));
+        }
         entities.push(AssetEntity {
             key: entity_key.clone(),
             final_total_cells_capacity: total_cells_capacity,
-            final_occupied_capacity: occupied_capacity.min(total_cells_capacity),
+            final_occupied_capacity: occupied_capacity,
         });
         for (date, delta) in deltas {
             deltas_by_date.entry(date).or_default().push((
@@ -934,7 +1039,7 @@ async fn get_most_utilized_assets_chart(
         &labels_by_key,
         &dates,
         &deltas_by_date,
-    );
+    )?;
     let capacity_share = build_most_utilized_share_chart(
         "Top Assets Capacity Share".to_string(),
         UtilizationMetric::Capacity,
@@ -942,7 +1047,7 @@ async fn get_most_utilized_assets_chart(
         &labels_by_key,
         &dates,
         &deltas_by_date,
-    );
+    )?;
 
     let response = MostUtilizedAssetsChartResponse {
         title: "Assets Occupied & Total CKBytes".to_string(),
@@ -1058,7 +1163,7 @@ async fn get_knowledge_size_chart(State(state): State<Arc<AppState>>) -> ApiResu
         .store
         .list_dao_daily_snapshots()
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    let circulating_by_date = build_circulating_supply_by_date_map(&snapshots);
+    let circulating_by_date = build_circulating_supply_by_date_map(&snapshots)?;
 
     let data: Vec<ChartDataPoint> = daily_stats
         .into_iter()
@@ -1155,20 +1260,32 @@ fn shannon_to_ckb_string(value: i128) -> String {
 
 fn build_circulating_supply_by_date_map(
     snapshots: &[ckbadger_store::DaoDailySnapshot],
-) -> HashMap<String, i128> {
+) -> Result<HashMap<String, i128>, ApiRouteError> {
     let mut by_date = HashMap::with_capacity(snapshots.len());
 
     for snapshot in snapshots {
         let Some(total_supply) = snapshot_total_issuance(snapshot) else {
             continue;
         };
-        let (_, _, cum_treasury) = snapshot_secondary_cumulative(snapshot);
+        let (_, _, cum_treasury) = snapshot_secondary_cumulative(snapshot)?;
+        if snapshot.total_deposited < 0 {
+            return Err(ApiError::internal(format!(
+                "negative total_deposited in dao_daily_snapshots for {}: {}",
+                snapshot.date, snapshot.total_deposited
+            )));
+        }
         let burnt = GENESIS_BURNT as i128 + cum_treasury;
-        let circulating = (total_supply - burnt - snapshot.total_deposited.max(0)).max(0);
+        let circulating = total_supply - burnt - snapshot.total_deposited;
+        if circulating < 0 {
+            return Err(ApiError::internal(format!(
+                "negative circulating supply at {}: total={}, burnt={}, dao_locked={}",
+                snapshot.date, total_supply, burnt, snapshot.total_deposited
+            )));
+        }
         by_date.insert(snapshot.date.clone(), circulating);
     }
 
-    by_date
+    Ok(by_date)
 }
 
 async fn get_common_knowledge_composition_chart(
@@ -1191,7 +1308,13 @@ async fn get_common_knowledge_composition_chart(
         let Ok(date) = date_key.parse::<u32>() else {
             continue;
         };
-        knowledge_by_date.insert(date, knowledge.max(0));
+        if knowledge < 0 {
+            return Err(ApiError::internal(format!(
+                "negative knowledge_size in daily_stats for {}: {}",
+                date_key, knowledge
+            )));
+        }
+        knowledge_by_date.insert(date, knowledge);
     }
 
     if knowledge_by_date.is_empty() {
@@ -1246,22 +1369,58 @@ async fn get_common_knowledge_composition_chart(
     let mut data = Vec::with_capacity(knowledge_by_date.len());
 
     for (date, knowledge) in knowledge_by_date {
-        cumulative_type = (cumulative_type + type_daily_delta.remove(&date).unwrap_or(0)).max(0);
-        cumulative_dao = (cumulative_dao + dao_daily_delta.remove(&date).unwrap_or(0)).max(0);
-        cumulative_udt = (cumulative_udt + udt_daily_delta.remove(&date).unwrap_or(0)).max(0);
-        cumulative_nft_spore =
-            (cumulative_nft_spore + nft_spore_daily_delta.remove(&date).unwrap_or(0)).max(0);
+        (cumulative_type, _) = apply_capacity_delta_i128(
+            cumulative_type,
+            0,
+            type_daily_delta.remove(&date).unwrap_or(0),
+            0,
+            &format!("accumulating type composition for date {}", date),
+        )?;
+        (cumulative_dao, _) = apply_capacity_delta_i128(
+            cumulative_dao,
+            0,
+            dao_daily_delta.remove(&date).unwrap_or(0),
+            0,
+            &format!("accumulating DAO composition for date {}", date),
+        )?;
+        (cumulative_udt, _) = apply_capacity_delta_i128(
+            cumulative_udt,
+            0,
+            udt_daily_delta.remove(&date).unwrap_or(0),
+            0,
+            &format!("accumulating UDT composition for date {}", date),
+        )?;
+        (cumulative_nft_spore, _) = apply_capacity_delta_i128(
+            cumulative_nft_spore,
+            0,
+            nft_spore_daily_delta.remove(&date).unwrap_or(0),
+            0,
+            &format!("accumulating NFT/spore composition for date {}", date),
+        )?;
 
-        let typed_effective = cumulative_type.min(knowledge).max(0);
+        if cumulative_dao + cumulative_udt + cumulative_nft_spore > cumulative_type {
+            return Err(ApiError::internal(format!(
+                "typed category sum exceeds total typed capacity on date {}: dao={}, udt={}, nft_spore={}, total_typed={}",
+                date, cumulative_dao, cumulative_udt, cumulative_nft_spore, cumulative_type
+            )));
+        }
+        if cumulative_type > knowledge {
+            return Err(ApiError::internal(format!(
+                "typed capacity exceeds knowledge size on date {}: typed={}, knowledge={}",
+                date, cumulative_type, knowledge
+            )));
+        }
+
+        let typed_effective = cumulative_type;
         let mut remaining_typed = typed_effective;
-        let dao = cumulative_dao.min(remaining_typed).max(0);
+        let dao = cumulative_dao.min(remaining_typed);
         remaining_typed -= dao;
-        let udt = cumulative_udt.min(remaining_typed).max(0);
+        let udt = cumulative_udt.min(remaining_typed);
         remaining_typed -= udt;
-        let nft_spore = cumulative_nft_spore.min(remaining_typed).max(0);
+        let nft_spore = cumulative_nft_spore.min(remaining_typed);
         remaining_typed -= nft_spore;
         let other_contracts = remaining_typed;
-        let transfer = (knowledge - typed_effective).max(0);
+        let transfer = knowledge - typed_effective;
 
         data.push(StackedAreaDataPoint {
             date: format_date_key(&format!("{date:08}")),
@@ -1430,8 +1589,21 @@ async fn get_cell_age_vs_occupied_capacity_chart(
         let Some(created_date) = block_number_to_date(&transitions, cell.created_at_block) else {
             continue;
         };
-        let age_days = (snapshot_date - created_date).num_days().max(0);
-        let occupied = (cell.occupied_capacity as i128).max(0);
+        let age_days_raw = (snapshot_date - created_date).num_days();
+        if age_days_raw < 0 {
+            return Err(ApiError::internal(format!(
+                "negative cell age detected: snapshot_date={}, created_date={}, created_at_block={}",
+                snapshot_date, created_date, cell.created_at_block
+            )));
+        }
+        let age_days = age_days_raw;
+        let occupied = cell.occupied_capacity as i128;
+        if occupied < 0 {
+            return Err(ApiError::internal(format!(
+                "negative occupied_capacity in live cell: created_at_block={}, occupied_capacity={}",
+                cell.created_at_block, occupied
+            )));
+        }
         match age_days {
             0 => lt_1d += occupied,
             1..=6 => d1_7d += occupied,
@@ -1519,8 +1691,20 @@ async fn get_capacity_turnover_ratio_chart(
     let mut data = Vec::with_capacity(daily_stats.len());
 
     for (date, stats) in daily_stats {
-        let live = stats.knowledge_size.unwrap_or(0).max(0);
-        let consumed = (stats.occupied_capacity_consumed as i128).max(0);
+        let live = stats.knowledge_size.unwrap_or(0);
+        if live < 0 {
+            return Err(ApiError::internal(format!(
+                "negative knowledge_size in daily_stats for {}: {}",
+                date, live
+            )));
+        }
+        let consumed = stats.occupied_capacity_consumed as i128;
+        if consumed < 0 {
+            return Err(ApiError::internal(format!(
+                "negative occupied_capacity_consumed in daily_stats for {}: {}",
+                date, consumed
+            )));
+        }
 
         rolling.push_back((consumed, live));
         rolling_consumed_sum += consumed;
@@ -1588,7 +1772,13 @@ async fn get_cell_size_distribution_chart(
         let Ok(cell) = bincode::deserialize::<ckbadger_store::LiveCellInfo>(&value) else {
             continue;
         };
-        let occupied = (cell.occupied_capacity as i128).max(0);
+        let occupied = cell.occupied_capacity as i128;
+        if occupied < 0 {
+            return Err(ApiError::internal(format!(
+                "negative occupied_capacity in live cell: created_at_block={}, occupied_capacity={}",
+                cell.created_at_block, occupied
+            )));
+        }
         let idx = occupied_capacity_bucket_index(occupied);
         bucket_counts[idx] += 1;
         bucket_occupied[idx] += occupied;
@@ -1641,8 +1831,26 @@ async fn get_address_cohort_retention_chart(
         };
 
         let cohort = first_seen_date.format("%Y-%m").to_string();
-        let occupied = balance.occupied_capacity.max(0);
-        let total_balance = balance.balance.max(0);
+        let occupied = balance.occupied_capacity;
+        let total_balance = balance.balance;
+        if occupied < 0 {
+            return Err(ApiError::internal(format!(
+                "negative address occupied_capacity: first_seen_block={}, occupied_capacity={}",
+                balance.first_seen_block, occupied
+            )));
+        }
+        if total_balance < 0 {
+            return Err(ApiError::internal(format!(
+                "negative address balance: first_seen_block={}, balance={}",
+                balance.first_seen_block, total_balance
+            )));
+        }
+        if occupied > total_balance {
+            return Err(ApiError::internal(format!(
+                "address occupied capacity exceeds balance: first_seen_block={}, occupied_capacity={}, balance={}",
+                balance.first_seen_block, occupied, total_balance
+            )));
+        }
         let entry = cohorts.entry(cohort).or_insert((0, 0));
         entry.0 += occupied;
         entry.1 += total_balance;
@@ -2440,12 +2648,30 @@ fn snapshot_total_issuance(snapshot: &ckbadger_store::DaoDailySnapshot) -> Optio
 
 fn snapshot_secondary_cumulative(
     snapshot: &ckbadger_store::DaoDailySnapshot,
-) -> (i128, i128, i128) {
-    (
-        snapshot.cum_miner_secondary.max(0),
-        snapshot.cum_dao_compensation.max(0),
-        snapshot.cum_treasury.max(0),
-    )
+) -> Result<(i128, i128, i128), ApiRouteError> {
+    if snapshot.cum_miner_secondary < 0 {
+        return Err(ApiError::internal(format!(
+            "negative cum_miner_secondary in dao_daily_snapshots for {}: {}",
+            snapshot.date, snapshot.cum_miner_secondary
+        )));
+    }
+    if snapshot.cum_dao_compensation < 0 {
+        return Err(ApiError::internal(format!(
+            "negative cum_dao_compensation in dao_daily_snapshots for {}: {}",
+            snapshot.date, snapshot.cum_dao_compensation
+        )));
+    }
+    if snapshot.cum_treasury < 0 {
+        return Err(ApiError::internal(format!(
+            "negative cum_treasury in dao_daily_snapshots for {}: {}",
+            snapshot.date, snapshot.cum_treasury
+        )));
+    }
+    Ok((
+        snapshot.cum_miner_secondary,
+        snapshot.cum_dao_compensation,
+        snapshot.cum_treasury,
+    ))
 }
 
 async fn get_total_supply_chart(
@@ -2471,13 +2697,25 @@ async fn get_total_supply_chart(
             )));
         };
         let total_supply = total_supply as f64;
-        let (_, _, cum_treasury) = snapshot_secondary_cumulative(snapshot);
+        let (_, _, cum_treasury) = snapshot_secondary_cumulative(snapshot)?;
         let burnt = (GENESIS_BURNT as i128 + cum_treasury) as f64;
 
         // Nervos DAO locked = active deposits (can be unlocked, but currently locked)
-        let nervos_dao = snapshot.total_deposited.max(0) as f64;
+        if snapshot.total_deposited < 0 {
+            return Err(ApiError::internal(format!(
+                "negative total_deposited in dao_daily_snapshots for {}: {}",
+                snapshot.date, snapshot.total_deposited
+            )));
+        }
+        let nervos_dao = snapshot.total_deposited as f64;
         // Circulating = total_supply - burnt - nervos_dao_locked
-        let circulating = (total_supply - burnt - nervos_dao).max(0.0);
+        let circulating = total_supply - burnt - nervos_dao;
+        if circulating < 0.0 {
+            return Err(ApiError::internal(format!(
+                "negative circulating supply in total-supply chart for {}: total={}, burnt={}, dao_locked={}",
+                snapshot.date, total_supply, burnt, nervos_dao
+            )));
+        }
 
         let mut values = std::collections::HashMap::new();
         values.insert(
@@ -2584,7 +2822,7 @@ async fn get_secondary_issuance_chart(
     const SHANNON: f64 = 100_000_000.0;
     let mut data = Vec::new();
     for snapshot in &snapshots {
-        let (cum_miner, cum_dao, cum_treasury) = snapshot_secondary_cumulative(snapshot);
+        let (cum_miner, cum_dao, cum_treasury) = snapshot_secondary_cumulative(snapshot)?;
         if cum_miner <= 0 && cum_dao <= 0 && cum_treasury <= 0 {
             continue;
         }
@@ -2854,16 +3092,27 @@ mod tests {
     }
 
     #[test]
-    fn test_snapshot_secondary_cumulative_clamps_negative_values() {
+    fn test_snapshot_secondary_cumulative_returns_values() {
+        let mut s = snapshot("2026-02-17", 100, 999, 0, 0);
+        s.cum_miner_secondary = 7;
+        s.cum_dao_compensation = 8;
+        s.cum_treasury = 3;
+
+        let (miner, dao, treasury) = snapshot_secondary_cumulative(&s).unwrap();
+        assert_eq!(miner, 7);
+        assert_eq!(dao, 8);
+        assert_eq!(treasury, 3);
+    }
+
+    #[test]
+    fn test_snapshot_secondary_cumulative_errors_on_negative_values() {
         let mut s = snapshot("2026-02-17", 100, 999, 0, 0);
         s.cum_miner_secondary = -1;
         s.cum_dao_compensation = 8;
         s.cum_treasury = -3;
 
-        let (miner, dao, treasury) = snapshot_secondary_cumulative(&s);
-        assert_eq!(miner, 0);
-        assert_eq!(dao, 8);
-        assert_eq!(treasury, 0);
+        let err = snapshot_secondary_cumulative(&s).unwrap_err();
+        assert!(err.1 .0.message.contains("negative cum_miner_secondary"));
     }
 
     #[test]
@@ -2888,8 +3137,22 @@ mod tests {
         let total = GENESIS_BURNT as i128 + 1_000_000;
         let mut s = snapshot("2026-02-17", 100, total, 0, 0);
         s.cum_treasury = 30;
-        let map = build_circulating_supply_by_date_map(&[s]);
+        let map = build_circulating_supply_by_date_map(&[s]).unwrap();
         assert_eq!(map.get("2026-02-17"), Some(&(1_000_000 - 30 - 100)));
+    }
+
+    #[test]
+    fn test_build_circulating_supply_by_date_map_errors_on_negative_dao_locked() {
+        let total = GENESIS_BURNT as i128 + 1_000_000;
+        let s = snapshot("2026-02-17", -1, total, 0, 0);
+        let err = build_circulating_supply_by_date_map(&[s]).unwrap_err();
+        assert!(err.1 .0.message.contains("negative total_deposited"));
+    }
+
+    #[test]
+    fn test_accumulate_capacity_deltas_errors_on_underflow() {
+        let err = accumulate_capacity_deltas([(100, 50), (-200, 0)]).unwrap_err();
+        assert!(err.1 .0.message.contains("underflow"));
     }
 
     #[test]

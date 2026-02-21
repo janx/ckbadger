@@ -1269,7 +1269,11 @@ async fn get_address_transactions(
 
     let txs: Vec<AddressTransactionResponse> = addr_txs
         .into_iter()
-        .map(|(block_number, tx_idx, tx_hash)| {
+        .map(
+            |(block_number, tx_idx, tx_hash)| -> Result<
+                AddressTransactionResponse,
+                (axum::http::StatusCode, axum::Json<ApiError>),
+            > {
             let timestamp = state
                 .store
                 .get_block_header(block_number)
@@ -1392,7 +1396,25 @@ async fn get_address_transactions(
             let stored_fee = tx_entry.as_ref().map(|e| e.fee as i128).unwrap_or(0);
             // For DAO withdrawals, stored fee = actual_fee - compensation (negative).
             // Correct by adding back the DAO compensation.
-            let fee = (stored_fee + dao_compensation).max(0) as i64;
+            let fee_total = stored_fee + dao_compensation;
+            if fee_total < 0 {
+                return Err(ApiError::internal(format!(
+                    "negative corrected transaction fee for tx 0x{} at block {}: stored_fee={}, dao_compensation={}, corrected={}",
+                    hex::encode(&tx_hash),
+                    block_number,
+                    stored_fee,
+                    dao_compensation,
+                    fee_total
+                )));
+            }
+            let fee = i64::try_from(fee_total).map_err(|_| {
+                ApiError::internal(format!(
+                    "corrected transaction fee exceeds i64 for tx 0x{} at block {}: {}",
+                    hex::encode(&tx_hash),
+                    block_number,
+                    fee_total
+                ))
+            })?;
             let tx_size = tx_entry.as_ref().map(|e| e.tx_size);
             let cycles = tx_entry.as_ref().and_then(|e| e.cycles);
 
@@ -1418,7 +1440,7 @@ async fn get_address_transactions(
             script_labels.sort();
             script_labels.dedup();
 
-            AddressTransactionResponse {
+            Ok(AddressTransactionResponse {
                 tx_hash: format!("0x{}", hex::encode(&tx_hash)),
                 block_number,
                 tx_type: tx_type.to_string(),
@@ -1431,9 +1453,9 @@ async fn get_address_transactions(
                 tx_size,
                 cycles,
                 script_labels,
-            }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
 
     ok(CursorPaginatedResponse::without_total(
         txs,

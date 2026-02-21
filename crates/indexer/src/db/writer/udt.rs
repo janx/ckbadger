@@ -279,21 +279,29 @@ impl BatchWriter {
             batch.put_token_transfers_count(type_hash, new_total);
 
             // Hourly bucket: determine hour from block timestamp
-            if let Some(&ts_ms) = block_timestamps.get(&update.block_number) {
-                let hour_bucket = ts_ms / 3_600_000;
-                let current_hourly = {
-                    let key = ckbadger_store::keys::encode_token_hourly_key(type_hash, hour_bucket);
-                    match self.store.get_cf(self.store.cf_stats(), &key)? {
-                        Some(v) if v.len() == 8 => i64::from_le_bytes(v[..8].try_into().unwrap()),
-                        _ => 0,
-                    }
-                };
-                batch.put_token_hourly_transfer(
-                    type_hash,
-                    hour_bucket,
-                    current_hourly + update.transfers_count,
-                );
-            }
+            let ts_ms = block_timestamps
+                .get(&update.block_number)
+                .copied()
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "missing block timestamp for UDT transfer aggregation: type_hash=0x{}, block_number={}",
+                        hex::encode(type_hash),
+                        update.block_number
+                    )
+                })?;
+            let hour_bucket = ts_ms / 3_600_000;
+            let current_hourly = {
+                let key = ckbadger_store::keys::encode_token_hourly_key(type_hash, hour_bucket);
+                match self.store.get_cf(self.store.cf_stats(), &key)? {
+                    Some(v) if v.len() == 8 => i64::from_le_bytes(v[..8].try_into().unwrap()),
+                    _ => 0,
+                }
+            };
+            batch.put_token_hourly_transfer(
+                type_hash,
+                hour_bucket,
+                current_hourly + update.transfers_count,
+            );
         }
 
         // Step 2.5: Apply observed max_supply to tokens not touched by transfers in this batch.
@@ -397,7 +405,17 @@ impl BatchWriter {
             let idx = transfer_idx
                 .entry((transfer.type_script_hash.clone(), *block_number))
                 .or_insert(0);
-            let timestamp = block_timestamps.get(block_number).copied().unwrap_or(0);
+            let timestamp = block_timestamps
+                .get(block_number)
+                .copied()
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "missing block timestamp for token transfer record: type_hash=0x{}, tx_hash=0x{}, block_number={}",
+                        hex::encode(&transfer.type_script_hash),
+                        hex::encode(tx_hash),
+                        block_number
+                    )
+                })?;
             let record = TokenTransferRecord {
                 tx_hash: tx_hash.to_vec(),
                 block_number: *block_number,
@@ -820,5 +838,42 @@ mod tests {
             )
             .unwrap_err();
         assert!(err.to_string().contains("holders count underflow"));
+    }
+
+    #[test]
+    fn test_process_udt_transfers_batch_errors_on_missing_block_timestamp() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+
+        let type_hash = vec![0xAE; 32];
+        let transfer = ParsedUdtTransfer {
+            type_script_hash: type_hash.clone(),
+            type_code_hash: vec![0xCD; 32],
+            type_hash_type: 1,
+            type_args: vec![0x11; 20],
+            from_lock_hash: None,
+            to_lock_hash: vec![0x66; 32],
+            amount: 10u128,
+            standard: crate::parser::UdtStandard::Sudt,
+            is_mint: true,
+            is_burn: false,
+        };
+
+        let tx_hash = [0xE3; 32];
+        let transfers = vec![(&transfer, tx_hash.as_slice(), 202i64)];
+        let block_timestamps = HashMap::new();
+        let max_supply_observations = HashMap::new();
+
+        let mut batch = StoreBatch::new(&store);
+        let err = writer
+            .process_udt_transfers_batch(
+                &transfers,
+                &max_supply_observations,
+                &block_timestamps,
+                &mut batch,
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("missing block timestamp"));
     }
 }

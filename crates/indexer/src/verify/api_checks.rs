@@ -198,7 +198,7 @@ impl Check for SyncComplete {
     fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
         let stats = fetch_network_stats(ctx)?;
         let ss = &stats.sync_status;
-        let lag = (ss.tip_block - ss.synced_block).max(0);
+        let lag = ss.tip_block - ss.synced_block;
         let findings = sync_complete_findings(ss);
 
         if findings.is_empty() {
@@ -222,7 +222,16 @@ impl Check for SyncComplete {
 
 fn sync_complete_findings(ss: &SyncStatus) -> Vec<Finding> {
     let mut findings = vec![];
-    let lag = (ss.tip_block - ss.synced_block).max(0);
+    let lag = ss.tip_block - ss.synced_block;
+    if lag < 0 {
+        findings.push(Finding {
+            entity: "sync_status".to_string(),
+            details: vec![format!(
+                "synced block ahead of tip (synced={}, tip={}, lag={})",
+                ss.synced_block, ss.tip_block, lag
+            )],
+        });
+    }
 
     if ss.is_syncing {
         findings.push(Finding {
