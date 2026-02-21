@@ -19,14 +19,17 @@ CONFIRM ?= 0
 SERVICE ?=
 SERVICES ?= $(strip $(SERVICE))
 REBUILD_SERVICES_ALLOWED := redis ckb-node indexer api frontend
+REBUILD_ALL_SERVICES_EXTERNAL := redis indexer api frontend
+REBUILD_ALL_SERVICES_INTERNAL := redis ckb-node indexer api frontend
 
-.PHONY: help up down reset verify rebuild tui
+.PHONY: help up down reset verify rebuild rebuild-all tui
 
 help:
 	@echo "Available targets:"
 	@echo "  make up                                Start local dependencies"
 	@echo "  make down                              Stop local dependencies"
 	@echo "  make rebuild SERVICES=\"api frontend\"   Rebuild + restart one/more services"
+	@echo "  make rebuild-all                       Rebuild all services for current node mode"
 	@echo "  make tui                               Run monitoring TUI"
 	@echo "  make reset CONFIRM=1                   Delete local RocksDB + redis volumes/data"
 	@echo "  make verify                            Run verify --depth fast"
@@ -83,6 +86,13 @@ rebuild:
 		$(COMPOSE) up -d --build --no-deps --force-recreate $$normal_services; \
 	fi; \
 	echo "Rebuilt and restarted services: $(SERVICES)"
+
+rebuild-all:
+ifeq ($(CKB_NODE_MODE),internal)
+	$(MAKE) rebuild SERVICES="$(REBUILD_ALL_SERVICES_INTERNAL)"
+else
+	$(MAKE) rebuild SERVICES="$(REBUILD_ALL_SERVICES_EXTERNAL)"
+endif
 
 tui:
 	cargo run -p ckbadger-tui $(if $(strip $(TUI_ARGS)),-- $(TUI_ARGS),)
