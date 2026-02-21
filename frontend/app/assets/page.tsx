@@ -41,14 +41,15 @@ function normalizeAssetTab(value: string | null): AssetTab {
 
 function AssetTable({ assetType, search }: { assetType: AssetTab; search: string | undefined }) {
   const pagination = useCursorPagination();
+  const { reset } = pagination;
   const [sortKey, setSortKey] = useState<AssetSortKey>('capacity');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
 
   useEffect(() => {
     setSortKey('capacity');
     setSortDirection('desc');
-    pagination.reset();
-  }, [assetType]);
+    reset();
+  }, [assetType, reset]);
 
   const { data, isLoading } = useQuery({
     queryKey: ['assets', assetType, pagination.cursor, search, sortKey, sortDirection],
