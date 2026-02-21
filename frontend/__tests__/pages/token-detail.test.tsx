@@ -44,6 +44,8 @@ const mockToken = {
   email: null,
   operatorWebsite: null,
   totalSupply: '1000000000000',
+  maximumSupply: null,
+  maximumSupplyStatus: 'unknown' as const,
   holdersCount: 42,
   transfersCount: 1000,
   transfers24h: 10,
@@ -140,6 +142,32 @@ describe('TokenDetailPage', () => {
       expect(screen.getByText('TEST')).toBeInTheDocument();
       expect(screen.getByText('XUDT')).toBeInTheDocument();
       expect(screen.getByText('A test token')).toBeInTheDocument();
+    });
+  });
+
+  it('renders circulation label and unknown max supply for xUDT without cap observation', async () => {
+    vi.mocked(api.getToken).mockResolvedValue(mockToken);
+
+    render(<TokenDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Total Circulation')).toBeInTheDocument();
+      expect(screen.getByText('Maximum Supply')).toBeInTheDocument();
+      expect(screen.getByText('Unknown')).toBeInTheDocument();
+    });
+  });
+
+  it('renders unlimited max supply when status is unlimited', async () => {
+    vi.mocked(api.getToken).mockResolvedValue({
+      ...mockToken,
+      standard: 'sudt',
+      maximumSupplyStatus: 'unlimited',
+    });
+
+    render(<TokenDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Unlimited')).toBeInTheDocument();
     });
   });
 

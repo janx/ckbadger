@@ -187,7 +187,7 @@ export default function TokenDetailPage() {
                 <StatBlock label="Transfers" value={token.transfersCount} color="amber" />
                 <StatBlock label="Decimals" value={token.decimals} color="white" />
                 <StatBlock
-                  label="Total Supply"
+                  label="Total Circulation"
                   value={(() => {
                     const { integer, decimal } = formatTokenAmount(
                       token.totalSupply,
@@ -196,6 +196,21 @@ export default function TokenDetailPage() {
                     return decimal ? `${integer}.${decimal}` : integer;
                   })()}
                   color="green"
+                />
+                <StatBlock
+                  label="Maximum Supply"
+                  value={(() => {
+                    if (token.maximumSupplyStatus === 'unlimited') return 'Unlimited';
+                    if (token.maximumSupplyStatus !== 'limited' || !token.maximumSupply) {
+                      return 'Unknown';
+                    }
+                    const { integer, decimal } = formatTokenAmount(
+                      token.maximumSupply,
+                      token.decimals
+                    );
+                    return decimal ? `${integer}.${decimal}` : integer;
+                  })()}
+                  color="white"
                 />
                 {token.cellsCount != null && (
                   <StatBlock label="Cells" value={token.cellsCount} color="white" />

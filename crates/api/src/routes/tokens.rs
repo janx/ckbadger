@@ -80,6 +80,8 @@ pub struct TokenResponse {
     pub email: Option<String>,
     pub operator_website: Option<String>,
     pub total_supply: String,
+    pub maximum_supply: Option<String>,
+    pub maximum_supply_status: String,
     pub holders_count: i32,
     pub transfers_count: i64,
     pub transfers_24h: i64,
@@ -119,6 +121,7 @@ fn token_info_to_response(
     transfers_24h: i64,
     cell_stats: Option<ckbadger_store::TokenCellStats>,
 ) -> TokenResponse {
+    let maximum_supply = info.max_supply.map(|s| s.to_string());
     TokenResponse {
         type_script_hash: format!("0x{}", hex::encode(type_hash)),
         type_code_hash: format!("0x{}", hex::encode(&info.type_code_hash)),
@@ -141,6 +144,13 @@ fn token_info_to_response(
             .total_supply
             .map(|s| s.to_string())
             .unwrap_or_else(|| "0".to_string()),
+        maximum_supply_status: max_supply_status(
+            &info.standard,
+            maximum_supply.as_deref(),
+            Some(&info.type_args),
+        )
+        .to_string(),
+        maximum_supply,
         holders_count: info.holders_count as i32,
         transfers_count,
         transfers_24h,
@@ -149,6 +159,44 @@ fn token_info_to_response(
         total_occupied_capacity: cell_stats
             .as_ref()
             .map(|s| s.total_occupied_capacity.to_string()),
+    }
+}
+
+const XUDT_EXTENSION_FLAGS_MASK: u32 = 0x1FFF_FFFF;
+
+fn is_xudt_standard(standard: &str) -> bool {
+    standard.eq_ignore_ascii_case("xudt") || standard.eq_ignore_ascii_case("xudt_compatible")
+}
+
+fn is_plain_xudt_without_extension(type_args: Option<&[u8]>) -> bool {
+    let Some(type_args) = type_args else {
+        return false;
+    };
+    match type_args.len() {
+        // Compatibility mode: owner lock hash only (implicit zero flags).
+        32 => true,
+        // Explicit flags in args: <owner lock script hash(32)> <flags(4)>
+        36 => {
+            let flags = u32::from_le_bytes(type_args[32..36].try_into().unwrap_or_default());
+            (flags & XUDT_EXTENSION_FLAGS_MASK) == 0
+        }
+        _ => false,
+    }
+}
+
+fn max_supply_status(
+    standard: &str,
+    maximum_supply: Option<&str>,
+    type_args: Option<&[u8]>,
+) -> &'static str {
+    if maximum_supply.is_some() {
+        "limited"
+    } else if standard.eq_ignore_ascii_case("sudt")
+        || (is_xudt_standard(standard) && is_plain_xudt_without_extension(type_args))
+    {
+        "unlimited"
+    } else {
+        "unknown"
     }
 }
 
@@ -243,31 +291,44 @@ fn serve_tokens_from_cache(
     // Build TokenResponse directly from cache — zero DB reads
     let tokens: Vec<TokenResponse> = page
         .into_iter()
-        .map(|entry| TokenResponse {
-            type_script_hash: entry.id.clone(),
-            type_code_hash: entry.type_code_hash.clone().unwrap_or_default(),
-            type_hash_type: entry.type_hash_type.clone().unwrap_or_default(),
-            type_args: entry.type_args.clone().unwrap_or_default(),
-            standard: entry.standard.clone(),
-            name: entry.name.clone(),
-            symbol: entry.symbol.clone(),
-            decimals: entry.decimals.unwrap_or(0),
-            description: entry.description.clone(),
-            icon_url: entry.icon_url.clone(),
-            published: false,
-            famous: false,
-            tags: None,
-            udt_type: None,
-            manager: None,
-            email: None,
-            operator_website: None,
-            total_supply: entry.total_supply.clone().unwrap_or_default(),
-            holders_count: entry.holders_count as i32,
-            transfers_count: entry.transfers_count,
-            transfers_24h: entry.transfers_24h,
-            cells_count: None,
-            total_capacity: None,
-            total_occupied_capacity: None,
+        .map(|entry| {
+            let decoded_type_args = entry
+                .type_args
+                .as_deref()
+                .and_then(|hex| hex::decode(hex.strip_prefix("0x").unwrap_or(hex)).ok());
+            TokenResponse {
+                type_script_hash: entry.id.clone(),
+                type_code_hash: entry.type_code_hash.clone().unwrap_or_default(),
+                type_hash_type: entry.type_hash_type.clone().unwrap_or_default(),
+                type_args: entry.type_args.clone().unwrap_or_default(),
+                standard: entry.standard.clone(),
+                name: entry.name.clone(),
+                symbol: entry.symbol.clone(),
+                decimals: entry.decimals.unwrap_or(0),
+                description: entry.description.clone(),
+                icon_url: entry.icon_url.clone(),
+                published: false,
+                famous: false,
+                tags: None,
+                udt_type: None,
+                manager: None,
+                email: None,
+                operator_website: None,
+                total_supply: entry.total_supply.clone().unwrap_or_default(),
+                maximum_supply: entry.maximum_supply.clone(),
+                maximum_supply_status: max_supply_status(
+                    &entry.standard,
+                    entry.maximum_supply.as_deref(),
+                    decoded_type_args.as_deref(),
+                )
+                .to_string(),
+                holders_count: entry.holders_count as i32,
+                transfers_count: entry.transfers_count,
+                transfers_24h: entry.transfers_24h,
+                cells_count: None,
+                total_capacity: None,
+                total_occupied_capacity: None,
+            }
         })
         .collect();
 
@@ -671,5 +732,188 @@ fn hash_type_to_string(hash_type: i16) -> String {
         2 => "data1".to_string(),
         4 => "data2".to_string(),
         _ => format!("unknown({})", hash_type),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_plain_xudt_without_extension, max_supply_status};
+    use crate::warmup::CachedAssetEntry;
+
+    #[test]
+    fn test_is_plain_xudt_without_extension_for_compatible_and_zero_flags() {
+        let compatible = vec![0x11; 32];
+        assert!(is_plain_xudt_without_extension(Some(&compatible)));
+
+        let mut explicit_zero_flags = vec![0x22; 32];
+        explicit_zero_flags.extend_from_slice(&0u32.to_le_bytes());
+        assert!(is_plain_xudt_without_extension(Some(&explicit_zero_flags)));
+    }
+
+    #[test]
+    fn test_is_plain_xudt_without_extension_rejects_extended_or_invalid_args() {
+        let mut with_extension = vec![0x33; 32];
+        with_extension.extend_from_slice(&1u32.to_le_bytes());
+        assert!(!is_plain_xudt_without_extension(Some(&with_extension)));
+
+        let invalid_len = vec![0x44; 20];
+        assert!(!is_plain_xudt_without_extension(Some(&invalid_len)));
+        assert!(!is_plain_xudt_without_extension(None));
+    }
+
+    #[test]
+    fn test_max_supply_status_priority_and_fallbacks() {
+        let mut plain_xudt = vec![0x55; 32];
+        plain_xudt.extend_from_slice(&0u32.to_le_bytes());
+        let mut ext_xudt = vec![0x66; 32];
+        ext_xudt.extend_from_slice(&1u32.to_le_bytes());
+
+        assert_eq!(
+            max_supply_status("xudt", Some("123"), Some(&ext_xudt)),
+            "limited"
+        );
+        assert_eq!(max_supply_status("sudt", None, None), "unlimited");
+        assert_eq!(
+            max_supply_status("xudt_compatible", None, Some(&plain_xudt)),
+            "unlimited"
+        );
+        assert_eq!(max_supply_status("xudt", None, Some(&ext_xudt)), "unknown");
+    }
+
+    #[test]
+    fn test_serve_tokens_from_cache_keeps_maximum_supply_and_status() {
+        let mut xudt_plain_args = vec![0x11; 32];
+        xudt_plain_args.extend_from_slice(&0u32.to_le_bytes());
+        let mut xudt_ext_args = vec![0x22; 32];
+        xudt_ext_args.extend_from_slice(&1u32.to_le_bytes());
+
+        let cached = vec![
+            CachedAssetEntry {
+                id: "0x01".to_string(),
+                asset_type: "token".to_string(),
+                standard: "xudt".to_string(),
+                name: Some("Limited".to_string()),
+                symbol: Some("CAP".to_string()),
+                icon_url: None,
+                holders_count: 4,
+                transfers_count: 10,
+                transfers_24h: 1,
+                decimals: Some(8),
+                total_supply: Some("500".to_string()),
+                maximum_supply: Some("1000".to_string()),
+                content_type: None,
+                content_size: None,
+                cluster_id: None,
+                cluster_name: None,
+                live_capacity: Some("1".to_string()),
+                live_occupied_capacity: Some("1".to_string()),
+                type_code_hash: Some("0xaaa".to_string()),
+                type_hash_type: Some("type".to_string()),
+                type_args: Some(format!("0x{}", hex::encode(&xudt_plain_args))),
+                description: None,
+            },
+            CachedAssetEntry {
+                id: "0x02".to_string(),
+                asset_type: "token".to_string(),
+                standard: "xudt".to_string(),
+                name: Some("Plain".to_string()),
+                symbol: Some("PX".to_string()),
+                icon_url: None,
+                holders_count: 3,
+                transfers_count: 10,
+                transfers_24h: 1,
+                decimals: Some(8),
+                total_supply: Some("500".to_string()),
+                maximum_supply: None,
+                content_type: None,
+                content_size: None,
+                cluster_id: None,
+                cluster_name: None,
+                live_capacity: Some("1".to_string()),
+                live_occupied_capacity: Some("1".to_string()),
+                type_code_hash: Some("0xbbb".to_string()),
+                type_hash_type: Some("type".to_string()),
+                type_args: Some(format!("0x{}", hex::encode(&xudt_plain_args))),
+                description: None,
+            },
+            CachedAssetEntry {
+                id: "0x03".to_string(),
+                asset_type: "token".to_string(),
+                standard: "xudt".to_string(),
+                name: Some("Extended".to_string()),
+                symbol: Some("EX".to_string()),
+                icon_url: None,
+                holders_count: 2,
+                transfers_count: 10,
+                transfers_24h: 1,
+                decimals: Some(8),
+                total_supply: Some("500".to_string()),
+                maximum_supply: None,
+                content_type: None,
+                content_size: None,
+                cluster_id: None,
+                cluster_name: None,
+                live_capacity: Some("1".to_string()),
+                live_occupied_capacity: Some("1".to_string()),
+                type_code_hash: Some("0xccc".to_string()),
+                type_hash_type: Some("type".to_string()),
+                type_args: Some(format!("0x{}", hex::encode(&xudt_ext_args))),
+                description: None,
+            },
+            CachedAssetEntry {
+                id: "0x04".to_string(),
+                asset_type: "token".to_string(),
+                standard: "sudt".to_string(),
+                name: Some("sUDT".to_string()),
+                symbol: Some("SD".to_string()),
+                icon_url: None,
+                holders_count: 1,
+                transfers_count: 10,
+                transfers_24h: 1,
+                decimals: Some(8),
+                total_supply: Some("500".to_string()),
+                maximum_supply: None,
+                content_type: None,
+                content_size: None,
+                cluster_id: None,
+                cluster_name: None,
+                live_capacity: Some("1".to_string()),
+                live_occupied_capacity: Some("1".to_string()),
+                type_code_hash: Some("0xddd".to_string()),
+                type_hash_type: Some("type".to_string()),
+                type_args: Some("0x1234".to_string()),
+                description: None,
+            },
+        ];
+
+        let params = super::ListParams {
+            limit: 20,
+            standard: None,
+            cursor: None,
+            search: None,
+        };
+
+        let axum::Json(resp) = super::serve_tokens_from_cache(cached, &params, 20).unwrap();
+        let by_symbol: std::collections::HashMap<_, _> = resp
+            .data
+            .iter()
+            .filter_map(|row| row.symbol.as_ref().map(|sym| (sym.as_str(), row)))
+            .collect();
+
+        let cap = by_symbol.get("CAP").unwrap();
+        assert_eq!(cap.maximum_supply.as_deref(), Some("1000"));
+        assert_eq!(cap.maximum_supply_status, "limited");
+
+        let px = by_symbol.get("PX").unwrap();
+        assert!(px.maximum_supply.is_none());
+        assert_eq!(px.maximum_supply_status, "unlimited");
+
+        let ex = by_symbol.get("EX").unwrap();
+        assert!(ex.maximum_supply.is_none());
+        assert_eq!(ex.maximum_supply_status, "unknown");
+
+        let sd = by_symbol.get("SD").unwrap();
+        assert!(sd.maximum_supply.is_none());
+        assert_eq!(sd.maximum_supply_status, "unlimited");
     }
 }

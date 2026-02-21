@@ -218,7 +218,8 @@ fn upsert_token_label(store: &CkbadgerStore, label: &UdtLabelInfo) -> Result<boo
                 name: None,
                 symbol: None,
                 decimals: None,
-                total_supply: None,
+                total_supply: Some(0),
+                max_supply: None,
                 holders_count: 0,
                 first_seen_block: 0,
                 icon_url: None,
@@ -471,5 +472,65 @@ mod tests {
         assert_eq!(result.udt_labels_imported, 0);
         assert_eq!(result.script_labels_imported, 0);
         assert!(result.errors.is_empty());
+    }
+
+    #[test]
+    fn test_upsert_token_label_preserves_existing_max_supply() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap();
+
+        let type_hash =
+            hex::decode("1111111111111111111111111111111111111111111111111111111111111111")
+                .unwrap();
+        store
+            .put_token_direct(
+                &type_hash,
+                &ckbadger_store::types::TokenInfo {
+                    type_code_hash: vec![0x01; 32],
+                    hash_type: 1,
+                    type_args: vec![0x02; 20],
+                    standard: "sudt".to_string(),
+                    name: None,
+                    symbol: None,
+                    decimals: None,
+                    total_supply: Some(0),
+                    max_supply: Some(1_000_000),
+                    holders_count: 0,
+                    first_seen_block: 0,
+                    icon_url: None,
+                    description: None,
+                    transfers_count: 0,
+                },
+            )
+            .unwrap();
+
+        let label = UdtLabelInfo {
+            name: Some("Cap Token".to_string()),
+            symbol: "CAP".to_string(),
+            icon: None,
+            decimal: 8,
+            tags: None,
+            manager: None,
+            type_script: UdtTypeScript {
+                code_hash: "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+                    .to_string(),
+                hash_type: "type".to_string(),
+                args: "0x01".to_string(),
+            },
+            type_hash: "0x1111111111111111111111111111111111111111111111111111111111111111"
+                .to_string(),
+            description: None,
+            udt_type: "sudt".to_string(),
+            published: true,
+            email: None,
+            famous: false,
+            operator_website: None,
+        };
+
+        upsert_token_label(&store, &label).unwrap();
+        let token = store.get_token(&type_hash).unwrap().unwrap();
+
+        assert_eq!(token.max_supply, Some(1_000_000));
+        assert_eq!(token.total_supply, Some(0));
     }
 }

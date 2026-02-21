@@ -1,5 +1,6 @@
 use anyhow::Result;
 use std::collections::HashMap;
+use tracing::warn;
 
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{TokenDailyDelta, TokenInfo, TokenTransferRecord};
@@ -179,10 +180,22 @@ impl BatchWriter {
     pub fn process_udt_transfers_batch(
         &self,
         transfers: &[(&ParsedUdtTransfer, &[u8], i64)],
+        max_supply_observations: &HashMap<Vec<u8>, i128>,
         block_timestamps: &HashMap<i64, i64>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
         if transfers.is_empty() {
+            // Even if this batch has no transfer deltas, a transaction can still expose
+            // supply-info cells that reveal token hard caps.
+            for type_hash in max_supply_observations.keys() {
+                if let Some(mut info) = self.store.get_token(type_hash)? {
+                    let before = info.max_supply;
+                    Self::apply_observed_max_supply(type_hash, &mut info, max_supply_observations);
+                    if info.max_supply != before {
+                        batch.put_token(type_hash, &info);
+                    }
+                }
+            }
             return Ok(());
         }
 
@@ -221,9 +234,8 @@ impl BatchWriter {
 
             let mut updated = match existing {
                 Some(mut info) => {
-                    if let Some(ref mut supply) = info.total_supply {
-                        *supply = (*supply + update.supply_delta).max(0);
-                    }
+                    let supply = info.total_supply.get_or_insert(0);
+                    *supply = (*supply + update.supply_delta).max(0);
                     info
                 }
                 None => TokenInfo {
@@ -239,6 +251,7 @@ impl BatchWriter {
                     } else {
                         Some(0)
                     },
+                    max_supply: None,
                     holders_count: 0,
                     first_seen_block: update.block_number,
                     icon_url: None,
@@ -246,6 +259,7 @@ impl BatchWriter {
                     transfers_count: 0,
                 },
             };
+            Self::apply_observed_max_supply(type_hash, &mut updated, max_supply_observations);
 
             // Embed transfers_count into TokenInfo
             updated.transfers_count = new_total;
@@ -270,6 +284,21 @@ impl BatchWriter {
                     hour_bucket,
                     current_hourly + update.transfers_count,
                 );
+            }
+        }
+
+        // Step 2.5: Apply observed max_supply to tokens not touched by transfers in this batch.
+        for type_hash in max_supply_observations.keys() {
+            if inflight_tokens.contains_key(type_hash) {
+                continue;
+            }
+
+            if let Some(mut info) = self.store.get_token(type_hash)? {
+                let before = info.max_supply;
+                Self::apply_observed_max_supply(type_hash, &mut info, max_supply_observations);
+                if info.max_supply != before {
+                    batch.put_token(type_hash, &info);
+                }
             }
         }
 
@@ -358,6 +387,29 @@ impl BatchWriter {
 
         Ok(())
     }
+
+    fn apply_observed_max_supply(
+        type_hash: &[u8],
+        info: &mut TokenInfo,
+        observations: &HashMap<Vec<u8>, i128>,
+    ) {
+        let Some(&observed) = observations.get(type_hash) else {
+            return;
+        };
+        match info.max_supply {
+            Some(existing) if existing != observed => {
+                warn!(
+                    token_type_hash = %hex::encode(type_hash),
+                    existing_max_supply = existing,
+                    observed_max_supply = observed,
+                    "conflicting on-chain max supply observation; keeping existing value"
+                );
+            }
+            _ => {
+                info.max_supply = Some(observed);
+            }
+        }
+    }
 }
 
 struct TokenUpdate<'a> {
@@ -439,6 +491,7 @@ mod tests {
             symbol: None,
             decimals: None,
             total_supply: Some(0),
+            max_supply: None,
             holders_count: 0,
             first_seen_block: 0,
             icon_url: None,
@@ -512,5 +565,113 @@ mod tests {
             result.is_empty(),
             "typed cell without token metadata should not be classified as UDT"
         );
+    }
+
+    #[test]
+    fn test_process_udt_transfers_batch_initializes_missing_total_supply() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+
+        let type_hash = vec![0xAA; 32];
+        let token = TokenInfo {
+            type_code_hash: vec![0xCD; 32],
+            hash_type: 1,
+            type_args: vec![0x11; 20],
+            standard: "sudt".to_string(),
+            name: None,
+            symbol: None,
+            decimals: Some(8),
+            total_supply: None,
+            max_supply: None,
+            holders_count: 0,
+            first_seen_block: 0,
+            icon_url: None,
+            description: None,
+            transfers_count: 0,
+        };
+        store.put_token_direct(&type_hash, &token).unwrap();
+
+        let transfer = ParsedUdtTransfer {
+            type_script_hash: type_hash.clone(),
+            type_code_hash: vec![0xCD; 32],
+            type_hash_type: 1,
+            type_args: vec![0x11; 20],
+            from_lock_hash: None,
+            to_lock_hash: vec![0x22; 32],
+            amount: 123u128,
+            standard: crate::parser::UdtStandard::Sudt,
+            is_mint: true,
+            is_burn: false,
+        };
+
+        let tx_hash = [0xEF; 32];
+        let mut block_timestamps = HashMap::new();
+        block_timestamps.insert(100i64, 1_700_000_000_000i64);
+        let transfers = vec![(&transfer, tx_hash.as_slice(), 100i64)];
+        let mut max_supply_observations = HashMap::new();
+        max_supply_observations.insert(type_hash.clone(), 1_000i128);
+
+        let mut batch = StoreBatch::new(&store);
+        writer
+            .process_udt_transfers_batch(
+                &transfers,
+                &max_supply_observations,
+                &block_timestamps,
+                &mut batch,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+
+        let updated = store.get_token(&type_hash).unwrap().unwrap();
+        assert_eq!(updated.total_supply, Some(123));
+        assert_eq!(updated.max_supply, Some(1_000));
+    }
+
+    #[test]
+    fn test_process_udt_transfers_batch_applies_max_supply_without_transfers() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+
+        let type_hash = vec![0xAB; 32];
+        let token = TokenInfo {
+            type_code_hash: vec![0xCD; 32],
+            hash_type: 1,
+            type_args: vec![0x11; 20],
+            standard: "sudt".to_string(),
+            name: None,
+            symbol: None,
+            decimals: Some(8),
+            total_supply: Some(42),
+            max_supply: None,
+            holders_count: 3,
+            first_seen_block: 100,
+            icon_url: None,
+            description: None,
+            transfers_count: 5,
+        };
+        store.put_token_direct(&type_hash, &token).unwrap();
+
+        let transfers: Vec<(&ParsedUdtTransfer, &[u8], i64)> = Vec::new();
+        let block_timestamps = HashMap::new();
+        let mut max_supply_observations = HashMap::new();
+        max_supply_observations.insert(type_hash.clone(), 1_000_000i128);
+
+        let mut batch = StoreBatch::new(&store);
+        writer
+            .process_udt_transfers_batch(
+                &transfers,
+                &max_supply_observations,
+                &block_timestamps,
+                &mut batch,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+
+        let updated = store.get_token(&type_hash).unwrap().unwrap();
+        assert_eq!(updated.max_supply, Some(1_000_000));
+        assert_eq!(updated.total_supply, Some(42));
+        assert_eq!(updated.transfers_count, 5);
     }
 }

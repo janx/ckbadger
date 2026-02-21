@@ -284,6 +284,141 @@ async fn test_tokens_list_empty_db() {
 }
 
 #[tokio::test]
+async fn test_tokens_list_includes_maximum_supply_status() {
+    let store = test_store();
+
+    let mut xudt_plain_args = vec![0x11; 32];
+    xudt_plain_args.extend_from_slice(&0u32.to_le_bytes());
+    let mut xudt_ext_args = vec![0x22; 32];
+    xudt_ext_args.extend_from_slice(&1u32.to_le_bytes());
+
+    let fixtures = vec![
+        (
+            vec![0x01; 32],
+            TokenInfo {
+                type_code_hash: vec![0xA1; 32],
+                hash_type: 1,
+                type_args: xudt_plain_args.clone(),
+                standard: "xudt".to_string(),
+                name: Some("Limited XUDT".to_string()),
+                symbol: Some("CAP".to_string()),
+                decimals: Some(8),
+                total_supply: Some(500),
+                max_supply: Some(1000),
+                holders_count: 50,
+                first_seen_block: 0,
+                icon_url: None,
+                description: None,
+                transfers_count: 0,
+            },
+        ),
+        (
+            vec![0x02; 32],
+            TokenInfo {
+                type_code_hash: vec![0xA2; 32],
+                hash_type: 1,
+                type_args: xudt_plain_args,
+                standard: "xudt".to_string(),
+                name: Some("Plain XUDT".to_string()),
+                symbol: Some("PX".to_string()),
+                decimals: Some(8),
+                total_supply: Some(500),
+                max_supply: None,
+                holders_count: 40,
+                first_seen_block: 0,
+                icon_url: None,
+                description: None,
+                transfers_count: 0,
+            },
+        ),
+        (
+            vec![0x03; 32],
+            TokenInfo {
+                type_code_hash: vec![0xA3; 32],
+                hash_type: 1,
+                type_args: xudt_ext_args,
+                standard: "xudt".to_string(),
+                name: Some("Extended XUDT".to_string()),
+                symbol: Some("EX".to_string()),
+                decimals: Some(8),
+                total_supply: Some(500),
+                max_supply: None,
+                holders_count: 30,
+                first_seen_block: 0,
+                icon_url: None,
+                description: None,
+                transfers_count: 0,
+            },
+        ),
+        (
+            vec![0x04; 32],
+            TokenInfo {
+                type_code_hash: vec![0xA4; 32],
+                hash_type: 1,
+                type_args: vec![0x44; 20],
+                standard: "sudt".to_string(),
+                name: Some("Plain SUDT".to_string()),
+                symbol: Some("SD".to_string()),
+                decimals: Some(8),
+                total_supply: Some(500),
+                max_supply: None,
+                holders_count: 20,
+                first_seen_block: 0,
+                icon_url: None,
+                description: None,
+                transfers_count: 0,
+            },
+        ),
+    ];
+
+    for (type_hash, info) in fixtures {
+        store.put_token_direct(&type_hash, &info).unwrap();
+    }
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/tokens?limit=20")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let rows = json["data"].as_array().unwrap();
+
+    let cap = rows
+        .iter()
+        .find(|row| row["symbol"] == "CAP")
+        .expect("CAP token should exist");
+    assert_eq!(cap["maximumSupply"], "1000");
+    assert_eq!(cap["maximumSupplyStatus"], "limited");
+
+    let px = rows
+        .iter()
+        .find(|row| row["symbol"] == "PX")
+        .expect("PX token should exist");
+    assert_eq!(px["maximumSupply"], serde_json::Value::Null);
+    assert_eq!(px["maximumSupplyStatus"], "unlimited");
+
+    let ex = rows
+        .iter()
+        .find(|row| row["symbol"] == "EX")
+        .expect("EX token should exist");
+    assert_eq!(ex["maximumSupply"], serde_json::Value::Null);
+    assert_eq!(ex["maximumSupplyStatus"], "unknown");
+
+    let sd = rows
+        .iter()
+        .find(|row| row["symbol"] == "SD")
+        .expect("SD token should exist");
+    assert_eq!(sd["maximumSupply"], serde_json::Value::Null);
+    assert_eq!(sd["maximumSupplyStatus"], "unlimited");
+}
+
+#[tokio::test]
 async fn test_charts_average_block_time_empty_db() {
     let store = test_store();
     let config = test_config(store);
@@ -500,6 +635,7 @@ async fn test_most_utilized_assets_chart_ranks_mixed_asset_types() {
                 symbol: Some("A".to_string()),
                 decimals: Some(8),
                 total_supply: Some(1000),
+                max_supply: None,
                 holders_count: 10,
                 first_seen_block: 1,
                 icon_url: None,
@@ -531,6 +667,7 @@ async fn test_most_utilized_assets_chart_ranks_mixed_asset_types() {
                 symbol: Some("B".to_string()),
                 decimals: Some(8),
                 total_supply: Some(1000),
+                max_supply: None,
                 holders_count: 11,
                 first_seen_block: 1,
                 icon_url: None,
@@ -1517,6 +1654,184 @@ async fn test_script_occupation_chart_by_code_hash_with_kind_filter() {
 }
 
 #[tokio::test]
+async fn test_get_token_includes_maximum_supply() {
+    let store = test_store();
+    let type_hash = vec![0x77; 32];
+    let type_hash_hex = format!("0x{}", hex::encode(&type_hash));
+
+    store
+        .put_token_direct(
+            &type_hash,
+            &TokenInfo {
+                type_code_hash: vec![0x55; 32],
+                hash_type: 1,
+                type_args: vec![0x66; 20],
+                standard: "xudt".to_string(),
+                name: Some("Cap Token".to_string()),
+                symbol: Some("CAP".to_string()),
+                decimals: Some(8),
+                total_supply: Some(500_00000000),
+                max_supply: Some(100_000_000_000),
+                holders_count: 0,
+                first_seen_block: 0,
+                icon_url: None,
+                description: None,
+                transfers_count: 0,
+            },
+        )
+        .unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri(format!("/api/v1/tokens/{}", type_hash_hex))
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["totalSupply"], "50000000000");
+    assert_eq!(json["maximumSupply"], "100000000000");
+    assert_eq!(json["maximumSupplyStatus"], "limited");
+}
+
+#[tokio::test]
+async fn test_get_token_maximum_supply_status_without_cap() {
+    let store = test_store();
+
+    let sudt_hash = vec![0x71; 32];
+    store
+        .put_token_direct(
+            &sudt_hash,
+            &TokenInfo {
+                type_code_hash: vec![0x55; 32],
+                hash_type: 1,
+                type_args: vec![0x66; 20],
+                standard: "sudt".to_string(),
+                name: Some("Plain sUDT".to_string()),
+                symbol: Some("SUDT".to_string()),
+                decimals: Some(8),
+                total_supply: Some(123),
+                max_supply: None,
+                holders_count: 0,
+                first_seen_block: 0,
+                icon_url: None,
+                description: None,
+                transfers_count: 0,
+            },
+        )
+        .unwrap();
+
+    let xudt_hash = vec![0x72; 32];
+    let mut xudt_type_args_with_extension = vec![0xAA; 32];
+    xudt_type_args_with_extension.extend_from_slice(&1u32.to_le_bytes());
+    store
+        .put_token_direct(
+            &xudt_hash,
+            &TokenInfo {
+                type_code_hash: vec![0x55; 32],
+                hash_type: 1,
+                type_args: xudt_type_args_with_extension,
+                standard: "xudt".to_string(),
+                name: Some("Extensible Token".to_string()),
+                symbol: Some("XUDT".to_string()),
+                decimals: Some(8),
+                total_supply: Some(456),
+                max_supply: None,
+                holders_count: 0,
+                first_seen_block: 0,
+                icon_url: None,
+                description: None,
+                transfers_count: 0,
+            },
+        )
+        .unwrap();
+
+    let xudt_plain_hash = vec![0x73; 32];
+    let mut xudt_plain_type_args = vec![0xBB; 32];
+    xudt_plain_type_args.extend_from_slice(&0u32.to_le_bytes());
+    store
+        .put_token_direct(
+            &xudt_plain_hash,
+            &TokenInfo {
+                type_code_hash: vec![0x55; 32],
+                hash_type: 1,
+                type_args: xudt_plain_type_args,
+                standard: "xudt".to_string(),
+                name: Some("Plain XUDT".to_string()),
+                symbol: Some("PXUDT".to_string()),
+                decimals: Some(8),
+                total_supply: Some(789),
+                max_supply: None,
+                holders_count: 0,
+                first_seen_block: 0,
+                icon_url: None,
+                description: None,
+                transfers_count: 0,
+            },
+        )
+        .unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let sudt_request = Request::builder()
+        .uri(format!("/api/v1/tokens/0x{}", hex::encode(&sudt_hash)))
+        .body(Body::empty())
+        .unwrap();
+    let sudt_response = app.clone().oneshot(sudt_request).await.unwrap();
+    assert_eq!(sudt_response.status(), StatusCode::OK);
+    let sudt_body = sudt_response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let sudt_json: serde_json::Value = serde_json::from_slice(&sudt_body).unwrap();
+    assert_eq!(sudt_json["maximumSupply"], serde_json::Value::Null);
+    assert_eq!(sudt_json["maximumSupplyStatus"], "unlimited");
+
+    let xudt_request = Request::builder()
+        .uri(format!("/api/v1/tokens/0x{}", hex::encode(&xudt_hash)))
+        .body(Body::empty())
+        .unwrap();
+    let xudt_response = app.clone().oneshot(xudt_request).await.unwrap();
+    assert_eq!(xudt_response.status(), StatusCode::OK);
+    let xudt_body = xudt_response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let xudt_json: serde_json::Value = serde_json::from_slice(&xudt_body).unwrap();
+    assert_eq!(xudt_json["maximumSupply"], serde_json::Value::Null);
+    assert_eq!(xudt_json["maximumSupplyStatus"], "unknown");
+
+    let xudt_plain_request = Request::builder()
+        .uri(format!(
+            "/api/v1/tokens/0x{}",
+            hex::encode(&xudt_plain_hash)
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let xudt_plain_response = app.oneshot(xudt_plain_request).await.unwrap();
+    assert_eq!(xudt_plain_response.status(), StatusCode::OK);
+    let xudt_plain_body = xudt_plain_response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let xudt_plain_json: serde_json::Value = serde_json::from_slice(&xudt_plain_body).unwrap();
+    assert_eq!(xudt_plain_json["maximumSupply"], serde_json::Value::Null);
+    assert_eq!(xudt_plain_json["maximumSupplyStatus"], "unlimited");
+}
+
+#[tokio::test]
 async fn test_token_occupation_chart_returns_cumulative_series() {
     let store = test_store();
     let type_hash = vec![0x44; 32];
@@ -1534,6 +1849,7 @@ async fn test_token_occupation_chart_returns_cumulative_series() {
                 symbol: Some("TEST".to_string()),
                 decimals: Some(8),
                 total_supply: Some(0),
+                max_supply: None,
                 holders_count: 0,
                 first_seen_block: 0,
                 icon_url: None,
@@ -1625,6 +1941,7 @@ async fn test_token_occupation_chart_rejects_invalid_date_range() {
                 symbol: Some("TEST".to_string()),
                 decimals: Some(8),
                 total_supply: Some(0),
+                max_supply: None,
                 holders_count: 0,
                 first_seen_block: 0,
                 icon_url: None,
@@ -1912,6 +2229,7 @@ async fn test_assets_list_defaults_to_capacity_sort_and_supports_cursor_paginati
                 symbol: Some("ALPHA".to_string()),
                 decimals: Some(8),
                 total_supply: Some(1000),
+                max_supply: None,
                 holders_count: 10,
                 first_seen_block: 1,
                 icon_url: None,
@@ -1932,6 +2250,7 @@ async fn test_assets_list_defaults_to_capacity_sort_and_supports_cursor_paginati
                 symbol: Some("BETA".to_string()),
                 decimals: Some(8),
                 total_supply: Some(2000),
+                max_supply: None,
                 holders_count: 20,
                 first_seen_block: 1,
                 icon_url: None,

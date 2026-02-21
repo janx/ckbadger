@@ -32,6 +32,7 @@ fn make_token(
         symbol: Some(symbol.to_string()),
         decimals: Some(decimals),
         total_supply: Some(total_supply),
+        max_supply: None,
         holders_count,
         first_seen_block,
         icon_url: None,

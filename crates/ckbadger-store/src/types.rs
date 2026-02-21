@@ -270,6 +270,8 @@ pub struct TokenInfo {
     pub symbol: Option<String>,
     pub decimals: Option<i32>,
     pub total_supply: Option<i128>,
+    #[serde(default)]
+    pub max_supply: Option<i128>,
     pub holders_count: i64,
     pub first_seen_block: i64,
     pub icon_url: Option<String>,

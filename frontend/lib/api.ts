@@ -441,6 +441,8 @@ interface Token {
   email: string | null;
   operatorWebsite: string | null;
   totalSupply: string;
+  maximumSupply: string | null;
+  maximumSupplyStatus: 'limited' | 'unlimited' | 'unknown';
   holdersCount: number;
   transfersCount: number;
   transfers24h: number;
