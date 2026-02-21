@@ -77,12 +77,12 @@ describe('ScriptByCodeHashPage', () => {
     render(<ScriptByCodeHashPage />);
 
     await waitFor(() => {
-      expect(screen.getByText('Capacity Utilization')).toBeInTheDocument();
+      expect(screen.queryByText('Capacity Utilization')).not.toBeInTheDocument();
       expect(screen.getByText('Occupation History')).toBeInTheDocument();
+      expect(screen.getByText('Total Capacity')).toBeInTheDocument();
+      expect(screen.getByText(/\(\d+\.\d% occupied\)/)).toBeInTheDocument();
+      expect(screen.getByText(/^Unoccupied:/)).toBeInTheDocument();
     });
-
-    expect(screen.getByText(/^Occupied:/)).toBeInTheDocument();
-    expect(screen.getByText(/^Unoccupied:/)).toBeInTheDocument();
     expect(screen.getByText('Same Deployment References')).toBeInTheDocument();
     expect(screen.getByText('Reference Semantics')).toBeInTheDocument();
     expect(screen.getByText(/bytecode hash ref family \(data\/data1\/data2\)/)).toBeInTheDocument();

@@ -5,7 +5,7 @@ import { formatCkbAmount, formatCkbCompact } from '@/lib/utils';
 interface CapacityUtilizationProps {
   totalCapacity: string;
   occupiedCapacity: string;
-  label?: string;
+  totalLabel?: string;
   className?: string;
 }
 
@@ -20,7 +20,7 @@ function parseBigInt(value: string): bigint | null {
 export function CapacityUtilization({
   totalCapacity,
   occupiedCapacity,
-  label = 'Capacity Utilization',
+  totalLabel = 'Total Capacity',
   className,
 }: CapacityUtilizationProps) {
   const zero = BigInt(0);
@@ -39,8 +39,15 @@ export function CapacityUtilization({
   return (
     <div className={className}>
       <div className="mb-2 flex items-center justify-between">
-        <span className="font-mono text-xs uppercase tracking-wider text-slate-500">{label}</span>
-        <span className="font-mono text-xs text-slate-400">{ratio.toFixed(1)}% occupied</span>
+        <span className="font-mono text-xs uppercase tracking-wider text-slate-500">
+          {totalLabel}
+        </span>
+        <span
+          className="font-mono text-xs tabular-nums text-white"
+          title={formatCkbAmount(total.toString()).full + ' CKB'}
+        >
+          {formatCkbCompact(total.toString()).value} CKB
+        </span>
       </div>
       <div className="flex h-3 w-full overflow-hidden rounded-sm bg-slate-800">
         <div
@@ -55,6 +62,7 @@ export function CapacityUtilization({
           title={formatCkbAmount(occupied.toString()).full + ' CKB'}
         >
           Occupied: {formatCkbCompact(occupied.toString()).value} CKB
+          <span className="ml-1.5 text-slate-400">({ratio.toFixed(1)}% occupied)</span>
         </span>
         <span
           className="text-terminal-green font-mono text-xs"

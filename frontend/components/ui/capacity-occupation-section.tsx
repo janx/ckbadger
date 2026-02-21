@@ -19,6 +19,7 @@ interface CapacityOccupationSectionProps {
   isOccupationChartLoading: boolean;
   totalCapacity?: string | null;
   occupiedCapacity?: string | null;
+  totalCapacityLabel?: string;
   className?: string;
 }
 
@@ -30,6 +31,7 @@ export function CapacityOccupationSection({
   isOccupationChartLoading,
   totalCapacity,
   occupiedCapacity,
+  totalCapacityLabel = 'Total Capacity',
   className,
 }: CapacityOccupationSectionProps) {
   const hasCapacityData = Boolean(totalCapacity && occupiedCapacity);
@@ -48,6 +50,7 @@ export function CapacityOccupationSection({
             <CapacityUtilization
               totalCapacity={totalCapacity!}
               occupiedCapacity={occupiedCapacity!}
+              totalLabel={totalCapacityLabel}
             />
           </div>
         )}

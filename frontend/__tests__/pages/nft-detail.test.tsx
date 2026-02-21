@@ -102,7 +102,8 @@ describe('SporeDetailPage', () => {
     });
 
     expect(screen.getByText('Test Collection')).toBeInTheDocument();
-    expect(screen.getByText('Capacity Utilization')).toBeInTheDocument();
+    expect(screen.queryByText('Capacity Utilization')).not.toBeInTheDocument();
+    expect(screen.getByText(/^Occupied:/)).toBeInTheDocument();
     expect(screen.getByText('Capacity & Occupation')).toBeInTheDocument();
   });
 

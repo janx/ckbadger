@@ -607,7 +607,6 @@ export default function ScriptDetailPage() {
                     <CapacityUtilization
                       totalCapacity={selectedDeploymentUsage.liveCapacitySum}
                       occupiedCapacity={selectedDeploymentUsage.liveOccupiedCapacitySum}
-                      label="Capacity & Occupation"
                     />
                   </div>
                 )}

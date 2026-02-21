@@ -101,12 +101,13 @@ describe('TokenDetailPage', () => {
     });
   });
 
-  it('renders cells capacity stat', async () => {
+  it('renders cells capacity inside capacity utilization', async () => {
     vi.mocked(api.getToken).mockResolvedValue(mockToken);
 
     render(<TokenDetailPage />);
 
     await waitFor(() => {
+      expect(screen.queryByText('Capacity Snapshot')).not.toBeInTheDocument();
       expect(screen.getByText('Cells Capacity')).toBeInTheDocument();
     });
   });
@@ -117,8 +118,9 @@ describe('TokenDetailPage', () => {
     render(<TokenDetailPage />);
 
     await waitFor(() => {
-      expect(screen.getByText('Capacity Utilization')).toBeInTheDocument();
-      expect(screen.getByText(/occupied$/)).toBeInTheDocument();
+      expect(screen.queryByText('Capacity Utilization')).not.toBeInTheDocument();
+      expect(screen.getByText(/^Occupied:/)).toBeInTheDocument();
+      expect(screen.getByText(/\(\d+\.\d% occupied\)/)).toBeInTheDocument();
     });
   });
 

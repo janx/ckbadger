@@ -23,7 +23,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { CapacityOccupationSection } from '@/components/ui/capacity-occupation-section';
 import { api, TokenHolder, TokenTransfer } from '@/lib/api';
 import { getOccupationRangeParams, OccupationRangeKey } from '@/lib/occupation-range';
-import { formatTimeAgo, formatCkbCompact } from '@/lib/utils';
+import { formatTimeAgo } from '@/lib/utils';
 
 export default function TokenDetailPage() {
   const params = useParams();
@@ -215,14 +215,6 @@ export default function TokenDetailPage() {
                 {token.cellsCount != null && (
                   <StatBlock label="Cells" value={token.cellsCount} color="white" />
                 )}
-                {token.totalCapacity != null && (
-                  <StatBlock
-                    label="Cells Capacity"
-                    value={formatCkbCompact(token.totalCapacity).value}
-                    suffix=" CKB"
-                    color="green"
-                  />
-                )}
               </StatGrid>
               {token.description && (
                 <div className="mt-4 border-t border-slate-800 pt-4">
@@ -294,6 +286,7 @@ export default function TokenDetailPage() {
           isOccupationChartLoading={isOccupationChartLoading}
           totalCapacity={token.totalCapacity}
           occupiedCapacity={token.totalOccupiedCapacity}
+          totalCapacityLabel="Cells Capacity"
         />
 
         <TerminalPanel>
