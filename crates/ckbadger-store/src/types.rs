@@ -19,6 +19,8 @@ pub struct LiveCellInfo {
     pub lock_args: Vec<u8>,
     pub type_script_hash: Option<Vec<u8>>,
     pub type_code_hash: Option<Vec<u8>>,
+    #[serde(default)]
+    pub type_args: Option<Vec<u8>>,
     pub data_size: i32,
     #[serde(default)]
     pub occupied_capacity: i64,
@@ -60,6 +62,7 @@ impl CompactConsumedCellInfo {
             lock_args: self.lock_args.clone(),
             type_script_hash: None,
             type_code_hash: self.type_code_hash.clone(),
+            type_args: None,
             data_size: self.data_size,
             occupied_capacity: 0,
         }

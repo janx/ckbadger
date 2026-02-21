@@ -32,6 +32,7 @@ fn make_live_cell(
         lock_args: vec![0x22u8; 20],
         type_script_hash: type_hash_byte.map(|b| vec![b; 32]),
         type_code_hash: type_hash_byte.map(|_| vec![0x44u8; 32]),
+        type_args: type_hash_byte.map(|_| vec![]),
         data_size,
         occupied_capacity: 0,
     }

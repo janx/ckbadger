@@ -23,6 +23,8 @@ use crate::utils::{
 use crate::AppState;
 use ckbadger_store::keys;
 
+const SHANNONS_PER_CKB: i64 = 100_000_000;
+
 struct DepGroupParseResult {
     is_dep_group: bool,
     items: Option<Vec<DepGroupItem>>,
@@ -216,6 +218,7 @@ pub struct CellDetailResponse {
     pub output_index: i32,
     pub capacity: String,
     pub occupied_capacity: i64,
+    pub occupied_capacity_breakdown: OccupiedCapacityBreakdown,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub virtual_occupied_capacity: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -237,6 +240,16 @@ pub struct CellDetailResponse {
     pub code_cell_of: Option<Vec<CodeCellScript>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dao_info: Option<DaoInfo>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OccupiedCapacityBreakdown {
+    pub capacity_field_bytes: i64,
+    pub lock_script_bytes: i64,
+    pub type_script_bytes: i64,
+    pub data_bytes: i64,
+    pub total_bytes: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -382,6 +395,28 @@ fn cell_info_to_response(
             None
         },
         udt_amount: None,
+    }
+}
+
+fn estimated_occupied_capacity_breakdown(
+    info: &ckbadger_store::LiveCellInfo,
+) -> OccupiedCapacityBreakdown {
+    let capacity_field_bytes = 8;
+    let lock_script_bytes = 32 + 1 + info.lock_args.len() as i64;
+    let type_script_bytes = if info.type_code_hash.is_some() {
+        32 + 1 + info.type_args.as_ref().map_or(0, |args| args.len() as i64)
+    } else {
+        0
+    };
+    let data_bytes = info.data_size as i64;
+    let total_bytes = capacity_field_bytes + lock_script_bytes + type_script_bytes + data_bytes;
+
+    OccupiedCapacityBreakdown {
+        capacity_field_bytes,
+        lock_script_bytes,
+        type_script_bytes,
+        data_bytes,
+        total_bytes,
     }
 }
 
@@ -928,7 +963,12 @@ async fn get_cell(
         ScriptResponse {
             code_hash: format!("0x{}", hex::encode(code_hash)),
             hash_type: hash_type_str(type_hash_type_num).to_string(),
-            args: String::from("0x"), // type_args not stored in LiveCellInfo
+            args: format!(
+                "0x{}",
+                info.type_args
+                    .as_ref()
+                    .map_or_else(String::new, hex::encode)
+            ),
         }
     });
 
@@ -973,14 +1013,14 @@ async fn get_cell(
         .as_ref()
         .and_then(|dh| lookup_code_cell_scripts(&state.store, dh, info.type_script_hash.as_ref()));
 
-    // Calculate occupied capacity: 8 (capacity) + 32 (code_hash) + 1 (hash_type) + lock_args + type_script + data
-    let type_script_size: i64 = if info.type_code_hash.is_some() {
-        32 + 1 // code_hash + hash_type (no args available from LiveCellInfo)
+    let occupied_capacity_breakdown = estimated_occupied_capacity_breakdown(&info);
+    let occupied_capacity = if info.occupied_capacity > 0 {
+        info.occupied_capacity
     } else {
-        0
+        occupied_capacity_breakdown
+            .total_bytes
+            .saturating_mul(SHANNONS_PER_CKB)
     };
-    let occupied_capacity =
-        8 + 32 + 1 + info.lock_args.len() as i64 + type_script_size + info.data_size as i64;
 
     let is_satoshi = is_genesis_special_burn_cell(&info.lock_args, info.created_at_block);
     let (cell_type, virtual_occupied_capacity) = if is_satoshi {
@@ -1008,6 +1048,7 @@ async fn get_cell(
         output_index: output_idx as i32,
         capacity: info.capacity.to_string(),
         occupied_capacity,
+        occupied_capacity_breakdown,
         virtual_occupied_capacity,
         cell_type,
         lock_script_hash: format!("0x{}", hex::encode(&info.lock_script_hash)),
@@ -1553,6 +1594,7 @@ mod tests {
             lock_args: vec![2u8; 20],
             type_script_hash: None,
             type_code_hash: None,
+            type_args: None,
             data_size: 0,
             occupied_capacity: 0,
         };
@@ -1562,5 +1604,53 @@ mod tests {
         assert_eq!(resp.capacity, "10000000000");
         assert!(resp.cell_type.is_none());
         assert!(resp.virtual_occupied_capacity.is_none());
+    }
+
+    #[test]
+    fn test_estimated_occupied_capacity_breakdown_without_type_script() {
+        let info = ckbadger_store::LiveCellInfo {
+            capacity: 10000000000,
+            created_at_block: 100,
+            lock_script_hash: vec![0u8; 32],
+            lock_code_hash: vec![1u8; 32],
+            lock_hash_type: 1,
+            lock_args: vec![2u8; 20],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_args: None,
+            data_size: 16,
+            occupied_capacity: 0,
+        };
+
+        let breakdown = estimated_occupied_capacity_breakdown(&info);
+        assert_eq!(breakdown.capacity_field_bytes, 8);
+        assert_eq!(breakdown.lock_script_bytes, 53);
+        assert_eq!(breakdown.type_script_bytes, 0);
+        assert_eq!(breakdown.data_bytes, 16);
+        assert_eq!(breakdown.total_bytes, 77);
+    }
+
+    #[test]
+    fn test_estimated_occupied_capacity_breakdown_with_type_script() {
+        let info = ckbadger_store::LiveCellInfo {
+            capacity: 10000000000,
+            created_at_block: 100,
+            lock_script_hash: vec![0u8; 32],
+            lock_code_hash: vec![1u8; 32],
+            lock_hash_type: 1,
+            lock_args: vec![2u8; 20],
+            type_script_hash: Some(vec![3u8; 32]),
+            type_code_hash: Some(vec![4u8; 32]),
+            type_args: Some(vec![5u8; 24]),
+            data_size: 16,
+            occupied_capacity: 0,
+        };
+
+        let breakdown = estimated_occupied_capacity_breakdown(&info);
+        assert_eq!(breakdown.capacity_field_bytes, 8);
+        assert_eq!(breakdown.lock_script_bytes, 53);
+        assert_eq!(breakdown.type_script_bytes, 57);
+        assert_eq!(breakdown.data_bytes, 16);
+        assert_eq!(breakdown.total_bytes, 134);
     }
 }

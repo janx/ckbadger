@@ -16,6 +16,14 @@ const mockCellWithDao = {
   txHash: '0xabc123def456789012345678901234567890123456789012345678901234abcd',
   outputIndex: 0,
   capacity: '50000000000',
+  occupiedCapacity: 8600000000,
+  occupiedCapacityBreakdown: {
+    capacityFieldBytes: 8,
+    lockScriptBytes: 53,
+    typeScriptBytes: 17,
+    dataBytes: 8,
+    totalBytes: 86,
+  },
   lockScriptHash: '0xlockscripthash123456789012345678901234567890123456789012345678',
   address: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq...',
   typeScriptHash: '0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e',
@@ -53,6 +61,14 @@ const mockCellWithoutDao = {
   txHash: '0xdef456789012345678901234567890123456789012345678901234567890abcd',
   outputIndex: 0,
   capacity: '10000000000',
+  occupiedCapacity: 6100000000,
+  occupiedCapacityBreakdown: {
+    capacityFieldBytes: 8,
+    lockScriptBytes: 53,
+    typeScriptBytes: 0,
+    dataBytes: 0,
+    totalBytes: 61,
+  },
   lockScriptHash: '0xlockscripthash123456789012345678901234567890123456789012345678',
   address: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq...',
   typeScriptHash: null,
@@ -142,6 +158,15 @@ describe('CellDetailPage', () => {
     await waitFor(() => {
       expect(screen.getByText('Live')).toBeInTheDocument();
     });
+
+    expect(screen.getByText('Capacity')).toBeInTheDocument();
+    expect(screen.getByText('Total Capacity')).toBeInTheDocument();
+    expect(screen.getByText('Occupied Capacity')).toBeInTheDocument();
+    expect(screen.getByText('Utilization Ratio')).toBeInTheDocument();
+    expect(screen.getByText('Byte Composition (61 bytes)')).toBeInTheDocument();
+    expect(screen.getByText('Capacity Field')).toBeInTheDocument();
+    expect(screen.getByText('Cell Data')).toBeInTheDocument();
+    expect(screen.getByText(/^Formula:/)).toBeInTheDocument();
   });
 
   it('renders withdrawn DAO cell with compensation info', async () => {

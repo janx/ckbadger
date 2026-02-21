@@ -157,27 +157,46 @@ Use repository `Makefile` targets for the most common local workflow:
 
 ```bash
 # Start local dependencies (always redis; ckb-node only in internal mode)
-make local-up
+make up
+
+# Rebuild + restart one or multiple compose services
+make rebuild SERVICES=api
+make rebuild SERVICES="api frontend"
+
+# Run monitoring TUI
+make tui
 
 # Reset local RocksDB + redis cache data (keeps ckb-data)
-make local-reset CONFIRM=1
+make reset CONFIRM=1
 
 # Run verification against local API
-make local-verify
+make verify
 
 # Sampling checks + RPC spot-checks
-make local-verify VERIFY_DEPTH=sampling VERIFY_RPC_URL=http://localhost:8114
+make verify VERIFY_DEPTH=sampling VERIFY_RPC_URL=http://localhost:8114
 ```
 
-`make local-up` mode resolution:
+`make up` mode resolution:
 
 - If `.env` contains `COMPOSE_PROFILES=internal`, it starts `redis + ckb-node`
 - Otherwise it starts `redis` only (external CKB mode)
 - You can override per command:
-  - `make local-up CKB_NODE_MODE=internal`
-  - `make local-up CKB_NODE_MODE=external`
+  - `make up CKB_NODE_MODE=internal`
+  - `make up CKB_NODE_MODE=external`
 
-`make local-reset CONFIRM=1` cleanup scope:
+`make rebuild SERVICES="<name> [name ...]"`:
+
+- Allowed services: `redis`, `ckb-node`, `indexer`, `api`, `frontend`
+- Uses `--no-deps` for non-`ckb-node` services, so only listed target services are recreated
+- Including `ckb-node` requires internal mode (`COMPOSE_PROFILES=internal` or `CKB_NODE_MODE=internal`)
+
+`make tui`:
+
+- Runs `ckbadger-tui` for sync/memory/throughput monitoring
+- Pass extra args with `TUI_ARGS`, for example:
+  - `make tui TUI_ARGS="--refresh-ms 500 --api-url http://localhost:3001/api/v1"`
+
+`make reset CONFIRM=1` cleanup scope:
 
 - Deletes local RocksDB path (`CKBADGER_DATA_PATH`) and api secondary path
 - Deletes compose volumes `ckbadger-data` and `redis-data` (if present)
@@ -191,7 +210,7 @@ make local-verify VERIFY_DEPTH=sampling VERIFY_RPC_URL=http://localhost:8114
 # .env.example
 
 # CKB Node Configuration
-# For Makefile local-up mode selection:
+# For Makefile up mode selection:
 #   COMPOSE_PROFILES=internal  -> internal CKB node in Docker
 #   COMPOSE_PROFILES unset     -> external CKB node (host)
 #

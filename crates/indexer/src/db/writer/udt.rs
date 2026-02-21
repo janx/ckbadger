@@ -456,6 +456,7 @@ mod tests {
             lock_args: vec![0x44; 20],
             type_script_hash: Some(type_hash.clone()),
             type_code_hash: None,
+            type_args: Some(vec![0x11; 20]),
             data_size: 16,
             occupied_capacity: 0,
         };
@@ -497,6 +498,7 @@ mod tests {
             lock_args: vec![0x44; 20],
             type_script_hash: Some(vec![0x77; 32]),
             type_code_hash: Some(vec![0x88; 32]),
+            type_args: Some(vec![0x99; 32]),
             data_size: 16,
             occupied_capacity: 0,
         };

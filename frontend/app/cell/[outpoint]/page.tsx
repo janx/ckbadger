@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
@@ -58,6 +58,89 @@ export default function CellDetailPage() {
     enabled: codeHashes.length > 0,
     staleTime: Infinity,
   });
+  const [hoveredSegmentKey, setHoveredSegmentKey] = useState<string | null>(null);
+
+  const capacityView = useMemo(() => {
+    if (!cell) {
+      return null;
+    }
+
+    const SHANNONS_PER_CKB = BigInt(100000000);
+    const totalCapacity = BigInt(cell.capacity);
+    const occupied = cell.occupiedCapacity !== undefined ? BigInt(cell.occupiedCapacity) : null;
+    const ZERO = BigInt(0);
+    const BASIS_POINTS = BigInt(10000);
+    const occupiedBytes =
+      occupied !== null && occupied >= ZERO ? Number(occupied / SHANNONS_PER_CKB) : null;
+    const occupiedRatioPercent =
+      occupied !== null && totalCapacity > ZERO
+        ? Number((occupied * BASIS_POINTS) / totalCapacity) / 100
+        : null;
+
+    const breakdown = cell.occupiedCapacityBreakdown;
+    const segments = breakdown && [
+      {
+        key: 'capacityFieldBytes',
+        label: 'Capacity Field',
+        bytes: Math.max(0, breakdown.capacityFieldBytes),
+        colorClass: 'bg-cyan-500',
+      },
+      {
+        key: 'lockScriptBytes',
+        label: 'Lock Script',
+        bytes: Math.max(0, breakdown.lockScriptBytes),
+        colorClass: 'bg-blue-500',
+      },
+      {
+        key: 'typeScriptBytes',
+        label: 'Type Script',
+        bytes: Math.max(0, breakdown.typeScriptBytes),
+        colorClass: 'bg-violet-500',
+      },
+      {
+        key: 'dataBytes',
+        label: 'Cell Data',
+        bytes: Math.max(0, breakdown.dataBytes),
+        colorClass: 'bg-emerald-500',
+      },
+    ];
+
+    const knownBytes = segments?.reduce((acc, seg) => acc + seg.bytes, 0) ?? 0;
+    const breakdownTotalBytes = Math.max(0, breakdown?.totalBytes ?? 0);
+    const canonicalTotalBytes =
+      occupiedBytes !== null
+        ? Math.max(occupiedBytes, knownBytes)
+        : Math.max(knownBytes, breakdownTotalBytes);
+    const inferredBytes = Math.max(0, canonicalTotalBytes - knownBytes);
+
+    const segmentsWithInference =
+      inferredBytes > 0
+        ? [
+            ...(segments ?? []),
+            {
+              key: 'inferredBytes',
+              label: 'Unindexed Script Args',
+              bytes: inferredBytes,
+              colorClass: 'bg-amber-500',
+            },
+          ]
+        : (segments ?? []);
+
+    return {
+      occupied,
+      totalCapacity,
+      totalBytes: canonicalTotalBytes,
+      occupiedRatioPercent,
+      segments: segmentsWithInference.map((seg) => ({
+        ...seg,
+        percent: canonicalTotalBytes > 0 ? (seg.bytes / canonicalTotalBytes) * 100 : 0,
+      })),
+      formulaText: breakdown
+        ? `${segmentsWithInference.map((seg) => seg.bytes).join(' + ')} = ${canonicalTotalBytes} bytes`
+        : null,
+      hasBreakdown: Boolean(breakdown),
+    };
+  }, [cell]);
 
   const handleGraphNodeClick = (node: GraphNode) => {
     if (node.nodeType === 'transaction' && node.data?.hash) {
@@ -126,6 +209,144 @@ export default function CellDetailPage() {
           }
         />
 
+        {capacityView && (
+          <TerminalPanel className="mb-6" glow>
+            <TerminalPanelHeader indicator="active">Capacity</TerminalPanelHeader>
+            <TerminalPanelContent>
+              <div className="grid gap-4 md:grid-cols-3">
+                <div className="border-terminal-green/20 bg-terminal-green/5 rounded border p-3">
+                  <div className="mb-1 text-xs uppercase tracking-wide text-slate-400">
+                    Total Capacity
+                  </div>
+                  <Capacity
+                    value={capacityView.totalCapacity}
+                    className="text-terminal-green text-lg"
+                    animate={false}
+                  />
+                </div>
+                <div className="rounded border border-cyan-500/20 bg-cyan-500/5 p-3">
+                  <div className="mb-1 text-xs uppercase tracking-wide text-slate-400">
+                    Occupied Capacity
+                  </div>
+                  {capacityView.occupied !== null ? (
+                    <Capacity
+                      value={capacityView.occupied}
+                      className="text-lg text-cyan-300"
+                      animate={false}
+                    />
+                  ) : (
+                    <div className="font-mono text-lg text-slate-500">N/A</div>
+                  )}
+                </div>
+                <div className="rounded border border-slate-700/60 bg-slate-900/60 p-3">
+                  <div className="mb-1 text-xs uppercase tracking-wide text-slate-400">
+                    Utilization Ratio
+                  </div>
+                  <div className="font-mono text-xl text-white">
+                    {capacityView.occupiedRatioPercent !== null
+                      ? `${Math.max(0, capacityView.occupiedRatioPercent).toFixed(2)}%`
+                      : 'N/A'}
+                  </div>
+                </div>
+              </div>
+
+              {capacityView.hasBreakdown ? (
+                <>
+                  <div className="mt-3">
+                    <div className="mb-1 flex flex-wrap items-baseline justify-between gap-2">
+                      <div className="text-xs uppercase tracking-wide text-slate-400">
+                        Byte Composition ({capacityView.totalBytes.toLocaleString()} bytes)
+                      </div>
+                      {capacityView.formulaText && (
+                        <div className="text-xs text-slate-500">
+                          Formula: {capacityView.formulaText}
+                        </div>
+                      )}
+                    </div>
+                    <div className="overflow-hidden rounded border border-slate-700 bg-slate-900">
+                      <div className="flex h-3.5 w-full">
+                        {capacityView.segments.map((segment) =>
+                          segment.percent > 0 ? (
+                            <div
+                              key={segment.key}
+                              className={`${segment.colorClass} transition-all ${
+                                hoveredSegmentKey === null
+                                  ? ''
+                                  : hoveredSegmentKey === segment.key
+                                    ? 'brightness-125'
+                                    : 'opacity-35'
+                              }`}
+                              style={{ width: `${segment.percent}%` }}
+                              title={`${segment.label}: ${segment.bytes.toLocaleString()} bytes (${segment.percent.toFixed(2)}%)`}
+                              onMouseEnter={() => setHoveredSegmentKey(segment.key)}
+                              onMouseLeave={() => setHoveredSegmentKey(null)}
+                            />
+                          ) : null
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="mt-0.5 flex h-2 w-full">
+                      {capacityView.segments.map((segment) => (
+                        <div
+                          key={`${segment.key}-guide`}
+                          className="relative"
+                          style={{ width: `${segment.percent}%` }}
+                        >
+                          {segment.percent > 0 ? (
+                            <span
+                              className={`absolute left-1/2 top-0 h-2 w-px -translate-x-1/2 ${
+                                segment.colorClass
+                              } transition-opacity ${
+                                hoveredSegmentKey === null || hoveredSegmentKey === segment.key
+                                  ? 'opacity-60'
+                                  : 'opacity-20'
+                              }`}
+                            />
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="-mt-0.5 overflow-x-auto pb-0.5">
+                    <div className="inline-flex min-w-full flex-nowrap gap-2">
+                      {capacityView.segments.map((segment) => (
+                        <button
+                          key={segment.key}
+                          type="button"
+                          className={`inline-flex items-center gap-2 whitespace-nowrap rounded border px-2.5 py-1 text-xs transition-all ${
+                            hoveredSegmentKey === null
+                              ? 'border-slate-700/60 bg-slate-900/50 text-slate-300'
+                              : hoveredSegmentKey === segment.key
+                                ? 'border-slate-500 bg-slate-800 text-white'
+                                : 'border-slate-800/60 bg-slate-900/30 text-slate-500'
+                          }`}
+                          onMouseEnter={() => setHoveredSegmentKey(segment.key)}
+                          onMouseLeave={() => setHoveredSegmentKey(null)}
+                        >
+                          <span className={`h-2.5 w-2.5 rounded-full ${segment.colorClass}`} />
+                          <span>{segment.label}</span>
+                          <span className="font-mono text-slate-400">
+                            {segment.bytes.toLocaleString()}B
+                          </span>
+                          <span className="font-mono text-slate-500">
+                            {segment.percent.toFixed(2)}%
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className="mt-4 text-sm text-slate-500">
+                  Occupied capacity breakdown is unavailable for this cell.
+                </div>
+              )}
+            </TerminalPanelContent>
+          </TerminalPanel>
+        )}
+
         <div className="grid gap-6 lg:grid-cols-2">
           <TerminalPanel glow>
             <TerminalPanelHeader indicator={isLive ? 'active' : 'inactive'}>
@@ -133,9 +354,6 @@ export default function CellDetailPage() {
             </TerminalPanelHeader>
             <TerminalPanelContent>
               <div className="space-y-1">
-                <DataField label="Capacity">
-                  <Capacity value={cell.capacity} className="text-terminal-green text-lg" />
-                </DataField>
                 <DataField label="Address">
                   <div className="flex items-center gap-2">
                     {cell.address ? (
@@ -220,39 +438,58 @@ export default function CellDetailPage() {
             </TerminalPanelContent>
           </TerminalPanel>
 
-          <div className="space-y-6">
-            <TerminalPanel>
-              <TerminalPanelHeader indicator="none">
-                <div className="flex items-center gap-2">
-                  <span>Lock Script</span>
-                  {lockScriptInfo && (
-                    <Link href={`/scripts/${encodeURIComponent(lockScriptInfo.name)}`}>
-                      <Badge variant="blue">{lockScriptInfo.name}</Badge>
-                    </Link>
-                  )}
+          <TerminalPanel>
+            <TerminalPanelHeader indicator="active">Cell Relationship Graph</TerminalPanelHeader>
+            <TerminalPanelContent>
+              {graphData && graphData.nodes.length > 0 ? (
+                <CellGraph
+                  nodes={graphData.nodes}
+                  links={graphData.links}
+                  onNodeClick={handleGraphNodeClick}
+                  width={undefined}
+                  height={400}
+                />
+              ) : (
+                <div className="flex h-[400px] items-center justify-center text-sm text-slate-500">
+                  Graph data unavailable
                 </div>
-              </TerminalPanelHeader>
-              <TerminalPanelContent>
-                <ScriptView script={cell.lock ?? null} collapsible={false} />
-              </TerminalPanelContent>
-            </TerminalPanel>
+              )}
+            </TerminalPanelContent>
+          </TerminalPanel>
+        </div>
 
-            <TerminalPanel>
-              <TerminalPanelHeader indicator="none">
-                <div className="flex items-center gap-2">
-                  <span>Type Script</span>
-                  {typeScriptInfo && (
-                    <Link href={`/scripts/${encodeURIComponent(typeScriptInfo.name)}`}>
-                      <Badge variant="purple">{typeScriptInfo.name}</Badge>
-                    </Link>
-                  )}
-                </div>
-              </TerminalPanelHeader>
-              <TerminalPanelContent>
-                <ScriptView script={cell.type ?? null} collapsible={false} />
-              </TerminalPanelContent>
-            </TerminalPanel>
-          </div>
+        <div className="mt-6 grid gap-6 lg:grid-cols-2">
+          <TerminalPanel>
+            <TerminalPanelHeader indicator="none">
+              <div className="flex items-center gap-2">
+                <span>Lock Script</span>
+                {lockScriptInfo && (
+                  <Link href={`/scripts/${encodeURIComponent(lockScriptInfo.name)}`}>
+                    <Badge variant="blue">{lockScriptInfo.name}</Badge>
+                  </Link>
+                )}
+              </div>
+            </TerminalPanelHeader>
+            <TerminalPanelContent>
+              <ScriptView script={cell.lock ?? null} collapsible={false} />
+            </TerminalPanelContent>
+          </TerminalPanel>
+
+          <TerminalPanel>
+            <TerminalPanelHeader indicator="none">
+              <div className="flex items-center gap-2">
+                <span>Type Script</span>
+                {typeScriptInfo && (
+                  <Link href={`/scripts/${encodeURIComponent(typeScriptInfo.name)}`}>
+                    <Badge variant="purple">{typeScriptInfo.name}</Badge>
+                  </Link>
+                )}
+              </div>
+            </TerminalPanelHeader>
+            <TerminalPanelContent>
+              <ScriptView script={cell.type ?? null} collapsible={false} />
+            </TerminalPanelContent>
+          </TerminalPanel>
         </div>
 
         {cell.daoInfo && (
@@ -499,21 +736,6 @@ export default function CellDetailPage() {
                   );
                 })()}
               </div>
-            </TerminalPanelContent>
-          </TerminalPanel>
-        )}
-
-        {graphData && graphData.nodes.length > 0 && (
-          <TerminalPanel className="mt-6">
-            <TerminalPanelHeader indicator="active">Cell Relationship Graph</TerminalPanelHeader>
-            <TerminalPanelContent>
-              <CellGraph
-                nodes={graphData.nodes}
-                links={graphData.links}
-                onNodeClick={handleGraphNodeClick}
-                width={undefined}
-                height={400}
-              />
             </TerminalPanelContent>
           </TerminalPanel>
         )}

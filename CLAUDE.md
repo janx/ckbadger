@@ -125,23 +125,37 @@ cargo check && cargo clippy && cd frontend && pnpm type-check && pnpm lint
 pnpm format                              # Prettier (all files)
 
 # Local-first shortcuts
-make local-up                            # Start local dependencies (ckb-node only in internal mode)
-make local-reset CONFIRM=1               # Delete local RocksDB + redis cache data
-make local-verify                        # Run verify --depth fast against local API
-make local-up CKB_NODE_MODE=internal     # Force internal mode for one run
-make local-up CKB_NODE_MODE=external     # Force external mode for one run
+make up                                  # Start local dependencies (ckb-node only in internal mode)
+make rebuild SERVICES=api                # Rebuild + restart one compose service
+make rebuild SERVICES="api frontend"     # Rebuild + restart multiple services
+make tui                                 # Run monitoring TUI
+make reset CONFIRM=1                     # Delete local RocksDB + redis cache data
+make verify                              # Run verify --depth fast against local API
+make up CKB_NODE_MODE=internal           # Force internal mode for one run
+make up CKB_NODE_MODE=external           # Force external mode for one run
 ```
 
-`local-up` default mode comes from `.env`:
+`up` default mode comes from `.env`:
 
 - `COMPOSE_PROFILES=internal` => internal CKB (`redis + ckb-node`)
 - `COMPOSE_PROFILES` unset => external CKB (`redis` only)
 
-`local-reset CONFIRM=1` removes:
+`reset CONFIRM=1` removes:
 
 - local `CKBADGER_DATA_PATH` (+ api secondary path)
 - Docker volumes `ckbadger-data` and `redis-data`
 - keeps `ckb-data` untouched
+
+`rebuild SERVICES="<name> [name ...]"`:
+
+- allowed services: `redis`, `ckb-node`, `indexer`, `api`, `frontend`
+- recreates only listed target services (`--no-deps` for non-`ckb-node`)
+- including `ckb-node` requires internal mode
+
+`tui`:
+
+- runs `ckbadger-tui` for sync/memory/throughput monitoring
+- pass extra args with `TUI_ARGS`, for example: `make tui TUI_ARGS="--refresh-ms 500"`
 
 ## Project Structure
 

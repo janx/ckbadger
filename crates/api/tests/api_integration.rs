@@ -84,6 +84,77 @@ async fn test_blocks_list_empty_db() {
 }
 
 #[tokio::test]
+async fn test_get_cell_returns_occupied_capacity_breakdown() {
+    let store = test_store();
+    let tx_hash = vec![0xab; 32];
+    let output_index = 1i16;
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_cell(
+        &tx_hash,
+        output_index,
+        &LiveCellInfo {
+            capacity: 100_00000000,
+            created_at_block: 123,
+            lock_script_hash: vec![0x11; 32],
+            lock_code_hash: vec![0x22; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x33; 20],
+            type_script_hash: Some(vec![0x44; 32]),
+            type_code_hash: Some(vec![0x55; 32]),
+            type_args: Some(vec![0xaa, 0xbb]),
+            data_size: 42,
+            occupied_capacity: 138_00000000,
+        },
+    );
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/cells/0x{}/{}",
+            hex::encode(&tx_hash),
+            output_index
+        ))
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(
+        json["occupiedCapacity"],
+        serde_json::Value::from(138_00000000i64)
+    );
+    assert_eq!(json["type"]["args"], serde_json::Value::from("0xaabb"));
+    assert_eq!(
+        json["occupiedCapacityBreakdown"]["capacityFieldBytes"],
+        serde_json::Value::from(8)
+    );
+    assert_eq!(
+        json["occupiedCapacityBreakdown"]["lockScriptBytes"],
+        serde_json::Value::from(53)
+    );
+    assert_eq!(
+        json["occupiedCapacityBreakdown"]["typeScriptBytes"],
+        serde_json::Value::from(35)
+    );
+    assert_eq!(
+        json["occupiedCapacityBreakdown"]["dataBytes"],
+        serde_json::Value::from(42)
+    );
+    assert_eq!(
+        json["occupiedCapacityBreakdown"]["totalBytes"],
+        serde_json::Value::from(138)
+    );
+}
+
+#[tokio::test]
 async fn test_search_empty_db() {
     let store = test_store();
     let config = test_config(store);
@@ -814,6 +885,7 @@ async fn test_get_script_returns_deployments_sorted_by_deployed_at() {
             lock_args: vec![],
             type_script_hash: Some(older_code_hash.clone()),
             type_code_hash: Some(vec![0x30; 32]),
+            type_args: Some(vec![]),
             data_size: 0,
             occupied_capacity: 61_00000000,
         },
@@ -831,6 +903,7 @@ async fn test_get_script_returns_deployments_sorted_by_deployed_at() {
             lock_args: vec![],
             type_script_hash: Some(newer_code_hash.clone()),
             type_code_hash: Some(vec![0x31; 32]),
+            type_args: Some(vec![]),
             data_size: 0,
             occupied_capacity: 61_00000000,
         },

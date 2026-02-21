@@ -208,10 +208,20 @@ interface CellDaoInfo {
   estimatedApc?: string;
 }
 
+interface OccupiedCapacityBreakdown {
+  capacityFieldBytes: number;
+  lockScriptBytes: number;
+  typeScriptBytes: number;
+  dataBytes: number;
+  totalBytes: number;
+}
+
 interface Cell {
   txHash: string;
   outputIndex: number;
   capacity: string;
+  occupiedCapacity?: number;
+  occupiedCapacityBreakdown?: OccupiedCapacityBreakdown;
   lockScriptHash: string;
   address?: string;
   typeScriptHash?: string;
@@ -869,6 +879,7 @@ export type {
   GraphLink,
   GraphResponse,
   Cell,
+  OccupiedCapacityBreakdown,
   CellDaoInfo,
   CellDep,
   CodeCellScript,
