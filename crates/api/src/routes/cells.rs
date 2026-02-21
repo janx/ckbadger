@@ -928,15 +928,19 @@ async fn get_cell(
     let consumed_cell = if live_cell.is_none() {
         state
             .store
-            .get_consumed_cell(&hash_bytes, output_idx)
+            .get_consumed_cell_info(&hash_bytes, output_idx)
             .map_err(|e| ApiError::internal(e.to_string()))?
     } else {
         None
     };
 
-    let (info, status_str, is_consumed) = match (live_cell, consumed_cell) {
-        (Some(cell), _) => (cell, "live", false),
-        (None, Some(cell)) => (cell, "dead", true),
+    let (info, status_str, consumed_meta) = match (live_cell, consumed_cell) {
+        (Some(cell), _) => (cell, "live", None),
+        (None, Some(cell)) => (
+            cell.cell,
+            "dead",
+            Some((cell.consumed_at_block, cell.consumed_by_tx)),
+        ),
         (None, None) => return Err(ApiError::not_found("Cell not found")),
     };
 
@@ -1032,11 +1036,9 @@ async fn get_cell(
         (None, None)
     };
 
-    // Find consumed_by info if cell is dead
-    let (consumed_at_block, consumed_by_tx) = if is_consumed {
-        // We don't have a direct consumed_by lookup in the store.
-        // The consumed_cells CF stores the cell info but not who consumed it.
-        (None, None)
+    let (consumed_at_block, consumed_by_tx) = if let Some((block, tx)) = consumed_meta {
+        let tx_hash = tx.map(|raw| format!("0x{}", hex::encode(raw)));
+        (if block > 0 { Some(block) } else { None }, tx_hash)
     } else {
         (None, None)
     };

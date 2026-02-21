@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
@@ -22,6 +22,8 @@ import { CellGraph } from '@/components/cell-graph';
 import { api, type CellDep, type GraphNode, type ScriptLookupResponse } from '@/lib/api';
 import { formatTimeAgo, formatCkbAmount } from '@/lib/utils';
 import { useCyclesCalculation } from '@/hooks/useCyclesCalculation';
+
+type TxGraphView = 'flow' | 'graph';
 
 export default function TransactionDetailPage() {
   const params = useParams();
@@ -48,6 +50,7 @@ export default function TransactionDetailPage() {
     queryFn: () => api.getTransactionGraph(hash),
     enabled: !!hash,
   });
+  const [txGraphView, setTxGraphView] = useState<TxGraphView>('flow');
 
   const { data: cellDeps, isLoading: cellDepsLoading } = useQuery({
     queryKey: ['txCellDeps', hash],
@@ -80,6 +83,58 @@ export default function TransactionDetailPage() {
     enabled: codeHashes.length > 0,
     staleTime: Infinity,
   });
+
+  const graphInsights = useMemo(() => {
+    if (!graphData) {
+      return {
+        nodeCount: 0,
+        linkCount: 0,
+        inputLinkCount: 0,
+        outputLinkCount: 0,
+        outputNodes: [] as Array<{
+          outputIndex: number;
+          status: string | null;
+          capacity: string | null;
+        }>,
+        graphHeight: 240,
+      };
+    }
+
+    const inputLinkCount = graphData.links.filter(
+      (link) => link.linkType === 'input' || link.linkType === 'consumed_by'
+    ).length;
+    const outputLinkCount = graphData.links.filter(
+      (link) => link.linkType === 'output' || link.linkType === 'creates'
+    ).length;
+
+    const outputNodes = graphData.nodes
+      .filter(
+        (node) =>
+          node.nodeType === 'cell' &&
+          node.data?.txHash === hash &&
+          node.data?.outputIndex !== undefined
+      )
+      .map((node) => ({
+        outputIndex: node.data?.outputIndex ?? 0,
+        status: node.data?.status ?? null,
+        capacity: node.data?.capacity ?? null,
+      }))
+      .sort((a, b) => a.outputIndex - b.outputIndex);
+
+    const graphHeight = Math.min(
+      340,
+      Math.max(220, 200 + graphData.nodes.length * 10 + graphData.links.length * 6)
+    );
+
+    return {
+      nodeCount: graphData.nodes.length,
+      linkCount: graphData.links.length,
+      inputLinkCount,
+      outputLinkCount,
+      outputNodes,
+      graphHeight,
+    };
+  }, [graphData, hash]);
 
   const handleGraphNodeClick = (node: GraphNode) => {
     if (node.nodeType === 'transaction' && node.data?.hash) {
@@ -313,17 +368,109 @@ export default function TransactionDetailPage() {
             </TabsContent>
 
             <TabsContent value="graph" className="p-4">
-              {graphData && graphData.nodes.length > 0 ? (
-                <CellGraph
-                  nodes={graphData.nodes}
-                  links={graphData.links}
-                  onNodeClick={handleGraphNodeClick}
-                  width={undefined}
-                  height={400}
-                />
-              ) : (
-                <p className="py-8 text-center text-slate-500">Loading graph...</p>
-              )}
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="inline-flex rounded border border-slate-700/70 bg-slate-900/60 p-1">
+                    <button
+                      type="button"
+                      className={`rounded px-2.5 py-1 text-xs transition-colors ${
+                        txGraphView === 'flow'
+                          ? 'bg-terminal-green/15 text-terminal-green'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                      onClick={() => setTxGraphView('flow')}
+                    >
+                      Flow View
+                    </button>
+                    <button
+                      type="button"
+                      className={`rounded px-2.5 py-1 text-xs transition-colors ${
+                        txGraphView === 'graph'
+                          ? 'bg-cyan-500/15 text-cyan-300'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                      onClick={() => setTxGraphView('graph')}
+                    >
+                      Graph View
+                    </button>
+                  </div>
+                  {graphInsights.nodeCount > 0 && (
+                    <span className="text-xs text-slate-500">
+                      {graphInsights.nodeCount} nodes / {graphInsights.linkCount} links
+                    </span>
+                  )}
+                </div>
+
+                {txGraphView === 'flow' ? (
+                  <div data-testid="tx-relationship-flow" className="space-y-3">
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="rounded border border-slate-700/70 bg-slate-900/70 p-3">
+                        <div className="text-xs uppercase tracking-wide text-slate-400">
+                          Inputs in Graph
+                        </div>
+                        <div className="mt-1 font-mono text-lg text-slate-100">
+                          {graphInsights.inputLinkCount}
+                        </div>
+                      </div>
+                      <div className="rounded border border-slate-700/70 bg-slate-900/70 p-3">
+                        <div className="text-xs uppercase tracking-wide text-slate-400">
+                          Outputs in Graph
+                        </div>
+                        <div className="mt-1 font-mono text-lg text-slate-100">
+                          {graphInsights.outputNodes.length}
+                        </div>
+                      </div>
+                      <div className="rounded border border-slate-700/70 bg-slate-900/70 p-3">
+                        <div className="text-xs uppercase tracking-wide text-slate-400">
+                          Live Outputs
+                        </div>
+                        <div className="text-terminal-green mt-1 font-mono text-lg">
+                          {
+                            graphInsights.outputNodes.filter((node) => node.status === 'live')
+                              .length
+                          }
+                        </div>
+                      </div>
+                      <div className="rounded border border-slate-700/70 bg-slate-900/70 p-3">
+                        <div className="text-xs uppercase tracking-wide text-slate-400">
+                          Dead Outputs
+                        </div>
+                        <div className="mt-1 font-mono text-lg text-red-400">
+                          {
+                            graphInsights.outputNodes.filter((node) => node.status === 'dead')
+                              .length
+                          }
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="rounded border border-slate-700/70 bg-slate-900/70 p-3">
+                      <div className="text-xs uppercase tracking-wide text-slate-400">
+                        Transaction Flow Snapshot
+                      </div>
+                      <div className="mt-2 text-sm text-slate-300">
+                        Inputs: <span className="font-mono text-slate-100">{tx.inputsCount}</span>{' '}
+                        {'->'} Outputs:{' '}
+                        <span className="font-mono text-slate-100">{tx.outputsCount}</span> | Graph
+                        Edges:{' '}
+                        <span className="font-mono text-slate-100">
+                          {graphInsights.outputLinkCount}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                ) : graphData && graphData.nodes.length > 0 ? (
+                  <CellGraph
+                    nodes={graphData.nodes}
+                    links={graphData.links}
+                    onNodeClick={handleGraphNodeClick}
+                    width={undefined}
+                    height={graphInsights.graphHeight}
+                  />
+                ) : (
+                  <p className="py-8 text-center text-slate-500">Loading graph...</p>
+                )}
+              </div>
             </TabsContent>
           </Tabs>
         </TerminalPanel>

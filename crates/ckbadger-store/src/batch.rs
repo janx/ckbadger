@@ -65,8 +65,23 @@ impl<'a> StoreBatch<'a> {
         info: &LiveCellInfo,
         consumed_at_block: i64,
     ) {
+        self.put_consumed_cell_with_consumer(tx_hash, output_index, info, consumed_at_block, None);
+    }
+
+    pub fn put_consumed_cell_with_consumer(
+        &mut self,
+        tx_hash: &[u8],
+        output_index: i16,
+        info: &LiveCellInfo,
+        consumed_at_block: i64,
+        consumed_by_tx: Option<&[u8]>,
+    ) {
         let key = keys::encode_outpoint(tx_hash, output_index);
-        let consumed = ConsumedCellInfo::from_live_cell_info(info, consumed_at_block);
+        let consumed = ConsumedCellInfo::from_live_cell_info_with_consumer(
+            info,
+            consumed_at_block,
+            consumed_by_tx,
+        );
         let value = bincode::serialize(&consumed).expect("serialize ConsumedCellInfo");
         self.batch
             .put_cf(self.store.cf_consumed_cells(), key, &value);

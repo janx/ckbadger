@@ -73,13 +73,29 @@ impl CompactConsumedCellInfo {
 pub struct ConsumedCellInfo {
     pub cell: LiveCellInfo,
     pub consumed_at_block: i64,
+    pub consumed_by_tx: Option<Vec<u8>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LegacyConsumedCellInfoV2 {
+    pub cell: LiveCellInfo,
+    pub consumed_at_block: i64,
 }
 
 impl ConsumedCellInfo {
     pub fn from_live_cell_info(info: &LiveCellInfo, consumed_at_block: i64) -> Self {
+        Self::from_live_cell_info_with_consumer(info, consumed_at_block, None)
+    }
+
+    pub fn from_live_cell_info_with_consumer(
+        info: &LiveCellInfo,
+        consumed_at_block: i64,
+        consumed_by_tx: Option<&[u8]>,
+    ) -> Self {
         Self {
             cell: info.clone(),
             consumed_at_block,
+            consumed_by_tx: consumed_by_tx.map(|tx| tx.to_vec()),
         }
     }
 
@@ -91,17 +107,22 @@ impl ConsumedCellInfo {
 /// Decode consumed cell bytes across storage schema versions.
 ///
 /// Order:
-/// 1. `ConsumedCellInfo` (current schema, includes consumed_at_block)
-/// 2. `CompactConsumedCellInfo` (legacy schema)
-/// 3. `LiveCellInfo` (very old schema)
+/// 1. `ConsumedCellInfo` (current schema, includes consumed_at_block + consumed_by_tx)
+/// 2. `LegacyConsumedCellInfoV2` (older schema, consumed_at_block only)
+/// 3. `CompactConsumedCellInfo` (legacy compact schema)
+/// 4. `LiveCellInfo` (very old schema)
 pub fn decode_consumed_cell_info(value: &[u8]) -> Option<ConsumedCellInfo> {
-    if let Ok(v2) = bincode::deserialize::<ConsumedCellInfo>(value) {
-        return Some(v2);
+    if let Ok(v3) = bincode::deserialize::<ConsumedCellInfo>(value) {
+        return Some(v3);
+    }
+    if let Ok(v2) = bincode::deserialize::<LegacyConsumedCellInfoV2>(value) {
+        return Some(v2.into());
     }
     if let Ok(compact) = bincode::deserialize::<CompactConsumedCellInfo>(value) {
         return Some(ConsumedCellInfo {
             cell: compact.to_live_cell_info(),
             consumed_at_block: 0,
+            consumed_by_tx: None,
         });
     }
     bincode::deserialize::<LiveCellInfo>(value)
@@ -109,7 +130,18 @@ pub fn decode_consumed_cell_info(value: &[u8]) -> Option<ConsumedCellInfo> {
         .map(|cell| ConsumedCellInfo {
             cell,
             consumed_at_block: 0,
+            consumed_by_tx: None,
         })
+}
+
+impl From<LegacyConsumedCellInfoV2> for ConsumedCellInfo {
+    fn from(value: LegacyConsumedCellInfoV2) -> Self {
+        Self {
+            cell: value.cell,
+            consumed_at_block: value.consumed_at_block,
+            consumed_by_tx: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -792,6 +824,50 @@ pub struct AddressDailyStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sample_live_cell_info() -> LiveCellInfo {
+        LiveCellInfo {
+            capacity: 1_000_000_000,
+            created_at_block: 123,
+            lock_script_hash: vec![0x11; 32],
+            lock_code_hash: vec![0x22; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x33; 20],
+            type_script_hash: Some(vec![0x44; 32]),
+            type_code_hash: Some(vec![0x55; 32]),
+            type_args: Some(vec![0x66; 8]),
+            data_size: 16,
+            occupied_capacity: 6_100_000_000,
+        }
+    }
+
+    #[test]
+    fn test_decode_consumed_cell_info_current_schema_with_consumer() {
+        let info = sample_live_cell_info();
+        let consumed =
+            ConsumedCellInfo::from_live_cell_info_with_consumer(&info, 999, Some(&[0xAA; 32]));
+        let bytes = bincode::serialize(&consumed).unwrap();
+        let decoded = decode_consumed_cell_info(&bytes).unwrap();
+
+        assert_eq!(decoded.cell.capacity, info.capacity);
+        assert_eq!(decoded.consumed_at_block, 999);
+        assert_eq!(decoded.consumed_by_tx, Some(vec![0xAA; 32]));
+    }
+
+    #[test]
+    fn test_decode_consumed_cell_info_legacy_v2_schema() {
+        let info = sample_live_cell_info();
+        let legacy = LegacyConsumedCellInfoV2 {
+            cell: info.clone(),
+            consumed_at_block: 777,
+        };
+        let bytes = bincode::serialize(&legacy).unwrap();
+        let decoded = decode_consumed_cell_info(&bytes).unwrap();
+
+        assert_eq!(decoded.cell.capacity, info.capacity);
+        assert_eq!(decoded.consumed_at_block, 777);
+        assert_eq!(decoded.consumed_by_tx, None);
+    }
 
     // ---- ScriptDailyDelta ----
 

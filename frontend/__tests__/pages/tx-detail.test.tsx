@@ -31,6 +31,10 @@ vi.mock('@/components/layout/header', () => ({
   Header: () => <div data-testid="header">Header</div>,
 }));
 
+vi.mock('@/components/cell-graph', () => ({
+  CellGraph: () => <div data-testid="mock-cell-graph">Graph Mock</div>,
+}));
+
 vi.mock('next/navigation', () => ({
   useParams: () => ({ hash: TX_HASH }),
   useRouter: () => ({ push: vi.fn() }),
@@ -148,5 +152,52 @@ describe('TransactionDetailPage', () => {
       `/script/${TYPE_CODE_HASH}?hashType=type&kind=type`
     );
     expect(document.querySelector('a[href="/scripts/Unknown"]')).toBeNull();
+  });
+
+  it('shows flow view by default and switches to graph view in graph tab', async () => {
+    vi.mocked(api.getTransactionGraph).mockResolvedValue({
+      nodes: [
+        {
+          id: `tx-${TX_HASH}`,
+          nodeType: 'transaction',
+          label: 'TX',
+          data: { hash: TX_HASH, blockNumber: 18661531 },
+        },
+        {
+          id: `cell-${TX_HASH}-0`,
+          nodeType: 'cell',
+          label: '554.99 CKB',
+          data: { txHash: TX_HASH, outputIndex: 0, status: 'live', capacity: '55499941197' },
+        },
+      ],
+      links: [
+        {
+          source: `tx-${TX_HASH}`,
+          target: `cell-${TX_HASH}-0`,
+          linkType: 'output',
+        },
+      ],
+    });
+
+    render(<TransactionDetailPage />);
+
+    await waitFor(() => {
+      expect(api.getTransactionDetail).toHaveBeenCalled();
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Graph' }));
+
+    expect(await screen.findByRole('button', { name: 'Flow View' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Graph View' })).toBeInTheDocument();
+    expect(screen.getByTestId('tx-relationship-flow')).toBeInTheDocument();
+    expect(screen.getByText('Transaction Flow Snapshot')).toBeInTheDocument();
+    expect(screen.getByText('2 nodes / 1 links')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Graph View' }));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('tx-relationship-flow')).not.toBeInTheDocument();
+    });
+    expect(screen.getByTestId('mock-cell-graph')).toBeInTheDocument();
   });
 });

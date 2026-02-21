@@ -20,6 +20,15 @@ import { ScriptView } from '@/components/ui/script-view';
 import { CellGraph } from '@/components/cell-graph';
 import { api, type GraphNode } from '@/lib/api';
 
+type RelationshipView = 'lifecycle' | 'graph';
+
+function shortenHash(hash: string, leading: number = 10, trailing: number = 8): string {
+  if (hash.length <= leading + trailing + 3) {
+    return hash;
+  }
+  return `${hash.slice(0, leading)}...${hash.slice(-trailing)}`;
+}
+
 export default function CellDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -59,6 +68,7 @@ export default function CellDetailPage() {
     staleTime: Infinity,
   });
   const [hoveredSegmentKey, setHoveredSegmentKey] = useState<string | null>(null);
+  const [relationshipView, setRelationshipView] = useState<RelationshipView>('lifecycle');
 
   const capacityView = useMemo(() => {
     if (!cell) {
@@ -141,6 +151,50 @@ export default function CellDetailPage() {
       hasBreakdown: Boolean(breakdown),
     };
   }, [cell]);
+
+  const relationshipStats = useMemo(() => {
+    if (!graphData || !cell) {
+      return {
+        nodeCount: 0,
+        linkCount: 0,
+        upstreamInputs: [] as Array<{
+          txHash: string;
+          outputIndex: number;
+          capacity: string | null;
+          status: string | null;
+        }>,
+        graphHeight: 240,
+      };
+    }
+
+    const upstreamInputs = graphData.nodes
+      .filter((node) => {
+        if (node.nodeType !== 'cell') return false;
+        const nodeTxHash = node.data?.txHash;
+        const nodeOutputIndex = node.data?.outputIndex;
+        if (!nodeTxHash || nodeOutputIndex === undefined) return false;
+        return !(nodeTxHash === cell.txHash && nodeOutputIndex === cell.outputIndex);
+      })
+      .map((node) => ({
+        txHash: node.data?.txHash ?? '',
+        outputIndex: node.data?.outputIndex ?? 0,
+        capacity: node.data?.capacity ?? null,
+        status: node.data?.status ?? null,
+      }))
+      .slice(0, 6);
+
+    const graphHeight = Math.min(
+      320,
+      Math.max(220, 200 + graphData.nodes.length * 12 + graphData.links.length * 6)
+    );
+
+    return {
+      nodeCount: graphData.nodes.length,
+      linkCount: graphData.links.length,
+      upstreamInputs,
+      graphHeight,
+    };
+  }, [graphData, cell]);
 
   const handleGraphNodeClick = (node: GraphNode) => {
     if (node.nodeType === 'transaction' && node.data?.hash) {
@@ -286,7 +340,10 @@ export default function CellDetailPage() {
                       </div>
                     </div>
 
-                    <div className="mt-0.5 flex h-2 w-full">
+                    <div
+                      data-testid="byte-composition-guides"
+                      className="relative z-10 mt-1 flex h-3 w-full"
+                    >
                       {capacityView.segments.map((segment) => (
                         <div
                           key={`${segment.key}-guide`}
@@ -295,7 +352,7 @@ export default function CellDetailPage() {
                         >
                           {segment.percent > 0 ? (
                             <span
-                              className={`absolute left-1/2 top-0 h-2 w-px -translate-x-1/2 ${
+                              className={`absolute left-1/2 top-0 h-3 w-px -translate-x-1/2 ${
                                 segment.colorClass
                               } transition-opacity ${
                                 hoveredSegmentKey === null || hoveredSegmentKey === segment.key
@@ -309,7 +366,10 @@ export default function CellDetailPage() {
                     </div>
                   </div>
 
-                  <div className="-mt-0.5 overflow-x-auto pb-0.5">
+                  <div
+                    data-testid="byte-composition-legend"
+                    className="relative z-0 mt-1 overflow-x-auto pb-0.5"
+                  >
                     <div className="inline-flex min-w-full flex-nowrap gap-2">
                       {capacityView.segments.map((segment) => (
                         <button
@@ -347,7 +407,7 @@ export default function CellDetailPage() {
           </TerminalPanel>
         )}
 
-        <div className="grid gap-6 lg:grid-cols-2">
+        <div className="grid gap-6 lg:grid-cols-2 lg:items-start">
           <TerminalPanel glow>
             <TerminalPanelHeader indicator={isLive ? 'active' : 'inactive'}>
               Overview
@@ -439,21 +499,169 @@ export default function CellDetailPage() {
           </TerminalPanel>
 
           <TerminalPanel>
-            <TerminalPanelHeader indicator="active">Cell Relationship Graph</TerminalPanelHeader>
+            <TerminalPanelHeader indicator="active">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span>Cell Relationship</span>
+                {relationshipStats.nodeCount > 0 && (
+                  <span className="text-xs text-slate-500">
+                    {relationshipStats.nodeCount} nodes / {relationshipStats.linkCount} links
+                  </span>
+                )}
+              </div>
+            </TerminalPanelHeader>
             <TerminalPanelContent>
-              {graphData && graphData.nodes.length > 0 ? (
-                <CellGraph
-                  nodes={graphData.nodes}
-                  links={graphData.links}
-                  onNodeClick={handleGraphNodeClick}
-                  width={undefined}
-                  height={400}
-                />
-              ) : (
-                <div className="flex h-[400px] items-center justify-center text-sm text-slate-500">
-                  Graph data unavailable
+              <div className="space-y-3">
+                <div className="inline-flex rounded border border-slate-700/70 bg-slate-900/60 p-1">
+                  <button
+                    type="button"
+                    className={`rounded px-2.5 py-1 text-xs transition-colors ${
+                      relationshipView === 'lifecycle'
+                        ? 'bg-terminal-green/15 text-terminal-green'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                    onClick={() => setRelationshipView('lifecycle')}
+                  >
+                    Lifecycle
+                  </button>
+                  <button
+                    type="button"
+                    className={`rounded px-2.5 py-1 text-xs transition-colors ${
+                      relationshipView === 'graph'
+                        ? 'bg-cyan-500/15 text-cyan-300'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                    onClick={() => setRelationshipView('graph')}
+                  >
+                    Graph
+                  </button>
                 </div>
-              )}
+
+                {relationshipView === 'lifecycle' ? (
+                  <div data-testid="cell-relationship-lifecycle" className="space-y-2.5">
+                    <div className="rounded border border-slate-700/70 bg-slate-900/70 p-3">
+                      <div className="text-xs uppercase tracking-wide text-slate-400">Created</div>
+                      <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-slate-200">
+                        <span className="text-slate-500">TX</span>
+                        <Link
+                          href={`/tx/${cell.txHash}`}
+                          className="text-amber font-mono hover:underline"
+                        >
+                          {shortenHash(cell.txHash)}
+                        </Link>
+                        <span className="text-slate-500">Output #{cell.outputIndex}</span>
+                        <span className="text-slate-500">at</span>
+                        <Link
+                          href={`/blocks/${cell.createdAtBlock}`}
+                          className="text-terminal-green hover:underline"
+                        >
+                          #{cell.createdAtBlock.toLocaleString()}
+                        </Link>
+                      </div>
+                    </div>
+
+                    <div className="rounded border border-slate-700/70 bg-slate-900/70 p-3">
+                      <div className="text-xs uppercase tracking-wide text-slate-400">
+                        Current Status
+                      </div>
+                      <div className="mt-1 flex flex-wrap items-center gap-2 text-sm">
+                        <Badge variant={isLive ? 'green' : 'red'}>{isLive ? 'Live' : 'Dead'}</Badge>
+                        {isLive ? (
+                          <span className="text-slate-300">
+                            Unspent cell available in current state.
+                          </span>
+                        ) : (
+                          <span className="text-slate-300">
+                            Cell was consumed by a later transaction.
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="rounded border border-slate-700/70 bg-slate-900/70 p-3">
+                      <div className="text-xs uppercase tracking-wide text-slate-400">
+                        Upstream Inputs ({relationshipStats.upstreamInputs.length})
+                      </div>
+                      {relationshipStats.upstreamInputs.length > 0 ? (
+                        <div className="mt-2 space-y-1.5">
+                          {relationshipStats.upstreamInputs.map((input) => (
+                            <div
+                              key={`${input.txHash}-${input.outputIndex}`}
+                              className="flex flex-wrap items-center gap-2 text-sm"
+                            >
+                              <Link
+                                href={`/cell/${input.txHash}-${input.outputIndex}`}
+                                className="font-mono text-cyan-300 hover:underline"
+                              >
+                                {shortenHash(input.txHash)}:{input.outputIndex}
+                              </Link>
+                              {input.capacity && (
+                                <span className="font-mono text-slate-400">
+                                  {BigInt(input.capacity).toLocaleString()} shannons
+                                </span>
+                              )}
+                              {input.status && (
+                                <span className="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-slate-400">
+                                  {input.status}
+                                </span>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="mt-1 text-sm text-slate-500">
+                          No upstream input cells found.
+                        </div>
+                      )}
+                    </div>
+
+                    {!isLive && (
+                      <div className="rounded border border-slate-700/70 bg-slate-900/70 p-3">
+                        <div className="text-xs uppercase tracking-wide text-slate-400">
+                          Consumed
+                        </div>
+                        {cell.consumedByTx ? (
+                          <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-slate-200">
+                            <span className="text-slate-500">TX</span>
+                            <Link
+                              href={`/tx/${cell.consumedByTx}`}
+                              className="font-mono text-red-400 hover:underline"
+                            >
+                              {shortenHash(cell.consumedByTx)}
+                            </Link>
+                            {cell.consumedAtBlock && (
+                              <>
+                                <span className="text-slate-500">at</span>
+                                <Link
+                                  href={`/blocks/${cell.consumedAtBlock}`}
+                                  className="text-red-400 hover:underline"
+                                >
+                                  #{cell.consumedAtBlock.toLocaleString()}
+                                </Link>
+                              </>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="mt-1 text-sm text-slate-500">
+                            Consuming transaction not indexed in this graph view.
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ) : graphData && graphData.nodes.length > 0 ? (
+                  <CellGraph
+                    nodes={graphData.nodes}
+                    links={graphData.links}
+                    onNodeClick={handleGraphNodeClick}
+                    width={undefined}
+                    height={relationshipStats.graphHeight}
+                  />
+                ) : (
+                  <div className="flex h-[220px] items-center justify-center text-sm text-slate-500">
+                    Graph data unavailable
+                  </div>
+                )}
+              </div>
             </TerminalPanelContent>
           </TerminalPanel>
         </div>

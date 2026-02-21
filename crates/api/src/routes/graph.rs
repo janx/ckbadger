@@ -112,6 +112,52 @@ fn get_tx_outputs_from_ckb_store(
     result
 }
 
+fn append_consumed_by_relation(
+    nodes: &mut Vec<GraphNode>,
+    links: &mut Vec<GraphLink>,
+    cell_id: &str,
+    consumed_by_tx: Option<&[u8]>,
+    consumed_at_block: i64,
+) {
+    let Some(consumed_by_tx) = consumed_by_tx else {
+        return;
+    };
+
+    let consumed_hash = format!("0x{}", hex::encode(consumed_by_tx));
+    let consumed_tx_id = format!("tx-{}", consumed_hash);
+    let block_number = if consumed_at_block > 0 {
+        Some(consumed_at_block)
+    } else {
+        None
+    };
+
+    if !nodes.iter().any(|n| n.id == consumed_tx_id) {
+        nodes.push(GraphNode {
+            id: consumed_tx_id.clone(),
+            node_type: "transaction".to_string(),
+            label: format!(
+                "TX ...{}",
+                &consumed_hash[consumed_hash.len().saturating_sub(8)..]
+            ),
+            data: serde_json::json!({
+                "hash": consumed_hash,
+                "blockNumber": block_number,
+            }),
+        });
+    }
+
+    if !links
+        .iter()
+        .any(|l| l.source == cell_id && l.target == consumed_tx_id && l.link_type == "consumed_by")
+    {
+        links.push(GraphLink {
+            source: cell_id.to_string(),
+            target: consumed_tx_id,
+            link_type: "consumed_by".to_string(),
+        });
+    }
+}
+
 async fn get_cell_graph(
     State(state): State<Arc<AppState>>,
     Path((tx_hash, output_index)): Path<(String, i32)>,
@@ -147,17 +193,23 @@ async fn get_cell_graph(
     let consumed_cell = if live_cell.is_none() {
         state
             .store
-            .get_consumed_cell(&hash_bytes, output_idx)
+            .get_consumed_cell_info(&hash_bytes, output_idx)
             .map_err(|e| ApiError::internal(e.to_string()))?
     } else {
         None
     };
 
-    let (cell_info, status_str) = match (&live_cell, &consumed_cell) {
-        (Some(info), _) => (info, "live"),
-        (None, Some(info)) => (info, "dead"),
-        (None, None) => return Err(ApiError::not_found("Cell not found")),
-    };
+    let (cell_info, status_str, consumed_by_tx, consumed_at_block) =
+        match (live_cell, consumed_cell) {
+            (Some(info), _) => (info, "live", None, 0),
+            (None, Some(info)) => (
+                info.cell,
+                "dead",
+                info.consumed_by_tx,
+                info.consumed_at_block,
+            ),
+            (None, None) => return Err(ApiError::not_found("Cell not found")),
+        };
 
     let capacity_str = cell_info.capacity.to_string();
 
@@ -171,6 +223,7 @@ async fn get_cell_graph(
             "capacity": capacity_str,
             "status": status_str,
             "createdAtBlock": cell_info.created_at_block,
+            "consumedAtBlock": if consumed_at_block > 0 { Some(consumed_at_block) } else { None },
         }),
     });
 
@@ -239,12 +292,14 @@ async fn get_cell_graph(
         }
     }
 
-    // If the cell is consumed, show the consuming transaction
-    // We don't have a direct consumed_by_tx lookup in the store,
-    // but for dead cells we can note it's consumed.
     if status_str == "dead" {
-        // Without a consumed_by index, we can't identify the consuming tx.
-        // This is a known limitation of the RocksDB migration.
+        append_consumed_by_relation(
+            &mut nodes,
+            &mut links,
+            &cell_id,
+            consumed_by_tx.as_deref(),
+            consumed_at_block,
+        );
     }
 
     ok(GraphResponse { nodes, links })
@@ -669,5 +724,49 @@ mod tests {
         assert_eq!(json["committedCount"], 8);
         assert_eq!(json["commitmentWindow"]["close"], 2);
         assert_eq!(json["commitmentWindow"]["far"], 10);
+    }
+
+    #[test]
+    fn test_append_consumed_by_relation_adds_tx_node_and_link() {
+        let mut nodes = vec![GraphNode {
+            id: "cell-0xabc-0".to_string(),
+            node_type: "cell".to_string(),
+            label: "100 CKB".to_string(),
+            data: serde_json::json!({}),
+        }];
+        let mut links = Vec::new();
+        let consumed_by_tx = [0x11u8; 32];
+
+        append_consumed_by_relation(
+            &mut nodes,
+            &mut links,
+            "cell-0xabc-0",
+            Some(&consumed_by_tx),
+            123,
+        );
+
+        assert_eq!(nodes.len(), 2);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].source, "cell-0xabc-0");
+        assert_eq!(links[0].link_type, "consumed_by");
+        assert_eq!(nodes[1].node_type, "transaction");
+        assert!(nodes[1].data["hash"].as_str().unwrap().starts_with("0x"));
+        assert_eq!(nodes[1].data["blockNumber"].as_i64(), Some(123));
+    }
+
+    #[test]
+    fn test_append_consumed_by_relation_no_consumer_is_noop() {
+        let mut nodes = vec![GraphNode {
+            id: "cell-0xabc-0".to_string(),
+            node_type: "cell".to_string(),
+            label: "100 CKB".to_string(),
+            data: serde_json::json!({}),
+        }];
+        let mut links = Vec::new();
+
+        append_consumed_by_relation(&mut nodes, &mut links, "cell-0xabc-0", None, 0);
+
+        assert_eq!(nodes.len(), 1);
+        assert!(links.is_empty());
     }
 }

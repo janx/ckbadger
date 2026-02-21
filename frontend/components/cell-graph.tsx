@@ -1,7 +1,7 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import { useCallback, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { GraphNode, GraphLink } from '@/lib/api';
 import type { ForceGraphMethods, NodeObject, LinkObject } from 'react-force-graph-2d';
 
@@ -40,14 +40,10 @@ const LINK_COLORS: Record<string, string> = {
   input: '#ef4444',
 };
 
-export function CellGraph({
-  nodes,
-  links,
-  onNodeClick,
-  width = 800,
-  height = 500,
-}: CellGraphProps) {
+export function CellGraph({ nodes, links, onNodeClick, width, height = 500 }: CellGraphProps) {
   const graphRef = useRef<ForceGraphMethods | undefined>(undefined);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [containerWidth, setContainerWidth] = useState<number | null>(width ?? null);
 
   const graphData = useMemo(
     () => ({
@@ -56,6 +52,54 @@ export function CellGraph({
     }),
     [nodes, links]
   );
+
+  useEffect(() => {
+    if (width !== undefined) {
+      setContainerWidth(width);
+      return;
+    }
+
+    const element = containerRef.current;
+    if (!element) {
+      return;
+    }
+
+    const updateWidth = () => {
+      const measuredWidth = Math.floor(element.clientWidth);
+      if (measuredWidth > 0) {
+        setContainerWidth(Math.max(320, measuredWidth));
+      }
+    };
+
+    updateWidth();
+
+    if (typeof ResizeObserver === 'undefined') {
+      return;
+    }
+
+    const observer = new ResizeObserver(() => {
+      updateWidth();
+    });
+    observer.observe(element);
+
+    return () => observer.disconnect();
+  }, [width]);
+
+  const resolvedWidth = width ?? containerWidth ?? 640;
+
+  useEffect(() => {
+    if (!graphRef.current || nodes.length === 0) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      graphRef.current?.zoomToFit?.(400, 50);
+    }, 0);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [graphData, height, nodes.length, resolvedWidth]);
 
   const getNodeColor = useCallback((node: ForceNode) => {
     if (node.nodeType === 'transaction') {
@@ -131,8 +175,9 @@ export function CellGraph({
   if (nodes.length === 0) {
     return (
       <div
-        className="flex items-center justify-center rounded-lg border border-slate-800 bg-slate-900/50"
-        style={{ width, height }}
+        ref={containerRef}
+        className="flex w-full items-center justify-center rounded-lg border border-slate-800 bg-slate-900/50"
+        style={{ width: width ?? '100%', height }}
       >
         <p className="text-slate-500">No graph data available</p>
       </div>
@@ -140,11 +185,15 @@ export function CellGraph({
   }
 
   return (
-    <div className="overflow-hidden rounded-lg border border-slate-800" style={{ width, height }}>
+    <div
+      ref={containerRef}
+      className="w-full overflow-hidden rounded-lg border border-slate-800"
+      style={{ width: width ?? '100%', height }}
+    >
       <ForceGraph2D
         ref={graphRef}
         graphData={graphData}
-        width={width}
+        width={resolvedWidth}
         height={height}
         backgroundColor="#0f0f1a"
         nodeCanvasObject={drawNode}

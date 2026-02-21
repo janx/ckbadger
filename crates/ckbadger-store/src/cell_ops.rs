@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use crate::keys;
 use crate::store::CkbadgerStore;
-use crate::types::{decode_consumed_cell_info, LiveCellInfo};
+use crate::types::{decode_consumed_cell_info, ConsumedCellInfo, LiveCellInfo};
 
 /// Aggregated cell statistics for a token.
 #[derive(Debug, Clone, Default)]
@@ -59,9 +59,19 @@ impl CkbadgerStore {
         tx_hash: &[u8],
         output_index: i16,
     ) -> anyhow::Result<Option<LiveCellInfo>> {
+        Ok(self
+            .get_consumed_cell_info(tx_hash, output_index)?
+            .map(|c| c.to_live_cell_info()))
+    }
+
+    pub fn get_consumed_cell_info(
+        &self,
+        tx_hash: &[u8],
+        output_index: i16,
+    ) -> anyhow::Result<Option<ConsumedCellInfo>> {
         let key = keys::encode_outpoint(tx_hash, output_index);
         match self.get_cf(self.cf_consumed_cells(), &key)? {
-            Some(value) => Ok(decode_consumed_cell_info(&value).map(|c| c.to_live_cell_info())),
+            Some(value) => Ok(decode_consumed_cell_info(&value)),
             None => Ok(None),
         }
     }
@@ -370,6 +380,7 @@ impl CkbadgerStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::batch::StoreBatch;
     use crate::store::CkbadgerStore;
     use tempfile::TempDir;
 
@@ -485,5 +496,29 @@ mod tests {
         let stats_b = store.aggregate_token_cell_stats(&type_b).unwrap();
         assert_eq!(stats_b.cells_count, 1);
         assert_eq!(stats_b.total_capacity, 500_00000000);
+    }
+
+    #[test]
+    fn test_get_consumed_cell_info_returns_consumer_metadata() {
+        let (_dir, store) = test_store();
+        let type_hash = [0x01u8; 32];
+        let consumed_cell = make_cell(200_00000000, 61_00000000, &type_hash);
+        let tx_hash = [0x11u8; 32];
+        let consumed_by_tx = [0x22u8; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_consumed_cell_with_consumer(
+            &tx_hash,
+            0,
+            &consumed_cell,
+            12345,
+            Some(&consumed_by_tx),
+        );
+        batch.commit().unwrap();
+
+        let info = store.get_consumed_cell_info(&tx_hash, 0).unwrap().unwrap();
+        assert_eq!(info.consumed_at_block, 12345);
+        assert_eq!(info.consumed_by_tx, Some(consumed_by_tx.to_vec()));
+        assert_eq!(info.cell.capacity, consumed_cell.capacity);
     }
 }

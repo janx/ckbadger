@@ -156,7 +156,8 @@ describe('CellDetailPage', () => {
     renderWithQueryClient(<CellDetailPage />);
 
     await waitFor(() => {
-      expect(screen.getByText('Live')).toBeInTheDocument();
+      const liveBadges = screen.getAllByText('Live');
+      expect(liveBadges.length).toBeGreaterThanOrEqual(1);
     });
 
     expect(screen.getByText('Capacity')).toBeInTheDocument();
@@ -167,6 +168,20 @@ describe('CellDetailPage', () => {
     expect(screen.getByText('Capacity Field')).toBeInTheDocument();
     expect(screen.getByText('Cell Data')).toBeInTheDocument();
     expect(screen.getByText(/^Formula:/)).toBeInTheDocument();
+
+    const guides = screen.getByTestId('byte-composition-guides');
+    const legend = screen.getByTestId('byte-composition-legend');
+
+    expect(guides.className).toContain('h-3');
+    expect(legend.className).toContain('mt-1');
+    expect(legend.className).not.toContain('-mt-');
+
+    expect(screen.getByText('Cell Relationship')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Lifecycle' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Graph' })).toBeInTheDocument();
+    expect(screen.getByTestId('cell-relationship-lifecycle')).toBeInTheDocument();
+    expect(screen.getByText('Current Status')).toBeInTheDocument();
+    expect(screen.getByText('Upstream Inputs (0)')).toBeInTheDocument();
   });
 
   it('renders withdrawn DAO cell with compensation info', async () => {

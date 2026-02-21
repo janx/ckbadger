@@ -107,13 +107,19 @@ impl BatchWriter {
         // Zip results with consumptions and process writes
         for (
             res,
-            (tx_hash, output_index, _created_at_block, _consumed_by_tx, consumed_at_block, _idx),
+            (tx_hash, output_index, _created_at_block, consumed_by_tx, consumed_at_block, _idx),
         ) in results.into_iter().zip(consumptions.iter())
         {
             if let Ok(Some(value)) = res {
                 if let Ok(info) = bincode::deserialize::<LiveCellInfo>(&value) {
                     // Move to consumed cells
-                    batch.put_consumed_cell(tx_hash, *output_index, &info, *consumed_at_block);
+                    batch.put_consumed_cell_with_consumer(
+                        tx_hash,
+                        *output_index,
+                        &info,
+                        *consumed_at_block,
+                        Some(*consumed_by_tx),
+                    );
                     // Remove from live cells
                     batch.delete_cell(tx_hash, *output_index);
                     // Remove cell indexes
@@ -350,7 +356,7 @@ impl BatchWriter {
             return Ok(());
         }
 
-        for (tx_hash, output_index, _created_at_block, _consumed_by_tx, consumed_at_block, _idx) in
+        for (tx_hash, output_index, _created_at_block, consumed_by_tx, consumed_at_block, _idx) in
             consumptions
         {
             let key = (tx_hash.to_vec(), *output_index);
@@ -359,7 +365,13 @@ impl BatchWriter {
                 .or_else(|| same_batch_cells.get(&key));
 
             if let Some(info) = info {
-                batch.put_consumed_cell(tx_hash, *output_index, info, *consumed_at_block);
+                batch.put_consumed_cell_with_consumer(
+                    tx_hash,
+                    *output_index,
+                    info,
+                    *consumed_at_block,
+                    Some(*consumed_by_tx),
+                );
                 batch.delete_cell(tx_hash, *output_index);
                 if !skip_cell_indices {
                     batch.delete_cell_by_lock(
