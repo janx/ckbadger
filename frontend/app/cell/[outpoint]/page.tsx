@@ -869,7 +869,7 @@ export default function CellDetailPage() {
           <TerminalPanel className="mt-6" variant="inset">
             <TerminalPanelHeader indicator="none">
               <div className="flex items-center gap-2">
-                <span>Data</span>
+                <span>DATA (first 1024 common knowledge bytes)</span>
                 {cell.data && (cell.data.length - 2) / 2 < cell.dataSize && (
                   <Badge variant="amber">
                     Truncated ({cell.dataSize.toLocaleString()} bytes total)
@@ -884,8 +884,7 @@ export default function CellDetailPage() {
                   if (!rawData) return <div className="text-slate-500">0x</div>;
 
                   const BYTES_PER_ROW = 24;
-                  const MAX_ROWS = 10;
-                  const MAX_DISPLAY_BYTES = BYTES_PER_ROW * MAX_ROWS;
+                  const MAX_DISPLAY_BYTES = 1024;
                   const receivedBytes = rawData.length / 2;
                   const actualTotalBytes = cell.dataSize;
                   const displayBytes = Math.min(receivedBytes, MAX_DISPLAY_BYTES);

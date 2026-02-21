@@ -105,6 +105,12 @@ const mockWithdrawnDaoCell = {
   },
 };
 
+const mockLargeDataCell = {
+  ...mockCellWithDao,
+  dataSize: 2048,
+  data: `0x${'ab'.repeat(2048)}`,
+};
+
 vi.mock('@/lib/api', () => ({
   api: {
     getCell: vi.fn(),
@@ -219,5 +225,17 @@ describe('CellDetailPage', () => {
     await waitFor(() => {
       expect(screen.getByText('Withdrawing')).toBeInTheDocument();
     });
+  });
+
+  it('shows DATA header and truncates displayed bytes to first 1024 bytes', async () => {
+    mockGetCell.mockResolvedValue(mockLargeDataCell);
+
+    renderWithQueryClient(<CellDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/DATA\s+\(first 1024 common knowledge bytes\)/)).toBeInTheDocument();
+    });
+
+    expect(screen.getByText('... 1,024 more bytes')).toBeInTheDocument();
   });
 });
