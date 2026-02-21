@@ -79,8 +79,8 @@ describe('ScriptsPage', () => {
       expect(api.getScripts).toHaveBeenCalledWith(
         expect.objectContaining({
           limit: 20,
-          sortKey: 'name',
-          sortDirection: 'asc',
+          sortKey: 'capacity',
+          sortDirection: 'desc',
         })
       );
     });

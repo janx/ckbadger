@@ -32,8 +32,8 @@ export default function ScriptsPage() {
   const decoderType = undefined;
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState<string | undefined>(undefined);
-  const [sortKey, setSortKey] = useState<ScriptSortKey>('name');
-  const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
+  const [sortKey, setSortKey] = useState<ScriptSortKey>('capacity');
+  const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
 
   const { data, isLoading } = useQuery({
     queryKey: ['scripts', pagination.cursor, decoderType, search, sortKey, sortDirection],

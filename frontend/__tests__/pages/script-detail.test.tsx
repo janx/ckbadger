@@ -178,6 +178,7 @@ describe('ScriptDetailPage', () => {
     });
 
     expect(screen.getByText('Deployed At')).toBeInTheDocument();
+    expect(screen.queryByText('Status')).not.toBeInTheDocument();
     expect(screen.getAllByText('Cells').length).toBeGreaterThan(0);
     expect(screen.queryByText('Occupation History')).not.toBeInTheDocument();
     expect(screen.queryByText('Selected Deployment Utilization')).not.toBeInTheDocument();

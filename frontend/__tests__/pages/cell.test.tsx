@@ -260,7 +260,7 @@ describe('CellDetailPage', () => {
     expect(
       document.querySelector(`a[href="/script/${DEPLOYMENT_DATA_HASH}?hashType=data&kind=both"]`)
     ).toBeTruthy();
-    expect(screen.getByText(/bytecode-hash family/)).toBeInTheDocument();
+    expect(screen.queryByText(/Deployment refs are shown as/i)).not.toBeInTheDocument();
   });
 
   it('renders withdrawing DAO cell status correctly', async () => {

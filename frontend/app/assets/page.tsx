@@ -46,11 +46,11 @@ function normalizeAssetTab(value: string | null): AssetTab {
 
 function AssetTable({ assetType, search }: { assetType: AssetTab; search: string | undefined }) {
   const pagination = useCursorPagination();
-  const [sortKey, setSortKey] = useState<AssetSortKey>('transfers24h');
+  const [sortKey, setSortKey] = useState<AssetSortKey>('capacity');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
 
   useEffect(() => {
-    setSortKey('transfers24h');
+    setSortKey('capacity');
     setSortDirection('desc');
   }, [assetType]);
 

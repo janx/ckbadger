@@ -811,13 +811,6 @@ export default function CellDetailPage() {
               <p className="mb-4 text-sm text-slate-400">
                 This cell stores script code used by the following scripts:
               </p>
-              <p className="mb-4 text-xs text-slate-500">
-                Deployment refs are shown as <span className="font-mono">type + data*</span>.
-                <span className="font-mono"> type </span>
-                is the upgradeable type-script reference, while{' '}
-                <span className="font-mono">data/data1/data2</span> are immutable bytecode-hash
-                references.
-              </p>
               <div className="space-y-2">
                 {cell.codeCellOf.map((script, idx) => {
                   const refs = getDeploymentReferenceHashes(script);

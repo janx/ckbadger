@@ -411,7 +411,6 @@ export default function ScriptDetailPage() {
                 <div className="flex-1">Deployment</div>
                 <div className="w-56">Deployed At</div>
                 <div className="w-24">Kind</div>
-                <div className="w-28">Status</div>
                 <div className="w-24 text-right">Cells</div>
                 <div className="w-32 text-right">Capacity</div>
               </div>
@@ -509,20 +508,6 @@ export default function ScriptDetailPage() {
                           <span className="text-slate-600">-</span>
                         )}
                       </div>
-                      <div className="w-28">
-                        <span
-                          className={`inline-flex items-center gap-1.5 font-mono text-xs ${
-                            deployment.deprecated ? 'text-red-400' : 'text-emerald-400'
-                          }`}
-                        >
-                          <span
-                            className={`h-1.5 w-1.5 rounded-full ${
-                              deployment.deprecated ? 'bg-red-500' : 'bg-emerald-400'
-                            }`}
-                          />
-                          {deployment.deprecated ? 'Deprecated' : 'Active'}
-                        </span>
-                      </div>
                       <div className="w-24 text-right font-mono tabular-nums text-slate-300">
                         {stats ? (
                           <span title={`Total: ${formatNumber(stats.cellsCount)}`}>
@@ -551,7 +536,6 @@ export default function ScriptDetailPage() {
                     <div className="flex-1 text-slate-400">Total</div>
                     <div className="w-56" />
                     <div className="w-24" />
-                    <div className="w-28" />
                     <div className="text-terminal-green w-24 text-right font-mono tabular-nums">
                       <span title={`Total: ${formatNumber(usage.cellsCount)}`}>
                         {formatNumber(usage.liveCellsCount)}

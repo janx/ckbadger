@@ -414,6 +414,24 @@ describe('AssetsPage', () => {
     });
   });
 
+  it('defaults to sorting by capacity in descending order', async () => {
+    vi.mocked(api.getAssets).mockResolvedValue(sortableTokenAssets);
+    vi.mocked(api.getToken).mockImplementation(async (typeHash: string) => {
+      const totalCapacity =
+        typeHash === sortableTokenAssets.data[0].id ? '2000000000' : '9000000000';
+      return { totalOccupiedCapacity: '0', totalCapacity } as any;
+    });
+
+    render(<AssetsPage />);
+
+    await waitFor(() => {
+      const tokenLinks = screen
+        .getAllByRole('link')
+        .filter((link) => link.getAttribute('href')?.startsWith('/tokens/'));
+      expect(tokenLinks[0]).toHaveTextContent('BETA');
+    });
+  });
+
   it('supports sorting by capacity', async () => {
     vi.mocked(api.getAssets).mockResolvedValue(sortableTokenAssets);
     vi.mocked(api.getToken).mockImplementation(async (typeHash: string) => {
@@ -435,7 +453,7 @@ describe('AssetsPage', () => {
       const tokenLinks = screen
         .getAllByRole('link')
         .filter((link) => link.getAttribute('href')?.startsWith('/tokens/'));
-      expect(tokenLinks[0]).toHaveTextContent('ALPHA');
+      expect(tokenLinks[0]).toHaveTextContent('BETA');
     });
   });
 });
