@@ -18,9 +18,72 @@ import { Capacity } from '@/components/ui/capacity';
 import { ScriptView } from '@/components/ui/script-view';
 import { CellGraph } from '@/components/cell-graph';
 import { api, type GraphNode } from '@/lib/api';
+import {
+  getScriptRefBadgeLabel,
+  getScriptRefQueryHashType,
+  normalizeScriptRefHashType,
+  type ScriptRefHashType,
+} from '@/lib/script-ref';
 
 type RelationshipView = 'lifecycle' | 'graph';
 const DATA_PREVIEW_LIMIT_BYTES = 1024;
+const UNKNOWN_SCRIPT_NAME = 'unknown';
+
+function hasKnownScriptName(name: string | null | undefined): boolean {
+  return Boolean(name && name.trim() && name.trim().toLowerCase() !== UNKNOWN_SCRIPT_NAME);
+}
+
+function normalizeHash(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+function getScriptRefHref(referenceHash: string, hashType: ScriptRefHashType): string {
+  return `/script/${referenceHash}?hashType=${hashType}&kind=both`;
+}
+
+function getDeploymentReferenceHashes(script: {
+  codeHash: string;
+  hashType: string;
+  deploymentTypeHash?: string | null;
+  deploymentDataHash?: string | null;
+}): { typeHash: string | null; dataHash: string | null; dataHashType: ScriptRefHashType } {
+  const typeHash =
+    normalizeHash(script.deploymentTypeHash) ??
+    (script.hashType === 'type' ? normalizeHash(script.codeHash) : null);
+
+  const dataHash =
+    normalizeHash(script.deploymentDataHash) ??
+    (script.hashType !== 'type' ? normalizeHash(script.codeHash) : null);
+
+  const dataHashType: ScriptRefHashType =
+    script.hashType !== 'type' ? getScriptRefQueryHashType(script.hashType, 'data') : 'data';
+
+  return { typeHash, dataHash, dataHashType };
+}
+
+function getCodeCellScriptHref(script: {
+  name: string;
+  codeHash: string;
+  hashType: string;
+  deploymentTypeHash?: string | null;
+  deploymentDataHash?: string | null;
+}): string {
+  if (hasKnownScriptName(script.name)) {
+    return `/scripts/${encodeURIComponent(script.name.trim())}`;
+  }
+
+  const refs = getDeploymentReferenceHashes(script);
+  if (refs.typeHash) {
+    return getScriptRefHref(refs.typeHash, 'type');
+  }
+  if (refs.dataHash) {
+    return getScriptRefHref(refs.dataHash, refs.dataHashType);
+  }
+
+  return getScriptRefHref(script.codeHash, normalizeScriptRefHashType(script.hashType) ?? 'data');
+}
 
 function shortenHash(hash: string, leading: number = 10, trailing: number = 8): string {
   if (hash.length <= leading + trailing + 3) {
@@ -748,23 +811,67 @@ export default function CellDetailPage() {
               <p className="mb-4 text-sm text-slate-400">
                 This cell stores script code used by the following scripts:
               </p>
+              <p className="mb-4 text-xs text-slate-500">
+                Deployment refs are shown as <span className="font-mono">type + data*</span>.
+                <span className="font-mono"> type </span>
+                is the upgradeable type-script reference, while{' '}
+                <span className="font-mono">data/data1/data2</span> are immutable bytecode-hash
+                references.
+              </p>
               <div className="space-y-2">
-                {cell.codeCellOf.map((script, idx) => (
-                  <TerminalRow key={idx}>
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
+                {cell.codeCellOf.map((script, idx) => {
+                  const refs = getDeploymentReferenceHashes(script);
+
+                  return (
+                    <TerminalRow key={`${script.codeHash}-${script.hashType}-${idx}`}>
+                      <div className="min-w-0 space-y-1.5">
                         <Link
-                          href={`/scripts/${encodeURIComponent(script.name)}`}
+                          href={getCodeCellScriptHref(script)}
                           className="text-lg font-medium text-emerald-300 hover:underline"
                         >
-                          {script.name}
+                          {hasKnownScriptName(script.name) ? script.name.trim() : 'Unknown'}
                         </Link>
-                        <Badge variant="gray">{script.hashType}</Badge>
+                        <div className="flex flex-wrap items-center gap-2 text-xs">
+                          <span className="uppercase tracking-wide text-slate-500">Refs</span>
+                          <Badge variant="gray">type</Badge>
+                          {refs.typeHash ? (
+                            <Link
+                              href={getScriptRefHref(refs.typeHash, 'type')}
+                              className="font-mono text-slate-300 hover:text-emerald-300 hover:underline"
+                            >
+                              <HexDisplay
+                                value={refs.typeHash}
+                                size="sm"
+                                color="green"
+                                startChars={10}
+                                endChars={8}
+                              />
+                            </Link>
+                          ) : (
+                            <span className="font-mono text-slate-500">Unavailable</span>
+                          )}
+                          <Badge variant="gray">{getScriptRefBadgeLabel(refs.dataHashType)}</Badge>
+                          {refs.dataHash ? (
+                            <Link
+                              href={getScriptRefHref(refs.dataHash, refs.dataHashType)}
+                              className="font-mono text-slate-300 hover:text-emerald-300 hover:underline"
+                            >
+                              <HexDisplay
+                                value={refs.dataHash}
+                                size="sm"
+                                color="green"
+                                startChars={10}
+                                endChars={8}
+                              />
+                            </Link>
+                          ) : (
+                            <span className="font-mono text-slate-500">Unavailable</span>
+                          )}
+                        </div>
                       </div>
-                      <HexDisplay value={script.codeHash} size="sm" color="white" />
-                    </div>
-                  </TerminalRow>
-                ))}
+                    </TerminalRow>
+                  );
+                })}
               </div>
             </TerminalPanelContent>
           </TerminalPanel>

@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { Header } from '@/components/layout/header';
 import {
@@ -21,12 +21,18 @@ import { OccupationRangeSelector } from '@/components/ui/occupation-range-select
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api } from '@/lib/api';
 import { getOccupationRangeParams, OccupationRangeKey } from '@/lib/occupation-range';
+import {
+  getScriptRefBadgeLabel,
+  getScriptRefQueryHashType,
+  normalizeScriptRefHashType,
+  type ScriptRefHashType,
+} from '@/lib/script-ref';
 import { formatCkbCompact } from '@/lib/utils';
-import type { KnownScript } from '@/lib/api';
+import type { KnownScript, ScriptLookupInfo } from '@/lib/api';
 
 interface SelectedDeployment {
   codeHash: string;
-  hashType: string;
+  hashType: ScriptRefHashType;
   scriptKind?: 'lock' | 'type';
 }
 
@@ -41,9 +47,55 @@ function compareDeploymentsByDeployedAt(a: KnownScript, b: KnownScript): number 
   return a.codeHash.localeCompare(b.codeHash);
 }
 
+function normalizeHash(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+function isHexScriptHash(value: string): boolean {
+  return /^0x[0-9a-fA-F]{64}$/.test(value);
+}
+
+function deploymentReferenceHashes(
+  deployment: KnownScript,
+  lookupInfo?: ScriptLookupInfo
+): {
+  typeRef: string | null;
+  dataRef: string | null;
+  dataRefType: ScriptRefHashType;
+} {
+  const normalizedHashType = normalizeScriptRefHashType(deployment.hashType);
+  const lookupTypeRef = normalizeHash(lookupInfo?.deploymentTypeHash);
+  const lookupDataRef = normalizeHash(lookupInfo?.deploymentDataHash);
+  const typeRef =
+    lookupTypeRef ??
+    deployment.typeHash ??
+    (normalizedHashType === 'type' ? deployment.codeHash : null);
+  const dataRef =
+    lookupDataRef ??
+    deployment.dataHash ??
+    (normalizedHashType !== 'type' ? deployment.codeHash : null);
+  const baseDataRefType =
+    normalizedHashType !== 'type' ? getScriptRefQueryHashType(deployment.hashType, 'data') : 'data';
+  const dataRefType =
+    lookupInfo?.hashType && lookupInfo.hashType !== 'type'
+      ? getScriptRefQueryHashType(lookupInfo.hashType, baseDataRefType)
+      : baseDataRefType;
+
+  return { typeRef, dataRef, dataRefType };
+}
+
 export default function ScriptDetailPage() {
   const params = useParams();
+  const searchParams = useSearchParams();
   const name = decodeURIComponent(params.name as string);
+  const selectedRefParam = searchParams.get('ref');
+  const selectedRef =
+    selectedRefParam && isHexScriptHash(selectedRefParam.trim())
+      ? `0x${selectedRefParam.trim().slice(2).toLowerCase()}`
+      : null;
+  const selectedRefHashType = normalizeScriptRefHashType(searchParams.get('hashType'));
   const [occupationRange, setOccupationRange] = useState<OccupationRangeKey>('all');
   const [selectedDeployment, setSelectedDeployment] = useState<SelectedDeployment | null>(null);
   const cellsPagination = useCursorPagination();
@@ -61,6 +113,19 @@ export default function ScriptDetailPage() {
   const { data: usage, isLoading: isUsageLoading } = useQuery({
     queryKey: ['script-usage', name],
     queryFn: () => api.getScriptUsage(name),
+  });
+  const lookupCodeHashes = useMemo(() => {
+    const refs = new Set<string>((deployments ?? []).map((deployment) => deployment.codeHash));
+    if (selectedRef) {
+      refs.add(selectedRef);
+    }
+    return Array.from(refs);
+  }, [deployments, selectedRef]);
+  const { data: deploymentLookup } = useQuery({
+    queryKey: ['script-deployments-lookup', lookupCodeHashes],
+    queryFn: () => api.lookupScripts(lookupCodeHashes),
+    enabled: lookupCodeHashes.length > 0,
+    staleTime: Infinity,
   });
 
   const selectedScriptKindForChart =
@@ -93,21 +158,57 @@ export default function ScriptDetailPage() {
     if (deployments && deployments.length > 0 && usage && !selectedDeployment) {
       const sortedDeployments = [...deployments].sort(compareDeploymentsByDeployedAt);
       const usageByCodeHash = new Map(usage.byDeployment.map((d) => [d.codeHash, d]));
+      const selectedByRef = selectedRef
+        ? sortedDeployments.find((deployment) => {
+            const normalizedHashType = normalizeScriptRefHashType(deployment.hashType);
+            if (
+              deployment.codeHash === selectedRef &&
+              (!selectedRefHashType || selectedRefHashType === normalizedHashType)
+            ) {
+              return true;
+            }
+            const refs = deploymentReferenceHashes(
+              deployment,
+              deploymentLookup?.[deployment.codeHash]
+            );
+            const matchesTypeRef =
+              refs.typeRef === selectedRef &&
+              (!selectedRefHashType || selectedRefHashType === 'type');
+            const matchesDataRef =
+              refs.dataRef === selectedRef &&
+              (!selectedRefHashType || selectedRefHashType === refs.dataRefType);
+            return matchesTypeRef || matchesDataRef;
+          })
+        : null;
       const firstWithCells = sortedDeployments.find((d) => {
+        const normalizedHashType = normalizeScriptRefHashType(d.hashType);
         const stats = usageByCodeHash.get(d.codeHash);
-        return d.hashType && stats && stats.liveCellsCount > 0;
+        return normalizedHashType && stats && stats.liveCellsCount > 0;
       });
-      const target = firstWithCells || sortedDeployments[0];
+      const target = selectedByRef || firstWithCells || sortedDeployments[0];
       const stats = usageByCodeHash.get(target.codeHash);
-      if (target.hashType) {
+      let hashType = normalizeScriptRefHashType(target.hashType);
+      if (selectedByRef && selectedRef && selectedRefHashType) {
+        const selectedRefs = deploymentReferenceHashes(target, deploymentLookup?.[target.codeHash]);
+        if (selectedRefHashType === 'type' && selectedRefs.typeRef === selectedRef) {
+          hashType = 'type';
+        } else if (
+          selectedRefHashType !== 'type' &&
+          selectedRefs.dataRef === selectedRef &&
+          selectedRefs.dataRefType === selectedRefHashType
+        ) {
+          hashType = selectedRefHashType;
+        }
+      }
+      if (hashType) {
         setSelectedDeployment({
           codeHash: target.codeHash,
-          hashType: target.hashType,
+          hashType,
           scriptKind: stats?.scriptKind as 'lock' | 'type' | undefined,
         });
       }
     }
-  }, [deployments, usage, selectedDeployment]);
+  }, [deploymentLookup, deployments, selectedDeployment, selectedRef, selectedRefHashType, usage]);
 
   const { data: cellsData, isLoading: isCellsLoading } = useQuery({
     queryKey: [
@@ -173,13 +274,33 @@ export default function ScriptDetailPage() {
   const selectedDeploymentUsage = selectedDeployment
     ? usageByCodeHash.get(selectedDeployment.codeHash)
     : undefined;
+  const selectedDeploymentInfo =
+    selectedDeployment &&
+    sortedDeployments.find((d) => {
+      const hashType = normalizeScriptRefHashType(d.hashType);
+      return d.codeHash === selectedDeployment.codeHash && hashType === selectedDeployment.hashType;
+    });
+  const selectedDeploymentRefs = selectedDeploymentInfo
+    ? deploymentReferenceHashes(
+        selectedDeploymentInfo,
+        deploymentLookup?.[selectedDeploymentInfo.codeHash]
+      )
+    : {
+        typeRef: selectedDeployment?.hashType === 'type' ? selectedDeployment.codeHash : null,
+        dataRef: selectedDeployment?.hashType !== 'type' ? selectedDeployment?.codeHash : null,
+        dataRefType:
+          selectedDeployment?.hashType && selectedDeployment.hashType !== 'type'
+            ? selectedDeployment.hashType
+            : 'data',
+      };
 
   const handleDeploymentClick = (deployment: KnownScript) => {
-    if (!deployment.hashType) return;
+    const hashType = normalizeScriptRefHashType(deployment.hashType);
+    if (!hashType) return;
     const stats = usageByCodeHash.get(deployment.codeHash);
     const newSelected = {
       codeHash: deployment.codeHash,
-      hashType: deployment.hashType,
+      hashType,
       scriptKind: stats?.scriptKind as 'lock' | 'type' | undefined,
     };
     if (
@@ -193,7 +314,7 @@ export default function ScriptDetailPage() {
 
   const isSelected = (deployment: KnownScript) =>
     selectedDeployment?.codeHash === deployment.codeHash &&
-    selectedDeployment?.hashType === deployment.hashType;
+    selectedDeployment?.hashType === normalizeScriptRefHashType(deployment.hashType);
 
   return (
     <div className="min-h-screen bg-slate-950">
@@ -253,6 +374,31 @@ export default function ScriptDetailPage() {
         <TerminalPanel className="mb-6" glow>
           <TerminalPanelHeader indicator="active">Deployments</TerminalPanelHeader>
           <TerminalPanelContent padding="none">
+            <div className="border-b border-slate-800 px-4 py-3">
+              <div className="mb-2 text-[11px] uppercase tracking-wider text-slate-500">
+                Reference Semantics
+              </div>
+              <div className="space-y-1 text-xs text-slate-400">
+                <div>
+                  <span className="font-mono text-emerald-300">type ref</span>
+                  <span>
+                    {' '}
+                    resolves by type script hash (upgradeable flow, executes on latest CKB-VM).
+                  </span>
+                </div>
+                <div>
+                  <span className="font-mono text-emerald-300">data/data1/data2</span>
+                  <span>
+                    {' '}
+                    resolves by bytecode hash (immutable binary, VM version fixed to v0/v1/v2).
+                  </span>
+                </div>
+                <div className="text-slate-500">
+                  Tradeoff: type favors upgradability; data family favors deterministic,
+                  reproducible execution.
+                </div>
+              </div>
+            </div>
             <div className="overflow-x-auto">
               <div className="flex border-b border-slate-800 bg-slate-900/50 px-4 py-2 font-mono text-xs uppercase tracking-wider text-slate-500">
                 <div className="flex-1">Deployment</div>
@@ -266,6 +412,10 @@ export default function ScriptDetailPage() {
               {sortedDeployments.map((deployment, idx) => {
                 const stats = usageByCodeHash.get(deployment.codeHash);
                 const selected = isSelected(deployment);
+                const refs = deploymentReferenceHashes(
+                  deployment,
+                  deploymentLookup?.[deployment.codeHash]
+                );
                 return (
                   <TerminalRow
                     key={idx}
@@ -294,12 +444,32 @@ export default function ScriptDetailPage() {
                             <span className="text-slate-600">-</span>
                           )}
                         </div>
-                        <HexDisplay
-                          value={`${deployment.hashType}:${deployment.codeHash}`}
-                          color={selected ? 'green' : 'white'}
-                          startChars={15}
-                          endChars={6}
-                        />
+                        <div className="flex flex-wrap items-center gap-2 text-xs">
+                          <Badge variant="gray">type</Badge>
+                          {refs.typeRef ? (
+                            <HexDisplay
+                              value={refs.typeRef}
+                              color={selected ? 'green' : 'white'}
+                              size="sm"
+                              startChars={10}
+                              endChars={8}
+                            />
+                          ) : (
+                            <span className="font-mono text-slate-600">Unavailable</span>
+                          )}
+                          <Badge variant="gray">{getScriptRefBadgeLabel(refs.dataRefType)}</Badge>
+                          {refs.dataRef ? (
+                            <HexDisplay
+                              value={refs.dataRef}
+                              color={selected ? 'green' : 'white'}
+                              size="sm"
+                              startChars={10}
+                              endChars={8}
+                            />
+                          ) : (
+                            <span className="font-mono text-slate-600">Unavailable</span>
+                          )}
+                        </div>
                       </div>
                       <div
                         className="w-48 font-mono text-xs text-slate-400"
@@ -384,13 +554,37 @@ export default function ScriptDetailPage() {
                 <div className="flex items-center gap-2">
                   <span>Capacity &amp; Occupation</span>
                   <span className="text-slate-600">|</span>
-                  <HexDisplay
-                    value={`${selectedDeployment.hashType}:${selectedDeployment.codeHash}`}
-                    color="white"
-                    size="sm"
-                    startChars={15}
-                    endChars={6}
-                  />
+                  <div
+                    data-testid="capacity-selected-refs"
+                    className="flex flex-wrap items-center gap-2 text-xs"
+                  >
+                    <Badge variant="gray">type</Badge>
+                    {selectedDeploymentRefs.typeRef ? (
+                      <HexDisplay
+                        value={selectedDeploymentRefs.typeRef}
+                        color="white"
+                        size="sm"
+                        startChars={10}
+                        endChars={8}
+                      />
+                    ) : (
+                      <span className="font-mono text-slate-600">Unavailable</span>
+                    )}
+                    <Badge variant="gray">
+                      {getScriptRefBadgeLabel(selectedDeploymentRefs.dataRefType)}
+                    </Badge>
+                    {selectedDeploymentRefs.dataRef ? (
+                      <HexDisplay
+                        value={selectedDeploymentRefs.dataRef}
+                        color="white"
+                        size="sm"
+                        startChars={10}
+                        endChars={8}
+                      />
+                    ) : (
+                      <span className="font-mono text-slate-600">Unavailable</span>
+                    )}
+                  </div>
                 </div>
               </TerminalPanelHeader>
               <TerminalPanelContent padding="none">
@@ -431,13 +625,37 @@ export default function ScriptDetailPage() {
                 <div className="flex items-center gap-2">
                   <span>Cells</span>
                   <span className="text-slate-600">|</span>
-                  <HexDisplay
-                    value={`${selectedDeployment.hashType}:${selectedDeployment.codeHash}`}
-                    color="white"
-                    size="sm"
-                    startChars={15}
-                    endChars={6}
-                  />
+                  <div
+                    data-testid="cells-selected-refs"
+                    className="flex flex-wrap items-center gap-2 text-xs"
+                  >
+                    <Badge variant="gray">type</Badge>
+                    {selectedDeploymentRefs.typeRef ? (
+                      <HexDisplay
+                        value={selectedDeploymentRefs.typeRef}
+                        color="white"
+                        size="sm"
+                        startChars={10}
+                        endChars={8}
+                      />
+                    ) : (
+                      <span className="font-mono text-slate-600">Unavailable</span>
+                    )}
+                    <Badge variant="gray">
+                      {getScriptRefBadgeLabel(selectedDeploymentRefs.dataRefType)}
+                    </Badge>
+                    {selectedDeploymentRefs.dataRef ? (
+                      <HexDisplay
+                        value={selectedDeploymentRefs.dataRef}
+                        color="white"
+                        size="sm"
+                        startChars={10}
+                        endChars={8}
+                      />
+                    ) : (
+                      <span className="font-mono text-slate-600">Unavailable</span>
+                    )}
+                  </div>
                 </div>
               </TerminalPanelHeader>
               <TerminalPanelContent padding="none">

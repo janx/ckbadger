@@ -18,10 +18,14 @@ vi.mock('@/components/layout/header', () => ({
 }));
 
 const mockCodeHash = '0x7366a61534fa7c7e6225ecc0d828ea3b5366adec2b58206f2ee84995fe030075';
+const mockDataHash = '0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649';
+const { replaceMock } = vi.hoisted(() => ({ replaceMock: vi.fn() }));
+let currentCodeHashParam = mockCodeHash;
 
 vi.mock('next/navigation', () => ({
-  useParams: () => ({ codeHash: mockCodeHash }),
+  useParams: () => ({ codeHash: currentCodeHashParam }),
   useSearchParams: () => new URLSearchParams(),
+  useRouter: () => ({ replace: replaceMock }),
 }));
 
 const emptyCells = {
@@ -35,13 +39,16 @@ const emptyCells = {
 describe('ScriptByCodeHashPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    currentCodeHashParam = mockCodeHash;
     vi.mocked(api.lookupScripts).mockResolvedValue({
       [mockCodeHash]: {
         codeHash: mockCodeHash,
-        name: 'Spore Cluster',
+        name: 'Unknown',
         scriptKind: 'type',
         decoderType: null,
         hashType: 'type',
+        deploymentTypeHash: mockCodeHash,
+        deploymentDataHash: mockDataHash,
         codeCellTxHash: null,
         codeCellOutputIndex: null,
         liveCellsCount: 15,
@@ -76,5 +83,54 @@ describe('ScriptByCodeHashPage', () => {
 
     expect(screen.getByText(/^Occupied:/)).toBeInTheDocument();
     expect(screen.getByText(/^Unoccupied:/)).toBeInTheDocument();
+    expect(screen.getByText('Same Deployment References')).toBeInTheDocument();
+    expect(screen.getByText('Reference Semantics')).toBeInTheDocument();
+    expect(screen.getByText(/bytecode hash ref family \(data\/data1\/data2\)/)).toBeInTheDocument();
+    expect(screen.getByText(/Tradeoff: choose type for upgradeability/)).toBeInTheDocument();
+    expect(screen.getByText('type (upgradeable ref)')).toBeInTheDocument();
+    expect(screen.getByText('Type + Data')).toBeInTheDocument();
+    expect(
+      document.querySelector(`a[href="/script/${mockCodeHash}?hashType=type&kind=type"]`)
+    ).toBeTruthy();
+    expect(
+      document.querySelector(`a[href="/script/${mockDataHash}?hashType=data&kind=type"]`)
+    ).toBeTruthy();
+  });
+
+  it('redirects known script hash to the unified named script detail page', async () => {
+    vi.mocked(api.lookupScripts).mockResolvedValue({
+      [mockCodeHash]: {
+        codeHash: mockCodeHash,
+        name: 'Default Lock',
+        scriptKind: 'lock',
+        decoderType: null,
+        hashType: 'type',
+        deploymentTypeHash: mockCodeHash,
+        deploymentDataHash: mockDataHash,
+        codeCellTxHash: null,
+        codeCellOutputIndex: null,
+        liveCellsCount: 15,
+        liveCapacitySum: '25000000000',
+        liveOccupiedCapacitySum: '14000000000',
+      },
+    });
+
+    render(<ScriptByCodeHashPage />);
+
+    await waitFor(() => {
+      expect(replaceMock).toHaveBeenCalledWith(
+        `/scripts/${encodeURIComponent('Default Lock')}?ref=${mockCodeHash}&hashType=type&kind=lock`
+      );
+    });
+  });
+
+  it('redirects /script/<name> alias to the named detail page', async () => {
+    currentCodeHashParam = 'Default Lock';
+
+    render(<ScriptByCodeHashPage />);
+
+    await waitFor(() => {
+      expect(replaceMock).toHaveBeenCalledWith(`/scripts/${encodeURIComponent('Default Lock')}`);
+    });
   });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import ScriptDetailPage from '@/app/scripts/[name]/page';
 import { api } from '@/lib/api';
@@ -11,6 +11,7 @@ vi.mock('@/lib/api', () => ({
     getScriptOccupationChart: vi.fn(),
     getScriptOccupationChartByCodeHash: vi.fn(),
     getCellsByScriptRef: vi.fn(),
+    lookupScripts: vi.fn(),
   },
 }));
 
@@ -20,10 +21,13 @@ vi.mock('@/components/layout/header', () => ({
 
 vi.mock('next/navigation', () => ({
   useParams: () => ({ name: 'SECP256K1_BLAKE160' }),
+  useSearchParams: () => new URLSearchParams(),
 }));
 
 const olderCodeHash = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const newerCodeHash = '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+const olderDataHash = '0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc';
+const newerDataHash = '0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd';
 const olderDeployedAt = Date.parse('2024-01-01T00:00:00.000Z');
 const newerDeployedAt = Date.parse('2024-02-01T00:00:00.000Z');
 const olderCodeCellTxHash = '0x1111111111111111111111111111111111111111111111111111111111111111';
@@ -41,8 +45,8 @@ const mockDeployments = [
     decoderType: null,
     network: 'mainnet',
     hashType: 'type',
-    dataHash: null,
-    typeHash: null,
+    dataHash: olderDataHash,
+    typeHash: olderCodeHash,
     tag: null,
     deprecated: false,
     isSystem: true,
@@ -61,8 +65,8 @@ const mockDeployments = [
     decoderType: null,
     network: 'mainnet',
     hashType: 'type',
-    dataHash: null,
-    typeHash: null,
+    dataHash: newerDataHash,
+    typeHash: newerCodeHash,
     tag: null,
     deprecated: false,
     isSystem: true,
@@ -134,6 +138,36 @@ describe('ScriptDetailPage', () => {
     vi.mocked(api.getScriptOccupationChart).mockResolvedValue(mockOccupationChart);
     vi.mocked(api.getScriptOccupationChartByCodeHash).mockResolvedValue(mockOccupationChart);
     vi.mocked(api.getCellsByScriptRef).mockResolvedValue(emptyCells);
+    vi.mocked(api.lookupScripts).mockResolvedValue({
+      [olderCodeHash]: {
+        codeHash: olderCodeHash,
+        name: 'SECP256K1_BLAKE160',
+        scriptKind: 'lock',
+        decoderType: null,
+        hashType: 'type',
+        deploymentTypeHash: olderCodeHash,
+        deploymentDataHash: olderDataHash,
+        codeCellTxHash: olderCodeCellTxHash,
+        codeCellOutputIndex: 0,
+        liveCellsCount: 1,
+        liveCapacitySum: '1000000000',
+        liveOccupiedCapacitySum: '610000000',
+      },
+      [newerCodeHash]: {
+        codeHash: newerCodeHash,
+        name: 'SECP256K1_BLAKE160',
+        scriptKind: 'lock',
+        decoderType: null,
+        hashType: 'type',
+        deploymentTypeHash: newerCodeHash,
+        deploymentDataHash: newerDataHash,
+        codeCellTxHash: newerCodeCellTxHash,
+        codeCellOutputIndex: 1,
+        liveCellsCount: 7,
+        liveCapacitySum: '9000000000',
+        liveOccupiedCapacitySum: '5490000000',
+      },
+    });
   });
 
   it('renders separate capacity and cells sections without occupation history section', async () => {
@@ -147,8 +181,15 @@ describe('ScriptDetailPage', () => {
     expect(screen.getAllByText('Cells').length).toBeGreaterThan(0);
     expect(screen.queryByText('Occupation History')).not.toBeInTheDocument();
     expect(screen.queryByText('Selected Deployment Utilization')).not.toBeInTheDocument();
+    expect(screen.getByText('Reference Semantics')).toBeInTheDocument();
     expect(screen.getAllByText(/^Occupied:/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/^Unoccupied:/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('bytecode(data)').length).toBeGreaterThan(0);
+    expect(document.querySelector(`[title="Click to copy: ${newerDataHash}"]`)).toBeTruthy();
+    const capacityRefs = screen.getByTestId('capacity-selected-refs');
+    const cellsRefs = screen.getByTestId('cells-selected-refs');
+    expect(within(capacityRefs).getByText('type')).toBeInTheDocument();
+    expect(within(cellsRefs).getByText('bytecode(data)')).toBeInTheDocument();
 
     const codeCellLinks = Array.from(document.querySelectorAll('a[href^="/cell/"]')).map((link) =>
       link.getAttribute('href')
