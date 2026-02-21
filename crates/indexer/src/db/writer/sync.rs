@@ -16,6 +16,16 @@ impl BatchWriter {
         new_addresses: i64,
         ema_rate: Option<f64>,
     ) -> Result<()> {
+        // Persist sync status in RocksDB so restart/fallback paths do not rely on Redis.
+        self.store.update_sync_status(|status| {
+            status.tip_block_number = block_number;
+            status.tip_block_hash = block_hash.to_vec();
+            status.total_transactions += tx_count;
+            status.total_cells_created += cells_created;
+            status.total_cells_consumed += cells_consumed;
+            status.last_synced_at = chrono::Utc::now().timestamp();
+        })?;
+
         if let Some(cache) = &self.cache_invalidator {
             let hash_hex = format!("0x{}", hex::encode(block_hash));
             cache
@@ -95,6 +105,22 @@ impl BatchWriter {
             );
         }
 
+        // Align persistent sync tip to the startup tip to avoid stale sync_status metadata.
+        let tip_number = start_block.max(0);
+        let tip_hash = if start_block >= 0 {
+            self.store.get_block_header(start_block)?.map(|h| h.hash)
+        } else {
+            None
+        };
+        self.store.update_sync_status(|status| {
+            status.tip_block_number = tip_number;
+            match &tip_hash {
+                Some(hash) => status.tip_block_hash = hash.clone(),
+                None if tip_number == 0 => status.tip_block_hash.clear(),
+                None => {}
+            }
+        })?;
+
         if let Some(cache) = &self.cache_invalidator {
             let cache = cache.clone();
             tokio::task::block_in_place(|| {
@@ -108,6 +134,10 @@ impl BatchWriter {
             });
         }
         Ok(())
+    }
+
+    pub fn needs_startup_cleanup(&self, start_block: i64) -> Result<bool> {
+        self.has_partial_data_after_block(start_block)
     }
 
     pub fn cleanup_batch_range(&self, start_block: i64, end_block: i64) -> Result<()> {
@@ -265,5 +295,44 @@ mod tests {
 
         assert!(store.get_block_header(1).unwrap().is_none());
         assert!(store.get_addr_balance(&lock_hash).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_needs_startup_cleanup_reports_partial_data() {
+        let (_dir, store, writer) = setup();
+        assert!(!writer.needs_startup_cleanup(0).unwrap());
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(1, &make_header(0x21, 1_700_000_020_000));
+        batch.commit().unwrap();
+
+        assert!(writer.needs_startup_cleanup(0).unwrap());
+    }
+
+    #[test]
+    fn test_update_sync_status_persists_sync_meta_in_store() {
+        let (_dir, store, writer) = setup();
+        let first_hash = vec![0xAB; 32];
+        let second_hash = vec![0xCD; 32];
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            writer
+                .update_sync_status(42, &first_hash, 10, 20, 4, 1, Some(123.0))
+                .await
+                .unwrap();
+            writer
+                .update_sync_status(43, &second_hash, 3, 8, 2, 1, None)
+                .await
+                .unwrap();
+        });
+
+        let status = store.get_sync_status().unwrap();
+        assert_eq!(status.tip_block_number, 43);
+        assert_eq!(status.tip_block_hash, second_hash);
+        assert_eq!(status.total_transactions, 13);
+        assert_eq!(status.total_cells_created, 28);
+        assert_eq!(status.total_cells_consumed, 6);
+        assert!(status.last_synced_at > 0);
     }
 }

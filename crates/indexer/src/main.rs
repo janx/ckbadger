@@ -193,6 +193,20 @@ async fn run_sync(args: Cli) -> Result<()> {
             "sync_status tip ({}) differs from block_headers tip ({}), using block_headers tip",
             sync_status.tip_block_number, db_tip
         );
+        let repaired_tip_hash = db_tip_hash.clone();
+        store.update_sync_status(|status| {
+            status.tip_block_number = db_tip;
+            match &repaired_tip_hash {
+                Some(hash) => status.tip_block_hash = hash.clone(),
+                None if db_tip == 0 => status.tip_block_hash.clear(),
+                None => {}
+            }
+        })?;
+        sync_status = store.get_sync_status()?;
+        info!(
+            "Repaired sync_status tip to {} from block_headers tip",
+            sync_status.tip_block_number
+        );
     }
     let is_fresh_sync = db_tip == 0 && db_tip_hash.is_none();
 
@@ -234,6 +248,7 @@ async fn run_sync(args: Cli) -> Result<()> {
                 eta_formatted: eta.clone(),
                 progress_percentage: progress.progress_percentage(),
                 updated_at: chrono::Utc::now().timestamp(),
+                startup_phase: indexer_for_progress.startup_phase(),
                 is_direct_db_read: data_source == "DB",
                 db_write_ms: if perf_db_ms > 0.0 {
                     Some(perf_db_ms)

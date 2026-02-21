@@ -1,7 +1,7 @@
 #![allow(clippy::type_complexity)]
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -35,6 +35,15 @@ use super::SyncProgress;
 #[allow(dead_code)]
 const PARTITION_SIZE: u64 = 5_000_000;
 const DOTBIT_SENTINEL_COLLECTION: [u8; 32] = *b"dotbit_collection_______________";
+const STARTUP_PHASE_NONE: u8 = 0;
+const STARTUP_PHASE_ROLLBACK_CLEANUP: u8 = 1;
+
+fn decode_startup_phase(phase: u8) -> Option<&'static str> {
+    match phase {
+        STARTUP_PHASE_ROLLBACK_CLEANUP => Some("rollback_cleanup"),
+        _ => None,
+    }
+}
 
 #[allow(dead_code)]
 fn get_partition_index(block_number: u64) -> usize {
@@ -701,6 +710,7 @@ pub struct Indexer {
     was_secondary_issuance_bulk_active: std::sync::atomic::AtomicBool,
     rebuild_pause_flag: Arc<std::sync::atomic::AtomicBool>,
     reorg_notify_flag: Arc<std::sync::atomic::AtomicBool>,
+    startup_phase: AtomicU8,
     pipeline_reset_epoch: Arc<AtomicU64>,
     label_import_started: std::sync::atomic::AtomicBool,
     ckb_store: Option<Arc<CkbChainReader>>,
@@ -777,6 +787,7 @@ impl Indexer {
             ),
             rebuild_pause_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             reorg_notify_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            startup_phase: AtomicU8::new(STARTUP_PHASE_NONE),
             pipeline_reset_epoch: Arc::new(AtomicU64::new(0)),
             label_import_started: std::sync::atomic::AtomicBool::new(false),
             ckb_store,
@@ -878,6 +889,10 @@ impl Indexer {
         self.pipeline_perf.snapshot()
     }
 
+    pub fn startup_phase(&self) -> Option<String> {
+        decode_startup_phase(self.startup_phase.load(Ordering::SeqCst)).map(str::to_string)
+    }
+
     pub fn get_memory_stats(&self) -> ckbadger_common::MemoryStatsData {
         let stats = self.writer.store().memory_stats();
         let sync_status = self.writer.store().get_sync_status().unwrap_or_default();
@@ -943,10 +958,27 @@ impl Indexer {
             _ => start_block,
         };
 
-        self.writer.init_sync_start(
+        let cleanup_needed = self.writer.needs_startup_cleanup(actual_start)?;
+        if cleanup_needed {
+            self.startup_phase
+                .store(STARTUP_PHASE_ROLLBACK_CLEANUP, Ordering::SeqCst);
+            info!(
+                from_block = actual_start + 1,
+                "Startup rollback cleanup phase started"
+            );
+        }
+
+        let init_result = self.writer.init_sync_start(
             actual_start,
             blocks_behind > self.config.bulk_sync_threshold,
-        )?;
+        );
+
+        self.startup_phase
+            .store(STARTUP_PHASE_NONE, Ordering::SeqCst);
+        if cleanup_needed {
+            info!("Startup rollback cleanup phase completed");
+        }
+        init_result?;
 
         self.maybe_start_label_import();
 
@@ -7739,5 +7771,15 @@ mod tests {
         assert_eq!(get_partition_index(start), get_partition_index(end));
         assert!(!crosses_partition_boundary(start, end));
         assert_eq!(format_partition_range(start, end), "[p1]");
+    }
+
+    #[test]
+    fn test_decode_startup_phase() {
+        assert_eq!(decode_startup_phase(STARTUP_PHASE_NONE), None);
+        assert_eq!(
+            decode_startup_phase(STARTUP_PHASE_ROLLBACK_CLEANUP),
+            Some("rollback_cleanup")
+        );
+        assert_eq!(decode_startup_phase(99), None);
     }
 }

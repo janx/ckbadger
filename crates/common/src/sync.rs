@@ -185,6 +185,9 @@ pub struct SyncProgressData {
     pub eta_formatted: String,
     pub progress_percentage: f64,
     pub updated_at: i64,
+    /// Optional startup phase while indexer performs pre-sync initialization.
+    #[serde(default)]
+    pub startup_phase: Option<String>,
     /// True when reading blocks directly from CKB's RocksDB instead of JSON-RPC.
     #[serde(default)]
     pub is_direct_db_read: bool,
@@ -534,6 +537,7 @@ mod tests {
             eta_formatted: "2s".to_string(),
             progress_percentage: 50.0,
             updated_at: 1700000000,
+            startup_phase: Some("rollback_cleanup".to_string()),
             is_direct_db_read: false,
             db_write_ms: Some(120.0),
             rpc_fetch_ms: Some(45.0),
@@ -561,5 +565,6 @@ mod tests {
         assert_eq!(pipeline.fetch_queue_depth, Some(2));
         assert_eq!(pipeline.parse_queue_capacity, Some(16));
         assert_eq!(pipeline.writer_queue_depth, Some(4));
+        assert_eq!(parsed.startup_phase.as_deref(), Some("rollback_cleanup"));
     }
 }

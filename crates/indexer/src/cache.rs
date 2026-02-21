@@ -426,6 +426,7 @@ mod tests {
             eta_formatted: "1m 30s".to_string(),
             progress_percentage: 10.0,
             updated_at: 1234567890,
+            startup_phase: None,
             is_direct_db_read: false,
             db_write_ms: None,
             rpc_fetch_ms: None,
@@ -519,6 +520,7 @@ mod tests {
                 eta_formatted: "27s".to_string(),
                 progress_percentage: 50.0,
                 updated_at: chrono::Utc::now().timestamp(),
+                startup_phase: Some("rollback_cleanup".to_string()),
                 is_direct_db_read: false,
                 db_write_ms: None,
                 rpc_fetch_ms: None,
@@ -539,6 +541,7 @@ mod tests {
             assert_eq!(stored.current_block, 5000);
             assert_eq!(stored.target_block, 10000);
             assert!((stored.progress_percentage - 50.0).abs() < 0.01);
+            assert_eq!(stored.startup_phase.as_deref(), Some("rollback_cleanup"));
         }
 
         #[tokio::test]
