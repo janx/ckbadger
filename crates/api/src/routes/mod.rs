@@ -5,6 +5,7 @@ mod cells;
 mod dao;
 mod forks;
 mod graph;
+mod hardforks;
 mod mempool;
 mod scripts;
 mod search;
@@ -27,6 +28,7 @@ pub fn api_routes() -> Router<Arc<AppState>> {
         .merge(cells::routes())
         .merge(statistics::routes())
         .merge(graph::routes())
+        .merge(hardforks::routes())
         .merge(search::routes())
         .merge(tokens::routes())
         .merge(dao::routes())

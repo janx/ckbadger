@@ -8,8 +8,8 @@ use ckbadger_api::{create_router, AppConfig};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
     CachedBlockHeader, ClusterAggregate, ClusterDailyDelta, DobEntry, DobExtra, DobStandard,
-    LiveCellInfo, NftCollectionAggregate, NftDailyDelta, NftStandard, ScriptDailyDelta, ScriptInfo,
-    SporeDailyDelta, TokenDailyDelta, TokenInfo,
+    EpochStats, LiveCellInfo, NftCollectionAggregate, NftDailyDelta, NftStandard, ScriptDailyDelta,
+    ScriptInfo, SporeDailyDelta, TokenDailyDelta, TokenInfo,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -48,6 +48,102 @@ async fn test_network_stats_returns_ok() {
 }
 
 #[tokio::test]
+async fn test_hardforks_endpoint_returns_default_timeline() {
+    let store = test_store();
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/hardforks")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["network"], "mainnet");
+    assert_eq!(json["tipEpoch"], 0);
+    assert_eq!(json["tipBlock"], 0);
+    assert!(json["events"].as_array().unwrap().len() >= 2);
+    assert_eq!(json["events"][0]["status"], "upcoming");
+    assert_eq!(json["events"][1]["status"], "upcoming");
+}
+
+#[tokio::test]
+async fn test_hardforks_endpoint_marks_activated_and_fills_activation_block() {
+    let store = test_store();
+    store
+        .put_epoch_stats(
+            5414,
+            &EpochStats {
+                epoch_number: 5414,
+                start_block: 8_775_638,
+                end_block: None,
+                blocks_count: 1800,
+                length: 1800,
+                start_timestamp: chrono::Utc::now(),
+                end_timestamp: None,
+                transactions_count: 0,
+            },
+        )
+        .unwrap();
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(
+        19_000_000,
+        &CachedBlockHeader {
+            hash: vec![0xaa; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 13_000,
+            epoch_index: 100,
+            epoch_length: 1800,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        },
+    );
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let request = Request::builder()
+        .uri("/api/v1/hardforks")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["tipEpoch"], 13_000);
+    assert_eq!(json["tipBlock"], 19_000_000);
+    assert_eq!(json["events"][0]["id"], "mirana-2021");
+    assert_eq!(json["events"][0]["status"], "activated");
+    assert_eq!(json["events"][0]["activationBlock"], 8_775_638);
+    assert_eq!(json["events"][1]["id"], "meepo-2024");
+    assert_eq!(json["events"][1]["status"], "activated");
+}
+
+#[tokio::test]
+async fn test_hardforks_endpoint_rejects_unknown_network() {
+    let store = test_store();
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/hardforks?network=devnet")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn test_recent_blocks_endpoint_empty_db() {
     let store = test_store();
     let mut config = test_config(store);
@@ -81,6 +177,136 @@ async fn test_blocks_list_empty_db() {
 
     let response = app.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn test_get_block_includes_hardfork_activation() {
+    let store = test_store();
+    store
+        .put_epoch_stats(
+            5414,
+            &EpochStats {
+                epoch_number: 5414,
+                start_block: 8_775_638,
+                end_block: None,
+                blocks_count: 1800,
+                length: 1800,
+                start_timestamp: chrono::Utc::now(),
+                end_timestamp: None,
+                transactions_count: 0,
+            },
+        )
+        .unwrap();
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(
+        8_775_638,
+        &CachedBlockHeader {
+            hash: vec![0x11; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 5414,
+            epoch_index: 7,
+            epoch_length: 1800,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        },
+    );
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let request = Request::builder()
+        .uri("/api/v1/blocks/8775638")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["number"], 8_775_638);
+    assert_eq!(json["hardforkActivation"]["id"], "mirana-2021");
+    assert_eq!(json["hardforkActivation"]["shortName"], "Mirana");
+    assert_eq!(json["hardforkActivation"]["activationEpoch"], 5414);
+}
+
+#[tokio::test]
+async fn test_blocks_list_includes_hardfork_activation() {
+    let store = test_store();
+    store
+        .put_epoch_stats(
+            5414,
+            &EpochStats {
+                epoch_number: 5414,
+                start_block: 8_775_638,
+                end_block: None,
+                blocks_count: 1800,
+                length: 1800,
+                start_timestamp: chrono::Utc::now(),
+                end_timestamp: None,
+                transactions_count: 0,
+            },
+        )
+        .unwrap();
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(
+        8_775_639,
+        &CachedBlockHeader {
+            hash: vec![0x22; 32],
+            timestamp: 1_700_000_010_000,
+            epoch_number: 5414,
+            epoch_index: 8,
+            epoch_length: 1800,
+            dao: vec![0; 32],
+            transactions_count: 2,
+        },
+    );
+    batch.put_block_header(
+        8_775_638,
+        &CachedBlockHeader {
+            hash: vec![0x11; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 5414,
+            epoch_index: 7,
+            epoch_length: 1800,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        },
+    );
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let request = Request::builder()
+        .uri("/api/v1/blocks?limit=2")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let rows = json["data"].as_array().expect("block rows");
+    assert_eq!(rows.len(), 2);
+
+    let activation_row = rows
+        .iter()
+        .find(|row| row["number"].as_i64() == Some(8_775_638))
+        .expect("activation block row");
+    assert_eq!(activation_row["hardforkActivation"]["id"], "mirana-2021");
+    assert_eq!(
+        activation_row["hardforkActivation"]["shortName"],
+        serde_json::Value::from("Mirana")
+    );
+
+    let normal_row = rows
+        .iter()
+        .find(|row| row["number"].as_i64() == Some(8_775_639))
+        .expect("non-activation block row");
+    assert_eq!(normal_row["hardforkActivation"], serde_json::Value::Null);
 }
 
 #[tokio::test]

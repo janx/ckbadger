@@ -37,8 +37,17 @@ interface Block {
   minerMessage: string | null;
   miningReward: string | null;
   miningRewardTxHash: string | null;
+  hardforkActivation?: HardforkActivation | null;
   compactTarget: string;
   version: number;
+}
+
+interface HardforkActivation {
+  id: string;
+  name: string;
+  shortName: string;
+  activationEpoch: number;
+  activationDate: string;
 }
 
 interface Transaction {
@@ -141,6 +150,31 @@ interface RecentReorgResponse {
   hasRecentReorg: boolean;
   reorg: ReorgEvent | null;
   deepFork: DeepForkStatus;
+}
+
+interface HardforkResource {
+  label: string;
+  url: string;
+}
+
+interface HardforkEvent {
+  id: string;
+  name: string;
+  shortName: string;
+  editionYear: number;
+  activationEpoch: number;
+  activationDate: string;
+  activationBlock: number | null;
+  status: 'activated' | 'upcoming';
+  summary: string;
+  resources: HardforkResource[];
+}
+
+interface HardforkTimelineResponse {
+  network: string;
+  tipEpoch: number;
+  tipBlock: number;
+  events: HardforkEvent[];
 }
 
 interface CursorQueryParams {
@@ -977,6 +1011,10 @@ export type {
   OrphanedTransaction,
   ReorgDetail,
   RecentReorgResponse,
+  HardforkResource,
+  HardforkEvent,
+  HardforkTimelineResponse,
+  HardforkActivation,
   Activity,
   ActivityAssetChange,
 };
@@ -995,6 +1033,13 @@ export const api = {
 
   getRecentReorg: (): Promise<RecentReorgResponse> => {
     return fetchApi(`/forks/recent`);
+  },
+
+  getHardforks: (params: { network?: string } = {}): Promise<HardforkTimelineResponse> => {
+    const query = new URLSearchParams();
+    if (params.network) query.set('network', params.network);
+    const queryString = query.toString();
+    return fetchApi(`/hardforks${queryString ? `?${queryString}` : ''}`);
   },
 
   getBlocks: (params: CursorQueryParams = {}): Promise<CursorPaginatedResponse<Block>> => {

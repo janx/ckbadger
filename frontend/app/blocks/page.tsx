@@ -11,7 +11,7 @@ import {
   TerminalPanelFooter,
   TerminalRow,
 } from '@/components/ui/terminal-panel';
-import { PageHeader } from '@/components/ui/page-header';
+import { Badge, PageHeader } from '@/components/ui/page-header';
 import { HexDisplay } from '@/components/ui/hex-display';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
@@ -73,6 +73,13 @@ export default function BlocksPage() {
                         >
                           #{block.number.toLocaleString()}
                         </Link>
+                        {block.hardforkActivation && (
+                          <div className="mt-1">
+                            <Badge variant="amber" className="text-[10px]">
+                              HF · {block.hardforkActivation.shortName.toUpperCase()}
+                            </Badge>
+                          </div>
+                        )}
                       </div>
                       <div className="flex-1">
                         <Link href={`/blocks/${block.hash}`} className="hover:underline">

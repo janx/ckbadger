@@ -907,6 +907,14 @@ function MinedBlock({
       <div className="mb-1 font-mono text-xs font-semibold tabular-nums text-purple-400 transition-colors group-hover/block:text-purple-300 sm:text-sm">
         {block.number.toLocaleString()}
       </div>
+      {block.hardforkActivation && (
+        <div
+          className="mb-1 rounded border border-amber-900/60 bg-amber-900/30 px-1.5 py-0.5 font-mono text-[9px] text-amber-300"
+          data-testid={`mempool-mined-hardfork-${block.number}`}
+        >
+          HF {block.hardforkActivation.shortName.toUpperCase()}
+        </div>
+      )}
       <div className="relative">
         <Block2D
           gradient={gradient}

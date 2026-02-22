@@ -120,6 +120,15 @@ describe('CommandPalette', () => {
     expect(pushMock).toHaveBeenCalledWith('/charts');
   });
 
+  it('does not navigate with g f chord', () => {
+    render(<CommandPalette />);
+
+    fireEvent.keyDown(window, { key: 'g' });
+    fireEvent.keyDown(window, { key: 'f' });
+
+    expect(pushMock).not.toHaveBeenCalled();
+  });
+
   it('opens shortcut help panel with question mark', () => {
     render(<CommandPalette />);
 

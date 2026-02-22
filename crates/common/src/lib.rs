@@ -1,6 +1,7 @@
 pub mod cycles;
 pub mod dao;
 pub mod error;
+pub mod hardfork;
 pub mod hex;
 pub mod label_import;
 pub mod proposal;
@@ -8,6 +9,7 @@ pub mod sync;
 pub mod types;
 
 pub use error::{Error, Result};
+pub use hardfork::*;
 pub use hex::{parse_capacity, parse_hex_to_bytes, parse_hex_to_hash, parse_hex_u32};
 pub use label_import::*;
 pub use proposal::*;

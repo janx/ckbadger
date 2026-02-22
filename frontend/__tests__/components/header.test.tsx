@@ -19,7 +19,7 @@ describe('Header', () => {
       (node.textContent ?? '').trim()
     );
 
-    expect(labels).toEqual(['DAO', 'Assets', 'Scripts', 'Charts']);
+    expect(labels).toEqual(['DAO', 'Assets', 'Scripts', 'Charts', 'Hardforks']);
     expect(desktopNav?.querySelector('a')?.getAttribute('href')).toBe('/dao');
   });
 });

@@ -33,6 +33,7 @@ vi.mock('@/lib/api', () => ({
     getSecondaryIssuanceChart: vi.fn(),
     getInflationRateChart: vi.fn(),
     getHodlWaveChart: vi.fn(),
+    getHardforks: vi.fn(),
   },
 }));
 
@@ -170,6 +171,38 @@ const mockMostUtilizedAssetsResponse: MostUtilizedAssetsChartResponse = {
   },
 };
 
+const mockHardforkTimeline = {
+  network: 'mainnet',
+  tipEpoch: 13000,
+  tipBlock: 19000000,
+  events: [
+    {
+      id: 'mirana-2021',
+      name: 'CKB Edition Mirana',
+      shortName: 'Mirana',
+      editionYear: 2021,
+      activationEpoch: 5414,
+      activationDate: '2022-05-10',
+      activationBlock: 8775638,
+      status: 'activated' as const,
+      summary: 'CKB-VM v1 activation.',
+      resources: [],
+    },
+    {
+      id: 'meepo-2024',
+      name: 'CKB Edition Meepo',
+      shortName: 'Meepo',
+      editionYear: 2024,
+      activationEpoch: 12293,
+      activationDate: '2025-07-01',
+      activationBlock: 18430000,
+      status: 'activated' as const,
+      summary: 'CKB-VM v2 activation.',
+      resources: [],
+    },
+  ],
+};
+
 describe('ChartsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -201,6 +234,7 @@ describe('ChartsPage', () => {
     vi.mocked(api.getSecondaryIssuanceChart).mockResolvedValue(mockStackedAreaResponse);
     vi.mocked(api.getInflationRateChart).mockResolvedValue(mockChartResponse);
     vi.mocked(api.getHodlWaveChart).mockResolvedValue(mockStackedAreaResponse);
+    vi.mocked(api.getHardforks).mockResolvedValue(mockHardforkTimeline);
   });
 
   it('renders the page with header and title', async () => {
@@ -235,6 +269,10 @@ describe('ChartsPage', () => {
     expect(screen.getByText('Economics')).toBeInTheDocument();
     expect(screen.getByText('Scripts Occupied & Total CKBytes')).toBeInTheDocument();
     expect(screen.getByText('Assets Occupied & Total CKBytes')).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(screen.getByText('Hardfork Markers on Epoch Time Length')).toBeInTheDocument();
+    });
   });
 
   it('uses percentage mode in overview previews that are percentage charts', async () => {

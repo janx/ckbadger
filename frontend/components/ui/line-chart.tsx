@@ -4,6 +4,11 @@ import { useState, useRef, useCallback, useMemo } from 'react';
 import { ChartDataPoint } from '@/lib/api';
 
 export type LineChartType = 'line' | 'bar';
+export interface LineChartMarker {
+  x: string;
+  label: string;
+  color?: string;
+}
 
 interface LineChartProps {
   data: ChartDataPoint[];
@@ -15,6 +20,7 @@ interface LineChartProps {
   interactive?: boolean;
   defaultLogScale?: boolean;
   chartType?: LineChartType;
+  markers?: LineChartMarker[];
 }
 
 function formatValue(val: number | undefined, isPercent = false): string {
@@ -46,6 +52,7 @@ export function LineChart({
   interactive = true,
   defaultLogScale = false,
   chartType = 'line',
+  markers = [],
 }: LineChartProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
@@ -385,6 +392,20 @@ export function LineChart({
     Math.floor((i / (xTickCount - 1 || 1)) * (data.length - 1))
   );
 
+  const markerPositions = !markers.length
+    ? []
+    : markers
+        .map((marker) => {
+          const markerX = parseFloat(marker.x);
+          const idx = data.findIndex((point) => {
+            if (point.date === marker.x) return true;
+            const pointX = parseFloat(point.date);
+            return Number.isFinite(markerX) && Number.isFinite(pointX) && pointX === markerX;
+          });
+          return idx >= 0 ? { ...marker, idx } : null;
+        })
+        .filter((marker): marker is LineChartMarker & { idx: number } => marker !== null);
+
   const isPercent =
     yAxisLabel.includes('%') || yAxisLabel === 'APC' || yAxisLabel.includes('Ratio');
 
@@ -475,6 +496,35 @@ export function LineChart({
             {data[idx]?.date || ''}
           </text>
         ))}
+
+        {markerPositions.map((marker) => {
+          const markerX = xScale(marker.idx);
+          const labelOnRight = markerX > width - padding.right - 80;
+          return (
+            <g key={`marker-${marker.label}-${marker.idx}`}>
+              <line
+                x1={markerX}
+                x2={markerX}
+                y1={padding.top}
+                y2={padding.top + chartHeight}
+                stroke={marker.color || '#f59e0b'}
+                strokeDasharray="4,3"
+                strokeWidth={1.5}
+                data-testid="line-chart-marker-line"
+              />
+              <text
+                x={labelOnRight ? markerX - 6 : markerX + 6}
+                y={padding.top + 12}
+                textAnchor={labelOnRight ? 'end' : 'start'}
+                className="fill-slate-300 font-mono"
+                fontSize={9}
+                data-testid="line-chart-marker-label"
+              >
+                {marker.label}
+              </text>
+            </g>
+          );
+        })}
 
         {chartType === 'line' && (
           <path d={pathD} fill="none" stroke={primaryColor} strokeWidth="2" />

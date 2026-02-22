@@ -6,8 +6,10 @@ use axum::{
     Router,
 };
 use ckb_store_reader::CkbChainReader;
+use ckbadger_common::hardforks_for_network;
 use ckbadger_common::sync::{SyncStatusData, SYNC_STATUS_REDIS_KEY};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::cache::{CacheBackend, CacheKeys, CacheTtl};
@@ -36,6 +38,16 @@ fn default_limit() -> i64 {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct HardforkActivationResponse {
+    pub id: String,
+    pub name: String,
+    pub short_name: String,
+    pub activation_epoch: i64,
+    pub activation_date: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BlockResponse {
     pub number: i64,
     pub hash: String,
@@ -55,6 +67,7 @@ pub struct BlockResponse {
     pub miner_message: Option<String>,
     pub mining_reward: Option<String>,
     pub mining_reward_tx_hash: Option<String>,
+    pub hardfork_activation: Option<HardforkActivationResponse>,
     pub compact_target: String,
     pub version: i32,
 }
@@ -102,9 +115,18 @@ async fn list_blocks(
     // or if no cursor, None (which starts from the end)
     let from_block = params.cursor.map(|c| c - 1);
     let fetch_limit = (limit + 1) as usize;
+    let network = state.ckb_network.clone();
 
     let store = state.store.clone();
     let ckb_store = state.ckb_store.clone();
+    let hardfork_activation_by_block = tokio::task::spawn_blocking({
+        let store = store.clone();
+        move || resolve_hardfork_activation_blocks(&network, &store)
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))?;
+
     let rows = tokio::task::spawn_blocking(move || store.list_blocks_desc(from_block, fetch_limit))
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
@@ -132,6 +154,7 @@ async fn list_blocks(
                     miner_message: None,
                     mining_reward: None,
                     mining_reward_tx_hash: None,
+                    hardfork_activation: hardfork_activation_by_block.get(&block_num).cloned(),
                 },
             )
         })
@@ -149,11 +172,42 @@ async fn list_blocks(
     ok(response)
 }
 
+fn resolve_hardfork_activation_blocks(
+    network: &str,
+    store: &ckbadger_store::CkbadgerStore,
+) -> anyhow::Result<HashMap<i64, HardforkActivationResponse>> {
+    let Some(specs) = hardforks_for_network(network) else {
+        return Ok(HashMap::new());
+    };
+
+    let mut activations = HashMap::new();
+    for spec in specs {
+        let activation_block = store
+            .get_epoch_stats(spec.activation_epoch)?
+            .map(|stats| stats.start_block);
+        if let Some(activation_block) = activation_block {
+            activations.insert(
+                activation_block,
+                HardforkActivationResponse {
+                    id: spec.id.to_string(),
+                    name: spec.name.to_string(),
+                    short_name: spec.short_name.to_string(),
+                    activation_epoch: spec.activation_epoch,
+                    activation_date: spec.activation_date.to_string(),
+                },
+            );
+        }
+    }
+
+    Ok(activations)
+}
+
 struct BlockExtra {
     miner_address: Option<String>,
     miner_message: Option<Vec<u8>>,
     mining_reward: Option<String>,
     mining_reward_tx_hash: Option<String>,
+    hardfork_activation: Option<HardforkActivationResponse>,
 }
 
 /// Try to read header info from CKB node's RocksDB for fields not in our store.
@@ -225,9 +279,49 @@ fn cached_header_to_block_response(
             .map(|m| format!("0x{}", hex::encode(&m))),
         mining_reward: extra.mining_reward,
         mining_reward_tx_hash: extra.mining_reward_tx_hash,
+        hardfork_activation: extra.hardfork_activation,
         compact_target,
         version,
     }
+}
+
+fn resolve_hardfork_activation(
+    network: &str,
+    store: &ckbadger_store::CkbadgerStore,
+    block_num: i64,
+    epoch_number: i64,
+    epoch_index: i32,
+) -> anyhow::Result<Option<HardforkActivationResponse>> {
+    let Some(specs) = hardforks_for_network(network) else {
+        return Ok(None);
+    };
+
+    for spec in specs {
+        if spec.activation_epoch != epoch_number {
+            continue;
+        }
+
+        let activation_block = store
+            .get_epoch_stats(spec.activation_epoch)?
+            .map(|stats| stats.start_block);
+
+        let is_activation = match activation_block {
+            Some(num) => num == block_num,
+            None => epoch_index == 0,
+        };
+
+        if is_activation {
+            return Ok(Some(HardforkActivationResponse {
+                id: spec.id.to_string(),
+                name: spec.name.to_string(),
+                short_name: spec.short_name.to_string(),
+                activation_epoch: spec.activation_epoch,
+                activation_date: spec.activation_date.to_string(),
+            }));
+        }
+    }
+
+    Ok(None)
 }
 
 async fn get_block(
@@ -292,6 +386,25 @@ async fn get_block(
                 Some(info) => (Some(info.reward), info.cellbase_tx_hash),
                 None => (None, None),
             };
+            let activation = {
+                let store_c = store.clone();
+                let network = state.ckb_network.clone();
+                let block_num_c = block_num;
+                let epoch_number = header.epoch_number;
+                let epoch_index = header.epoch_index;
+                tokio::task::spawn_blocking(move || {
+                    resolve_hardfork_activation(
+                        &network,
+                        &store_c,
+                        block_num_c,
+                        epoch_number,
+                        epoch_index,
+                    )
+                })
+                .await
+                .map_err(|e| ApiError::internal(e.to_string()))?
+                .map_err(|e| ApiError::internal(e.to_string()))?
+            };
 
             ok(cached_header_to_block_response(
                 block_num,
@@ -302,6 +415,7 @@ async fn get_block(
                     miner_message,
                     mining_reward,
                     mining_reward_tx_hash,
+                    hardfork_activation: activation,
                 },
             ))
         }
@@ -705,6 +819,7 @@ mod tests {
             miner_message: None,
             mining_reward: None,
             mining_reward_tx_hash: None,
+            hardfork_activation: None,
             compact_target: "0x0".to_string(),
             version: 0,
         };

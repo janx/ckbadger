@@ -112,6 +112,14 @@ export function LatestBlocks({ isRealtime = false, initialBlocks }: LatestBlocks
                       <span className="text-slate-500">
                         <span className="text-terminal-dim">{block.transactionsCount}</span> txs
                       </span>
+                      {block.hardforkActivation && (
+                        <span
+                          className="rounded border border-amber-900/60 bg-amber-900/30 px-1.5 py-0.5 font-mono text-[10px] text-amber-300"
+                          data-testid={`latest-block-hardfork-${block.number}`}
+                        >
+                          HF · {block.hardforkActivation.shortName.toUpperCase()}
+                        </span>
+                      )}
                     </div>
                   </div>
 

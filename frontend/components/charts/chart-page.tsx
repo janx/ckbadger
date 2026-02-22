@@ -11,7 +11,7 @@ import {
 import { ChartCalculationNote } from '@/components/charts/chart-calculation-note';
 import { getChartDescription } from '@/components/charts/chart-calculation-descriptions';
 import type { ChartDescription } from '@/components/charts/chart-calculation-descriptions';
-import { LineChart, LineChartType } from '@/components/ui/line-chart';
+import { LineChart, LineChartMarker, LineChartType } from '@/components/ui/line-chart';
 import { api, ChartResponse } from '@/lib/api';
 
 function ChartDataWarning({ show }: { show: boolean }) {
@@ -37,6 +37,7 @@ interface ChartPageProps {
   defaultLogScale?: boolean;
   chartType?: LineChartType;
   description?: ChartDescription;
+  markers?: LineChartMarker[];
 }
 
 export function ChartPage({
@@ -48,6 +49,7 @@ export function ChartPage({
   defaultLogScale = false,
   chartType = 'line',
   description,
+  markers,
 }: ChartPageProps) {
   const { data: networkStats } = useQuery({
     queryKey: ['network-stats'],
@@ -101,6 +103,7 @@ export function ChartPage({
                   height={400}
                   defaultLogScale={defaultLogScale}
                   chartType={chartType}
+                  markers={markers}
                 />
                 <div className="mt-6 flex items-center justify-center gap-6 text-sm">
                   <div className="flex items-center gap-2">

@@ -5,7 +5,7 @@ import { act, createTestQueryClient, fireEvent, render, screen, within } from '.
 import { MempoolBlocks } from '@/components/mempool-blocks';
 import { api, Block } from '@/lib/api';
 
-function mockBlock(number: number, txCount: number): Block {
+function mockBlock(number: number, txCount: number, hardforkShortName?: string): Block {
   return {
     number,
     hash: `0xblock${number}`,
@@ -25,6 +25,15 @@ function mockBlock(number: number, txCount: number): Block {
     minerMessage: null,
     miningReward: null,
     miningRewardTxHash: null,
+    hardforkActivation: hardforkShortName
+      ? {
+          id: `${hardforkShortName.toLowerCase()}-activation`,
+          name: `CKB Edition ${hardforkShortName}`,
+          shortName: hardforkShortName,
+          activationEpoch: 0,
+          activationDate: '2026-01-01',
+        }
+      : null,
     compactTarget: '0x1a000000',
     version: 0,
   };
@@ -65,7 +74,7 @@ describe('MempoolBlocks', () => {
     });
 
     vi.spyOn(api, 'getBlocks').mockResolvedValue({
-      data: [mockBlock(100, 180), mockBlock(99, 160)],
+      data: [mockBlock(100, 180, 'Mirana'), mockBlock(99, 160)],
       total: 2,
       limit: 10,
       hasMore: false,
@@ -162,7 +171,12 @@ describe('MempoolBlocks', () => {
       timestamp: '2024-01-15T10:30:00Z',
     }));
 
-    render(<MempoolBlocks latestBlocks={[mockBlock(100, 180), mockBlock(99, 160)]} showTxnLens />);
+    render(
+      <MempoolBlocks
+        latestBlocks={[mockBlock(100, 180, 'Mirana'), mockBlock(99, 160)]}
+        showTxnLens
+      />
+    );
 
     expect(await screen.findByText('Chain Tip Intelligence')).toBeInTheDocument();
     expect(await screen.findByText('Mempool')).toBeInTheDocument();
@@ -193,6 +207,7 @@ describe('MempoolBlocks', () => {
 
     const minedTooltip = await screen.findByTestId('mined-block-tooltip-100');
     expect(minedTooltip).toHaveClass('fixed');
+    expect(screen.getByTestId('mempool-mined-hardfork-100')).toHaveTextContent('HF MIRANA');
   });
 
   it('refreshes txn data queries immediately when new tip block arrives', async () => {

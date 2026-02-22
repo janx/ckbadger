@@ -107,6 +107,7 @@ export default function BlockDetailPage() {
 
   const epochStartNumber = block.number - block.epochIndex;
   const ordinalSuffix = getOrdinalSuffix(block.epochIndex + 1);
+  const activationHardfork = block.hardforkActivation;
 
   return (
     <div className="min-h-screen bg-slate-950">
@@ -115,6 +116,13 @@ export default function BlockDetailPage() {
         <PageHeader
           title={`Block #${block.number.toLocaleString()}`}
           hash={block.hash}
+          badge={
+            activationHardfork ? (
+              <Badge variant="amber">
+                HARDFORK ACTIVATION · {activationHardfork.shortName.toUpperCase()}
+              </Badge>
+            ) : undefined
+          }
           navigation={{
             prev: { href: `/blocks/${block.number - 1}`, label: 'Previous Block' },
             next: { href: `/blocks/${block.number + 1}`, label: 'Next Block' },

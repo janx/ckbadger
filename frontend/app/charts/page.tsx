@@ -1,12 +1,13 @@
 'use client';
 
+import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Header } from '@/components/layout/header';
-import { LineChart, LineChartType } from '@/components/ui/line-chart';
+import { LineChart, LineChartMarker, LineChartType } from '@/components/ui/line-chart';
 import { PieChart } from '@/components/ui/pie-chart';
 import { StackedAreaChart } from '@/components/ui/stacked-area-chart';
 import { ChartCard, ChartSection } from '@/components/ui/chart-card';
-import { PageHeader } from '@/components/ui/page-header';
+import { Badge, PageHeader } from '@/components/ui/page-header';
 import {
   api,
   ChartResponse,
@@ -34,10 +35,12 @@ function LineChartPreview({
   data,
   href,
   chartType = 'line',
+  markers,
 }: {
   data: ChartResponse | undefined;
   href: string;
   chartType?: LineChartType;
+  markers?: LineChartMarker[];
 }) {
   return (
     <ChartCard
@@ -54,6 +57,7 @@ function LineChartPreview({
           height={160}
           interactive={false}
           chartType={chartType}
+          markers={markers}
         />
       )}
     </ChartCard>
@@ -362,6 +366,22 @@ export default function ChartsPage() {
     queryFn: () => api.getHodlWaveChart(),
   });
 
+  const { data: hardforkTimeline } = useQuery({
+    queryKey: ['hardforks-for-charts'],
+    queryFn: () => api.getHardforks(),
+    staleTime: 60_000,
+  });
+
+  const epochHardforkMarkers = useMemo<LineChartMarker[]>(
+    () =>
+      (hardforkTimeline?.events ?? []).map((event) => ({
+        x: String(event.activationEpoch),
+        label: event.shortName.toUpperCase(),
+        color: event.status === 'activated' ? '#f59e0b' : '#38bdf8',
+      })),
+    [hardforkTimeline?.events]
+  );
+
   return (
     <div className="min-h-screen bg-slate-950">
       <Header />
@@ -387,9 +407,32 @@ export default function ChartsPage() {
         </ChartSection>
 
         <ChartSection title="Block">
+          {!!hardforkTimeline?.events?.length && (
+            <div className="rounded border border-slate-800 bg-slate-900/70 p-3 lg:col-span-2 xl:col-span-3">
+              <div className="mb-2 font-mono text-xs uppercase tracking-wider text-slate-400">
+                Hardfork Markers on Epoch Time Length
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {hardforkTimeline.events.map((event) => (
+                  <Badge
+                    key={event.id}
+                    variant={event.status === 'activated' ? 'amber' : 'blue'}
+                    className="text-[10px]"
+                  >
+                    {event.shortName.toUpperCase()} @ EPOCH #
+                    {event.activationEpoch.toLocaleString()}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          )}
           <LineChartPreview data={blockTimeDistribution} href="/charts/block-time-distribution" />
           <LineChartPreview data={epochTimeDistribution} href="/charts/epoch-time-distribution" />
-          <LineChartPreview data={epochTimeLength} href="/charts/epoch-time-length" />
+          <LineChartPreview
+            data={epochTimeLength}
+            href="/charts/epoch-time-length"
+            markers={epochHardforkMarkers}
+          />
           <LineChartPreview data={averageBlockTime} href="/charts/average-block-time" />
         </ChartSection>
 
