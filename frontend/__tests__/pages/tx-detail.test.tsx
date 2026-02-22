@@ -158,7 +158,7 @@ describe('TransactionDetailPage', () => {
     expect(document.querySelector('a[href="/scripts/Unknown"]')).toBeNull();
   });
 
-  it('shows input type script label in IO tab', async () => {
+  it('does not render hash-only fallback label in IO tab', async () => {
     render(<TransactionDetailPage />);
 
     await waitFor(() => {
@@ -166,8 +166,8 @@ describe('TransactionDetailPage', () => {
     });
 
     const fallbackLabel = `type: ${TYPE_CODE_HASH.slice(0, 10)}...${TYPE_CODE_HASH.slice(-8)}`;
-    const links = await screen.findAllByRole('link', { name: fallbackLabel });
-    expect(links.some((link) => link.getAttribute('href'))).toBe(true);
+    expect(screen.queryByRole('link', { name: fallbackLabel })).toBeNull();
+    expect(screen.queryByText(fallbackLabel)).toBeNull();
   });
 
   it('shows flow view by default and switches to graph view in graph tab', async () => {

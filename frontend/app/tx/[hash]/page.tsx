@@ -492,11 +492,6 @@ function hasKnownScriptName(name: string | null | undefined): boolean {
   return Boolean(name && name.trim() && name.trim().toLowerCase() !== UNKNOWN_SCRIPT_NAME);
 }
 
-function shortenCodeHash(value: string): string {
-  if (value.length <= 20) return value;
-  return `${value.slice(0, 10)}...${value.slice(-8)}`;
-}
-
 function getScriptHref({
   codeHash,
   hashType,
@@ -525,15 +520,15 @@ function ScriptLabel({
 }) {
   if (!script) return null;
   const info = scriptLookup?.[script.codeHash];
-  const scriptName = info?.name;
-  const label = hasKnownScriptName(scriptName)
-    ? scriptName!.trim()
-    : `${type}: ${shortenCodeHash(script.codeHash)}`;
+  const trimmedScriptName = info?.name?.trim();
+  if (!trimmedScriptName || trimmedScriptName.toLowerCase() === UNKNOWN_SCRIPT_NAME) return null;
+
+  const label = trimmedScriptName;
   const href = getScriptHref({
     codeHash: script.codeHash,
     hashType: info?.hashType ?? script.hashType,
     scriptKind: type,
-    scriptName,
+    scriptName: trimmedScriptName,
   });
 
   return (
