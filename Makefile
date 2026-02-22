@@ -26,8 +26,8 @@ REBUILD_ALL_SERVICES_INTERNAL := redis ckb-node indexer api frontend
 
 help:
 	@echo "Available targets:"
-	@echo "  make up                                Start local dependencies"
-	@echo "  make down                              Stop local dependencies"
+	@echo "  make up                                Start local stack"
+	@echo "  make down                              Stop local stack"
 	@echo "  make rebuild SERVICES=\"api frontend\"   Rebuild + restart one/more services"
 	@echo "  make rebuild-all                       Rebuild all services for current node mode"
 	@echo "  make tui                               Run monitoring TUI"
@@ -37,15 +37,14 @@ help:
 
 up:
 ifeq ($(CKB_NODE_MODE),internal)
-	$(COMPOSE) --profile internal up -d redis ckb-node
+	$(COMPOSE) --profile internal up -d redis ckb-node indexer api frontend
 else
-	$(COMPOSE) up -d redis
+	$(COMPOSE) up -d redis indexer api frontend
 endif
-	@echo "Dependencies started."
+	@echo "Services started."
 	@echo "Node mode: $(CKB_NODE_MODE)"
-	@echo "Start indexer: cargo run -p ckbadger-indexer"
-	@echo "Start API: cargo run -p ckbadger-api"
-	@echo "Start frontend: cd frontend && pnpm dev"
+	@echo "Frontend: http://localhost:3000"
+	@echo "API: http://localhost:3001/api/v1"
 
 down:
 	$(COMPOSE) down

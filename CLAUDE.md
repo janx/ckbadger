@@ -131,7 +131,7 @@ cargo check && cargo clippy && cd frontend && pnpm type-check && pnpm lint
 pnpm format                              # Prettier (all files)
 
 # Local-first shortcuts
-make up                                  # Start local dependencies (ckb-node only in internal mode)
+make up                                  # Start local stack (redis/indexer/api/frontend; ckb-node only in internal mode)
 make rebuild SERVICES=api                # Rebuild + restart one compose service
 make rebuild SERVICES="api frontend"     # Rebuild + restart multiple services
 make tui                                 # Run monitoring TUI
@@ -143,8 +143,8 @@ make up CKB_NODE_MODE=external           # Force external mode for one run
 
 `up` default mode comes from `.env`:
 
-- `COMPOSE_PROFILES=internal` => internal CKB (`redis + ckb-node`)
-- `COMPOSE_PROFILES` unset => external CKB (`redis` only)
+- `COMPOSE_PROFILES=internal` => internal CKB (`redis + ckb-node + indexer + api + frontend`)
+- `COMPOSE_PROFILES` unset => external CKB (`redis + indexer + api + frontend`)
 
 `reset CONFIRM=1` removes:
 

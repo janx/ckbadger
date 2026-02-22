@@ -164,7 +164,7 @@ docker compose -f docker-compose.minimal.yml up -d
 Use repository `Makefile` targets for the most common local workflow:
 
 ```bash
-# Start local dependencies (always redis; ckb-node only in internal mode)
+# Start local stack (always redis/indexer/api/frontend; ckb-node only in internal mode)
 make up
 
 # Rebuild + restart one or multiple compose services
@@ -186,8 +186,8 @@ make verify VERIFY_DEPTH=sampling VERIFY_RPC_URL=http://localhost:8114
 
 `make up` mode resolution:
 
-- If `.env` contains `COMPOSE_PROFILES=internal`, it starts `redis + ckb-node`
-- Otherwise it starts `redis` only (external CKB mode)
+- If `.env` contains `COMPOSE_PROFILES=internal`, it starts `redis + ckb-node + indexer + api + frontend`
+- Otherwise it starts `redis + indexer + api + frontend` (external CKB mode)
 - You can override per command:
   - `make up CKB_NODE_MODE=internal`
   - `make up CKB_NODE_MODE=external`
