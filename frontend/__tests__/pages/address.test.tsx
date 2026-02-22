@@ -234,6 +234,7 @@ describe('AddressDetailPage', () => {
     expect(screen.getByText('4.86% APC')).toBeInTheDocument();
     expect(screen.getByText('Active Deposits')).toBeInTheDocument();
     expect(screen.getByText('3')).toBeInTheDocument();
+    expect(screen.getByText('D')).toHaveClass('bg-slate-800');
   });
 
   it('displays DAO deposit stats including pending withdrawals', async () => {

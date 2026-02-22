@@ -326,9 +326,7 @@ export default function ScriptDetailPage() {
           badge={
             <div className="flex items-center gap-2">
               {inferredScriptKind && (
-                <Badge variant={inferredScriptKind === 'lock' ? 'blue' : 'purple'}>
-                  {inferredScriptKind.toUpperCase()}
-                </Badge>
+                <Badge variant="neutral">{inferredScriptKind.toUpperCase()}</Badge>
               )}
               {scriptInfo.decoderType && (
                 <Badge variant="gray">{scriptInfo.decoderType.toUpperCase()}</Badge>
@@ -342,7 +340,7 @@ export default function ScriptDetailPage() {
                   href={scriptInfo.rfc}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-terminal-green hover:border-terminal-dark rounded border border-slate-700 px-3 py-1 font-mono text-sm transition-colors hover:bg-slate-900"
+                  className="text-terminal-green rounded border border-slate-700 px-3 py-1 font-mono text-sm transition-colors hover:border-slate-600 hover:bg-slate-900"
                 >
                   RFC
                 </a>
@@ -352,7 +350,7 @@ export default function ScriptDetailPage() {
                   href={scriptInfo.website}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-terminal-green hover:border-terminal-dark rounded border border-slate-700 px-3 py-1 font-mono text-sm transition-colors hover:bg-slate-900"
+                  className="text-terminal-green rounded border border-slate-700 px-3 py-1 font-mono text-sm transition-colors hover:border-slate-600 hover:bg-slate-900"
                 >
                   Website
                 </a>
@@ -362,7 +360,7 @@ export default function ScriptDetailPage() {
                   href={scriptInfo.sourceUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-terminal-green hover:border-terminal-dark rounded border border-slate-700 px-3 py-1 font-mono text-sm transition-colors hover:bg-slate-900"
+                  className="text-terminal-green rounded border border-slate-700 px-3 py-1 font-mono text-sm transition-colors hover:border-slate-600 hover:bg-slate-900"
                 >
                   Source
                 </a>
@@ -382,7 +380,7 @@ export default function ScriptDetailPage() {
                 <div className="mb-1 font-mono text-[11px] uppercase tracking-wider text-slate-500">
                   Script Ref
                 </div>
-                <div className="font-mono text-xs text-emerald-300">type ref</div>
+                <div className="font-mono text-xs text-slate-300">type ref</div>
                 <div className="mt-1 text-xs text-slate-400">
                   Resolves by type script hash. Upgradeable flow, executes on latest CKB-VM.
                 </div>
@@ -391,7 +389,7 @@ export default function ScriptDetailPage() {
                 <div className="mb-1 font-mono text-[11px] uppercase tracking-wider text-slate-500">
                   Script Ref
                 </div>
-                <div className="font-mono text-xs text-emerald-300">data/data1/data2</div>
+                <div className="font-mono text-xs text-slate-300">data/data1/data2</div>
                 <div className="mt-1 text-xs text-slate-400">
                   Resolves by bytecode hash. Immutable binary, VM version fixed to v0/v1/v2.
                 </div>
@@ -432,7 +430,7 @@ export default function ScriptDetailPage() {
                 return (
                   <TerminalRow
                     key={idx}
-                    className={`cursor-pointer ${selected ? 'bg-emerald-950/20 ring-1 ring-inset ring-emerald-600/30' : ''}`}
+                    className={`cursor-pointer ${selected ? 'bg-terminal-green/10 ring-terminal-green/30 ring-1 ring-inset' : ''}`}
                   >
                     <div
                       className="flex w-full items-center gap-3"
@@ -444,11 +442,11 @@ export default function ScriptDetailPage() {
                             <Link
                               href={`/cell/${deployment.codeCellTxHash}-${deployment.codeCellOutputIndex}`}
                               onClick={(e) => e.stopPropagation()}
-                              className="text-amber text-xs hover:underline"
+                              className="text-terminal-green text-xs hover:underline"
                             >
                               <HexDisplay
                                 value={`${deployment.codeCellTxHash}:${deployment.codeCellOutputIndex}`}
-                                color="amber"
+                                color="accent"
                                 startChars={8}
                                 endChars={8}
                               />
@@ -465,7 +463,7 @@ export default function ScriptDetailPage() {
                             {refs.typeRef ? (
                               <HexDisplay
                                 value={refs.typeRef}
-                                color={selected ? 'green' : 'white'}
+                                color="accent"
                                 size="sm"
                                 startChars={10}
                                 endChars={8}
@@ -481,7 +479,7 @@ export default function ScriptDetailPage() {
                             {refs.dataRef ? (
                               <HexDisplay
                                 value={refs.dataRef}
-                                color={selected ? 'green' : 'white'}
+                                color="accent"
                                 size="sm"
                                 startChars={10}
                                 endChars={8}
@@ -506,10 +504,7 @@ export default function ScriptDetailPage() {
                       </div>
                       <div className="w-24 text-slate-400">
                         {stats?.scriptKind ? (
-                          <Badge
-                            variant={stats.scriptKind === 'lock' ? 'blue' : 'purple'}
-                            className="px-1.5 py-0.5 text-[10px]"
-                          >
+                          <Badge variant="neutral" className="px-1.5 py-0.5 text-[10px]">
                             {stats.scriptKind}
                           </Badge>
                         ) : (
@@ -576,7 +571,7 @@ export default function ScriptDetailPage() {
                     {selectedDeploymentRefs.typeRef ? (
                       <HexDisplay
                         value={selectedDeploymentRefs.typeRef}
-                        color="white"
+                        color="accent"
                         size="sm"
                         startChars={10}
                         endChars={8}
@@ -590,7 +585,7 @@ export default function ScriptDetailPage() {
                     {selectedDeploymentRefs.dataRef ? (
                       <HexDisplay
                         value={selectedDeploymentRefs.dataRef}
-                        color="white"
+                        color="accent"
                         size="sm"
                         startChars={10}
                         endChars={8}
@@ -646,7 +641,7 @@ export default function ScriptDetailPage() {
                     {selectedDeploymentRefs.typeRef ? (
                       <HexDisplay
                         value={selectedDeploymentRefs.typeRef}
-                        color="white"
+                        color="accent"
                         size="sm"
                         startChars={10}
                         endChars={8}
@@ -660,7 +655,7 @@ export default function ScriptDetailPage() {
                     {selectedDeploymentRefs.dataRef ? (
                       <HexDisplay
                         value={selectedDeploymentRefs.dataRef}
-                        color="white"
+                        color="accent"
                         size="sm"
                         startChars={10}
                         endChars={8}
@@ -690,7 +685,10 @@ export default function ScriptDetailPage() {
                               href={`/cell/${cell.txHash}-${cell.outputIndex}`}
                               className="text-terminal-green hover:underline"
                             >
-                              <HexDisplay value={`${cell.txHash}:${cell.outputIndex}`} />
+                              <HexDisplay
+                                value={`${cell.txHash}:${cell.outputIndex}`}
+                                color="accent"
+                              />
                             </Link>
                           </div>
                           <div className="w-52 shrink-0 text-right text-white">
@@ -711,7 +709,7 @@ export default function ScriptDetailPage() {
                           <div className="w-28 shrink-0 text-right">
                             <Link
                               href={`/blocks/${cell.createdAtBlock}`}
-                              className="text-amber hover:underline"
+                              className="text-terminal-green hover:underline"
                             >
                               #{cell.createdAtBlock.toLocaleString()}
                             </Link>

@@ -40,10 +40,10 @@ const TYPE_CONFIG = {
     countColor: 'text-amber-500/80',
   },
   tip: {
-    borderColor: 'border-purple-600/50',
-    bgGradient: 'from-purple-950/30 to-slate-900/50',
-    titleColor: 'text-purple-400',
-    countColor: 'text-purple-500/80',
+    borderColor: 'border-terminal-green/50',
+    bgGradient: 'from-terminal-dark/20 to-slate-900/50',
+    titleColor: 'text-terminal-green',
+    countColor: 'text-terminal-dim',
   },
 };
 
@@ -51,7 +51,7 @@ const CATEGORY_COLORS: Record<TxCategory, Record<'mempool' | 'proposals' | 'tip'
   normal: {
     mempool: 'bg-slate-500/80 hover:bg-slate-400',
     proposals: 'bg-amber-600/80 hover:bg-amber-500',
-    tip: 'bg-purple-600/80 hover:bg-purple-500',
+    tip: 'bg-terminal-green/80 hover:bg-terminal-dim',
   },
   cellbase: {
     mempool: 'bg-emerald-600/80 hover:bg-emerald-500',
@@ -59,9 +59,9 @@ const CATEGORY_COLORS: Record<TxCategory, Record<'mempool' | 'proposals' | 'tip'
     tip: 'bg-emerald-600/80 hover:bg-emerald-500',
   },
   dao: {
-    mempool: 'bg-cyan-600/80 hover:bg-cyan-500',
-    proposals: 'bg-cyan-600/80 hover:bg-cyan-500',
-    tip: 'bg-cyan-600/80 hover:bg-cyan-500',
+    mempool: 'bg-amber-500/80 hover:bg-amber-400',
+    proposals: 'bg-amber-500/80 hover:bg-amber-400',
+    tip: 'bg-amber-500/80 hover:bg-amber-400',
   },
 };
 
@@ -282,7 +282,7 @@ export function PackedContainer({
         config.bgGradient,
         type === 'tip' &&
           blockNumber &&
-          'cursor-pointer hover:border-purple-500/70 hover:shadow-lg hover:shadow-purple-900/20'
+          'hover:border-terminal-green/70 hover:shadow-terminal-glow cursor-pointer hover:shadow-lg'
       )}
     >
       <div className="mb-2 flex items-center justify-between sm:mb-3">

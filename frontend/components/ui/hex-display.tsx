@@ -9,7 +9,7 @@ interface HexCharProps {
   groupIndex: number;
   isHovered: boolean;
   onHover: (index: number | null) => void;
-  color: 'green' | 'amber' | 'white';
+  color: 'green' | 'amber' | 'white' | 'accent';
   showGroupHighlight: boolean;
 }
 
@@ -37,6 +37,11 @@ const HexChar = memo(function HexChar({
       base: 'text-slate-500',
       hover: 'text-white',
       glow: '0 0 4px rgba(255, 255, 255, 0.4)',
+    },
+    accent: {
+      base: 'text-terminal-green',
+      hover: 'text-terminal-green',
+      glow: '0 0 4px rgba(0, 255, 65, 0.6)',
     },
   };
 
@@ -71,7 +76,7 @@ interface HexDisplayProps {
   groupSize?: number;
   showGroupHighlight?: boolean;
   copyable?: boolean;
-  color?: 'green' | 'amber' | 'white';
+  color?: 'green' | 'amber' | 'white' | 'accent';
   size?: 'sm' | 'md' | 'lg';
   className?: string;
   mono?: boolean;
@@ -149,6 +154,7 @@ export function HexDisplay({
     green: 'text-terminal-dark',
     amber: 'text-amber-dark',
     white: 'text-slate-600',
+    accent: 'text-terminal-dark',
   };
 
   if (copied) {
@@ -210,7 +216,7 @@ interface ByteGroupDisplayProps {
   value: string;
   bytesPerGroup?: number;
   separator?: string;
-  color?: 'green' | 'amber' | 'white';
+  color?: 'green' | 'amber' | 'white' | 'accent';
   className?: string;
 }
 
@@ -239,6 +245,7 @@ export function ByteGroupDisplay({
     green: ['text-terminal-green', 'text-terminal-dim'],
     amber: ['text-amber', 'text-amber-dim'],
     white: ['text-white', 'text-slate-400'],
+    accent: ['text-terminal-green', 'text-terminal-dark'],
   };
 
   return (

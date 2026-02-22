@@ -138,7 +138,7 @@ export default function SporeDetailPage() {
 
           <PageHeader
             title={collection.name || 'NFT Collection'}
-            badge={<Badge variant="purple">{collection.standard.toUpperCase()}</Badge>}
+            badge={<Badge variant="neutral">{collection.standard.toUpperCase()}</Badge>}
           />
 
           <div className="space-y-6">
@@ -147,7 +147,7 @@ export default function SporeDetailPage() {
               <TerminalPanelContent>
                 <DataGrid columns={1}>
                   <DataField label="Collection ID">
-                    <HexDisplay value={collection.collectionId} truncate={false} color="white" />
+                    <HexDisplay value={collection.collectionId} truncate={false} color="accent" />
                   </DataField>
                   <DataField label="Standard">
                     <span className="font-mono text-slate-300">
@@ -231,20 +231,20 @@ export default function SporeDetailPage() {
               <TerminalPanelContent>
                 <DataGrid columns={1}>
                   <DataField label="Spore ID">
-                    <HexDisplay value={spore.sporeId} truncate={false} color="white" />
+                    <HexDisplay value={spore.sporeId} truncate={false} color="accent" />
                   </DataField>
                   <DataField label="Owner">
                     {spore.ownerAddress ? (
                       <Address address={spore.ownerAddress} truncate={false} />
                     ) : (
                       <Link href={`/address/${spore.ownerLockHash}`} className="hover:underline">
-                        <HexDisplay value={spore.ownerLockHash} truncate={false} color="green" />
+                        <HexDisplay value={spore.ownerLockHash} truncate={false} color="accent" />
                       </Link>
                     )}
                   </DataField>
                   <DataField label="Owner Lock Hash">
                     <Link href={`/address/${spore.ownerLockHash}`} className="hover:underline">
-                      <HexDisplay value={spore.ownerLockHash} truncate={false} color="green" />
+                      <HexDisplay value={spore.ownerLockHash} truncate={false} color="accent" />
                     </Link>
                   </DataField>
                   <DataField label="Created at Block">
@@ -289,7 +289,7 @@ export default function SporeDetailPage() {
                     )}
                     <DataField label="Cluster ID">
                       <Link href={`/clusters/${cluster.clusterId}`} className="hover:underline">
-                        <HexDisplay value={cluster.clusterId} truncate={false} color="green" />
+                        <HexDisplay value={cluster.clusterId} truncate={false} color="accent" />
                       </Link>
                     </DataField>
                     <DataField label="Total NFTs">

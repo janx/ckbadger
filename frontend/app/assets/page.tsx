@@ -89,11 +89,8 @@ function AssetTable({ assetType, search }: { assetType: AssetTab; search: string
     return asset.name || 'Unnamed Collection';
   };
 
-  const getTypeBadgeVariant = (asset: Asset): 'green' | 'purple' | 'blue' | 'amber' => {
-    if (asset.assetType === 'dob') return 'green';
-    if (asset.assetType === 'nft') return 'purple';
-    if (asset.standard === 'xudt') return 'purple';
-    return 'blue';
+  const getTypeBadgeVariant = (_asset: Asset): 'neutral' => {
+    return 'neutral';
   };
 
   const getTypeBadgeLabel = (asset: Asset) => {
@@ -230,7 +227,7 @@ function AssetTable({ assetType, search }: { assetType: AssetTab; search: string
                     </div>
                     <HexDisplay
                       value={asset.id}
-                      color="white"
+                      color="accent"
                       size="sm"
                       startChars={8}
                       endChars={6}
@@ -360,7 +357,7 @@ export default function AssetsPage() {
               </div>
               <button
                 type="submit"
-                className="border-terminal-dark bg-terminal-dark/20 text-terminal-green hover:bg-terminal-dark/40 rounded border px-4 py-1.5 font-mono text-sm transition-colors"
+                className="text-terminal-green rounded border border-slate-700 bg-slate-900/40 px-4 py-1.5 font-mono text-sm transition-colors hover:bg-slate-900/70"
               >
                 Search
               </button>
@@ -379,7 +376,7 @@ export default function AssetsPage() {
                   <TabsTrigger value="dob">
                     <span className="flex items-center gap-1.5">
                       DOBs
-                      <Badge variant="green">ON-CHAIN</Badge>
+                      <Badge variant="neutral">ON-CHAIN</Badge>
                     </span>
                   </TabsTrigger>
                 </TabsList>
@@ -394,13 +391,13 @@ export default function AssetsPage() {
               </TabsContent>
 
               <TabsContent value="nft">
-                <div className="border-b border-slate-800 bg-purple-950/20 p-4">
+                <div className="border-b border-slate-800 bg-slate-900/40 p-4">
                   <div className="flex items-start gap-3">
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-purple-900/50 text-xl">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-800 text-xl">
                       🖼️
                     </div>
                     <div>
-                      <h3 className="font-semibold text-purple-400">NFT Collections</h3>
+                      <h3 className="font-semibold text-slate-200">NFT Collections</h3>
                       <p className="mt-1 text-sm text-slate-400">
                         NFTs (Non-Fungible Tokens) are unique digital assets. Unlike DOBs, NFTs
                         often rely on external services for metadata storage.
@@ -412,13 +409,13 @@ export default function AssetsPage() {
               </TabsContent>
 
               <TabsContent value="dob">
-                <div className="bg-terminal-dark/10 border-b border-slate-800 p-4">
+                <div className="border-b border-slate-800 bg-slate-900/40 p-4">
                   <div className="flex items-start gap-3">
-                    <div className="bg-terminal-dark/30 flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-xl">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-800 text-xl">
                       🗂️
                     </div>
                     <div>
-                      <h3 className="text-terminal-green font-semibold">DOB Collections</h3>
+                      <h3 className="font-semibold text-slate-200">DOB Collections</h3>
                       <p className="mt-1 text-sm text-slate-400">
                         DOBs (Digital Objects) are fully on-chain assets with all data stored
                         directly in CKB cells. They require no external services and can exist

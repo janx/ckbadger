@@ -223,7 +223,7 @@ export default function ScriptByCodeHashPage() {
                     >
                       <HexDisplay
                         value={`${codeCellTxHash}:${codeCellOutputIndex}`}
-                        color="green"
+                        color="accent"
                         size="sm"
                         startChars={8}
                         endChars={8}
@@ -234,7 +234,7 @@ export default function ScriptByCodeHashPage() {
                   )}
                 </div>
                 <div className="flex-1">
-                  <HexDisplay value={codeHash} truncate={false} color="white" size="sm" />
+                  <HexDisplay value={codeHash} truncate={false} color="accent" size="sm" />
                 </div>
                 <div className="w-20 text-center">
                   <Badge variant="gray">
@@ -243,13 +243,7 @@ export default function ScriptByCodeHashPage() {
                 </div>
                 <div className="w-20 text-center">
                   {knownScript?.scriptKind || (scriptKind !== 'both' ? scriptKind : null) ? (
-                    <Badge
-                      variant={
-                        (knownScript?.scriptKind || scriptKind) === 'lock' ? 'blue' : 'purple'
-                      }
-                    >
-                      {knownScript?.scriptKind || scriptKind}
-                    </Badge>
+                    <Badge variant="neutral">{knownScript?.scriptKind || scriptKind}</Badge>
                   ) : (
                     <span className="text-slate-500">-</span>
                   )}
@@ -272,11 +266,11 @@ export default function ScriptByCodeHashPage() {
                   {deploymentTypeHash ? (
                     <Link
                       href={`/script/${deploymentTypeHash}?hashType=type&kind=${deploymentKind}`}
-                      className="font-mono text-xs text-emerald-300 hover:underline"
+                      className="text-terminal-green font-mono text-xs hover:underline"
                     >
                       <HexDisplay
                         value={deploymentTypeHash}
-                        color="green"
+                        color="accent"
                         size="sm"
                         startChars={10}
                         endChars={8}
@@ -291,11 +285,11 @@ export default function ScriptByCodeHashPage() {
                   {deploymentDataHash ? (
                     <Link
                       href={`/script/${deploymentDataHash}?hashType=${dataRefHashType}&kind=${deploymentKind}`}
-                      className="font-mono text-xs text-emerald-300 hover:underline"
+                      className="text-terminal-green font-mono text-xs hover:underline"
                     >
                       <HexDisplay
                         value={deploymentDataHash}
-                        color="green"
+                        color="accent"
                         size="sm"
                         startChars={10}
                         endChars={8}
@@ -313,7 +307,7 @@ export default function ScriptByCodeHashPage() {
               </div>
               <div className="space-y-1 text-xs text-slate-400">
                 <div>
-                  <span className="font-mono text-emerald-300">type ref</span>
+                  <span className="font-mono text-slate-300">type ref</span>
                   <span>
                     {' '}
                     resolves code by matching type script hash (upgradeable; runs latest VM
@@ -321,7 +315,7 @@ export default function ScriptByCodeHashPage() {
                   </span>
                 </div>
                 <div>
-                  <span className="font-mono text-emerald-300">
+                  <span className="font-mono text-slate-300">
                     bytecode hash ref family (data/data1/data2)
                   </span>
                   <span>
@@ -454,7 +448,7 @@ export default function ScriptByCodeHashPage() {
                         >
                           <HexDisplay
                             value={`${cell.txHash}:${cell.outputIndex}`}
-                            color="green"
+                            color="accent"
                             size="sm"
                             startChars={8}
                             endChars={8}

@@ -113,7 +113,7 @@ export default function ForkDetailPage({ params }: { params: Promise<{ id: strin
                     >
                       #{event.forkPointNumber.toLocaleString()}
                     </Link>
-                    <HexDisplay value={event.forkPointHash} color="white" size="sm" />
+                    <HexDisplay value={event.forkPointHash} color="accent" size="sm" />
                   </div>
                 </DataField>
                 {event.resolvedAt && (
@@ -144,7 +144,7 @@ export default function ForkDetailPage({ params }: { params: Promise<{ id: strin
                     </span>
                   </div>
                   <div className="mt-2">
-                    <HexDisplay value={event.oldTipHash} color="white" size="sm" />
+                    <HexDisplay value={event.oldTipHash} color="accent" size="sm" />
                   </div>
                 </div>
 
@@ -162,7 +162,7 @@ export default function ForkDetailPage({ params }: { params: Promise<{ id: strin
                     </span>
                   </div>
                   <div className="mt-2">
-                    <HexDisplay value={event.newTipHash} color="white" size="sm" />
+                    <HexDisplay value={event.newTipHash} color="accent" size="sm" />
                   </div>
                 </div>
               </div>
@@ -205,7 +205,7 @@ export default function ForkDetailPage({ params }: { params: Promise<{ id: strin
                           </Link>
                         </div>
                         <div className="flex-1">
-                          <HexDisplay value={block.hash} color="white" size="sm" />
+                          <HexDisplay value={block.hash} color="accent" size="sm" />
                         </div>
                         <div className="w-24 text-center font-mono text-slate-300">
                           {block.transactionsCount}
@@ -238,7 +238,7 @@ export default function ForkDetailPage({ params }: { params: Promise<{ id: strin
                       <div className="flex items-center">
                         <div className="flex-1">
                           <Link href={`/tx/${tx.hash}`} className="hover:underline">
-                            <HexDisplay value={tx.hash} color="green" size="sm" />
+                            <HexDisplay value={tx.hash} color="accent" size="sm" />
                           </Link>
                           <Link
                             href={`/blocks/${tx.blockNumber}`}

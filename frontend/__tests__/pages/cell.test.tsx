@@ -236,6 +236,16 @@ describe('CellDetailPage', () => {
     expect(screen.queryByTestId('byte-composition-guides')).not.toBeInTheDocument();
     expect(legend.className).toContain('mt-2');
     expect(legend.querySelector('.grid')).toBeTruthy();
+    expect(legend.querySelector('.bg-slate-500')).toBeTruthy();
+    expect(legend.querySelector('.bg-terminal-green')).toBeTruthy();
+    expect(legend.querySelector('.bg-cyan-400')).toBeTruthy();
+    expect(legend.querySelector('.bg-amber-400')).toBeTruthy();
+
+    const lockScriptLegendItem = screen.getByRole('button', { name: /Lock Script/i });
+    fireEvent.mouseEnter(lockScriptLegendItem);
+    expect(lockScriptLegendItem.className).toContain('bg-terminal-green/15');
+    expect(lockScriptLegendItem.className).toContain('border-terminal-green/70');
+    fireEvent.mouseLeave(lockScriptLegendItem);
 
     expect(screen.getByText('Overview')).toBeInTheDocument();
     expect(screen.getByText('Address')).toBeInTheDocument();
@@ -251,6 +261,29 @@ describe('CellDetailPage', () => {
     expect(screen.getByTestId('cell-relationship-lifecycle')).toBeInTheDocument();
     expect(screen.getByText('Current Status')).toBeInTheDocument();
     expect(screen.getByText('Upstream Inputs (0)')).toBeInTheDocument();
+  });
+
+  it('renders inferred bytes segment with dedicated legend color', async () => {
+    mockGetCell.mockResolvedValue({
+      ...mockCellWithDao,
+      occupiedCapacity: 10200000000,
+      occupiedCapacityBreakdown: {
+        capacityFieldBytes: 8,
+        lockScriptBytes: 53,
+        typeScriptBytes: 17,
+        dataBytes: 8,
+        totalBytes: 86,
+      },
+    });
+
+    renderWithQueryClient(<CellDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Unindexed Script Args')).toBeInTheDocument();
+    });
+
+    const legend = screen.getByTestId('byte-composition-legend');
+    expect(legend.querySelector('.bg-fuchsia-400')).toBeTruthy();
   });
 
   it('renders withdrawn DAO cell with compensation info', async () => {
@@ -365,6 +398,7 @@ describe('CellDetailPage', () => {
     expect(screen.queryByTestId('data-analysis-panel')).not.toBeInTheDocument();
     expect(screen.queryByTestId('data-deterministic-panel')).not.toBeInTheDocument();
     expect(screen.queryByTestId('data-heuristic-panel')).not.toBeInTheDocument();
+    expect(screen.getByTestId('data-byte-0').className).toContain('bg-terminal-green/15');
 
     fireEvent.mouseEnter(screen.getByTestId('data-byte-0'));
     expect(screen.getByTestId('data-active-segment-value')).toHaveTextContent('42');
@@ -413,13 +447,18 @@ describe('CellDetailPage', () => {
       expect(screen.getByTestId('data-heuristic-item-0')).toBeInTheDocument();
     });
 
+    expect(
+      screen.getByTestId('data-heuristic-item-0').querySelector('.bg-terminal-green')
+    ).toBeTruthy();
     expect(screen.queryByTestId('data-heuristic-detail-0')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId('data-heuristic-item-0'));
     expect(screen.getByTestId('data-heuristic-detail-0')).toBeInTheDocument();
+    expect(screen.getByTestId('data-heuristic-item-0').className).toContain('bg-terminal-green/15');
     expect(
       screen.getByText('Payload length is exactly 16 bytes (common u128 LE encoding)')
     ).toBeInTheDocument();
+    expect(screen.getByText('42').className).toContain('text-terminal-green');
 
     fireEvent.click(screen.getByTestId('data-heuristic-item-0'));
     expect(screen.queryByTestId('data-heuristic-detail-0')).not.toBeInTheDocument();
@@ -459,5 +498,6 @@ describe('CellDetailPage', () => {
     expect(screen.queryByTestId('data-coverage-grid')).not.toBeInTheDocument();
     expect(screen.queryByTestId('data-unparsed-ranges')).not.toBeInTheDocument();
     expect(screen.queryByTestId('data-byte-filter')).not.toBeInTheDocument();
+    expect(screen.getByTestId('data-byte-10').className).toContain('bg-slate-800/70');
   });
 });

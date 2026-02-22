@@ -67,7 +67,9 @@ describe('HardforksPage', () => {
 
     expect(screen.getByText('CKB Edition Mirana')).toBeInTheDocument();
     expect(screen.getAllByText('ACTIVATED').length).toBeGreaterThanOrEqual(2);
-    expect(screen.getAllByRole('link', { name: 'View activation block' }).length).toBe(2);
+    const activationLinks = screen.getAllByRole('link', { name: 'View activation block' });
+    expect(activationLinks.length).toBe(2);
+    expect(activationLinks[0]).toHaveClass('text-terminal-green');
   });
 
   it('shows error state on fetch failure', async () => {

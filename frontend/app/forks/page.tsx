@@ -117,7 +117,7 @@ export default function ForksPage() {
                         </div>
                         <HexDisplay
                           value={event.oldTipHash}
-                          color="white"
+                          color="accent"
                           size="sm"
                           startChars={8}
                           endChars={6}
@@ -129,7 +129,7 @@ export default function ForksPage() {
                         </div>
                         <HexDisplay
                           value={event.newTipHash}
-                          color="white"
+                          color="accent"
                           size="sm"
                           startChars={8}
                           endChars={6}

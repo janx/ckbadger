@@ -310,18 +310,18 @@ export default function AddressDetailPage() {
       }
       case 'dob':
         return (
-          <Badge variant="purple">
+          <Badge variant="neutral">
             {change.action.charAt(0).toUpperCase() + change.action.slice(1)} DOB
           </Badge>
         );
       case 'nft':
         return (
-          <Badge variant="green">
+          <Badge variant="neutral">
             {change.action.charAt(0).toUpperCase() + change.action.slice(1)} NFT
           </Badge>
         );
       case 'daoDeposit':
-        return <Badge variant="purple">DAO Deposit</Badge>;
+        return <Badge variant="neutral">DAO Deposit</Badge>;
       case 'daoWithdrawRequest':
         return <Badge variant="amber">DAO Withdraw Request</Badge>;
       case 'daoWithdrawComplete':
@@ -349,7 +349,7 @@ export default function AddressDetailPage() {
               {address.lockScriptInfo && (
                 <Link
                   href={`/scripts/${encodeURIComponent(address.lockScriptInfo.name)}`}
-                  className="bg-terminal-green/20 text-terminal-green hover:bg-terminal-green/30 inline-flex items-center gap-1.5 rounded border border-transparent px-2 py-0.5 text-xs font-medium transition-colors"
+                  className="inline-flex items-center gap-1.5 rounded border border-slate-700 bg-slate-800/70 px-2 py-0.5 text-xs font-medium text-slate-300 transition-colors hover:bg-slate-800"
                 >
                   {address.lockScriptInfo.name}
                 </Link>
@@ -432,7 +432,7 @@ export default function AddressDetailPage() {
           <TerminalPanel className="mb-8" variant="elevated">
             <TerminalPanelHeader>
               <div className="flex items-center gap-2">
-                <div className="flex h-5 w-5 items-center justify-center rounded-full bg-purple-900/50 text-xs text-purple-400">
+                <div className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-800 text-xs text-slate-300">
                   D
                 </div>
                 <Link href="/dao" className="hover:text-terminal-green transition-colors">
@@ -501,7 +501,7 @@ export default function AddressDetailPage() {
                                 truncate
                                 startChars={6}
                                 endChars={6}
-                                className="text-terminal-green"
+                                color="accent"
                               />
                             </Link>
                             <Link
@@ -636,7 +636,7 @@ export default function AddressDetailPage() {
                   onClick={() => setActiveTab('activities')}
                   className={`rounded px-3 py-1 font-mono text-sm transition-colors ${
                     activeTab === 'activities'
-                      ? 'bg-terminal-green/20 text-terminal-green'
+                      ? 'bg-terminal-green/15 text-terminal-green'
                       : 'text-slate-400 hover:text-white'
                   }`}
                 >
@@ -647,7 +647,7 @@ export default function AddressDetailPage() {
                   onClick={() => setActiveTab('cells')}
                   className={`rounded px-3 py-1 font-mono text-sm transition-colors ${
                     activeTab === 'cells'
-                      ? 'bg-terminal-green/20 text-terminal-green'
+                      ? 'bg-terminal-green/15 text-terminal-green'
                       : 'text-slate-400 hover:text-white'
                   }`}
                 >
@@ -662,7 +662,7 @@ export default function AddressDetailPage() {
                   onClick={() => setActiveTab('transactions')}
                   className={`rounded px-3 py-1 font-mono text-sm transition-colors ${
                     activeTab === 'transactions'
-                      ? 'bg-terminal-green/20 text-terminal-green'
+                      ? 'bg-terminal-green/15 text-terminal-green'
                       : 'text-slate-400 hover:text-white'
                   }`}
                 >
@@ -683,7 +683,7 @@ export default function AddressDetailPage() {
                   </Badge>
                 )}
                 {selectedDao && (
-                  <Badge variant="purple" className="ml-2">
+                  <Badge variant="neutral" className="ml-2">
                     Filter: Nervos DAO
                   </Badge>
                 )}
@@ -711,7 +711,7 @@ export default function AddressDetailPage() {
           {selectedDao && activeTab === 'cells' && (
             <div className="flex items-center justify-between border-b border-slate-800 bg-slate-900/50 px-4 py-2">
               <span className="text-sm text-slate-400">
-                Showing cells for <span className="text-purple-400">Nervos DAO</span>
+                Showing cells for <span className="text-slate-300">Nervos DAO</span>
               </span>
               <button
                 onClick={() => setSelectedDao(false)}
@@ -735,7 +735,7 @@ export default function AddressDetailPage() {
                       }}
                       className={`rounded px-2 py-0.5 font-mono text-xs transition-colors ${
                         activityFilter === f
-                          ? 'bg-terminal-green/20 text-terminal-green'
+                          ? 'bg-terminal-green/15 text-terminal-green'
                           : 'text-slate-500 hover:text-slate-300'
                       }`}
                     >
@@ -775,7 +775,7 @@ export default function AddressDetailPage() {
                                       truncate
                                       startChars={6}
                                       endChars={6}
-                                      className="text-terminal-green"
+                                      color="accent"
                                     />
                                   </Link>
                                   <Link
@@ -850,7 +850,7 @@ export default function AddressDetailPage() {
                       onClick={() => setCellFilter(f)}
                       className={`rounded px-2 py-0.5 font-mono text-xs transition-colors ${
                         cellFilter === f
-                          ? 'bg-terminal-green/20 text-terminal-green'
+                          ? 'bg-terminal-green/15 text-terminal-green'
                           : 'text-slate-500 hover:text-slate-300'
                       }`}
                     >
@@ -894,6 +894,7 @@ export default function AddressDetailPage() {
                                       startChars={6}
                                       endChars={6}
                                       size="sm"
+                                      color="accent"
                                     />
                                   </Link>
                                   <span className="font-mono text-xs text-slate-500">
@@ -906,9 +907,9 @@ export default function AddressDetailPage() {
                                 </div>
 
                                 {cellIsDao && (
-                                  <div className="rounded border border-purple-900/30 bg-purple-900/10 px-2 py-1.5">
+                                  <div className="rounded border border-slate-800 bg-slate-900/50 px-2 py-1.5">
                                     <div className="flex items-center justify-between text-sm">
-                                      <span className="font-mono text-purple-400">Nervos DAO</span>
+                                      <span className="font-mono text-slate-300">Nervos DAO</span>
                                       {daoDepositInfo && (
                                         <Badge
                                           variant={
@@ -1051,12 +1052,12 @@ export default function AddressDetailPage() {
                                         truncate
                                         startChars={6}
                                         endChars={6}
-                                        className="text-terminal-green"
+                                        color="accent"
                                       />
                                     </Link>
-                                    {tx.isCellbase && <Badge variant="blue">Cellbase</Badge>}
+                                    {tx.isCellbase && <Badge variant="neutral">Cellbase</Badge>}
                                     {tx.scriptLabels.map((label) => (
-                                      <Badge key={label} variant="purple">
+                                      <Badge key={label} variant="neutral">
                                         {label}
                                       </Badge>
                                     ))}

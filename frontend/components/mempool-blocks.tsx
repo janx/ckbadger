@@ -310,9 +310,9 @@ function lensColor(stage: LensStage, feeScore: number, missing: boolean): string
   if (missing) return 'rgba(148, 163, 184, 0.55)';
 
   const alpha = 0.35 + feeScore * 0.5;
-  if (stage === 'mempool') return `rgba(34, 211, 238, ${alpha})`;
-  if (stage === 'proposed') return `rgba(251, 191, 36, ${alpha})`;
-  return `rgba(52, 211, 153, ${alpha})`;
+  if (stage === 'mempool') return `rgba(255, 176, 0, ${alpha})`;
+  if (stage === 'proposed') return `rgba(0, 204, 51, ${alpha})`;
+  return `rgba(0, 255, 65, ${alpha})`;
 }
 
 function mempoolTxToLensItem(tx: {
@@ -483,17 +483,17 @@ function edgeFadeOpacity(distanceToEdge: number): number {
 
 function getBlockColors(index: number, isPending: boolean): string {
   if (!isPending) {
-    return 'from-purple-500 via-purple-600 to-purple-700';
+    return 'from-emerald-500 via-green-500 to-terminal-green';
   }
   const colorSets = [
-    'from-emerald-400 via-emerald-500 to-emerald-600',
-    'from-green-400 via-green-500 to-green-600',
-    'from-lime-400 via-yellow-500 to-yellow-600',
-    'from-yellow-400 via-amber-500 to-amber-600',
-    'from-amber-400 via-orange-500 to-orange-600',
-    'from-orange-400 via-orange-500 to-red-500',
-    'from-red-400 via-red-500 to-red-600',
-    'from-red-500 via-red-600 to-rose-700',
+    'from-terminal-green via-green-500 to-emerald-600',
+    'from-green-400 via-green-500 to-emerald-600',
+    'from-lime-400 via-green-500 to-emerald-600',
+    'from-amber-300 via-amber-400 to-amber-500',
+    'from-amber-400 via-amber-500 to-orange-500',
+    'from-orange-400 via-amber-500 to-amber-600',
+    'from-amber-500 via-amber-600 to-orange-700',
+    'from-slate-500 via-slate-600 to-slate-700',
   ];
   return colorSets[Math.min(index, colorSets.length - 1)];
 }
@@ -621,7 +621,7 @@ function TxBubbleLayer({ bubbles, showAxes = false }: { bubbles: TxBubble[]; sho
       <div className="absolute inset-0 overflow-hidden rounded-[inherit]">
         {showAxes && (
           <>
-            <div className="pointer-events-none absolute inset-1 rounded-[inherit] bg-gradient-to-br from-white/[0.03] via-transparent to-cyan-300/[0.04]" />
+            <div className="to-terminal-green/10 pointer-events-none absolute inset-1 rounded-[inherit] bg-gradient-to-br from-white/[0.03] via-transparent" />
             {[0.33, 0.66].map((ratio) => (
               <div
                 key={`vertical-guide-${ratio}`}
@@ -698,26 +698,26 @@ function PendingBlock({
   const gradient = isEmpty
     ? ''
     : tone === 'mempool'
-      ? 'from-cyan-400 via-cyan-500 to-sky-600'
+      ? 'from-amber-400 via-amber-500 to-orange-600'
       : tone === 'proposals'
-        ? 'from-emerald-400 via-teal-500 to-cyan-600'
+        ? 'from-green-400 via-green-500 to-emerald-600'
         : getBlockColors(block.index, true);
   const effectiveGradient =
     isEmpty && large ? 'from-slate-700 via-slate-800 to-slate-900' : gradient;
   const borderClassName = isEmpty
     ? 'border-slate-500/70'
     : tone === 'mempool'
-      ? 'border-cyan-400/70'
-      : tone === 'proposals'
-        ? 'border-emerald-400/70'
-        : 'border-amber-400/70';
+      ? 'border-amber-400/70'
+      : tone === 'proposals' || tone === 'next'
+        ? 'border-cyan-400/80'
+        : 'border-terminal-green/70';
   const topLabelClass = isEmpty
     ? 'text-slate-500'
     : tone === 'mempool'
-      ? 'text-cyan-300'
-      : tone === 'proposals'
-        ? 'text-emerald-300'
-        : 'text-amber-400';
+      ? 'text-amber-300'
+      : tone === 'proposals' || tone === 'next'
+        ? 'text-cyan-300'
+        : 'text-terminal-green';
 
   return (
     <div className="flex flex-col items-center">
@@ -785,7 +785,7 @@ function PendingBlock({
         </div>
       )}
       {isNextBlock && (
-        <div className="mt-1.5 rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-medium text-amber-400 sm:text-xs">
+        <div className="mt-1.5 rounded-full bg-cyan-500/15 px-2 py-0.5 text-[10px] font-medium text-cyan-300 sm:text-xs">
           Next Block
         </div>
       )}
@@ -807,7 +807,7 @@ function MinedBlock({
   const isLoading = feeStats === 'loading';
   const stats = feeStats && feeStats !== 'loading' ? feeStats : null;
   const gradient = getBlockColors(0, false);
-  const borderClassName = 'border-purple-400/70';
+  const borderClassName = 'border-terminal-green/70';
   const anchorRef = useRef<HTMLAnchorElement | null>(null);
   const [isHovered, setIsHovered] = useState(false);
   const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
@@ -904,7 +904,7 @@ function MinedBlock({
       onFocus={() => setIsHovered(true)}
       onBlur={() => setIsHovered(false)}
     >
-      <div className="mb-1 font-mono text-xs font-semibold tabular-nums text-purple-400 transition-colors group-hover/block:text-purple-300 sm:text-sm">
+      <div className="text-terminal-green group-hover/block:text-terminal-dim mb-1 font-mono text-xs font-semibold tabular-nums transition-colors sm:text-sm">
         {block.number.toLocaleString()}
       </div>
       {block.hardforkActivation && (
@@ -1556,11 +1556,13 @@ export function MempoolBlocks({
             className="mt-1 flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between"
           >
             <p className="text-xs sm:text-sm">
-              <span className="text-cyan-300">Mempool ({formatCount(totalPending)})</span>
+              <span className="text-amber-300">Mempool ({formatCount(totalPending)})</span>
               <span className="text-slate-500"> {'->'} </span>
-              <span className="text-emerald-300">Proposals ({formatCount(totalProposed)})</span>
+              <span className="text-cyan-300">Proposals ({formatCount(totalProposed)})</span>
               <span className="text-slate-500"> {'->'} </span>
-              <span className="text-violet-300">New Committed ({formatCount(totalCommitted)})</span>
+              <span className="text-terminal-green">
+                New Committed ({formatCount(totalCommitted)})
+              </span>
             </p>
             {legendMode === 'row' && (
               <p className="text-[10px] text-slate-400 sm:text-right sm:text-[11px]">

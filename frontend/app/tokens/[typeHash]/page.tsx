@@ -136,14 +136,12 @@ export default function TokenDetailPage() {
           title={token.symbol || token.name || 'Unknown Token'}
           subtitle={
             <div className="flex items-center gap-2">
-              <HexDisplay value={token.typeScriptHash} truncate color="white" size="sm" />
+              <HexDisplay value={token.typeScriptHash} truncate color="accent" size="sm" />
             </div>
           }
           badge={
             <div className="flex items-center gap-2">
-              <Badge variant={token.standard === 'xudt' ? 'purple' : 'blue'}>
-                {token.standard.toUpperCase()}
-              </Badge>
+              <Badge variant="neutral">{token.standard.toUpperCase()}</Badge>
               {token.published && (
                 <span className="text-terminal-green" title="Verified">
                   <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 20 20">
@@ -324,7 +322,7 @@ export default function TokenDetailPage() {
                               <Link href={`/address/${holder.lockScriptHash}`}>
                                 <HexDisplay
                                   value={holder.lockScriptHash}
-                                  color="green"
+                                  color="accent"
                                   className="hover:underline"
                                 />
                               </Link>
@@ -390,7 +388,7 @@ export default function TokenDetailPage() {
                               <Link href={`/tx/${transfer.txHash}`}>
                                 <HexDisplay
                                   value={transfer.txHash}
-                                  color="amber"
+                                  color="accent"
                                   startChars={8}
                                   endChars={4}
                                   className="hover:underline"
@@ -409,10 +407,10 @@ export default function TokenDetailPage() {
                                 <Link href={`/address/${transfer.fromLockHash}`}>
                                   <HexDisplay
                                     value={transfer.fromLockHash}
-                                    color="white"
+                                    color="accent"
                                     startChars={6}
                                     endChars={4}
-                                    className="hover:text-terminal-green"
+                                    className="hover:underline"
                                   />
                                 </Link>
                               ) : (
@@ -443,10 +441,10 @@ export default function TokenDetailPage() {
                                 <Link href={`/address/${transfer.toLockHash}`}>
                                   <HexDisplay
                                     value={transfer.toLockHash}
-                                    color="white"
+                                    color="accent"
                                     startChars={6}
                                     endChars={4}
-                                    className="hover:text-terminal-green"
+                                    className="hover:underline"
                                   />
                                 </Link>
                               )}

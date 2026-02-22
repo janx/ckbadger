@@ -72,11 +72,11 @@ export default function TransactionsPage() {
                     <div className="flex items-center">
                       <div className="flex-1">
                         <Link href={`/tx/${tx.hash}`} className="hover:underline">
-                          <HexDisplay value={tx.hash} color="green" startChars={12} endChars={8} />
+                          <HexDisplay value={tx.hash} color="accent" startChars={12} endChars={8} />
                         </Link>
                         <Link
                           href={`/blocks/${tx.blockNumber}`}
-                          className="block font-mono text-xs text-slate-500 hover:text-slate-300"
+                          className="text-terminal-green block font-mono text-xs hover:underline"
                         >
                           #{formattedNumbers.get(tx.hash)}
                         </Link>

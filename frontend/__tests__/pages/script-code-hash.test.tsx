@@ -98,6 +98,9 @@ describe('ScriptByCodeHashPage', () => {
     expect(
       document.querySelector(`a[href="/script/${mockDataHash}?hashType=data&kind=type"]`)
     ).toBeTruthy();
+    expect(
+      document.querySelector(`[title="Click to copy: ${mockCodeHash}"] .text-terminal-green`)
+    ).toBeTruthy();
   });
 
   it('redirects known script hash to the unified named script detail page', async () => {

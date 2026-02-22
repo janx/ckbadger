@@ -93,7 +93,7 @@ export function PageHeader({
 
 interface BadgeProps {
   children: ReactNode;
-  variant?: 'green' | 'amber' | 'blue' | 'purple' | 'red' | 'gray';
+  variant?: 'green' | 'amber' | 'blue' | 'purple' | 'red' | 'gray' | 'neutral';
   className?: string;
 }
 
@@ -101,10 +101,11 @@ export function Badge({ children, variant = 'gray', className }: BadgeProps) {
   const variantClasses = {
     green: 'bg-green-900/50 text-green-400 border-green-900/50',
     amber: 'bg-amber-900/50 text-amber border-amber-900/50',
-    blue: 'bg-blue-900/50 text-blue-400 border-blue-900/50',
-    purple: 'bg-purple-900/50 text-purple-400 border-purple-900/50',
+    blue: 'bg-slate-800/70 text-slate-300 border-slate-700',
+    purple: 'bg-slate-800/70 text-slate-300 border-slate-700',
     red: 'bg-red-900/50 text-red-400 border-red-900/50',
     gray: 'bg-slate-800 text-slate-400 border-slate-700',
+    neutral: 'bg-slate-800/70 text-slate-300 border-slate-700',
   };
 
   return (

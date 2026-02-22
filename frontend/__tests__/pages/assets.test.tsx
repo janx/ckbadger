@@ -277,6 +277,7 @@ describe('AssetsPage', () => {
     await waitFor(() => {
       expect(screen.getByText('DOB Collections')).toBeInTheDocument();
     });
+    expect(screen.getByText('DOB Collections')).toHaveClass('text-slate-200');
   });
 
   it('shows NFTs info banner when NFTs tab is active', async () => {
@@ -290,6 +291,7 @@ describe('AssetsPage', () => {
     await waitFor(() => {
       expect(screen.getByText('NFT Collections')).toBeInTheDocument();
     });
+    expect(screen.getByText('NFT Collections')).toHaveClass('text-slate-200');
   });
 
   it('displays token data in the table', async () => {

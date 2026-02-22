@@ -46,11 +46,11 @@ export function ScriptView({
         <Link
           href={`/scripts/${encodeURIComponent(scriptInfo.name)}`}
           onClick={(e) => e.stopPropagation()}
-          className="bg-terminal-green/20 text-terminal-green hover:bg-terminal-green/30 inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs transition-colors"
+          className="inline-flex items-center gap-1 rounded border border-slate-700 bg-slate-800/70 px-2 py-0.5 text-xs text-slate-300 transition-colors hover:bg-slate-800"
         >
           {scriptInfo.name}
           {scriptInfo.scriptKind && (
-            <span className="text-terminal-green/60">({scriptInfo.scriptKind})</span>
+            <span className="text-slate-500">({scriptInfo.scriptKind})</span>
           )}
         </Link>
       )}
@@ -81,7 +81,7 @@ export function ScriptView({
           </div>
           <div className="flex items-start gap-2">
             <span className="w-20 shrink-0 text-slate-500">hash_type:</span>
-            <span className="text-terminal-green rounded bg-slate-800 px-2 py-0.5 text-xs">
+            <span className="rounded border border-slate-700 bg-slate-800/70 px-2 py-0.5 text-xs text-slate-300">
               {getScriptRefBadgeLabel(script.hashType)}
             </span>
           </div>

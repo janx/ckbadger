@@ -74,19 +74,18 @@ function median(values: Array<number | null | undefined>): number | null {
 }
 
 function stagePillClass(stage: FlowStage): string {
-  if (stage === 'mempool') return 'border-cyan-500/30 bg-cyan-500/10 text-cyan-200';
-  if (stage === 'proposed') return 'border-amber-500/30 bg-amber-500/10 text-amber-200';
-  return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200';
+  if (stage === 'mempool') return 'border-amber-500/30 bg-amber-500/10 text-amber-200';
+  if (stage === 'proposed') return 'border-green-500/30 bg-green-500/10 text-green-200';
+  return 'border-terminal-green/40 bg-terminal-green/10 text-terminal-green';
 }
 
 function bubbleColor(feeScore: number, stage: FlowStage, missing: boolean): string {
   if (missing) return 'rgba(148, 163, 184, 0.6)';
 
-  const stageShift = stage === 'mempool' ? -8 : stage === 'proposed' ? 12 : 0;
-  const hue = 206 - feeScore * 150 + stageShift;
-  const saturation = 82;
-  const lightness = 40 + feeScore * 20;
-  return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+  const alpha = 0.4 + feeScore * 0.4;
+  if (stage === 'mempool') return `rgba(255, 176, 0, ${alpha})`;
+  if (stage === 'proposed') return `rgba(0, 204, 51, ${alpha})`;
+  return `rgba(0, 255, 65, ${alpha})`;
 }
 
 function mempoolTxToItem(tx: MempoolTransaction): FlowTxItem {
@@ -152,8 +151,8 @@ function StageConnector({ label }: { label: string }) {
     <div className="hidden items-center gap-1 px-2 lg:flex">
       <div className="h-px w-6 bg-slate-700" />
       <div className="relative">
-        <div className="h-2 w-2 rounded-full bg-amber-400/80" />
-        <div className="absolute inset-0 animate-ping rounded-full bg-amber-300/40" />
+        <div className="bg-terminal-green/80 h-2 w-2 rounded-full" />
+        <div className="bg-terminal-green/35 absolute inset-0 animate-ping rounded-full" />
       </div>
       <div className="text-[10px] uppercase tracking-widest text-slate-500">{label}</div>
       <div className="h-px w-6 bg-slate-700" />
@@ -314,7 +313,7 @@ function CommittedBlocksStrip({ blocks }: { blocks: CommittedBlock[] }) {
           <h3 className="text-sm font-semibold text-white sm:text-base">Recent Committed Blocks</h3>
           <div className="text-xs text-slate-400">New blocks stream in as txns get packed</div>
         </div>
-        <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-xs text-emerald-200">
+        <div className="border-terminal-green/40 bg-terminal-green/10 text-terminal-green rounded-lg border px-2 py-1 text-xs">
           head #{blocks[0].block.number.toLocaleString()}
         </div>
       </div>
@@ -324,14 +323,14 @@ function CommittedBlocksStrip({ blocks }: { blocks: CommittedBlock[] }) {
           <Link
             key={entry.block.number}
             href={`/blocks/${entry.block.number}`}
-            className="block rounded-xl border border-slate-700/60 bg-slate-950/60 p-3 transition-colors hover:border-emerald-500/50"
+            className="hover:border-terminal-green/50 block rounded-xl border border-slate-700/60 bg-slate-950/60 p-3 transition-colors"
           >
             <div className="mb-2 flex items-center justify-between text-xs">
               <div className="font-medium text-slate-200">
                 #{entry.block.number.toLocaleString()}
               </div>
               {index === 0 ? (
-                <span className="rounded-md border border-emerald-500/40 bg-emerald-500/20 px-1.5 py-0.5 text-[10px] uppercase tracking-widest text-emerald-200">
+                <span className="border-terminal-green/40 bg-terminal-green/20 text-terminal-green rounded-md border px-1.5 py-0.5 text-[10px] uppercase tracking-widest">
                   New
                 </span>
               ) : (

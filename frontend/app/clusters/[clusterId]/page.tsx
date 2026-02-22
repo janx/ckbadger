@@ -113,7 +113,7 @@ export default function ClusterDetailPage() {
 
         <PageHeader
           title={cluster.name || 'Unnamed Collection'}
-          badge={<Badge variant="purple">Spore Cluster</Badge>}
+          badge={<Badge variant="neutral">Spore Cluster</Badge>}
         />
 
         <div className="grid gap-6 lg:grid-cols-3">
@@ -126,7 +126,7 @@ export default function ClusterDetailPage() {
                     <HexDisplay
                       value={cluster.clusterId}
                       truncate={false}
-                      color="white"
+                      color="accent"
                       size="sm"
                     />
                   </DataField>
@@ -145,7 +145,7 @@ export default function ClusterDetailPage() {
                       <Address address={cluster.ownerAddress} truncate={false} />
                     ) : (
                       <Link href={`/address/${cluster.ownerLockHash}`} className="hover:underline">
-                        <HexDisplay value={cluster.ownerLockHash} color="green" size="sm" />
+                        <HexDisplay value={cluster.ownerLockHash} color="accent" size="sm" />
                       </Link>
                     )}
                   </DataField>
@@ -195,7 +195,7 @@ export default function ClusterDetailPage() {
                           <div className="flex flex-1 items-center gap-2">
                             <span className="text-lg">{getContentTypeIcon(spore.contentType)}</span>
                             <Link href={`/nfts/${spore.sporeId}`} className="hover:underline">
-                              <HexDisplay value={spore.sporeId} color="green" size="sm" />
+                              <HexDisplay value={spore.sporeId} color="accent" size="sm" />
                             </Link>
                           </div>
                           <div className="w-32 font-mono text-sm text-slate-400">
@@ -206,12 +206,7 @@ export default function ClusterDetailPage() {
                           </div>
                           <div className="w-36 text-right">
                             {spore.ownerAddress ? (
-                              <Link
-                                href={`/address/${spore.ownerLockHash}`}
-                                className="hover:underline"
-                              >
-                                <Address address={spore.ownerAddress} truncate />
-                              </Link>
+                              <Address address={spore.ownerAddress} truncate />
                             ) : (
                               <Link
                                 href={`/address/${spore.ownerLockHash}`}
@@ -219,7 +214,7 @@ export default function ClusterDetailPage() {
                               >
                                 <HexDisplay
                                   value={spore.ownerLockHash}
-                                  color="green"
+                                  color="accent"
                                   size="sm"
                                   startChars={8}
                                   endChars={6}

@@ -29,6 +29,81 @@ type RelationshipView = 'lifecycle' | 'graph';
 const DATA_PREVIEW_LIMIT_BYTES = 1024;
 const DATA_BYTES_PER_ROW = 24;
 const UNKNOWN_SCRIPT_NAME = 'unknown';
+const DATA_SEGMENT_TONES = [
+  {
+    dot: 'bg-terminal-green',
+    activePill: 'border-terminal-green/70 bg-terminal-green/15 text-terminal-green',
+    valueText: 'text-terminal-green',
+    byte: 'rounded bg-terminal-green/15 text-terminal-dim',
+    byteActive: 'rounded bg-terminal-green/25 text-terminal-green ring-1 ring-terminal-green/70',
+    byteHover:
+      'byte-hover-breathe ring-1 ring-terminal-green/80 shadow-[0_0_10px_rgba(0,255,65,0.35)]',
+  },
+  {
+    dot: 'bg-cyan-400',
+    activePill: 'border-cyan-400/70 bg-cyan-500/15 text-cyan-300',
+    valueText: 'text-cyan-300',
+    byte: 'rounded bg-cyan-500/15 text-cyan-300',
+    byteActive: 'rounded bg-cyan-500/25 text-cyan-200 ring-1 ring-cyan-400/70',
+    byteHover: 'byte-hover-breathe ring-1 ring-cyan-400/80 shadow-[0_0_10px_rgba(34,211,238,0.35)]',
+  },
+  {
+    dot: 'bg-amber-400',
+    activePill: 'border-amber-400/70 bg-amber-500/15 text-amber-200',
+    valueText: 'text-amber-200',
+    byte: 'rounded bg-amber-500/15 text-amber-200',
+    byteActive: 'rounded bg-amber-500/25 text-amber-100 ring-1 ring-amber-400/70',
+    byteHover:
+      'byte-hover-breathe ring-1 ring-amber-400/80 shadow-[0_0_10px_rgba(251,191,36,0.35)]',
+  },
+  {
+    dot: 'bg-fuchsia-400',
+    activePill: 'border-fuchsia-400/70 bg-fuchsia-500/15 text-fuchsia-200',
+    valueText: 'text-fuchsia-200',
+    byte: 'rounded bg-fuchsia-500/15 text-fuchsia-200',
+    byteActive: 'rounded bg-fuchsia-500/25 text-fuchsia-100 ring-1 ring-fuchsia-400/70',
+    byteHover:
+      'byte-hover-breathe ring-1 ring-fuchsia-400/80 shadow-[0_0_10px_rgba(232,121,249,0.35)]',
+  },
+] as const;
+
+type CapacitySegmentTone = {
+  dot: string;
+  legendActivePill: string;
+  legendValueText: string;
+};
+
+const CAPACITY_SEGMENT_TONES: Record<string, CapacitySegmentTone> = {
+  capacityFieldBytes: {
+    dot: 'bg-slate-500',
+    legendActivePill: 'border-slate-400/70 bg-slate-500/15 text-slate-100',
+    legendValueText: 'text-slate-300',
+  },
+  lockScriptBytes: {
+    dot: 'bg-terminal-green',
+    legendActivePill: 'border-terminal-green/70 bg-terminal-green/15 text-terminal-green',
+    legendValueText: 'text-terminal-green',
+  },
+  typeScriptBytes: {
+    dot: 'bg-cyan-400',
+    legendActivePill: 'border-cyan-400/70 bg-cyan-500/15 text-cyan-300',
+    legendValueText: 'text-cyan-300',
+  },
+  dataBytes: {
+    dot: 'bg-amber-400',
+    legendActivePill: 'border-amber-400/70 bg-amber-500/15 text-amber-200',
+    legendValueText: 'text-amber-200',
+  },
+  inferredBytes: {
+    dot: 'bg-fuchsia-400',
+    legendActivePill: 'border-fuchsia-400/70 bg-fuchsia-500/15 text-fuchsia-200',
+    legendValueText: 'text-fuchsia-200',
+  },
+};
+
+function getDataSegmentTone(segmentIndex: number) {
+  return DATA_SEGMENT_TONES[Math.abs(segmentIndex) % DATA_SEGMENT_TONES.length];
+}
 
 function hasKnownScriptName(name: string | null | undefined): boolean {
   return Boolean(name && name.trim() && name.trim().toLowerCase() !== UNKNOWN_SCRIPT_NAME);
@@ -165,25 +240,33 @@ export default function CellDetailPage() {
         key: 'capacityFieldBytes',
         label: 'Capacity Field',
         bytes: Math.max(0, breakdown.capacityFieldBytes),
-        colorClass: 'bg-cyan-400',
+        colorClass: CAPACITY_SEGMENT_TONES.capacityFieldBytes.dot,
+        legendActivePill: CAPACITY_SEGMENT_TONES.capacityFieldBytes.legendActivePill,
+        legendValueText: CAPACITY_SEGMENT_TONES.capacityFieldBytes.legendValueText,
       },
       {
         key: 'lockScriptBytes',
         label: 'Lock Script',
         bytes: Math.max(0, breakdown.lockScriptBytes),
-        colorClass: 'bg-blue-400',
+        colorClass: CAPACITY_SEGMENT_TONES.lockScriptBytes.dot,
+        legendActivePill: CAPACITY_SEGMENT_TONES.lockScriptBytes.legendActivePill,
+        legendValueText: CAPACITY_SEGMENT_TONES.lockScriptBytes.legendValueText,
       },
       {
         key: 'typeScriptBytes',
         label: 'Type Script',
         bytes: Math.max(0, breakdown.typeScriptBytes),
-        colorClass: 'bg-violet-400',
+        colorClass: CAPACITY_SEGMENT_TONES.typeScriptBytes.dot,
+        legendActivePill: CAPACITY_SEGMENT_TONES.typeScriptBytes.legendActivePill,
+        legendValueText: CAPACITY_SEGMENT_TONES.typeScriptBytes.legendValueText,
       },
       {
         key: 'dataBytes',
         label: 'Cell Data',
         bytes: Math.max(0, breakdown.dataBytes),
-        colorClass: 'bg-emerald-400',
+        colorClass: CAPACITY_SEGMENT_TONES.dataBytes.dot,
+        legendActivePill: CAPACITY_SEGMENT_TONES.dataBytes.legendActivePill,
+        legendValueText: CAPACITY_SEGMENT_TONES.dataBytes.legendValueText,
       },
     ];
 
@@ -203,7 +286,9 @@ export default function CellDetailPage() {
               key: 'inferredBytes',
               label: 'Unindexed Script Args',
               bytes: inferredBytes,
-              colorClass: 'bg-amber-500',
+              colorClass: CAPACITY_SEGMENT_TONES.inferredBytes.dot,
+              legendActivePill: CAPACITY_SEGMENT_TONES.inferredBytes.legendActivePill,
+              legendValueText: CAPACITY_SEGMENT_TONES.inferredBytes.legendValueText,
             },
           ]
         : (segments ?? []);
@@ -310,6 +395,8 @@ export default function CellDetailPage() {
     focusedDataSegmentIndex < dataSegments.length
       ? dataSegments[focusedDataSegmentIndex]
       : null;
+  const activeDataSegmentTone =
+    focusedDataSegmentIndex !== null ? getDataSegmentTone(focusedDataSegmentIndex) : null;
 
   const activeDataSegmentHex = useMemo(() => {
     if (!activeDataSegment) return null;
@@ -407,8 +494,8 @@ export default function CellDetailPage() {
           badge={
             <div className="flex items-center gap-2">
               <Badge variant={isLive ? 'green' : 'red'}>{isLive ? 'Live' : 'Dead'}</Badge>
-              {cell.isDepGroup && <Badge variant="amber">Dep Group</Badge>}
-              {cell.daoInfo && <Badge variant="purple">Nervos DAO</Badge>}
+              {cell.isDepGroup && <Badge variant="neutral">Dep Group</Badge>}
+              {cell.daoInfo && <Badge variant="neutral">Nervos DAO</Badge>}
             </div>
           }
         />
@@ -424,7 +511,7 @@ export default function CellDetailPage() {
                   </div>
                   <Capacity
                     value={capacityView.totalCapacity}
-                    className="text-lg text-emerald-300"
+                    className="text-lg text-slate-200"
                     animate={false}
                   />
                 </div>
@@ -435,7 +522,7 @@ export default function CellDetailPage() {
                   {capacityView.occupied !== null ? (
                     <Capacity
                       value={capacityView.occupied}
-                      className="text-lg text-sky-300"
+                      className="text-terminal-green text-lg"
                       animate={false}
                     />
                   ) : (
@@ -504,7 +591,7 @@ export default function CellDetailPage() {
                             hoveredSegmentKey === null
                               ? 'border-slate-700/50 bg-slate-900/60 text-slate-300'
                               : hoveredSegmentKey === segment.key
-                                ? 'border-slate-500/80 bg-slate-800/80 text-white'
+                                ? segment.legendActivePill
                                 : 'border-slate-800/60 bg-slate-900/40 text-slate-500'
                           }`}
                           onMouseEnter={() => setHoveredSegmentKey(segment.key)}
@@ -512,11 +599,19 @@ export default function CellDetailPage() {
                         >
                           <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
                             <span
-                              className={`h-2 w-2 shrink-0 rounded-full ${segment.colorClass}`}
+                              className={`h-2 w-2 shrink-0 rounded-full ring-1 ring-black/25 ${segment.colorClass}`}
                             />
                             <span className="truncate">{segment.label}</span>
                           </span>
-                          <span className="shrink-0 font-mono text-[11px] text-slate-500">
+                          <span
+                            className={`shrink-0 font-mono text-[11px] ${
+                              hoveredSegmentKey === null
+                                ? 'text-slate-500'
+                                : hoveredSegmentKey === segment.key
+                                  ? segment.legendValueText
+                                  : 'text-slate-600'
+                            }`}
+                          >
                             {segment.bytes.toLocaleString()}B · {segment.percent.toFixed(2)}%
                           </span>
                         </button>
@@ -580,7 +675,7 @@ export default function CellDetailPage() {
                         <span className="text-slate-500">TX</span>
                         <Link
                           href={`/tx/${cell.txHash}`}
-                          className="font-mono text-amber-300 hover:underline"
+                          className="text-terminal-green font-mono hover:underline"
                         >
                           {shortenHash(cell.txHash)}
                         </Link>
@@ -588,7 +683,7 @@ export default function CellDetailPage() {
                         <span className="text-slate-500">at</span>
                         <Link
                           href={`/blocks/${cell.createdAtBlock}`}
-                          className="text-emerald-300 hover:underline"
+                          className="text-terminal-green hover:underline"
                         >
                           #{cell.createdAtBlock.toLocaleString()}
                         </Link>
@@ -626,7 +721,7 @@ export default function CellDetailPage() {
                             >
                               <Link
                                 href={`/cell/${input.txHash}-${input.outputIndex}`}
-                                className="font-mono text-sky-300 hover:underline"
+                                className="text-terminal-green font-mono hover:underline"
                               >
                                 {shortenHash(input.txHash)}:{input.outputIndex}
                               </Link>
@@ -636,9 +731,20 @@ export default function CellDetailPage() {
                                 </span>
                               )}
                               {input.status && (
-                                <span className="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-slate-400">
+                                <Badge
+                                  variant={
+                                    input.status.toLowerCase() === 'live'
+                                      ? 'green'
+                                      : input.status.toLowerCase() === 'dead' ||
+                                          input.status.toLowerCase() === 'consumed'
+                                        ? 'red'
+                                        : input.status.toLowerCase() === 'withdrawing'
+                                          ? 'amber'
+                                          : 'gray'
+                                  }
+                                >
                                   {input.status}
-                                </span>
+                                </Badge>
                               )}
                             </div>
                           ))}
@@ -660,7 +766,7 @@ export default function CellDetailPage() {
                             <span className="text-slate-500">TX</span>
                             <Link
                               href={`/tx/${cell.consumedByTx}`}
-                              className="font-mono text-rose-300 hover:underline"
+                              className="text-terminal-green font-mono hover:underline"
                             >
                               {shortenHash(cell.consumedByTx)}
                             </Link>
@@ -669,7 +775,7 @@ export default function CellDetailPage() {
                                 <span className="text-slate-500">at</span>
                                 <Link
                                   href={`/blocks/${cell.consumedAtBlock}`}
-                                  className="text-rose-300 hover:underline"
+                                  className="text-terminal-green hover:underline"
                                 >
                                   #{cell.consumedAtBlock.toLocaleString()}
                                 </Link>
@@ -739,17 +845,17 @@ export default function CellDetailPage() {
                     ) : (
                       <Link
                         href={`/address/${cell.lockScriptHash}`}
-                        className="text-emerald-300 hover:underline"
+                        className="text-terminal-green hover:underline"
                       >
-                        <HexDisplay value={cell.lockScriptHash} />
+                        <HexDisplay value={cell.lockScriptHash} color="accent" />
                       </Link>
                     )}
                     {lockScriptInfo && (
                       <Link
                         href={`/scripts/${encodeURIComponent(lockScriptInfo.name)}`}
-                        className="text-blue-400 hover:underline"
+                        className="text-terminal-green hover:underline"
                       >
-                        <Badge variant="blue">{lockScriptInfo.name}</Badge>
+                        <Badge variant="neutral">{lockScriptInfo.name}</Badge>
                       </Link>
                     )}
                   </div>
@@ -763,7 +869,7 @@ export default function CellDetailPage() {
                   <span>Lock Script</span>
                   {lockScriptInfo && (
                     <Link href={`/scripts/${encodeURIComponent(lockScriptInfo.name)}`}>
-                      <Badge variant="blue">{lockScriptInfo.name}</Badge>
+                      <Badge variant="neutral">{lockScriptInfo.name}</Badge>
                     </Link>
                   )}
                 </div>
@@ -779,7 +885,7 @@ export default function CellDetailPage() {
                   <span>Type Script</span>
                   {typeScriptInfo && (
                     <Link href={`/scripts/${encodeURIComponent(typeScriptInfo.name)}`}>
-                      <Badge variant="purple">{typeScriptInfo.name}</Badge>
+                      <Badge variant="neutral">{typeScriptInfo.name}</Badge>
                     </Link>
                   )}
                 </div>
@@ -819,7 +925,7 @@ export default function CellDetailPage() {
                   <div className="text-xs text-slate-500">Deposit Block</div>
                   <Link
                     href={`/blocks/${cell.daoInfo.depositBlockNumber}`}
-                    className="text-emerald-300 hover:underline"
+                    className="text-terminal-green hover:underline"
                   >
                     #{cell.daoInfo.depositBlockNumber.toLocaleString()}
                   </Link>
@@ -835,7 +941,7 @@ export default function CellDetailPage() {
                     <div className="text-xs text-slate-500">Withdraw Request</div>
                     <Link
                       href={`/blocks/${cell.daoInfo.withdrawRequestBlock}`}
-                      className="text-amber-300 hover:underline"
+                      className="text-terminal-green hover:underline"
                     >
                       #{cell.daoInfo.withdrawRequestBlock.toLocaleString()}
                     </Link>
@@ -854,7 +960,7 @@ export default function CellDetailPage() {
                     <div className="text-xs text-slate-500">Withdrawn Block</div>
                     <Link
                       href={`/blocks/${cell.daoInfo.withdrawBlock}`}
-                      className="text-rose-300 hover:underline"
+                      className="text-terminal-green hover:underline"
                     >
                       #{cell.daoInfo.withdrawBlock.toLocaleString()}
                     </Link>
@@ -871,7 +977,7 @@ export default function CellDetailPage() {
                 {cell.daoInfo.compensation && (
                   <div>
                     <div className="text-xs text-slate-500">Compensation Earned</div>
-                    <span className="font-mono text-emerald-300">
+                    <span className="font-mono text-slate-200">
                       {cell.daoInfo.compensationCkb
                         ? `${Number(cell.daoInfo.compensationCkb).toLocaleString()} CKB`
                         : `${Number(cell.daoInfo.compensation).toLocaleString()} Shannon`}
@@ -888,7 +994,7 @@ export default function CellDetailPage() {
             <TerminalPanelHeader indicator="active">
               <div className="flex items-center gap-2">
                 <span>Script Deployments</span>
-                <Badge variant="green">Code Cell</Badge>
+                <Badge variant="neutral">Code Cell</Badge>
               </div>
             </TerminalPanelHeader>
             <TerminalPanelContent>
@@ -904,7 +1010,7 @@ export default function CellDetailPage() {
                       <div className="min-w-0 space-y-1.5">
                         <Link
                           href={getCodeCellScriptHref(script)}
-                          className="text-lg font-medium text-emerald-300 hover:underline"
+                          className="text-terminal-green text-lg font-medium hover:underline"
                         >
                           {hasKnownScriptName(script.name)
                             ? script.name.trim()
@@ -916,12 +1022,12 @@ export default function CellDetailPage() {
                           {refs.typeHash ? (
                             <Link
                               href={getScriptRefHref(refs.typeHash, 'type')}
-                              className="font-mono text-slate-300 hover:text-emerald-300 hover:underline"
+                              className="hover:text-terminal-green font-mono text-slate-300 hover:underline"
                             >
                               <HexDisplay
                                 value={refs.typeHash}
                                 size="sm"
-                                color="green"
+                                color="accent"
                                 startChars={10}
                                 endChars={8}
                               />
@@ -933,12 +1039,12 @@ export default function CellDetailPage() {
                           {refs.dataHash ? (
                             <Link
                               href={getScriptRefHref(refs.dataHash, refs.dataHashType)}
-                              className="font-mono text-slate-300 hover:text-emerald-300 hover:underline"
+                              className="hover:text-terminal-green font-mono text-slate-300 hover:underline"
                             >
                               <HexDisplay
                                 value={refs.dataHash}
                                 size="sm"
-                                color="green"
+                                color="accent"
                                 startChars={10}
                                 endChars={8}
                               />
@@ -962,7 +1068,7 @@ export default function CellDetailPage() {
               <div className="flex items-center gap-2">
                 <span>Dep Group Contents</span>
                 {cell.depGroupItems && (
-                  <Badge variant="amber">
+                  <Badge variant="neutral">
                     {cell.depGroupItems.length} cell{cell.depGroupItems.length !== 1 ? 's' : ''}
                   </Badge>
                 )}
@@ -978,9 +1084,9 @@ export default function CellDetailPage() {
                       </span>
                       <Link
                         href={`/cell/${item.txHash}-${item.outputIndex}`}
-                        className="text-emerald-300 hover:underline"
+                        className="text-terminal-green hover:underline"
                       >
-                        <HexDisplay value={`${item.txHash}:${item.outputIndex}`} />
+                        <HexDisplay value={`${item.txHash}:${item.outputIndex}`} color="accent" />
                       </Link>
                     </TerminalRow>
                   ))}
@@ -1012,7 +1118,7 @@ export default function CellDetailPage() {
                   className={`inline-flex items-center gap-2 rounded border px-2.5 py-1.5 ${
                     isDataPreviewTruncated
                       ? 'border-amber/30 bg-amber/10'
-                      : 'border-emerald-500/20 bg-emerald-500/5'
+                      : 'border-terminal-green/25 bg-terminal-green/5'
                   }`}
                 >
                   <span className="uppercase tracking-wide text-slate-400">Preview</span>
@@ -1021,7 +1127,7 @@ export default function CellDetailPage() {
                       Truncated at the {dataPreviewBytes.toLocaleString()}-th byte
                     </span>
                   ) : (
-                    <span className="text-emerald-300">Full data shown</span>
+                    <span className="text-terminal-green">Full data shown</span>
                   )}
                 </div>
               </div>
@@ -1035,7 +1141,7 @@ export default function CellDetailPage() {
                     <span className="text-[10px] uppercase tracking-[0.12em] text-slate-500">
                       Deterministic Decode
                     </span>
-                    <Badge variant="blue">{deterministicAnalysis.kind}</Badge>
+                    <Badge variant="neutral">{deterministicAnalysis.kind}</Badge>
                     <span className="rounded border border-slate-700/80 bg-slate-900/70 px-1.5 py-0.5 font-mono text-[10px] text-slate-400">
                       {deterministicAnalysis.segments.length} segments
                     </span>
@@ -1063,6 +1169,7 @@ export default function CellDetailPage() {
                         {deterministicAnalysis.segments.map((segment, idx) => {
                           const inPreview = segment.start < dataPreviewBytes && segment.end > 0;
                           const isActive = idx === focusedDataSegmentIndex;
+                          const segmentTone = getDataSegmentTone(idx);
                           return (
                             <button
                               key={`${segment.label}-${segment.start}-${segment.end}`}
@@ -1075,12 +1182,15 @@ export default function CellDetailPage() {
                               title={segment.meaning}
                               className={`inline-flex max-w-full items-center gap-1.5 rounded border px-1.5 py-0.5 font-mono text-[11px] transition ${
                                 isActive
-                                  ? 'border-emerald-400/70 bg-emerald-500/10 text-emerald-100'
+                                  ? segmentTone.activePill
                                   : inPreview
                                     ? 'border-slate-700/70 bg-slate-900/60 text-slate-200 hover:border-slate-500/70'
                                     : 'border-slate-800/70 bg-slate-900/40 text-slate-500'
                               }`}
                             >
+                              <span
+                                className={`h-1.5 w-1.5 shrink-0 rounded-full ${segmentTone.dot}`}
+                              />
                               <span className="truncate">{segment.label}</span>
                               <span className="shrink-0 text-[10px] text-slate-500">
                                 [{segment.start}..{segment.end})
@@ -1108,7 +1218,7 @@ export default function CellDetailPage() {
                           </div>
                           <div
                             data-testid="data-active-segment-value"
-                            className="mt-1 break-all font-mono text-sm text-emerald-200"
+                            className={`mt-1 break-all font-mono text-sm ${activeDataSegmentTone?.valueText ?? 'text-terminal-green'}`}
                           >
                             {activeDataSegment.humanValue}
                           </div>
@@ -1118,7 +1228,7 @@ export default function CellDetailPage() {
                           {activeDataSegmentHex && (
                             <div
                               data-testid="data-active-segment-hex"
-                              className="mt-1 break-all font-mono text-[11px] text-sky-300"
+                              className={`mt-1 break-all font-mono text-[11px] ${activeDataSegmentTone?.valueText ?? 'text-terminal-green'}`}
                             >
                               {activeDataSegmentHex.value}
                             </div>
@@ -1158,57 +1268,70 @@ export default function CellDetailPage() {
                     </span>
                   </div>
                   <div className="grid gap-1 sm:grid-cols-2 xl:grid-cols-3">
-                    {heuristicGuesses.map((guess, idx) => (
-                      <button
-                        key={`${guess.kind}-${idx}`}
-                        type="button"
-                        data-testid={`data-heuristic-item-${idx}`}
-                        onClick={() =>
-                          setExpandedHeuristicIndex((prev) => (prev === idx ? null : idx))
-                        }
-                        className="rounded border border-slate-800/80 bg-slate-900/70 p-1 text-left transition hover:border-slate-600/80"
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="min-w-0">
-                            <div className="flex flex-wrap items-center gap-1">
-                              <span className="font-mono text-[11px] text-slate-200">
-                                {guess.kind}
-                              </span>
-                              <Badge
-                                variant={
-                                  guess.confidence === 'high'
-                                    ? 'green'
-                                    : guess.confidence === 'medium'
-                                      ? 'amber'
-                                      : 'gray'
-                                }
-                              >
-                                {guess.confidence}
-                              </Badge>
-                              {guess.mimeType && <Badge variant="gray">{guess.mimeType}</Badge>}
-                            </div>
-                          </div>
-                          <span className="font-mono text-[10px] text-slate-500">
-                            {expandedHeuristicIndex === idx ? '[-]' : '[+]'}
-                          </span>
-                        </div>
-                        {expandedHeuristicIndex === idx && (
-                          <div
-                            data-testid={`data-heuristic-detail-${idx}`}
-                            className="mt-1 border-t border-slate-800/80 pt-1"
-                          >
-                            <div className="text-[10px] leading-4 text-slate-400">
-                              {guess.reason}
-                            </div>
-                            {guess.humanValue && (
-                              <div className="mt-0.5 break-all font-mono text-[11px] text-slate-300">
-                                {guess.humanValue}
+                    {heuristicGuesses.map((guess, idx) => {
+                      const guessTone = getDataSegmentTone(idx);
+                      const isExpanded = expandedHeuristicIndex === idx;
+                      return (
+                        <button
+                          key={`${guess.kind}-${idx}`}
+                          type="button"
+                          data-testid={`data-heuristic-item-${idx}`}
+                          onClick={() =>
+                            setExpandedHeuristicIndex((prev) => (prev === idx ? null : idx))
+                          }
+                          className={`rounded border p-1 text-left transition ${
+                            isExpanded
+                              ? `${guessTone.activePill} bg-opacity-100`
+                              : 'border-slate-800/80 bg-slate-900/70 hover:border-slate-600/80'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-1">
+                                <span
+                                  className={`h-1.5 w-1.5 shrink-0 rounded-full ${guessTone.dot}`}
+                                />
+                                <span className="font-mono text-[11px] text-slate-200">
+                                  {guess.kind}
+                                </span>
+                                <Badge
+                                  variant={
+                                    guess.confidence === 'high'
+                                      ? 'green'
+                                      : guess.confidence === 'medium'
+                                        ? 'amber'
+                                        : 'gray'
+                                  }
+                                >
+                                  {guess.confidence}
+                                </Badge>
+                                {guess.mimeType && <Badge variant="gray">{guess.mimeType}</Badge>}
                               </div>
-                            )}
+                            </div>
+                            <span className="font-mono text-[10px] text-slate-500">
+                              {isExpanded ? '[-]' : '[+]'}
+                            </span>
                           </div>
-                        )}
-                      </button>
-                    ))}
+                          {isExpanded && (
+                            <div
+                              data-testid={`data-heuristic-detail-${idx}`}
+                              className="mt-1 border-t border-slate-800/80 pt-1"
+                            >
+                              <div className="text-[10px] leading-4 text-slate-400">
+                                {guess.reason}
+                              </div>
+                              {guess.humanValue && (
+                                <div
+                                  className={`mt-0.5 break-all font-mono text-[11px] ${guessTone.valueText}`}
+                                >
+                                  {guess.humanValue}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -1272,6 +1395,8 @@ export default function CellDetailPage() {
                                   absoluteOffset < segmentOffsetMap.length
                                     ? segmentOffsetMap[absoluteOffset]
                                     : -1;
+                                const segmentTone =
+                                  segmentIndex >= 0 ? getDataSegmentTone(segmentIndex) : null;
                                 const isActiveSegment =
                                   segmentIndex >= 0 && segmentIndex === focusedDataSegmentIndex;
                                 const isHoveredByte = absoluteOffset === hoveredDataByteOffset;
@@ -1280,16 +1405,19 @@ export default function CellDetailPage() {
                                   segmentIndex < 0
                                     ? hasActiveSegment
                                       ? 'text-slate-600'
-                                      : 'rounded bg-amber-500/10 text-amber-200/80'
+                                      : 'rounded bg-slate-800/70 text-slate-300'
                                     : isActiveSegment
-                                      ? 'rounded bg-emerald-500/30 text-emerald-100 ring-1 ring-emerald-400/70'
+                                      ? (segmentTone?.byteActive ??
+                                        'rounded bg-terminal-green/25 text-terminal-green ring-1 ring-terminal-green/70')
                                       : hasActiveSegment
                                         ? 'text-slate-500 opacity-40'
-                                        : 'rounded bg-sky-500/15 text-sky-200';
+                                        : (segmentTone?.byte ??
+                                          'rounded bg-terminal-green/15 text-terminal-dim');
                                 const hoverBreatheClass = isHoveredByte
                                   ? segmentIndex >= 0
-                                    ? 'byte-hover-breathe ring-1 ring-emerald-300/80 shadow-[0_0_10px_rgba(52,211,153,0.45)]'
-                                    : 'byte-hover-breathe ring-1 ring-amber-300/80 shadow-[0_0_10px_rgba(251,191,36,0.45)]'
+                                    ? (segmentTone?.byteHover ??
+                                      'byte-hover-breathe ring-1 ring-terminal-green/80 shadow-[0_0_10px_rgba(0,255,65,0.35)]')
+                                    : 'byte-hover-breathe ring-1 ring-slate-400/70 shadow-[0_0_8px_rgba(148,163,184,0.35)]'
                                   : '';
                                 const title =
                                   segmentIndex >= 0 && segmentIndex < dataSegments.length

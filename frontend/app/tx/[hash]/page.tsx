@@ -253,9 +253,9 @@ export default function TransactionDetailPage() {
 
               <DataField label="Type">
                 {tx.isCellbase ? (
-                  <Badge variant="amber">Cellbase (Mining Reward)</Badge>
+                  <Badge variant="neutral">Cellbase (Mining Reward)</Badge>
                 ) : (
-                  <Badge variant="blue">Normal Transaction</Badge>
+                  <Badge variant="neutral">Normal Transaction</Badge>
                 )}
               </DataField>
 
@@ -388,7 +388,7 @@ export default function TransactionDetailPage() {
                       type="button"
                       className={`rounded px-2.5 py-1 text-xs transition-colors ${
                         txGraphView === 'graph'
-                          ? 'bg-cyan-500/15 text-cyan-300'
+                          ? 'bg-terminal-green/15 text-terminal-green'
                           : 'text-slate-400 hover:text-slate-200'
                       }`}
                       onClick={() => setTxGraphView('graph')}
@@ -533,7 +533,7 @@ function ScriptLabel({
 
   return (
     <Link href={href}>
-      <Badge variant={type === 'lock' ? 'blue' : 'purple'} className="hover:opacity-80">
+      <Badge variant="neutral" className="hover:opacity-80">
         {label}
       </Badge>
     </Link>
@@ -566,7 +566,7 @@ function InputsOutputsTab({ tx, scriptLookup }: TabProps) {
                         value={input.previousOutput.txHash}
                         startChars={8}
                         endChars={6}
-                        color="amber"
+                        color="accent"
                         size="sm"
                         copyable={false}
                       />
@@ -722,8 +722,9 @@ function ScriptsSummaryTab({ tx, scriptLookup }: TabProps) {
                   >
                     <HexDisplay
                       value={script.codeHash}
+                      color="accent"
                       truncate
-                      className="text-terminal-green group-hover:underline"
+                      className="group-hover:underline"
                     />
                   </Link>
                 )}
@@ -777,8 +778,9 @@ function ScriptsSummaryTab({ tx, scriptLookup }: TabProps) {
                   >
                     <HexDisplay
                       value={script.codeHash}
+                      color="accent"
                       truncate
-                      className="text-terminal-green group-hover:underline"
+                      className="group-hover:underline"
                     />
                   </Link>
                 )}
@@ -831,7 +833,7 @@ function CellDepsTab({ cellDeps, isLoading }: CellDepsTabProps) {
                 value={cellDep.outPointTxHash}
                 startChars={10}
                 endChars={8}
-                color="amber"
+                color="accent"
                 copyable={false}
               />
               <span className="group-hover:text-terminal-green text-slate-500">:</span>
@@ -840,9 +842,7 @@ function CellDepsTab({ cellDeps, isLoading }: CellDepsTabProps) {
               </span>
             </Link>
           </div>
-          <Badge variant={cellDep.depType === 'dep_group' ? 'purple' : 'blue'}>
-            {cellDep.depType}
-          </Badge>
+          <Badge variant="neutral">{cellDep.depType}</Badge>
         </TerminalRow>
       ))}
     </div>

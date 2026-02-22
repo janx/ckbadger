@@ -119,7 +119,7 @@ export default function HardforksPage() {
                       {event.activationBlock !== null && (
                         <Link
                           href={`/blocks/${event.activationBlock}`}
-                          className="mt-1 inline-block font-mono text-xs text-blue-400 hover:underline"
+                          className="text-terminal-green mt-1 inline-block font-mono text-xs hover:underline"
                         >
                           View activation block
                         </Link>
