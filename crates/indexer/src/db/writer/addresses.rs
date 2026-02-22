@@ -7,7 +7,7 @@ use ckbadger_store::types::{AddressBalance, ScriptDailyDelta};
 
 use super::BatchWriter;
 
-fn checked_next_script_metric(
+fn checked_next_script_metric_i64(
     code_hash: &[u8],
     script_kind: &str,
     metric: &str,
@@ -15,6 +15,38 @@ fn checked_next_script_metric(
     delta: i64,
 ) -> Result<i64> {
     let next = current.checked_add(delta).ok_or_else(|| {
+        anyhow::anyhow!(
+            "script {} {} overflow: code_hash=0x{}, current={}, delta={}",
+            script_kind,
+            metric,
+            hex::encode(code_hash),
+            current,
+            delta
+        )
+    })?;
+    if next < 0 {
+        bail!(
+            "script {} {} underflow: code_hash=0x{}, current={}, delta={}, next={}",
+            script_kind,
+            metric,
+            hex::encode(code_hash),
+            current,
+            delta,
+            next
+        );
+    }
+    Ok(next)
+}
+
+fn checked_next_script_metric_i128(
+    code_hash: &[u8],
+    script_kind: &str,
+    metric: &str,
+    current: i128,
+    delta: i64,
+) -> Result<i128> {
+    let delta_i128 = i128::from(delta);
+    let next = current.checked_add(delta_i128).ok_or_else(|| {
         anyhow::anyhow!(
             "script {} {} overflow: code_hash=0x{}, current={}, delta={}",
             script_kind,
@@ -252,42 +284,42 @@ impl BatchWriter {
             });
 
             if *is_type {
-                let next_type_cells_count = checked_next_script_metric(
+                let next_type_cells_count = checked_next_script_metric_i64(
                     code_hash,
                     "type",
                     "cells_count",
                     info.type_cells_count,
                     *cells_delta,
                 )?;
-                let next_type_live_cells_count = checked_next_script_metric(
+                let next_type_live_cells_count = checked_next_script_metric_i64(
                     code_hash,
                     "type",
                     "live_cells_count",
                     info.type_live_cells_count,
                     *live_delta,
                 )?;
-                let next_type_capacity_sum = checked_next_script_metric(
+                let next_type_capacity_sum = checked_next_script_metric_i128(
                     code_hash,
                     "type",
                     "capacity_sum",
                     info.type_capacity_sum,
                     *cap_delta,
                 )?;
-                let next_type_live_capacity_sum = checked_next_script_metric(
+                let next_type_live_capacity_sum = checked_next_script_metric_i128(
                     code_hash,
                     "type",
                     "live_capacity_sum",
                     info.type_live_capacity_sum,
                     *live_cap_delta,
                 )?;
-                let next_type_occupied_capacity_sum = checked_next_script_metric(
+                let next_type_occupied_capacity_sum = checked_next_script_metric_i128(
                     code_hash,
                     "type",
                     "occupied_capacity_sum",
                     info.type_occupied_capacity_sum,
                     *occupied_delta,
                 )?;
-                let next_type_live_occupied_capacity_sum = checked_next_script_metric(
+                let next_type_live_occupied_capacity_sum = checked_next_script_metric_i128(
                     code_hash,
                     "type",
                     "live_occupied_capacity_sum",
@@ -319,42 +351,42 @@ impl BatchWriter {
                 info.type_occupied_capacity_sum = next_type_occupied_capacity_sum;
                 info.type_live_occupied_capacity_sum = next_type_live_occupied_capacity_sum;
             } else {
-                let next_lock_cells_count = checked_next_script_metric(
+                let next_lock_cells_count = checked_next_script_metric_i64(
                     code_hash,
                     "lock",
                     "cells_count",
                     info.lock_cells_count,
                     *cells_delta,
                 )?;
-                let next_lock_live_cells_count = checked_next_script_metric(
+                let next_lock_live_cells_count = checked_next_script_metric_i64(
                     code_hash,
                     "lock",
                     "live_cells_count",
                     info.lock_live_cells_count,
                     *live_delta,
                 )?;
-                let next_lock_capacity_sum = checked_next_script_metric(
+                let next_lock_capacity_sum = checked_next_script_metric_i128(
                     code_hash,
                     "lock",
                     "capacity_sum",
                     info.lock_capacity_sum,
                     *cap_delta,
                 )?;
-                let next_lock_live_capacity_sum = checked_next_script_metric(
+                let next_lock_live_capacity_sum = checked_next_script_metric_i128(
                     code_hash,
                     "lock",
                     "live_capacity_sum",
                     info.lock_live_capacity_sum,
                     *live_cap_delta,
                 )?;
-                let next_lock_occupied_capacity_sum = checked_next_script_metric(
+                let next_lock_occupied_capacity_sum = checked_next_script_metric_i128(
                     code_hash,
                     "lock",
                     "occupied_capacity_sum",
                     info.lock_occupied_capacity_sum,
                     *occupied_delta,
                 )?;
-                let next_lock_live_occupied_capacity_sum = checked_next_script_metric(
+                let next_lock_live_occupied_capacity_sum = checked_next_script_metric_i128(
                     code_hash,
                     "lock",
                     "live_occupied_capacity_sum",
@@ -592,5 +624,45 @@ mod tests {
         assert!(err
             .to_string()
             .contains("script type live occupied capacity exceeds total"));
+    }
+
+    #[test]
+    fn test_apply_script_usage_deltas_allows_capacity_sum_above_i64_max() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+
+        let code_hash = vec![0xCC; 32];
+        let existing_info = ScriptInfo {
+            code_hash: code_hash.clone(),
+            lock_cells_count: 1,
+            lock_live_cells_count: 1,
+            lock_capacity_sum: i64::MAX as i128,
+            lock_live_capacity_sum: i64::MAX as i128,
+            lock_occupied_capacity_sum: i64::MAX as i128 - 100,
+            lock_live_occupied_capacity_sum: i64::MAX as i128 - 100,
+            ..Default::default()
+        };
+
+        let mut existing = HashMap::new();
+        existing.insert(code_hash.clone(), Some(existing_info));
+
+        let mut changes = HashMap::new();
+        changes.insert((code_hash.clone(), false), (0, 0, 500, 500, 400, 400));
+
+        let mut batch = StoreBatch::new(&store);
+        writer
+            .apply_script_usage_deltas(&existing, &changes, &mut batch)
+            .unwrap();
+        batch.commit().unwrap();
+
+        let updated = store.get_script_info(&code_hash).unwrap().unwrap();
+        assert_eq!(updated.lock_capacity_sum, i64::MAX as i128 + 500);
+        assert_eq!(updated.lock_live_capacity_sum, i64::MAX as i128 + 500);
+        assert_eq!(updated.lock_occupied_capacity_sum, i64::MAX as i128 + 300);
+        assert_eq!(
+            updated.lock_live_occupied_capacity_sum,
+            i64::MAX as i128 + 300
+        );
     }
 }

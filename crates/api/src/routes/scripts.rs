@@ -249,9 +249,8 @@ fn checked_capacity_totals(
     info: &ckbadger_store::ScriptInfo,
     context: &str,
 ) -> Result<(i128, i128), ApiRouteError> {
-    let capacity = info.lock_live_capacity_sum as i128 + info.type_live_capacity_sum as i128;
-    let occupied =
-        info.lock_live_occupied_capacity_sum as i128 + info.type_live_occupied_capacity_sum as i128;
+    let capacity = info.lock_live_capacity_sum + info.type_live_capacity_sum;
+    let occupied = info.lock_live_occupied_capacity_sum + info.type_live_occupied_capacity_sum;
     if capacity < 0 {
         return Err(ApiError::internal(format!(
             "negative live capacity in {}: code_hash=0x{}, capacity={}",
@@ -281,11 +280,11 @@ fn checked_capacity_totals(
 }
 
 fn live_capacity_sum_for_sort(info: &ckbadger_store::ScriptInfo) -> i128 {
-    info.lock_live_capacity_sum as i128 + info.type_live_capacity_sum as i128
+    info.lock_live_capacity_sum + info.type_live_capacity_sum
 }
 
 fn live_occupied_capacity_sum_for_sort(info: &ckbadger_store::ScriptInfo) -> i128 {
-    info.lock_live_occupied_capacity_sum as i128 + info.type_live_occupied_capacity_sum as i128
+    info.lock_live_occupied_capacity_sum + info.type_live_occupied_capacity_sum
 }
 
 fn occupied_ratio_for_sort(info: &ckbadger_store::ScriptInfo) -> Option<(i128, i128)> {
@@ -492,11 +491,10 @@ async fn lookup_scripts(
             };
 
             let live_cells_count = info.lock_live_cells_count + info.type_live_cells_count;
-            let live_capacity_sum = (info.lock_live_capacity_sum as i128
-                + info.type_live_capacity_sum as i128)
-                .to_string();
-            let live_occupied_capacity_sum = (info.lock_live_occupied_capacity_sum as i128
-                + info.type_live_occupied_capacity_sum as i128)
+            let live_capacity_sum =
+                (info.lock_live_capacity_sum + info.type_live_capacity_sum).to_string();
+            let live_occupied_capacity_sum = (info.lock_live_occupied_capacity_sum
+                + info.type_live_occupied_capacity_sum)
                 .to_string();
 
             let (code_cell_tx_hash, code_cell_output_index) =
@@ -803,15 +801,13 @@ async fn get_script_usage(
         .map(|(_, info)| {
             let cells_count = info.lock_cells_count + info.type_cells_count;
             let live_cells_count = info.lock_live_cells_count + info.type_live_cells_count;
-            let capacity_sum =
-                (info.lock_capacity_sum as i128 + info.type_capacity_sum as i128) as u128;
+            let capacity_sum = (info.lock_capacity_sum + info.type_capacity_sum) as u128;
             let live_capacity_sum =
-                (info.lock_live_capacity_sum as i128 + info.type_live_capacity_sum as i128) as u128;
-            let occupied_capacity_sum = (info.lock_occupied_capacity_sum as i128
-                + info.type_occupied_capacity_sum as i128)
-                as u128;
-            let live_occupied_capacity_sum = (info.lock_live_occupied_capacity_sum as i128
-                + info.type_live_occupied_capacity_sum as i128)
+                (info.lock_live_capacity_sum + info.type_live_capacity_sum) as u128;
+            let occupied_capacity_sum =
+                (info.lock_occupied_capacity_sum + info.type_occupied_capacity_sum) as u128;
+            let live_occupied_capacity_sum = (info.lock_live_occupied_capacity_sum
+                + info.type_live_occupied_capacity_sum)
                 as u128;
 
             total_cells += cells_count;

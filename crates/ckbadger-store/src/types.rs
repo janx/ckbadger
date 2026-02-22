@@ -549,20 +549,20 @@ pub struct ScriptInfo {
     // Per-kind usage stats (lock vs type)
     pub lock_cells_count: i64,
     pub lock_live_cells_count: i64,
-    pub lock_capacity_sum: i64,
-    pub lock_live_capacity_sum: i64,
+    pub lock_capacity_sum: i128,
+    pub lock_live_capacity_sum: i128,
     #[serde(default)]
-    pub lock_occupied_capacity_sum: i64,
+    pub lock_occupied_capacity_sum: i128,
     #[serde(default)]
-    pub lock_live_occupied_capacity_sum: i64,
+    pub lock_live_occupied_capacity_sum: i128,
     pub type_cells_count: i64,
     pub type_live_cells_count: i64,
-    pub type_capacity_sum: i64,
-    pub type_live_capacity_sum: i64,
+    pub type_capacity_sum: i128,
+    pub type_live_capacity_sum: i128,
     #[serde(default)]
-    pub type_occupied_capacity_sum: i64,
+    pub type_occupied_capacity_sum: i128,
     #[serde(default)]
-    pub type_live_occupied_capacity_sum: i64,
+    pub type_live_occupied_capacity_sum: i128,
     /// type_script_hash of the deployment cell (from label data).
     /// Used to find the code cell for hash_type="data"/"data1"/"data2" scripts.
     #[serde(default)]

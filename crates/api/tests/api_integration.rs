@@ -935,9 +935,9 @@ async fn test_scripts_list_sorts_before_cursor_pagination() {
     let store = test_store();
 
     for (code_byte, name, live_capacity_sum) in [
-        (0x01u8, "A_SCRIPT", 10i64),
-        (0x02u8, "B_SCRIPT", 30i64),
-        (0x03u8, "C_SCRIPT", 20i64),
+        (0x01u8, "A_SCRIPT", 10i128),
+        (0x02u8, "B_SCRIPT", 30i128),
+        (0x03u8, "C_SCRIPT", 20i128),
     ] {
         let code_hash = vec![code_byte; 32];
         store

@@ -19,8 +19,8 @@ fn make_script_info_lock(
     code_hash_byte: u8,
     cells_count: i64,
     live_cells_count: i64,
-    capacity_sum: i64,
-    live_capacity_sum: i64,
+    capacity_sum: i128,
+    live_capacity_sum: i128,
 ) -> ScriptInfo {
     let occupied_capacity_sum = capacity_sum / 2;
     let live_occupied_capacity_sum = live_capacity_sum / 2;
@@ -32,7 +32,7 @@ fn make_script_info_lock(
         website: None,
         description: Some("A lock script".to_string()),
         cells_count,
-        capacity_used: capacity_sum as i128,
+        capacity_used: capacity_sum,
         lock_cells_count: cells_count,
         lock_live_cells_count: live_cells_count,
         lock_capacity_sum: capacity_sum,
@@ -56,8 +56,8 @@ fn make_script_info_type(
     code_hash_byte: u8,
     cells_count: i64,
     live_cells_count: i64,
-    capacity_sum: i64,
-    live_capacity_sum: i64,
+    capacity_sum: i128,
+    live_capacity_sum: i128,
 ) -> ScriptInfo {
     let occupied_capacity_sum = capacity_sum / 2;
     let live_occupied_capacity_sum = live_capacity_sum / 2;
@@ -69,7 +69,7 @@ fn make_script_info_type(
         website: None,
         description: Some("A type script".to_string()),
         cells_count,
-        capacity_used: capacity_sum as i128,
+        capacity_used: capacity_sum,
         lock_cells_count: 0,
         lock_live_cells_count: 0,
         lock_capacity_sum: 0,

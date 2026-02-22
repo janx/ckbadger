@@ -733,10 +733,9 @@ async fn get_most_utilized_scripts_chart(
         };
         labels_by_key.insert(key.clone(), label);
 
-        let final_total_cells_capacity =
-            info.lock_live_capacity_sum as i128 + info.type_live_capacity_sum as i128;
-        let final_occupied_capacity = info.lock_live_occupied_capacity_sum as i128
-            + info.type_live_occupied_capacity_sum as i128;
+        let final_total_cells_capacity = info.lock_live_capacity_sum + info.type_live_capacity_sum;
+        let final_occupied_capacity =
+            info.lock_live_occupied_capacity_sum + info.type_live_occupied_capacity_sum;
         if final_total_cells_capacity < 0 {
             return Err(ApiError::internal(format!(
                 "negative script total capacity for key {}: {}",

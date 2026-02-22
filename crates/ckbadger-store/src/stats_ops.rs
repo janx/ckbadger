@@ -919,6 +919,38 @@ impl CkbadgerStore {
             Ok(next)
         }
 
+        fn checked_add_i128(
+            code_hash: &[u8],
+            script_kind: &str,
+            metric: &str,
+            current: i128,
+            delta: i64,
+        ) -> anyhow::Result<i128> {
+            let delta_i128 = i128::from(delta);
+            let next = current.checked_add(delta_i128).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "script rebuild overflow: code_hash=0x{}, kind={}, metric={}, current={}, delta={}",
+                    bytes_to_hex(code_hash),
+                    script_kind,
+                    metric,
+                    current,
+                    delta
+                )
+            })?;
+            if next < 0 {
+                anyhow::bail!(
+                    "script rebuild underflow: code_hash=0x{}, kind={}, metric={}, current={}, delta={}, next={}",
+                    bytes_to_hex(code_hash),
+                    script_kind,
+                    metric,
+                    current,
+                    delta,
+                    next
+                );
+            }
+            Ok(next)
+        }
+
         fn apply_script_cell_usage(
             info: &mut ScriptInfo,
             is_type: bool,
@@ -968,28 +1000,28 @@ impl CkbadgerStore {
                     info.type_live_cells_count,
                     live_count_delta,
                 )?;
-                info.type_capacity_sum = checked_add_i64(
+                info.type_capacity_sum = checked_add_i128(
                     &info.code_hash,
                     "type",
                     "capacity_sum",
                     info.type_capacity_sum,
                     capacity,
                 )?;
-                info.type_live_capacity_sum = checked_add_i64(
+                info.type_live_capacity_sum = checked_add_i128(
                     &info.code_hash,
                     "type",
                     "live_capacity_sum",
                     info.type_live_capacity_sum,
                     live_cap_delta,
                 )?;
-                info.type_occupied_capacity_sum = checked_add_i64(
+                info.type_occupied_capacity_sum = checked_add_i128(
                     &info.code_hash,
                     "type",
                     "occupied_capacity_sum",
                     info.type_occupied_capacity_sum,
                     occupied_capacity,
                 )?;
-                info.type_live_occupied_capacity_sum = checked_add_i64(
+                info.type_live_occupied_capacity_sum = checked_add_i128(
                     &info.code_hash,
                     "type",
                     "live_occupied_capacity_sum",
@@ -1027,28 +1059,28 @@ impl CkbadgerStore {
                     info.lock_live_cells_count,
                     live_count_delta,
                 )?;
-                info.lock_capacity_sum = checked_add_i64(
+                info.lock_capacity_sum = checked_add_i128(
                     &info.code_hash,
                     "lock",
                     "capacity_sum",
                     info.lock_capacity_sum,
                     capacity,
                 )?;
-                info.lock_live_capacity_sum = checked_add_i64(
+                info.lock_live_capacity_sum = checked_add_i128(
                     &info.code_hash,
                     "lock",
                     "live_capacity_sum",
                     info.lock_live_capacity_sum,
                     live_cap_delta,
                 )?;
-                info.lock_occupied_capacity_sum = checked_add_i64(
+                info.lock_occupied_capacity_sum = checked_add_i128(
                     &info.code_hash,
                     "lock",
                     "occupied_capacity_sum",
                     info.lock_occupied_capacity_sum,
                     occupied_capacity,
                 )?;
-                info.lock_live_occupied_capacity_sum = checked_add_i64(
+                info.lock_live_occupied_capacity_sum = checked_add_i128(
                     &info.code_hash,
                     "lock",
                     "live_occupied_capacity_sum",
@@ -1084,8 +1116,7 @@ impl CkbadgerStore {
                         info.type_cells_count
                     )
                 })?;
-            info.capacity_used =
-                i128::from(info.lock_capacity_sum) + i128::from(info.type_capacity_sum);
+            info.capacity_used = info.lock_capacity_sum + info.type_capacity_sum;
             Ok(())
         }
 
