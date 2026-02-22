@@ -356,6 +356,7 @@ describe('CellDetailPage', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('data-deterministic-section')).toBeInTheDocument();
+      expect(screen.getByTestId('data-deterministic-columns')).toBeInTheDocument();
       expect(screen.getByText('Deterministic Decode')).toBeInTheDocument();
       expect(screen.getByText('Heuristic Guesses')).toBeInTheDocument();
       expect(screen.getByText('1 segments')).toBeInTheDocument();

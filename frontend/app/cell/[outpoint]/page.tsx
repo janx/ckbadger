@@ -1045,101 +1045,100 @@ export default function CellDetailPage() {
                       </span>
                     )}
                   </div>
-                  <div className="grid gap-2 xl:grid-cols-[minmax(0,1fr)_minmax(280px,0.52fr)] xl:items-start">
-                    <div className="space-y-1.5">
-                      <div className="text-[11px] leading-4 text-slate-300">
-                        {deterministicAnalysis.summary}
+                  <div className="mb-1.5 text-[11px] leading-4 text-slate-300">
+                    {deterministicAnalysis.summary}
+                  </div>
+                  <div
+                    data-testid="data-deterministic-columns"
+                    className="grid gap-2 md:grid-cols-2"
+                  >
+                    <div className="rounded border border-slate-800 bg-slate-950/60 p-1.5">
+                      <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-slate-500">
+                        Parsed Segments
                       </div>
-                      <div className="rounded border border-slate-800 bg-slate-950/60 p-1.5">
-                        <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-slate-500">
-                          Parsed Segments
-                        </div>
-                        <div
-                          className="flex flex-wrap gap-1"
-                          onMouseLeave={() => setHoveredDataSegmentIndex(null)}
-                        >
-                          {deterministicAnalysis.segments.map((segment, idx) => {
-                            const inPreview = segment.start < dataPreviewBytes && segment.end > 0;
-                            const isActive = idx === focusedDataSegmentIndex;
-                            return (
-                              <button
-                                key={`${segment.label}-${segment.start}-${segment.end}`}
-                                type="button"
-                                data-testid={`data-segment-item-${idx}`}
-                                onMouseEnter={() => setHoveredDataSegmentIndex(idx)}
-                                onClick={() =>
-                                  setPinnedDataSegmentIndex((prev) => (prev === idx ? null : idx))
-                                }
-                                title={segment.meaning}
-                                className={`inline-flex max-w-full items-center gap-1.5 rounded border px-1.5 py-0.5 font-mono text-[11px] transition ${
-                                  isActive
-                                    ? 'border-emerald-400/70 bg-emerald-500/10 text-emerald-100'
-                                    : inPreview
-                                      ? 'border-slate-700/70 bg-slate-900/60 text-slate-200 hover:border-slate-500/70'
-                                      : 'border-slate-800/70 bg-slate-900/40 text-slate-500'
-                                }`}
-                              >
-                                <span className="truncate">{segment.label}</span>
-                                <span className="shrink-0 text-[10px] text-slate-500">
-                                  [{segment.start}..{segment.end})
-                                </span>
-                              </button>
-                            );
-                          })}
-                        </div>
+                      <div
+                        className="flex flex-wrap gap-1"
+                        onMouseLeave={() => setHoveredDataSegmentIndex(null)}
+                      >
+                        {deterministicAnalysis.segments.map((segment, idx) => {
+                          const inPreview = segment.start < dataPreviewBytes && segment.end > 0;
+                          const isActive = idx === focusedDataSegmentIndex;
+                          return (
+                            <button
+                              key={`${segment.label}-${segment.start}-${segment.end}`}
+                              type="button"
+                              data-testid={`data-segment-item-${idx}`}
+                              onMouseEnter={() => setHoveredDataSegmentIndex(idx)}
+                              onClick={() =>
+                                setPinnedDataSegmentIndex((prev) => (prev === idx ? null : idx))
+                              }
+                              title={segment.meaning}
+                              className={`inline-flex max-w-full items-center gap-1.5 rounded border px-1.5 py-0.5 font-mono text-[11px] transition ${
+                                isActive
+                                  ? 'border-emerald-400/70 bg-emerald-500/10 text-emerald-100'
+                                  : inPreview
+                                    ? 'border-slate-700/70 bg-slate-900/60 text-slate-200 hover:border-slate-500/70'
+                                    : 'border-slate-800/70 bg-slate-900/40 text-slate-500'
+                              }`}
+                            >
+                              <span className="truncate">{segment.label}</span>
+                              <span className="shrink-0 text-[10px] text-slate-500">
+                                [{segment.start}..{segment.end})
+                              </span>
+                            </button>
+                          );
+                        })}
                       </div>
                     </div>
 
-                    <div className="space-y-1.5">
-                      <div
-                        data-testid="data-active-segment"
-                        className="h-[132px] overflow-y-auto rounded border border-slate-800 bg-slate-950/70 p-2 sm:h-[144px]"
-                      >
-                        {activeDataSegment ? (
-                          <>
-                            <div className="text-[10px] uppercase tracking-[0.12em] text-slate-500">
-                              Segment Detail
-                            </div>
-                            <div className="mt-1 font-mono text-[11px] text-slate-300">
-                              {activeDataSegment.label}
-                            </div>
-                            <div className="mt-0.5 text-[10px] leading-4 text-slate-400">
-                              {activeDataSegment.meaning}
-                            </div>
+                    <div
+                      data-testid="data-active-segment"
+                      className="h-[132px] overflow-y-auto rounded border border-slate-800 bg-slate-950/70 p-2 sm:h-[144px]"
+                    >
+                      {activeDataSegment ? (
+                        <>
+                          <div className="text-[10px] uppercase tracking-[0.12em] text-slate-500">
+                            Segment Detail
+                          </div>
+                          <div className="mt-1 font-mono text-[11px] text-slate-300">
+                            {activeDataSegment.label}
+                          </div>
+                          <div className="mt-0.5 text-[10px] leading-4 text-slate-400">
+                            {activeDataSegment.meaning}
+                          </div>
+                          <div
+                            data-testid="data-active-segment-value"
+                            className="mt-1 break-all font-mono text-sm text-emerald-200"
+                          >
+                            {activeDataSegment.humanValue}
+                          </div>
+                          <div className="mt-1.5 font-mono text-[11px] text-slate-300">
+                            [{activeDataSegment.start}..{activeDataSegment.end})
+                          </div>
+                          {activeDataSegmentHex && (
                             <div
-                              data-testid="data-active-segment-value"
-                              className="mt-1 break-all font-mono text-sm text-emerald-200"
+                              data-testid="data-active-segment-hex"
+                              className="mt-1 break-all font-mono text-[11px] text-sky-300"
                             >
-                              {activeDataSegment.humanValue}
+                              {activeDataSegmentHex.value}
                             </div>
-                            <div className="mt-1.5 font-mono text-[11px] text-slate-300">
-                              [{activeDataSegment.start}..{activeDataSegment.end})
+                          )}
+                          {activeDataSegmentHex?.truncated && (
+                            <div className="mt-1 text-[11px] text-slate-500">
+                              Hex preview truncated for readability.
                             </div>
-                            {activeDataSegmentHex && (
-                              <div
-                                data-testid="data-active-segment-hex"
-                                className="mt-1 break-all font-mono text-[11px] text-sky-300"
-                              >
-                                {activeDataSegmentHex.value}
-                              </div>
-                            )}
-                            {activeDataSegmentHex?.truncated && (
-                              <div className="mt-1 text-[11px] text-slate-500">
-                                Hex preview truncated for readability.
-                              </div>
-                            )}
-                          </>
-                        ) : (
-                          <>
-                            <div className="text-[10px] uppercase tracking-[0.12em] text-slate-500">
-                              Segment Detail
-                            </div>
-                            <div className="mt-1 text-xs text-slate-500">
-                              Hover a segment/byte to preview it, or click a segment to pin it.
-                            </div>
-                          </>
-                        )}
-                      </div>
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          <div className="text-[10px] uppercase tracking-[0.12em] text-slate-500">
+                            Segment Detail
+                          </div>
+                          <div className="mt-1 text-xs text-slate-500">
+                            Hover a segment/byte to preview it, or click a segment to pin it.
+                          </div>
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>
