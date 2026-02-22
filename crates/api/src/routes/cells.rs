@@ -28,6 +28,31 @@ use ckbadger_store::keys;
 
 const SHANNONS_PER_CKB: i64 = 100_000_000;
 const UNKNOWN_SCRIPT_NAME: &str = "unknown";
+const DAO_CODE_HASH: &str = "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e";
+const SUDT_CODE_HASH: &str = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5";
+const XUDT_CODE_HASH_DATA1: &str =
+    "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95";
+const XUDT_CODE_HASH_TYPE: &str =
+    "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb";
+const DOTBIT_ACCOUNT_CELL_TYPE_ID: &str =
+    "0x4f170a048198408f4f4d36bdbcddcebe7a0ae85244d3ab08fd40a80cbfc70918";
+const MNFT_ISSUER_CODE_HASH: &str =
+    "0x24b04faf80ded836efc05247778eec4ec02548dab6e2012c0107374aa3f68b81";
+const MNFT_CLASS_CODE_HASH: &str =
+    "0xd51e6eaf48124c601f41abe173f1da550b4cbca9c6a166781906a287abbb3d9a";
+const MNFT_TOKEN_CODE_HASH: &str =
+    "0x2b24f0d644ccbdd77bbf86b27c8cca02efa0ad051e447c212636d9ee7acaaec9";
+const SPORE_CODE_HASHES: [&str; 4] = [
+    "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
+    "0xcfba73b58b6f30e70caed8a999748781b164ef9a1e218424a6fb55ebf641cb33",
+    "0x685a60219309029d01310311dba953d67029170ca4848a4ff638e57002130a0d",
+    "0xbbad126377d45f90a8ee120da988a2d7332c78ba8fd679aab478a19d6c133494",
+];
+const CLUSTER_CODE_HASHES: [&str; 3] = [
+    "0x7366a61534fa7c7e6225ecc0d828ea3b5366adec2b58206f2ee84995fe030075",
+    "0x0bbe768b519d8ea7b96d58f1182eb7e6ef96c541fbd9526975077ee09f049058",
+    "0x598d793defef36e2eeba54a9b45130e4ca92822e1d193671f490950c3b856080",
+];
 
 fn is_known_script_label(name: &str) -> bool {
     let trimmed = name.trim();
@@ -45,6 +70,45 @@ fn format_script_code_hash_label(code_hash: &[u8]) -> String {
 struct DepGroupParseResult {
     is_dep_group: bool,
     items: Option<Vec<DepGroupItem>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CellDataSegment {
+    pub label: String,
+    pub start: i32,
+    pub end: i32,
+    pub meaning: String,
+    pub human_value: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CellDeterministicDecode {
+    pub kind: String,
+    pub summary: String,
+    pub segments: Vec<CellDataSegment>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CellDataGuess {
+    pub kind: String,
+    pub confidence: String,
+    pub reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub human_value: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CellDataAnalysis {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deterministic: Option<CellDeterministicDecode>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub heuristic_guesses: Vec<CellDataGuess>,
 }
 
 fn parse_dep_group(data: &[u8], data_size: i32) -> DepGroupParseResult {
@@ -110,6 +174,928 @@ fn parse_dep_group(data: &[u8], data_size: i32) -> DepGroupParseResult {
         } else {
             None // Data truncated, can't return complete list
         },
+    }
+}
+
+fn is_spore_type_code_hash(code_hash: &[u8]) -> bool {
+    let code_hash_hex = format!("0x{}", hex::encode(code_hash));
+    SPORE_CODE_HASHES.iter().any(|h| *h == code_hash_hex)
+}
+
+fn is_cluster_type_code_hash(code_hash: &[u8]) -> bool {
+    let code_hash_hex = format!("0x{}", hex::encode(code_hash));
+    CLUSTER_CODE_HASHES.iter().any(|h| *h == code_hash_hex)
+}
+
+fn is_dotbit_account_type_code_hash(code_hash: &[u8]) -> bool {
+    let code_hash_hex = format!("0x{}", hex::encode(code_hash));
+    code_hash_hex == DOTBIT_ACCOUNT_CELL_TYPE_ID
+}
+
+fn is_dao_type_code_hash(code_hash: &[u8]) -> bool {
+    let code_hash_hex = format!("0x{}", hex::encode(code_hash));
+    code_hash_hex == DAO_CODE_HASH
+}
+
+fn is_mnft_issuer_type_code_hash(code_hash: &[u8]) -> bool {
+    let code_hash_hex = format!("0x{}", hex::encode(code_hash));
+    code_hash_hex == MNFT_ISSUER_CODE_HASH
+}
+
+fn is_mnft_class_type_code_hash(code_hash: &[u8]) -> bool {
+    let code_hash_hex = format!("0x{}", hex::encode(code_hash));
+    code_hash_hex == MNFT_CLASS_CODE_HASH
+}
+
+fn is_mnft_token_type_code_hash(code_hash: &[u8]) -> bool {
+    let code_hash_hex = format!("0x{}", hex::encode(code_hash));
+    code_hash_hex == MNFT_TOKEN_CODE_HASH
+}
+
+fn read_molecule_bytes_field(
+    data: &[u8],
+    start: usize,
+    end: usize,
+) -> Option<(usize, usize, Vec<u8>)> {
+    if start >= end || start + 4 > data.len() {
+        return None;
+    }
+    let len = u32::from_le_bytes(data[start..start + 4].try_into().ok()?) as usize;
+    let value_start = start + 4;
+    let value_end = value_start.checked_add(len)?;
+    if value_end > data.len() || value_end > end {
+        return None;
+    }
+    Some((
+        value_start,
+        value_end,
+        data[value_start..value_end].to_vec(),
+    ))
+}
+
+fn maybe_parse_spore_decode(
+    info: &ckbadger_store::LiveCellInfo,
+    data: &[u8],
+) -> Option<CellDeterministicDecode> {
+    let type_code_hash = info.type_code_hash.as_ref()?;
+    if !is_spore_type_code_hash(type_code_hash) {
+        return None;
+    }
+    if data.len() < 16 {
+        return None;
+    }
+
+    let total_size = u32::from_le_bytes(data[0..4].try_into().ok()?) as usize;
+    if total_size < 16 || data.len() < total_size {
+        return None;
+    }
+
+    let offset_content_type = u32::from_le_bytes(data[4..8].try_into().ok()?) as usize;
+    let offset_content = u32::from_le_bytes(data[8..12].try_into().ok()?) as usize;
+    let offset_cluster_id = u32::from_le_bytes(data[12..16].try_into().ok()?) as usize;
+
+    if !(16 <= offset_content_type
+        && offset_content_type <= offset_content
+        && offset_content <= offset_cluster_id
+        && offset_cluster_id <= total_size)
+    {
+        return None;
+    }
+
+    let mut segments = vec![
+        CellDataSegment {
+            label: "total_size".to_string(),
+            start: 0,
+            end: 4,
+            meaning: "Molecule table total size (u32 LE)".to_string(),
+            human_value: total_size.to_string(),
+        },
+        CellDataSegment {
+            label: "offset_content_type".to_string(),
+            start: 4,
+            end: 8,
+            meaning: "Offset to content_type bytes field".to_string(),
+            human_value: offset_content_type.to_string(),
+        },
+        CellDataSegment {
+            label: "offset_content".to_string(),
+            start: 8,
+            end: 12,
+            meaning: "Offset to content bytes field".to_string(),
+            human_value: offset_content.to_string(),
+        },
+        CellDataSegment {
+            label: "offset_cluster_id".to_string(),
+            start: 12,
+            end: 16,
+            meaning: "Offset to optional cluster_id bytes field".to_string(),
+            human_value: offset_cluster_id.to_string(),
+        },
+    ];
+
+    let (content_type_start, content_type_end, content_type_bytes) =
+        read_molecule_bytes_field(data, offset_content_type, offset_content)?;
+    let content_type = String::from_utf8_lossy(&content_type_bytes).replace('\0', "");
+    segments.push(CellDataSegment {
+        label: "content_type".to_string(),
+        start: content_type_start as i32,
+        end: content_type_end as i32,
+        meaning: "Spore content MIME type".to_string(),
+        human_value: content_type.clone(),
+    });
+
+    let (content_start, content_end, _content_bytes) =
+        read_molecule_bytes_field(data, offset_content, offset_cluster_id)?;
+    segments.push(CellDataSegment {
+        label: "content".to_string(),
+        start: content_start as i32,
+        end: content_end as i32,
+        meaning: "Spore binary payload".to_string(),
+        human_value: format!("{} bytes", content_end.saturating_sub(content_start)),
+    });
+
+    if offset_cluster_id < total_size && offset_cluster_id + 4 <= data.len() {
+        let opt_header = u32::from_le_bytes(
+            data[offset_cluster_id..offset_cluster_id + 4]
+                .try_into()
+                .ok()?,
+        );
+        if opt_header == 0 {
+            segments.push(CellDataSegment {
+                label: "cluster_id".to_string(),
+                start: offset_cluster_id as i32,
+                end: (offset_cluster_id + 4) as i32,
+                meaning: "Optional cluster id marker".to_string(),
+                human_value: "none".to_string(),
+            });
+        } else if let Some((cluster_start, cluster_end, cluster_bytes)) =
+            read_molecule_bytes_field(data, offset_cluster_id, total_size)
+        {
+            segments.push(CellDataSegment {
+                label: "cluster_id".to_string(),
+                start: cluster_start as i32,
+                end: cluster_end as i32,
+                meaning: "Cluster id bytes".to_string(),
+                human_value: format!("0x{}", hex::encode(cluster_bytes)),
+            });
+        }
+    }
+
+    Some(CellDeterministicDecode {
+        kind: "spore_cell".to_string(),
+        summary: format!(
+            "Spore molecule layout detected (content_type={}, content_bytes={})",
+            content_type,
+            content_end.saturating_sub(content_start)
+        ),
+        segments,
+    })
+}
+
+fn maybe_parse_cluster_decode(
+    info: &ckbadger_store::LiveCellInfo,
+    data: &[u8],
+) -> Option<CellDeterministicDecode> {
+    let type_code_hash = info.type_code_hash.as_ref()?;
+    if !is_cluster_type_code_hash(type_code_hash) {
+        return None;
+    }
+    if data.len() < 12 {
+        return None;
+    }
+
+    let total_size = u32::from_le_bytes(data[0..4].try_into().ok()?) as usize;
+    if total_size < 12 || data.len() < total_size {
+        return None;
+    }
+
+    let offset_name = u32::from_le_bytes(data[4..8].try_into().ok()?) as usize;
+    let offset_description = u32::from_le_bytes(data[8..12].try_into().ok()?) as usize;
+    if !(12 <= offset_name && offset_name <= offset_description && offset_description <= total_size)
+    {
+        return None;
+    }
+
+    let mut segments = vec![
+        CellDataSegment {
+            label: "total_size".to_string(),
+            start: 0,
+            end: 4,
+            meaning: "Molecule table total size (u32 LE)".to_string(),
+            human_value: total_size.to_string(),
+        },
+        CellDataSegment {
+            label: "offset_name".to_string(),
+            start: 4,
+            end: 8,
+            meaning: "Offset to cluster name bytes".to_string(),
+            human_value: offset_name.to_string(),
+        },
+        CellDataSegment {
+            label: "offset_description".to_string(),
+            start: 8,
+            end: 12,
+            meaning: "Offset to cluster description bytes".to_string(),
+            human_value: offset_description.to_string(),
+        },
+    ];
+
+    let desc_end = if data.len() >= 16 {
+        let candidate = u32::from_le_bytes(data[12..16].try_into().ok()?) as usize;
+        if candidate >= offset_description && candidate <= total_size {
+            candidate
+        } else {
+            total_size
+        }
+    } else {
+        total_size
+    };
+
+    if let Some((name_start, name_end, name_bytes)) =
+        read_molecule_bytes_field(data, offset_name, offset_description)
+    {
+        segments.push(CellDataSegment {
+            label: "name".to_string(),
+            start: name_start as i32,
+            end: name_end as i32,
+            meaning: "Cluster name".to_string(),
+            human_value: String::from_utf8_lossy(&name_bytes).replace('\0', ""),
+        });
+    }
+    if let Some((desc_start, desc_end_offset, desc_bytes)) =
+        read_molecule_bytes_field(data, offset_description, desc_end)
+    {
+        segments.push(CellDataSegment {
+            label: "description".to_string(),
+            start: desc_start as i32,
+            end: desc_end_offset as i32,
+            meaning: "Cluster description".to_string(),
+            human_value: String::from_utf8_lossy(&desc_bytes).replace('\0', ""),
+        });
+    }
+
+    Some(CellDeterministicDecode {
+        kind: "spore_cluster_cell".to_string(),
+        summary: "Spore cluster molecule layout detected".to_string(),
+        segments,
+    })
+}
+
+fn read_u16_text_field(data: &[u8], offset: usize) -> Option<(usize, usize, String, usize)> {
+    if offset + 2 > data.len() {
+        return None;
+    }
+    let len = u16::from_le_bytes(data[offset..offset + 2].try_into().ok()?) as usize;
+    let value_start = offset + 2;
+    let value_end = value_start.checked_add(len)?;
+    if len == 0 || value_end > data.len() {
+        return None;
+    }
+    let value = String::from_utf8_lossy(&data[value_start..value_end]).replace('\0', "");
+    Some((value_start, value_end, value, value_end))
+}
+
+fn maybe_parse_mnft_decode(
+    info: &ckbadger_store::LiveCellInfo,
+    data: &[u8],
+) -> Option<CellDeterministicDecode> {
+    let type_code_hash = info.type_code_hash.as_ref()?;
+
+    if is_mnft_issuer_type_code_hash(type_code_hash) {
+        if data.len() < 9 {
+            return None;
+        }
+        let version = data[0];
+        let class_count = u32::from_le_bytes(data[1..5].try_into().ok()?);
+        let set_count = u32::from_le_bytes(data[5..9].try_into().ok()?);
+
+        let mut segments = vec![
+            CellDataSegment {
+                label: "version".to_string(),
+                start: 0,
+                end: 1,
+                meaning: "mNFT issuer schema version".to_string(),
+                human_value: version.to_string(),
+            },
+            CellDataSegment {
+                label: "class_count".to_string(),
+                start: 1,
+                end: 5,
+                meaning: "Number of classes under this issuer (u32 LE)".to_string(),
+                human_value: class_count.to_string(),
+            },
+            CellDataSegment {
+                label: "set_count".to_string(),
+                start: 5,
+                end: 9,
+                meaning: "Number of sets under this issuer (u32 LE)".to_string(),
+                human_value: set_count.to_string(),
+            },
+        ];
+
+        if data.len() >= 11 {
+            let info_size = u16::from_le_bytes(data[9..11].try_into().ok()?) as usize;
+            segments.push(CellDataSegment {
+                label: "info_size".to_string(),
+                start: 9,
+                end: 11,
+                meaning: "Length of issuer metadata blob (u16 LE)".to_string(),
+                human_value: info_size.to_string(),
+            });
+            let info_start = 11usize;
+            let info_end = info_start.checked_add(info_size)?;
+            if info_size > 0 && info_end <= data.len() {
+                let info_value =
+                    String::from_utf8_lossy(&data[info_start..info_end]).replace('\0', "");
+                segments.push(CellDataSegment {
+                    label: "info_blob".to_string(),
+                    start: info_start as i32,
+                    end: info_end as i32,
+                    meaning: "Issuer metadata payload".to_string(),
+                    human_value: info_value.chars().take(120).collect(),
+                });
+            }
+        }
+
+        if let Some(last_end) = segments.last().map(|s| s.end as usize) {
+            if data.len() > last_end {
+                segments.push(CellDataSegment {
+                    label: "trailing_payload".to_string(),
+                    start: last_end as i32,
+                    end: data.len() as i32,
+                    meaning: "Trailing bytes after parsed issuer fields".to_string(),
+                    human_value: format!("{} bytes", data.len() - last_end),
+                });
+            }
+        }
+
+        return Some(CellDeterministicDecode {
+            kind: "mnft_issuer_cell".to_string(),
+            summary: "mNFT issuer layout detected".to_string(),
+            segments,
+        });
+    }
+
+    if is_mnft_class_type_code_hash(type_code_hash) {
+        if data.len() < 10 {
+            return None;
+        }
+        let version = data[0];
+        let total = u32::from_le_bytes(data[1..5].try_into().ok()?);
+        let issued = u32::from_le_bytes(data[5..9].try_into().ok()?);
+        let configure = data[9];
+
+        let mut segments = vec![
+            CellDataSegment {
+                label: "version".to_string(),
+                start: 0,
+                end: 1,
+                meaning: "mNFT class schema version".to_string(),
+                human_value: version.to_string(),
+            },
+            CellDataSegment {
+                label: "total".to_string(),
+                start: 1,
+                end: 5,
+                meaning: "Class max supply (u32 LE)".to_string(),
+                human_value: total.to_string(),
+            },
+            CellDataSegment {
+                label: "issued".to_string(),
+                start: 5,
+                end: 9,
+                meaning: "Class issued count (u32 LE)".to_string(),
+                human_value: issued.to_string(),
+            },
+            CellDataSegment {
+                label: "configure".to_string(),
+                start: 9,
+                end: 10,
+                meaning: "Class configure flags".to_string(),
+                human_value: format!("0x{:02x}", configure),
+            },
+        ];
+
+        let mut offset = 10usize;
+        if let Some((start, end, value, next)) = read_u16_text_field(data, offset) {
+            segments.push(CellDataSegment {
+                label: "name".to_string(),
+                start: start as i32,
+                end: end as i32,
+                meaning: "Class name".to_string(),
+                human_value: value,
+            });
+            offset = next;
+        } else {
+            return Some(CellDeterministicDecode {
+                kind: "mnft_class_cell".to_string(),
+                summary: "mNFT class header parsed; text fields unavailable".to_string(),
+                segments,
+            });
+        }
+
+        if let Some((start, end, value, next)) = read_u16_text_field(data, offset) {
+            segments.push(CellDataSegment {
+                label: "description".to_string(),
+                start: start as i32,
+                end: end as i32,
+                meaning: "Class description".to_string(),
+                human_value: value,
+            });
+            offset = next;
+        } else {
+            return Some(CellDeterministicDecode {
+                kind: "mnft_class_cell".to_string(),
+                summary: "mNFT class parsed up to name/description boundary".to_string(),
+                segments,
+            });
+        }
+
+        if let Some((start, end, value, next)) = read_u16_text_field(data, offset) {
+            segments.push(CellDataSegment {
+                label: "renderer".to_string(),
+                start: start as i32,
+                end: end as i32,
+                meaning: "Class renderer descriptor".to_string(),
+                human_value: value,
+            });
+            offset = next;
+        }
+
+        if data.len() > offset {
+            segments.push(CellDataSegment {
+                label: "trailing_payload".to_string(),
+                start: offset as i32,
+                end: data.len() as i32,
+                meaning: "Trailing bytes after parsed class fields".to_string(),
+                human_value: format!("{} bytes", data.len() - offset),
+            });
+        }
+
+        return Some(CellDeterministicDecode {
+            kind: "mnft_class_cell".to_string(),
+            summary: "mNFT class layout detected".to_string(),
+            segments,
+        });
+    }
+
+    if is_mnft_token_type_code_hash(type_code_hash) {
+        if data.len() < 11 {
+            return None;
+        }
+        let version = data[0];
+        let characteristic = &data[1..9];
+        let configure = data[9];
+        let state = data[10];
+
+        let mut segments = vec![
+            CellDataSegment {
+                label: "version".to_string(),
+                start: 0,
+                end: 1,
+                meaning: "mNFT token schema version".to_string(),
+                human_value: version.to_string(),
+            },
+            CellDataSegment {
+                label: "characteristic".to_string(),
+                start: 1,
+                end: 9,
+                meaning: "8-byte token characteristic field".to_string(),
+                human_value: format!("0x{}", hex::encode(characteristic)),
+            },
+            CellDataSegment {
+                label: "configure".to_string(),
+                start: 9,
+                end: 10,
+                meaning: "Token configure flags".to_string(),
+                human_value: format!("0x{:02x}", configure),
+            },
+            CellDataSegment {
+                label: "state".to_string(),
+                start: 10,
+                end: 11,
+                meaning: "Token state flags".to_string(),
+                human_value: format!("0x{:02x}", state),
+            },
+        ];
+
+        if data.len() > 11 {
+            segments.push(CellDataSegment {
+                label: "trailing_payload".to_string(),
+                start: 11,
+                end: data.len() as i32,
+                meaning: "Trailing bytes after parsed token fields".to_string(),
+                human_value: format!("{} bytes", data.len() - 11),
+            });
+        }
+
+        return Some(CellDeterministicDecode {
+            kind: "mnft_token_cell".to_string(),
+            summary: "mNFT token layout detected".to_string(),
+            segments,
+        });
+    }
+
+    None
+}
+
+fn maybe_parse_dao_decode(
+    info: &ckbadger_store::LiveCellInfo,
+    data: &[u8],
+) -> Option<CellDeterministicDecode> {
+    let type_code_hash = info.type_code_hash.as_ref()?;
+    if !is_dao_type_code_hash(type_code_hash) {
+        return None;
+    }
+    if data.len() != 8 {
+        return None;
+    }
+
+    if data == [0u8; 8] {
+        return Some(CellDeterministicDecode {
+            kind: "dao_deposit_cell".to_string(),
+            summary: "DAO deposit cell detected (8-byte zero data)".to_string(),
+            segments: vec![CellDataSegment {
+                label: "dao_state".to_string(),
+                start: 0,
+                end: 8,
+                meaning: "DAO state marker".to_string(),
+                human_value: "deposit".to_string(),
+            }],
+        });
+    }
+
+    let deposit_block_number = u64::from_le_bytes(data.try_into().ok()?);
+    Some(CellDeterministicDecode {
+        kind: "dao_withdraw_request_cell".to_string(),
+        summary: format!(
+            "DAO withdraw-request cell detected (deposit_block_number={})",
+            deposit_block_number
+        ),
+        segments: vec![
+            CellDataSegment {
+                label: "dao_state".to_string(),
+                start: 0,
+                end: 8,
+                meaning: "DAO state marker".to_string(),
+                human_value: "withdraw_request".to_string(),
+            },
+            CellDataSegment {
+                label: "deposit_block_number".to_string(),
+                start: 0,
+                end: 8,
+                meaning: "Original deposit block number (u64 LE)".to_string(),
+                human_value: deposit_block_number.to_string(),
+            },
+        ],
+    })
+}
+
+fn detect_udt_standard_from_code_hash(code_hash: &[u8]) -> Option<&'static str> {
+    let code_hash_hex = format!("0x{}", hex::encode(code_hash));
+    if code_hash_hex == SUDT_CODE_HASH {
+        return Some("sudt");
+    }
+    if code_hash_hex == XUDT_CODE_HASH_DATA1 || code_hash_hex == XUDT_CODE_HASH_TYPE {
+        return Some("xudt");
+    }
+    None
+}
+
+fn maybe_parse_udt_decode(
+    info: &ckbadger_store::LiveCellInfo,
+    data: &[u8],
+) -> Option<CellDeterministicDecode> {
+    let type_code_hash = info.type_code_hash.as_ref()?;
+    let standard = detect_udt_standard_from_code_hash(type_code_hash)?;
+
+    if data.len() < 16 {
+        return None;
+    }
+
+    let amount = u128::from_le_bytes(data[0..16].try_into().ok()?);
+    let mut segments = vec![CellDataSegment {
+        label: "amount".to_string(),
+        start: 0,
+        end: 16,
+        meaning: format!("{} amount in little-endian u128", standard.to_uppercase()),
+        human_value: amount.to_string(),
+    }];
+
+    if data.len() > 16 {
+        segments.push(CellDataSegment {
+            label: "extension_data".to_string(),
+            start: 16,
+            end: data.len() as i32,
+            meaning: "Additional payload bytes beyond canonical UDT amount".to_string(),
+            human_value: format!("{} bytes", data.len() - 16),
+        });
+    }
+
+    Some(CellDeterministicDecode {
+        kind: "udt_amount".to_string(),
+        summary: format!(
+            "{} cell data starts with amount={} (u128 LE)",
+            standard.to_uppercase(),
+            amount
+        ),
+        segments,
+    })
+}
+
+fn maybe_parse_dotbit_decode(
+    info: &ckbadger_store::LiveCellInfo,
+    data: &[u8],
+) -> Option<CellDeterministicDecode> {
+    let type_code_hash = info.type_code_hash.as_ref()?;
+    if !is_dotbit_account_type_code_hash(type_code_hash) {
+        return None;
+    }
+    if data.len() < 52 {
+        return None;
+    }
+
+    let mut segments = Vec::new();
+    segments.push(CellDataSegment {
+        label: "account_hash".to_string(),
+        start: 0,
+        end: 32,
+        meaning: "DAS account hash prefix".to_string(),
+        human_value: format!("0x{}", hex::encode(&data[0..32])),
+    });
+    segments.push(CellDataSegment {
+        label: "account_id".to_string(),
+        start: 32,
+        end: 52,
+        meaning: "Unique 20-byte DAS account id".to_string(),
+        human_value: format!("0x{}", hex::encode(&data[32..52])),
+    });
+
+    if data.len() >= 72 {
+        let next_id = &data[52..72];
+        let is_zero = next_id.iter().all(|b| *b == 0);
+        segments.push(CellDataSegment {
+            label: "next_account_id".to_string(),
+            start: 52,
+            end: 72,
+            meaning: "Linked-list pointer to next account".to_string(),
+            human_value: if is_zero {
+                "none".to_string()
+            } else {
+                format!("0x{}", hex::encode(next_id))
+            },
+        });
+    }
+
+    if data.len() >= 80 {
+        let expired_at = u64::from_le_bytes(data[72..80].try_into().ok()?);
+        let expired_at_str = if let Ok(expired_i64) = i64::try_from(expired_at) {
+            chrono::DateTime::from_timestamp(expired_i64, 0)
+                .map(|dt| dt.to_rfc3339())
+                .unwrap_or_else(|| format!("unix:{}", expired_at))
+        } else {
+            format!("unix:{}", expired_at)
+        };
+        segments.push(CellDataSegment {
+            label: "expired_at".to_string(),
+            start: 72,
+            end: 80,
+            meaning: "Account expiration timestamp (seconds)".to_string(),
+            human_value: expired_at_str,
+        });
+    }
+
+    if data.len() > 80 {
+        segments.push(CellDataSegment {
+            label: "trailing_payload".to_string(),
+            start: 80,
+            end: data.len() as i32,
+            meaning: "Remaining bytes in account cell payload".to_string(),
+            human_value: format!("{} bytes", data.len() - 80),
+        });
+    }
+
+    Some(CellDeterministicDecode {
+        kind: "dotbit_account".to_string(),
+        summary: "DAS account cell layout detected from type script".to_string(),
+        segments,
+    })
+}
+
+fn maybe_parse_dep_group_decode(data: &[u8], data_size: i32) -> Option<CellDeterministicDecode> {
+    let parsed = parse_dep_group(data, data_size);
+    if !parsed.is_dep_group || data.len() < 4 {
+        return None;
+    }
+
+    let count = u32::from_le_bytes(data[0..4].try_into().ok()?) as usize;
+    let mut segments = Vec::new();
+    segments.push(CellDataSegment {
+        label: "count".to_string(),
+        start: 0,
+        end: 4,
+        meaning: "Number of outpoints in dep group".to_string(),
+        human_value: count.to_string(),
+    });
+
+    for idx in 0..count {
+        let base = 4 + idx * 36;
+        if base + 36 > data.len() {
+            break;
+        }
+
+        segments.push(CellDataSegment {
+            label: format!("outpoint[{}].tx_hash", idx),
+            start: base as i32,
+            end: (base + 32) as i32,
+            meaning: "Referenced transaction hash".to_string(),
+            human_value: format!("0x{}", hex::encode(&data[base..base + 32])),
+        });
+
+        let output_index = u32::from_le_bytes(data[base + 32..base + 36].try_into().ok()?);
+        segments.push(CellDataSegment {
+            label: format!("outpoint[{}].output_index", idx),
+            start: (base + 32) as i32,
+            end: (base + 36) as i32,
+            meaning: "Referenced output index (u32 LE)".to_string(),
+            human_value: output_index.to_string(),
+        });
+    }
+
+    let parsed_count = (segments.len().saturating_sub(1)) / 2;
+    Some(CellDeterministicDecode {
+        kind: "dep_group_out_point_vec".to_string(),
+        summary: format!(
+            "Dep group OutPointVec with {} item(s); decoded {} item(s) from available bytes",
+            count, parsed_count
+        ),
+        segments,
+    })
+}
+
+fn parse_printable_utf8(data: &[u8]) -> Option<String> {
+    let text = std::str::from_utf8(data).ok()?;
+    if text
+        .chars()
+        .all(|c| c.is_ascii_graphic() || c.is_ascii_whitespace())
+    {
+        return Some(text.to_string());
+    }
+    None
+}
+
+fn build_heuristic_guesses(data: &[u8]) -> Vec<CellDataGuess> {
+    if data.is_empty() {
+        return Vec::new();
+    }
+
+    let mut guesses = Vec::new();
+
+    if data.starts_with(b"\x89PNG\r\n\x1a\n") {
+        guesses.push(CellDataGuess {
+            kind: "magic_number".to_string(),
+            confidence: "high".to_string(),
+            reason: "PNG signature matched (89 50 4E 47 0D 0A 1A 0A)".to_string(),
+            mime_type: Some("image/png".to_string()),
+            human_value: None,
+        });
+    } else if data.len() >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF {
+        guesses.push(CellDataGuess {
+            kind: "magic_number".to_string(),
+            confidence: "high".to_string(),
+            reason: "JPEG SOI marker matched (FF D8 FF)".to_string(),
+            mime_type: Some("image/jpeg".to_string()),
+            human_value: None,
+        });
+    } else if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {
+        guesses.push(CellDataGuess {
+            kind: "magic_number".to_string(),
+            confidence: "high".to_string(),
+            reason: "GIF header matched".to_string(),
+            mime_type: Some("image/gif".to_string()),
+            human_value: None,
+        });
+    } else if data.starts_with(b"%PDF-") {
+        guesses.push(CellDataGuess {
+            kind: "magic_number".to_string(),
+            confidence: "high".to_string(),
+            reason: "PDF header matched".to_string(),
+            mime_type: Some("application/pdf".to_string()),
+            human_value: None,
+        });
+    } else if data.starts_with(b"\x7FELF") {
+        guesses.push(CellDataGuess {
+            kind: "magic_number".to_string(),
+            confidence: "high".to_string(),
+            reason: "ELF binary header matched".to_string(),
+            mime_type: Some("application/x-elf".to_string()),
+            human_value: None,
+        });
+    } else if data.starts_with(b"\0asm") {
+        guesses.push(CellDataGuess {
+            kind: "magic_number".to_string(),
+            confidence: "high".to_string(),
+            reason: "WebAssembly binary header matched (00 61 73 6D)".to_string(),
+            mime_type: Some("application/wasm".to_string()),
+            human_value: None,
+        });
+    } else if data.len() >= 4
+        && data[0] == 0x50
+        && data[1] == 0x4B
+        && data[2] == 0x03
+        && data[3] == 0x04
+    {
+        guesses.push(CellDataGuess {
+            kind: "magic_number".to_string(),
+            confidence: "high".to_string(),
+            reason: "ZIP local file header matched (PK\\x03\\x04)".to_string(),
+            mime_type: Some("application/zip".to_string()),
+            human_value: None,
+        });
+    } else if data.len() >= 2 && data[0] == 0x1F && data[1] == 0x8B {
+        guesses.push(CellDataGuess {
+            kind: "magic_number".to_string(),
+            confidence: "high".to_string(),
+            reason: "GZIP header matched (1F 8B)".to_string(),
+            mime_type: Some("application/gzip".to_string()),
+            human_value: None,
+        });
+    }
+
+    if data.len() == 16 {
+        let value = u128::from_le_bytes(
+            data.try_into()
+                .expect("data length already checked as exactly 16 bytes"),
+        );
+        guesses.push(CellDataGuess {
+            kind: "numeric_pattern".to_string(),
+            confidence: "medium".to_string(),
+            reason: "Payload length is exactly 16 bytes (common u128 LE encoding)".to_string(),
+            mime_type: None,
+            human_value: Some(value.to_string()),
+        });
+    }
+
+    if let Some(text) = parse_printable_utf8(data) {
+        let trimmed = text.trim();
+        if (trimmed.starts_with('{') || trimmed.starts_with('['))
+            && serde_json::from_str::<serde_json::Value>(trimmed).is_ok()
+        {
+            guesses.push(CellDataGuess {
+                kind: "text_pattern".to_string(),
+                confidence: "high".to_string(),
+                reason: "UTF-8 payload parses as JSON".to_string(),
+                mime_type: Some("application/json".to_string()),
+                human_value: Some(trimmed.chars().take(120).collect()),
+            });
+        } else {
+            guesses.push(CellDataGuess {
+                kind: "text_pattern".to_string(),
+                confidence: "medium".to_string(),
+                reason: "Payload is printable UTF-8 text".to_string(),
+                mime_type: Some("text/plain".to_string()),
+                human_value: Some(trimmed.chars().take(120).collect()),
+            });
+        }
+    }
+
+    if guesses.is_empty() {
+        guesses.push(CellDataGuess {
+            kind: "binary_fallback".to_string(),
+            confidence: "low".to_string(),
+            reason: "No known signature matched; treated as opaque binary".to_string(),
+            mime_type: Some("application/octet-stream".to_string()),
+            human_value: Some(format!("{} bytes", data.len())),
+        });
+    }
+
+    guesses
+}
+
+fn analyze_cell_data(
+    info: &ckbadger_store::LiveCellInfo,
+    data: &[u8],
+    data_size: i32,
+) -> CellDataAnalysis {
+    let deterministic = maybe_parse_dao_decode(info, data)
+        .or_else(|| maybe_parse_spore_decode(info, data))
+        .or_else(|| maybe_parse_cluster_decode(info, data))
+        .or_else(|| maybe_parse_mnft_decode(info, data))
+        .or_else(|| maybe_parse_udt_decode(info, data))
+        .or_else(|| maybe_parse_dotbit_decode(info, data))
+        .or_else(|| {
+            if info.type_code_hash.is_none() {
+                maybe_parse_dep_group_decode(data, data_size)
+            } else {
+                None
+            }
+        });
+
+    let heuristic_guesses = build_heuristic_guesses(data);
+
+    CellDataAnalysis {
+        deterministic,
+        heuristic_guesses,
     }
 }
 
@@ -256,6 +1242,8 @@ pub struct CellDetailResponse {
     #[serde(rename = "type")]
     pub type_script: Option<ScriptResponse>,
     pub data: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data_analysis: Option<CellDataAnalysis>,
     pub is_dep_group: bool,
     pub dep_group_items: Option<Vec<DepGroupItem>>,
     pub code_cell_of: Option<Vec<CodeCellScript>>,
@@ -1099,6 +2087,10 @@ async fn get_cell(
         .as_ref()
         .and_then(|dh| lookup_code_cell_scripts(&state.store, dh, info.type_script_hash.as_ref()));
 
+    let data_analysis = cell_data
+        .as_ref()
+        .map(|d| analyze_cell_data(&info, d, info.data_size));
+
     let occupied_capacity_breakdown = estimated_occupied_capacity_breakdown(&info);
     let occupied_capacity = if info.occupied_capacity > 0 {
         info.occupied_capacity
@@ -1153,6 +2145,7 @@ async fn get_cell(
         },
         type_script,
         data: cell_data.map(|d| format!("0x{}", hex::encode(d))),
+        data_analysis,
         is_dep_group: dep_group_result.is_dep_group,
         dep_group_items: dep_group_result.items,
         code_cell_of,
@@ -1646,6 +2639,78 @@ async fn get_address_stats_history(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ckbadger_store::LiveCellInfo;
+
+    fn encode_molecule_bytes(input: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(4 + input.len());
+        out.extend_from_slice(&(input.len() as u32).to_le_bytes());
+        out.extend_from_slice(input);
+        out
+    }
+
+    fn make_spore_data(content_type: &str, content: &[u8], cluster_id: Option<&[u8]>) -> Vec<u8> {
+        let content_type_bytes = encode_molecule_bytes(content_type.as_bytes());
+        let content_bytes = encode_molecule_bytes(content);
+        let cluster_bytes = cluster_id.map(encode_molecule_bytes);
+
+        let offset_content_type = 16u32;
+        let offset_content = offset_content_type + content_type_bytes.len() as u32;
+        let offset_cluster = offset_content + content_bytes.len() as u32;
+        let total_size = offset_cluster + cluster_bytes.as_ref().map_or(0u32, |b| b.len() as u32);
+
+        let mut out = Vec::new();
+        out.extend_from_slice(&total_size.to_le_bytes());
+        out.extend_from_slice(&offset_content_type.to_le_bytes());
+        out.extend_from_slice(&offset_content.to_le_bytes());
+        out.extend_from_slice(&offset_cluster.to_le_bytes());
+        out.extend_from_slice(&content_type_bytes);
+        out.extend_from_slice(&content_bytes);
+        if let Some(bytes) = cluster_bytes {
+            out.extend_from_slice(&bytes);
+        }
+        out
+    }
+
+    fn make_cluster_data(name: &str, description: &str) -> Vec<u8> {
+        let name_bytes = encode_molecule_bytes(name.as_bytes());
+        let desc_bytes = encode_molecule_bytes(description.as_bytes());
+        let offset_name = 16u32;
+        let offset_desc = offset_name + name_bytes.len() as u32;
+        let offset_end = offset_desc + desc_bytes.len() as u32;
+
+        let mut out = Vec::new();
+        out.extend_from_slice(&offset_end.to_le_bytes());
+        out.extend_from_slice(&offset_name.to_le_bytes());
+        out.extend_from_slice(&offset_desc.to_le_bytes());
+        out.extend_from_slice(&offset_end.to_le_bytes());
+        out.extend_from_slice(&name_bytes);
+        out.extend_from_slice(&desc_bytes);
+        out
+    }
+
+    fn make_mnft_vartext(value: &str) -> Vec<u8> {
+        let bytes = value.as_bytes();
+        let mut out = Vec::with_capacity(2 + bytes.len());
+        out.extend_from_slice(&(bytes.len() as u16).to_le_bytes());
+        out.extend_from_slice(bytes);
+        out
+    }
+
+    fn make_info() -> LiveCellInfo {
+        LiveCellInfo {
+            capacity: 10000000000,
+            created_at_block: 100,
+            lock_script_hash: vec![0u8; 32],
+            lock_code_hash: vec![1u8; 32],
+            lock_hash_type: 1,
+            lock_args: vec![2u8; 20],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 0,
+        }
+    }
 
     #[test]
     fn test_parse_dep_group_valid() {
@@ -1694,19 +2759,7 @@ mod tests {
 
     #[test]
     fn test_cell_info_to_response_normal() {
-        let info = ckbadger_store::LiveCellInfo {
-            capacity: 10000000000,
-            created_at_block: 100,
-            lock_script_hash: vec![0u8; 32],
-            lock_code_hash: vec![1u8; 32],
-            lock_hash_type: 1,
-            lock_args: vec![2u8; 20],
-            type_script_hash: None,
-            type_code_hash: None,
-            type_args: None,
-            data_size: 0,
-            occupied_capacity: 0,
-        };
+        let info = make_info();
         let tx_hash = vec![3u8; 32];
         let resp = cell_info_to_response(&tx_hash, 0, &info);
         assert_eq!(resp.output_index, 0);
@@ -1717,18 +2770,9 @@ mod tests {
 
     #[test]
     fn test_estimated_occupied_capacity_breakdown_without_type_script() {
-        let info = ckbadger_store::LiveCellInfo {
-            capacity: 10000000000,
-            created_at_block: 100,
-            lock_script_hash: vec![0u8; 32],
-            lock_code_hash: vec![1u8; 32],
-            lock_hash_type: 1,
-            lock_args: vec![2u8; 20],
-            type_script_hash: None,
-            type_code_hash: None,
-            type_args: None,
+        let info = LiveCellInfo {
             data_size: 16,
-            occupied_capacity: 0,
+            ..make_info()
         };
 
         let breakdown = estimated_occupied_capacity_breakdown(&info);
@@ -1741,18 +2785,12 @@ mod tests {
 
     #[test]
     fn test_estimated_occupied_capacity_breakdown_with_type_script() {
-        let info = ckbadger_store::LiveCellInfo {
-            capacity: 10000000000,
-            created_at_block: 100,
-            lock_script_hash: vec![0u8; 32],
-            lock_code_hash: vec![1u8; 32],
-            lock_hash_type: 1,
-            lock_args: vec![2u8; 20],
+        let info = LiveCellInfo {
             type_script_hash: Some(vec![3u8; 32]),
             type_code_hash: Some(vec![4u8; 32]),
             type_args: Some(vec![5u8; 24]),
             data_size: 16,
-            occupied_capacity: 0,
+            ..make_info()
         };
 
         let breakdown = estimated_occupied_capacity_breakdown(&info);
@@ -1761,6 +2799,309 @@ mod tests {
         assert_eq!(breakdown.type_script_bytes, 57);
         assert_eq!(breakdown.data_bytes, 16);
         assert_eq!(breakdown.total_bytes, 134);
+    }
+
+    #[test]
+    fn test_analyze_cell_data_detects_udt_amount_segments() {
+        let info = LiveCellInfo {
+            type_code_hash: Some(hex::decode(SUDT_CODE_HASH.trim_start_matches("0x")).unwrap()),
+            type_script_hash: Some(vec![0x11; 32]),
+            data_size: 16,
+            ..make_info()
+        };
+        let mut data = vec![0u8; 16];
+        data[0] = 0x2a;
+
+        let analysis = analyze_cell_data(&info, &data, 16);
+        let deterministic = analysis.deterministic.expect("deterministic decode");
+        assert_eq!(deterministic.kind, "udt_amount");
+        assert_eq!(deterministic.segments.len(), 1);
+        assert_eq!(deterministic.segments[0].label, "amount");
+        assert_eq!(deterministic.segments[0].start, 0);
+        assert_eq!(deterministic.segments[0].end, 16);
+        assert_eq!(deterministic.segments[0].human_value, "42");
+    }
+
+    #[test]
+    fn test_analyze_cell_data_detects_spore_segments() {
+        let info = LiveCellInfo {
+            type_code_hash: Some(
+                hex::decode(SPORE_CODE_HASHES[0].trim_start_matches("0x")).unwrap(),
+            ),
+            type_script_hash: Some(vec![0x11; 32]),
+            ..make_info()
+        };
+        let cluster_id = vec![0xAA; 32];
+        let data = make_spore_data("image/png", &[1, 2, 3, 4], Some(cluster_id.as_slice()));
+
+        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        let deterministic = analysis.deterministic.expect("spore decode");
+        assert_eq!(deterministic.kind, "spore_cell");
+        assert!(deterministic
+            .segments
+            .iter()
+            .any(|s| s.label == "content_type" && s.human_value == "image/png"));
+        assert!(deterministic
+            .segments
+            .iter()
+            .any(|s| s.label == "content" && s.human_value == "4 bytes"));
+        assert!(deterministic.segments.iter().any(|s| {
+            s.label == "cluster_id" && s.human_value == format!("0x{}", hex::encode(&cluster_id))
+        }));
+    }
+
+    #[test]
+    fn test_analyze_cell_data_detects_spore_cluster_segments() {
+        let info = LiveCellInfo {
+            type_code_hash: Some(
+                hex::decode(CLUSTER_CODE_HASHES[0].trim_start_matches("0x")).unwrap(),
+            ),
+            type_script_hash: Some(vec![0x19; 32]),
+            ..make_info()
+        };
+        let data = make_cluster_data("Genesis Collection", "Primary cluster");
+
+        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        let deterministic = analysis.deterministic.expect("spore cluster decode");
+        assert_eq!(deterministic.kind, "spore_cluster_cell");
+        assert!(deterministic
+            .segments
+            .iter()
+            .any(|s| s.label == "name" && s.human_value == "Genesis Collection"));
+        assert!(deterministic
+            .segments
+            .iter()
+            .any(|s| s.label == "description" && s.human_value == "Primary cluster"));
+    }
+
+    #[test]
+    fn test_analyze_cell_data_detects_mnft_issuer_segments() {
+        let info = LiveCellInfo {
+            type_code_hash: Some(
+                hex::decode(MNFT_ISSUER_CODE_HASH.trim_start_matches("0x")).unwrap(),
+            ),
+            type_script_hash: Some(vec![0x20; 32]),
+            ..make_info()
+        };
+
+        let info_blob = br#"{"name":"Issuer-01","info":"demo"}"#;
+        let mut data = Vec::new();
+        data.push(1); // version
+        data.extend_from_slice(&12u32.to_le_bytes()); // class_count
+        data.extend_from_slice(&3u32.to_le_bytes()); // set_count
+        data.extend_from_slice(&(info_blob.len() as u16).to_le_bytes());
+        data.extend_from_slice(info_blob);
+
+        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        let deterministic = analysis.deterministic.expect("mnft issuer decode");
+        assert_eq!(deterministic.kind, "mnft_issuer_cell");
+        assert!(deterministic
+            .segments
+            .iter()
+            .any(|s| s.label == "class_count" && s.human_value == "12"));
+        assert!(deterministic
+            .segments
+            .iter()
+            .any(|s| s.label == "set_count" && s.human_value == "3"));
+        assert!(deterministic
+            .segments
+            .iter()
+            .any(|s| s.label == "info_blob" && s.human_value.contains("Issuer-01")));
+    }
+
+    #[test]
+    fn test_analyze_cell_data_detects_mnft_class_segments() {
+        let info = LiveCellInfo {
+            type_code_hash: Some(
+                hex::decode(MNFT_CLASS_CODE_HASH.trim_start_matches("0x")).unwrap(),
+            ),
+            type_script_hash: Some(vec![0x21; 32]),
+            ..make_info()
+        };
+        let mut data = Vec::new();
+        data.push(1); // version
+        data.extend_from_slice(&100u32.to_le_bytes()); // total
+        data.extend_from_slice(&7u32.to_le_bytes()); // issued
+        data.push(0x0f); // configure
+        data.extend_from_slice(&make_mnft_vartext("Class-A"));
+        data.extend_from_slice(&make_mnft_vartext("Main collection"));
+        data.extend_from_slice(&make_mnft_vartext("renderer:v1"));
+
+        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        let deterministic = analysis.deterministic.expect("mnft class decode");
+        assert_eq!(deterministic.kind, "mnft_class_cell");
+        assert!(deterministic
+            .segments
+            .iter()
+            .any(|s| s.label == "total" && s.human_value == "100"));
+        assert!(deterministic
+            .segments
+            .iter()
+            .any(|s| s.label == "name" && s.human_value == "Class-A"));
+        assert!(deterministic
+            .segments
+            .iter()
+            .any(|s| s.label == "renderer" && s.human_value == "renderer:v1"));
+    }
+
+    #[test]
+    fn test_analyze_cell_data_detects_mnft_token_segments() {
+        let info = LiveCellInfo {
+            type_code_hash: Some(
+                hex::decode(MNFT_TOKEN_CODE_HASH.trim_start_matches("0x")).unwrap(),
+            ),
+            type_script_hash: Some(vec![0x22; 32]),
+            ..make_info()
+        };
+        let mut data = Vec::new();
+        data.push(2); // version
+        data.extend_from_slice(&[0x11, 0x22, 0x33, 0x44, 0xaa, 0xbb, 0xcc, 0xdd]); // characteristic
+        data.push(0x81); // configure
+        data.push(0x04); // state
+
+        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        let deterministic = analysis.deterministic.expect("mnft token decode");
+        assert_eq!(deterministic.kind, "mnft_token_cell");
+        assert!(deterministic
+            .segments
+            .iter()
+            .any(|s| s.label == "characteristic" && s.human_value == "0x11223344aabbccdd"));
+        assert!(deterministic
+            .segments
+            .iter()
+            .any(|s| s.label == "configure" && s.human_value == "0x81"));
+        assert!(deterministic
+            .segments
+            .iter()
+            .any(|s| s.label == "state" && s.human_value == "0x04"));
+    }
+
+    #[test]
+    fn test_analyze_cell_data_detects_dao_deposit_segments() {
+        let info = LiveCellInfo {
+            type_code_hash: Some(hex::decode(DAO_CODE_HASH.trim_start_matches("0x")).unwrap()),
+            type_script_hash: Some(vec![0x33; 32]),
+            ..make_info()
+        };
+        let data = vec![0u8; 8];
+
+        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        let deterministic = analysis.deterministic.expect("dao deposit decode");
+        assert_eq!(deterministic.kind, "dao_deposit_cell");
+        assert!(deterministic
+            .segments
+            .iter()
+            .any(|s| s.label == "dao_state" && s.human_value == "deposit"));
+    }
+
+    #[test]
+    fn test_analyze_cell_data_detects_dao_withdraw_request_segments() {
+        let info = LiveCellInfo {
+            type_code_hash: Some(hex::decode(DAO_CODE_HASH.trim_start_matches("0x")).unwrap()),
+            type_script_hash: Some(vec![0x34; 32]),
+            ..make_info()
+        };
+        let block_number = 987654u64;
+        let data = block_number.to_le_bytes().to_vec();
+
+        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        let deterministic = analysis.deterministic.expect("dao withdraw decode");
+        assert_eq!(deterministic.kind, "dao_withdraw_request_cell");
+        assert!(deterministic
+            .segments
+            .iter()
+            .any(|s| s.label == "dao_state" && s.human_value == "withdraw_request"));
+        assert!(deterministic.segments.iter().any(
+            |s| s.label == "deposit_block_number" && s.human_value == block_number.to_string()
+        ));
+    }
+
+    #[test]
+    fn test_analyze_cell_data_detects_dep_group_segments() {
+        let info = make_info();
+        let mut data = Vec::new();
+        data.extend_from_slice(&1u32.to_le_bytes());
+        data.extend_from_slice(&[0xAB; 32]);
+        data.extend_from_slice(&3u32.to_le_bytes());
+
+        let analysis = analyze_cell_data(&info, &data, 40);
+        let deterministic = analysis.deterministic.expect("dep group decode");
+        assert_eq!(deterministic.kind, "dep_group_out_point_vec");
+        assert_eq!(deterministic.segments[0].label, "count");
+        assert_eq!(deterministic.segments[0].human_value, "1");
+        assert!(deterministic
+            .segments
+            .iter()
+            .any(|s| s.label == "outpoint[0].tx_hash"));
+        assert!(deterministic
+            .segments
+            .iter()
+            .any(|s| s.label == "outpoint[0].output_index"));
+    }
+
+    #[test]
+    fn test_analyze_cell_data_builds_heuristic_png_guess() {
+        let info = make_info();
+        let data = b"\x89PNG\r\n\x1a\nhello".to_vec();
+
+        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        assert!(analysis.deterministic.is_none());
+        assert!(analysis
+            .heuristic_guesses
+            .iter()
+            .any(|g| g.mime_type.as_deref() == Some("image/png")));
+    }
+
+    #[test]
+    fn test_analyze_cell_data_builds_heuristic_wasm_guess() {
+        let info = make_info();
+        let data = b"\0asm\x01\0\0\0".to_vec();
+
+        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        assert!(analysis
+            .heuristic_guesses
+            .iter()
+            .any(|g| g.mime_type.as_deref() == Some("application/wasm")));
+    }
+
+    #[test]
+    fn test_analyze_cell_data_builds_heuristic_zip_guess() {
+        let info = make_info();
+        let data = vec![0x50, 0x4B, 0x03, 0x04, 0x14, 0x00];
+
+        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        assert!(analysis
+            .heuristic_guesses
+            .iter()
+            .any(|g| g.mime_type.as_deref() == Some("application/zip")));
+    }
+
+    #[test]
+    fn test_analyze_cell_data_builds_heuristic_gzip_guess() {
+        let info = make_info();
+        let data = vec![0x1F, 0x8B, 0x08, 0x00];
+
+        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        assert!(analysis
+            .heuristic_guesses
+            .iter()
+            .any(|g| g.mime_type.as_deref() == Some("application/gzip")));
+    }
+
+    #[test]
+    fn test_analyze_cell_data_does_not_force_dep_group_for_typed_unknown_cells() {
+        let info = LiveCellInfo {
+            type_code_hash: Some(vec![0x99; 32]),
+            type_script_hash: Some(vec![0x12; 32]),
+            ..make_info()
+        };
+        let mut data = Vec::new();
+        data.extend_from_slice(&1u32.to_le_bytes());
+        data.extend_from_slice(&[0xAB; 32]);
+        data.extend_from_slice(&3u32.to_le_bytes());
+
+        let analysis = analyze_cell_data(&info, &data, 40);
+        assert!(analysis.deterministic.is_none());
     }
 
     #[test]

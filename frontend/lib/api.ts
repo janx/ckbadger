@@ -254,6 +254,33 @@ interface OccupiedCapacityBreakdown {
   totalBytes: number;
 }
 
+interface CellDataSegment {
+  label: string;
+  start: number;
+  end: number;
+  meaning: string;
+  humanValue: string;
+}
+
+interface CellDeterministicDecode {
+  kind: string;
+  summary: string;
+  segments: CellDataSegment[];
+}
+
+interface CellDataGuess {
+  kind: string;
+  confidence: string;
+  reason: string;
+  mimeType?: string;
+  humanValue?: string;
+}
+
+interface CellDataAnalysis {
+  deterministic?: CellDeterministicDecode;
+  heuristicGuesses: CellDataGuess[];
+}
+
 interface Cell {
   txHash: string;
   outputIndex: number;
@@ -272,6 +299,7 @@ interface Cell {
   lock?: Script;
   type?: Script;
   data?: string;
+  dataAnalysis?: CellDataAnalysis;
   isDepGroup?: boolean;
   depGroupItems?: DepGroupItem[];
   codeCellOf?: CodeCellScript[];
@@ -942,6 +970,10 @@ export type {
   GraphLink,
   GraphResponse,
   Cell,
+  CellDataAnalysis,
+  CellDeterministicDecode,
+  CellDataSegment,
+  CellDataGuess,
   OccupiedCapacityBreakdown,
   CellDaoInfo,
   CellDep,

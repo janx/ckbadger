@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CellDetailPage from '@/app/cell/[outpoint]/page';
 
@@ -109,6 +109,57 @@ const mockLargeDataCell = {
   ...mockCellWithDao,
   dataSize: 2048,
   data: `0x${'ab'.repeat(2048)}`,
+};
+
+const mockCellWithDataAnalysis = {
+  ...mockCellWithDao,
+  dataSize: 16,
+  data: '0x2a000000000000000000000000000000',
+  dataAnalysis: {
+    deterministic: {
+      kind: 'udt_amount',
+      summary: 'SUDT cell data starts with amount=42 (u128 LE)',
+      segments: [
+        {
+          label: 'amount',
+          start: 0,
+          end: 16,
+          meaning: 'SUDT amount in little-endian u128',
+          humanValue: '42',
+        },
+      ],
+    },
+    heuristicGuesses: [
+      {
+        kind: 'numeric_pattern',
+        confidence: 'medium',
+        reason: 'Payload length is exactly 16 bytes (common u128 LE encoding)',
+        humanValue: '42',
+      },
+    ],
+  },
+};
+
+const mockCellWithPartialParsedData = {
+  ...mockCellWithDao,
+  dataSize: 16,
+  data: '0x0102030405060708090a0b0c0d0e0f10',
+  dataAnalysis: {
+    deterministic: {
+      kind: 'partial_demo',
+      summary: 'Only first 8 bytes are deterministically parsed',
+      segments: [
+        {
+          label: 'header',
+          start: 0,
+          end: 8,
+          meaning: 'Demo parsed header',
+          humanValue: '0x0102030405060708',
+        },
+      ],
+    },
+    heuristicGuesses: [],
+  },
 };
 
 const UNKNOWN_CODE_HASH = '0x709f3fda1234567890abcdef1234567890abcdef1234567890abcdefcce08649';
@@ -296,5 +347,58 @@ describe('CellDetailPage', () => {
     });
 
     expect(screen.getByText('... 1,024 more bytes')).toBeInTheDocument();
+  });
+
+  it('renders deterministic/heuristic data analysis and supports byte hover highlighting', async () => {
+    mockGetCell.mockResolvedValue(mockCellWithDataAnalysis);
+
+    renderWithQueryClient(<CellDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Deterministic Decode')).toBeInTheDocument();
+      expect(screen.getByText('Heuristic Guesses')).toBeInTheDocument();
+      expect(screen.getByText('Parsed Coverage (Full Payload)')).toBeInTheDocument();
+    });
+
+    fireEvent.mouseEnter(screen.getByTestId('data-byte-0'));
+    expect(screen.getByTestId('data-active-segment-value')).toHaveTextContent('42');
+    expect(screen.getByTestId('data-segment-item-0')).toBeInTheDocument();
+    expect(screen.getByTestId('data-byte-filter')).toBeInTheDocument();
+  });
+
+  it('pins deterministic segment on click and keeps details visible after mouse leave', async () => {
+    mockGetCell.mockResolvedValue(mockCellWithDataAnalysis);
+
+    renderWithQueryClient(<CellDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('data-segment-item-0')).toBeInTheDocument();
+    });
+
+    const segmentItem = screen.getByTestId('data-segment-item-0');
+    fireEvent.click(segmentItem);
+    expect(screen.getByTestId('data-segment-pinned')).toBeInTheDocument();
+
+    fireEvent.mouseLeave(segmentItem);
+    expect(screen.getByTestId('data-active-segment-value')).toHaveTextContent('42');
+    expect(screen.getByTestId('data-active-segment-hex')).toHaveTextContent(
+      '0x2a000000000000000000000000000000'
+    );
+  });
+
+  it('lists unparsed preview ranges and highlights selected range bytes', async () => {
+    mockGetCell.mockResolvedValue(mockCellWithPartialParsedData);
+
+    renderWithQueryClient(<CellDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('data-unparsed-ranges')).toBeInTheDocument();
+      expect(screen.getByTestId('unparsed-range-item-0')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('unparsed-range-item-0'));
+    const byte10 = screen.getByTestId('data-byte-10');
+    expect(byte10.className).toContain('ring-1');
+    expect(byte10.className).toContain('ring-amber-400/70');
   });
 });
