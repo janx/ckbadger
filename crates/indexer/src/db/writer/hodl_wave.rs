@@ -34,6 +34,12 @@ impl HodlWaveTracker {
 
     /// Restore tracker from persisted state.
     pub fn from_state(state: HodlTrackerState) -> Self {
+        assert!(
+            state.holder_count >= 0,
+            "invalid hodl tracker state: negative holder_count={}",
+            state.holder_count
+        );
+
         let capacity_by_creation_date = state
             .capacity_by_date
             .into_iter()
@@ -447,14 +453,14 @@ mod tests {
     }
 
     #[test]
-    fn test_from_state_clamps_negative_holder_count() {
+    #[should_panic(expected = "negative holder_count")]
+    fn test_from_state_rejects_negative_holder_count() {
         let state = HodlTrackerState {
             capacity_by_date: vec![],
             date_transitions: vec![],
             holder_count: -5,
             last_snapshot_date: None,
         };
-        let restored = HodlWaveTracker::from_state(state);
-        assert_eq!(restored.holder_count, 0);
+        let _ = HodlWaveTracker::from_state(state);
     }
 }
