@@ -304,14 +304,15 @@ fn maybe_parse_spore_decode(
         human_value: content_type.clone(),
     });
 
-    let (content_start, content_end, _content_bytes) =
+    let (content_start, content_end, content_bytes) =
         read_molecule_bytes_field(data, offset_content, offset_cluster_id)?;
+    let content_human_value = summarize_spore_content_human_value(&content_type, &content_bytes);
     segments.push(CellDataSegment {
         label: "content".to_string(),
         start: content_start as i32,
         end: content_end as i32,
         meaning: "Spore binary payload".to_string(),
-        human_value: format!("{} bytes", content_end.saturating_sub(content_start)),
+        human_value: content_human_value,
     });
 
     if offset_cluster_id < total_size && offset_cluster_id + 4 <= data.len() {
@@ -350,6 +351,30 @@ fn maybe_parse_spore_decode(
         ),
         segments,
     })
+}
+
+fn summarize_spore_content_human_value(content_type: &str, content: &[u8]) -> String {
+    let normalized = content_type.trim().to_ascii_lowercase();
+    let text_like = normalized.starts_with("text/")
+        || normalized.contains("json")
+        || normalized.contains("xml")
+        || normalized.contains("javascript")
+        || normalized.contains("dob/");
+
+    if text_like {
+        if let Some(text) = parse_readable_utf8(content) {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                return format!(
+                    "{} ({} bytes)",
+                    truncate_for_preview(trimmed, 120),
+                    content.len()
+                );
+            }
+        }
+    }
+
+    format!("{} bytes", content.len())
 }
 
 fn maybe_parse_cluster_decode(
@@ -944,6 +969,63 @@ fn parse_printable_utf8(data: &[u8]) -> Option<String> {
     None
 }
 
+fn parse_readable_utf8(data: &[u8]) -> Option<String> {
+    let text = std::str::from_utf8(data).ok()?;
+    if text
+        .chars()
+        .all(|c| !c.is_control() || matches!(c, '\n' | '\r' | '\t'))
+    {
+        return Some(text.to_string());
+    }
+    None
+}
+
+fn truncate_for_preview(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+
+    let mut out: String = text.chars().take(max_chars).collect();
+    out.push_str("...");
+    out
+}
+
+fn parse_molecule_table_shape(data: &[u8]) -> Option<(usize, usize)> {
+    if data.len() < 8 {
+        return None;
+    }
+
+    let total_size = u32::from_le_bytes(data[0..4].try_into().ok()?) as usize;
+    if total_size != data.len() {
+        return None;
+    }
+
+    let first_offset = u32::from_le_bytes(data[4..8].try_into().ok()?) as usize;
+    if !(8..=total_size).contains(&first_offset) || first_offset % 4 != 0 {
+        return None;
+    }
+
+    let field_count = first_offset / 4;
+    if !(2..=256).contains(&field_count) {
+        return None;
+    }
+
+    if data.len() < field_count * 4 {
+        return None;
+    }
+
+    let mut prev = first_offset;
+    for i in 2..field_count {
+        let offset = u32::from_le_bytes(data[i * 4..i * 4 + 4].try_into().ok()?) as usize;
+        if offset < prev || offset > total_size || offset % 4 != 0 {
+            return None;
+        }
+        prev = offset;
+    }
+
+    Some((field_count, total_size))
+}
+
 fn build_heuristic_guesses(data: &[u8]) -> Vec<CellDataGuess> {
     if data.is_empty() {
         return Vec::new();
@@ -1022,6 +1104,58 @@ fn build_heuristic_guesses(data: &[u8]) -> Vec<CellDataGuess> {
         });
     }
 
+    if data.iter().all(|b| *b == 0) {
+        guesses.push(CellDataGuess {
+            kind: "zero_pattern".to_string(),
+            confidence: "high".to_string(),
+            reason: "Payload is entirely zero bytes".to_string(),
+            mime_type: None,
+            human_value: Some(format!("{} zero bytes", data.len())),
+        });
+    }
+
+    if let Some((field_count, total_size)) = parse_molecule_table_shape(data) {
+        guesses.push(CellDataGuess {
+            kind: "structure_pattern".to_string(),
+            confidence: "medium".to_string(),
+            reason: "Looks like Molecule table layout (LE total size + monotonic offsets)"
+                .to_string(),
+            mime_type: Some("application/x-molecule-table".to_string()),
+            human_value: Some(format!(
+                "total_size={} bytes, fields={}",
+                total_size, field_count
+            )),
+        });
+    }
+
+    if data.len() == 4 {
+        let value = u32::from_le_bytes(
+            data.try_into()
+                .expect("data length already checked as exactly 4 bytes"),
+        );
+        guesses.push(CellDataGuess {
+            kind: "numeric_pattern".to_string(),
+            confidence: "medium".to_string(),
+            reason: "Payload length is exactly 4 bytes (common u32 LE encoding)".to_string(),
+            mime_type: None,
+            human_value: Some(value.to_string()),
+        });
+    }
+
+    if data.len() == 8 {
+        let value = u64::from_le_bytes(
+            data.try_into()
+                .expect("data length already checked as exactly 8 bytes"),
+        );
+        guesses.push(CellDataGuess {
+            kind: "numeric_pattern".to_string(),
+            confidence: "medium".to_string(),
+            reason: "Payload length is exactly 8 bytes (common u64 LE encoding)".to_string(),
+            mime_type: None,
+            human_value: Some(value.to_string()),
+        });
+    }
+
     if data.len() == 16 {
         let value = u128::from_le_bytes(
             data.try_into()
@@ -1049,12 +1183,38 @@ fn build_heuristic_guesses(data: &[u8]) -> Vec<CellDataGuess> {
                 human_value: Some(trimmed.chars().take(120).collect()),
             });
         } else {
+            let lower = trimmed.to_ascii_lowercase();
+            if lower.starts_with("<svg") || (lower.starts_with("<?xml") && lower.contains("<svg")) {
+                guesses.push(CellDataGuess {
+                    kind: "text_pattern".to_string(),
+                    confidence: "high".to_string(),
+                    reason: "UTF-8 payload looks like SVG/XML markup".to_string(),
+                    mime_type: Some("image/svg+xml".to_string()),
+                    human_value: Some(truncate_for_preview(trimmed, 120)),
+                });
+            }
+
+            if lower.starts_with("ipfs://")
+                || lower.starts_with("https://")
+                || lower.starts_with("http://")
+                || lower.starts_with("did:ckb:")
+                || lower.starts_with("ckb://")
+            {
+                guesses.push(CellDataGuess {
+                    kind: "text_pattern".to_string(),
+                    confidence: "medium".to_string(),
+                    reason: "UTF-8 payload looks like a URI".to_string(),
+                    mime_type: Some("text/uri-list".to_string()),
+                    human_value: Some(truncate_for_preview(trimmed, 120)),
+                });
+            }
+
             guesses.push(CellDataGuess {
                 kind: "text_pattern".to_string(),
                 confidence: "medium".to_string(),
                 reason: "Payload is printable UTF-8 text".to_string(),
                 mime_type: Some("text/plain".to_string()),
-                human_value: Some(trimmed.chars().take(120).collect()),
+                human_value: Some(truncate_for_preview(trimmed, 120)),
             });
         }
     }
@@ -3086,6 +3246,93 @@ mod tests {
             .heuristic_guesses
             .iter()
             .any(|g| g.mime_type.as_deref() == Some("application/gzip")));
+    }
+
+    #[test]
+    fn test_analyze_cell_data_spore_text_content_exposes_preview() {
+        let info = LiveCellInfo {
+            type_code_hash: Some(
+                hex::decode(SPORE_CODE_HASHES[0].trim_start_matches("0x")).unwrap(),
+            ),
+            type_script_hash: Some(vec![0x41; 32]),
+            ..make_info()
+        };
+        let data = make_spore_data("text/plain", b"hello spore text", None);
+
+        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        let deterministic = analysis.deterministic.expect("spore decode");
+        let content_segment = deterministic
+            .segments
+            .iter()
+            .find(|s| s.label == "content")
+            .expect("content segment");
+        assert!(content_segment.human_value.contains("hello spore text"));
+        assert!(content_segment.human_value.contains("16 bytes"));
+    }
+
+    #[test]
+    fn test_analyze_cell_data_builds_heuristic_molecule_table_guess() {
+        let info = make_info();
+        let mut data = Vec::new();
+        data.extend_from_slice(&16u32.to_le_bytes());
+        data.extend_from_slice(&8u32.to_le_bytes());
+        data.extend_from_slice(&[0x11, 0x22, 0x33, 0x44]);
+        data.extend_from_slice(&[0x55, 0x66, 0x77, 0x88]);
+
+        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        assert!(analysis.heuristic_guesses.iter().any(|g| {
+            g.mime_type.as_deref() == Some("application/x-molecule-table")
+                && g.human_value
+                    .as_deref()
+                    .is_some_and(|v| v.contains("fields=2"))
+        }));
+    }
+
+    #[test]
+    fn test_analyze_cell_data_builds_heuristic_svg_guess() {
+        let info = make_info();
+        let data = br#"<svg xmlns="http://www.w3.org/2000/svg"></svg>"#.to_vec();
+
+        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        assert!(analysis
+            .heuristic_guesses
+            .iter()
+            .any(|g| g.mime_type.as_deref() == Some("image/svg+xml")));
+    }
+
+    #[test]
+    fn test_analyze_cell_data_builds_heuristic_uri_guess() {
+        let info = make_info();
+        let data = b"ipfs://bafybeigdyrztm".to_vec();
+
+        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        assert!(analysis
+            .heuristic_guesses
+            .iter()
+            .any(|g| g.mime_type.as_deref() == Some("text/uri-list")));
+    }
+
+    #[test]
+    fn test_analyze_cell_data_builds_heuristic_u32_u64_zero_guesses() {
+        let info = make_info();
+
+        let u32_data = 12345u32.to_le_bytes().to_vec();
+        let u32_analysis = analyze_cell_data(&info, &u32_data, u32_data.len() as i32);
+        assert!(u32_analysis
+            .heuristic_guesses
+            .iter()
+            .any(|g| g.kind == "numeric_pattern" && g.human_value.as_deref() == Some("12345")));
+
+        let u64_data = 0u64.to_le_bytes().to_vec();
+        let u64_analysis = analyze_cell_data(&info, &u64_data, u64_data.len() as i32);
+        assert!(u64_analysis
+            .heuristic_guesses
+            .iter()
+            .any(|g| g.kind == "zero_pattern"));
+        assert!(u64_analysis
+            .heuristic_guesses
+            .iter()
+            .any(|g| g.kind == "numeric_pattern" && g.human_value.as_deref() == Some("0")));
     }
 
     #[test]
