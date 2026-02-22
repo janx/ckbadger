@@ -160,6 +160,7 @@ impl RollbackStageProgress {
 
 fn clear_dao_withdraw_request_fields(entry: &mut DaoDepositCacheEntry) {
     entry.withdraw_request_tx = None;
+    entry.withdraw_request_output_index = None;
     entry.withdraw_request_block = None;
     entry.withdraw_request_ar = None;
 }
@@ -167,6 +168,7 @@ fn clear_dao_withdraw_request_fields(entry: &mut DaoDepositCacheEntry) {
 fn clear_dao_withdraw_completion_fields(entry: &mut DaoDepositCacheEntry) {
     entry.withdraw_block = None;
     entry.withdraw_tx = None;
+    entry.withdraw_to_output_index = None;
     entry.compensation = None;
 }
 
@@ -193,6 +195,7 @@ fn normalize_dao_entry_for_rollback(
                 changed = true;
             }
             if entry.withdraw_request_tx.is_some()
+                || entry.withdraw_request_output_index.is_some()
                 || entry.withdraw_request_block.is_some()
                 || entry.withdraw_request_ar.is_some()
             {
@@ -228,6 +231,7 @@ fn normalize_dao_entry_for_rollback(
     match entry.status {
         0 => {
             if entry.withdraw_request_tx.is_some()
+                || entry.withdraw_request_output_index.is_some()
                 || entry.withdraw_request_block.is_some()
                 || entry.withdraw_request_ar.is_some()
             {
@@ -243,7 +247,10 @@ fn normalize_dao_entry_for_rollback(
             }
         }
         1 => {
-            if entry.withdraw_request_tx.is_none() || entry.withdraw_request_block.is_none() {
+            if entry.withdraw_request_tx.is_none()
+                || entry.withdraw_request_output_index.is_none()
+                || entry.withdraw_request_block.is_none()
+            {
                 anyhow::bail!(
                     "inconsistent DAO entry after rollback normalization: status=1 missing request fields, deposit_block={}",
                     entry.deposit_block_number
@@ -258,7 +265,10 @@ fn normalize_dao_entry_for_rollback(
             }
         }
         2 => {
-            if entry.withdraw_request_tx.is_none() || entry.withdraw_request_block.is_none() {
+            if entry.withdraw_request_tx.is_none()
+                || entry.withdraw_request_output_index.is_none()
+                || entry.withdraw_request_block.is_none()
+            {
                 anyhow::bail!(
                     "inconsistent DAO entry after rollback normalization: status=2 missing request fields, deposit_block={}",
                     entry.deposit_block_number
@@ -1126,10 +1136,12 @@ mod tests {
                 deposit_ar: 1,
                 status: 1,
                 withdraw_request_tx: Some(request_tx_a.clone()),
+                withdraw_request_output_index: Some(0),
                 withdraw_request_block: Some(2),
                 withdraw_request_ar: Some(1),
                 withdraw_block: None,
                 withdraw_tx: None,
+                withdraw_to_output_index: None,
                 compensation: None,
             },
         );
@@ -1146,10 +1158,12 @@ mod tests {
                 deposit_ar: 1,
                 status: 2,
                 withdraw_request_tx: Some(request_tx_b.clone()),
+                withdraw_request_output_index: Some(0),
                 withdraw_request_block: Some(1),
                 withdraw_request_ar: Some(1),
                 withdraw_block: Some(3),
                 withdraw_tx: Some(vec![0x44; 32]),
+                withdraw_to_output_index: Some(0),
                 compensation: Some(10),
             },
         );
@@ -1165,10 +1179,12 @@ mod tests {
                 deposit_ar: 1,
                 status: 0,
                 withdraw_request_tx: None,
+                withdraw_request_output_index: None,
                 withdraw_request_block: None,
                 withdraw_request_ar: None,
                 withdraw_block: None,
                 withdraw_tx: None,
+                withdraw_to_output_index: None,
                 compensation: None,
             },
         );

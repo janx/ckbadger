@@ -216,6 +216,99 @@ export default function DaoPage() {
     { label: 'Withdrawn', value: 2 },
   ];
 
+  const renderReferenceCell = (deposit: DaoDeposit) => {
+    const depositCellHref = `/cell/${deposit.txHash}-${deposit.outputIndex}`;
+    const depositCellLabel = `${deposit.txHash}:${deposit.outputIndex}`;
+
+    if (
+      deposit.status === 'withdrawing' &&
+      deposit.withdrawRequestTxHash &&
+      deposit.withdrawRequestOutputIndex !== null
+    ) {
+      const requestCellHref = `/cell/${deposit.withdrawRequestTxHash}-${deposit.withdrawRequestOutputIndex}`;
+      const requestCellLabel = `${deposit.withdrawRequestTxHash}:${deposit.withdrawRequestOutputIndex}`;
+      return (
+        <div className="space-y-1">
+          <Link href={requestCellHref} className="text-terminal-green hover:underline">
+            <Hash hash={requestCellLabel} />
+          </Link>
+          <div className="font-mono text-xs text-slate-500">
+            Deposit cell:{' '}
+            <Link href={depositCellHref} className="hover:text-slate-300">
+              <Hash hash={depositCellLabel} />
+            </Link>
+          </div>
+        </div>
+      );
+    }
+
+    if (
+      deposit.status === 'withdrawn' &&
+      deposit.withdrawTxHash &&
+      deposit.withdrawToOutputIndex !== null
+    ) {
+      const withdrawToCellHref = `/cell/${deposit.withdrawTxHash}-${deposit.withdrawToOutputIndex}`;
+      const withdrawToCellLabel = `${deposit.withdrawTxHash}:${deposit.withdrawToOutputIndex}`;
+      return (
+        <div className="space-y-1">
+          <Link href={withdrawToCellHref} className="text-terminal-green hover:underline">
+            <Hash hash={withdrawToCellLabel} />
+          </Link>
+          <div className="font-mono text-xs text-slate-500">
+            Deposit cell:{' '}
+            <Link href={depositCellHref} className="hover:text-slate-300">
+              <Hash hash={depositCellLabel} />
+            </Link>
+          </div>
+        </div>
+      );
+    }
+
+    if (deposit.status === 'withdrawing' && deposit.withdrawRequestTxHash) {
+      return (
+        <div className="space-y-1">
+          <Link
+            href={`/tx/${deposit.withdrawRequestTxHash}`}
+            className="text-terminal-green hover:underline"
+          >
+            <Hash hash={deposit.withdrawRequestTxHash} />
+          </Link>
+          <div className="font-mono text-xs text-slate-500">
+            Deposit cell:{' '}
+            <Link href={depositCellHref} className="hover:text-slate-300">
+              <Hash hash={depositCellLabel} />
+            </Link>
+          </div>
+        </div>
+      );
+    }
+
+    if (deposit.status === 'withdrawn' && deposit.withdrawTxHash) {
+      return (
+        <div className="space-y-1">
+          <Link
+            href={`/tx/${deposit.withdrawTxHash}`}
+            className="text-terminal-green hover:underline"
+          >
+            <Hash hash={deposit.withdrawTxHash} />
+          </Link>
+          <div className="font-mono text-xs text-slate-500">
+            Deposit cell:{' '}
+            <Link href={depositCellHref} className="hover:text-slate-300">
+              <Hash hash={depositCellLabel} />
+            </Link>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <Link href={depositCellHref} className="text-terminal-green hover:underline">
+        <Hash hash={depositCellLabel} />
+      </Link>
+    );
+  };
+
   return (
     <div className="min-h-screen bg-slate-950">
       <Header />
@@ -411,7 +504,7 @@ export default function DaoPage() {
                   <table className="w-full">
                     <thead>
                       <tr className="border-b border-slate-800 text-left font-mono text-xs uppercase text-slate-500">
-                        <th className="px-4 py-3">Cell</th>
+                        <th className="px-4 py-3">Reference</th>
                         <th className="px-4 py-3">Address</th>
                         <th className="px-4 py-3 text-right">Amount</th>
                         <th className="px-4 py-3">Status</th>
@@ -424,14 +517,7 @@ export default function DaoPage() {
                           key={`${deposit.txHash}-${deposit.outputIndex}`}
                           className="hover:bg-slate-850/50 border-b border-slate-800/50 transition-colors"
                         >
-                          <td className="px-4 py-3">
-                            <Link
-                              href={`/cell/${deposit.txHash}-${deposit.outputIndex}`}
-                              className="text-terminal-green hover:underline"
-                            >
-                              <Hash hash={`${deposit.txHash}:${deposit.outputIndex}`} />
-                            </Link>
-                          </td>
+                          <td className="px-4 py-3">{renderReferenceCell(deposit)}</td>
                           <td className="px-4 py-3">
                             <div className="flex items-center gap-2">
                               {deposit.address ? (

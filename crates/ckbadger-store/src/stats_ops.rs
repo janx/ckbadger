@@ -1833,10 +1833,12 @@ mod tests {
             deposit_ar: 0,
             status: 1,
             withdraw_request_tx: Some(vec![0x77; 32]),
+            withdraw_request_output_index: Some(0),
             withdraw_request_block: Some(5),
             withdraw_request_ar: Some(0),
             withdraw_block: None,
             withdraw_tx: None,
+            withdraw_to_output_index: None,
             compensation: None,
         };
 
@@ -1881,10 +1883,12 @@ mod tests {
             deposit_ar: 0,
             status: 2,
             withdraw_request_tx: Some(vec![0x77; 32]),
+            withdraw_request_output_index: Some(0),
             withdraw_request_block: Some(10),
             withdraw_request_ar: Some(0),
             withdraw_block: Some(11),
             withdraw_tx: Some(vec![0x88; 32]),
+            withdraw_to_output_index: Some(0),
             compensation: None,
         };
 
@@ -1938,10 +1942,12 @@ mod tests {
             deposit_ar: 0,
             status: 0,
             withdraw_request_tx: None,
+            withdraw_request_output_index: None,
             withdraw_request_block: None,
             withdraw_request_ar: None,
             withdraw_block: None,
             withdraw_tx: None,
+            withdraw_to_output_index: None,
             compensation: None,
         };
 

@@ -23,10 +23,12 @@ fn test_dao_deposit_creation() {
         deposit_ar: 10_000_000_000,
         status: 0, // deposited
         withdraw_request_tx: None,
+        withdraw_request_output_index: None,
         withdraw_request_block: None,
         withdraw_request_ar: None,
         withdraw_block: None,
         withdraw_tx: None,
+        withdraw_to_output_index: None,
         compensation: None,
     };
 
@@ -59,10 +61,12 @@ fn test_dao_withdraw_request() {
         deposit_ar: 10_000_000_000,
         status: 0,
         withdraw_request_tx: None,
+        withdraw_request_output_index: None,
         withdraw_request_block: None,
         withdraw_request_ar: None,
         withdraw_block: None,
         withdraw_tx: None,
+        withdraw_to_output_index: None,
         compensation: None,
     };
 
@@ -79,10 +83,12 @@ fn test_dao_withdraw_request() {
         deposit_ar: 10_000_000_000,
         status: 1, // withdraw_requested
         withdraw_request_tx: Some(vec![0xcc; 32]),
+        withdraw_request_output_index: Some(0),
         withdraw_request_block: Some(7000),
         withdraw_request_ar: Some(10_200_000_000),
         withdraw_block: None,
         withdraw_tx: None,
+        withdraw_to_output_index: None,
         compensation: None,
     };
 
@@ -112,10 +118,12 @@ fn test_dao_withdrawal_completion() {
         deposit_ar: 10_000_000_000,
         status: 2, // withdrawn
         withdraw_request_tx: Some(vec![0xee; 32]),
+        withdraw_request_output_index: Some(0),
         withdraw_request_block: Some(8500),
         withdraw_request_ar: Some(10_300_000_000),
         withdraw_block: Some(9000),
         withdraw_tx: Some(vec![0xff; 32]),
+        withdraw_to_output_index: Some(0),
         compensation: Some(1_500_000_000),
     };
 
@@ -150,10 +158,12 @@ fn test_list_dao_deposits() {
             deposit_ar: 10_000_000_000,
             status: *status,
             withdraw_request_tx: None,
+            withdraw_request_output_index: None,
             withdraw_request_block: None,
             withdraw_request_ar: None,
             withdraw_block: None,
             withdraw_tx: None,
+            withdraw_to_output_index: None,
             compensation: None,
         };
         batch.put_dao_deposit(key, &entry);
@@ -184,10 +194,12 @@ fn test_list_active_dao_deposits() {
         deposit_ar: 10_000_000_000,
         status: 0,
         withdraw_request_tx: None,
+        withdraw_request_output_index: None,
         withdraw_request_block: None,
         withdraw_request_ar: None,
         withdraw_block: None,
         withdraw_tx: None,
+        withdraw_to_output_index: None,
         compensation: None,
     };
 
@@ -199,10 +211,12 @@ fn test_list_active_dao_deposits() {
         deposit_ar: 10_000_000_000,
         status: 1,
         withdraw_request_tx: Some(vec![0x77; 32]),
+        withdraw_request_output_index: Some(0),
         withdraw_request_block: Some(3000),
         withdraw_request_ar: Some(10_100_000_000),
         withdraw_block: None,
         withdraw_tx: None,
+        withdraw_to_output_index: None,
         compensation: None,
     };
 
@@ -214,10 +228,12 @@ fn test_list_active_dao_deposits() {
         deposit_ar: 10_000_000_000,
         status: 2,
         withdraw_request_tx: Some(vec![0x99; 32]),
+        withdraw_request_output_index: Some(0),
         withdraw_request_block: Some(3500),
         withdraw_request_ar: Some(10_200_000_000),
         withdraw_block: Some(4000),
         withdraw_tx: Some(vec![0xaa; 32]),
+        withdraw_to_output_index: Some(0),
         compensation: Some(1_000_000_000),
     };
 

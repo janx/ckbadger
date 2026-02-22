@@ -57,8 +57,12 @@ pub struct DaoDepositResponse {
     pub status: String,
     pub withdraw_request_block: Option<i64>,
     pub withdraw_request_timestamp: Option<String>,
+    pub withdraw_request_tx_hash: Option<String>,
+    pub withdraw_request_output_index: Option<i32>,
     pub withdraw_block: Option<i64>,
     pub withdraw_timestamp: Option<String>,
+    pub withdraw_tx_hash: Option<String>,
+    pub withdraw_to_output_index: Option<i32>,
     pub compensation: Option<String>,
 }
 
@@ -158,6 +162,15 @@ fn deposit_to_response(
         })
     });
 
+    let withdraw_request_tx_hash = entry
+        .withdraw_request_tx
+        .as_ref()
+        .map(|tx| format!("0x{}", hex::encode(tx)));
+    let withdraw_tx_hash = entry
+        .withdraw_tx
+        .as_ref()
+        .map(|tx| format!("0x{}", hex::encode(tx)));
+
     DaoDepositResponse {
         tx_hash: format!("0x{}", hex::encode(&tx_hash_bytes)),
         output_index: output_index as i32,
@@ -170,8 +183,12 @@ fn deposit_to_response(
         status: status_to_string(entry.status),
         withdraw_request_block: entry.withdraw_request_block,
         withdraw_request_timestamp,
+        withdraw_request_tx_hash,
+        withdraw_request_output_index: entry.withdraw_request_output_index.map(i32::from),
         withdraw_block: entry.withdraw_block,
         withdraw_timestamp,
+        withdraw_tx_hash,
+        withdraw_to_output_index: entry.withdraw_to_output_index.map(i32::from),
         compensation: entry.compensation.map(|c| c.to_string()),
     }
 }

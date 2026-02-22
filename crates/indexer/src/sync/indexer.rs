@@ -5019,6 +5019,7 @@ impl Indexer {
                 }
 
                 let mut new_dao_outputs: Vec<(Vec<u8>, i16, Vec<u8>, i64, u64)> = Vec::new();
+                let mut candidate_withdraw_to_outputs: Vec<(i16, Vec<u8>)> = Vec::new();
                 for (idx, cell) in tx_data.cells.iter().enumerate() {
                     if let Some(ref type_code_hash) = cell.type_code_hash {
                         if type_code_hash == &dao_code_hash && cell.data_size == 8 {
@@ -5036,15 +5037,38 @@ impl Indexer {
                                     ));
                                 }
                             }
+                        } else {
+                            candidate_withdraw_to_outputs
+                                .push((idx as i16, cell.lock_script_hash.clone()));
                         }
+                    } else {
+                        candidate_withdraw_to_outputs
+                            .push((idx as i16, cell.lock_script_hash.clone()));
                     }
                 }
+
+                let tx_input_outpoints: Vec<(Vec<u8>, i16)> = tx_data
+                    .inputs
+                    .iter()
+                    .map(|input| {
+                        let output_index = i16::try_from(input.previous_output_index).map_err(|_| {
+                            anyhow!(
+                                "DAO processing input index exceeds i16 range: tx_hash=0x{}, previous_output_index={}",
+                                hex::encode(tx_data.hash),
+                                input.previous_output_index
+                            )
+                        })?;
+                        Ok((input.previous_tx_hash.to_vec(), output_index))
+                    })
+                    .collect::<Result<_>>()?;
 
                 {
                     let mut batch = StoreBatch::new(self.writer.store());
                     self.writer.process_dao_withdrawals(
                         &consumed_dao,
                         &new_dao_outputs,
+                        &candidate_withdraw_to_outputs,
+                        &tx_input_outpoints,
                         parsed.number,
                         &tx_data.hash,
                         parsed.timestamp,
@@ -6118,10 +6142,12 @@ impl Indexer {
                                 deposit_ar: *ar,
                                 status: 0,
                                 withdraw_request_tx: None,
+                                withdraw_request_output_index: None,
                                 withdraw_request_block: None,
                                 withdraw_request_ar: None,
                                 withdraw_block: None,
                                 withdraw_tx: None,
+                                withdraw_to_output_index: None,
                                 compensation: None,
                             },
                         );
@@ -6133,6 +6159,8 @@ impl Indexer {
                         struct DaoWithdrawalContext {
                             consumed_deposits: Vec<(i64, Vec<u8>, i16, String, i64, i16)>,
                             new_dao_outputs: Vec<(Vec<u8>, i16, Vec<u8>, i64, u64)>,
+                            tx_inputs: Vec<(Vec<u8>, i16)>,
+                            candidate_withdraw_to_outputs: Vec<(i16, Vec<u8>)>,
                             block_number: i64,
                             consuming_tx_hash: Vec<u8>,
                             timestamp: DateTime<Utc>,
@@ -6155,6 +6183,40 @@ impl Indexer {
                             }
                             fn timestamp(&self) -> DateTime<Utc> {
                                 self.timestamp
+                            }
+                            fn withdraw_to_output_index_for_lock(
+                                &self,
+                                lock_script_hash: &[u8],
+                            ) -> Option<i16> {
+                                let mut same_lock = self
+                                    .candidate_withdraw_to_outputs
+                                    .iter()
+                                    .filter_map(|(output_index, output_lock_hash)| {
+                                        (output_lock_hash.as_slice() == lock_script_hash)
+                                            .then_some(*output_index)
+                                    });
+                                if let Some(first) = same_lock.next() {
+                                    if same_lock.next().is_none() {
+                                        return Some(first);
+                                    }
+                                    return None;
+                                }
+                                (self.candidate_withdraw_to_outputs.len() == 1)
+                                    .then_some(self.candidate_withdraw_to_outputs[0].0)
+                            }
+                            fn infer_request_output_index(&self, request_tx_hash: &[u8]) -> Option<i16> {
+                                let mut matches = self
+                                    .tx_inputs
+                                    .iter()
+                                    .filter_map(|(tx_hash, output_index)| {
+                                        (tx_hash.as_slice() == request_tx_hash).then_some(*output_index)
+                                    })
+                                    .take(2);
+                                let first = matches.next()?;
+                                if matches.next().is_some() {
+                                    return None;
+                                }
+                                Some(first)
                             }
                         }
 
@@ -6192,7 +6254,26 @@ impl Indexer {
                                 if consumed_deposits.is_empty() {
                                     continue;
                                 }
+                                let tx_inputs: Vec<(Vec<u8>, i16)> = tx_data
+                                    .inputs
+                                    .iter()
+                                    .map(|input| {
+                                        let output_index =
+                                            i16::try_from(input.previous_output_index).map_err(
+                                                |_| {
+                                                    anyhow!(
+                                                        "DAO processing input index exceeds i16 range: tx_hash=0x{}, previous_output_index={}",
+                                                        hex::encode(tx_data.hash),
+                                                        input.previous_output_index
+                                                    )
+                                                },
+                                            )?;
+                                        Ok((input.previous_tx_hash.to_vec(), output_index))
+                                    })
+                                    .collect::<Result<_>>()?;
                                 let mut new_dao_outputs: Vec<(Vec<u8>, i16, Vec<u8>, i64, u64)> =
+                                    Vec::new();
+                                let mut candidate_withdraw_to_outputs: Vec<(i16, Vec<u8>)> =
                                     Vec::new();
                                 for (idx, cell) in tx_data.cells.iter().enumerate() {
                                     if let Some(ref type_code_hash) = cell.type_code_hash {
@@ -6214,12 +6295,20 @@ impl Indexer {
                                                     ));
                                                 }
                                             }
+                                        } else {
+                                            candidate_withdraw_to_outputs
+                                                .push((idx as i16, cell.lock_script_hash.clone()));
                                         }
+                                    } else {
+                                        candidate_withdraw_to_outputs
+                                            .push((idx as i16, cell.lock_script_hash.clone()));
                                     }
                                 }
                                 withdrawal_contexts.push(DaoWithdrawalContext {
                                     consumed_deposits,
                                     new_dao_outputs,
+                                    tx_inputs,
+                                    candidate_withdraw_to_outputs,
                                     block_number: parsed.number,
                                     consuming_tx_hash: tx_data.hash.to_vec(),
                                     timestamp: parsed.timestamp,
@@ -6996,10 +7085,12 @@ impl Indexer {
                             deposit_ar: *ar,
                             status: 0,
                             withdraw_request_tx: None,
+                            withdraw_request_output_index: None,
                             withdraw_request_block: None,
                             withdraw_request_ar: None,
                             withdraw_block: None,
                             withdraw_tx: None,
+                            withdraw_to_output_index: None,
                             compensation: None,
                         },
                     );
@@ -7011,6 +7102,8 @@ impl Indexer {
                     struct DaoWithdrawalContext {
                         consumed_deposits: Vec<(i64, Vec<u8>, i16, String, i64, i16)>,
                         new_dao_outputs: Vec<(Vec<u8>, i16, Vec<u8>, i64, u64)>,
+                        tx_inputs: Vec<(Vec<u8>, i16)>,
+                        candidate_withdraw_to_outputs: Vec<(i16, Vec<u8>)>,
                         block_number: i64,
                         consuming_tx_hash: Vec<u8>,
                         timestamp: DateTime<Utc>,
@@ -7030,6 +7123,43 @@ impl Indexer {
                         }
                         fn timestamp(&self) -> DateTime<Utc> {
                             self.timestamp
+                        }
+                        fn withdraw_to_output_index_for_lock(
+                            &self,
+                            lock_script_hash: &[u8],
+                        ) -> Option<i16> {
+                            let mut same_lock = self
+                                .candidate_withdraw_to_outputs
+                                .iter()
+                                .filter_map(|(output_index, output_lock_hash)| {
+                                    (output_lock_hash.as_slice() == lock_script_hash)
+                                        .then_some(*output_index)
+                                });
+                            if let Some(first) = same_lock.next() {
+                                if same_lock.next().is_none() {
+                                    return Some(first);
+                                }
+                                return None;
+                            }
+                            (self.candidate_withdraw_to_outputs.len() == 1)
+                                .then_some(self.candidate_withdraw_to_outputs[0].0)
+                        }
+                        fn infer_request_output_index(
+                            &self,
+                            request_tx_hash: &[u8],
+                        ) -> Option<i16> {
+                            let mut matches = self
+                                .tx_inputs
+                                .iter()
+                                .filter_map(|(tx_hash, output_index)| {
+                                    (tx_hash.as_slice() == request_tx_hash).then_some(*output_index)
+                                })
+                                .take(2);
+                            let first = matches.next()?;
+                            if matches.next().is_some() {
+                                return None;
+                            }
+                            Some(first)
                         }
                     }
 
@@ -7061,8 +7191,24 @@ impl Indexer {
                             if consumed_deposits.is_empty() {
                                 continue;
                             }
+                            let tx_inputs: Vec<(Vec<u8>, i16)> = tx_data
+                                .inputs
+                                .iter()
+                                .map(|input| {
+                                    let output_index =
+                                        i16::try_from(input.previous_output_index).map_err(|_| {
+                                            anyhow!(
+                                                "DAO processing input index exceeds i16 range: tx_hash=0x{}, previous_output_index={}",
+                                                hex::encode(tx_data.hash),
+                                                input.previous_output_index
+                                            )
+                                        })?;
+                                    Ok((input.previous_tx_hash.to_vec(), output_index))
+                                })
+                                .collect::<Result<_>>()?;
                             let mut new_dao_outputs: Vec<(Vec<u8>, i16, Vec<u8>, i64, u64)> =
                                 Vec::new();
+                            let mut candidate_withdraw_to_outputs: Vec<(i16, Vec<u8>)> = Vec::new();
                             for (idx, cell) in tx_data.cells.iter().enumerate() {
                                 if let Some(ref type_code_hash) = cell.type_code_hash {
                                     if type_code_hash == &dao_code_hash && cell.data_size == 8 {
@@ -7080,12 +7226,20 @@ impl Indexer {
                                                 ));
                                             }
                                         }
+                                    } else {
+                                        candidate_withdraw_to_outputs
+                                            .push((idx as i16, cell.lock_script_hash.clone()));
                                     }
+                                } else {
+                                    candidate_withdraw_to_outputs
+                                        .push((idx as i16, cell.lock_script_hash.clone()));
                                 }
                             }
                             withdrawal_contexts.push(DaoWithdrawalContext {
                                 consumed_deposits,
                                 new_dao_outputs,
+                                tx_inputs,
+                                candidate_withdraw_to_outputs,
                                 block_number: parsed.number,
                                 consuming_tx_hash: tx_data.hash.to_vec(),
                                 timestamp: parsed.timestamp,

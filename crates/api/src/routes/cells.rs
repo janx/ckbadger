@@ -2166,11 +2166,19 @@ fn lookup_dao_info(
 
     let entry = store.get_dao_deposit(&outpoint_key).ok()?;
 
-    // If not found by outpoint, try by withdraw_tx
+    // If not found by outpoint, try by withdraw-request/withdraw-complete tx hash
     let entry = if entry.is_none() {
         let outpoint_key_data = store.get_dao_deposit_by_withdraw_tx(tx_hash).ok()?;
         if let Some(key_data) = outpoint_key_data {
-            store.get_dao_deposit(&key_data).ok()?
+            let candidate = store.get_dao_deposit(&key_data).ok()??;
+            let matches_withdraw_request =
+                candidate.withdraw_request_output_index == Some(output_index);
+            let matches_withdraw_to = candidate.withdraw_to_output_index == Some(output_index);
+            if matches_withdraw_request || matches_withdraw_to {
+                Some(candidate)
+            } else {
+                None
+            }
         } else {
             None
         }

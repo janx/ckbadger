@@ -200,10 +200,14 @@ pub struct DaoDepositCacheEntry {
     pub deposit_ar: i64,
     pub status: i16,
     pub withdraw_request_tx: Option<Vec<u8>>,
+    #[serde(default)]
+    pub withdraw_request_output_index: Option<i16>,
     pub withdraw_request_block: Option<i64>,
     pub withdraw_request_ar: Option<i64>,
     pub withdraw_block: Option<i64>,
     pub withdraw_tx: Option<Vec<u8>>,
+    #[serde(default)]
+    pub withdraw_to_output_index: Option<i16>,
     pub compensation: Option<i64>,
 }
 

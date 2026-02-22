@@ -23,10 +23,12 @@ fn build_dao_cache_entry(
         deposit_ar,
         status: 0,
         withdraw_request_tx: None,
+        withdraw_request_output_index: None,
         withdraw_request_block: None,
         withdraw_request_ar: None,
         withdraw_block: None,
         withdraw_tx: None,
+        withdraw_to_output_index: None,
         compensation: None,
     }
 }
@@ -61,6 +63,12 @@ pub trait DaoWithdrawalContextTrait {
     fn block_number(&self) -> i64;
     fn consuming_tx_hash(&self) -> &[u8];
     fn timestamp(&self) -> DateTime<Utc>;
+    fn withdraw_to_output_index_for_lock(&self, _lock_script_hash: &[u8]) -> Option<i16> {
+        None
+    }
+    fn infer_request_output_index(&self, _request_tx_hash: &[u8]) -> Option<i16> {
+        None
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -115,6 +123,50 @@ fn calculate_dao_compensation_from_ar(
         .map_err(|_| anyhow!("DAO compensation exceeds i64: {}", compensation_u128))
 }
 
+fn infer_withdraw_to_output_index_from_outputs(
+    candidate_outputs: &[(i16, Vec<u8>)],
+    lock_script_hash: &[u8],
+) -> Option<i16> {
+    if candidate_outputs.is_empty() {
+        return None;
+    }
+
+    let mut same_lock = candidate_outputs
+        .iter()
+        .filter_map(|(output_index, output_lock_hash)| {
+            (output_lock_hash.as_slice() == lock_script_hash).then_some(*output_index)
+        });
+    if let Some(first) = same_lock.next() {
+        if same_lock.next().is_none() {
+            return Some(first);
+        }
+        return None;
+    }
+
+    if candidate_outputs.len() == 1 {
+        return Some(candidate_outputs[0].0);
+    }
+
+    None
+}
+
+fn infer_request_output_index_from_inputs(
+    tx_inputs: &[(Vec<u8>, i16)],
+    request_tx_hash: &[u8],
+) -> Option<i16> {
+    let mut matches = tx_inputs
+        .iter()
+        .filter_map(|(tx_hash, output_index)| {
+            (tx_hash.as_slice() == request_tx_hash).then_some(*output_index)
+        })
+        .take(2);
+    let first = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    Some(first)
+}
+
 impl BatchWriter {
     pub fn get_block_dao_field(&self, block_number: i64) -> Result<Option<Vec<u8>>> {
         if let Some(header) = self.store.get_block_header(block_number)? {
@@ -159,6 +211,7 @@ impl BatchWriter {
                 entry.status = 1;
                 entry.withdraw_request_block = Some(block_number);
                 entry.withdraw_request_tx = Some(request.tx_hash.clone());
+                entry.withdraw_request_output_index = Some(request.output_index as i16);
                 entry.withdraw_request_ar = Some(withdraw_ar);
                 batch.put_dao_deposit(&outpoint_key, &entry);
                 // Update the withdraw_tx -> outpoint index
@@ -196,6 +249,7 @@ impl BatchWriter {
                     entry.status = 2;
                     entry.withdraw_block = Some(block_number);
                     entry.withdraw_tx = Some(tx_hash.to_vec());
+                    entry.withdraw_to_output_index = None;
                     entry.compensation = Some(compensation);
                     batch.put_dao_deposit(&outpoint_key, &entry);
                 }
@@ -267,6 +321,8 @@ impl BatchWriter {
         &self,
         consumed_dao_deposits: &[(i64, Vec<u8>, i16, String, i64, i16)],
         new_dao_outputs: &[(Vec<u8>, i16, Vec<u8>, i64, u64)],
+        candidate_withdraw_to_outputs: &[(i16, Vec<u8>)],
+        tx_inputs: &[(Vec<u8>, i16)],
         block_number: i64,
         consuming_tx_hash: &[u8],
         _timestamp: DateTime<Utc>,
@@ -296,7 +352,7 @@ impl BatchWriter {
                     .iter()
                     .find(|(_, _, _, cap, _)| *cap == capacity);
 
-                if let Some((new_tx_hash, _, _, _, _)) = matching_output {
+                if let Some((new_tx_hash, new_output_index, _, _, _)) = matching_output {
                     if let Some(value) = self
                         .store
                         .get_cf(self.store.cf_dao_deposits(), &outpoint_key)?
@@ -306,6 +362,7 @@ impl BatchWriter {
                             entry.status = 1;
                             entry.withdraw_request_block = Some(block_number);
                             entry.withdraw_request_tx = Some(new_tx_hash.clone());
+                            entry.withdraw_request_output_index = Some(*new_output_index);
                             batch.put_dao_deposit(&outpoint_key, &entry);
                             batch.put_dao_by_withdraw_tx(new_tx_hash, &outpoint_key);
                         }
@@ -342,10 +399,37 @@ impl BatchWriter {
                 let compensation =
                     self.calculate_dao_compensation(capacity, *deposit_block, request_block)?;
 
+                let request_tx_hash = entry.withdraw_request_tx.as_ref().ok_or_else(|| {
+                    anyhow!(
+                        "withdraw request tx missing for status=1 deposit: tx_hash=0x{}, output_index={}",
+                        hex::encode(original_tx_hash),
+                        original_output_index
+                    )
+                })?;
+                let request_output_index = if let Some(idx) = entry.withdraw_request_output_index {
+                    idx
+                } else {
+                    infer_request_output_index_from_inputs(tx_inputs, request_tx_hash)
+                            .ok_or_else(|| {
+                                anyhow!(
+                                    "withdraw request output index missing/ambiguous for status=1 deposit: tx_hash=0x{}, output_index={}, request_tx=0x{}",
+                                    hex::encode(original_tx_hash),
+                                    original_output_index,
+                                    hex::encode(request_tx_hash)
+                                )
+                            })?
+                };
+                let withdraw_to_output_index = infer_withdraw_to_output_index_from_outputs(
+                    candidate_withdraw_to_outputs,
+                    &entry.lock_script_hash,
+                );
+
                 let mut entry = entry;
                 entry.status = 2;
                 entry.withdraw_block = Some(block_number);
                 entry.withdraw_tx = Some(consuming_tx_hash.to_vec());
+                entry.withdraw_request_output_index = Some(request_output_index);
+                entry.withdraw_to_output_index = withdraw_to_output_index;
                 entry.compensation = Some(compensation);
                 batch.put_dao_deposit(&outpoint_key, &entry);
             }
@@ -533,7 +617,7 @@ impl BatchWriter {
                         .iter()
                         .find(|(_, _, _, cap, _)| *cap == capacity);
 
-                    if let Some((new_tx_hash, _, _, _, _)) = matching_output {
+                    if let Some((new_tx_hash, new_output_index, _, _, _)) = matching_output {
                         let maybe_entry: Option<DaoDepositCacheEntry> = if let Some(value) = self
                             .store
                             .get_cf(self.store.cf_dao_deposits(), &outpoint_key)?
@@ -548,6 +632,7 @@ impl BatchWriter {
                             entry.status = 1;
                             entry.withdraw_request_block = Some(ctx.block_number());
                             entry.withdraw_request_tx = Some(new_tx_hash.clone());
+                            entry.withdraw_request_output_index = Some(*new_output_index);
                             batch.put_dao_deposit(&outpoint_key, &entry);
                             batch.put_dao_by_withdraw_tx(new_tx_hash, &outpoint_key);
                         }
@@ -568,6 +653,27 @@ impl BatchWriter {
                         .unwrap_or(ctx.block_number());
 
                     if let Some(mut entry) = maybe_entry {
+                        let request_tx_hash = entry.withdraw_request_tx.as_ref().ok_or_else(|| {
+                            anyhow!(
+                                "withdraw request tx missing for status=1 deposit: tx_hash=0x{}, output_index={}",
+                                hex::encode(original_tx_hash),
+                                original_output_index
+                            )
+                        })?;
+                        let request_output_index = if let Some(idx) =
+                            entry.withdraw_request_output_index
+                        {
+                            idx
+                        } else {
+                            ctx.infer_request_output_index(request_tx_hash).ok_or_else(|| {
+                                    anyhow!(
+                                        "withdraw request output index missing/ambiguous for status=1 deposit: tx_hash=0x{}, output_index={}, request_tx=0x{}",
+                                        hex::encode(original_tx_hash),
+                                        original_output_index,
+                                        hex::encode(request_tx_hash)
+                                    )
+                                })?
+                        };
                         let dep_dao = dao_fields.get(deposit_block).ok_or_else(|| {
                             anyhow!(
                                 "missing DAO field for deposit block {} while completing DAO withdraw: block={}, consuming_tx=0x{}, deposit_outpoint=0x{}:{}",
@@ -597,9 +703,13 @@ impl BatchWriter {
                         let ar_withdraw = extract_ar_from_dao(req_dao).unwrap_or(1);
                         let compensation =
                             calculate_dao_compensation_from_ar(capacity, ar_deposit, ar_withdraw)?;
+                        let withdraw_to_output_index =
+                            ctx.withdraw_to_output_index_for_lock(&entry.lock_script_hash);
                         entry.status = 2;
                         entry.withdraw_block = Some(ctx.block_number());
                         entry.withdraw_tx = Some(ctx.consuming_tx_hash().to_vec());
+                        entry.withdraw_request_output_index = Some(request_output_index);
+                        entry.withdraw_to_output_index = withdraw_to_output_index;
                         entry.compensation = Some(compensation);
                         batch.put_dao_deposit(&outpoint_key, &entry);
                     } else {
@@ -700,10 +810,12 @@ mod tests {
         assert_eq!(entry.deposit_ar, 9876);
         assert_eq!(entry.status, 0);
         assert!(entry.withdraw_request_tx.is_none());
+        assert!(entry.withdraw_request_output_index.is_none());
         assert!(entry.withdraw_request_block.is_none());
         assert!(entry.withdraw_request_ar.is_none());
         assert!(entry.withdraw_block.is_none());
         assert!(entry.withdraw_tx.is_none());
+        assert!(entry.withdraw_to_output_index.is_none());
         assert!(entry.compensation.is_none());
     }
 
@@ -716,10 +828,12 @@ mod tests {
             deposit_ar: 123,
             status: 1,
             withdraw_request_tx: Some(vec![0x44; 32]),
+            withdraw_request_output_index: Some(0),
             withdraw_request_block: Some(88),
             withdraw_request_ar: Some(456),
             withdraw_block: None,
             withdraw_tx: None,
+            withdraw_to_output_index: None,
             compensation: None,
         };
         let (id, tx_hash, output_index, capacity_str, deposit_block, status) =
@@ -799,6 +913,54 @@ mod tests {
     }
 
     #[test]
+    fn test_infer_withdraw_to_output_index_prefers_unique_same_lock() {
+        let candidate_outputs = vec![
+            (0, vec![0x10; 32]),
+            (2, vec![0x20; 32]),
+            (4, vec![0x30; 32]),
+        ];
+
+        let idx = infer_withdraw_to_output_index_from_outputs(&candidate_outputs, &[0x20; 32]);
+        assert_eq!(idx, Some(2));
+    }
+
+    #[test]
+    fn test_infer_withdraw_to_output_index_returns_single_candidate_when_unambiguous() {
+        let candidate_outputs = vec![(3, vec![0x10; 32])];
+        let idx = infer_withdraw_to_output_index_from_outputs(&candidate_outputs, &[0x99; 32]);
+        assert_eq!(idx, Some(3));
+    }
+
+    #[test]
+    fn test_infer_withdraw_to_output_index_returns_none_when_ambiguous() {
+        let candidate_outputs = vec![(1, vec![0x10; 32]), (2, vec![0x11; 32])];
+        let idx = infer_withdraw_to_output_index_from_outputs(&candidate_outputs, &[0x99; 32]);
+        assert!(idx.is_none());
+    }
+
+    #[test]
+    fn test_infer_request_output_index_from_inputs_unique_match() {
+        let tx_inputs = vec![
+            (vec![0x10; 32], 0),
+            (vec![0x20; 32], 4),
+            (vec![0x30; 32], 1),
+        ];
+        let idx = infer_request_output_index_from_inputs(&tx_inputs, &[0x20; 32]);
+        assert_eq!(idx, Some(4));
+    }
+
+    #[test]
+    fn test_infer_request_output_index_from_inputs_ambiguous_returns_none() {
+        let tx_inputs = vec![
+            (vec![0x20; 32], 4),
+            (vec![0x20; 32], 5),
+            (vec![0x30; 32], 1),
+        ];
+        let idx = infer_request_output_index_from_inputs(&tx_inputs, &[0x20; 32]);
+        assert!(idx.is_none());
+    }
+
+    #[test]
     fn test_calculate_dao_compensation_from_ar_errors_on_capacity_below_occupied() {
         let err = calculate_dao_compensation_from_ar(100_00000000, 100, 110).unwrap_err();
         assert!(err.to_string().contains("below occupied"));
@@ -836,10 +998,12 @@ mod tests {
                 deposit_ar: 10000000000000000,
                 status: 0,
                 withdraw_request_tx: None,
+                withdraw_request_output_index: None,
                 withdraw_request_block: None,
                 withdraw_request_ar: None,
                 withdraw_block: None,
                 withdraw_tx: None,
+                withdraw_to_output_index: None,
                 compensation: None,
             },
         );
@@ -894,10 +1058,12 @@ mod tests {
                 deposit_ar: 10,
                 status: 1,
                 withdraw_request_tx: Some(vec![0xDD; 32]),
+                withdraw_request_output_index: Some(0),
                 withdraw_request_block: Some(110),
                 withdraw_request_ar: Some(11),
                 withdraw_block: None,
                 withdraw_tx: None,
+                withdraw_to_output_index: None,
                 compensation: None,
             },
         );
@@ -946,10 +1112,12 @@ mod tests {
             deposit_ar: 10,
             status: 1,
             withdraw_request_tx: Some(vec![0xCC; 32]),
+            withdraw_request_output_index: Some(0),
             withdraw_request_block: None,
             withdraw_request_ar: Some(11),
             withdraw_block: None,
             withdraw_tx: None,
+            withdraw_to_output_index: None,
             compensation: None,
         };
         let mut batch = StoreBatch::new(&store);
@@ -969,6 +1137,8 @@ mod tests {
             .process_dao_withdrawals(
                 &consumed,
                 &[],
+                &[],
+                &[(vec![0xCC; 32], 0)],
                 120,
                 &[0xDD; 32],
                 chrono::Utc::now(),
@@ -1000,10 +1170,12 @@ mod tests {
             deposit_ar: 10,
             status: 1,
             withdraw_request_tx: Some(vec![0xCD; 32]),
+            withdraw_request_output_index: Some(0),
             withdraw_request_block: Some(110),
             withdraw_request_ar: Some(11),
             withdraw_block: None,
             withdraw_tx: None,
+            withdraw_to_output_index: None,
             compensation: None,
         };
         let mut batch = StoreBatch::new(&store);
@@ -1023,6 +1195,8 @@ mod tests {
             .process_dao_withdrawals(
                 &consumed,
                 &[],
+                &[],
+                &[(vec![0xCD; 32], 0)],
                 120,
                 &[0xDE; 32],
                 chrono::Utc::now(),
@@ -1032,6 +1206,89 @@ mod tests {
         assert!(err
             .to_string()
             .contains("missing DAO field for compensation"));
+    }
+
+    #[test]
+    fn test_process_dao_withdrawals_phase2_withdraw_to_uses_output_lock_analysis() {
+        use ckbadger_store::batch::StoreBatch;
+        use ckbadger_store::CkbadgerStore;
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = super::super::BatchWriter::new(store.clone());
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(100, &header_with_ar(10));
+        batch.put_block_header(110, &header_with_ar(11));
+        batch.commit().unwrap();
+
+        let original_tx_hash = vec![0xAA; 32];
+        let original_output_index = 1i16;
+        let outpoint_key =
+            ckbadger_store::keys::encode_outpoint(&original_tx_hash, original_output_index);
+        let target_lock_hash = vec![0xBC; 32];
+        let request_tx_hash = vec![0xCD; 32];
+        let withdraw_tx_hash = vec![0xDE; 32];
+
+        let entry = DaoDepositCacheEntry {
+            capacity: 500_00000000,
+            deposit_block_number: 100,
+            lock_script_hash: target_lock_hash.clone(),
+            deposit_ar: 10,
+            status: 1,
+            withdraw_request_tx: Some(request_tx_hash.clone()),
+            withdraw_request_output_index: Some(4),
+            withdraw_request_block: Some(110),
+            withdraw_request_ar: Some(11),
+            withdraw_block: None,
+            withdraw_tx: None,
+            withdraw_to_output_index: None,
+            compensation: None,
+        };
+        let mut batch = StoreBatch::new(&store);
+        batch.put_dao_deposit(&outpoint_key, &entry);
+        batch.commit().unwrap();
+
+        let consumed = vec![(
+            0,
+            original_tx_hash.clone(),
+            original_output_index,
+            "50000000000".to_string(),
+            100,
+            1,
+        )];
+        let candidate_outputs = vec![
+            (0, vec![0x11; 32]),
+            (3, target_lock_hash),
+            (5, vec![0x22; 32]),
+        ];
+        let tx_inputs = vec![(request_tx_hash, 4)];
+
+        let mut batch = StoreBatch::new(&store);
+        writer
+            .process_dao_withdrawals(
+                &consumed,
+                &[],
+                &candidate_outputs,
+                &tx_inputs,
+                120,
+                &withdraw_tx_hash,
+                chrono::Utc::now(),
+                &mut batch,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+
+        let stored = store
+            .get_cf(store.cf_dao_deposits(), &outpoint_key)
+            .unwrap()
+            .unwrap();
+        let updated: DaoDepositCacheEntry = bincode::deserialize(&stored).unwrap();
+
+        assert_eq!(updated.status, 2);
+        assert_eq!(updated.withdraw_tx, Some(withdraw_tx_hash));
+        assert_eq!(updated.withdraw_to_output_index, Some(3));
     }
 
     /// Regression test: same-batch deposits must be updated to status=1
@@ -1064,10 +1321,12 @@ mod tests {
             deposit_ar: 10000000000000000,
             status: 0,
             withdraw_request_tx: None,
+            withdraw_request_output_index: None,
             withdraw_request_block: None,
             withdraw_request_ar: None,
             withdraw_block: None,
             withdraw_tx: None,
+            withdraw_to_output_index: None,
             compensation: None,
         };
 

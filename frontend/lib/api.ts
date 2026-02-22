@@ -602,8 +602,12 @@ interface DaoDeposit {
   status: string;
   withdrawRequestBlock: number | null;
   withdrawRequestTimestamp: string | null;
+  withdrawRequestTxHash: string | null;
+  withdrawRequestOutputIndex: number | null;
   withdrawBlock: number | null;
   withdrawTimestamp: string | null;
+  withdrawTxHash: string | null;
+  withdrawToOutputIndex: number | null;
   compensation: string | null;
 }
 
