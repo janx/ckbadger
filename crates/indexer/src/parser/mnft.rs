@@ -195,11 +195,11 @@ impl MnftParser {
         }
 
         let _version = data[0];
-        let class_count = u32::from_le_bytes(data[1..5].try_into().ok()?);
-        let set_count = u32::from_le_bytes(data[5..9].try_into().ok()?);
+        let class_count = u32::from_be_bytes(data[1..5].try_into().ok()?);
+        let set_count = u32::from_be_bytes(data[5..9].try_into().ok()?);
 
         let (name, info) = if data.len() > 11 {
-            let info_size = u16::from_le_bytes(data[9..11].try_into().ok()?) as usize;
+            let info_size = u16::from_be_bytes(data[9..11].try_into().ok()?) as usize;
             if data.len() >= 11 + info_size && info_size > 0 {
                 let info_bytes = data[11..11 + info_size].to_vec();
                 let name = Self::extract_json_field(&info_bytes, "name");
@@ -225,8 +225,8 @@ impl MnftParser {
         }
 
         let _version = data[0];
-        let total = u32::from_le_bytes(data[1..5].try_into().ok()?);
-        let issued = u32::from_le_bytes(data[5..9].try_into().ok()?);
+        let total = u32::from_be_bytes(data[1..5].try_into().ok()?);
+        let issued = u32::from_be_bytes(data[5..9].try_into().ok()?);
         let configure = data[9];
 
         let mut offset = 10;
@@ -267,7 +267,7 @@ impl MnftParser {
             return None;
         }
 
-        let size = u16::from_le_bytes(data[*offset..*offset + 2].try_into().ok()?) as usize;
+        let size = u16::from_be_bytes(data[*offset..*offset + 2].try_into().ok()?) as usize;
         *offset += 2;
 
         if size == 0 || *offset + size > data.len() {
@@ -363,12 +363,12 @@ mod tests {
     fn create_issuer_data(class_count: u32, set_count: u32, info: Option<&str>) -> Vec<u8> {
         let version = 0u8;
         let mut data = vec![version];
-        data.extend_from_slice(&class_count.to_le_bytes());
-        data.extend_from_slice(&set_count.to_le_bytes());
+        data.extend_from_slice(&class_count.to_be_bytes());
+        data.extend_from_slice(&set_count.to_be_bytes());
 
         if let Some(info_str) = info {
             let info_bytes = info_str.as_bytes();
-            data.extend_from_slice(&(info_bytes.len() as u16).to_le_bytes());
+            data.extend_from_slice(&(info_bytes.len() as u16).to_be_bytes());
             data.extend_from_slice(info_bytes);
         }
         data
@@ -383,18 +383,18 @@ mod tests {
     ) -> Vec<u8> {
         let version = 0u8;
         let mut data = vec![version];
-        data.extend_from_slice(&total.to_le_bytes());
-        data.extend_from_slice(&issued.to_le_bytes());
+        data.extend_from_slice(&total.to_be_bytes());
+        data.extend_from_slice(&issued.to_be_bytes());
         data.push(configure);
 
-        data.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        data.extend_from_slice(&(name.len() as u16).to_be_bytes());
         data.extend_from_slice(name.as_bytes());
 
-        data.extend_from_slice(&(description.len() as u16).to_le_bytes());
+        data.extend_from_slice(&(description.len() as u16).to_be_bytes());
         data.extend_from_slice(description.as_bytes());
 
         let empty_renderer_size = 0u16;
-        data.extend_from_slice(&empty_renderer_size.to_le_bytes());
+        data.extend_from_slice(&empty_renderer_size.to_be_bytes());
 
         data
     }
@@ -576,5 +576,56 @@ mod tests {
 
         let result_missing = MnftParser::extract_json_field(json.as_bytes(), "email");
         assert!(result_missing.is_none());
+    }
+
+    #[test]
+    fn test_parse_issuer_cell_big_endian_info_size() {
+        let type_id = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let output = CellOutput {
+            capacity: "0x174876e800".to_string(),
+            lock: create_lock_script(),
+            type_: Some(create_issuer_type_script(type_id)),
+        };
+
+        let info = r#"{"name":"BE Issuer"}"#;
+        let mut data = vec![0u8];
+        data.extend_from_slice(&1u32.to_be_bytes());
+        data.extend_from_slice(&2u32.to_be_bytes());
+        data.extend_from_slice(&(info.len() as u16).to_be_bytes());
+        data.extend_from_slice(info.as_bytes());
+        let data_hex = format!("0x{}", hex::encode(&data));
+
+        let parsed = MnftParser::parse_issuer_cell(&output, &data_hex).expect("must parse");
+        assert_eq!(parsed.class_count, 1);
+        assert_eq!(parsed.set_count, 2);
+        assert_eq!(parsed.name.as_deref(), Some("BE Issuer"));
+    }
+
+    #[test]
+    fn test_parse_class_cell_big_endian_vartext_layout() {
+        let issuer_id = [0x11; 20];
+        let output = CellOutput {
+            capacity: "0x174876e800".to_string(),
+            lock: create_lock_script(),
+            type_: Some(create_class_type_script(&issuer_id, 9)),
+        };
+
+        let mut data = vec![0u8];
+        data.extend_from_slice(&20u32.to_be_bytes());
+        data.extend_from_slice(&7u32.to_be_bytes());
+        data.push(0xc0);
+        data.extend_from_slice(&8u16.to_be_bytes());
+        data.extend_from_slice(b"Class-BE");
+        data.extend_from_slice(&4u16.to_be_bytes());
+        data.extend_from_slice(b"desc");
+        data.extend_from_slice(&0u16.to_be_bytes());
+        let data_hex = format!("0x{}", hex::encode(&data));
+
+        let parsed = MnftParser::parse_class_cell(&output, &data_hex).expect("must parse");
+        assert_eq!(parsed.total, 20);
+        assert_eq!(parsed.issued, 7);
+        assert_eq!(parsed.configure, 0xc0);
+        assert_eq!(parsed.name.as_deref(), Some("Class-BE"));
+        assert_eq!(parsed.description.as_deref(), Some("desc"));
     }
 }

@@ -470,7 +470,7 @@ fn read_u16_text_field(data: &[u8], offset: usize) -> Option<(usize, usize, Stri
     if offset + 2 > data.len() {
         return None;
     }
-    let len = u16::from_le_bytes(data[offset..offset + 2].try_into().ok()?) as usize;
+    let len = u16::from_be_bytes(data[offset..offset + 2].try_into().ok()?) as usize;
     let value_start = offset + 2;
     let value_end = value_start.checked_add(len)?;
     if len == 0 || value_end > data.len() {
@@ -491,8 +491,8 @@ fn maybe_parse_mnft_decode(
             return None;
         }
         let version = data[0];
-        let class_count = u32::from_le_bytes(data[1..5].try_into().ok()?);
-        let set_count = u32::from_le_bytes(data[5..9].try_into().ok()?);
+        let class_count = u32::from_be_bytes(data[1..5].try_into().ok()?);
+        let set_count = u32::from_be_bytes(data[5..9].try_into().ok()?);
 
         let mut segments = vec![
             CellDataSegment {
@@ -506,25 +506,25 @@ fn maybe_parse_mnft_decode(
                 label: "class_count".to_string(),
                 start: 1,
                 end: 5,
-                meaning: "Number of classes under this issuer (u32 LE)".to_string(),
+                meaning: "Number of classes under this issuer (u32 BE)".to_string(),
                 human_value: class_count.to_string(),
             },
             CellDataSegment {
                 label: "set_count".to_string(),
                 start: 5,
                 end: 9,
-                meaning: "Number of sets under this issuer (u32 LE)".to_string(),
+                meaning: "Number of sets under this issuer (u32 BE)".to_string(),
                 human_value: set_count.to_string(),
             },
         ];
 
         if data.len() >= 11 {
-            let info_size = u16::from_le_bytes(data[9..11].try_into().ok()?) as usize;
+            let info_size = u16::from_be_bytes(data[9..11].try_into().ok()?) as usize;
             segments.push(CellDataSegment {
                 label: "info_size".to_string(),
                 start: 9,
                 end: 11,
-                meaning: "Length of issuer metadata blob (u16 LE)".to_string(),
+                meaning: "Length of issuer metadata blob (u16 BE)".to_string(),
                 human_value: info_size.to_string(),
             });
             let info_start = 11usize;
@@ -566,8 +566,8 @@ fn maybe_parse_mnft_decode(
             return None;
         }
         let version = data[0];
-        let total = u32::from_le_bytes(data[1..5].try_into().ok()?);
-        let issued = u32::from_le_bytes(data[5..9].try_into().ok()?);
+        let total = u32::from_be_bytes(data[1..5].try_into().ok()?);
+        let issued = u32::from_be_bytes(data[5..9].try_into().ok()?);
         let configure = data[9];
 
         let mut segments = vec![
@@ -582,14 +582,14 @@ fn maybe_parse_mnft_decode(
                 label: "total".to_string(),
                 start: 1,
                 end: 5,
-                meaning: "Class max supply (u32 LE)".to_string(),
+                meaning: "Class max supply (u32 BE)".to_string(),
                 human_value: total.to_string(),
             },
             CellDataSegment {
                 label: "issued".to_string(),
                 start: 5,
                 end: 9,
-                meaning: "Class issued count (u32 LE)".to_string(),
+                meaning: "Class issued count (u32 BE)".to_string(),
                 human_value: issued.to_string(),
             },
             CellDataSegment {
@@ -2952,7 +2952,7 @@ mod tests {
     fn make_mnft_vartext(value: &str) -> Vec<u8> {
         let bytes = value.as_bytes();
         let mut out = Vec::with_capacity(2 + bytes.len());
-        out.extend_from_slice(&(bytes.len() as u16).to_le_bytes());
+        out.extend_from_slice(&(bytes.len() as u16).to_be_bytes());
         out.extend_from_slice(bytes);
         out
     }
@@ -3148,9 +3148,9 @@ mod tests {
         let info_blob = br#"{"name":"Issuer-01","info":"demo"}"#;
         let mut data = Vec::new();
         data.push(1); // version
-        data.extend_from_slice(&12u32.to_le_bytes()); // class_count
-        data.extend_from_slice(&3u32.to_le_bytes()); // set_count
-        data.extend_from_slice(&(info_blob.len() as u16).to_le_bytes());
+        data.extend_from_slice(&12u32.to_be_bytes()); // class_count
+        data.extend_from_slice(&3u32.to_be_bytes()); // set_count
+        data.extend_from_slice(&(info_blob.len() as u16).to_be_bytes());
         data.extend_from_slice(info_blob);
 
         let analysis = analyze_cell_data(&info, &data, data.len() as i32);
@@ -3181,8 +3181,8 @@ mod tests {
         };
         let mut data = Vec::new();
         data.push(1); // version
-        data.extend_from_slice(&100u32.to_le_bytes()); // total
-        data.extend_from_slice(&7u32.to_le_bytes()); // issued
+        data.extend_from_slice(&100u32.to_be_bytes()); // total
+        data.extend_from_slice(&7u32.to_be_bytes()); // issued
         data.push(0x0f); // configure
         data.extend_from_slice(&make_mnft_vartext("Class-A"));
         data.extend_from_slice(&make_mnft_vartext("Main collection"));
@@ -3203,6 +3203,38 @@ mod tests {
             .segments
             .iter()
             .any(|s| s.label == "renderer" && s.human_value == "renderer:v1"));
+    }
+
+    #[test]
+    fn test_analyze_cell_data_detects_mnft_class_segments_big_endian_layout() {
+        let info = LiveCellInfo {
+            type_code_hash: Some(
+                hex::decode(MNFT_CLASS_CODE_HASH.trim_start_matches("0x")).unwrap(),
+            ),
+            type_script_hash: Some(vec![0x23; 32]),
+            ..make_info()
+        };
+
+        // version(1) + total(4 BE) + issued(4 BE) + configure(1)
+        // + name_len(2 BE) + name + desc_len(2 BE) + desc + renderer_len(2 BE)
+        let data = hex::decode("000000001400000014c0000a466972737420537465700004646573630000")
+            .expect("valid hex");
+
+        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        let deterministic = analysis.deterministic.expect("mnft class decode");
+        assert_eq!(deterministic.kind, "mnft_class_cell");
+        assert!(deterministic
+            .segments
+            .iter()
+            .any(|s| s.label == "total" && s.human_value == "20"));
+        assert!(deterministic
+            .segments
+            .iter()
+            .any(|s| s.label == "issued" && s.human_value == "20"));
+        assert!(deterministic
+            .segments
+            .iter()
+            .any(|s| s.label == "name" && s.human_value == "First Step"));
     }
 
     #[test]
