@@ -85,8 +85,8 @@ pub struct SporeResponse {
 fn spore_to_response(
     spore_id: &[u8],
     entry: &ckbadger_store::SporeEntry,
-    live_capacity: Option<i64>,
-    live_occupied_capacity: Option<i64>,
+    live_capacity: Option<i128>,
+    live_occupied_capacity: Option<i128>,
 ) -> SporeResponse {
     let (content_type, content_size) = match &entry.extra {
         ckbadger_store::DobExtra::Spore {
@@ -124,14 +124,14 @@ fn format_yyyymmdd_for_chart(date: u32) -> String {
 }
 
 fn build_capacity_occupation_chart(
-    deltas: Vec<(u32, i64, i64)>,
+    deltas: Vec<(u32, i128, i128)>,
     title: String,
 ) -> anyhow::Result<StackedAreaChartResponse> {
     build_capacity_occupation_chart_with_initial(deltas, title, 0, 0)
 }
 
 fn build_capacity_occupation_chart_with_initial(
-    deltas: Vec<(u32, i64, i64)>,
+    deltas: Vec<(u32, i128, i128)>,
     title: String,
     initial_capacity: i128,
     initial_occupied: i128,
@@ -572,8 +572,8 @@ async fn get_spore(
             )
             .map_err(|e| ApiError::internal(e.to_string()))?;
             let (live_capacity, live_occupied_capacity) = latest_capacity_from_chart(&chart);
-            let cap = live_capacity.and_then(|v| v.parse::<i64>().ok());
-            let occ = live_occupied_capacity.and_then(|v| v.parse::<i64>().ok());
+            let cap = live_capacity.and_then(|v| v.parse::<i128>().ok());
+            let occ = live_occupied_capacity.and_then(|v| v.parse::<i128>().ok());
             ok(spore_to_response(&id, &entry, cap, occ))
         }
         None => Err(ApiError::not_found("Spore not found")),

@@ -341,7 +341,7 @@ impl CkbadgerStore {
                 balance: agg.balance,
                 occupied_capacity: agg.occupied_capacity,
                 live_cells_count: agg.live_cells_count,
-                total_cells_count: agg.live_cells_count as i64,
+                total_cells_count: i64::from(agg.live_cells_count),
                 txs_count: agg.txs_count,
                 first_seen_block: agg.first_seen_block,
                 first_seen_tx: agg.first_seen_tx,

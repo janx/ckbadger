@@ -75,10 +75,10 @@ impl CkbadgerStore {
     /// Iterates all block headers and looks up the per-block secondary issuance,
     /// returning cumulative (dao_reward, miner_reward, treasury) per date sorted
     /// chronologically.
-    pub fn list_daily_secondary_issuance(&self) -> anyhow::Result<Vec<(String, i64, i64, i64)>> {
+    pub fn list_daily_secondary_issuance(&self) -> anyhow::Result<Vec<(String, i128, i128, i128)>> {
         let iter = self.iterator_cf(self.cf_block_headers(), rocksdb::IteratorMode::Start);
         // date -> (dao_reward_sum, miner_reward_sum, treasury_sum)
-        let mut daily: BTreeMap<String, (i64, i64, i64)> = BTreeMap::new();
+        let mut daily: BTreeMap<String, (i128, i128, i128)> = BTreeMap::new();
 
         for item in iter.flatten() {
             let (key, value) = item;
@@ -109,15 +109,15 @@ impl CkbadgerStore {
             }
 
             let entry = daily.entry(date).or_insert((0, 0, 0));
-            entry.0 += issuance.dao_reward;
-            entry.1 += issuance.miner_reward;
-            entry.2 += issuance.treasury;
+            entry.0 += i128::from(issuance.dao_reward);
+            entry.1 += i128::from(issuance.miner_reward);
+            entry.2 += i128::from(issuance.treasury);
         }
 
         // Convert to cumulative
-        let mut cum_dao: i64 = 0;
-        let mut cum_miner: i64 = 0;
-        let mut cum_treasury: i64 = 0;
+        let mut cum_dao: i128 = 0;
+        let mut cum_miner: i128 = 0;
+        let mut cum_treasury: i128 = 0;
         let results: Vec<_> = daily
             .into_iter()
             .map(|(date, (d, m, t))| {

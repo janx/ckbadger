@@ -7,6 +7,17 @@ use ckbadger_store::types::*;
 
 use super::BatchWriter;
 
+fn checked_add_i128(current: i128, delta: i128, metric: &str) -> Result<i128> {
+    current.checked_add(delta).ok_or_else(|| {
+        anyhow::anyhow!(
+            "daily/hourly statistics overflow while updating {}: current={}, delta={}",
+            metric,
+            current,
+            delta
+        )
+    })
+}
+
 /// Pre-computed DAO deposit statistics for daily snapshots.
 /// Computed from tracked deposit/withdrawal events rather than block header fields.
 pub struct DaoSnapshotInput {
@@ -40,7 +51,7 @@ impl BatchWriter {
         transactions_count: i32,
         cells_created: i32,
         cells_consumed: i32,
-        capacity_transferred: i64,
+        capacity_transferred: i128,
         batch: &mut StoreBatch,
     ) -> Result<()> {
         let key = keys::encode_stats_key(
@@ -56,7 +67,11 @@ impl BatchWriter {
                 s.transactions_count += transactions_count;
                 s.cells_created += cells_created;
                 s.cells_consumed += cells_consumed;
-                s.capacity_transferred += capacity_transferred;
+                s.capacity_transferred = checked_add_i128(
+                    s.capacity_transferred,
+                    capacity_transferred,
+                    "hourly.capacity_transferred",
+                )?;
                 s
             }
             None => HourlyStats {
@@ -81,9 +96,9 @@ impl BatchWriter {
         transactions_count: i32,
         cells_created: i32,
         cells_consumed: i32,
-        capacity_transferred: i64,
-        occupied_capacity_created: i64,
-        occupied_capacity_consumed: i64,
+        capacity_transferred: i128,
+        occupied_capacity_created: i128,
+        occupied_capacity_consumed: i128,
         data_size_added: i64,
         data_size_consumed: i64,
         dao_field: Option<&[u8]>,
@@ -130,9 +145,21 @@ impl BatchWriter {
                 s.transactions_count += transactions_count;
                 s.cells_created += cells_created;
                 s.cells_consumed += cells_consumed;
-                s.capacity_transferred += capacity_transferred;
-                s.occupied_capacity_created += occupied_capacity_created;
-                s.occupied_capacity_consumed += occupied_capacity_consumed;
+                s.capacity_transferred = checked_add_i128(
+                    s.capacity_transferred,
+                    capacity_transferred,
+                    "daily.capacity_transferred",
+                )?;
+                s.occupied_capacity_created = checked_add_i128(
+                    s.occupied_capacity_created,
+                    occupied_capacity_created,
+                    "daily.occupied_capacity_created",
+                )?;
+                s.occupied_capacity_consumed = checked_add_i128(
+                    s.occupied_capacity_consumed,
+                    occupied_capacity_consumed,
+                    "daily.occupied_capacity_consumed",
+                )?;
                 s.total_live_cells += (cells_created - cells_consumed) as i64;
                 s.total_dead_cells += cells_consumed as i64;
                 s.total_all_cells += cells_created as i64;

@@ -549,15 +549,11 @@ fn apply_capacity_delta_i128(
     occupied_delta: i128,
     context: &str,
 ) -> Result<(i128, i128), ApiRouteError> {
-    let capacity_delta_i64 = i64::try_from(capacity_delta)
-        .map_err(|_| ApiError::internal(format!("{} capacity delta exceeds i64", context)))?;
-    let occupied_delta_i64 = i64::try_from(occupied_delta)
-        .map_err(|_| ApiError::internal(format!("{} occupied delta exceeds i64", context)))?;
     apply_live_capacity_delta(
         total_cells_capacity,
         occupied_capacity,
-        capacity_delta_i64,
-        occupied_delta_i64,
+        capacity_delta,
+        occupied_delta,
         context,
     )
     .map_err(|e| ApiError::internal(e.to_string()))
@@ -565,7 +561,7 @@ fn apply_capacity_delta_i128(
 
 fn accumulate_capacity_deltas<I>(deltas: I) -> Result<(i128, i128), ApiRouteError>
 where
-    I: IntoIterator<Item = (i64, i64)>,
+    I: IntoIterator<Item = (i128, i128)>,
 {
     let mut total_cells_capacity: i128 = 0;
     let mut occupied_capacity: i128 = 0;
@@ -590,7 +586,7 @@ fn build_most_utilized_share_chart(
     top_keys: &[String],
     labels_by_key: &HashMap<String, String>,
     dates: &[u32],
-    deltas_by_date: &BTreeMap<u32, Vec<(String, i64, i64)>>,
+    deltas_by_date: &BTreeMap<u32, Vec<(String, i128, i128)>>,
 ) -> Result<StackedAreaChartResponse, ApiRouteError> {
     let mut states: HashMap<String, EntityState> = HashMap::new();
     let mut total_cells_capacity: i128 = 0;
@@ -714,7 +710,7 @@ async fn get_most_utilized_scripts_chart(
 
     let mut labels_by_key: HashMap<String, String> = HashMap::new();
     let mut final_by_key: HashMap<String, (i128, i128)> = HashMap::new();
-    let mut deltas_by_date: BTreeMap<u32, Vec<(String, i64, i64)>> = BTreeMap::new();
+    let mut deltas_by_date: BTreeMap<u32, Vec<(String, i128, i128)>> = BTreeMap::new();
 
     for (code_hash, info) in all_scripts {
         let code_hash_hex = format!("0x{}", hex::encode(&code_hash));
@@ -865,7 +861,7 @@ async fn get_most_utilized_assets_chart(
 
     let mut labels_by_key: HashMap<String, String> = HashMap::new();
     let mut entities: Vec<AssetEntity> = Vec::new();
-    let mut deltas_by_date: BTreeMap<u32, Vec<(String, i64, i64)>> = BTreeMap::new();
+    let mut deltas_by_date: BTreeMap<u32, Vec<(String, i128, i128)>> = BTreeMap::new();
 
     let tokens = state
         .store
@@ -1348,7 +1344,7 @@ async fn get_common_knowledge_composition_chart(
             .list_script_daily_deltas_in_range(&code_hash, true, None, None)
             .map_err(|e| ApiError::internal(e.to_string()))?;
         for (date, delta) in deltas {
-            let occupied_delta = delta.live_occupied_capacity_delta as i128;
+            let occupied_delta = delta.live_occupied_capacity_delta;
             *type_daily_delta.entry(date).or_insert(0) += occupied_delta;
 
             if dao_hashes.contains(&code_hash) {
@@ -1697,7 +1693,7 @@ async fn get_capacity_turnover_ratio_chart(
                 date, live
             )));
         }
-        let consumed = stats.occupied_capacity_consumed as i128;
+        let consumed = stats.occupied_capacity_consumed;
         if consumed < 0 {
             return Err(ApiError::internal(format!(
                 "negative occupied_capacity_consumed in daily_stats for {}: {}",
@@ -2182,7 +2178,22 @@ async fn fetch_network_stats_from_db(
 
     // Fetch tip block from CKB node
     let tip_block_result = fetch_tip_block_from_ckb(&state.ckb_rpc_url).await;
-    let tip_block = tip_block_result.unwrap_or(latest_block as u64) as i64;
+    let tip_block_u64 = match tip_block_result {
+        Ok(tip) => tip,
+        Err(_) => u64::try_from(latest_block).map_err(|_| {
+            ApiError::internal(format!(
+                "latest block below zero, cannot convert to u64 for tip fallback: {}",
+                latest_block
+            ))
+        })?,
+    };
+    let tip_block = i64::try_from(tip_block_u64).map_err(|_| {
+        ApiError::internal(format!(
+            "tip block exceeds i64 range: {} (max={})",
+            tip_block_u64,
+            i64::MAX
+        ))
+    })?;
 
     // Calculate epoch avg block time
     let epoch_avg_time = epoch_stats

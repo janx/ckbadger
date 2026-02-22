@@ -185,6 +185,76 @@ fn should_skip_address_balances(_bulk_sync_mode: bool) -> bool {
     false
 }
 
+fn should_abort_pipeline_on_idle_timeout(parser_finished: bool, fetcher_finished: bool) -> bool {
+    parser_finished || fetcher_finished
+}
+
+fn should_log_pipeline_idle_timeout(consecutive_idle_timeouts: u64) -> bool {
+    consecutive_idle_timeouts <= 3 || consecutive_idle_timeouts.is_multiple_of(10)
+}
+
+fn queue_fill_percentage(depth: Option<u64>, capacity: Option<u64>) -> Option<f64> {
+    match (depth, capacity) {
+        (Some(d), Some(c)) if c > 0 => Some((d as f64 / c as f64) * 100.0),
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RepeatedWarningSnapshot {
+    total_count: u64,
+    suppressed_since_last_emit: u64,
+    first_seen_secs_ago: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RepeatedWarningState {
+    first_seen_at: Instant,
+    last_emit_at: Instant,
+    total_count: u64,
+    suppressed_since_last_emit: u64,
+}
+
+#[derive(Default)]
+struct RepeatedWarningTracker {
+    states: std::sync::Mutex<HashMap<&'static str, RepeatedWarningState>>,
+}
+
+impl RepeatedWarningTracker {
+    fn record(
+        &self,
+        key: &'static str,
+        min_emit_interval: Duration,
+    ) -> Option<RepeatedWarningSnapshot> {
+        let now = Instant::now();
+        let mut states = match self.states.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let entry = states.entry(key).or_insert(RepeatedWarningState {
+            first_seen_at: now,
+            last_emit_at: now,
+            total_count: 0,
+            suppressed_since_last_emit: 0,
+        });
+        entry.total_count = entry.total_count.saturating_add(1);
+
+        if now.duration_since(entry.last_emit_at) >= min_emit_interval || entry.total_count == 1 {
+            let snapshot = RepeatedWarningSnapshot {
+                total_count: entry.total_count,
+                suppressed_since_last_emit: entry.suppressed_since_last_emit,
+                first_seen_secs_ago: now.duration_since(entry.first_seen_at).as_secs(),
+            };
+            entry.last_emit_at = now;
+            entry.suppressed_since_last_emit = 0;
+            Some(snapshot)
+        } else {
+            entry.suppressed_since_last_emit = entry.suppressed_since_last_emit.saturating_add(1);
+            None
+        }
+    }
+}
+
 fn omnilock_code_hashes() -> &'static Vec<Vec<u8>> {
     OMNILOCK_CODE_HASHES.get_or_init(|| {
         [
@@ -735,8 +805,8 @@ enum ReorgAction {
 struct BatchStats {
     sync_totals: (i64, i64, i64),
     last_block: Option<(i64, Vec<u8>)>,
-    hourly_stats: HashMap<DateTime<Utc>, (i32, i32, i32, i32, i64)>,
-    daily_stats: HashMap<NaiveDate, (i32, i32, i32, i32, i64, i64, i64, i64, i64)>,
+    hourly_stats: HashMap<DateTime<Utc>, (i32, i32, i32, i32, i128)>,
+    daily_stats: HashMap<NaiveDate, (i32, i32, i32, i32, i128, i128, i128, i64, i64)>,
     daily_block_stats: HashMap<NaiveDate, (i128, i32, i32)>,
     miner_stats: HashMap<(NaiveDate, Vec<u8>), (i32, i64)>,
     epoch_stats: HashMap<i64, EpochAccum>,
@@ -1289,6 +1359,8 @@ struct TxData {
     timestamp: chrono::DateTime<Utc>,
 }
 
+type ScriptUsageChanges = HashMap<(Vec<u8>, bool), (i64, i64, i128, i128, i128, i128)>;
+
 fn parse_blocks_parallel(
     blocks: &[BlockResponseWithCycles],
 ) -> Result<(
@@ -1331,14 +1403,38 @@ fn parse_blocks_parallel(
                         let cycles = if tx_index == 0 {
                             None
                         } else {
-                            block_response
+                            match block_response
                                 .cycles
                                 .as_ref()
                                 .and_then(|c| c.get(tx_index - 1))
-                                .and_then(|hex| {
-                                    let hex = hex.strip_prefix("0x").unwrap_or(hex);
-                                    u64::from_str_radix(hex, 16).ok().map(|v| v as i64)
-                                })
+                            {
+                                Some(raw_cycles_hex) => {
+                                    let cycles_u64 = u64::from_str_radix(
+                                        raw_cycles_hex.strip_prefix("0x").unwrap_or(raw_cycles_hex),
+                                        16,
+                                    )
+                                    .map_err(|e| {
+                                        anyhow!(
+                                            "invalid tx cycles hex '{}' for tx {} in block {}: {}",
+                                            raw_cycles_hex,
+                                            tx.hash,
+                                            parsed.number,
+                                            e
+                                        )
+                                    })?;
+                                    Some(i64::try_from(cycles_u64).map_err(|_| {
+                                        anyhow!(
+                                            "tx cycles over i64 range '{}' for tx {} in block {}: {} (max={})",
+                                            raw_cycles_hex,
+                                            tx.hash,
+                                            parsed.number,
+                                            cycles_u64,
+                                            i64::MAX
+                                        )
+                                    })?)
+                                }
+                                None => None,
+                            }
                         };
                         Ok(TxData {
                             hash: parsed_tx.hash,
@@ -1424,6 +1520,7 @@ pub struct Indexer {
     pipeline_reset_epoch: Arc<AtomicU64>,
     incident_seq: AtomicU64,
     flight_recorder: FlightRecorder,
+    repeated_warning_tracker: RepeatedWarningTracker,
     incident_dir: PathBuf,
     label_import_started: std::sync::atomic::AtomicBool,
     ckb_store: Option<Arc<CkbChainReader>>,
@@ -1507,6 +1604,7 @@ impl Indexer {
             pipeline_reset_epoch: Arc::new(AtomicU64::new(0)),
             incident_seq: AtomicU64::new(0),
             flight_recorder: FlightRecorder::new(FLIGHT_RECORDER_CAPACITY),
+            repeated_warning_tracker: RepeatedWarningTracker::default(),
             incident_dir,
             label_import_started: std::sync::atomic::AtomicBool::new(false),
             ckb_store,
@@ -1595,10 +1693,21 @@ impl Indexer {
     }
 
     pub fn record_runtime_heartbeat(&self, current_block: u64) {
+        let current_block_i64 = match i64::try_from(current_block) {
+            Ok(v) => v,
+            Err(_) => {
+                warn!(
+                    run_id = %self.run_id,
+                    current_block,
+                    "Skipping runtime heartbeat: current_block exceeds i64 range"
+                );
+                return;
+            }
+        };
         if let Err(e) = self
             .writer
             .store()
-            .mark_runtime_heartbeat(&self.run_id, current_block as i64)
+            .mark_runtime_heartbeat(&self.run_id, current_block_i64)
         {
             warn!(
                 run_id = %self.run_id,
@@ -1712,6 +1821,14 @@ impl Indexer {
         incident_id
     }
 
+    fn repeated_warning_snapshot(
+        &self,
+        key: &'static str,
+        min_emit_interval: Duration,
+    ) -> Option<RepeatedWarningSnapshot> {
+        self.repeated_warning_tracker.record(key, min_emit_interval)
+    }
+
     fn request_pipeline_reset(
         &self,
         reason: &'static str,
@@ -1781,7 +1898,12 @@ impl Indexer {
             total_transactions: sync_status.total_transactions,
             total_cells: sync_status.total_cells_created,
             total_live_cells: sync_status.total_cells_created - sync_status.total_cells_consumed,
-            total_addresses: stats.addr_balance_count as i64,
+            total_addresses: i64::try_from(stats.addr_balance_count).unwrap_or_else(|_| {
+                panic!(
+                    "addr_balance_count over i64 range in memory stats: {}",
+                    stats.addr_balance_count
+                )
+            }),
             updated_at: chrono::Utc::now().timestamp(),
         }
     }
@@ -1909,7 +2031,18 @@ impl Indexer {
             }
 
             if self.repo.has_unresolved_deep_fork().unwrap_or(false) {
-                warn!("Deep fork unresolved, sync paused. Waiting for manual intervention...");
+                if let Some(repeat) = self.repeated_warning_snapshot(
+                    "sequential_deep_fork_unresolved",
+                    Duration::from_secs(120),
+                ) {
+                    warn!(
+                        run_id = %self.run_id,
+                        repeat_count = repeat.total_count,
+                        suppressed_since_last = repeat.suppressed_since_last_emit,
+                        first_seen_secs_ago = repeat.first_seen_secs_ago,
+                        "Deep fork unresolved, sync paused. Waiting for manual intervention..."
+                    );
+                }
                 sleep(Duration::from_secs(30)).await;
                 continue;
             }
@@ -1957,14 +2090,14 @@ impl Indexer {
             // Pre-computed in parser stage:
             HashMap<(Vec<u8>, i16), LiveCellInfo>, // batch_cell_infos
             HashMap<Vec<u8>, (i64, i32, i32, i64, i64, Vec<u8>, i64)>, // address_balance_changes
-            HashMap<(Vec<u8>, bool), (i64, i64, i64, i64, i64, i64)>, // script_usage_changes
-            HashMap<(Vec<u8>, bool, u32), (i64, i64)>, // script_daily_changes
-            HashMap<(Vec<u8>, u32), (i64, i64)>,   // token_daily_changes
+            ScriptUsageChanges,                    // script_usage_changes
+            HashMap<(Vec<u8>, bool, u32), (i128, i128)>, // script_daily_changes
+            HashMap<(Vec<u8>, u32), (i128, i128)>, // token_daily_changes
             HashMap<Vec<u8>, SporeTypeIndex>,      // spore_type_index_changes
-            HashMap<(Vec<u8>, u32), (i64, i64)>,   // spore_daily_changes
-            HashMap<(Vec<u8>, u32), (i64, i64)>,   // cluster_daily_changes
+            HashMap<(Vec<u8>, u32), (i128, i128)>, // spore_daily_changes
+            HashMap<(Vec<u8>, u32), (i128, i128)>, // cluster_daily_changes
             HashMap<Vec<u8>, NftTypeIndex>,        // nft_type_index_changes
-            HashMap<(Vec<u8>, u32), (i64, i64)>,   // nft_daily_changes
+            HashMap<(Vec<u8>, u32), (i128, i128)>, // nft_daily_changes
         );
 
         let (fetch_tx, mut fetch_rx) = mpsc::channel::<FetchedBatch>(self.config.pipeline_buffer);
@@ -2439,18 +2572,16 @@ impl Indexer {
                     Vec<u8>,
                     (i64, i32, i32, i64, i64, Vec<u8>, i64),
                 > = HashMap::new();
-                let mut script_usage_changes: HashMap<
-                    (Vec<u8>, bool),
-                    (i64, i64, i64, i64, i64, i64),
-                > = HashMap::new();
-                let mut script_daily_changes: HashMap<(Vec<u8>, bool, u32), (i64, i64)> =
+                let mut script_usage_changes: ScriptUsageChanges = HashMap::new();
+                let mut script_daily_changes: HashMap<(Vec<u8>, bool, u32), (i128, i128)> =
                     HashMap::new();
-                let mut token_daily_changes: HashMap<(Vec<u8>, u32), (i64, i64)> = HashMap::new();
+                let mut token_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)> = HashMap::new();
                 let mut spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex> = HashMap::new();
-                let mut spore_daily_changes: HashMap<(Vec<u8>, u32), (i64, i64)> = HashMap::new();
-                let mut cluster_daily_changes: HashMap<(Vec<u8>, u32), (i64, i64)> = HashMap::new();
+                let mut spore_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)> = HashMap::new();
+                let mut cluster_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)> =
+                    HashMap::new();
                 let mut nft_type_index_changes: HashMap<Vec<u8>, NftTypeIndex> = HashMap::new();
-                let mut nft_daily_changes: HashMap<(Vec<u8>, u32), (i64, i64)> = HashMap::new();
+                let mut nft_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)> = HashMap::new();
                 let mut spore_type_index_cache: HashMap<Vec<u8>, Option<SporeTypeIndex>> =
                     HashMap::new();
                 let mut nft_type_index_cache: HashMap<Vec<u8>, Option<NftTypeIndex>> =
@@ -2506,15 +2637,15 @@ impl Indexer {
                             .or_insert((0, 0, 0, 0, 0, 0));
                         entry.0 += 1;
                         entry.1 += 1;
-                        entry.2 += cell.capacity;
-                        entry.3 += cell.capacity;
-                        entry.4 += cell_occupied;
-                        entry.5 += cell_occupied;
+                        entry.2 += i128::from(cell.capacity);
+                        entry.3 += i128::from(cell.capacity);
+                        entry.4 += i128::from(cell_occupied);
+                        entry.5 += i128::from(cell_occupied);
                         let daily_entry = script_daily_changes
                             .entry((cell.lock_code_hash.clone(), false, date_yyyymmdd))
                             .or_insert((0, 0));
-                        daily_entry.0 += cell.capacity;
-                        daily_entry.1 += cell_occupied;
+                        daily_entry.0 += i128::from(cell.capacity);
+                        daily_entry.1 += i128::from(cell_occupied);
                         if let Some(ref type_code_hash) = cell.type_code_hash {
                             let type_key = (type_code_hash.clone(), true);
                             let entry = script_usage_changes
@@ -2522,22 +2653,22 @@ impl Indexer {
                                 .or_insert((0, 0, 0, 0, 0, 0));
                             entry.0 += 1;
                             entry.1 += 1;
-                            entry.2 += cell.capacity;
-                            entry.3 += cell.capacity;
-                            entry.4 += cell_occupied;
-                            entry.5 += cell_occupied;
+                            entry.2 += i128::from(cell.capacity);
+                            entry.3 += i128::from(cell.capacity);
+                            entry.4 += i128::from(cell_occupied);
+                            entry.5 += i128::from(cell_occupied);
                             let daily_entry = script_daily_changes
                                 .entry((type_code_hash.clone(), true, date_yyyymmdd))
                                 .or_insert((0, 0));
-                            daily_entry.0 += cell.capacity;
-                            daily_entry.1 += cell_occupied;
+                            daily_entry.0 += i128::from(cell.capacity);
+                            daily_entry.1 += i128::from(cell_occupied);
                         }
                         if let Some(ref type_script_hash) = cell.type_script_hash {
                             let daily_entry = token_daily_changes
                                 .entry((type_script_hash.clone(), date_yyyymmdd))
                                 .or_insert((0, 0));
-                            daily_entry.0 += cell.capacity;
-                            daily_entry.1 += cell_occupied;
+                            daily_entry.0 += i128::from(cell.capacity);
+                            daily_entry.1 += i128::from(cell_occupied);
                         }
                         if let (Some(type_script_hash), Some(type_code_hash), Some(type_args)) = (
                             cell.type_script_hash.as_ref(),
@@ -2561,15 +2692,15 @@ impl Indexer {
                                 let spore_daily = spore_daily_changes
                                     .entry((spore_id, date_yyyymmdd))
                                     .or_insert((0, 0));
-                                spore_daily.0 += cell.capacity;
-                                spore_daily.1 += cell_occupied;
+                                spore_daily.0 += i128::from(cell.capacity);
+                                spore_daily.1 += i128::from(cell_occupied);
 
                                 if let Some(cluster_id) = cluster_id {
                                     let cluster_daily = cluster_daily_changes
                                         .entry((cluster_id, date_yyyymmdd))
                                         .or_insert((0, 0));
-                                    cluster_daily.0 += cell.capacity;
-                                    cluster_daily.1 += cell_occupied;
+                                    cluster_daily.0 += i128::from(cell.capacity);
+                                    cluster_daily.1 += i128::from(cell_occupied);
                                 }
                             }
                         }
@@ -2591,8 +2722,8 @@ impl Indexer {
                                 let nft_daily = nft_daily_changes
                                     .entry((collection_id, date_yyyymmdd))
                                     .or_insert((0, 0));
-                                nft_daily.0 += cell.capacity;
-                                nft_daily.1 += cell_occupied;
+                                nft_daily.0 += i128::from(cell.capacity);
+                                nft_daily.1 += i128::from(cell_occupied);
                             }
                         }
                     }
@@ -2627,33 +2758,33 @@ impl Indexer {
                                     .entry(lock_key)
                                     .or_insert((0, 0, 0, 0, 0, 0));
                                 entry.1 -= 1;
-                                entry.3 -= info.capacity;
-                                entry.5 -= info.occupied_capacity;
+                                entry.3 -= i128::from(info.capacity);
+                                entry.5 -= i128::from(info.occupied_capacity);
                                 let daily_entry = script_daily_changes
                                     .entry((info.lock_code_hash.clone(), false, date_yyyymmdd))
                                     .or_insert((0, 0));
-                                daily_entry.0 -= info.capacity;
-                                daily_entry.1 -= info.occupied_capacity;
+                                daily_entry.0 -= i128::from(info.capacity);
+                                daily_entry.1 -= i128::from(info.occupied_capacity);
                                 if let Some(ref type_code_hash) = info.type_code_hash {
                                     let type_key = (type_code_hash.clone(), true);
                                     let entry = script_usage_changes
                                         .entry(type_key)
                                         .or_insert((0, 0, 0, 0, 0, 0));
                                     entry.1 -= 1;
-                                    entry.3 -= info.capacity;
-                                    entry.5 -= info.occupied_capacity;
+                                    entry.3 -= i128::from(info.capacity);
+                                    entry.5 -= i128::from(info.occupied_capacity);
                                     let daily_entry = script_daily_changes
                                         .entry((type_code_hash.clone(), true, date_yyyymmdd))
                                         .or_insert((0, 0));
-                                    daily_entry.0 -= info.capacity;
-                                    daily_entry.1 -= info.occupied_capacity;
+                                    daily_entry.0 -= i128::from(info.capacity);
+                                    daily_entry.1 -= i128::from(info.occupied_capacity);
                                 }
                                 if let Some(ref type_script_hash) = info.type_script_hash {
                                     let daily_entry = token_daily_changes
                                         .entry((type_script_hash.clone(), date_yyyymmdd))
                                         .or_insert((0, 0));
-                                    daily_entry.0 -= info.capacity;
-                                    daily_entry.1 -= info.occupied_capacity;
+                                    daily_entry.0 -= i128::from(info.capacity);
+                                    daily_entry.1 -= i128::from(info.occupied_capacity);
                                 }
                                 if let (Some(type_script_hash), Some(type_code_hash)) =
                                     (info.type_script_hash.as_ref(), info.type_code_hash.as_ref())
@@ -2677,15 +2808,16 @@ impl Indexer {
                                             let spore_daily = spore_daily_changes
                                                 .entry((index.spore_id.clone(), date_yyyymmdd))
                                                 .or_insert((0, 0));
-                                            spore_daily.0 -= info.capacity;
-                                            spore_daily.1 -= info.occupied_capacity;
+                                            spore_daily.0 -= i128::from(info.capacity);
+                                            spore_daily.1 -= i128::from(info.occupied_capacity);
 
                                             if let Some(cluster_id) = index.cluster_id {
                                                 let cluster_daily = cluster_daily_changes
                                                     .entry((cluster_id, date_yyyymmdd))
                                                     .or_insert((0, 0));
-                                                cluster_daily.0 -= info.capacity;
-                                                cluster_daily.1 -= info.occupied_capacity;
+                                                cluster_daily.0 -= i128::from(info.capacity);
+                                                cluster_daily.1 -=
+                                                    i128::from(info.occupied_capacity);
                                             }
                                         }
                                     }
@@ -2717,8 +2849,8 @@ impl Indexer {
                                             let nft_daily = nft_daily_changes
                                                 .entry((collection_id, date_yyyymmdd))
                                                 .or_insert((0, 0));
-                                            nft_daily.0 -= info.capacity;
-                                            nft_daily.1 -= info.occupied_capacity;
+                                            nft_daily.0 -= i128::from(info.capacity);
+                                            nft_daily.1 -= i128::from(info.occupied_capacity);
                                         }
                                     }
                                 }
@@ -2866,10 +2998,24 @@ impl Indexer {
         });
 
         // === Writer loop ===
+        let mut consecutive_idle_timeouts: u64 = 0;
         loop {
             if self.repo.has_unresolved_deep_fork().unwrap_or(false) {
-                warn!("Deep fork unresolved, sync paused. Waiting for manual intervention...");
-                Self::drain_channel(&mut parse_rx).await;
+                let drained = Self::drain_channel(&mut parse_rx).await;
+                if let Some(repeat) = self.repeated_warning_snapshot(
+                    "pipeline_deep_fork_unresolved",
+                    Duration::from_secs(120),
+                ) {
+                    warn!(
+                        run_id = %self.run_id,
+                        pipeline_epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst),
+                        drained,
+                        repeat_count = repeat.total_count,
+                        suppressed_since_last = repeat.suppressed_since_last_emit,
+                        first_seen_secs_ago = repeat.first_seen_secs_ago,
+                        "Deep fork unresolved, sync paused. Waiting for manual intervention..."
+                    );
+                }
                 sleep(Duration::from_secs(30)).await;
                 continue;
             }
@@ -2897,6 +3043,7 @@ impl Indexer {
                     nft_type_index_changes,
                     nft_daily_changes,
                 ))) => {
+                    consecutive_idle_timeouts = 0;
                     let recv_wait_ms = t_recv.elapsed().as_secs_f64() * 1000.0;
                     let current_epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst);
                     if batch_epoch != current_epoch {
@@ -2919,20 +3066,45 @@ impl Indexer {
                     if start_block != expected_start {
                         let writer_queue_depth = parse_tx_for_writer_depth.max_capacity()
                             - parse_tx_for_writer_depth.capacity();
-                        warn!(
-                            run_id = %self.run_id,
-                            expected_start,
-                            got_start = start_block,
-                            writer_queue_depth,
-                            "Pipeline batch mismatch: draining stale batches"
-                        );
+                        let pipeline = self.pipeline_perf.snapshot();
+                        let blocks_behind = chain_tip.saturating_sub(db_tip as u64);
+                        if let Some(repeat) = self.repeated_warning_snapshot(
+                            "pipeline_batch_mismatch",
+                            Duration::from_secs(5),
+                        ) {
+                            warn!(
+                                run_id = %self.run_id,
+                                pipeline_epoch = current_epoch,
+                                db_tip,
+                                chain_tip,
+                                blocks_behind,
+                                expected_start,
+                                got_start = start_block,
+                                writer_queue_depth,
+                                repeat_count = repeat.total_count,
+                                suppressed_since_last = repeat.suppressed_since_last_emit,
+                                first_seen_secs_ago = repeat.first_seen_secs_ago,
+                                parse_queue_depth = ?pipeline.as_ref().and_then(|p| p.parse_queue_depth),
+                                parse_queue_capacity = ?pipeline.as_ref().and_then(|p| p.parse_queue_capacity),
+                                writer_wait_ms = ?pipeline.as_ref().and_then(|p| p.writer_wait_ms),
+                                "Pipeline batch mismatch: reset and drain stale parsed batches"
+                            );
+                        }
                         self.request_pipeline_reset(
                             "pipeline batch mismatch",
                             Some(expected_start),
                             Some(start_block),
                             Some(writer_queue_depth),
                         );
-                        Self::drain_channel(&mut parse_rx).await;
+                        let drained = Self::drain_channel(&mut parse_rx).await;
+                        info!(
+                            run_id = %self.run_id,
+                            pipeline_epoch = current_epoch,
+                            drained,
+                            expected_start,
+                            got_start = start_block,
+                            "Pipeline mismatch drain completed"
+                        );
                         continue;
                     }
 
@@ -2945,25 +3117,53 @@ impl Indexer {
                                     .await?
                                 {
                                     Some(ReorgAction::Handled(_)) => {
-                                        info!("Reorg handled, draining stale batches");
+                                        let current_epoch =
+                                            self.pipeline_reset_epoch.load(Ordering::SeqCst);
+                                        info!(
+                                            run_id = %self.run_id,
+                                            pipeline_epoch = current_epoch,
+                                            db_tip,
+                                            chain_tip,
+                                            "Reorg handled, draining stale parsed batches"
+                                        );
                                         self.request_pipeline_reset(
                                             "reorg handled",
                                             None,
                                             None,
                                             None,
                                         );
-                                        Self::drain_channel(&mut parse_rx).await;
+                                        let drained = Self::drain_channel(&mut parse_rx).await;
+                                        info!(
+                                            run_id = %self.run_id,
+                                            pipeline_epoch = current_epoch,
+                                            drained,
+                                            "Reorg drain completed"
+                                        );
                                         continue;
                                     }
                                     Some(ReorgAction::DeepForkPaused) => {
-                                        warn!("Deep fork detected, sync paused");
+                                        let current_epoch =
+                                            self.pipeline_reset_epoch.load(Ordering::SeqCst);
+                                        warn!(
+                                            run_id = %self.run_id,
+                                            pipeline_epoch = current_epoch,
+                                            db_tip,
+                                            chain_tip,
+                                            "Deep fork detected, sync paused"
+                                        );
                                         self.request_pipeline_reset(
                                             "deep fork paused",
                                             None,
                                             None,
                                             None,
                                         );
-                                        Self::drain_channel(&mut parse_rx).await;
+                                        let drained = Self::drain_channel(&mut parse_rx).await;
+                                        info!(
+                                            run_id = %self.run_id,
+                                            pipeline_epoch = current_epoch,
+                                            drained,
+                                            "Deep fork pause drain completed"
+                                        );
                                         sleep(Duration::from_secs(30)).await;
                                         continue;
                                     }
@@ -3010,14 +3210,23 @@ impl Indexer {
                             error = ?e,
                             "Sync error while writing parsed batch"
                         );
-                        if let Err(cleanup_err) = self
-                            .writer
-                            .cleanup_batch_range(start_block as i64, end_block as i64)
-                        {
+                        if let Err(cleanup_err) = self.writer.cleanup_batch_range(
+                            i64::try_from(start_block).map_err(|_| {
+                                anyhow!("batch cleanup start_block exceeds i64: {}", start_block)
+                            })?,
+                            i64::try_from(end_block).map_err(|_| {
+                                anyhow!("batch cleanup end_block exceeds i64: {}", end_block)
+                            })?,
+                        ) {
                             error!("Failed to cleanup partial batch: {:?}", cleanup_err);
-                        } else if let Err(rebuild_err) =
-                            self.rebuild_hodl_tracker_from_store(start_block as i64 - 1)
-                        {
+                        } else if let Err(rebuild_err) = self.rebuild_hodl_tracker_from_store(
+                            i64::try_from(start_block).map_err(|_| {
+                                anyhow!(
+                                    "batch cleanup start_block exceeds i64 for hodl rebuild: {}",
+                                    start_block
+                                )
+                            })? - 1,
+                        ) {
                             error!(
                                 "Failed to rebuild HODL tracker after batch cleanup: {:?}",
                                 rebuild_err
@@ -3025,7 +3234,13 @@ impl Indexer {
                             return Err(rebuild_err);
                         }
                         self.request_pipeline_reset("batch write failed", None, None, None);
-                        Self::drain_channel(&mut parse_rx).await;
+                        let drained = Self::drain_channel(&mut parse_rx).await;
+                        info!(
+                            run_id = %self.run_id,
+                            pipeline_epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst),
+                            drained,
+                            "Batch write failure drain completed"
+                        );
                         sleep(Duration::from_secs(5)).await;
                         continue;
                     }
@@ -3104,15 +3319,23 @@ impl Indexer {
 
                         let crossed_1000 = (start_block / 1000) != (end_block / 1000);
                         if crossed_1000 && !self.is_bulk_sync_active() {
-                            let update_block = ((end_block / 1000) * 1000) as i64;
-                            let writer = self.writer.clone();
-                            tokio::spawn(async move {
-                                if let Err(e) =
-                                    writer.recalculate_dao_extended_statistics(update_block)
-                                {
-                                    warn!("Failed to recalculate DAO statistics: {}", e);
+                            match i64::try_from((end_block / 1000) * 1000) {
+                                Ok(update_block) => {
+                                    let writer = self.writer.clone();
+                                    tokio::spawn(async move {
+                                        if let Err(e) =
+                                            writer.recalculate_dao_extended_statistics(update_block)
+                                        {
+                                            warn!("Failed to recalculate DAO statistics: {}", e);
+                                        }
+                                    });
                                 }
-                            });
+                                Err(_) => warn!(
+                                    run_id = %self.run_id,
+                                    end_block,
+                                    "Skipping DAO extended statistics recalc: block exceeds i64 range"
+                                ),
+                            }
                         }
 
                         self.maybe_invalidate_chart_caches(end_block).await;
@@ -3130,7 +3353,82 @@ impl Indexer {
                     return Err(anyhow::anyhow!("Pipeline channel closed"));
                 }
                 Err(_timeout) => {
-                    // Idle timeout - no pending batches
+                    // Idle timeout - no pending batches. If any worker exited, fail fast
+                    // instead of spinning forever with stale progress.
+                    consecutive_idle_timeouts = consecutive_idle_timeouts.saturating_add(1);
+                    let parser_finished = parser.is_finished();
+                    let fetcher_finished = fetcher.is_finished();
+                    let writer_queue_depth = parse_tx_for_writer_depth.max_capacity()
+                        - parse_tx_for_writer_depth.capacity();
+                    let pipeline = self.pipeline_perf.snapshot();
+                    let fetch_fill_pct = queue_fill_percentage(
+                        pipeline.as_ref().and_then(|p| p.fetch_queue_depth),
+                        pipeline.as_ref().and_then(|p| p.fetch_queue_capacity),
+                    );
+                    let parse_fill_pct = queue_fill_percentage(
+                        pipeline.as_ref().and_then(|p| p.parse_queue_depth),
+                        pipeline.as_ref().and_then(|p| p.parse_queue_capacity),
+                    );
+                    if should_log_pipeline_idle_timeout(consecutive_idle_timeouts) {
+                        if let Some(repeat) = self.repeated_warning_snapshot(
+                            "pipeline_idle_timeout",
+                            Duration::from_secs(10),
+                        ) {
+                            warn!(
+                                run_id = %self.run_id,
+                                pipeline_epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst),
+                                idle_timeouts = consecutive_idle_timeouts,
+                                parser_finished,
+                                fetcher_finished,
+                                repeat_count = repeat.total_count,
+                                suppressed_since_last = repeat.suppressed_since_last_emit,
+                                first_seen_secs_ago = repeat.first_seen_secs_ago,
+                                current_block = self.progress.current(),
+                                target_block = self.progress.target(),
+                                blocks_remaining = self.progress.blocks_remaining(),
+                                writer_queue_depth,
+                                fetch_queue_depth = ?pipeline.as_ref().and_then(|p| p.fetch_queue_depth),
+                                fetch_queue_capacity = ?pipeline.as_ref().and_then(|p| p.fetch_queue_capacity),
+                                fetch_queue_fill_pct = ?fetch_fill_pct.map(|v| format!("{:.1}", v)),
+                                parse_queue_depth = ?pipeline.as_ref().and_then(|p| p.parse_queue_depth),
+                                parse_queue_capacity = ?pipeline.as_ref().and_then(|p| p.parse_queue_capacity),
+                                parse_queue_fill_pct = ?parse_fill_pct.map(|v| format!("{:.1}", v)),
+                                writer_wait_ms = ?pipeline.as_ref().and_then(|p| p.writer_wait_ms),
+                                "Pipeline idle timeout while waiting for parsed batches"
+                            );
+                        }
+                    }
+                    if should_abort_pipeline_on_idle_timeout(parser_finished, fetcher_finished) {
+                        let incident_id = self.report_incident(
+                            "pipeline_worker_terminated",
+                            format!(
+                                "idle_timeouts={} parser_finished={} fetcher_finished={} writer_queue_depth={} current={} target={}",
+                                consecutive_idle_timeouts,
+                                parser_finished,
+                                fetcher_finished,
+                                writer_queue_depth,
+                                self.progress.current(),
+                                self.progress.target()
+                            ),
+                        );
+                        fetcher.abort();
+                        parser.abort();
+                        error!(
+                            run_id = %self.run_id,
+                            incident_id = %incident_id,
+                            pipeline_epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst),
+                            idle_timeouts = consecutive_idle_timeouts,
+                            parser_finished,
+                            fetcher_finished,
+                            writer_queue_depth,
+                            "Pipeline worker terminated unexpectedly after idle timeout"
+                        );
+                        return Err(anyhow::anyhow!(
+                            "Pipeline worker terminated unexpectedly (parser_finished={}, fetcher_finished={})",
+                            parser_finished,
+                            fetcher_finished
+                        ));
+                    }
                 }
             }
         }
@@ -3186,14 +3484,12 @@ impl Indexer {
         results.into_iter().collect()
     }
 
-    async fn drain_channel<T>(rx: &mut tokio::sync::mpsc::Receiver<T>) {
+    async fn drain_channel<T>(rx: &mut tokio::sync::mpsc::Receiver<T>) -> usize {
         let mut drained = 0;
         while rx.try_recv().is_ok() {
             drained += 1;
         }
-        if drained > 0 {
-            info!("Drained {} stale batches from pipeline", drained);
-        }
+        drained
     }
 
     async fn maybe_invalidate_chart_caches(&self, current_block: u64) {
@@ -3278,14 +3574,22 @@ impl Indexer {
 
         let db_start = Instant::now();
         if let Err(e) = self.sync_blocks_batch(&blocks, chain_tip).await {
-            if let Err(cleanup_err) = self
-                .writer
-                .cleanup_batch_range(start_block as i64, end_block as i64)
-            {
+            if let Err(cleanup_err) = self.writer.cleanup_batch_range(
+                i64::try_from(start_block).map_err(|_| {
+                    anyhow!("batch cleanup start_block exceeds i64: {}", start_block)
+                })?,
+                i64::try_from(end_block)
+                    .map_err(|_| anyhow!("batch cleanup end_block exceeds i64: {}", end_block))?,
+            ) {
                 error!("Failed to cleanup partial batch: {:?}", cleanup_err);
-            } else if let Err(rebuild_err) =
-                self.rebuild_hodl_tracker_from_store(start_block as i64 - 1)
-            {
+            } else if let Err(rebuild_err) = self.rebuild_hodl_tracker_from_store(
+                i64::try_from(start_block).map_err(|_| {
+                    anyhow!(
+                        "batch cleanup start_block exceeds i64 for hodl rebuild: {}",
+                        start_block
+                    )
+                })? - 1,
+            ) {
                 error!(
                     "Failed to rebuild HODL tracker after batch cleanup: {:?}",
                     rebuild_err
@@ -3346,7 +3650,14 @@ impl Indexer {
             if !self.is_secondary_issuance_bulk_active() {
                 for block_response in &blocks {
                     let block_number =
-                        BlockParser::parse_block_number(&block_response.block) as i64;
+                        i64::try_from(BlockParser::parse_block_number(&block_response.block))
+                            .map_err(|_| {
+                                anyhow!(
+                            "block number exceeds i64 range: block_hash={}, block_number={}",
+                            block_response.block.header.hash,
+                            BlockParser::parse_block_number(&block_response.block)
+                        )
+                            })?;
                     let block_timestamp =
                         BlockParser::parse_timestamp(&block_response.block.header.timestamp);
                     if let Err(e) = self
@@ -3368,13 +3679,22 @@ impl Indexer {
 
             let crossed_1000 = (start_block / 1000) != (end_block / 1000);
             if crossed_1000 && !self.is_bulk_sync_active() {
-                let update_block = ((end_block / 1000) * 1000) as i64;
-                let writer = self.writer.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = writer.recalculate_dao_extended_statistics(update_block) {
-                        warn!("Failed to recalculate DAO statistics: {}", e);
+                match i64::try_from((end_block / 1000) * 1000) {
+                    Ok(update_block) => {
+                        let writer = self.writer.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = writer.recalculate_dao_extended_statistics(update_block)
+                            {
+                                warn!("Failed to recalculate DAO statistics: {}", e);
+                            }
+                        });
                     }
-                });
+                    Err(_) => warn!(
+                        run_id = %self.run_id,
+                        end_block,
+                        "Skipping DAO extended statistics recalc: block exceeds i64 range"
+                    ),
+                }
             }
 
             self.maybe_invalidate_chart_caches(end_block).await;
@@ -3397,11 +3717,18 @@ impl Indexer {
             let stats = self.writer.store().memory_stats();
             let current = self.progress.current();
             let chain_tip = self.progress.target();
+            let chain_tip_i64 = i64::try_from(chain_tip).unwrap_or_else(|_| {
+                panic!(
+                    "chain tip over i64 range while marking bulk sync complete: {} (max={})",
+                    chain_tip,
+                    i64::MAX
+                )
+            });
             let sst_gb = stats.sst_files_size as f64 / (1024.0 * 1024.0 * 1024.0);
 
             self.cache_invalidator
                 .update_sync_status(|status| {
-                    status.mark_bulk_sync_completed(chain_tip as i64);
+                    status.mark_bulk_sync_completed(chain_tip_i64);
                     status.address_balances_deferred = false;
                 })
                 .await;
@@ -3961,15 +4288,14 @@ impl Indexer {
                 .collect();
 
         // Script usage
-        let mut script_usage_changes: HashMap<(Vec<u8>, bool), (i64, i64, i64, i64, i64, i64)> =
-            HashMap::new();
-        let mut script_daily_changes: HashMap<(Vec<u8>, bool, u32), (i64, i64)> = HashMap::new();
-        let mut token_daily_changes: HashMap<(Vec<u8>, u32), (i64, i64)> = HashMap::new();
+        let mut script_usage_changes: ScriptUsageChanges = HashMap::new();
+        let mut script_daily_changes: HashMap<(Vec<u8>, bool, u32), (i128, i128)> = HashMap::new();
+        let mut token_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)> = HashMap::new();
         let mut spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex> = HashMap::new();
-        let mut spore_daily_changes: HashMap<(Vec<u8>, u32), (i64, i64)> = HashMap::new();
-        let mut cluster_daily_changes: HashMap<(Vec<u8>, u32), (i64, i64)> = HashMap::new();
+        let mut spore_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)> = HashMap::new();
+        let mut cluster_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)> = HashMap::new();
         let mut nft_type_index_changes: HashMap<Vec<u8>, NftTypeIndex> = HashMap::new();
-        let mut nft_daily_changes: HashMap<(Vec<u8>, u32), (i64, i64)> = HashMap::new();
+        let mut nft_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)> = HashMap::new();
         let mut spore_type_index_cache: HashMap<Vec<u8>, Option<SporeTypeIndex>> = HashMap::new();
         let mut nft_type_index_cache: HashMap<Vec<u8>, Option<NftTypeIndex>> = HashMap::new();
         for tx_data in &all_tx_data {
@@ -3990,15 +4316,15 @@ impl Indexer {
                     .or_insert((0, 0, 0, 0, 0, 0));
                 entry.0 += 1;
                 entry.1 += 1;
-                entry.2 += cell.capacity;
-                entry.3 += cell.capacity;
-                entry.4 += cell_occupied;
-                entry.5 += cell_occupied;
+                entry.2 += i128::from(cell.capacity);
+                entry.3 += i128::from(cell.capacity);
+                entry.4 += i128::from(cell_occupied);
+                entry.5 += i128::from(cell_occupied);
                 let daily_entry = script_daily_changes
                     .entry((cell.lock_code_hash.clone(), false, date_yyyymmdd))
                     .or_insert((0, 0));
-                daily_entry.0 += cell.capacity;
-                daily_entry.1 += cell_occupied;
+                daily_entry.0 += i128::from(cell.capacity);
+                daily_entry.1 += i128::from(cell_occupied);
                 if let Some(ref type_code_hash) = cell.type_code_hash {
                     let type_key = (type_code_hash.clone(), true);
                     let entry = script_usage_changes
@@ -4006,22 +4332,22 @@ impl Indexer {
                         .or_insert((0, 0, 0, 0, 0, 0));
                     entry.0 += 1;
                     entry.1 += 1;
-                    entry.2 += cell.capacity;
-                    entry.3 += cell.capacity;
-                    entry.4 += cell_occupied;
-                    entry.5 += cell_occupied;
+                    entry.2 += i128::from(cell.capacity);
+                    entry.3 += i128::from(cell.capacity);
+                    entry.4 += i128::from(cell_occupied);
+                    entry.5 += i128::from(cell_occupied);
                     let daily_entry = script_daily_changes
                         .entry((type_code_hash.clone(), true, date_yyyymmdd))
                         .or_insert((0, 0));
-                    daily_entry.0 += cell.capacity;
-                    daily_entry.1 += cell_occupied;
+                    daily_entry.0 += i128::from(cell.capacity);
+                    daily_entry.1 += i128::from(cell_occupied);
                 }
                 if let Some(ref type_script_hash) = cell.type_script_hash {
                     let daily_entry = token_daily_changes
                         .entry((type_script_hash.clone(), date_yyyymmdd))
                         .or_insert((0, 0));
-                    daily_entry.0 += cell.capacity;
-                    daily_entry.1 += cell_occupied;
+                    daily_entry.0 += i128::from(cell.capacity);
+                    daily_entry.1 += i128::from(cell_occupied);
                 }
                 if let (Some(type_script_hash), Some(type_code_hash), Some(type_args)) = (
                     cell.type_script_hash.as_ref(),
@@ -4042,15 +4368,15 @@ impl Indexer {
                         let spore_daily = spore_daily_changes
                             .entry((spore_id, date_yyyymmdd))
                             .or_insert((0, 0));
-                        spore_daily.0 += cell.capacity;
-                        spore_daily.1 += cell_occupied;
+                        spore_daily.0 += i128::from(cell.capacity);
+                        spore_daily.1 += i128::from(cell_occupied);
 
                         if let Some(cluster_id) = cluster_id {
                             let cluster_daily = cluster_daily_changes
                                 .entry((cluster_id, date_yyyymmdd))
                                 .or_insert((0, 0));
-                            cluster_daily.0 += cell.capacity;
-                            cluster_daily.1 += cell_occupied;
+                            cluster_daily.0 += i128::from(cell.capacity);
+                            cluster_daily.1 += i128::from(cell_occupied);
                         }
                     }
                 }
@@ -4070,8 +4396,8 @@ impl Indexer {
                         let nft_daily = nft_daily_changes
                             .entry((collection_id, date_yyyymmdd))
                             .or_insert((0, 0));
-                        nft_daily.0 += cell.capacity;
-                        nft_daily.1 += cell_occupied;
+                        nft_daily.0 += i128::from(cell.capacity);
+                        nft_daily.1 += i128::from(cell_occupied);
                     }
                 }
             }
@@ -4094,33 +4420,33 @@ impl Indexer {
                             .entry(lock_key)
                             .or_insert((0, 0, 0, 0, 0, 0));
                         entry.1 -= 1;
-                        entry.3 -= info.capacity;
-                        entry.5 -= info.occupied_capacity;
+                        entry.3 -= i128::from(info.capacity);
+                        entry.5 -= i128::from(info.occupied_capacity);
                         let daily_entry = script_daily_changes
                             .entry((info.lock_code_hash.clone(), false, date_yyyymmdd))
                             .or_insert((0, 0));
-                        daily_entry.0 -= info.capacity;
-                        daily_entry.1 -= info.occupied_capacity;
+                        daily_entry.0 -= i128::from(info.capacity);
+                        daily_entry.1 -= i128::from(info.occupied_capacity);
                         if let Some(ref type_code_hash) = info.type_code_hash {
                             let type_key = (type_code_hash.clone(), true);
                             let entry = script_usage_changes
                                 .entry(type_key)
                                 .or_insert((0, 0, 0, 0, 0, 0));
                             entry.1 -= 1;
-                            entry.3 -= info.capacity;
-                            entry.5 -= info.occupied_capacity;
+                            entry.3 -= i128::from(info.capacity);
+                            entry.5 -= i128::from(info.occupied_capacity);
                             let daily_entry = script_daily_changes
                                 .entry((type_code_hash.clone(), true, date_yyyymmdd))
                                 .or_insert((0, 0));
-                            daily_entry.0 -= info.capacity;
-                            daily_entry.1 -= info.occupied_capacity;
+                            daily_entry.0 -= i128::from(info.capacity);
+                            daily_entry.1 -= i128::from(info.occupied_capacity);
                         }
                         if let Some(ref type_script_hash) = info.type_script_hash {
                             let daily_entry = token_daily_changes
                                 .entry((type_script_hash.clone(), date_yyyymmdd))
                                 .or_insert((0, 0));
-                            daily_entry.0 -= info.capacity;
-                            daily_entry.1 -= info.occupied_capacity;
+                            daily_entry.0 -= i128::from(info.capacity);
+                            daily_entry.1 -= i128::from(info.occupied_capacity);
                         }
                         if let (Some(type_script_hash), Some(type_code_hash)) =
                             (info.type_script_hash.as_ref(), info.type_code_hash.as_ref())
@@ -4143,15 +4469,15 @@ impl Indexer {
                                     let spore_daily = spore_daily_changes
                                         .entry((index.spore_id.clone(), date_yyyymmdd))
                                         .or_insert((0, 0));
-                                    spore_daily.0 -= info.capacity;
-                                    spore_daily.1 -= info.occupied_capacity;
+                                    spore_daily.0 -= i128::from(info.capacity);
+                                    spore_daily.1 -= i128::from(info.occupied_capacity);
 
                                     if let Some(cluster_id) = index.cluster_id {
                                         let cluster_daily = cluster_daily_changes
                                             .entry((cluster_id, date_yyyymmdd))
                                             .or_insert((0, 0));
-                                        cluster_daily.0 -= info.capacity;
-                                        cluster_daily.1 -= info.occupied_capacity;
+                                        cluster_daily.0 -= i128::from(info.capacity);
+                                        cluster_daily.1 -= i128::from(info.occupied_capacity);
                                     }
                                 }
                             }
@@ -4178,8 +4504,8 @@ impl Indexer {
                                     let nft_daily = nft_daily_changes
                                         .entry((collection_id, date_yyyymmdd))
                                         .or_insert((0, 0));
-                                    nft_daily.0 -= info.capacity;
-                                    nft_daily.1 -= info.occupied_capacity;
+                                    nft_daily.0 -= i128::from(info.capacity);
+                                    nft_daily.1 -= i128::from(info.occupied_capacity);
                                 }
                             }
                         }
@@ -4371,27 +4697,28 @@ impl Indexer {
                 .filter(|tx| !tx.is_cellbase)
                 .map(|tx| tx.inputs.len() as i32)
                 .sum();
-            let capacity_transferred: i64 = tx_slice
+            let capacity_transferred: i128 = tx_slice
                 .iter()
                 .filter(|tx| !tx.is_cellbase)
-                .map(|tx| tx.total_output_capacity)
+                .map(|tx| i128::from(tx.total_output_capacity))
                 .sum();
             let data_size_added: i64 = tx_slice
                 .iter()
                 .flat_map(|tx| tx.cells.iter())
                 .map(|cell| cell.data_size as i64)
                 .sum();
-            let occupied_capacity_created: i64 = tx_slice
+            let occupied_capacity_created: i128 = tx_slice
                 .iter()
                 .flat_map(|tx| tx.cells.iter())
                 .map(|cell| {
-                    let lock_script_size = 32 + 1 + cell.lock_args.len() as i64;
+                    let lock_script_size = 33_i128 + cell.lock_args.len() as i128;
                     let type_script_size = cell
                         .type_args
                         .as_ref()
-                        .map(|args| 32 + 1 + args.len() as i64)
+                        .map(|args| 33_i128 + args.len() as i128)
                         .unwrap_or(0);
-                    (8 + lock_script_size + type_script_size + cell.data_size as i64) * 100_000_000
+                    (8_i128 + lock_script_size + type_script_size + i128::from(cell.data_size))
+                        * 100_000_000_i128
                 })
                 .sum();
             let data_size_consumed: i64 = tx_slice
@@ -4409,7 +4736,7 @@ impl Indexer {
                         .or_else(|| batch_cell_infos.get(&key).map(|info| info.data_size as i64))
                 })
                 .sum();
-            let occupied_capacity_consumed: i64 = tx_slice
+            let occupied_capacity_consumed: i128 = tx_slice
                 .iter()
                 .filter(|tx| !tx.is_cellbase)
                 .flat_map(|tx| tx.inputs.iter())
@@ -4420,11 +4747,11 @@ impl Indexer {
                     );
                     input_cell_info
                         .get(&key)
-                        .map(|info| info.occupied_capacity)
+                        .map(|info| i128::from(info.occupied_capacity))
                         .or_else(|| {
                             batch_cell_infos
                                 .get(&key)
-                                .map(|info| info.occupied_capacity)
+                                .map(|info| i128::from(info.occupied_capacity))
                         })
                 })
                 .sum();
@@ -4440,9 +4767,33 @@ impl Indexer {
                 entry.1 += parsed.transactions_count;
                 entry.2 += cells_created;
                 entry.3 += cells_consumed;
-                entry.4 += capacity_transferred;
-                entry.5 += occupied_capacity_created;
-                entry.6 += occupied_capacity_consumed;
+                entry.4 = entry.4.checked_add(capacity_transferred).ok_or_else(|| {
+                    anyhow!(
+                        "daily capacity_transferred overflow: date={} block={}",
+                        block_date,
+                        parsed.number
+                    )
+                })?;
+                entry.5 = entry
+                    .5
+                    .checked_add(occupied_capacity_created)
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "daily occupied_capacity_created overflow: date={} block={}",
+                            block_date,
+                            parsed.number
+                        )
+                    })?;
+                entry.6 = entry
+                    .6
+                    .checked_add(occupied_capacity_consumed)
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "daily occupied_capacity_consumed overflow: date={} block={}",
+                            block_date,
+                            parsed.number
+                        )
+                    })?;
                 entry.7 += data_size_added;
                 entry.8 += data_size_consumed;
             }
@@ -4458,7 +4809,13 @@ impl Indexer {
                 entry.1 += parsed.transactions_count;
                 entry.2 += cells_created;
                 entry.3 += cells_consumed;
-                entry.4 += capacity_transferred;
+                entry.4 = entry.4.checked_add(capacity_transferred).ok_or_else(|| {
+                    anyhow!(
+                        "hourly capacity_transferred overflow: hour={} block={}",
+                        block_hour,
+                        parsed.number
+                    )
+                })?;
             }
 
             {
@@ -5055,14 +5412,14 @@ impl Indexer {
         input_cell_info: HashMap<(Vec<u8>, i16), LiveCellInfo>,
         batch_cell_infos: HashMap<(Vec<u8>, i16), LiveCellInfo>,
         address_balance_changes: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, Vec<u8>, i64)>,
-        script_usage_changes: HashMap<(Vec<u8>, bool), (i64, i64, i64, i64, i64, i64)>,
-        script_daily_changes: HashMap<(Vec<u8>, bool, u32), (i64, i64)>,
-        token_daily_changes: HashMap<(Vec<u8>, u32), (i64, i64)>,
+        script_usage_changes: ScriptUsageChanges,
+        script_daily_changes: HashMap<(Vec<u8>, bool, u32), (i128, i128)>,
+        token_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
         spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex>,
-        spore_daily_changes: HashMap<(Vec<u8>, u32), (i64, i64)>,
-        cluster_daily_changes: HashMap<(Vec<u8>, u32), (i64, i64)>,
+        spore_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
+        cluster_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
         nft_type_index_changes: HashMap<Vec<u8>, NftTypeIndex>,
-        nft_daily_changes: HashMap<(Vec<u8>, u32), (i64, i64)>,
+        nft_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
         chain_tip: u64,
     ) -> Result<()> {
         if all_parsed_blocks.is_empty() {
@@ -6052,28 +6409,31 @@ impl Indexer {
                             .filter(|tx| !tx.is_cellbase)
                             .map(|tx| tx.inputs.len() as i32)
                             .sum();
-                        let capacity_transferred: i64 = tx_slice
+                        let capacity_transferred: i128 = tx_slice
                             .iter()
                             .filter(|tx| !tx.is_cellbase)
-                            .map(|tx| tx.total_output_capacity)
+                            .map(|tx| i128::from(tx.total_output_capacity))
                             .sum();
                         let data_size_added: i64 = tx_slice
                             .iter()
                             .flat_map(|tx| tx.cells.iter())
                             .map(|cell| cell.data_size as i64)
                             .sum();
-                        let occupied_capacity_created: i64 = tx_slice
+                        let occupied_capacity_created: i128 = tx_slice
                             .iter()
                             .flat_map(|tx| tx.cells.iter())
                             .map(|cell| {
-                                let lock_script_size = 32 + 1 + cell.lock_args.len() as i64;
+                                let lock_script_size = 33_i128 + cell.lock_args.len() as i128;
                                 let type_script_size = cell
                                     .type_args
                                     .as_ref()
-                                    .map(|args| 32 + 1 + args.len() as i64)
+                                    .map(|args| 33_i128 + args.len() as i128)
                                     .unwrap_or(0);
-                                (8 + lock_script_size + type_script_size + cell.data_size as i64)
-                                    * 100_000_000
+                                (8_i128
+                                    + lock_script_size
+                                    + type_script_size
+                                    + i128::from(cell.data_size))
+                                    * 100_000_000_i128
                             })
                             .sum();
                         let data_size_consumed: i64 = tx_slice
@@ -6093,7 +6453,7 @@ impl Indexer {
                                     })
                             })
                             .sum();
-                        let occupied_capacity_consumed: i64 = tx_slice
+                        let occupied_capacity_consumed: i128 = tx_slice
                             .iter()
                             .filter(|tx| !tx.is_cellbase)
                             .flat_map(|tx| tx.inputs.iter())
@@ -6104,11 +6464,11 @@ impl Indexer {
                                 );
                                 input_cell_info
                                     .get(&key)
-                                    .map(|info| info.occupied_capacity)
+                                    .map(|info| i128::from(info.occupied_capacity))
                                     .or_else(|| {
                                         batch_cell_infos
                                             .get(&key)
-                                            .map(|info| info.occupied_capacity)
+                                            .map(|info| i128::from(info.occupied_capacity))
                                     })
                             })
                             .sum();
@@ -6124,9 +6484,33 @@ impl Indexer {
                             entry.1 += parsed.transactions_count;
                             entry.2 += cells_created;
                             entry.3 += cells_consumed;
-                            entry.4 += capacity_transferred;
-                            entry.5 += occupied_capacity_created;
-                            entry.6 += occupied_capacity_consumed;
+                            entry.4 = entry.4.checked_add(capacity_transferred).ok_or_else(|| {
+                                anyhow!(
+                                    "daily capacity_transferred overflow: date={} block={}",
+                                    block_date,
+                                    parsed.number
+                                )
+                            })?;
+                            entry.5 = entry
+                                .5
+                                .checked_add(occupied_capacity_created)
+                                .ok_or_else(|| {
+                                    anyhow!(
+                                        "daily occupied_capacity_created overflow: date={} block={}",
+                                        block_date,
+                                        parsed.number
+                                    )
+                                })?;
+                            entry.6 = entry
+                                .6
+                                .checked_add(occupied_capacity_consumed)
+                                .ok_or_else(|| {
+                                    anyhow!(
+                                        "daily occupied_capacity_consumed overflow: date={} block={}",
+                                        block_date,
+                                        parsed.number
+                                    )
+                                })?;
                             entry.7 += data_size_added;
                             entry.8 += data_size_consumed;
                         }
@@ -6140,7 +6524,13 @@ impl Indexer {
                             entry.1 += parsed.transactions_count;
                             entry.2 += cells_created;
                             entry.3 += cells_consumed;
-                            entry.4 += capacity_transferred;
+                            entry.4 = entry.4.checked_add(capacity_transferred).ok_or_else(|| {
+                                anyhow!(
+                                    "hourly capacity_transferred overflow: hour={} block={}",
+                                    block_hour,
+                                    parsed.number
+                                )
+                            })?;
                         }
                         {
                             let entry = stats.daily_block_stats.entry(block_date).or_default();
@@ -7231,28 +7621,28 @@ impl Indexer {
                     .filter(|tx| !tx.is_cellbase)
                     .map(|tx| tx.inputs.len() as i32)
                     .sum();
-                let capacity_transferred: i64 = tx_slice
+                let capacity_transferred: i128 = tx_slice
                     .iter()
                     .filter(|tx| !tx.is_cellbase)
-                    .map(|tx| tx.total_output_capacity)
+                    .map(|tx| i128::from(tx.total_output_capacity))
                     .sum();
                 let data_size_added: i64 = tx_slice
                     .iter()
                     .flat_map(|tx| tx.cells.iter())
                     .map(|cell| cell.data_size as i64)
                     .sum();
-                let occupied_capacity_created: i64 = tx_slice
+                let occupied_capacity_created: i128 = tx_slice
                     .iter()
                     .flat_map(|tx| tx.cells.iter())
                     .map(|cell| {
-                        let lock_script_size = 32 + 1 + cell.lock_args.len() as i64;
+                        let lock_script_size = 33_i128 + cell.lock_args.len() as i128;
                         let type_script_size = cell
                             .type_args
                             .as_ref()
-                            .map(|args| 32 + 1 + args.len() as i64)
+                            .map(|args| 33_i128 + args.len() as i128)
                             .unwrap_or(0);
-                        (8 + lock_script_size + type_script_size + cell.data_size as i64)
-                            * 100_000_000
+                        (8_i128 + lock_script_size + type_script_size + i128::from(cell.data_size))
+                            * 100_000_000_i128
                     })
                     .sum();
                 let data_size_consumed: i64 = tx_slice
@@ -7272,7 +7662,7 @@ impl Indexer {
                             })
                     })
                     .sum();
-                let occupied_capacity_consumed: i64 = tx_slice
+                let occupied_capacity_consumed: i128 = tx_slice
                     .iter()
                     .filter(|tx| !tx.is_cellbase)
                     .flat_map(|tx| tx.inputs.iter())
@@ -7283,11 +7673,11 @@ impl Indexer {
                         );
                         input_cell_info
                             .get(&key)
-                            .map(|info| info.occupied_capacity)
+                            .map(|info| i128::from(info.occupied_capacity))
                             .or_else(|| {
                                 batch_cell_infos
                                     .get(&key)
-                                    .map(|info| info.occupied_capacity)
+                                    .map(|info| i128::from(info.occupied_capacity))
                             })
                     })
                     .sum();
@@ -7303,9 +7693,33 @@ impl Indexer {
                     entry.1 += parsed.transactions_count;
                     entry.2 += cells_created;
                     entry.3 += cells_consumed;
-                    entry.4 += capacity_transferred;
-                    entry.5 += occupied_capacity_created;
-                    entry.6 += occupied_capacity_consumed;
+                    entry.4 = entry.4.checked_add(capacity_transferred).ok_or_else(|| {
+                        anyhow!(
+                            "daily capacity_transferred overflow: date={} block={}",
+                            block_date,
+                            parsed.number
+                        )
+                    })?;
+                    entry.5 = entry
+                        .5
+                        .checked_add(occupied_capacity_created)
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "daily occupied_capacity_created overflow: date={} block={}",
+                                block_date,
+                                parsed.number
+                            )
+                        })?;
+                    entry.6 = entry
+                        .6
+                        .checked_add(occupied_capacity_consumed)
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "daily occupied_capacity_consumed overflow: date={} block={}",
+                                block_date,
+                                parsed.number
+                            )
+                        })?;
                     entry.7 += data_size_added;
                     entry.8 += data_size_consumed;
                 }
@@ -7319,7 +7733,13 @@ impl Indexer {
                     entry.1 += parsed.transactions_count;
                     entry.2 += cells_created;
                     entry.3 += cells_consumed;
-                    entry.4 += capacity_transferred;
+                    entry.4 = entry.4.checked_add(capacity_transferred).ok_or_else(|| {
+                        anyhow!(
+                            "hourly capacity_transferred overflow: hour={} block={}",
+                            block_hour,
+                            parsed.number
+                        )
+                    })?;
                 }
                 {
                     let entry = batch_stats.daily_block_stats.entry(block_date).or_default();
@@ -7551,7 +7971,14 @@ impl Indexer {
         // Daily block stats
         for (date, (sum_target, count, uncles)) in &stats.daily_block_stats {
             let avg_target = if *count > 0 {
-                (*sum_target / *count as i128) as i64
+                i64::try_from(*sum_target / *count as i128).map_err(|_| {
+                    anyhow!(
+                        "daily avg compact target exceeds i64: date={} sum_target={} count={}",
+                        date,
+                        sum_target,
+                        count
+                    )
+                })?
             } else {
                 0
             };
@@ -7995,18 +8422,21 @@ impl Indexer {
         }
 
         warn!(
-            "Reorg detected at block {}: stored={} chain={}",
+            run_id = %self.run_id,
             db_tip,
-            hex::encode(stored_hash),
-            hex::encode(&chain_hash_bytes)
+            stored_hash = %hex::encode(stored_hash),
+            chain_hash = %hex::encode(&chain_hash_bytes),
+            "Reorg detected at current DB tip"
         );
 
         let (fork_point, fork_hash) = self.find_fork_point(db_tip).await?;
         let depth = db_tip - fork_point;
 
         info!(
-            "Fork point found at block {}, depth = {}",
-            fork_point, depth
+            run_id = %self.run_id,
+            fork_point,
+            depth,
+            "Reorg fork point discovered"
         );
 
         let chain_tip = self.get_chain_tip().await?;
@@ -8014,36 +8444,67 @@ impl Indexer {
 
         if depth > DEEP_FORK_DEPTH {
             error!(
-                "DEEP FORK DETECTED! Depth {} exceeds limit {}. Manual intervention required.",
-                depth, DEEP_FORK_DEPTH
+                run_id = %self.run_id,
+                db_tip,
+                chain_tip,
+                fork_point,
+                depth,
+                deep_fork_limit = DEEP_FORK_DEPTH,
+                "DEEP FORK DETECTED! Manual intervention required."
             );
 
+            let fork_point_i64 = i64::try_from(fork_point).map_err(|_| {
+                anyhow!(
+                    "fork point exceeds i64 range for deep fork: fork_point={}",
+                    fork_point
+                )
+            })?;
+            let db_tip_i64 = i64::try_from(db_tip).map_err(|_| {
+                anyhow!("db tip exceeds i64 range for deep fork: db_tip={}", db_tip)
+            })?;
+            let chain_tip_i64 = i64::try_from(chain_tip).map_err(|_| {
+                anyhow!(
+                    "chain tip exceeds i64 range for deep fork: chain_tip={}",
+                    chain_tip
+                )
+            })?;
+            let depth_i64 = i64::try_from(depth)
+                .map_err(|_| anyhow!("reorg depth exceeds i64 range: depth={}", depth))?;
+
             self.writer.record_deep_fork(
-                fork_point as i64,
+                fork_point_i64,
                 &fork_hash,
-                db_tip as i64,
+                db_tip_i64,
                 stored_hash,
-                chain_tip as i64,
+                chain_tip_i64,
                 &chain_tip_hash_bytes,
-                depth as i64,
+                depth_i64,
             )?;
 
             return Ok(Some(ReorgAction::DeepForkPaused));
         }
 
         info!(
-            "Processing automatic reorg (depth={} <= limit={})",
-            depth, DEEP_FORK_DEPTH
+            run_id = %self.run_id,
+            db_tip,
+            chain_tip,
+            fork_point,
+            depth,
+            deep_fork_limit = DEEP_FORK_DEPTH,
+            "Processing automatic reorg"
         );
 
         let result = self
             .writer
             .execute_reorg(
-                fork_point as i64,
+                i64::try_from(fork_point)
+                    .map_err(|_| anyhow!("fork point exceeds i64 range: {}", fork_point))?,
                 &fork_hash,
-                db_tip as i64,
+                i64::try_from(db_tip)
+                    .map_err(|_| anyhow!("db tip exceeds i64 range: {}", db_tip))?,
                 stored_hash,
-                chain_tip as i64,
+                i64::try_from(chain_tip)
+                    .map_err(|_| anyhow!("chain tip exceeds i64 range: {}", chain_tip))?,
                 &chain_tip_hash_bytes,
             )
             .await?;
@@ -8055,9 +8516,11 @@ impl Indexer {
         let mut height = db_tip;
 
         loop {
+            let height_i64 = i64::try_from(height)
+                .map_err(|_| anyhow!("fork-search height exceeds i64 range: {}", height))?;
             let db_hash = self
                 .repo
-                .get_block_hash_at_height(height as i64)?
+                .get_block_hash_at_height(height_i64)?
                 .ok_or_else(|| anyhow::anyhow!("Block {} not found in DB", height))?;
 
             let chain_hash_bytes = self.get_chain_block_hash(height).await?;
@@ -8483,6 +8946,66 @@ mod tests {
     fn test_address_balances_are_never_skipped_in_bulk_mode() {
         assert!(!should_skip_address_balances(true));
         assert!(!should_skip_address_balances(false));
+    }
+
+    #[test]
+    fn test_should_abort_pipeline_on_idle_timeout_when_parser_exits() {
+        assert!(should_abort_pipeline_on_idle_timeout(true, false));
+    }
+
+    #[test]
+    fn test_should_abort_pipeline_on_idle_timeout_when_fetcher_exits() {
+        assert!(should_abort_pipeline_on_idle_timeout(false, true));
+        assert!(!should_abort_pipeline_on_idle_timeout(false, false));
+    }
+
+    #[test]
+    fn test_should_log_pipeline_idle_timeout_policy() {
+        assert!(should_log_pipeline_idle_timeout(1));
+        assert!(should_log_pipeline_idle_timeout(2));
+        assert!(should_log_pipeline_idle_timeout(3));
+        assert!(!should_log_pipeline_idle_timeout(4));
+        assert!(should_log_pipeline_idle_timeout(10));
+        assert!(should_log_pipeline_idle_timeout(20));
+    }
+
+    #[test]
+    fn test_queue_fill_percentage() {
+        assert_eq!(queue_fill_percentage(Some(5), Some(10)), Some(50.0));
+        assert_eq!(queue_fill_percentage(Some(1), Some(0)), None);
+        assert_eq!(queue_fill_percentage(None, Some(10)), None);
+        assert_eq!(queue_fill_percentage(Some(1), None), None);
+    }
+
+    #[test]
+    fn test_repeated_warning_tracker_suppresses_and_aggregates() {
+        let tracker = RepeatedWarningTracker::default();
+
+        let first = tracker
+            .record("pipeline_idle_timeout", Duration::from_secs(60))
+            .expect("first warning should emit");
+        assert_eq!(first.total_count, 1);
+        assert_eq!(first.suppressed_since_last_emit, 0);
+
+        let second = tracker.record("pipeline_idle_timeout", Duration::from_secs(60));
+        assert!(second.is_none(), "second warning should be suppressed");
+
+        let third = tracker
+            .record("pipeline_idle_timeout", Duration::from_secs(0))
+            .expect("forced emit should flush suppressed count");
+        assert_eq!(third.total_count, 3);
+        assert_eq!(third.suppressed_since_last_emit, 1);
+    }
+
+    #[test]
+    fn test_repeated_warning_tracker_isolated_by_key() {
+        let tracker = RepeatedWarningTracker::default();
+        assert!(tracker
+            .record("pipeline_idle_timeout", Duration::from_secs(60))
+            .is_some());
+        assert!(tracker
+            .record("pipeline_batch_mismatch", Duration::from_secs(60))
+            .is_some());
     }
 
     #[test]

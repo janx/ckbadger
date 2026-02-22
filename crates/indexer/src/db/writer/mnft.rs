@@ -258,7 +258,7 @@ impl BatchWriter {
 
     pub fn update_nft_daily_deltas_batch(
         &self,
-        changes: &HashMap<(Vec<u8>, u32), (i64, i64)>,
+        changes: &HashMap<(Vec<u8>, u32), (i128, i128)>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
         for ((collection_id, date), (capacity_delta, occupied_delta)) in changes {
@@ -269,8 +269,30 @@ impl BatchWriter {
                 .store
                 .get_nft_daily_delta(collection_id, *date)?
                 .unwrap_or_default();
-            current.live_capacity_delta += *capacity_delta;
-            current.live_occupied_capacity_delta += *occupied_delta;
+            current.live_capacity_delta = current
+                .live_capacity_delta
+                .checked_add(*capacity_delta)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "nft daily capacity delta overflow: collection_id=0x{}, date={}, current={}, delta={}",
+                        hex::encode(collection_id),
+                        date,
+                        current.live_capacity_delta,
+                        capacity_delta
+                    )
+                })?;
+            current.live_occupied_capacity_delta = current
+                .live_occupied_capacity_delta
+                .checked_add(*occupied_delta)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "nft daily occupied delta overflow: collection_id=0x{}, date={}, current={}, delta={}",
+                        hex::encode(collection_id),
+                        date,
+                        current.live_occupied_capacity_delta,
+                        occupied_delta
+                    )
+                })?;
             if current.live_capacity_delta == 0 && current.live_occupied_capacity_delta == 0 {
                 let key = keys::encode_nft_daily_key(collection_id, *date);
                 batch.delete_stats(&key);

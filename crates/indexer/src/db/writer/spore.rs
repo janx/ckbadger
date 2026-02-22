@@ -410,7 +410,7 @@ impl BatchWriter {
 
     pub fn update_spore_daily_deltas_batch(
         &self,
-        changes: &HashMap<(Vec<u8>, u32), (i64, i64)>,
+        changes: &HashMap<(Vec<u8>, u32), (i128, i128)>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
         for ((spore_id, date), (capacity_delta, occupied_delta)) in changes {
@@ -421,8 +421,30 @@ impl BatchWriter {
                 .store
                 .get_spore_daily_delta(spore_id, *date)?
                 .unwrap_or_default();
-            current.live_capacity_delta += *capacity_delta;
-            current.live_occupied_capacity_delta += *occupied_delta;
+            current.live_capacity_delta = current
+                .live_capacity_delta
+                .checked_add(*capacity_delta)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "spore daily capacity delta overflow: spore_id=0x{}, date={}, current={}, delta={}",
+                        hex::encode(spore_id),
+                        date,
+                        current.live_capacity_delta,
+                        capacity_delta
+                    )
+                })?;
+            current.live_occupied_capacity_delta = current
+                .live_occupied_capacity_delta
+                .checked_add(*occupied_delta)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "spore daily occupied delta overflow: spore_id=0x{}, date={}, current={}, delta={}",
+                        hex::encode(spore_id),
+                        date,
+                        current.live_occupied_capacity_delta,
+                        occupied_delta
+                    )
+                })?;
             if current.live_capacity_delta == 0 && current.live_occupied_capacity_delta == 0 {
                 let key = keys::encode_spore_daily_key(spore_id, *date);
                 batch.delete_stats(&key);
@@ -435,7 +457,7 @@ impl BatchWriter {
 
     pub fn update_cluster_daily_deltas_batch(
         &self,
-        changes: &HashMap<(Vec<u8>, u32), (i64, i64)>,
+        changes: &HashMap<(Vec<u8>, u32), (i128, i128)>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
         for ((cluster_id, date), (capacity_delta, occupied_delta)) in changes {
@@ -446,8 +468,30 @@ impl BatchWriter {
                 .store
                 .get_cluster_daily_delta(cluster_id, *date)?
                 .unwrap_or_default();
-            current.live_capacity_delta += *capacity_delta;
-            current.live_occupied_capacity_delta += *occupied_delta;
+            current.live_capacity_delta = current
+                .live_capacity_delta
+                .checked_add(*capacity_delta)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "cluster daily capacity delta overflow: cluster_id=0x{}, date={}, current={}, delta={}",
+                        hex::encode(cluster_id),
+                        date,
+                        current.live_capacity_delta,
+                        capacity_delta
+                    )
+                })?;
+            current.live_occupied_capacity_delta = current
+                .live_occupied_capacity_delta
+                .checked_add(*occupied_delta)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "cluster daily occupied delta overflow: cluster_id=0x{}, date={}, current={}, delta={}",
+                        hex::encode(cluster_id),
+                        date,
+                        current.live_occupied_capacity_delta,
+                        occupied_delta
+                    )
+                })?;
             if current.live_capacity_delta == 0 && current.live_occupied_capacity_delta == 0 {
                 let key = keys::encode_cluster_daily_key(cluster_id, *date);
                 batch.delete_stats(&key);

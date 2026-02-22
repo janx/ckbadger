@@ -203,7 +203,7 @@ fn test_list_daily_stats() {
             transactions_count: 1000 + (i as i32 * 100),
             cells_created: 2000 + (i as i32 * 200),
             cells_consumed: 1500 + (i as i32 * 150),
-            capacity_transferred: 10_000_000_000_000 * (i as i64 + 1),
+            capacity_transferred: 10_000_000_000_000_i128 * (i as i128 + 1),
             occupied_capacity_created: 0,
             occupied_capacity_consumed: 0,
             total_live_cells: 50_000 + (i as i64 * 1000),
@@ -228,4 +228,43 @@ fn test_list_daily_stats() {
     let jan2 = store.get_daily_stats("2024-01-02").unwrap().unwrap();
     assert_eq!(jan2.transactions_count, 1100);
     assert_eq!(jan2.cells_created, 2200);
+}
+
+#[test]
+fn test_daily_and_hourly_capacity_support_values_above_i64() {
+    let store = setup_store();
+    let huge = i128::from(i64::MAX) + 42;
+
+    let daily = DailyStats {
+        blocks_count: 1,
+        transactions_count: 1,
+        cells_created: 1,
+        cells_consumed: 0,
+        capacity_transferred: huge,
+        occupied_capacity_created: huge,
+        occupied_capacity_consumed: huge,
+        total_live_cells: 1,
+        total_dead_cells: 0,
+        total_all_cells: 1,
+        total_data_size: 0,
+        knowledge_size: None,
+        avg_block_time_ms: None,
+    };
+    store.put_daily_stats("2024-02-01", &daily).unwrap();
+    let got_daily = store.get_daily_stats("2024-02-01").unwrap().unwrap();
+    assert_eq!(got_daily.capacity_transferred, huge);
+    assert_eq!(got_daily.occupied_capacity_created, huge);
+    assert_eq!(got_daily.occupied_capacity_consumed, huge);
+
+    let hourly = HourlyStats {
+        hour: 2024020112,
+        blocks_count: 1,
+        transactions_count: 1,
+        cells_created: 1,
+        cells_consumed: 0,
+        capacity_transferred: huge,
+    };
+    store.put_hourly_stats("2024020112", &hourly).unwrap();
+    let got_hourly = store.get_hourly_stats("2024020112").unwrap().unwrap();
+    assert_eq!(got_hourly.capacity_transferred, huge);
 }

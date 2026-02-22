@@ -1,7 +1,8 @@
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 use std::sync::Arc;
-use tracing::info;
+use std::time::{Duration, Instant};
+use tracing::{info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use ckb_store_reader::CkbChainReader;
@@ -130,6 +131,35 @@ async fn main() -> Result<()> {
         // Default (no subcommand) or explicit `sync` → run sync daemon
         None | Some(Command::Sync) => run_sync(cli).await,
     }
+}
+
+fn queue_fill_pct(depth: Option<u64>, capacity: Option<u64>) -> Option<f64> {
+    match (depth, capacity) {
+        (Some(d), Some(c)) if c > 0 => Some((d as f64 / c as f64) * 100.0),
+        _ => None,
+    }
+}
+
+fn should_emit_rate_limited(
+    last_emit_at: Option<Instant>,
+    now: Instant,
+    min_emit_interval: Duration,
+) -> bool {
+    match last_emit_at {
+        None => true,
+        Some(last) => now.duration_since(last) >= min_emit_interval,
+    }
+}
+
+fn should_warn_progress_stall(
+    last_progress_advanced_at: Instant,
+    now: Instant,
+    current_block: u64,
+    target_block: u64,
+    min_stall_duration: Duration,
+) -> bool {
+    current_block < target_block
+        && now.duration_since(last_progress_advanced_at) >= min_stall_duration
 }
 
 async fn run_sync(args: Cli) -> Result<()> {
@@ -270,6 +300,12 @@ async fn run_sync(args: Cli) -> Result<()> {
 
     let indexer_for_progress = Arc::clone(&indexer);
     tokio::spawn(async move {
+        let mut last_queue_pressure_warn_at: Option<Instant> = None;
+        let mut suppressed_queue_pressure_warns: u64 = 0;
+        let mut last_progress_block: Option<u64> = None;
+        let mut last_progress_advanced_at = Instant::now();
+        let mut last_stall_warn_at: Option<Instant> = None;
+        let mut suppressed_stall_warns: u64 = 0;
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
 
@@ -280,6 +316,7 @@ async fn run_sync(args: Cli) -> Result<()> {
 
             let (perf_rpc_ms, perf_db_ms) = indexer_for_progress.perf_snapshot_ms();
             let pipeline = indexer_for_progress.pipeline_progress_snapshot();
+            let pipeline_log = pipeline.clone();
             indexer_for_progress.record_runtime_heartbeat(progress.current());
             let sync_data = ckbadger_common::SyncProgressData {
                 current_block: progress.current(),
@@ -332,6 +369,83 @@ async fn run_sync(args: Cli) -> Result<()> {
                 "RocksDB stats"
             );
 
+            let fetch_fill_pct = queue_fill_pct(
+                pipeline_log.as_ref().and_then(|p| p.fetch_queue_depth),
+                pipeline_log.as_ref().and_then(|p| p.fetch_queue_capacity),
+            );
+            let parse_fill_pct = queue_fill_pct(
+                pipeline_log.as_ref().and_then(|p| p.parse_queue_depth),
+                pipeline_log.as_ref().and_then(|p| p.parse_queue_capacity),
+            );
+            let writer_fill_pct = queue_fill_pct(
+                pipeline_log.as_ref().and_then(|p| p.writer_queue_depth),
+                pipeline_log.as_ref().and_then(|p| p.writer_queue_capacity),
+            );
+
+            let current_block = progress.current();
+            match last_progress_block {
+                None => {
+                    last_progress_block = Some(current_block);
+                    last_progress_advanced_at = Instant::now();
+                }
+                Some(last_block) if current_block > last_block => {
+                    if let Some(last_warn_at) = last_stall_warn_at.take() {
+                        info!(
+                            run_id = %indexer_for_progress.run_id(),
+                            resumed_at = current_block,
+                            stalled_seconds = last_progress_advanced_at.elapsed().as_secs(),
+                            seconds_since_last_stall_warn = last_warn_at.elapsed().as_secs(),
+                            suppressed_since_last = suppressed_stall_warns,
+                            "Sync progress resumed after stall"
+                        );
+                    }
+                    last_progress_block = Some(current_block);
+                    last_progress_advanced_at = Instant::now();
+                    suppressed_stall_warns = 0;
+                }
+                Some(_) if current_block < progress.target() => {
+                    let stalled_for = last_progress_advanced_at.elapsed();
+                    let now = Instant::now();
+                    if should_warn_progress_stall(
+                        last_progress_advanced_at,
+                        now,
+                        current_block,
+                        progress.target(),
+                        Duration::from_secs(60),
+                    ) {
+                        if should_emit_rate_limited(
+                            last_stall_warn_at,
+                            now,
+                            Duration::from_secs(60),
+                        ) {
+                            warn!(
+                                run_id = %indexer_for_progress.run_id(),
+                                current = current_block,
+                                target = progress.target(),
+                                blocks_remaining = progress.blocks_remaining(),
+                                stalled_seconds = stalled_for.as_secs(),
+                                bps = format!("{:.1}", bps),
+                                ema_bps = format!("{:.1}", ema_rate),
+                                pipeline_fetch_ms = ?pipeline_log.as_ref().and_then(|p| p.fetch_ms).map(|v| format!("{:.1}", v)),
+                                pipeline_parse_ms = ?pipeline_log.as_ref().and_then(|p| p.parse_ms).map(|v| format!("{:.1}", v)),
+                                pipeline_write_ms = ?pipeline_log.as_ref().and_then(|p| p.write_ms).map(|v| format!("{:.1}", v)),
+                                pipeline_writer_wait_ms = ?pipeline_log.as_ref().and_then(|p| p.writer_wait_ms).map(|v| format!("{:.1}", v)),
+                                fetch_queue_fill_pct = ?fetch_fill_pct.map(|v| format!("{:.1}", v)),
+                                parse_queue_fill_pct = ?parse_fill_pct.map(|v| format!("{:.1}", v)),
+                                writer_queue_fill_pct = ?writer_fill_pct.map(|v| format!("{:.1}", v)),
+                                suppressed_since_last = suppressed_stall_warns,
+                                "Sync progress stalled"
+                            );
+                            last_stall_warn_at = Some(now);
+                            suppressed_stall_warns = 0;
+                        } else {
+                            suppressed_stall_warns = suppressed_stall_warns.saturating_add(1);
+                        }
+                    }
+                }
+                Some(_) => {}
+            }
+
             if indexer_for_progress.is_bulk_sync_active() {
                 info!(
                     run_id = %indexer_for_progress.run_id(),
@@ -342,17 +456,70 @@ async fn run_sync(args: Cli) -> Result<()> {
                     bps = format!("{:.1}", bps),
                     ema_bps = format!("{:.1}", ema_rate),
                     eta = %eta,
+                    pipeline_fetch_ms = ?pipeline_log.as_ref().and_then(|p| p.fetch_ms).map(|v| format!("{:.1}", v)),
+                    pipeline_parse_ms = ?pipeline_log.as_ref().and_then(|p| p.parse_ms).map(|v| format!("{:.1}", v)),
+                    pipeline_write_ms = ?pipeline_log.as_ref().and_then(|p| p.write_ms).map(|v| format!("{:.1}", v)),
+                    pipeline_writer_wait_ms = ?pipeline_log.as_ref().and_then(|p| p.writer_wait_ms).map(|v| format!("{:.1}", v)),
+                    fetch_queue_fill_pct = ?fetch_fill_pct.map(|v| format!("{:.1}", v)),
+                    parse_queue_fill_pct = ?parse_fill_pct.map(|v| format!("{:.1}", v)),
+                    writer_queue_fill_pct = ?writer_fill_pct.map(|v| format!("{:.1}", v)),
                     "Bulk sync progress"
                 );
+                if parse_fill_pct.is_some_and(|p| p >= 80.0)
+                    || writer_fill_pct.is_some_and(|p| p >= 80.0)
+                {
+                    let now = Instant::now();
+                    if should_emit_rate_limited(
+                        last_queue_pressure_warn_at,
+                        now,
+                        Duration::from_secs(60),
+                    ) {
+                        warn!(
+                            run_id = %indexer_for_progress.run_id(),
+                            parse_queue_fill_pct = ?parse_fill_pct.map(|v| format!("{:.1}", v)),
+                            writer_queue_fill_pct = ?writer_fill_pct.map(|v| format!("{:.1}", v)),
+                            suppressed_since_last = suppressed_queue_pressure_warns,
+                            "Pipeline queue pressure high"
+                        );
+                        last_queue_pressure_warn_at = Some(now);
+                        suppressed_queue_pressure_warns = 0;
+                    } else {
+                        suppressed_queue_pressure_warns =
+                            suppressed_queue_pressure_warns.saturating_add(1);
+                    }
+                } else if let Some(last_warn_at) = last_queue_pressure_warn_at.take() {
+                    info!(
+                        run_id = %indexer_for_progress.run_id(),
+                        seconds_since_last_warn = last_warn_at.elapsed().as_secs(),
+                        suppressed_since_last = suppressed_queue_pressure_warns,
+                        "Pipeline queue pressure normalized"
+                    );
+                    suppressed_queue_pressure_warns = 0;
+                }
             } else {
                 info!(
                     run_id = %indexer_for_progress.run_id(),
+                    source = data_source,
+                    bps = format!("{:.1}", bps),
+                    ema_bps = format!("{:.1}", ema_rate),
+                    eta = %eta,
+                    pipeline_writer_wait_ms = ?pipeline_log.as_ref().and_then(|p| p.writer_wait_ms).map(|v| format!("{:.1}", v)),
+                    parse_queue_fill_pct = ?parse_fill_pct.map(|v| format!("{:.1}", v)),
                     "[{}] Synced to block {} (tip: {}, {} behind)",
                     data_source,
                     progress.current(),
                     progress.target(),
                     progress.blocks_remaining()
                 );
+                if let Some(last_warn_at) = last_queue_pressure_warn_at.take() {
+                    info!(
+                        run_id = %indexer_for_progress.run_id(),
+                        seconds_since_last_warn = last_warn_at.elapsed().as_secs(),
+                        suppressed_since_last = suppressed_queue_pressure_warns,
+                        "Pipeline queue pressure normalized"
+                    );
+                    suppressed_queue_pressure_warns = 0;
+                }
             }
         }
     });
@@ -422,4 +589,61 @@ async fn run_label_import_command(
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{queue_fill_pct, should_emit_rate_limited, should_warn_progress_stall};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn test_queue_fill_pct() {
+        assert_eq!(queue_fill_pct(Some(5), Some(10)), Some(50.0));
+        assert_eq!(queue_fill_pct(Some(1), Some(0)), None);
+        assert_eq!(queue_fill_pct(None, Some(10)), None);
+        assert_eq!(queue_fill_pct(Some(1), None), None);
+    }
+
+    #[test]
+    fn test_should_emit_rate_limited() {
+        let now = Instant::now();
+        assert!(should_emit_rate_limited(None, now, Duration::from_secs(60)));
+        assert!(!should_emit_rate_limited(
+            Some(now),
+            now + Duration::from_secs(10),
+            Duration::from_secs(60)
+        ));
+        assert!(should_emit_rate_limited(
+            Some(now),
+            now + Duration::from_secs(60),
+            Duration::from_secs(60)
+        ));
+    }
+
+    #[test]
+    fn test_should_warn_progress_stall() {
+        let now = Instant::now();
+        let last_advanced = now - Duration::from_secs(75);
+        assert!(should_warn_progress_stall(
+            last_advanced,
+            now,
+            100,
+            200,
+            Duration::from_secs(60)
+        ));
+        assert!(!should_warn_progress_stall(
+            now - Duration::from_secs(30),
+            now,
+            100,
+            200,
+            Duration::from_secs(60)
+        ));
+        assert!(!should_warn_progress_stall(
+            last_advanced,
+            now,
+            200,
+            200,
+            Duration::from_secs(60)
+        ));
+    }
 }

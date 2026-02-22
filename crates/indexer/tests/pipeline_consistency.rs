@@ -223,7 +223,7 @@ fn test_same_batch_cell_consumption() {
 fn test_script_usage_cell_creation() {
     let (store, writer) = setup_store();
     let lock_code_hash = vec![0x11u8; 32];
-    let mut changes: HashMap<(Vec<u8>, bool), (i64, i64, i64, i64, i64, i64)> = HashMap::new();
+    let mut changes: HashMap<(Vec<u8>, bool), (i64, i64, i128, i128, i128, i128)> = HashMap::new();
 
     changes.insert(
         (lock_code_hash.clone(), false),
@@ -253,7 +253,7 @@ fn test_script_usage_cell_consumption() {
     let (store, writer) = setup_store();
     let lock_code_hash = vec![0x11u8; 32];
 
-    let mut create_changes: HashMap<(Vec<u8>, bool), (i64, i64, i64, i64, i64, i64)> =
+    let mut create_changes: HashMap<(Vec<u8>, bool), (i64, i64, i128, i128, i128, i128)> =
         HashMap::new();
     create_changes.insert(
         (lock_code_hash.clone(), false),
@@ -265,7 +265,7 @@ fn test_script_usage_cell_consumption() {
         .unwrap();
     batch.commit().unwrap();
 
-    let mut consume_changes: HashMap<(Vec<u8>, bool), (i64, i64, i64, i64, i64, i64)> =
+    let mut consume_changes: HashMap<(Vec<u8>, bool), (i64, i64, i128, i128, i128, i128)> =
         HashMap::new();
     consume_changes.insert(
         (lock_code_hash.clone(), false),

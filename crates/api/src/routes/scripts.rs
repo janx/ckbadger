@@ -885,15 +885,11 @@ fn apply_script_chart_delta(
     occupied_delta: i128,
     context: &str,
 ) -> Result<(i128, i128), ApiRouteError> {
-    let cap_delta_i64 = i64::try_from(cap_delta)
-        .map_err(|_| ApiError::internal(format!("{} capacity delta exceeds i64", context)))?;
-    let occupied_delta_i64 = i64::try_from(occupied_delta)
-        .map_err(|_| ApiError::internal(format!("{} occupied delta exceeds i64", context)))?;
     apply_live_capacity_delta(
         cumulative_capacity,
         cumulative_occupied,
-        cap_delta_i64,
-        occupied_delta_i64,
+        cap_delta,
+        occupied_delta,
         context,
     )
     .map_err(|e| ApiError::internal(e.to_string()))
@@ -949,8 +945,8 @@ fn build_script_occupation_chart(
                 .map_err(|e| ApiError::internal(e.to_string()))?;
             for (date, delta) in baseline {
                 let entry = baseline_daily.entry(date).or_insert((0, 0));
-                entry.0 += delta.live_capacity_delta as i128;
-                entry.1 += delta.live_occupied_capacity_delta as i128;
+                entry.0 += delta.live_capacity_delta;
+                entry.1 += delta.live_occupied_capacity_delta;
             }
         }
         for (_, (cap_delta, occupied_delta)) in baseline_daily {
@@ -972,8 +968,8 @@ fn build_script_occupation_chart(
             .map_err(|e| ApiError::internal(e.to_string()))?;
         for (date, delta) in deltas {
             let entry = daily_deltas.entry(date).or_insert((0, 0));
-            entry.0 += delta.live_capacity_delta as i128;
-            entry.1 += delta.live_occupied_capacity_delta as i128;
+            entry.0 += delta.live_capacity_delta;
+            entry.1 += delta.live_occupied_capacity_delta;
         }
     }
 
@@ -1095,11 +1091,11 @@ mod tests {
     use ckbadger_store::ScriptInfo;
 
     #[test]
-    fn apply_script_chart_delta_errors_on_i64_overflow() {
-        let err = apply_script_chart_delta(0, 0, i128::from(i64::MAX) + 1, 0, "script chart")
-            .unwrap_err();
-        assert_eq!(err.0, StatusCode::INTERNAL_SERVER_ERROR);
-        assert!(err.1 .0.message.contains("capacity delta exceeds i64"));
+    fn apply_script_chart_delta_accepts_delta_beyond_i64() {
+        let huge = i128::from(i64::MAX) + 1;
+        let (capacity, occupied) = apply_script_chart_delta(0, 0, huge, 0, "script chart").unwrap();
+        assert_eq!(capacity, huge);
+        assert_eq!(occupied, 0);
     }
 
     #[test]

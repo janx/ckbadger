@@ -369,14 +369,14 @@ fn decode_nft_collection_id(
 }
 
 fn build_capacity_occupation_chart(
-    deltas: Vec<(u32, i64, i64)>,
+    deltas: Vec<(u32, i128, i128)>,
     title: String,
 ) -> anyhow::Result<StackedAreaChartResponse> {
     build_capacity_occupation_chart_with_initial(deltas, title, 0, 0)
 }
 
 fn build_capacity_occupation_chart_with_initial(
-    deltas: Vec<(u32, i64, i64)>,
+    deltas: Vec<(u32, i128, i128)>,
     title: String,
     initial_capacity: i128,
     initial_occupied: i128,

@@ -486,11 +486,11 @@ pub struct DailyStats {
     pub transactions_count: i32,
     pub cells_created: i32,
     pub cells_consumed: i32,
-    pub capacity_transferred: i64,
+    pub capacity_transferred: i128,
     #[serde(default)]
-    pub occupied_capacity_created: i64,
+    pub occupied_capacity_created: i128,
     #[serde(default)]
-    pub occupied_capacity_consumed: i64,
+    pub occupied_capacity_consumed: i128,
     pub total_live_cells: i64,
     pub total_dead_cells: i64,
     pub total_all_cells: i64,
@@ -506,7 +506,7 @@ pub struct HourlyStats {
     pub transactions_count: i32,
     pub cells_created: i32,
     pub cells_consumed: i32,
-    pub capacity_transferred: i64,
+    pub capacity_transferred: i128,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -583,33 +583,33 @@ pub struct ScriptInfo {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ScriptDailyDelta {
     /// Net live capacity change in shannons for this script deployment + kind + day.
-    pub live_capacity_delta: i64,
+    pub live_capacity_delta: i128,
     /// Net live occupied capacity change in shannons for this script deployment + kind + day.
-    pub live_occupied_capacity_delta: i64,
+    pub live_occupied_capacity_delta: i128,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TokenDailyDelta {
     /// Net live capacity change in shannons for this token's cells on a day.
-    pub live_capacity_delta: i64,
+    pub live_capacity_delta: i128,
     /// Net live occupied capacity change in shannons for this token's cells on a day.
-    pub live_occupied_capacity_delta: i64,
+    pub live_occupied_capacity_delta: i128,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ClusterDailyDelta {
     /// Net live capacity change in shannons for this cluster's spores on a day.
-    pub live_capacity_delta: i64,
+    pub live_capacity_delta: i128,
     /// Net live occupied capacity change in shannons for this cluster's spores on a day.
-    pub live_occupied_capacity_delta: i64,
+    pub live_occupied_capacity_delta: i128,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SporeDailyDelta {
     /// Net live capacity change in shannons for this spore on a day.
-    pub live_capacity_delta: i64,
+    pub live_capacity_delta: i128,
     /// Net live occupied capacity change in shannons for this spore on a day.
-    pub live_occupied_capacity_delta: i64,
+    pub live_occupied_capacity_delta: i128,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -621,9 +621,9 @@ pub struct SporeTypeIndex {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct NftDailyDelta {
     /// Net live capacity change in shannons for this NFT collection on a day.
-    pub live_capacity_delta: i64,
+    pub live_capacity_delta: i128,
     /// Net live occupied capacity change in shannons for this NFT collection on a day.
-    pub live_occupied_capacity_delta: i64,
+    pub live_occupied_capacity_delta: i128,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

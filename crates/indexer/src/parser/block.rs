@@ -96,7 +96,15 @@ impl BlockParser {
 
     pub fn parse_timestamp(timestamp_hex: &str) -> DateTime<Utc> {
         let ms = Self::parse_hex_u64(timestamp_hex);
-        Utc.timestamp_millis_opt(ms as i64)
+        let ms = i64::try_from(ms).unwrap_or_else(|_| {
+            panic!(
+                "timestamp over i64 range '{}': {} (max={})",
+                timestamp_hex,
+                ms,
+                i64::MAX
+            )
+        });
+        Utc.timestamp_millis_opt(ms)
             .single()
             .expect("Invalid timestamp in block header")
     }
@@ -107,11 +115,27 @@ impl BlockParser {
     }
 
     fn parse_hex_i64(hex: &str) -> i64 {
-        Self::parse_hex_u64(hex) as i64
+        let parsed = Self::parse_hex_u64(hex);
+        i64::try_from(parsed).unwrap_or_else(|_| {
+            panic!(
+                "block hex over i64 range '{}': {} (max={})",
+                hex,
+                parsed,
+                i64::MAX
+            )
+        })
     }
 
     fn parse_hex_i32(hex: &str) -> i32 {
-        Self::parse_hex_u64(hex) as i32
+        let parsed = Self::parse_hex_u64(hex);
+        i32::try_from(parsed).unwrap_or_else(|_| {
+            panic!(
+                "block hex over i32 range '{}': {} (max={})",
+                hex,
+                parsed,
+                i32::MAX
+            )
+        })
     }
 
     pub fn parse_block_number(block: &BlockView) -> u64 {
@@ -272,10 +296,22 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "block hex over i64 range")]
+    fn test_parse_hex_i64_overflow_panics() {
+        let _ = BlockParser::parse_hex_i64("0x8000000000000000");
+    }
+
+    #[test]
     fn test_parse_hex_i32_preserves_value() {
         assert_eq!(BlockParser::parse_hex_i32("0x0"), 0);
         assert_eq!(BlockParser::parse_hex_i32("0x1"), 1);
         assert_eq!(BlockParser::parse_hex_i32("0xff"), 255);
+    }
+
+    #[test]
+    #[should_panic(expected = "block hex over i32 range")]
+    fn test_parse_hex_i32_overflow_panics() {
+        let _ = BlockParser::parse_hex_i32("0x100000000");
     }
 
     #[test]

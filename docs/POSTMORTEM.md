@@ -1033,4 +1033,54 @@ return Ok(true);  // BUG: triggers immediate retry
 
 ---
 
-_Last updated: 2026-02-20_
+## Category: Numeric Safety
+
+### IDX-006: Shannons `i64`/unchecked cast caused overflow risk and pipeline false-idle hang (2026-02-22)
+
+**Symptom**: Bulk sync stalled with repeated idle warnings and no forward progress, while some numeric fields had potential wraparound risk under large values.
+
+**Root Cause**:
+
+1. **Unchecked narrowing conversions (`u64 as i64`)** on sync-critical parsing path:
+   - transaction `since`
+   - block hex parsing helpers
+   - tx `cycles` parsing
+     These could silently wrap when input exceeds `i64::MAX`.
+
+2. **Daily shannons deltas stored as `i64`** (`ScriptDailyDelta` / `TokenDailyDelta` / `ClusterDailyDelta` / `SporeDailyDelta` / `NftDailyDelta`), leaving insufficient headroom for long-term cumulative scale.
+
+3. **Daily/Hourly transfer and occupied-capacity aggregates stored as `i64`**
+   (`DailyStats.capacity_transferred`, `DailyStats.occupied_capacity_*`, `HourlyStats.capacity_transferred`), which can exceed `i64` under sustained high churn.
+
+4. **Pipeline idle timeout path** could keep waiting even when parser/fetcher task had already exited, creating a false "idle" loop instead of hard failure.
+
+**Fix**:
+
+- Replaced unchecked casts with fail-fast checked conversion (`try_from`) and explicit context in panic/error messages.
+- Promoted daily shannons delta value types from `i64` to `i128` across store types, indexer writer/update paths, sync aggregation maps, and API accumulation path.
+- Promoted daily/hourly shannons aggregate fields to `i128` and applied checked-add on batch merge paths to fail fast on impossible arithmetic overflow.
+- Added checked-add overflow guards when applying daily deltas in writer batch updates.
+- On pipeline idle timeout, detect parser/fetcher completion and return error immediately instead of waiting indefinitely.
+- Added progress-stall logging (rate-limited) with pipeline stage timings + queue fill ratios to speed up root-cause diagnosis when sync appears alive but block height does not advance.
+
+**Tests Added/Updated**:
+
+- `parser/cell.rs`: overflow panic test for capacity parsing.
+- `parser/transaction.rs`: overflow panic test for `since`.
+- `parser/block.rs`: overflow panic tests for `parse_hex_i64` / `parse_hex_i32`.
+- `indexer/tests/pipeline_consistency.rs`: idle-timeout abort regression test.
+- `indexer/tests/daily_statistics.rs`: regression coverage for daily/hourly shannons values above `i64::MAX`.
+- `indexer/src/main.rs` unit tests: stall-warning policy helper coverage.
+- writer unit tests updated for `i128` daily delta behavior.
+
+**Lesson**:
+
+- Any on-chain amount in shannons should default to `i128` in stored/aggregated forms.
+- Never use `as` for narrowing integer conversion on correctness-critical paths.
+- Timeout handlers must differentiate "slow" from "producer already dead"; dead producers should fail fast.
+
+**Files**: `crates/indexer/src/parser/cell.rs`, `crates/indexer/src/parser/transaction.rs`, `crates/indexer/src/parser/block.rs`, `crates/indexer/src/sync/indexer.rs`, `crates/indexer/src/db/writer/addresses.rs`, `crates/indexer/src/db/writer/udt.rs`, `crates/indexer/src/db/writer/spore.rs`, `crates/indexer/src/db/writer/mnft.rs`, `crates/ckbadger-store/src/types.rs`, `crates/api/src/utils/assets.rs`, `crates/api/src/routes/scripts.rs`, `crates/api/src/routes/statistics.rs`
+
+---
+
+_Last updated: 2026-02-22_

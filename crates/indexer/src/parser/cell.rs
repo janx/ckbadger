@@ -64,9 +64,16 @@ impl CellParser {
 
     fn parse_capacity_i64(capacity_hex: &str) -> i64 {
         let hex = capacity_hex.strip_prefix("0x").unwrap_or(capacity_hex);
-        u64::from_str_radix(hex, 16)
-            .unwrap_or_else(|e| panic!("invalid cell capacity hex '{}': {}", capacity_hex, e))
-            as i64
+        let parsed = u64::from_str_radix(hex, 16)
+            .unwrap_or_else(|e| panic!("invalid cell capacity hex '{}': {}", capacity_hex, e));
+        i64::try_from(parsed).unwrap_or_else(|_| {
+            panic!(
+                "cell capacity over i64 range '{}': {} (max={})",
+                capacity_hex,
+                parsed,
+                i64::MAX
+            )
+        })
     }
 }
 
@@ -154,6 +161,12 @@ mod tests {
     #[should_panic(expected = "invalid cell capacity hex")]
     fn test_parse_capacity_i64_invalid_panics() {
         let _ = CellParser::parse_capacity_i64("invalid");
+    }
+
+    #[test]
+    #[should_panic(expected = "cell capacity over i64 range")]
+    fn test_parse_capacity_i64_overflow_panics() {
+        let _ = CellParser::parse_capacity_i64("0x8000000000000000");
     }
 
     #[test]

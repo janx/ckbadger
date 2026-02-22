@@ -43,10 +43,9 @@ fn checked_next_script_metric_i128(
     script_kind: &str,
     metric: &str,
     current: i128,
-    delta: i64,
+    delta: i128,
 ) -> Result<i128> {
-    let delta_i128 = i128::from(delta);
-    let next = current.checked_add(delta_i128).ok_or_else(|| {
+    let next = current.checked_add(delta).ok_or_else(|| {
         anyhow::anyhow!(
             "script {} {} overflow: code_hash=0x{}, current={}, delta={}",
             script_kind,
@@ -251,7 +250,7 @@ impl BatchWriter {
     pub fn apply_script_usage_deltas(
         &self,
         existing: &HashMap<Vec<u8>, Option<ckbadger_store::types::ScriptInfo>>,
-        changes: &HashMap<(Vec<u8>, bool), (i64, i64, i64, i64, i64, i64)>,
+        changes: &HashMap<(Vec<u8>, bool), (i64, i64, i128, i128, i128, i128)>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
         if changes.is_empty() {
@@ -429,7 +428,7 @@ impl BatchWriter {
 
     pub fn update_script_usage_batch(
         &self,
-        changes: &HashMap<(Vec<u8>, bool), (i64, i64, i64, i64, i64, i64)>,
+        changes: &HashMap<(Vec<u8>, bool), (i64, i64, i128, i128, i128, i128)>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
         if changes.is_empty() {
@@ -457,14 +456,14 @@ impl BatchWriter {
 
     pub fn update_script_daily_deltas_batch(
         &self,
-        changes: &HashMap<(Vec<u8>, bool, u32), (i64, i64)>,
+        changes: &HashMap<(Vec<u8>, bool, u32), (i128, i128)>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
         if changes.is_empty() {
             return Ok(());
         }
 
-        let mut keyed_changes: Vec<(Vec<u8>, i64, i64)> = Vec::with_capacity(changes.len());
+        let mut keyed_changes: Vec<(Vec<u8>, i128, i128)> = Vec::with_capacity(changes.len());
         for ((code_hash, is_type, date_yyyymmdd), (live_cap_delta, live_occupied_delta)) in changes
         {
             if *live_cap_delta == 0 && *live_occupied_delta == 0 {
@@ -494,8 +493,28 @@ impl BatchWriter {
                 Ok(Some(value)) => bincode::deserialize(&value).unwrap_or_default(),
                 _ => ScriptDailyDelta::default(),
             };
-            existing.live_capacity_delta += live_cap_delta;
-            existing.live_occupied_capacity_delta += live_occupied_delta;
+            existing.live_capacity_delta = existing
+                .live_capacity_delta
+                .checked_add(live_cap_delta)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "script daily capacity delta overflow: key=0x{}, current={}, delta={}",
+                        hex::encode(&key),
+                        existing.live_capacity_delta,
+                        live_cap_delta
+                    )
+                })?;
+            existing.live_occupied_capacity_delta = existing
+                .live_occupied_capacity_delta
+                .checked_add(live_occupied_delta)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "script daily occupied delta overflow: key=0x{}, current={}, delta={}",
+                        hex::encode(&key),
+                        existing.live_occupied_capacity_delta,
+                        live_occupied_delta
+                    )
+                })?;
             if existing.live_capacity_delta == 0 && existing.live_occupied_capacity_delta == 0 {
                 batch.delete_stats(&key);
             } else {
@@ -524,7 +543,7 @@ mod tests {
         let date = 20240115u32;
 
         let mut first = HashMap::new();
-        first.insert((code_hash.clone(), false, date), (100i64, 60i64));
+        first.insert((code_hash.clone(), false, date), (100i128, 60i128));
         let mut batch = StoreBatch::new(&store);
         writer
             .update_script_daily_deltas_batch(&first, &mut batch)
@@ -532,7 +551,7 @@ mod tests {
         batch.commit().unwrap();
 
         let mut second = HashMap::new();
-        second.insert((code_hash.clone(), false, date), (-20i64, -10i64));
+        second.insert((code_hash.clone(), false, date), (-20i128, -10i128));
         let mut batch = StoreBatch::new(&store);
         writer
             .update_script_daily_deltas_batch(&second, &mut batch)
@@ -547,7 +566,7 @@ mod tests {
         assert_eq!(delta.live_occupied_capacity_delta, 50);
 
         let mut third = HashMap::new();
-        third.insert((code_hash.clone(), false, date), (-80i64, -50i64));
+        third.insert((code_hash.clone(), false, date), (-80i128, -50i128));
         let mut batch = StoreBatch::new(&store);
         writer
             .update_script_daily_deltas_batch(&third, &mut batch)
@@ -664,5 +683,44 @@ mod tests {
             updated.lock_live_occupied_capacity_sum,
             i64::MAX as i128 + 300
         );
+    }
+
+    #[test]
+    fn test_apply_script_usage_deltas_accepts_capacity_delta_exceeding_i64() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+
+        let code_hash = vec![0xDD; 32];
+        let existing_info = ScriptInfo {
+            code_hash: code_hash.clone(),
+            lock_cells_count: 1,
+            lock_live_cells_count: 1,
+            lock_capacity_sum: 0,
+            lock_live_capacity_sum: 0,
+            lock_occupied_capacity_sum: 0,
+            lock_live_occupied_capacity_sum: 0,
+            ..Default::default()
+        };
+
+        let mut existing = HashMap::new();
+        existing.insert(code_hash.clone(), Some(existing_info));
+
+        let huge_delta = i128::from(i64::MAX) + 42;
+        let mut changes = HashMap::new();
+        changes.insert(
+            (code_hash.clone(), false),
+            (0, 0, huge_delta, huge_delta, 0, 0),
+        );
+
+        let mut batch = StoreBatch::new(&store);
+        writer
+            .apply_script_usage_deltas(&existing, &changes, &mut batch)
+            .unwrap();
+        batch.commit().unwrap();
+
+        let updated = store.get_script_info(&code_hash).unwrap().unwrap();
+        assert_eq!(updated.lock_capacity_sum, huge_delta);
+        assert_eq!(updated.lock_live_capacity_sum, huge_delta);
     }
 }

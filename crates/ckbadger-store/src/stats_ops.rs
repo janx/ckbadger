@@ -645,7 +645,13 @@ impl CkbadgerStore {
                 }
             }
 
-            let depositors_count = active_depositors.len() as i64;
+            let depositors_count = i64::try_from(active_depositors.len()).map_err(|_| {
+                anyhow::anyhow!(
+                    "dao depositors_count exceeds i64: date={}, count={}",
+                    date,
+                    active_depositors.len()
+                )
+            })?;
             let date_str = date.format("%Y%m%d").to_string();
             let key = crate::keys::encode_stats_key(
                 crate::keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,

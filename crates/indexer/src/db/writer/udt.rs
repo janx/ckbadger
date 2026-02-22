@@ -12,14 +12,14 @@ use super::BatchWriter;
 impl BatchWriter {
     pub fn update_token_daily_deltas_batch(
         &self,
-        changes: &HashMap<(Vec<u8>, u32), (i64, i64)>,
+        changes: &HashMap<(Vec<u8>, u32), (i128, i128)>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
         if changes.is_empty() {
             return Ok(());
         }
 
-        let mut keyed_changes: Vec<(Vec<u8>, i64, i64)> = Vec::with_capacity(changes.len());
+        let mut keyed_changes: Vec<(Vec<u8>, i128, i128)> = Vec::with_capacity(changes.len());
         for ((type_hash, date_yyyymmdd), (live_cap_delta, live_occupied_delta)) in changes {
             if *live_cap_delta == 0 && *live_occupied_delta == 0 {
                 continue;
@@ -48,8 +48,28 @@ impl BatchWriter {
                 Ok(Some(value)) => bincode::deserialize(&value).unwrap_or_default(),
                 _ => TokenDailyDelta::default(),
             };
-            existing.live_capacity_delta += live_cap_delta;
-            existing.live_occupied_capacity_delta += live_occupied_delta;
+            existing.live_capacity_delta = existing
+                .live_capacity_delta
+                .checked_add(live_cap_delta)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "token daily capacity delta overflow: key=0x{}, current={}, delta={}",
+                        hex::encode(&key),
+                        existing.live_capacity_delta,
+                        live_cap_delta
+                    )
+                })?;
+            existing.live_occupied_capacity_delta = existing
+                .live_occupied_capacity_delta
+                .checked_add(live_occupied_delta)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "token daily occupied delta overflow: key=0x{}, current={}, delta={}",
+                        hex::encode(&key),
+                        existing.live_occupied_capacity_delta,
+                        live_occupied_delta
+                    )
+                })?;
             if existing.live_capacity_delta == 0 && existing.live_occupied_capacity_delta == 0 {
                 batch.delete_stats(&key);
             } else {
@@ -481,7 +501,7 @@ mod tests {
         let type_hash = vec![0xAA; 32];
 
         let mut first = HashMap::new();
-        first.insert((type_hash.clone(), 20240115u32), (100i64, 60i64));
+        first.insert((type_hash.clone(), 20240115u32), (100i128, 60i128));
         let mut batch = StoreBatch::new(&store);
         writer
             .update_token_daily_deltas_batch(&first, &mut batch)
@@ -489,7 +509,7 @@ mod tests {
         batch.commit().unwrap();
 
         let mut second = HashMap::new();
-        second.insert((type_hash.clone(), 20240115u32), (-20i64, -10i64));
+        second.insert((type_hash.clone(), 20240115u32), (-20i128, -10i128));
         let mut batch = StoreBatch::new(&store);
         writer
             .update_token_daily_deltas_batch(&second, &mut batch)
@@ -504,7 +524,7 @@ mod tests {
         assert_eq!(delta.live_occupied_capacity_delta, 50);
 
         let mut third = HashMap::new();
-        third.insert((type_hash.clone(), 20240115u32), (-80i64, -50i64));
+        third.insert((type_hash.clone(), 20240115u32), (-80i128, -50i128));
         let mut batch = StoreBatch::new(&store);
         writer
             .update_token_daily_deltas_batch(&third, &mut batch)

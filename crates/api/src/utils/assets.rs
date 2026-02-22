@@ -15,11 +15,11 @@ fn non_empty_name(name: Option<&str>) -> Option<String> {
 pub fn apply_live_capacity_delta(
     live_capacity: i128,
     live_occupied: i128,
-    capacity_delta: i64,
-    occupied_delta: i64,
+    capacity_delta: i128,
+    occupied_delta: i128,
     context: &str,
 ) -> Result<(i128, i128)> {
-    let next_capacity = live_capacity + capacity_delta as i128;
+    let next_capacity = live_capacity + capacity_delta;
     if next_capacity < 0 {
         bail!(
             "live capacity underflow while {}: prev={}, delta={}, next={}",
@@ -30,7 +30,7 @@ pub fn apply_live_capacity_delta(
         );
     }
 
-    let next_occupied = live_occupied + occupied_delta as i128;
+    let next_occupied = live_occupied + occupied_delta;
     if next_occupied < 0 {
         bail!(
             "live occupied capacity underflow while {}: prev={}, delta={}, next={}",
@@ -56,7 +56,7 @@ pub fn apply_live_capacity_delta(
 /// Accumulate live capacity/occupied capacity from ordered daily deltas.
 pub fn accumulate_live_capacity<I>(deltas: I) -> Result<(i128, i128)>
 where
-    I: IntoIterator<Item = (i64, i64)>,
+    I: IntoIterator<Item = (i128, i128)>,
 {
     let mut live_capacity: i128 = 0;
     let mut live_occupied: i128 = 0;
