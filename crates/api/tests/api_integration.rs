@@ -8,8 +8,8 @@ use ckbadger_api::{create_router, AppConfig};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
     CachedBlockHeader, ClusterAggregate, ClusterDailyDelta, DobEntry, DobExtra, DobStandard,
-    EpochStats, LiveCellInfo, NftCollectionAggregate, NftDailyDelta, NftStandard, ScriptDailyDelta,
-    ScriptInfo, SporeDailyDelta, TokenDailyDelta, TokenInfo,
+    EpochStats, LiveCellInfo, NftCollectionAggregate, NftDailyDelta, NftEntry, NftExtra,
+    NftStandard, ScriptDailyDelta, ScriptInfo, SporeDailyDelta, TokenDailyDelta, TokenInfo,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -2742,6 +2742,93 @@ async fn test_assets_nft_list_uses_dotbit_display_name_when_aggregate_name_missi
 
     assert_eq!(json["data"][0]["name"], ".bit");
     assert_eq!(json["data"][0]["standard"], "dotbit");
+}
+
+#[tokio::test]
+async fn test_assets_nft_collection_items_dotbit_human_readable_and_pagination() {
+    let store = test_store();
+    let collection_id = b"dotbit_collection_______________".to_vec();
+    let nft_a = [0x11u8; 20];
+    let nft_b = [0x22u8; 20];
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_nft_collection_aggregate(
+        &collection_id,
+        &NftCollectionAggregate {
+            name: Some(".bit".to_string()),
+            standard: NftStandard::DotBit,
+            total_count: 2,
+            live_count: 1,
+        },
+    );
+    batch.put_nft(
+        &nft_a,
+        &NftEntry {
+            standard: NftStandard::DotBit,
+            collection_id: None,
+            token_id: Some(nft_a.to_vec()),
+            owner_lock_hash: Some(vec![0x31; 32]),
+            name: Some("alice.bit".to_string()),
+            is_live: true,
+            created_at_block: 100,
+            extra: NftExtra::DotBit {
+                expired_at: Some(1_800_000_000),
+            },
+        },
+    );
+    batch.put_nft(
+        &nft_b,
+        &NftEntry {
+            standard: NftStandard::DotBit,
+            collection_id: None,
+            token_id: Some(nft_b.to_vec()),
+            owner_lock_hash: None,
+            name: Some("bob.bit".to_string()),
+            is_live: false,
+            created_at_block: 101,
+            extra: NftExtra::DotBit {
+                expired_at: Some(1_900_000_000),
+            },
+        },
+    );
+    batch.put_nft_by_collection(&collection_id, &nft_a);
+    batch.put_nft_by_collection(&collection_id, &nft_b);
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/assets/nfts/dotbit/items?limit=1")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["total"], 2);
+    assert_eq!(json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(json["data"][0]["name"], "alice.bit");
+    assert_eq!(json["data"][0]["isLive"], true);
+    assert_eq!(json["data"][0]["expiredAt"], 1_800_000_000u64);
+    let cursor = json["nextCursor"].as_str().expect("next cursor");
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/assets/nfts/dotbit/items?limit=1&cursor={cursor}"
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(json["data"][0]["name"], "bob.bit");
+    assert_eq!(json["data"][0]["isLive"], false);
+    assert_eq!(json["nextCursor"], serde_json::Value::Null);
 }
 
 #[tokio::test]

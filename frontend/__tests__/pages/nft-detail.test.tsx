@@ -12,6 +12,7 @@ vi.mock('@/lib/api', () => ({
     getSporeNftOccupationChart: vi.fn(),
     getNftCollection: vi.fn(),
     getNftCollectionOccupationChart: vi.fn(),
+    getNftCollectionItems: vi.fn(),
   },
 }));
 
@@ -67,6 +68,13 @@ describe('SporeDetailPage', () => {
       data: [],
       series: [],
     });
+    vi.mocked(api.getNftCollectionItems).mockResolvedValue({
+      data: [],
+      total: 0,
+      limit: 20,
+      hasMore: false,
+      nextCursor: null,
+    });
   });
 
   it('links back to NFT tab on assets page', async () => {
@@ -94,6 +102,23 @@ describe('SporeDetailPage', () => {
   it('falls back to NFT collection detail when spore lookup returns 404', async () => {
     vi.mocked(api.getSporeNft).mockRejectedValue(new Error('API error: 404'));
     vi.mocked(api.getNftCollection).mockResolvedValue(mockCollection);
+    vi.mocked(api.getNftCollectionItems).mockResolvedValue({
+      data: [
+        {
+          nftId: '0x1111',
+          name: 'alice.bit',
+          standard: 'dotbit',
+          ownerLockHash: '0x2222',
+          isLive: true,
+          createdAtBlock: 100,
+          expiredAt: 1800000000,
+        },
+      ],
+      total: 1,
+      limit: 20,
+      hasMore: false,
+      nextCursor: null,
+    });
 
     render(<SporeDetailPage />);
 
@@ -105,6 +130,14 @@ describe('SporeDetailPage', () => {
     expect(screen.queryByText('Capacity Utilization')).not.toBeInTheDocument();
     expect(screen.getByText(/^Occupied:/)).toBeInTheDocument();
     expect(screen.getByText('Capacity & Occupation')).toBeInTheDocument();
+    expect(screen.getByText('Collection NFTs')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText('alice.bit')).toBeInTheDocument();
+    });
+    expect(api.getNftCollectionItems).toHaveBeenCalledWith(
+      mockCollection.collectionId,
+      expect.objectContaining({ limit: 20 })
+    );
   });
 
   it('normalizes dotbit slug before querying collection API', async () => {

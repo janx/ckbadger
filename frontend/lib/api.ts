@@ -699,6 +699,16 @@ interface NftCollection {
   liveOccupiedCapacity: string;
 }
 
+interface NftCollectionItem {
+  nftId: string;
+  name: string | null;
+  standard: string;
+  ownerLockHash: string | null;
+  isLive: boolean;
+  createdAtBlock: number;
+  expiredAt?: number | null;
+}
+
 interface ChartDataPoint {
   date: string;
   value: string;
@@ -1007,6 +1017,7 @@ export type {
   SporeCluster,
   SporeNft,
   NftCollection,
+  NftCollectionItem,
   ChartDataPoint,
   ChartResponse,
   TxStatsDataPoint,
@@ -1400,6 +1411,19 @@ export const api = {
     const suffix = query.toString();
     return fetchApi(
       `/assets/nfts/${normalizeNftAssetId(collectionId)}/charts/occupation${suffix ? `?${suffix}` : ''}`
+    );
+  },
+
+  getNftCollectionItems: (
+    collectionId: string,
+    params: CursorQueryParams = {}
+  ): Promise<CursorPaginatedResponse<NftCollectionItem>> => {
+    const query = new URLSearchParams();
+    if (params.limit) query.set('limit', String(params.limit));
+    if (params.cursor) query.set('cursor', params.cursor);
+    const suffix = query.toString();
+    return fetchApi(
+      `/assets/nfts/${normalizeNftAssetId(collectionId)}/items${suffix ? `?${suffix}` : ''}`
     );
   },
 

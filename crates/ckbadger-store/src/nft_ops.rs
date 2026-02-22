@@ -540,6 +540,57 @@ impl CkbadgerStore {
         }
         Ok(results)
     }
+
+    /// List NFT IDs in a collection via the `nft_by_collection` secondary index.
+    ///
+    /// Pagination is keyset-based by `nft_id` lexicographic order.
+    /// - `cursor = None` starts from the beginning.
+    /// - `cursor = Some(id)` starts AFTER that id.
+    pub fn list_nft_ids_by_collection(
+        &self,
+        collection_id: &[u8],
+        cursor: Option<&[u8]>,
+        limit: usize,
+    ) -> anyhow::Result<Vec<Vec<u8>>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let prefix = keys::encode_nft_by_collection_prefix(collection_id);
+        let start_nft_id = cursor.unwrap_or(&[]);
+        let start_key = keys::encode_nft_by_collection_key(collection_id, start_nft_id);
+
+        let iter = self.iterator_cf(
+            self.cf_nft_by_collection(),
+            rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
+        );
+        let mut results = Vec::new();
+
+        for item in iter.flatten() {
+            let (key, _) = item;
+            if !key.starts_with(&prefix) {
+                break;
+            }
+
+            if cursor.is_some() && key.as_ref() == start_key.as_slice() {
+                continue;
+            }
+
+            let Some((_, nft_id)) = keys::decode_nft_by_collection_key(&key) else {
+                anyhow::bail!("invalid nft_by_collection key length: {}", key.len());
+            };
+            if nft_id.is_empty() {
+                anyhow::bail!("invalid empty nft_id in nft_by_collection key");
+            }
+
+            results.push(nft_id);
+            if results.len() >= limit {
+                break;
+            }
+        }
+
+        Ok(results)
+    }
 }
 
 #[cfg(test)]
@@ -829,5 +880,32 @@ mod tests {
             .unwrap();
         assert_eq!(ranged.len(), 1);
         assert_eq!(ranged[0].0, 20260219);
+    }
+
+    #[test]
+    fn test_list_nft_ids_by_collection_pagination() {
+        let (_dir, store) = test_store();
+        let collection_id = [0x88u8; 24];
+        let nft_a = [0x01u8; 20];
+        let nft_b = [0x02u8; 20];
+        let nft_c = [0x03u8; 20];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_nft_by_collection(&collection_id, &nft_b);
+        batch.put_nft_by_collection(&collection_id, &nft_c);
+        batch.put_nft_by_collection(&collection_id, &nft_a);
+        batch.commit().unwrap();
+
+        let first = store
+            .list_nft_ids_by_collection(&collection_id, None, 2)
+            .unwrap();
+        assert_eq!(first.len(), 2);
+        assert_eq!(first[0], nft_a.to_vec());
+        assert_eq!(first[1], nft_b.to_vec());
+
+        let second = store
+            .list_nft_ids_by_collection(&collection_id, Some(&first[1]), 2)
+            .unwrap();
+        assert_eq!(second, vec![nft_c.to_vec()]);
     }
 }

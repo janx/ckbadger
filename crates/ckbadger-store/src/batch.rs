@@ -425,6 +425,17 @@ impl<'a> StoreBatch<'a> {
         self.batch.put_cf(self.store.cf_nft_data(), id, &value);
     }
 
+    pub fn put_nft_by_collection(&mut self, collection_id: &[u8], nft_id: &[u8]) {
+        let key = keys::encode_nft_by_collection_key(collection_id, nft_id);
+        self.batch
+            .put_cf(self.store.cf_nft_by_collection(), key, []);
+    }
+
+    pub fn delete_nft_by_collection(&mut self, collection_id: &[u8], nft_id: &[u8]) {
+        let key = keys::encode_nft_by_collection_key(collection_id, nft_id);
+        self.batch.delete_cf(self.store.cf_nft_by_collection(), key);
+    }
+
     // ---- Cluster aggregates ----
 
     pub fn put_cluster_aggregate(&mut self, cluster_id: &[u8], agg: &ClusterAggregate) {

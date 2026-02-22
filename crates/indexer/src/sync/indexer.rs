@@ -5362,7 +5362,7 @@ impl Indexer {
                         )?;
                     }
                     for (output_index, account) in
-                        DotbitParser::parse_accounts(tx).iter().enumerate()
+                        DotbitParser::parse_accounts(tx)?.iter().enumerate()
                     {
                         self.writer.insert_dotbit_account(
                             account,
@@ -6472,7 +6472,7 @@ impl Indexer {
                                 )?;
                             }
                             for (output_index, account) in
-                                DotbitParser::parse_accounts(tx).iter().enumerate()
+                                DotbitParser::parse_accounts(tx)?.iter().enumerate()
                             {
                                 writer.insert_dotbit_account(
                                     account,
@@ -7532,7 +7532,7 @@ impl Indexer {
                             );
                         }
                         for (output_index, account) in
-                            DotbitParser::parse_accounts(tx).iter().enumerate()
+                            DotbitParser::parse_accounts(tx)?.iter().enumerate()
                         {
                             self.writer.insert_dotbit_account(
                                 account,

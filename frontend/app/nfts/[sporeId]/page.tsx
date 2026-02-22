@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
@@ -10,12 +10,15 @@ import {
   TerminalPanel,
   TerminalPanelHeader,
   TerminalPanelContent,
+  TerminalPanelFooter,
 } from '@/components/ui/terminal-panel';
 import { PageHeader, Badge } from '@/components/ui/page-header';
 import { HexDisplay } from '@/components/ui/hex-display';
 import { DataField, DataGrid } from '@/components/ui/data-field';
 import { Address } from '@/components/ui/address';
+import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { CapacityOccupationSection } from '@/components/ui/capacity-occupation-section';
+import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { isDotbitAlias, normalizeNftAssetId } from '@/lib/nft-collections';
 import { getOccupationRangeParams, OccupationRangeKey } from '@/lib/occupation-range';
 
@@ -27,6 +30,7 @@ export default function SporeDetailPage() {
   const params = useParams();
   const rawAssetId = params.sporeId as string;
   const [occupationRange, setOccupationRange] = useState<OccupationRangeKey>('all');
+  const collectionItemsPagination = useCursorPagination();
   const occupationRangeParams = getOccupationRangeParams(occupationRange);
   const isDotbitCollection = isDotbitAlias(rawAssetId);
   const assetId = normalizeNftAssetId(rawAssetId);
@@ -47,6 +51,7 @@ export default function SporeDetailPage() {
     retry: false,
   });
   const collection = collectionQuery.data;
+  const collectionAssetId = collection?.collectionId ?? assetId;
 
   const { data: cluster } = useQuery({
     queryKey: ['cluster', spore?.clusterId],
@@ -65,13 +70,31 @@ export default function SporeDetailPage() {
 
   const { data: collectionOccupationChart, isLoading: isCollectionOccupationChartLoading } =
     useQuery({
-      queryKey: ['nft-collection-occupation-chart', assetId, occupationRange],
+      queryKey: ['nft-collection-occupation-chart', collectionAssetId, occupationRange],
       queryFn: () =>
         occupationRangeParams
-          ? api.getNftCollectionOccupationChart(assetId, occupationRangeParams)
-          : api.getNftCollectionOccupationChart(assetId),
+          ? api.getNftCollectionOccupationChart(collectionAssetId, occupationRangeParams)
+          : api.getNftCollectionOccupationChart(collectionAssetId),
       enabled: !!collection,
     });
+
+  const {
+    data: collectionItems,
+    isLoading: isCollectionItemsLoading,
+    isFetching: isCollectionItemsFetching,
+  } = useQuery({
+    queryKey: ['nft-collection-items', collectionAssetId, collectionItemsPagination.cursor],
+    queryFn: () =>
+      api.getNftCollectionItems(collectionAssetId, {
+        limit: 20,
+        cursor: collectionItemsPagination.cursor,
+      }),
+    enabled: !!collection,
+  });
+
+  useEffect(() => {
+    collectionItemsPagination.reset();
+  }, [collectionAssetId, collectionItemsPagination.reset]);
 
   const formatNumber = (num: number) => {
     return new Intl.NumberFormat().format(num);
@@ -177,6 +200,70 @@ export default function SporeDetailPage() {
               totalCapacity={collection.liveCapacity}
               occupiedCapacity={collection.liveOccupiedCapacity}
             />
+
+            <TerminalPanel>
+              <TerminalPanelHeader indicator="active">Collection NFTs</TerminalPanelHeader>
+              <TerminalPanelContent>
+                {isCollectionItemsLoading || isCollectionItemsFetching ? (
+                  <div className="py-8 text-center text-slate-500">Loading NFTs...</div>
+                ) : !collectionItems?.data?.length ? (
+                  <div className="py-8 text-center text-slate-500">No NFTs in this collection</div>
+                ) : (
+                  <div className="space-y-2">
+                    {collectionItems.data.map((item) => (
+                      <div
+                        key={item.nftId}
+                        className="flex flex-col gap-2 rounded border border-slate-800 bg-slate-900/40 p-3"
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="font-mono text-sm text-white">
+                            {item.name || item.nftId}
+                          </div>
+                          {item.isLive ? (
+                            <Badge variant="green">Live</Badge>
+                          ) : (
+                            <Badge variant="red">Burned</Badge>
+                          )}
+                        </div>
+                        <HexDisplay value={item.nftId} color="accent" size="sm" />
+                        <div className="font-mono text-xs text-slate-400">
+                          Created at block #{formatNumber(item.createdAtBlock)}
+                        </div>
+                        {item.ownerLockHash && (
+                          <div className="font-mono text-xs text-slate-400">
+                            Owner:{' '}
+                            <Link
+                              href={`/address/${item.ownerLockHash}`}
+                              className="hover:underline"
+                            >
+                              <HexDisplay
+                                value={item.ownerLockHash}
+                                color="accent"
+                                size="sm"
+                                startChars={10}
+                                endChars={8}
+                              />
+                            </Link>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </TerminalPanelContent>
+              <TerminalPanelFooter>
+                <CursorPagination
+                  total={collectionItems?.total ?? undefined}
+                  totalLabel="NFTs"
+                  pageSize={20}
+                  page={collectionItemsPagination.page}
+                  hasMore={collectionItems?.hasMore ?? false}
+                  hasPrevious={collectionItemsPagination.hasPrevious}
+                  onNext={() => collectionItemsPagination.goToNext(collectionItems?.nextCursor)}
+                  onPrevious={collectionItemsPagination.goToPrevious}
+                />
+              </TerminalPanelFooter>
+            </TerminalPanel>
           </div>
         </main>
       </div>

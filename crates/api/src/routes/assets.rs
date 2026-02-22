@@ -26,6 +26,10 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/assets", get(list_assets))
         .route("/assets/nfts/{collection_id}", get(get_nft_collection))
         .route(
+            "/assets/nfts/{collection_id}/items",
+            get(list_nft_collection_items),
+        )
+        .route(
             "/assets/nfts/{collection_id}/charts/occupation",
             get(get_nft_collection_occupation_chart),
         )
@@ -49,6 +53,13 @@ pub struct ListParams {
 pub struct ChartRangeParams {
     from: Option<String>,
     to: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NftItemsParams {
+    #[serde(default = "default_limit")]
+    limit: i64,
+    cursor: Option<String>,
 }
 
 fn default_limit() -> i64 {
@@ -118,6 +129,18 @@ pub struct NftCollectionDetailResponse {
     pub live_count: i64,
     pub live_capacity: String,
     pub live_occupied_capacity: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NftCollectionItemResponse {
+    pub nft_id: String,
+    pub name: Option<String>,
+    pub standard: String,
+    pub owner_lock_hash: Option<String>,
+    pub is_live: bool,
+    pub created_at_block: i64,
+    pub expired_at: Option<u64>,
 }
 
 async fn list_assets(
@@ -368,6 +391,34 @@ fn decode_nft_collection_id(
         .map_err(|_| ApiError::bad_request("Invalid NFT collection ID"))
 }
 
+fn decode_nft_item_cursor(raw: &str) -> Result<Vec<u8>, (axum::http::StatusCode, Json<ApiError>)> {
+    hex::decode(raw.strip_prefix("0x").unwrap_or(raw))
+        .map_err(|_| ApiError::bad_request("Invalid NFT items cursor"))
+}
+
+fn pad_collection_id_32(id: &[u8]) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    let len = id.len().min(32);
+    out[..len].copy_from_slice(&id[..len]);
+    out
+}
+
+fn nft_entry_matches_collection(
+    collection_id: &[u8],
+    entry: &ckbadger_store::types::NftEntry,
+) -> bool {
+    match entry.standard {
+        ckbadger_store::types::NftStandard::DotBit => {
+            collection_id == DOTBIT_SENTINEL_COLLECTION.as_slice()
+        }
+        _ => entry
+            .collection_id
+            .as_deref()
+            .map(|id| pad_collection_id_32(id) == pad_collection_id_32(collection_id))
+            .unwrap_or(false),
+    }
+}
+
 fn build_capacity_occupation_chart(
     deltas: Vec<(u32, i128, i128)>,
     title: String,
@@ -503,6 +554,98 @@ async fn get_nft_collection(
         live_capacity,
         live_occupied_capacity,
     })
+}
+
+async fn list_nft_collection_items(
+    State(state): State<Arc<AppState>>,
+    Path(collection_id): Path<String>,
+    Query(params): Query<NftItemsParams>,
+) -> ApiResult<CursorPaginatedResponse<NftCollectionItemResponse>> {
+    let limit = params.limit.clamp(1, 100);
+    let collection_id_bytes = decode_nft_collection_id(&collection_id)?;
+    let cursor_bytes = params
+        .cursor
+        .as_deref()
+        .map(decode_nft_item_cursor)
+        .transpose()?;
+
+    let agg = state
+        .store
+        .get_nft_collection_aggregate(&collection_id_bytes)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let agg = agg.ok_or_else(|| ApiError::not_found("NFT collection not found"))?;
+
+    let nft_ids = state
+        .store
+        .list_nft_ids_by_collection(
+            &collection_id_bytes,
+            cursor_bytes.as_deref(),
+            (limit + 1) as usize,
+        )
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let has_more = nft_ids.len() as i64 > limit;
+    let page_ids: Vec<Vec<u8>> = nft_ids.into_iter().take(limit as usize).collect();
+
+    let mut rows = Vec::with_capacity(page_ids.len());
+    for nft_id in &page_ids {
+        let entry = state
+            .store
+            .get_nft(nft_id)
+            .map_err(|e| ApiError::internal(e.to_string()))?
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "nft_by_collection index points to missing nft_data entry: collection_id=0x{}, nft_id=0x{}",
+                    hex::encode(&collection_id_bytes),
+                    hex::encode(nft_id)
+                ))
+            })?;
+
+        if !nft_entry_matches_collection(&collection_id_bytes, &entry) {
+            return Err(ApiError::internal(format!(
+                "nft_by_collection index mismatch: collection_id=0x{}, nft_id=0x{}, entry_standard={}, entry_collection_id={}",
+                hex::encode(&collection_id_bytes),
+                hex::encode(nft_id),
+                entry.standard.as_str(),
+                entry
+                    .collection_id
+                    .as_ref()
+                    .map(|id| format!("0x{}", hex::encode(id)))
+                    .unwrap_or_else(|| "null".to_string())
+            )));
+        }
+
+        let expired_at = match &entry.extra {
+            ckbadger_store::types::NftExtra::DotBit { expired_at } => *expired_at,
+            _ => None,
+        };
+
+        rows.push(NftCollectionItemResponse {
+            nft_id: format!("0x{}", hex::encode(nft_id)),
+            name: entry.name.clone(),
+            standard: entry.standard.asset_standard().to_string(),
+            owner_lock_hash: entry
+                .owner_lock_hash
+                .as_ref()
+                .map(|h| format!("0x{}", hex::encode(h))),
+            is_live: entry.is_live,
+            created_at_block: entry.created_at_block,
+            expired_at,
+        });
+    }
+
+    let next_cursor = if has_more {
+        page_ids.last().map(|id| format!("0x{}", hex::encode(id)))
+    } else {
+        None
+    };
+
+    ok(CursorPaginatedResponse::new(
+        rows,
+        agg.total_count,
+        limit,
+        next_cursor,
+    ))
 }
 
 async fn get_nft_collection_occupation_chart(

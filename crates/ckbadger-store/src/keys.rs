@@ -348,6 +348,26 @@ pub fn encode_nft_type_index_key(type_script_hash: &[u8]) -> [u8; NFT_TYPE_INDEX
     key
 }
 
+/// NFT-by-collection secondary index key: collection_id(32B padded) + nft_id(variable).
+pub fn encode_nft_by_collection_key(collection_id: &[u8], nft_id: &[u8]) -> Vec<u8> {
+    let mut key = Vec::with_capacity(32 + nft_id.len());
+    key.extend_from_slice(&pad_id_32(collection_id));
+    key.extend_from_slice(nft_id);
+    key
+}
+
+/// Prefix for scanning all NFTs in a collection.
+pub fn encode_nft_by_collection_prefix(collection_id: &[u8]) -> [u8; 32] {
+    pad_id_32(collection_id)
+}
+
+pub fn decode_nft_by_collection_key(key: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
+    if key.len() < 32 {
+        return None;
+    }
+    Some((key[..32].to_vec(), key[32..].to_vec()))
+}
+
 /// Zero-pad an ID to exactly 32 bytes. IDs shorter than 32 bytes (e.g. mNFT class_id = 24B)
 /// are right-padded with zeros; IDs already 32+ bytes are truncated to 32.
 fn pad_id_32(id: &[u8]) -> [u8; 32] {
@@ -750,6 +770,29 @@ mod tests {
         assert_eq!(key.len(), NFT_TYPE_INDEX_KEY_SIZE);
         assert_eq!(key[0], STATS_PREFIX_NFT_TYPE_INDEX);
         assert_eq!(&key[1..33], &type_script_hash);
+    }
+
+    #[test]
+    fn test_nft_by_collection_key_roundtrip() {
+        let collection_id = [0xA1u8; 24];
+        let nft_id = [0xB2u8; 20];
+        let key = encode_nft_by_collection_key(&collection_id, &nft_id);
+        assert_eq!(key.len(), 52);
+        let (decoded_collection, decoded_nft) =
+            decode_nft_by_collection_key(&key).expect("valid nft-by-collection key");
+        assert_eq!(&decoded_collection[..24], &collection_id);
+        assert_eq!(&decoded_collection[24..], &[0u8; 8]);
+        assert_eq!(decoded_nft, nft_id.to_vec());
+    }
+
+    #[test]
+    fn test_nft_by_collection_prefix_is_prefix_of_full_key() {
+        let collection_id = [0xF1u8; 24];
+        let nft_id = [0x1Fu8; 20];
+        let prefix = encode_nft_by_collection_prefix(&collection_id);
+        let key = encode_nft_by_collection_key(&collection_id, &nft_id);
+        assert_eq!(prefix.len(), 32);
+        assert!(key.starts_with(&prefix));
     }
 
     // ---- Activity key ----

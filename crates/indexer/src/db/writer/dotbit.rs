@@ -21,7 +21,10 @@ impl BatchWriter {
         timestamp_ms: i64,
         batch: &mut StoreBatch,
     ) -> Result<()> {
-        let account_name = format!("0x{}", hex::encode(&account.account_id));
+        let account_name = account
+            .account
+            .clone()
+            .unwrap_or_else(|| format!("0x{}", hex::encode(&account.account_id)));
         let existing = self.store.get_nft(&account.account_id)?;
 
         let entry = NftEntry {
@@ -40,6 +43,7 @@ impl BatchWriter {
             },
         };
         batch.put_nft(&account.account_id, &entry);
+        batch.put_nft_by_collection(&DOTBIT_SENTINEL_COLLECTION, &account.account_id);
 
         // Update collection aggregate if this is a new account
         if existing.is_none() {
@@ -149,6 +153,7 @@ mod tests {
 
         let account = ParsedDotbitAccount {
             account_id: vec![0x11; 20],
+            account: Some("alice.bit".to_string()),
             type_script_hash: vec![0x21; 32],
             next_account_id: None,
             expired_at: None,
@@ -168,12 +173,26 @@ mod tests {
             .unwrap();
         assert_eq!(loaded, account.account_id);
 
+        let entry = writer
+            .store()
+            .get_nft(&account.account_id)
+            .unwrap()
+            .expect("dotbit nft exists");
+        assert_eq!(entry.name.as_deref(), Some("alice.bit"));
+
         let batch_loaded = writer
             .get_dotbit_account_ids_by_outpoints_batch(std::slice::from_ref(&tx_hash), &[6])
             .unwrap();
         assert_eq!(batch_loaded.len(), 1);
         assert_eq!(batch_loaded[0].0, tx_hash);
         assert_eq!(batch_loaded[0].1, 6);
+
+        let dotbit_collection = b"dotbit_collection_______________";
+        let collection_ids = writer
+            .store()
+            .list_nft_ids_by_collection(dotbit_collection, None, 10)
+            .unwrap();
+        assert_eq!(collection_ids, vec![account.account_id]);
     }
 
     #[test]
@@ -184,6 +203,7 @@ mod tests {
 
         let account = ParsedDotbitAccount {
             account_id: vec![0x11; 20],
+            account: Some("alice.bit".to_string()),
             type_script_hash: vec![0x21; 32],
             next_account_id: None,
             expired_at: None,
@@ -222,6 +242,7 @@ mod tests {
 
         let account = ParsedDotbitAccount {
             account_id: vec![0x11; 20],
+            account: Some("alice.bit".to_string()),
             type_script_hash: vec![0x21; 32],
             next_account_id: None,
             expired_at: None,

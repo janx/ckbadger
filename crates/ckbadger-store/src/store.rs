@@ -32,6 +32,7 @@ pub const CF_TOKENS: &str = "tokens";
 pub const CF_TOKEN_HOLDERS: &str = "token_holders";
 pub const CF_SPORE_DATA: &str = "spore_data";
 pub const CF_NFT_DATA: &str = "nft_data";
+pub const CF_NFT_BY_COLLECTION: &str = "nft_by_collection";
 pub const CF_STATS: &str = "stats";
 pub const CF_SCRIPT_INFO: &str = "script_info";
 pub const CF_SYNC_META: &str = "sync_meta";
@@ -66,6 +67,7 @@ pub const ALL_CFS: &[&str] = &[
     CF_TOKEN_HOLDERS,
     CF_SPORE_DATA,
     CF_NFT_DATA,
+    CF_NFT_BY_COLLECTION,
     CF_STATS,
     CF_SCRIPT_INFO,
     CF_SYNC_META,
@@ -361,6 +363,9 @@ impl CkbadgerStore {
     }
     pub fn cf_nft_data(&self) -> &ColumnFamily {
         self.cf(CF_NFT_DATA)
+    }
+    pub fn cf_nft_by_collection(&self) -> &ColumnFamily {
+        self.cf(CF_NFT_BY_COLLECTION)
     }
     pub fn cf_stats(&self) -> &ColumnFamily {
         self.cf(CF_STATS)

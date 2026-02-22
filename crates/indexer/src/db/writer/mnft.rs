@@ -151,6 +151,7 @@ impl BatchWriter {
             },
         };
         batch.put_nft(&token.token_id, &entry);
+        batch.put_nft_by_collection(&token.class_id, &token.token_id);
 
         // Update collection aggregate if this is a new token
         if existing.is_none() {
@@ -426,6 +427,12 @@ mod tests {
         assert_eq!(batch_loaded.len(), 1);
         assert_eq!(batch_loaded[0].0, tx_hash);
         assert_eq!(batch_loaded[0].1, 8);
+
+        let collection_ids = writer
+            .store()
+            .list_nft_ids_by_collection(&class.class_id, None, 10)
+            .unwrap();
+        assert_eq!(collection_ids, vec![token.token_id]);
     }
 
     #[test]
