@@ -1232,6 +1232,94 @@ fn build_heuristic_guesses(data: &[u8]) -> Vec<CellDataGuess> {
     guesses
 }
 
+fn build_script_hint_guess(
+    info: &ckbadger_store::LiveCellInfo,
+    data: &[u8],
+) -> Option<CellDataGuess> {
+    let type_code_hash = info.type_code_hash.as_ref()?;
+
+    let (label, expectation, confidence) = if is_dao_type_code_hash(type_code_hash) {
+        (
+            "DAO",
+            "expected exactly 8 bytes (deposit marker or deposit block number)",
+            "high",
+        )
+    } else if is_spore_type_code_hash(type_code_hash) {
+        (
+            "Spore",
+            "expected Molecule table layout: [total_size, offsets, content_type, content, optional cluster_id]",
+            "high",
+        )
+    } else if is_cluster_type_code_hash(type_code_hash) {
+        (
+            "Spore Cluster",
+            "expected Molecule table layout: [total_size, offsets, name, description, mutant_id]",
+            "high",
+        )
+    } else if is_mnft_issuer_type_code_hash(type_code_hash) {
+        (
+            "mNFT Issuer",
+            "expected binary layout: version(1) + class_count(4) + set_count(4) + optional info blob",
+            "medium",
+        )
+    } else if is_mnft_class_type_code_hash(type_code_hash) {
+        (
+            "mNFT Class",
+            "expected binary layout: version(1) + total(4) + issued(4) + configure(1) + vartext fields",
+            "medium",
+        )
+    } else if is_mnft_token_type_code_hash(type_code_hash) {
+        (
+            "mNFT Token",
+            "expected binary layout: version(1) + characteristic(8) + configure(1) + state(1)",
+            "medium",
+        )
+    } else if let Some(standard) = detect_udt_standard_from_code_hash(type_code_hash) {
+        let upper = standard.to_uppercase();
+        return Some(CellDataGuess {
+            kind: "script_hint".to_string(),
+            confidence: if data.len() < 16 {
+                "high".to_string()
+            } else {
+                "medium".to_string()
+            },
+            reason: format!(
+                "Type script indicates {} but payload does not decode as canonical {} amount",
+                upper, upper
+            ),
+            mime_type: None,
+            human_value: Some(format!(
+                "{}; observed length={} bytes",
+                "expected first 16 bytes as little-endian u128 amount",
+                data.len()
+            )),
+        });
+    } else if is_dotbit_account_type_code_hash(type_code_hash) {
+        (
+            "dotbit account",
+            "expected at least 52 bytes: account_hash(32) + account_id(20)",
+            "high",
+        )
+    } else {
+        return None;
+    };
+
+    Some(CellDataGuess {
+        kind: "script_hint".to_string(),
+        confidence: confidence.to_string(),
+        reason: format!(
+            "Type script indicates {} but payload does not match expected layout",
+            label
+        ),
+        mime_type: None,
+        human_value: Some(format!(
+            "{}; observed length={} bytes",
+            expectation,
+            data.len()
+        )),
+    })
+}
+
 fn analyze_cell_data(
     info: &ckbadger_store::LiveCellInfo,
     data: &[u8],
@@ -1251,7 +1339,12 @@ fn analyze_cell_data(
             }
         });
 
-    let heuristic_guesses = build_heuristic_guesses(data);
+    let mut heuristic_guesses = build_heuristic_guesses(data);
+    if deterministic.is_none() {
+        if let Some(script_hint) = build_script_hint_guess(info, data) {
+            heuristic_guesses.insert(0, script_hint);
+        }
+    }
 
     CellDataAnalysis {
         deterministic,
@@ -3333,6 +3426,68 @@ mod tests {
             .heuristic_guesses
             .iter()
             .any(|g| g.kind == "numeric_pattern" && g.human_value.as_deref() == Some("0")));
+    }
+
+    #[test]
+    fn test_analyze_cell_data_builds_script_hint_for_short_dao_payload() {
+        let info = LiveCellInfo {
+            type_code_hash: Some(hex::decode(DAO_CODE_HASH.trim_start_matches("0x")).unwrap()),
+            type_script_hash: Some(vec![0x51; 32]),
+            ..make_info()
+        };
+        let data = vec![0u8; 4];
+
+        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        assert!(analysis.deterministic.is_none());
+        assert!(analysis.heuristic_guesses.iter().any(|g| {
+            g.kind == "script_hint"
+                && g.reason.contains("DAO")
+                && g.human_value
+                    .as_deref()
+                    .is_some_and(|v| v.contains("observed length=4 bytes"))
+        }));
+    }
+
+    #[test]
+    fn test_analyze_cell_data_builds_script_hint_for_short_dotbit_payload() {
+        let info = LiveCellInfo {
+            type_code_hash: Some(
+                hex::decode(DOTBIT_ACCOUNT_CELL_TYPE_ID.trim_start_matches("0x")).unwrap(),
+            ),
+            type_script_hash: Some(vec![0x52; 32]),
+            ..make_info()
+        };
+        let data = vec![0u8; 20];
+
+        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        assert!(analysis.deterministic.is_none());
+        assert!(analysis.heuristic_guesses.iter().any(|g| {
+            g.kind == "script_hint"
+                && g.reason.contains("dotbit")
+                && g.human_value
+                    .as_deref()
+                    .is_some_and(|v| v.contains("at least 52 bytes"))
+        }));
+    }
+
+    #[test]
+    fn test_analyze_cell_data_builds_script_hint_for_short_udt_payload() {
+        let info = LiveCellInfo {
+            type_code_hash: Some(hex::decode(SUDT_CODE_HASH.trim_start_matches("0x")).unwrap()),
+            type_script_hash: Some(vec![0x53; 32]),
+            ..make_info()
+        };
+        let data = vec![0u8; 8];
+
+        let analysis = analyze_cell_data(&info, &data, data.len() as i32);
+        assert!(analysis.deterministic.is_none());
+        assert!(analysis.heuristic_guesses.iter().any(|g| {
+            g.kind == "script_hint"
+                && g.reason.contains("SUDT")
+                && g.human_value
+                    .as_deref()
+                    .is_some_and(|v| v.contains("first 16 bytes"))
+        }));
     }
 
     #[test]
