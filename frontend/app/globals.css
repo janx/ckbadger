@@ -172,6 +172,10 @@ body {
   .neon-flicker {
     animation: neon-flicker-anim 0.8s steps(1) forwards;
   }
+
+  .byte-hover-breathe {
+    animation: byte-breathe 1.15s ease-in-out infinite;
+  }
 }
 
 /* Broken neon light flicker effect */
@@ -297,6 +301,18 @@ body {
   }
   80% {
     transform: translateX(1px);
+  }
+}
+
+@keyframes byte-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+    filter: brightness(1);
+  }
+  50% {
+    transform: scale(1.08);
+    filter: brightness(1.15);
   }
 }
 

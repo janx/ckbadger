@@ -355,15 +355,73 @@ describe('CellDetailPage', () => {
     renderWithQueryClient(<CellDetailPage />);
 
     await waitFor(() => {
+      expect(screen.getByTestId('data-deterministic-section')).toBeInTheDocument();
       expect(screen.getByText('Deterministic Decode')).toBeInTheDocument();
       expect(screen.getByText('Heuristic Guesses')).toBeInTheDocument();
-      expect(screen.getByText('Parsed Coverage (Full Payload)')).toBeInTheDocument();
+      expect(screen.getByText('1 segments')).toBeInTheDocument();
     });
+
+    expect(screen.queryByTestId('data-analysis-panel')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('data-deterministic-panel')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('data-heuristic-panel')).not.toBeInTheDocument();
 
     fireEvent.mouseEnter(screen.getByTestId('data-byte-0'));
     expect(screen.getByTestId('data-active-segment-value')).toHaveTextContent('42');
+    expect(screen.getByTestId('data-byte-0').className).toContain('byte-hover-breathe');
     expect(screen.getByTestId('data-segment-item-0')).toBeInTheDocument();
-    expect(screen.getByTestId('data-byte-filter')).toBeInTheDocument();
+  });
+
+  it('keeps segment detail stable while moving inside byte grid and clears when leaving grid', async () => {
+    mockGetCell.mockResolvedValue(mockCellWithDataAnalysis);
+
+    renderWithQueryClient(<CellDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('data-byte-0')).toBeInTheDocument();
+      expect(screen.getByTestId('data-bytes-grid')).toBeInTheDocument();
+      expect(screen.getByTestId('data-active-segment')).toBeInTheDocument();
+    });
+
+    expect(screen.getByTestId('data-active-segment').className).toContain('h-[132px]');
+
+    const byte0 = screen.getByTestId('data-byte-0');
+    const byte1 = screen.getByTestId('data-byte-1');
+    const byteGrid = screen.getByTestId('data-bytes-grid');
+
+    fireEvent.mouseEnter(byte0);
+    expect(screen.getByTestId('data-active-segment-value')).toHaveTextContent('42');
+
+    fireEvent.mouseLeave(byte0, { relatedTarget: byte1 });
+    fireEvent.mouseEnter(byte1);
+    expect(screen.getByTestId('data-active-segment-value')).toHaveTextContent('42');
+
+    fireEvent.mouseLeave(byteGrid);
+    expect(screen.getByTestId('data-byte-0').className).not.toContain('byte-hover-breathe');
+    expect(
+      screen.getByText('Hover a segment/byte to preview it, or click a segment to pin it.')
+    ).toBeInTheDocument();
+  });
+
+  it('toggles heuristic detail expansion in compact mode', async () => {
+    mockGetCell.mockResolvedValue(mockCellWithDataAnalysis);
+
+    renderWithQueryClient(<CellDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('data-heuristics-list')).toBeInTheDocument();
+      expect(screen.getByTestId('data-heuristic-item-0')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByTestId('data-heuristic-detail-0')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('data-heuristic-item-0'));
+    expect(screen.getByTestId('data-heuristic-detail-0')).toBeInTheDocument();
+    expect(
+      screen.getByText('Payload length is exactly 16 bytes (common u128 LE encoding)')
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('data-heuristic-item-0'));
+    expect(screen.queryByTestId('data-heuristic-detail-0')).not.toBeInTheDocument();
   });
 
   it('pins deterministic segment on click and keeps details visible after mouse leave', async () => {
@@ -386,19 +444,19 @@ describe('CellDetailPage', () => {
     );
   });
 
-  it('lists unparsed preview ranges and highlights selected range bytes', async () => {
+  it('removes coverage/unparsed/filter controls from data detail section', async () => {
     mockGetCell.mockResolvedValue(mockCellWithPartialParsedData);
 
     renderWithQueryClient(<CellDetailPage />);
 
     await waitFor(() => {
-      expect(screen.getByTestId('data-unparsed-ranges')).toBeInTheDocument();
-      expect(screen.getByTestId('unparsed-range-item-0')).toBeInTheDocument();
+      expect(screen.getByText('Deterministic Decode')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByTestId('unparsed-range-item-0'));
-    const byte10 = screen.getByTestId('data-byte-10');
-    expect(byte10.className).toContain('ring-1');
-    expect(byte10.className).toContain('ring-amber-400/70');
+    expect(screen.queryByText('Parsed Coverage (Full Payload)')).not.toBeInTheDocument();
+    expect(screen.queryByText('Parsed Coverage (Preview Window)')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('data-coverage-grid')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('data-unparsed-ranges')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('data-byte-filter')).not.toBeInTheDocument();
   });
 });
