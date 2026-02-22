@@ -243,7 +243,8 @@ describe('CellDetailPage', () => {
 
     renderWithQueryClient(<CellDetailPage />);
 
-    const unknownLink = await screen.findByRole('link', { name: 'Unknown' });
+    const fallbackLabel = `script: ${UNKNOWN_CODE_HASH.slice(0, 10)}...${UNKNOWN_CODE_HASH.slice(-8)}`;
+    const unknownLink = await screen.findByRole('link', { name: fallbackLabel });
     expect(unknownLink).toHaveAttribute(
       'href',
       `/script/${DEPLOYMENT_TYPE_HASH}?hashType=type&kind=both`

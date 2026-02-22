@@ -71,6 +71,11 @@ function AssetTable({ assetType, search }: { assetType: AssetTab; search: string
     return new Intl.NumberFormat().format(Number(num));
   };
 
+  const shortHash = (value: string) => {
+    if (value.length <= 20) return value;
+    return `${value.slice(0, 10)}...${value.slice(-8)}`;
+  };
+
   const getAssetLink = (asset: Asset) => {
     if (asset.assetType === 'token') return `/tokens/${asset.id}`;
     if (asset.assetType === 'dob') return `/clusters/${asset.id}`;
@@ -79,7 +84,7 @@ function AssetTable({ assetType, search }: { assetType: AssetTab; search: string
 
   const getAssetName = (asset: Asset) => {
     if (asset.assetType === 'token') {
-      return asset.symbol || asset.name || 'Unknown Token';
+      return asset.symbol || asset.name || shortHash(asset.id);
     }
     return asset.name || 'Unnamed Collection';
   };

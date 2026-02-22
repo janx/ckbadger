@@ -27,6 +27,20 @@ use crate::AppState;
 use ckbadger_store::keys;
 
 const SHANNONS_PER_CKB: i64 = 100_000_000;
+const UNKNOWN_SCRIPT_NAME: &str = "unknown";
+
+fn is_known_script_label(name: &str) -> bool {
+    let trimmed = name.trim();
+    !trimmed.is_empty() && !trimmed.eq_ignore_ascii_case(UNKNOWN_SCRIPT_NAME)
+}
+
+fn format_script_code_hash_label(code_hash: &[u8]) -> String {
+    let full = hex::encode(code_hash);
+    let prefix = &full[..full.len().min(10)];
+    let suffix_start = full.len().saturating_sub(8);
+    let suffix = &full[suffix_start..];
+    format!("script:0x{}...{}", prefix, suffix)
+}
 
 struct DepGroupParseResult {
     is_dep_group: bool,
@@ -1421,13 +1435,16 @@ async fn get_address_transactions(
             // Resolve script labels from collected code hashes (type + lock scripts)
             let mut script_labels: Vec<String> = script_code_hashes
                 .iter()
-                .filter_map(|ch| {
-                    state
+                .map(|ch| {
+                    let known_name = state
                         .store
                         .get_script_info(ch)
                         .ok()
                         .flatten()
                         .and_then(|si| si.name)
+                        .map(|name| name.trim().to_string())
+                        .filter(|name| is_known_script_label(name));
+                    known_name.unwrap_or_else(|| format_script_code_hash_label(ch))
                 })
                 .filter(|name| {
                     // Filter out common lock scripts that aren't interesting as labels
@@ -1744,5 +1761,19 @@ mod tests {
         assert_eq!(breakdown.type_script_bytes, 57);
         assert_eq!(breakdown.data_bytes, 16);
         assert_eq!(breakdown.total_bytes, 134);
+    }
+
+    #[test]
+    fn test_is_known_script_label() {
+        assert!(!is_known_script_label("unknown"));
+        assert!(!is_known_script_label(" Unknown "));
+        assert!(!is_known_script_label(" "));
+        assert!(is_known_script_label("Secp256k1"));
+    }
+
+    #[test]
+    fn test_format_script_code_hash_label() {
+        let label = format_script_code_hash_label(&[0xAB; 32]);
+        assert_eq!(label, "script:0xababababab...abababab");
     }
 }

@@ -250,4 +250,77 @@ describe('AddressDetailPage', () => {
     expect(screen.getByText('Pending Withdrawals')).toBeInTheDocument();
     expect(screen.getByText('Compensation Earned')).toBeInTheDocument();
   });
+
+  it('uses token hash fallback in asset holdings when token has no name/symbol', async () => {
+    vi.mocked(api.getAddress).mockResolvedValue(mockAddressWithLockScriptInfo);
+    const typeScriptHash = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    vi.mocked(api.getAddressTokens).mockResolvedValue({
+      data: [
+        {
+          typeScriptHash,
+          standard: 'xudt',
+          name: null,
+          symbol: null,
+          decimals: 8,
+          iconUrl: null,
+          balance: '123450000000',
+        },
+      ],
+      total: 1,
+      limit: 100,
+      hasMore: false,
+      nextCursor: null,
+    });
+
+    render(<AddressDetailPage />);
+
+    const fallbackLabel = `${typeScriptHash.slice(0, 10)}...${typeScriptHash.slice(-8)}`;
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: fallbackLabel })).toHaveAttribute(
+        'href',
+        `/tokens/${typeScriptHash}`
+      );
+    });
+  });
+
+  it('uses token hash fallback link in activities when symbol is missing', async () => {
+    vi.mocked(api.getAddress).mockResolvedValue(mockAddressWithLockScriptInfo);
+    const typeScriptHash = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    vi.mocked(api.getAddressActivities).mockResolvedValue({
+      data: [
+        {
+          txHash: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+          blockNumber: 123,
+          txIndex: 0,
+          timestamp: '2026-02-20T00:00:00Z',
+          ckbDelta: '0',
+          occupiedDelta: '0',
+          isCellbase: false,
+          peers: [],
+          assetChanges: [
+            {
+              type: 'token',
+              typeScriptHash,
+              delta: '100000000',
+              decimals: 8,
+            },
+          ],
+        },
+      ],
+      total: 1,
+      limit: 20,
+      hasMore: false,
+      nextCursor: null,
+    });
+
+    render(<AddressDetailPage />);
+
+    const fallbackLabel = `${typeScriptHash.slice(0, 10)}...${typeScriptHash.slice(-8)}`;
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: fallbackLabel })).toHaveAttribute(
+        'href',
+        `/tokens/${typeScriptHash}`
+      );
+    });
+  });
 });

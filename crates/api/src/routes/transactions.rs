@@ -350,6 +350,7 @@ pub struct TransactionInputResponse {
     pub since: String,
     pub capacity: Option<String>,
     pub lock: Option<ScriptResponse>,
+    pub r#type: Option<ScriptResponse>,
     pub address: Option<String>,
 }
 
@@ -408,6 +409,7 @@ fn hash_type_to_string(hash_type: i16) -> String {
     }
 }
 
+#[cfg(test)]
 fn hash_type_byte_to_i16(byte: u8) -> i16 {
     match byte {
         0 => 0,
@@ -416,6 +418,34 @@ fn hash_type_byte_to_i16(byte: u8) -> i16 {
         4 => 4,
         _ => 0,
     }
+}
+
+fn parse_hash_type_label_to_i16(hash_type: &str) -> i16 {
+    match hash_type {
+        "data" => 0,
+        "type" => 1,
+        "data1" => 2,
+        "data2" => 4,
+        _ => 0,
+    }
+}
+
+fn resolve_stored_input_type_hash_type(
+    store: &ckbadger_store::CkbadgerStore,
+    type_script_hash: Option<&[u8]>,
+    type_code_hash: &[u8],
+) -> String {
+    if let Some(type_hash) = type_script_hash {
+        if let Ok(Some(token)) = store.get_token(type_hash) {
+            return hash_type_to_string(token.hash_type as i16);
+        }
+    }
+
+    if let Ok(Some(script)) = store.get_script_info(type_code_hash) {
+        return hash_type_to_string(script.hash_type as i16);
+    }
+
+    "unknown".to_string()
 }
 
 async fn fetch_tx_size_from_rpc(rpc_url: &str, tx_hash: &str) -> Option<i32> {
@@ -705,8 +735,6 @@ fn build_inputs_outputs_from_ckb(
     network: &str,
     block_number: i64,
 ) -> Result<TxIoBundle, RouteError> {
-    use ckb_types::prelude::*;
-
     let rpc_tx = ckb_store_reader::convert_transaction_view(tx_view);
 
     let mut inputs_capacity: u128 = 0;
@@ -734,7 +762,7 @@ fn build_inputs_outputs_from_ckb(
             )
             .unwrap_or_default();
 
-            let (capacity, lock, address) = if prev_tx_hash_bytes.len() == 32 {
+            let (capacity, lock, type_script, address) = if prev_tx_hash_bytes.len() == 32 {
                 // Try live cells first, then consumed cells in our store
                 let cell_info = store
                     .get_cell(&prev_tx_hash_bytes, prev_index as i16)
@@ -761,6 +789,21 @@ fn build_inputs_outputs_from_ckb(
                             hash_type: hash_type_to_string(info.lock_hash_type),
                             args: format!("0x{}", hex::encode(&info.lock_args)),
                         };
+                        let type_resp =
+                            info.type_code_hash
+                                .as_ref()
+                                .map(|type_code_hash| ScriptResponse {
+                                    code_hash: format!("0x{}", hex::encode(type_code_hash)),
+                                    hash_type: resolve_stored_input_type_hash_type(
+                                        store,
+                                        info.type_script_hash.as_deref(),
+                                        type_code_hash,
+                                    ),
+                                    args: format!(
+                                        "0x{}",
+                                        hex::encode(info.type_args.as_deref().unwrap_or(&[]))
+                                    ),
+                                });
 
                         let addr = script_to_address(
                             &info.lock_code_hash,
@@ -770,28 +813,54 @@ fn build_inputs_outputs_from_ckb(
                         )
                         .ok();
 
-                        (Some(cap.to_string()), Some(lock_resp), addr)
+                        (Some(cap.to_string()), Some(lock_resp), type_resp, addr)
                     }
                     None => {
                         // Fallback: read from CKB node's RocksDB
                         let mut prev_hash = [0u8; 32];
                         prev_hash.copy_from_slice(&prev_tx_hash_bytes);
                         if let Some(prev_tx) = ckb_store.get_transaction(&prev_hash) {
-                            if let Some(output) = prev_tx.output(prev_index as usize) {
-                                let cap: u64 = output.capacity().unpack();
+                            let rpc_prev_tx = ckb_store_reader::convert_transaction_view(&prev_tx);
+                            if let Some(output) = rpc_prev_tx.outputs.get(prev_index as usize) {
+                                let cap = u64::from_str_radix(
+                                    output
+                                        .capacity
+                                        .strip_prefix("0x")
+                                        .unwrap_or(&output.capacity),
+                                    16,
+                                )
+                                .unwrap_or(0);
                                 inputs_capacity += cap as u128;
 
-                                let lock = output.lock();
-                                let code_hash: Vec<u8> = lock.code_hash().raw_data().to_vec();
-                                let ht_byte = lock.hash_type().as_bytes()[0];
-                                let ht = hash_type_byte_to_i16(ht_byte);
-                                let args: Vec<u8> = lock.args().raw_data().to_vec();
+                                let code_hash = hex::decode(
+                                    output
+                                        .lock
+                                        .code_hash
+                                        .strip_prefix("0x")
+                                        .unwrap_or(&output.lock.code_hash),
+                                )
+                                .unwrap_or_default();
+                                let ht = parse_hash_type_label_to_i16(&output.lock.hash_type);
+                                let args = hex::decode(
+                                    output
+                                        .lock
+                                        .args
+                                        .strip_prefix("0x")
+                                        .unwrap_or(&output.lock.args),
+                                )
+                                .unwrap_or_default();
 
                                 let lock_resp = ScriptResponse {
-                                    code_hash: format!("0x{}", hex::encode(&code_hash)),
-                                    hash_type: hash_type_to_string(ht),
-                                    args: format!("0x{}", hex::encode(&args)),
+                                    code_hash: output.lock.code_hash.clone(),
+                                    hash_type: output.lock.hash_type.clone(),
+                                    args: output.lock.args.clone(),
                                 };
+                                let type_resp =
+                                    output.type_.as_ref().map(|type_script| ScriptResponse {
+                                        code_hash: type_script.code_hash.clone(),
+                                        hash_type: type_script.hash_type.clone(),
+                                        args: type_script.args.clone(),
+                                    });
 
                                 let addr = script_to_address(&code_hash, ht, &args, network).ok();
 
@@ -802,17 +871,17 @@ fn build_inputs_outputs_from_ckb(
                                 let occ = 8 + 32 + 1 + args.len() + data_len;
                                 inputs_occupied_capacity += occ as u128;
 
-                                (Some(cap.to_string()), Some(lock_resp), addr)
+                                (Some(cap.to_string()), Some(lock_resp), type_resp, addr)
                             } else {
-                                (None, None, None)
+                                (None, None, None, None)
                             }
                         } else {
-                            (None, None, None)
+                            (None, None, None, None)
                         }
                     }
                 }
             } else {
-                (None, None, None)
+                (None, None, None, None)
             };
 
             TransactionInputResponse {
@@ -823,6 +892,7 @@ fn build_inputs_outputs_from_ckb(
                 since: since.clone(),
                 capacity,
                 lock,
+                r#type: type_script,
                 address,
             }
         })
@@ -1383,6 +1453,33 @@ mod tests {
         assert_eq!(hash_type_byte_to_i16(2), 2);
         assert_eq!(hash_type_byte_to_i16(4), 4);
         assert_eq!(hash_type_byte_to_i16(255), 0);
+    }
+
+    #[test]
+    fn test_transaction_input_response_serializes_type_script() {
+        let input = TransactionInputResponse {
+            previous_output: Some(PreviousOutput {
+                tx_hash: "0x01".to_string(),
+                index: 0,
+            }),
+            since: "0x0".to_string(),
+            capacity: Some("100".to_string()),
+            lock: Some(ScriptResponse {
+                code_hash: "0x02".to_string(),
+                hash_type: "type".to_string(),
+                args: "0x".to_string(),
+            }),
+            r#type: Some(ScriptResponse {
+                code_hash: "0x03".to_string(),
+                hash_type: "data1".to_string(),
+                args: "0x11".to_string(),
+            }),
+            address: Some("ckb1qyqszqgpqyqszqgpqyqszqgpqyqszqgpl6m0j".to_string()),
+        };
+
+        let json = serde_json::to_value(&input).unwrap();
+        assert_eq!(json["type"]["codeHash"], "0x03");
+        assert_eq!(json["type"]["hashType"], "data1");
     }
 
     #[test]

@@ -70,6 +70,7 @@ export default function TransactionDetailPage() {
     const hashes = new Set<string>();
     tx.inputs?.forEach((input) => {
       if (input.lock?.codeHash) hashes.add(input.lock.codeHash);
+      if (input.type?.codeHash) hashes.add(input.type.codeHash);
     });
     tx.outputs?.forEach((output) => {
       if (output.lock?.codeHash) hashes.add(output.lock.codeHash);
@@ -491,6 +492,11 @@ function hasKnownScriptName(name: string | null | undefined): boolean {
   return Boolean(name && name.trim() && name.trim().toLowerCase() !== UNKNOWN_SCRIPT_NAME);
 }
 
+function shortenCodeHash(value: string): string {
+  if (value.length <= 20) return value;
+  return `${value.slice(0, 10)}...${value.slice(-8)}`;
+}
+
 function getScriptHref({
   codeHash,
   hashType,
@@ -513,19 +519,21 @@ function ScriptLabel({
   scriptLookup,
   type,
 }: {
-  script: { codeHash: string } | undefined;
+  script: { codeHash: string; hashType?: string } | undefined;
   scriptLookup?: ScriptLookupResponse;
   type: 'lock' | 'type';
 }) {
   if (!script) return null;
   const info = scriptLookup?.[script.codeHash];
-  if (!info) return null;
-  const label = hasKnownScriptName(info.name) ? info.name.trim() : 'Unknown';
+  const scriptName = info?.name;
+  const label = hasKnownScriptName(scriptName)
+    ? scriptName!.trim()
+    : `${type}: ${shortenCodeHash(script.codeHash)}`;
   const href = getScriptHref({
     codeHash: script.codeHash,
-    hashType: info.hashType,
+    hashType: info?.hashType ?? script.hashType,
     scriptKind: type,
-    scriptName: info.name,
+    scriptName,
   });
 
   return (
@@ -552,6 +560,7 @@ function InputsOutputsTab({ tx, scriptLookup }: TabProps) {
                   <div className="flex items-center gap-2">
                     <span className="font-mono text-xs text-slate-500">#{index}</span>
                     <ScriptLabel script={input.lock} scriptLookup={scriptLookup} type="lock" />
+                    <ScriptLabel script={input.type} scriptLookup={scriptLookup} type="type" />
                   </div>
                   {input.previousOutput && (
                     <Link
@@ -694,7 +703,7 @@ function ScriptsSummaryTab({ tx, scriptLookup }: TabProps) {
               className="flex items-center justify-between"
             >
               <div className="min-w-0 flex-1">
-                {script.name?.trim() ? (
+                {hasKnownScriptName(script.name) ? (
                   <Link
                     href={getScriptHref({
                       codeHash: script.codeHash,
@@ -704,7 +713,7 @@ function ScriptsSummaryTab({ tx, scriptLookup }: TabProps) {
                     })}
                     className="text-terminal-green hover:underline"
                   >
-                    {script.name.trim()}
+                    {script.name!.trim()}
                   </Link>
                 ) : (
                   <Link
@@ -749,7 +758,7 @@ function ScriptsSummaryTab({ tx, scriptLookup }: TabProps) {
               className="flex items-center justify-between"
             >
               <div className="min-w-0 flex-1">
-                {script.name?.trim() ? (
+                {hasKnownScriptName(script.name) ? (
                   <Link
                     href={getScriptHref({
                       codeHash: script.codeHash,
@@ -759,7 +768,7 @@ function ScriptsSummaryTab({ tx, scriptLookup }: TabProps) {
                     })}
                     className="text-terminal-green hover:underline"
                   >
-                    {script.name.trim()}
+                    {script.name!.trim()}
                   </Link>
                 ) : (
                   <Link

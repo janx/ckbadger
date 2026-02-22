@@ -92,6 +92,10 @@ function shortenHash(hash: string, leading: number = 10, trailing: number = 8): 
   return `${hash.slice(0, leading)}...${hash.slice(-trailing)}`;
 }
 
+function scriptFallbackLabel(codeHash: string): string {
+  return `script: ${shortenHash(codeHash, 10, 8)}`;
+}
+
 export default function CellDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -822,7 +826,9 @@ export default function CellDetailPage() {
                           href={getCodeCellScriptHref(script)}
                           className="text-lg font-medium text-emerald-300 hover:underline"
                         >
-                          {hasKnownScriptName(script.name) ? script.name.trim() : 'Unknown'}
+                          {hasKnownScriptName(script.name)
+                            ? script.name.trim()
+                            : scriptFallbackLabel(script.codeHash)}
                         </Link>
                         <div className="flex flex-wrap items-center gap-2 text-xs">
                           <span className="uppercase tracking-wide text-slate-500">Refs</span>

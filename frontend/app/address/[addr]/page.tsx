@@ -227,6 +227,23 @@ export default function AddressDetailPage() {
     }
   };
 
+  const shortHash = (value: string) => {
+    if (value.length <= 20) return value;
+    return `${value.slice(0, 10)}...${value.slice(-8)}`;
+  };
+
+  const tokenDisplayName = (token: {
+    symbol?: string | null;
+    name?: string | null;
+    typeScriptHash?: string;
+  }) => {
+    const symbol = token.symbol?.trim();
+    if (symbol) return symbol;
+    const name = token.name?.trim();
+    if (name) return name;
+    return token.typeScriptHash ? shortHash(token.typeScriptHash) : 'Token';
+  };
+
   const parseDaoCellData = (dataHex: string | undefined): number | null => {
     if (!dataHex || dataHex === '0x' || dataHex.length < 18) return null;
     const hex = dataHex.startsWith('0x') ? dataHex.slice(2) : dataHex;
@@ -278,10 +295,16 @@ export default function AddressDetailPage() {
         const formatted = formatTokenBalance(absDelta, change.decimals ?? 0);
         const sign = isZero ? '' : isPositive ? '+' : '-';
         const color = isZero ? 'text-slate-500' : isPositive ? 'text-green-400' : 'text-red-400';
+        const tokenLabel = change.symbol?.trim()
+          ? change.symbol.trim()
+          : shortHash(change.typeScriptHash);
         return (
           <span className={`font-mono text-xs ${color}`}>
             {sign}
-            {formatted} {change.symbol || '???'}
+            {formatted}{' '}
+            <Link href={`/tokens/${change.typeScriptHash}`} className="hover:underline">
+              {tokenLabel}
+            </Link>
           </span>
         );
       }
@@ -581,7 +604,7 @@ export default function AddressDetailPage() {
                                 onClick={(e) => e.stopPropagation()}
                                 className="text-terminal-green font-medium hover:underline"
                               >
-                                {token.name || token.symbol || 'Unknown Token'}
+                                {tokenDisplayName(token)}
                               </Link>
                               {token.symbol && token.name && (
                                 <span className="ml-2 text-xs text-slate-500">{token.symbol}</span>
@@ -656,7 +679,7 @@ export default function AddressDetailPage() {
                 <span>Cells</span>
                 {selectedToken && (
                   <Badge variant="amber" className="ml-2">
-                    Filter: {selectedToken.symbol || selectedToken.name}
+                    Filter: {tokenDisplayName(selectedToken)}
                   </Badge>
                 )}
                 {selectedDao && (
@@ -674,7 +697,7 @@ export default function AddressDetailPage() {
             <div className="flex items-center justify-between border-b border-slate-800 bg-slate-900/50 px-4 py-2">
               <span className="text-sm text-slate-400">
                 Showing cells for{' '}
-                <span className="text-amber">{selectedToken.symbol || selectedToken.name}</span>
+                <span className="text-amber">{tokenDisplayName(selectedToken)}</span>
               </span>
               <button
                 onClick={() => handleTokenSelect(null)}
@@ -925,7 +948,7 @@ export default function AddressDetailPage() {
                                         {formatTokenBalance(cell.udtAmount, cellToken.decimals)}
                                       </span>
                                       <span className="text-amber text-xs">
-                                        {cellToken.symbol || cellToken.name || 'Unknown Token'}
+                                        {tokenDisplayName(cellToken)}
                                       </span>
                                     </div>
                                   </div>
@@ -937,7 +960,16 @@ export default function AddressDetailPage() {
                                       <span className="font-mono text-slate-400">
                                         {formatTokenBalance(cell.udtAmount, 0)}
                                       </span>
-                                      <span className="text-xs text-slate-500">Unknown Token</span>
+                                      {cell.typeScriptHash ? (
+                                        <Link
+                                          href={`/tokens/${cell.typeScriptHash}`}
+                                          className="text-xs text-slate-500 hover:text-slate-300 hover:underline"
+                                        >
+                                          {shortHash(cell.typeScriptHash)}
+                                        </Link>
+                                      ) : (
+                                        <span className="text-xs text-slate-500">Token</span>
+                                      )}
                                     </div>
                                   </div>
                                 )}

@@ -73,6 +73,11 @@ describe('TransactionDetailPage', () => {
             hashType: 'type',
             args: '0x1111111111111111111111111111111111111111',
           },
+          type: {
+            codeHash: TYPE_CODE_HASH,
+            hashType: 'type',
+            args: '0x',
+          },
           address: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq',
         },
       ],
@@ -146,12 +151,23 @@ describe('TransactionDetailPage', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Scripts' }));
 
-    const unknownLink = await screen.findByRole('link', { name: 'Unknown' });
-    expect(unknownLink).toHaveAttribute(
-      'href',
-      `/script/${TYPE_CODE_HASH}?hashType=type&kind=type`
+    const link = document.querySelector(
+      `a[href="/script/${TYPE_CODE_HASH}?hashType=type&kind=type"]`
     );
+    expect(link).not.toBeNull();
     expect(document.querySelector('a[href="/scripts/Unknown"]')).toBeNull();
+  });
+
+  it('shows input type script label in IO tab', async () => {
+    render(<TransactionDetailPage />);
+
+    await waitFor(() => {
+      expect(api.getTransactionDetail).toHaveBeenCalled();
+    });
+
+    const fallbackLabel = `type: ${TYPE_CODE_HASH.slice(0, 10)}...${TYPE_CODE_HASH.slice(-8)}`;
+    const links = await screen.findAllByRole('link', { name: fallbackLabel });
+    expect(links.some((link) => link.getAttribute('href'))).toBe(true);
   });
 
   it('shows flow view by default and switches to graph view in graph tab', async () => {

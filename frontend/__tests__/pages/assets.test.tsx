@@ -206,6 +206,28 @@ describe('AssetsPage', () => {
     });
   });
 
+  it('uses type-hash fallback name for tokens without symbol and name', async () => {
+    const typeHash = '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
+    vi.mocked(api.getAssets).mockResolvedValue({
+      ...mockTokenAssets,
+      data: [
+        {
+          ...mockTokenAssets.data[0],
+          id: typeHash,
+          name: null,
+          symbol: null,
+        },
+      ],
+    });
+
+    render(<AssetsPage />);
+
+    const fallbackLabel = `${typeHash.slice(0, 10)}...${typeHash.slice(-8)}`;
+    await waitFor(() => {
+      expect(screen.getByText(fallbackLabel)).toBeInTheDocument();
+    });
+  });
+
   it('uses query type as initial tab', async () => {
     window.history.replaceState(null, '', '/assets?type=dob');
     vi.mocked(api.getAssets).mockResolvedValue(mockClusterAssets);

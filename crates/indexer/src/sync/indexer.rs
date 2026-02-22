@@ -714,6 +714,63 @@ fn collect_token_max_supply_observations(all_tx_data: &[TxData]) -> HashMap<Vec<
     observations
 }
 
+fn load_activity_token_info_cache(
+    store: &CkbadgerStore,
+    tx_data: &[TxData],
+    input_cell_info: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
+    batch_cell_infos: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
+) -> Result<HashMap<Vec<u8>, (Option<String>, Option<u8>)>> {
+    let mut type_hashes = HashSet::<Vec<u8>>::new();
+
+    for tx in tx_data {
+        for cell in &tx.cells {
+            if let Some(type_script_hash) = &cell.type_script_hash {
+                type_hashes.insert(type_script_hash.clone());
+            }
+        }
+
+        if tx.is_cellbase {
+            continue;
+        }
+
+        for input in &tx.inputs {
+            let key = (
+                input.previous_tx_hash.to_vec(),
+                input.previous_output_index as i16,
+            );
+            let cell_info = input_cell_info
+                .get(&key)
+                .or_else(|| batch_cell_infos.get(&key));
+            if let Some(info) = cell_info {
+                if let Some(type_script_hash) = &info.type_script_hash {
+                    type_hashes.insert(type_script_hash.clone());
+                }
+            }
+        }
+    }
+
+    let mut token_info_cache: HashMap<Vec<u8>, (Option<String>, Option<u8>)> = HashMap::new();
+    for type_hash in type_hashes {
+        let Some(info) = store.get_token(&type_hash)? else {
+            continue;
+        };
+        let decimals = match info.decimals {
+            Some(value) => Some(u8::try_from(value).map_err(|_| {
+                anyhow!(
+                    "token decimals out of u8 range while building activity cache: type_hash=0x{}, decimals={}",
+                    hex::encode(&type_hash),
+                    value
+                )
+            })?),
+            None => None,
+        };
+        let symbol = info.symbol.clone().or(info.name.clone());
+        token_info_cache.insert(type_hash, (symbol, decimals));
+    }
+
+    Ok(token_info_cache)
+}
+
 fn collect_committed_proposal_ids(txs: &[TxData]) -> Vec<String> {
     let mut ids = HashSet::new();
     for tx in txs {
@@ -6610,8 +6667,12 @@ impl Indexer {
                     Some(s.spawn(|| -> Result<f64> {
                         let t = Instant::now();
                         let mut batch = StoreBatch::new(store);
-                        let token_info_cache: HashMap<Vec<u8>, (Option<String>, Option<u8>)> =
-                            HashMap::new();
+                        let token_info_cache = load_activity_token_info_cache(
+                            store,
+                            &all_tx_data,
+                            &input_cell_info,
+                            &batch_cell_infos,
+                        )?;
                         let mut block_tx_idx = 0usize;
                         for parsed in all_parsed_blocks {
                             let tx_count = parsed.transactions_count as usize;
@@ -7461,8 +7522,12 @@ impl Indexer {
 
             // Activity writes (live sync)
             {
-                let token_info_cache: HashMap<Vec<u8>, (Option<String>, Option<u8>)> =
-                    HashMap::new();
+                let token_info_cache = load_activity_token_info_cache(
+                    self.writer.store(),
+                    &all_tx_data,
+                    &input_cell_info,
+                    &batch_cell_infos,
+                )?;
                 let mut block_tx_idx = 0usize;
                 for parsed in all_parsed_blocks {
                     let tx_count = parsed.transactions_count as usize;
@@ -9480,6 +9545,87 @@ mod tests {
             cycles: None,
             timestamp: Utc::now(),
         }
+    }
+
+    fn make_token_info(
+        decimals: Option<i32>,
+        symbol: Option<&str>,
+    ) -> ckbadger_store::types::TokenInfo {
+        ckbadger_store::types::TokenInfo {
+            type_code_hash: vec![0x77; 32],
+            hash_type: 1,
+            type_args: vec![0x88; 32],
+            standard: "xudt".to_string(),
+            name: Some("FallbackName".to_string()),
+            symbol: symbol.map(|s| s.to_string()),
+            decimals,
+            total_supply: Some(0),
+            max_supply: None,
+            holders_count: 0,
+            first_seen_block: 0,
+            icon_url: None,
+            description: None,
+            transfers_count: 0,
+        }
+    }
+
+    #[test]
+    fn test_load_activity_token_info_cache_prefers_symbol_and_converts_decimals() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap();
+
+        let type_hash = vec![0xAA; 32];
+        let mut batch = StoreBatch::new(&store);
+        batch.put_token(&type_hash, &make_token_info(Some(8), Some("OTTER")));
+        batch.commit().unwrap();
+
+        let tx = dummy_tx_data(
+            [0x11; 32],
+            false,
+            vec![],
+            vec![dummy_xudt_cell(
+                <[u8; 32]>::try_from(type_hash.clone()).unwrap(),
+                vec![0x99; 32],
+            )],
+            vec![],
+            vec![],
+        );
+
+        let cache = load_activity_token_info_cache(&store, &[tx], &HashMap::new(), &HashMap::new())
+            .unwrap();
+
+        assert_eq!(
+            cache.get(&type_hash),
+            Some(&(Some("OTTER".to_string()), Some(8)))
+        );
+    }
+
+    #[test]
+    fn test_load_activity_token_info_cache_errors_on_invalid_decimals() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap();
+
+        let type_hash = vec![0xAB; 32];
+        let mut batch = StoreBatch::new(&store);
+        batch.put_token(&type_hash, &make_token_info(Some(300), None));
+        batch.commit().unwrap();
+
+        let tx = dummy_tx_data(
+            [0x12; 32],
+            false,
+            vec![],
+            vec![dummy_xudt_cell(
+                <[u8; 32]>::try_from(type_hash.clone()).unwrap(),
+                vec![0x98; 32],
+            )],
+            vec![],
+            vec![],
+        );
+
+        let err = load_activity_token_info_cache(&store, &[tx], &HashMap::new(), &HashMap::new())
+            .unwrap_err();
+
+        assert!(err.to_string().contains("out of u8 range"));
     }
 
     #[test]

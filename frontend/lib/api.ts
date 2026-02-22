@@ -171,6 +171,7 @@ interface TransactionDetail extends Transaction {
     since?: string;
     capacity?: string;
     lock?: Script;
+    type?: Script;
     address?: string;
   }>;
   outputs?: Array<{
