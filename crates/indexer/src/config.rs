@@ -40,6 +40,10 @@ pub struct Config {
     /// Path to token-labels repository for label import.
     #[serde(default = "default_token_labels_path")]
     pub token_labels_path: String,
+    /// Force startup rollback cleanup before syncing.
+    /// Used after unclean shutdowns to reconcile derived aggregates.
+    #[serde(default = "default_force_startup_cleanup")]
+    pub force_startup_cleanup: bool,
 }
 
 fn default_batch_size() -> usize {
@@ -80,6 +84,10 @@ fn default_max_batch_txs() -> usize {
 
 fn default_token_labels_path() -> String {
     "docs/token-labels".to_string()
+}
+
+fn default_force_startup_cleanup() -> bool {
+    false
 }
 
 impl Config {
@@ -133,5 +141,10 @@ mod tests {
     #[test]
     fn test_default_token_labels_path() {
         assert_eq!(default_token_labels_path(), "docs/token-labels");
+    }
+
+    #[test]
+    fn test_default_force_startup_cleanup() {
+        assert!(!default_force_startup_cleanup());
     }
 }

@@ -162,8 +162,50 @@ fn should_warn_progress_stall(
         && now.duration_since(last_progress_advanced_at) >= min_stall_duration
 }
 
+fn is_clean_shutdown_reason(reason: &str) -> bool {
+    matches!(
+        reason,
+        "graceful_shutdown" | "sigterm_shutdown" | "run_completed"
+    )
+}
+
+fn should_force_startup_cleanup(previous_runtime: &ckbadger_store::RuntimeStatus) -> bool {
+    let Some(active_run_id) = previous_runtime.active_run_id.as_deref() else {
+        return false;
+    };
+    let clean_shutdown_marker_for_same_run = previous_runtime.last_run_id.as_deref()
+        == Some(active_run_id)
+        && previous_runtime.last_exit_code == Some(0)
+        && previous_runtime
+            .last_shutdown_reason
+            .as_deref()
+            .is_some_and(is_clean_shutdown_reason)
+        && previous_runtime.last_shutdown_at >= previous_runtime.run_started_at;
+    !clean_shutdown_marker_for_same_run
+}
+
+#[cfg(unix)]
+async fn wait_for_shutdown_signal() -> std::io::Result<&'static str> {
+    use tokio::signal::unix::{signal, SignalKind};
+
+    let mut sigterm = signal(SignalKind::terminate())?;
+    tokio::select! {
+        ctrl = tokio::signal::ctrl_c() => {
+            ctrl?;
+            Ok("graceful_shutdown")
+        }
+        _ = sigterm.recv() => Ok("sigterm_shutdown"),
+    }
+}
+
+#[cfg(not(unix))]
+async fn wait_for_shutdown_signal() -> std::io::Result<&'static str> {
+    tokio::signal::ctrl_c().await?;
+    Ok("graceful_shutdown")
+}
+
 async fn run_sync(args: Cli) -> Result<()> {
-    let config = Config {
+    let mut config = Config {
         data_path: args.data_path.clone(),
         ckb_rpc_url: args
             .ckb_rpc_url
@@ -182,6 +224,7 @@ async fn run_sync(args: Cli) -> Result<()> {
         ckb_data_path: args.ckb_data_path,
         max_batch_txs: args.max_batch_txs,
         token_labels_path: args.token_labels_path,
+        force_startup_cleanup: false,
     };
 
     info!("Opening ckbadger-store at: {}", config.data_path);
@@ -205,6 +248,13 @@ async fn run_sync(args: Cli) -> Result<()> {
     // One-time backfill: rebuild avg_block_time_ms from block headers
     let mut sync_status = store.get_sync_status()?;
     let previous_runtime = store.get_runtime_status()?;
+    let previous_run_unclean = should_force_startup_cleanup(&previous_runtime);
+    config.force_startup_cleanup = previous_run_unclean;
+    if previous_run_unclean {
+        info!(
+            "Previous run did not shut down cleanly; forcing startup rollback cleanup to reconcile derived state"
+        );
+    }
     if !sync_status.avg_block_time_rebuilt && sync_status.tip_block_number > 0 {
         info!("avg_block_time migration: rebuilding from block headers...");
         let updated = store.rebuild_avg_block_times()?;
@@ -242,13 +292,14 @@ async fn run_sync(args: Cli) -> Result<()> {
     }
     let run_id = generate_run_id();
     let startup_cgroup = read_cgroup_memory_snapshot();
-    if previous_runtime.active_run_id.is_some() {
+    if previous_run_unclean {
         info!(
             run_id = %run_id,
             previous_active_run_id = ?previous_runtime.active_run_id,
             previous_last_run_id = ?previous_runtime.last_run_id,
             previous_last_shutdown_reason = ?previous_runtime.last_shutdown_reason,
             previous_last_exit_code = ?previous_runtime.last_exit_code,
+            previous_last_shutdown_at = previous_runtime.last_shutdown_at,
             previous_last_heartbeat_at = previous_runtime.last_heartbeat_at,
             previous_last_heartbeat_block = previous_runtime.last_heartbeat_block,
             previous_last_incident_id = ?previous_runtime.last_incident_id,
@@ -265,6 +316,7 @@ async fn run_sync(args: Cli) -> Result<()> {
             previous_last_run_id = ?previous_runtime.last_run_id,
             previous_last_shutdown_reason = ?previous_runtime.last_shutdown_reason,
             previous_last_exit_code = ?previous_runtime.last_exit_code,
+            previous_last_shutdown_at = previous_runtime.last_shutdown_at,
             previous_last_heartbeat_at = previous_runtime.last_heartbeat_at,
             previous_last_heartbeat_block = previous_runtime.last_heartbeat_block,
             previous_last_incident_id = ?previous_runtime.last_incident_id,
@@ -526,12 +578,13 @@ async fn run_sync(args: Cli) -> Result<()> {
 
     let indexer_for_shutdown = Arc::clone(&indexer);
     tokio::spawn(async move {
-        match tokio::signal::ctrl_c().await {
-            Ok(()) => {
-                info!("Received shutdown signal, shutting down gracefully...");
-                indexer_for_shutdown.mark_runtime_shutdown("graceful_shutdown", 0);
-                // RocksDB handles durability automatically via WAL
-                let _ = indexer_for_shutdown; // keep alive until shutdown
+        match wait_for_shutdown_signal().await {
+            Ok(reason) => {
+                info!(
+                    reason,
+                    "Received shutdown signal, shutting down gracefully..."
+                );
+                indexer_for_shutdown.mark_runtime_shutdown(reason, 0);
                 std::process::exit(0);
             }
             Err(e) => {
@@ -593,7 +646,11 @@ async fn run_label_import_command(
 
 #[cfg(test)]
 mod tests {
-    use super::{queue_fill_pct, should_emit_rate_limited, should_warn_progress_stall};
+    use super::{
+        queue_fill_pct, should_emit_rate_limited, should_force_startup_cleanup,
+        should_warn_progress_stall,
+    };
+    use ckbadger_store::RuntimeStatus;
     use std::time::{Duration, Instant};
 
     #[test]
@@ -645,5 +702,48 @@ mod tests {
             200,
             Duration::from_secs(60)
         ));
+    }
+
+    #[test]
+    fn test_should_force_startup_cleanup_when_active_run_exists() {
+        let runtime = RuntimeStatus {
+            active_run_id: Some("run-xyz".to_string()),
+            ..Default::default()
+        };
+        assert!(should_force_startup_cleanup(&runtime));
+    }
+
+    #[test]
+    fn test_should_not_force_startup_cleanup_when_no_active_run() {
+        let runtime = RuntimeStatus::default();
+        assert!(!should_force_startup_cleanup(&runtime));
+    }
+
+    #[test]
+    fn test_should_not_force_startup_cleanup_with_clean_shutdown_marker_for_same_run() {
+        let runtime = RuntimeStatus {
+            active_run_id: Some("run-xyz".to_string()),
+            last_run_id: Some("run-xyz".to_string()),
+            run_started_at: 100,
+            last_shutdown_at: 101,
+            last_shutdown_reason: Some("sigterm_shutdown".to_string()),
+            last_exit_code: Some(0),
+            ..Default::default()
+        };
+        assert!(!should_force_startup_cleanup(&runtime));
+    }
+
+    #[test]
+    fn test_should_force_startup_cleanup_when_shutdown_marker_is_stale() {
+        let runtime = RuntimeStatus {
+            active_run_id: Some("run-xyz".to_string()),
+            last_run_id: Some("run-xyz".to_string()),
+            run_started_at: 200,
+            last_shutdown_at: 100,
+            last_shutdown_reason: Some("sigterm_shutdown".to_string()),
+            last_exit_code: Some(0),
+            ..Default::default()
+        };
+        assert!(should_force_startup_cleanup(&runtime));
     }
 }

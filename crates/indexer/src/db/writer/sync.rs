@@ -85,6 +85,15 @@ impl BatchWriter {
     }
 
     pub fn init_sync_start(&self, start_block: i64, is_bulk_sync: bool) -> Result<()> {
+        self.init_sync_start_with_options(start_block, is_bulk_sync, false)
+    }
+
+    pub fn init_sync_start_with_options(
+        &self,
+        start_block: i64,
+        is_bulk_sync: bool,
+        force_cleanup: bool,
+    ) -> Result<()> {
         if start_block < -1 {
             bail!(
                 "invalid startup sync tip: start_block={} (expected >= -1)",
@@ -92,7 +101,14 @@ impl BatchWriter {
             );
         }
         let next_block = start_block + 1;
-        if self.has_partial_data_after_block(start_block)? {
+        let has_partial_data = self.has_partial_data_after_block(start_block)?;
+        if force_cleanup || has_partial_data {
+            if force_cleanup && !has_partial_data {
+                info!(
+                    "Forcing startup rollback cleanup at block {} due to unclean previous shutdown",
+                    start_block
+                );
+            }
             info!(
                 "Cleaning up any partial data from block {} onwards before sync start",
                 next_block
@@ -143,6 +159,17 @@ impl BatchWriter {
     }
 
     pub fn needs_startup_cleanup(&self, start_block: i64) -> Result<bool> {
+        self.needs_startup_cleanup_with_force(start_block, false)
+    }
+
+    pub fn needs_startup_cleanup_with_force(
+        &self,
+        start_block: i64,
+        force_cleanup: bool,
+    ) -> Result<bool> {
+        if force_cleanup {
+            return Ok(true);
+        }
         self.has_partial_data_after_block(start_block)
     }
 
@@ -313,6 +340,31 @@ mod tests {
         batch.commit().unwrap();
 
         assert!(writer.needs_startup_cleanup(0).unwrap());
+    }
+
+    #[test]
+    fn test_needs_startup_cleanup_with_force_reports_true_without_partial_data() {
+        let (_dir, _store, writer) = setup();
+        assert!(writer.needs_startup_cleanup_with_force(0, true).unwrap());
+    }
+
+    #[test]
+    fn test_init_sync_start_forces_cleanup_without_partial_data() {
+        let (_dir, store, writer) = setup();
+        let lock_hash = vec![0xCC; 32];
+        store
+            .put_addr_balance_direct(
+                &lock_hash,
+                &AddressBalance {
+                    balance: 789,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        writer.init_sync_start_with_options(0, false, true).unwrap();
+
+        assert!(store.get_addr_balance(&lock_hash).unwrap().is_none());
     }
 
     #[test]

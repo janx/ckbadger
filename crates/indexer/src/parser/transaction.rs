@@ -19,7 +19,7 @@ pub struct ParsedTransaction {
 pub struct ParsedInput {
     pub previous_tx_hash: [u8; 32],
     pub previous_output_index: i32,
-    pub since: i64,
+    pub since: u64,
 }
 
 #[derive(Debug)]
@@ -214,19 +214,11 @@ impl TransactionParser {
         total.to_string()
     }
 
-    fn parse_since(since_hex: &str) -> i64 {
+    fn parse_since(since_hex: &str) -> u64 {
         let raw = since_hex;
         let hex = since_hex.strip_prefix("0x").unwrap_or(since_hex);
-        let parsed = u64::from_str_radix(hex, 16)
-            .unwrap_or_else(|e| panic!("invalid since hex '{}': {}", raw, e));
-        i64::try_from(parsed).unwrap_or_else(|_| {
-            panic!(
-                "since over i64 range '{}': {} (max={})",
-                raw,
-                parsed,
-                i64::MAX
-            )
-        })
+        u64::from_str_radix(hex, 16)
+            .unwrap_or_else(|e| panic!("invalid since hex '{}': {}", raw, e))
     }
 
     fn parse_capacity_u128(capacity_hex: &str) -> u128 {
@@ -444,7 +436,7 @@ mod tests {
     fn test_parse_since_absolute() {
         let since_hex = "0x7fffffffffffffff";
         let since = TransactionParser::parse_since(since_hex);
-        assert_eq!(since, i64::MAX);
+        assert_eq!(since, 0x7fffffffffffffff);
     }
 
     #[test]
@@ -454,9 +446,10 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "since over i64 range")]
-    fn test_parse_since_overflow_panics() {
-        let _ = TransactionParser::parse_since("0x8000000000000000");
+    fn test_parse_since_high_bit_allowed() {
+        let since_hex = "0xa00000000000000c";
+        let since = TransactionParser::parse_since(since_hex);
+        assert_eq!(since, 0xa00000000000000c);
     }
 
     #[test]

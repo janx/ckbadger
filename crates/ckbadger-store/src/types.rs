@@ -704,6 +704,8 @@ pub struct RuntimeStatus {
     pub last_incident_at: i64,
     #[serde(default)]
     pub last_incident_summary: Option<String>,
+    #[serde(default)]
+    pub last_shutdown_at: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

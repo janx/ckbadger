@@ -1951,7 +1951,9 @@ impl Indexer {
             _ => start_block,
         };
 
-        let cleanup_needed = self.writer.needs_startup_cleanup(actual_start)?;
+        let cleanup_needed = self
+            .writer
+            .needs_startup_cleanup_with_force(actual_start, self.config.force_startup_cleanup)?;
         if cleanup_needed {
             self.startup_phase
                 .store(STARTUP_PHASE_ROLLBACK_CLEANUP, Ordering::SeqCst);
@@ -1966,9 +1968,10 @@ impl Indexer {
             );
         }
 
-        let init_result = self.writer.init_sync_start(
+        let init_result = self.writer.init_sync_start_with_options(
             actual_start,
             blocks_behind > self.config.bulk_sync_threshold,
+            self.config.force_startup_cleanup,
         );
 
         self.startup_phase
