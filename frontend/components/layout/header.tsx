@@ -11,7 +11,6 @@ const navLinks = [
   { href: '/assets', label: 'Assets' },
   { href: '/scripts', label: 'Scripts' },
   { href: '/charts', label: 'Charts' },
-  { href: '/hardforks', label: 'Hardforks' },
 ];
 
 export function Header() {
