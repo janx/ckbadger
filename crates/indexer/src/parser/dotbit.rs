@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
-use anyhow::{bail, Result};
+use anyhow::Result;
+use tracing::warn;
 
 use crate::rpc::{parse_hex_to_bytes, CellOutput, TransactionView};
 
@@ -55,7 +56,21 @@ impl DotbitParser {
             return None;
         }
 
-        let account_id = data[HASH_BYTES_LEN..HASH_BYTES_LEN + ACCOUNT_ID_LEN].to_vec();
+        let account_id_from_data = data[HASH_BYTES_LEN..HASH_BYTES_LEN + ACCOUNT_ID_LEN].to_vec();
+        let account_id_from_args = parse_hex_to_bytes(&type_script.args);
+
+        // .bit account ID is encoded in type args. Keep compatibility with older data layouts.
+        let account_id = if account_id_from_args.len() == ACCOUNT_ID_LEN
+            && !account_id_from_args.iter().all(|&b| b == 0)
+        {
+            account_id_from_args
+        } else {
+            account_id_from_data
+        };
+
+        if account_id.iter().all(|&b| b == 0) {
+            return None;
+        }
 
         let next_account_id = if data.len() >= HASH_BYTES_LEN + ACCOUNT_ID_LEN * 2 {
             let next_id =
@@ -92,23 +107,36 @@ impl DotbitParser {
 
     pub fn parse_accounts(tx: &TransactionView) -> Result<Vec<ParsedDotbitAccount>> {
         let account_name_map = parse_account_names_from_witnesses(&tx.witnesses);
+        let mut accounts = Vec::new();
+        let mut missing_name_count = 0usize;
+        let mut missing_name_samples: Vec<String> = Vec::new();
 
-        tx.outputs
-            .iter()
-            .zip(tx.outputs_data.iter())
-            .filter_map(|(output, data_hex)| Self::parse_account_cell(output, data_hex))
-            .map(|mut account| {
-                let Some(name) = account_name_map.get(&account.account_id).cloned() else {
-                    bail!(
-                        "dotbit account name missing in DAS witness: tx_hash={}, account_id=0x{}",
-                        tx.hash,
-                        hex::encode(&account.account_id)
-                    );
-                };
-                account.account = Some(name);
-                Ok(account)
-            })
-            .collect()
+        for (output, data_hex) in tx.outputs.iter().zip(tx.outputs_data.iter()) {
+            let Some(mut account) = Self::parse_account_cell(output, data_hex) else {
+                continue;
+            };
+
+            account.account = account_name_map.get(&account.account_id).cloned();
+            if account.account.is_none() {
+                missing_name_count += 1;
+                if missing_name_samples.len() < 5 {
+                    missing_name_samples.push(format!("0x{}", hex::encode(&account.account_id)));
+                }
+            }
+            accounts.push(account);
+        }
+
+        if missing_name_count > 0 {
+            let samples = missing_name_samples.join(",");
+            warn!(
+                tx_hash = %tx.hash,
+                missing_account_name_count = missing_name_count,
+                missing_account_name_samples = %samples,
+                "dotbit account name missing in DAS witness, fallback to account_id"
+            );
+        }
+
+        Ok(accounts)
     }
 }
 
@@ -323,10 +351,14 @@ mod tests {
     }
 
     fn create_account_cell_type_script() -> Script {
+        create_account_cell_type_script_with_args(&[])
+    }
+
+    fn create_account_cell_type_script_with_args(args: &[u8]) -> Script {
         Script {
             code_hash: DOTBIT_ACCOUNT_CELL_TYPE_ID.to_string(),
             hash_type: "type".to_string(),
-            args: "0x".to_string(),
+            args: format!("0x{}", hex::encode(args)),
         }
     }
 
@@ -537,6 +569,29 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_account_cell_uses_type_args_account_id_when_data_is_placeholder() {
+        let account_id_from_args: [u8; 20] = [0x44; 20];
+        let placeholder_data_account_id: [u8; 20] = [0x00; 20];
+
+        let output = CellOutput {
+            capacity: "0x174876e800".to_string(),
+            lock: create_lock_script(),
+            type_: Some(create_account_cell_type_script_with_args(
+                &account_id_from_args,
+            )),
+        };
+
+        let data = create_account_cell_data(&placeholder_data_account_id, None, None);
+        let data_hex = format!("0x{}", hex::encode(&data));
+
+        let result = DotbitParser::parse_account_cell(&output, &data_hex);
+        assert!(result.is_some());
+
+        let parsed = result.unwrap();
+        assert_eq!(parsed.account_id, account_id_from_args.to_vec());
+    }
+
+    #[test]
     fn test_parse_account_cell_no_type() {
         let output = CellOutput {
             capacity: "0x174876e800".to_string(),
@@ -592,13 +647,55 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_accounts_errors_when_witness_name_missing() {
+    fn test_parse_accounts_allows_missing_witness_name_with_fallback() {
         let account_id = [0x22u8; 20];
         let tx = create_dotbit_tx(&account_id, false);
 
-        let err = DotbitParser::parse_accounts(&tx).unwrap_err();
-        let msg = err.to_string();
-        assert!(msg.contains("dotbit account name missing in DAS witness"));
-        assert!(msg.contains("account_id=0x"));
+        let parsed_accounts = DotbitParser::parse_accounts(&tx).expect("parse dotbit accounts");
+        assert_eq!(parsed_accounts.len(), 1);
+        assert_eq!(parsed_accounts[0].account_id, account_id.to_vec());
+        assert!(parsed_accounts[0].account.is_none());
+    }
+
+    #[test]
+    fn test_parse_accounts_resolves_account_id_from_type_args() {
+        let account_id = [0x33u8; 20];
+        let output = CellOutput {
+            capacity: "0x174876e800".to_string(),
+            lock: create_lock_script(),
+            type_: Some(create_account_cell_type_script_with_args(&account_id)),
+        };
+        let placeholder_data_account_id = [0u8; 20];
+        let data_hex = format!(
+            "0x{}",
+            hex::encode(create_account_cell_data(
+                &placeholder_data_account_id,
+                None,
+                None
+            ))
+        );
+
+        let tx = TransactionView {
+            hash: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            version: "0x0".to_string(),
+            cell_deps: Vec::<CellDep>::new(),
+            header_deps: Vec::new(),
+            inputs: vec![CellInput {
+                since: "0x0".to_string(),
+                previous_output: OutPoint {
+                    tx_hash: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                        .to_string(),
+                    index: "0x0".to_string(),
+                },
+            }],
+            outputs: vec![output],
+            outputs_data: vec![data_hex],
+            witnesses: vec![encode_dotbit_account_cell_witness(&account_id, "alice.bit")],
+        };
+
+        let parsed_accounts = DotbitParser::parse_accounts(&tx).expect("parse dotbit accounts");
+        assert_eq!(parsed_accounts.len(), 1);
+        assert_eq!(parsed_accounts[0].account_id, account_id.to_vec());
+        assert_eq!(parsed_accounts[0].account.as_deref(), Some("alice.bit"));
     }
 }
