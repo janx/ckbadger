@@ -7,7 +7,9 @@ describe('SiteFooter', () => {
     render(<SiteFooter />);
 
     const footer = screen.getByRole('contentinfo');
-    expect(footer).not.toHaveClass('border-t');
+    expect(footer).toHaveClass('border-t');
+    const footerPanel = footer.querySelector('.rounded-xl');
+    expect(footerPanel).not.toHaveClass('border');
 
     expect(screen.queryByText(/ckbadger explorer/i)).toBeNull();
     expect(screen.queryByText(/Local-first CKB observability and protocol context/i)).toBeNull();
@@ -18,11 +20,15 @@ describe('SiteFooter', () => {
     expect(screen.queryByRole('link', { name: 'Charts' })).toBeNull();
     const githubLink = screen.getByRole('link', { name: 'Github' });
     expect(githubLink).toHaveAttribute('href', 'https://github.com/janx/ckbadger');
+    expect(githubLink).not.toHaveClass('text-terminal-green');
     const footerLinks = Array.from(githubLink.parentElement?.querySelectorAll('a') ?? []).map(
       (link) => link.textContent?.trim()
     );
     expect(footerLinks).toEqual(['Hardforks', 'Github']);
-    expect(screen.getByText('Press ? for shortcuts')).toBeInTheDocument();
+    const shortcutHint = screen.getByText('Press ? for shortcuts');
+    expect(shortcutHint).toBeInTheDocument();
+    expect(hardforksLink.className).not.toEqual(shortcutHint.className);
+    expect(githubLink.className).not.toEqual(shortcutHint.className);
     expect(screen.getByText(/Built by/i)).toBeInTheDocument();
     const profileLink = screen.getByRole('link', { name: '@busyforking' });
     expect(profileLink).toHaveAttribute('href', 'https://x.com/busyforking');

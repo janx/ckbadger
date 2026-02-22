@@ -34,7 +34,7 @@ export function SiteFooter() {
                   <Link
                     key={link.href}
                     href={link.href}
-                    className="hover:border-terminal-dark/70 hover:text-terminal-green rounded border border-slate-700/70 bg-slate-900/75 px-2.5 py-1 text-slate-300 transition-colors"
+                    className="hover:decoration-terminal-dark inline-flex items-center px-1 text-slate-400 underline decoration-slate-700/80 underline-offset-4 transition-colors hover:text-slate-200"
                   >
                     {link.label}
                   </Link>
@@ -45,7 +45,7 @@ export function SiteFooter() {
                 href="https://github.com/janx/ckbadger"
                 target="_blank"
                 rel="noreferrer"
-                className="text-terminal-green border-terminal-dark/70 bg-terminal-bg-light/70 hover:border-terminal-green/70 hover:bg-terminal-bg-light inline-flex items-center rounded border px-2.5 py-1 text-[10px] transition-colors"
+                className="hover:decoration-terminal-dark inline-flex items-center px-1 text-[10px] uppercase tracking-[0.16em] text-slate-400 underline decoration-slate-700/80 underline-offset-4 transition-colors hover:text-slate-200"
               >
                 Github
               </a>
