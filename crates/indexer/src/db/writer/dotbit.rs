@@ -3,7 +3,7 @@ use anyhow::{bail, Result};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{NftCollectionAggregate, NftEntry, NftExtra, NftStandard};
 
-use crate::parser::dotbit::ParsedDotbitAccount;
+use crate::parser::dotbit::ParsedDotbitAccountOutput;
 
 use super::BatchWriter;
 
@@ -14,13 +14,13 @@ const DOTBIT_SENTINEL_COLLECTION: [u8; 32] = *b"dotbit_collection_______________
 impl BatchWriter {
     pub fn insert_dotbit_account(
         &self,
-        account: &ParsedDotbitAccount,
+        account_output: &ParsedDotbitAccountOutput,
         tx_hash: &[u8],
-        output_index: i16,
         block_number: i64,
         timestamp_ms: i64,
         batch: &mut StoreBatch,
     ) -> Result<()> {
+        let account = &account_output.account;
         let account_name = account
             .account
             .clone()
@@ -71,7 +71,11 @@ impl BatchWriter {
             };
             batch.put_nft_hourly_transfer(&DOTBIT_SENTINEL_COLLECTION, hour_bucket, current + 1);
         }
-        batch.put_dotbit_account_outpoint(tx_hash, output_index, &account.account_id);
+        batch.put_dotbit_account_outpoint(
+            tx_hash,
+            account_output.output_index,
+            &account.account_id,
+        );
         Ok(())
     }
 
@@ -151,19 +155,22 @@ mod tests {
         let store = CkbadgerStore::open(dir.path()).unwrap();
         let writer = BatchWriter::new(Arc::new(store));
 
-        let account = ParsedDotbitAccount {
-            account_id: vec![0x11; 20],
-            account: Some("alice.bit".to_string()),
-            type_script_hash: vec![0x21; 32],
-            next_account_id: None,
-            expired_at: None,
-            owner_lock_hash: vec![0x31; 32],
+        let account = ParsedDotbitAccountOutput {
+            output_index: 6,
+            account: crate::parser::dotbit::ParsedDotbitAccount {
+                account_id: vec![0x11; 20],
+                account: Some("alice.bit".to_string()),
+                type_script_hash: vec![0x21; 32],
+                next_account_id: None,
+                expired_at: None,
+                owner_lock_hash: vec![0x31; 32],
+            },
         };
         let tx_hash = vec![0x41; 32];
 
         let mut batch = StoreBatch::new(writer.store());
         writer
-            .insert_dotbit_account(&account, &tx_hash, 6, 1, 0, &mut batch)
+            .insert_dotbit_account(&account, &tx_hash, 1, 0, &mut batch)
             .unwrap();
         batch.commit().unwrap();
 
@@ -171,11 +178,11 @@ mod tests {
             .get_dotbit_account_id_by_outpoint(&tx_hash, 6)
             .unwrap()
             .unwrap();
-        assert_eq!(loaded, account.account_id);
+        assert_eq!(loaded, account.account.account_id);
 
         let entry = writer
             .store()
-            .get_nft(&account.account_id)
+            .get_nft(&account.account.account_id)
             .unwrap()
             .expect("dotbit nft exists");
         assert_eq!(entry.name.as_deref(), Some("alice.bit"));
@@ -192,7 +199,7 @@ mod tests {
             .store()
             .list_nft_ids_by_collection(dotbit_collection, None, 10)
             .unwrap();
-        assert_eq!(collection_ids, vec![account.account_id]);
+        assert_eq!(collection_ids, vec![account.account.account_id]);
     }
 
     #[test]
@@ -201,19 +208,22 @@ mod tests {
         let store = CkbadgerStore::open(dir.path()).unwrap();
         let writer = BatchWriter::new(Arc::new(store));
 
-        let account = ParsedDotbitAccount {
-            account_id: vec![0x11; 20],
-            account: Some("alice.bit".to_string()),
-            type_script_hash: vec![0x21; 32],
-            next_account_id: None,
-            expired_at: None,
-            owner_lock_hash: vec![0x31; 32],
+        let account = ParsedDotbitAccountOutput {
+            output_index: 6,
+            account: crate::parser::dotbit::ParsedDotbitAccount {
+                account_id: vec![0x11; 20],
+                account: Some("alice.bit".to_string()),
+                type_script_hash: vec![0x21; 32],
+                next_account_id: None,
+                expired_at: None,
+                owner_lock_hash: vec![0x31; 32],
+            },
         };
         let tx_hash = vec![0x41; 32];
 
         let mut batch = StoreBatch::new(writer.store());
         writer
-            .insert_dotbit_account(&account, &tx_hash, 6, 1, 0, &mut batch)
+            .insert_dotbit_account(&account, &tx_hash, 1, 0, &mut batch)
             .unwrap();
         batch.commit().unwrap();
 
@@ -229,7 +239,7 @@ mod tests {
 
         let mut batch = StoreBatch::new(writer.store());
         let err = writer
-            .consume_dotbit_account(&account.account_id, 2, &tx_hash, &mut batch)
+            .consume_dotbit_account(&account.account.account_id, 2, &tx_hash, &mut batch)
             .unwrap_err();
         assert!(err.to_string().contains("live_count underflow"));
     }
@@ -240,31 +250,34 @@ mod tests {
         let store = CkbadgerStore::open(dir.path()).unwrap();
         let writer = BatchWriter::new(Arc::new(store));
 
-        let account = ParsedDotbitAccount {
-            account_id: vec![0x11; 20],
-            account: Some("alice.bit".to_string()),
-            type_script_hash: vec![0x21; 32],
-            next_account_id: None,
-            expired_at: None,
-            owner_lock_hash: vec![0x31; 32],
+        let account = ParsedDotbitAccountOutput {
+            output_index: 6,
+            account: crate::parser::dotbit::ParsedDotbitAccount {
+                account_id: vec![0x11; 20],
+                account: Some("alice.bit".to_string()),
+                type_script_hash: vec![0x21; 32],
+                next_account_id: None,
+                expired_at: None,
+                owner_lock_hash: vec![0x31; 32],
+            },
         };
         let tx_hash = vec![0x41; 32];
 
         let mut batch = StoreBatch::new(writer.store());
         writer
-            .insert_dotbit_account(&account, &tx_hash, 6, 1, 0, &mut batch)
+            .insert_dotbit_account(&account, &tx_hash, 1, 0, &mut batch)
             .unwrap();
         batch.commit().unwrap();
 
         let mut batch = StoreBatch::new(writer.store());
         writer
-            .consume_dotbit_account(&account.account_id, 2, &tx_hash, &mut batch)
+            .consume_dotbit_account(&account.account.account_id, 2, &tx_hash, &mut batch)
             .unwrap();
         batch.commit().unwrap();
 
         let mut batch = StoreBatch::new(writer.store());
         let err = writer
-            .consume_dotbit_account(&account.account_id, 3, &tx_hash, &mut batch)
+            .consume_dotbit_account(&account.account.account_id, 3, &tx_hash, &mut batch)
             .unwrap_err();
         assert!(err.to_string().contains("already consumed"));
     }

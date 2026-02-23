@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use tracing::warn;
 
 use crate::rpc::{parse_hex_to_bytes, CellOutput, TransactionView};
@@ -26,6 +26,12 @@ pub struct ParsedDotbitAccount {
     pub next_account_id: Option<Vec<u8>>,
     pub expired_at: Option<u64>,
     pub owner_lock_hash: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ParsedDotbitAccountOutput {
+    pub output_index: i16,
+    pub account: ParsedDotbitAccount,
 }
 
 pub struct DotbitParser;
@@ -105,17 +111,26 @@ impl DotbitParser {
         })
     }
 
-    pub fn parse_accounts(tx: &TransactionView) -> Result<Vec<ParsedDotbitAccount>> {
+    pub fn parse_accounts(tx: &TransactionView) -> Result<Vec<ParsedDotbitAccountOutput>> {
         let account_name_map = parse_account_names_from_witnesses(&tx.witnesses);
         let mut accounts = Vec::new();
         let mut missing_name_count = 0usize;
         let mut missing_name_samples: Vec<String> = Vec::new();
 
-        for (output, data_hex) in tx.outputs.iter().zip(tx.outputs_data.iter()) {
+        for (output_index, (output, data_hex)) in
+            tx.outputs.iter().zip(tx.outputs_data.iter()).enumerate()
+        {
             let Some(mut account) = Self::parse_account_cell(output, data_hex) else {
                 continue;
             };
 
+            let output_index = i16::try_from(output_index).map_err(|_| {
+                anyhow!(
+                    "dotbit output index exceeds i16 range: tx_hash={}, output_index={}",
+                    tx.hash,
+                    output_index
+                )
+            })?;
             account.account = account_name_map.get(&account.account_id).cloned();
             if account.account.is_none() {
                 missing_name_count += 1;
@@ -123,7 +138,10 @@ impl DotbitParser {
                     missing_name_samples.push(format!("0x{}", hex::encode(&account.account_id)));
                 }
             }
-            accounts.push(account);
+            accounts.push(ParsedDotbitAccountOutput {
+                output_index,
+                account,
+            });
         }
 
         if missing_name_count > 0 {
@@ -688,8 +706,12 @@ mod tests {
 
         let parsed_accounts = DotbitParser::parse_accounts(&tx).expect("parse dotbit accounts");
         assert_eq!(parsed_accounts.len(), 1);
-        assert_eq!(parsed_accounts[0].account_id, account_id.to_vec());
-        assert_eq!(parsed_accounts[0].account.as_deref(), Some("alice.bit"));
+        assert_eq!(parsed_accounts[0].output_index, 0);
+        assert_eq!(parsed_accounts[0].account.account_id, account_id.to_vec());
+        assert_eq!(
+            parsed_accounts[0].account.account.as_deref(),
+            Some("alice.bit")
+        );
     }
 
     #[test]
@@ -699,8 +721,9 @@ mod tests {
 
         let parsed_accounts = DotbitParser::parse_accounts(&tx).expect("parse dotbit accounts");
         assert_eq!(parsed_accounts.len(), 1);
-        assert_eq!(parsed_accounts[0].account_id, account_id.to_vec());
-        assert!(parsed_accounts[0].account.is_none());
+        assert_eq!(parsed_accounts[0].output_index, 0);
+        assert_eq!(parsed_accounts[0].account.account_id, account_id.to_vec());
+        assert!(parsed_accounts[0].account.account.is_none());
     }
 
     #[test]
@@ -741,8 +764,55 @@ mod tests {
 
         let parsed_accounts = DotbitParser::parse_accounts(&tx).expect("parse dotbit accounts");
         assert_eq!(parsed_accounts.len(), 1);
-        assert_eq!(parsed_accounts[0].account_id, account_id.to_vec());
-        assert_eq!(parsed_accounts[0].account.as_deref(), Some("alice.bit"));
+        assert_eq!(parsed_accounts[0].output_index, 0);
+        assert_eq!(parsed_accounts[0].account.account_id, account_id.to_vec());
+        assert_eq!(
+            parsed_accounts[0].account.account.as_deref(),
+            Some("alice.bit")
+        );
+    }
+
+    #[test]
+    fn test_parse_accounts_preserves_original_output_index() {
+        let account_id = [0x44u8; 20];
+        let dotbit_output = CellOutput {
+            capacity: "0x174876e800".to_string(),
+            lock: create_lock_script(),
+            type_: Some(create_account_cell_type_script_with_args(&account_id)),
+        };
+        let dotbit_data_hex = format!(
+            "0x{}",
+            hex::encode(create_account_cell_data(&[0u8; 20], None, None))
+        );
+
+        let other_output = CellOutput {
+            capacity: "0x174876e800".to_string(),
+            lock: create_lock_script(),
+            type_: None,
+        };
+
+        let tx = TransactionView {
+            hash: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            version: "0x0".to_string(),
+            cell_deps: Vec::<CellDep>::new(),
+            header_deps: Vec::new(),
+            inputs: vec![CellInput {
+                since: "0x0".to_string(),
+                previous_output: OutPoint {
+                    tx_hash: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                        .to_string(),
+                    index: "0x0".to_string(),
+                },
+            }],
+            outputs: vec![other_output, dotbit_output],
+            outputs_data: vec!["0x".to_string(), dotbit_data_hex],
+            witnesses: vec![encode_dotbit_account_cell_witness(&account_id, "alice.bit")],
+        };
+
+        let parsed_accounts = DotbitParser::parse_accounts(&tx).expect("parse dotbit accounts");
+        assert_eq!(parsed_accounts.len(), 1);
+        assert_eq!(parsed_accounts[0].output_index, 1);
+        assert_eq!(parsed_accounts[0].account.account_id, account_id.to_vec());
     }
 
     #[test]

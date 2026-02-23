@@ -5397,6 +5397,7 @@ impl Indexer {
 
         // NFT/Spore processing
         let mut batch_spore_ids: HashSet<Vec<u8>> = HashSet::new();
+        let mut batch_dotbit_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>> = HashMap::new();
 
         {
             let mut nft_batch = StoreBatch::new(self.writer.store());
@@ -5467,17 +5468,18 @@ impl Indexer {
                             &mut nft_batch,
                         )?;
                     }
-                    for (output_index, account) in
-                        DotbitParser::parse_accounts(tx)?.iter().enumerate()
-                    {
+                    for account in DotbitParser::parse_accounts(tx)? {
                         self.writer.insert_dotbit_account(
-                            account,
+                            &account,
                             &tx_data.hash,
-                            output_index as i16,
                             parsed.number,
                             parsed.timestamp.timestamp_millis(),
                             &mut nft_batch,
                         )?;
+                        batch_dotbit_outpoints.insert(
+                            (tx_data.hash.to_vec(), account.output_index),
+                            account.account.account_id.clone(),
+                        );
                     }
                 }
             }
@@ -5528,6 +5530,23 @@ impl Indexer {
                                     &mut spore_state,
                                 )?;
                             }
+                        }
+
+                        let consumed_dotbit_account_id = self
+                            .writer
+                            .get_dotbit_account_id_by_outpoint(&prev_tx_hash, prev_index)?
+                            .or_else(|| {
+                                batch_dotbit_outpoints
+                                    .get(&(prev_tx_hash.clone(), prev_index))
+                                    .cloned()
+                            });
+                        if let Some(account_id) = consumed_dotbit_account_id {
+                            self.writer.consume_dotbit_account(
+                                &account_id,
+                                parsed.number,
+                                &tx_data.hash,
+                                &mut consume_batch,
+                            )?;
                         }
                     }
                 }
@@ -6581,13 +6600,10 @@ impl Indexer {
                                     &mut batch,
                                 )?;
                             }
-                            for (output_index, account) in
-                                DotbitParser::parse_accounts(tx)?.iter().enumerate()
-                            {
+                            for account in DotbitParser::parse_accounts(tx)? {
                                 writer.insert_dotbit_account(
-                                    account,
+                                    &account,
                                     &tx_data.hash,
-                                    output_index as i16,
                                     parsed.number,
                                     ts_ms,
                                     &mut batch,
@@ -7643,20 +7659,17 @@ impl Indexer {
                                 token.token_id.clone(),
                             );
                         }
-                        for (output_index, account) in
-                            DotbitParser::parse_accounts(tx)?.iter().enumerate()
-                        {
+                        for account in DotbitParser::parse_accounts(tx)? {
                             self.writer.insert_dotbit_account(
-                                account,
+                                &account,
                                 &tx_data.hash,
-                                output_index as i16,
                                 parsed.number,
                                 ts_ms,
                                 &mut data_batch,
                             )?;
                             batch_dotbit_outpoints.insert(
-                                (tx_data.hash.to_vec(), output_index as i16),
-                                account.account_id.clone(),
+                                (tx_data.hash.to_vec(), account.output_index),
+                                account.account.account_id.clone(),
                             );
                         }
                     }
