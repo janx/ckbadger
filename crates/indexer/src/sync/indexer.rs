@@ -977,17 +977,25 @@ fn parse_parsed_cell_udt_amount(
     let Some(hash_type) = cell.type_hash_type else {
         return Ok(None);
     };
-    if crate::parser::UdtParser::is_udt_code_hash_bytes(type_code_hash, hash_type).is_none() {
+    let Some(standard) =
+        crate::parser::UdtParser::is_udt_code_hash_bytes(type_code_hash, hash_type)
+    else {
         return Ok(None);
-    }
-    let amount = crate::parser::UdtParser::parse_amount(&cell.data).ok_or_else(|| {
-        anyhow!(
+    };
+
+    let Some(amount) = crate::parser::UdtParser::parse_amount(&cell.data) else {
+        // xUDT-compatible cells can carry non-amount payloads (for example owner-mode cells).
+        // They should not be indexed as fungible UDT balances/transfers.
+        if matches!(standard, crate::parser::UdtStandard::Xudt) {
+            return Ok(None);
+        }
+        return Err(anyhow!(
             "failed to parse UDT amount from parsed output data: outpoint=0x{}:{}, type_code_hash=0x{}",
             hex::encode(tx_hash),
             output_index,
             hex::encode(type_code_hash)
-        )
-    })?;
+        ));
+    };
     Ok(Some(amount))
 }
 
@@ -9179,6 +9187,41 @@ mod tests {
             data_size: 16,
             data: vec![0u8; 16],
         }
+    }
+
+    #[test]
+    fn test_parse_parsed_cell_udt_amount_allows_xudt_without_amount_payload() {
+        let mut cell = dummy_xudt_cell([0xAB; 32], vec![0xCD; XUDT_TYPE_ARGS_MIN_LEN]);
+        cell.data.clear();
+        cell.data_size = 0;
+
+        let tx_hash = [0x81; 32];
+        let amount = parse_parsed_cell_udt_amount(&cell, &tx_hash, 3).unwrap();
+        assert_eq!(amount, None);
+    }
+
+    #[test]
+    fn test_parse_parsed_cell_udt_amount_rejects_invalid_sudt_payload() {
+        let sudt_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::udt::SUDT_CODE_HASH);
+        let cell = crate::parser::cell::ParsedCell {
+            capacity: 100_00000000,
+            lock_code_hash: vec![0x11; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x22; 20],
+            lock_script_hash: vec![0x33; 32],
+            type_code_hash: Some(sudt_code_hash.clone()),
+            type_hash_type: Some(1),
+            type_args: Some(vec![0x44; 32]),
+            type_script_hash: Some(vec![0x55; 32]),
+            data_hash: vec![0x66; 32],
+            data_size: 0,
+            data: vec![],
+        };
+
+        let tx_hash = [0x82; 32];
+        let err = parse_parsed_cell_udt_amount(&cell, &tx_hash, 7).unwrap_err();
+        assert!(err.to_string().contains("failed to parse UDT amount"));
+        assert!(err.to_string().contains("0x8282828282828282"));
     }
 
     fn build_xudt_type_args_with_extension_in_args(

@@ -154,14 +154,24 @@ impl BatchWriter {
                 let hash_type = token_info.hash_type as i16;
                 let type_args = token_info.type_args.clone();
 
-                let amount = info.udt_amount.ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "missing udt_amount in cell info for UDT input: outpoint=0x{}:{}, type_script_hash=0x{}",
-                        hex::encode(tx_hash),
-                        output_index,
-                        hex::encode(type_script_hash)
-                    )
-                })?;
+                let amount = match info.udt_amount {
+                    Some(amount) => amount,
+                    None => match standard {
+                        crate::parser::UdtStandard::Xudt => {
+                            // xUDT-compatible typed cells can be owner/metadata cells that do not
+                            // carry a fungible amount. Skip them from UDT transfer matching.
+                            continue;
+                        }
+                        crate::parser::UdtStandard::Sudt => {
+                            return Err(anyhow::anyhow!(
+                                "missing udt_amount in cell info for UDT input: outpoint=0x{}:{}, type_script_hash=0x{}",
+                                hex::encode(tx_hash),
+                                output_index,
+                                hex::encode(type_script_hash)
+                            ));
+                        }
+                    },
+                };
                 result.insert(
                     (tx_hash.to_vec(), output_index),
                     (
@@ -635,6 +645,108 @@ mod tests {
             result.is_empty(),
             "typed cell without token metadata should not be classified as UDT"
         );
+    }
+
+    #[test]
+    fn test_get_udt_cells_info_batch_skips_xudt_cells_without_amount() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+
+        let type_hash = vec![0xAC; 32];
+        let tx_hash = vec![0xDD; 32];
+        let output_index = 1i16;
+
+        let token = TokenInfo {
+            type_code_hash: vec![0x50; 32],
+            hash_type: 2, // data1
+            type_args: vec![0x11; 32],
+            standard: "xudt".to_string(),
+            name: None,
+            symbol: None,
+            decimals: None,
+            total_supply: Some(0),
+            max_supply: None,
+            holders_count: 0,
+            first_seen_block: 0,
+            icon_url: None,
+            description: None,
+            transfers_count: 0,
+        };
+        store.put_token_direct(&type_hash, &token).unwrap();
+
+        let cell = LiveCellInfo {
+            capacity: 100_000_000,
+            created_at_block: 1,
+            lock_script_hash: vec![0x22; 32],
+            lock_code_hash: vec![0x33; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x44; 20],
+            type_script_hash: Some(type_hash),
+            type_code_hash: Some(vec![0x50; 32]),
+            type_args: Some(vec![0x11; 32]),
+            data_size: 0,
+            occupied_capacity: 0,
+            udt_amount: None,
+        };
+        let mut batch = StoreBatch::new(&store);
+        batch.put_cell(&tx_hash, output_index, &cell);
+        batch.commit().unwrap();
+
+        let outpoints = vec![(tx_hash.as_slice(), output_index)];
+        let result = writer.get_udt_cells_info_batch(&outpoints).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_get_udt_cells_info_batch_errors_on_sudt_cells_without_amount() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+
+        let type_hash = vec![0xAD; 32];
+        let tx_hash = vec![0xCC; 32];
+        let output_index = 2i16;
+
+        let token = TokenInfo {
+            type_code_hash: vec![0x60; 32],
+            hash_type: 1,
+            type_args: vec![0x21; 32],
+            standard: "sudt".to_string(),
+            name: None,
+            symbol: None,
+            decimals: None,
+            total_supply: Some(0),
+            max_supply: None,
+            holders_count: 0,
+            first_seen_block: 0,
+            icon_url: None,
+            description: None,
+            transfers_count: 0,
+        };
+        store.put_token_direct(&type_hash, &token).unwrap();
+
+        let cell = LiveCellInfo {
+            capacity: 100_000_000,
+            created_at_block: 1,
+            lock_script_hash: vec![0x22; 32],
+            lock_code_hash: vec![0x33; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x44; 20],
+            type_script_hash: Some(type_hash),
+            type_code_hash: Some(vec![0x60; 32]),
+            type_args: Some(vec![0x21; 32]),
+            data_size: 0,
+            occupied_capacity: 0,
+            udt_amount: None,
+        };
+        let mut batch = StoreBatch::new(&store);
+        batch.put_cell(&tx_hash, output_index, &cell);
+        batch.commit().unwrap();
+
+        let outpoints = vec![(tx_hash.as_slice(), output_index)];
+        let err = writer.get_udt_cells_info_batch(&outpoints).unwrap_err();
+        assert!(err.to_string().contains("missing udt_amount"));
     }
 
     #[test]

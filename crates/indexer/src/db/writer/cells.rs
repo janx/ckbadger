@@ -142,18 +142,26 @@ impl BatchWriter {
                 (8 + lock_script_size + type_script_size + cell.data_size as i64) * 100_000_000;
 
             let udt_amount = match (cell.type_code_hash.as_deref(), cell.type_hash_type) {
-                (Some(type_code_hash), Some(hash_type))
-                    if UdtParser::is_udt_code_hash_bytes(type_code_hash, hash_type).is_some() =>
-                {
-                    let amount = UdtParser::parse_amount(&cell.data).ok_or_else(|| {
-                        anyhow!(
-                            "failed to parse UDT amount from output cell data: outpoint=0x{}:{}, type_code_hash=0x{}",
-                            hex::encode(tx_hash),
-                            output_index,
-                            hex::encode(type_code_hash)
-                        )
-                    })?;
-                    Some(amount)
+                (Some(type_code_hash), Some(hash_type)) => {
+                    match UdtParser::is_udt_code_hash_bytes(type_code_hash, hash_type) {
+                        Some(crate::parser::UdtStandard::Xudt) => {
+                            // xUDT-compatible cells can be non-fungible metadata/owner cells.
+                            // Those cells intentionally carry no 16-byte token amount.
+                            UdtParser::parse_amount(&cell.data)
+                        }
+                        Some(crate::parser::UdtStandard::Sudt) => {
+                            let amount = UdtParser::parse_amount(&cell.data).ok_or_else(|| {
+                                anyhow!(
+                                    "failed to parse UDT amount from output cell data: outpoint=0x{}:{}, type_code_hash=0x{}",
+                                    hex::encode(tx_hash),
+                                    output_index,
+                                    hex::encode(type_code_hash)
+                                )
+                            })?;
+                            Some(amount)
+                        }
+                        None => None,
+                    }
                 }
                 _ => None,
             };
@@ -671,4 +679,67 @@ pub fn rebuild_cell_indices(store: &CkbadgerStore) {
         "Cell index rebuild complete: {} cells indexed in {}s",
         count, elapsed_secs
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn build_udt_cell(type_code_hash: Vec<u8>, data: Vec<u8>) -> ParsedCell {
+        ParsedCell {
+            capacity: 100_000_000,
+            lock_code_hash: vec![0x11; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x22; 20],
+            lock_script_hash: vec![0x33; 32],
+            type_code_hash: Some(type_code_hash),
+            type_hash_type: Some(1),
+            type_args: Some(vec![0x44; 32]),
+            type_script_hash: Some(vec![0x55; 32]),
+            data_hash: vec![0x66; 32],
+            data_size: data.len() as i32,
+            data,
+        }
+    }
+
+    #[test]
+    fn test_insert_cells_batch_allows_xudt_cells_without_amount_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+
+        let type_code_hash =
+            crate::rpc::parse_hex_to_bytes(crate::parser::udt::XUDT_CODE_HASH_TYPE);
+        let cell = build_udt_cell(type_code_hash, vec![]);
+        let tx_hash = vec![0xAA; 32];
+        let all_cells = vec![(tx_hash.as_slice(), 0i16, &cell, 1i64)];
+
+        let mut batch = StoreBatch::new(&store);
+        writer
+            .insert_cells_batch(&all_cells, &mut batch, false)
+            .unwrap();
+        batch.commit().unwrap();
+
+        let stored = store.get_cell(&tx_hash, 0).unwrap().unwrap();
+        assert_eq!(stored.udt_amount, None);
+    }
+
+    #[test]
+    fn test_insert_cells_batch_rejects_invalid_sudt_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store);
+
+        let type_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::udt::SUDT_CODE_HASH);
+        let cell = build_udt_cell(type_code_hash, vec![]);
+        let tx_hash = vec![0xBB; 32];
+        let all_cells = vec![(tx_hash.as_slice(), 3i16, &cell, 1i64)];
+
+        let mut batch = StoreBatch::new(writer.store());
+        let err = writer
+            .insert_cells_batch(&all_cells, &mut batch, false)
+            .unwrap_err();
+        assert!(err.to_string().contains("failed to parse UDT amount"));
+    }
 }
