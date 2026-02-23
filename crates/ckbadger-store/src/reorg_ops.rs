@@ -306,6 +306,8 @@ impl CkbadgerStore {
                 rollback_to
             );
         }
+        // Persist a rollback marker so startup can force cleanup if interrupted.
+        self.set_rollback_cleanup_in_progress(true)?;
         let mut batch = WriteBatch::default();
         let mut blocks_removed = 0u64;
         let mut txs_removed = 0u64;
@@ -692,6 +694,23 @@ impl CkbadgerStore {
             "Rollback cleanup script info rebuild complete"
         );
 
+        // Rebuild token state from transfer history to heal partial UDT writes
+        // that can survive crash windows before block-header commit markers.
+        info!("Rollback cleanup rebuilding token state from token_transfers");
+        let token_rebuild = self.rebuild_token_state_from_transfers()?;
+        info!(
+            token_holders_cleared = token_rebuild.token_holders_cleared,
+            token_transfer_stats_cleared = token_rebuild.token_transfer_stats_cleared,
+            token_hourly_stats_cleared = token_rebuild.token_hourly_stats_cleared,
+            tokens_written = token_rebuild.tokens_written,
+            tokens_deleted = token_rebuild.tokens_deleted,
+            token_holders_written = token_rebuild.token_holders_written,
+            token_transfer_stats_written = token_rebuild.token_transfer_stats_written,
+            token_hourly_stats_written = token_rebuild.token_hourly_stats_written,
+            elapsed_secs = format!("{:.1}", rollback_started_at.elapsed().as_secs_f64()),
+            "Rollback cleanup token state rebuild complete"
+        );
+
         // Keep sync_status tip aligned with the rolled-back chain head.
         let tip_hash = if rollback_to >= 0 {
             self.get_block_header(rollback_to)?
@@ -706,6 +725,8 @@ impl CkbadgerStore {
             status.tip_block_hash = tip_hash.clone();
             status.last_synced_at = chrono::Utc::now().timestamp();
         })?;
+
+        self.set_rollback_cleanup_in_progress(false)?;
 
         info!(
             tip_number,
@@ -738,6 +759,7 @@ mod tests {
     use crate::store::CkbadgerStore;
     use crate::types::{
         AddressBalance, CachedBlockHeader, DaoDepositCacheEntry, LiveCellInfo, ScriptInfo,
+        TokenInfo, TokenTransferRecord,
     };
 
     #[test]
@@ -1239,5 +1261,242 @@ mod tests {
         let store = CkbadgerStore::open(dir.path()).unwrap();
         let err = store.rollback_to_block(-2).unwrap_err();
         assert!(err.to_string().contains("expected >= -1"));
+    }
+
+    #[test]
+    fn test_rollback_rebuilds_token_state_from_transfers() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+
+        let header1 = CachedBlockHeader {
+            hash: vec![0x01; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+        let header2 = CachedBlockHeader {
+            hash: vec![0x02; 32],
+            timestamp: 1_700_003_600_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+
+        let type_hash = vec![0xCD; 32];
+        let lock_a = vec![0xAA; 32];
+        let lock_b = vec![0xBB; 32];
+
+        let stale_token_info = TokenInfo {
+            type_code_hash: vec![0x11; 32],
+            hash_type: 1,
+            type_args: vec![0x22; 32],
+            standard: "sudt".to_string(),
+            name: Some("Test Token".to_string()),
+            symbol: Some("TT".to_string()),
+            decimals: Some(8),
+            total_supply: Some(100),
+            max_supply: Some(1_000),
+            holders_count: 2, // stale (contains block2 state)
+            first_seen_block: 1,
+            icon_url: None,
+            description: None,
+            transfers_count: 2, // stale (contains block2 state)
+        };
+
+        let transfer_block_1 = TokenTransferRecord {
+            tx_hash: vec![0x10; 32],
+            block_number: 1,
+            from_lock_hash: None,
+            to_lock_hash: lock_a.clone(),
+            amount: 100,
+            is_mint: true,
+            is_burn: false,
+            timestamp: header1.timestamp,
+        };
+        let transfer_block_2 = TokenTransferRecord {
+            tx_hash: vec![0x20; 32],
+            block_number: 2,
+            from_lock_hash: Some(lock_a.clone()),
+            to_lock_hash: lock_b.clone(),
+            amount: 60,
+            is_mint: false,
+            is_burn: false,
+            timestamp: header2.timestamp,
+        };
+        let live_cell_block_1 = LiveCellInfo {
+            capacity: 1000,
+            created_at_block: 1,
+            lock_script_hash: lock_a.clone(),
+            lock_code_hash: vec![0x33; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: Some(type_hash.clone()),
+            type_code_hash: Some(vec![0x11; 32]),
+            type_args: Some(vec![0x22; 32]),
+            data_size: 16,
+            occupied_capacity: 1000,
+            udt_amount: Some(100),
+        };
+        let live_cell_block_2 = LiveCellInfo {
+            capacity: 1000,
+            created_at_block: 2,
+            lock_script_hash: lock_b.clone(),
+            lock_code_hash: vec![0x33; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: Some(type_hash.clone()),
+            type_code_hash: Some(vec![0x11; 32]),
+            type_args: Some(vec![0x22; 32]),
+            data_size: 16,
+            occupied_capacity: 1000,
+            udt_amount: Some(60),
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(1, &header1);
+        batch.put_block_header(2, &header2);
+        batch.put_cell(&[0x31; 32], 0, &live_cell_block_1);
+        batch.put_cell(&[0x32; 32], 0, &live_cell_block_2);
+        batch.put_token(&type_hash, &stale_token_info);
+        batch.put_token_holder(&type_hash, &lock_a, 40);
+        batch.put_token_holder(&type_hash, &lock_b, 60);
+        batch.put_token_transfers_count(&type_hash, 2);
+        batch.put_token_hourly_transfer(&type_hash, header1.timestamp / 3_600_000, 1);
+        batch.put_token_hourly_transfer(&type_hash, header2.timestamp / 3_600_000, 1);
+        batch.put_token_transfer(&type_hash, 1, 0, &transfer_block_1);
+        batch.put_token_transfer(&type_hash, 2, 0, &transfer_block_2);
+        batch.commit().unwrap();
+
+        store.rollback_to_block(1).unwrap();
+
+        // Transfer history should be truncated to block 1.
+        let transfers = store.list_token_transfers(&type_hash, 10, None).unwrap();
+        assert_eq!(transfers.len(), 1);
+        assert_eq!(transfers[0].0, 1);
+
+        // Holder balances should match only block 1 mint.
+        assert_eq!(
+            store.get_token_holder_balance(&type_hash, &lock_a).unwrap(),
+            Some(100)
+        );
+        assert_eq!(
+            store.get_token_holder_balance(&type_hash, &lock_b).unwrap(),
+            None
+        );
+
+        // Token aggregates should be rebuilt from the truncated transfer history.
+        let rebuilt_token = store.get_token(&type_hash).unwrap().unwrap();
+        assert_eq!(rebuilt_token.total_supply, Some(100));
+        assert_eq!(rebuilt_token.holders_count, 1);
+        assert_eq!(rebuilt_token.transfers_count, 1);
+        assert_eq!(rebuilt_token.first_seen_block, 1);
+        assert_eq!(rebuilt_token.name.as_deref(), Some("Test Token"));
+        assert_eq!(rebuilt_token.max_supply, Some(1_000));
+
+        assert_eq!(store.get_token_transfers_count(&type_hash).unwrap(), 1);
+        assert_eq!(
+            store
+                .get_token_24h_transfers(&type_hash, header2.timestamp)
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn test_rollback_deletes_token_without_remaining_transfers() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+
+        let header1 = CachedBlockHeader {
+            hash: vec![0x01; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+        let header2 = CachedBlockHeader {
+            hash: vec![0x02; 32],
+            timestamp: 1_700_003_600_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+
+        let type_hash = vec![0xEF; 32];
+        let lock_a = vec![0xAA; 32];
+
+        let token_info = TokenInfo {
+            type_code_hash: vec![0x11; 32],
+            hash_type: 1,
+            type_args: vec![0x22; 32],
+            standard: "sudt".to_string(),
+            name: None,
+            symbol: None,
+            decimals: None,
+            total_supply: Some(50),
+            max_supply: None,
+            holders_count: 1,
+            first_seen_block: 2,
+            icon_url: None,
+            description: None,
+            transfers_count: 1,
+        };
+        let transfer_block_2 = TokenTransferRecord {
+            tx_hash: vec![0x20; 32],
+            block_number: 2,
+            from_lock_hash: None,
+            to_lock_hash: lock_a.clone(),
+            amount: 50,
+            is_mint: true,
+            is_burn: false,
+            timestamp: header2.timestamp,
+        };
+        let live_cell_block_2 = LiveCellInfo {
+            capacity: 1000,
+            created_at_block: 2,
+            lock_script_hash: lock_a.clone(),
+            lock_code_hash: vec![0x33; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: Some(type_hash.clone()),
+            type_code_hash: Some(vec![0x11; 32]),
+            type_args: Some(vec![0x22; 32]),
+            data_size: 16,
+            occupied_capacity: 1000,
+            udt_amount: Some(50),
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(1, &header1);
+        batch.put_block_header(2, &header2);
+        batch.put_cell(&[0x33; 32], 0, &live_cell_block_2);
+        batch.put_token(&type_hash, &token_info);
+        batch.put_token_holder(&type_hash, &lock_a, 50);
+        batch.put_token_transfers_count(&type_hash, 1);
+        batch.put_token_hourly_transfer(&type_hash, header2.timestamp / 3_600_000, 1);
+        batch.put_token_transfer(&type_hash, 2, 0, &transfer_block_2);
+        batch.commit().unwrap();
+
+        store.rollback_to_block(1).unwrap();
+
+        assert!(store.get_token(&type_hash).unwrap().is_none());
+        assert_eq!(
+            store.get_token_holder_balance(&type_hash, &lock_a).unwrap(),
+            None
+        );
+        assert_eq!(store.get_token_transfers_count(&type_hash).unwrap(), 0);
+        assert!(store
+            .list_token_transfers(&type_hash, 10, None)
+            .unwrap()
+            .is_empty());
     }
 }

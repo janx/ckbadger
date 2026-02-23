@@ -170,9 +170,18 @@ fn is_clean_shutdown_reason(reason: &str) -> bool {
     )
 }
 
-fn should_force_startup_cleanup(previous_runtime: &ckbadger_store::RuntimeStatus) -> bool {
+fn should_force_startup_cleanup(
+    previous_runtime: &ckbadger_store::RuntimeStatus,
+    rollback_cleanup_in_progress: bool,
+) -> bool {
+    if rollback_cleanup_in_progress {
+        return true;
+    }
+
     let Some(active_run_id) = previous_runtime.active_run_id.as_deref() else {
-        return false;
+        return previous_runtime.last_incident_summary.as_deref()
+            == Some("pipeline_batch_write_failed")
+            && previous_runtime.last_incident_at >= previous_runtime.run_started_at;
     };
     let clean_shutdown_marker_for_same_run = previous_runtime.last_run_id.as_deref()
         == Some(active_run_id)
@@ -249,11 +258,14 @@ async fn run_sync(args: Cli) -> Result<()> {
     // One-time backfill: rebuild avg_block_time_ms from block headers
     let mut sync_status = store.get_sync_status()?;
     let previous_runtime = store.get_runtime_status()?;
-    let previous_run_unclean = should_force_startup_cleanup(&previous_runtime);
+    let rollback_cleanup_in_progress = store.is_rollback_cleanup_in_progress()?;
+    let previous_run_unclean =
+        should_force_startup_cleanup(&previous_runtime, rollback_cleanup_in_progress);
     config.force_startup_cleanup = previous_run_unclean;
     if previous_run_unclean {
         info!(
-            "Previous run did not shut down cleanly; forcing startup rollback cleanup to reconcile derived state"
+            rollback_cleanup_in_progress,
+            "Forcing startup rollback cleanup to reconcile derived state"
         );
     }
     if !sync_status.avg_block_time_rebuilt && sync_status.tip_block_number > 0 {
@@ -717,13 +729,13 @@ mod tests {
             active_run_id: Some("run-xyz".to_string()),
             ..Default::default()
         };
-        assert!(should_force_startup_cleanup(&runtime));
+        assert!(should_force_startup_cleanup(&runtime, false));
     }
 
     #[test]
     fn test_should_not_force_startup_cleanup_when_no_active_run() {
         let runtime = RuntimeStatus::default();
-        assert!(!should_force_startup_cleanup(&runtime));
+        assert!(!should_force_startup_cleanup(&runtime, false));
     }
 
     #[test]
@@ -737,7 +749,7 @@ mod tests {
             last_exit_code: Some(0),
             ..Default::default()
         };
-        assert!(!should_force_startup_cleanup(&runtime));
+        assert!(!should_force_startup_cleanup(&runtime, false));
     }
 
     #[test]
@@ -751,6 +763,34 @@ mod tests {
             last_exit_code: Some(0),
             ..Default::default()
         };
-        assert!(should_force_startup_cleanup(&runtime));
+        assert!(should_force_startup_cleanup(&runtime, false));
+    }
+
+    #[test]
+    fn test_should_force_startup_cleanup_when_rollback_marker_set() {
+        let runtime = RuntimeStatus::default();
+        assert!(should_force_startup_cleanup(&runtime, true));
+    }
+
+    #[test]
+    fn test_should_force_startup_cleanup_when_previous_run_had_batch_write_incident() {
+        let runtime = RuntimeStatus {
+            run_started_at: 100,
+            last_incident_at: 101,
+            last_incident_summary: Some("pipeline_batch_write_failed".to_string()),
+            ..Default::default()
+        };
+        assert!(should_force_startup_cleanup(&runtime, false));
+    }
+
+    #[test]
+    fn test_should_not_force_startup_cleanup_for_old_incident_before_run_start() {
+        let runtime = RuntimeStatus {
+            run_started_at: 200,
+            last_incident_at: 100,
+            last_incident_summary: Some("pipeline_batch_write_failed".to_string()),
+            ..Default::default()
+        };
+        assert!(!should_force_startup_cleanup(&runtime, false));
     }
 }

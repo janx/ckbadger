@@ -105,7 +105,9 @@ impl BatchWriter {
         for &(tx_hash, output_index) in outpoints {
             let outpoint_key = ckbadger_store::keys::encode_outpoint(tx_hash, output_index);
 
-            // Try live cells first, then consumed cells
+            // UDT transfer inputs must come from pre-batch live state.
+            // Do not fall back to consumed_cells here: historical consumed entries
+            // can reintroduce already-spent cells and produce false negative deltas.
             let cell_info = if let Some(val) = self
                 .store
                 .get_cf(self.store.cf_live_cells(), &outpoint_key)?
@@ -113,12 +115,6 @@ impl BatchWriter {
                 Some(bincode::deserialize::<ckbadger_store::types::LiveCellInfo>(
                     &val,
                 )?)
-            } else if let Some(val) = self
-                .store
-                .get_cf(self.store.cf_consumed_cells(), &outpoint_key)?
-            {
-                ckbadger_store::types::decode_consumed_cell_info(&val)
-                    .map(|c| c.to_live_cell_info())
             } else {
                 None
             };
@@ -609,6 +605,63 @@ mod tests {
         assert_eq!(entry.4, vec![0x22; 32]);
         assert_eq!(entry.5, 1234u128);
         assert_eq!(entry.6, "sudt".to_string());
+    }
+
+    #[test]
+    fn test_get_udt_cells_info_batch_does_not_use_consumed_cell_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+
+        let type_hash = vec![0xBA; 32];
+        let type_code_hash = vec![0xCB; 32];
+        let tx_hash = vec![0xDC; 32];
+        let output_index = 0i16;
+
+        let token = TokenInfo {
+            type_code_hash: type_code_hash.clone(),
+            hash_type: 1,
+            type_args: vec![0x11; 20],
+            standard: "sudt".to_string(),
+            name: None,
+            symbol: None,
+            decimals: None,
+            total_supply: Some(0),
+            max_supply: None,
+            holders_count: 0,
+            first_seen_block: 0,
+            icon_url: None,
+            description: None,
+            transfers_count: 0,
+        };
+        store.put_token_direct(&type_hash, &token).unwrap();
+
+        // The outpoint exists only in consumed_cells (already spent), not live_cells.
+        // UDT input lookup must ignore it to avoid replaying historical spend deltas.
+        let consumed_cell = LiveCellInfo {
+            capacity: 100_000_000,
+            created_at_block: 1,
+            lock_script_hash: vec![0x22; 32],
+            lock_code_hash: vec![0x33; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x44; 20],
+            type_script_hash: Some(type_hash),
+            type_code_hash: Some(type_code_hash),
+            type_args: Some(vec![0x11; 20]),
+            data_size: 16,
+            occupied_capacity: 0,
+            udt_amount: Some(1234),
+        };
+        let mut batch = StoreBatch::new(&store);
+        batch.put_consumed_cell(&tx_hash, output_index, &consumed_cell, 2);
+        batch.commit().unwrap();
+
+        let outpoints = vec![(tx_hash.as_slice(), output_index)];
+        let result = writer.get_udt_cells_info_batch(&outpoints).unwrap();
+        assert!(
+            result.is_empty(),
+            "spent outpoints from consumed_cells must not be reused as UDT inputs"
+        );
     }
 
     #[test]

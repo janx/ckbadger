@@ -185,6 +185,31 @@ impl CkbadgerStore {
         })
     }
 
+    pub fn is_rollback_cleanup_in_progress(&self) -> anyhow::Result<bool> {
+        match self.get_cf(
+            self.cf_sync_meta(),
+            sync_meta_keys::ROLLBACK_CLEANUP_IN_PROGRESS,
+        )? {
+            Some(value) => Ok(value.first().copied() == Some(1)),
+            None => Ok(false),
+        }
+    }
+
+    pub fn set_rollback_cleanup_in_progress(&self, in_progress: bool) -> anyhow::Result<()> {
+        if in_progress {
+            self.put_cf(
+                self.cf_sync_meta(),
+                sync_meta_keys::ROLLBACK_CLEANUP_IN_PROGRESS,
+                &[1u8],
+            )
+        } else {
+            self.delete_cf(
+                self.cf_sync_meta(),
+                sync_meta_keys::ROLLBACK_CLEANUP_IN_PROGRESS,
+            )
+        }
+    }
+
     /// Get sync tip (block number and hash) from the sync_status.
     pub fn get_sync_tip(&self) -> anyhow::Result<(i64, Option<Vec<u8>>)> {
         let status = self.get_sync_status()?;
@@ -404,5 +429,19 @@ mod tests {
         assert_eq!(status.last_incident_id.as_deref(), Some("inc-1"));
         assert_eq!(status.last_incident_at, 40);
         assert_eq!(status.last_incident_summary.as_deref(), Some("legacy"));
+    }
+
+    #[test]
+    fn test_rollback_cleanup_in_progress_marker_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+
+        assert!(!store.is_rollback_cleanup_in_progress().unwrap());
+
+        store.set_rollback_cleanup_in_progress(true).unwrap();
+        assert!(store.is_rollback_cleanup_in_progress().unwrap());
+
+        store.set_rollback_cleanup_in_progress(false).unwrap();
+        assert!(!store.is_rollback_cleanup_in_progress().unwrap());
     }
 }

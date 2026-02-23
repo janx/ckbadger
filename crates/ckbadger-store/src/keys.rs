@@ -550,6 +550,7 @@ pub mod sync_meta_keys {
     pub const TIP_BLOCK: &[u8] = b"tip_block";
     pub const SYNC_STATUS: &[u8] = b"sync_status";
     pub const RUNTIME_STATUS: &[u8] = b"runtime_status";
+    pub const ROLLBACK_CLEANUP_IN_PROGRESS: &[u8] = b"rollback_cleanup_in_progress";
     pub const DEEP_FORK: &[u8] = b"deep_fork";
     pub const REORG_EVENTS: &[u8] = b"reorg_events";
     pub const HODL_TRACKER: &[u8] = b"hodl_tracker";
