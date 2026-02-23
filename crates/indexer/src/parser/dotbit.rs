@@ -282,8 +282,10 @@ fn parse_molecule_bytes(data: &[u8]) -> Option<&[u8]> {
     if data.len() < 4 {
         return None;
     }
-    let total_size = parse_molecule_u32(&data[0..4])?;
-    if total_size != data.len() {
+    // Molecule `Bytes` is encoded as `FixVec<byte>`:
+    // 4-byte item count (payload length) + payload bytes.
+    let item_count = parse_molecule_u32(&data[0..4])?;
+    if item_count + 4 != data.len() {
         return None;
     }
     Some(&data[4..])
@@ -403,7 +405,7 @@ mod tests {
     fn encode_molecule_bytes(payload: &[u8]) -> Vec<u8> {
         let total_size = 4 + payload.len();
         let mut out = Vec::with_capacity(total_size);
-        out.extend_from_slice(&(total_size as u32).to_le_bytes());
+        out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
         out.extend_from_slice(payload);
         out
     }
@@ -458,6 +460,50 @@ mod tests {
         let data_entity = encode_molecule_table(&[
             0u32.to_le_bytes().to_vec(), // index
             3u32.to_le_bytes().to_vec(), // version v3
+            encode_molecule_bytes(&entity),
+        ]);
+
+        let data = encode_molecule_table(&[
+            Vec::new(),  // dep
+            Vec::new(),  // old
+            data_entity, // new
+        ]);
+
+        let mut witness = Vec::new();
+        witness.extend_from_slice(b"das");
+        witness.extend_from_slice(&DAS_ACCOUNT_CELL_ACTION_DATA_TYPE);
+        witness.extend_from_slice(&data);
+        format!("0x{}", hex::encode(witness))
+    }
+
+    fn encode_dotbit_account_cell_witness_v2(account_id: &[u8; 20], account: &str) -> String {
+        let mut account_items = Vec::new();
+        let account_without_suffix = account.strip_suffix(".bit").unwrap_or(account);
+        for ch in account_without_suffix.chars() {
+            let char_table = encode_molecule_table(&[
+                2u32.to_le_bytes().to_vec(), // En
+                encode_molecule_bytes(ch.to_string().as_bytes()),
+            ]);
+            account_items.push(char_table);
+        }
+        let account_chars = encode_molecule_dynvec(&account_items);
+        let records_empty = encode_molecule_dynvec(&[]);
+
+        // AccountCellDataV2 entity
+        let entity = encode_molecule_table(&[
+            account_id.to_vec(), // id
+            account_chars,       // account
+            0u64.to_le_bytes().to_vec(),
+            0u64.to_le_bytes().to_vec(),
+            0u64.to_le_bytes().to_vec(),
+            0u64.to_le_bytes().to_vec(),
+            vec![0], // status
+            records_empty,
+        ]);
+
+        let data_entity = encode_molecule_table(&[
+            0u32.to_le_bytes().to_vec(), // index
+            2u32.to_le_bytes().to_vec(), // version v2
             encode_molecule_bytes(&entity),
         ]);
 
@@ -697,5 +743,17 @@ mod tests {
         assert_eq!(parsed_accounts.len(), 1);
         assert_eq!(parsed_accounts[0].account_id, account_id.to_vec());
         assert_eq!(parsed_accounts[0].account.as_deref(), Some("alice.bit"));
+    }
+
+    #[test]
+    fn test_parse_account_names_from_witnesses_supports_v2_bytes_fixvec() {
+        let account_id = [0x55u8; 20];
+        let witness = encode_dotbit_account_cell_witness_v2(&account_id, "smartest.bit");
+        let result = parse_account_names_from_witnesses(&[witness]);
+
+        assert_eq!(
+            result.get(account_id.as_slice()),
+            Some(&"smartest.bit".to_string())
+        );
     }
 }
