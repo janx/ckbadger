@@ -287,6 +287,15 @@ export default function AddressDetailPage() {
   };
 
   const AssetChangeBadge = ({ change }: { change: ActivityAssetChange }) => {
+    const formatAssetStandardLabel = (standard: string): string => {
+      const normalized = standard.toLowerCase();
+      if (normalized === 'dotbit') return '.bit';
+      if (normalized === 'm-nft' || normalized === 'mnft') return 'M-NFT';
+      if (normalized === 'spore') return 'Spore';
+      if (normalized === 'did_ckb' || normalized === 'did:ckb') return 'did:ckb';
+      return standard.toUpperCase();
+    };
+
     switch (change.type) {
       case 'token': {
         const isPositive = !change.delta.startsWith('-');
@@ -311,13 +320,15 @@ export default function AddressDetailPage() {
       case 'dob':
         return (
           <Badge variant="neutral">
-            {change.action.charAt(0).toUpperCase() + change.action.slice(1)} DOB
+            {change.action.charAt(0).toUpperCase() + change.action.slice(1)}{' '}
+            {formatAssetStandardLabel(change.standard)}
           </Badge>
         );
       case 'nft':
         return (
           <Badge variant="neutral">
-            {change.action.charAt(0).toUpperCase() + change.action.slice(1)} NFT
+            {change.action.charAt(0).toUpperCase() + change.action.slice(1)}{' '}
+            {formatAssetStandardLabel(change.standard)}
           </Badge>
         );
       case 'daoDeposit':

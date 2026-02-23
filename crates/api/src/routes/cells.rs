@@ -2970,6 +2970,7 @@ mod tests {
             type_args: None,
             data_size: 0,
             occupied_capacity: 0,
+            udt_amount: None,
         }
     }
 

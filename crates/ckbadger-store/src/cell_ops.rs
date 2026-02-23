@@ -403,6 +403,7 @@ mod tests {
             type_args: Some(vec![]),
             data_size: 0,
             occupied_capacity: occupied,
+            udt_amount: None,
         }
     }
 

@@ -324,4 +324,76 @@ describe('AddressDetailPage', () => {
       );
     });
   });
+
+  it('shows dotbit label in activities for nft changes', async () => {
+    vi.mocked(api.getAddress).mockResolvedValue(mockAddressWithLockScriptInfo);
+    vi.mocked(api.getAddressActivities).mockResolvedValue({
+      data: [
+        {
+          txHash: '0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+          blockNumber: 456,
+          txIndex: 1,
+          timestamp: '2026-02-20T00:00:00Z',
+          ckbDelta: '0',
+          occupiedDelta: '0',
+          isCellbase: false,
+          peers: [],
+          assetChanges: [
+            {
+              type: 'nft',
+              nftId: '0x1111111111111111111111111111111111111111',
+              standard: 'dotbit',
+              action: 'mint',
+            },
+          ],
+        },
+      ],
+      total: 1,
+      limit: 20,
+      hasMore: false,
+      nextCursor: null,
+    });
+
+    render(<AddressDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Mint .bit')).toBeInTheDocument();
+    });
+  });
+
+  it('shows did:ckb label in activities for dob changes', async () => {
+    vi.mocked(api.getAddress).mockResolvedValue(mockAddressWithLockScriptInfo);
+    vi.mocked(api.getAddressActivities).mockResolvedValue({
+      data: [
+        {
+          txHash: '0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+          blockNumber: 789,
+          txIndex: 0,
+          timestamp: '2026-02-21T00:00:00Z',
+          ckbDelta: '0',
+          occupiedDelta: '0',
+          isCellbase: false,
+          peers: [],
+          assetChanges: [
+            {
+              type: 'dob',
+              dobId: '0x2222222222222222222222222222222222222222222222222222222222222222',
+              standard: 'did_ckb',
+              action: 'mint',
+            },
+          ],
+        },
+      ],
+      total: 1,
+      limit: 20,
+      hasMore: false,
+      nextCursor: null,
+    });
+
+    render(<AddressDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Mint did:ckb')).toBeInTheDocument();
+    });
+  });
 });

@@ -907,6 +907,7 @@ struct CachedCellInfo {
     type_args: Option<Vec<u8>>,
     data_size: i32,
     occupied_capacity: i64,
+    udt_amount: Option<u128>,
 }
 
 #[derive(Clone)]
@@ -918,6 +919,31 @@ struct CachedUdtCellInfo {
     lock_script_hash: Vec<u8>,
     amount: u128,
     standard: String,
+}
+
+fn parse_parsed_cell_udt_amount(
+    cell: &crate::parser::cell::ParsedCell,
+    tx_hash: &[u8],
+    output_index: i16,
+) -> Result<Option<u128>> {
+    let Some(type_code_hash) = cell.type_code_hash.as_deref() else {
+        return Ok(None);
+    };
+    let Some(hash_type) = cell.type_hash_type else {
+        return Ok(None);
+    };
+    if crate::parser::UdtParser::is_udt_code_hash_bytes(type_code_hash, hash_type).is_none() {
+        return Ok(None);
+    }
+    let amount = crate::parser::UdtParser::parse_amount(&cell.data).ok_or_else(|| {
+        anyhow!(
+            "failed to parse UDT amount from parsed output data: outpoint=0x{}:{}, type_code_hash=0x{}",
+            hex::encode(tx_hash),
+            output_index,
+            hex::encode(type_code_hash)
+        )
+    })?;
+    Ok(Some(amount))
 }
 
 fn extract_dao_csu(dao: &[u8]) -> Option<(i128, i128, i128)> {
@@ -2469,6 +2495,7 @@ impl Indexer {
                                     type_args: cached.type_args.clone(),
                                     data_size: cached.data_size,
                                     occupied_capacity: cached.occupied_capacity,
+                                    udt_amount: cached.udt_amount,
                                 },
                             );
                         }
@@ -2568,6 +2595,23 @@ impl Indexer {
                 let mut batch_cell_infos: HashMap<(Vec<u8>, i16), LiveCellInfo> = HashMap::new();
                 for tx_data in &all_tx_data {
                     for (output_index, cell) in tx_data.cells.iter().enumerate() {
+                        let udt_amount = match parse_parsed_cell_udt_amount(
+                            cell,
+                            &tx_data.hash,
+                            output_index as i16,
+                        ) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                error!(
+                                    block_number = tx_data.block_number,
+                                    tx_hash = %hex::encode(tx_data.hash),
+                                    output_index,
+                                    "Parser: {}",
+                                    e
+                                );
+                                return;
+                            }
+                        };
                         let lock_script_size = 32 + 1 + cell.lock_args.len() as i64;
                         let type_script_size = cell
                             .type_args
@@ -2591,6 +2635,7 @@ impl Indexer {
                                 type_args: cell.type_args.clone(),
                                 data_size: cell.data_size,
                                 occupied_capacity,
+                                udt_amount,
                             },
                         );
                     }
@@ -2670,6 +2715,23 @@ impl Indexer {
                     );
                     // cell_cache update
                     for (output_index, cell) in tx_data.cells.iter().enumerate() {
+                        let udt_amount = match parse_parsed_cell_udt_amount(
+                            cell,
+                            &tx_data.hash,
+                            output_index as i16,
+                        ) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                error!(
+                                    block_number = tx_data.block_number,
+                                    tx_hash = %hex::encode(tx_data.hash),
+                                    output_index,
+                                    "Parser: {}",
+                                    e
+                                );
+                                return;
+                            }
+                        };
                         let lock_script_size = 32 + 1 + cell.lock_args.len() as i64;
                         let type_script_size = cell
                             .type_args
@@ -2693,6 +2755,7 @@ impl Indexer {
                                 type_args: cell.type_args.clone(),
                                 data_size: cell.data_size,
                                 occupied_capacity: cell_occupied,
+                                udt_amount,
                             },
                         );
                     }
@@ -3934,6 +3997,8 @@ impl Indexer {
         let mut batch_cell_infos: HashMap<(Vec<u8>, i16), LiveCellInfo> = HashMap::new();
         for tx_data in &all_tx_data {
             for (output_index, cell) in tx_data.cells.iter().enumerate() {
+                let udt_amount =
+                    parse_parsed_cell_udt_amount(cell, &tx_data.hash, output_index as i16)?;
                 let lock_script_size = 32 + 1 + cell.lock_args.len() as i64;
                 let type_script_size = cell
                     .type_args
@@ -3956,6 +4021,7 @@ impl Indexer {
                         type_args: cell.type_args.clone(),
                         data_size: cell.data_size,
                         occupied_capacity,
+                        udt_amount,
                     },
                 );
             }
@@ -3980,6 +4046,7 @@ impl Indexer {
                         type_args: cached.type_args.clone(),
                         data_size: cached.data_size,
                         occupied_capacity: cached.occupied_capacity,
+                        udt_amount: cached.udt_amount,
                     },
                 );
             }
@@ -4053,6 +4120,8 @@ impl Indexer {
 
         for tx_data in &all_tx_data {
             for (output_index, cell) in tx_data.cells.iter().enumerate() {
+                let udt_amount =
+                    parse_parsed_cell_udt_amount(cell, &tx_data.hash, output_index as i16)?;
                 let lock_script_size = 32 + 1 + cell.lock_args.len() as i64;
                 let type_script_size = cell
                     .type_args
@@ -4075,6 +4144,7 @@ impl Indexer {
                         type_args: cell.type_args.clone(),
                         data_size: cell.data_size,
                         occupied_capacity: cell_occupied,
+                        udt_amount,
                     },
                 );
             }
@@ -6813,7 +6883,8 @@ impl Indexer {
                                                             type_script_hash: info
                                                                 .type_script_hash
                                                                 .clone(),
-                                                            type_args: None,
+                                                            type_args: info.type_args.clone(),
+                                                            udt_amount: info.udt_amount,
                                                             data: Vec::new(),
                                                             data_size: info.data_size,
                                                         }
@@ -6825,6 +6896,7 @@ impl Indexer {
                                                             type_code_hash: None,
                                                             type_script_hash: None,
                                                             type_args: None,
+                                                            udt_amount: None,
                                                             data: Vec::new(),
                                                             data_size: 0,
                                                         }
@@ -7729,7 +7801,8 @@ impl Indexer {
                                                     occupied_capacity: info.occupied_capacity,
                                                     type_code_hash: info.type_code_hash.clone(),
                                                     type_script_hash: info.type_script_hash.clone(),
-                                                    type_args: None,
+                                                    type_args: info.type_args.clone(),
+                                                    udt_amount: info.udt_amount,
                                                     data: Vec::new(),
                                                     data_size: info.data_size,
                                                 }
@@ -7741,6 +7814,7 @@ impl Indexer {
                                                     type_code_hash: None,
                                                     type_script_hash: None,
                                                     type_args: None,
+                                                    udt_amount: None,
                                                     data: Vec::new(),
                                                     data_size: 0,
                                                 }
@@ -8962,6 +9036,7 @@ mod tests {
             type_args: None,
             data_size: 0,
             occupied_capacity: 1,
+            udt_amount: None,
         }
     }
 

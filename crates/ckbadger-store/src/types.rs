@@ -24,6 +24,8 @@ pub struct LiveCellInfo {
     pub data_size: i32,
     #[serde(default)]
     pub occupied_capacity: i64,
+    #[serde(default)]
+    pub udt_amount: Option<u128>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,6 +67,7 @@ impl CompactConsumedCellInfo {
             type_args: None,
             data_size: self.data_size,
             occupied_capacity: 0,
+            udt_amount: None,
         }
     }
 }
@@ -870,6 +873,7 @@ mod tests {
             type_args: Some(vec![0x66; 8]),
             data_size: 16,
             occupied_capacity: 6_100_000_000,
+            udt_amount: Some(42),
         }
     }
 

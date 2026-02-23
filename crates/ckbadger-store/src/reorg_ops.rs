@@ -882,6 +882,7 @@ mod tests {
             type_args: None,
             data_size: 0,
             occupied_capacity: 100,
+            udt_amount: None,
         };
         let cell_block_2 = LiveCellInfo {
             capacity: 300,
@@ -895,6 +896,7 @@ mod tests {
             type_args: None,
             data_size: 0,
             occupied_capacity: 300,
+            udt_amount: None,
         };
 
         let mut batch = StoreBatch::new(&store);
@@ -962,6 +964,7 @@ mod tests {
             type_args: None,
             data_size: 0,
             occupied_capacity: 60,
+            udt_amount: None,
         };
         let rollback_live = LiveCellInfo {
             capacity: 300,
@@ -975,6 +978,7 @@ mod tests {
             type_args: None,
             data_size: 0,
             occupied_capacity: 180,
+            udt_amount: None,
         };
 
         let stale_script_info = ScriptInfo {
@@ -1048,6 +1052,7 @@ mod tests {
             type_args: None,
             data_size: 0,
             occupied_capacity: 500,
+            udt_amount: None,
         };
 
         let mut batch = StoreBatch::new(&store);

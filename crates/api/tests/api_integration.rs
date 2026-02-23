@@ -332,6 +332,7 @@ async fn test_get_cell_returns_occupied_capacity_breakdown() {
             type_args: Some(vec![0xaa, 0xbb]),
             data_size: 42,
             occupied_capacity: 138_00000000,
+            udt_amount: None,
         },
     );
     batch.commit().unwrap();
@@ -404,6 +405,7 @@ async fn test_dead_cell_exposes_consumer_metadata_in_cell_and_graph() {
             type_args: None,
             data_size: 0,
             occupied_capacity: 61_00000000,
+            udt_amount: None,
         },
         456,
         Some(&consumed_by_tx),
@@ -1311,6 +1313,7 @@ async fn test_script_lookup_and_code_cell_resolve_deployment_reference_alias() {
             type_args: Some(vec![]),
             data_size: 0,
             occupied_capacity: 61_00000000,
+            udt_amount: None,
         },
     );
     batch.put_cell_by_type(&type_hash, 123, &code_cell_tx_hash, code_cell_output_index);
@@ -1463,6 +1466,7 @@ async fn test_cells_by_script_resolves_reference_hash_type_alias() {
             type_args: None,
             data_size: 0,
             occupied_capacity: 61_00000000,
+            udt_amount: None,
         },
     );
     batch.put_cell_by_lock_code(&type_hash, 123, &tx_hash, 0);
@@ -1525,6 +1529,7 @@ async fn test_cells_by_script_type_request_returns_empty_for_data_only_deploymen
             type_args: None,
             data_size: 0,
             occupied_capacity: 61_00000000,
+            udt_amount: None,
         },
     );
     batch.put_cell_by_lock_code(&data_hash, 123, &tx_hash, 0);
@@ -1650,6 +1655,7 @@ async fn test_get_script_returns_deployments_sorted_by_deployed_at() {
             type_args: Some(vec![]),
             data_size: 0,
             occupied_capacity: 61_00000000,
+            udt_amount: None,
         },
     );
     batch.put_cell_by_type(&older_code_hash, older_block, &older_tx_hash, 0);
@@ -1668,6 +1674,7 @@ async fn test_get_script_returns_deployments_sorted_by_deployed_at() {
             type_args: Some(vec![]),
             data_size: 0,
             occupied_capacity: 61_00000000,
+            udt_amount: None,
         },
     );
     batch.put_cell_by_type(&newer_code_hash, newer_block, &newer_tx_hash, 1);
@@ -2888,6 +2895,7 @@ async fn test_assets_nft_collection_items_dotbit_human_readable_and_pagination()
             type_args: Some(nft_a.to_vec()),
             data_size: 64,
             occupied_capacity: 62_00000000,
+            udt_amount: None,
         },
     );
     batch.put_dotbit_account_outpoint(&nft_a_tx_hash, nft_a_output_index, &nft_a);
@@ -3001,6 +3009,7 @@ async fn test_assets_nft_collection_items_dotbit_outpoint_fallback_without_index
             type_args: Some(nft_id.to_vec()),
             data_size: 64,
             occupied_capacity: 62_00000000,
+            udt_amount: None,
         },
     );
     batch.put_cell_by_type(&nft_type_hash, 100, &tx_hash, output_index);

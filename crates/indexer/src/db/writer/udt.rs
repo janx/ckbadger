@@ -154,11 +154,14 @@ impl BatchWriter {
                 let hash_type = token_info.hash_type as i16;
                 let type_args = token_info.type_args.clone();
 
-                // Amount is stored in token_holders, but for consumed cells we may not have it.
-                // The amount for UDT cells comes from the cell data (first 16 bytes).
-                // Since we don't store raw cell data, we rely on the token_holders balance.
-                // For transfer detection, the parser already has the amount from the output data.
-                // Return 0 as amount — caller uses this for type identification/matching.
+                let amount = info.udt_amount.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "missing udt_amount in cell info for UDT input: outpoint=0x{}:{}, type_script_hash=0x{}",
+                        hex::encode(tx_hash),
+                        output_index,
+                        hex::encode(type_script_hash)
+                    )
+                })?;
                 result.insert(
                     (tx_hash.to_vec(), output_index),
                     (
@@ -167,7 +170,7 @@ impl BatchWriter {
                         hash_type,
                         type_args,
                         info.lock_script_hash.clone(),
-                        0u128, // amount — caller gets this from parsed output data
+                        amount,
                         standard.as_str().to_string(),
                     ),
                 );
@@ -577,6 +580,7 @@ mod tests {
             type_args: Some(vec![0x11; 20]),
             data_size: 16,
             occupied_capacity: 0,
+            udt_amount: Some(1234),
         };
         let mut batch = StoreBatch::new(&store);
         batch.put_cell(&tx_hash, output_index, &cell);
@@ -593,7 +597,7 @@ mod tests {
         assert_eq!(entry.2, 1i16);
         assert_eq!(entry.3, vec![0x11; 20]);
         assert_eq!(entry.4, vec![0x22; 32]);
-        assert_eq!(entry.5, 0u128);
+        assert_eq!(entry.5, 1234u128);
         assert_eq!(entry.6, "sudt".to_string());
     }
 
@@ -619,6 +623,7 @@ mod tests {
             type_args: Some(vec![0x99; 32]),
             data_size: 16,
             occupied_capacity: 0,
+            udt_amount: None,
         };
         let mut batch = StoreBatch::new(&store);
         batch.put_cell(&tx_hash, output_index, &cell);

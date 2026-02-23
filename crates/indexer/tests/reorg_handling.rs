@@ -54,6 +54,7 @@ fn make_cell(block_num: i64, lock_hash: &[u8]) -> LiveCellInfo {
         type_args: None,
         data_size: 0,
         occupied_capacity: 0,
+        udt_amount: None,
     }
 }
 

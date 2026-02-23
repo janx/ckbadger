@@ -868,6 +868,7 @@ mod tests {
                 type_args: Some(account_id.clone()),
                 data_size: 0,
                 occupied_capacity: 61_00000000,
+                udt_amount: None,
             },
         );
         batch.commit().unwrap();

@@ -8,6 +8,7 @@ use ckbadger_store::CkbadgerStore;
 use tracing::info;
 
 use crate::parser::cell::ParsedCell;
+use crate::parser::UdtParser;
 
 use super::BatchWriter;
 
@@ -140,6 +141,23 @@ impl BatchWriter {
             let occupied_capacity =
                 (8 + lock_script_size + type_script_size + cell.data_size as i64) * 100_000_000;
 
+            let udt_amount = match (cell.type_code_hash.as_deref(), cell.type_hash_type) {
+                (Some(type_code_hash), Some(hash_type))
+                    if UdtParser::is_udt_code_hash_bytes(type_code_hash, hash_type).is_some() =>
+                {
+                    let amount = UdtParser::parse_amount(&cell.data).ok_or_else(|| {
+                        anyhow!(
+                            "failed to parse UDT amount from output cell data: outpoint=0x{}:{}, type_code_hash=0x{}",
+                            hex::encode(tx_hash),
+                            output_index,
+                            hex::encode(type_code_hash)
+                        )
+                    })?;
+                    Some(amount)
+                }
+                _ => None,
+            };
+
             let info = LiveCellInfo {
                 capacity: cell.capacity,
                 created_at_block: *created_at_block,
@@ -152,6 +170,7 @@ impl BatchWriter {
                 type_args: cell.type_args.clone(),
                 data_size: cell.data_size,
                 occupied_capacity,
+                udt_amount,
             };
             batch.put_cell(tx_hash, *output_index, &info);
             if !skip_cell_indices {

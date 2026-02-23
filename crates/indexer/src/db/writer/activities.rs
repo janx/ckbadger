@@ -13,6 +13,7 @@ struct CodeHashes {
     sudt: Vec<u8>,
     xudt_data1: Vec<u8>,
     xudt_type: Vec<u8>,
+    spore_did: Vec<u8>,
     spore_hashes: Vec<Vec<u8>>,
     cluster_hashes: Vec<Vec<u8>>,
     mnft_token: Vec<u8>,
@@ -37,9 +38,9 @@ impl CodeHashes {
             sudt: parse_hex_to_bytes(SUDT_CODE_HASH),
             xudt_data1: parse_hex_to_bytes(XUDT_CODE_HASH_DATA1),
             xudt_type: parse_hex_to_bytes(XUDT_CODE_HASH_TYPE),
+            spore_did: parse_hex_to_bytes(SPORE_CODE_HASH_MAINNET_DID),
             spore_hashes: vec![
                 parse_hex_to_bytes(SPORE_CODE_HASH_MAINNET_V2),
-                parse_hex_to_bytes(SPORE_CODE_HASH_MAINNET_DID),
                 parse_hex_to_bytes(SPORE_CODE_HASH_TESTNET_V2),
                 parse_hex_to_bytes(SPORE_CODE_HASH_TESTNET_V1),
             ],
@@ -75,6 +76,7 @@ pub struct InputCellView {
     pub type_code_hash: Option<Vec<u8>>,
     pub type_script_hash: Option<Vec<u8>>,
     pub type_args: Option<Vec<u8>>,
+    pub udt_amount: Option<u128>,
     pub data: Vec<u8>,
     pub data_size: i32,
 }
@@ -136,7 +138,14 @@ struct OwnerAccum {
     dotbit_inputs: Vec<Vec<u8>>,
     /// DotBit IDs seen as outputs
     dotbit_outputs: Vec<Vec<u8>>,
+    /// did:ckb IDs seen as inputs
+    did_ckb_inputs: Vec<Vec<u8>>,
+    /// did:ckb IDs seen as outputs
+    did_ckb_outputs: Vec<Vec<u8>>,
 }
+
+const DOTBIT_TYPE_ARGS_LEN: usize = 20;
+const DOTBIT_DATA_HASH_PREFIX_LEN: usize = 32;
 
 fn build_tx_activities(
     tx: &TxView<'_>,
@@ -160,6 +169,7 @@ fn build_tx_activities(
                 type_code_hash,
                 input.type_script_hash.as_deref(),
                 input.type_args.as_deref(),
+                input.udt_amount,
                 &input.data,
                 input.data_size,
                 hashes,
@@ -286,6 +296,15 @@ fn build_tx_activities(
             &mut asset_changes,
         );
 
+        // did:ckb changes
+        emit_nft_changes(
+            &accum.did_ckb_inputs,
+            &accum.did_ckb_outputs,
+            "did_ckb",
+            true,
+            &mut asset_changes,
+        );
+
         let entry = ActivityEntry {
             tx_hash: tx.tx_hash.to_vec(),
             block_number: tx.block_number,
@@ -309,6 +328,7 @@ fn classify_input(
     type_code_hash: &[u8],
     type_script_hash: Option<&[u8]>,
     type_args: Option<&[u8]>,
+    udt_amount: Option<u128>,
     data: &[u8],
     _data_size: i32,
     hashes: &CodeHashes,
@@ -316,7 +336,7 @@ fn classify_input(
 ) {
     if hashes.is_udt(type_code_hash) {
         if let Some(tsh) = type_script_hash {
-            if let Some(amount) = UdtParser::parse_amount(data) {
+            if let Some(amount) = udt_amount.or_else(|| UdtParser::parse_amount(data)) {
                 let entry = accum.udt_deltas.entry(tsh.to_vec()).or_insert((0, 0));
                 entry.0 += amount as i128;
             }
@@ -327,6 +347,12 @@ fn classify_input(
             let val = u64::from_le_bytes(data[..8].try_into().unwrap_or([0; 8]));
             if val != 0 {
                 accum.dao_withdraw_completes.push(capacity);
+            }
+        }
+    } else if type_code_hash == hashes.spore_did {
+        if let Some(args) = type_args {
+            if !args.is_empty() {
+                accum.did_ckb_inputs.push(args.to_vec());
             }
         }
     } else if hashes.is_spore(type_code_hash) || hashes.is_cluster(type_code_hash) {
@@ -342,10 +368,8 @@ fn classify_input(
             }
         }
     } else if type_code_hash == hashes.dotbit {
-        if let Some(args) = type_args {
-            if !args.is_empty() {
-                accum.dotbit_inputs.push(args.to_vec());
-            }
+        if let Some(account_id) = resolve_dotbit_account_id(type_args, data) {
+            accum.dotbit_inputs.push(account_id);
         }
     }
 }
@@ -355,7 +379,7 @@ fn classify_output(
     type_code_hash: &[u8],
     type_script_hash: Option<&[u8]>,
     type_args: Option<&[u8]>,
-    _cell_data: &[u8],
+    cell_data: &[u8],
     data_size: i32,
     hashes: &CodeHashes,
     output_idx: usize,
@@ -391,6 +415,12 @@ fn classify_output(
                 }
             }
         }
+    } else if type_code_hash == hashes.spore_did {
+        if let Some(args) = type_args {
+            if !args.is_empty() {
+                accum.did_ckb_outputs.push(args.to_vec());
+            }
+        }
     } else if hashes.is_spore(type_code_hash) || hashes.is_cluster(type_code_hash) {
         if let Some(args) = type_args {
             if !args.is_empty() {
@@ -404,12 +434,35 @@ fn classify_output(
             }
         }
     } else if type_code_hash == hashes.dotbit {
-        if let Some(args) = type_args {
-            if !args.is_empty() {
-                accum.dotbit_outputs.push(args.to_vec());
-            }
+        if let Some(account_id) = resolve_dotbit_account_id(type_args, cell_data) {
+            accum.dotbit_outputs.push(account_id);
         }
     }
+}
+
+fn resolve_dotbit_account_id(type_args: Option<&[u8]>, cell_data: &[u8]) -> Option<Vec<u8>> {
+    if let Some(args) = type_args {
+        // Normal case: .bit account_id comes from type args.
+        if args.len() == DOTBIT_TYPE_ARGS_LEN && !args.iter().all(|&b| b == 0) {
+            return Some(args.to_vec());
+        }
+        if !args.is_empty() {
+            return Some(args.to_vec());
+        }
+    }
+
+    // Compatibility path for old .bit layouts: account_id in cell data.
+    let min_len = DOTBIT_DATA_HASH_PREFIX_LEN + DOTBIT_TYPE_ARGS_LEN;
+    if cell_data.len() < min_len {
+        return None;
+    }
+    let account_id = cell_data
+        [DOTBIT_DATA_HASH_PREFIX_LEN..DOTBIT_DATA_HASH_PREFIX_LEN + DOTBIT_TYPE_ARGS_LEN]
+        .to_vec();
+    if account_id.iter().all(|&b| b == 0) {
+        return None;
+    }
+    Some(account_id)
 }
 
 /// Emit DOB/NFT asset changes by comparing input vs output ID sets.
@@ -502,6 +555,7 @@ mod tests {
             type_code_hash: None,
             type_script_hash: None,
             type_args: None,
+            udt_amount: None,
             data: vec![],
             data_size: 0,
         }
@@ -778,8 +832,181 @@ mod tests {
     }
 
     #[test]
+    fn test_udt_token_transfer_uses_prefetched_input_amount_when_input_data_is_empty() {
+        let alice = 0xAA;
+        let bob = 0xBB;
+        let sudt_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::udt::SUDT_CODE_HASH);
+        let type_script_hash = vec![0xDD; 32];
+
+        let mut alice_input = make_input(alice, 200_00000000, 61_00000000);
+        alice_input.type_code_hash = Some(sudt_code_hash.clone());
+        alice_input.type_script_hash = Some(type_script_hash.clone());
+        alice_input.udt_amount = Some(5000);
+        // Real sync path does not populate input raw data.
+        alice_input.data = vec![];
+
+        let outputs = vec![
+            make_output(
+                bob,
+                142_00000000,
+                Some(sudt_code_hash.clone()),
+                Some(type_script_hash.clone()),
+                Some(vec![0xEE; 20]),
+                1000u128.to_le_bytes().to_vec(),
+            ),
+            make_output(
+                alice,
+                58_00000000,
+                Some(sudt_code_hash),
+                Some(type_script_hash.clone()),
+                Some(vec![0xEE; 20]),
+                4000u128.to_le_bytes().to_vec(),
+            ),
+        ];
+        let outputs_data = vec![
+            format!("0x{}", hex::encode(1000u128.to_le_bytes())),
+            format!("0x{}", hex::encode(4000u128.to_le_bytes())),
+        ];
+        let tx = TxView {
+            tx_hash: &[0x06; 32],
+            tx_index: 1,
+            block_number: 1000,
+            timestamp: 1_700_000_000,
+            is_cellbase: false,
+            inputs: vec![alice_input],
+            outputs: &outputs,
+            outputs_data: &outputs_data,
+        };
+
+        let mut token_cache = HashMap::new();
+        token_cache.insert(
+            type_script_hash.clone(),
+            (Some("SEAL".to_string()), Some(8u8)),
+        );
+
+        let activities = build_activities_for_block(&[tx], &token_cache);
+        let alice_act = activities
+            .iter()
+            .find(|(lh, _)| lh == &vec![alice; 32])
+            .map(|(_, e)| e)
+            .unwrap();
+        let token_change = alice_act
+            .asset_changes
+            .iter()
+            .find(|c| matches!(c, AssetChange::Token { .. }))
+            .unwrap();
+        match token_change {
+            AssetChange::Token { delta, .. } => assert_eq!(*delta, -1000),
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
     fn test_no_activities_for_empty_block() {
         let activities = build_activities_for_block(&[], &HashMap::new());
         assert!(activities.is_empty());
+    }
+
+    #[test]
+    fn test_dotbit_output_falls_back_to_account_id_in_cell_data_when_type_args_missing() {
+        let owner = 0xAA;
+        let dotbit_code_hash =
+            crate::rpc::parse_hex_to_bytes(crate::parser::dotbit::DOTBIT_ACCOUNT_CELL_TYPE_ID);
+        let account_id = vec![0x5a; 20];
+
+        let mut dotbit_data = vec![0x00; 32];
+        dotbit_data.extend_from_slice(&account_id);
+
+        let outputs = vec![make_output(
+            owner,
+            100_00000000,
+            Some(dotbit_code_hash),
+            Some(vec![0x11; 32]),
+            None,
+            dotbit_data,
+        )];
+        let outputs_data = vec!["0x".to_string()];
+        let tx = TxView {
+            tx_hash: &[0x07; 32],
+            tx_index: 0,
+            block_number: 123,
+            timestamp: 1_700_000_000,
+            is_cellbase: false,
+            inputs: vec![],
+            outputs: &outputs,
+            outputs_data: &outputs_data,
+        };
+
+        let activities = build_activities_for_block(&[tx], &HashMap::new());
+        assert_eq!(activities.len(), 1);
+        let (_, entry) = &activities[0];
+
+        let dotbit_change = entry
+            .asset_changes
+            .iter()
+            .find(|c| matches!(c, AssetChange::Nft { standard, .. } if standard == "dotbit"))
+            .expect("dotbit nft change should be present");
+        match dotbit_change {
+            AssetChange::Nft {
+                nft_id,
+                standard,
+                action,
+            } => {
+                assert_eq!(nft_id, &account_id);
+                assert_eq!(standard, "dotbit");
+                assert!(matches!(action, AssetAction::Mint));
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn test_did_ckb_changes_are_labeled_as_did_ckb_dob() {
+        let owner = 0xBB;
+        let did_code_hash =
+            crate::rpc::parse_hex_to_bytes(crate::parser::spore::SPORE_CODE_HASH_MAINNET_DID);
+        let did_id = vec![0x6b; 32];
+
+        let outputs = vec![make_output(
+            owner,
+            100_00000000,
+            Some(did_code_hash),
+            Some(vec![0x22; 32]),
+            Some(did_id.clone()),
+            vec![0u8; 16],
+        )];
+        let outputs_data = vec!["0x".to_string()];
+        let tx = TxView {
+            tx_hash: &[0x08; 32],
+            tx_index: 0,
+            block_number: 124,
+            timestamp: 1_700_000_100,
+            is_cellbase: false,
+            inputs: vec![],
+            outputs: &outputs,
+            outputs_data: &outputs_data,
+        };
+
+        let activities = build_activities_for_block(&[tx], &HashMap::new());
+        assert_eq!(activities.len(), 1);
+        let (_, entry) = &activities[0];
+
+        let did_change = entry
+            .asset_changes
+            .iter()
+            .find(|c| matches!(c, AssetChange::Dob { standard, .. } if standard == "did_ckb"))
+            .expect("did_ckb dob change should be present");
+        match did_change {
+            AssetChange::Dob {
+                dob_id,
+                standard,
+                action,
+            } => {
+                assert_eq!(dob_id, &did_id);
+                assert_eq!(standard, "did_ckb");
+                assert!(matches!(action, AssetAction::Mint));
+            }
+            _ => unreachable!(),
+        }
     }
 }

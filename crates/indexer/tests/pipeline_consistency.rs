@@ -204,6 +204,7 @@ fn test_full_cells_info_errors_on_zero_occupied_capacity_from_live_cell() {
         type_args: Some(vec![0x55u8; 20]),
         data_size: 100,
         occupied_capacity: 0,
+        udt_amount: None,
     };
 
     let mut batch = StoreBatch::new(&store);
@@ -233,6 +234,7 @@ fn test_full_cells_info_errors_when_typed_cell_lacks_type_args_and_occupied_miss
         type_args: None,
         data_size: 100,
         occupied_capacity: 0,
+        udt_amount: None,
     };
 
     let mut batch = StoreBatch::new(&store);

@@ -35,6 +35,7 @@ fn make_live_cell(
         type_args: type_hash_byte.map(|_| vec![]),
         data_size,
         occupied_capacity: 0,
+        udt_amount: None,
     }
 }
 

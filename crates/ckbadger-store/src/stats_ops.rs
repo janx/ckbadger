@@ -1425,6 +1425,7 @@ mod tests {
             type_args: Some(vec![0x03, 0x04]),
             data_size: 16,
             occupied_capacity: 700,
+            udt_amount: None,
         };
         let lock_consumed = LiveCellInfo {
             capacity: 400,
@@ -1438,6 +1439,7 @@ mod tests {
             type_args: Some(vec![0x06]),
             data_size: 8,
             occupied_capacity: 250,
+            udt_amount: None,
         };
 
         let mut bad_lock_info = ScriptInfo {
