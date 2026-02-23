@@ -38,6 +38,9 @@ const DATA_SEGMENT_TONES = [
     byteActive: 'rounded bg-terminal-green/25 text-terminal-green ring-1 ring-terminal-green/70',
     byteHover:
       'byte-hover-breathe ring-1 ring-terminal-green/80 shadow-[0_0_10px_rgba(0,255,65,0.35)]',
+    asciiActive: 'rounded-sm bg-terminal-green/20 text-terminal-green',
+    asciiHover:
+      'rounded-sm bg-terminal-green/30 text-terminal-green shadow-[inset_0_0_0_1px_rgba(0,255,65,0.45)]',
   },
   {
     dot: 'bg-cyan-400',
@@ -46,6 +49,9 @@ const DATA_SEGMENT_TONES = [
     byte: 'rounded bg-cyan-500/15 text-cyan-300',
     byteActive: 'rounded bg-cyan-500/25 text-cyan-200 ring-1 ring-cyan-400/70',
     byteHover: 'byte-hover-breathe ring-1 ring-cyan-400/80 shadow-[0_0_10px_rgba(34,211,238,0.35)]',
+    asciiActive: 'rounded-sm bg-cyan-500/20 text-cyan-200',
+    asciiHover:
+      'rounded-sm bg-cyan-500/30 text-cyan-100 shadow-[inset_0_0_0_1px_rgba(34,211,238,0.5)]',
   },
   {
     dot: 'bg-amber-400',
@@ -55,6 +61,9 @@ const DATA_SEGMENT_TONES = [
     byteActive: 'rounded bg-amber-500/25 text-amber-100 ring-1 ring-amber-400/70',
     byteHover:
       'byte-hover-breathe ring-1 ring-amber-400/80 shadow-[0_0_10px_rgba(251,191,36,0.35)]',
+    asciiActive: 'rounded-sm bg-amber-500/20 text-amber-100',
+    asciiHover:
+      'rounded-sm bg-amber-500/30 text-amber-50 shadow-[inset_0_0_0_1px_rgba(251,191,36,0.5)]',
   },
   {
     dot: 'bg-fuchsia-400',
@@ -64,6 +73,9 @@ const DATA_SEGMENT_TONES = [
     byteActive: 'rounded bg-fuchsia-500/25 text-fuchsia-100 ring-1 ring-fuchsia-400/70',
     byteHover:
       'byte-hover-breathe ring-1 ring-fuchsia-400/80 shadow-[0_0_10px_rgba(232,121,249,0.35)]',
+    asciiActive: 'rounded-sm bg-fuchsia-500/20 text-fuchsia-100',
+    asciiHover:
+      'rounded-sm bg-fuchsia-500/30 text-fuchsia-50 shadow-[inset_0_0_0_1px_rgba(232,121,249,0.5)]',
   },
 ] as const;
 
@@ -1370,14 +1382,79 @@ export default function CellDetailPage() {
                       {rows.map((rowHex, idx) => {
                         const offset = (idx * DATA_BYTES_PER_ROW).toString(16).padStart(4, '0');
                         const bytes = [];
-                        const ascii = [];
 
                         for (let i = 0; i < rowHex.length; i += 2) {
                           const hex = rowHex.slice(i, i + 2);
                           bytes.push(hex);
-                          const code = parseInt(hex, 16);
-                          ascii.push(code >= 32 && code <= 126 ? String.fromCharCode(code) : '.');
                         }
+
+                        const byteEntries = bytes.map((b, i) => {
+                          const absoluteOffset = idx * DATA_BYTES_PER_ROW + i;
+                          const segmentIndex =
+                            absoluteOffset < segmentOffsetMap.length
+                              ? segmentOffsetMap[absoluteOffset]
+                              : -1;
+                          const segmentTone =
+                            segmentIndex >= 0 ? getDataSegmentTone(segmentIndex) : null;
+                          const isActiveSegment =
+                            segmentIndex >= 0 && segmentIndex === focusedDataSegmentIndex;
+                          const isHoveredByte = absoluteOffset === hoveredDataByteOffset;
+                          const hasActiveSegment = focusedDataSegmentIndex !== null;
+                          const byteClass =
+                            segmentIndex < 0
+                              ? hasActiveSegment
+                                ? 'text-slate-500'
+                                : 'rounded bg-slate-800/70 text-slate-300'
+                              : isActiveSegment
+                                ? (segmentTone?.byteActive ??
+                                  'rounded bg-terminal-green/25 text-terminal-green ring-1 ring-terminal-green/70')
+                                : hasActiveSegment
+                                  ? 'text-slate-500 opacity-40'
+                                  : (segmentTone?.byte ??
+                                    'rounded bg-terminal-green/15 text-terminal-dim');
+                          const asciiClass =
+                            segmentIndex < 0
+                              ? hasActiveSegment
+                                ? 'text-slate-600'
+                                : 'text-slate-500'
+                              : isActiveSegment
+                                ? (segmentTone?.asciiActive ??
+                                  'rounded-sm bg-terminal-green/20 text-terminal-green')
+                                : hasActiveSegment
+                                  ? 'text-slate-600 opacity-40'
+                                  : 'text-slate-500';
+                          const asciiHoverClass = isHoveredByte
+                            ? segmentIndex >= 0
+                              ? (segmentTone?.asciiHover ??
+                                'rounded-sm bg-terminal-green/30 text-terminal-green shadow-[inset_0_0_0_1px_rgba(0,255,65,0.45)]')
+                              : 'rounded-sm bg-slate-700/50 text-slate-200'
+                            : '';
+                          const hoverBreatheClass = isHoveredByte
+                            ? segmentIndex >= 0
+                              ? (segmentTone?.byteHover ??
+                                'byte-hover-breathe ring-1 ring-terminal-green/80 shadow-[0_0_10px_rgba(0,255,65,0.35)]')
+                              : 'byte-hover-breathe ring-1 ring-slate-400/70 shadow-[0_0_8px_rgba(148,163,184,0.35)]'
+                            : '';
+                          const title =
+                            segmentIndex >= 0 && segmentIndex < dataSegments.length
+                              ? dataSegments[segmentIndex].label
+                              : undefined;
+                          const code = parseInt(b, 16);
+                          const asciiChar =
+                            code >= 32 && code <= 126 ? String.fromCharCode(code) : '.';
+
+                          return {
+                            byteHex: b,
+                            asciiChar,
+                            absoluteOffset,
+                            segmentIndex,
+                            title,
+                            byteClass,
+                            asciiClass,
+                            asciiHoverClass,
+                            hoverBreatheClass,
+                          };
+                        });
 
                         const padCount = DATA_BYTES_PER_ROW - bytes.length;
 
@@ -1389,63 +1466,29 @@ export default function CellDetailPage() {
                           >
                             <span className="mr-4 select-none text-slate-500">0x{offset}:</span>
                             <div className="text-terminal-dim mr-6 flex gap-1.5">
-                              {bytes.map((b, i) => {
-                                const absoluteOffset = idx * DATA_BYTES_PER_ROW + i;
-                                const segmentIndex =
-                                  absoluteOffset < segmentOffsetMap.length
-                                    ? segmentOffsetMap[absoluteOffset]
-                                    : -1;
-                                const segmentTone =
-                                  segmentIndex >= 0 ? getDataSegmentTone(segmentIndex) : null;
-                                const isActiveSegment =
-                                  segmentIndex >= 0 && segmentIndex === focusedDataSegmentIndex;
-                                const isHoveredByte = absoluteOffset === hoveredDataByteOffset;
-                                const hasActiveSegment = focusedDataSegmentIndex !== null;
-                                const byteClass =
-                                  segmentIndex < 0
-                                    ? hasActiveSegment
-                                      ? 'text-slate-500'
-                                      : 'rounded bg-slate-800/70 text-slate-300'
-                                    : isActiveSegment
-                                      ? (segmentTone?.byteActive ??
-                                        'rounded bg-terminal-green/25 text-terminal-green ring-1 ring-terminal-green/70')
-                                      : hasActiveSegment
-                                        ? 'text-slate-500 opacity-40'
-                                        : (segmentTone?.byte ??
-                                          'rounded bg-terminal-green/15 text-terminal-dim');
-                                const hoverBreatheClass = isHoveredByte
-                                  ? segmentIndex >= 0
-                                    ? (segmentTone?.byteHover ??
-                                      'byte-hover-breathe ring-1 ring-terminal-green/80 shadow-[0_0_10px_rgba(0,255,65,0.35)]')
-                                    : 'byte-hover-breathe ring-1 ring-slate-400/70 shadow-[0_0_8px_rgba(148,163,184,0.35)]'
-                                  : '';
-                                const title =
-                                  segmentIndex >= 0 && segmentIndex < dataSegments.length
-                                    ? dataSegments[segmentIndex].label
-                                    : undefined;
-
+                              {byteEntries.map((entry) => {
                                 return (
                                   <span
-                                    key={i}
-                                    data-testid={`data-byte-${absoluteOffset}`}
-                                    className={`${byteClass} ${
-                                      segmentIndex >= 0 ? 'cursor-pointer' : 'cursor-default'
-                                    } ${hoverBreatheClass}`}
-                                    title={title}
+                                    key={entry.absoluteOffset}
+                                    data-testid={`data-byte-${entry.absoluteOffset}`}
+                                    className={`${entry.byteClass} ${
+                                      entry.segmentIndex >= 0 ? 'cursor-pointer' : 'cursor-default'
+                                    } ${entry.hoverBreatheClass}`}
+                                    title={entry.title}
                                     onMouseEnter={() => {
-                                      setHoveredDataByteOffset(absoluteOffset);
+                                      setHoveredDataByteOffset(entry.absoluteOffset);
                                       setHoveredDataSegmentIndex(
-                                        segmentIndex >= 0 ? segmentIndex : null
+                                        entry.segmentIndex >= 0 ? entry.segmentIndex : null
                                       );
                                     }}
                                     onClick={() => {
-                                      if (segmentIndex < 0) return;
+                                      if (entry.segmentIndex < 0) return;
                                       setPinnedDataSegmentIndex((prev) =>
-                                        prev === segmentIndex ? null : segmentIndex
+                                        prev === entry.segmentIndex ? null : entry.segmentIndex
                                       );
                                     }}
                                   >
-                                    {b}
+                                    {entry.byteHex}
                                   </span>
                                 );
                               })}
@@ -1455,8 +1498,31 @@ export default function CellDetailPage() {
                                 </span>
                               ))}
                             </div>
-                            <div className="border-l border-slate-800 pl-4 tracking-widest text-slate-500">
-                              {ascii.join('')}
+                            <div className="border-l border-slate-800 pl-4">
+                              {byteEntries.map((entry) => (
+                                <span
+                                  key={`ascii-${entry.absoluteOffset}`}
+                                  data-testid={`data-ascii-byte-${entry.absoluteOffset}`}
+                                  className={`inline-flex w-2.5 justify-center rounded-sm transition-colors duration-100 ${
+                                    entry.segmentIndex >= 0 ? 'cursor-pointer' : 'cursor-default'
+                                  } ${entry.asciiClass} ${entry.asciiHoverClass}`}
+                                  title={entry.title}
+                                  onMouseEnter={() => {
+                                    setHoveredDataByteOffset(entry.absoluteOffset);
+                                    setHoveredDataSegmentIndex(
+                                      entry.segmentIndex >= 0 ? entry.segmentIndex : null
+                                    );
+                                  }}
+                                  onClick={() => {
+                                    if (entry.segmentIndex < 0) return;
+                                    setPinnedDataSegmentIndex((prev) =>
+                                      prev === entry.segmentIndex ? null : entry.segmentIndex
+                                    );
+                                  }}
+                                >
+                                  {entry.asciiChar}
+                                </span>
+                              ))}
                             </div>
                           </div>
                         );

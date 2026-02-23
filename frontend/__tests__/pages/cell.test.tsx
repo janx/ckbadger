@@ -400,10 +400,16 @@ describe('CellDetailPage', () => {
     expect(screen.queryByTestId('data-deterministic-panel')).not.toBeInTheDocument();
     expect(screen.queryByTestId('data-heuristic-panel')).not.toBeInTheDocument();
     expect(screen.getByTestId('data-byte-0').className).toContain('bg-terminal-green/15');
+    expect(screen.getByTestId('data-ascii-byte-0').className).toContain('text-slate-500');
 
     fireEvent.mouseEnter(screen.getByTestId('data-byte-0'));
     expect(screen.getByTestId('data-active-segment-value')).toHaveTextContent('42');
     expect(screen.getByTestId('data-byte-0').className).toContain('byte-hover-breathe');
+    expect(screen.getByTestId('data-ascii-byte-0').className).toContain('bg-terminal-green/30');
+    expect(screen.getByTestId('data-ascii-byte-1').className).toContain('bg-terminal-green/20');
+
+    fireEvent.mouseEnter(screen.getByTestId('data-ascii-byte-2'));
+    expect(screen.getByTestId('data-byte-2').className).toContain('byte-hover-breathe');
     expect(screen.getByTestId('data-segment-item-0')).toBeInTheDocument();
   });
 
