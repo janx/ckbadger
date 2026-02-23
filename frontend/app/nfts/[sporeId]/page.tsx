@@ -33,6 +33,7 @@ export default function SporeDetailPage() {
   const [searchInput, setSearchInput] = useState('');
   const [searchKeyword, setSearchKeyword] = useState('');
   const collectionItemsPagination = useCursorPagination();
+  const { reset: resetCollectionItemsPagination } = collectionItemsPagination;
   const occupationRangeParams = getOccupationRangeParams(occupationRange);
   const isDotbitCollection = isDotbitAlias(rawAssetId);
   const assetId = normalizeNftAssetId(rawAssetId);
@@ -116,8 +117,8 @@ export default function SporeDetailPage() {
   });
 
   useEffect(() => {
-    collectionItemsPagination.reset();
-  }, [collectionAssetId, collectionSearchKeyword, collectionItemsPagination.reset]);
+    resetCollectionItemsPagination();
+  }, [collectionAssetId, collectionSearchKeyword, resetCollectionItemsPagination]);
 
   const formatNumber = (num: number) => {
     return new Intl.NumberFormat().format(num);

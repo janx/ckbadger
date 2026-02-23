@@ -230,6 +230,14 @@ async fn test_get_block_includes_hardfork_activation() {
     assert_eq!(json["hardforkActivation"]["id"], "mirana-2021");
     assert_eq!(json["hardforkActivation"]["shortName"], "Mirana");
     assert_eq!(json["hardforkActivation"]["activationEpoch"], 5414);
+    assert_eq!(
+        json["hardforkActivation"]["resources"][0]["label"],
+        "CKB2021"
+    );
+    assert_eq!(
+        json["hardforkActivation"]["resources"][0]["url"],
+        "https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0037-ckb2021/0037-ckb2021.md"
+    );
 }
 
 #[tokio::test]
@@ -301,6 +309,10 @@ async fn test_blocks_list_includes_hardfork_activation() {
     assert_eq!(
         activation_row["hardforkActivation"]["shortName"],
         serde_json::Value::from("Mirana")
+    );
+    assert_eq!(
+        activation_row["hardforkActivation"]["resources"][0]["label"],
+        serde_json::Value::from("CKB2021")
     );
 
     let normal_row = rows

@@ -7,7 +7,7 @@ import { LineChart, LineChartMarker, LineChartType } from '@/components/ui/line-
 import { PieChart } from '@/components/ui/pie-chart';
 import { StackedAreaChart } from '@/components/ui/stacked-area-chart';
 import { ChartCard, ChartSection } from '@/components/ui/chart-card';
-import { Badge, PageHeader } from '@/components/ui/page-header';
+import { PageHeader } from '@/components/ui/page-header';
 import {
   api,
   ChartResponse,
@@ -407,25 +407,6 @@ export default function ChartsPage() {
         </ChartSection>
 
         <ChartSection title="Block">
-          {!!hardforkTimeline?.events?.length && (
-            <div className="rounded border border-slate-800 bg-slate-900/70 p-3 lg:col-span-2 xl:col-span-3">
-              <div className="mb-2 font-mono text-xs uppercase tracking-wider text-slate-400">
-                Hardfork Markers on Epoch Time Length
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {hardforkTimeline.events.map((event) => (
-                  <Badge
-                    key={event.id}
-                    variant={event.status === 'activated' ? 'amber' : 'blue'}
-                    className="text-[10px]"
-                  >
-                    {event.shortName.toUpperCase()} @ EPOCH #
-                    {event.activationEpoch.toLocaleString()}
-                  </Badge>
-                ))}
-              </div>
-            </div>
-          )}
           <LineChartPreview data={blockTimeDistribution} href="/charts/block-time-distribution" />
           <LineChartPreview data={epochTimeDistribution} href="/charts/epoch-time-distribution" />
           <LineChartPreview

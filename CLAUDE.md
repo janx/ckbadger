@@ -122,10 +122,14 @@ cd frontend && pnpm test                 # Run Vitest
 cd frontend && pnpm test:coverage        # With coverage report
 cd frontend && npx vitest run            # Non-interactive
 
-# AI-friendly markdown pages (frontend)
+# AI-friendly pages (frontend: markdown + raw)
 curl http://localhost:3000/blocks.md
 curl "http://localhost:3000/blocks?format=md&limit=20"
 curl -H "Accept: text/markdown" http://localhost:3000/charts/hash-rate
+curl http://localhost:3000/blocks/123.raw
+curl "http://localhost:3000/tx/0x...hash....raw?profile=debugger" | jq '.data.txDebugger.mockTransaction'
+curl -H "Accept: application/vnd.ckbadger.raw+json" http://localhost:3000/tx/0x...hash...
+curl http://localhost:3000/capabilities
 
 # Data Integrity Verification (requires running API at localhost:3001)
 cargo run -p ckbadger-indexer -- verify --depth fast        # Quick checks (seconds)
@@ -174,27 +178,86 @@ make up CKB_NODE_MODE=external           # Force external mode for one run
 - runs `ckbadger-tui` for sync/memory/throughput monitoring
 - pass extra args with `TUI_ARGS`, for example: `make tui TUI_ARGS="--refresh-ms 500"`
 
-## AI-Friendly Markdown Output (Frontend)
+## AI-Friendly Page Output (Frontend)
 
-Frontend pages support markdown output through three equivalent modes:
+Frontend pages support two machine-oriented formats:
+
+- `md` for summary-style markdown
+- `raw` for structured automation payloads
+
+Format negotiation priority (strict):
+
+1. `query.format`
+2. URL suffix (`.md` / `.raw`)
+3. `Accept` header
+
+Markdown output supports:
 
 1. URL suffix `.md` (e.g. `/blocks/123.md`)
 2. Query parameter `?format=md`
 3. Header `Accept: text/markdown`
 
+Raw output supports:
+
+1. URL suffix `.raw` (e.g. `/blocks/123.raw`)
+2. Query parameter `?format=raw`
+3. Header `Accept: application/vnd.ckbadger.raw+json`
+
+Raw profile:
+
+- `profile` query selects a raw variant (`default` when absent)
+- `profile=debugger` is supported on `/tx/{hash}` and includes `data.txDebugger.mockTransaction`
+- Unknown/unsupported profiles fail fast with `invalid_profile` / `profile_not_supported`
+
+End-to-end debugger workflow:
+
+```bash
+TX_HASH=0x...replace_with_real_tx_hash...
+curl "http://localhost:3000/tx/${TX_HASH}.raw?profile=debugger" \
+  | jq '.data.txDebugger.mockTransaction' > /tmp/mock_tx.json
+
+ckb-debugger \
+  --tx-file /tmp/mock_tx.json \
+  --cell-index 0 \
+  --cell-type input \
+  --script-group-type lock
+```
+
+Troubleshooting:
+
+- `invalid_profile` / `profile_not_supported`: check route support via `/capabilities`
+- `rpc_http_error` / `rpc_error`: verify `CKB_RPC_URL` (default `http://127.0.0.1:8114`)
+- `tx_not_found`: confirm tx hash and network alignment
+
+Matrix run helper (recommended for exhaustive checks):
+
+```bash
+# Full matrix: script-group-type (lock/type) x cell-type (input/output) x all indices
+scripts/run_tx_debugger_matrix.sh 0x...tx_hash...
+
+# Focused iteration
+SCRIPT_GROUP_TYPES="lock" CELL_TYPES="input" \
+  scripts/run_tx_debugger_matrix.sh 0x...tx_hash...
+
+# Keep running after a failing combination
+CONTINUE_ON_ERROR=1 scripts/run_tx_debugger_matrix.sh 0x...tx_hash...
+```
+
 Implementation boundary:
 
-- Markdown output is handled in frontend only (`Next.js` route + middleware)
-- API JSON endpoints under `/api/v1` are not rewritten to markdown
+- Markdown/raw output is handled in frontend only (`Next.js` route + middleware)
+- API JSON endpoints under `/api/v1` are not rewritten to markdown/raw
 - Static files and `/_next/*` are not rewritten
+- Raw responses include `x-ckbadger-format`, `x-ckbadger-profile`, and `x-ckbadger-schema`
 
-When adding/changing frontend routes (MANDATORY):
+When adding/changing frontend routes or formats (MANDATORY):
 
-1. Update route parsing in `frontend/lib/ai/markdown-route.ts`
-2. Update renderer in `frontend/lib/ai/markdown-renderer.ts`
-3. Update rewrite decision logic if needed in `frontend/lib/ai/markdown-request.ts`
-4. Update AI discovery files: `frontend/public/llms.txt` and `frontend/public/llms-full.txt`
-5. Add/adjust tests in `frontend/__tests__/lib/markdown-*.test.ts`
+1. Update markdown route parsing in `frontend/lib/ai/markdown-route.ts` if markdown coverage changes
+2. Update raw route parsing in `frontend/lib/ai/raw-route.ts` if raw coverage changes
+3. Update renderer(s): `frontend/lib/ai/markdown-renderer.ts` and/or `frontend/lib/ai/raw-renderer.ts`
+4. Update rewrite negotiation in `frontend/lib/ai/markdown-request.ts` if format rules change
+5. Update capability/discovery files: `frontend/lib/ai/capabilities.ts`, `frontend/public/llms.txt`, and `frontend/public/llms-full.txt`
+6. Add/adjust tests in `frontend/__tests__/lib/markdown-*.test.ts`, `frontend/__tests__/lib/raw-*.test.ts`, and `frontend/__tests__/lib/capabilities.test.ts`
 
 ## Project Structure
 
@@ -792,7 +855,12 @@ const DAO_OCCUPIED_CAPACITY: u64 = 102_00000000; // 102 CKB
 | Markdown route    | `frontend/app/__md/[[...slug]]/route.ts`                         |
 | Markdown parser   | `frontend/lib/ai/markdown-route.ts`                              |
 | Markdown renderer | `frontend/lib/ai/markdown-renderer.ts`                           |
-| Markdown rewrite  | `frontend/lib/ai/markdown-request.ts` + `frontend/middleware.ts` |
+| Raw route         | `frontend/app/__raw/[[...slug]]/route.ts`                        |
+| Raw parser        | `frontend/lib/ai/raw-route.ts`                                   |
+| Raw renderer      | `frontend/lib/ai/raw-renderer.ts`                                |
+| Capabilities API  | `frontend/app/capabilities/route.ts`                             |
+| Capabilities spec | `frontend/lib/ai/capabilities.ts`                                |
+| Format rewrite    | `frontend/lib/ai/markdown-request.ts` + `frontend/middleware.ts` |
 | LLM discovery     | `frontend/public/llms.txt`, `frontend/public/llms-full.txt`      |
 | UI components     | `frontend/components/ui/`                                        |
 | Pages             | `frontend/app/`                                                  |

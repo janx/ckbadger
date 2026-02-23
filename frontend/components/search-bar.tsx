@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { api, type SearchResult } from '@/lib/api';
@@ -28,7 +28,7 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
     staleTime: 30000,
   });
 
-  const results = searchResults?.results || [];
+  const results = useMemo(() => searchResults?.results ?? [], [searchResults?.results]);
 
   useEffect(() => {
     setSelectedIndex(-1);

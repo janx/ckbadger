@@ -38,12 +38,20 @@ fn default_limit() -> i64 {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct HardforkResourceResponse {
+    pub label: String,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HardforkActivationResponse {
     pub id: String,
     pub name: String,
     pub short_name: String,
     pub activation_epoch: i64,
     pub activation_date: String,
+    pub resources: Vec<HardforkResourceResponse>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -194,6 +202,14 @@ fn resolve_hardfork_activation_blocks(
                     short_name: spec.short_name.to_string(),
                     activation_epoch: spec.activation_epoch,
                     activation_date: spec.activation_date.to_string(),
+                    resources: spec
+                        .resources
+                        .iter()
+                        .map(|resource| HardforkResourceResponse {
+                            label: resource.label.to_string(),
+                            url: resource.url.to_string(),
+                        })
+                        .collect(),
                 },
             );
         }
@@ -317,6 +333,14 @@ fn resolve_hardfork_activation(
                 short_name: spec.short_name.to_string(),
                 activation_epoch: spec.activation_epoch,
                 activation_date: spec.activation_date.to_string(),
+                resources: spec
+                    .resources
+                    .iter()
+                    .map(|resource| HardforkResourceResponse {
+                        label: resource.label.to_string(),
+                        url: resource.url.to_string(),
+                    })
+                    .collect(),
             }));
         }
     }

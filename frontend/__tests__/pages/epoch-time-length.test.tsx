@@ -18,7 +18,7 @@ vi.mock('@/components/charts/chart-page', () => ({
     const { title, queryKey, markers } = props as {
       title: string;
       queryKey: string;
-      markers?: Array<{ label: string }>;
+      markers?: Array<{ label: string; href?: string }>;
     };
     return (
       <div>
@@ -72,5 +72,13 @@ describe('EpochTimeLengthPage', () => {
     await waitFor(() => {
       expect(screen.getByTestId('markers-count')).toHaveTextContent('2');
     });
+
+    const lastProps = chartPageMock.mock.calls.at(-1)?.[0] as {
+      markers?: Array<{ x: string; label: string; color: string; href?: string }>;
+    };
+    expect(lastProps.markers).toEqual([
+      { x: '5414', label: 'MIRANA', color: '#f59e0b', href: '/blocks/8775638' },
+      { x: '12293', label: 'MEEPO', color: '#f59e0b', href: '/blocks/18430000' },
+    ]);
   });
 });

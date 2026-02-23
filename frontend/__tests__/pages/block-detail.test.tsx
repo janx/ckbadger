@@ -13,6 +13,7 @@ vi.mock('@/lib/api', () => ({
     getTransactions: vi.fn(),
     getBlockFeeStats: vi.fn(),
     getBlockProposals: vi.fn(),
+    getHardforks: vi.fn(),
   },
 }));
 
@@ -89,6 +90,12 @@ describe('BlockDetailPage', () => {
       transactionCount: 1,
     });
     vi.mocked(api.getBlockProposals).mockResolvedValue([]);
+    vi.mocked(api.getHardforks).mockResolvedValue({
+      network: 'mainnet',
+      tipEpoch: 13000,
+      tipBlock: 19000000,
+      events: [],
+    });
   });
 
   it('shows hardfork activation badge on activation block', async () => {
@@ -100,6 +107,16 @@ describe('BlockDetailPage', () => {
         shortName: 'Mirana',
         activationEpoch: 5414,
         activationDate: '2022-05-10',
+        resources: [
+          {
+            label: 'CKB2021',
+            url: 'https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0037-ckb2021/0037-ckb2021.md',
+          },
+          {
+            label: 'Migration Guide',
+            url: 'https://github.com/jordanmack/nervos-ckb2021-hard-fork-migration-guide',
+          },
+        ],
       },
     });
 
@@ -111,8 +128,19 @@ describe('BlockDetailPage', () => {
 
     await waitFor(() => {
       expect(screen.getByText(/HARDFORK ACTIVATION/i)).toBeInTheDocument();
-      expect(screen.getByText(/MIRANA/i)).toBeInTheDocument();
+      expect(screen.getByText(/HARDFORK RESOURCES/i)).toBeInTheDocument();
     });
+
+    const resourceLinks = screen.getAllByTestId('block-hardfork-resource-link');
+    expect(resourceLinks).toHaveLength(2);
+    expect(screen.getByRole('link', { name: 'CKB2021' })).toHaveAttribute(
+      'href',
+      'https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0037-ckb2021/0037-ckb2021.md'
+    );
+    expect(screen.getByRole('link', { name: 'Migration Guide' })).toHaveAttribute(
+      'href',
+      'https://github.com/jordanmack/nervos-ckb2021-hard-fork-migration-guide'
+    );
   });
 
   it('does not show activation badge when block is not a hardfork block', async () => {
@@ -156,5 +184,51 @@ describe('BlockDetailPage', () => {
 
     expect(pushMock).toHaveBeenNthCalledWith(1, `/blocks/${mockBlock.number + 1}`);
     expect(pushMock).toHaveBeenNthCalledWith(2, `/blocks/${mockBlock.number + 1}`);
+  });
+
+  it('loads hardfork resources from timeline when block payload has no resources', async () => {
+    vi.mocked(api.getBlock).mockResolvedValue({
+      ...mockBlock,
+      hardforkActivation: {
+        id: 'meepo-2024',
+        name: 'CKB Edition Meepo',
+        shortName: 'Meepo',
+        activationEpoch: 12293,
+        activationDate: '2025-07-01',
+      },
+    });
+    vi.mocked(api.getHardforks).mockResolvedValue({
+      network: 'mainnet',
+      tipEpoch: 13000,
+      tipBlock: 19000000,
+      events: [
+        {
+          id: 'meepo-2024',
+          name: 'CKB Edition Meepo',
+          shortName: 'Meepo',
+          editionYear: 2024,
+          activationEpoch: 12293,
+          activationDate: '2025-07-01',
+          activationBlock: 16595590,
+          status: 'activated',
+          summary: 'CKB-VM v2 activation.',
+          resources: [
+            {
+              label: 'CKB2023',
+              url: 'https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0051-ckb2023/0051-ckb2023.md',
+            },
+          ],
+        },
+      ],
+    });
+
+    render(<BlockDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: 'CKB2023' })).toHaveAttribute(
+        'href',
+        'https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0051-ckb2023/0051-ckb2023.md'
+      );
+    });
   });
 });

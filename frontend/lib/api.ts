@@ -48,6 +48,7 @@ interface HardforkActivation {
   shortName: string;
   activationEpoch: number;
   activationDate: string;
+  resources?: HardforkResource[];
 }
 
 interface Transaction {

@@ -3,6 +3,7 @@
 import { useState, useMemo } from 'react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import Link from 'next/link';
+import Image from 'next/image';
 import { useParams } from 'next/navigation';
 import { Header } from '@/components/layout/header';
 import { PageHeader, Badge } from '@/components/ui/page-header';
@@ -163,14 +164,6 @@ export default function AddressDetailPage() {
     placeholderData: keepPreviousData,
   });
 
-  const daoTxHashes = useMemo(() => {
-    const set = new Set<string>();
-    if (daoDeposits?.data) {
-      daoDeposits.data.forEach((d) => set.add(d.txHash));
-    }
-    return set;
-  }, [daoDeposits?.data]);
-
   const handleTokenSelect = (token: AddressToken | null) => {
     setSelectedToken(token);
     setSelectedDao(false);
@@ -213,19 +206,6 @@ export default function AddressDetailPage() {
       </div>
     );
   }
-
-  const getTxTypeBadge = (txType: string) => {
-    switch (txType) {
-      case 'received':
-        return <Badge variant="green">Received</Badge>;
-      case 'sent':
-        return <Badge variant="red">Sent</Badge>;
-      case 'internal':
-        return <Badge variant="gray">Internal</Badge>;
-      default:
-        return null;
-    }
-  };
 
   const shortHash = (value: string) => {
     if (value.length <= 20) return value;
@@ -600,12 +580,15 @@ export default function AddressDetailPage() {
                         >
                           <div className="flex flex-1 items-center gap-3">
                             {token.iconUrl && (
-                              <img
+                              <Image
                                 src={token.iconUrl}
                                 alt={token.symbol || token.name || 'Token'}
                                 className="h-6 w-6 rounded-full"
-                                onError={(e) => {
-                                  (e.target as HTMLImageElement).style.display = 'none';
+                                width={24}
+                                height={24}
+                                unoptimized
+                                onError={(event) => {
+                                  event.currentTarget.style.display = 'none';
                                 }}
                               />
                             )}

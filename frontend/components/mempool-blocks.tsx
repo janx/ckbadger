@@ -1173,7 +1173,10 @@ export function MempoolBlocks({
       : [],
   });
 
-  const pendingProposals = pendingProposalsData?.proposals ?? [];
+  const pendingProposals = useMemo(
+    () => pendingProposalsData?.proposals ?? [],
+    [pendingProposalsData?.proposals]
+  );
   const proposalBuckets = useMemo(() => splitProposalBuckets(pendingProposals), [pendingProposals]);
 
   const proposalLookupHashes = useMemo(

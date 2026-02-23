@@ -18,6 +18,7 @@ export default function EpochTimeLengthPage() {
         x: String(event.activationEpoch),
         label: event.shortName.toUpperCase(),
         color: event.status === 'activated' ? '#f59e0b' : '#38bdf8',
+        href: event.activationBlock ? `/blocks/${event.activationBlock}` : undefined,
       })),
     [hardforkTimeline?.events]
   );

@@ -46,6 +46,26 @@ describe('LineChart', () => {
     expect(screen.queryByText('NOT_FOUND')).not.toBeInTheDocument();
   });
 
+  it('renders marker links when href is provided', () => {
+    render(
+      <LineChart
+        interactive={false}
+        yAxisLabel="Epoch Hours"
+        data={[
+          { date: '5414', value: '16.2' },
+          { date: '12293', value: '16.1' },
+        ]}
+        markers={[
+          { x: '5414', label: 'MIRANA', href: '/blocks/8775638' },
+          { x: '12293', label: 'MEEPO' },
+        ]}
+      />
+    );
+
+    expect(screen.getByText('MIRANA').closest('a')).toHaveAttribute('href', '/blocks/8775638');
+    expect(screen.getByText('MEEPO').closest('a')).toBeNull();
+  });
+
   it('uses project palette defaults for primary and secondary lines', () => {
     render(
       <LineChart

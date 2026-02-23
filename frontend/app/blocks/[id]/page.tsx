@@ -79,6 +79,15 @@ export default function BlockDetailPage() {
     enabled: !!block && block.proposalsCount > 0,
   });
 
+  const { data: hardforkTimeline } = useQuery({
+    queryKey: ['hardforks-for-block', block?.hardforkActivation?.id],
+    queryFn: () => api.getHardforks(),
+    enabled:
+      !!block?.hardforkActivation &&
+      (!block.hardforkActivation.resources || block.hardforkActivation.resources.length === 0),
+    staleTime: 60_000,
+  });
+
   useEffect(() => {
     if (!block) return;
 
@@ -144,6 +153,11 @@ export default function BlockDetailPage() {
   const epochStartNumber = block.number - block.epochIndex;
   const ordinalSuffix = getOrdinalSuffix(block.epochIndex + 1);
   const activationHardfork = block.hardforkActivation;
+  const activationResources =
+    activationHardfork?.resources && activationHardfork.resources.length > 0
+      ? activationHardfork.resources
+      : (hardforkTimeline?.events.find((event) => event.id === activationHardfork?.id)?.resources ??
+        []);
 
   return (
     <div className="min-h-screen bg-slate-950">
@@ -164,6 +178,30 @@ export default function BlockDetailPage() {
             next: { href: `/blocks/${block.number + 1}`, label: 'Next Block' },
           }}
         />
+
+        {activationHardfork && activationResources.length > 0 && (
+          <TerminalPanel className="mb-6 border-amber-500/30">
+            <TerminalPanelHeader indicator="active">
+              HARDFORK RESOURCES · {activationHardfork.shortName.toUpperCase()}
+            </TerminalPanelHeader>
+            <TerminalPanelContent>
+              <div className="flex flex-wrap gap-3">
+                {activationResources.map((resource) => (
+                  <a
+                    key={`${activationHardfork.id}-${resource.label}`}
+                    href={resource.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-terminal-green font-mono text-xs hover:underline"
+                    data-testid="block-hardfork-resource-link"
+                  >
+                    {resource.label}
+                  </a>
+                ))}
+              </div>
+            </TerminalPanelContent>
+          </TerminalPanel>
+        )}
 
         <TerminalPanel className="mb-6">
           <TerminalPanelHeader indicator="active">Epoch Progress</TerminalPanelHeader>

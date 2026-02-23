@@ -63,7 +63,7 @@ on localhost deployments:
 - **Network Dashboard** - Hash rate, difficulty, epoch progress, TPS metrics
 - **Historical Charts** - Block time, transaction volume, active addresses
 - **Real-time Updates** - WebSocket subscriptions for new blocks and transactions
-- **AI-Friendly Markdown Pages** - Append `.md` (or use content negotiation) to get machine-readable page summaries
+- **AI-Friendly Multi-Format Pages** - Use `.md` for summaries, `.raw` for tool-oriented payloads, plus `/capabilities` for machine discovery
 - **System Status Page** - Monitor sync progress, index rebuild status, and integrity checks
 - **Data Integrity Verification** - 28 built-in checks for acceptance testing via API
 - **Developer API** - REST endpoints with rate limiting
@@ -383,39 +383,105 @@ ws.onmessage = (event) => {
 // }
 ```
 
-### Markdown Page Output (AI Friendly)
+### AI-Friendly Page Output (Markdown + Raw)
 
-The frontend supports a Markdown representation for explorer pages:
+The frontend supports two machine-oriented page formats:
+
+- `md`: human+agent readable summaries
+- `raw`: structured payloads for tooling/automation
+
+Format negotiation priority (strict):
+
+1. `query.format`
+2. path suffix (`.md` / `.raw`)
+3. `Accept` header
+
+Markdown modes:
 
 - Suffix mode: append `.md` to a page URL
 - Query mode: add `?format=md`
 - Header mode: send `Accept: text/markdown`
 
+Raw modes:
+
+- Suffix mode: append `.raw` to a page URL
+- Query mode: add `?format=raw`
+- Header mode: send `Accept: application/vnd.ckbadger.raw+json`
+
+Raw profile:
+
+- `profile` query selects a raw variant (default: `default`)
+- Example: `?profile=debugger` for transaction debugger payloads
+
 Examples:
 
 ```bash
-# Suffix mode
+# Markdown
 curl http://localhost:3000/blocks.md
-curl http://localhost:3000/blocks/123.md
-curl http://localhost:3000/tx/0x...hash....md
-
-# Query mode
 curl "http://localhost:3000/blocks?format=md&limit=20"
-
-# Header mode
 curl -H "Accept: text/markdown" http://localhost:3000/charts/hash-rate
+
+# Raw (default profile)
+curl http://localhost:3000/blocks/123.raw
+curl "http://localhost:3000/cell/0x...txhash...-0?format=raw"
+curl -H "Accept: application/vnd.ckbadger.raw+json" http://localhost:3000/tx/0x...hash...
+
+# Raw debugger profile (tx only)
+curl "http://localhost:3000/tx/0x...hash....raw?profile=debugger" \
+  | jq '.data.txDebugger.mockTransaction'
 ```
 
 Response details:
 
-- Content-Type: `text/markdown; charset=utf-8`
-- Includes YAML frontmatter (`title`, `path`, `canonical`, `pageType`, `generatedAt`, `formatVersion`)
-- Error responses are also emitted as markdown (`400` / `404` / `502`) with actionable messages
+- Markdown content type: `text/markdown; charset=utf-8`
+- Raw content type: `application/json; charset=utf-8`
+- Raw response headers:
+  - `x-ckbadger-format`
+  - `x-ckbadger-profile`
+  - `x-ckbadger-schema`
+- Raw profile errors fail fast (`invalid_profile`, `profile_not_supported`)
 
-AI discovery files:
+AI discovery:
 
 - `frontend/public/llms.txt`
 - `frontend/public/llms-full.txt`
+- `http://localhost:3000/capabilities` (machine-readable format/profile/route matrix)
+
+Debugger workflow (`.raw?profile=debugger`):
+
+```bash
+# 1) Fetch debugger payload and extract mock transaction
+TX_HASH=0x...replace_with_real_tx_hash...
+curl "http://localhost:3000/tx/${TX_HASH}.raw?profile=debugger" \
+  | jq '.data.txDebugger.mockTransaction' > /tmp/mock_tx.json
+
+# 2) Run ckb-debugger with extracted tx-file
+ckb-debugger \
+  --tx-file /tmp/mock_tx.json \
+  --cell-index 0 \
+  --cell-type input \
+  --script-group-type lock
+```
+
+Troubleshooting:
+
+- `invalid_profile` / `profile_not_supported`: check `profile` and route support via `/capabilities`
+- RPC errors (`rpc_http_error`, `rpc_error`): ensure CKB node RPC is reachable (`CKB_RPC_URL`, default `http://127.0.0.1:8114`)
+- `tx_not_found`: verify transaction hash on the same network as the connected node
+
+Matrix run helper (lock/type + input/output):
+
+```bash
+# Fail-fast matrix run (all combinations)
+scripts/run_tx_debugger_matrix.sh 0x...tx_hash...
+
+# Limit scope for faster iteration
+SCRIPT_GROUP_TYPES="lock" CELL_TYPES="input" \
+  scripts/run_tx_debugger_matrix.sh 0x...tx_hash...
+
+# Keep running after failures to collect all failing combinations
+CONTINUE_ON_ERROR=1 scripts/run_tx_debugger_matrix.sh 0x...tx_hash...
+```
 
 ## Deployment
 
@@ -464,14 +530,15 @@ ckbadger/
 │   └── ckb-store-reader/   # Read-only CKB RocksDB reader (optional direct read mode)
 ├── frontend/               # Next.js application
 │   ├── app/                # App router pages
-│   │   └── __md/           # Markdown route handlers for AI-friendly page output
+│   │   ├── __md/           # Markdown route handlers for AI-friendly page output
+│   │   └── __raw/          # Raw route handlers for tool-oriented payload output
 │   ├── components/         # React components
 │   │   ├── ui/             # Reusable UI (Hash, Capacity, etc.)
 │   │   └── cell-graph.tsx  # Force-directed graph visualization
 │   ├── hooks/              # Custom hooks (WebSocket, etc.)
 │   ├── lib/                # API client, utilities
-│   │   └── ai/             # Markdown route parsing/rendering helpers
-│   ├── middleware.ts       # Markdown rewrite for .md / format=md / Accept: text/markdown
+│   │   └── ai/             # Markdown/raw parsing/rendering/capabilities helpers
+│   ├── middleware.ts       # Format rewrite for .md/.raw, ?format, and Accept negotiation
 │   └── public/             # Static assets + LLM discovery files
 ├── docs/                   # Documentation & references
 │   ├── rfcs/               # [submodule] CKB RFCs - protocol specs

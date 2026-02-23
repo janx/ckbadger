@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import Link from 'next/link';
+import Image from 'next/image';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Header } from '@/components/layout/header';
 import {
@@ -88,10 +89,6 @@ function AssetTable({ assetType, search }: { assetType: AssetTab; search: string
       return asset.symbol || asset.name || shortHash(asset.id);
     }
     return asset.name || 'Unnamed Collection';
-  };
-
-  const getTypeBadgeVariant = (_asset: Asset): 'neutral' => {
-    return 'neutral';
   };
 
   const getTypeBadgeLabel = (asset: Asset) => {
@@ -190,12 +187,15 @@ function AssetTable({ assetType, search }: { assetType: AssetTab; search: string
               <Link href={getAssetLink(asset)} className="block">
                 <div className="flex items-center gap-2">
                   {asset.assetType === 'token' && asset.iconUrl && (
-                    <img
+                    <Image
                       src={asset.iconUrl}
                       alt=""
                       className="h-6 w-6 rounded-full"
-                      onError={(e) => {
-                        (e.target as HTMLImageElement).style.display = 'none';
+                      width={24}
+                      height={24}
+                      unoptimized
+                      onError={(event) => {
+                        event.currentTarget.style.display = 'none';
                       }}
                     />
                   )}
@@ -239,7 +239,7 @@ function AssetTable({ assetType, search }: { assetType: AssetTab; search: string
             </div>
             <div className="w-20 shrink-0">
               <div className="flex flex-wrap gap-1">
-                <Badge variant={getTypeBadgeVariant(asset)}>{getTypeBadgeLabel(asset)}</Badge>
+                <Badge variant="neutral">{getTypeBadgeLabel(asset)}</Badge>
               </div>
             </div>
             {assetType === 'dob' && (

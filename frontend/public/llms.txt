@@ -10,6 +10,12 @@ Primary markdown rule:
 Machine-friendly endpoints:
 - API base: `/api/v1`
 - Markdown pages: `/{page}.md`
+- Raw pages: `/{page}.raw`
+  - Optional profile: `?profile=default|debugger`
+  - Example: `/tx/0x....raw?profile=debugger`
+  - `profile=debugger` returns `mockTransaction` for `ckb-debugger --tx-file`
+  - Raw response headers: `x-ckbadger-format`, `x-ckbadger-profile`, `x-ckbadger-schema`
+- Capability descriptor: `/capabilities` (JSON)
 
 Core page groups:
 - `/blocks`, `/blocks/{id}`

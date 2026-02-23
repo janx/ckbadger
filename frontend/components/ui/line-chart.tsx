@@ -9,6 +9,7 @@ export interface LineChartMarker {
   x: string;
   label: string;
   color?: string;
+  href?: string;
 }
 
 interface LineChartProps {
@@ -513,16 +514,31 @@ export function LineChart({
                 strokeWidth={1.5}
                 data-testid="line-chart-marker-line"
               />
-              <text
-                x={labelOnRight ? markerX - 6 : markerX + 6}
-                y={padding.top + 12}
-                textAnchor={labelOnRight ? 'end' : 'start'}
-                className="fill-slate-300 font-mono"
-                fontSize={9}
-                data-testid="line-chart-marker-label"
-              >
-                {marker.label}
-              </text>
+              {marker.href ? (
+                <a href={marker.href} data-testid="line-chart-marker-link">
+                  <text
+                    x={labelOnRight ? markerX - 6 : markerX + 6}
+                    y={padding.top + 12}
+                    textAnchor={labelOnRight ? 'end' : 'start'}
+                    className="hover:fill-terminal-green fill-slate-300 font-mono underline decoration-dotted"
+                    fontSize={9}
+                    data-testid="line-chart-marker-label"
+                  >
+                    {marker.label}
+                  </text>
+                </a>
+              ) : (
+                <text
+                  x={labelOnRight ? markerX - 6 : markerX + 6}
+                  y={padding.top + 12}
+                  textAnchor={labelOnRight ? 'end' : 'start'}
+                  className="fill-slate-300 font-mono"
+                  fontSize={9}
+                  data-testid="line-chart-marker-label"
+                >
+                  {marker.label}
+                </text>
+              )}
             </g>
           );
         })}
@@ -585,6 +601,7 @@ export function LineChart({
           height={chartHeight}
           fill="transparent"
           className="cursor-crosshair"
+          pointerEvents="none"
         />
 
         {hoverIndex !== null && hoverIndex < values.length && values[hoverIndex] !== undefined && (

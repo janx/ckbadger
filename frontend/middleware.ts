@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { resolveMarkdownRewrite } from '@/lib/ai/markdown-request';
 
 const MARKDOWN_INTERNAL_PREFIX = '/__md';
+const RAW_INTERNAL_PREFIX = '/__raw';
 
 export function middleware(request: NextRequest): NextResponse {
   const decision = resolveMarkdownRewrite({
@@ -17,7 +18,11 @@ export function middleware(request: NextRequest): NextResponse {
   }
 
   const rewriteUrl = request.nextUrl.clone();
-  rewriteUrl.pathname = `${MARKDOWN_INTERNAL_PREFIX}${
+  const internalPrefix = decision.internalPrefix ?? MARKDOWN_INTERNAL_PREFIX;
+  if (internalPrefix !== MARKDOWN_INTERNAL_PREFIX && internalPrefix !== RAW_INTERNAL_PREFIX) {
+    return NextResponse.next();
+  }
+  rewriteUrl.pathname = `${internalPrefix}${
     decision.sourcePath === '/' ? '' : decision.sourcePath
   }`;
   if (decision.removeFormatParam) {

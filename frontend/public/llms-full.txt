@@ -13,6 +13,20 @@ Markdown output convention:
   - `/tx/0xabc...def.md`
   - `/charts/transaction-count.md`
 
+Raw output convention:
+- Raw format can be requested with:
+  - suffix: `.raw`
+  - query: `?format=raw`
+  - accept: `application/vnd.ckbadger.raw+json`
+- Negotiation priority: `query.format` > `path suffix` > `Accept` header.
+- Raw profile is selected with query param: `profile=default|debugger`
+- Current raw routes:
+  - `/blocks/{id}.raw` (profile: `default`)
+  - `/cell/{outpoint}.raw` (profile: `default`)
+  - `/tx/{hash}.raw` (profiles: `default`, `debugger`)
+- `profile=debugger` includes `data.txDebugger.mockTransaction`, compatible with `ckb-debugger --tx-file`.
+- Raw responses include headers: `x-ckbadger-format`, `x-ckbadger-profile`, `x-ckbadger-schema`.
+
 Known markdown page routes:
 - `/`
 - `/address/{addr}`
@@ -69,6 +83,7 @@ Chart slugs:
 API:
 - Base URL: `/api/v1`
 - JSON API supports blocks, transactions, cells, scripts, tokens, charts, DAO, forks, hardfork timeline.
+- Capability descriptor: `/capabilities` (formats, profiles, route matrix, and strict error codes).
 
 Notes for agents:
 - Prefer markdown pages for narrative + tabular summaries.

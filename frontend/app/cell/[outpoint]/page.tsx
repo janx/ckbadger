@@ -385,7 +385,10 @@ export default function CellDetailPage() {
 
   const deterministicAnalysis = cell?.dataAnalysis?.deterministic ?? null;
   const heuristicGuesses = cell?.dataAnalysis?.heuristicGuesses ?? [];
-  const dataSegments = deterministicAnalysis?.segments ?? [];
+  const dataSegments = useMemo(
+    () => deterministicAnalysis?.segments ?? [],
+    [deterministicAnalysis]
+  );
   const segmentOffsetMap = useMemo(() => {
     const map = new Array<number>(dataPreview.dataPreviewBytes).fill(-1);
     dataSegments.forEach((segment, segmentIndex) => {
@@ -1360,7 +1363,6 @@ export default function CellDetailPage() {
                     );
                   }
 
-                  const displayBytes = dataPreviewBytes;
                   const displayHex = dataPreview.displayHex;
 
                   const rows = [];
@@ -1415,13 +1417,13 @@ export default function CellDetailPage() {
                           const asciiClass =
                             segmentIndex < 0
                               ? hasActiveSegment
-                                ? 'text-slate-600'
+                                ? 'text-slate-500'
                                 : 'text-slate-500'
                               : isActiveSegment
                                 ? (segmentTone?.asciiActive ??
                                   'rounded-sm bg-terminal-green/20 text-terminal-green')
                                 : hasActiveSegment
-                                  ? 'text-slate-600 opacity-40'
+                                  ? 'text-slate-500 opacity-40'
                                   : 'text-slate-500';
                           const asciiHoverClass = isHoveredByte
                             ? segmentIndex >= 0

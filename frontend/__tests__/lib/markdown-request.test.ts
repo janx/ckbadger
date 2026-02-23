@@ -13,7 +13,11 @@ describe('resolveMarkdownRewrite', () => {
       acceptHeader: 'text/html',
     });
 
-    expect(decision).toEqual({ rewrite: true, sourcePath: '/blocks/123' });
+    expect(decision).toEqual({
+      rewrite: true,
+      sourcePath: '/blocks/123',
+      internalPrefix: '/__md',
+    });
   });
 
   it('rewrites format=md query', () => {
@@ -28,6 +32,7 @@ describe('resolveMarkdownRewrite', () => {
       rewrite: true,
       sourcePath: '/tx/0xabc',
       removeFormatParam: true,
+      internalPrefix: '/__md',
     });
   });
 
@@ -42,6 +47,69 @@ describe('resolveMarkdownRewrite', () => {
     expect(decision).toEqual({
       rewrite: true,
       sourcePath: '/charts/hash-rate',
+      internalPrefix: '/__md',
+    });
+  });
+
+  it('rewrites .raw suffix to raw source path', () => {
+    const decision = resolveMarkdownRewrite({
+      method: 'GET',
+      pathname: '/tx/0xabc.raw',
+      searchParams: params(),
+      acceptHeader: 'text/html',
+    });
+
+    expect(decision).toEqual({
+      rewrite: true,
+      sourcePath: '/tx/0xabc',
+      internalPrefix: '/__raw',
+    });
+  });
+
+  it('rewrites format=raw query', () => {
+    const decision = resolveMarkdownRewrite({
+      method: 'GET',
+      pathname: '/blocks/123',
+      searchParams: params('format=raw&profile=default'),
+      acceptHeader: 'text/html',
+    });
+
+    expect(decision).toEqual({
+      rewrite: true,
+      sourcePath: '/blocks/123',
+      removeFormatParam: true,
+      internalPrefix: '/__raw',
+    });
+  });
+
+  it('prioritizes query format over suffix format', () => {
+    const decision = resolveMarkdownRewrite({
+      method: 'GET',
+      pathname: '/tx/0xabc.raw',
+      searchParams: params('format=md'),
+      acceptHeader: 'application/vnd.ckbadger.raw+json, text/markdown;q=0.5',
+    });
+
+    expect(decision).toEqual({
+      rewrite: true,
+      sourcePath: '/tx/0xabc',
+      removeFormatParam: true,
+      internalPrefix: '/__md',
+    });
+  });
+
+  it('rewrites Accept: application/vnd.ckbadger.raw+json', () => {
+    const decision = resolveMarkdownRewrite({
+      method: 'GET',
+      pathname: '/cell/0xabc-0',
+      searchParams: params(),
+      acceptHeader: 'application/vnd.ckbadger.raw+json, application/json;q=0.8',
+    });
+
+    expect(decision).toEqual({
+      rewrite: true,
+      sourcePath: '/cell/0xabc-0',
+      internalPrefix: '/__raw',
     });
   });
 

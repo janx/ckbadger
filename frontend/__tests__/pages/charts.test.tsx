@@ -270,9 +270,7 @@ describe('ChartsPage', () => {
     expect(screen.getByText('Scripts Occupied & Total CKBytes')).toBeInTheDocument();
     expect(screen.getByText('Assets Occupied & Total CKBytes')).toBeInTheDocument();
 
-    await waitFor(() => {
-      expect(screen.getByText('Hardfork Markers on Epoch Time Length')).toBeInTheDocument();
-    });
+    expect(screen.queryByText('Hardfork Markers on Epoch Time Length')).not.toBeInTheDocument();
   });
 
   it('uses percentage mode in overview previews that are percentage charts', async () => {
