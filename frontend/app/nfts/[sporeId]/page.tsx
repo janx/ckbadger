@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
@@ -21,6 +21,7 @@ import { CapacityOccupationSection } from '@/components/ui/capacity-occupation-s
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { isDotbitAlias, normalizeNftAssetId } from '@/lib/nft-collections';
 import { getOccupationRangeParams, OccupationRangeKey } from '@/lib/occupation-range';
+import { decodeDobContent, extractSporePayload } from '@/lib/dob-render';
 
 function isNotFoundError(error: unknown): boolean {
   return error instanceof Error && error.message.includes('404');
@@ -73,6 +74,47 @@ export default function SporeDetailPage() {
     queryKey: ['cluster', spore?.clusterId],
     queryFn: () => api.getSporeCluster(spore!.clusterId!),
     enabled: !!spore?.clusterId,
+  });
+
+  const { data: decodedDobByApi } = useQuery({
+    queryKey: ['spore-dob-decoded', assetId],
+    queryFn: () => api.getSporeNftDecoded(assetId),
+    enabled: !!spore && spore.contentType.toLowerCase().startsWith('dob/'),
+    retry: false,
+  });
+
+  const { data: sporeTxDetail } = useQuery({
+    queryKey: ['spore-tx-detail', spore?.txHash],
+    queryFn: () => api.getTransactionDetail(spore!.txHash),
+    enabled: !!spore?.txHash,
+  });
+
+  const resolvedSporeOutputIndex = useMemo(() => {
+    if (!spore) {
+      return null;
+    }
+
+    const fallback = Number.isInteger(spore.outputIndex) ? spore.outputIndex : null;
+    const outputs = sporeTxDetail?.outputs;
+    if (!outputs || outputs.length === 0) {
+      return fallback;
+    }
+
+    const normalizedSporeId = spore.sporeId.toLowerCase();
+    const exactIndex = outputs.findIndex(
+      (output) => output.type?.args?.toLowerCase() === normalizedSporeId
+    );
+    if (exactIndex >= 0) {
+      return exactIndex;
+    }
+    return fallback;
+  }, [spore, sporeTxDetail]);
+
+  const { data: sporeCell, isLoading: isSporeCellLoading } = useQuery({
+    queryKey: ['spore-cell-preview', spore?.txHash, resolvedSporeOutputIndex],
+    queryFn: () => api.getCell(spore!.txHash, resolvedSporeOutputIndex!),
+    enabled: !!spore?.txHash && resolvedSporeOutputIndex !== null && resolvedSporeOutputIndex >= 0,
+    retry: false,
   });
 
   const { data: occupationChart, isLoading: isOccupationChartLoading } = useQuery({
@@ -131,6 +173,68 @@ export default function SporeDetailPage() {
     if (contentType.startsWith('text/')) return '📄';
     return '📦';
   };
+
+  const shortenHex = (value: string, start: number = 16, end: number = 12) => {
+    const normalized = value.startsWith('0x') ? value : `0x${value}`;
+    if (normalized.length <= start + end + 3) {
+      return normalized;
+    }
+    return `${normalized.slice(0, start)}...${normalized.slice(-end)}`;
+  };
+
+  const sporePayload = useMemo(() => extractSporePayload(sporeCell), [sporeCell]);
+
+  const dobContent = useMemo(() => {
+    if (decodedDobByApi) {
+      return {
+        dnaHex: decodedDobByApi.dnaHex,
+        traits: decodedDobByApi.traits,
+        svgMarkup: decodedDobByApi.svgMarkup,
+        issues: decodedDobByApi.issues,
+      };
+    }
+    if (!spore) {
+      return null;
+    }
+    return decodeDobContent({
+      sporeContentType: spore.contentType,
+      contentText: sporePayload?.textContent,
+      clusterDescription: cluster?.description,
+    });
+  }, [cluster?.description, decodedDobByApi, spore, sporePayload?.textContent]);
+
+  const mediaPreviewUrl = useMemo(() => {
+    if (!sporePayload?.contentType || !sporePayload.contentHex) {
+      return null;
+    }
+    const normalized = sporePayload.contentType.toLowerCase();
+    if (
+      !normalized.startsWith('image/') &&
+      !normalized.startsWith('video/') &&
+      !normalized.startsWith('audio/')
+    ) {
+      return null;
+    }
+
+    const safeBytes = Uint8Array.from(sporePayload.contentBytes);
+    const blob = new Blob([safeBytes.buffer], { type: sporePayload.contentType });
+    return URL.createObjectURL(blob);
+  }, [sporePayload?.contentHex, sporePayload?.contentType, sporePayload?.contentBytes]);
+
+  useEffect(() => {
+    return () => {
+      if (mediaPreviewUrl) {
+        URL.revokeObjectURL(mediaPreviewUrl);
+      }
+    };
+  }, [mediaPreviewUrl]);
+
+  const dobSvgDataUrl = useMemo(() => {
+    if (!dobContent?.svgMarkup) {
+      return null;
+    }
+    return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(dobContent.svgMarkup)}`;
+  }, [dobContent?.svgMarkup]);
 
   const isPageLoading =
     sporeQuery.isLoading || (shouldQueryCollection && collectionQuery.isLoading);
@@ -420,6 +524,101 @@ export default function SporeDetailPage() {
     return null;
   }
 
+  const previewContentType = sporePayload?.contentType || spore.contentType;
+  const previewBytes = sporePayload?.contentBytes.length ?? spore.contentSize;
+  const previewText = sporePayload?.textContent?.trim() ?? '';
+  const previewTextTruncated = previewText.length > 600;
+  const previewTextSnippet = previewTextTruncated ? `${previewText.slice(0, 600)}...` : previewText;
+
+  const renderSporePreview = () => {
+    if (isSporeCellLoading) {
+      return (
+        <div className="flex h-64 items-center justify-center px-4 text-center font-mono text-xs text-slate-500">
+          Loading on-chain payload...
+        </div>
+      );
+    }
+
+    if (dobSvgDataUrl) {
+      return (
+        <div className="h-64 bg-slate-950/60 p-3">
+          <img
+            src={dobSvgDataUrl}
+            alt="DOB rendered preview"
+            className="h-full w-full rounded border border-slate-700 object-contain"
+          />
+        </div>
+      );
+    }
+
+    if (mediaPreviewUrl && previewContentType.startsWith('image/')) {
+      return (
+        <div className="h-64 bg-slate-950/60 p-3">
+          <img
+            src={mediaPreviewUrl}
+            alt="Spore content preview"
+            className="h-full w-full rounded border border-slate-700 object-contain"
+          />
+        </div>
+      );
+    }
+
+    if (mediaPreviewUrl && previewContentType.startsWith('video/')) {
+      return (
+        <div className="h-64 bg-slate-950/60 p-3">
+          <video
+            src={mediaPreviewUrl}
+            controls
+            className="h-full w-full rounded border border-slate-700"
+          />
+        </div>
+      );
+    }
+
+    if (mediaPreviewUrl && previewContentType.startsWith('audio/')) {
+      return (
+        <div className="flex h-64 flex-col items-center justify-center gap-3 bg-slate-950/60 p-3">
+          <div className="font-mono text-xs tracking-[0.2em] text-slate-500">AUDIO</div>
+          <audio src={mediaPreviewUrl} controls className="w-full max-w-xs" />
+        </div>
+      );
+    }
+
+    if (dobContent?.traits.length) {
+      return (
+        <div className="h-64 overflow-y-auto bg-slate-950/60 p-3">
+          <div className="space-y-2 font-mono text-xs">
+            {dobContent.traits.map((trait) => (
+              <div
+                key={`${trait.name}-${trait.value}`}
+                className="rounded border border-slate-700 bg-slate-900/70 p-2"
+              >
+                <div className="text-slate-400">{trait.name}</div>
+                <div className="break-all text-slate-100">{trait.value}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    if (previewTextSnippet) {
+      return (
+        <div className="h-64 overflow-y-auto bg-slate-950/60 p-3">
+          <pre className="whitespace-pre-wrap break-words font-mono text-xs text-slate-200">
+            {previewTextSnippet}
+          </pre>
+        </div>
+      );
+    }
+
+    return (
+      <div className="flex h-64 items-center justify-center bg-slate-950/60 text-6xl">
+        {getContentTypeIcon(previewContentType)}
+      </div>
+    );
+  };
+
   return (
     <div className="min-h-screen bg-slate-950">
       <Header />
@@ -444,14 +643,29 @@ export default function SporeDetailPage() {
           <div className="lg:col-span-1">
             <TerminalPanel>
               <TerminalPanelContent>
-                <div className="mb-4 flex h-48 items-center justify-center rounded border border-slate-800 bg-slate-900/50 text-6xl">
-                  {getContentTypeIcon(spore.contentType)}
+                <div className="mb-4 overflow-hidden rounded border border-slate-800">
+                  {renderSporePreview()}
                 </div>
                 <div className="space-y-2 text-center">
-                  <div className="font-mono text-lg text-white">{spore.contentType}</div>
+                  <div className="font-mono text-lg text-white">{previewContentType}</div>
                   <div className="font-mono text-sm text-slate-400">
-                    {formatNumber(spore.contentSize)} bytes
+                    {formatNumber(previewBytes)} bytes
                   </div>
+                  {dobContent?.dnaHex && (
+                    <div className="font-mono text-xs text-cyan-300">
+                      DNA {shortenHex(dobContent.dnaHex, 14, 10)}
+                    </div>
+                  )}
+                  {dobContent?.issues.length ? (
+                    <div className="px-4 font-mono text-xs text-amber-300">
+                      {dobContent.issues[0]}
+                    </div>
+                  ) : null}
+                  {previewTextTruncated && (
+                    <div className="font-mono text-xs text-slate-500">
+                      Text preview truncated to 600 chars
+                    </div>
+                  )}
                   {!spore.isLive && <Badge variant="red">Burned</Badge>}
                 </div>
               </TerminalPanelContent>

@@ -9,7 +9,10 @@ vi.mock('@/lib/api', () => ({
   api: {
     getSporeNft: vi.fn(),
     getSporeCluster: vi.fn(),
+    getSporeNftDecoded: vi.fn(),
     getSporeNftOccupationChart: vi.fn(),
+    getTransactionDetail: vi.fn(),
+    getCell: vi.fn(),
     getNftCollection: vi.fn(),
     getNftCollectionOccupationChart: vi.fn(),
     getNftCollectionItems: vi.fn(),
@@ -63,6 +66,47 @@ describe('SporeDetailPage', () => {
       data: [],
       series: [],
     });
+    vi.mocked(api.getSporeNftDecoded).mockRejectedValue(new Error('API error: 404'));
+    vi.mocked(api.getTransactionDetail).mockResolvedValue({
+      hash: mockSpore.txHash,
+      blockNumber: 123456,
+      blockHash: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      index: 0,
+      inputsCount: 1,
+      outputsCount: 1,
+      fee: '1000',
+      isCellbase: false,
+      timestamp: '2026-01-01T00:00:00.000Z',
+      confirmations: 10,
+      inputsCapacity: '100000000000',
+      outputsCapacity: '99999999000',
+      inputsOccupiedCapacity: '0',
+      outputsOccupiedCapacity: '0',
+      outputs: [
+        {
+          capacity: '100000000000',
+          occupiedCapacity: 61,
+          type: {
+            codeHash: '0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+            hashType: 'type',
+            args: mockSpore.sporeId,
+          },
+          lock: {
+            codeHash: '0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+            hashType: 'type',
+            args: '0x01',
+          },
+        },
+      ],
+    } as any);
+    vi.mocked(api.getCell).mockResolvedValue({
+      txHash: mockSpore.txHash,
+      outputIndex: mockSpore.outputIndex,
+      capacity: '100000000000',
+      lockScriptHash: mockSpore.ownerLockHash,
+      dataSize: 0,
+      createdAtBlock: mockSpore.createdAtBlock,
+    } as any);
     vi.mocked(api.getNftCollectionOccupationChart).mockResolvedValue({
       title: 'Test Collection Capacity Occupation',
       data: [],

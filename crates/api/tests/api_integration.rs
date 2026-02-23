@@ -2411,6 +2411,79 @@ async fn test_spore_occupation_chart_and_spore_capacity_fields() {
 }
 
 #[tokio::test]
+async fn test_spore_decode_endpoint_returns_issues_without_ckb_direct_store() {
+    let store = test_store();
+    let cluster_id = [0x44u8; 32];
+    let spore_id = [0x55u8; 32];
+    let spore_id_hex = format!("0x{}", hex::encode(spore_id));
+
+    let cluster_entry = DobEntry {
+        standard: DobStandard::SporeCluster,
+        collection_id: None,
+        owner_lock_hash: Some(vec![0x11; 32]),
+        name: Some("DOB Cluster".to_string()),
+        description: Some(
+            serde_json::json!({
+                "dob": {
+                    "ver": 0,
+                    "pattern": [
+                        {
+                            "traitName": "Background",
+                            "dobType": "String",
+                            "dnaOffset": 0,
+                            "dnaLength": 1,
+                            "patternType": "options",
+                            "traitArgs": ["red", "blue"]
+                        }
+                    ]
+                }
+            })
+            .to_string(),
+        ),
+        is_live: true,
+        created_at_block: 100,
+        created_at_tx: vec![0x22; 32],
+        extra: DobExtra::SporeCluster,
+    };
+    store.put_spore_direct(&cluster_id, &cluster_entry).unwrap();
+
+    let spore_entry = DobEntry {
+        standard: DobStandard::Spore,
+        collection_id: Some(cluster_id.to_vec()),
+        owner_lock_hash: Some(vec![0xAA; 32]),
+        name: None,
+        description: None,
+        is_live: true,
+        created_at_block: 321,
+        created_at_tx: vec![0xBB; 32],
+        extra: DobExtra::Spore {
+            content_type: "dob/0".to_string(),
+            content_length: 128,
+        },
+    };
+    store.put_spore_direct(&spore_id, &spore_entry).unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri(format!("/api/v1/spore/nfts/{}/decode", spore_id_hex))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["sporeId"], spore_id_hex);
+    assert_eq!(json["contentType"], "dob/0");
+    assert_eq!(json["traits"], serde_json::json!([]));
+    assert!(json["issues"].as_array().unwrap().iter().any(|issue| issue
+        .as_str()
+        .is_some_and(|s| s.contains("Failed to load on-chain spore content"))));
+}
+
+#[tokio::test]
 async fn test_assets_dob_uses_cluster_entry_name_when_aggregate_name_missing() {
     let store = test_store();
 

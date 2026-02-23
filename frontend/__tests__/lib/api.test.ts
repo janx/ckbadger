@@ -322,6 +322,26 @@ describe('api', () => {
       expect(chart.title).toContain('Capacity Occupation');
     });
 
+    it('fetches spore dob decoded result', async () => {
+      server.use(
+        http.get('*/api/v1/spore/nfts/:sporeId/decode', ({ params }) => {
+          expect(params.sporeId).toBe('0x9999');
+          return HttpResponse.json({
+            sporeId: '0x9999',
+            contentType: 'dob/0',
+            dnaHex: '0a01ff00',
+            traits: [{ name: 'Background', value: 'red' }],
+            svgMarkup: null,
+            issues: [],
+          });
+        })
+      );
+
+      const decoded = await api.getSporeNftDecoded('0x9999');
+      expect(decoded.contentType).toBe('dob/0');
+      expect(decoded.traits[0].name).toBe('Background');
+    });
+
     it('fetches nft collection detail', async () => {
       server.use(
         http.get('*/api/v1/assets/nfts/:collectionId', ({ params }) => {

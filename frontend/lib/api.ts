@@ -694,6 +694,20 @@ interface SporeNft {
   liveOccupiedCapacity?: string | null;
 }
 
+interface DobTrait {
+  name: string;
+  value: string;
+}
+
+interface SporeDobDecoded {
+  sporeId: string;
+  contentType: string;
+  dnaHex: string | null;
+  traits: DobTrait[];
+  svgMarkup: string | null;
+  issues: string[];
+}
+
 interface NftCollection {
   collectionId: string;
   standard: string;
@@ -1392,6 +1406,10 @@ export const api = {
 
   getSporeNft: (sporeId: string): Promise<SporeNft> => {
     return fetchApi(`/spore/nfts/${sporeId}`);
+  },
+
+  getSporeNftDecoded: (sporeId: string): Promise<SporeDobDecoded> => {
+    return fetchApi(`/spore/nfts/${sporeId}/decode`);
   },
 
   getSporeNftOccupationChart: (
