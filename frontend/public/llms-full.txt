@@ -1,0 +1,76 @@
+ckbadger LLM Capability Map
+===========================
+
+Site purpose:
+- CKB-native explorer focused on exact on-chain data.
+
+Markdown output convention:
+- Any page URL can be requested as markdown by appending `.md`.
+- Response content-type: `text/markdown`.
+- Examples:
+  - `/blocks.md`
+  - `/blocks/123.md`
+  - `/tx/0xabc...def.md`
+  - `/charts/transaction-count.md`
+
+Known markdown page routes:
+- `/`
+- `/address/{addr}`
+- `/assets`
+- `/blocks`
+- `/blocks/{id}`
+- `/cell/{outpoint}`
+- `/charts`
+- `/charts/{slug}`
+- `/clusters/{clusterId}`
+- `/dao`
+- `/dao/charts`
+- `/forks`
+- `/forks/{id}`
+- `/hardforks`
+- `/nfts`
+- `/nfts/{sporeId}`
+- `/script/{codeHash}`
+- `/scripts`
+- `/scripts/{name}`
+- `/tokens`
+- `/tokens/{typeHash}`
+- `/transactions`
+- `/tx/{hash}`
+
+Chart slugs:
+- `address-cohort-retention`
+- `average-block-time`
+- `block-time-distribution`
+- `capacity-turnover-ratio`
+- `cell-age-vs-occupied-capacity`
+- `cell-count`
+- `cell-size-distribution`
+- `circulation-ratio`
+- `common-knowledge-composition`
+- `daily-deposit`
+- `difficulty`
+- `epoch-time-distribution`
+- `epoch-time-length`
+- `hash-rate`
+- `hodl-wave`
+- `inflation-rate`
+- `knowledge-size`
+- `miner-address-distribution`
+- `most-utilized-assets`
+- `most-utilized-scripts`
+- `nominal-apc`
+- `secondary-issuance`
+- `total-deposit`
+- `total-supply`
+- `transaction-count`
+- `uncle-rate`
+
+API:
+- Base URL: `/api/v1`
+- JSON API supports blocks, transactions, cells, scripts, tokens, charts, DAO, forks, hardfork timeline.
+
+Notes for agents:
+- Prefer markdown pages for narrative + tabular summaries.
+- Prefer `/api/v1` for structured machine extraction and full-fidelity fields.
+- Use markdown page query params for pagination when supported: `limit`, `cursor`.

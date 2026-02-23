@@ -63,6 +63,7 @@ on localhost deployments:
 - **Network Dashboard** - Hash rate, difficulty, epoch progress, TPS metrics
 - **Historical Charts** - Block time, transaction volume, active addresses
 - **Real-time Updates** - WebSocket subscriptions for new blocks and transactions
+- **AI-Friendly Markdown Pages** - Append `.md` (or use content negotiation) to get machine-readable page summaries
 - **System Status Page** - Monitor sync progress, index rebuild status, and integrity checks
 - **Data Integrity Verification** - 28 built-in checks for acceptance testing via API
 - **Developer API** - REST endpoints with rate limiting
@@ -382,6 +383,40 @@ ws.onmessage = (event) => {
 // }
 ```
 
+### Markdown Page Output (AI Friendly)
+
+The frontend supports a Markdown representation for explorer pages:
+
+- Suffix mode: append `.md` to a page URL
+- Query mode: add `?format=md`
+- Header mode: send `Accept: text/markdown`
+
+Examples:
+
+```bash
+# Suffix mode
+curl http://localhost:3000/blocks.md
+curl http://localhost:3000/blocks/123.md
+curl http://localhost:3000/tx/0x...hash....md
+
+# Query mode
+curl "http://localhost:3000/blocks?format=md&limit=20"
+
+# Header mode
+curl -H "Accept: text/markdown" http://localhost:3000/charts/hash-rate
+```
+
+Response details:
+
+- Content-Type: `text/markdown; charset=utf-8`
+- Includes YAML frontmatter (`title`, `path`, `canonical`, `pageType`, `generatedAt`, `formatVersion`)
+- Error responses are also emitted as markdown (`400` / `404` / `502`) with actionable messages
+
+AI discovery files:
+
+- `frontend/public/llms.txt`
+- `frontend/public/llms-full.txt`
+
 ## Deployment
 
 ### Docker Compose (Recommended for small deployments)
@@ -429,11 +464,15 @@ ckbadger/
 │   └── ckb-store-reader/   # Read-only CKB RocksDB reader (optional direct read mode)
 ├── frontend/               # Next.js application
 │   ├── app/                # App router pages
+│   │   └── __md/           # Markdown route handlers for AI-friendly page output
 │   ├── components/         # React components
 │   │   ├── ui/             # Reusable UI (Hash, Capacity, etc.)
 │   │   └── cell-graph.tsx  # Force-directed graph visualization
 │   ├── hooks/              # Custom hooks (WebSocket, etc.)
-│   └── lib/                # API client, utilities
+│   ├── lib/                # API client, utilities
+│   │   └── ai/             # Markdown route parsing/rendering helpers
+│   ├── middleware.ts       # Markdown rewrite for .md / format=md / Accept: text/markdown
+│   └── public/             # Static assets + LLM discovery files
 ├── docs/                   # Documentation & references
 │   ├── rfcs/               # [submodule] CKB RFCs - protocol specs
 │   ├── docs.nervos.org/    # [submodule] Official Nervos docs

@@ -999,6 +999,7 @@ export type {
   CellDep,
   CodeCellScript,
   Transaction,
+  TransactionDetail,
   Block,
   NetworkStats,
   SyncStatus,

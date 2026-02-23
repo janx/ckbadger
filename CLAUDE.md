@@ -122,6 +122,11 @@ cd frontend && pnpm test                 # Run Vitest
 cd frontend && pnpm test:coverage        # With coverage report
 cd frontend && npx vitest run            # Non-interactive
 
+# AI-friendly markdown pages (frontend)
+curl http://localhost:3000/blocks.md
+curl "http://localhost:3000/blocks?format=md&limit=20"
+curl -H "Accept: text/markdown" http://localhost:3000/charts/hash-rate
+
 # Data Integrity Verification (requires running API at localhost:3001)
 cargo run -p ckbadger-indexer -- verify --depth fast        # Quick checks (seconds)
 cargo run -p ckbadger-indexer -- verify --depth sampling    # Sampling + explorer (minutes)
@@ -168,6 +173,28 @@ make up CKB_NODE_MODE=external           # Force external mode for one run
 
 - runs `ckbadger-tui` for sync/memory/throughput monitoring
 - pass extra args with `TUI_ARGS`, for example: `make tui TUI_ARGS="--refresh-ms 500"`
+
+## AI-Friendly Markdown Output (Frontend)
+
+Frontend pages support markdown output through three equivalent modes:
+
+1. URL suffix `.md` (e.g. `/blocks/123.md`)
+2. Query parameter `?format=md`
+3. Header `Accept: text/markdown`
+
+Implementation boundary:
+
+- Markdown output is handled in frontend only (`Next.js` route + middleware)
+- API JSON endpoints under `/api/v1` are not rewritten to markdown
+- Static files and `/_next/*` are not rewritten
+
+When adding/changing frontend routes (MANDATORY):
+
+1. Update route parsing in `frontend/lib/ai/markdown-route.ts`
+2. Update renderer in `frontend/lib/ai/markdown-renderer.ts`
+3. Update rewrite decision logic if needed in `frontend/lib/ai/markdown-request.ts`
+4. Update AI discovery files: `frontend/public/llms.txt` and `frontend/public/llms-full.txt`
+5. Add/adjust tests in `frontend/__tests__/lib/markdown-*.test.ts`
 
 ## Project Structure
 
@@ -745,30 +772,35 @@ const DAO_OCCUPIED_CAPACITY: u64 = 102_00000000; // 102 CKB
 
 ## File Locations
 
-| What             | Where                                   |
-| ---------------- | --------------------------------------- |
-| Storage engine   | `crates/ckbadger-store/src/`            |
-| Store types      | `crates/ckbadger-store/src/types.rs`    |
-| Store operations | `crates/ckbadger-store/src/*_ops.rs`    |
-| API routes       | `crates/api/src/routes/*.rs`            |
-| Response types   | `crates/api/src/response.rs`            |
-| WebSocket        | `crates/api/src/ws/`                    |
-| RPC client       | `crates/indexer/src/rpc/client.rs`      |
-| Parsers          | `crates/indexer/src/parser/*.rs`        |
-| DB writers       | `crates/indexer/src/db/writer/*.rs`     |
-| Spore writer     | `crates/indexer/src/db/writer/spore.rs` |
-| Label import     | `crates/indexer/src/label_import.rs`    |
-| Verify checks    | `crates/indexer/src/verify/*.rs`        |
-| Verify runner    | `crates/indexer/src/verify/mod.rs`      |
-| Explorer cache   | `{data_path}/.verify-cache/*.json`      |
-| Frontend API     | `frontend/lib/api.ts`                   |
-| UI components    | `frontend/components/ui/`               |
-| Pages            | `frontend/app/`                         |
-| Rust tests       | Inline `#[cfg(test)]` in source files   |
-| API integration  | `crates/api/tests/api_integration.rs`   |
-| Frontend tests   | `frontend/__tests__/**/*.test.{ts,tsx}` |
-| MSW handlers     | `frontend/__tests__/msw/handlers.ts`    |
-| CI workflow      | `.github/workflows/ci.yml`              |
+| What              | Where                                                            |
+| ----------------- | ---------------------------------------------------------------- |
+| Storage engine    | `crates/ckbadger-store/src/`                                     |
+| Store types       | `crates/ckbadger-store/src/types.rs`                             |
+| Store operations  | `crates/ckbadger-store/src/*_ops.rs`                             |
+| API routes        | `crates/api/src/routes/*.rs`                                     |
+| Response types    | `crates/api/src/response.rs`                                     |
+| WebSocket         | `crates/api/src/ws/`                                             |
+| RPC client        | `crates/indexer/src/rpc/client.rs`                               |
+| Parsers           | `crates/indexer/src/parser/*.rs`                                 |
+| DB writers        | `crates/indexer/src/db/writer/*.rs`                              |
+| Spore writer      | `crates/indexer/src/db/writer/spore.rs`                          |
+| Label import      | `crates/indexer/src/label_import.rs`                             |
+| Verify checks     | `crates/indexer/src/verify/*.rs`                                 |
+| Verify runner     | `crates/indexer/src/verify/mod.rs`                               |
+| Explorer cache    | `{data_path}/.verify-cache/*.json`                               |
+| Frontend API      | `frontend/lib/api.ts`                                            |
+| Markdown route    | `frontend/app/__md/[[...slug]]/route.ts`                         |
+| Markdown parser   | `frontend/lib/ai/markdown-route.ts`                              |
+| Markdown renderer | `frontend/lib/ai/markdown-renderer.ts`                           |
+| Markdown rewrite  | `frontend/lib/ai/markdown-request.ts` + `frontend/middleware.ts` |
+| LLM discovery     | `frontend/public/llms.txt`, `frontend/public/llms-full.txt`      |
+| UI components     | `frontend/components/ui/`                                        |
+| Pages             | `frontend/app/`                                                  |
+| Rust tests        | Inline `#[cfg(test)]` in source files                            |
+| API integration   | `crates/api/tests/api_integration.rs`                            |
+| Frontend tests    | `frontend/__tests__/**/*.test.{ts,tsx}`                          |
+| MSW handlers      | `frontend/__tests__/msw/handlers.ts`                             |
+| CI workflow       | `.github/workflows/ci.yml`                                       |
 
 ## Dependencies
 
