@@ -1095,6 +1095,39 @@ fn parse_outpoint_index_i16(field: &str, label: &str) -> Result<i16> {
     i16::try_from(value).map_err(|_| anyhow::anyhow!("{} exceeds i16 range: {}", label, value))
 }
 
+fn dotbit_consume_event_order(tx_global_index: usize) -> Result<u64> {
+    let tx_index = u64::try_from(tx_global_index).map_err(|_| {
+        anyhow!(
+            "dotbit tx index exceeds u64 while building consume order: {}",
+            tx_global_index
+        )
+    })?;
+    tx_index.checked_mul(2).ok_or_else(|| {
+        anyhow!(
+            "dotbit consume event order overflow: tx_global_index={}",
+            tx_global_index
+        )
+    })
+}
+
+fn dotbit_create_event_order(tx_global_index: usize) -> Result<u64> {
+    dotbit_consume_event_order(tx_global_index)?
+        .checked_add(1)
+        .ok_or_else(|| {
+            anyhow!(
+                "dotbit create event order overflow: tx_global_index={}",
+                tx_global_index
+            )
+        })
+}
+
+fn should_consume_dotbit_account(latest_create_order: Option<u64>, consume_order: u64) -> bool {
+    match latest_create_order {
+        Some(order) => order <= consume_order,
+        None => true,
+    }
+}
+
 fn checked_sub_u128(lhs: u128, rhs: u128, label: &str) -> Result<u128> {
     lhs.checked_sub(rhs)
         .ok_or_else(|| anyhow::anyhow!("{} underflow: lhs={}, rhs={}", label, lhs, rhs))
@@ -5419,6 +5452,7 @@ impl Indexer {
         // NFT/Spore processing
         let mut batch_spore_ids: HashSet<Vec<u8>> = HashSet::new();
         let mut batch_dotbit_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>> = HashMap::new();
+        let mut batch_dotbit_latest_create_order: HashMap<Vec<u8>, u64> = HashMap::new();
 
         {
             let mut nft_batch = StoreBatch::new(self.writer.store());
@@ -5428,9 +5462,10 @@ impl Indexer {
                 let parsed = &all_parsed_blocks[block_idx];
                 let tx_count_for_block = parsed.transactions_count as usize;
                 let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
-                block_tx_idx += tx_count_for_block;
 
                 for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
+                    let tx_global_index = block_tx_idx + tx_idx;
+                    let dotbit_create_order = dotbit_create_event_order(tx_global_index)?;
                     let tx = &block_response.block.transactions[tx_idx];
 
                     if !skip_spore {
@@ -5501,43 +5536,56 @@ impl Indexer {
                             (tx_data.hash.to_vec(), account.output_index),
                             account.account.account_id.clone(),
                         );
+                        let account_id = account.account.account_id.clone();
+                        batch_dotbit_latest_create_order
+                            .entry(account_id)
+                            .and_modify(|current| {
+                                if dotbit_create_order > *current {
+                                    *current = dotbit_create_order;
+                                }
+                            })
+                            .or_insert(dotbit_create_order);
                     }
                 }
+                block_tx_idx += tx_count_for_block;
             }
             nft_batch.commit()?;
         }
 
-        // Spore consumption (live sync only)
-        if !self.is_bulk_sync_active() {
-            let mut consume_batch = StoreBatch::new(self.writer.store());
-            let mut spore_state = self.writer.new_spore_batch_state();
-            let mut block_tx_idx = 0usize;
-            for (block_idx, block_response) in blocks.iter().enumerate() {
-                let parsed = &all_parsed_blocks[block_idx];
-                let tx_count_for_block = parsed.transactions_count as usize;
-                let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
-                block_tx_idx += tx_count_for_block;
+        // Spore consumption runs in live sync mode only, DotBit consumption runs in all sync modes.
+        let bulk_sync_active = self.is_bulk_sync_active();
+        let mut consume_batch = StoreBatch::new(self.writer.store());
+        let mut spore_state = self.writer.new_spore_batch_state();
+        let mut block_tx_idx = 0usize;
+        for (block_idx, block_response) in blocks.iter().enumerate() {
+            let parsed = &all_parsed_blocks[block_idx];
+            let tx_count_for_block = parsed.transactions_count as usize;
+            let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
 
-                for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
-                    if tx_data.is_cellbase || tx_data.inputs.is_empty() {
-                        continue;
-                    }
-                    let tx = &block_response.block.transactions[tx_idx];
-                    for input in &tx.inputs {
-                        let prev_tx_hash =
-                            crate::rpc::parse_hex_to_bytes(&input.previous_output.tx_hash);
-                        let prev_index = parse_outpoint_index_i16(
-                            &input.previous_output.index,
-                            "input.previous_output.index",
+            for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
+                if tx_data.is_cellbase || tx_data.inputs.is_empty() {
+                    continue;
+                }
+                let tx_global_index = block_tx_idx + tx_idx;
+                let dotbit_consume_order = dotbit_consume_event_order(tx_global_index)?;
+                let tx = &block_response.block.transactions[tx_idx];
+                for input in &tx.inputs {
+                    let prev_tx_hash =
+                        crate::rpc::parse_hex_to_bytes(&input.previous_output.tx_hash);
+                    let prev_index = parse_outpoint_index_i16(
+                        &input.previous_output.index,
+                        "input.previous_output.index",
+                    )
+                    .map_err(|e| {
+                        anyhow!(
+                            "invalid consumed spore input index at block {}, tx 0x{}: {}",
+                            parsed.number,
+                            hex::encode(tx_data.hash),
+                            e
                         )
-                        .map_err(|e| {
-                            anyhow!(
-                                "invalid consumed spore input index at block {}, tx 0x{}: {}",
-                                parsed.number,
-                                hex::encode(tx_data.hash),
-                                e
-                            )
-                        })?;
+                    })?;
+
+                    if !bulk_sync_active {
                         let consumed_spore_id = self
                             .writer
                             .get_spore_id_by_outpoint(&prev_tx_hash, prev_index)?;
@@ -5552,16 +5600,21 @@ impl Indexer {
                                 )?;
                             }
                         }
+                    }
 
-                        let consumed_dotbit_account_id = self
-                            .writer
-                            .get_dotbit_account_id_by_outpoint(&prev_tx_hash, prev_index)?
-                            .or_else(|| {
-                                batch_dotbit_outpoints
-                                    .get(&(prev_tx_hash.clone(), prev_index))
-                                    .cloned()
-                            });
-                        if let Some(account_id) = consumed_dotbit_account_id {
+                    let consumed_dotbit_account_id = self
+                        .writer
+                        .get_dotbit_account_id_by_outpoint(&prev_tx_hash, prev_index)?
+                        .or_else(|| {
+                            batch_dotbit_outpoints
+                                .get(&(prev_tx_hash.clone(), prev_index))
+                                .cloned()
+                        });
+                    if let Some(account_id) = consumed_dotbit_account_id {
+                        let latest_create_order =
+                            batch_dotbit_latest_create_order.get(&account_id).copied();
+                        if should_consume_dotbit_account(latest_create_order, dotbit_consume_order)
+                        {
                             self.writer.consume_dotbit_account(
                                 &account_id,
                                 parsed.number,
@@ -5572,8 +5625,9 @@ impl Indexer {
                     }
                 }
             }
-            consume_batch.commit()?;
+            block_tx_idx += tx_count_for_block;
         }
+        consume_batch.commit()?;
 
         {
             let mut batch = StoreBatch::new(self.writer.store());
@@ -6548,7 +6602,7 @@ impl Indexer {
                     Ok(t.elapsed().as_secs_f64() * 1000.0)
                 });
 
-                // T6: Spore + mNFT/DotBit (no NFT consumption during bulk sync)
+                // T6: Spore + mNFT/DotBit writes only (consumption is handled in Group C)
                 // CFs: SPORE_DATA, SPORE_CONTENT, NFT_DATA
                 let h6 = s.spawn(|| -> Result<f64> {
                     let t = Instant::now();
@@ -7608,15 +7662,17 @@ impl Indexer {
                 let mut batch_mnft_token_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>> =
                     HashMap::new();
                 let mut batch_dotbit_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>> = HashMap::new();
+                let mut batch_dotbit_latest_create_order: HashMap<Vec<u8>, u64> = HashMap::new();
                 let mut spore_state = self.writer.new_spore_batch_state();
                 let mut block_tx_idx = 0usize;
                 for (block_idx, block_response) in blocks.iter().enumerate() {
                     let parsed = &all_parsed_blocks[block_idx];
                     let tx_count_for_block = parsed.transactions_count as usize;
                     let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
-                    block_tx_idx += tx_count_for_block;
                     let ts_ms = parsed.timestamp.timestamp_millis();
                     for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
+                        let tx_global_index = block_tx_idx + tx_idx;
+                        let dotbit_create_order = dotbit_create_event_order(tx_global_index)?;
                         let tx = &block_response.block.transactions[tx_idx];
                         if !skip_spore {
                             for cluster in SporeParser::parse_clusters(tx) {
@@ -7692,67 +7748,91 @@ impl Indexer {
                                 (tx_data.hash.to_vec(), account.output_index),
                                 account.account.account_id.clone(),
                             );
+                            let account_id = account.account.account_id.clone();
+                            batch_dotbit_latest_create_order
+                                .entry(account_id)
+                                .and_modify(|current| {
+                                    if dotbit_create_order > *current {
+                                        *current = dotbit_create_order;
+                                    }
+                                })
+                                .or_insert(dotbit_create_order);
                         }
                     }
+                    block_tx_idx += tx_count_for_block;
                 }
 
-                // NFT consumption (live sync only)
-                if !self.is_bulk_sync_active() {
-                    let mut all_prev_tx_hashes: Vec<Vec<u8>> = Vec::new();
-                    let mut all_prev_indices: Vec<i16> = Vec::new();
-                    let mut outpoint_context: Vec<(i64, Vec<u8>)> = Vec::new();
-                    let mut block_tx_idx = 0usize;
-                    for (block_idx, block_response) in blocks.iter().enumerate() {
-                        let parsed = &all_parsed_blocks[block_idx];
-                        let tx_count_for_block = parsed.transactions_count as usize;
-                        let tx_slice =
-                            &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
-                        block_tx_idx += tx_count_for_block;
-                        for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
-                            if tx_data.is_cellbase || tx_data.inputs.is_empty() {
-                                continue;
-                            }
-                            let tx = &block_response.block.transactions[tx_idx];
-                            for input in &tx.inputs {
-                                let prev_tx_hash =
-                                    crate::rpc::parse_hex_to_bytes(&input.previous_output.tx_hash);
-                                let prev_index = parse_outpoint_index_i16(
-                                    &input.previous_output.index,
-                                    "input.previous_output.index",
+                // Spore/mNFT consumption runs in live sync mode only, DotBit consumption runs in all sync modes.
+                let bulk_sync_active = self.is_bulk_sync_active();
+                let mut all_prev_tx_hashes: Vec<Vec<u8>> = Vec::new();
+                let mut all_prev_indices: Vec<i16> = Vec::new();
+                let mut outpoint_context: Vec<(i64, Vec<u8>, u64)> = Vec::new();
+                let mut block_tx_idx = 0usize;
+                for (block_idx, block_response) in blocks.iter().enumerate() {
+                    let parsed = &all_parsed_blocks[block_idx];
+                    let tx_count_for_block = parsed.transactions_count as usize;
+                    let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
+                    for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
+                        if tx_data.is_cellbase || tx_data.inputs.is_empty() {
+                            continue;
+                        }
+                        let tx_global_index = block_tx_idx + tx_idx;
+                        let dotbit_consume_order = dotbit_consume_event_order(tx_global_index)?;
+                        let tx = &block_response.block.transactions[tx_idx];
+                        for input in &tx.inputs {
+                            let prev_tx_hash =
+                                crate::rpc::parse_hex_to_bytes(&input.previous_output.tx_hash);
+                            let prev_index = parse_outpoint_index_i16(
+                                &input.previous_output.index,
+                                "input.previous_output.index",
+                            )
+                            .map_err(|e| {
+                                anyhow!(
+                                    "invalid input index while prefetching outpoints at block {}, tx 0x{}: {}",
+                                    parsed.number,
+                                    hex::encode(tx_data.hash),
+                                    e
                                 )
-                                .map_err(|e| {
-                                    anyhow!(
-                                        "invalid input index while prefetching outpoints at block {}, tx 0x{}: {}",
-                                        parsed.number,
-                                        hex::encode(tx_data.hash),
-                                        e
-                                    )
-                                })?;
-                                all_prev_tx_hashes.push(prev_tx_hash);
-                                all_prev_indices.push(prev_index);
-                                outpoint_context.push((parsed.number, tx_data.hash.to_vec()));
-                            }
+                            })?;
+                            all_prev_tx_hashes.push(prev_tx_hash);
+                            all_prev_indices.push(prev_index);
+                            outpoint_context.push((
+                                parsed.number,
+                                tx_data.hash.to_vec(),
+                                dotbit_consume_order,
+                            ));
                         }
                     }
-                    if !all_prev_tx_hashes.is_empty() {
-                        let spore_results = self.writer.get_spore_ids_by_outpoints_batch(
+                    block_tx_idx += tx_count_for_block;
+                }
+                if !all_prev_tx_hashes.is_empty() {
+                    let dotbit_results = self.writer.get_dotbit_account_ids_by_outpoints_batch(
+                        &all_prev_tx_hashes,
+                        &all_prev_indices,
+                    )?;
+                    let spore_results = if bulk_sync_active {
+                        Vec::new()
+                    } else {
+                        self.writer.get_spore_ids_by_outpoints_batch(
                             &all_prev_tx_hashes,
                             &all_prev_indices,
-                        )?;
-                        let mnft_results = self.writer.get_mnft_token_ids_by_outpoints_batch(
+                        )?
+                    };
+                    let mnft_results = if bulk_sync_active {
+                        Vec::new()
+                    } else {
+                        self.writer.get_mnft_token_ids_by_outpoints_batch(
                             &all_prev_tx_hashes,
                             &all_prev_indices,
-                        )?;
-                        let dotbit_results =
-                            self.writer.get_dotbit_account_ids_by_outpoints_batch(
-                                &all_prev_tx_hashes,
-                                &all_prev_indices,
-                            )?;
-                        let spore_map: HashMap<(Vec<u8>, i16), Vec<u8>> = spore_results
-                            .into_iter()
-                            .map(|(h, i, id)| ((h, i), id))
-                            .collect();
-                        let mut spore_map = spore_map;
+                        )?
+                    };
+
+                    let spore_map: HashMap<(Vec<u8>, i16), Vec<u8>> = spore_results
+                        .into_iter()
+                        .map(|(h, i, id)| ((h, i), id))
+                        .collect();
+                    let mut spore_map = spore_map;
+                    if !bulk_sync_active {
                         for (idx, tx_hash) in all_prev_tx_hashes.iter().enumerate() {
                             let key = (tx_hash.clone(), all_prev_indices[idx]);
                             if spore_map.contains_key(&key) {
@@ -7764,30 +7844,37 @@ impl Indexer {
                                 spore_map.insert(key, spore_id);
                             }
                         }
-                        let mnft_map: HashMap<(Vec<u8>, i16), Vec<u8>> = mnft_results
-                            .into_iter()
-                            .map(|(h, i, id)| ((h, i), id))
-                            .collect();
-                        let mut mnft_map = mnft_map;
+                    }
+
+                    let mnft_map: HashMap<(Vec<u8>, i16), Vec<u8>> = mnft_results
+                        .into_iter()
+                        .map(|(h, i, id)| ((h, i), id))
+                        .collect();
+                    let mut mnft_map = mnft_map;
+                    if !bulk_sync_active {
                         for (key, token_id) in &batch_mnft_token_outpoints {
                             mnft_map
                                 .entry(key.clone())
                                 .or_insert_with(|| token_id.clone());
                         }
-                        let dotbit_map: HashMap<(Vec<u8>, i16), Vec<u8>> = dotbit_results
-                            .into_iter()
-                            .map(|(h, i, id)| ((h, i), id))
-                            .collect();
-                        let mut dotbit_map = dotbit_map;
-                        for (key, account_id) in &batch_dotbit_outpoints {
-                            dotbit_map
-                                .entry(key.clone())
-                                .or_insert_with(|| account_id.clone());
-                        }
-                        for (i, (block_number, consuming_tx_hash)) in
-                            outpoint_context.iter().enumerate()
-                        {
-                            let key = (all_prev_tx_hashes[i].clone(), all_prev_indices[i]);
+                    }
+
+                    let dotbit_map: HashMap<(Vec<u8>, i16), Vec<u8>> = dotbit_results
+                        .into_iter()
+                        .map(|(h, i, id)| ((h, i), id))
+                        .collect();
+                    let mut dotbit_map = dotbit_map;
+                    for (key, account_id) in &batch_dotbit_outpoints {
+                        dotbit_map
+                            .entry(key.clone())
+                            .or_insert_with(|| account_id.clone());
+                    }
+
+                    for (i, (block_number, consuming_tx_hash, dotbit_consume_order)) in
+                        outpoint_context.iter().enumerate()
+                    {
+                        let key = (all_prev_tx_hashes[i].clone(), all_prev_indices[i]);
+                        if !bulk_sync_active {
                             if let Some(spore_id) = spore_map.get(&key) {
                                 if !batch_spore_ids.contains(spore_id) {
                                     self.writer.consume_spore(
@@ -7807,7 +7894,14 @@ impl Indexer {
                                     &mut data_batch,
                                 )?;
                             }
-                            if let Some(account_id) = dotbit_map.get(&key) {
+                        }
+                        if let Some(account_id) = dotbit_map.get(&key) {
+                            let latest_create_order =
+                                batch_dotbit_latest_create_order.get(account_id).copied();
+                            if should_consume_dotbit_account(
+                                latest_create_order,
+                                *dotbit_consume_order,
+                            ) {
                                 self.writer.consume_dotbit_account(
                                     account_id,
                                     *block_number,
@@ -9529,6 +9623,43 @@ mod tests {
         let mnft_code_hash =
             crate::rpc::parse_hex_to_bytes(crate::parser::mnft::MNFT_TOKEN_CODE_HASH);
         assert!(classify_nft_collection_id(&mnft_code_hash, &[0x33; 23]).is_none());
+    }
+
+    #[test]
+    fn test_dotbit_event_order_marks_output_after_input_in_same_tx() {
+        let consume_order = dotbit_consume_event_order(42).unwrap();
+        let create_order = dotbit_create_event_order(42).unwrap();
+        assert!(create_order > consume_order);
+    }
+
+    #[test]
+    fn test_should_consume_dotbit_account_when_no_later_output_exists() {
+        let consume_order = dotbit_consume_event_order(10).unwrap();
+        assert!(should_consume_dotbit_account(None, consume_order));
+        assert!(should_consume_dotbit_account(
+            Some(consume_order),
+            consume_order
+        ));
+        assert!(!should_consume_dotbit_account(
+            Some(consume_order + 1),
+            consume_order
+        ));
+    }
+
+    #[test]
+    fn test_should_consume_dotbit_account_with_cross_tx_recreate() {
+        let consume_t1 = dotbit_consume_event_order(1).unwrap();
+        let create_t2 = dotbit_create_event_order(2).unwrap();
+        assert!(
+            !should_consume_dotbit_account(Some(create_t2), consume_t1),
+            "later output should keep account live"
+        );
+
+        let consume_t3 = dotbit_consume_event_order(3).unwrap();
+        assert!(
+            should_consume_dotbit_account(Some(create_t2), consume_t3),
+            "consume after latest output should mark account consumed"
+        );
     }
 
     #[test]
