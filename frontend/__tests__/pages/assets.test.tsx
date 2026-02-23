@@ -4,6 +4,17 @@ import { render } from '../utils/test-utils';
 import AssetsPage from '@/app/assets/page';
 import { api } from '@/lib/api';
 
+const mockReplace = vi.fn((href: string) => {
+  const url = new URL(href, 'http://localhost');
+  window.history.replaceState(null, '', `${url.pathname}${url.search}`);
+});
+
+vi.mock('next/navigation', () => ({
+  useSearchParams: () => new URLSearchParams(window.location.search),
+  usePathname: () => '/assets',
+  useRouter: () => ({ replace: mockReplace }),
+}));
+
 vi.mock('@/lib/api', () => ({
   api: {
     getAssets: vi.fn(),
@@ -174,6 +185,7 @@ const sortableTokenAssets = {
 describe('AssetsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockReplace.mockClear();
     window.history.replaceState(null, '', '/assets');
   });
 
@@ -249,6 +261,7 @@ describe('AssetsPage', () => {
 
     await waitFor(() => {
       expect(window.location.search).toBe('?type=nft');
+      expect(mockReplace).toHaveBeenCalledWith('/assets?type=nft', { scroll: false });
       expect(api.getAssets).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'nft' }));
     });
   });

@@ -30,7 +30,7 @@ export function Logo() {
         height={97}
         unoptimized
         priority
-        className={`logo-image h-auto w-[73px] rotate-[8deg] transform-gpu object-contain transition-all duration-300 group-hover:rotate-[9deg] group-hover:scale-100 md:w-[111px] lg:w-[129px] ${isGlitching ? 'neon-flicker' : ''}`}
+        className={`logo-image h-auto w-[66px] rotate-[8deg] transform-gpu object-contain transition-all duration-300 group-hover:rotate-[9deg] group-hover:scale-100 md:w-[100px] lg:w-[116px] ${isGlitching ? 'neon-flicker' : ''}`}
       />
     </Link>
   );

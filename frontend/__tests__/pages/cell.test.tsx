@@ -10,6 +10,7 @@ vi.mock('next/navigation', () => ({
     outpoint: '0xabc123def456789012345678901234567890123456789012345678901234abcd-0',
   }),
   useRouter: () => ({ push: mockPush }),
+  usePathname: () => '/cell/0xabc123def456789012345678901234567890123456789012345678901234abcd-0',
 }));
 
 const mockCellWithDao = {
