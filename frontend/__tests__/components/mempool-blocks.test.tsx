@@ -202,6 +202,16 @@ describe('MempoolBlocks', () => {
     expect(
       within(summaryRow).getByText(/w -> size \| h -> cycles \| x -> fee \| y -> fee rate/i)
     ).toBeInTheDocument();
+    await waitFor(() => {
+      const glowLayers = Array.from(
+        document.querySelectorAll<HTMLElement>('[data-testid="tx-bubble-layer-glow"]')
+      );
+      expect(glowLayers.length).toBeGreaterThan(0);
+      const glowClasses = glowLayers.map((layer) => layer.className).join(' ');
+      expect(glowClasses).toContain('to-amber-400/[0.12]');
+      expect(glowClasses).toContain('to-cyan-400/[0.12]');
+      expect(glowClasses).toContain('to-terminal-green/10');
+    });
 
     await waitFor(() => {
       expect(document.querySelectorAll('[data-tx-tooltip*="Stage:"]').length).toBeGreaterThan(0);

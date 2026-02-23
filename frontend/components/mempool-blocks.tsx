@@ -576,7 +576,15 @@ function Block2D({
   );
 }
 
-function TxBubbleLayer({ bubbles, showAxes = false }: { bubbles: TxBubble[]; showAxes?: boolean }) {
+function TxBubbleLayer({
+  bubbles,
+  showAxes = false,
+  glowClassName = 'to-terminal-green/10',
+}: {
+  bubbles: TxBubble[];
+  showAxes?: boolean;
+  glowClassName?: string;
+}) {
   const [hovered, setHovered] = useState<{ bubble: TxBubble; x: number; y: number } | null>(null);
   if (bubbles.length === 0 && !showAxes) return null;
 
@@ -635,7 +643,13 @@ function TxBubbleLayer({ bubbles, showAxes = false }: { bubbles: TxBubble[]; sho
       <div className="absolute inset-0 overflow-hidden rounded-[inherit]">
         {showAxes && (
           <>
-            <div className="to-terminal-green/10 pointer-events-none absolute inset-1 rounded-[inherit] bg-gradient-to-br from-white/[0.03] via-transparent" />
+            <div
+              data-testid="tx-bubble-layer-glow"
+              className={cn(
+                'pointer-events-none absolute inset-1 rounded-[inherit] bg-gradient-to-br from-white/[0.03] via-transparent',
+                glowClassName
+              )}
+            />
             {[0.33, 0.66].map((ratio) => (
               <div
                 key={`vertical-guide-${ratio}`}
@@ -732,6 +746,13 @@ function PendingBlock({
       : tone === 'proposals' || tone === 'next'
         ? 'text-cyan-300'
         : 'text-terminal-green';
+  const glowClassName = isEmpty
+    ? 'to-slate-500/[0.20]'
+    : tone === 'mempool'
+      ? 'to-amber-400/[0.12]'
+      : tone === 'proposals' || tone === 'next'
+        ? 'to-cyan-400/[0.12]'
+        : 'to-terminal-green/10';
 
   return (
     <div className="flex flex-col items-center">
@@ -752,7 +773,7 @@ function PendingBlock({
       >
         {large ? (
           <div className="relative h-full w-full overflow-visible rounded-lg border border-white/25 bg-transparent">
-            <TxBubbleLayer bubbles={bubbles} showAxes />
+            <TxBubbleLayer bubbles={bubbles} showAxes glowClassName={glowClassName} />
           </div>
         ) : isEmpty ? (
           <>
@@ -822,6 +843,7 @@ function MinedBlock({
   const stats = feeStats && feeStats !== 'loading' ? feeStats : null;
   const gradient = getBlockColors(0, false);
   const borderClassName = 'border-terminal-green/70';
+  const glowClassName = 'to-terminal-green/10';
   const anchorRef = useRef<HTMLAnchorElement | null>(null);
   const [isHovered, setIsHovered] = useState(false);
   const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
@@ -938,7 +960,7 @@ function MinedBlock({
         >
           {large ? (
             <div className="relative h-full w-full overflow-visible rounded-lg border border-white/25 bg-transparent">
-              <TxBubbleLayer bubbles={bubbles} showAxes />
+              <TxBubbleLayer bubbles={bubbles} showAxes glowClassName={glowClassName} />
             </div>
           ) : isLoading ? (
             <div className="flex h-full w-full flex-col justify-between">
