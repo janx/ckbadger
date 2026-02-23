@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import { useState } from 'react';
 import { CommandPalette } from '@/components/command-palette';
 import { SearchBar } from '@/components/search-bar';
@@ -15,22 +16,31 @@ const navLinks = [
 
 export function Header() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const pathname = usePathname();
+  const isHomePage = pathname === '/';
+  const isLinkActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
 
   return (
-    <header className="sticky top-0 z-40 overflow-visible border-b border-slate-800 bg-slate-900">
+    <header className="sticky top-0 z-40 overflow-visible border-b border-slate-800/80 bg-slate-950/85 backdrop-blur-md">
       <div className="container relative mx-auto flex h-16 items-center justify-between gap-4 px-4 pl-[140px] md:pl-[220px] lg:pl-[260px]">
         <Logo />
 
-        <div className="hidden max-w-xl flex-1 md:block">
-          <SearchBar variant="compact" />
+        <div className="hidden min-w-0 flex-1 items-center justify-center md:flex">
+          <div className="w-full max-w-[clamp(18rem,40vw,42rem)]">
+            <SearchBar variant={isHomePage ? 'home' : 'compact'} />
+          </div>
         </div>
 
-        <nav className="hidden shrink-0 items-center space-x-6 md:flex">
+        <nav className="relative z-10 hidden shrink-0 items-center justify-end gap-2 md:flex">
           {navLinks.map((link) => (
             <Link
               key={link.href}
               href={link.href}
-              className="hover:text-terminal-green font-mono text-sm uppercase tracking-wide text-slate-400 transition"
+              className={`rounded-md border px-3 py-1.5 font-mono text-xs uppercase tracking-[0.12em] transition ${
+                isLinkActive(link.href)
+                  ? 'border-terminal-green/50 bg-terminal-green/12 text-terminal-green shadow-[inset_0_0_0_1px_rgba(74,222,128,0.18)]'
+                  : 'border-transparent text-slate-300/85 hover:border-slate-700/80 hover:bg-slate-800/35 hover:text-slate-100'
+              }`}
             >
               {link.label}
             </Link>
@@ -68,17 +78,21 @@ export function Header() {
       </div>
 
       {isMenuOpen && (
-        <div className="absolute z-50 w-full border-t border-slate-800 bg-slate-900 shadow-xl md:hidden">
+        <div className="absolute z-50 w-full border-t border-slate-800/80 bg-slate-950/95 shadow-xl backdrop-blur-md md:hidden">
           <nav className="container mx-auto px-4 py-4">
             <div className="mb-4">
-              <SearchBar variant="compact" />
+              <SearchBar variant={isHomePage ? 'home' : 'compact'} />
             </div>
             {navLinks.map((link) => (
               <Link
                 key={link.href}
                 href={link.href}
                 onClick={() => setIsMenuOpen(false)}
-                className="hover:text-terminal-green block py-3 font-mono text-sm uppercase tracking-wide text-slate-400 transition"
+                className={`block rounded-md border px-3 py-2.5 font-mono text-xs uppercase tracking-[0.12em] transition ${
+                  isLinkActive(link.href)
+                    ? 'border-terminal-green/50 bg-terminal-green/12 text-terminal-green'
+                    : 'border-transparent text-slate-300/85 hover:border-slate-700/80 hover:bg-slate-800/35 hover:text-slate-100'
+                }`}
               >
                 {link.label}
               </Link>

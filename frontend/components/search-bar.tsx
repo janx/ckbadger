@@ -9,12 +9,13 @@ import { cn } from '@/lib/utils';
 
 interface SearchBarProps {
   className?: string;
-  variant?: 'default' | 'compact';
+  variant?: 'default' | 'compact' | 'home';
 }
 
 export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
   const [query, setQuery] = useState('');
   const [isOpen, setIsOpen] = useState(false);
+  const [isInputFocused, setIsInputFocused] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(-1);
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -56,6 +57,7 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
     if (selectedIndex >= 0 && results[selectedIndex]) {
       router.push(results[selectedIndex].url);
       setIsOpen(false);
+      setIsInputFocused(false);
       setQuery('');
       return;
     }
@@ -63,6 +65,7 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
     router.push(resolveSearchRoute(query));
 
     setIsOpen(false);
+    setIsInputFocused(false);
     setQuery('');
   };
 
@@ -75,12 +78,14 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
       setSelectedIndex((prev) => Math.max(prev - 1, -1));
     } else if (e.key === 'Escape') {
       setIsOpen(false);
+      setIsInputFocused(false);
     }
   };
 
   const handleResultClick = (result: SearchResult) => {
     router.push(result.url);
     setIsOpen(false);
+    setIsInputFocused(false);
     setQuery('');
   };
 
@@ -100,11 +105,12 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
   };
 
   const isCompact = variant === 'compact';
+  const isHome = variant === 'home';
 
   return (
     <div className={cn('relative', className)}>
       <form onSubmit={handleSearch}>
-        <div className="relative">
+        <div className={cn('group relative', isHome && 'overflow-hidden rounded-xl')}>
           <input
             ref={inputRef}
             data-ckbadger-global-search="true"
@@ -114,27 +120,52 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
               setQuery(e.target.value);
               setIsOpen(true);
             }}
-            onFocus={() => setIsOpen(true)}
+            onFocus={() => {
+              setIsOpen(true);
+              setIsInputFocused(true);
+            }}
+            onBlur={() => setIsInputFocused(false)}
             onKeyDown={handleKeyDown}
-            placeholder={isCompact ? 'Search blocks, txs...' : 'Block, tx hash, address...'}
+            placeholder={
+              isHome
+                ? 'Search block / tx / address / cell ...'
+                : isCompact
+                  ? 'Search blocks, txs...'
+                  : 'Block, tx hash, address...'
+            }
             className={cn(
               'focus:border-terminal-green focus:ring-terminal-green w-full rounded-lg border border-slate-700 bg-slate-900 font-mono text-white placeholder-slate-500 transition-colors focus:outline-none focus:ring-1',
-              isCompact
-                ? 'py-1.5 pl-3 pr-16 text-sm'
-                : 'px-3 py-2.5 pr-20 text-sm sm:px-4 sm:py-3 sm:pr-24 sm:text-base'
+              isHome
+                ? 'border-terminal-green/50 focus:ring-terminal-green/25 h-10 rounded-xl bg-slate-900/95 pl-4 pr-20 text-sm shadow-[0_0_0_1px_rgba(74,222,128,0.18),0_6px_20px_rgba(16,185,129,0.18)] placeholder:text-slate-400 focus:ring-2 sm:pr-28'
+                : isCompact
+                  ? 'py-1.5 pl-3 pr-3 text-sm'
+                  : 'px-3 py-2.5 pr-3 text-sm sm:px-4 sm:py-3 sm:text-base'
             )}
           />
-          <button
-            type="submit"
-            className={cn(
-              'bg-terminal-green hover:bg-terminal-dim absolute top-1/2 -translate-y-1/2 rounded font-mono font-medium text-slate-950 transition-colors',
-              isCompact
-                ? 'right-1 px-2 py-0.5 text-xs'
-                : 'right-1.5 px-3 py-1 text-xs sm:right-2 sm:px-4 sm:py-1.5 sm:text-sm'
-            )}
-          >
-            Search
-          </button>
+          {isHome && isInputFocused && (
+            <>
+              <span
+                data-testid="home-search-focus-glow"
+                className="border-terminal-green/55 animate-terminal-glow-pulse pointer-events-none absolute inset-0 rounded-xl border opacity-100"
+              />
+              <span
+                data-testid="home-search-focus-border-scan"
+                className="pointer-events-none absolute inset-0 overflow-hidden rounded-xl"
+              >
+                <span className="via-terminal-green absolute bottom-0 left-0 h-[2px] w-24 -translate-x-full bg-gradient-to-r from-transparent to-transparent [animation:terminal-border-scan-ltr_2.4s_linear_infinite]" />
+              </span>
+            </>
+          )}
+          {isHome && (
+            <div className="pointer-events-none absolute inset-y-0 right-3 hidden items-center gap-1 sm:flex">
+              <span className="rounded border border-slate-700/80 bg-slate-900/80 px-1.5 py-0.5 font-mono text-[10px] text-slate-400">
+                /
+              </span>
+              <span className="rounded border border-slate-700/80 bg-slate-900/80 px-1.5 py-0.5 font-mono text-[10px] text-slate-400">
+                ?
+              </span>
+            </div>
+          )}
         </div>
       </form>
 

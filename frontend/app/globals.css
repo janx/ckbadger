@@ -259,6 +259,15 @@ body {
   }
 }
 
+@keyframes terminal-border-scan-ltr {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(520%);
+  }
+}
+
 @keyframes glow-pulse {
   0%,
   100% {
