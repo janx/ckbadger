@@ -304,6 +304,10 @@ pub fn encode_dotbit_account_outpoint_key(
     key
 }
 
+pub fn decode_dotbit_account_outpoint_key(key: &[u8]) -> (Vec<u8>, i16) {
+    decode_outpoint(&key[1..35])
+}
+
 /// Spore type-script index key: prefix(1B) + type_script_hash(32B)
 pub const SPORE_TYPE_INDEX_KEY_SIZE: usize = 33;
 
@@ -729,7 +733,7 @@ mod tests {
         let key = encode_dotbit_account_outpoint_key(&tx_hash, 10);
         assert_eq!(key.len(), DOTBIT_ACCOUNT_OUTPOINT_KEY_SIZE);
         assert_eq!(key[0], STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT);
-        let (decoded_tx_hash, decoded_output_index) = decode_outpoint(&key[1..35]);
+        let (decoded_tx_hash, decoded_output_index) = decode_dotbit_account_outpoint_key(&key);
         assert_eq!(decoded_tx_hash, tx_hash.to_vec());
         assert_eq!(decoded_output_index, 10);
     }

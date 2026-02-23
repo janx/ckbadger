@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import SporeDetailPage from '@/app/nfts/[sporeId]/page';
 import { api } from '@/lib/api';
@@ -112,6 +112,8 @@ describe('SporeDetailPage', () => {
           isLive: true,
           createdAtBlock: 100,
           expiredAt: 1800000000,
+          txHash: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          outputIndex: 7,
         },
       ],
       total: 1,
@@ -134,10 +136,40 @@ describe('SporeDetailPage', () => {
     await waitFor(() => {
       expect(screen.getByText('alice.bit')).toBeInTheDocument();
     });
+    const cellLink = screen.getByRole('link', { name: /alice\.bit/i });
+    expect(cellLink).toHaveAttribute(
+      'href',
+      '/cell/0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-7'
+    );
     expect(api.getNftCollectionItems).toHaveBeenCalledWith(
       mockCollection.collectionId,
       expect.objectContaining({ limit: 20 })
     );
+  });
+
+  it('searches nft collection items by keyword', async () => {
+    mockParams = { sporeId: 'dotbit' };
+    vi.mocked(api.getNftCollection).mockResolvedValue(mockCollection);
+
+    render(<SporeDetailPage />);
+
+    await waitFor(() => {
+      expect(api.getNftCollectionItems).toHaveBeenCalledWith(
+        mockCollection.collectionId,
+        expect.objectContaining({ limit: 20, search: undefined })
+      );
+    });
+
+    fireEvent.change(screen.getByLabelText('Search .bit'), {
+      target: { value: 'alice' },
+    });
+
+    await waitFor(() => {
+      expect(api.getNftCollectionItems).toHaveBeenCalledWith(
+        mockCollection.collectionId,
+        expect.objectContaining({ limit: 20, search: 'alice' })
+      );
+    });
   });
 
   it('normalizes dotbit slug before querying collection API', async () => {

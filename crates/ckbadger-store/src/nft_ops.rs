@@ -1,5 +1,7 @@
 //! NFT (Spore, mNFT, DotBit) operations.
 
+use std::collections::{HashMap, HashSet};
+
 use crate::batch::StoreBatch;
 use crate::keys;
 use crate::store::CkbadgerStore;
@@ -7,6 +9,9 @@ use crate::types::{
     ClusterDailyDelta, NftCollectionAggregate, NftDailyDelta, NftEntry, NftTypeIndex,
     SporeDailyDelta, SporeEntry, SporeTypeIndex,
 };
+
+type DotbitLiveOutpoint = (Vec<u8>, i16);
+type DotbitLiveOutpointMap = HashMap<Vec<u8>, DotbitLiveOutpoint>;
 
 impl CkbadgerStore {
     pub fn get_spore(&self, id: &[u8]) -> anyhow::Result<Option<SporeEntry>> {
@@ -223,6 +228,68 @@ impl CkbadgerStore {
             }
         }
         results
+    }
+
+    /// Resolve live dotbit account outpoints by account IDs.
+    ///
+    /// Scans dotbit outpoint index in `stats` and validates liveness via `live_cells`.
+    /// Returns account_id -> (tx_hash, output_index) for accounts that currently have
+    /// a live outpoint.
+    pub fn get_live_dotbit_outpoints_by_account_ids(
+        &self,
+        account_ids: &[Vec<u8>],
+    ) -> anyhow::Result<DotbitLiveOutpointMap> {
+        let targets: HashSet<Vec<u8>> = account_ids.iter().cloned().collect();
+        if targets.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let prefix = [keys::STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT];
+        let iter = self.prefix_iterator_cf(self.cf_stats(), &prefix);
+        let mut resolved: DotbitLiveOutpointMap = HashMap::with_capacity(targets.len());
+
+        for item in iter.flatten() {
+            let (key, value) = item;
+            if key.first() != Some(&keys::STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT) {
+                break;
+            }
+            if key.len() != keys::DOTBIT_ACCOUNT_OUTPOINT_KEY_SIZE {
+                anyhow::bail!(
+                    "invalid dotbit outpoint key length: expected {}, got {}",
+                    keys::DOTBIT_ACCOUNT_OUTPOINT_KEY_SIZE,
+                    key.len()
+                );
+            }
+            if !targets.contains(value.as_ref()) {
+                continue;
+            }
+
+            let (tx_hash, output_index) = keys::decode_dotbit_account_outpoint_key(&key);
+            if self.get_cell(&tx_hash, output_index)?.is_none() {
+                continue;
+            }
+
+            if let Some((existing_tx_hash, existing_output_index)) = resolved.get(value.as_ref()) {
+                if existing_tx_hash != &tx_hash || *existing_output_index != output_index {
+                    anyhow::bail!(
+                        "multiple live dotbit outpoints for account_id=0x{:x?}: first=0x{:x?}-{}, second=0x{:x?}-{}",
+                        value.as_ref(),
+                        existing_tx_hash,
+                        existing_output_index,
+                        tx_hash,
+                        output_index
+                    );
+                }
+            } else {
+                resolved.insert(value.to_vec(), (tx_hash, output_index));
+            }
+
+            if resolved.len() == targets.len() {
+                break;
+            }
+        }
+
+        Ok(resolved)
     }
 
     pub fn get_nft_type_index(
@@ -770,6 +837,47 @@ mod tests {
         assert_eq!(dotbit_results[0].0, tx_b.to_vec());
         assert_eq!(dotbit_results[0].1, 5);
         assert_eq!(dotbit_results[0].2, dotbit_account_id.to_vec());
+    }
+
+    #[test]
+    fn test_get_live_dotbit_outpoints_by_account_ids_prefers_live_cells() {
+        let (_dir, store) = test_store();
+        let account_id = vec![0x61u8; 20];
+        let old_tx = vec![0x71u8; 32];
+        let live_tx = vec![0x72u8; 32];
+        let old_idx = 1i16;
+        let live_idx = 2i16;
+
+        let mut batch = StoreBatch::new(&store);
+        // Historical outpoint (no live cell now)
+        batch.put_dotbit_account_outpoint(&old_tx, old_idx, &account_id);
+        // Current outpoint with a live cell
+        batch.put_dotbit_account_outpoint(&live_tx, live_idx, &account_id);
+        batch.put_cell(
+            &live_tx,
+            live_idx,
+            &crate::types::LiveCellInfo {
+                capacity: 100_00000000,
+                created_at_block: 10,
+                lock_script_hash: vec![0x01; 32],
+                lock_code_hash: vec![0x02; 32],
+                lock_hash_type: 1,
+                lock_args: vec![],
+                type_script_hash: Some(vec![0x03; 32]),
+                type_code_hash: Some(vec![0x04; 32]),
+                type_args: Some(account_id.clone()),
+                data_size: 0,
+                occupied_capacity: 61_00000000,
+            },
+        );
+        batch.commit().unwrap();
+
+        let outpoints = store
+            .get_live_dotbit_outpoints_by_account_ids(std::slice::from_ref(&account_id))
+            .unwrap();
+        let (tx_hash, output_index) = outpoints.get(&account_id).unwrap();
+        assert_eq!(tx_hash, &live_tx);
+        assert_eq!(*output_index, live_idx);
     }
 
     #[test]

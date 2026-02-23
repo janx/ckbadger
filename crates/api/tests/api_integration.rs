@@ -4,6 +4,7 @@ use http_body_util::BodyExt;
 use std::sync::Arc;
 use tower::ServiceExt;
 
+use ckbadger_api::utils::address::compute_script_hash;
 use ckbadger_api::{create_router, AppConfig};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
@@ -43,7 +44,7 @@ async fn test_network_stats_returns_ok() {
         .body(Body::empty())
         .unwrap();
 
-    let response = app.oneshot(request).await.unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 }
 
@@ -58,7 +59,7 @@ async fn test_hardforks_endpoint_returns_default_timeline() {
         .body(Body::empty())
         .unwrap();
 
-    let response = app.oneshot(request).await.unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
     let body = response.into_body().collect().await.unwrap().to_bytes();
@@ -2551,6 +2552,80 @@ async fn test_assets_list_defaults_to_capacity_sort_and_supports_cursor_paginati
 }
 
 #[tokio::test]
+async fn test_assets_list_token_errors_when_daily_deltas_invalid() {
+    let store = test_store();
+    let healthy_token = [0x31u8; 32];
+    let broken_token = [0x32u8; 32];
+
+    for (hash, name, symbol) in [
+        (healthy_token, "Healthy Token", "HLT"),
+        (broken_token, "Broken Token", "BKT"),
+    ] {
+        store
+            .put_token_direct(
+                &hash,
+                &TokenInfo {
+                    type_code_hash: vec![0xAA; 32],
+                    hash_type: 1,
+                    type_args: vec![0x01; 20],
+                    standard: "xudt".to_string(),
+                    name: Some(name.to_string()),
+                    symbol: Some(symbol.to_string()),
+                    decimals: Some(8),
+                    total_supply: Some(1000),
+                    max_supply: None,
+                    holders_count: 10,
+                    first_seen_block: 1,
+                    icon_url: None,
+                    description: None,
+                    transfers_count: 1,
+                },
+            )
+            .unwrap();
+    }
+
+    store
+        .put_token_daily_delta(
+            &healthy_token,
+            20240115,
+            &TokenDailyDelta {
+                live_capacity_delta: 200,
+                live_occupied_capacity_delta: 100,
+            },
+        )
+        .unwrap();
+
+    // Broken history: occupied exceeds capacity; API must fail fast instead of masking.
+    store
+        .put_token_daily_delta(
+            &broken_token,
+            20240115,
+            &TokenDailyDelta {
+                live_capacity_delta: 100,
+                live_occupied_capacity_delta: 120,
+            },
+        )
+        .unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/assets?type=token&sort_key=capacity&sort_direction=desc")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"], "internal_error");
+    let message = json["message"].as_str().unwrap();
+    assert!(message.contains("invalid token daily deltas"));
+    assert!(message.contains(&hex::encode(broken_token)));
+}
+
+#[tokio::test]
 async fn test_assets_nft_collection_occupation_chart_and_capacity_fields() {
     let store = test_store();
     let collection_id = [0x24u8; 24];
@@ -2748,8 +2823,13 @@ async fn test_assets_nft_list_uses_dotbit_display_name_when_aggregate_name_missi
 async fn test_assets_nft_collection_items_dotbit_human_readable_and_pagination() {
     let store = test_store();
     let collection_id = b"dotbit_collection_______________".to_vec();
+    let dotbit_code_hash =
+        hex::decode("4f170a048198408f4f4d36bdbcddcebe7a0ae85244d3ab08fd40a80cbfc70918").unwrap();
     let nft_a = [0x11u8; 20];
     let nft_b = [0x22u8; 20];
+    let nft_a_type_hash = compute_script_hash(&dotbit_code_hash, 1, &nft_a);
+    let nft_a_tx_hash = vec![0x9au8; 32];
+    let nft_a_output_index = 2i16;
 
     let mut batch = StoreBatch::new(store.as_ref());
     batch.put_nft_collection_aggregate(
@@ -2793,6 +2873,25 @@ async fn test_assets_nft_collection_items_dotbit_human_readable_and_pagination()
     );
     batch.put_nft_by_collection(&collection_id, &nft_a);
     batch.put_nft_by_collection(&collection_id, &nft_b);
+    batch.put_cell(
+        &nft_a_tx_hash,
+        nft_a_output_index,
+        &LiveCellInfo {
+            capacity: 200_00000000,
+            created_at_block: 100,
+            lock_script_hash: vec![0x41; 32],
+            lock_code_hash: vec![0x51; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: Some(nft_a_type_hash.clone()),
+            type_code_hash: Some(dotbit_code_hash.clone()),
+            type_args: Some(nft_a.to_vec()),
+            data_size: 64,
+            occupied_capacity: 62_00000000,
+        },
+    );
+    batch.put_dotbit_account_outpoint(&nft_a_tx_hash, nft_a_output_index, &nft_a);
+    batch.put_cell_by_type(&nft_a_type_hash, 100, &nft_a_tx_hash, nft_a_output_index);
     batch.commit().unwrap();
 
     let config = test_config(store);
@@ -2812,6 +2911,11 @@ async fn test_assets_nft_collection_items_dotbit_human_readable_and_pagination()
     assert_eq!(json["data"][0]["name"], "alice.bit");
     assert_eq!(json["data"][0]["isLive"], true);
     assert_eq!(json["data"][0]["expiredAt"], 1_800_000_000u64);
+    assert_eq!(
+        json["data"][0]["txHash"],
+        format!("0x{}", hex::encode(&nft_a_tx_hash))
+    );
+    assert_eq!(json["data"][0]["outputIndex"], nft_a_output_index);
     let cursor = json["nextCursor"].as_str().expect("next cursor");
 
     let request = Request::builder()
@@ -2820,7 +2924,7 @@ async fn test_assets_nft_collection_items_dotbit_human_readable_and_pagination()
         ))
         .body(Body::empty())
         .unwrap();
-    let response = app.oneshot(request).await.unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
@@ -2828,7 +2932,101 @@ async fn test_assets_nft_collection_items_dotbit_human_readable_and_pagination()
     assert_eq!(json["data"].as_array().unwrap().len(), 1);
     assert_eq!(json["data"][0]["name"], "bob.bit");
     assert_eq!(json["data"][0]["isLive"], false);
+    assert_eq!(json["data"][0]["txHash"], serde_json::Value::Null);
+    assert_eq!(json["data"][0]["outputIndex"], serde_json::Value::Null);
     assert_eq!(json["nextCursor"], serde_json::Value::Null);
+
+    let request = Request::builder()
+        .uri("/api/v1/assets/nfts/dotbit/items?limit=20&search=alice")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(json["data"][0]["name"], "alice.bit");
+    assert!(json.get("total").is_none());
+}
+
+#[tokio::test]
+async fn test_assets_nft_collection_items_dotbit_outpoint_fallback_without_index() {
+    let store = test_store();
+    let collection_id = b"dotbit_collection_______________".to_vec();
+    let dotbit_code_hash =
+        hex::decode("4f170a048198408f4f4d36bdbcddcebe7a0ae85244d3ab08fd40a80cbfc70918").unwrap();
+    let nft_id = [0x66u8; 20];
+    let nft_type_hash = compute_script_hash(&dotbit_code_hash, 1, &nft_id);
+    let tx_hash = vec![0xabu8; 32];
+    let output_index = 3i16;
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_nft_collection_aggregate(
+        &collection_id,
+        &NftCollectionAggregate {
+            name: Some(".bit".to_string()),
+            standard: NftStandard::DotBit,
+            total_count: 1,
+            live_count: 1,
+        },
+    );
+    batch.put_nft(
+        &nft_id,
+        &NftEntry {
+            standard: NftStandard::DotBit,
+            collection_id: None,
+            token_id: Some(nft_id.to_vec()),
+            owner_lock_hash: Some(vec![0x31; 32]),
+            name: Some("fallback.bit".to_string()),
+            is_live: true,
+            created_at_block: 100,
+            extra: NftExtra::DotBit {
+                expired_at: Some(1_800_000_000),
+            },
+        },
+    );
+    batch.put_nft_by_collection(&collection_id, &nft_id);
+    batch.put_cell(
+        &tx_hash,
+        output_index,
+        &LiveCellInfo {
+            capacity: 200_00000000,
+            created_at_block: 100,
+            lock_script_hash: vec![0x41; 32],
+            lock_code_hash: vec![0x51; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: Some(nft_type_hash.clone()),
+            type_code_hash: Some(dotbit_code_hash.clone()),
+            type_args: Some(nft_id.to_vec()),
+            data_size: 64,
+            occupied_capacity: 62_00000000,
+        },
+    );
+    batch.put_cell_by_type(&nft_type_hash, 100, &tx_hash, output_index);
+    // Intentionally no put_dotbit_account_outpoint(...) to verify fallback path.
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/assets/nfts/dotbit/items?limit=20")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(json["data"][0]["name"], "fallback.bit");
+    assert_eq!(json["data"][0]["isLive"], true);
+    assert_eq!(
+        json["data"][0]["txHash"],
+        format!("0x{}", hex::encode(&tx_hash))
+    );
+    assert_eq!(json["data"][0]["outputIndex"], output_index);
 }
 
 #[tokio::test]

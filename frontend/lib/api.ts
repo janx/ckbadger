@@ -182,6 +182,10 @@ interface CursorQueryParams {
   cursor?: string;
 }
 
+interface NftCollectionItemsParams extends CursorQueryParams {
+  search?: string;
+}
+
 interface Script {
   codeHash: string;
   hashType: string;
@@ -707,6 +711,8 @@ interface NftCollectionItem {
   isLive: boolean;
   createdAtBlock: number;
   expiredAt?: number | null;
+  txHash?: string | null;
+  outputIndex?: number | null;
 }
 
 interface ChartDataPoint {
@@ -1416,11 +1422,12 @@ export const api = {
 
   getNftCollectionItems: (
     collectionId: string,
-    params: CursorQueryParams = {}
+    params: NftCollectionItemsParams = {}
   ): Promise<CursorPaginatedResponse<NftCollectionItem>> => {
     const query = new URLSearchParams();
     if (params.limit) query.set('limit', String(params.limit));
     if (params.cursor) query.set('cursor', params.cursor);
+    if (params.search) query.set('search', params.search);
     const suffix = query.toString();
     return fetchApi(
       `/assets/nfts/${normalizeNftAssetId(collectionId)}/items${suffix ? `?${suffix}` : ''}`

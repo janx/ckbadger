@@ -39,6 +39,7 @@ export function CursorPagination({
       )}
       <div className="flex items-center gap-3">
         <button
+          type="button"
           onClick={onPrevious}
           disabled={!hasPrevious}
           className="hover:border-terminal-green hover:text-terminal-green rounded border border-slate-700 bg-slate-800 px-4 py-2 font-mono text-sm text-slate-300 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
@@ -52,6 +53,7 @@ export function CursorPagination({
           </span>
         )}
         <button
+          type="button"
           onClick={onNext}
           disabled={!hasMore}
           className="hover:border-terminal-green hover:text-terminal-green rounded border border-slate-700 bg-slate-800 px-4 py-2 font-mono text-sm text-slate-300 transition-colors disabled:cursor-not-allowed disabled:opacity-50"

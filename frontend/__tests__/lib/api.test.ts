@@ -395,6 +395,31 @@ describe('api', () => {
       expect(chart.title).toContain('Capacity Occupation');
     });
 
+    it('builds query params for nft collection items search', async () => {
+      server.use(
+        http.get('*/api/v1/assets/nfts/:collectionId/items', ({ request, params }) => {
+          const url = new URL(request.url);
+          expect(params.collectionId).toBe(DOTBIT_COLLECTION_ID);
+          expect(url.searchParams.get('limit')).toBe('20');
+          expect(url.searchParams.get('cursor')).toBe('abc');
+          expect(url.searchParams.get('search')).toBe('alice');
+          return HttpResponse.json({
+            data: [],
+            limit: 20,
+            hasMore: false,
+            nextCursor: null,
+          });
+        })
+      );
+
+      const result = await api.getNftCollectionItems('.bit', {
+        limit: 20,
+        cursor: 'abc',
+        search: 'alice',
+      });
+      expect(result.hasMore).toBe(false);
+    });
+
     it('builds query params for getAddressTokens', async () => {
       server.use(
         http.get('*/api/v1/addresses/:addr/tokens', ({ request }) => {

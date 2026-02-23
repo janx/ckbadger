@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { Header } from '@/components/layout/header';
@@ -30,10 +30,20 @@ export default function SporeDetailPage() {
   const params = useParams();
   const rawAssetId = params.sporeId as string;
   const [occupationRange, setOccupationRange] = useState<OccupationRangeKey>('all');
+  const [searchInput, setSearchInput] = useState('');
+  const [searchKeyword, setSearchKeyword] = useState('');
   const collectionItemsPagination = useCursorPagination();
   const occupationRangeParams = getOccupationRangeParams(occupationRange);
   const isDotbitCollection = isDotbitAlias(rawAssetId);
   const assetId = normalizeNftAssetId(rawAssetId);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      setSearchKeyword(searchInput.trim());
+    }, 250);
+
+    return () => window.clearTimeout(timeout);
+  }, [searchInput]);
 
   const sporeQuery = useQuery({
     queryKey: ['spore', rawAssetId],
@@ -82,19 +92,27 @@ export default function SporeDetailPage() {
     data: collectionItems,
     isLoading: isCollectionItemsLoading,
     isFetching: isCollectionItemsFetching,
+    isError: isCollectionItemsError,
   } = useQuery({
-    queryKey: ['nft-collection-items', collectionAssetId, collectionItemsPagination.cursor],
+    queryKey: [
+      'nft-collection-items',
+      collectionAssetId,
+      collectionItemsPagination.cursor,
+      searchKeyword,
+    ],
     queryFn: () =>
       api.getNftCollectionItems(collectionAssetId, {
         limit: 20,
         cursor: collectionItemsPagination.cursor,
+        search: searchKeyword || undefined,
       }),
     enabled: !!collection,
+    placeholderData: keepPreviousData,
   });
 
   useEffect(() => {
     collectionItemsPagination.reset();
-  }, [collectionAssetId, collectionItemsPagination.reset]);
+  }, [collectionAssetId, searchKeyword, collectionItemsPagination.reset]);
 
   const formatNumber = (num: number) => {
     return new Intl.NumberFormat().format(num);
@@ -202,50 +220,117 @@ export default function SporeDetailPage() {
             />
 
             <TerminalPanel>
-              <TerminalPanelHeader indicator="active">Collection NFTs</TerminalPanelHeader>
+              <TerminalPanelHeader
+                indicator="active"
+                actions={
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={searchInput}
+                      onChange={(event) => setSearchInput(event.target.value)}
+                      placeholder={isDotbitCollection ? 'Search .bit' : 'Search NFT'}
+                      aria-label={isDotbitCollection ? 'Search .bit' : 'Search NFT'}
+                      className="focus:border-terminal-green w-44 rounded border border-slate-700 bg-slate-900 px-2.5 py-1.5 font-mono text-xs text-slate-200 outline-none transition-colors placeholder:text-slate-500"
+                    />
+                    {isCollectionItemsFetching && (
+                      <span className="font-mono text-xs text-slate-500">Searching...</span>
+                    )}
+                  </div>
+                }
+              >
+                Collection NFTs
+              </TerminalPanelHeader>
               <TerminalPanelContent>
-                {isCollectionItemsLoading || isCollectionItemsFetching ? (
+                {isCollectionItemsLoading ? (
                   <div className="py-8 text-center text-slate-500">Loading NFTs...</div>
+                ) : isCollectionItemsError ? (
+                  <div className="py-8 text-center text-rose-400">
+                    Failed to load NFTs. Please refresh and try again.
+                  </div>
                 ) : !collectionItems?.data?.length ? (
                   <div className="py-8 text-center text-slate-500">No NFTs in this collection</div>
                 ) : (
-                  <div className="space-y-2">
+                  <div className="overflow-hidden rounded border border-slate-800 bg-slate-900/30">
                     {collectionItems.data.map((item) => (
                       <div
                         key={item.nftId}
-                        className="flex flex-col gap-2 rounded border border-slate-800 bg-slate-900/40 p-3"
+                        className="row-scan hover:bg-slate-850/40 border-b border-slate-800 px-3 py-2.5 transition-colors last:border-b-0"
                       >
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="font-mono text-sm text-white">
-                            {item.name || item.nftId}
-                          </div>
+                        <div className="mb-1 flex items-center justify-between gap-3">
+                          {item.txHash &&
+                          item.outputIndex !== null &&
+                          item.outputIndex !== undefined ? (
+                            <Link
+                              href={`/cell/${item.txHash}-${item.outputIndex}`}
+                              className="hover:text-terminal-green font-mono text-sm text-white hover:underline"
+                            >
+                              {item.name || item.nftId}
+                            </Link>
+                          ) : (
+                            <span className="font-mono text-sm text-white">
+                              {item.name || item.nftId}
+                            </span>
+                          )}
                           {item.isLive ? (
                             <Badge variant="green">Live</Badge>
                           ) : (
                             <Badge variant="red">Burned</Badge>
                           )}
                         </div>
-                        <HexDisplay value={item.nftId} color="accent" size="sm" />
-                        <div className="font-mono text-xs text-slate-400">
-                          Created at block #{formatNumber(item.createdAtBlock)}
-                        </div>
-                        {item.ownerLockHash && (
-                          <div className="font-mono text-xs text-slate-400">
-                            Owner:{' '}
-                            <Link
-                              href={`/address/${item.ownerLockHash}`}
-                              className="hover:underline"
-                            >
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-xs text-slate-400">
+                          <span>
+                            ID:{' '}
+                            <span className="text-slate-300">
                               <HexDisplay
-                                value={item.ownerLockHash}
+                                value={item.nftId}
                                 color="accent"
                                 size="sm"
                                 startChars={10}
                                 endChars={8}
                               />
-                            </Link>
-                          </div>
-                        )}
+                            </span>
+                          </span>
+                          <span>Block #{formatNumber(item.createdAtBlock)}</span>
+                          <span>
+                            Cell:{' '}
+                            {item.txHash &&
+                            item.outputIndex !== null &&
+                            item.outputIndex !== undefined ? (
+                              <Link
+                                href={`/cell/${item.txHash}-${item.outputIndex}`}
+                                className="text-terminal-green hover:underline"
+                              >
+                                <HexDisplay
+                                  value={item.txHash}
+                                  color="accent"
+                                  size="sm"
+                                  startChars={10}
+                                  endChars={8}
+                                />
+                                -{item.outputIndex}
+                              </Link>
+                            ) : (
+                              <span className="text-slate-500">Unavailable</span>
+                            )}
+                          </span>
+                          {item.ownerLockHash && (
+                            <span>
+                              Owner:{' '}
+                              <Link
+                                href={`/address/${item.ownerLockHash}`}
+                                className="hover:underline"
+                              >
+                                <HexDisplay
+                                  value={item.ownerLockHash}
+                                  color="accent"
+                                  size="sm"
+                                  startChars={10}
+                                  endChars={8}
+                                />
+                              </Link>
+                            </span>
+                          )}
+                        </div>
                       </div>
                     ))}
                   </div>
