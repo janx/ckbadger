@@ -208,8 +208,8 @@ describe('MempoolBlocks', () => {
       );
       expect(glowLayers.length).toBeGreaterThan(0);
       const glowClasses = glowLayers.map((layer) => layer.className).join(' ');
-      expect(glowClasses).toContain('to-amber-400/[0.12]');
-      expect(glowClasses).toContain('to-cyan-400/[0.12]');
+      expect(glowClasses).toContain('to-amber/[0.12]');
+      expect(glowClasses).toContain('to-terminal-dim/[0.12]');
       expect(glowClasses).toContain('to-terminal-green/10');
     });
 

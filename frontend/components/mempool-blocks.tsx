@@ -497,16 +497,13 @@ function edgeFadeOpacity(distanceToEdge: number): number {
 
 function getBlockColors(index: number, isPending: boolean): string {
   if (!isPending) {
-    return 'from-emerald-500 via-green-500 to-terminal-green';
+    return 'from-terminal-dark via-terminal-dim to-terminal-green';
   }
   const colorSets = [
-    'from-terminal-green via-green-500 to-emerald-600',
-    'from-green-400 via-green-500 to-emerald-600',
-    'from-lime-400 via-green-500 to-emerald-600',
-    'from-amber-300 via-amber-400 to-amber-500',
-    'from-amber-400 via-amber-500 to-orange-500',
-    'from-orange-400 via-amber-500 to-amber-600',
-    'from-amber-500 via-amber-600 to-orange-700',
+    'from-amber-bright via-amber to-amber-dim',
+    'from-amber via-amber-dim to-amber-dark',
+    'from-amber-dim via-amber-dark to-slate-700',
+    'from-slate-500 via-slate-600 to-slate-700',
     'from-slate-500 via-slate-600 to-slate-700',
   ];
   return colorSets[Math.min(index, colorSets.length - 1)];
@@ -646,29 +643,29 @@ function TxBubbleLayer({
             <div
               data-testid="tx-bubble-layer-glow"
               className={cn(
-                'pointer-events-none absolute inset-1 rounded-[inherit] bg-gradient-to-br from-white/[0.03] via-transparent',
+                'pointer-events-none absolute inset-1 rounded-[inherit] bg-gradient-to-br from-white/[0.02] via-transparent',
                 glowClassName
               )}
             />
             {[0.33, 0.66].map((ratio) => (
               <div
                 key={`vertical-guide-${ratio}`}
-                className="pointer-events-none absolute bottom-2 top-2 border-l border-dashed border-white/10"
+                className="pointer-events-none absolute bottom-2 top-2 border-l border-dashed border-slate-300/15"
                 style={{ left: `calc(${ratio * 100}% - 0.5px)` }}
               />
             ))}
             {[0.33, 0.66].map((ratio) => (
               <div
                 key={`horizontal-guide-${ratio}`}
-                className="pointer-events-none absolute left-2 right-2 border-t border-dashed border-white/10"
+                className="pointer-events-none absolute left-2 right-2 border-t border-dashed border-slate-300/15"
                 style={{ top: `calc(${ratio * 100}% - 0.5px)` }}
               />
             ))}
-            <div className="bg-white/28 pointer-events-none absolute bottom-2 left-2 right-2 h-px" />
-            <div className="bg-white/28 pointer-events-none absolute bottom-2 left-2 top-2 w-px" />
-            <div className="pointer-events-none absolute inset-1.5 grid grid-cols-8 grid-rows-7 opacity-30">
+            <div className="pointer-events-none absolute bottom-2 left-2 right-2 h-px bg-slate-200/25" />
+            <div className="pointer-events-none absolute bottom-2 left-2 top-2 w-px bg-slate-200/25" />
+            <div className="pointer-events-none absolute inset-1.5 grid grid-cols-8 grid-rows-7 opacity-20">
               {Array.from({ length: 56 }, (_, idx) => (
-                <div key={idx} className="border-white/6 border" />
+                <div key={idx} className="border border-slate-200/10" />
               ))}
             </div>
           </>
@@ -676,7 +673,7 @@ function TxBubbleLayer({
         {bubbles.map((bubble) => (
           <div
             key={bubble.id}
-            className="absolute transition-transform duration-150 hover:z-20 hover:scale-110"
+            className="absolute transition-transform duration-150 hover:z-20 hover:scale-105"
             style={{
               width: bubble.widthPx,
               height: bubble.heightPx,
@@ -726,32 +723,34 @@ function PendingBlock({
   const gradient = isEmpty
     ? ''
     : tone === 'mempool'
-      ? 'from-amber-400 via-amber-500 to-orange-600'
+      ? 'from-amber-bright via-amber to-amber-dim'
       : tone === 'proposals'
-        ? 'from-green-400 via-green-500 to-emerald-600'
-        : getBlockColors(block.index, true);
+        ? 'from-terminal-dark via-terminal-dim to-terminal-green'
+        : large
+          ? 'from-terminal-dark via-terminal-dim to-terminal-green'
+          : getBlockColors(block.index, true);
   const effectiveGradient =
     isEmpty && large ? 'from-slate-700 via-slate-800 to-slate-900' : gradient;
   const borderClassName = isEmpty
     ? 'border-slate-500/70'
     : tone === 'mempool'
-      ? 'border-amber-400/70'
+      ? 'border-amber/70'
       : tone === 'proposals' || tone === 'next'
-        ? 'border-cyan-400/80'
+        ? 'border-terminal-dim/70'
         : 'border-terminal-green/70';
   const topLabelClass = isEmpty
     ? 'text-slate-500'
     : tone === 'mempool'
-      ? 'text-amber-300'
+      ? 'text-amber'
       : tone === 'proposals' || tone === 'next'
-        ? 'text-cyan-300'
+        ? 'text-terminal-dim'
         : 'text-terminal-green';
   const glowClassName = isEmpty
     ? 'to-slate-500/[0.20]'
     : tone === 'mempool'
-      ? 'to-amber-400/[0.12]'
+      ? 'to-amber/[0.12]'
       : tone === 'proposals' || tone === 'next'
-        ? 'to-cyan-400/[0.12]'
+        ? 'to-terminal-dim/[0.12]'
         : 'to-terminal-green/10';
 
   return (
@@ -820,7 +819,7 @@ function PendingBlock({
         </div>
       )}
       {isNextBlock && (
-        <div className="mt-1.5 rounded-full bg-cyan-500/15 px-2 py-0.5 text-[10px] font-medium text-cyan-300 sm:text-xs">
+        <div className="bg-terminal-dim/15 text-terminal-dim mt-1.5 rounded-full px-2 py-0.5 text-[10px] font-medium sm:text-xs">
           Next Block
         </div>
       )}
@@ -1051,10 +1050,16 @@ function ChainArrow({ isPending = false }: { isPending?: boolean }) {
   return (
     <div className="flex items-center justify-center px-1 sm:px-2">
       <div
-        className={cn('flex items-center gap-0.5', isPending ? 'text-slate-500' : 'text-slate-400')}
+        className={cn(
+          'flex items-center gap-0.5',
+          isPending ? 'text-terminal-dim/70' : 'text-terminal-green/70'
+        )}
       >
         <div
-          className={cn('h-0.5 w-3 rounded-full', isPending ? 'bg-slate-600' : 'bg-slate-500')}
+          className={cn(
+            'h-0.5 w-3 rounded-full',
+            isPending ? 'bg-terminal-dim/50' : 'bg-terminal-green/50'
+          )}
         />
         <svg width="8" height="12" viewBox="0 0 8 12" fill="none" className="opacity-60">
           <path
@@ -1081,7 +1086,7 @@ function MempoolDivider({ large = false }: { large?: boolean }) {
       >
         <div className="flex items-center gap-2">
           <div className="h-px w-4 bg-gradient-to-r from-transparent to-slate-500" />
-          <div className="rounded-md border border-slate-600/50 bg-slate-800/50 px-2 py-1 text-[10px] font-medium tracking-wider text-slate-400">
+          <div className="border-terminal-dark/50 text-terminal-green/80 rounded-md border bg-slate-900/70 px-2 py-1 text-[10px] font-medium tracking-wider">
             MINED
           </div>
           <div className="h-px w-4 bg-gradient-to-l from-transparent to-slate-500" />
@@ -1594,14 +1599,14 @@ export function MempoolBlocks({
             <p className="text-xs sm:text-sm">
               <span className="text-amber-300">Mempool ({formatCount(totalPending)})</span>
               <span className="text-slate-500"> {'->'} </span>
-              <span className="text-cyan-300">Proposals ({formatCount(totalProposed)})</span>
+              <span className="text-terminal-dim">Proposals ({formatCount(totalProposed)})</span>
               <span className="text-slate-500"> {'->'} </span>
               <span className="text-terminal-green">
                 New Committed ({formatCount(totalCommitted)})
               </span>
             </p>
             {legendMode === 'row' && (
-              <p className="text-[10px] text-slate-400 sm:text-right sm:text-[11px]">
+              <p className="rounded-md border border-slate-700/60 bg-slate-900/70 px-2 py-1 text-[11px] text-slate-300 sm:text-right">
                 w {'->'} size | h {'->'} cycles | x {'->'} fee | y {'->'} fee rate
               </p>
             )}
@@ -1610,8 +1615,8 @@ export function MempoolBlocks({
       )}
 
       {legendMode === 'row' && !showHeader && (
-        <div className="mb-1 mt-1 flex items-center text-[10px] text-slate-500">
-          <span>
+        <div className="mb-1 mt-1 flex items-center">
+          <span className="rounded-md border border-slate-700/60 bg-slate-900/70 px-2 py-1 text-[11px] text-slate-300">
             w {'->'} size | h {'->'} cycles | x {'->'} fee | y {'->'} fee rate
           </span>
         </div>

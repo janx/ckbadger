@@ -68,13 +68,13 @@ export function PipelinePreview({ initialBlocks = [] }: PipelinePreviewProps) {
           <p className="text-xs sm:text-sm">
             <span className="text-amber-300">Mempool ({formatCount(mempoolCount)})</span>
             <span className="text-slate-500"> {'->'} </span>
-            <span className="text-cyan-300">Proposals ({formatCount(proposalsCount)})</span>
+            <span className="text-terminal-dim">Proposals ({formatCount(proposalsCount)})</span>
             <span className="text-slate-500"> {'->'} </span>
             <span className="text-terminal-green">
               New Committed ({formatCount(committedCount)})
             </span>
           </p>
-          <p className="text-[10px] text-slate-400 sm:text-right sm:text-[11px]">
+          <p className="rounded-md border border-slate-700/60 bg-slate-900/70 px-2 py-1 text-[11px] text-slate-300 sm:text-right">
             w {'->'} size | h {'->'} cycles | x {'->'} fee | y {'->'} fee rate
           </p>
         </div>
