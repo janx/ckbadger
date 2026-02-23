@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import BlockDetailPage from '@/app/blocks/[id]/page';
 import { api } from '@/lib/api';
 
 const BLOCK_ID = '8775638';
+const pushMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -21,6 +22,14 @@ vi.mock('@/components/layout/header', () => ({
 
 vi.mock('next/navigation', () => ({
   useParams: () => ({ id: BLOCK_ID }),
+  useRouter: () => ({
+    push: pushMock,
+    replace: vi.fn(),
+    back: vi.fn(),
+    forward: vi.fn(),
+    refresh: vi.fn(),
+    prefetch: vi.fn(),
+  }),
 }));
 
 const mockBlock = {
@@ -50,6 +59,7 @@ const mockBlock = {
 describe('BlockDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    pushMock.mockReset();
     vi.mocked(api.getBlock).mockResolvedValue(mockBlock);
     vi.mocked(api.getTransactions).mockResolvedValue({
       data: [
@@ -118,5 +128,33 @@ describe('BlockDetailPage', () => {
     });
 
     expect(screen.queryByText(/HARDFORK ACTIVATION/i)).not.toBeInTheDocument();
+  });
+
+  it('navigates to previous block with ArrowLeft and h', async () => {
+    render(<BlockDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Block #8,775,638')).toBeInTheDocument();
+    });
+
+    fireEvent.keyDown(window, { key: 'ArrowLeft' });
+    fireEvent.keyDown(window, { key: 'h' });
+
+    expect(pushMock).toHaveBeenNthCalledWith(1, `/blocks/${mockBlock.number - 1}`);
+    expect(pushMock).toHaveBeenNthCalledWith(2, `/blocks/${mockBlock.number - 1}`);
+  });
+
+  it('navigates to next block with ArrowRight and l', async () => {
+    render(<BlockDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Block #8,775,638')).toBeInTheDocument();
+    });
+
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+    fireEvent.keyDown(window, { key: 'l' });
+
+    expect(pushMock).toHaveBeenNthCalledWith(1, `/blocks/${mockBlock.number + 1}`);
+    expect(pushMock).toHaveBeenNthCalledWith(2, `/blocks/${mockBlock.number + 1}`);
   });
 });

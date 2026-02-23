@@ -2,7 +2,8 @@
 
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
+import { useEffect } from 'react';
 import { Header } from '@/components/layout/header';
 import { Hash } from '@/components/ui/hash';
 import { Address } from '@/components/ui/address';
@@ -17,6 +18,7 @@ import { PageHeader, Badge } from '@/components/ui/page-header';
 import { DataField, DataGrid } from '@/components/ui/data-field';
 import { UsageBar, ProgressBar } from '@/components/ui/progress-bar';
 import { api } from '@/lib/api';
+import { isEditableElement } from '@/lib/search-focus';
 import { formatCkbAmount } from '@/lib/utils';
 
 const BLOCK_MAX_SIZE = 597_000;
@@ -47,6 +49,7 @@ function formatTimestamp(timestamp: string): string {
 
 export default function BlockDetailPage() {
   const params = useParams();
+  const router = useRouter();
   const id = params.id as string;
 
   const {
@@ -75,6 +78,39 @@ export default function BlockDetailPage() {
     queryFn: () => api.getBlockProposals(id),
     enabled: !!block && block.proposalsCount > 0,
   });
+
+  useEffect(() => {
+    if (!block) return;
+
+    const handleWindowKeyDown = (event: KeyboardEvent) => {
+      if (
+        isEditableElement(event.target) ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        event.shiftKey
+      ) {
+        return;
+      }
+
+      const key = event.key.toLowerCase();
+      if (key === 'arrowleft' || key === 'h') {
+        if (block.number > 0) {
+          event.preventDefault();
+          router.push(`/blocks/${block.number - 1}`);
+        }
+        return;
+      }
+
+      if (key === 'arrowright' || key === 'l') {
+        event.preventDefault();
+        router.push(`/blocks/${block.number + 1}`);
+      }
+    };
+
+    window.addEventListener('keydown', handleWindowKeyDown);
+    return () => window.removeEventListener('keydown', handleWindowKeyDown);
+  }, [block, router]);
 
   if (isLoading) {
     return (

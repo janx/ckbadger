@@ -514,11 +514,6 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
         .split(inner);
 
-    let source_text = app
-        .sync_status
-        .as_ref()
-        .map(|s| if s.is_direct_db_read { "[DB]" } else { "[RPC]" })
-        .unwrap_or("[N/A]");
     let mode_text = app
         .sync_status
         .as_ref()
@@ -538,21 +533,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         _ => TERMINAL_DIM,
     };
 
-    let title = Paragraph::new(Line::from(vec![
-        Span::styled(
-            "CKBadger",
-            Style::default()
-                .fg(TERMINAL_GREEN)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" Monitor ", Style::default().fg(FOREGROUND)),
-        Span::styled(source_text, Style::default().fg(AMBER)),
-        Span::styled(" ", Style::default().fg(SLATE_700)),
-        Span::styled(
-            format!(" {} ", mode_text),
-            Style::default().fg(Color::Black).bg(mode_color),
-        ),
-    ]));
+    let title = Paragraph::new(header_title_line(mode_text, mode_color));
     f.render_widget(title, cols[0]);
 
     let now = Local::now();
@@ -580,6 +561,23 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     ]))
     .alignment(Alignment::Right);
     f.render_widget(right, cols[1]);
+}
+
+fn header_title_line(mode_text: &str, mode_color: Color) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            "CKBadger",
+            Style::default()
+                .fg(TERMINAL_GREEN)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" Monitor", Style::default().fg(FOREGROUND)),
+        Span::styled(" ", Style::default().fg(SLATE_700)),
+        Span::styled(
+            format!(" {} ", mode_text),
+            Style::default().fg(Color::Black).bg(mode_color),
+        ),
+    ])
 }
 
 fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
@@ -2995,12 +2993,12 @@ mod tests {
         consumed_bytes_source_color, consumed_bytes_source_label, dense_right_lines,
         detail_right_lines, diagnostics_dense_panel, eta_confidence_label, format_age_secs,
         format_hit_rate, format_num, format_num_commas, format_ratio, format_signed_num_i128,
-        format_ttl, heartbeat_is_on, io_rpc_jitter_line, overview_log_min_height,
-        overview_services_min_height, pipeline_bottleneck, pipeline_flow_state, rate_jitter,
-        redis_health_state, redis_key_line, redis_max_key_age, runtime_live_delta, sparkline,
-        stack_sync_charts, storage_runtime_columns, sync_bottleneck, trend_delta, trim_for_panel,
-        Color, CompactOverviewLayout, CompactSyncLayout, DiagnosticsViewMode, SyncBottleneck,
-        AMBER, ERROR_RED, TERMINAL_DIM, TERMINAL_GREEN,
+        format_ttl, header_title_line, heartbeat_is_on, io_rpc_jitter_line,
+        overview_log_min_height, overview_services_min_height, pipeline_bottleneck,
+        pipeline_flow_state, rate_jitter, redis_health_state, redis_key_line, redis_max_key_age,
+        runtime_live_delta, sparkline, stack_sync_charts, storage_runtime_columns, sync_bottleneck,
+        trend_delta, trim_for_panel, Color, CompactOverviewLayout, CompactSyncLayout,
+        DiagnosticsViewMode, SyncBottleneck, AMBER, ERROR_RED, TERMINAL_DIM, TERMINAL_GREEN,
     };
     use crate::db::{ApiServiceInfo, RedisServiceInfo};
     use ckbadger_common::MemoryStatsData;
@@ -3013,6 +3011,15 @@ mod tests {
             .iter()
             .map(|span| span.content.as_ref())
             .collect::<String>()
+    }
+
+    #[test]
+    fn test_header_title_line_no_data_source_label() {
+        let line = header_title_line("SYNCING", TERMINAL_DIM);
+        let text = line_text(&line);
+        assert!(text.contains("CKBadger Monitor"));
+        assert!(!text.contains("[DB]"));
+        assert!(!text.contains("[RPC]"));
     }
 
     #[test]
