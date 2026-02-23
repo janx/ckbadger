@@ -176,6 +176,51 @@ fn format_outpoint_sample(outpoints: &[(Vec<u8>, i16)], max_items: usize) -> Str
         .join(", ")
 }
 
+fn parse_udt_cells_with_store_fallback_inner<F>(
+    tx: &crate::rpc::TransactionView,
+    mut standard_lookup: F,
+) -> Vec<(i16, crate::parser::ParsedUdtCell)>
+where
+    F: FnMut(&[u8]) -> Option<String>,
+{
+    let mut parsed = Vec::new();
+    let mut standard_cache: HashMap<Vec<u8>, Option<String>> = HashMap::new();
+
+    for (output_index, (output, data_hex)) in
+        tx.outputs.iter().zip(tx.outputs_data.iter()).enumerate()
+    {
+        if let Some(cell) = UdtParser::parse_udt_cell(output, data_hex) {
+            parsed.push((output_index as i16, cell));
+            continue;
+        }
+
+        let Some(type_script) = output.type_.as_ref() else {
+            continue;
+        };
+
+        let type_script_hash = ScriptParser::compute_script_hash(type_script);
+        let standard_hint = if let Some(cached) = standard_cache.get(&type_script_hash) {
+            cached.clone()
+        } else {
+            let looked_up = standard_lookup(&type_script_hash);
+            standard_cache.insert(type_script_hash.clone(), looked_up.clone());
+            looked_up
+        };
+
+        let Some(standard_hint) = standard_hint else {
+            continue;
+        };
+
+        if let Some(cell) =
+            UdtParser::parse_udt_cell_with_standard_hint(output, data_hex, Some(&standard_hint))
+        {
+            parsed.push((output_index as i16, cell));
+        }
+    }
+
+    parsed
+}
+
 fn should_log_unresolved_retry(attempt: usize) -> bool {
     attempt == 1 || attempt.is_multiple_of(10) || attempt >= PARSER_UNRESOLVED_MAX_RETRIES
 }
@@ -1729,47 +1774,15 @@ impl Indexer {
     fn parse_udt_cells_with_store_fallback(
         &self,
         tx: &crate::rpc::TransactionView,
-    ) -> Vec<crate::parser::ParsedUdtCell> {
-        let mut parsed = Vec::new();
-        let mut standard_cache: HashMap<Vec<u8>, Option<String>> = HashMap::new();
-
-        for (output, data_hex) in tx.outputs.iter().zip(tx.outputs_data.iter()) {
-            if let Some(cell) = UdtParser::parse_udt_cell(output, data_hex) {
-                parsed.push(cell);
-                continue;
-            }
-
-            let Some(type_script) = output.type_.as_ref() else {
-                continue;
-            };
-
-            let type_script_hash = ScriptParser::compute_script_hash(type_script);
-            let standard_hint = if let Some(cached) = standard_cache.get(&type_script_hash) {
-                cached.clone()
-            } else {
-                let looked_up = self
-                    .writer
-                    .store()
-                    .get_token(&type_script_hash)
-                    .ok()
-                    .flatten()
-                    .map(|info| info.standard);
-                standard_cache.insert(type_script_hash.clone(), looked_up.clone());
-                looked_up
-            };
-
-            let Some(standard_hint) = standard_hint else {
-                continue;
-            };
-
-            if let Some(cell) =
-                UdtParser::parse_udt_cell_with_standard_hint(output, data_hex, Some(&standard_hint))
-            {
-                parsed.push(cell);
-            }
-        }
-
-        parsed
+    ) -> Vec<(i16, crate::parser::ParsedUdtCell)> {
+        parse_udt_cells_with_store_fallback_inner(tx, |type_script_hash| {
+            self.writer
+                .store()
+                .get_token(type_script_hash)
+                .ok()
+                .flatten()
+                .map(|info| info.standard)
+        })
     }
 
     pub fn rebuild_pause_flag(&self) -> Arc<std::sync::atomic::AtomicBool> {
@@ -5205,14 +5218,11 @@ impl Indexer {
                     continue;
                 }
                 let tx = &block_response.block.transactions[tx_idx];
-                let output_udts = self.parse_udt_cells_with_store_fallback(tx);
-                for (output_index, udt_cell) in output_udts.iter().enumerate() {
-                    batch_udt_cells.insert(
-                        (tx_data.hash.to_vec(), output_index as i16),
-                        udt_cell.clone(),
-                    );
+                let mut output_udts: Vec<crate::parser::ParsedUdtCell> = Vec::new();
+                for (output_index, udt_cell) in self.parse_udt_cells_with_store_fallback(tx) {
+                    batch_udt_cells.insert((tx_data.hash.to_vec(), output_index), udt_cell.clone());
                     self.udt_cell_cache.insert(
-                        (tx_data.hash, output_index as i16),
+                        (tx_data.hash, output_index),
                         CachedUdtCellInfo {
                             type_script_hash: udt_cell.type_script_hash.clone(),
                             type_code_hash: udt_cell.type_code_hash.clone(),
@@ -5223,6 +5233,7 @@ impl Indexer {
                             standard: udt_cell.standard.as_str().to_string(),
                         },
                     );
+                    output_udts.push(udt_cell);
                 }
                 let input_outpoints: Vec<(Vec<u8>, i16)> = tx_data
                     .inputs
@@ -5880,14 +5891,17 @@ impl Indexer {
                                         continue;
                                     }
                                     let tx = &block_response.block.transactions[tx_idx];
-                                    let output_udts = self.parse_udt_cells_with_store_fallback(tx);
-                                    for (output_index, udt_cell) in output_udts.iter().enumerate() {
+                                    let mut output_udts: Vec<crate::parser::ParsedUdtCell> =
+                                        Vec::new();
+                                    for (output_index, udt_cell) in
+                                        self.parse_udt_cells_with_store_fallback(tx)
+                                    {
                                         batch_udt_cells.insert(
-                                            (tx_data.hash.to_vec(), output_index as i16),
+                                            (tx_data.hash.to_vec(), output_index),
                                             udt_cell.clone(),
                                         );
                                         udt_cache.insert(
-                                            (tx_data.hash, output_index as i16),
+                                            (tx_data.hash, output_index),
                                             CachedUdtCellInfo {
                                                 type_script_hash: udt_cell.type_script_hash.clone(),
                                                 type_code_hash: udt_cell.type_code_hash.clone(),
@@ -5898,6 +5912,7 @@ impl Indexer {
                                                 standard: udt_cell.standard.as_str().to_string(),
                                             },
                                         );
+                                        output_udts.push(udt_cell);
                                     }
                                     let input_outpoints: Vec<(Vec<u8>, i16)> = tx_data
                                         .inputs
@@ -7379,14 +7394,13 @@ impl Indexer {
                             continue;
                         }
                         let tx = &block_response.block.transactions[tx_idx];
-                        let output_udts = self.parse_udt_cells_with_store_fallback(tx);
-                        for (output_index, udt_cell) in output_udts.iter().enumerate() {
-                            batch_udt_cells.insert(
-                                (tx_data.hash.to_vec(), output_index as i16),
-                                udt_cell.clone(),
-                            );
+                        let mut output_udts: Vec<crate::parser::ParsedUdtCell> = Vec::new();
+                        for (output_index, udt_cell) in self.parse_udt_cells_with_store_fallback(tx)
+                        {
+                            batch_udt_cells
+                                .insert((tx_data.hash.to_vec(), output_index), udt_cell.clone());
                             self.udt_cell_cache.insert(
-                                (tx_data.hash, output_index as i16),
+                                (tx_data.hash, output_index),
                                 CachedUdtCellInfo {
                                     type_script_hash: udt_cell.type_script_hash.clone(),
                                     type_code_hash: udt_cell.type_code_hash.clone(),
@@ -7397,6 +7411,7 @@ impl Indexer {
                                     standard: udt_cell.standard.as_str().to_string(),
                                 },
                             );
+                            output_udts.push(udt_cell);
                         }
                         let input_outpoints: Vec<(Vec<u8>, i16)> = tx_data
                             .inputs
@@ -9217,6 +9232,50 @@ mod tests {
         assert!(sample.contains("0x1111111111111111:0"));
         assert!(sample.contains("0x2222222222222222:1"));
         assert!(!sample.contains("0x3333333333333333:2"));
+    }
+
+    #[test]
+    fn test_parse_udt_cells_with_store_fallback_preserves_output_index() {
+        let lock = crate::rpc::Script {
+            code_hash: "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
+                .to_string(),
+            hash_type: "type".to_string(),
+            args: "0x0102030405060708090a0b0c0d0e0f1011121314".to_string(),
+        };
+        let sudt_type = crate::rpc::Script {
+            code_hash: crate::parser::udt::SUDT_CODE_HASH.to_string(),
+            hash_type: "type".to_string(),
+            args: "0xa92deeb134132d493d340f2cc4e7b62f930bcd037f0fb7f06b48f931f36f9fc2".to_string(),
+        };
+        let tx = crate::rpc::TransactionView {
+            hash: format!("0x{}", "11".repeat(32)),
+            version: "0x0".to_string(),
+            cell_deps: vec![],
+            header_deps: vec![],
+            inputs: vec![],
+            outputs: vec![
+                crate::rpc::CellOutput {
+                    capacity: "0x0".to_string(),
+                    lock: lock.clone(),
+                    type_: None,
+                },
+                crate::rpc::CellOutput {
+                    capacity: "0x0".to_string(),
+                    lock,
+                    type_: Some(sudt_type),
+                },
+            ],
+            outputs_data: vec![
+                "0x".to_string(),
+                "0x01000000000000000000000000000000".to_string(),
+            ],
+            witnesses: vec![],
+        };
+
+        let parsed = parse_udt_cells_with_store_fallback_inner(&tx, |_| None);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].0, 1);
+        assert_eq!(parsed[0].1.amount, 1);
     }
 
     #[test]
