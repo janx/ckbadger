@@ -6,7 +6,9 @@ use rocksdb::{IteratorMode, WriteBatch};
 
 use crate::keys;
 use crate::store::CkbadgerStore;
-use crate::types::{LiveCellInfo, TokenDailyDelta, TokenInfo, TokenTransferRecord};
+use crate::types::{
+    decode_consumed_cell_info, LiveCellInfo, TokenDailyDelta, TokenInfo, TokenTransferRecord,
+};
 
 const TOKEN_REBUILD_BATCH_SIZE: usize = 20_000;
 
@@ -30,6 +32,24 @@ pub struct TokenStateRebuildResult {
     pub token_holders_written: u64,
     pub token_transfer_stats_written: u64,
     pub token_hourly_stats_written: u64,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct TokenDailyRebuildResult {
+    pub token_daily_cleared: u64,
+    pub token_daily_written: u64,
+    pub live_cells_scanned: u64,
+    pub consumed_cells_scanned: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct TokenDailyValidationError {
+    pub type_hash: Vec<u8>,
+    pub date_yyyymmdd: u32,
+    pub live_capacity: i128,
+    pub live_occupied_capacity: i128,
+    pub capacity_delta: i128,
+    pub occupied_delta: i128,
 }
 
 #[derive(Debug, Default)]
@@ -64,6 +84,92 @@ fn update_first_seen(first_seen: &mut Option<i64>, candidate: i64) {
     if first_seen.is_none_or(|current| candidate < current) {
         *first_seen = Some(candidate);
     }
+}
+
+fn effective_occupied_capacity(
+    info: &LiveCellInfo,
+    outpoint_key: &[u8],
+    source: &str,
+) -> anyhow::Result<i64> {
+    if info.occupied_capacity > 0 {
+        if info.occupied_capacity > info.capacity {
+            anyhow::bail!(
+                "token daily rebuild found occupied capacity exceeding capacity in {} cell: outpoint=0x{}, occupied_capacity={}, capacity={}",
+                source,
+                bytes_to_hex(outpoint_key),
+                info.occupied_capacity,
+                info.capacity
+            );
+        }
+        return Ok(info.occupied_capacity);
+    }
+
+    let lock_script_size = 32i64
+        .checked_add(1)
+        .and_then(|x| x.checked_add(i64::try_from(info.lock_args.len()).ok()?))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "token daily rebuild lock script size overflow in {} cell: outpoint=0x{}",
+                source,
+                bytes_to_hex(outpoint_key)
+            )
+        })?;
+
+    let type_script_size = if info.type_script_hash.is_some() {
+        let type_args = info.type_args.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "token daily rebuild missing type_args for typed {} cell: outpoint=0x{}",
+                source,
+                bytes_to_hex(outpoint_key)
+            )
+        })?;
+        32i64
+            .checked_add(1)
+            .and_then(|x| x.checked_add(i64::try_from(type_args.len()).ok()?))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "token daily rebuild type script size overflow in {} cell: outpoint=0x{}",
+                    source,
+                    bytes_to_hex(outpoint_key)
+                )
+            })?
+    } else {
+        0
+    };
+
+    if info.data_size < 0 {
+        anyhow::bail!(
+            "token daily rebuild found negative data_size in {} cell: outpoint=0x{}, data_size={}",
+            source,
+            bytes_to_hex(outpoint_key),
+            info.data_size
+        );
+    }
+    let data_size = i64::from(info.data_size);
+    let occupied = (8i64)
+        .checked_add(lock_script_size)
+        .and_then(|x| x.checked_add(type_script_size))
+        .and_then(|x| x.checked_add(data_size))
+        .and_then(|x| x.checked_mul(100_000_000))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "token daily rebuild occupied capacity overflow in {} cell: outpoint=0x{}",
+                source,
+                bytes_to_hex(outpoint_key)
+            )
+        })?;
+
+    if occupied <= 0 || occupied > info.capacity {
+        anyhow::bail!(
+            "token daily rebuild computed invalid occupied capacity in {} cell: outpoint=0x{}, occupied_capacity={}, capacity={}",
+            source,
+            bytes_to_hex(outpoint_key),
+            occupied,
+            info.capacity
+        );
+    }
+
+    Ok(occupied)
 }
 
 impl CkbadgerStore {
@@ -208,6 +314,364 @@ impl CkbadgerStore {
         }
 
         Ok(results)
+    }
+
+    /// Return the first invalid token daily accumulation (if any).
+    ///
+    /// Validity checks are applied in per-token date order:
+    /// - running live capacity must be >= 0
+    /// - running live occupied capacity must be >= 0
+    /// - running live occupied capacity must be <= running live capacity
+    pub fn find_first_invalid_token_daily_delta(
+        &self,
+    ) -> anyhow::Result<Option<TokenDailyValidationError>> {
+        let start = [keys::STATS_PREFIX_TOKEN_DAILY];
+        let iter = self.iterator_cf(
+            self.cf_stats(),
+            IteratorMode::From(&start, rocksdb::Direction::Forward),
+        );
+
+        let mut current_type_hash: Option<Vec<u8>> = None;
+        let mut live_capacity: i128 = 0;
+        let mut live_occupied_capacity: i128 = 0;
+
+        for item in iter.flatten() {
+            let (key, value) = item;
+            if key.first().copied() != Some(keys::STATS_PREFIX_TOKEN_DAILY) {
+                break;
+            }
+            if key.len() != keys::TOKEN_DAILY_KEY_SIZE {
+                anyhow::bail!(
+                    "invalid token daily key length while validating token daily deltas: key_len={}, key=0x{}",
+                    key.len(),
+                    bytes_to_hex(&key)
+                );
+            }
+
+            let (type_hash, date_yyyymmdd) = keys::decode_token_daily_key(&key);
+            let delta: TokenDailyDelta = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize token daily delta while validating: type_hash=0x{}, date={}, error={}",
+                    bytes_to_hex(&type_hash),
+                    date_yyyymmdd,
+                    e
+                )
+            })?;
+
+            if current_type_hash.as_ref() != Some(&type_hash) {
+                current_type_hash = Some(type_hash.clone());
+                live_capacity = 0;
+                live_occupied_capacity = 0;
+            }
+
+            live_capacity = live_capacity
+                .checked_add(delta.live_capacity_delta)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "token daily validation overflow on capacity: type_hash=0x{}, date={}, current={}, delta={}",
+                        bytes_to_hex(&type_hash),
+                        date_yyyymmdd,
+                        live_capacity,
+                        delta.live_capacity_delta
+                    )
+                })?;
+            live_occupied_capacity = live_occupied_capacity
+                .checked_add(delta.live_occupied_capacity_delta)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "token daily validation overflow on occupied capacity: type_hash=0x{}, date={}, current={}, delta={}",
+                        bytes_to_hex(&type_hash),
+                        date_yyyymmdd,
+                        live_occupied_capacity,
+                        delta.live_occupied_capacity_delta
+                    )
+                })?;
+
+            if live_capacity < 0
+                || live_occupied_capacity < 0
+                || live_occupied_capacity > live_capacity
+            {
+                return Ok(Some(TokenDailyValidationError {
+                    type_hash,
+                    date_yyyymmdd,
+                    live_capacity,
+                    live_occupied_capacity,
+                    capacity_delta: delta.live_capacity_delta,
+                    occupied_delta: delta.live_occupied_capacity_delta,
+                }));
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Rebuild token daily deltas from canonical cell sets (`live_cells` + `consumed_cells`).
+    ///
+    /// For each token cell:
+    /// - add `(capacity, occupied)` at `created_at_block` day
+    /// - if consumed, subtract `(capacity, occupied)` at `consumed_at_block` day
+    #[allow(clippy::too_many_lines)]
+    pub fn rebuild_token_daily_deltas_from_cells(&self) -> anyhow::Result<TokenDailyRebuildResult> {
+        let mut result = TokenDailyRebuildResult::default();
+        let mut block_date_cache: HashMap<i64, u32> = HashMap::new();
+        let mut daily: HashMap<(Vec<u8>, u32), (i128, i128)> = HashMap::new();
+
+        let mut resolve_date = |block_number: i64| -> anyhow::Result<u32> {
+            if let Some(date) = block_date_cache.get(&block_number).copied() {
+                return Ok(date);
+            }
+            let header = self.get_block_header(block_number)?.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "missing block header while rebuilding token daily deltas: block_number={}",
+                    block_number
+                )
+            })?;
+            let date = keys::timestamp_ms_to_date(header.timestamp);
+            block_date_cache.insert(block_number, date);
+            Ok(date)
+        };
+
+        // 1) Aggregate live cells: +created
+        let iter = self.iterator_cf(self.cf_live_cells(), IteratorMode::Start);
+        for item in iter.flatten() {
+            let (key, value) = item;
+            result.live_cells_scanned += 1;
+
+            if key.len() != keys::OUTPOINT_KEY_SIZE {
+                continue;
+            }
+
+            let info: LiveCellInfo = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize live cell while rebuilding token daily deltas: outpoint=0x{}, error={}",
+                    bytes_to_hex(&key),
+                    e
+                )
+            })?;
+            let Some(type_hash) = info.type_script_hash.as_ref() else {
+                continue;
+            };
+            let date = resolve_date(info.created_at_block)?;
+            let occupied = effective_occupied_capacity(&info, &key, "live")?;
+
+            let entry = daily.entry((type_hash.clone(), date)).or_insert((0, 0));
+            entry.0 = entry
+                .0
+                .checked_add(i128::from(info.capacity))
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "token daily rebuild capacity overflow from live cell: type_hash=0x{}, date={}, current={}, delta={}",
+                        bytes_to_hex(type_hash),
+                        date,
+                        entry.0,
+                        info.capacity
+                    )
+                })?;
+            entry.1 = entry
+                .1
+                .checked_add(i128::from(occupied))
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "token daily rebuild occupied overflow from live cell: type_hash=0x{}, date={}, current={}, delta={}",
+                        bytes_to_hex(type_hash),
+                        date,
+                        entry.1,
+                        occupied
+                    )
+                })?;
+        }
+
+        // 2) Aggregate consumed cells: +created, -consumed
+        let iter = self.iterator_cf(self.cf_consumed_cells(), IteratorMode::Start);
+        for item in iter.flatten() {
+            let (key, value) = item;
+            result.consumed_cells_scanned += 1;
+
+            if key.len() != keys::OUTPOINT_KEY_SIZE {
+                continue;
+            }
+
+            let consumed = decode_consumed_cell_info(&value).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "failed to decode consumed cell while rebuilding token daily deltas: outpoint=0x{}",
+                    bytes_to_hex(&key)
+                )
+            })?;
+            let info = consumed.cell;
+            let Some(type_hash) = info.type_script_hash.as_ref() else {
+                continue;
+            };
+
+            let created_date = resolve_date(info.created_at_block)?;
+            let consumed_date = resolve_date(consumed.consumed_at_block)?;
+            let occupied = effective_occupied_capacity(&info, &key, "consumed")?;
+
+            let created = daily
+                .entry((type_hash.clone(), created_date))
+                .or_insert((0, 0));
+            created.0 = created
+                .0
+                .checked_add(i128::from(info.capacity))
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "token daily rebuild capacity overflow on consumed-created edge: type_hash=0x{}, date={}, current={}, delta={}",
+                        bytes_to_hex(type_hash),
+                        created_date,
+                        created.0,
+                        info.capacity
+                    )
+                })?;
+            created.1 = created
+                .1
+                .checked_add(i128::from(occupied))
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "token daily rebuild occupied overflow on consumed-created edge: type_hash=0x{}, date={}, current={}, delta={}",
+                        bytes_to_hex(type_hash),
+                        created_date,
+                        created.1,
+                        occupied
+                    )
+                })?;
+
+            let consumed_entry = daily
+                .entry((type_hash.clone(), consumed_date))
+                .or_insert((0, 0));
+            consumed_entry.0 = consumed_entry
+                .0
+                .checked_sub(i128::from(info.capacity))
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "token daily rebuild capacity overflow on consumed edge: type_hash=0x{}, date={}, current={}, delta=-{}",
+                        bytes_to_hex(type_hash),
+                        consumed_date,
+                        consumed_entry.0,
+                        info.capacity
+                    )
+                })?;
+            consumed_entry.1 = consumed_entry
+                .1
+                .checked_sub(i128::from(occupied))
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "token daily rebuild occupied overflow on consumed edge: type_hash=0x{}, date={}, current={}, delta=-{}",
+                        bytes_to_hex(type_hash),
+                        consumed_date,
+                        consumed_entry.1,
+                        occupied
+                    )
+                })?;
+        }
+
+        // Keep only non-zero daily entries, then validate per-token running totals.
+        let mut entries: Vec<(Vec<u8>, u32, i128, i128)> = daily
+            .into_iter()
+            .filter_map(|((type_hash, date), (capacity_delta, occupied_delta))| {
+                if capacity_delta == 0 && occupied_delta == 0 {
+                    None
+                } else {
+                    Some((type_hash, date, capacity_delta, occupied_delta))
+                }
+            })
+            .collect();
+        entries.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+
+        let mut current_type_hash: Option<Vec<u8>> = None;
+        let mut live_capacity: i128 = 0;
+        let mut live_occupied_capacity: i128 = 0;
+        for (type_hash, date_yyyymmdd, capacity_delta, occupied_delta) in &entries {
+            if current_type_hash.as_ref() != Some(type_hash) {
+                current_type_hash = Some(type_hash.clone());
+                live_capacity = 0;
+                live_occupied_capacity = 0;
+            }
+
+            live_capacity = live_capacity.checked_add(*capacity_delta).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "token daily rebuild validation overflow on capacity: type_hash=0x{}, date={}, current={}, delta={}",
+                    bytes_to_hex(type_hash),
+                    date_yyyymmdd,
+                    live_capacity,
+                    capacity_delta
+                )
+            })?;
+            live_occupied_capacity = live_occupied_capacity
+                .checked_add(*occupied_delta)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "token daily rebuild validation overflow on occupied capacity: type_hash=0x{}, date={}, current={}, delta={}",
+                        bytes_to_hex(type_hash),
+                        date_yyyymmdd,
+                        live_occupied_capacity,
+                        occupied_delta
+                    )
+                })?;
+
+            if live_capacity < 0
+                || live_occupied_capacity < 0
+                || live_occupied_capacity > live_capacity
+            {
+                anyhow::bail!(
+                    "token daily rebuild produced invalid accumulation: type_hash=0x{}, date={}, live_capacity={}, live_occupied_capacity={}, delta_capacity={}, delta_occupied={}",
+                    bytes_to_hex(type_hash),
+                    date_yyyymmdd,
+                    live_capacity,
+                    live_occupied_capacity,
+                    capacity_delta,
+                    occupied_delta
+                );
+            }
+        }
+
+        // 3) Clear all existing token_daily entries.
+        let mut write_batch = WriteBatch::default();
+        let start = [keys::STATS_PREFIX_TOKEN_DAILY];
+        let iter = self.iterator_cf(
+            self.cf_stats(),
+            IteratorMode::From(&start, rocksdb::Direction::Forward),
+        );
+        for item in iter.flatten() {
+            let (key, _) = item;
+            if key.first().copied() != Some(keys::STATS_PREFIX_TOKEN_DAILY) {
+                break;
+            }
+            write_batch.delete_cf(self.cf_stats(), &key);
+            result.token_daily_cleared += 1;
+            if result
+                .token_daily_cleared
+                .is_multiple_of(TOKEN_REBUILD_BATCH_SIZE as u64)
+            {
+                self.write_batch(std::mem::take(&mut write_batch))?;
+                write_batch = WriteBatch::default();
+            }
+        }
+        if !write_batch.is_empty() {
+            self.write_batch(write_batch)?;
+        }
+
+        // 4) Write rebuilt entries.
+        let mut write_batch = WriteBatch::default();
+        for (type_hash, date_yyyymmdd, capacity_delta, occupied_delta) in entries {
+            let key = keys::encode_token_daily_key(&type_hash, date_yyyymmdd);
+            let value = bincode::serialize(&TokenDailyDelta {
+                live_capacity_delta: capacity_delta,
+                live_occupied_capacity_delta: occupied_delta,
+            })?;
+            write_batch.put_cf(self.cf_stats(), key, value);
+            result.token_daily_written += 1;
+            if result
+                .token_daily_written
+                .is_multiple_of(TOKEN_REBUILD_BATCH_SIZE as u64)
+            {
+                self.write_batch(std::mem::take(&mut write_batch))?;
+                write_batch = WriteBatch::default();
+            }
+        }
+        if !write_batch.is_empty() {
+            self.write_batch(write_batch)?;
+        }
+
+        Ok(result)
     }
 
     /// Scan ALL hourly transfer entries in one pass and group by type_hash.
@@ -746,6 +1210,7 @@ impl CkbadgerStore {
 mod tests {
     use super::*;
     use crate::batch::StoreBatch;
+    use crate::types::CachedBlockHeader;
     use tempfile::TempDir;
 
     fn test_store() -> (TempDir, CkbadgerStore) {
@@ -887,6 +1352,184 @@ mod tests {
             .unwrap();
         assert_eq!(ranged.len(), 1);
         assert_eq!(ranged[0].0, 20240116);
+    }
+
+    fn make_header(hash_byte: u8, timestamp: i64) -> CachedBlockHeader {
+        CachedBlockHeader {
+            hash: vec![hash_byte; 32],
+            timestamp,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        }
+    }
+
+    fn make_token_cell(
+        lock_byte: u8,
+        type_hash: &[u8],
+        created_at_block: i64,
+        capacity: i64,
+        occupied_capacity: i64,
+    ) -> LiveCellInfo {
+        LiveCellInfo {
+            capacity,
+            created_at_block,
+            lock_script_hash: vec![lock_byte; 32],
+            lock_code_hash: vec![0x33; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: Some(type_hash.to_vec()),
+            type_code_hash: Some(vec![0x11; 32]),
+            type_args: Some(vec![0x22; 32]),
+            data_size: 16,
+            occupied_capacity,
+            udt_amount: Some(1),
+        }
+    }
+
+    #[test]
+    fn test_find_first_invalid_token_daily_delta_none_for_valid_data() {
+        let (_dir, store) = test_store();
+        let type_hash = [0x11u8; 32];
+
+        store
+            .put_token_daily_delta(
+                &type_hash,
+                20240101,
+                &TokenDailyDelta {
+                    live_capacity_delta: 1_000,
+                    live_occupied_capacity_delta: 600,
+                },
+            )
+            .unwrap();
+        store
+            .put_token_daily_delta(
+                &type_hash,
+                20240102,
+                &TokenDailyDelta {
+                    live_capacity_delta: -200,
+                    live_occupied_capacity_delta: -100,
+                },
+            )
+            .unwrap();
+
+        assert!(store
+            .find_first_invalid_token_daily_delta()
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn test_find_first_invalid_token_daily_delta_reports_first_violation() {
+        let (_dir, store) = test_store();
+        let type_good = [0x01u8; 32];
+        let type_bad = [0x02u8; 32];
+
+        store
+            .put_token_daily_delta(
+                &type_good,
+                20240101,
+                &TokenDailyDelta {
+                    live_capacity_delta: 500,
+                    live_occupied_capacity_delta: 300,
+                },
+            )
+            .unwrap();
+        store
+            .put_token_daily_delta(
+                &type_bad,
+                20240101,
+                &TokenDailyDelta {
+                    live_capacity_delta: 100,
+                    live_occupied_capacity_delta: 120,
+                },
+            )
+            .unwrap();
+
+        let invalid = store
+            .find_first_invalid_token_daily_delta()
+            .unwrap()
+            .expect("expected invalid token daily delta");
+        assert_eq!(invalid.type_hash, type_bad.to_vec());
+        assert_eq!(invalid.date_yyyymmdd, 20240101);
+        assert_eq!(invalid.live_capacity, 100);
+        assert_eq!(invalid.live_occupied_capacity, 120);
+        assert_eq!(invalid.capacity_delta, 100);
+        assert_eq!(invalid.occupied_delta, 120);
+    }
+
+    #[test]
+    fn test_rebuild_token_daily_deltas_from_cells_rebuilds_from_live_and_consumed() {
+        let (_dir, store) = test_store();
+        let type_hash = vec![0xAB; 32];
+        let day1_ts = 1_704_067_200_000i64; // 2024-01-01T00:00:00Z
+        let day2_ts = 1_704_153_600_000i64; // 2024-01-02T00:00:00Z
+        let day1 = keys::timestamp_ms_to_date(day1_ts);
+        let day2 = keys::timestamp_ms_to_date(day2_ts);
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(1, &make_header(0x01, day1_ts));
+        batch.put_block_header(2, &make_header(0x02, day2_ts));
+        batch.put_cell(
+            &[0x11; 32],
+            0,
+            &make_token_cell(0xAA, &type_hash, 1, 1_000, 600),
+        );
+        batch.put_consumed_cell(
+            &[0x22; 32],
+            0,
+            &make_token_cell(0xBB, &type_hash, 1, 400, 300),
+            2,
+        );
+        batch.commit().unwrap();
+
+        // Seed stale/invalid token daily rows to prove rebuild clears and rewrites them.
+        store
+            .put_token_daily_delta(
+                &type_hash,
+                day1,
+                &TokenDailyDelta {
+                    live_capacity_delta: -1,
+                    live_occupied_capacity_delta: 2,
+                },
+            )
+            .unwrap();
+        store
+            .put_token_daily_delta(
+                &type_hash,
+                day2,
+                &TokenDailyDelta {
+                    live_capacity_delta: 123,
+                    live_occupied_capacity_delta: 456,
+                },
+            )
+            .unwrap();
+
+        let rebuild = store.rebuild_token_daily_deltas_from_cells().unwrap();
+        assert_eq!(rebuild.live_cells_scanned, 1);
+        assert_eq!(rebuild.consumed_cells_scanned, 1);
+        assert_eq!(rebuild.token_daily_cleared, 2);
+        assert_eq!(rebuild.token_daily_written, 2);
+
+        let d1 = store
+            .get_token_daily_delta(&type_hash, day1)
+            .unwrap()
+            .expect("missing day1 delta");
+        let d2 = store
+            .get_token_daily_delta(&type_hash, day2)
+            .unwrap()
+            .expect("missing day2 delta");
+        assert_eq!(d1.live_capacity_delta, 1_400);
+        assert_eq!(d1.live_occupied_capacity_delta, 900);
+        assert_eq!(d2.live_capacity_delta, -400);
+        assert_eq!(d2.live_occupied_capacity_delta, -300);
+
+        assert!(store
+            .find_first_invalid_token_daily_delta()
+            .unwrap()
+            .is_none());
     }
 
     #[test]

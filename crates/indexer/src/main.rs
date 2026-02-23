@@ -194,6 +194,57 @@ fn should_force_startup_cleanup(
     !clean_shutdown_marker_for_same_run
 }
 
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(&mut out, "{:02x}", b);
+    }
+    out
+}
+
+fn reconcile_token_daily_deltas_on_startup(store: &CkbadgerStore) -> Result<()> {
+    let Some(invalid) = store.find_first_invalid_token_daily_delta()? else {
+        return Ok(());
+    };
+
+    let type_hash_hex = bytes_to_hex(&invalid.type_hash);
+    warn!(
+        type_hash = %type_hash_hex,
+        date = invalid.date_yyyymmdd,
+        live_capacity = invalid.live_capacity,
+        live_occupied_capacity = invalid.live_occupied_capacity,
+        capacity_delta = invalid.capacity_delta,
+        occupied_delta = invalid.occupied_delta,
+        "Detected invalid token daily deltas; rebuilding from cells"
+    );
+
+    let rebuilt = store.rebuild_token_daily_deltas_from_cells()?;
+    info!(
+        token_daily_cleared = rebuilt.token_daily_cleared,
+        token_daily_written = rebuilt.token_daily_written,
+        live_cells_scanned = rebuilt.live_cells_scanned,
+        consumed_cells_scanned = rebuilt.consumed_cells_scanned,
+        "Startup token daily delta rebuild complete"
+    );
+
+    if let Some(still_invalid) = store.find_first_invalid_token_daily_delta()? {
+        anyhow::bail!(
+            "token daily delta rebuild failed validation: type_hash=0x{}, date={}, live_capacity={}, live_occupied_capacity={}, capacity_delta={}, occupied_delta={}",
+            bytes_to_hex(&still_invalid.type_hash),
+            still_invalid.date_yyyymmdd,
+            still_invalid.live_capacity,
+            still_invalid.live_occupied_capacity,
+            still_invalid.capacity_delta,
+            still_invalid.occupied_delta
+        );
+    }
+
+    info!("Startup token daily deltas validation passed after rebuild");
+    Ok(())
+}
+
 #[cfg(unix)]
 async fn wait_for_shutdown_signal() -> std::io::Result<&'static str> {
     use tokio::signal::unix::{signal, SignalKind};
@@ -280,6 +331,8 @@ async fn run_sync(args: Cli) -> Result<()> {
         })?;
         sync_status = store.get_sync_status()?;
     }
+
+    reconcile_token_daily_deltas_on_startup(&store)?;
 
     let repo = Repository::new(store.clone());
     let (db_tip, db_tip_hash) = repo.get_sync_tip().await?;
@@ -666,10 +719,13 @@ async fn run_label_import_command(
 #[cfg(test)]
 mod tests {
     use super::{
-        queue_fill_pct, should_emit_rate_limited, should_force_startup_cleanup,
-        should_warn_progress_stall,
+        queue_fill_pct, reconcile_token_daily_deltas_on_startup, should_emit_rate_limited,
+        should_force_startup_cleanup, should_warn_progress_stall,
     };
-    use ckbadger_store::RuntimeStatus;
+    use ckbadger_store::{
+        types::{CachedBlockHeader, LiveCellInfo, TokenDailyDelta},
+        CkbadgerStore, RuntimeStatus, StoreBatch,
+    };
     use std::time::{Duration, Instant};
 
     #[test]
@@ -792,5 +848,114 @@ mod tests {
             ..Default::default()
         };
         assert!(!should_force_startup_cleanup(&runtime, false));
+    }
+
+    #[test]
+    fn test_reconcile_token_daily_deltas_on_startup_rebuilds_invalid_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let type_hash = vec![0xAB; 32];
+        let day1_ts = 1_704_067_200_000i64; // 2024-01-01T00:00:00Z
+        let day2_ts = 1_704_153_600_000i64; // 2024-01-02T00:00:00Z
+        let day1 = ckbadger_store::keys::timestamp_ms_to_date(day1_ts);
+        let day2 = ckbadger_store::keys::timestamp_ms_to_date(day2_ts);
+
+        let header1 = CachedBlockHeader {
+            hash: vec![0x01; 32],
+            timestamp: day1_ts,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+        let header2 = CachedBlockHeader {
+            hash: vec![0x02; 32],
+            timestamp: day2_ts,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+        let live_cell = LiveCellInfo {
+            capacity: 1_000,
+            created_at_block: 1,
+            lock_script_hash: vec![0xAA; 32],
+            lock_code_hash: vec![0x33; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: Some(type_hash.clone()),
+            type_code_hash: Some(vec![0x11; 32]),
+            type_args: Some(vec![0x22; 32]),
+            data_size: 16,
+            occupied_capacity: 600,
+            udt_amount: Some(1),
+        };
+        let consumed_cell = LiveCellInfo {
+            capacity: 400,
+            created_at_block: 1,
+            lock_script_hash: vec![0xBB; 32],
+            lock_code_hash: vec![0x33; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: Some(type_hash.clone()),
+            type_code_hash: Some(vec![0x11; 32]),
+            type_args: Some(vec![0x22; 32]),
+            data_size: 16,
+            occupied_capacity: 300,
+            udt_amount: Some(1),
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(1, &header1);
+        batch.put_block_header(2, &header2);
+        batch.put_cell(&[0x10; 32], 0, &live_cell);
+        batch.put_consumed_cell(&[0x20; 32], 0, &consumed_cell, 2);
+        batch.commit().unwrap();
+
+        store
+            .put_token_daily_delta(
+                &type_hash,
+                day1,
+                &TokenDailyDelta {
+                    live_capacity_delta: 100,
+                    live_occupied_capacity_delta: 200,
+                },
+            )
+            .unwrap();
+        store
+            .put_token_daily_delta(
+                &type_hash,
+                day2,
+                &TokenDailyDelta {
+                    live_capacity_delta: 50,
+                    live_occupied_capacity_delta: 50,
+                },
+            )
+            .unwrap();
+        assert!(store
+            .find_first_invalid_token_daily_delta()
+            .unwrap()
+            .is_some());
+
+        reconcile_token_daily_deltas_on_startup(&store).unwrap();
+
+        let day1_delta = store
+            .get_token_daily_delta(&type_hash, day1)
+            .unwrap()
+            .expect("missing day1 delta");
+        let day2_delta = store
+            .get_token_daily_delta(&type_hash, day2)
+            .unwrap()
+            .expect("missing day2 delta");
+        assert_eq!(day1_delta.live_capacity_delta, 1_400);
+        assert_eq!(day1_delta.live_occupied_capacity_delta, 900);
+        assert_eq!(day2_delta.live_capacity_delta, -400);
+        assert_eq!(day2_delta.live_occupied_capacity_delta, -300);
+        assert!(store
+            .find_first_invalid_token_daily_delta()
+            .unwrap()
+            .is_none());
     }
 }
