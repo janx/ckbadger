@@ -22,6 +22,7 @@ type LensStage = 'mempool' | 'proposed' | 'committed';
 interface LensTxItem {
   id: string;
   stage: LensStage;
+  isCellbase: boolean;
   proposalId?: string | null;
   size: number;
   fee?: number | null;
@@ -306,7 +307,13 @@ function splitProposalBuckets(proposals: PendingProposal[]): {
   return { nextBlockProposals, backlogProposals };
 }
 
-function lensColor(stage: LensStage, feeScore: number, missing: boolean): string {
+function lensColor(
+  stage: LensStage,
+  feeScore: number,
+  missing: boolean,
+  isCellbase: boolean
+): string {
+  if (isCellbase) return 'rgba(74, 222, 128, 0.24)';
   if (missing) return 'rgba(148, 163, 184, 0.55)';
 
   const alpha = 0.35 + feeScore * 0.5;
@@ -325,6 +332,7 @@ function mempoolTxToLensItem(tx: {
   return {
     id: tx.txHash,
     stage: 'mempool',
+    isCellbase: false,
     size: toSafePositive(tx.size, 220),
     fee: tx.fee,
     feeRate: tx.feeRate,
@@ -353,6 +361,7 @@ function proposalToLensItem(
   return {
     id: proposal.fullTxHash || proposal.proposalId,
     stage: 'proposed',
+    isCellbase: false,
     proposalId: proposal.proposalId,
     size: toSafePositive(mergedSize, 220),
     fee: mergedFee,
@@ -368,6 +377,7 @@ function committedTxToLensItem(tx: Transaction): LensTxItem {
   return {
     id: tx.hash,
     stage: 'committed',
+    isCellbase: tx.isCellbase,
     size: toSafePositive(tx.txSize, 220),
     fee,
     feeRate,
@@ -402,6 +412,7 @@ function txBubbleTitle(item: LensTxItem): string {
   const proposal = shortProposalLabel(item.proposalId);
   return [
     `TX: ${item.id.slice(0, 10)}...${item.id.slice(-6)}`,
+    item.isCellbase ? 'Type: Cellbase' : null,
     proposal ? `Proposal: ${proposal}` : null,
     `Stage: ${item.stage}`,
     `Size: ${Math.round(item.size).toLocaleString()} B`,
@@ -423,6 +434,8 @@ function toTxBubble(item: LensTxItem, metrics: RectMetrics, jitterSeed: string):
   const top = plotPadding + rawTop * (1 - plotPadding * 2);
   const widthPx = 8 + metrics.sizeScore * 18;
   const heightPx = 6 + metrics.cyclesScore * 14;
+  const hasMissingMetrics = metrics.missingCycles || metrics.missingFee || metrics.missingFeeRate;
+  const isCellbase = item.isCellbase;
 
   return {
     id: item.id,
@@ -430,16 +443,17 @@ function toTxBubble(item: LensTxItem, metrics: RectMetrics, jitterSeed: string):
     top,
     widthPx,
     heightPx,
-    color: lensColor(item.stage, metrics.feeRateScore, metrics.missingFeeRate),
-    border:
-      metrics.missingCycles || metrics.missingFee || metrics.missingFeeRate
+    color: lensColor(item.stage, metrics.feeRateScore, hasMissingMetrics, isCellbase),
+    border: isCellbase
+      ? '1px solid rgba(167, 243, 208, 0.72)'
+      : hasMissingMetrics
         ? '1px dashed rgba(148, 163, 184, 0.82)'
         : '1px solid rgba(226, 232, 240, 0.55)',
-    opacity: metrics.missingCycles || metrics.missingFee || metrics.missingFeeRate ? 0.56 : 0.9,
+    opacity: isCellbase ? 0.42 : hasMissingMetrics ? 0.56 : 0.9,
     title: txBubbleTitle(item),
     txLabel: `${item.id.slice(0, 10)}...${item.id.slice(-6)}`,
     proposalLabel: shortProposalLabel(item.proposalId),
-    stageLabel: item.stage,
+    stageLabel: isCellbase ? `${item.stage} (cellbase)` : item.stage,
     sizeLabel: `${Math.round(item.size).toLocaleString()} B`,
     feeLabel: formatLensFee(item.fee),
     feeRateLabel: formatLensFeeRate(item.feeRate),
@@ -1241,7 +1255,7 @@ export function MempoolBlocks({
 
     const committedTxs = committedTxQueries.flatMap((query) => query.data?.data ?? []);
     return sampleItems(
-      committedTxs.filter((tx) => !tx.isCellbase).map((tx) => committedTxToLensItem(tx)),
+      committedTxs.map((tx) => committedTxToLensItem(tx)),
       MAX_LENS_STAGE_ITEMS
     );
   }, [committedTxQueries, showTxnLens]);
@@ -1280,7 +1294,7 @@ export function MempoolBlocks({
     displayedMinedBlocks.forEach((block, index) => {
       const queryData = committedTxQueries[index]?.data?.data ?? [];
       const sampled = sampleItems(
-        queryData.filter((tx) => !tx.isCellbase).map((tx) => committedTxToLensItem(tx)),
+        queryData.map((tx) => committedTxToLensItem(tx)),
         14
       );
       mapped.set(block.number, sampled);

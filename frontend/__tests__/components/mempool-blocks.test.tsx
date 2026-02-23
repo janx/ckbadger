@@ -137,10 +137,23 @@ describe('MempoolBlocks', () => {
       return {
         data: [
           {
-            hash: `0xblocktx-${blockNumber}`,
+            hash: `0xcellbase-${blockNumber}`,
             blockNumber,
             blockHash: `0xhash-${blockNumber}`,
             index: 0,
+            inputsCount: 1,
+            outputsCount: 1,
+            fee: '0',
+            txSize: 280,
+            cycles: undefined,
+            isCellbase: true,
+            timestamp: '2024-01-15T10:30:00Z',
+          },
+          {
+            hash: `0xblocktx-${blockNumber}`,
+            blockNumber,
+            blockHash: `0xhash-${blockNumber}`,
+            index: 1,
             inputsCount: 1,
             outputsCount: 2,
             fee: '2200',
@@ -150,7 +163,7 @@ describe('MempoolBlocks', () => {
             timestamp: '2024-01-15T10:30:00Z',
           },
         ],
-        total: 1,
+        total: 2,
         limit: 80,
         hasMore: false,
         nextCursor: null,
@@ -193,6 +206,12 @@ describe('MempoolBlocks', () => {
     await waitFor(() => {
       expect(document.querySelectorAll('[data-tx-tooltip*="Stage:"]').length).toBeGreaterThan(0);
     });
+
+    const cellbaseBubble = Array.from(
+      document.querySelectorAll<HTMLElement>('[data-tx-tooltip]')
+    ).find((bubble) => (bubble.getAttribute('data-tx-tooltip') ?? '').includes('Type: Cellbase'));
+    expect(cellbaseBubble).toBeTruthy();
+    expect(cellbaseBubble?.style.opacity).toBe('0.42');
 
     const firstBubble = document.querySelector('[data-tx-tooltip]');
     expect(firstBubble).toBeTruthy();
