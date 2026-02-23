@@ -1,4 +1,5 @@
 pub mod cycles;
+pub mod cycles_task;
 pub mod dao;
 pub mod error;
 pub mod hardfork;

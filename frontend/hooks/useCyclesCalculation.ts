@@ -1,52 +1,70 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 
 export function useCyclesCalculation(
   hash: string,
-  txCycles: number | undefined,
+  txCycles: number | null | undefined,
   isCellbase: boolean
 ) {
   const queryClient = useQueryClient();
   const [isCalculating, setIsCalculating] = useState(false);
   const [hasFailed, setHasFailed] = useState(false);
   const [triggeredForHash, setTriggeredForHash] = useState<string | null>(null);
+  const [resolvedCycles, setResolvedCycles] = useState<number | null>(null);
 
   const parsedCycles = txCycles ?? null;
-  const hasCycles = parsedCycles !== null && parsedCycles > 0;
+  const effectiveCycles = parsedCycles ?? resolvedCycles;
+  const hasCycles = effectiveCycles !== null && effectiveCycles > 0;
   const needsCalculation = !isCellbase && !hasCycles && !hasFailed;
+  const displayCalculating = needsCalculation;
+  const invalidateTransactionQuery = useCallback(
+    () => queryClient.invalidateQueries({ queryKey: ['transaction', hash] }),
+    [queryClient, hash]
+  );
 
   useEffect(() => {
     setIsCalculating(false);
     setHasFailed(false);
     setTriggeredForHash(null);
+    setResolvedCycles(null);
   }, [hash]);
 
   useEffect(() => {
     if (!needsCalculation || triggeredForHash === hash) return;
 
     setTriggeredForHash(hash);
+    setIsCalculating(true);
 
     const trigger = async () => {
       try {
         const response = await api.triggerCyclesCalculation(hash);
 
         if (response.status === 'done') {
-          queryClient.invalidateQueries({ queryKey: ['transaction', hash] });
-        } else if (response.status === 'failed' || response.status === 'notFound') {
-          setHasFailed(true);
-        } else {
+          await invalidateTransactionQuery();
+          if (response.cycles !== null && response.cycles > 0) {
+            setResolvedCycles(response.cycles);
+            setIsCalculating(false);
+          } else {
+            setIsCalculating(true);
+          }
+        } else if (response.status === 'calculating' || response.status === 'queued') {
           setIsCalculating(true);
+          await invalidateTransactionQuery();
+        } else if (response.status === 'failed' || response.status === 'notFound') {
+          setIsCalculating(false);
+          setHasFailed(true);
         }
       } catch {
+        setIsCalculating(false);
         setHasFailed(true);
       }
     };
 
     trigger();
-  }, [needsCalculation, triggeredForHash, hash, queryClient]);
+  }, [needsCalculation, triggeredForHash, hash, invalidateTransactionQuery]);
 
   useEffect(() => {
     if (!isCalculating) return;
@@ -56,8 +74,15 @@ export function useCyclesCalculation(
         const response = await api.getCyclesStatus(hash);
 
         if (response.status === 'done') {
-          setIsCalculating(false);
-          queryClient.invalidateQueries({ queryKey: ['transaction', hash] });
+          await invalidateTransactionQuery();
+          if (response.cycles !== null && response.cycles > 0) {
+            setResolvedCycles(response.cycles);
+            setIsCalculating(false);
+          } else {
+            setIsCalculating(true);
+          }
+        } else if (response.status === 'calculating' || response.status === 'queued') {
+          await invalidateTransactionQuery();
         } else if (response.status === 'failed' || response.status === 'notFound') {
           setIsCalculating(false);
           setHasFailed(true);
@@ -69,12 +94,18 @@ export function useCyclesCalculation(
     }, 2000);
 
     return () => clearInterval(pollInterval);
-  }, [isCalculating, hash, queryClient]);
+  }, [isCalculating, hash, invalidateTransactionQuery]);
+
+  useEffect(() => {
+    if (hasCycles && isCalculating) {
+      setIsCalculating(false);
+    }
+  }, [hasCycles, isCalculating]);
 
   return {
-    cycles: parsedCycles,
+    cycles: effectiveCycles,
     hasCycles,
-    isCalculating,
+    isCalculating: displayCalculating,
     hasFailed,
   };
 }

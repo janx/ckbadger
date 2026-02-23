@@ -8,8 +8,9 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use ckb_store_reader::CkbChainReader;
 use ckbadger_common::LabelImportConfig;
 use ckbadger_indexer::{
-    db::Repository, label_import::run_label_import, runtime_diag::generate_run_id,
-    runtime_diag::read_cgroup_memory_snapshot, sync::Indexer, verify, Config,
+    cycles_worker::spawn_cycles_task_worker, db::Repository, label_import::run_label_import,
+    runtime_diag::generate_run_id, runtime_diag::read_cgroup_memory_snapshot, sync::Indexer,
+    verify, Config,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -343,6 +344,12 @@ async fn run_sync(args: Cli) -> Result<()> {
 
     let indexer = Indexer::new(run_id, config.clone(), store.clone()).await?;
     let indexer = Arc::new(indexer);
+
+    spawn_cycles_task_worker(
+        store.clone(),
+        config.ckb_rpc_url.clone(),
+        config.redis_url.clone(),
+    );
 
     let data_source = if indexer.is_direct_db_read() {
         "DB"

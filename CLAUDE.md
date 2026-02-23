@@ -53,6 +53,12 @@ For any non-trivial task, use this structure in the final summary or PR descript
 - Do not add silent guards to mask bad states on correctness-critical paths (for example `max(0)`, `saturating_sub`, `unwrap_or(0)`).
 - If an invariant is violated, return/raise an error with enough context (block/tx/key/date) to locate the upstream bug quickly.
 
+## DB Responsibility Boundary (MANDATORY)
+
+- **Indexer owns all RocksDB writes**: any operation that creates/updates/deletes persistent DB state must be executed by `ckbadger-indexer`.
+- **API is read-only for RocksDB**: `ckbadger-api` must only read from store (secondary/open_secondary path) and must not write persistent state.
+- If API needs missing derived data, API must trigger indexer to compute and write it, then wait/poll for result instead of writing DB directly.
+
 ## Development Status (IMPORTANT)
 
 **This is a project under active development, NOT running in production.**

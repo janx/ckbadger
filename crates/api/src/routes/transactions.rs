@@ -3,6 +3,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use ckbadger_common::cycles_task::{CyclesTaskResult, CyclesTaskStatus};
 use ckbadger_common::dao::{
     is_genesis_special_burn_cell, GENESIS_SPECIAL_BURN_CELL_VIRTUAL_OCCUPIED,
 };
@@ -10,6 +11,7 @@ use ckbadger_common::parse_hex_to_bytes;
 use ckbadger_common::sync::{SyncStatusData, SYNC_STATUS_REDIS_KEY};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use tokio::time::{sleep, Instant};
 
 use crate::cycles::{CyclesStatus, CyclesStatusResponse};
 use crate::response::{
@@ -1069,15 +1071,8 @@ async fn get_cycles_status(
     let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap_or(&hash))
         .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
 
-    let store = state.store.clone();
-    let hash_c = hash_bytes.clone();
-    let row = tokio::task::spawn_blocking(move || store.get_tx_by_hash(&hash_c))
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let (db_cycles, is_cellbase) = match row {
-        Some((_, _, entry)) => (entry.cycles, entry.is_cellbase),
+    let (db_cycles, is_cellbase) = match load_tx_cycles_state(&state, &hash_bytes).await? {
+        Some(state) => state,
         None => {
             return ok(CyclesStatusResponse {
                 status: CyclesStatus::NotFound,
@@ -1101,32 +1096,31 @@ async fn get_cycles_status(
             cycles: Some(cycles),
             error: None,
         }),
-        Some(-1) => {
-            let error = state.cycles_calculator.get_error(&hash).await;
-            ok(CyclesStatusResponse {
-                status: CyclesStatus::Failed,
-                cycles: None,
-                error: error.or_else(|| Some("Calculation failed".to_string())),
-            })
-        }
+        Some(-1) => ok(CyclesStatusResponse {
+            status: CyclesStatus::Failed,
+            cycles: None,
+            error: Some("Calculation failed".to_string()),
+        }),
         _ => {
-            let queue_status = state.cycles_calculator.get_status(&hash).await;
+            if !state.cycles_client.is_enabled() {
+                return ok(CyclesStatusResponse {
+                    status: CyclesStatus::Failed,
+                    cycles: None,
+                    error: Some(
+                        "Cycles task dispatch unavailable: Redis is not configured".to_string(),
+                    ),
+                });
+            }
 
-            match queue_status {
-                CyclesStatus::Calculating => ok(CyclesStatusResponse {
-                    status: CyclesStatus::Calculating,
+            match state.cycles_client.get_task_result(&hash).await {
+                Ok(Some(result)) => ok(cycles_response_from_task(result)),
+                Ok(None) => ok(cycles_enqueue_response(
+                    state.cycles_client.enqueue_task(&hash).await,
+                )),
+                Err(e) => ok(CyclesStatusResponse {
+                    status: CyclesStatus::Failed,
                     cycles: None,
-                    error: None,
-                }),
-                CyclesStatus::Queued => ok(CyclesStatusResponse {
-                    status: CyclesStatus::Queued,
-                    cycles: None,
-                    error: None,
-                }),
-                _ => ok(CyclesStatusResponse {
-                    status: CyclesStatus::Done,
-                    cycles: None,
-                    error: None,
+                    error: Some(e),
                 }),
             }
         }
@@ -1140,15 +1134,8 @@ async fn trigger_cycles_calculation(
     let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap_or(&hash))
         .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
 
-    let store = state.store.clone();
-    let hash_c = hash_bytes.clone();
-    let row = tokio::task::spawn_blocking(move || store.get_tx_by_hash(&hash_c))
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let (db_cycles, is_cellbase) = match row {
-        Some((_, _, entry)) => (entry.cycles, entry.is_cellbase),
+    let (db_cycles, is_cellbase) = match load_tx_cycles_state(&state, &hash_bytes).await? {
+        Some(state) => state,
         None => {
             return ok(CyclesStatusResponse {
                 status: CyclesStatus::NotFound,
@@ -1178,13 +1165,137 @@ async fn trigger_cycles_calculation(
             error: Some("Calculation previously failed".to_string()),
         }),
         _ => {
-            let status = state.cycles_calculator.request_calculation(&hash).await;
-            ok(CyclesStatusResponse {
-                status,
+            if let Ok(Some(result)) = state.cycles_client.get_task_result(&hash).await {
+                return ok(cycles_response_from_task(result));
+            }
+
+            if let Err(e) = state.cycles_client.enqueue_task(&hash).await {
+                return ok(CyclesStatusResponse {
+                    status: CyclesStatus::Failed,
+                    cycles: None,
+                    error: Some(e),
+                });
+            }
+
+            ok(wait_cycles_result(&state, &hash, &hash_bytes).await?)
+        }
+    }
+}
+
+async fn load_tx_cycles_state(
+    state: &Arc<AppState>,
+    hash_bytes: &[u8],
+) -> Result<Option<(Option<i64>, bool)>, RouteError> {
+    let store = state.store.clone();
+    let hash_c = hash_bytes.to_vec();
+    let row = tokio::task::spawn_blocking(move || store.get_tx_by_hash(&hash_c))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    Ok(row.map(|(_, _, entry)| (entry.cycles, entry.is_cellbase)))
+}
+
+async fn wait_cycles_result(
+    state: &Arc<AppState>,
+    hash: &str,
+    hash_bytes: &[u8],
+) -> Result<CyclesStatusResponse, RouteError> {
+    let deadline = Instant::now() + state.cycles_client.wait_timeout();
+
+    loop {
+        match load_tx_cycles_state(state, hash_bytes).await? {
+            Some((Some(cycles), _)) if cycles > 0 => {
+                return Ok(CyclesStatusResponse {
+                    status: CyclesStatus::Done,
+                    cycles: Some(cycles),
+                    error: None,
+                });
+            }
+            Some((Some(-1), _)) => {
+                return Ok(CyclesStatusResponse {
+                    status: CyclesStatus::Failed,
+                    cycles: None,
+                    error: Some("Calculation failed".to_string()),
+                });
+            }
+            Some((_cycles, true)) => {
+                return Ok(CyclesStatusResponse {
+                    status: CyclesStatus::Done,
+                    cycles: Some(0),
+                    error: None,
+                });
+            }
+            Some(_) => {}
+            None => {
+                return Ok(CyclesStatusResponse {
+                    status: CyclesStatus::NotFound,
+                    cycles: None,
+                    error: Some("Transaction not found".to_string()),
+                });
+            }
+        }
+
+        match state.cycles_client.get_task_result(hash).await {
+            Ok(Some(result)) => return Ok(cycles_response_from_task(result)),
+            Ok(None) => {}
+            Err(e) => {
+                return Ok(CyclesStatusResponse {
+                    status: CyclesStatus::Failed,
+                    cycles: None,
+                    error: Some(e),
+                });
+            }
+        }
+
+        if Instant::now() >= deadline {
+            return Ok(CyclesStatusResponse {
+                status: CyclesStatus::Calculating,
                 cycles: None,
                 error: None,
-            })
+            });
         }
+
+        sleep(state.cycles_client.poll_interval()).await;
+    }
+}
+
+fn cycles_response_from_task(result: CyclesTaskResult) -> CyclesStatusResponse {
+    match result.status {
+        CyclesTaskStatus::Done => CyclesStatusResponse {
+            status: CyclesStatus::Done,
+            cycles: result.cycles,
+            error: None,
+        },
+        CyclesTaskStatus::Failed => CyclesStatusResponse {
+            status: CyclesStatus::Failed,
+            cycles: None,
+            error: result
+                .error
+                .or_else(|| Some("Calculation failed".to_string())),
+        },
+        CyclesTaskStatus::NotFound => CyclesStatusResponse {
+            status: CyclesStatus::NotFound,
+            cycles: None,
+            error: result
+                .error
+                .or_else(|| Some("Transaction not found".to_string())),
+        },
+    }
+}
+
+fn cycles_enqueue_response(enqueue_result: Result<(), String>) -> CyclesStatusResponse {
+    match enqueue_result {
+        Ok(()) => CyclesStatusResponse {
+            status: CyclesStatus::Queued,
+            cycles: None,
+            error: None,
+        },
+        Err(e) => CyclesStatusResponse {
+            status: CyclesStatus::Failed,
+            cycles: None,
+            error: Some(e),
+        },
     }
 }
 
@@ -1406,6 +1517,7 @@ async fn get_transaction_lifecycle(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ckbadger_common::cycles_task::{CyclesTaskResult, CyclesTaskStatus};
 
     #[test]
     fn test_transaction_response_serialization() {
@@ -1507,5 +1619,50 @@ mod tests {
         assert_eq!(pending, "pending");
         let committed = serde_json::to_value(&LifecyclePhase::Committed).unwrap();
         assert_eq!(committed, "committed");
+    }
+
+    #[test]
+    fn test_cycles_response_from_task_done() {
+        let response = cycles_response_from_task(CyclesTaskResult {
+            status: CyclesTaskStatus::Done,
+            cycles: Some(42),
+            error: None,
+            updated_at: 1_700_000_000,
+        });
+        assert_eq!(response.status, CyclesStatus::Done);
+        assert_eq!(response.cycles, Some(42));
+        assert!(response.error.is_none());
+    }
+
+    #[test]
+    fn test_cycles_response_from_task_failed_uses_default_message() {
+        let response = cycles_response_from_task(CyclesTaskResult {
+            status: CyclesTaskStatus::Failed,
+            cycles: None,
+            error: None,
+            updated_at: 1_700_000_000,
+        });
+        assert_eq!(response.status, CyclesStatus::Failed);
+        assert_eq!(response.cycles, None);
+        assert!(response
+            .error
+            .unwrap_or_default()
+            .contains("Calculation failed"));
+    }
+
+    #[test]
+    fn test_cycles_enqueue_response_queued() {
+        let response = cycles_enqueue_response(Ok(()));
+        assert_eq!(response.status, CyclesStatus::Queued);
+        assert_eq!(response.cycles, None);
+        assert!(response.error.is_none());
+    }
+
+    #[test]
+    fn test_cycles_enqueue_response_failed() {
+        let response = cycles_enqueue_response(Err("enqueue failed".to_string()));
+        assert_eq!(response.status, CyclesStatus::Failed);
+        assert_eq!(response.cycles, None);
+        assert_eq!(response.error.unwrap_or_default(), "enqueue failed");
     }
 }

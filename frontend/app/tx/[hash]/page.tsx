@@ -288,7 +288,7 @@ export default function TransactionDetailPage() {
                   ) : isCalculating ? (
                     <span className="inline-flex items-center gap-2 italic text-slate-400">
                       <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-slate-400 border-t-transparent" />
-                      Calculating...
+                      <span className="cycles-calculating-marquee">Calculating ...</span>
                     </span>
                   ) : hasFailed ? (
                     <span className="italic text-red-400">Calculation failed</span>

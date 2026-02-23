@@ -21,6 +21,16 @@ function createWrapper() {
   };
 }
 
+function createWrapperWithClient() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const Wrapper = ({ children }: { children: React.ReactNode }) =>
+    React.createElement(QueryClientProvider, { client: queryClient }, children);
+
+  return { Wrapper, queryClient };
+}
+
 describe('useCyclesCalculation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -28,6 +38,7 @@ describe('useCyclesCalculation', () => {
 
   afterEach(() => {
     vi.clearAllTimers();
+    vi.useRealTimers();
   });
 
   it('returns cycles when already available', () => {
@@ -69,6 +80,160 @@ describe('useCyclesCalculation', () => {
     await waitFor(() => {
       expect(result.current.isCalculating).toBe(true);
     });
+  });
+
+  it('shows calculating immediately while trigger request is in flight', async () => {
+    let resolveTrigger:
+      | ((value: { status: string; cycles: number | null; error: string | null }) => void)
+      | null = null;
+    const pendingTrigger = new Promise<{
+      status: string;
+      cycles: number | null;
+      error: string | null;
+    }>((resolve) => {
+      resolveTrigger = resolve;
+    });
+    vi.mocked(api.triggerCyclesCalculation).mockReturnValue(
+      pendingTrigger as Promise<{ status: 'done'; cycles: number; error: null }>
+    );
+
+    const { result } = renderHook(() => useCyclesCalculation('0xabc', undefined, false), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(api.triggerCyclesCalculation).toHaveBeenCalledWith('0xabc');
+      expect(result.current.isCalculating).toBe(true);
+    });
+
+    (
+      resolveTrigger as unknown as (value: {
+        status: string;
+        cycles: number | null;
+        error: string | null;
+      }) => void
+    )({
+      status: 'done',
+      cycles: 1000,
+      error: null,
+    });
+
+    await waitFor(() => {
+      expect(result.current.cycles).toBe(1000);
+      expect(result.current.isCalculating).toBe(false);
+    });
+  });
+
+  it('keeps calculating when trigger returns done without cycles', async () => {
+    vi.mocked(api.triggerCyclesCalculation).mockResolvedValue({
+      status: 'done',
+      cycles: null,
+      error: null,
+    });
+
+    const { result } = renderHook(() => useCyclesCalculation('0xabc', undefined, false), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(api.triggerCyclesCalculation).toHaveBeenCalledWith('0xabc');
+      expect(result.current.isCalculating).toBe(true);
+      expect(result.current.hasCycles).toBe(false);
+      expect(result.current.hasFailed).toBe(false);
+    });
+  });
+
+  it('uses cycles when trigger returns done with cycles', async () => {
+    vi.mocked(api.triggerCyclesCalculation).mockResolvedValue({
+      status: 'done',
+      cycles: 123456,
+      error: null,
+    });
+
+    const { result } = renderHook(() => useCyclesCalculation('0xabc', undefined, false), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(api.triggerCyclesCalculation).toHaveBeenCalledWith('0xabc');
+    });
+
+    await waitFor(() => {
+      expect(result.current.cycles).toBe(123456);
+      expect(result.current.hasCycles).toBe(true);
+      expect(result.current.isCalculating).toBe(false);
+    });
+  });
+
+  it('uses cycles when polling returns done with cycles', async () => {
+    vi.mocked(api.triggerCyclesCalculation).mockResolvedValue({
+      status: 'calculating',
+      cycles: null,
+      error: null,
+    });
+    vi.mocked(api.getCyclesStatus).mockResolvedValue({
+      status: 'done',
+      cycles: 777,
+      error: null,
+    });
+    const setIntervalSpy = vi.spyOn(global, 'setInterval').mockImplementation((handler) => {
+      if (typeof handler === 'function') {
+        void handler();
+      }
+      return 1 as unknown as ReturnType<typeof setInterval>;
+    });
+    const clearIntervalSpy = vi.spyOn(global, 'clearInterval').mockImplementation(() => {});
+
+    const { result } = renderHook(() => useCyclesCalculation('0xabc', undefined, false), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(api.triggerCyclesCalculation).toHaveBeenCalledWith('0xabc');
+    });
+
+    await waitFor(() => expect(api.getCyclesStatus).toHaveBeenCalledWith('0xabc'));
+    await waitFor(() => expect(result.current.cycles).toBe(777));
+    expect(result.current.hasCycles).toBe(true);
+    expect(result.current.isCalculating).toBe(false);
+
+    setIntervalSpy.mockRestore();
+    clearIntervalSpy.mockRestore();
+  });
+
+  it('invalidates transaction query while polling remains calculating', async () => {
+    vi.mocked(api.triggerCyclesCalculation).mockResolvedValue({
+      status: 'calculating',
+      cycles: null,
+      error: null,
+    });
+    vi.mocked(api.getCyclesStatus).mockResolvedValue({
+      status: 'calculating',
+      cycles: null,
+      error: null,
+    });
+    const setIntervalSpy = vi.spyOn(global, 'setInterval').mockImplementation((handler) => {
+      if (typeof handler === 'function') {
+        void handler();
+      }
+      return 1 as unknown as ReturnType<typeof setInterval>;
+    });
+    const clearIntervalSpy = vi.spyOn(global, 'clearInterval').mockImplementation(() => {});
+    const { Wrapper, queryClient } = createWrapperWithClient();
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    const { result } = renderHook(() => useCyclesCalculation('0xabc', undefined, false), {
+      wrapper: Wrapper,
+    });
+
+    await waitFor(() => expect(api.getCyclesStatus).toHaveBeenCalledWith('0xabc'));
+    await waitFor(() =>
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['transaction', '0xabc'] })
+    );
+    expect(result.current.isCalculating).toBe(true);
+
+    setIntervalSpy.mockRestore();
+    clearIntervalSpy.mockRestore();
   });
 
   it('sets hasFailed when calculation fails', async () => {
@@ -131,7 +296,14 @@ describe('useCyclesCalculation', () => {
       rerender({ hash: '0xdef' });
     });
 
-    expect(result.current.hasFailed).toBe(false);
-    expect(result.current.isCalculating).toBe(false);
+    await waitFor(() => {
+      expect(result.current.hasFailed).toBe(false);
+      expect(result.current.isCalculating).toBe(true);
+    });
+
+    await waitFor(() => {
+      expect(result.current.cycles).toBe(1000);
+      expect(result.current.isCalculating).toBe(false);
+    });
   });
 });

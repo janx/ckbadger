@@ -1,9 +1,13 @@
-use ckbadger_store::CkbadgerStore;
+use ckbadger_common::cycles_task::{
+    cycles_task_lock_key, cycles_task_result_key, normalize_tx_hash, CyclesTaskResult,
+    CYCLES_TASK_LOCK_TTL_SECS, CYCLES_TASK_QUEUE_KEY,
+};
+use redis::aio::ConnectionManager;
+use redis::AsyncCommands;
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex, RwLock};
-use tracing::{debug, info, warn};
+use std::time::Duration;
+use tracing::{info, warn};
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -23,222 +27,133 @@ pub struct CyclesStatusResponse {
     pub error: Option<String>,
 }
 
-pub struct CyclesCalculator {
-    pending: RwLock<HashSet<String>>,
-    calculating: RwLock<Option<String>>,
-    failed: RwLock<HashMap<String, String>>,
-    request_tx: mpsc::Sender<String>,
+pub struct CyclesClient {
+    conn: Option<ConnectionManager>,
+    wait_timeout: Duration,
+    poll_interval: Duration,
 }
 
-impl CyclesCalculator {
-    pub fn new(store: Arc<CkbadgerStore>, ckb_rpc_url: String) -> Arc<Self> {
-        let (request_tx, request_rx) = mpsc::channel::<String>(1000);
-
-        let calculator = Arc::new(Self {
-            pending: RwLock::new(HashSet::new()),
-            calculating: RwLock::new(None),
-            failed: RwLock::new(HashMap::new()),
-            request_tx,
-        });
-
-        let worker = CyclesWorker {
-            calculator: Arc::clone(&calculator),
-            store,
-            ckb_rpc_url,
-            request_rx: Mutex::new(request_rx),
-        };
-        tokio::spawn(worker.run());
-
-        calculator
-    }
-
-    pub async fn request_calculation(&self, tx_hash: &str) -> CyclesStatus {
-        let normalized_hash = normalize_hash(tx_hash);
-
-        {
-            let calculating = self.calculating.read().await;
-            if calculating.as_ref() == Some(&normalized_hash) {
-                return CyclesStatus::Calculating;
+impl CyclesClient {
+    pub async fn new(redis_url: Option<&str>) -> Arc<Self> {
+        let conn = if let Some(url) = redis_url {
+            match redis::Client::open(url) {
+                Ok(client) => match redis::aio::ConnectionManager::new(client).await {
+                    Ok(conn) => {
+                        info!("Connected to Redis for cycles task dispatch");
+                        Some(conn)
+                    }
+                    Err(e) => {
+                        warn!("Failed to connect Redis for cycles task dispatch: {}", e);
+                        None
+                    }
+                },
+                Err(e) => {
+                    warn!("Invalid Redis URL for cycles task dispatch: {}", e);
+                    None
+                }
             }
-        }
-
-        {
-            let pending = self.pending.read().await;
-            if pending.contains(&normalized_hash) {
-                return CyclesStatus::Queued;
-            }
-        }
-
-        {
-            let mut failed = self.failed.write().await;
-            failed.remove(&normalized_hash);
-        }
-
-        {
-            let mut pending = self.pending.write().await;
-            pending.insert(normalized_hash.clone());
-        }
-
-        if let Err(e) = self.request_tx.try_send(normalized_hash) {
-            warn!("Failed to queue cycles calculation: {}", e);
-            return CyclesStatus::Failed;
-        }
-
-        CyclesStatus::Queued
-    }
-
-    pub async fn get_status(&self, tx_hash: &str) -> CyclesStatus {
-        let normalized_hash = normalize_hash(tx_hash);
-
-        {
-            let calculating = self.calculating.read().await;
-            if calculating.as_ref() == Some(&normalized_hash) {
-                return CyclesStatus::Calculating;
-            }
-        }
-
-        {
-            let pending = self.pending.read().await;
-            if pending.contains(&normalized_hash) {
-                return CyclesStatus::Queued;
-            }
-        }
-
-        CyclesStatus::Done
-    }
-
-    pub async fn get_error(&self, tx_hash: &str) -> Option<String> {
-        let normalized_hash = normalize_hash(tx_hash);
-        let failed = self.failed.read().await;
-        failed.get(&normalized_hash).cloned()
-    }
-
-    async fn mark_calculating(&self, tx_hash: &str) {
-        let mut calculating = self.calculating.write().await;
-        *calculating = Some(tx_hash.to_string());
-    }
-
-    async fn mark_complete(&self, tx_hash: &str) {
-        {
-            let mut pending = self.pending.write().await;
-            pending.remove(tx_hash);
-        }
-        {
-            let mut calculating = self.calculating.write().await;
-            *calculating = None;
-        }
-    }
-
-    async fn mark_failed(&self, tx_hash: &str, error: String) {
-        {
-            let mut pending = self.pending.write().await;
-            pending.remove(tx_hash);
-        }
-        {
-            let mut calculating = self.calculating.write().await;
-            *calculating = None;
-        }
-        {
-            let mut failed = self.failed.write().await;
-            failed.insert(tx_hash.to_string(), error);
-        }
-    }
-}
-
-struct CyclesWorker {
-    calculator: Arc<CyclesCalculator>,
-    store: Arc<CkbadgerStore>,
-    ckb_rpc_url: String,
-    request_rx: Mutex<mpsc::Receiver<String>>,
-}
-
-impl CyclesWorker {
-    async fn run(self) {
-        info!("Cycles calculation worker started");
-
-        let mut rx = self.request_rx.lock().await;
-        while let Some(tx_hash) = rx.recv().await {
-            self.process_request(&tx_hash).await;
-        }
-
-        info!("Cycles calculation worker stopped");
-    }
-
-    async fn process_request(&self, tx_hash: &str) {
-        debug!("Processing cycles calculation for {}", tx_hash);
-
-        let hash_bytes = match hex::decode(tx_hash.strip_prefix("0x").unwrap_or(tx_hash)) {
-            Ok(b) => b,
-            Err(e) => {
-                self.calculator
-                    .mark_failed(tx_hash, format!("Invalid hash: {}", e))
-                    .await;
-                return;
-            }
-        };
-
-        // Look up transaction in store
-        let tx_info = match self.store.get_tx_by_hash(&hash_bytes) {
-            Ok(Some((_, _, entry))) => entry,
-            Ok(None) => {
-                self.calculator
-                    .mark_failed(tx_hash, "Transaction not found".to_string())
-                    .await;
-                return;
-            }
-            Err(e) => {
-                self.calculator
-                    .mark_failed(tx_hash, format!("Store error: {}", e))
-                    .await;
-                return;
-            }
-        };
-
-        // Already has cycles?
-        match tx_info.cycles {
-            Some(cycles) if cycles > 0 => {
-                debug!("Transaction {} already has cycles: {}", tx_hash, cycles);
-                self.calculator.mark_complete(tx_hash).await;
-                return;
-            }
-            Some(-1) => {
-                self.calculator
-                    .mark_failed(tx_hash, "Calculation previously failed".to_string())
-                    .await;
-                return;
-            }
-            _ => {}
-        }
-
-        if tx_info.is_cellbase {
-            self.calculator.mark_complete(tx_hash).await;
-            return;
-        }
-
-        self.calculator.mark_calculating(tx_hash).await;
-
-        let formatted_hash = if tx_hash.starts_with("0x") {
-            tx_hash.to_string()
         } else {
-            format!("0x{}", tx_hash)
+            None
         };
 
-        match ckbadger_common::cycles::calculate_cycles(&self.ckb_rpc_url, &formatted_hash).await {
-            Ok(cycles) => {
-                // Update cycles in the store (best-effort for secondary instance)
-                // The indexer's primary instance will handle persistent writes
-                debug!("Calculated cycles for {}: {}", tx_hash, cycles);
-                self.calculator.mark_complete(tx_hash).await;
-            }
-            Err(e) => {
-                warn!("Failed to calculate cycles for {}: {}", tx_hash, e);
-                self.calculator.mark_failed(tx_hash, e).await;
+        Arc::new(Self {
+            conn,
+            wait_timeout: Duration::from_secs(12),
+            poll_interval: Duration::from_millis(250),
+        })
+    }
+
+    pub fn wait_timeout(&self) -> Duration {
+        self.wait_timeout
+    }
+
+    pub fn poll_interval(&self) -> Duration {
+        self.poll_interval
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.conn.is_some()
+    }
+
+    pub async fn enqueue_task(&self, tx_hash: &str) -> Result<(), String> {
+        let Some(conn) = self.conn.as_ref() else {
+            return Err("Cycles task dispatch unavailable: Redis is not configured".to_string());
+        };
+
+        let normalized = normalize_tx_hash(tx_hash);
+        let lock_key = cycles_task_lock_key(&normalized);
+
+        let mut conn = conn.clone();
+        let lock_result: Option<String> = redis::cmd("SET")
+            .arg(&lock_key)
+            .arg("1")
+            .arg("NX")
+            .arg("EX")
+            .arg(CYCLES_TASK_LOCK_TTL_SECS)
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| format!("failed to acquire cycles task lock: {}", e))?;
+
+        if lock_result.is_some() {
+            let enqueue_result: Result<(), redis::RedisError> = redis::cmd("LPUSH")
+                .arg(CYCLES_TASK_QUEUE_KEY)
+                .arg(&normalized)
+                .query_async(&mut conn)
+                .await;
+
+            if let Err(e) = enqueue_result {
+                let _: Result<(), _> = redis::cmd("DEL")
+                    .arg(&lock_key)
+                    .query_async(&mut conn)
+                    .await;
+                return Err(format!("failed to enqueue cycles task: {}", e));
             }
         }
+
+        Ok(())
+    }
+
+    pub async fn get_task_result(&self, tx_hash: &str) -> Result<Option<CyclesTaskResult>, String> {
+        let Some(conn) = self.conn.as_ref() else {
+            return Ok(None);
+        };
+
+        let result_key = cycles_task_result_key(tx_hash);
+        let mut conn = conn.clone();
+        let raw: Option<String> = conn
+            .get(&result_key)
+            .await
+            .map_err(|e| format!("failed to read cycles task result: {}", e))?;
+
+        raw.map(|json| {
+            serde_json::from_str::<CyclesTaskResult>(&json)
+                .map_err(|e| format!("invalid cycles task result payload: {}", e))
+        })
+        .transpose()
     }
 }
 
-fn normalize_hash(hash: &str) -> String {
-    let h = hash.strip_prefix("0x").unwrap_or(hash);
-    format!("0x{}", h.to_lowercase())
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_cycles_client_is_disabled_without_redis() {
+        let client = CyclesClient::new(None).await;
+        assert!(!client.is_enabled());
+    }
+
+    #[tokio::test]
+    async fn test_get_task_result_returns_none_without_redis() {
+        let client = CyclesClient::new(None).await;
+        let result = client.get_task_result("0x1234").await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_enqueue_task_fails_without_redis() {
+        let client = CyclesClient::new(None).await;
+        let err = client.enqueue_task("0x1234").await.unwrap_err();
+        assert!(err.contains("Redis is not configured"));
+    }
 }

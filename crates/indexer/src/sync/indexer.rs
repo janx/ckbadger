@@ -1418,6 +1418,47 @@ struct TxData {
 
 type ScriptUsageChanges = HashMap<(Vec<u8>, bool), (i64, i64, i128, i128, i128, i128)>;
 
+fn parse_tx_cycles(
+    raw_cycles_hex: Option<&String>,
+    tx_hash: &str,
+    block_number: i64,
+) -> Result<Option<i64>> {
+    let Some(raw_cycles_hex) = raw_cycles_hex else {
+        return Ok(None);
+    };
+
+    let cycles_u64 = u64::from_str_radix(
+        raw_cycles_hex.strip_prefix("0x").unwrap_or(raw_cycles_hex),
+        16,
+    )
+    .map_err(|e| {
+        anyhow!(
+            "invalid tx cycles hex '{}' for tx {} in block {}: {}",
+            raw_cycles_hex,
+            tx_hash,
+            block_number,
+            e
+        )
+    })?;
+
+    // Historical CKB blocks may expose unavailable cycles as 0x0 for non-cellbase txs.
+    // Treat this as missing data so cycles_worker can lazily recompute and persist real values.
+    if cycles_u64 == 0 {
+        return Ok(None);
+    }
+
+    i64::try_from(cycles_u64).map(Some).map_err(|_| {
+        anyhow!(
+            "tx cycles over i64 range '{}' for tx {} in block {}: {} (max={})",
+            raw_cycles_hex,
+            tx_hash,
+            block_number,
+            cycles_u64,
+            i64::MAX
+        )
+    })
+}
+
 fn parse_blocks_parallel(
     blocks: &[BlockResponseWithCycles],
 ) -> Result<(
@@ -1460,38 +1501,14 @@ fn parse_blocks_parallel(
                         let cycles = if tx_index == 0 {
                             None
                         } else {
-                            match block_response
-                                .cycles
-                                .as_ref()
-                                .and_then(|c| c.get(tx_index - 1))
-                            {
-                                Some(raw_cycles_hex) => {
-                                    let cycles_u64 = u64::from_str_radix(
-                                        raw_cycles_hex.strip_prefix("0x").unwrap_or(raw_cycles_hex),
-                                        16,
-                                    )
-                                    .map_err(|e| {
-                                        anyhow!(
-                                            "invalid tx cycles hex '{}' for tx {} in block {}: {}",
-                                            raw_cycles_hex,
-                                            tx.hash,
-                                            parsed.number,
-                                            e
-                                        )
-                                    })?;
-                                    Some(i64::try_from(cycles_u64).map_err(|_| {
-                                        anyhow!(
-                                            "tx cycles over i64 range '{}' for tx {} in block {}: {} (max={})",
-                                            raw_cycles_hex,
-                                            tx.hash,
-                                            parsed.number,
-                                            cycles_u64,
-                                            i64::MAX
-                                        )
-                                    })?)
-                                }
-                                None => None,
-                            }
+                            parse_tx_cycles(
+                                block_response
+                                    .cycles
+                                    .as_ref()
+                                    .and_then(|c| c.get(tx_index - 1)),
+                                &tx.hash,
+                                parsed.number,
+                            )?
                         };
                         Ok(TxData {
                             hash: parsed_tx.hash,
@@ -9520,6 +9537,27 @@ mod tests {
 
         let err = parse_prefixed_hex_u64("0xzz", "test field").unwrap_err();
         assert!(err.to_string().contains("invalid test field hex"));
+    }
+
+    #[test]
+    fn test_parse_tx_cycles_treats_zero_as_missing() {
+        let raw = "0x0".to_string();
+        let cycles = parse_tx_cycles(Some(&raw), "0xabc", 200).unwrap();
+        assert_eq!(cycles, None);
+    }
+
+    #[test]
+    fn test_parse_tx_cycles_parses_positive_value() {
+        let raw = "0x1a".to_string();
+        let cycles = parse_tx_cycles(Some(&raw), "0xabc", 200).unwrap();
+        assert_eq!(cycles, Some(26));
+    }
+
+    #[test]
+    fn test_parse_tx_cycles_errors_on_invalid_hex() {
+        let raw = "0xzz".to_string();
+        let err = parse_tx_cycles(Some(&raw), "0xabc", 200).unwrap_err();
+        assert!(err.to_string().contains("invalid tx cycles hex"));
     }
 
     #[test]

@@ -17,7 +17,7 @@ use tower_http::trace::TraceLayer;
 
 use cache::{CacheBackend, InMemoryCache};
 use ckb_store_reader::CkbChainReader;
-use cycles::CyclesCalculator;
+use cycles::CyclesClient;
 use middleware::IpRateLimitLayer;
 use ws::WsManager;
 
@@ -28,7 +28,7 @@ pub struct AppState {
     pub cache: CacheBackend,
     pub ckb_rpc_url: String,
     pub ckb_network: String,
-    pub cycles_calculator: Arc<CyclesCalculator>,
+    pub cycles_client: Arc<CyclesClient>,
     /// Direct read-only access to CKB node's RocksDB (when configured).
     pub ckb_store: Option<Arc<CkbChainReader>>,
     /// In-memory cache for assets/tokens/DOB data (refreshed by background loop).
@@ -77,7 +77,7 @@ pub async fn create_router(config: AppConfig) -> Router {
     let broadcaster_rpc_url = config.ckb_rpc_url.clone();
     let broadcaster_cache = cache.clone();
 
-    let cycles_calculator = CyclesCalculator::new(config.store.clone(), config.ckb_rpc_url.clone());
+    let cycles_client = CyclesClient::new(config.redis_url.as_deref()).await;
 
     let ckb_store = match config.ckb_data_path.as_deref() {
         Some(path) => {
@@ -97,7 +97,7 @@ pub async fn create_router(config: AppConfig) -> Router {
         cache,
         ckb_rpc_url: config.ckb_rpc_url,
         ckb_network: config.ckb_network,
-        cycles_calculator,
+        cycles_client,
         ckb_store,
         mem_cache,
     });

@@ -22,6 +22,12 @@ Correctness issues must be fixed at the source path. Do not add silent guards (f
 `max(0)`, `saturating_sub`, or `unwrap_or(0)` on invariant-critical paths) to mask inconsistent
 state transitions.
 
+## Responsibility Boundary
+
+- **Indexer owns all RocksDB writes**: any task that persists or mutates database state must be executed by `ckbadger-indexer`.
+- **API is read-only for RocksDB**: `ckbadger-api` must only read from store and must not perform persistent DB writes.
+- If API encounters missing derived data (for example missing transaction cycles), API should trigger indexer to compute/write it, then return the result after waiting/polling.
+
 ## Performance Targets
 
 To keep the `Unrivaled Speed` principle concrete, performance work should report against these targets
