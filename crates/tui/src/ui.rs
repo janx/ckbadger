@@ -113,7 +113,6 @@ pub struct App {
     prev_is_bulk_sync: Option<bool>,
     prev_is_syncing: Option<bool>,
     prev_indexes_deferred: Option<bool>,
-    prev_is_direct_db_read: Option<bool>,
     prev_bottleneck: Option<SyncBottleneck>,
     last_rate_drop_alert: Option<Instant>,
     stale_warning_active: bool,
@@ -124,8 +123,8 @@ pub struct App {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SyncBottleneck {
-    DbBound,
-    RpcBound,
+    WriteBound,
+    FetchBound,
     Mixed,
     Unknown,
 }
@@ -168,7 +167,6 @@ impl App {
             prev_is_bulk_sync: None,
             prev_is_syncing: None,
             prev_indexes_deferred: None,
-            prev_is_direct_db_read: None,
             prev_bottleneck: None,
             last_rate_drop_alert: None,
             stale_warning_active: false,
@@ -366,7 +364,6 @@ impl App {
         let is_bulk_sync = sync.is_bulk_sync;
         let is_syncing = sync.is_syncing;
         let indexes_deferred = sync.indexes_deferred;
-        let is_direct_db_read = sync.is_direct_db_read;
         let bottleneck = sync_bottleneck(sync.db_write_ms, sync.rpc_fetch_ms);
 
         if let Some(prev_bulk) = self.prev_is_bulk_sync {
@@ -404,21 +401,6 @@ impl App {
             }
         }
         self.prev_indexes_deferred = Some(indexes_deferred);
-
-        if let Some(prev_direct) = self.prev_is_direct_db_read {
-            if prev_direct && !is_direct_db_read {
-                self.push_sync_event_and_log(
-                    "data source switched to RPC".to_string(),
-                    LogLevel::Info,
-                );
-            } else if !prev_direct && is_direct_db_read {
-                self.push_sync_event_and_log(
-                    "data source switched to direct DB".to_string(),
-                    LogLevel::Info,
-                );
-            }
-        }
-        self.prev_is_direct_db_read = Some(is_direct_db_read);
 
         if let Some(prev) = self.prev_bottleneck {
             if prev != bottleneck && bottleneck != SyncBottleneck::Unknown {
@@ -888,8 +870,8 @@ fn draw_sync_realtime_bar(f: &mut Frame, app: &App, area: Rect) {
         Span::styled(
             bottleneck_label(bottleneck),
             Style::default().fg(match bottleneck {
-                SyncBottleneck::DbBound => AMBER,
-                SyncBottleneck::RpcBound => TERMINAL_DIM,
+                SyncBottleneck::WriteBound => AMBER,
+                SyncBottleneck::FetchBound => TERMINAL_DIM,
                 SyncBottleneck::Mixed => FOREGROUND,
                 SyncBottleneck::Unknown => SLATE_500,
             }),
@@ -1245,41 +1227,7 @@ fn draw_sync_progress(f: &mut Frame, app: &App, area: Rect) {
     ];
     f.render_widget(Paragraph::new(mid), cols[1]);
 
-    let mut right = Vec::new();
-    if let Some(ref eta) = sync.eta {
-        right.push(Line::from(vec![
-            Span::styled("ETA: ", Style::default().fg(SLATE_500)),
-            Span::styled(
-                eta,
-                Style::default()
-                    .fg(TERMINAL_GREEN)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]));
-    }
-
-    if let Some(ref elapsed) = sync.elapsed_time {
-        right.push(Line::from(vec![
-            Span::styled("Elapsed: ", Style::default().fg(SLATE_500)),
-            Span::styled(elapsed, Style::default().fg(FOREGROUND)),
-        ]));
-    }
-
-    right.push(Line::from(vec![
-        Span::styled("Source: ", Style::default().fg(SLATE_500)),
-        Span::styled(
-            if sync.is_direct_db_read { "DB" } else { "RPC" },
-            Style::default().fg(TERMINAL_DIM),
-        ),
-    ]));
-
-    if right.is_empty() {
-        right.push(Line::from(Span::styled(
-            "No timing data",
-            Style::default().fg(SLATE_500),
-        )));
-    }
-
+    let right = sync_timing_lines(sync.eta.as_deref(), sync.elapsed_time.as_deref());
     f.render_widget(Paragraph::new(right), cols[2]);
 }
 
@@ -1290,14 +1238,26 @@ fn draw_sync_charts(f: &mut Frame, app: &App, area: Rect) {
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(area);
         draw_chart_panel(f, rows[0], "Sync Rate (blk/s)", "blk/s", &app.rate_history);
-        draw_chart_panel(f, rows[1], "DB Write (ms)", "ms", &app.db_write_history);
+        draw_chart_panel(
+            f,
+            rows[1],
+            "Write Latency (ms)",
+            "ms",
+            &app.db_write_history,
+        );
     } else {
         let cols = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(area);
         draw_chart_panel(f, cols[0], "Sync Rate (blk/s)", "blk/s", &app.rate_history);
-        draw_chart_panel(f, cols[1], "DB Write (ms)", "ms", &app.db_write_history);
+        draw_chart_panel(
+            f,
+            cols[1],
+            "Write Latency (ms)",
+            "ms",
+            &app.db_write_history,
+        );
     }
 }
 
@@ -1415,11 +1375,11 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
     .filter(|v| *v)
     .count();
 
-    let db_write = sync
+    let write_ms_text = sync
         .db_write_ms
         .map(|v| format!("{v:.1}ms"))
         .unwrap_or_else(|| "-".to_string());
-    let rpc_fetch = sync
+    let fetch_ms_text = sync
         .rpc_fetch_ms
         .map(|v| format!("{v:.1}ms"))
         .unwrap_or_else(|| "-".to_string());
@@ -1536,7 +1496,7 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
                             }),
                         ),
                     ]),
-                    io_rpc_jitter_line(&rpc_fetch, &db_write, &rate_jitter_text),
+                    io_fetch_write_jitter_line(&fetch_ms_text, &write_ms_text, &rate_jitter_text),
                 ),
             )
         } else {
@@ -1596,12 +1556,7 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
                         ),
                     ]),
                     Line::from(vec![
-                        Span::styled("Source ", Style::default().fg(SLATE_500)),
-                        Span::styled(
-                            if sync.is_direct_db_read { "DB" } else { "RPC" },
-                            Style::default().fg(TERMINAL_DIM),
-                        ),
-                        Span::styled("  Deferred ", Style::default().fg(SLATE_500)),
+                        Span::styled("Deferred ", Style::default().fg(SLATE_500)),
                         Span::styled(
                             format!("{deferred_count}"),
                             Style::default().fg(if deferred_count > 0 {
@@ -1638,7 +1593,7 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
                             Style::default().fg(FOREGROUND),
                         ),
                     ]),
-                    io_rpc_jitter_line(&rpc_fetch, &db_write, &rate_jitter_text),
+                    io_fetch_write_jitter_line(&fetch_ms_text, &write_ms_text, &rate_jitter_text),
                 ),
             )
         };
@@ -1667,7 +1622,7 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
                 Line::from(vec![
                     Span::styled("I/O ", Style::default().fg(SLATE_500)),
                     Span::styled(
-                        format!("RPC {} DB {}", rpc_fetch, db_write),
+                        format!("Fetch {} Write {}", fetch_ms_text, write_ms_text),
                         Style::default().fg(FOREGROUND),
                     ),
                 ]),
@@ -1683,11 +1638,15 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(right), cols[1]);
 }
 
-fn io_rpc_jitter_line(rpc_fetch: &str, db_write: &str, rate_jitter_text: &str) -> Line<'static> {
+fn io_fetch_write_jitter_line(
+    fetch_ms_text: &str,
+    write_ms_text: &str,
+    rate_jitter_text: &str,
+) -> Line<'static> {
     Line::from(vec![
         Span::styled("I/O ", Style::default().fg(SLATE_500)),
         Span::styled(
-            format!("RPC {} DB {}", rpc_fetch, db_write),
+            format!("Fetch {} Write {}", fetch_ms_text, write_ms_text),
             Style::default().fg(FOREGROUND),
         ),
         Span::styled("  jitter ", Style::default().fg(SLATE_500)),
@@ -1721,6 +1680,38 @@ fn detail_right_lines(
         rate_line,
         io_line,
     ]
+}
+
+fn sync_timing_lines(eta: Option<&str>, elapsed: Option<&str>) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+
+    if let Some(eta) = eta {
+        lines.push(Line::from(vec![
+            Span::styled("ETA: ", Style::default().fg(SLATE_500)),
+            Span::styled(
+                eta.to_string(),
+                Style::default()
+                    .fg(TERMINAL_GREEN)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+    }
+
+    if let Some(elapsed) = elapsed {
+        lines.push(Line::from(vec![
+            Span::styled("Elapsed: ", Style::default().fg(SLATE_500)),
+            Span::styled(elapsed.to_string(), Style::default().fg(FOREGROUND)),
+        ]));
+    }
+
+    if lines.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "No timing data",
+            Style::default().fg(SLATE_500),
+        )));
+    }
+
+    lines
 }
 
 fn draw_sync_events(f: &mut Frame, app: &App, area: Rect) {
@@ -1826,21 +1817,11 @@ fn storage_runtime_columns(
             format_num_u64(mem.consumed_cells_count),
             FOREGROUND,
         ),
-        Line::from(vec![
-            metric_label_span("Consumed Sz"),
-            Span::styled(
-                format_bytes(mem.consumed_cells_bytes),
-                Style::default().fg(FOREGROUND),
-            ),
-            Span::styled(" [", Style::default().fg(SLATE_500)),
-            Span::styled(
-                consumed_bytes_source_label(&mem.consumed_cells_bytes_source),
-                Style::default().fg(consumed_bytes_source_color(
-                    &mem.consumed_cells_bytes_source,
-                )),
-            ),
-            Span::styled("]", Style::default().fg(SLATE_500)),
-        ]),
+        metric_line(
+            "Consumed Sz",
+            format_bytes(mem.consumed_cells_bytes),
+            FOREGROUND,
+        ),
         metric_line(
             "Block Hdrs",
             format_num_u64(mem.block_headers_count),
@@ -2363,26 +2344,6 @@ fn format_hit_rate(hits: Option<u64>, misses: Option<u64>) -> String {
     }
 }
 
-fn consumed_bytes_source_label(source: &str) -> &'static str {
-    match source {
-        "live" => "live",
-        "sst" => "sst",
-        "mem" => "mem",
-        "none" => "none",
-        _ => "-",
-    }
-}
-
-fn consumed_bytes_source_color(source: &str) -> Color {
-    match source {
-        "live" => TERMINAL_GREEN,
-        "sst" => AMBER,
-        "mem" => AMBER,
-        "none" => ERROR_RED,
-        _ => TERMINAL_DIM,
-    }
-}
-
 fn redis_key_line(
     name: &str,
     key_type: Option<&str>,
@@ -2585,27 +2546,27 @@ fn rate_jitter(history: &VecDeque<f64>, sample_window: usize) -> Option<f64> {
     Some(variance.sqrt())
 }
 
-fn sync_bottleneck(db_write_ms: Option<f64>, rpc_fetch_ms: Option<f64>) -> SyncBottleneck {
-    match (db_write_ms, rpc_fetch_ms) {
-        (Some(db), Some(rpc)) if db > 0.0 && rpc > 0.0 => {
-            if db > rpc * 1.2 {
-                SyncBottleneck::DbBound
-            } else if rpc > db * 1.2 {
-                SyncBottleneck::RpcBound
+fn sync_bottleneck(write_ms: Option<f64>, fetch_ms: Option<f64>) -> SyncBottleneck {
+    match (write_ms, fetch_ms) {
+        (Some(write), Some(fetch)) if write > 0.0 && fetch > 0.0 => {
+            if write > fetch * 1.2 {
+                SyncBottleneck::WriteBound
+            } else if fetch > write * 1.2 {
+                SyncBottleneck::FetchBound
             } else {
                 SyncBottleneck::Mixed
             }
         }
-        (Some(db), None) if db > 0.0 => SyncBottleneck::DbBound,
-        (None, Some(rpc)) if rpc > 0.0 => SyncBottleneck::RpcBound,
+        (Some(write), None) if write > 0.0 => SyncBottleneck::WriteBound,
+        (None, Some(fetch)) if fetch > 0.0 => SyncBottleneck::FetchBound,
         _ => SyncBottleneck::Unknown,
     }
 }
 
 fn bottleneck_label(bottleneck: SyncBottleneck) -> &'static str {
     match bottleneck {
-        SyncBottleneck::DbBound => "DB-bound",
-        SyncBottleneck::RpcBound => "RPC-bound",
+        SyncBottleneck::WriteBound => "write-bound",
+        SyncBottleneck::FetchBound => "fetch-bound",
         SyncBottleneck::Mixed => "mixed",
         SyncBottleneck::Unknown => "unknown",
     }
@@ -2990,15 +2951,15 @@ fn format_bytes(bytes: u64) -> String {
 mod tests {
     use super::{
         api_health_state, chart_height_warning, compact_overview_layout, compact_sync_layout,
-        consumed_bytes_source_color, consumed_bytes_source_label, dense_right_lines,
-        detail_right_lines, diagnostics_dense_panel, eta_confidence_label, format_age_secs,
-        format_hit_rate, format_num, format_num_commas, format_ratio, format_signed_num_i128,
-        format_ttl, header_title_line, heartbeat_is_on, io_rpc_jitter_line,
-        overview_log_min_height, overview_services_min_height, pipeline_bottleneck,
-        pipeline_flow_state, rate_jitter, redis_health_state, redis_key_line, redis_max_key_age,
-        runtime_live_delta, sparkline, stack_sync_charts, storage_runtime_columns, sync_bottleneck,
-        trend_delta, trim_for_panel, Color, CompactOverviewLayout, CompactSyncLayout,
-        DiagnosticsViewMode, SyncBottleneck, AMBER, ERROR_RED, TERMINAL_DIM, TERMINAL_GREEN,
+        dense_right_lines, detail_right_lines, diagnostics_dense_panel, eta_confidence_label,
+        format_age_secs, format_hit_rate, format_num, format_num_commas, format_ratio,
+        format_signed_num_i128, format_ttl, header_title_line, heartbeat_is_on,
+        io_fetch_write_jitter_line, overview_log_min_height, overview_services_min_height,
+        pipeline_bottleneck, pipeline_flow_state, rate_jitter, redis_health_state, redis_key_line,
+        redis_max_key_age, runtime_live_delta, sparkline, stack_sync_charts,
+        storage_runtime_columns, sync_bottleneck, sync_timing_lines, trend_delta, trim_for_panel,
+        Color, CompactOverviewLayout, CompactSyncLayout, DiagnosticsViewMode, SyncBottleneck,
+        TERMINAL_DIM,
     };
     use crate::db::{ApiServiceInfo, RedisServiceInfo};
     use ckbadger_common::MemoryStatsData;
@@ -3048,11 +3009,11 @@ mod tests {
     fn test_sync_bottleneck_detection() {
         assert_eq!(
             sync_bottleneck(Some(20.0), Some(5.0)),
-            SyncBottleneck::DbBound
+            SyncBottleneck::WriteBound
         );
         assert_eq!(
             sync_bottleneck(Some(5.0), Some(20.0)),
-            SyncBottleneck::RpcBound
+            SyncBottleneck::FetchBound
         );
         assert_eq!(
             sync_bottleneck(Some(10.0), Some(11.0)),
@@ -3218,10 +3179,10 @@ mod tests {
     }
 
     #[test]
-    fn test_io_rpc_jitter_line_format() {
-        let line = io_rpc_jitter_line("123.4ms", "567.8ms", "9.0 blk/s");
+    fn test_io_fetch_write_jitter_line_format() {
+        let line = io_fetch_write_jitter_line("123.4ms", "567.8ms", "9.0 blk/s");
         let text = line_text(&line);
-        assert!(text.starts_with("I/O RPC 123.4ms DB 567.8ms"));
+        assert!(text.starts_with("I/O Fetch 123.4ms Write 567.8ms"));
         assert!(text.contains("jitter 9.0 blk/s"));
     }
 
@@ -3250,6 +3211,28 @@ mod tests {
         );
         let labels: Vec<String> = lines.iter().map(line_text).collect();
         assert_eq!(labels, vec!["Stability", "F", "P", "W", "Rate", "I/O"]);
+    }
+
+    #[test]
+    fn test_sync_timing_lines_do_not_show_data_source() {
+        let lines = sync_timing_lines(Some("2m 03s"), Some("17m 12s"));
+        let text = lines
+            .iter()
+            .map(line_text)
+            .collect::<Vec<String>>()
+            .join(" ");
+        assert!(text.contains("ETA: 2m 03s"));
+        assert!(text.contains("Elapsed: 17m 12s"));
+        assert!(!text.contains("Source"));
+        assert!(!text.contains("DB"));
+        assert!(!text.contains("RPC"));
+    }
+
+    #[test]
+    fn test_sync_timing_lines_empty_shows_fallback() {
+        let lines = sync_timing_lines(None, None);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(line_text(&lines[0]), "No timing data");
     }
 
     #[test]
@@ -3382,24 +3365,6 @@ mod tests {
         assert!(text.contains("2.00 KB"));
         assert!(text.contains("ttl 30s"));
         assert!(text.contains("age 2s"));
-    }
-
-    #[test]
-    fn test_consumed_bytes_source_label() {
-        assert_eq!(consumed_bytes_source_label("live"), "live");
-        assert_eq!(consumed_bytes_source_label("sst"), "sst");
-        assert_eq!(consumed_bytes_source_label("mem"), "mem");
-        assert_eq!(consumed_bytes_source_label("none"), "none");
-        assert_eq!(consumed_bytes_source_label(""), "-");
-    }
-
-    #[test]
-    fn test_consumed_bytes_source_color() {
-        assert_eq!(consumed_bytes_source_color("live"), TERMINAL_GREEN);
-        assert_eq!(consumed_bytes_source_color("sst"), AMBER);
-        assert_eq!(consumed_bytes_source_color("mem"), AMBER);
-        assert_eq!(consumed_bytes_source_color("none"), ERROR_RED);
-        assert_eq!(consumed_bytes_source_color(""), TERMINAL_DIM);
     }
 
     #[test]
