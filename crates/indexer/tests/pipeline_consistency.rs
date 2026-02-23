@@ -8,6 +8,7 @@
 use ckbadger_indexer::db::BatchWriter;
 use ckbadger_indexer::parser::cell::ParsedCell;
 use ckbadger_store::batch::StoreBatch;
+use ckbadger_store::types::LiveCellInfo;
 use ckbadger_store::CkbadgerStore;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -117,7 +118,7 @@ fn test_full_cells_info_returns_lock_and_type() {
     let (store, writer) = setup_store();
     let tx_hash = vec![0x01u8; 32];
     let cell = ParsedCell {
-        capacity: 100_00000000,
+        capacity: 300_00000000,
         lock_code_hash: vec![0x11u8; 32],
         lock_hash_type: 0,
         lock_args: vec![0x22u8; 20],
@@ -146,7 +147,7 @@ fn test_full_cells_info_returns_lock_and_type() {
 
     assert_eq!(info.lock_code_hash, vec![0x11u8; 32]);
     assert_eq!(info.type_code_hash, Some(vec![0x44u8; 32]));
-    assert_eq!(info.capacity, 100_00000000);
+    assert_eq!(info.capacity, 300_00000000);
     assert_eq!(info.created_at_block, 1000);
 }
 
@@ -155,7 +156,7 @@ fn test_full_cells_info_no_type_script() {
     let (store, writer) = setup_store();
     let tx_hash = vec![0x01u8; 32];
     let cell = ParsedCell {
-        capacity: 100_00000000,
+        capacity: 300_00000000,
         lock_code_hash: vec![0x11u8; 32],
         lock_hash_type: 0,
         lock_args: vec![0x22u8; 20],
@@ -184,6 +185,64 @@ fn test_full_cells_info_no_type_script() {
 
     assert_eq!(info.lock_code_hash, vec![0x11u8; 32]);
     assert_eq!(info.type_code_hash, None);
+}
+
+#[test]
+fn test_full_cells_info_errors_on_zero_occupied_capacity_from_live_cell() {
+    let (store, writer) = setup_store();
+    let tx_hash = vec![0x31u8; 32];
+
+    let legacy_like = LiveCellInfo {
+        capacity: 300_00000000,
+        created_at_block: 1000,
+        lock_script_hash: vec![0x33u8; 32],
+        lock_code_hash: vec![0x11u8; 32],
+        lock_hash_type: 0,
+        lock_args: vec![0x22u8; 20],
+        type_script_hash: Some(vec![0x66u8; 32]),
+        type_code_hash: Some(vec![0x44u8; 32]),
+        type_args: Some(vec![0x55u8; 20]),
+        data_size: 100,
+        occupied_capacity: 0,
+    };
+
+    let mut batch = StoreBatch::new(&store);
+    batch.put_cell(&tx_hash, 0, &legacy_like);
+    batch.commit().unwrap();
+
+    let err = writer
+        .get_full_cells_info_batch(&[(&tx_hash, 0)], false)
+        .unwrap_err();
+    assert!(err.to_string().contains("invalid occupied capacity"));
+}
+
+#[test]
+fn test_full_cells_info_errors_when_typed_cell_lacks_type_args_and_occupied_missing() {
+    let (store, writer) = setup_store();
+    let tx_hash = vec![0x41u8; 32];
+
+    let bad = LiveCellInfo {
+        capacity: 300_00000000,
+        created_at_block: 1000,
+        lock_script_hash: vec![0x33u8; 32],
+        lock_code_hash: vec![0x11u8; 32],
+        lock_hash_type: 0,
+        lock_args: vec![0x22u8; 20],
+        type_script_hash: Some(vec![0x66u8; 32]),
+        type_code_hash: Some(vec![0x44u8; 32]),
+        type_args: None,
+        data_size: 100,
+        occupied_capacity: 0,
+    };
+
+    let mut batch = StoreBatch::new(&store);
+    batch.put_cell(&tx_hash, 0, &bad);
+    batch.commit().unwrap();
+
+    let err = writer
+        .get_full_cells_info_batch(&[(&tx_hash, 0)], false)
+        .unwrap_err();
+    assert!(err.to_string().contains("missing type_args"));
 }
 
 #[test]

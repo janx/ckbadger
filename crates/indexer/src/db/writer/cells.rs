@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{anyhow, bail, Result};
 use std::collections::HashMap;
 
 use ckbadger_store::batch::StoreBatch;
@@ -10,6 +10,110 @@ use tracing::info;
 use crate::parser::cell::ParsedCell;
 
 use super::BatchWriter;
+
+fn expected_occupied_capacity_for_cell(
+    info: &LiveCellInfo,
+    tx_hash: &[u8],
+    output_index: i16,
+    source: &str,
+) -> Result<i64> {
+    let data_size = i128::from(info.data_size);
+    if data_size < 0 {
+        bail!(
+            "negative data_size while loading {} cell: outpoint=0x{}:{}, data_size={}",
+            source,
+            hex::encode(tx_hash),
+            output_index,
+            info.data_size
+        );
+    }
+
+    let lock_script_size = 33_i128 + info.lock_args.len() as i128;
+    let has_type_script = info.type_script_hash.is_some() || info.type_code_hash.is_some();
+    let type_script_size = if has_type_script {
+        let type_args = info.type_args.as_ref().ok_or_else(|| {
+            anyhow!(
+                "missing type_args for typed {} cell: outpoint=0x{}:{}, type_script_hash={}, type_code_hash=0x{}",
+                source,
+                hex::encode(tx_hash),
+                output_index,
+                info.type_script_hash
+                    .as_ref()
+                    .map(|v| format!("0x{}", hex::encode(v)))
+                    .unwrap_or_else(|| "none".to_string()),
+                info.type_code_hash
+                    .as_ref()
+                    .map(hex::encode)
+                    .unwrap_or_else(|| "none".to_string())
+            )
+        })?;
+        33_i128 + type_args.len() as i128
+    } else {
+        0
+    };
+
+    let occupied = (8_i128 + lock_script_size + type_script_size + data_size)
+        .checked_mul(100_000_000_i128)
+        .ok_or_else(|| {
+            anyhow!(
+                "occupied capacity overflow while loading {} cell: outpoint=0x{}:{}",
+                source,
+                hex::encode(tx_hash),
+                output_index
+            )
+        })?;
+
+    i64::try_from(occupied).map_err(|_| {
+        anyhow!(
+            "occupied capacity over i64 range while loading {} cell: outpoint=0x{}:{}, occupied={}",
+            source,
+            hex::encode(tx_hash),
+            output_index,
+            occupied
+        )
+    })
+}
+
+fn validate_input_cell_occupied_capacity(
+    info: &LiveCellInfo,
+    tx_hash: &[u8],
+    output_index: i16,
+    source: &str,
+) -> Result<()> {
+    let expected = expected_occupied_capacity_for_cell(info, tx_hash, output_index, source)?;
+    if info.occupied_capacity <= 0 {
+        bail!(
+            "invalid occupied capacity while loading {} cell: outpoint=0x{}:{}, occupied={}, expected={}",
+            source,
+            hex::encode(tx_hash),
+            output_index,
+            info.occupied_capacity,
+            expected
+        );
+    }
+    if info.occupied_capacity != expected {
+        bail!(
+            "occupied capacity mismatch while loading {} cell: outpoint=0x{}:{}, occupied={}, expected={}",
+            source,
+            hex::encode(tx_hash),
+            output_index,
+            info.occupied_capacity,
+            expected
+        );
+    }
+    if info.occupied_capacity > info.capacity {
+        bail!(
+            "invalid occupied capacity while loading {} cell: outpoint=0x{}:{}, occupied={}, capacity={}, expected={}",
+            source,
+            hex::encode(tx_hash),
+            output_index,
+            info.occupied_capacity,
+            info.capacity,
+            expected
+        );
+    }
+    Ok(())
+}
 
 impl BatchWriter {
     pub fn insert_cells_batch(
@@ -302,10 +406,28 @@ impl BatchWriter {
         let results = self.store.multi_get_cf(key_refs);
 
         for (idx, res) in results.into_iter().enumerate() {
-            if let Ok(Some(value)) = res {
-                if let Ok(info) = bincode::deserialize::<LiveCellInfo>(&value) {
-                    let (tx_hash, output_index) = outpoints[idx];
+            let (tx_hash, output_index) = outpoints[idx];
+            match res {
+                Ok(Some(value)) => {
+                    let info = bincode::deserialize::<LiveCellInfo>(&value).map_err(|e| {
+                        anyhow!(
+                            "failed to decode live cell info: outpoint=0x{}:{}, error={}",
+                            hex::encode(tx_hash),
+                            output_index,
+                            e
+                        )
+                    })?;
+                    validate_input_cell_occupied_capacity(&info, tx_hash, output_index, "live")?;
                     result.insert((tx_hash.to_vec(), output_index), info);
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    bail!(
+                        "failed to read live cell info: outpoint=0x{}:{}, error={}",
+                        hex::encode(tx_hash),
+                        output_index,
+                        e
+                    );
                 }
             }
         }
@@ -332,10 +454,34 @@ impl BatchWriter {
             let consumed_results = self.store.multi_get_cf(consumed_refs);
 
             for (idx, res) in consumed_results.into_iter().enumerate() {
-                if let Ok(Some(value)) = res {
-                    if let Some(info) = ckbadger_store::types::decode_consumed_cell_info(&value) {
-                        let (tx_hash, output_index) = missing[idx];
-                        result.insert((tx_hash.to_vec(), *output_index), info.to_live_cell_info());
+                let (tx_hash, output_index) = missing[idx];
+                match res {
+                    Ok(Some(value)) => {
+                        let info = ckbadger_store::types::decode_consumed_cell_info(&value)
+                            .ok_or_else(|| {
+                                anyhow!(
+                                    "failed to decode consumed cell info: outpoint=0x{}:{}",
+                                    hex::encode(tx_hash),
+                                    output_index
+                                )
+                            })?;
+                        let live = info.to_live_cell_info();
+                        validate_input_cell_occupied_capacity(
+                            &live,
+                            tx_hash,
+                            *output_index,
+                            "consumed",
+                        )?;
+                        result.insert((tx_hash.to_vec(), *output_index), live);
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        bail!(
+                            "failed to read consumed cell info: outpoint=0x{}:{}, error={}",
+                            hex::encode(tx_hash),
+                            output_index,
+                            e
+                        );
                     }
                 }
             }

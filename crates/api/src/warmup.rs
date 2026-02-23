@@ -132,11 +132,11 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
                     delta.live_occupied_capacity_delta,
                 )
             }))
-            .map_err(|e| {
+            .map_err(|err| {
                 anyhow::anyhow!(
-                    "invalid token daily capacity deltas for type_hash=0x{}: {}",
+                    "invalid token daily deltas during warmup for type_hash=0x{}: {}",
                     hex::encode(hash),
-                    e
+                    err
                 )
             })?;
 
