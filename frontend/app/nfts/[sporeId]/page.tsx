@@ -62,6 +62,11 @@ export default function SporeDetailPage() {
   });
   const collection = collectionQuery.data;
   const collectionAssetId = collection?.collectionId ?? assetId;
+  const isDotbitCollectionView =
+    isDotbitCollection ||
+    (!!collection &&
+      (isDotbitAlias(collection.collectionId) || collection.standard.toLowerCase() === 'dotbit'));
+  const collectionSearchKeyword = isDotbitCollectionView ? searchKeyword : '';
 
   const { data: cluster } = useQuery({
     queryKey: ['cluster', spore?.clusterId],
@@ -98,13 +103,13 @@ export default function SporeDetailPage() {
       'nft-collection-items',
       collectionAssetId,
       collectionItemsPagination.cursor,
-      searchKeyword,
+      collectionSearchKeyword,
     ],
     queryFn: () =>
       api.getNftCollectionItems(collectionAssetId, {
         limit: 20,
         cursor: collectionItemsPagination.cursor,
-        search: searchKeyword || undefined,
+        search: collectionSearchKeyword || undefined,
       }),
     enabled: !!collection,
     placeholderData: keepPreviousData,
@@ -112,7 +117,7 @@ export default function SporeDetailPage() {
 
   useEffect(() => {
     collectionItemsPagination.reset();
-  }, [collectionAssetId, searchKeyword, collectionItemsPagination.reset]);
+  }, [collectionAssetId, collectionSearchKeyword, collectionItemsPagination.reset]);
 
   const formatNumber = (num: number) => {
     return new Intl.NumberFormat().format(num);
@@ -223,25 +228,124 @@ export default function SporeDetailPage() {
               <TerminalPanelHeader
                 indicator="active"
                 actions={
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="text"
-                      value={searchInput}
-                      onChange={(event) => setSearchInput(event.target.value)}
-                      placeholder={isDotbitCollection ? 'Search .bit' : 'Search NFT'}
-                      aria-label={isDotbitCollection ? 'Search .bit' : 'Search NFT'}
-                      className="focus:border-terminal-green w-44 rounded border border-slate-700 bg-slate-900 px-2.5 py-1.5 font-mono text-xs text-slate-200 outline-none transition-colors placeholder:text-slate-500"
-                    />
-                    {isCollectionItemsFetching && (
-                      <span className="font-mono text-xs text-slate-500">Searching...</span>
-                    )}
-                  </div>
+                  isDotbitCollectionView ? (
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={searchInput}
+                        onChange={(event) => setSearchInput(event.target.value)}
+                        placeholder="Search .bit"
+                        aria-label="Search .bit"
+                        className="focus:border-terminal-green w-44 rounded border border-slate-700 bg-slate-900 px-2.5 py-1.5 font-mono text-xs text-slate-200 outline-none transition-colors placeholder:text-slate-500"
+                      />
+                      {isCollectionItemsFetching && (
+                        <span className="font-mono text-xs text-slate-500">Searching...</span>
+                      )}
+                    </div>
+                  ) : undefined
                 }
               >
                 Collection NFTs
               </TerminalPanelHeader>
               <TerminalPanelContent>
-                {isCollectionItemsLoading ? (
+                {isDotbitCollectionView ? (
+                  isCollectionItemsLoading ? (
+                    <div className="py-8 text-center text-slate-500">Loading NFTs...</div>
+                  ) : isCollectionItemsError ? (
+                    <div className="py-8 text-center text-rose-400">
+                      Failed to load NFTs. Please refresh and try again.
+                    </div>
+                  ) : !collectionItems?.data?.length ? (
+                    <div className="py-8 text-center text-slate-500">
+                      No NFTs in this collection
+                    </div>
+                  ) : (
+                    <div className="overflow-hidden rounded border border-slate-800 bg-slate-900/30">
+                      {collectionItems.data.map((item) => (
+                        <div
+                          key={item.nftId}
+                          className="row-scan hover:bg-slate-850/40 border-b border-slate-800 px-3 py-2.5 transition-colors last:border-b-0"
+                        >
+                          <div className="mb-1 flex items-center justify-between gap-3">
+                            {item.txHash &&
+                            item.outputIndex !== null &&
+                            item.outputIndex !== undefined ? (
+                              <Link
+                                href={`/cell/${item.txHash}-${item.outputIndex}`}
+                                className="hover:text-terminal-green font-mono text-sm text-white hover:underline"
+                              >
+                                {item.name || item.nftId}
+                              </Link>
+                            ) : (
+                              <span className="font-mono text-sm text-white">
+                                {item.name || item.nftId}
+                              </span>
+                            )}
+                            {item.isLive ? (
+                              <Badge variant="green">Live</Badge>
+                            ) : (
+                              <Badge variant="red">Burned</Badge>
+                            )}
+                          </div>
+                          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-xs text-slate-400">
+                            <span>
+                              ID:{' '}
+                              <span className="text-slate-300">
+                                <HexDisplay
+                                  value={item.nftId}
+                                  color="accent"
+                                  size="sm"
+                                  startChars={10}
+                                  endChars={8}
+                                />
+                              </span>
+                            </span>
+                            <span>Block #{formatNumber(item.createdAtBlock)}</span>
+                            <span>
+                              Cell:{' '}
+                              {item.txHash &&
+                              item.outputIndex !== null &&
+                              item.outputIndex !== undefined ? (
+                                <Link
+                                  href={`/cell/${item.txHash}-${item.outputIndex}`}
+                                  className="text-terminal-green hover:underline"
+                                >
+                                  <HexDisplay
+                                    value={item.txHash}
+                                    color="accent"
+                                    size="sm"
+                                    startChars={10}
+                                    endChars={8}
+                                  />
+                                  -{item.outputIndex}
+                                </Link>
+                              ) : (
+                                <span className="text-slate-500">Unavailable</span>
+                              )}
+                            </span>
+                            {item.ownerLockHash && (
+                              <span>
+                                Owner:{' '}
+                                <Link
+                                  href={`/address/${item.ownerLockHash}`}
+                                  className="hover:underline"
+                                >
+                                  <HexDisplay
+                                    value={item.ownerLockHash}
+                                    color="accent"
+                                    size="sm"
+                                    startChars={10}
+                                    endChars={8}
+                                  />
+                                </Link>
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )
+                ) : isCollectionItemsLoading || isCollectionItemsFetching ? (
                   <div className="py-8 text-center text-slate-500">Loading NFTs...</div>
                 ) : isCollectionItemsError ? (
                   <div className="py-8 text-center text-rose-400">
@@ -250,87 +354,43 @@ export default function SporeDetailPage() {
                 ) : !collectionItems?.data?.length ? (
                   <div className="py-8 text-center text-slate-500">No NFTs in this collection</div>
                 ) : (
-                  <div className="overflow-hidden rounded border border-slate-800 bg-slate-900/30">
+                  <div className="space-y-2">
                     {collectionItems.data.map((item) => (
                       <div
                         key={item.nftId}
-                        className="row-scan hover:bg-slate-850/40 border-b border-slate-800 px-3 py-2.5 transition-colors last:border-b-0"
+                        className="flex flex-col gap-2 rounded border border-slate-800 bg-slate-900/40 p-3"
                       >
-                        <div className="mb-1 flex items-center justify-between gap-3">
-                          {item.txHash &&
-                          item.outputIndex !== null &&
-                          item.outputIndex !== undefined ? (
-                            <Link
-                              href={`/cell/${item.txHash}-${item.outputIndex}`}
-                              className="hover:text-terminal-green font-mono text-sm text-white hover:underline"
-                            >
-                              {item.name || item.nftId}
-                            </Link>
-                          ) : (
-                            <span className="font-mono text-sm text-white">
-                              {item.name || item.nftId}
-                            </span>
-                          )}
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="font-mono text-sm text-white">
+                            {item.name || item.nftId}
+                          </div>
                           {item.isLive ? (
                             <Badge variant="green">Live</Badge>
                           ) : (
                             <Badge variant="red">Burned</Badge>
                           )}
                         </div>
-                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-xs text-slate-400">
-                          <span>
-                            ID:{' '}
-                            <span className="text-slate-300">
+                        <HexDisplay value={item.nftId} color="accent" size="sm" />
+                        <div className="font-mono text-xs text-slate-400">
+                          Created at block #{formatNumber(item.createdAtBlock)}
+                        </div>
+                        {item.ownerLockHash && (
+                          <div className="font-mono text-xs text-slate-400">
+                            Owner:{' '}
+                            <Link
+                              href={`/address/${item.ownerLockHash}`}
+                              className="hover:underline"
+                            >
                               <HexDisplay
-                                value={item.nftId}
+                                value={item.ownerLockHash}
                                 color="accent"
                                 size="sm"
                                 startChars={10}
                                 endChars={8}
                               />
-                            </span>
-                          </span>
-                          <span>Block #{formatNumber(item.createdAtBlock)}</span>
-                          <span>
-                            Cell:{' '}
-                            {item.txHash &&
-                            item.outputIndex !== null &&
-                            item.outputIndex !== undefined ? (
-                              <Link
-                                href={`/cell/${item.txHash}-${item.outputIndex}`}
-                                className="text-terminal-green hover:underline"
-                              >
-                                <HexDisplay
-                                  value={item.txHash}
-                                  color="accent"
-                                  size="sm"
-                                  startChars={10}
-                                  endChars={8}
-                                />
-                                -{item.outputIndex}
-                              </Link>
-                            ) : (
-                              <span className="text-slate-500">Unavailable</span>
-                            )}
-                          </span>
-                          {item.ownerLockHash && (
-                            <span>
-                              Owner:{' '}
-                              <Link
-                                href={`/address/${item.ownerLockHash}`}
-                                className="hover:underline"
-                              >
-                                <HexDisplay
-                                  value={item.ownerLockHash}
-                                  color="accent"
-                                  size="sm"
-                                  startChars={10}
-                                  endChars={8}
-                                />
-                              </Link>
-                            </span>
-                          )}
-                        </div>
+                            </Link>
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>

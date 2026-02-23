@@ -136,11 +136,8 @@ describe('SporeDetailPage', () => {
     await waitFor(() => {
       expect(screen.getByText('alice.bit')).toBeInTheDocument();
     });
-    const cellLink = screen.getByRole('link', { name: /alice\.bit/i });
-    expect(cellLink).toHaveAttribute(
-      'href',
-      '/cell/0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-7'
-    );
+    expect(screen.getByText('Created at block #100')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Search .bit')).not.toBeInTheDocument();
     expect(api.getNftCollectionItems).toHaveBeenCalledWith(
       mockCollection.collectionId,
       expect.objectContaining({ limit: 20 })
