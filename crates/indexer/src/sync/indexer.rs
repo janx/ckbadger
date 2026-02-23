@@ -1813,7 +1813,12 @@ impl Indexer {
         &self.run_id
     }
 
-    pub fn record_runtime_heartbeat(&self, current_block: u64) {
+    pub fn record_runtime_heartbeat(
+        &self,
+        current_block: u64,
+        target_block: u64,
+        stage: Option<&str>,
+    ) {
         let current_block_i64 = match i64::try_from(current_block) {
             Ok(v) => v,
             Err(_) => {
@@ -1825,14 +1830,30 @@ impl Indexer {
                 return;
             }
         };
-        if let Err(e) = self
-            .writer
-            .store()
-            .mark_runtime_heartbeat(&self.run_id, current_block_i64)
-        {
+        let target_block_i64 = match i64::try_from(target_block) {
+            Ok(v) => v,
+            Err(_) => {
+                warn!(
+                    run_id = %self.run_id,
+                    target_block,
+                    "Skipping runtime heartbeat: target_block exceeds i64 range"
+                );
+                return;
+            }
+        };
+        let cgroup = read_cgroup_memory_snapshot();
+        if let Err(e) = self.writer.store().mark_runtime_heartbeat_with_diag(
+            &self.run_id,
+            current_block_i64,
+            target_block_i64,
+            stage,
+            cgroup.oom_events,
+            cgroup.oom_kill_events,
+        ) {
             warn!(
                 run_id = %self.run_id,
                 current_block,
+                target_block,
                 error = %e,
                 "Failed to persist runtime heartbeat"
             );

@@ -702,6 +702,14 @@ pub struct RuntimeStatus {
     #[serde(default)]
     pub last_heartbeat_block: i64,
     #[serde(default)]
+    pub last_heartbeat_target_block: i64,
+    #[serde(default)]
+    pub last_heartbeat_stage: Option<String>,
+    #[serde(default)]
+    pub last_heartbeat_oom_events: Option<u64>,
+    #[serde(default)]
+    pub last_heartbeat_oom_kill_events: Option<u64>,
+    #[serde(default)]
     pub last_shutdown_reason: Option<String>,
     #[serde(default)]
     pub last_exit_code: Option<i32>,

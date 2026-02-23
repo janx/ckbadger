@@ -12,7 +12,7 @@ use ckbadger_indexer::{
     runtime_diag::generate_run_id, runtime_diag::read_cgroup_memory_snapshot, sync::Indexer,
     verify, Config,
 };
-use ckbadger_store::CkbadgerStore;
+use ckbadger_store::{CkbadgerStore, RuntimeStatus};
 
 #[derive(Parser, Debug)]
 #[command(name = "ckbadger-indexer")]
@@ -194,6 +194,30 @@ fn should_force_startup_cleanup(
     !clean_shutdown_marker_for_same_run
 }
 
+fn monotonic_counter_delta(current: Option<u64>, previous: Option<u64>) -> Option<u64> {
+    match (current, previous) {
+        (Some(curr), Some(prev)) if curr >= prev => Some(curr - prev),
+        _ => None,
+    }
+}
+
+fn classify_unclean_shutdown_hint(
+    previous_runtime: &RuntimeStatus,
+    oom_kill_delta: Option<u64>,
+) -> &'static str {
+    if oom_kill_delta.is_some_and(|delta| delta > 0) {
+        "cgroup_oom_kill"
+    } else if previous_runtime.last_incident_summary.is_some() {
+        "application_incident_before_unclean_exit"
+    } else if previous_runtime.last_shutdown_reason.is_none()
+        && previous_runtime.last_exit_code.is_none()
+    {
+        "external_sigkill_or_host_oom_or_abort"
+    } else {
+        "unknown_unclean_exit"
+    }
+}
+
 fn bytes_to_hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
 
@@ -358,6 +382,18 @@ async fn run_sync(args: Cli) -> Result<()> {
     }
     let run_id = generate_run_id();
     let startup_cgroup = read_cgroup_memory_snapshot();
+    let startup_oom_events_since_last_heartbeat = monotonic_counter_delta(
+        startup_cgroup.oom_events,
+        previous_runtime.last_heartbeat_oom_events,
+    );
+    let startup_oom_kill_events_since_last_heartbeat = monotonic_counter_delta(
+        startup_cgroup.oom_kill_events,
+        previous_runtime.last_heartbeat_oom_kill_events,
+    );
+    let unclean_shutdown_hint = classify_unclean_shutdown_hint(
+        &previous_runtime,
+        startup_oom_kill_events_since_last_heartbeat,
+    );
     if previous_run_unclean {
         info!(
             run_id = %run_id,
@@ -368,13 +404,30 @@ async fn run_sync(args: Cli) -> Result<()> {
             previous_last_shutdown_at = previous_runtime.last_shutdown_at,
             previous_last_heartbeat_at = previous_runtime.last_heartbeat_at,
             previous_last_heartbeat_block = previous_runtime.last_heartbeat_block,
+            previous_last_heartbeat_target_block = previous_runtime.last_heartbeat_target_block,
+            previous_last_heartbeat_stage = ?previous_runtime.last_heartbeat_stage,
+            previous_last_heartbeat_oom_events = ?previous_runtime.last_heartbeat_oom_events,
+            previous_last_heartbeat_oom_kill_events = ?previous_runtime.last_heartbeat_oom_kill_events,
             previous_last_incident_id = ?previous_runtime.last_incident_id,
             cgroup_memory_current_bytes = startup_cgroup.memory_current_bytes,
             cgroup_memory_max_bytes = startup_cgroup.memory_max_bytes,
             cgroup_memory_max_raw = ?startup_cgroup.memory_max_raw,
             cgroup_oom_events = startup_cgroup.oom_events,
             cgroup_oom_kill_events = startup_cgroup.oom_kill_events,
+            startup_oom_events_since_last_heartbeat = ?startup_oom_events_since_last_heartbeat,
+            startup_oom_kill_events_since_last_heartbeat = ?startup_oom_kill_events_since_last_heartbeat,
+            unclean_shutdown_hint,
             "Detected previous run without graceful shutdown marker"
+        );
+        warn!(
+            run_id = %run_id,
+            unclean_shutdown_hint,
+            startup_oom_events_since_last_heartbeat = ?startup_oom_events_since_last_heartbeat,
+            startup_oom_kill_events_since_last_heartbeat = ?startup_oom_kill_events_since_last_heartbeat,
+            previous_last_heartbeat_stage = ?previous_runtime.last_heartbeat_stage,
+            previous_last_heartbeat_block = previous_runtime.last_heartbeat_block,
+            previous_last_heartbeat_target_block = previous_runtime.last_heartbeat_target_block,
+            "Unclean shutdown diagnostics summary"
         );
     } else {
         info!(
@@ -385,12 +438,18 @@ async fn run_sync(args: Cli) -> Result<()> {
             previous_last_shutdown_at = previous_runtime.last_shutdown_at,
             previous_last_heartbeat_at = previous_runtime.last_heartbeat_at,
             previous_last_heartbeat_block = previous_runtime.last_heartbeat_block,
+            previous_last_heartbeat_target_block = previous_runtime.last_heartbeat_target_block,
+            previous_last_heartbeat_stage = ?previous_runtime.last_heartbeat_stage,
+            previous_last_heartbeat_oom_events = ?previous_runtime.last_heartbeat_oom_events,
+            previous_last_heartbeat_oom_kill_events = ?previous_runtime.last_heartbeat_oom_kill_events,
             previous_last_incident_id = ?previous_runtime.last_incident_id,
             cgroup_memory_current_bytes = startup_cgroup.memory_current_bytes,
             cgroup_memory_max_bytes = startup_cgroup.memory_max_bytes,
             cgroup_memory_max_raw = ?startup_cgroup.memory_max_raw,
             cgroup_oom_events = startup_cgroup.oom_events,
             cgroup_oom_kill_events = startup_cgroup.oom_kill_events,
+            startup_oom_events_since_last_heartbeat = ?startup_oom_events_since_last_heartbeat,
+            startup_oom_kill_events_since_last_heartbeat = ?startup_oom_kill_events_since_last_heartbeat,
             "Runtime diagnostics at startup"
         );
     }
@@ -441,7 +500,18 @@ async fn run_sync(args: Cli) -> Result<()> {
             let (perf_rpc_ms, perf_db_ms) = indexer_for_progress.perf_snapshot_ms();
             let pipeline = indexer_for_progress.pipeline_progress_snapshot();
             let pipeline_log = pipeline.clone();
-            indexer_for_progress.record_runtime_heartbeat(progress.current());
+            let heartbeat_stage = indexer_for_progress.startup_phase().unwrap_or_else(|| {
+                if indexer_for_progress.is_bulk_sync_active() {
+                    "bulk_sync".to_string()
+                } else {
+                    "tip_sync".to_string()
+                }
+            });
+            indexer_for_progress.record_runtime_heartbeat(
+                progress.current(),
+                progress.target(),
+                Some(heartbeat_stage.as_str()),
+            );
             let sync_data = ckbadger_common::SyncProgressData {
                 current_block: progress.current(),
                 target_block: progress.target(),
@@ -719,7 +789,8 @@ async fn run_label_import_command(
 #[cfg(test)]
 mod tests {
     use super::{
-        queue_fill_pct, reconcile_token_daily_deltas_on_startup, should_emit_rate_limited,
+        classify_unclean_shutdown_hint, monotonic_counter_delta, queue_fill_pct,
+        reconcile_token_daily_deltas_on_startup, should_emit_rate_limited,
         should_force_startup_cleanup, should_warn_progress_stall,
     };
     use ckbadger_store::{
@@ -777,6 +848,44 @@ mod tests {
             200,
             Duration::from_secs(60)
         ));
+    }
+
+    #[test]
+    fn test_monotonic_counter_delta() {
+        assert_eq!(monotonic_counter_delta(Some(10), Some(7)), Some(3));
+        assert_eq!(monotonic_counter_delta(Some(7), Some(10)), None);
+        assert_eq!(monotonic_counter_delta(Some(7), None), None);
+        assert_eq!(monotonic_counter_delta(None, Some(7)), None);
+    }
+
+    #[test]
+    fn test_classify_unclean_shutdown_hint_prefers_oom_kill_delta() {
+        let runtime = RuntimeStatus::default();
+        assert_eq!(
+            classify_unclean_shutdown_hint(&runtime, Some(1)),
+            "cgroup_oom_kill"
+        );
+    }
+
+    #[test]
+    fn test_classify_unclean_shutdown_hint_for_external_kill_like_case() {
+        let runtime = RuntimeStatus::default();
+        assert_eq!(
+            classify_unclean_shutdown_hint(&runtime, Some(0)),
+            "external_sigkill_or_host_oom_or_abort"
+        );
+    }
+
+    #[test]
+    fn test_classify_unclean_shutdown_hint_for_known_incident() {
+        let runtime = RuntimeStatus {
+            last_incident_summary: Some("pipeline_batch_write_failed".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            classify_unclean_shutdown_hint(&runtime, Some(0)),
+            "application_incident_before_unclean_exit"
+        );
     }
 
     #[test]

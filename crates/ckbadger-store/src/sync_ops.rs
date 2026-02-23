@@ -21,6 +21,21 @@ struct LegacyRuntimeStatusV1 {
     pub last_incident_summary: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct LegacyRuntimeStatusV2 {
+    pub active_run_id: Option<String>,
+    pub last_run_id: Option<String>,
+    pub run_started_at: i64,
+    pub last_heartbeat_at: i64,
+    pub last_heartbeat_block: i64,
+    pub last_shutdown_reason: Option<String>,
+    pub last_exit_code: Option<i32>,
+    pub last_incident_id: Option<String>,
+    pub last_incident_at: i64,
+    pub last_incident_summary: Option<String>,
+    pub last_shutdown_at: i64,
+}
+
 impl From<LegacyRuntimeStatusV1> for RuntimeStatus {
     fn from(value: LegacyRuntimeStatusV1) -> Self {
         Self {
@@ -29,9 +44,35 @@ impl From<LegacyRuntimeStatusV1> for RuntimeStatus {
             run_started_at: value.run_started_at,
             last_heartbeat_at: value.last_heartbeat_at,
             last_heartbeat_block: value.last_heartbeat_block,
+            last_heartbeat_target_block: value.last_heartbeat_block,
+            last_heartbeat_stage: None,
+            last_heartbeat_oom_events: None,
+            last_heartbeat_oom_kill_events: None,
             last_shutdown_reason: value.last_shutdown_reason,
             last_exit_code: value.last_exit_code,
             last_shutdown_at: 0,
+            last_incident_id: value.last_incident_id,
+            last_incident_at: value.last_incident_at,
+            last_incident_summary: value.last_incident_summary,
+        }
+    }
+}
+
+impl From<LegacyRuntimeStatusV2> for RuntimeStatus {
+    fn from(value: LegacyRuntimeStatusV2) -> Self {
+        Self {
+            active_run_id: value.active_run_id,
+            last_run_id: value.last_run_id,
+            run_started_at: value.run_started_at,
+            last_heartbeat_at: value.last_heartbeat_at,
+            last_heartbeat_block: value.last_heartbeat_block,
+            last_heartbeat_target_block: value.last_heartbeat_block,
+            last_heartbeat_stage: None,
+            last_heartbeat_oom_events: None,
+            last_heartbeat_oom_kill_events: None,
+            last_shutdown_reason: value.last_shutdown_reason,
+            last_exit_code: value.last_exit_code,
+            last_shutdown_at: value.last_shutdown_at,
             last_incident_id: value.last_incident_id,
             last_incident_at: value.last_incident_at,
             last_incident_summary: value.last_incident_summary,
@@ -65,13 +106,17 @@ impl CkbadgerStore {
         match self.get_cf(self.cf_sync_meta(), sync_meta_keys::RUNTIME_STATUS)? {
             Some(value) => match bincode::deserialize::<RuntimeStatus>(&value) {
                 Ok(status) => Ok(status),
-                Err(primary_err) => match bincode::deserialize::<LegacyRuntimeStatusV1>(&value) {
-                    Ok(legacy) => Ok(legacy.into()),
-                    Err(legacy_err) => Err(anyhow!(
-                        "failed to deserialize runtime_status as current or legacy format: current={:#} legacy={:#}",
-                        primary_err,
-                        legacy_err
-                    )),
+                Err(primary_err) => match bincode::deserialize::<LegacyRuntimeStatusV2>(&value) {
+                    Ok(legacy_v2) => Ok(legacy_v2.into()),
+                    Err(v2_err) => match bincode::deserialize::<LegacyRuntimeStatusV1>(&value) {
+                        Ok(legacy_v1) => Ok(legacy_v1.into()),
+                        Err(v1_err) => Err(anyhow!(
+                            "failed to deserialize runtime_status as current or legacy format: current={:#} legacy_v2={:#} legacy_v1={:#}",
+                            primary_err,
+                            v2_err,
+                            v1_err
+                        )),
+                    },
                 },
             },
             None => Ok(RuntimeStatus::default()),
@@ -100,6 +145,10 @@ impl CkbadgerStore {
             status.run_started_at = now;
             status.last_heartbeat_at = now;
             status.last_heartbeat_block = tip_block;
+            status.last_heartbeat_target_block = tip_block;
+            status.last_heartbeat_stage = Some("run_start".to_string());
+            status.last_heartbeat_oom_events = None;
+            status.last_heartbeat_oom_kill_events = None;
             status.last_shutdown_reason = None;
             status.last_exit_code = None;
             status.last_shutdown_at = 0;
@@ -107,12 +156,35 @@ impl CkbadgerStore {
     }
 
     pub fn mark_runtime_heartbeat(&self, run_id: &str, current_block: i64) -> anyhow::Result<()> {
+        self.mark_runtime_heartbeat_with_diag(
+            run_id,
+            current_block,
+            current_block,
+            None,
+            None,
+            None,
+        )
+    }
+
+    pub fn mark_runtime_heartbeat_with_diag(
+        &self,
+        run_id: &str,
+        current_block: i64,
+        target_block: i64,
+        stage: Option<&str>,
+        oom_events: Option<u64>,
+        oom_kill_events: Option<u64>,
+    ) -> anyhow::Result<()> {
         let now = chrono::Utc::now().timestamp();
         let mut status = self.get_runtime_status()?;
         match status.active_run_id.as_deref() {
             Some(active_run) if active_run == run_id => {
                 status.last_heartbeat_at = now;
                 status.last_heartbeat_block = current_block;
+                status.last_heartbeat_target_block = target_block;
+                status.last_heartbeat_stage = stage.map(ToOwned::to_owned);
+                status.last_heartbeat_oom_events = oom_events;
+                status.last_heartbeat_oom_kill_events = oom_kill_events;
                 self.set_runtime_status(&status)
             }
             Some(active_run) => Err(anyhow!(
@@ -300,6 +372,21 @@ mod tests {
         pub last_incident_summary: Option<String>,
     }
 
+    #[derive(Debug, Clone, Serialize)]
+    struct LegacyRuntimeStatusV2ForTest {
+        pub active_run_id: Option<String>,
+        pub last_run_id: Option<String>,
+        pub run_started_at: i64,
+        pub last_heartbeat_at: i64,
+        pub last_heartbeat_block: i64,
+        pub last_shutdown_reason: Option<String>,
+        pub last_exit_code: Option<i32>,
+        pub last_incident_id: Option<String>,
+        pub last_incident_at: i64,
+        pub last_incident_summary: Option<String>,
+        pub last_shutdown_at: i64,
+    }
+
     #[test]
     fn test_runtime_status_lifecycle() {
         let dir = tempfile::tempdir().unwrap();
@@ -313,12 +400,27 @@ mod tests {
         assert_eq!(running.active_run_id.as_deref(), Some("run-1"));
         assert_eq!(running.last_run_id.as_deref(), Some("run-1"));
         assert_eq!(running.last_heartbeat_block, 120);
+        assert_eq!(running.last_heartbeat_target_block, 120);
+        assert_eq!(running.last_heartbeat_stage.as_deref(), Some("run_start"));
         assert!(running.run_started_at > 0);
 
-        store.mark_runtime_heartbeat("run-1", 130).unwrap();
+        store
+            .mark_runtime_heartbeat_with_diag(
+                "run-1",
+                130,
+                180,
+                Some("bulk_sync"),
+                Some(11),
+                Some(2),
+            )
+            .unwrap();
         let heartbeat = store.get_runtime_status().unwrap();
         assert_eq!(heartbeat.active_run_id.as_deref(), Some("run-1"));
         assert_eq!(heartbeat.last_heartbeat_block, 130);
+        assert_eq!(heartbeat.last_heartbeat_target_block, 180);
+        assert_eq!(heartbeat.last_heartbeat_stage.as_deref(), Some("bulk_sync"));
+        assert_eq!(heartbeat.last_heartbeat_oom_events, Some(11));
+        assert_eq!(heartbeat.last_heartbeat_oom_kill_events, Some(2));
 
         store
             .mark_runtime_incident("run-1", "run-1-inc-000001", "pipeline batch mismatch")
@@ -420,6 +522,10 @@ mod tests {
         assert_eq!(status.run_started_at, 10);
         assert_eq!(status.last_heartbeat_at, 20);
         assert_eq!(status.last_heartbeat_block, 30);
+        assert_eq!(status.last_heartbeat_target_block, 30);
+        assert!(status.last_heartbeat_stage.is_none());
+        assert!(status.last_heartbeat_oom_events.is_none());
+        assert!(status.last_heartbeat_oom_kill_events.is_none());
         assert_eq!(
             status.last_shutdown_reason.as_deref(),
             Some("sigterm_shutdown")
@@ -429,6 +535,46 @@ mod tests {
         assert_eq!(status.last_incident_id.as_deref(), Some("inc-1"));
         assert_eq!(status.last_incident_at, 40);
         assert_eq!(status.last_incident_summary.as_deref(), Some("legacy"));
+    }
+
+    #[test]
+    fn test_runtime_status_deserialize_legacy_v2() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let legacy = LegacyRuntimeStatusV2ForTest {
+            active_run_id: Some("run-v2".to_string()),
+            last_run_id: Some("run-v2".to_string()),
+            run_started_at: 11,
+            last_heartbeat_at: 22,
+            last_heartbeat_block: 33,
+            last_shutdown_reason: Some("run_error".to_string()),
+            last_exit_code: Some(1),
+            last_incident_id: Some("inc-v2".to_string()),
+            last_incident_at: 44,
+            last_incident_summary: Some("legacy-v2".to_string()),
+            last_shutdown_at: 55,
+        };
+        let bytes = bincode::serialize(&legacy).unwrap();
+        store
+            .put_cf(store.cf_sync_meta(), sync_meta_keys::RUNTIME_STATUS, &bytes)
+            .unwrap();
+
+        let status = store.get_runtime_status().unwrap();
+        assert_eq!(status.active_run_id.as_deref(), Some("run-v2"));
+        assert_eq!(status.last_run_id.as_deref(), Some("run-v2"));
+        assert_eq!(status.run_started_at, 11);
+        assert_eq!(status.last_heartbeat_at, 22);
+        assert_eq!(status.last_heartbeat_block, 33);
+        assert_eq!(status.last_heartbeat_target_block, 33);
+        assert!(status.last_heartbeat_stage.is_none());
+        assert!(status.last_heartbeat_oom_events.is_none());
+        assert!(status.last_heartbeat_oom_kill_events.is_none());
+        assert_eq!(status.last_shutdown_reason.as_deref(), Some("run_error"));
+        assert_eq!(status.last_exit_code, Some(1));
+        assert_eq!(status.last_shutdown_at, 55);
+        assert_eq!(status.last_incident_id.as_deref(), Some("inc-v2"));
+        assert_eq!(status.last_incident_at, 44);
+        assert_eq!(status.last_incident_summary.as_deref(), Some("legacy-v2"));
     }
 
     #[test]
