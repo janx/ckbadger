@@ -110,20 +110,20 @@ export function ChartPage({
                     <span
                       className={
                         chartType === 'bar'
-                          ? 'h-3 w-3 rounded bg-purple-500'
-                          : 'h-0.5 w-4 bg-purple-500'
+                          ? 'bg-terminal-green h-3 w-3 rounded'
+                          : 'bg-terminal-green h-0.5 w-4'
                       }
                     />
                     <span className="text-slate-400">{data.yAxisLabel}</span>
                   </div>
                   {chartType === 'line' && data.y2AxisLabel && (
                     <div className="flex items-center gap-2">
-                      <span className="bg-terminal-green h-0.5 w-4" />
+                      <span className="bg-amber h-0.5 w-4" />
                       <span className="text-slate-400">{data.y2AxisLabel}</span>
                     </div>
                   )}
                 </div>
-                <div className="mt-4 text-center font-mono text-xs text-slate-600">
+                <div className="mt-4 text-center font-mono text-xs text-slate-500">
                   Drag to select range • Scroll to zoom • Middle-click drag to pan • Click Reset to
                   restore
                 </div>

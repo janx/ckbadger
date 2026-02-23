@@ -2,6 +2,7 @@
 
 import { useState, useRef, useCallback, useMemo } from 'react';
 import { ChartDataPoint } from '@/lib/api';
+import { CHART_PRIMARY_COLOR, CHART_SECONDARY_COLOR } from '@/lib/chart-colors';
 
 export type LineChartType = 'line' | 'bar';
 export interface LineChartMarker {
@@ -46,8 +47,8 @@ export function LineChart({
   data: fullData,
   yAxisLabel,
   y2AxisLabel,
-  primaryColor = '#8b5cf6',
-  secondaryColor = '#00c389',
+  primaryColor = CHART_PRIMARY_COLOR,
+  secondaryColor = CHART_SECONDARY_COLOR,
   height: chartHeightProp = 240,
   interactive = true,
   defaultLogScale = false,
@@ -527,10 +528,22 @@ export function LineChart({
         })}
 
         {chartType === 'line' && (
-          <path d={pathD} fill="none" stroke={primaryColor} strokeWidth="2" />
+          <path
+            d={pathD}
+            fill="none"
+            stroke={primaryColor}
+            strokeWidth="2"
+            data-testid="line-series-primary"
+          />
         )}
         {chartType === 'line' && path2D && (
-          <path d={path2D} fill="none" stroke={secondaryColor} strokeWidth="2" />
+          <path
+            d={path2D}
+            fill="none"
+            stroke={secondaryColor}
+            strokeWidth="2"
+            data-testid="line-series-secondary"
+          />
         )}
         {chartType === 'bar' &&
           data.map((_, i) => {
@@ -558,9 +571,9 @@ export function LineChart({
             y={padding.top}
             width={Math.max(0, xScale(selectionEnd) - xScale(selectionStart))}
             height={chartHeight}
-            fill="#8b5cf6"
-            fillOpacity={0.3}
-            stroke="#8b5cf6"
+            fill={primaryColor}
+            fillOpacity={0.22}
+            stroke={primaryColor}
             strokeWidth={1}
           />
         )}

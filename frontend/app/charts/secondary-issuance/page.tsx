@@ -54,7 +54,7 @@ export default function SecondaryIssuancePage() {
                     </div>
                   ))}
                 </div>
-                <div className="mt-4 text-center font-mono text-xs text-slate-600">
+                <div className="mt-4 text-center font-mono text-xs text-slate-500">
                   Drag to select range • Scroll to zoom • Middle-click drag to pan • Click Reset to
                   restore
                 </div>

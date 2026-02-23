@@ -213,7 +213,7 @@ export default function TransactionDetailPage() {
                         #{lifecycle.proposedIn.blockNumber.toLocaleString()}
                       </Link>
                     </div>
-                    <span className="text-slate-600">→</span>
+                    <span className="text-slate-500">→</span>
                     <div className="flex items-center gap-1.5">
                       <span className="text-xs text-slate-500">Committed</span>
                       <Link

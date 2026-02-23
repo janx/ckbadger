@@ -414,10 +414,10 @@ export default function TokenDetailPage() {
                                   />
                                 </Link>
                               ) : (
-                                <span className="text-slate-600">-</span>
+                                <span className="text-slate-500">-</span>
                               )}
                             </td>
-                            <td className="px-0 py-3 text-center text-slate-600">
+                            <td className="px-0 py-3 text-center text-slate-500">
                               <svg
                                 className="mx-auto h-3.5 w-3.5"
                                 fill="none"

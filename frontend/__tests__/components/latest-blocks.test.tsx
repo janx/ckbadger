@@ -69,5 +69,6 @@ describe('LatestBlocks', () => {
     });
     expect(screen.getByText('HF · MIRANA')).toBeInTheDocument();
     expect(screen.queryByTestId('latest-block-hardfork-8775639')).not.toBeInTheDocument();
+    expect(screen.getAllByText('#')[0]).toHaveClass('text-slate-500');
   });
 });

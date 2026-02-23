@@ -261,7 +261,7 @@ export default function ScriptsPage() {
                             {script.scriptKind}
                           </Badge>
                         ) : (
-                          <span className="text-slate-600">-</span>
+                          <span className="text-slate-500">-</span>
                         )}
                       </div>
                       <div className="flex-1 truncate px-4 text-sm text-slate-400">
@@ -280,7 +280,7 @@ export default function ScriptsPage() {
                         {(() => {
                           const occupied = script.liveOccupiedCapacitySum;
                           if (!occupied) {
-                            return <span className="text-slate-600">-</span>;
+                            return <span className="text-slate-500">-</span>;
                           }
                           const compact = formatCkbCompact(occupied);
                           return <span title={`${compact.full} CKB`}>{compact.value}</span>;
@@ -290,7 +290,7 @@ export default function ScriptsPage() {
                         {(() => {
                           const capacity = script.liveCapacitySum;
                           if (!capacity) {
-                            return <span className="text-slate-600">-</span>;
+                            return <span className="text-slate-500">-</span>;
                           }
                           const compact = formatCkbCompact(capacity);
                           return <span title={`${compact.full} CKB`}>{compact.value}</span>;
@@ -300,7 +300,7 @@ export default function ScriptsPage() {
                         {formatOccupiedRatio(
                           script.liveOccupiedCapacitySum,
                           script.liveCapacitySum
-                        ) ?? <span className="text-slate-600">-</span>}
+                        ) ?? <span className="text-slate-500">-</span>}
                       </div>
                     </div>
                   </TerminalRow>

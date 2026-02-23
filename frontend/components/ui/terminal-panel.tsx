@@ -137,7 +137,7 @@ export function TerminalDivider({ className, label }: TerminalDividerProps) {
     return (
       <div className={cn('flex items-center gap-3 py-2', className)}>
         <div className="h-px flex-1 bg-gradient-to-r from-transparent via-slate-700 to-transparent" />
-        <span className="font-mono text-xs uppercase tracking-widest text-slate-600">{label}</span>
+        <span className="font-mono text-xs uppercase tracking-widest text-slate-500">{label}</span>
         <div className="h-px flex-1 bg-gradient-to-r from-transparent via-slate-700 to-transparent" />
       </div>
     );

@@ -40,7 +40,7 @@ export function SparkChart({ data, color = '#10b981', height = 40, className }: 
   if (!data.length) {
     return (
       <div
-        className={cn('flex items-center justify-center text-slate-600', className)}
+        className={cn('flex items-center justify-center text-slate-500', className)}
         style={{ height }}
       >
         No data

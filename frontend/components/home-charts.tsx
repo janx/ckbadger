@@ -4,13 +4,14 @@ import { useQuery } from '@tanstack/react-query';
 import { api, ChartDataPoint, NetworkStats } from '@/lib/api';
 import { useMemo } from 'react';
 import Link from 'next/link';
+import { CHART_PRIMARY_COLOR, CHART_SECONDARY_COLOR } from '@/lib/chart-colors';
 
 interface MiniChartProps {
   data: ChartDataPoint[];
   color?: string;
 }
 
-function MiniLineChart({ data, color = '#ffffff' }: MiniChartProps) {
+function MiniLineChart({ data, color = CHART_PRIMARY_COLOR }: MiniChartProps) {
   const width = 500;
   const height = 120;
   const padding = { top: 10, right: 10, bottom: 25, left: 45 };
@@ -133,6 +134,7 @@ interface ChartCardProps {
   data: ChartDataPoint[];
   isLoading?: boolean;
   href?: string;
+  chartColor?: string;
 }
 
 function ChartCard({
@@ -144,6 +146,7 @@ function ChartCard({
   data,
   isLoading,
   href,
+  chartColor = CHART_PRIMARY_COLOR,
 }: ChartCardProps) {
   const content = (
     <div
@@ -171,8 +174,8 @@ function ChartCard({
           </div>
         </div>
       </div>
-      <div className="mb-1 font-mono text-xs text-slate-600">{chartTitle}</div>
-      <MiniLineChart data={data} />
+      <div className="mb-1 font-mono text-xs text-slate-500">{chartTitle}</div>
+      <MiniLineChart data={data} color={chartColor} />
     </div>
   );
 
@@ -240,6 +243,7 @@ export function HomeCharts({
         data={recentBlockTimeData}
         isLoading={statsLoading || blockTimeLoading}
         href="/charts/average-block-time"
+        chartColor={CHART_PRIMARY_COLOR}
       />
       <ChartCard
         leftLabel="Mining Hash Rate"
@@ -250,6 +254,7 @@ export function HomeCharts({
         data={recentHashRateData}
         isLoading={statsLoading || hashRateLoading}
         href="/charts/hash-rate"
+        chartColor={CHART_SECONDARY_COLOR}
       />
     </div>
   );

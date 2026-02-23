@@ -53,6 +53,7 @@ describe('TransactionsPage', () => {
       expect(document.querySelector('a[href="/blocks/123456"]')).toBeTruthy();
     });
     expect(document.querySelector('a[href="/blocks/123456"]')).toHaveClass('text-terminal-green');
+    expect(screen.getByText('→')).toHaveClass('text-slate-500');
     expect(
       document.querySelector(
         '[title="Click to copy: 0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"] .text-terminal-green'

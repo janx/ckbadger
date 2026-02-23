@@ -117,7 +117,7 @@ export function LatestTransactions({
                       />
                     </Link>
                     <div className="mt-1.5 flex items-center gap-2 text-xs">
-                      <span className="text-slate-600">Block</span>
+                      <span className="text-slate-500">Block</span>
                       <Link
                         href={`/blocks/${tx.blockNumber}`}
                         className="hover:text-terminal-green font-mono text-slate-400"
@@ -130,10 +130,10 @@ export function LatestTransactions({
                   <div className="shrink-0 text-right">
                     <div className="flex items-center gap-1.5 font-mono text-sm">
                       <span className="text-terminal-dim">{tx.inputsCount}</span>
-                      <span className="text-slate-600">→</span>
+                      <span className="text-slate-500">→</span>
                       <span className="text-amber-dim">{tx.outputsCount}</span>
                     </div>
-                    <div className="mt-1.5 text-xs text-slate-600">
+                    <div className="mt-1.5 text-xs text-slate-500">
                       {formatTimeAgo(tx.timestamp)}
                     </div>
                   </div>

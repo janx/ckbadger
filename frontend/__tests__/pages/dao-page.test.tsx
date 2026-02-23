@@ -79,6 +79,7 @@ describe('DaoPage', () => {
       '/scripts/Default%20Lock'
     );
     expect(screen.getByText('Default Lock')).toHaveClass('text-blue-400');
+    expect(screen.getAllByText('CKB')[0]).toHaveClass('text-slate-500');
   });
 
   it('renders withdraw request tx as reference for withdrawing rows', async () => {

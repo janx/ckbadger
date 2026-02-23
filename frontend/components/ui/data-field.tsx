@@ -39,7 +39,7 @@ export function DataField({
         <div className={cn('flex items-center gap-2', labelClassName)}>
           <span className="font-mono text-xs uppercase tracking-wider text-slate-500">{label}</span>
           {helpText && (
-            <span className="cursor-help text-slate-600 hover:text-slate-400" title={helpText}>
+            <span className="cursor-help text-slate-500 hover:text-slate-400" title={helpText}>
               <HelpIcon className="h-3.5 w-3.5" />
             </span>
           )}
@@ -68,7 +68,7 @@ export function DataField({
       <div className={cn('flex items-center gap-2', labelClassName)}>
         <span className="text-sm text-slate-500">{label}</span>
         {helpText && (
-          <span className="cursor-help text-slate-600 hover:text-slate-400" title={helpText}>
+          <span className="cursor-help text-slate-500 hover:text-slate-400" title={helpText}>
             <HelpIcon className="h-4 w-4" />
           </span>
         )}
@@ -87,7 +87,7 @@ export function DataField({
           <>
             {children}
             {copyValue && (
-              <CopyIcon className="group-hover:text-terminal-green h-3.5 w-3.5 text-slate-600 opacity-0 transition-opacity group-hover:opacity-100" />
+              <CopyIcon className="group-hover:text-terminal-green h-3.5 w-3.5 text-slate-500 opacity-0 transition-opacity group-hover:opacity-100" />
             )}
           </>
         )}

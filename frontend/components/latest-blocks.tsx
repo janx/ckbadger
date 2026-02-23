@@ -103,7 +103,7 @@ export function LatestBlocks({ isRealtime = false, initialBlocks }: LatestBlocks
                       href={`/blocks/${block.number}`}
                       className="group flex items-center gap-1 transition-opacity hover:opacity-80"
                     >
-                      <span className="text-xs text-slate-600">#</span>
+                      <span className="text-xs text-slate-500">#</span>
                       <span className="text-terminal-green font-mono font-bold tabular-nums">
                         {block.number.toLocaleString()}
                       </span>
@@ -133,7 +133,7 @@ export function LatestBlocks({ isRealtime = false, initialBlocks }: LatestBlocks
                       size="sm"
                       showGroupHighlight={false}
                     />
-                    <div className="mt-1.5 text-xs text-slate-600">
+                    <div className="mt-1.5 text-xs text-slate-500">
                       {formatTimeAgo(block.timestamp)}
                     </div>
                   </div>

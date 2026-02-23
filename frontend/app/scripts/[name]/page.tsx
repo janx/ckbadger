@@ -452,7 +452,7 @@ export default function ScriptDetailPage() {
                               />
                             </Link>
                           ) : (
-                            <span className="text-slate-600">-</span>
+                            <span className="text-slate-500">-</span>
                           )}
                         </div>
                         <div className="space-y-1 text-xs">
@@ -469,7 +469,7 @@ export default function ScriptDetailPage() {
                                 endChars={8}
                               />
                             ) : (
-                              <span className="font-mono text-slate-600">Unavailable</span>
+                              <span className="font-mono text-slate-500">Unavailable</span>
                             )}
                           </div>
                           <div className="flex items-center gap-2">
@@ -485,7 +485,7 @@ export default function ScriptDetailPage() {
                                 endChars={8}
                               />
                             ) : (
-                              <span className="font-mono text-slate-600">Unavailable</span>
+                              <span className="font-mono text-slate-500">Unavailable</span>
                             )}
                           </div>
                         </div>
@@ -508,7 +508,7 @@ export default function ScriptDetailPage() {
                             {stats.scriptKind}
                           </Badge>
                         ) : (
-                          <span className="text-slate-600">-</span>
+                          <span className="text-slate-500">-</span>
                         )}
                       </div>
                       <div className="w-24 text-right font-mono tabular-nums text-slate-300">
@@ -562,7 +562,7 @@ export default function ScriptDetailPage() {
               <TerminalPanelHeader indicator="none">
                 <div className="flex items-center gap-2">
                   <span>Capacity &amp; Occupation</span>
-                  <span className="text-slate-600">|</span>
+                  <span className="text-slate-500">|</span>
                   <div
                     data-testid="capacity-selected-refs"
                     className="flex flex-wrap items-center gap-2 text-xs"
@@ -577,7 +577,7 @@ export default function ScriptDetailPage() {
                         endChars={8}
                       />
                     ) : (
-                      <span className="font-mono text-slate-600">Unavailable</span>
+                      <span className="font-mono text-slate-500">Unavailable</span>
                     )}
                     <Badge variant="gray">
                       {getScriptRefBadgeLabel(selectedDeploymentRefs.dataRefType)}
@@ -591,7 +591,7 @@ export default function ScriptDetailPage() {
                         endChars={8}
                       />
                     ) : (
-                      <span className="font-mono text-slate-600">Unavailable</span>
+                      <span className="font-mono text-slate-500">Unavailable</span>
                     )}
                   </div>
                 </div>
@@ -632,7 +632,7 @@ export default function ScriptDetailPage() {
               <TerminalPanelHeader indicator="none">
                 <div className="flex items-center gap-2">
                   <span>Cells</span>
-                  <span className="text-slate-600">|</span>
+                  <span className="text-slate-500">|</span>
                   <div
                     data-testid="cells-selected-refs"
                     className="flex flex-wrap items-center gap-2 text-xs"
@@ -647,7 +647,7 @@ export default function ScriptDetailPage() {
                         endChars={8}
                       />
                     ) : (
-                      <span className="font-mono text-slate-600">Unavailable</span>
+                      <span className="font-mono text-slate-500">Unavailable</span>
                     )}
                     <Badge variant="gray">
                       {getScriptRefBadgeLabel(selectedDeploymentRefs.dataRefType)}
@@ -661,7 +661,7 @@ export default function ScriptDetailPage() {
                         endChars={8}
                       />
                     ) : (
-                      <span className="font-mono text-slate-600">Unavailable</span>
+                      <span className="font-mono text-slate-500">Unavailable</span>
                     )}
                   </div>
                 </div>

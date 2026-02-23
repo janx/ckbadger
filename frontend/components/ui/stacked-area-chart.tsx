@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useCallback, useMemo } from 'react';
+import { CHART_PRIMARY_COLOR } from '@/lib/chart-colors';
 
 export interface StackedAreaDataPoint {
   date: string;
@@ -478,9 +479,9 @@ export function StackedAreaChart({
             y={padding.top}
             width={Math.max(0, xScale(selectionEnd) - xScale(selectionStart))}
             height={chartHeight}
-            fill="#8b5cf6"
-            fillOpacity={0.3}
-            stroke="#8b5cf6"
+            fill={CHART_PRIMARY_COLOR}
+            fillOpacity={0.22}
+            stroke={CHART_PRIMARY_COLOR}
             strokeWidth={1}
           />
         )}

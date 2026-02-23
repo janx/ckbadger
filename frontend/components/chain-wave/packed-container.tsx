@@ -298,7 +298,7 @@ export function PackedContainer({
 
       <div ref={containerRef} className="relative flex-1 overflow-hidden rounded-lg bg-black/20">
         {items.length === 0 ? (
-          <div className="flex h-full w-full items-center justify-center text-xs text-slate-600">
+          <div className="flex h-full w-full items-center justify-center text-xs text-slate-500">
             {emptyText}
           </div>
         ) : (

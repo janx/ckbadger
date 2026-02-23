@@ -27,7 +27,7 @@ export function EpochProgress({
     <div className="h-full overflow-hidden rounded-lg border border-slate-800 bg-slate-900 p-4">
       <div className="mb-3 flex items-center justify-between">
         <div className="flex items-baseline gap-3">
-          <span className="font-mono text-xs uppercase tracking-wider text-slate-500">Epoch</span>
+          <span className="font-mono text-xs uppercase tracking-wider text-slate-400">Epoch</span>
           <span className="text-terminal-green font-mono text-2xl font-bold tabular-nums">
             {epochNumber.toLocaleString()}
           </span>
@@ -37,7 +37,7 @@ export function EpochProgress({
         </div>
         {estimatedTimeRemaining && (
           <div className="flex items-baseline gap-2">
-            <span className="font-mono text-xs uppercase tracking-wider text-slate-500">
+            <span className="font-mono text-xs uppercase tracking-wider text-slate-400">
               Est. Time
             </span>
             <span className="text-amber font-mono tabular-nums">{estimatedTimeRemaining}</span>
@@ -50,12 +50,12 @@ export function EpochProgress({
           className={cn(
             'absolute inset-y-0 left-0 rounded-full transition-all duration-1000',
             progress < 25
-              ? 'bg-gradient-to-r from-emerald-600 to-emerald-500'
+              ? 'from-terminal-dark to-terminal-dim bg-gradient-to-r'
               : progress < 50
-                ? 'bg-gradient-to-r from-emerald-500 to-green-500'
+                ? 'from-terminal-dim to-terminal-green bg-gradient-to-r'
                 : progress < 75
-                  ? 'bg-gradient-to-r from-green-500 to-amber-500'
-                  : 'bg-gradient-to-r from-amber-500 to-purple-500'
+                  ? 'from-terminal-green to-amber-dim bg-gradient-to-r'
+                  : 'from-amber-dim to-amber bg-gradient-to-r'
           )}
           style={{ width: `${progressClamped}%` }}
         />
@@ -65,7 +65,7 @@ export function EpochProgress({
         />
       </div>
 
-      <div className="mt-2 flex items-center justify-between text-[10px] text-slate-500 sm:text-xs">
+      <div className="mt-2 flex items-center justify-between text-[10px] text-slate-400 sm:text-xs">
         <span className="font-mono tabular-nums">#{epochStartBlock.toLocaleString()}</span>
         <span className="font-mono tabular-nums">
           {epochIndex.toLocaleString()} / {epochLength.toLocaleString()}

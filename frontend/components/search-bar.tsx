@@ -89,21 +89,6 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
     setQuery('');
   };
 
-  const getResultIcon = (type: string) => {
-    switch (type) {
-      case 'block':
-        return '📦';
-      case 'transaction':
-        return '📄';
-      case 'address':
-        return '👛';
-      case 'cell':
-        return '🔷';
-      default:
-        return '🔍';
-    }
-  };
-
   const isCompact = variant === 'compact';
   const isHome = variant === 'home';
 
@@ -190,10 +175,10 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
                         : 'text-slate-300 hover:bg-slate-800/50'
                     )}
                   >
-                    <span className="text-lg">{getResultIcon(result.resultType)}</span>
+                    <SearchResultIcon type={result.resultType} />
                     <div className="min-w-0 flex-1">
                       <div className="truncate font-medium">{result.label}</div>
-                      <div className="truncate font-mono text-xs text-slate-500">{result.id}</div>
+                      <div className="truncate font-mono text-xs text-slate-400">{result.id}</div>
                     </div>
                     <span className="shrink-0 rounded bg-slate-800 px-2 py-0.5 font-mono text-xs text-slate-400">
                       {result.resultType}
@@ -203,10 +188,85 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
               ))}
             </ul>
           ) : (
-            <div className="px-4 py-3 text-slate-500">No results found</div>
+            <div className="px-4 py-3 text-slate-400">No results found</div>
           )}
         </div>
       )}
     </div>
+  );
+}
+
+function SearchResultIcon({ type }: { type: string }) {
+  const classes = {
+    block: 'text-terminal-green',
+    transaction: 'text-amber',
+    address: 'text-slate-300',
+    cell: 'text-cyan-300',
+    default: 'text-slate-400',
+  };
+
+  const iconColor = classes[type as keyof typeof classes] ?? classes.default;
+
+  const icon = (() => {
+    switch (type) {
+      case 'block':
+        return (
+          <path
+            d="M4.5 7.5 12 4l7.5 3.5v9L12 20l-7.5-3.5v-9ZM12 4v9m0 7v-7m7.5-5.5-7.5 3.5-7.5-3.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        );
+      case 'transaction':
+        return (
+          <path
+            d="M4 8h10m0 0-2.5-2.5M14 8l-2.5 2.5M20 16H10m0 0 2.5-2.5M10 16l2.5 2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        );
+      case 'address':
+        return (
+          <>
+            <path d="M12 12a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" />
+            <path d="M6 19c.8-2 3-3.5 6-3.5s5.2 1.5 6 3.5" strokeLinecap="round" />
+          </>
+        );
+      case 'cell':
+        return (
+          <path
+            d="M5 9 12 5l7 4-7 4-7-4Zm0 0v6l7 4 7-4V9"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        );
+      default:
+        return (
+          <path
+            d="m21 21-4.35-4.35M10 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16Z"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        );
+    }
+  })();
+
+  return (
+    <span
+      className={cn('inline-flex h-5 w-5 items-center justify-center', iconColor)}
+      data-testid={`search-result-icon-${type}`}
+      aria-hidden
+    >
+      <svg
+        viewBox="0 0 24 24"
+        width="18"
+        height="18"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+      >
+        {icon}
+      </svg>
+    </span>
   );
 }

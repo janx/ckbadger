@@ -83,7 +83,7 @@ export function PageHeader({
           {copied ? (
             <CheckIcon className="text-terminal-green h-4 w-4 shrink-0" />
           ) : (
-            <CopyIcon className="h-4 w-4 shrink-0 text-slate-600 group-hover:text-slate-400" />
+            <CopyIcon className="h-4 w-4 shrink-0 text-slate-500 group-hover:text-slate-400" />
           )}
         </div>
       )}

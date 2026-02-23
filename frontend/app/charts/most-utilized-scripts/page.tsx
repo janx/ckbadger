@@ -94,7 +94,7 @@ export default function MostUtilizedScriptsPage() {
                   <SeriesLegend series={data.capacityShare.series} />
                 </section>
 
-                <div className="text-center font-mono text-xs text-slate-600">
+                <div className="text-center font-mono text-xs text-slate-500">
                   Drag to select range • Scroll to zoom • Middle-click drag to pan • Click Reset to
                   restore
                 </div>

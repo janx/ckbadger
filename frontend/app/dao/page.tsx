@@ -405,7 +405,7 @@ export default function DaoPage() {
                                 <>
                                   {f.integer}
                                   <span
-                                    className={`text-[0.85em] ${secondaryHover === idx ? 'text-slate-300' : 'text-slate-600'}`}
+                                    className={`text-[0.85em] ${secondaryHover === idx ? 'text-slate-300' : 'text-slate-500'}`}
                                   >
                                     .{f.decimal}
                                   </span>
@@ -461,7 +461,7 @@ export default function DaoPage() {
                                 <>
                                   {f.integer}
                                   <span
-                                    className={`text-[0.85em] ${compensationHover === idx ? 'text-slate-300' : 'text-slate-600'}`}
+                                    className={`text-[0.85em] ${compensationHover === idx ? 'text-slate-300' : 'text-slate-500'}`}
                                   >
                                     .{f.decimal}
                                   </span>
@@ -543,7 +543,7 @@ export default function DaoPage() {
                                 <>
                                   {f.integer}
                                   <span className="text-[0.85em] text-slate-500">.{f.decimal}</span>
-                                  <span className="ml-1 text-[0.85em] text-slate-600">CKB</span>
+                                  <span className="ml-1 text-[0.85em] text-slate-500">CKB</span>
                                 </>
                               );
                             })()}

@@ -68,7 +68,7 @@ export default function HodlWavePage() {
                     <span className="text-slate-400">Holder Count</span>
                   </div>
                 </div>
-                <div className="mt-4 text-center font-mono text-xs text-slate-600">
+                <div className="mt-4 text-center font-mono text-xs text-slate-500">
                   Drag to select range • Scroll to zoom • Middle-click drag to pan • Click Reset to
                   restore
                 </div>

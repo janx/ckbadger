@@ -73,12 +73,12 @@ export default function KnowledgeSizePage() {
                   />
                   <div className="mt-4 flex flex-wrap items-center justify-center gap-6 text-sm">
                     <div className="flex items-center gap-2">
-                      <span className="h-0.5 w-4 bg-purple-500" />
+                      <span className="bg-terminal-green h-0.5 w-4" />
                       <span className="text-slate-400">{data.yAxisLabel}</span>
                     </div>
                     {data.y2AxisLabel && (
                       <div className="flex items-center gap-2">
-                        <span className="bg-terminal-green h-0.5 w-4" />
+                        <span className="bg-amber h-0.5 w-4" />
                         <span className="text-slate-400">{data.y2AxisLabel}</span>
                       </div>
                     )}
@@ -102,7 +102,7 @@ export default function KnowledgeSizePage() {
                   </div>
                 </div>
 
-                <div className="text-center font-mono text-xs text-slate-600">
+                <div className="text-center font-mono text-xs text-slate-500">
                   Drag to select range • Scroll to zoom • Middle-click drag to pan • Click Reset to
                   restore
                 </div>

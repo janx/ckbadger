@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useMemo } from 'react';
+import { getChartPaletteColor } from '@/lib/chart-colors';
 
 interface PieChartDataPoint {
   label: string;
@@ -14,21 +15,6 @@ interface PieChartProps {
   showLegend?: boolean;
   formatValue?: (value: number) => string;
 }
-
-const COLORS = [
-  '#8b5cf6',
-  '#00c389',
-  '#f59e0b',
-  '#ef4444',
-  '#3b82f6',
-  '#ec4899',
-  '#14b8a6',
-  '#f97316',
-  '#6366f1',
-  '#84cc16',
-  '#a855f7',
-  '#22d3ee',
-];
 
 export function PieChart({
   data,
@@ -68,7 +54,7 @@ export function PieChart({
         ...d,
         percentage,
         pathD,
-        color: d.color || COLORS[i % COLORS.length],
+        color: d.color || getChartPaletteColor(i),
         midAngle: startAngle + angle / 2,
       };
     });

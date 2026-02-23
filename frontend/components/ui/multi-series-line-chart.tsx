@@ -477,7 +477,7 @@ export function MultiSeriesLineChart({
         </div>
       )}
 
-      <div className="mt-4 text-center font-mono text-xs text-slate-600">
+      <div className="mt-4 text-center font-mono text-xs text-slate-500">
         Drag to select range | Scroll to zoom | Middle-click drag to pan
       </div>
     </div>

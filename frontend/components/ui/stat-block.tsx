@@ -99,12 +99,12 @@ export function StatBlock({
           <span className={cn('flex items-center gap-1', trendColors[trend.direction])}>
             <span>{trendIcons[trend.direction]}</span>
             <span className={cn('font-mono', config.trend)}>{trend.value}</span>
-            {trend.label && <span className="ml-1 text-slate-600">{trend.label}</span>}
+            {trend.label && <span className="ml-1 text-slate-500">{trend.label}</span>}
           </span>
         )}
       </div>
 
-      {subtext && <div className="font-mono text-sm text-slate-600">{subtext}</div>}
+      {subtext && <div className="font-mono text-sm text-slate-500">{subtext}</div>}
     </div>
   );
 }
@@ -169,7 +169,7 @@ export function MiniStat({ label, value, color = 'dim', className }: MiniStatPro
 
   return (
     <div className={cn('flex items-center justify-between gap-4', className)}>
-      <span className="font-mono text-xs uppercase tracking-wide text-slate-600">{label}</span>
+      <span className="font-mono text-xs uppercase tracking-wide text-slate-500">{label}</span>
       <span className={cn('font-mono text-sm tabular-nums', miniColorClasses[color])}>{value}</span>
     </div>
   );

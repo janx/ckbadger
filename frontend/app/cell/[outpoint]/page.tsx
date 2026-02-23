@@ -609,7 +609,7 @@ export default function CellDetailPage() {
                                 ? 'text-slate-500'
                                 : hoveredSegmentKey === segment.key
                                   ? segment.legendValueText
-                                  : 'text-slate-600'
+                                  : 'text-slate-500'
                             }`}
                           >
                             {segment.bytes.toLocaleString()}B · {segment.percent.toFixed(2)}%
@@ -1387,7 +1387,7 @@ export default function CellDetailPage() {
                             data-row-index={idx}
                             className="flex py-0.5 hover:bg-slate-800/50"
                           >
-                            <span className="mr-4 select-none text-slate-600">0x{offset}:</span>
+                            <span className="mr-4 select-none text-slate-500">0x{offset}:</span>
                             <div className="text-terminal-dim mr-6 flex gap-1.5">
                               {bytes.map((b, i) => {
                                 const absoluteOffset = idx * DATA_BYTES_PER_ROW + i;
@@ -1404,7 +1404,7 @@ export default function CellDetailPage() {
                                 const byteClass =
                                   segmentIndex < 0
                                     ? hasActiveSegment
-                                      ? 'text-slate-600'
+                                      ? 'text-slate-500'
                                       : 'rounded bg-slate-800/70 text-slate-300'
                                     : isActiveSegment
                                       ? (segmentTone?.byteActive ??
@@ -1462,7 +1462,7 @@ export default function CellDetailPage() {
                         );
                       })}
                       {remainingBytes > 0 && (
-                        <div className="mt-2 select-none italic text-slate-600">
+                        <div className="mt-2 select-none italic text-slate-500">
                           ... {remainingBytes.toLocaleString()} more bytes
                         </div>
                       )}

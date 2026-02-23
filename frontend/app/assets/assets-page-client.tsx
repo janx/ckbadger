@@ -260,7 +260,7 @@ function AssetTable({ assetType, search }: { assetType: AssetTab; search: string
               {(() => {
                 const occupied = asset.liveOccupiedCapacity;
                 if (!occupied) {
-                  return <span className="text-slate-600">-</span>;
+                  return <span className="text-slate-500">-</span>;
                 }
                 const compact = formatCkbCompact(occupied);
                 return <span title={`${compact.full} CKB`}>{compact.value}</span>;
@@ -270,7 +270,7 @@ function AssetTable({ assetType, search }: { assetType: AssetTab; search: string
               {(() => {
                 const capacity = asset.liveCapacity;
                 if (!capacity) {
-                  return <span className="text-slate-600">-</span>;
+                  return <span className="text-slate-500">-</span>;
                 }
                 const compact = formatCkbCompact(capacity);
                 return <span title={`${compact.full} CKB`}>{compact.value}</span>;

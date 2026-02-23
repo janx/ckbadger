@@ -534,7 +534,7 @@ export default function AddressDetailPage() {
                             ) : deposit.status === 'deposited' ? (
                               <span className="text-sm text-slate-500">Accruing...</span>
                             ) : (
-                              <span className="text-slate-600">-</span>
+                              <span className="text-slate-500">-</span>
                             )}
                           </div>
                           <div className="self-center font-mono text-sm text-slate-400">
@@ -1082,17 +1082,17 @@ export default function AddressDetailPage() {
                                 </div>
                                 <div className="w-20 text-center font-mono text-slate-400">
                                   <span className="text-terminal-dim">{tx.inputsCount}</span>
-                                  <span className="mx-1 text-slate-600">→</span>
+                                  <span className="mx-1 text-slate-500">→</span>
                                   <span className="text-terminal-dim">{tx.outputsCount}</span>
                                 </div>
                                 <div className="w-32 whitespace-nowrap text-right">
                                   {tx.isCellbase ? (
-                                    <span className="text-slate-600">—</span>
+                                    <span className="text-slate-500">—</span>
                                   ) : (
                                     <div>
                                       <Capacity value={tx.fee} className="text-slate-400" />
                                       {feeRate != null && (
-                                        <div className="font-mono text-xs text-slate-600">
+                                        <div className="font-mono text-xs text-slate-500">
                                           {feeRate.toFixed(1)} shannons/B
                                         </div>
                                       )}
@@ -1107,7 +1107,7 @@ export default function AddressDetailPage() {
                                         : `${tx.txSize} B`}
                                     </span>
                                   ) : (
-                                    <span className="text-slate-600">—</span>
+                                    <span className="text-slate-500">—</span>
                                   )}
                                   {tx.cycles != null && (
                                     <>

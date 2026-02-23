@@ -193,7 +193,7 @@ export default function BlockDetailPage() {
               color="green"
               labelFormat="percent"
             />
-            <div className="mt-2 flex justify-between font-mono text-xs text-slate-600">
+            <div className="mt-2 flex justify-between font-mono text-xs text-slate-500">
               <Link href={`/blocks/${epochStartNumber}`} className="hover:text-slate-400">
                 #{epochStartNumber.toLocaleString()}
               </Link>
@@ -305,11 +305,11 @@ export default function BlockDetailPage() {
                           </Link>
                           {tx.isCellbase && <Badge variant="amber">Cellbase</Badge>}
                         </div>
-                        <span className="text-xs text-slate-600">Index: {index}</span>
+                        <span className="text-xs text-slate-500">Index: {index}</span>
                       </div>
                       <div className="text-right font-mono text-sm text-slate-400">
                         <span className="text-terminal-dim">{tx.inputsCount}</span>
-                        <span className="mx-1 text-slate-600">→</span>
+                        <span className="mx-1 text-slate-500">→</span>
                         <span className="text-amber-dim">{tx.outputsCount}</span>
                       </div>
                     </div>
@@ -330,7 +330,7 @@ export default function BlockDetailPage() {
                       <div className="flex items-center justify-between">
                         <div className="flex flex-col gap-1">
                           <div className="flex items-center gap-3">
-                            <span className="text-xs text-slate-600">
+                            <span className="text-xs text-slate-500">
                               #{proposal.proposalIndex}
                             </span>
                             <span className="font-mono text-sm text-slate-300">
@@ -339,7 +339,7 @@ export default function BlockDetailPage() {
                           </div>
                           {proposal.committedTxHash && (
                             <div className="flex items-center gap-2 text-xs">
-                              <span className="text-slate-600">Committed:</span>
+                              <span className="text-slate-500">Committed:</span>
                               <Link
                                 href={`/tx/${proposal.committedTxHash}`}
                                 className="text-terminal-green font-mono hover:underline"

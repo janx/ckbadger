@@ -25,7 +25,7 @@ export function Pagination({ page, totalPages, onPageChange, className }: Pagina
 
       {pages.map((p, i) =>
         p === '...' ? (
-          <span key={`ellipsis-${i}`} className="px-2 text-slate-600">
+          <span key={`ellipsis-${i}`} className="px-2 text-slate-500">
             ...
           </span>
         ) : (

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '../utils/test-utils';
 import { LineChart } from '@/components/ui/line-chart';
+import { CHART_PRIMARY_COLOR, CHART_SECONDARY_COLOR } from '@/lib/chart-colors';
 
 describe('LineChart', () => {
   it('renders bars when chartType is bar', () => {
@@ -43,5 +44,29 @@ describe('LineChart', () => {
     expect(screen.getByText('MIRANA')).toBeInTheDocument();
     expect(screen.getByText('MEEPO')).toBeInTheDocument();
     expect(screen.queryByText('NOT_FOUND')).not.toBeInTheDocument();
+  });
+
+  it('uses project palette defaults for primary and secondary lines', () => {
+    render(
+      <LineChart
+        interactive={false}
+        yAxisLabel="Primary"
+        y2AxisLabel="Secondary"
+        data={[
+          { date: '2026-02-21', value: '10', value2: '3' },
+          { date: '2026-02-22', value: '20', value2: '4' },
+          { date: '2026-02-23', value: '15', value2: '5' },
+        ]}
+      />
+    );
+
+    expect(screen.getByTestId('line-series-primary')).toHaveAttribute(
+      'stroke',
+      CHART_PRIMARY_COLOR
+    );
+    expect(screen.getByTestId('line-series-secondary')).toHaveAttribute(
+      'stroke',
+      CHART_SECONDARY_COLOR
+    );
   });
 });

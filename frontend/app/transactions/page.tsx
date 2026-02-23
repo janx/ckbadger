@@ -83,7 +83,7 @@ export default function TransactionsPage() {
                       </div>
                       <div className="w-24 text-center font-mono text-slate-400">
                         <span className="text-terminal-dim">{tx.inputsCount}</span>
-                        <span className="mx-1 text-slate-600">→</span>
+                        <span className="mx-1 text-slate-500">→</span>
                         <span className="text-terminal-dim">{tx.outputsCount}</span>
                       </div>
                       <div className="w-32 text-right text-slate-500">

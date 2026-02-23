@@ -153,7 +153,7 @@ export function HexDisplay({
   const prefixColorClasses = {
     green: 'text-terminal-dark',
     amber: 'text-amber-dark',
-    white: 'text-slate-600',
+    white: 'text-slate-500',
     accent: 'text-terminal-dark',
   };
 
@@ -189,7 +189,7 @@ export function HexDisplay({
       {chars.map(({ char, groupIndex, originalIndex }) => {
         if (char === '.') {
           return (
-            <span key={`ellipsis-${originalIndex}`} className="mx-0.5 text-slate-600">
+            <span key={`ellipsis-${originalIndex}`} className="mx-0.5 text-slate-500">
               {char}
             </span>
           );
@@ -250,7 +250,7 @@ export function ByteGroupDisplay({
 
   return (
     <span className={cn('font-mono tabular-nums', className)}>
-      {prefix && <span className="text-slate-600">{prefix}</span>}
+      {prefix && <span className="text-slate-500">{prefix}</span>}
       {groups.map((group, index) => (
         <span key={index}>
           <span className={colorClasses[color][index % 2]}>{group}</span>

@@ -17,7 +17,7 @@ function formatNumber(value: number): string {
 
 interface BarChartProps {
   data: TxStatsDataPoint[];
-  color: string;
+  color: 'green' | 'amber';
   height?: number;
 }
 
@@ -26,15 +26,15 @@ function BarChart({ data, color, height = 48 }: BarChartProps) {
 
   if (!data.length) {
     return (
-      <div className="flex items-center justify-center text-slate-600" style={{ height }}>
+      <div className="flex items-center justify-center text-slate-500" style={{ height }}>
         No data
       </div>
     );
   }
 
   const maxValue = Math.max(...data.map((d) => d.value), 1);
-  const barColor = color === 'emerald' ? 'bg-emerald-500' : 'bg-amber-500';
-  const barColorHover = color === 'emerald' ? 'bg-emerald-400' : 'bg-amber-400';
+  const barColor = color === 'green' ? 'bg-terminal-dark' : 'bg-amber-dim';
+  const barColorHover = color === 'green' ? 'bg-terminal-green' : 'bg-amber';
 
   return (
     <div className="relative" style={{ height }}>
@@ -64,7 +64,7 @@ function BarChart({ data, color, height = 48 }: BarChartProps) {
                   <div
                     className={cn(
                       'font-mono font-bold',
-                      color === 'emerald' ? 'text-emerald-400' : 'text-amber-400'
+                      color === 'green' ? 'text-terminal-green' : 'text-amber'
                     )}
                   >
                     {formatNumber(point.value)}
@@ -83,7 +83,7 @@ interface TxStatWidgetProps {
   label: string;
   value: number;
   data: TxStatsDataPoint[];
-  color: string;
+  color: 'green' | 'amber';
 }
 
 function TxStatWidget({ label, value, data, color }: TxStatWidgetProps) {
@@ -94,14 +94,14 @@ function TxStatWidget({ label, value, data, color }: TxStatWidgetProps) {
         <span
           className={cn(
             'font-mono text-xl font-bold tabular-nums',
-            color === 'emerald' ? 'text-terminal-green' : 'text-amber'
+            color === 'green' ? 'text-terminal-green' : 'text-amber'
           )}
         >
           {formatNumber(value)}
         </span>
       </div>
       <BarChart data={data} color={color} height={48} />
-      <div className="flex justify-between font-mono text-[10px] text-slate-600">
+      <div className="flex justify-between font-mono text-[10px] text-slate-500">
         <span>{data.length > 0 ? data[0].label : ''}</span>
         <span>{data.length > 0 ? data[data.length - 1].label : ''}</span>
       </div>
@@ -129,7 +129,7 @@ export function MiniStatsCards({ className }: MiniStatsCardsProps) {
           label="TXs Last 60 Mins"
           value={txsLastHour}
           data={hourlyData}
-          color="emerald"
+          color="green"
         />
         <TxStatWidget
           label="TXs Last 24 Hours"
