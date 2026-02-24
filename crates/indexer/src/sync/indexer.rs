@@ -72,6 +72,11 @@ const TOKEN_INFO_TAG_TOTAL_SUPPLY: u32 = 1;
 const TOKEN_INFO_TOTAL_SUPPLY_DATA_LEN: usize = 16;
 const STARTUP_PHASE_NONE: u8 = 0;
 const STARTUP_PHASE_ROLLBACK_CLEANUP: u8 = 1;
+const PIPELINE_RESET_REASON_UNKNOWN: u8 = 0;
+const PIPELINE_RESET_REASON_BATCH_MISMATCH: u8 = 1;
+const PIPELINE_RESET_REASON_REORG_HANDLED: u8 = 2;
+const PIPELINE_RESET_REASON_DEEP_FORK_PAUSED: u8 = 3;
+const PIPELINE_RESET_REASON_BATCH_WRITE_FAILED: u8 = 4;
 const FLIGHT_RECORDER_CAPACITY: usize = 200;
 static OMNILOCK_CODE_HASHES: OnceLock<Vec<Vec<u8>>> = OnceLock::new();
 
@@ -84,6 +89,26 @@ fn decode_startup_phase(phase: u8) -> Option<&'static str> {
     match phase {
         STARTUP_PHASE_ROLLBACK_CLEANUP => Some("rollback_cleanup"),
         _ => None,
+    }
+}
+
+fn encode_pipeline_reset_reason(reason: &'static str) -> u8 {
+    match reason {
+        "pipeline batch mismatch" => PIPELINE_RESET_REASON_BATCH_MISMATCH,
+        "reorg handled" => PIPELINE_RESET_REASON_REORG_HANDLED,
+        "deep fork paused" => PIPELINE_RESET_REASON_DEEP_FORK_PAUSED,
+        "batch write failed" => PIPELINE_RESET_REASON_BATCH_WRITE_FAILED,
+        _ => PIPELINE_RESET_REASON_UNKNOWN,
+    }
+}
+
+fn decode_pipeline_reset_reason(reason_code: u8) -> &'static str {
+    match reason_code {
+        PIPELINE_RESET_REASON_BATCH_MISMATCH => "pipeline batch mismatch",
+        PIPELINE_RESET_REASON_REORG_HANDLED => "reorg handled",
+        PIPELINE_RESET_REASON_DEEP_FORK_PAUSED => "deep fork paused",
+        PIPELINE_RESET_REASON_BATCH_WRITE_FAILED => "batch write failed",
+        _ => "unknown",
     }
 }
 
@@ -1717,7 +1742,8 @@ pub struct Indexer {
     was_bulk_sync_active: std::sync::atomic::AtomicBool,
     was_secondary_issuance_bulk_active: std::sync::atomic::AtomicBool,
     rebuild_pause_flag: Arc<std::sync::atomic::AtomicBool>,
-    reorg_notify_flag: Arc<std::sync::atomic::AtomicBool>,
+    pipeline_reset_notify_flag: Arc<std::sync::atomic::AtomicBool>,
+    pipeline_reset_reason_code: Arc<AtomicU8>,
     startup_phase: AtomicU8,
     pipeline_reset_epoch: Arc<AtomicU64>,
     incident_seq: AtomicU64,
@@ -1801,7 +1827,8 @@ impl Indexer {
                 was_secondary_bulk,
             ),
             rebuild_pause_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            reorg_notify_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            pipeline_reset_notify_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            pipeline_reset_reason_code: Arc::new(AtomicU8::new(PIPELINE_RESET_REASON_UNKNOWN)),
             startup_phase: AtomicU8::new(STARTUP_PHASE_NONE),
             pipeline_reset_epoch: Arc::new(AtomicU64::new(0)),
             incident_seq: AtomicU64::new(0),
@@ -2027,12 +2054,17 @@ impl Indexer {
         got_start: Option<u64>,
         writer_queue_depth: Option<usize>,
     ) {
+        let reason_code = encode_pipeline_reset_reason(reason);
         let epoch = bump_pipeline_reset_epoch(&self.pipeline_reset_epoch);
-        self.reorg_notify_flag.store(true, Ordering::SeqCst);
+        self.pipeline_reset_reason_code
+            .store(reason_code, Ordering::SeqCst);
+        self.pipeline_reset_notify_flag
+            .store(true, Ordering::SeqCst);
         info!(
             run_id = %self.run_id,
             epoch,
             reason,
+            reason_code,
             expected_start = ?expected_start,
             got_start = ?got_start,
             writer_queue_depth = ?writer_queue_depth,
@@ -2304,8 +2336,10 @@ impl Indexer {
         let config = self.config.clone();
         let progress = Arc::clone(&self.progress);
         let repo = self.repo.clone();
+        let run_id_for_fetcher = self.run_id.clone();
         let rebuild_pause = Arc::clone(&self.rebuild_pause_flag);
-        let reorg_notify = Arc::clone(&self.reorg_notify_flag);
+        let pipeline_reset_notify = Arc::clone(&self.pipeline_reset_notify_flag);
+        let pipeline_reset_reason_code = Arc::clone(&self.pipeline_reset_reason_code);
         let pipeline_epoch_for_fetcher = Arc::clone(&self.pipeline_reset_epoch);
         let ckb_store = self.ckb_store.clone();
         let pipeline_perf_for_fetcher = Arc::clone(&self.pipeline_perf);
@@ -2327,8 +2361,17 @@ impl Indexer {
                     next_block = None;
                     was_paused = false;
                 }
-                if reorg_notify.swap(false, Ordering::SeqCst) {
-                    info!("Fetcher received reorg notification, resetting next_block");
+                if pipeline_reset_notify.swap(false, Ordering::SeqCst) {
+                    let reason = decode_pipeline_reset_reason(
+                        pipeline_reset_reason_code.load(Ordering::SeqCst),
+                    );
+                    let pipeline_epoch = pipeline_epoch_for_fetcher.load(Ordering::SeqCst);
+                    info!(
+                        run_id = %run_id_for_fetcher,
+                        pipeline_epoch,
+                        reason,
+                        "Fetcher received pipeline reset notification, resetting next_block"
+                    );
                     next_block = None;
                 }
 
@@ -10464,6 +10507,29 @@ mod tests {
         assert_eq!(bump_pipeline_reset_epoch(&epoch), 1);
         assert_eq!(bump_pipeline_reset_epoch(&epoch), 2);
         assert_eq!(epoch.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn test_pipeline_reset_reason_roundtrip_known_values() {
+        let reasons = [
+            "pipeline batch mismatch",
+            "reorg handled",
+            "deep fork paused",
+            "batch write failed",
+        ];
+        for reason in reasons {
+            let code = encode_pipeline_reset_reason(reason);
+            assert_ne!(code, PIPELINE_RESET_REASON_UNKNOWN);
+            assert_eq!(decode_pipeline_reset_reason(code), reason);
+        }
+    }
+
+    #[test]
+    fn test_pipeline_reset_reason_unknown_fallback() {
+        let code = encode_pipeline_reset_reason("unexpected reason");
+        assert_eq!(code, PIPELINE_RESET_REASON_UNKNOWN);
+        assert_eq!(decode_pipeline_reset_reason(code), "unknown");
+        assert_eq!(decode_pipeline_reset_reason(255), "unknown");
     }
 
     // --- DAO recalculation boundary tests ---
