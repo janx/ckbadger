@@ -89,6 +89,7 @@ const ADAPTIVE_REASON_THROUGHPUT_BACKOFF: u8 = 8;
 const ADAPTIVE_REASON_ADJUSTED: u8 = 9;
 const ADAPTIVE_REASON_EARLY_HEIGHT_BOOST: u8 = 10;
 const FLIGHT_RECORDER_CAPACITY: usize = 200;
+const HEAVY_LANE_PROGRESS_LOG_INTERVAL_BLOCKS: u64 = 5_000;
 static OMNILOCK_CODE_HASHES: OnceLock<Vec<Vec<u8>>> = OnceLock::new();
 
 #[derive(Debug, Clone)]
@@ -272,6 +273,384 @@ fn collect_missing_input_outpoints<T>(
         .collect()
 }
 
+fn collect_addr_tx_entries(
+    all_tx_data: &[TxData],
+    input_cell_info: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
+    batch_cell_infos: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
+) -> Vec<(Vec<u8>, i64, i32, Vec<u8>)> {
+    let mut entries = Vec::new();
+    for tx_data in all_tx_data {
+        let mut touched: HashSet<Vec<u8>> = HashSet::new();
+        for cell in &tx_data.cells {
+            touched.insert(cell.lock_script_hash.clone());
+        }
+        if !tx_data.is_cellbase {
+            for input in &tx_data.inputs {
+                let key = (
+                    input.previous_tx_hash.to_vec(),
+                    input.previous_output_index as i16,
+                );
+                if let Some(info) = input_cell_info
+                    .get(&key)
+                    .or_else(|| batch_cell_infos.get(&key))
+                {
+                    touched.insert(info.lock_script_hash.clone());
+                }
+            }
+        }
+        for lock_hash in touched {
+            entries.push((
+                lock_hash,
+                tx_data.block_number,
+                tx_data.tx_index,
+                tx_data.hash.to_vec(),
+            ));
+        }
+    }
+    entries
+}
+
+fn write_heavy_lane_batch(
+    writer: &BatchWriter,
+    batch: HeavyLaneBatch,
+    bulk_sync_threshold: u64,
+) -> Result<()> {
+    let bulk_sync_mode = is_bulk_sync_batch(batch.chain_tip, batch.end_block, bulk_sync_threshold);
+    let store = writer.store();
+    let blocks = batch.blocks.as_ref();
+    let all_parsed_blocks = batch.all_parsed_blocks.as_ref();
+    let all_tx_data = batch.all_tx_data.as_ref();
+    let input_cell_info = batch.input_cell_info.as_ref();
+    let batch_cell_infos = batch.batch_cell_infos.as_ref();
+
+    let mut data_batch = StoreBatch::new(store);
+
+    if !batch.spore_type_index_changes.is_empty() {
+        writer.update_spore_type_index_batch(&batch.spore_type_index_changes, &mut data_batch)?;
+    }
+    if !batch.spore_daily_changes.is_empty() {
+        writer.update_spore_daily_deltas_batch(&batch.spore_daily_changes, &mut data_batch)?;
+    }
+    if !batch.nft_type_index_changes.is_empty() {
+        writer.update_nft_type_index_batch(&batch.nft_type_index_changes, &mut data_batch)?;
+    }
+    if !batch.nft_daily_changes.is_empty() {
+        writer.update_nft_daily_deltas_batch(&batch.nft_daily_changes, &mut data_batch)?;
+    }
+    if !batch.cluster_daily_changes.is_empty() {
+        writer.update_cluster_daily_deltas_batch(&batch.cluster_daily_changes, &mut data_batch)?;
+    }
+
+    let addr_tx_entries = collect_addr_tx_entries(all_tx_data, input_cell_info, batch_cell_infos);
+    for (lock_hash, block_num, tx_idx, tx_hash) in &addr_tx_entries {
+        data_batch.put_addr_tx(lock_hash, *block_num, *tx_idx, tx_hash);
+    }
+
+    let mut batch_spore_ids: HashSet<Vec<u8>> = HashSet::new();
+    let mut batch_mnft_token_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>> = HashMap::new();
+    let mut batch_dotbit_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>> = HashMap::new();
+    let mut batch_dotbit_latest_create_order: HashMap<Vec<u8>, u64> = HashMap::new();
+
+    let mut spore_state = writer.new_spore_batch_state();
+    let mut block_tx_idx = 0usize;
+    for (block_idx, block_response) in blocks.iter().enumerate() {
+        let parsed = &all_parsed_blocks[block_idx];
+        let tx_count_for_block = parsed.transactions_count as usize;
+        let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
+        let ts_ms = parsed.timestamp.timestamp_millis();
+        for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
+            let tx_global_index = block_tx_idx + tx_idx;
+            let dotbit_create_order = dotbit_create_event_order(tx_global_index)?;
+            let tx = &block_response.block.transactions[tx_idx];
+
+            for cluster in SporeParser::parse_clusters(tx) {
+                writer.insert_spore_cluster(
+                    &cluster,
+                    parsed.number,
+                    &tx_data.hash,
+                    &mut data_batch,
+                    &mut spore_state,
+                )?;
+            }
+            for (output_index, spore) in SporeParser::parse_spores(tx).iter().enumerate() {
+                batch_spore_ids.insert(spore.spore_id.clone());
+                writer.insert_spore_cell(
+                    spore,
+                    &tx_data.hash,
+                    output_index as i16,
+                    parsed.number,
+                    ts_ms,
+                    &mut data_batch,
+                    &mut spore_state,
+                )?;
+                writer.insert_spore_content(&spore.spore_id, &spore.content)?;
+            }
+            for issuer in MnftParser::parse_issuers(tx) {
+                writer.insert_mnft_issuer(
+                    &issuer,
+                    &tx_data.hash,
+                    0,
+                    parsed.number,
+                    &mut data_batch,
+                )?;
+            }
+            for (output_index, class) in MnftParser::parse_classes(tx).iter().enumerate() {
+                writer.insert_mnft_class(
+                    class,
+                    &tx_data.hash,
+                    output_index as i16,
+                    parsed.number,
+                    &mut data_batch,
+                )?;
+            }
+            for (output_index, token) in MnftParser::parse_tokens(tx).iter().enumerate() {
+                writer.insert_mnft_token(
+                    token,
+                    &tx_data.hash,
+                    output_index as i16,
+                    parsed.number,
+                    ts_ms,
+                    &mut data_batch,
+                )?;
+                batch_mnft_token_outpoints.insert(
+                    (tx_data.hash.to_vec(), output_index as i16),
+                    token.token_id.clone(),
+                );
+            }
+            for account in DotbitParser::parse_accounts(tx)? {
+                writer.insert_dotbit_account(
+                    &account,
+                    &tx_data.hash,
+                    parsed.number,
+                    ts_ms,
+                    &mut data_batch,
+                )?;
+                batch_dotbit_outpoints.insert(
+                    (tx_data.hash.to_vec(), account.output_index),
+                    account.account.account_id.clone(),
+                );
+                let account_id = account.account.account_id.clone();
+                batch_dotbit_latest_create_order
+                    .entry(account_id)
+                    .and_modify(|current| {
+                        if dotbit_create_order > *current {
+                            *current = dotbit_create_order;
+                        }
+                    })
+                    .or_insert(dotbit_create_order);
+            }
+        }
+        block_tx_idx += tx_count_for_block;
+    }
+
+    if !bulk_sync_mode {
+        let mut all_prev_tx_hashes: Vec<Vec<u8>> = Vec::new();
+        let mut all_prev_indices: Vec<i16> = Vec::new();
+        let mut outpoint_context: Vec<(i64, Vec<u8>, u64)> = Vec::new();
+        let mut block_tx_idx = 0usize;
+        for (block_idx, block_response) in blocks.iter().enumerate() {
+            let parsed = &all_parsed_blocks[block_idx];
+            let tx_count_for_block = parsed.transactions_count as usize;
+            let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
+            for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
+                if tx_data.is_cellbase || tx_data.inputs.is_empty() {
+                    continue;
+                }
+                let tx_global_index = block_tx_idx + tx_idx;
+                let dotbit_consume_order = dotbit_consume_event_order(tx_global_index)?;
+                let tx = &block_response.block.transactions[tx_idx];
+                for input in &tx.inputs {
+                    let prev_tx_hash =
+                        crate::rpc::parse_hex_to_bytes(&input.previous_output.tx_hash);
+                    let prev_index =
+                        parse_outpoint_index_i16(&input.previous_output.index, "input.previous_output.index")
+                            .map_err(|e| {
+                                anyhow!(
+                                    "invalid input index while prefetching outpoints at block {}, tx 0x{}: {}",
+                                    parsed.number,
+                                    hex::encode(tx_data.hash),
+                                    e
+                                )
+                            })?;
+                    all_prev_tx_hashes.push(prev_tx_hash);
+                    all_prev_indices.push(prev_index);
+                    outpoint_context.push((
+                        parsed.number,
+                        tx_data.hash.to_vec(),
+                        dotbit_consume_order,
+                    ));
+                }
+            }
+            block_tx_idx += tx_count_for_block;
+        }
+        if !all_prev_tx_hashes.is_empty() {
+            let dotbit_results = writer.get_dotbit_account_ids_by_outpoints_batch(
+                &all_prev_tx_hashes,
+                &all_prev_indices,
+            )?;
+            let spore_results =
+                writer.get_spore_ids_by_outpoints_batch(&all_prev_tx_hashes, &all_prev_indices)?;
+            let mnft_results = writer
+                .get_mnft_token_ids_by_outpoints_batch(&all_prev_tx_hashes, &all_prev_indices)?;
+
+            let spore_map: HashMap<(Vec<u8>, i16), Vec<u8>> = spore_results
+                .into_iter()
+                .map(|(h, i, id)| ((h, i), id))
+                .collect();
+            let mut spore_map = spore_map;
+            for (idx, tx_hash) in all_prev_tx_hashes.iter().enumerate() {
+                let key = (tx_hash.clone(), all_prev_indices[idx]);
+                if spore_map.contains_key(&key) {
+                    continue;
+                }
+                if let Some(spore_id) =
+                    spore_state.get_cached_spore_id_by_outpoint(tx_hash, all_prev_indices[idx])
+                {
+                    spore_map.insert(key, spore_id);
+                }
+            }
+
+            let mnft_map: HashMap<(Vec<u8>, i16), Vec<u8>> = mnft_results
+                .into_iter()
+                .map(|(h, i, id)| ((h, i), id))
+                .collect();
+            let mut mnft_map = mnft_map;
+            for (key, token_id) in &batch_mnft_token_outpoints {
+                mnft_map
+                    .entry(key.clone())
+                    .or_insert_with(|| token_id.clone());
+            }
+
+            let dotbit_map: HashMap<(Vec<u8>, i16), Vec<u8>> = dotbit_results
+                .into_iter()
+                .map(|(h, i, id)| ((h, i), id))
+                .collect();
+            let mut dotbit_map = dotbit_map;
+            for (key, account_id) in &batch_dotbit_outpoints {
+                dotbit_map
+                    .entry(key.clone())
+                    .or_insert_with(|| account_id.clone());
+            }
+
+            for (i, (block_number, consuming_tx_hash, dotbit_consume_order)) in
+                outpoint_context.iter().enumerate()
+            {
+                let key = (all_prev_tx_hashes[i].clone(), all_prev_indices[i]);
+                if let Some(spore_id) = spore_map.get(&key) {
+                    if !batch_spore_ids.contains(spore_id) {
+                        writer.consume_spore(
+                            spore_id,
+                            *block_number,
+                            consuming_tx_hash,
+                            &mut data_batch,
+                            &mut spore_state,
+                        )?;
+                    }
+                }
+                if let Some(token_id) = mnft_map.get(&key) {
+                    writer.consume_mnft_token(
+                        token_id,
+                        *block_number,
+                        consuming_tx_hash,
+                        &mut data_batch,
+                    )?;
+                }
+                if let Some(account_id) = dotbit_map.get(&key) {
+                    let latest_create_order =
+                        batch_dotbit_latest_create_order.get(account_id).copied();
+                    if should_consume_dotbit_account(latest_create_order, *dotbit_consume_order) {
+                        writer.consume_dotbit_account(
+                            account_id,
+                            *block_number,
+                            consuming_tx_hash,
+                            &mut data_batch,
+                        )?;
+                    }
+                }
+            }
+        }
+    }
+
+    let token_info_cache =
+        load_activity_token_info_cache(store, all_tx_data, input_cell_info, batch_cell_infos)?;
+    let mut block_tx_idx = 0usize;
+    for parsed in all_parsed_blocks {
+        let tx_count = parsed.transactions_count as usize;
+        let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count];
+        block_tx_idx += tx_count;
+
+        let tx_views: Vec<crate::db::writer::activities::TxView<'_>> = tx_slice
+            .iter()
+            .map(|td| {
+                let inputs: Vec<crate::db::writer::activities::InputCellView> = if td.is_cellbase {
+                    Vec::new()
+                } else {
+                    td.inputs
+                        .iter()
+                        .map(|inp| {
+                            let key = (
+                                inp.previous_tx_hash.to_vec(),
+                                inp.previous_output_index as i16,
+                            );
+                            let cell_info = input_cell_info
+                                .get(&key)
+                                .or_else(|| batch_cell_infos.get(&key));
+                            if let Some(info) = cell_info {
+                                crate::db::writer::activities::InputCellView {
+                                    lock_script_hash: info.lock_script_hash.clone(),
+                                    capacity: info.capacity,
+                                    occupied_capacity: info.occupied_capacity,
+                                    type_code_hash: info.type_code_hash.clone(),
+                                    type_script_hash: info.type_script_hash.clone(),
+                                    type_args: info.type_args.clone(),
+                                    udt_amount: info.udt_amount,
+                                    data: Vec::new(),
+                                    data_size: info.data_size,
+                                }
+                            } else {
+                                crate::db::writer::activities::InputCellView {
+                                    lock_script_hash: Vec::new(),
+                                    capacity: 0,
+                                    occupied_capacity: 0,
+                                    type_code_hash: None,
+                                    type_script_hash: None,
+                                    type_args: None,
+                                    udt_amount: None,
+                                    data: Vec::new(),
+                                    data_size: 0,
+                                }
+                            }
+                        })
+                        .collect()
+                };
+                crate::db::writer::activities::TxView {
+                    tx_hash: &td.hash,
+                    tx_index: td.tx_index,
+                    block_number: parsed.number,
+                    timestamp: parsed.timestamp.timestamp_millis(),
+                    is_cellbase: td.is_cellbase,
+                    inputs,
+                    outputs: &td.cells,
+                    outputs_data: &td.outputs_data,
+                }
+            })
+            .collect();
+
+        let activities =
+            crate::db::writer::activities::build_activities_for_block(&tx_views, &token_info_cache);
+        for (lock_hash, entry) in activities {
+            data_batch.put_activity(&lock_hash, entry.block_number, entry.tx_index, &entry);
+        }
+    }
+
+    if bulk_sync_mode {
+        data_batch.commit_no_wal()?;
+    } else {
+        data_batch.commit()?;
+    }
+    Ok(())
+}
+
 fn format_outpoint_sample(outpoints: &[(Vec<u8>, i16)], max_items: usize) -> String {
     if outpoints.is_empty() {
         return "none".to_string();
@@ -355,6 +734,53 @@ fn is_bulk_sync_active_by_lag(blocks_behind: u64, bulk_sync_threshold: u64) -> b
 
 fn is_bulk_sync_batch(chain_tip: u64, batch_end: u64, bulk_sync_threshold: u64) -> bool {
     chain_tip.saturating_sub(batch_end) > bulk_sync_threshold
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BulkCompletionDecision {
+    next_was_bulk: bool,
+    next_completion_target: u64,
+    completion_target_for_mark: u64,
+    should_mark_completed: bool,
+    should_log_waiting_heavy: bool,
+}
+
+fn evaluate_bulk_completion_state(
+    was_bulk: bool,
+    currently_bulk_core: bool,
+    completion_target: u64,
+    progress_target: u64,
+    core_tip: u64,
+    heavy_tip: u64,
+) -> BulkCompletionDecision {
+    let mut next_was_bulk = was_bulk || currently_bulk_core;
+    let mut next_completion_target = completion_target;
+    let mut should_log_waiting_heavy = false;
+
+    if currently_bulk_core {
+        next_completion_target = 0;
+    } else if next_was_bulk && next_completion_target == 0 {
+        next_completion_target = progress_target;
+        should_log_waiting_heavy = true;
+    }
+
+    let completion_target_for_mark = next_completion_target;
+    let should_mark_completed = next_was_bulk
+        && completion_target_for_mark > 0
+        && core_tip >= completion_target_for_mark
+        && heavy_tip >= completion_target_for_mark;
+    if should_mark_completed {
+        next_was_bulk = false;
+        next_completion_target = 0;
+    }
+
+    BulkCompletionDecision {
+        next_was_bulk,
+        next_completion_target,
+        completion_target_for_mark,
+        should_mark_completed,
+        should_log_waiting_heavy,
+    }
 }
 
 fn should_abort_pipeline_on_idle_timeout(parser_finished: bool, fetcher_finished: bool) -> bool {
@@ -2097,6 +2523,25 @@ struct TxData {
 
 type ScriptUsageChanges = HashMap<(Vec<u8>, bool), (i64, i64, i128, i128, i128, i128)>;
 
+type BalanceDeltaChanges = HashMap<Vec<u8>, (i64, i32, i32, i64, i64, Vec<u8>, i64)>;
+type DailyCapacityDelta = HashMap<(Vec<u8>, u32), (i128, i128)>;
+
+struct HeavyLaneBatch {
+    start_block: u64,
+    end_block: u64,
+    chain_tip: u64,
+    blocks: Arc<Vec<BlockResponseWithCycles>>,
+    all_parsed_blocks: Arc<Vec<crate::parser::block::ParsedBlock>>,
+    all_tx_data: Arc<Vec<TxData>>,
+    input_cell_info: Arc<HashMap<(Vec<u8>, i16), LiveCellInfo>>,
+    batch_cell_infos: Arc<HashMap<(Vec<u8>, i16), LiveCellInfo>>,
+    spore_type_index_changes: Arc<HashMap<Vec<u8>, SporeTypeIndex>>,
+    spore_daily_changes: Arc<DailyCapacityDelta>,
+    cluster_daily_changes: Arc<DailyCapacityDelta>,
+    nft_type_index_changes: Arc<HashMap<Vec<u8>, NftTypeIndex>>,
+    nft_daily_changes: Arc<DailyCapacityDelta>,
+}
+
 fn parse_tx_cycles(
     raw_cycles_hex: Option<&String>,
     tx_hash: &str,
@@ -2268,6 +2713,10 @@ pub struct Indexer {
     last_cache_invalidation: tokio::sync::Mutex<u64>,
     was_bulk_sync_active: std::sync::atomic::AtomicBool,
     was_secondary_issuance_bulk_active: std::sync::atomic::AtomicBool,
+    core_tip: AtomicU64,
+    heavy_tip: AtomicU64,
+    heavy_tip_updated_at: AtomicI64,
+    bulk_completion_target: AtomicU64,
     rebuild_pause_flag: Arc<std::sync::atomic::AtomicBool>,
     pipeline_reset_notify_flag: Arc<std::sync::atomic::AtomicBool>,
     pipeline_reset_reason_code: Arc<AtomicU8>,
@@ -2319,6 +2768,13 @@ impl Indexer {
         let was_bulk = progress.blocks_remaining() > config.bulk_sync_threshold;
         let was_secondary_bulk =
             progress.blocks_remaining() > SECONDARY_ISSUANCE_BACKFILL_THRESHOLD;
+        let initial_tip = u64::try_from(tip_number).unwrap_or_else(|_| {
+            panic!(
+                "sync tip over u64 range while initializing lane tips: {}",
+                tip_number
+            )
+        });
+        let now_ts = chrono::Utc::now().timestamp();
 
         let hodl_tracker = match store.get_hodl_tracker_state()? {
             Some(state) => {
@@ -2356,6 +2812,10 @@ impl Indexer {
             was_secondary_issuance_bulk_active: std::sync::atomic::AtomicBool::new(
                 was_secondary_bulk,
             ),
+            core_tip: AtomicU64::new(initial_tip),
+            heavy_tip: AtomicU64::new(initial_tip),
+            heavy_tip_updated_at: AtomicI64::new(now_ts),
+            bulk_completion_target: AtomicU64::new(0),
             rebuild_pause_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             pipeline_reset_notify_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             pipeline_reset_reason_code: Arc::new(AtomicU8::new(PIPELINE_RESET_REASON_UNKNOWN)),
@@ -2405,6 +2865,44 @@ impl Indexer {
 
     pub fn is_bulk_sync_active(&self) -> bool {
         self.progress.blocks_remaining() > self.config.bulk_sync_threshold
+    }
+
+    fn record_core_lane_tip(&self, tip: u64) {
+        self.core_tip.fetch_max(tip, Ordering::SeqCst);
+    }
+
+    fn record_heavy_lane_tip(&self, tip: u64) {
+        self.heavy_tip.fetch_max(tip, Ordering::SeqCst);
+        self.heavy_tip_updated_at
+            .store(chrono::Utc::now().timestamp(), Ordering::SeqCst);
+    }
+
+    fn ensure_heavy_lane_not_stalled(&self, context: &str) -> Result<()> {
+        let core_tip = self.core_tip.load(Ordering::SeqCst);
+        let heavy_tip = self.heavy_tip.load(Ordering::SeqCst);
+        let lag_blocks = core_tip.saturating_sub(heavy_tip);
+
+        if lag_blocks <= self.config.heavy_lane_max_lag_blocks {
+            return Ok(());
+        }
+
+        let now = chrono::Utc::now().timestamp();
+        let last_advanced_at = self.heavy_tip_updated_at.load(Ordering::SeqCst);
+        let lag_secs = now.saturating_sub(last_advanced_at);
+        if lag_secs < self.config.heavy_lane_max_lag_seconds as i64 {
+            return Ok(());
+        }
+
+        bail!(
+            "heavy lane lag exceeded threshold: context={} core_tip={} heavy_tip={} lag_blocks={} lag_secs={} max_lag_blocks={} max_lag_seconds={}",
+            context,
+            core_tip,
+            heavy_tip,
+            lag_blocks,
+            lag_secs,
+            self.config.heavy_lane_max_lag_blocks,
+            self.config.heavy_lane_max_lag_seconds
+        );
     }
 
     pub fn is_direct_db_read(&self) -> bool {
@@ -2882,7 +3380,11 @@ impl Indexer {
     }
 
     async fn run_pipeline(&self) -> Result<()> {
-        use tokio::sync::mpsc;
+        use tokio::sync::{mpsc, watch};
+
+        if self.config.heavy_lane_queue == 0 {
+            bail!("heavy_lane_queue must be > 0");
+        }
 
         type FetchedBatch = (u64, u64, u64, u64, Arc<Vec<BlockResponseWithCycles>>);
         type ParsedBatch = (
@@ -2896,19 +3398,23 @@ impl Indexer {
             HashMap<(Vec<u8>, i16), LiveCellInfo>,
             // Pre-computed in parser stage:
             HashMap<(Vec<u8>, i16), LiveCellInfo>, // batch_cell_infos
-            HashMap<Vec<u8>, (i64, i32, i32, i64, i64, Vec<u8>, i64)>, // address_balance_changes
+            BalanceDeltaChanges,                   // address_balance_changes
             ScriptUsageChanges,                    // script_usage_changes
             HashMap<(Vec<u8>, bool, u32), (i128, i128)>, // script_daily_changes
-            HashMap<(Vec<u8>, u32), (i128, i128)>, // token_daily_changes
+            DailyCapacityDelta,                    // token_daily_changes
             HashMap<Vec<u8>, SporeTypeIndex>,      // spore_type_index_changes
-            HashMap<(Vec<u8>, u32), (i128, i128)>, // spore_daily_changes
-            HashMap<(Vec<u8>, u32), (i128, i128)>, // cluster_daily_changes
+            DailyCapacityDelta,                    // spore_daily_changes
+            DailyCapacityDelta,                    // cluster_daily_changes
             HashMap<Vec<u8>, NftTypeIndex>,        // nft_type_index_changes
-            HashMap<(Vec<u8>, u32), (i128, i128)>, // nft_daily_changes
+            DailyCapacityDelta,                    // nft_daily_changes
         );
 
         let (fetch_tx, mut fetch_rx) = mpsc::channel::<FetchedBatch>(self.config.pipeline_buffer);
         let (parse_tx, mut parse_rx) = mpsc::channel::<ParsedBatch>(self.config.pipeline_buffer);
+        let (heavy_tx, mut heavy_rx) =
+            mpsc::channel::<HeavyLaneBatch>(self.config.heavy_lane_queue);
+        let (heavy_done_tx, mut heavy_done_rx) = mpsc::unbounded_channel::<u64>();
+        let (heavy_error_tx, heavy_error_rx) = watch::channel::<Option<String>>(None);
         let committed_tip_for_cache = Arc::new(AtomicI64::new(self.repo.get_sync_tip().await?.0));
         self.pipeline_perf
             .set_queue_capacities(self.config.pipeline_buffer, self.config.pipeline_buffer);
@@ -2926,6 +3432,53 @@ impl Indexer {
         let pipeline_perf_for_fetcher = Arc::clone(&self.pipeline_perf);
         let adaptive_batch_controller_for_fetcher = Arc::clone(&self.adaptive_batch_controller);
         let parse_tx_for_fetcher_depth = parse_tx.clone();
+        let heavy_writer = self.writer.clone();
+        let heavy_run_id = self.run_id.clone();
+        let heavy_bulk_sync_threshold = self.config.bulk_sync_threshold;
+
+        // === Heavy lane worker ===
+        let heavy_worker = tokio::spawn(async move {
+            while let Some(batch) = heavy_rx.recv().await {
+                let start_block = batch.start_block;
+                let end_block = batch.end_block;
+                let chain_tip = batch.chain_tip;
+                let heavy_writer = heavy_writer.clone();
+                let write_started = Instant::now();
+                let write_result = tokio::task::spawn_blocking(move || {
+                    write_heavy_lane_batch(&heavy_writer, batch, heavy_bulk_sync_threshold)
+                })
+                .await;
+
+                match write_result {
+                    Ok(Ok(())) => {
+                        let elapsed_ms = write_started.elapsed().as_secs_f64() * 1000.0;
+                        let _ = heavy_done_tx.send(end_block);
+                        debug!(
+                            run_id = %heavy_run_id,
+                            start_block,
+                            end_block,
+                            chain_tip,
+                            elapsed_ms = format!("{:.1}", elapsed_ms),
+                            "Heavy lane committed batch"
+                        );
+                    }
+                    Ok(Err(e)) => {
+                        let _ = heavy_error_tx.send(Some(format!(
+                            "heavy lane batch {}-{} failed (chain_tip={}): {:?}",
+                            start_block, end_block, chain_tip, e
+                        )));
+                        return;
+                    }
+                    Err(join_err) => {
+                        let _ = heavy_error_tx.send(Some(format!(
+                            "heavy lane worker join error for batch {}-{} (chain_tip={}): {}",
+                            start_block, end_block, chain_tip, join_err
+                        )));
+                        return;
+                    }
+                }
+            }
+        });
 
         // === Fetcher task ===
         let fetcher = tokio::spawn(async move {
@@ -3934,502 +4487,594 @@ impl Indexer {
 
         // === Writer loop ===
         let committed_tip_for_cache_for_writer = Arc::clone(&committed_tip_for_cache);
-        let mut consecutive_idle_timeouts: u64 = 0;
-        loop {
-            if self.repo.has_unresolved_deep_fork().unwrap_or(false) {
-                let drained = Self::drain_channel(&mut parse_rx).await;
-                if let Some(repeat) = self.repeated_warning_snapshot(
-                    "pipeline_deep_fork_unresolved",
-                    Duration::from_secs(120),
-                ) {
-                    warn!(
-                        run_id = %self.run_id,
-                        pipeline_epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst),
-                        drained,
-                        repeat_count = repeat.total_count,
-                        suppressed_since_last = repeat.suppressed_since_last_emit,
-                        first_seen_secs_ago = repeat.first_seen_secs_ago,
-                        "Deep fork unresolved, sync paused. Waiting for manual intervention..."
-                    );
-                }
-                sleep(Duration::from_secs(30)).await;
-                continue;
-            }
+        let heavy_error_rx_for_writer = heavy_error_rx.clone();
+        let writer_result: Result<()> = async {
+            let mut consecutive_idle_timeouts: u64 = 0;
+            let mut next_heavy_progress_log = self
+                .heavy_tip
+                .load(Ordering::SeqCst)
+                .saturating_add(HEAVY_LANE_PROGRESS_LOG_INTERVAL_BLOCKS);
 
-            let recv_timeout = Duration::from_millis(self.config.poll_interval_ms * 2);
-            let t_recv = Instant::now();
-            match tokio::time::timeout(recv_timeout, parse_rx.recv()).await {
-                Ok(Some((
-                    batch_epoch,
-                    start_block,
-                    end_block,
-                    chain_tip,
-                    blocks,
-                    all_parsed_blocks,
-                    all_tx_data,
-                    input_cell_info,
-                    batch_cell_infos,
-                    address_balance_changes,
-                    script_usage_changes,
-                    script_daily_changes,
-                    token_daily_changes,
-                    spore_type_index_changes,
-                    spore_daily_changes,
-                    cluster_daily_changes,
-                    nft_type_index_changes,
-                    nft_daily_changes,
-                ))) => {
-                    consecutive_idle_timeouts = 0;
-                    let recv_wait_ms = t_recv.elapsed().as_secs_f64() * 1000.0;
-                    let current_epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst);
-                    if batch_epoch != current_epoch {
-                        debug!(
-                            batch_epoch,
-                            current_epoch,
-                            "Dropping stale parsed batch {}-{}",
-                            start_block,
-                            end_block
+            loop {
+                let mut heavy_progress_advanced = false;
+                while let Ok(done_tip) = heavy_done_rx.try_recv() {
+                    heavy_progress_advanced = true;
+                    self.record_heavy_lane_tip(done_tip);
+                    if done_tip >= next_heavy_progress_log {
+                        info!(
+                            heavy_tip = done_tip,
+                            core_tip = self.core_tip.load(Ordering::SeqCst),
+                            lag_blocks = self
+                                .core_tip
+                                .load(Ordering::SeqCst)
+                                .saturating_sub(done_tip),
+                            "Heavy lane progress"
                         );
-                        continue;
+                        next_heavy_progress_log =
+                            done_tip.saturating_add(HEAVY_LANE_PROGRESS_LOG_INTERVAL_BLOCKS);
                     }
-                    let (db_tip, db_tip_hash) = self.repo.get_sync_tip().await?;
-                    committed_tip_for_cache_for_writer.store(db_tip, Ordering::SeqCst);
-                    let expected_start = if db_tip == 0 && db_tip_hash.is_none() {
-                        0
-                    } else {
-                        (db_tip + 1) as u64
-                    };
+                }
+                if heavy_progress_advanced {
+                    self.check_bulk_sync_completion().await;
+                }
+                if let Some(err) = heavy_error_rx_for_writer.borrow().clone() {
+                    return Err(anyhow!(err));
+                }
 
-                    if start_block != expected_start {
-                        let writer_queue_depth = parse_tx_for_writer_depth.max_capacity()
-                            - parse_tx_for_writer_depth.capacity();
-                        let pipeline = self.pipeline_perf.snapshot();
-                        let blocks_behind = chain_tip.saturating_sub(db_tip as u64);
-                        if let Some(repeat) = self.repeated_warning_snapshot(
-                            "pipeline_batch_mismatch",
-                            Duration::from_secs(5),
-                        ) {
-                            warn!(
+                if self.repo.has_unresolved_deep_fork().unwrap_or(false) {
+                    let drained = Self::drain_channel(&mut parse_rx).await;
+                    if let Some(repeat) = self.repeated_warning_snapshot(
+                        "pipeline_deep_fork_unresolved",
+                        Duration::from_secs(120),
+                    ) {
+                        warn!(
+                            run_id = %self.run_id,
+                            pipeline_epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst),
+                            drained,
+                            repeat_count = repeat.total_count,
+                            suppressed_since_last = repeat.suppressed_since_last_emit,
+                            first_seen_secs_ago = repeat.first_seen_secs_ago,
+                            "Deep fork unresolved, sync paused. Waiting for manual intervention..."
+                        );
+                    }
+                    sleep(Duration::from_secs(30)).await;
+                    continue;
+                }
+
+                let recv_timeout = Duration::from_millis(self.config.poll_interval_ms * 2);
+                let t_recv = Instant::now();
+                match tokio::time::timeout(recv_timeout, parse_rx.recv()).await {
+                    Ok(Some((
+                        batch_epoch,
+                        start_block,
+                        end_block,
+                        chain_tip,
+                        blocks,
+                        all_parsed_blocks,
+                        all_tx_data,
+                        input_cell_info,
+                        batch_cell_infos,
+                        address_balance_changes,
+                        script_usage_changes,
+                        script_daily_changes,
+                        token_daily_changes,
+                        spore_type_index_changes,
+                        spore_daily_changes,
+                        cluster_daily_changes,
+                        nft_type_index_changes,
+                        nft_daily_changes,
+                    ))) => {
+                        consecutive_idle_timeouts = 0;
+                        let recv_wait_ms = t_recv.elapsed().as_secs_f64() * 1000.0;
+                        let current_epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst);
+                        if batch_epoch != current_epoch {
+                            debug!(
+                                batch_epoch,
+                                current_epoch,
+                                "Dropping stale parsed batch {}-{}",
+                                start_block,
+                                end_block
+                            );
+                            continue;
+                        }
+                        let (db_tip, db_tip_hash) = self.repo.get_sync_tip().await?;
+                        committed_tip_for_cache_for_writer.store(db_tip, Ordering::SeqCst);
+                        let expected_start = if db_tip == 0 && db_tip_hash.is_none() {
+                            0
+                        } else {
+                            (db_tip + 1) as u64
+                        };
+
+                        if start_block != expected_start {
+                            let writer_queue_depth = parse_tx_for_writer_depth.max_capacity()
+                                - parse_tx_for_writer_depth.capacity();
+                            let pipeline = self.pipeline_perf.snapshot();
+                            let blocks_behind = chain_tip.saturating_sub(db_tip as u64);
+                            if let Some(repeat) = self.repeated_warning_snapshot(
+                                "pipeline_batch_mismatch",
+                                Duration::from_secs(5),
+                            ) {
+                                warn!(
+                                    run_id = %self.run_id,
+                                    pipeline_epoch = current_epoch,
+                                    db_tip,
+                                    chain_tip,
+                                    blocks_behind,
+                                    expected_start,
+                                    got_start = start_block,
+                                    writer_queue_depth,
+                                    repeat_count = repeat.total_count,
+                                    suppressed_since_last = repeat.suppressed_since_last_emit,
+                                    first_seen_secs_ago = repeat.first_seen_secs_ago,
+                                    parse_queue_depth = ?pipeline.as_ref().and_then(|p| p.parse_queue_depth),
+                                    parse_queue_capacity = ?pipeline.as_ref().and_then(|p| p.parse_queue_capacity),
+                                    writer_wait_ms = ?pipeline.as_ref().and_then(|p| p.writer_wait_ms),
+                                    "Pipeline batch mismatch: reset and drain stale parsed batches"
+                                );
+                            }
+                            self.request_pipeline_reset(
+                                "pipeline batch mismatch",
+                                Some(expected_start),
+                                Some(start_block),
+                                Some(writer_queue_depth),
+                            );
+                            let drained = Self::drain_channel(&mut parse_rx).await;
+                            info!(
                                 run_id = %self.run_id,
                                 pipeline_epoch = current_epoch,
-                                db_tip,
-                                chain_tip,
-                                blocks_behind,
+                                drained,
                                 expected_start,
                                 got_start = start_block,
-                                writer_queue_depth,
-                                repeat_count = repeat.total_count,
-                                suppressed_since_last = repeat.suppressed_since_last_emit,
-                                first_seen_secs_ago = repeat.first_seen_secs_ago,
-                                parse_queue_depth = ?pipeline.as_ref().and_then(|p| p.parse_queue_depth),
-                                parse_queue_capacity = ?pipeline.as_ref().and_then(|p| p.parse_queue_capacity),
-                                writer_wait_ms = ?pipeline.as_ref().and_then(|p| p.writer_wait_ms),
-                                "Pipeline batch mismatch: reset and drain stale parsed batches"
+                                "Pipeline mismatch drain completed"
                             );
+                            continue;
                         }
-                        self.request_pipeline_reset(
-                            "pipeline batch mismatch",
-                            Some(expected_start),
-                            Some(start_block),
-                            Some(writer_queue_depth),
-                        );
-                        let drained = Self::drain_channel(&mut parse_rx).await;
-                        info!(
-                            run_id = %self.run_id,
-                            pipeline_epoch = current_epoch,
-                            drained,
-                            expected_start,
-                            got_start = start_block,
-                            "Pipeline mismatch drain completed"
-                        );
-                        continue;
-                    }
 
-                    let blocks_behind = chain_tip.saturating_sub(db_tip as u64);
-                    if blocks_behind <= self.config.bulk_sync_threshold {
-                        if let Some(ref stored_hash) = db_tip_hash {
-                            if db_tip > 0 {
-                                match self
-                                    .check_and_handle_reorg(db_tip as u64, stored_hash)
-                                    .await?
-                                {
-                                    Some(ReorgAction::Handled(_)) => {
-                                        let current_epoch =
-                                            self.pipeline_reset_epoch.load(Ordering::SeqCst);
-                                        info!(
-                                            run_id = %self.run_id,
-                                            pipeline_epoch = current_epoch,
-                                            db_tip,
-                                            chain_tip,
-                                            "Reorg handled, draining stale parsed batches"
-                                        );
-                                        self.request_pipeline_reset(
-                                            "reorg handled",
-                                            None,
-                                            None,
-                                            None,
-                                        );
-                                        let drained = Self::drain_channel(&mut parse_rx).await;
-                                        info!(
-                                            run_id = %self.run_id,
-                                            pipeline_epoch = current_epoch,
-                                            drained,
-                                            "Reorg drain completed"
-                                        );
-                                        continue;
+                        let blocks_behind = chain_tip.saturating_sub(db_tip as u64);
+                        if blocks_behind <= self.config.bulk_sync_threshold {
+                            if let Some(ref stored_hash) = db_tip_hash {
+                                if db_tip > 0 {
+                                    match self
+                                        .check_and_handle_reorg(db_tip as u64, stored_hash)
+                                        .await?
+                                    {
+                                        Some(ReorgAction::Handled(_)) => {
+                                            let current_epoch =
+                                                self.pipeline_reset_epoch.load(Ordering::SeqCst);
+                                            info!(
+                                                run_id = %self.run_id,
+                                                pipeline_epoch = current_epoch,
+                                                db_tip,
+                                                chain_tip,
+                                                "Reorg handled, draining stale parsed batches"
+                                            );
+                                            self.request_pipeline_reset(
+                                                "reorg handled",
+                                                None,
+                                                None,
+                                                None,
+                                            );
+                                            let drained = Self::drain_channel(&mut parse_rx).await;
+                                            info!(
+                                                run_id = %self.run_id,
+                                                pipeline_epoch = current_epoch,
+                                                drained,
+                                                "Reorg drain completed"
+                                            );
+                                            continue;
+                                        }
+                                        Some(ReorgAction::DeepForkPaused) => {
+                                            let current_epoch =
+                                                self.pipeline_reset_epoch.load(Ordering::SeqCst);
+                                            warn!(
+                                                run_id = %self.run_id,
+                                                pipeline_epoch = current_epoch,
+                                                db_tip,
+                                                chain_tip,
+                                                "Deep fork detected, sync paused"
+                                            );
+                                            self.request_pipeline_reset(
+                                                "deep fork paused",
+                                                None,
+                                                None,
+                                                None,
+                                            );
+                                            let drained = Self::drain_channel(&mut parse_rx).await;
+                                            info!(
+                                                run_id = %self.run_id,
+                                                pipeline_epoch = current_epoch,
+                                                drained,
+                                                "Deep fork pause drain completed"
+                                            );
+                                            sleep(Duration::from_secs(30)).await;
+                                            continue;
+                                        }
+                                        None => {}
                                     }
-                                    Some(ReorgAction::DeepForkPaused) => {
-                                        let current_epoch =
-                                            self.pipeline_reset_epoch.load(Ordering::SeqCst);
-                                        warn!(
-                                            run_id = %self.run_id,
-                                            pipeline_epoch = current_epoch,
-                                            db_tip,
-                                            chain_tip,
-                                            "Deep fork detected, sync paused"
-                                        );
-                                        self.request_pipeline_reset(
-                                            "deep fork paused",
-                                            None,
-                                            None,
-                                            None,
-                                        );
-                                        let drained = Self::drain_channel(&mut parse_rx).await;
-                                        info!(
-                                            run_id = %self.run_id,
-                                            pipeline_epoch = current_epoch,
-                                            drained,
-                                            "Deep fork pause drain completed"
-                                        );
-                                        sleep(Duration::from_secs(30)).await;
-                                        continue;
-                                    }
-                                    None => {}
                                 }
                             }
                         }
-                    }
 
-                    let db_start = Instant::now();
-                    let batch_tx_count = all_tx_data.len();
-                    let batch_tx_count_u64 =
-                        u64::try_from(batch_tx_count).expect("batch tx count exceeds u64");
-                    if let Err(e) = self
-                        .write_parsed_batch(
-                            &blocks,
-                            &all_parsed_blocks,
-                            all_tx_data,
-                            input_cell_info,
-                            batch_cell_infos,
-                            address_balance_changes,
-                            script_usage_changes,
-                            script_daily_changes,
-                            token_daily_changes,
-                            spore_type_index_changes,
-                            spore_daily_changes,
-                            cluster_daily_changes,
-                            nft_type_index_changes,
-                            nft_daily_changes,
-                            chain_tip,
-                        )
-                        .await
-                    {
-                        let incident_id = self.report_incident(
-                            "pipeline_batch_write_failed",
-                            format!(
-                                "start_block={} end_block={} chain_tip={} error={:?}",
-                                start_block, end_block, chain_tip, e
-                            ),
-                        );
-                        error!(
-                            run_id = %self.run_id,
-                            incident_id = %incident_id,
-                            start_block,
-                            end_block,
-                            chain_tip,
-                            error = ?e,
-                            "Sync error while writing parsed batch"
-                        );
+                        let all_parsed_blocks = Arc::new(all_parsed_blocks);
+                        let all_tx_data = Arc::new(all_tx_data);
+                        let input_cell_info = Arc::new(input_cell_info);
+                        let batch_cell_infos = Arc::new(batch_cell_infos);
+                        let address_balance_changes = Arc::new(address_balance_changes);
+                        let script_usage_changes = Arc::new(script_usage_changes);
+                        let script_daily_changes = Arc::new(script_daily_changes);
+                        let token_daily_changes = Arc::new(token_daily_changes);
+                        let spore_type_index_changes = Arc::new(spore_type_index_changes);
+                        let spore_daily_changes = Arc::new(spore_daily_changes);
+                        let cluster_daily_changes = Arc::new(cluster_daily_changes);
+                        let nft_type_index_changes = Arc::new(nft_type_index_changes);
+                        let nft_daily_changes = Arc::new(nft_daily_changes);
                         let bulk_sync_mode = is_bulk_sync_batch(
                             chain_tip,
                             end_block,
                             self.config.bulk_sync_threshold,
                         );
+                        if !bulk_sync_mode {
+                            loop {
+                                while let Ok(done_tip) = heavy_done_rx.try_recv() {
+                                    self.record_heavy_lane_tip(done_tip);
+                                }
+                                if self.core_tip.load(Ordering::SeqCst)
+                                    <= self.heavy_tip.load(Ordering::SeqCst)
+                                {
+                                    break;
+                                }
+                                if let Some(err) = heavy_error_rx_for_writer.borrow().clone() {
+                                    return Err(anyhow!(err));
+                                }
+                                self.ensure_heavy_lane_not_stalled(
+                                    "waiting_heavy_before_live_batch",
+                                )?;
+                                sleep(Duration::from_millis(20)).await;
+                            }
+                        }
                         if bulk_sync_mode {
+                            let heavy_batch = HeavyLaneBatch {
+                                start_block,
+                                end_block,
+                                chain_tip,
+                                blocks: Arc::clone(&blocks),
+                                all_parsed_blocks: Arc::clone(&all_parsed_blocks),
+                                all_tx_data: Arc::clone(&all_tx_data),
+                                input_cell_info: Arc::clone(&input_cell_info),
+                                batch_cell_infos: Arc::clone(&batch_cell_infos),
+                                spore_type_index_changes: Arc::clone(&spore_type_index_changes),
+                                spore_daily_changes: Arc::clone(&spore_daily_changes),
+                                cluster_daily_changes: Arc::clone(&cluster_daily_changes),
+                                nft_type_index_changes: Arc::clone(&nft_type_index_changes),
+                                nft_daily_changes: Arc::clone(&nft_daily_changes),
+                            };
+                            if heavy_tx.send(heavy_batch).await.is_err() {
+                                return Err(anyhow!(
+                                    "heavy lane channel closed while enqueueing batch {}-{}",
+                                    start_block,
+                                    end_block
+                                ));
+                            }
+                            self.ensure_heavy_lane_not_stalled("after_heavy_enqueue")?;
+                        }
+
+                        let db_start = Instant::now();
+                        let batch_tx_count = all_tx_data.len();
+                        let batch_tx_count_u64 =
+                            u64::try_from(batch_tx_count).expect("batch tx count exceeds u64");
+                        if let Err(e) = self
+                            .write_parsed_batch(
+                                blocks.as_ref(),
+                                all_parsed_blocks.as_ref(),
+                                all_tx_data.as_ref(),
+                                input_cell_info.as_ref(),
+                                batch_cell_infos.as_ref(),
+                                address_balance_changes.as_ref(),
+                                script_usage_changes.as_ref(),
+                                script_daily_changes.as_ref(),
+                                token_daily_changes.as_ref(),
+                                spore_type_index_changes.as_ref(),
+                                spore_daily_changes.as_ref(),
+                                cluster_daily_changes.as_ref(),
+                                nft_type_index_changes.as_ref(),
+                                nft_daily_changes.as_ref(),
+                                chain_tip,
+                                bulk_sync_mode,
+                            )
+                            .await
+                        {
+                            let incident_id = self.report_incident(
+                                "pipeline_batch_write_failed",
+                                format!(
+                                    "start_block={} end_block={} chain_tip={} error={:?}",
+                                    start_block, end_block, chain_tip, e
+                                ),
+                            );
+                            error!(
+                                run_id = %self.run_id,
+                                incident_id = %incident_id,
+                                start_block,
+                                end_block,
+                                chain_tip,
+                                error = ?e,
+                                "Sync error while writing parsed batch"
+                            );
                             return Err(e).with_context(|| {
                                 format!(
-                                    "bulk sync fail-fast for range {}-{} (chain_tip={}): \
-                                     no rollback cleanup/retry in bulk mode; delete RocksDB and restart from genesis",
+                                    "pipeline fail-fast for range {}-{} (chain_tip={})",
                                     start_block, end_block, chain_tip
                                 )
                             });
                         }
-                        if let Err(cleanup_err) = self.writer.cleanup_batch_range(
-                            i64::try_from(start_block).map_err(|_| {
-                                anyhow!("batch cleanup start_block exceeds i64: {}", start_block)
-                            })?,
-                            i64::try_from(end_block).map_err(|_| {
-                                anyhow!("batch cleanup end_block exceeds i64: {}", end_block)
-                            })?,
-                        ) {
-                            error!("Failed to cleanup partial batch: {:?}", cleanup_err);
-                        } else if let Err(rebuild_err) = self.rebuild_hodl_tracker_from_store(
-                            i64::try_from(start_block).map_err(|_| {
-                                anyhow!(
-                                    "batch cleanup start_block exceeds i64 for hodl rebuild: {}",
-                                    start_block
-                                )
-                            })? - 1,
-                        ) {
-                            error!(
-                                "Failed to rebuild HODL tracker after batch cleanup: {:?}",
-                                rebuild_err
+                        let db_elapsed = db_start.elapsed();
+                        self.perf.add_db_write(db_elapsed);
+
+                        if db_elapsed.as_secs() >= 5 {
+                            let stats = self.writer.store().memory_stats();
+                            warn!(
+                                db_ms = format!("{:.1}", db_elapsed.as_secs_f64() * 1000.0),
+                                compaction_pending_mb = stats.compaction_pending_bytes / (1024 * 1024),
+                                running_compactions = stats.num_running_compactions,
+                                l0_total = stats.l0_files_count,
+                                l0_max = stats.l0_files_max,
+                                l0_worst_cf = stats.l0_worst_cf,
+                                memtable_mb = stats.memtable_bytes / (1024 * 1024),
+                                imm_memtables = stats.immutable_memtables,
+                                "Slow DB write detected (possible write stall)"
                             );
-                            return Err(rebuild_err);
                         }
-                        self.request_pipeline_reset("batch write failed", None, None, None);
-                        let drained = Self::drain_channel(&mut parse_rx).await;
-                        info!(
-                            run_id = %self.run_id,
-                            pipeline_epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst),
-                            drained,
-                            "Batch write failure drain completed"
-                        );
-                        sleep(Duration::from_secs(5)).await;
-                        continue;
+
+                        if let Some(last_block) = all_parsed_blocks.last() {
+                            let last_block_u64 = u64::try_from(last_block.number).map_err(|_| {
+                                anyhow!(
+                                    "last block exceeds u64 range for core_tip: {}",
+                                    last_block.number
+                                )
+                            })?;
+                            self.record_core_lane_tip(last_block_u64);
+                            if !bulk_sync_mode {
+                                self.record_heavy_lane_tip(last_block_u64);
+                            }
+                            self.ensure_heavy_lane_not_stalled("after_core_commit")?;
+                            committed_tip_for_cache_for_writer
+                                .store(last_block.number, Ordering::SeqCst);
+                            self.progress.record_batch(
+                                last_block_u64,
+                                all_parsed_blocks.len() as u64,
+                                batch_tx_count_u64,
+                            );
+
+                            let mode = if self.is_bulk_sync_active() {
+                                "[BULK]"
+                            } else {
+                                ""
+                            };
+                            let partition_range = format_partition_range(start_block, end_block);
+                            let boundary_info =
+                                if crosses_partition_boundary(start_block, end_block) {
+                                    " (crosses boundary)"
+                                } else {
+                                    ""
+                                };
+                            let writer_queue = parse_tx_for_writer_depth.max_capacity()
+                                - parse_tx_for_writer_depth.capacity();
+                            self.pipeline_perf.record_write(
+                                db_elapsed,
+                                recv_wait_ms,
+                                writer_queue,
+                                parse_tx_for_writer_depth.max_capacity(),
+                            );
+                            let pipeline = self.pipeline_perf.snapshot();
+                            let parse_queue_fill_pct = queue_fill_percentage(
+                                pipeline.as_ref().and_then(|p| p.parse_queue_depth),
+                                pipeline.as_ref().and_then(|p| p.parse_queue_capacity),
+                            );
+                            let writer_queue_fill_pct = queue_fill_percentage(
+                                Some(writer_queue as u64),
+                                Some(parse_tx_for_writer_depth.max_capacity() as u64),
+                            );
+                            let memory_ratio_pct =
+                                cgroup_memory_ratio_pct(&read_cgroup_memory_snapshot());
+                            if let Some(adjustment) =
+                                self.adaptive_batch_controller.update_after_write(
+                                    AdaptiveBatchInput {
+                                        write_ms: db_elapsed.as_secs_f64() * 1000.0,
+                                        batch_tx_count,
+                                        parse_queue_fill_pct,
+                                        writer_queue_fill_pct,
+                                        memory_ratio_pct,
+                                    },
+                                )
+                            {
+                                info!(
+                                    run_id = %self.run_id,
+                                    reason = adjustment.reason,
+                                    previous_target_batch_txs = adjustment.previous_target_batch_txs,
+                                    new_target_batch_txs = adjustment.new_target_batch_txs,
+                                    previous_inflight_limit = adjustment.previous_inflight_limit,
+                                    new_inflight_limit = adjustment.new_inflight_limit,
+                                    previous_min_target_batch_txs = adjustment.previous_min_target_batch_txs,
+                                    new_min_target_batch_txs = adjustment.new_min_target_batch_txs,
+                                    parse_queue_fill_pct = parse_queue_fill_pct.map(|v| format!("{:.1}", v)),
+                                    writer_queue_fill_pct = writer_queue_fill_pct.map(|v| format!("{:.1}", v)),
+                                    memory_ratio_pct = memory_ratio_pct.map(|v| format!("{:.1}", v)),
+                                    db_ms = format!("{:.1}", db_elapsed.as_secs_f64() * 1000.0),
+                                    "Adaptive batch controller adjusted"
+                                );
+                            }
+                            let adaptive_snapshot = self.adaptive_batch_controller.snapshot();
+                            info!(
+                                "Wrote blocks {} to {} ({} remaining, {:.2}s, q={}, wait={:.0}ms, adaptive_txs={}, adaptive_min_txs={}, inflight_limit={}) {}{} {}",
+                                start_block,
+                                end_block,
+                                self.progress.blocks_remaining(),
+                                db_elapsed.as_secs_f64(),
+                                writer_queue,
+                                recv_wait_ms,
+                                adaptive_snapshot.target_batch_txs,
+                                adaptive_snapshot.min_target_batch_txs,
+                                adaptive_snapshot.inflight_limit,
+                                partition_range,
+                                boundary_info,
+                                mode
+                            );
+
+                            if !self.is_secondary_issuance_bulk_active() {
+                                for block in all_parsed_blocks.iter() {
+                                    if let Err(e) = self
+                                        .update_secondary_issuance(
+                                            &format!("0x{}", hex::encode(&block.hash)),
+                                            &hex::encode(&block.dao),
+                                            block.number,
+                                            block.timestamp,
+                                        )
+                                        .await
+                                    {
+                                        warn!(
+                                            "Failed to update secondary issuance for block {}: {}",
+                                            block.number, e
+                                        );
+                                    }
+                                }
+                            }
+
+                            let crossed_1000 = (start_block / 1000) != (end_block / 1000);
+                            if crossed_1000 && !self.is_bulk_sync_active() {
+                                match i64::try_from((end_block / 1000) * 1000) {
+                                    Ok(update_block) => {
+                                        let writer = self.writer.clone();
+                                        tokio::spawn(async move {
+                                            if let Err(e) = writer
+                                                .recalculate_dao_extended_statistics(update_block)
+                                            {
+                                                warn!("Failed to recalculate DAO statistics: {}", e);
+                                            }
+                                        });
+                                    }
+                                    Err(_) => warn!(
+                                        run_id = %self.run_id,
+                                        end_block,
+                                        "Skipping DAO extended statistics recalc: block exceeds i64 range"
+                                    ),
+                                }
+                            }
+
+                            self.maybe_invalidate_chart_caches(end_block).await;
+                            self.check_bulk_sync_completion().await;
+                        }
+
+                        self.perf
+                            .blocks_count
+                            .fetch_add(all_parsed_blocks.len() as u64, Ordering::Relaxed);
+                        self.perf.report_and_reset();
                     }
-                    let db_elapsed = db_start.elapsed();
-                    self.perf.add_db_write(db_elapsed);
-
-                    if db_elapsed.as_secs() >= 5 {
-                        let stats = self.writer.store().memory_stats();
-                        warn!(
-                            db_ms = format!("{:.1}", db_elapsed.as_secs_f64() * 1000.0),
-                            compaction_pending_mb = stats.compaction_pending_bytes / (1024 * 1024),
-                            running_compactions = stats.num_running_compactions,
-                            l0_total = stats.l0_files_count,
-                            l0_max = stats.l0_files_max,
-                            l0_worst_cf = stats.l0_worst_cf,
-                            memtable_mb = stats.memtable_bytes / (1024 * 1024),
-                            imm_memtables = stats.immutable_memtables,
-                            "Slow DB write detected (possible write stall)"
-                        );
+                    Ok(None) => {
+                        fetcher.abort();
+                        parser.abort();
+                        return Err(anyhow::anyhow!("Pipeline channel closed"));
                     }
-
-                    if let Some(last_block) = all_parsed_blocks.last() {
-                        committed_tip_for_cache_for_writer
-                            .store(last_block.number, Ordering::SeqCst);
-                        self.progress.record_batch(
-                            last_block.number as u64,
-                            all_parsed_blocks.len() as u64,
-                            batch_tx_count_u64,
-                        );
-
-                        let mode = if self.is_bulk_sync_active() {
-                            "[BULK]"
-                        } else {
-                            ""
-                        };
-                        let partition_range = format_partition_range(start_block, end_block);
-                        let boundary_info = if crosses_partition_boundary(start_block, end_block) {
-                            " (crosses boundary)"
-                        } else {
-                            ""
-                        };
-                        let writer_queue = parse_tx_for_writer_depth.max_capacity()
+                    Err(_timeout) => {
+                        consecutive_idle_timeouts = consecutive_idle_timeouts.saturating_add(1);
+                        self.ensure_heavy_lane_not_stalled("pipeline_idle_timeout")?;
+                        let parser_finished = parser.is_finished();
+                        let fetcher_finished = fetcher.is_finished();
+                        let writer_queue_depth = parse_tx_for_writer_depth.max_capacity()
                             - parse_tx_for_writer_depth.capacity();
-                        self.pipeline_perf.record_write(
-                            db_elapsed,
-                            recv_wait_ms,
-                            writer_queue,
-                            parse_tx_for_writer_depth.max_capacity(),
-                        );
                         let pipeline = self.pipeline_perf.snapshot();
-                        let parse_queue_fill_pct = queue_fill_percentage(
+                        let fetch_fill_pct = queue_fill_percentage(
+                            pipeline.as_ref().and_then(|p| p.fetch_queue_depth),
+                            pipeline.as_ref().and_then(|p| p.fetch_queue_capacity),
+                        );
+                        let parse_fill_pct = queue_fill_percentage(
                             pipeline.as_ref().and_then(|p| p.parse_queue_depth),
                             pipeline.as_ref().and_then(|p| p.parse_queue_capacity),
                         );
-                        let writer_queue_fill_pct = queue_fill_percentage(
-                            Some(writer_queue as u64),
-                            Some(parse_tx_for_writer_depth.max_capacity() as u64),
-                        );
-                        let memory_ratio_pct =
-                            cgroup_memory_ratio_pct(&read_cgroup_memory_snapshot());
-                        if let Some(adjustment) =
-                            self.adaptive_batch_controller
-                                .update_after_write(AdaptiveBatchInput {
-                                    write_ms: db_elapsed.as_secs_f64() * 1000.0,
-                                    batch_tx_count,
-                                    parse_queue_fill_pct,
-                                    writer_queue_fill_pct,
-                                    memory_ratio_pct,
-                                })
-                        {
-                            info!(
-                                run_id = %self.run_id,
-                                reason = adjustment.reason,
-                                previous_target_batch_txs = adjustment.previous_target_batch_txs,
-                                new_target_batch_txs = adjustment.new_target_batch_txs,
-                                previous_inflight_limit = adjustment.previous_inflight_limit,
-                                new_inflight_limit = adjustment.new_inflight_limit,
-                                previous_min_target_batch_txs = adjustment.previous_min_target_batch_txs,
-                                new_min_target_batch_txs = adjustment.new_min_target_batch_txs,
-                                parse_queue_fill_pct = parse_queue_fill_pct.map(|v| format!("{:.1}", v)),
-                                writer_queue_fill_pct = writer_queue_fill_pct.map(|v| format!("{:.1}", v)),
-                                memory_ratio_pct = memory_ratio_pct.map(|v| format!("{:.1}", v)),
-                                db_ms = format!("{:.1}", db_elapsed.as_secs_f64() * 1000.0),
-                                "Adaptive batch controller adjusted"
-                            );
-                        }
-                        let adaptive_snapshot = self.adaptive_batch_controller.snapshot();
-                        info!(
-                            "Wrote blocks {} to {} ({} remaining, {:.2}s, q={}, wait={:.0}ms, adaptive_txs={}, adaptive_min_txs={}, inflight_limit={}) {}{} {}",
-                            start_block,
-                            end_block,
-                            self.progress.blocks_remaining(),
-                            db_elapsed.as_secs_f64(),
-                            writer_queue,
-                            recv_wait_ms,
-                            adaptive_snapshot.target_batch_txs,
-                            adaptive_snapshot.min_target_batch_txs,
-                            adaptive_snapshot.inflight_limit,
-                            partition_range,
-                            boundary_info,
-                            mode
-                        );
-
-                        if !self.is_secondary_issuance_bulk_active() {
-                            for block in &all_parsed_blocks {
-                                if let Err(e) = self
-                                    .update_secondary_issuance(
-                                        &format!("0x{}", hex::encode(&block.hash)),
-                                        &hex::encode(&block.dao),
-                                        block.number,
-                                        block.timestamp,
-                                    )
-                                    .await
-                                {
-                                    warn!(
-                                        "Failed to update secondary issuance for block {}: {}",
-                                        block.number, e
-                                    );
-                                }
-                            }
-                        }
-
-                        let crossed_1000 = (start_block / 1000) != (end_block / 1000);
-                        if crossed_1000 && !self.is_bulk_sync_active() {
-                            match i64::try_from((end_block / 1000) * 1000) {
-                                Ok(update_block) => {
-                                    let writer = self.writer.clone();
-                                    tokio::spawn(async move {
-                                        if let Err(e) =
-                                            writer.recalculate_dao_extended_statistics(update_block)
-                                        {
-                                            warn!("Failed to recalculate DAO statistics: {}", e);
-                                        }
-                                    });
-                                }
-                                Err(_) => warn!(
+                        if should_log_pipeline_idle_timeout(consecutive_idle_timeouts) {
+                            if let Some(repeat) = self.repeated_warning_snapshot(
+                                "pipeline_idle_timeout",
+                                Duration::from_secs(10),
+                            ) {
+                                warn!(
                                     run_id = %self.run_id,
-                                    end_block,
-                                    "Skipping DAO extended statistics recalc: block exceeds i64 range"
-                                ),
+                                    pipeline_epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst),
+                                    idle_timeouts = consecutive_idle_timeouts,
+                                    parser_finished,
+                                    fetcher_finished,
+                                    repeat_count = repeat.total_count,
+                                    suppressed_since_last = repeat.suppressed_since_last_emit,
+                                    first_seen_secs_ago = repeat.first_seen_secs_ago,
+                                    current_block = self.progress.current(),
+                                    target_block = self.progress.target(),
+                                    blocks_remaining = self.progress.blocks_remaining(),
+                                    writer_queue_depth,
+                                    fetch_queue_depth = ?pipeline.as_ref().and_then(|p| p.fetch_queue_depth),
+                                    fetch_queue_capacity = ?pipeline.as_ref().and_then(|p| p.fetch_queue_capacity),
+                                    fetch_queue_fill_pct = ?fetch_fill_pct.map(|v| format!("{:.1}", v)),
+                                    parse_queue_depth = ?pipeline.as_ref().and_then(|p| p.parse_queue_depth),
+                                    parse_queue_capacity = ?pipeline.as_ref().and_then(|p| p.parse_queue_capacity),
+                                    parse_queue_fill_pct = ?parse_fill_pct.map(|v| format!("{:.1}", v)),
+                                    writer_wait_ms = ?pipeline.as_ref().and_then(|p| p.writer_wait_ms),
+                                    "Pipeline idle timeout while waiting for parsed batches"
+                                );
                             }
                         }
-
-                        self.maybe_invalidate_chart_caches(end_block).await;
-                        self.check_bulk_sync_completion().await;
-                    }
-
-                    self.perf
-                        .blocks_count
-                        .fetch_add(all_parsed_blocks.len() as u64, Ordering::Relaxed);
-                    self.perf.report_and_reset();
-                }
-                Ok(None) => {
-                    fetcher.abort();
-                    parser.abort();
-                    return Err(anyhow::anyhow!("Pipeline channel closed"));
-                }
-                Err(_timeout) => {
-                    // Idle timeout - no pending batches. If any worker exited, fail fast
-                    // instead of spinning forever with stale progress.
-                    consecutive_idle_timeouts = consecutive_idle_timeouts.saturating_add(1);
-                    let parser_finished = parser.is_finished();
-                    let fetcher_finished = fetcher.is_finished();
-                    let writer_queue_depth = parse_tx_for_writer_depth.max_capacity()
-                        - parse_tx_for_writer_depth.capacity();
-                    let pipeline = self.pipeline_perf.snapshot();
-                    let fetch_fill_pct = queue_fill_percentage(
-                        pipeline.as_ref().and_then(|p| p.fetch_queue_depth),
-                        pipeline.as_ref().and_then(|p| p.fetch_queue_capacity),
-                    );
-                    let parse_fill_pct = queue_fill_percentage(
-                        pipeline.as_ref().and_then(|p| p.parse_queue_depth),
-                        pipeline.as_ref().and_then(|p| p.parse_queue_capacity),
-                    );
-                    if should_log_pipeline_idle_timeout(consecutive_idle_timeouts) {
-                        if let Some(repeat) = self.repeated_warning_snapshot(
-                            "pipeline_idle_timeout",
-                            Duration::from_secs(10),
-                        ) {
-                            warn!(
+                        if should_abort_pipeline_on_idle_timeout(parser_finished, fetcher_finished)
+                        {
+                            let incident_id = self.report_incident(
+                                "pipeline_worker_terminated",
+                                format!(
+                                    "idle_timeouts={} parser_finished={} fetcher_finished={} writer_queue_depth={} current={} target={}",
+                                    consecutive_idle_timeouts,
+                                    parser_finished,
+                                    fetcher_finished,
+                                    writer_queue_depth,
+                                    self.progress.current(),
+                                    self.progress.target()
+                                ),
+                            );
+                            fetcher.abort();
+                            parser.abort();
+                            error!(
                                 run_id = %self.run_id,
+                                incident_id = %incident_id,
                                 pipeline_epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst),
                                 idle_timeouts = consecutive_idle_timeouts,
                                 parser_finished,
                                 fetcher_finished,
-                                repeat_count = repeat.total_count,
-                                suppressed_since_last = repeat.suppressed_since_last_emit,
-                                first_seen_secs_ago = repeat.first_seen_secs_ago,
-                                current_block = self.progress.current(),
-                                target_block = self.progress.target(),
-                                blocks_remaining = self.progress.blocks_remaining(),
                                 writer_queue_depth,
-                                fetch_queue_depth = ?pipeline.as_ref().and_then(|p| p.fetch_queue_depth),
-                                fetch_queue_capacity = ?pipeline.as_ref().and_then(|p| p.fetch_queue_capacity),
-                                fetch_queue_fill_pct = ?fetch_fill_pct.map(|v| format!("{:.1}", v)),
-                                parse_queue_depth = ?pipeline.as_ref().and_then(|p| p.parse_queue_depth),
-                                parse_queue_capacity = ?pipeline.as_ref().and_then(|p| p.parse_queue_capacity),
-                                parse_queue_fill_pct = ?parse_fill_pct.map(|v| format!("{:.1}", v)),
-                                writer_wait_ms = ?pipeline.as_ref().and_then(|p| p.writer_wait_ms),
-                                "Pipeline idle timeout while waiting for parsed batches"
+                                "Pipeline worker terminated unexpectedly after idle timeout"
                             );
+                            return Err(anyhow::anyhow!(
+                                "Pipeline worker terminated unexpectedly (parser_finished={}, fetcher_finished={})",
+                                parser_finished,
+                                fetcher_finished
+                            ));
                         }
                     }
-                    if should_abort_pipeline_on_idle_timeout(parser_finished, fetcher_finished) {
-                        let incident_id = self.report_incident(
-                            "pipeline_worker_terminated",
-                            format!(
-                                "idle_timeouts={} parser_finished={} fetcher_finished={} writer_queue_depth={} current={} target={}",
-                                consecutive_idle_timeouts,
-                                parser_finished,
-                                fetcher_finished,
-                                writer_queue_depth,
-                                self.progress.current(),
-                                self.progress.target()
-                            ),
-                        );
-                        fetcher.abort();
-                        parser.abort();
-                        error!(
-                            run_id = %self.run_id,
-                            incident_id = %incident_id,
-                            pipeline_epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst),
-                            idle_timeouts = consecutive_idle_timeouts,
-                            parser_finished,
-                            fetcher_finished,
-                            writer_queue_depth,
-                            "Pipeline worker terminated unexpectedly after idle timeout"
-                        );
-                        return Err(anyhow::anyhow!(
-                            "Pipeline worker terminated unexpectedly (parser_finished={}, fetcher_finished={})",
-                            parser_finished,
-                            fetcher_finished
-                        ));
-                    }
                 }
+            }
+        }
+        .await;
+
+        drop(heavy_tx);
+        if let Err(e) = writer_result {
+            heavy_worker.abort();
+            fetcher.abort();
+            parser.abort();
+            return Err(e);
+        }
+        let heavy_join_result = heavy_worker.await;
+        if let Some(err) = heavy_error_rx.borrow().clone() {
+            fetcher.abort();
+            parser.abort();
+            return Err(anyhow!(err));
+        }
+        match heavy_join_result {
+            Ok(()) => Ok(()),
+            Err(join_err) => {
+                fetcher.abort();
+                parser.abort();
+                Err(anyhow!("heavy lane worker join failed: {}", join_err))
             }
         }
     }
@@ -4643,6 +5288,8 @@ impl Indexer {
                 .sum();
             self.progress
                 .record_batch(last_block_number, batch_block_count, batch_tx_count);
+            self.record_core_lane_tip(last_block_number);
+            self.record_heavy_lane_tip(last_block_number);
 
             let partition_range = format_partition_range(start_block, end_block);
             let boundary_info = if crosses_partition_boundary(start_block, end_block) {
@@ -4725,21 +5372,43 @@ impl Indexer {
     }
 
     async fn check_bulk_sync_completion(&self) {
-        let currently_bulk = self.is_bulk_sync_active();
+        let currently_bulk_core = self.is_bulk_sync_active();
         let was_bulk = self.was_bulk_sync_active.load(Ordering::SeqCst);
         let currently_secondary_bulk = self.is_secondary_issuance_bulk_active();
         let was_secondary_bulk = self
             .was_secondary_issuance_bulk_active
             .load(Ordering::SeqCst);
-
-        if was_bulk && !currently_bulk {
+        let core_tip = self.core_tip.load(Ordering::SeqCst);
+        let heavy_tip = self.heavy_tip.load(Ordering::SeqCst);
+        let completion_target = self.bulk_completion_target.load(Ordering::SeqCst);
+        let decision = evaluate_bulk_completion_state(
+            was_bulk,
+            currently_bulk_core,
+            completion_target,
+            self.progress.target(),
+            core_tip,
+            heavy_tip,
+        );
+        if decision.should_log_waiting_heavy {
+            self.bulk_completion_target
+                .store(decision.next_completion_target, Ordering::SeqCst);
+            info!(
+                completion_target = decision.next_completion_target,
+                core_tip,
+                heavy_tip,
+                "Core lane exited bulk threshold; waiting for heavy lane to reach completion target"
+            );
+        } else if currently_bulk_core && completion_target != 0 {
+            self.bulk_completion_target.store(0, Ordering::SeqCst);
+        }
+        if decision.should_mark_completed {
             let stats = self.writer.store().memory_stats();
             let current = self.progress.current();
-            let chain_tip = self.progress.target();
-            let chain_tip_i64 = i64::try_from(chain_tip).unwrap_or_else(|_| {
+            let completion_target_i64 =
+                i64::try_from(decision.completion_target_for_mark).unwrap_or_else(|_| {
                 panic!(
-                    "chain tip over i64 range while marking bulk sync complete: {} (max={})",
-                    chain_tip,
+                    "bulk completion target over i64 range while marking bulk sync complete: {} (max={})",
+                    decision.completion_target_for_mark,
                     i64::MAX
                 )
             });
@@ -4747,7 +5416,7 @@ impl Indexer {
 
             self.cache_invalidator
                 .update_sync_status(|status| {
-                    status.mark_bulk_sync_completed(chain_tip_i64);
+                    status.mark_bulk_sync_completed(completion_target_i64);
                     status.address_balances_deferred = false;
                 })
                 .await;
@@ -4761,6 +5430,9 @@ impl Indexer {
                 .filter(|&e| e > 0)
                 .map(|e| current as f64 / e as f64);
             info!(
+                completion_target = decision.completion_target_for_mark,
+                core_tip,
+                heavy_tip,
                 blocks_synced = current,
                 elapsed_secs = elapsed.unwrap_or(0),
                 avg_bps = format!("{:.1}", avg_bps.unwrap_or(0.0)),
@@ -4774,6 +5446,10 @@ impl Indexer {
             // post-bulk full-db manual compaction because that is a delayed
             // heavy task started after sync phase transition.
             self.writer.store().restore_normal_compaction_options();
+            self.bulk_completion_target.store(0, Ordering::SeqCst);
+        } else {
+            self.bulk_completion_target
+                .store(decision.next_completion_target, Ordering::SeqCst);
         }
 
         if was_secondary_bulk && !currently_secondary_bulk {
@@ -4781,7 +5457,7 @@ impl Indexer {
         }
 
         self.was_bulk_sync_active
-            .store(currently_bulk, Ordering::SeqCst);
+            .store(decision.next_was_bulk, Ordering::SeqCst);
         self.was_secondary_issuance_bulk_active
             .store(currently_secondary_bulk, Ordering::SeqCst);
     }
@@ -6492,19 +7168,20 @@ impl Indexer {
         &self,
         blocks: &[BlockResponseWithCycles],
         all_parsed_blocks: &[crate::parser::block::ParsedBlock],
-        all_tx_data: Vec<TxData>,
-        input_cell_info: HashMap<(Vec<u8>, i16), LiveCellInfo>,
-        batch_cell_infos: HashMap<(Vec<u8>, i16), LiveCellInfo>,
-        address_balance_changes: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, Vec<u8>, i64)>,
-        script_usage_changes: ScriptUsageChanges,
-        script_daily_changes: HashMap<(Vec<u8>, bool, u32), (i128, i128)>,
-        token_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
-        spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex>,
-        spore_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
-        cluster_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
-        nft_type_index_changes: HashMap<Vec<u8>, NftTypeIndex>,
-        nft_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
+        all_tx_data: &[TxData],
+        input_cell_info: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
+        batch_cell_infos: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
+        address_balance_changes: &BalanceDeltaChanges,
+        script_usage_changes: &ScriptUsageChanges,
+        script_daily_changes: &HashMap<(Vec<u8>, bool, u32), (i128, i128)>,
+        token_daily_changes: &DailyCapacityDelta,
+        spore_type_index_changes: &HashMap<Vec<u8>, SporeTypeIndex>,
+        spore_daily_changes: &DailyCapacityDelta,
+        cluster_daily_changes: &DailyCapacityDelta,
+        nft_type_index_changes: &HashMap<Vec<u8>, NftTypeIndex>,
+        nft_daily_changes: &DailyCapacityDelta,
         chain_tip: u64,
+        heavy_lane_enabled: bool,
     ) -> Result<()> {
         if all_parsed_blocks.is_empty() {
             return Ok(());
@@ -6530,8 +7207,8 @@ impl Indexer {
             .collect();
         let unresolved_outpoints = collect_missing_input_outpoints(
             &all_input_outpoints,
-            &input_cell_info,
-            &batch_cell_infos,
+            input_cell_info,
+            batch_cell_infos,
         );
         if !unresolved_outpoints.is_empty() {
             let first_block = all_parsed_blocks.first().map(|b| b.number).unwrap_or(0);
@@ -6554,7 +7231,7 @@ impl Indexer {
         let mut all_consumptions: Vec<(&[u8], i16, i64, &[u8], i64, i16)> = Vec::new();
         let mut txs_for_batch: Vec<_> = Vec::with_capacity(all_tx_data.len());
 
-        for tx_data in &all_tx_data {
+        for tx_data in all_tx_data {
             txs_for_batch.push((
                 tx_data.hash.as_slice(),
                 tx_data.block_number,
@@ -6616,36 +7293,11 @@ impl Indexer {
             }
         }
 
-        // Compute per-tx address entries for addr_txs index
-        let mut addr_tx_entries: Vec<(Vec<u8>, i64, i32, Vec<u8>)> = Vec::new();
-        for tx_data in &all_tx_data {
-            let mut touched: HashSet<Vec<u8>> = HashSet::new();
-            for cell in &tx_data.cells {
-                touched.insert(cell.lock_script_hash.clone());
-            }
-            if !tx_data.is_cellbase {
-                for input in &tx_data.inputs {
-                    let key = (
-                        input.previous_tx_hash.to_vec(),
-                        input.previous_output_index as i16,
-                    );
-                    let info = input_cell_info
-                        .get(&key)
-                        .or_else(|| batch_cell_infos.get(&key));
-                    if let Some(info) = info {
-                        touched.insert(info.lock_script_hash.clone());
-                    }
-                }
-            }
-            for lock_hash in touched {
-                addr_tx_entries.push((
-                    lock_hash,
-                    tx_data.block_number,
-                    tx_data.tx_index,
-                    tx_data.hash.to_vec(),
-                ));
-            }
-        }
+        let addr_tx_entries = if heavy_lane_enabled {
+            Vec::new()
+        } else {
+            collect_addr_tx_entries(all_tx_data, input_cell_info, batch_cell_infos)
+        };
 
         let changes_ref: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8], i64)> =
             address_balance_changes
@@ -6677,7 +7329,7 @@ impl Indexer {
         }
 
         let skip_address_balances = should_skip_address_balances(bulk_sync_mode);
-        let skip_activities = false;
+        let skip_activities = heavy_lane_enabled;
 
         let precompute_ms = t_precompute.elapsed().as_secs_f64() * 1000.0;
 
@@ -7005,8 +7657,8 @@ impl Indexer {
                     if !all_consumptions.is_empty() {
                         writer.consume_cells_batch_preloaded(
                             &all_consumptions,
-                            &input_cell_info,
-                            &batch_cell_infos,
+                            input_cell_info,
+                            batch_cell_infos,
                             &mut batch,
                             false,
                         )?;
@@ -7033,38 +7685,44 @@ impl Indexer {
                     if !script_usage_changes.is_empty() {
                         writer.apply_script_usage_deltas(
                             &prefetched_script_info,
-                            &script_usage_changes,
+                            script_usage_changes,
                             &mut batch,
                         )?;
                     }
                     if !script_daily_changes.is_empty() {
                         writer
-                            .update_script_daily_deltas_batch(&script_daily_changes, &mut batch)?;
+                            .update_script_daily_deltas_batch(script_daily_changes, &mut batch)?;
                     }
                     if !token_daily_changes.is_empty() {
-                        writer.update_token_daily_deltas_batch(&token_daily_changes, &mut batch)?;
+                        writer.update_token_daily_deltas_batch(token_daily_changes, &mut batch)?;
                     }
-                    if !spore_type_index_changes.is_empty() {
-                        writer
-                            .update_spore_type_index_batch(&spore_type_index_changes, &mut batch)?;
-                    }
-                    if !spore_daily_changes.is_empty() {
-                        writer.update_spore_daily_deltas_batch(&spore_daily_changes, &mut batch)?;
-                    }
-                    if !nft_type_index_changes.is_empty() {
-                        writer.update_nft_type_index_batch(&nft_type_index_changes, &mut batch)?;
-                    }
-                    if !nft_daily_changes.is_empty() {
-                        writer.update_nft_daily_deltas_batch(&nft_daily_changes, &mut batch)?;
-                    }
-                    if !cluster_daily_changes.is_empty() {
-                        writer.update_cluster_daily_deltas_batch(
-                            &cluster_daily_changes,
-                            &mut batch,
-                        )?;
-                    }
-                    for (lock_hash, block_num, tx_idx, tx_hash) in &addr_tx_entries {
-                        batch.put_addr_tx(lock_hash, *block_num, *tx_idx, tx_hash);
+                    if !heavy_lane_enabled {
+                        if !spore_type_index_changes.is_empty() {
+                            writer.update_spore_type_index_batch(
+                                spore_type_index_changes,
+                                &mut batch,
+                            )?;
+                        }
+                        if !spore_daily_changes.is_empty() {
+                            writer
+                                .update_spore_daily_deltas_batch(spore_daily_changes, &mut batch)?;
+                        }
+                        if !nft_type_index_changes.is_empty() {
+                            writer
+                                .update_nft_type_index_batch(nft_type_index_changes, &mut batch)?;
+                        }
+                        if !nft_daily_changes.is_empty() {
+                            writer.update_nft_daily_deltas_batch(nft_daily_changes, &mut batch)?;
+                        }
+                        if !cluster_daily_changes.is_empty() {
+                            writer.update_cluster_daily_deltas_batch(
+                                cluster_daily_changes,
+                                &mut batch,
+                            )?;
+                        }
+                        for (lock_hash, block_num, tx_idx, tx_hash) in &addr_tx_entries {
+                            batch.put_addr_tx(lock_hash, *block_num, *tx_idx, tx_hash);
+                        }
                     }
                     batch.commit_no_wal()?;
                     Ok(t.elapsed().as_secs_f64() * 1000.0)
@@ -7336,7 +7994,7 @@ impl Indexer {
                 // CFs: TOKENS, TOKEN_HOLDERS
                 let input_udt_info = &prefetched_input_udt_info;
                 let batch_udt_cells = &prefetched_batch_udt_cells;
-                let max_supply_observations = collect_token_max_supply_observations(&all_tx_data);
+                let max_supply_observations = collect_token_max_supply_observations(all_tx_data);
                 let h5 = s.spawn(move || -> Result<f64> {
                     let t = Instant::now();
                     let mut batch = StoreBatch::new(store);
@@ -7404,91 +8062,98 @@ impl Indexer {
 
                 // T6: Spore + mNFT/DotBit writes only (consumption is handled in Group C)
                 // CFs: SPORE_DATA, SPORE_CONTENT, NFT_DATA
-                let h6 = s.spawn(|| -> Result<f64> {
-                    let t = Instant::now();
-                    let mut batch = StoreBatch::new(store);
-                    let mut spore_state = writer.new_spore_batch_state();
-                    let mut block_tx_idx = 0usize;
-                    for (block_idx, block_response) in blocks.iter().enumerate() {
-                        let parsed = &all_parsed_blocks[block_idx];
-                        let tx_count_for_block = parsed.transactions_count as usize;
-                        let tx_slice =
-                            &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
-                        block_tx_idx += tx_count_for_block;
-                        let ts_ms = parsed.timestamp.timestamp_millis();
-                        for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
-                            let tx = &block_response.block.transactions[tx_idx];
-                            if !skip_spore {
-                                for cluster in SporeParser::parse_clusters(tx) {
-                                    writer.insert_spore_cluster(
-                                        &cluster,
-                                        parsed.number,
+                let h6 = if heavy_lane_enabled {
+                    None
+                } else {
+                    Some(s.spawn(|| -> Result<f64> {
+                        let t = Instant::now();
+                        let mut batch = StoreBatch::new(store);
+                        let mut spore_state = writer.new_spore_batch_state();
+                        let mut block_tx_idx = 0usize;
+                        for (block_idx, block_response) in blocks.iter().enumerate() {
+                            let parsed = &all_parsed_blocks[block_idx];
+                            let tx_count_for_block = parsed.transactions_count as usize;
+                            let tx_slice =
+                                &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
+                            block_tx_idx += tx_count_for_block;
+                            let ts_ms = parsed.timestamp.timestamp_millis();
+                            for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
+                                let tx = &block_response.block.transactions[tx_idx];
+                                if !skip_spore {
+                                    for cluster in SporeParser::parse_clusters(tx) {
+                                        writer.insert_spore_cluster(
+                                            &cluster,
+                                            parsed.number,
+                                            &tx_data.hash,
+                                            &mut batch,
+                                            &mut spore_state,
+                                        )?;
+                                    }
+                                    for (output_index, spore) in
+                                        SporeParser::parse_spores(tx).iter().enumerate()
+                                    {
+                                        writer.insert_spore_cell(
+                                            spore,
+                                            &tx_data.hash,
+                                            output_index as i16,
+                                            parsed.number,
+                                            ts_ms,
+                                            &mut batch,
+                                            &mut spore_state,
+                                        )?;
+                                        writer.insert_spore_content(
+                                            &spore.spore_id,
+                                            &spore.content,
+                                        )?;
+                                    }
+                                }
+                                for issuer in MnftParser::parse_issuers(tx) {
+                                    writer.insert_mnft_issuer(
+                                        &issuer,
                                         &tx_data.hash,
+                                        0,
+                                        parsed.number,
                                         &mut batch,
-                                        &mut spore_state,
                                     )?;
                                 }
-                                for (output_index, spore) in
-                                    SporeParser::parse_spores(tx).iter().enumerate()
+                                for (output_index, class) in
+                                    MnftParser::parse_classes(tx).iter().enumerate()
                                 {
-                                    writer.insert_spore_cell(
-                                        spore,
+                                    writer.insert_mnft_class(
+                                        class,
+                                        &tx_data.hash,
+                                        output_index as i16,
+                                        parsed.number,
+                                        &mut batch,
+                                    )?;
+                                }
+                                for (output_index, token) in
+                                    MnftParser::parse_tokens(tx).iter().enumerate()
+                                {
+                                    writer.insert_mnft_token(
+                                        token,
                                         &tx_data.hash,
                                         output_index as i16,
                                         parsed.number,
                                         ts_ms,
                                         &mut batch,
-                                        &mut spore_state,
                                     )?;
-                                    writer.insert_spore_content(&spore.spore_id, &spore.content)?;
+                                }
+                                for account in DotbitParser::parse_accounts(tx)? {
+                                    writer.insert_dotbit_account(
+                                        &account,
+                                        &tx_data.hash,
+                                        parsed.number,
+                                        ts_ms,
+                                        &mut batch,
+                                    )?;
                                 }
                             }
-                            for issuer in MnftParser::parse_issuers(tx) {
-                                writer.insert_mnft_issuer(
-                                    &issuer,
-                                    &tx_data.hash,
-                                    0,
-                                    parsed.number,
-                                    &mut batch,
-                                )?;
-                            }
-                            for (output_index, class) in
-                                MnftParser::parse_classes(tx).iter().enumerate()
-                            {
-                                writer.insert_mnft_class(
-                                    class,
-                                    &tx_data.hash,
-                                    output_index as i16,
-                                    parsed.number,
-                                    &mut batch,
-                                )?;
-                            }
-                            for (output_index, token) in
-                                MnftParser::parse_tokens(tx).iter().enumerate()
-                            {
-                                writer.insert_mnft_token(
-                                    token,
-                                    &tx_data.hash,
-                                    output_index as i16,
-                                    parsed.number,
-                                    ts_ms,
-                                    &mut batch,
-                                )?;
-                            }
-                            for account in DotbitParser::parse_accounts(tx)? {
-                                writer.insert_dotbit_account(
-                                    &account,
-                                    &tx_data.hash,
-                                    parsed.number,
-                                    ts_ms,
-                                    &mut batch,
-                                )?;
-                            }
                         }
-                    }
-                    batch.commit_no_wal()?;
-                    Ok(t.elapsed().as_secs_f64() * 1000.0)
-                });
+                        batch.commit_no_wal()?;
+                        Ok(t.elapsed().as_secs_f64() * 1000.0)
+                    }))
+                };
 
                 // T7: Stats accumulation (overlaps with T1-T6 IO)
                 // Safe: reads CF_BLOCK_HEADERS which is NOT written by T1-T6.
@@ -7759,9 +8424,9 @@ impl Indexer {
                         let mut batch = StoreBatch::new(store);
                         let token_info_cache = load_activity_token_info_cache(
                             store,
-                            &all_tx_data,
-                            &input_cell_info,
-                            &batch_cell_infos,
+                            all_tx_data,
+                            input_cell_info,
+                            batch_cell_infos,
                         )?;
                         let mut block_tx_idx = 0usize;
                         for parsed in all_parsed_blocks {
@@ -7855,7 +8520,10 @@ impl Indexer {
                 let t2_ms = h2.join().expect("T2 panicked")?;
                 let t4_ms = h4.join().expect("T4 panicked")?;
                 let t5_ms = h5.join().expect("T5 panicked")?;
-                let t6_ms = h6.join().expect("T6 panicked")?;
+                let t6_ms = match h6 {
+                    Some(h) => h.join().expect("T6 panicked")?,
+                    None => 0.0,
+                };
                 let (stats, t7_ms) = h7.join().expect("T7 panicked")?;
                 let t_act_ms = match h_act {
                     Some(h) => h.join().expect("T_ACT panicked")?,
@@ -7884,8 +8552,8 @@ impl Indexer {
             if !all_consumptions.is_empty() {
                 self.writer.consume_cells_batch_preloaded(
                     &all_consumptions,
-                    &input_cell_info,
-                    &batch_cell_infos,
+                    input_cell_info,
+                    batch_cell_infos,
                     &mut data_batch,
                     false,
                 )?;
@@ -7948,38 +8616,38 @@ impl Indexer {
                 if let Some(existing) = existing_scripts {
                     self.writer.apply_script_usage_deltas(
                         &existing?,
-                        &script_usage_changes,
+                        script_usage_changes,
                         &mut data_batch,
                     )?;
                 }
             }
             if !script_daily_changes.is_empty() {
                 self.writer
-                    .update_script_daily_deltas_batch(&script_daily_changes, &mut data_batch)?;
+                    .update_script_daily_deltas_batch(script_daily_changes, &mut data_batch)?;
             }
             if !token_daily_changes.is_empty() {
                 self.writer
-                    .update_token_daily_deltas_batch(&token_daily_changes, &mut data_batch)?;
+                    .update_token_daily_deltas_batch(token_daily_changes, &mut data_batch)?;
             }
             if !spore_type_index_changes.is_empty() {
                 self.writer
-                    .update_spore_type_index_batch(&spore_type_index_changes, &mut data_batch)?;
+                    .update_spore_type_index_batch(spore_type_index_changes, &mut data_batch)?;
             }
             if !spore_daily_changes.is_empty() {
                 self.writer
-                    .update_spore_daily_deltas_batch(&spore_daily_changes, &mut data_batch)?;
+                    .update_spore_daily_deltas_batch(spore_daily_changes, &mut data_batch)?;
             }
             if !nft_type_index_changes.is_empty() {
                 self.writer
-                    .update_nft_type_index_batch(&nft_type_index_changes, &mut data_batch)?;
+                    .update_nft_type_index_batch(nft_type_index_changes, &mut data_batch)?;
             }
             if !nft_daily_changes.is_empty() {
                 self.writer
-                    .update_nft_daily_deltas_batch(&nft_daily_changes, &mut data_batch)?;
+                    .update_nft_daily_deltas_batch(nft_daily_changes, &mut data_batch)?;
             }
             if !cluster_daily_changes.is_empty() {
                 self.writer
-                    .update_cluster_daily_deltas_batch(&cluster_daily_changes, &mut data_batch)?;
+                    .update_cluster_daily_deltas_batch(cluster_daily_changes, &mut data_batch)?;
             }
 
             // Write addr_txs entries
@@ -8405,7 +9073,7 @@ impl Indexer {
 
                 if !skip_token && !udt_tx_contexts.is_empty() {
                     let max_supply_observations =
-                        collect_token_max_supply_observations(&all_tx_data);
+                        collect_token_max_supply_observations(all_tx_data);
                     let mut all_transfers: Vec<(crate::parser::ParsedUdtTransfer, Vec<u8>, i64)> =
                         Vec::new();
                     for ctx in &udt_tx_contexts {
@@ -8715,89 +9383,82 @@ impl Indexer {
             }
 
             // Activity writes (live sync)
-            {
-                let token_info_cache = load_activity_token_info_cache(
-                    self.writer.store(),
-                    &all_tx_data,
-                    &input_cell_info,
-                    &batch_cell_infos,
-                )?;
-                let mut block_tx_idx = 0usize;
-                for parsed in all_parsed_blocks {
-                    let tx_count = parsed.transactions_count as usize;
-                    let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count];
-                    block_tx_idx += tx_count;
+            let token_info_cache = load_activity_token_info_cache(
+                self.writer.store(),
+                all_tx_data,
+                input_cell_info,
+                batch_cell_infos,
+            )?;
+            let mut block_tx_idx = 0usize;
+            for parsed in all_parsed_blocks {
+                let tx_count = parsed.transactions_count as usize;
+                let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count];
+                block_tx_idx += tx_count;
 
-                    let tx_views: Vec<crate::db::writer::activities::TxView<'_>> = tx_slice
-                        .iter()
-                        .map(|td| {
-                            let inputs: Vec<crate::db::writer::activities::InputCellView> =
-                                if td.is_cellbase {
-                                    Vec::new()
-                                } else {
-                                    td.inputs
-                                        .iter()
-                                        .map(|inp| {
-                                            let key = (
-                                                inp.previous_tx_hash.to_vec(),
-                                                inp.previous_output_index as i16,
-                                            );
-                                            let cell_info = input_cell_info
-                                                .get(&key)
-                                                .or_else(|| batch_cell_infos.get(&key));
-                                            if let Some(info) = cell_info {
-                                                crate::db::writer::activities::InputCellView {
-                                                    lock_script_hash: info.lock_script_hash.clone(),
-                                                    capacity: info.capacity,
-                                                    occupied_capacity: info.occupied_capacity,
-                                                    type_code_hash: info.type_code_hash.clone(),
-                                                    type_script_hash: info.type_script_hash.clone(),
-                                                    type_args: info.type_args.clone(),
-                                                    udt_amount: info.udt_amount,
-                                                    data: Vec::new(),
-                                                    data_size: info.data_size,
-                                                }
-                                            } else {
-                                                crate::db::writer::activities::InputCellView {
-                                                    lock_script_hash: Vec::new(),
-                                                    capacity: 0,
-                                                    occupied_capacity: 0,
-                                                    type_code_hash: None,
-                                                    type_script_hash: None,
-                                                    type_args: None,
-                                                    udt_amount: None,
-                                                    data: Vec::new(),
-                                                    data_size: 0,
-                                                }
+                let tx_views: Vec<crate::db::writer::activities::TxView<'_>> = tx_slice
+                    .iter()
+                    .map(|td| {
+                        let inputs: Vec<crate::db::writer::activities::InputCellView> =
+                            if td.is_cellbase {
+                                Vec::new()
+                            } else {
+                                td.inputs
+                                    .iter()
+                                    .map(|inp| {
+                                        let key = (
+                                            inp.previous_tx_hash.to_vec(),
+                                            inp.previous_output_index as i16,
+                                        );
+                                        let cell_info = input_cell_info
+                                            .get(&key)
+                                            .or_else(|| batch_cell_infos.get(&key));
+                                        if let Some(info) = cell_info {
+                                            crate::db::writer::activities::InputCellView {
+                                                lock_script_hash: info.lock_script_hash.clone(),
+                                                capacity: info.capacity,
+                                                occupied_capacity: info.occupied_capacity,
+                                                type_code_hash: info.type_code_hash.clone(),
+                                                type_script_hash: info.type_script_hash.clone(),
+                                                type_args: info.type_args.clone(),
+                                                udt_amount: info.udt_amount,
+                                                data: Vec::new(),
+                                                data_size: info.data_size,
                                             }
-                                        })
-                                        .collect()
-                                };
-                            crate::db::writer::activities::TxView {
-                                tx_hash: &td.hash,
-                                tx_index: td.tx_index,
-                                block_number: parsed.number,
-                                timestamp: parsed.timestamp.timestamp_millis(),
-                                is_cellbase: td.is_cellbase,
-                                inputs,
-                                outputs: &td.cells,
-                                outputs_data: &td.outputs_data,
-                            }
-                        })
-                        .collect();
+                                        } else {
+                                            crate::db::writer::activities::InputCellView {
+                                                lock_script_hash: Vec::new(),
+                                                capacity: 0,
+                                                occupied_capacity: 0,
+                                                type_code_hash: None,
+                                                type_script_hash: None,
+                                                type_args: None,
+                                                udt_amount: None,
+                                                data: Vec::new(),
+                                                data_size: 0,
+                                            }
+                                        }
+                                    })
+                                    .collect()
+                            };
+                        crate::db::writer::activities::TxView {
+                            tx_hash: &td.hash,
+                            tx_index: td.tx_index,
+                            block_number: parsed.number,
+                            timestamp: parsed.timestamp.timestamp_millis(),
+                            is_cellbase: td.is_cellbase,
+                            inputs,
+                            outputs: &td.cells,
+                            outputs_data: &td.outputs_data,
+                        }
+                    })
+                    .collect();
 
-                    let activities = crate::db::writer::activities::build_activities_for_block(
-                        &tx_views,
-                        &token_info_cache,
-                    );
-                    for (lock_hash, entry) in activities {
-                        data_batch.put_activity(
-                            &lock_hash,
-                            entry.block_number,
-                            entry.tx_index,
-                            &entry,
-                        );
-                    }
+                let activities = crate::db::writer::activities::build_activities_for_block(
+                    &tx_views,
+                    &token_info_cache,
+                );
+                for (lock_hash, entry) in activities {
+                    data_batch.put_activity(&lock_hash, entry.block_number, entry.tx_index, &entry);
                 }
             }
 
@@ -9108,10 +9769,10 @@ impl Indexer {
         // HODL wave tracker update
         self.update_hodl_wave(
             all_parsed_blocks,
-            &all_tx_data,
-            &input_cell_info,
-            &batch_cell_infos,
-            &address_balance_changes,
+            all_tx_data,
+            input_cell_info,
+            batch_cell_infos,
+            address_balance_changes,
         )?;
 
         // Lightweight async cache update (no DB write)
@@ -9132,7 +9793,7 @@ impl Indexer {
         }
 
         if !bulk_sync_mode {
-            let committed_proposal_ids = collect_committed_proposal_ids(&all_tx_data);
+            let committed_proposal_ids = collect_committed_proposal_ids(all_tx_data);
             if !committed_proposal_ids.is_empty() {
                 self.cache_invalidator
                     .remove_committed_proposals(&committed_proposal_ids)
@@ -10234,6 +10895,62 @@ mod tests {
         assert!(!is_bulk_sync_batch(10_000, 9_000, 1000));
         assert!(is_bulk_sync_batch(10_001, 9_000, 1000));
         assert!(!is_bulk_sync_batch(100, 150, 1000));
+    }
+
+    #[test]
+    fn test_evaluate_bulk_completion_state_waits_for_heavy_after_core_leaves_bulk() {
+        let decision = evaluate_bulk_completion_state(
+            true,  // was_bulk
+            false, // currently_bulk_core
+            0,     // completion_target
+            12_345, 12_345, // core_tip
+            12_300, // heavy_tip
+        );
+        assert!(decision.next_was_bulk);
+        assert_eq!(decision.next_completion_target, 12_345);
+        assert!(decision.should_log_waiting_heavy);
+        assert!(!decision.should_mark_completed);
+    }
+
+    #[test]
+    fn test_evaluate_bulk_completion_state_marks_complete_on_dual_tip_reach() {
+        let decision = evaluate_bulk_completion_state(
+            true,  // was_bulk
+            false, // currently_bulk_core
+            20_000, 25_000, 20_010, // core_tip
+            20_000, // heavy_tip
+        );
+        assert!(!decision.next_was_bulk);
+        assert_eq!(decision.completion_target_for_mark, 20_000);
+        assert_eq!(decision.next_completion_target, 0);
+        assert!(decision.should_mark_completed);
+    }
+
+    #[test]
+    fn test_collect_addr_tx_entries_dedups_touched_locks_per_tx() {
+        let prev_hash_vec = vec![0xAA; 32];
+        let prev_hash: [u8; 32] = prev_hash_vec.clone().try_into().unwrap();
+        let mut cell = dummy_dao_cell(100, false);
+        cell.lock_script_hash = vec![0x11; 32];
+        let tx = dummy_tx_data(
+            [0x33; 32],
+            false,
+            vec![crate::parser::transaction::ParsedInput {
+                previous_tx_hash: prev_hash,
+                previous_output_index: 0,
+                since: 0,
+            }],
+            vec![cell],
+            vec![],
+            vec![],
+        );
+        let mut input_cell_info = HashMap::new();
+        let mut consumed = dummy_live_cell_info();
+        consumed.lock_script_hash = vec![0x22; 32];
+        input_cell_info.insert((prev_hash_vec, 0), consumed);
+
+        let entries = collect_addr_tx_entries(&[tx], &input_cell_info, &HashMap::new());
+        assert_eq!(entries.len(), 2);
     }
 
     #[test]

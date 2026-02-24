@@ -53,6 +53,27 @@ struct Cli {
 
     #[arg(
         long,
+        default_value = "12",
+        help = "Heavy lane queue capacity (bounded backlog between parser/core and heavy writers)"
+    )]
+    heavy_lane_queue: usize,
+
+    #[arg(
+        long,
+        default_value = "20000",
+        help = "Fail-fast when heavy lane falls behind core lane by more than this many blocks"
+    )]
+    heavy_lane_max_lag_blocks: u64,
+
+    #[arg(
+        long,
+        default_value = "120",
+        help = "Fail-fast when heavy lane makes no progress for this many seconds while lagging"
+    )]
+    heavy_lane_max_lag_seconds: u64,
+
+    #[arg(
+        long,
         default_value = "1000",
         help = "Blocks behind tip to exit bulk sync mode"
     )]
@@ -299,6 +320,9 @@ async fn run_sync(args: Cli) -> Result<()> {
         redis_url: args.redis_url.or_else(|| std::env::var("REDIS_URL").ok()),
         bulk_sync_threshold: args.bulk_sync_threshold,
         fast_sync_mode: true,
+        heavy_lane_queue: args.heavy_lane_queue,
+        heavy_lane_max_lag_blocks: args.heavy_lane_max_lag_blocks,
+        heavy_lane_max_lag_seconds: args.heavy_lane_max_lag_seconds,
         ckb_data_path: args.ckb_data_path,
         token_labels_path: args.token_labels_path,
         force_startup_cleanup: false,

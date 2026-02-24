@@ -29,6 +29,12 @@ pub struct Config {
     pub bulk_sync_threshold: u64,
     #[serde(default = "default_fast_sync_mode")]
     pub fast_sync_mode: bool,
+    #[serde(default = "default_heavy_lane_queue")]
+    pub heavy_lane_queue: usize,
+    #[serde(default = "default_heavy_lane_max_lag_blocks")]
+    pub heavy_lane_max_lag_blocks: u64,
+    #[serde(default = "default_heavy_lane_max_lag_seconds")]
+    pub heavy_lane_max_lag_seconds: u64,
     /// Path to CKB node's RocksDB data directory for direct reads.
     /// When set, the indexer reads blocks directly from CKB's RocksDB instead of via JSON-RPC.
     #[serde(default)]
@@ -72,6 +78,18 @@ fn default_bulk_sync_threshold() -> u64 {
 
 fn default_fast_sync_mode() -> bool {
     true
+}
+
+fn default_heavy_lane_queue() -> usize {
+    12
+}
+
+fn default_heavy_lane_max_lag_blocks() -> u64 {
+    20_000
+}
+
+fn default_heavy_lane_max_lag_seconds() -> u64 {
+    120
 }
 
 fn default_token_labels_path() -> String {
@@ -133,6 +151,21 @@ mod tests {
     #[test]
     fn test_default_token_labels_path() {
         assert_eq!(default_token_labels_path(), "docs/token-labels");
+    }
+
+    #[test]
+    fn test_default_heavy_lane_queue() {
+        assert_eq!(default_heavy_lane_queue(), 12);
+    }
+
+    #[test]
+    fn test_default_heavy_lane_max_lag_blocks() {
+        assert_eq!(default_heavy_lane_max_lag_blocks(), 20_000);
+    }
+
+    #[test]
+    fn test_default_heavy_lane_max_lag_seconds() {
+        assert_eq!(default_heavy_lane_max_lag_seconds(), 120);
     }
 
     #[test]
