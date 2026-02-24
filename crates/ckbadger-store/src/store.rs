@@ -245,6 +245,15 @@ impl CkbadgerStore {
         opts.create_if_missing(true);
         opts.create_missing_column_families(true);
 
+        // Bypass OS page cache for reads: block cache already handles hot data,
+        // and bulk sync reads (live cell lookups) are not reused — caching them
+        // in the page cache wastes RAM and adds syscall overhead.
+        opts.set_use_direct_reads(true);
+
+        // Gradual background sync: flush 1 MB at a time instead of accumulating
+        // all dirty pages until a checkpoint, which prevents I/O burst stalls.
+        opts.set_bytes_per_sync(1024 * 1024);
+
         // Write buffer: 128 MB per CF (default for high-write CFs), up to 4 buffers
         opts.set_write_buffer_size(128 * 1024 * 1024);
         opts.set_max_write_buffer_number(4);
@@ -317,6 +326,13 @@ impl CkbadgerStore {
             uco.set_size_ratio(10);
             uco.set_max_size_amplification_percent(100);
             opts.set_universal_compaction_options(&uco);
+        } else {
+            // Dynamic level sizing for Leveled compaction CFs: RocksDB sizes each
+            // level relative to the last (largest) level rather than using fixed
+            // size ratios. This halves write amplification (~10x → ~5x) because
+            // the upper levels stay proportionally smaller, triggering far fewer
+            // cross-level rewrites during bulk sync.
+            opts.set_level_compaction_dynamic_level_bytes(true);
         }
 
         let block_opts = Self::default_block_options(block_cache);
@@ -498,14 +514,19 @@ impl CkbadgerStore {
             write_buffer_low_mb = 32,
             max_write_buffers_high = 4,
             max_write_buffers_low = 2,
-            l0_slowdown = 20,
-            l0_stop = 48,
+            l0_slowdown = 12,
+            l0_stop = 24,
             l0_slowdown_bulk = 64,
             l0_stop_bulk = 128,
             max_background_jobs = 24,
             max_subcompactions = 4,
             block_cache_gb = 8,
+            direct_io_reads = true,
             direct_io_compaction = true,
+            bytes_per_sync_mb = 1,
+            dynamic_level_bytes = true,
+            target_file_size_base_mb = 64,
+            target_file_size_base_bulk_mb = 256,
             pipelined_write = Self::PIPELINED_WRITE_ENABLED,
             mega_write_cfs = Self::MEGA_WRITE_CFS.len(),
             high_write_cfs = Self::HIGH_WRITE_CFS.len(),
@@ -545,6 +566,9 @@ impl CkbadgerStore {
                         ("level0_stop_writes_trigger", "128"),
                         ("max_write_buffer_number", max_wb),
                         ("max_bytes_for_level_base", "2147483648"), // 2 GB
+                        // Larger SST files during bulk sync → fewer files to
+                        // compact, reducing compaction frequency and I/O overhead.
+                        ("target_file_size_base", "268435456"), // 256 MB
                     ],
                 );
                 if result.is_ok() {
@@ -586,6 +610,7 @@ impl CkbadgerStore {
                         ("level0_stop_writes_trigger", "24"),
                         ("max_write_buffer_number", max_wb),
                         ("max_bytes_for_level_base", "536870912"), // 512 MB
+                        ("target_file_size_base", "67108864"),     // 64 MB (RocksDB default)
                     ],
                 );
             }
