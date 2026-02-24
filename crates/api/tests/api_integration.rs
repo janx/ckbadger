@@ -1780,7 +1780,7 @@ async fn test_script_occupation_chart_aggregates_deployments() {
         .put_script_daily_delta(
             &code_hash_a,
             false,
-            20240116,
+            20240117,
             &ScriptDailyDelta {
                 live_capacity_delta: -20,
                 live_occupied_capacity_delta: -10,
@@ -1802,7 +1802,7 @@ async fn test_script_occupation_chart_aggregates_deployments() {
         .put_script_daily_delta(
             &code_hash_b,
             false,
-            20240116,
+            20240117,
             &ScriptDailyDelta {
                 live_capacity_delta: 10,
                 live_occupied_capacity_delta: 5,
@@ -1825,13 +1825,16 @@ async fn test_script_occupation_chart_aggregates_deployments() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let data = json["data"].as_array().unwrap();
     assert_eq!(json["title"], "SECP256K1_BLAKE160 Capacity Occupation");
-    assert_eq!(data.len(), 2);
+    assert_eq!(data.len(), 3);
     assert_eq!(data[0]["date"], "2024-01-15");
     assert_eq!(data[0]["values"]["occupied"], "90");
     assert_eq!(data[0]["values"]["unoccupied"], "60");
     assert_eq!(data[1]["date"], "2024-01-16");
-    assert_eq!(data[1]["values"]["occupied"], "85");
-    assert_eq!(data[1]["values"]["unoccupied"], "55");
+    assert_eq!(data[1]["values"]["occupied"], "90");
+    assert_eq!(data[1]["values"]["unoccupied"], "60");
+    assert_eq!(data[2]["date"], "2024-01-17");
+    assert_eq!(data[2]["values"]["occupied"], "85");
+    assert_eq!(data[2]["values"]["unoccupied"], "55");
 
     let request = Request::builder()
         .uri("/api/v1/scripts/SECP256K1_BLAKE160/charts/occupation?from=2024-01-16&to=2024-01-16")
@@ -1844,8 +1847,8 @@ async fn test_script_occupation_chart_aggregates_deployments() {
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 1);
     assert_eq!(data[0]["date"], "2024-01-16");
-    assert_eq!(data[0]["values"]["occupied"], "85");
-    assert_eq!(data[0]["values"]["unoccupied"], "55");
+    assert_eq!(data[0]["values"]["occupied"], "90");
+    assert_eq!(data[0]["values"]["unoccupied"], "60");
 }
 
 #[tokio::test]
@@ -2117,7 +2120,7 @@ async fn test_token_occupation_chart_returns_cumulative_series() {
     store
         .put_token_daily_delta(
             &type_hash,
-            20240116,
+            20240117,
             &TokenDailyDelta {
                 live_capacity_delta: -20,
                 live_occupied_capacity_delta: -10,
@@ -2143,13 +2146,16 @@ async fn test_token_occupation_chart_returns_cumulative_series() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let data = json["data"].as_array().unwrap();
     assert_eq!(json["title"], "TEST Capacity Occupation");
-    assert_eq!(data.len(), 2);
+    assert_eq!(data.len(), 3);
     assert_eq!(data[0]["date"], "2024-01-15");
     assert_eq!(data[0]["values"]["occupied"], "60");
     assert_eq!(data[0]["values"]["unoccupied"], "40");
     assert_eq!(data[1]["date"], "2024-01-16");
-    assert_eq!(data[1]["values"]["occupied"], "50");
-    assert_eq!(data[1]["values"]["unoccupied"], "30");
+    assert_eq!(data[1]["values"]["occupied"], "60");
+    assert_eq!(data[1]["values"]["unoccupied"], "40");
+    assert_eq!(data[2]["date"], "2024-01-17");
+    assert_eq!(data[2]["values"]["occupied"], "50");
+    assert_eq!(data[2]["values"]["unoccupied"], "30");
 
     let request = Request::builder()
         .uri(format!(
@@ -2165,8 +2171,8 @@ async fn test_token_occupation_chart_returns_cumulative_series() {
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 1);
     assert_eq!(data[0]["date"], "2024-01-16");
-    assert_eq!(data[0]["values"]["occupied"], "50");
-    assert_eq!(data[0]["values"]["unoccupied"], "30");
+    assert_eq!(data[0]["values"]["occupied"], "60");
+    assert_eq!(data[0]["values"]["unoccupied"], "40");
 }
 
 #[tokio::test]
@@ -2258,7 +2264,7 @@ async fn test_cluster_occupation_chart_and_cluster_capacity_fields() {
     store
         .put_cluster_daily_delta(
             &cluster_id,
-            20240116,
+            20240117,
             &ClusterDailyDelta {
                 live_capacity_delta: -20,
                 live_occupied_capacity_delta: -10,
@@ -2283,11 +2289,13 @@ async fn test_cluster_occupation_chart_and_cluster_capacity_fields() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["title"], "Test Cluster Capacity Occupation");
     let data = json["data"].as_array().unwrap();
-    assert_eq!(data.len(), 2);
+    assert_eq!(data.len(), 3);
     assert_eq!(data[0]["values"]["occupied"], "60");
     assert_eq!(data[0]["values"]["unoccupied"], "40");
-    assert_eq!(data[1]["values"]["occupied"], "50");
-    assert_eq!(data[1]["values"]["unoccupied"], "30");
+    assert_eq!(data[1]["values"]["occupied"], "60");
+    assert_eq!(data[1]["values"]["unoccupied"], "40");
+    assert_eq!(data[2]["values"]["occupied"], "50");
+    assert_eq!(data[2]["values"]["unoccupied"], "30");
 
     let request = Request::builder()
         .uri(format!(
@@ -2303,8 +2311,8 @@ async fn test_cluster_occupation_chart_and_cluster_capacity_fields() {
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 1);
     assert_eq!(data[0]["date"], "2024-01-16");
-    assert_eq!(data[0]["values"]["occupied"], "50");
-    assert_eq!(data[0]["values"]["unoccupied"], "30");
+    assert_eq!(data[0]["values"]["occupied"], "60");
+    assert_eq!(data[0]["values"]["unoccupied"], "40");
 
     let request = Request::builder()
         .uri(format!("/api/v1/spore/clusters/{}", cluster_id_hex))
@@ -2352,7 +2360,7 @@ async fn test_spore_occupation_chart_and_spore_capacity_fields() {
     store
         .put_spore_daily_delta(
             &spore_id,
-            20240116,
+            20240117,
             &SporeDailyDelta {
                 live_capacity_delta: -20,
                 live_occupied_capacity_delta: -11,
@@ -2377,9 +2385,11 @@ async fn test_spore_occupation_chart_and_spore_capacity_fields() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["title"], "Spore Capacity Occupation");
     let data = json["data"].as_array().unwrap();
-    assert_eq!(data.len(), 2);
-    assert_eq!(data[1]["values"]["occupied"], "50");
-    assert_eq!(data[1]["values"]["unoccupied"], "30");
+    assert_eq!(data.len(), 3);
+    assert_eq!(data[1]["values"]["occupied"], "61");
+    assert_eq!(data[1]["values"]["unoccupied"], "39");
+    assert_eq!(data[2]["values"]["occupied"], "50");
+    assert_eq!(data[2]["values"]["unoccupied"], "30");
 
     let request = Request::builder()
         .uri(format!(
@@ -2395,8 +2405,8 @@ async fn test_spore_occupation_chart_and_spore_capacity_fields() {
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 1);
     assert_eq!(data[0]["date"], "2024-01-16");
-    assert_eq!(data[0]["values"]["occupied"], "50");
-    assert_eq!(data[0]["values"]["unoccupied"], "30");
+    assert_eq!(data[0]["values"]["occupied"], "61");
+    assert_eq!(data[0]["values"]["unoccupied"], "39");
 
     let request = Request::builder()
         .uri(format!("/api/v1/spore/nfts/{}", spore_id_hex))
@@ -2764,7 +2774,7 @@ async fn test_assets_nft_collection_occupation_chart_and_capacity_fields() {
     store
         .put_nft_daily_delta(
             &collection_id,
-            20240116,
+            20240117,
             &NftDailyDelta {
                 live_capacity_delta: -20,
                 live_occupied_capacity_delta: -10,
@@ -2787,8 +2797,11 @@ async fn test_assets_nft_collection_occupation_chart_and_capacity_fields() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["title"], "Test NFT Collection Capacity Occupation");
-    assert_eq!(json["data"][1]["values"]["occupied"], "50");
-    assert_eq!(json["data"][1]["values"]["unoccupied"], "30");
+    assert_eq!(json["data"].as_array().unwrap().len(), 3);
+    assert_eq!(json["data"][1]["values"]["occupied"], "60");
+    assert_eq!(json["data"][1]["values"]["unoccupied"], "40");
+    assert_eq!(json["data"][2]["values"]["occupied"], "50");
+    assert_eq!(json["data"][2]["values"]["unoccupied"], "30");
 
     let request = Request::builder()
         .uri(format!(
@@ -2803,8 +2816,8 @@ async fn test_assets_nft_collection_occupation_chart_and_capacity_fields() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["data"].as_array().unwrap().len(), 1);
     assert_eq!(json["data"][0]["date"], "2024-01-16");
-    assert_eq!(json["data"][0]["values"]["occupied"], "50");
-    assert_eq!(json["data"][0]["values"]["unoccupied"], "30");
+    assert_eq!(json["data"][0]["values"]["occupied"], "60");
+    assert_eq!(json["data"][0]["values"]["unoccupied"], "40");
 
     let request = Request::builder()
         .uri(format!("/api/v1/assets/nfts/{}", collection_id_hex))

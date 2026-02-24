@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
-use crate::utils::{apply_live_capacity_delta, parse_chart_date_range};
+use crate::utils::{apply_live_capacity_delta, date_keys_inclusive, parse_chart_date_range};
 use crate::warmup::{CachedAssetEntry, CACHE_KEY_ASSETS_TOKEN};
 use crate::AppState;
 
@@ -684,14 +684,59 @@ async fn get_token_occupation_chart(
         .store
         .list_token_daily_deltas_in_range(&hash, from_date, to_date)
         .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let mut data = Vec::with_capacity(deltas.len());
+    let mut daily_deltas: std::collections::BTreeMap<u32, (i128, i128)> =
+        std::collections::BTreeMap::new();
     for (date, delta) in deltas {
+        let entry = daily_deltas.entry(date).or_insert((0, 0));
+        entry.0 = entry
+            .0
+            .checked_add(delta.live_capacity_delta)
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "capacity delta overflow while building token occupation chart: date={}",
+                    date
+                ))
+            })?;
+        entry.1 = entry
+            .1
+            .checked_add(delta.live_occupied_capacity_delta)
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "occupied delta overflow while building token occupation chart: date={}",
+                    date
+                ))
+            })?;
+    }
+
+    let chart_bounds = match (from_date, to_date) {
+        (Some(from), Some(to)) => Some((from, to)),
+        (Some(from), None) => daily_deltas
+            .keys()
+            .next_back()
+            .copied()
+            .map(|last| (from, last)),
+        (None, Some(to)) => daily_deltas.keys().next().copied().map(|first| (first, to)),
+        (None, None) => {
+            let first = daily_deltas.keys().next().copied();
+            let last = daily_deltas.keys().next_back().copied();
+            first.zip(last)
+        }
+    };
+
+    let dates = if let Some((start, end)) = chart_bounds {
+        date_keys_inclusive(start, end).map_err(|e| ApiError::internal(e.to_string()))?
+    } else {
+        Vec::new()
+    };
+
+    let mut data = Vec::with_capacity(dates.len());
+    for date in dates {
+        let (capacity_delta, occupied_delta) = daily_deltas.get(&date).copied().unwrap_or((0, 0));
         (cumulative_capacity, cumulative_occupied) = apply_live_capacity_delta(
             cumulative_capacity,
             cumulative_occupied,
-            delta.live_capacity_delta,
-            delta.live_occupied_capacity_delta,
+            capacity_delta,
+            occupied_delta,
             &format!("building token occupation chart at date {}", date),
         )
         .map_err(|e| ApiError::internal(e.to_string()))?;

@@ -87,6 +87,44 @@ pub fn parse_chart_date_range(
     Ok((from_date, to_date))
 }
 
+fn parse_yyyymmdd_key(date_yyyymmdd: u32) -> Result<NaiveDate, String> {
+    let date_str = format!("{date_yyyymmdd:08}");
+    NaiveDate::parse_from_str(&date_str, "%Y%m%d")
+        .map_err(|_| format!("Invalid date key: {}", date_yyyymmdd))
+}
+
+/// Build inclusive daily keys in YYYYMMDD format.
+pub fn date_keys_inclusive(
+    from_date_yyyymmdd: u32,
+    to_date_yyyymmdd: u32,
+) -> Result<Vec<u32>, String> {
+    let mut current = parse_yyyymmdd_key(from_date_yyyymmdd)?;
+    let end = parse_yyyymmdd_key(to_date_yyyymmdd)?;
+    if current > end {
+        return Err(format!(
+            "Invalid date key range: {} > {}",
+            from_date_yyyymmdd, to_date_yyyymmdd
+        ));
+    }
+
+    let mut out = Vec::new();
+    loop {
+        let key = current
+            .format("%Y%m%d")
+            .to_string()
+            .parse::<u32>()
+            .map_err(|e| format!("Failed to encode date key for {}: {}", current, e))?;
+        out.push(key);
+        if current == end {
+            break;
+        }
+        current = current
+            .succ_opt()
+            .ok_or_else(|| format!("Date overflow while iterating from {}", current))?;
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -163,5 +201,19 @@ mod tests {
         );
         assert!(parse_chart_date_range(Some("invalid"), None).is_err());
         assert!(parse_chart_date_range(Some("2024-02-01"), Some("2024-01-01")).is_err());
+    }
+
+    #[test]
+    fn test_date_keys_inclusive() {
+        assert_eq!(
+            date_keys_inclusive(20240115, 20240117).unwrap(),
+            vec![20240115, 20240116, 20240117]
+        );
+    }
+
+    #[test]
+    fn test_date_keys_inclusive_rejects_invalid_range() {
+        assert!(date_keys_inclusive(20240117, 20240115).is_err());
+        assert!(date_keys_inclusive(20240230, 20240301).is_err());
     }
 }

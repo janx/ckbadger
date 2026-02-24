@@ -16,8 +16,9 @@ use crate::response::{
     decode_cursor_single, encode_cursor_single, ok, ApiError, ApiResult, CursorPaginatedResponse,
 };
 use crate::utils::{
-    apply_live_capacity_delta, deployment_reference_hashes, is_known_script_name,
-    merge_script_info_for_reference, parse_chart_date_range, related_code_hashes_for_reference,
+    apply_live_capacity_delta, date_keys_inclusive, deployment_reference_hashes,
+    is_known_script_name, merge_script_info_for_reference, parse_chart_date_range,
+    related_code_hashes_for_reference,
 };
 use crate::AppState;
 
@@ -973,8 +974,29 @@ fn build_script_occupation_chart(
         }
     }
 
-    let mut data = Vec::with_capacity(daily_deltas.len());
-    for (date, (cap_delta, occupied_delta)) in daily_deltas {
+    let chart_bounds = match (from_date, to_date) {
+        (Some(from), Some(to)) => Some((from, to)),
+        (Some(from), None) => daily_deltas
+            .keys()
+            .next_back()
+            .copied()
+            .map(|last| (from, last)),
+        (None, Some(to)) => daily_deltas.keys().next().copied().map(|first| (first, to)),
+        (None, None) => {
+            let first = daily_deltas.keys().next().copied();
+            let last = daily_deltas.keys().next_back().copied();
+            first.zip(last)
+        }
+    };
+    let dates = if let Some((start, end)) = chart_bounds {
+        date_keys_inclusive(start, end).map_err(ApiError::internal)?
+    } else {
+        Vec::new()
+    };
+
+    let mut data = Vec::with_capacity(dates.len());
+    for date in dates {
+        let (cap_delta, occupied_delta) = daily_deltas.get(&date).copied().unwrap_or((0, 0));
         (cumulative_capacity, cumulative_occupied) = apply_script_chart_delta(
             cumulative_capacity,
             cumulative_occupied,

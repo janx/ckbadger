@@ -12,8 +12,8 @@ use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedA
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
 use crate::utils::address::compute_script_hash;
 use crate::utils::{
-    accumulate_live_capacity, apply_live_capacity_delta, parse_chart_date_range,
-    resolve_dob_collection_name, resolve_nft_collection_name,
+    accumulate_live_capacity, apply_live_capacity_delta, date_keys_inclusive,
+    parse_chart_date_range, resolve_dob_collection_name, resolve_nft_collection_name,
 };
 use crate::warmup::{CachedAssetEntry, CACHE_KEY_ASSETS_NFT, CACHE_KEY_ASSETS_TOKEN};
 use crate::AppState;
@@ -530,7 +530,7 @@ fn build_capacity_occupation_chart(
     deltas: Vec<(u32, i128, i128)>,
     title: String,
 ) -> anyhow::Result<StackedAreaChartResponse> {
-    build_capacity_occupation_chart_with_initial(deltas, title, 0, 0)
+    build_capacity_occupation_chart_with_initial(deltas, title, 0, 0, None, None)
 }
 
 fn build_capacity_occupation_chart_with_initial(
@@ -538,6 +538,8 @@ fn build_capacity_occupation_chart_with_initial(
     title: String,
     initial_capacity: i128,
     initial_occupied: i128,
+    from_date: Option<u32>,
+    to_date: Option<u32>,
 ) -> anyhow::Result<StackedAreaChartResponse> {
     if initial_capacity < 0 {
         anyhow::bail!(
@@ -558,11 +560,50 @@ fn build_capacity_occupation_chart_with_initial(
             initial_capacity
         );
     }
+    let mut daily_deltas: std::collections::BTreeMap<u32, (i128, i128)> =
+        std::collections::BTreeMap::new();
+    for (date, cap_delta, occupied_delta) in deltas {
+        let entry = daily_deltas.entry(date).or_insert((0, 0));
+        entry.0 = entry.0.checked_add(cap_delta).ok_or_else(|| {
+            anyhow::anyhow!(
+                "capacity delta overflow while building occupation chart: date={}",
+                date
+            )
+        })?;
+        entry.1 = entry.1.checked_add(occupied_delta).ok_or_else(|| {
+            anyhow::anyhow!(
+                "occupied delta overflow while building occupation chart: date={}",
+                date
+            )
+        })?;
+    }
+
+    let chart_bounds = match (from_date, to_date) {
+        (Some(from), Some(to)) => Some((from, to)),
+        (Some(from), None) => daily_deltas
+            .keys()
+            .next_back()
+            .copied()
+            .map(|last| (from, last)),
+        (None, Some(to)) => daily_deltas.keys().next().copied().map(|first| (first, to)),
+        (None, None) => {
+            let first = daily_deltas.keys().next().copied();
+            let last = daily_deltas.keys().next_back().copied();
+            first.zip(last)
+        }
+    };
+    let dates = if let Some((start, end)) = chart_bounds {
+        date_keys_inclusive(start, end).map_err(|e| anyhow::anyhow!(e))?
+    } else {
+        Vec::new()
+    };
+
     let mut cumulative_capacity = initial_capacity;
     let mut cumulative_occupied = initial_occupied;
-    let mut data = Vec::with_capacity(deltas.len());
+    let mut data = Vec::with_capacity(dates.len());
 
-    for (date, cap_delta, occupied_delta) in deltas {
+    for date in dates {
+        let (cap_delta, occupied_delta) = daily_deltas.get(&date).copied().unwrap_or((0, 0));
         (cumulative_capacity, cumulative_occupied) = apply_live_capacity_delta(
             cumulative_capacity,
             cumulative_occupied,
@@ -935,6 +976,8 @@ async fn get_nft_collection_occupation_chart(
         format!("{title} Capacity Occupation"),
         initial_capacity,
         initial_occupied,
+        from_date,
+        to_date,
     )
     .map_err(|e| ApiError::internal(e.to_string()))?)
 }
