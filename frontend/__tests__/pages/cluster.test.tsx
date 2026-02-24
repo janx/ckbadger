@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import ClusterDetailPage from '@/app/clusters/[clusterId]/page';
 import { api } from '@/lib/api';
@@ -9,6 +9,7 @@ vi.mock('@/lib/api', () => ({
     getSporeCluster: vi.fn(),
     getSporesByCluster: vi.fn(),
     getSporeClusterOccupationChart: vi.fn(),
+    getAddress: vi.fn(),
   },
 }));
 
@@ -17,16 +18,20 @@ vi.mock('@/components/layout/header', () => ({
 }));
 
 const mockClusterId = '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890';
+let mockSearchParamsString = '';
+const mockReplace = vi.fn();
 
 vi.mock('next/navigation', () => ({
   useParams: () => ({ clusterId: mockClusterId }),
-  useRouter: () => ({ push: vi.fn() }),
+  useRouter: () => ({ push: vi.fn(), replace: mockReplace }),
+  usePathname: () => `/clusters/${mockClusterId}`,
+  useSearchParams: () => new URLSearchParams(mockSearchParamsString),
 }));
 
 const mockCluster = {
   clusterId: mockClusterId,
   name: 'Test Collection',
-  description: 'A test collection of DOBs',
+  description: 'A test collection of spores',
   ownerLockHash: '0x1111111111111111111111111111111111111111111111111111111111111111',
   ownerAddress: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq...',
   sporesCount: 5,
@@ -79,11 +84,20 @@ const emptySpores = {
 describe('ClusterDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockSearchParamsString = '';
     vi.mocked(api.getSporeClusterOccupationChart).mockResolvedValue({
       title: 'Test Collection Capacity Occupation',
       data: [],
       series: [],
     });
+    vi.mocked(api.getAddress).mockResolvedValue({
+      lockScriptHash: mockCluster.ownerLockHash,
+      address: 'ckb1qyqszqgpqyqszqgpqyqszqgpqyqszqgp9f0v3',
+      balance: '0',
+      occupiedCapacity: '0',
+      liveCellsCount: 0,
+      transactionsCount: 0,
+    } as any);
   });
 
   it('renders the page with header', async () => {
@@ -113,7 +127,7 @@ describe('ClusterDetailPage', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Test Collection')).toBeInTheDocument();
-      expect(screen.getByText('A test collection of DOBs')).toBeInTheDocument();
+      expect(screen.getByText('A test collection of spores')).toBeInTheDocument();
     });
   });
 
@@ -139,40 +153,41 @@ describe('ClusterDetailPage', () => {
     });
   });
 
-  it('displays total DOBs count', async () => {
+  it('displays total spores count', async () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
     render(<ClusterDetailPage />);
 
     await waitFor(() => {
-      expect(screen.getByText('Total DOBs')).toBeInTheDocument();
-      const dobsValue = document.querySelector('.text-amber.text-xl');
-      expect(dobsValue?.textContent).toBe('5');
+      expect(screen.getAllByText('Total Spores').length).toBeGreaterThan(0);
+      const sporesValue = document.querySelector('.text-amber.text-xl');
+      expect(sporesValue?.textContent).toBe('5');
     });
   });
 
-  it('displays DOBs table with content', async () => {
+  it('displays spores table with content', async () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
     render(<ClusterDetailPage />);
 
     await waitFor(() => {
-      expect(screen.getByText('image/png')).toBeInTheDocument();
-      expect(screen.getByText('text/plain')).toBeInTheDocument();
+      expect(screen.getByText('Spores in this collection (2)')).toBeInTheDocument();
+      expect(screen.getAllByText('image/png').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('text/plain').length).toBeGreaterThan(0);
     });
   });
 
-  it('shows content size for each DOB', async () => {
+  it('shows content size for each spore', async () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
     render(<ClusterDetailPage />);
 
     await waitFor(() => {
-      expect(screen.getByText('1,024 B')).toBeInTheDocument();
-      expect(screen.getByText('256 B')).toBeInTheDocument();
+      expect(screen.getAllByText('1,024 B').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('256 B').length).toBeGreaterThan(0);
     });
   });
 
@@ -187,14 +202,14 @@ describe('ClusterDetailPage', () => {
     });
   });
 
-  it('shows empty state when cluster has no DOBs', async () => {
+  it('shows empty state when cluster has no spores', async () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(emptySpores);
 
     render(<ClusterDetailPage />);
 
     await waitFor(() => {
-      expect(screen.getByText('No DOBs in this collection')).toBeInTheDocument();
+      expect(screen.getByText('No spores in this collection')).toBeInTheDocument();
     });
   });
 
@@ -221,9 +236,233 @@ describe('ClusterDetailPage', () => {
       expect(screen.getByText('Cluster Info')).toBeInTheDocument();
       expect(screen.getByText('Cluster ID')).toBeInTheDocument();
       expect(screen.getByText('Description')).toBeInTheDocument();
-      expect(screen.getByText('Total DOBs')).toBeInTheDocument();
+      expect(screen.getAllByText('Total Spores').length).toBeGreaterThan(0);
       expect(screen.getByText('Creator')).toBeInTheDocument();
-      expect(screen.getByText('Created at Block')).toBeInTheDocument();
+      expect(screen.queryByText('Created at Block')).not.toBeInTheDocument();
+    });
+  });
+
+  it('renders overview and snapshot sections', async () => {
+    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
+    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
+
+    render(<ClusterDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Live Capacity')).toBeInTheDocument();
+      expect(screen.getByText('Occupied Capacity')).toBeInTheDocument();
+      expect(screen.getByText('Content Snapshot (Filtered View)')).toBeInTheDocument();
+      expect(screen.getByText('Average Payload Size')).toBeInTheDocument();
+      expect(screen.getByText('image')).toBeInTheDocument();
+      expect(screen.getByText('text')).toBeInTheDocument();
+    });
+  });
+
+  it('filters spores by content type', async () => {
+    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
+    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
+
+    render(<ClusterDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('2 shown / 2 total')).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByLabelText('Filter spores by content type'), {
+      target: { value: 'image' },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('1 shown / 2 total')).toBeInTheDocument();
+      expect(screen.queryByText('No spores match current filters')).not.toBeInTheDocument();
+    });
+  });
+
+  it('shows empty filtered state when no spores match selected type', async () => {
+    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
+    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
+
+    render(<ClusterDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Filter spores by content type')).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByLabelText('Filter spores by content type'), {
+      target: { value: 'audio' },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('No spores match current filters')).toBeInTheDocument();
+      expect(screen.getByText('0 shown / 2 total')).toBeInTheDocument();
+    });
+  });
+
+  it('filters spores by search keyword', async () => {
+    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
+    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
+
+    render(<ClusterDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Search spores')).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByLabelText('Search spores'), {
+      target: { value: 'text/plain' },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('1 shown / 2 total')).toBeInTheDocument();
+      expect(screen.getAllByText('text/plain').length).toBeGreaterThan(0);
+      expect(screen.queryByText('No spores match current filters')).not.toBeInTheDocument();
+    });
+  });
+
+  it('hydrates list controls from URL search params', async () => {
+    mockSearchParamsString = 'content=text&sort=sizeAsc&q=text%2Fplain';
+    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
+    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
+
+    render(<ClusterDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Filter spores by content type')).toHaveValue('text');
+      expect(screen.getByLabelText('Sort spores')).toHaveValue('sizeAsc');
+      expect(screen.getByLabelText('Search spores')).toHaveValue('text/plain');
+      expect(screen.getByText('1 shown / 2 total')).toBeInTheDocument();
+    });
+  });
+
+  it('updates URL search params when list controls change', async () => {
+    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
+    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
+
+    render(<ClusterDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Filter spores by content type')).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByLabelText('Filter spores by content type'), {
+      target: { value: 'image' },
+    });
+    fireEvent.change(screen.getByLabelText('Sort spores'), {
+      target: { value: 'sizeAsc' },
+    });
+    fireEvent.change(screen.getByLabelText('Search spores'), {
+      target: { value: '0x2222' },
+    });
+
+    await waitFor(() => {
+      expect(
+        mockReplace.mock.calls.some(
+          ([href]) =>
+            String(href).includes('content=image') &&
+            String(href).includes('sort=sizeAsc') &&
+            String(href).includes('q=0x2222')
+        )
+      ).toBe(true);
+    });
+  });
+
+  it('renders cluster description JSON with metadata blocks', async () => {
+    const jsonDescriptionCluster = {
+      ...mockCluster,
+      description: JSON.stringify({
+        description: 'On-chain generative spores',
+        version: 1,
+        category: 'collectible',
+        dob: {
+          ver: 1,
+          pattern: [{}, {}],
+          decoders: [{}],
+        },
+      }),
+    };
+    vi.mocked(api.getSporeCluster).mockResolvedValue(jsonDescriptionCluster);
+    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
+
+    render(<ClusterDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('On-chain generative spores')).toBeInTheDocument();
+      const versionLabel = screen.getByText('Version');
+      expect(versionLabel).toBeInTheDocument();
+      expect(versionLabel.parentElement?.textContent).toContain('1');
+      expect(screen.getByText('Category')).toBeInTheDocument();
+      expect(screen.getByText('collectible')).toBeInTheDocument();
+      expect(screen.getByText('DOB Version')).toBeInTheDocument();
+      expect(screen.getByText('DOB Pattern Items')).toBeInTheDocument();
+      expect(screen.getByText('DOB Decoders')).toBeInTheDocument();
+      expect(screen.getByText('View Raw Cluster Metadata JSON')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText('View Raw Cluster Metadata JSON'));
+
+    await waitFor(() => {
+      expect(screen.getByText(/"category": "collectible"/)).toBeInTheDocument();
+      expect(screen.getByText(/"description": "On-chain generative spores"/)).toBeInTheDocument();
+    });
+  });
+
+  it('resolves creator address from owner lock hash', async () => {
+    vi.mocked(api.getSporeCluster).mockResolvedValue({
+      ...mockCluster,
+      ownerAddress: undefined,
+    });
+    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
+
+    render(<ClusterDetailPage />);
+
+    await waitFor(() => {
+      expect(api.getAddress).toHaveBeenCalledWith(mockCluster.ownerLockHash);
+      const ownerLink = screen.getByRole('link', {
+        name: 'ckb1qyqszqgpqyqszqgpqyqszqgpqyqszqgp9f0v3',
+      });
+      expect(ownerLink).toBeInTheDocument();
+      expect(ownerLink).toHaveAttribute(
+        'href',
+        '/address/ckb1qyqszqgpqyqszqgpqyqszqgpqyqszqgp9f0v3'
+      );
+    });
+  });
+
+  it('resolves spore owner address from owner lock hash', async () => {
+    const resolvedSporeOwnerAddress = 'ckb1qyqszqgpqyqszqgpqyqszqgpqyqszqgpz9p9j';
+    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
+    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
+    vi.mocked(api.getAddress).mockImplementation(async (addr: string) => {
+      if (addr === mockSpores.data[1].ownerLockHash) {
+        return {
+          lockScriptHash: addr,
+          address: resolvedSporeOwnerAddress,
+          balance: '0',
+          occupiedCapacity: '0',
+          liveCellsCount: 0,
+          transactionsCount: 0,
+        } as any;
+      }
+      return {
+        lockScriptHash: addr,
+        address: 'ckb1qyqszqgpqyqszqgpqyqszqgpqyqszqgp9f0v3',
+        balance: '0',
+        occupiedCapacity: '0',
+        liveCellsCount: 0,
+        transactionsCount: 0,
+      } as any;
+    });
+
+    render(<ClusterDetailPage />);
+
+    await waitFor(() => {
+      expect(api.getAddress).toHaveBeenCalledWith(mockSpores.data[1].ownerLockHash);
+      expect(
+        document.querySelector(`a[href="/address/${resolvedSporeOwnerAddress}"]`)
+      ).toBeInTheDocument();
+      expect(
+        document.querySelector(`a[href="/address/${mockSpores.data[1].ownerLockHash}"]`)
+      ).not.toBeInTheDocument();
     });
   });
 

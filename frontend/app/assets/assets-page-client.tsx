@@ -386,20 +386,6 @@ export function AssetsPageClient() {
               </TabsContent>
 
               <TabsContent value="nft">
-                <div className="border-b border-slate-800 bg-slate-900/40 p-4">
-                  <div className="flex items-start gap-3">
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-800 text-xl">
-                      🖼️
-                    </div>
-                    <div>
-                      <h3 className="font-semibold text-slate-200">NFT Collections</h3>
-                      <p className="mt-1 text-sm text-slate-400">
-                        NFTs (Non-Fungible Tokens) are unique digital assets. This list includes
-                        both standard NFT collections and Spore/DOB collections.
-                      </p>
-                    </div>
-                  </div>
-                </div>
                 <AssetTable assetType="nft" search={search} />
               </TabsContent>
             </TerminalPanelContent>

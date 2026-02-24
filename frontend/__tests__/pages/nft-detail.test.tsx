@@ -11,6 +11,7 @@ vi.mock('@/lib/api', () => ({
     getSporeCluster: vi.fn(),
     getSporeNftDecoded: vi.fn(),
     getSporeNftOccupationChart: vi.fn(),
+    getAddress: vi.fn(),
     getTransactionDetail: vi.fn(),
     getCell: vi.fn(),
     getNftCollection: vi.fn(),
@@ -55,6 +56,45 @@ const mockCollection = {
   liveOccupiedCapacity: '510000000000',
 };
 
+function encodeMoleculeBytes(value: Uint8Array): Uint8Array {
+  const out = new Uint8Array(4 + value.length);
+  const view = new DataView(out.buffer);
+  view.setUint32(0, value.length, true);
+  out.set(value, 4);
+  return out;
+}
+
+function encodeSporeData(contentType: string, contentText: string) {
+  const contentTypeBytes = new TextEncoder().encode(contentType);
+  const contentBytes = new TextEncoder().encode(contentText);
+
+  const ctField = encodeMoleculeBytes(contentTypeBytes);
+  const contentField = encodeMoleculeBytes(contentBytes);
+  const offsetContentType = 16;
+  const offsetContent = offsetContentType + ctField.length;
+  const offsetCluster = offsetContent + contentField.length;
+  const totalSize = offsetCluster;
+
+  const buffer = new Uint8Array(totalSize);
+  const view = new DataView(buffer.buffer);
+  view.setUint32(0, totalSize, true);
+  view.setUint32(4, offsetContentType, true);
+  view.setUint32(8, offsetContent, true);
+  view.setUint32(12, offsetCluster, true);
+  buffer.set(ctField, offsetContentType);
+  buffer.set(contentField, offsetContent);
+
+  return {
+    dataHex: `0x${Array.from(buffer)
+      .map((item) => item.toString(16).padStart(2, '0'))
+      .join('')}`,
+    contentTypeStart: offsetContentType + 4,
+    contentTypeEnd: offsetContentType + 4 + contentTypeBytes.length,
+    contentStart: offsetContent + 4,
+    contentEnd: offsetContent + 4 + contentBytes.length,
+  };
+}
+
 describe('SporeDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -66,6 +106,14 @@ describe('SporeDetailPage', () => {
       data: [],
       series: [],
     });
+    vi.mocked(api.getAddress).mockResolvedValue({
+      lockScriptHash: mockSpore.ownerLockHash,
+      address: 'ckb1qyqszqgpqyqszqgpqyqszqgpqyqszqgp9f0v3',
+      balance: '0',
+      occupiedCapacity: '0',
+      liveCellsCount: 0,
+      transactionsCount: 0,
+    } as any);
     vi.mocked(api.getSporeNftDecoded).mockRejectedValue(new Error('API error: 404'));
     vi.mocked(api.getTransactionDetail).mockResolvedValue({
       hash: mockSpore.txHash,
@@ -140,6 +188,126 @@ describe('SporeDetailPage', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Capacity & Occupation')).toBeInTheDocument();
+    });
+  });
+
+  it('renders improved spore content panels', async () => {
+    vi.mocked(api.getSporeNft).mockResolvedValue(mockSpore);
+
+    render(<SporeDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Spore Asset')).toBeInTheDocument();
+      expect(screen.getByText('Spore Content Preview')).toBeInTheDocument();
+      expect(screen.getByText('Spore Details')).toBeInTheDocument();
+      expect(screen.getByText('Rendering Pipeline')).toBeInTheDocument();
+      expect(screen.queryByText('How To Read This Spore')).not.toBeInTheDocument();
+    });
+  });
+
+  it('shows owner address resolved from lock hash', async () => {
+    vi.mocked(api.getSporeNft).mockResolvedValue(mockSpore);
+
+    render(<SporeDetailPage />);
+
+    await waitFor(() => {
+      expect(api.getAddress).toHaveBeenCalledWith(mockSpore.ownerLockHash);
+      const ownerLink = screen.getByRole('link', {
+        name: 'ckb1qyqszqgpqyqszqgpqyqszqgpqyqszqgp9f0v3',
+      });
+      expect(ownerLink).toBeInTheDocument();
+      expect(ownerLink).toHaveAttribute(
+        'href',
+        '/address/ckb1qyqszqgpqyqszqgpqyqszqgpqyqszqgp9f0v3'
+      );
+    });
+  });
+
+  it('renders decoded traits panel for DOB spores', async () => {
+    vi.mocked(api.getSporeNft).mockResolvedValue({
+      ...mockSpore,
+      contentType: 'dob/0',
+    } as any);
+    vi.mocked(api.getSporeNftDecoded).mockResolvedValue({
+      sporeId: mockSpore.sporeId,
+      contentType: 'dob/0',
+      dnaHex: '0102',
+      traits: [{ name: 'Background', value: 'Blue' }],
+      svgMarkup: null,
+      issues: [],
+    } as any);
+
+    render(<SporeDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Decoded Traits')).toBeInTheDocument();
+      expect(screen.getAllByText('Background').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('Blue').length).toBeGreaterThan(0);
+    });
+  });
+
+  it('renders payload text view for text spores', async () => {
+    const encoded = encodeSporeData('text/plain', 'hello from payload text panel');
+    vi.mocked(api.getSporeNft).mockResolvedValue({
+      ...mockSpore,
+      contentType: 'text/plain',
+    } as any);
+    vi.mocked(api.getCell).mockResolvedValue({
+      txHash: mockSpore.txHash,
+      outputIndex: mockSpore.outputIndex,
+      capacity: '100000000000',
+      lockScriptHash: mockSpore.ownerLockHash,
+      dataSize: encoded.dataHex.length / 2,
+      createdAtBlock: mockSpore.createdAtBlock,
+      data: encoded.dataHex,
+      dataAnalysis: {
+        deterministic: {
+          kind: 'spore_cell',
+          segments: [
+            { label: 'content_type', start: encoded.contentTypeStart, end: encoded.contentTypeEnd },
+            { label: 'content', start: encoded.contentStart, end: encoded.contentEnd },
+          ],
+        },
+      },
+    } as any);
+
+    render(<SporeDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Payload Text View')).toBeInTheDocument();
+      expect(screen.getAllByText('hello from payload text panel').length).toBeGreaterThan(0);
+    });
+  });
+
+  it('renders cluster metadata from JSON description', async () => {
+    vi.mocked(api.getSporeNft).mockResolvedValue({
+      ...mockSpore,
+      clusterId: '0xcluster',
+    } as any);
+    vi.mocked(api.getSporeCluster).mockResolvedValue({
+      clusterId: '0xcluster',
+      name: 'Genesis Cluster',
+      description: JSON.stringify({
+        description: 'Metadata-rich cluster',
+        version: 3,
+      }),
+      ownerLockHash: '0x1111111111111111111111111111111111111111111111111111111111111111',
+      ownerAddress: null,
+      sporesCount: 42,
+      createdAtBlock: 123,
+      liveCapacity: '0',
+      liveOccupiedCapacity: '0',
+    } as any);
+
+    render(<SporeDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Cluster Context')).toBeInTheDocument();
+      expect(screen.getByText('Metadata-rich cluster')).toBeInTheDocument();
+      const versionLabel = screen.getByText('Version');
+      expect(versionLabel).toBeInTheDocument();
+      expect(versionLabel.parentElement?.textContent).toContain('3');
+      expect(screen.getByText('View Raw Cluster Metadata JSON')).toBeInTheDocument();
     });
   });
 

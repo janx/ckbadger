@@ -22,6 +22,7 @@ import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { isDotbitAlias, normalizeNftAssetId } from '@/lib/nft-collections';
 import { getOccupationRangeParams, OccupationRangeKey } from '@/lib/occupation-range';
 import { decodeDobContent, extractSporePayload } from '@/lib/dob-render';
+import { ClusterDescription } from '@/components/spore/cluster-description';
 
 function isNotFoundError(error: unknown): boolean {
   return error instanceof Error && error.message.includes('404');
@@ -74,6 +75,13 @@ export default function SporeDetailPage() {
     queryKey: ['cluster', spore?.clusterId],
     queryFn: () => api.getSporeCluster(spore!.clusterId!),
     enabled: !!spore?.clusterId,
+  });
+
+  const { data: ownerAddressRecord } = useQuery({
+    queryKey: ['address-by-lock-hash', spore?.ownerLockHash],
+    queryFn: () => api.getAddress(spore!.ownerLockHash),
+    enabled: !!spore?.ownerLockHash && !spore?.ownerAddress,
+    retry: false,
   });
 
   const { data: decodedDobByApi } = useQuery({
@@ -524,11 +532,31 @@ export default function SporeDetailPage() {
     return null;
   }
 
+  const resolvedOwnerAddress = spore.ownerAddress || ownerAddressRecord?.address || null;
   const previewContentType = sporePayload?.contentType || spore.contentType;
+  const normalizedPreviewContentType = previewContentType.toLowerCase();
   const previewBytes = sporePayload?.contentBytes.length ?? spore.contentSize;
   const previewText = sporePayload?.textContent?.trim() ?? '';
   const previewTextTruncated = previewText.length > 600;
   const previewTextSnippet = previewTextTruncated ? `${previewText.slice(0, 600)}...` : previewText;
+  const hasDecodedTraits = (dobContent?.traits.length ?? 0) > 0;
+  const shouldShowPayloadTextPanel =
+    !!previewTextSnippet &&
+    (normalizedPreviewContentType.startsWith('text/') ||
+      normalizedPreviewContentType.includes('json') ||
+      normalizedPreviewContentType.startsWith('dob/'));
+  const sporeOutputIndex =
+    resolvedSporeOutputIndex !== null && resolvedSporeOutputIndex >= 0
+      ? resolvedSporeOutputIndex
+      : spore.outputIndex;
+  const hasCellLink = Number.isInteger(sporeOutputIndex);
+  const renderPipeline = dobSvgDataUrl
+    ? 'DOB decoder generated SVG preview from cluster metadata and DNA bytes.'
+    : mediaPreviewUrl
+      ? 'Bytes were decoded into a media blob using the on-chain contentType.'
+      : previewTextSnippet
+        ? 'Bytes were decoded as UTF-8 text for direct inspection.'
+        : 'Payload is shown as a generic binary asset because no richer decoder matched.';
 
   const renderSporePreview = () => {
     if (isSporeCellLoading) {
@@ -633,66 +661,120 @@ export default function SporeDetailPage() {
         </div>
 
         <PageHeader
-          title="Spore NFT"
+          title="Spore Asset"
           badge={
             spore.isLive ? <Badge variant="green">Live</Badge> : <Badge variant="red">Burned</Badge>
           }
         />
 
-        <div className="grid gap-6 lg:grid-cols-3">
-          <div className="lg:col-span-1">
+        <div className="grid gap-6 xl:grid-cols-5">
+          <div className="space-y-6 xl:col-span-2">
             <TerminalPanel>
+              <TerminalPanelHeader indicator="active">Spore Content Preview</TerminalPanelHeader>
               <TerminalPanelContent>
                 <div className="mb-4 overflow-hidden rounded border border-slate-800">
                   {renderSporePreview()}
                 </div>
-                <div className="space-y-2 text-center">
-                  <div className="font-mono text-lg text-white">{previewContentType}</div>
-                  <div className="font-mono text-sm text-slate-400">
-                    {formatNumber(previewBytes)} bytes
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <div className="rounded border border-slate-800 bg-slate-900/50 px-3 py-2">
+                    <div className="font-mono text-[10px] uppercase tracking-wider text-slate-500">
+                      Content Type
+                    </div>
+                    <div className="mt-1 break-all font-mono text-xs text-slate-100">
+                      {previewContentType}
+                    </div>
+                  </div>
+                  <div className="rounded border border-slate-800 bg-slate-900/50 px-3 py-2">
+                    <div className="font-mono text-[10px] uppercase tracking-wider text-slate-500">
+                      Payload Size
+                    </div>
+                    <div className="mt-1 font-mono text-xs text-slate-100">
+                      {formatNumber(previewBytes)} bytes
+                    </div>
+                  </div>
+                  <div className="rounded border border-slate-800 bg-slate-900/50 px-3 py-2 sm:col-span-2">
+                    <div className="font-mono text-[10px] uppercase tracking-wider text-slate-500">
+                      Rendering Pipeline
+                    </div>
+                    <div className="mt-1 text-xs text-slate-300">{renderPipeline}</div>
                   </div>
                   {dobContent?.dnaHex && (
-                    <div className="font-mono text-xs text-cyan-300">
-                      DNA {shortenHex(dobContent.dnaHex, 14, 10)}
+                    <div className="rounded border border-cyan-900/70 bg-cyan-950/20 px-3 py-2 sm:col-span-2">
+                      <div className="font-mono text-[10px] uppercase tracking-wider text-cyan-400/80">
+                        DOB DNA
+                      </div>
+                      <div className="mt-1 font-mono text-xs text-cyan-200">
+                        {shortenHex(dobContent.dnaHex, 18, 14)}
+                      </div>
                     </div>
                   )}
-                  {dobContent?.issues.length ? (
-                    <div className="px-4 font-mono text-xs text-amber-300">
-                      {dobContent.issues[0]}
-                    </div>
-                  ) : null}
-                  {previewTextTruncated && (
-                    <div className="font-mono text-xs text-slate-500">
-                      Text preview truncated to 600 chars
-                    </div>
-                  )}
-                  {!spore.isLive && <Badge variant="red">Burned</Badge>}
                 </div>
               </TerminalPanelContent>
             </TerminalPanel>
           </div>
 
-          <div className="space-y-6 lg:col-span-2">
+          <div className="space-y-6 xl:col-span-3">
             <TerminalPanel>
-              <TerminalPanelHeader indicator="active">NFT Details</TerminalPanelHeader>
+              <TerminalPanelHeader indicator="active">Spore Details</TerminalPanelHeader>
               <TerminalPanelContent>
                 <DataGrid columns={1}>
                   <DataField label="Spore ID">
                     <HexDisplay value={spore.sporeId} truncate={false} color="accent" />
                   </DataField>
-                  <DataField label="Owner">
-                    {spore.ownerAddress ? (
-                      <Address address={spore.ownerAddress} truncate={false} />
+                  <DataField label="Status">
+                    {spore.isLive ? (
+                      <Badge variant="green">Live</Badge>
                     ) : (
-                      <Link href={`/address/${spore.ownerLockHash}`} className="hover:underline">
-                        <HexDisplay value={spore.ownerLockHash} truncate={false} color="accent" />
-                      </Link>
+                      <Badge variant="red">Burned</Badge>
+                    )}
+                  </DataField>
+                  <DataField label="Content Type">
+                    <span className="font-mono text-slate-200">{previewContentType}</span>
+                  </DataField>
+                  <DataField label="Payload Size">
+                    <span className="font-mono text-slate-200">
+                      {formatNumber(previewBytes)} bytes
+                    </span>
+                  </DataField>
+                  <DataField label="Interpreted As">
+                    <span className="font-mono text-slate-200">
+                      {normalizedPreviewContentType.startsWith('image/')
+                        ? 'Image'
+                        : normalizedPreviewContentType.startsWith('video/')
+                          ? 'Video'
+                          : normalizedPreviewContentType.startsWith('audio/')
+                            ? 'Audio'
+                            : normalizedPreviewContentType.startsWith('text/')
+                              ? 'Text'
+                              : normalizedPreviewContentType.startsWith('dob/')
+                                ? 'DOB Metadata'
+                                : 'Binary'}
+                    </span>
+                  </DataField>
+                  <DataField label="Owner">
+                    {resolvedOwnerAddress ? (
+                      <Address address={resolvedOwnerAddress} truncate={false} />
+                    ) : (
+                      <span className="font-mono text-slate-500">Address unavailable</span>
                     )}
                   </DataField>
                   <DataField label="Owner Lock Hash">
                     <Link href={`/address/${spore.ownerLockHash}`} className="hover:underline">
                       <HexDisplay value={spore.ownerLockHash} truncate={false} color="accent" />
                     </Link>
+                  </DataField>
+                  <DataField label="Origin Cell">
+                    {hasCellLink ? (
+                      <Link
+                        href={`/cell/${spore.txHash}-${sporeOutputIndex}`}
+                        className="text-terminal-green font-mono hover:underline"
+                      >
+                        <HexDisplay value={spore.txHash} color="accent" size="sm" />-
+                        {sporeOutputIndex}
+                      </Link>
+                    ) : (
+                      <span className="font-mono text-slate-500">Unavailable</span>
+                    )}
                   </DataField>
                   <DataField label="Created at Block">
                     <Link
@@ -706,6 +788,48 @@ export default function SporeDetailPage() {
               </TerminalPanelContent>
             </TerminalPanel>
 
+            {hasDecodedTraits && (
+              <TerminalPanel>
+                <TerminalPanelHeader indicator="active">Decoded Traits</TerminalPanelHeader>
+                <TerminalPanelContent>
+                  <div className="mb-3 text-sm text-slate-400">
+                    Traits derived from DOB metadata and on-chain DNA bytes.
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {dobContent!.traits.map((trait) => (
+                      <div
+                        key={`${trait.name}-${trait.value}`}
+                        className="rounded border border-slate-800 bg-slate-900/50 p-2.5"
+                      >
+                        <div className="font-mono text-[10px] uppercase tracking-wider text-slate-500">
+                          {trait.name}
+                        </div>
+                        <div className="mt-1 break-all font-mono text-xs text-slate-200">
+                          {trait.value}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </TerminalPanelContent>
+              </TerminalPanel>
+            )}
+
+            {shouldShowPayloadTextPanel && (
+              <TerminalPanel>
+                <TerminalPanelHeader indicator="active">Payload Text View</TerminalPanelHeader>
+                <TerminalPanelContent>
+                  <pre className="max-h-80 overflow-y-auto whitespace-pre-wrap break-words rounded border border-slate-800 bg-slate-950/40 p-3 font-mono text-xs text-slate-200">
+                    {previewTextSnippet}
+                  </pre>
+                  {previewTextTruncated && (
+                    <div className="mt-2 text-xs text-slate-500">
+                      Showing first 600 characters from on-chain payload text.
+                    </div>
+                  )}
+                </TerminalPanelContent>
+              </TerminalPanel>
+            )}
+
             <CapacityOccupationSection
               description="Daily cumulative live CKB occupation for this NFT."
               occupationRange={occupationRange}
@@ -718,7 +842,7 @@ export default function SporeDetailPage() {
 
             {cluster && (
               <TerminalPanel>
-                <TerminalPanelHeader indicator="active">Collection</TerminalPanelHeader>
+                <TerminalPanelHeader indicator="active">Cluster Context</TerminalPanelHeader>
                 <TerminalPanelContent>
                   <DataGrid columns={1}>
                     <DataField label="Name">
@@ -731,7 +855,7 @@ export default function SporeDetailPage() {
                     </DataField>
                     {cluster.description && (
                       <DataField label="Description">
-                        <span className="text-slate-300">{cluster.description}</span>
+                        <ClusterDescription description={cluster.description} />
                       </DataField>
                     )}
                     <DataField label="Cluster ID">
@@ -739,7 +863,7 @@ export default function SporeDetailPage() {
                         <HexDisplay value={cluster.clusterId} truncate={false} color="accent" />
                       </Link>
                     </DataField>
-                    <DataField label="Total NFTs">
+                    <DataField label="Total Spores">
                       <span className="text-amber font-mono">
                         {formatNumber(cluster.sporesCount)}
                       </span>

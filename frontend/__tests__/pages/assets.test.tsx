@@ -247,7 +247,7 @@ describe('AssetsPage', () => {
 
     await waitFor(() => {
       expect(api.getAssets).toHaveBeenCalledWith(expect.objectContaining({ type: 'nft' }));
-      expect(screen.getByText('NFT Collections')).toBeInTheDocument();
+      expect(screen.getByText('Test Collection')).toBeInTheDocument();
     });
   });
 
@@ -259,7 +259,7 @@ describe('AssetsPage', () => {
 
     await waitFor(() => {
       expect(api.getAssets).toHaveBeenCalledWith(expect.objectContaining({ type: 'nft' }));
-      expect(screen.getByText('NFT Collections')).toBeInTheDocument();
+      expect(screen.getByText('Test Collection')).toBeInTheDocument();
     });
   });
 
@@ -277,7 +277,7 @@ describe('AssetsPage', () => {
     });
   });
 
-  it('shows NFTs info banner when NFTs tab is active', async () => {
+  it('does not show NFTs info banner when NFTs tab is active', async () => {
     vi.mocked(api.getAssets).mockResolvedValue(emptyAssets);
 
     render(<AssetsPage />);
@@ -286,12 +286,12 @@ describe('AssetsPage', () => {
     fireEvent.click(nftsTab);
 
     await waitFor(() => {
-      expect(screen.getByText('NFT Collections')).toBeInTheDocument();
-      expect(
-        screen.getByText(/includes both standard NFT collections and Spore\/DOB collections/i)
-      ).toBeInTheDocument();
+      expect(api.getAssets).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'nft' }));
     });
-    expect(screen.getByText('NFT Collections')).toHaveClass('text-slate-200');
+    expect(screen.queryByText('NFT Collections')).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/includes both standard NFT collections and Spore\/DOB collections/i)
+    ).not.toBeInTheDocument();
   });
 
   it('displays token data in the table', async () => {
