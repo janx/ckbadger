@@ -10,6 +10,7 @@ endif
 COMPOSE ?= docker compose
 CKB_NODE_MODE ?= $(if $(findstring internal,$(COMPOSE_PROFILES)),internal,external)
 CKBADGER_DATA_PATH ?= ./data/ckbadger-store
+CKBADGER_HEAVY_DATA_PATH ?= ./data/ckbadger-heavy-store
 COMPOSE_PROJECT ?= $(notdir $(CURDIR))
 VERIFY_API_URL ?= $(or $(CKBADGER_API_URL),http://localhost:3001/api/v1)
 VERIFY_DEPTH ?= fast
@@ -103,17 +104,20 @@ reset:
 		exit 1; \
 	fi
 	-$(COMPOSE) stop redis api indexer frontend >/dev/null 2>&1 || true
-	rm -rf "$(CKBADGER_DATA_PATH)" "$(CKBADGER_DATA_PATH)-api-secondary"
+	rm -rf "$(CKBADGER_DATA_PATH)" "$(CKBADGER_DATA_PATH)-api-secondary" \
+		"$(CKBADGER_HEAVY_DATA_PATH)" "$(CKBADGER_HEAVY_DATA_PATH)-api-secondary"
 	@if command -v docker >/dev/null 2>&1; then \
 		project="$${COMPOSE_PROJECT_NAME:-$(COMPOSE_PROJECT)}"; \
 		rocksdb_vols=$$(docker volume ls -q --filter "label=com.docker.compose.project=$$project" --filter "label=com.docker.compose.volume=ckbadger-data"); \
+		heavy_vols=$$(docker volume ls -q --filter "label=com.docker.compose.project=$$project" --filter "label=com.docker.compose.volume=ckbadger-heavy-data"); \
 		redis_vols=$$(docker volume ls -q --filter "label=com.docker.compose.project=$$project" --filter "label=com.docker.compose.volume=redis-data"); \
-		if [ -n "$$rocksdb_vols$$redis_vols" ]; then \
-			docker volume rm $$rocksdb_vols $$redis_vols >/dev/null || true; \
+		if [ -n "$$rocksdb_vols$$heavy_vols$$redis_vols" ]; then \
+			docker volume rm $$rocksdb_vols $$heavy_vols $$redis_vols >/dev/null || true; \
 		fi; \
 	fi
 	@echo "Deleted local data path: $(CKBADGER_DATA_PATH)"
-	@echo "Deleted Docker volumes (if present): ckbadger-data, redis-data"
+	@echo "Deleted local heavy data path: $(CKBADGER_HEAVY_DATA_PATH)"
+	@echo "Deleted Docker volumes (if present): ckbadger-data, ckbadger-heavy-data, redis-data"
 
 verify:
 	@RPC_ARG=""; \
