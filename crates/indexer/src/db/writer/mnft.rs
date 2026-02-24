@@ -166,7 +166,7 @@ impl BatchWriter {
             // Re-insert (transfer) — increment hourly bucket for 24h tracking
             let hour_bucket = timestamp_ms / 3_600_000;
             let key = ckbadger_store::keys::encode_nft_hourly_key(&token.class_id, hour_bucket);
-            let current = match self.store.get_cf(self.store.cf_stats(), &key)? {
+            let current = match self.store.get_stats(&key)? {
                 Some(v) if v.len() == 8 => i64::from_le_bytes(v[..8].try_into().unwrap()),
                 _ => 0,
             };

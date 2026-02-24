@@ -65,7 +65,7 @@ impl BatchWriter {
                 &DOTBIT_SENTINEL_COLLECTION,
                 hour_bucket,
             );
-            let current = match self.store.get_cf(self.store.cf_stats(), &key)? {
+            let current = match self.store.get_stats(&key)? {
                 Some(v) if v.len() == 8 => i64::from_le_bytes(v[..8].try_into().unwrap()),
                 _ => 0,
             };

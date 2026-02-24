@@ -183,13 +183,13 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open(dir.path()).unwrap();
 
-        let cf = store.cf_stats();
+        let cf = store.stats_cf_for_prefix(0x01);
         for i in 0u32..10 {
             let key = [&[0x01u8][..], &i.to_be_bytes()].concat();
-            store.put_cf(cf, &key, &i.to_le_bytes()).unwrap();
+            store.put_stats(&key, &i.to_le_bytes()).unwrap();
         }
         // Different prefix
-        store.put_cf(cf, &[0x02, 0, 0, 0, 0], b"other").unwrap();
+        store.put_stats(&[0x02, 0, 0, 0, 0], b"other").unwrap();
 
         let result: PaginatedResult<u32> =
             store.paginate_prefix(cf, &[0x01], None, 5, |_key, value| {

@@ -9,7 +9,7 @@ impl CkbadgerStore {
 
     pub fn get_daily_stats(&self, date: &str) -> anyhow::Result<Option<DailyStats>> {
         let key = keys::encode_stats_key(stats_prefix::DAILY, date.as_bytes());
-        match self.get_cf(self.cf_stats(), &key)? {
+        match self.get_stats(&key)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
@@ -18,12 +18,12 @@ impl CkbadgerStore {
     pub fn put_daily_stats(&self, date: &str, stats: &DailyStats) -> anyhow::Result<()> {
         let key = keys::encode_stats_key(stats_prefix::DAILY, date.as_bytes());
         let value = bincode::serialize(stats)?;
-        self.put_cf(self.cf_stats(), &key, &value)
+        self.put_stats(&key, &value)
     }
 
     pub fn list_daily_stats(&self) -> anyhow::Result<Vec<DailyStats>> {
         let prefix = [stats_prefix::DAILY];
-        let iter = self.prefix_iterator_cf(self.cf_stats(), &prefix);
+        let iter = self.prefix_iterator_stats(&prefix);
         let mut results = Vec::new();
 
         for item in iter.flatten() {
@@ -42,7 +42,7 @@ impl CkbadgerStore {
 
     pub fn get_hourly_stats(&self, hour: &str) -> anyhow::Result<Option<HourlyStats>> {
         let key = keys::encode_stats_key(stats_prefix::HOURLY, hour.as_bytes());
-        match self.get_cf(self.cf_stats(), &key)? {
+        match self.get_stats(&key)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
@@ -51,12 +51,12 @@ impl CkbadgerStore {
     pub fn put_hourly_stats(&self, hour: &str, stats: &HourlyStats) -> anyhow::Result<()> {
         let key = keys::encode_stats_key(stats_prefix::HOURLY, hour.as_bytes());
         let value = bincode::serialize(stats)?;
-        self.put_cf(self.cf_stats(), &key, &value)
+        self.put_stats(&key, &value)
     }
 
     pub fn list_hourly_stats(&self) -> anyhow::Result<Vec<HourlyStats>> {
         let prefix = [stats_prefix::HOURLY];
-        let iter = self.prefix_iterator_cf(self.cf_stats(), &prefix);
+        let iter = self.prefix_iterator_stats(&prefix);
         let mut results = Vec::new();
 
         for item in iter.flatten() {
@@ -74,7 +74,7 @@ impl CkbadgerStore {
     /// List daily stats with their date keys (date is in the key, not the value).
     pub fn list_daily_stats_with_dates(&self) -> anyhow::Result<Vec<(String, DailyStats)>> {
         let prefix = [stats_prefix::DAILY];
-        let iter = self.prefix_iterator_cf(self.cf_stats(), &prefix);
+        let iter = self.prefix_iterator_stats(&prefix);
         let mut results = Vec::new();
 
         for item in iter.flatten() {
@@ -94,7 +94,7 @@ impl CkbadgerStore {
     /// List hourly stats with their hour keys.
     pub fn list_hourly_stats_with_keys(&self) -> anyhow::Result<Vec<(String, HourlyStats)>> {
         let prefix = [stats_prefix::HOURLY];
-        let iter = self.prefix_iterator_cf(self.cf_stats(), &prefix);
+        let iter = self.prefix_iterator_stats(&prefix);
         let mut results = Vec::new();
 
         for item in iter.flatten() {
@@ -114,7 +114,7 @@ impl CkbadgerStore {
 
     pub fn get_epoch_stats(&self, epoch: i64) -> anyhow::Result<Option<EpochStats>> {
         let key = keys::encode_stats_key(stats_prefix::EPOCH, &epoch.to_be_bytes());
-        match self.get_cf(self.cf_stats(), &key)? {
+        match self.get_stats(&key)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
@@ -123,13 +123,13 @@ impl CkbadgerStore {
     pub fn put_epoch_stats(&self, epoch: i64, stats: &EpochStats) -> anyhow::Result<()> {
         let key = keys::encode_stats_key(stats_prefix::EPOCH, &epoch.to_be_bytes());
         let value = bincode::serialize(stats)?;
-        self.put_cf(self.cf_stats(), &key, &value)
+        self.put_stats(&key, &value)
     }
 
     /// List all epoch stats, ordered by epoch number.
     pub fn list_epoch_stats(&self) -> anyhow::Result<Vec<EpochStats>> {
         let prefix = [stats_prefix::EPOCH];
-        let iter = self.prefix_iterator_cf(self.cf_stats(), &prefix);
+        let iter = self.prefix_iterator_stats(&prefix);
         let mut results = Vec::new();
 
         for item in iter.flatten() {
@@ -155,13 +155,13 @@ impl CkbadgerStore {
         let suffix = [date.as_bytes(), miner_hash].concat();
         let key = keys::encode_stats_key(stats_prefix::MINER, &suffix);
         let value = bincode::serialize(stats)?;
-        self.put_cf(self.cf_stats(), &key, &value)
+        self.put_stats(&key, &value)
     }
 
     /// List all miner stats (aggregated across all dates).
     pub fn list_miner_stats(&self) -> anyhow::Result<Vec<MinerStats>> {
         let prefix = [stats_prefix::MINER];
-        let iter = self.prefix_iterator_cf(self.cf_stats(), &prefix);
+        let iter = self.prefix_iterator_stats(&prefix);
         let mut results = Vec::new();
 
         for item in iter.flatten() {
@@ -180,7 +180,7 @@ impl CkbadgerStore {
 
     pub fn get_daily_block_stats(&self, date: &str) -> anyhow::Result<Option<DailyBlockStats>> {
         let key = keys::encode_stats_key(stats_prefix::DAILY_BLOCK, date.as_bytes());
-        match self.get_cf(self.cf_stats(), &key)? {
+        match self.get_stats(&key)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
@@ -189,13 +189,13 @@ impl CkbadgerStore {
     pub fn put_daily_block_stats(&self, date: &str, stats: &DailyBlockStats) -> anyhow::Result<()> {
         let key = keys::encode_stats_key(stats_prefix::DAILY_BLOCK, date.as_bytes());
         let value = bincode::serialize(stats)?;
-        self.put_cf(self.cf_stats(), &key, &value)
+        self.put_stats(&key, &value)
     }
 
     /// List all daily block stats with their date keys.
     pub fn list_daily_block_stats(&self) -> anyhow::Result<Vec<(String, DailyBlockStats)>> {
         let prefix = [stats_prefix::DAILY_BLOCK];
-        let iter = self.prefix_iterator_cf(self.cf_stats(), &prefix);
+        let iter = self.prefix_iterator_stats(&prefix);
         let mut results = Vec::new();
 
         for item in iter.flatten() {
@@ -215,12 +215,12 @@ impl CkbadgerStore {
 
     pub fn put_block_time_dist(&self, bucket: i32, count: i32) -> anyhow::Result<()> {
         let key = keys::encode_stats_key(stats_prefix::BLOCK_TIME_DIST, &bucket.to_be_bytes());
-        self.put_cf(self.cf_stats(), &key, &count.to_le_bytes())
+        self.put_stats(&key, &count.to_le_bytes())
     }
 
     pub fn get_block_time_dist(&self, bucket: i32) -> anyhow::Result<Option<i32>> {
         let key = keys::encode_stats_key(stats_prefix::BLOCK_TIME_DIST, &bucket.to_be_bytes());
-        match self.get_cf(self.cf_stats(), &key)? {
+        match self.get_stats(&key)? {
             Some(value) if value.len() == 4 => {
                 Ok(Some(i32::from_le_bytes(value[..4].try_into().unwrap())))
             }
@@ -231,7 +231,7 @@ impl CkbadgerStore {
     /// List all block time distribution buckets.
     pub fn list_block_time_dist(&self) -> anyhow::Result<Vec<(i32, i32)>> {
         let prefix = [stats_prefix::BLOCK_TIME_DIST];
-        let iter = self.prefix_iterator_cf(self.cf_stats(), &prefix);
+        let iter = self.prefix_iterator_stats(&prefix);
         let mut results = Vec::new();
 
         for item in iter.flatten() {
@@ -253,13 +253,13 @@ impl CkbadgerStore {
 
     pub fn put_epoch_time_dist(&self, bucket: i32, count: i32) -> anyhow::Result<()> {
         let key = keys::encode_stats_key(stats_prefix::EPOCH_TIME_DIST, &bucket.to_be_bytes());
-        self.put_cf(self.cf_stats(), &key, &count.to_le_bytes())
+        self.put_stats(&key, &count.to_le_bytes())
     }
 
     /// List all epoch time distribution buckets.
     pub fn list_epoch_time_dist(&self) -> anyhow::Result<Vec<(i32, i32)>> {
         let prefix = [stats_prefix::EPOCH_TIME_DIST];
-        let iter = self.prefix_iterator_cf(self.cf_stats(), &prefix);
+        let iter = self.prefix_iterator_stats(&prefix);
         let mut results = Vec::new();
 
         for item in iter.flatten() {
@@ -318,7 +318,7 @@ impl CkbadgerStore {
             }
             let date_str = date.format("%Y%m%d").to_string();
             let key = crate::keys::encode_stats_key(stats_prefix::DAILY, date_str.as_bytes());
-            if let Some(val) = self.get_cf(self.cf_stats(), &key)? {
+            if let Some(val) = self.get_stats(&key)? {
                 if let Ok(mut s) = bincode::deserialize::<DailyStats>(&val) {
                     s.avg_block_time_ms = Some(*sum_ms / *count);
                     let value = bincode::serialize(&s)?;
@@ -344,7 +344,7 @@ impl CkbadgerStore {
 
     pub fn list_dao_daily_snapshots(&self) -> anyhow::Result<Vec<DaoDailySnapshot>> {
         let prefix = [stats_prefix::DAO_DAILY_SNAPSHOT];
-        let iter = self.prefix_iterator_cf(self.cf_stats(), &prefix);
+        let iter = self.prefix_iterator_stats(&prefix);
         let mut results = Vec::new();
 
         for item in iter.flatten() {
@@ -361,7 +361,7 @@ impl CkbadgerStore {
 
     pub fn get_dao_daily_snapshot(&self, date: &str) -> anyhow::Result<Option<DaoDailySnapshot>> {
         let key = keys::encode_stats_key(stats_prefix::DAO_DAILY_SNAPSHOT, date.as_bytes());
-        match self.get_cf(self.cf_stats(), &key)? {
+        match self.get_stats(&key)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
@@ -380,7 +380,7 @@ impl CkbadgerStore {
 
         // 1. Delete all existing DAO snapshots
         let prefix = [stats_prefix::DAO_DAILY_SNAPSHOT];
-        let iter = self.prefix_iterator_cf(self.cf_stats(), &prefix);
+        let iter = self.prefix_iterator_stats(&prefix);
         let mut delete_batch = crate::batch::StoreBatch::new(self);
         let mut deleted = 0usize;
         for item in iter.flatten() {
@@ -700,12 +700,12 @@ impl CkbadgerStore {
     pub fn put_hodl_wave(&self, date: &str, wave: &DailyHodlWave) -> anyhow::Result<()> {
         let key = keys::encode_stats_key(stats_prefix::HODL_WAVE, date.as_bytes());
         let value = bincode::serialize(wave)?;
-        self.put_cf(self.cf_stats(), &key, &value)
+        self.put_stats(&key, &value)
     }
 
     pub fn get_hodl_wave(&self, date: &str) -> anyhow::Result<Option<DailyHodlWave>> {
         let key = keys::encode_stats_key(stats_prefix::HODL_WAVE, date.as_bytes());
-        match self.get_cf(self.cf_stats(), &key)? {
+        match self.get_stats(&key)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
@@ -713,7 +713,7 @@ impl CkbadgerStore {
 
     pub fn list_hodl_waves(&self) -> anyhow::Result<Vec<(String, DailyHodlWave)>> {
         let prefix = [stats_prefix::HODL_WAVE];
-        let iter = self.prefix_iterator_cf(self.cf_stats(), &prefix);
+        let iter = self.prefix_iterator_stats(&prefix);
         let mut results = Vec::new();
 
         for item in iter.flatten() {
@@ -759,7 +759,7 @@ impl CkbadgerStore {
         date_yyyymmdd: u32,
     ) -> anyhow::Result<Option<ScriptDailyDelta>> {
         let key = keys::encode_script_daily_key(code_hash, is_type, date_yyyymmdd);
-        match self.get_cf(self.cf_stats(), &key)? {
+        match self.get_stats(&key)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
@@ -774,7 +774,7 @@ impl CkbadgerStore {
     ) -> anyhow::Result<()> {
         let key = keys::encode_script_daily_key(code_hash, is_type, date_yyyymmdd);
         let value = bincode::serialize(delta)?;
-        self.put_cf(self.cf_stats(), &key, &value)
+        self.put_stats(&key, &value)
     }
 
     pub fn list_script_daily_deltas(
@@ -799,7 +799,7 @@ impl CkbadgerStore {
             from_date_yyyymmdd.unwrap_or(u32::MIN),
         );
         let iter = self.iterator_cf(
-            self.cf_stats(),
+            self.stats_cf_for_key(&start_key),
             rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
         );
         let mut results = Vec::new();
@@ -1534,7 +1534,7 @@ mod tests {
             date_key.as_bytes(),
         );
         let value = bincode::serialize(snap).unwrap();
-        store.put_cf(store.cf_stats(), &key, &value).unwrap();
+        store.put_stats(&key, &value).unwrap();
     }
 
     #[test]

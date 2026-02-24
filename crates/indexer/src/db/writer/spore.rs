@@ -98,7 +98,7 @@ impl SporeBatchState {
         if let Some(cached) = self.spore_hourly_transfers.get(key) {
             return Ok(*cached);
         }
-        let loaded = match store.get_cf(store.cf_stats(), key)? {
+        let loaded = match store.get_stats(key)? {
             Some(v) if v.len() == 8 => i64::from_le_bytes(v[..8].try_into().unwrap()),
             _ => 0,
         };

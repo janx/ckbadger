@@ -34,7 +34,15 @@ pub const CF_TOKEN_HOLDERS: &str = "token_holders";
 pub const CF_SPORE_DATA: &str = "spore_data";
 pub const CF_NFT_DATA: &str = "nft_data";
 pub const CF_NFT_BY_COLLECTION: &str = "nft_by_collection";
-pub const CF_STATS: &str = "stats";
+pub const CF_STATS_CORE: &str = "stats_core";
+pub const CF_STATS_TOKEN: &str = "stats_token";
+pub const CF_STATS_SCRIPT: &str = "stats_script";
+pub const CF_STATS_CLUSTER: &str = "stats_cluster";
+pub const CF_STATS_SPORE: &str = "stats_spore";
+pub const CF_STATS_NFT: &str = "stats_nft";
+pub const CF_STATS_LOOKUP: &str = "stats_lookup";
+// Deprecated alias kept for callsites that still refer to the legacy name.
+pub const CF_STATS: &str = CF_STATS_CORE;
 pub const CF_SCRIPT_INFO: &str = "script_info";
 pub const CF_SYNC_META: &str = "sync_meta";
 pub const CF_SPORE_BY_CLUSTER: &str = "spore_by_cluster";
@@ -45,6 +53,15 @@ pub const CF_ACTIVITIES: &str = "activities";
 pub const CF_ADDR_DAILY_STATS: &str = "addr_daily_stats";
 pub const CF_CLUSTER_AGG: &str = "cluster_agg";
 pub const CF_NFT_COLLECTION_AGG: &str = "nft_collection_agg";
+pub const STATS_CFS: &[&str] = &[
+    CF_STATS_CORE,
+    CF_STATS_TOKEN,
+    CF_STATS_SCRIPT,
+    CF_STATS_CLUSTER,
+    CF_STATS_SPORE,
+    CF_STATS_NFT,
+    CF_STATS_LOOKUP,
+];
 
 /// All column family names, used during DB open.
 pub const ALL_CFS: &[&str] = &[
@@ -69,7 +86,13 @@ pub const ALL_CFS: &[&str] = &[
     CF_SPORE_DATA,
     CF_NFT_DATA,
     CF_NFT_BY_COLLECTION,
-    CF_STATS,
+    CF_STATS_CORE,
+    CF_STATS_TOKEN,
+    CF_STATS_SCRIPT,
+    CF_STATS_CLUSTER,
+    CF_STATS_SPORE,
+    CF_STATS_NFT,
+    CF_STATS_LOOKUP,
     CF_SCRIPT_INFO,
     CF_SYNC_META,
     CF_SPORE_BY_CLUSTER,
@@ -211,6 +234,12 @@ impl CkbadgerStore {
         CF_ADDR_TXS,
         CF_DAO_DEPOSITS,
         CF_ACTIVITIES,
+        CF_STATS_TOKEN,
+        CF_STATS_SCRIPT,
+        CF_STATS_CLUSTER,
+        CF_STATS_SPORE,
+        CF_STATS_NFT,
+        CF_STATS_LOOKUP,
     ];
 
     /// Historical append-heavy CFs.
@@ -390,8 +419,30 @@ impl CkbadgerStore {
     pub fn cf_nft_by_collection(&self) -> &ColumnFamily {
         self.cf(CF_NFT_BY_COLLECTION)
     }
+    pub fn cf_stats_core(&self) -> &ColumnFamily {
+        self.cf(CF_STATS_CORE)
+    }
+    pub fn cf_stats_token(&self) -> &ColumnFamily {
+        self.cf(CF_STATS_TOKEN)
+    }
+    pub fn cf_stats_script(&self) -> &ColumnFamily {
+        self.cf(CF_STATS_SCRIPT)
+    }
+    pub fn cf_stats_cluster(&self) -> &ColumnFamily {
+        self.cf(CF_STATS_CLUSTER)
+    }
+    pub fn cf_stats_spore(&self) -> &ColumnFamily {
+        self.cf(CF_STATS_SPORE)
+    }
+    pub fn cf_stats_nft(&self) -> &ColumnFamily {
+        self.cf(CF_STATS_NFT)
+    }
+    pub fn cf_stats_lookup(&self) -> &ColumnFamily {
+        self.cf(CF_STATS_LOOKUP)
+    }
+    #[allow(dead_code)]
     pub fn cf_stats(&self) -> &ColumnFamily {
-        self.cf(CF_STATS)
+        self.cf_stats_core()
     }
     pub fn cf_script_info(&self) -> &ColumnFamily {
         self.cf(CF_SCRIPT_INFO)
@@ -424,6 +475,46 @@ impl CkbadgerStore {
         self.cf(CF_NFT_COLLECTION_AGG)
     }
 
+    pub fn stats_cf_for_prefix(&self, prefix: u8) -> &ColumnFamily {
+        match prefix {
+            crate::keys::stats_prefix::DAILY
+            | crate::keys::stats_prefix::HOURLY
+            | crate::keys::stats_prefix::EPOCH
+            | crate::keys::stats_prefix::MINER
+            | crate::keys::stats_prefix::BLOCK_TIME_DIST
+            | crate::keys::stats_prefix::EPOCH_TIME_DIST
+            | crate::keys::stats_prefix::DAILY_BLOCK
+            | crate::keys::stats_prefix::DAO_DAILY_SNAPSHOT
+            | crate::keys::stats_prefix::HODL_WAVE => self.cf_stats_core(),
+            crate::keys::stats_prefix::TOKEN_TRANSFERS
+            | crate::keys::stats_prefix::TOKEN_HOURLY
+            | crate::keys::stats_prefix::TOKEN_DAILY => self.cf_stats_token(),
+            crate::keys::stats_prefix::SCRIPT_DAILY => self.cf_stats_script(),
+            crate::keys::stats_prefix::CLUSTER_DAILY | crate::keys::stats_prefix::CLUSTER_OWNER => {
+                self.cf_stats_cluster()
+            }
+            crate::keys::stats_prefix::SPORE_HOURLY
+            | crate::keys::stats_prefix::SPORE_DAILY
+            | crate::keys::stats_prefix::SPORE_TYPE_INDEX => self.cf_stats_spore(),
+            crate::keys::stats_prefix::NFT_HOURLY
+            | crate::keys::stats_prefix::NFT_DAILY
+            | crate::keys::stats_prefix::NFT_TYPE_INDEX => self.cf_stats_nft(),
+            crate::keys::stats_prefix::SPORE_OUTPOINT
+            | crate::keys::stats_prefix::MNFT_CLASS_OUTPOINT
+            | crate::keys::stats_prefix::MNFT_TOKEN_OUTPOINT
+            | crate::keys::stats_prefix::DOTBIT_ACCOUNT_OUTPOINT => self.cf_stats_lookup(),
+            _ => panic!("unknown stats prefix: 0x{prefix:02x}"),
+        }
+    }
+
+    pub fn stats_cf_for_key(&self, key: &[u8]) -> &ColumnFamily {
+        let prefix = key
+            .first()
+            .copied()
+            .unwrap_or_else(|| panic!("stats key cannot be empty"));
+        self.stats_cf_for_prefix(prefix)
+    }
+
     // ---- Raw DB operations ----
 
     pub fn get_cf(&self, cf: &ColumnFamily, key: &[u8]) -> anyhow::Result<Option<Vec<u8>>> {
@@ -436,6 +527,26 @@ impl CkbadgerStore {
 
     pub fn delete_cf(&self, cf: &ColumnFamily, key: &[u8]) -> anyhow::Result<()> {
         Ok(self.db.delete_cf(cf, key)?)
+    }
+
+    pub fn get_stats(&self, key: &[u8]) -> anyhow::Result<Option<Vec<u8>>> {
+        self.get_cf(self.stats_cf_for_key(key), key)
+    }
+
+    pub fn put_stats(&self, key: &[u8], value: &[u8]) -> anyhow::Result<()> {
+        self.put_cf(self.stats_cf_for_key(key), key, value)
+    }
+
+    pub fn delete_stats(&self, key: &[u8]) -> anyhow::Result<()> {
+        self.delete_cf(self.stats_cf_for_key(key), key)
+    }
+
+    pub fn prefix_iterator_stats(&self, prefix: &[u8]) -> impl Iterator<Item = KvResult> + '_ {
+        let prefix_tag = prefix
+            .first()
+            .copied()
+            .unwrap_or_else(|| panic!("stats prefix cannot be empty"));
+        self.prefix_iterator_cf(self.stats_cf_for_prefix(prefix_tag), prefix)
     }
 
     pub fn multi_get_cf(
@@ -859,6 +970,70 @@ mod tests {
         let cf = secondary.cf_sync_meta();
         let val = secondary.get_cf(cf, b"key").unwrap();
         assert_eq!(val.as_deref(), Some(b"value".as_slice()));
+    }
+
+    #[test]
+    fn test_stats_prefix_routes_to_expected_cf() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+
+        assert!(std::ptr::eq(
+            store.stats_cf_for_prefix(crate::keys::stats_prefix::DAILY),
+            store.cf_stats_core()
+        ));
+        assert!(std::ptr::eq(
+            store.stats_cf_for_prefix(crate::keys::stats_prefix::TOKEN_DAILY),
+            store.cf_stats_token()
+        ));
+        assert!(std::ptr::eq(
+            store.stats_cf_for_prefix(crate::keys::stats_prefix::SCRIPT_DAILY),
+            store.cf_stats_script()
+        ));
+        assert!(std::ptr::eq(
+            store.stats_cf_for_prefix(crate::keys::stats_prefix::CLUSTER_DAILY),
+            store.cf_stats_cluster()
+        ));
+        assert!(std::ptr::eq(
+            store.stats_cf_for_prefix(crate::keys::stats_prefix::SPORE_DAILY),
+            store.cf_stats_spore()
+        ));
+        assert!(std::ptr::eq(
+            store.stats_cf_for_prefix(crate::keys::stats_prefix::NFT_DAILY),
+            store.cf_stats_nft()
+        ));
+        assert!(std::ptr::eq(
+            store.stats_cf_for_prefix(crate::keys::stats_prefix::DOTBIT_ACCOUNT_OUTPOINT),
+            store.cf_stats_lookup()
+        ));
+    }
+
+    #[test]
+    fn test_put_stats_routes_to_split_cf() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+
+        let type_hash = [0x11u8; 32];
+        let token_key = crate::keys::encode_token_daily_key(&type_hash, 20260224);
+        store.put_stats(&token_key, b"token").unwrap();
+        assert_eq!(
+            store.get_cf(store.cf_stats_token(), &token_key).unwrap(),
+            Some(b"token".to_vec())
+        );
+        assert!(store
+            .get_cf(store.cf_stats_core(), &token_key)
+            .unwrap()
+            .is_none());
+
+        let core_key = crate::keys::encode_stats_key(crate::keys::stats_prefix::DAILY, b"20260224");
+        store.put_stats(&core_key, b"core").unwrap();
+        assert_eq!(
+            store.get_cf(store.cf_stats_core(), &core_key).unwrap(),
+            Some(b"core".to_vec())
+        );
+        assert!(store
+            .get_cf(store.cf_stats_token(), &core_key)
+            .unwrap()
+            .is_none());
     }
 
     #[test]

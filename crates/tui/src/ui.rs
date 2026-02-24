@@ -719,10 +719,37 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         .as_ref()
         .map(|m| (chrono::Utc::now().timestamp() - m.updated_at).max(0))
         .unwrap_or(0);
-    let right = Paragraph::new(header_right_line(
+    let (redis_state, redis_color) = redis_health_state(&app.redis_service);
+    let (api_state, api_color) = api_health_state(&app.api_service);
+    let (run_state, run_color) = runtime_health_state(app.runtime_diag.as_ref());
+    let lane_state = app
+        .sync_status
+        .as_ref()
+        .map(|sync| {
+            lane_lag_state(
+                sync.heavy_lane_enabled,
+                sync.heavy_lane_lag_blocks,
+                sync.heavy_lane_max_lag_blocks,
+                sync.heavy_lane_backpressure,
+            )
+        })
+        .unwrap_or(LaneLagState::Off);
+    let (lane_label, lane_color) = lane_lag_state_badge(lane_state);
+    let warn_count = warning_total(&sync_warning_counters(&app.sync_event_entries));
+    let clock_text = now.format("%H:%M:%S").to_string();
+    let right = Paragraph::new(header_right_line(HeaderRightSnapshot {
         stale_secs,
-        &now.format("%H:%M:%S").to_string(),
-    ))
+        clock_text: &clock_text,
+        redis_state,
+        redis_color,
+        api_state,
+        api_color,
+        run_state,
+        run_color,
+        lane_label,
+        lane_color,
+        warn_count,
+    }))
     .alignment(Alignment::Right);
     f.render_widget(right, cols[1]);
 }
@@ -744,14 +771,66 @@ fn header_title_line(mode_text: &str, mode_color: Color) -> Line<'static> {
     ])
 }
 
-fn header_right_line(stale_secs: i64, clock_text: &str) -> Line<'static> {
+struct HeaderRightSnapshot<'a> {
+    stale_secs: i64,
+    clock_text: &'a str,
+    redis_state: &'a str,
+    redis_color: Color,
+    api_state: &'a str,
+    api_color: Color,
+    run_state: &'a str,
+    run_color: Color,
+    lane_label: &'a str,
+    lane_color: Color,
+    warn_count: usize,
+}
+
+fn header_right_line(snapshot: HeaderRightSnapshot<'_>) -> Line<'static> {
+    let warn_color = if snapshot.warn_count > 0 {
+        AMBER
+    } else {
+        TERMINAL_GREEN
+    };
     Line::from(vec![
         Span::styled(
-            format!("stale {}s", stale_secs),
-            Style::default().fg(if stale_secs > 30 { AMBER } else { TERMINAL_DIM }),
+            format!(" R:{} ", snapshot.redis_state),
+            Style::default().fg(Color::Black).bg(snapshot.redis_color),
+        ),
+        Span::styled(" ", Style::default().fg(SLATE_700)),
+        Span::styled(
+            format!(" A:{} ", snapshot.api_state),
+            Style::default().fg(Color::Black).bg(snapshot.api_color),
+        ),
+        Span::styled(" ", Style::default().fg(SLATE_700)),
+        Span::styled(
+            format!(" Run:{} ", snapshot.run_state),
+            Style::default().fg(Color::Black).bg(snapshot.run_color),
+        ),
+        Span::styled(" ", Style::default().fg(SLATE_700)),
+        Span::styled(
+            format!(" {} ", snapshot.lane_label),
+            Style::default().fg(Color::Black).bg(snapshot.lane_color),
+        ),
+        Span::styled(" | ", Style::default().fg(SLATE_700)),
+        Span::styled("warn ", Style::default().fg(SLATE_500)),
+        Span::styled(
+            snapshot.warn_count.to_string(),
+            Style::default().fg(warn_color),
+        ),
+        Span::styled("  stale ", Style::default().fg(SLATE_500)),
+        Span::styled(
+            format!("{}s", snapshot.stale_secs),
+            Style::default().fg(if snapshot.stale_secs > 30 {
+                AMBER
+            } else {
+                TERMINAL_DIM
+            }),
         ),
         Span::styled(" │ ", Style::default().fg(SLATE_700)),
-        Span::styled(clock_text.to_string(), Style::default().fg(FOREGROUND)),
+        Span::styled(
+            snapshot.clock_text.to_string(),
+            Style::default().fg(FOREGROUND),
+        ),
     ])
 }
 
@@ -779,7 +858,7 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
         ),
     };
 
-    let line = Line::from(vec![
+    let mut spans = vec![
         Span::styled(" Tabs: ", Style::default().fg(SLATE_500)),
         Span::styled(" Overview ", overview_style),
         Span::styled("  ", Style::default().fg(SLATE_700)),
@@ -804,48 +883,54 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
             ),
             Style::default().fg(diagnostics_view_mode_color(app.diagnostics_view_mode)),
         ),
-        Span::styled("  ", Style::default().fg(SLATE_700)),
-        Span::styled(
-            if app.sync_focus_mode {
-                "[Focus]"
-            } else {
-                "[Dense]"
-            },
-            Style::default().fg(if app.sync_focus_mode {
-                AMBER
-            } else {
-                TERMINAL_DIM
-            }),
-        ),
-        Span::styled("  ", Style::default().fg(SLATE_700)),
-        Span::styled(
-            format!(
-                "[Events:{}]",
-                sync_event_filter_label(app.sync_event_filter)
-            ),
-            Style::default().fg(if app.sync_event_filter == SyncEventFilter::WarnOnly {
-                AMBER
-            } else {
-                SLATE_500
-            }),
-        ),
-        Span::styled("  ", Style::default().fg(SLATE_700)),
-        Span::styled(
-            format!(
-                "[Match:{}]",
-                sync_event_keyword_filter_label(app.sync_event_keyword_filter)
-            ),
-            Style::default().fg(
-                if app.sync_event_keyword_filter == SyncEventKeywordFilter::Any {
-                    SLATE_500
+    ];
+
+    if app.main_tab == MainTab::Sync {
+        spans.extend([
+            Span::styled("  ", Style::default().fg(SLATE_700)),
+            Span::styled(
+                if app.sync_focus_mode {
+                    "[Focus]"
                 } else {
-                    CYAN
+                    "[Dense]"
                 },
+                Style::default().fg(if app.sync_focus_mode {
+                    AMBER
+                } else {
+                    TERMINAL_DIM
+                }),
             ),
-        ),
-        Span::styled("  [Tab/s]", Style::default().fg(SLATE_500)),
-    ]);
-    f.render_widget(Paragraph::new(line), inner);
+            Span::styled("  ", Style::default().fg(SLATE_700)),
+            Span::styled(
+                format!(
+                    "[Events:{}]",
+                    sync_event_filter_label(app.sync_event_filter)
+                ),
+                Style::default().fg(if app.sync_event_filter == SyncEventFilter::WarnOnly {
+                    AMBER
+                } else {
+                    SLATE_500
+                }),
+            ),
+            Span::styled("  ", Style::default().fg(SLATE_700)),
+            Span::styled(
+                format!(
+                    "[Match:{}]",
+                    sync_event_keyword_filter_label(app.sync_event_keyword_filter)
+                ),
+                Style::default().fg(
+                    if app.sync_event_keyword_filter == SyncEventKeywordFilter::Any {
+                        SLATE_500
+                    } else {
+                        CYAN
+                    },
+                ),
+            ),
+        ]);
+    }
+
+    spans.push(Span::styled("  [Tab/s]", Style::default().fg(SLATE_500)));
+    f.render_widget(Paragraph::new(Line::from(spans)), inner);
 }
 
 fn draw_content(f: &mut Frame, app: &App, area: Rect) {
@@ -1009,38 +1094,62 @@ fn draw_sync_content(f: &mut Frame, app: &App, area: Rect) {
             }
         },
         LayoutDensity::Standard => {
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Length(4),
-                    Constraint::Length(7),
-                    Constraint::Length(8),
-                    Constraint::Length(8),
-                    Constraint::Min(3),
-                ])
-                .split(area);
-            draw_sync_realtime_bar(f, app, chunks[0]);
-            draw_sync_progress(f, app, chunks[1]);
-            draw_sync_charts(f, app, chunks[2]);
-            draw_sync_diagnostics(f, app, chunks[3]);
-            draw_sync_events(f, app, chunks[4]);
+            if area.height >= 34 {
+                let chart_height = if area.height >= 38 { 9 } else { 8 };
+                let chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([
+                        Constraint::Length(4),
+                        Constraint::Length(4),
+                        Constraint::Length(7),
+                        Constraint::Length(chart_height),
+                        Constraint::Length(chart_height),
+                        Constraint::Min(3),
+                    ])
+                    .split(area);
+                draw_sync_realtime_bar(f, app, chunks[0]);
+                draw_sync_alert_strip(f, app, chunks[1]);
+                draw_sync_progress(f, app, chunks[2]);
+                draw_sync_charts(f, app, chunks[3]);
+                draw_sync_diagnostics(f, app, chunks[4]);
+                draw_sync_events(f, app, chunks[5]);
+            } else {
+                let chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([
+                        Constraint::Length(4),
+                        Constraint::Length(7),
+                        Constraint::Length(8),
+                        Constraint::Length(8),
+                        Constraint::Min(3),
+                    ])
+                    .split(area);
+                draw_sync_realtime_bar(f, app, chunks[0]);
+                draw_sync_progress(f, app, chunks[1]);
+                draw_sync_charts(f, app, chunks[2]);
+                draw_sync_diagnostics(f, app, chunks[3]);
+                draw_sync_events(f, app, chunks[4]);
+            }
         }
         LayoutDensity::Wide => {
+            let chart_height = if area.height >= 36 { 9 } else { 8 };
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
                     Constraint::Length(4),
+                    Constraint::Length(4),
                     Constraint::Length(7),
-                    Constraint::Length(9),
-                    Constraint::Length(9),
+                    Constraint::Length(chart_height),
+                    Constraint::Length(chart_height),
                     Constraint::Min(3),
                 ])
                 .split(area);
             draw_sync_realtime_bar(f, app, chunks[0]);
-            draw_sync_progress(f, app, chunks[1]);
-            draw_sync_charts(f, app, chunks[2]);
-            draw_sync_diagnostics(f, app, chunks[3]);
-            draw_sync_events(f, app, chunks[4]);
+            draw_sync_alert_strip(f, app, chunks[1]);
+            draw_sync_progress(f, app, chunks[2]);
+            draw_sync_charts(f, app, chunks[3]);
+            draw_sync_diagnostics(f, app, chunks[4]);
+            draw_sync_events(f, app, chunks[5]);
         }
     }
 }
@@ -1143,65 +1252,88 @@ fn draw_sync_realtime_bar(f: &mut Frame, app: &App, area: Rect) {
     } else {
         AMBER
     };
+    let warn_count = warning_total(&sync_warning_counters(&app.sync_event_entries));
+    let warn_color = if warn_count > 0 {
+        AMBER
+    } else {
+        TERMINAL_GREEN
+    };
+    let lane_ratio_text = format_ratio_percent(lane_lag_ratio(
+        sync.heavy_lane_lag_blocks,
+        sync.heavy_lane_max_lag_blocks,
+    ));
 
-    let line = Line::from(vec![
-        Span::styled(heartbeat, Style::default().fg(heartbeat_color)),
-        Span::styled("  src ", Style::default().fg(SLATE_500)),
-        Span::styled(source_text, Style::default().fg(CYAN)),
-        Span::styled("  Behind ", Style::default().fg(SLATE_500)),
-        Span::styled(format_num(behind), Style::default().fg(FOREGROUND)),
-        Span::styled("  |  Rate ", Style::default().fg(SLATE_500)),
-        Span::styled(block_rate_text, Style::default().fg(TERMINAL_GREEN)),
-        Span::styled("  |  Tx ", Style::default().fg(SLATE_500)),
-        Span::styled(tx_rate_text, Style::default().fg(TERMINAL_GREEN)),
-        Span::styled("  |  ETA ", Style::default().fg(SLATE_500)),
-        Span::styled(
-            sync.eta.clone().unwrap_or_else(|| "-".to_string()),
-            Style::default().fg(FOREGROUND),
-        ),
-        Span::styled(" ", Style::default().fg(SLATE_700)),
-        Span::styled(
-            format!("{} ", eta_conf.0),
-            Style::default().fg(Color::Black).bg(eta_conf.1),
-        ),
-        Span::styled(" | phase ", Style::default().fg(SLATE_500)),
-        Span::styled(phase_label, Style::default().fg(phase_color)),
-        Span::styled(" | Bottleneck ", Style::default().fg(SLATE_500)),
-        Span::styled(
-            bottleneck_label(bottleneck),
-            Style::default().fg(match bottleneck {
-                SyncBottleneck::WriteBound => AMBER,
-                SyncBottleneck::FetchBound => TERMINAL_DIM,
-                SyncBottleneck::Mixed => FOREGROUND,
-                SyncBottleneck::Unknown => SLATE_500,
-            }),
-        ),
-        Span::styled(" | lane lag ", Style::default().fg(SLATE_500)),
-        Span::styled(lane_text, Style::default().fg(lane_state_color)),
-        Span::styled(" ", Style::default().fg(SLATE_700)),
-        Span::styled(
-            if !sync.heavy_lane_enabled {
-                "OFF"
-            } else if lane_bp {
-                "BP"
-            } else {
-                "FLOW"
-            },
-            if sync.heavy_lane_enabled {
-                lane_bp_style
-            } else {
-                Style::default().fg(SLATE_500)
-            },
-        ),
-        Span::styled(" ", Style::default().fg(SLATE_700)),
-        Span::styled(
-            format!("{} ", lane_state_label),
-            Style::default().fg(Color::Black).bg(lane_state_color),
-        ),
-        Span::styled(" | stale ", Style::default().fg(SLATE_500)),
-        Span::styled(format!("{stale_secs}s"), stale_style),
-    ]);
-    f.render_widget(Paragraph::new(line), inner);
+    let lines = vec![
+        Line::from(vec![
+            Span::styled(heartbeat, Style::default().fg(heartbeat_color)),
+            Span::styled(" src ", Style::default().fg(SLATE_500)),
+            Span::styled(source_text, Style::default().fg(CYAN)),
+            Span::styled("  progress ", Style::default().fg(SLATE_500)),
+            Span::styled(
+                format!("{:.2}%", sync.progress),
+                Style::default().fg(TERMINAL_GREEN),
+            ),
+            Span::styled("  behind ", Style::default().fg(SLATE_500)),
+            Span::styled(format_num(behind), Style::default().fg(FOREGROUND)),
+            Span::styled("  ETA ", Style::default().fg(SLATE_500)),
+            Span::styled(
+                sync.eta.clone().unwrap_or_else(|| "-".to_string()),
+                Style::default().fg(FOREGROUND),
+            ),
+            Span::styled(" ", Style::default().fg(SLATE_700)),
+            Span::styled(
+                format!("{} ", eta_conf.0),
+                Style::default().fg(Color::Black).bg(eta_conf.1),
+            ),
+            Span::styled("  stale ", Style::default().fg(SLATE_500)),
+            Span::styled(format!("{stale_secs}s"), stale_style),
+            Span::styled("  warn ", Style::default().fg(SLATE_500)),
+            Span::styled(warn_count.to_string(), Style::default().fg(warn_color)),
+        ]),
+        Line::from(vec![
+            Span::styled("phase ", Style::default().fg(SLATE_500)),
+            Span::styled(phase_label, Style::default().fg(phase_color)),
+            Span::styled("  bottleneck ", Style::default().fg(SLATE_500)),
+            Span::styled(
+                bottleneck_label(bottleneck),
+                Style::default().fg(match bottleneck {
+                    SyncBottleneck::WriteBound => AMBER,
+                    SyncBottleneck::FetchBound => TERMINAL_DIM,
+                    SyncBottleneck::Mixed => FOREGROUND,
+                    SyncBottleneck::Unknown => SLATE_500,
+                }),
+            ),
+            Span::styled("  blk ", Style::default().fg(SLATE_500)),
+            Span::styled(block_rate_text, Style::default().fg(TERMINAL_GREEN)),
+            Span::styled("  tx ", Style::default().fg(SLATE_500)),
+            Span::styled(tx_rate_text, Style::default().fg(TERMINAL_GREEN)),
+            Span::styled("  lane ", Style::default().fg(SLATE_500)),
+            Span::styled(lane_text, Style::default().fg(lane_state_color)),
+            Span::styled(" ", Style::default().fg(SLATE_700)),
+            Span::styled(lane_ratio_text, Style::default().fg(CYAN)),
+            Span::styled(" ", Style::default().fg(SLATE_700)),
+            Span::styled(
+                if !sync.heavy_lane_enabled {
+                    "OFF"
+                } else if lane_bp {
+                    "BP"
+                } else {
+                    "FLOW"
+                },
+                if sync.heavy_lane_enabled {
+                    lane_bp_style
+                } else {
+                    Style::default().fg(SLATE_500)
+                },
+            ),
+            Span::styled(" ", Style::default().fg(SLATE_700)),
+            Span::styled(
+                format!("{} ", lane_state_label),
+                Style::default().fg(Color::Black).bg(lane_state_color),
+            ),
+        ]),
+    ];
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
 fn heartbeat_is_on(elapsed_millis: u128) -> bool {
@@ -2360,6 +2492,21 @@ fn lane_status_text(
     format!("{lag}/{max_lag} {state}")
 }
 
+fn lane_lag_ratio(lag_blocks: Option<i64>, max_lag_blocks: Option<i64>) -> Option<f64> {
+    let lag = lag_blocks?;
+    let max_lag = max_lag_blocks?;
+    if lag < 0 || max_lag <= 0 {
+        return None;
+    }
+    Some((lag as f64 / max_lag as f64).clamp(0.0, 1.0))
+}
+
+fn format_ratio_percent(ratio: Option<f64>) -> String {
+    ratio
+        .map(|v| format!("{:.0}%", v * 100.0))
+        .unwrap_or_else(|| "-".to_string())
+}
+
 fn lane_lag_state(
     heavy_lane_enabled: bool,
     lag_blocks: Option<i64>,
@@ -2754,14 +2901,23 @@ fn draw_sync_alert_strip(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    let counters = sync_warning_counters(&app.sync_event_entries);
-    let latest_warn = app
+    let counters_total = sync_warning_counters(&app.sync_event_entries);
+    let now = Local::now();
+    let counters_recent =
+        sync_warning_counters_recent(&app.sync_event_entries, now, chrono::Duration::minutes(5));
+
+    let latest_warn_entry = app
         .sync_event_entries
         .iter()
         .rev()
-        .find(|entry| entry.level == LogLevel::Warning)
+        .find(|entry| entry.level == LogLevel::Warning);
+    let latest_warn = latest_warn_entry
         .map(|entry| trim_for_panel(&entry.message, inner.width as usize))
         .unwrap_or_else(|| "none".to_string());
+    let latest_warn_age = latest_warn_entry
+        .map(|entry| (now - entry.timestamp).num_seconds().max(0))
+        .map(|secs| format!("{secs}s"))
+        .unwrap_or_else(|| "-".to_string());
 
     let lane_state = app
         .sync_status
@@ -2785,23 +2941,63 @@ fn draw_sync_alert_strip(f: &mut Frame, app: &App, area: Rect) {
                 Style::default().fg(Color::Black).bg(lane_color),
             ),
             Span::styled("  ", Style::default().fg(SLATE_700)),
+            Span::styled("warn[5m/all] ", Style::default().fg(SLATE_500)),
             Span::styled("BP ", Style::default().fg(SLATE_500)),
             Span::styled(
-                counters.backpressure.to_string(),
-                Style::default().fg(AMBER),
+                format!(
+                    "{}/{}",
+                    counters_recent.backpressure, counters_total.backpressure
+                ),
+                Style::default().fg(warning_counter_color(
+                    counters_recent.backpressure,
+                    counters_total.backpressure,
+                )),
             ),
             Span::styled("  reset ", Style::default().fg(SLATE_500)),
-            Span::styled(counters.reset.to_string(), Style::default().fg(AMBER)),
+            Span::styled(
+                format!("{}/{}", counters_recent.reset, counters_total.reset),
+                Style::default().fg(warning_counter_color(
+                    counters_recent.reset,
+                    counters_total.reset,
+                )),
+            ),
             Span::styled("  stall ", Style::default().fg(SLATE_500)),
-            Span::styled(counters.stall.to_string(), Style::default().fg(AMBER)),
+            Span::styled(
+                format!("{}/{}", counters_recent.stall, counters_total.stall),
+                Style::default().fg(warning_counter_color(
+                    counters_recent.stall,
+                    counters_total.stall,
+                )),
+            ),
             Span::styled("  stale ", Style::default().fg(SLATE_500)),
-            Span::styled(counters.stale.to_string(), Style::default().fg(AMBER)),
+            Span::styled(
+                format!("{}/{}", counters_recent.stale, counters_total.stale),
+                Style::default().fg(warning_counter_color(
+                    counters_recent.stale,
+                    counters_total.stale,
+                )),
+            ),
             Span::styled("  other ", Style::default().fg(SLATE_500)),
-            Span::styled(counters.other.to_string(), Style::default().fg(FOREGROUND)),
+            Span::styled(
+                format!("{}/{}", counters_recent.other, counters_total.other),
+                Style::default().fg(warning_counter_color(
+                    counters_recent.other,
+                    counters_total.other,
+                )),
+            ),
         ]),
         Line::from(vec![
             Span::styled("Latest WARN ", Style::default().fg(SLATE_500)),
-            Span::styled(latest_warn, Style::default().fg(AMBER)),
+            Span::styled(latest_warn_age, Style::default().fg(TERMINAL_DIM)),
+            Span::styled(" ago ", Style::default().fg(SLATE_500)),
+            Span::styled(
+                latest_warn,
+                Style::default().fg(if latest_warn_entry.is_some() {
+                    AMBER
+                } else {
+                    TERMINAL_GREEN
+                }),
+            ),
         ]),
     ];
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
@@ -2944,9 +3140,25 @@ struct WarningCounters {
 }
 
 fn sync_warning_counters(entries: &VecDeque<LogEntry>) -> WarningCounters {
+    sync_warning_counters_with_cutoff(entries, None)
+}
+
+fn sync_warning_counters_recent(
+    entries: &VecDeque<LogEntry>,
+    now: DateTime<Local>,
+    window: chrono::Duration,
+) -> WarningCounters {
+    sync_warning_counters_with_cutoff(entries, Some(now - window))
+}
+
+fn sync_warning_counters_with_cutoff(
+    entries: &VecDeque<LogEntry>,
+    cutoff: Option<DateTime<Local>>,
+) -> WarningCounters {
     let mut counters = WarningCounters::default();
     for entry in entries
         .iter()
+        .filter(|entry| cutoff.is_none_or(|ts| entry.timestamp >= ts))
         .filter(|entry| entry.level == LogLevel::Warning)
     {
         let m = entry.message.to_ascii_lowercase();
@@ -2963,6 +3175,20 @@ fn sync_warning_counters(entries: &VecDeque<LogEntry>) -> WarningCounters {
         }
     }
     counters
+}
+
+fn warning_counter_color(recent: usize, total: usize) -> Color {
+    if recent > 0 {
+        AMBER
+    } else if total > 0 {
+        TERMINAL_DIM
+    } else {
+        SLATE_500
+    }
+}
+
+fn warning_total(counters: &WarningCounters) -> usize {
+    counters.backpressure + counters.reset + counters.stall + counters.stale + counters.other
 }
 
 fn draw_memory_stats(f: &mut Frame, app: &App, area: Rect) {
@@ -4014,43 +4240,56 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let hint = Line::from(vec![
-        Span::styled("q", Style::default().fg(TERMINAL_GREEN)),
-        Span::styled(" quit  ", Style::default().fg(SLATE_500)),
-        Span::styled("h/l Tab/s", Style::default().fg(TERMINAL_GREEN)),
-        Span::styled(" switch-tab  ", Style::default().fg(SLATE_500)),
-        Span::styled("c", Style::default().fg(TERMINAL_GREEN)),
-        Span::styled(" compact  ", Style::default().fg(SLATE_500)),
-        Span::styled("f", Style::default().fg(TERMINAL_GREEN)),
-        Span::styled(" focus  ", Style::default().fg(SLATE_500)),
-        Span::styled("e", Style::default().fg(TERMINAL_GREEN)),
-        Span::styled(" event-filter  ", Style::default().fg(SLATE_500)),
-        Span::styled("x", Style::default().fg(TERMINAL_GREEN)),
-        Span::styled(" keyword-match  ", Style::default().fg(SLATE_500)),
-        Span::styled("v", Style::default().fg(TERMINAL_GREEN)),
-        Span::styled(" diag-view  ", Style::default().fg(SLATE_500)),
-        Span::styled("?", Style::default().fg(TERMINAL_GREEN)),
-        Span::styled(" help  ", Style::default().fg(SLATE_500)),
-        Span::styled("j/k", Style::default().fg(TERMINAL_GREEN)),
-        Span::styled(" log-scroll  ", Style::default().fg(SLATE_500)),
-        Span::styled("R", Style::default().fg(TERMINAL_GREEN)),
-        Span::styled(" refresh", Style::default().fg(SLATE_500)),
-    ]);
-
-    let mut lines = vec![hint];
+    let mut spans = footer_hint_spans(app.main_tab);
     if let Some((msg, ts)) = &app.status_message {
         let color = if ts.elapsed().as_secs() < 5 {
             AMBER
         } else {
             ERROR_RED
         };
-        lines.push(Line::from(Span::styled(
-            msg.clone(),
-            Style::default().fg(color),
-        )));
+        spans.extend([
+            Span::styled("  |  ", Style::default().fg(SLATE_700)),
+            Span::styled(msg.clone(), Style::default().fg(color)),
+        ]);
     }
 
-    f.render_widget(Paragraph::new(lines).alignment(Alignment::Left), inner);
+    f.render_widget(
+        Paragraph::new(Line::from(spans)).alignment(Alignment::Left),
+        inner,
+    );
+}
+
+fn footer_hint_spans(main_tab: MainTab) -> Vec<Span<'static>> {
+    let mut spans = vec![
+        Span::styled("q", Style::default().fg(TERMINAL_GREEN)),
+        Span::styled(" quit  ", Style::default().fg(SLATE_500)),
+        Span::styled("h/l Tab/s", Style::default().fg(TERMINAL_GREEN)),
+        Span::styled(" tab  ", Style::default().fg(SLATE_500)),
+        Span::styled("j/k g/G", Style::default().fg(TERMINAL_GREEN)),
+        Span::styled(" scroll  ", Style::default().fg(SLATE_500)),
+        Span::styled("?", Style::default().fg(TERMINAL_GREEN)),
+        Span::styled(" help  ", Style::default().fg(SLATE_500)),
+        Span::styled("R", Style::default().fg(TERMINAL_GREEN)),
+        Span::styled(" refresh  ", Style::default().fg(SLATE_500)),
+        Span::styled("c", Style::default().fg(TERMINAL_GREEN)),
+        Span::styled(" compact  ", Style::default().fg(SLATE_500)),
+        Span::styled("v", Style::default().fg(TERMINAL_GREEN)),
+        Span::styled(" diag", Style::default().fg(SLATE_500)),
+    ];
+
+    if main_tab == MainTab::Sync {
+        spans.extend([
+            Span::styled("  ", Style::default().fg(SLATE_700)),
+            Span::styled("f", Style::default().fg(TERMINAL_GREEN)),
+            Span::styled(" focus  ", Style::default().fg(SLATE_500)),
+            Span::styled("e", Style::default().fg(TERMINAL_GREEN)),
+            Span::styled(" events  ", Style::default().fg(SLATE_500)),
+            Span::styled("x", Style::default().fg(TERMINAL_GREEN)),
+            Span::styled(" match", Style::default().fg(SLATE_500)),
+        ]);
+    }
+
+    spans
 }
 
 fn push_history_sample(history: &mut VecDeque<f64>, sample: f64) {
@@ -4573,20 +4812,21 @@ mod tests {
         adaptive_state_label, api_health_state, chart_height_warning, compact_overview_layout,
         compact_sync_layout, consumed_cells_source_color, consumed_cells_source_label,
         db_lane_health, db_lane_lines, dense_right_lines, detail_right_lines,
-        diagnostics_dense_panel, eta_confidence_label, format_age_secs, format_hit_rate,
-        format_num, format_num_commas, format_rate_pair, format_ratio, format_signed_num_i128,
-        format_ttl, header_right_line, header_title_line, heartbeat_is_on,
-        io_fetch_write_jitter_line, is_rate_drop, lane_lag_state, lane_lag_state_badge,
-        lane_status_text, overview_log_min_height, overview_services_min_height,
-        pipeline_bottleneck, pipeline_flow_state, pipeline_reset_line, rate_jitter,
-        redis_health_state, redis_key_line, redis_max_key_age, runtime_health_state,
-        runtime_live_delta, sparkline, stack_sync_charts, startup_phase_label,
-        storage_runtime_columns, sync_bottleneck, sync_chart_specs, sync_event_filter_label,
-        sync_event_keyword_filter_label, sync_event_level_counts_slice,
-        sync_event_message_matches_keyword, sync_timing_lines, sync_warning_counters, trend_delta,
-        trim_for_panel, AdaptiveControlSnapshot, Color, CompactOverviewLayout, CompactSyncLayout,
-        DiagnosticsViewMode, LaneLagState, LogEntry, LogLevel, SyncBottleneck, SyncChartKind,
-        SyncEventFilter, SyncEventKeywordFilter, TERMINAL_DIM,
+        diagnostics_dense_panel, eta_confidence_label, footer_hint_spans, format_age_secs,
+        format_hit_rate, format_num, format_num_commas, format_rate_pair, format_ratio,
+        format_ratio_percent, format_signed_num_i128, format_ttl, header_right_line,
+        header_title_line, heartbeat_is_on, io_fetch_write_jitter_line, is_rate_drop,
+        lane_lag_ratio, lane_lag_state, lane_lag_state_badge, lane_status_text,
+        overview_log_min_height, overview_services_min_height, pipeline_bottleneck,
+        pipeline_flow_state, pipeline_reset_line, rate_jitter, redis_health_state, redis_key_line,
+        redis_max_key_age, runtime_health_state, runtime_live_delta, sparkline, stack_sync_charts,
+        startup_phase_label, storage_runtime_columns, sync_bottleneck, sync_chart_specs,
+        sync_event_filter_label, sync_event_keyword_filter_label, sync_event_level_counts_slice,
+        sync_event_message_matches_keyword, sync_timing_lines, sync_warning_counters,
+        sync_warning_counters_recent, trend_delta, trim_for_panel, warning_counter_color,
+        warning_total, AdaptiveControlSnapshot, Color, CompactOverviewLayout, CompactSyncLayout,
+        DiagnosticsViewMode, HeaderRightSnapshot, LaneLagState, LogEntry, LogLevel, MainTab,
+        SyncBottleneck, SyncChartKind, SyncEventFilter, SyncEventKeywordFilter, TERMINAL_DIM,
     };
     use crate::db::{ApiServiceInfo, RedisServiceInfo, RuntimeDiagData};
     use chrono::Local;
@@ -4613,8 +4853,25 @@ mod tests {
 
     #[test]
     fn test_header_right_line_does_not_include_elapsed_ms() {
-        let line = header_right_line(12, "10:23:45");
+        let line = header_right_line(HeaderRightSnapshot {
+            stale_secs: 12,
+            clock_text: "10:23:45",
+            redis_state: "OK",
+            redis_color: Color::Rgb(0, 255, 65),
+            api_state: "OK",
+            api_color: Color::Rgb(0, 255, 65),
+            run_state: "WARN",
+            run_color: Color::Rgb(255, 176, 0),
+            lane_label: "LAG WARN",
+            lane_color: Color::Rgb(255, 176, 0),
+            warn_count: 3,
+        });
         let text = line_text(&line);
+        assert!(text.contains("R:OK"));
+        assert!(text.contains("A:OK"));
+        assert!(text.contains("Run:WARN"));
+        assert!(text.contains("LAG WARN"));
+        assert!(text.contains("warn 3"));
         assert!(text.contains("stale 12s"));
         assert!(text.contains("10:23:45"));
         assert!(!text.contains("ago"));
@@ -4856,6 +5113,15 @@ mod tests {
     }
 
     #[test]
+    fn test_lane_lag_ratio_helpers() {
+        assert_eq!(lane_lag_ratio(Some(10), Some(20)), Some(0.5));
+        assert_eq!(lane_lag_ratio(Some(-1), Some(20)), None);
+        assert_eq!(lane_lag_ratio(Some(10), Some(0)), None);
+        assert_eq!(format_ratio_percent(Some(0.5)), "50%");
+        assert_eq!(format_ratio_percent(None), "-");
+    }
+
+    #[test]
     fn test_lane_lag_state_and_badge() {
         assert_eq!(lane_lag_state(false, None, None, None), LaneLagState::Off);
         assert_eq!(
@@ -4987,6 +5253,40 @@ mod tests {
         assert_eq!(counters.stall, 1);
         assert_eq!(counters.stale, 1);
         assert_eq!(counters.other, 1);
+        assert_eq!(warning_total(&counters), 5);
+    }
+
+    #[test]
+    fn test_sync_warning_counters_recent_window() {
+        let now = Local::now();
+        let mut entries = VecDeque::new();
+        entries.push_back(LogEntry {
+            timestamp: now - chrono::Duration::minutes(1),
+            message: "heavy lane lag high; pausing core lane for backpressure".to_string(),
+            level: LogLevel::Warning,
+        });
+        entries.push_back(LogEntry {
+            timestamp: now - chrono::Duration::minutes(7),
+            message: "pipeline reset #3 (pipeline batch mismatch)".to_string(),
+            level: LogLevel::Warning,
+        });
+        entries.push_back(LogEntry {
+            timestamp: now - chrono::Duration::minutes(2),
+            message: "syncing started".to_string(),
+            level: LogLevel::Info,
+        });
+
+        let total = sync_warning_counters(&entries);
+        let recent = sync_warning_counters_recent(&entries, now, chrono::Duration::minutes(5));
+
+        assert_eq!(total.backpressure, 1);
+        assert_eq!(total.reset, 1);
+        assert_eq!(recent.backpressure, 1);
+        assert_eq!(recent.reset, 0);
+
+        assert_eq!(warning_counter_color(1, 4), Color::Rgb(255, 176, 0));
+        assert_eq!(warning_counter_color(0, 2), Color::Rgb(0, 204, 51));
+        assert_eq!(warning_counter_color(0, 0), Color::Rgb(160, 174, 192));
     }
 
     #[test]
@@ -5340,6 +5640,18 @@ mod tests {
             compact_overview_layout(Rect::new(0, 0, 100, 32)),
             CompactOverviewLayout::MemoryAndStorage
         );
+    }
+
+    #[test]
+    fn test_footer_hint_spans_are_tab_specific() {
+        let overview_line = Line::from(footer_hint_spans(MainTab::Overview));
+        let sync_line = Line::from(footer_hint_spans(MainTab::Sync));
+        let overview_text = line_text(&overview_line);
+        let sync_text = line_text(&sync_line);
+        assert!(!overview_text.contains("focus"));
+        assert!(!overview_text.contains("events"));
+        assert!(sync_text.contains("focus"));
+        assert!(sync_text.contains("events"));
     }
 
     #[test]

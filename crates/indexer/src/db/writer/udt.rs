@@ -37,7 +37,7 @@ impl BatchWriter {
 
         let cf_keys: Vec<_> = keyed_changes
             .iter()
-            .map(|(key, _, _)| (self.store.cf_stats(), key.as_slice()))
+            .map(|(key, _, _)| (self.store.stats_cf_for_key(key), key.as_slice()))
             .collect();
         let existing_results = self.store.multi_get_cf(cf_keys);
 
@@ -321,7 +321,7 @@ impl BatchWriter {
             let hour_bucket = ts_ms / 3_600_000;
             let current_hourly = {
                 let key = ckbadger_store::keys::encode_token_hourly_key(type_hash, hour_bucket);
-                match self.store.get_cf(self.store.cf_stats(), &key)? {
+                match self.store.get_stats(&key)? {
                     Some(v) if v.len() == 8 => i64::from_le_bytes(v[..8].try_into().unwrap()),
                     _ => 0,
                 }

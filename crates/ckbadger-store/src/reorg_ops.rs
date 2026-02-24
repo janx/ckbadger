@@ -579,14 +579,17 @@ impl CkbadgerStore {
         if let Some(cutoff) = replay_cutoff_date.as_deref() {
             let mut stats_removed = 0u64;
             let mut stage = RollbackStageProgress::new("delete_stats_from_cutoff");
-            let iter = self.iterator_cf(self.cf_stats(), IteratorMode::Start);
-            for item in iter.flatten() {
-                let (key, _) = item;
-                if should_delete_stats_for_replay(&key, cutoff.as_bytes())? {
-                    batch.delete_cf(self.cf_stats(), &key);
-                    stats_removed += 1;
+            for &cf_name in crate::store::STATS_CFS {
+                let cf = self.cf(cf_name);
+                let iter = self.iterator_cf(cf, IteratorMode::Start);
+                for item in iter.flatten() {
+                    let (key, _) = item;
+                    if should_delete_stats_for_replay(&key, cutoff.as_bytes())? {
+                        batch.delete_cf(cf, &key);
+                        stats_removed += 1;
+                    }
+                    stage.tick(stats_removed);
                 }
-                stage.tick(stats_removed);
             }
             stage.finish(stats_removed);
         }

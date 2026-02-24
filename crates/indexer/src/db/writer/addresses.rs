@@ -482,7 +482,7 @@ impl BatchWriter {
 
         let cf_keys: Vec<_> = keyed_changes
             .iter()
-            .map(|(key, _, _)| (self.store.cf_stats(), key.as_slice()))
+            .map(|(key, _, _)| (self.store.stats_cf_for_key(key), key.as_slice()))
             .collect();
         let existing_results = self.store.multi_get_cf(cf_keys);
 

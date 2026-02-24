@@ -217,7 +217,7 @@ impl CkbadgerStore {
     /// Get total transfer count for a token from the stats CF.
     pub fn get_token_transfers_count(&self, type_hash: &[u8]) -> anyhow::Result<i64> {
         let key = keys::encode_token_transfers_key(type_hash);
-        match self.get_cf(self.cf_stats(), &key)? {
+        match self.get_stats(&key)? {
             Some(value) if value.len() == 8 => {
                 Ok(i64::from_le_bytes(value[..8].try_into().unwrap()))
             }
@@ -230,7 +230,7 @@ impl CkbadgerStore {
         let current_hour = now_ms / 3_600_000;
         let cutoff_hour = current_hour - 24;
         let prefix = keys::encode_token_hourly_prefix(type_hash);
-        let iter = self.prefix_iterator_cf(self.cf_stats(), &prefix);
+        let iter = self.prefix_iterator_stats(&prefix);
         let mut total: i64 = 0;
 
         for item in iter.flatten() {
@@ -255,7 +255,7 @@ impl CkbadgerStore {
         date_yyyymmdd: u32,
     ) -> anyhow::Result<Option<TokenDailyDelta>> {
         let key = keys::encode_token_daily_key(type_hash, date_yyyymmdd);
-        match self.get_cf(self.cf_stats(), &key)? {
+        match self.get_stats(&key)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
@@ -269,7 +269,7 @@ impl CkbadgerStore {
     ) -> anyhow::Result<()> {
         let key = keys::encode_token_daily_key(type_hash, date_yyyymmdd);
         let value = bincode::serialize(delta)?;
-        self.put_cf(self.cf_stats(), &key, &value)
+        self.put_stats(&key, &value)
     }
 
     pub fn list_token_daily_deltas(
@@ -289,7 +289,7 @@ impl CkbadgerStore {
         let start_key =
             keys::encode_token_daily_key(type_hash, from_date_yyyymmdd.unwrap_or(u32::MIN));
         let iter = self.iterator_cf(
-            self.cf_stats(),
+            self.stats_cf_for_key(&start_key),
             rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
         );
         let mut results = Vec::new();
@@ -327,7 +327,7 @@ impl CkbadgerStore {
     ) -> anyhow::Result<Option<TokenDailyValidationError>> {
         let start = [keys::STATS_PREFIX_TOKEN_DAILY];
         let iter = self.iterator_cf(
-            self.cf_stats(),
+            self.stats_cf_for_prefix(keys::STATS_PREFIX_TOKEN_DAILY),
             IteratorMode::From(&start, rocksdb::Direction::Forward),
         );
 
@@ -627,7 +627,7 @@ impl CkbadgerStore {
         let mut write_batch = WriteBatch::default();
         let start = [keys::STATS_PREFIX_TOKEN_DAILY];
         let iter = self.iterator_cf(
-            self.cf_stats(),
+            self.stats_cf_for_prefix(keys::STATS_PREFIX_TOKEN_DAILY),
             IteratorMode::From(&start, rocksdb::Direction::Forward),
         );
         for item in iter.flatten() {
@@ -635,7 +635,7 @@ impl CkbadgerStore {
             if key.first().copied() != Some(keys::STATS_PREFIX_TOKEN_DAILY) {
                 break;
             }
-            write_batch.delete_cf(self.cf_stats(), &key);
+            write_batch.delete_cf(self.stats_cf_for_key(&key), &key);
             result.token_daily_cleared += 1;
             if result
                 .token_daily_cleared
@@ -657,7 +657,7 @@ impl CkbadgerStore {
                 live_capacity_delta: capacity_delta,
                 live_occupied_capacity_delta: occupied_delta,
             })?;
-            write_batch.put_cf(self.cf_stats(), key, value);
+            write_batch.put_cf(self.stats_cf_for_key(&key), key, value);
             result.token_daily_written += 1;
             if result
                 .token_daily_written
@@ -686,7 +686,7 @@ impl CkbadgerStore {
 
         // Scan all entries with the TOKEN_HOURLY prefix (0x0A)
         let prefix = [keys::STATS_PREFIX_TOKEN_HOURLY];
-        let iter = self.prefix_iterator_cf(self.cf_stats(), &prefix);
+        let iter = self.prefix_iterator_stats(&prefix);
         let mut result: HashMap<Vec<u8>, i64> = HashMap::new();
 
         for item in iter.flatten() {
@@ -718,7 +718,7 @@ impl CkbadgerStore {
         let cutoff_hour = current_hour - 24;
 
         let prefix = [keys::STATS_PREFIX_SPORE_HOURLY];
-        let iter = self.prefix_iterator_cf(self.cf_stats(), &prefix);
+        let iter = self.prefix_iterator_stats(&prefix);
         let mut result: HashMap<Vec<u8>, i64> = HashMap::new();
 
         for item in iter.flatten() {
@@ -746,7 +746,7 @@ impl CkbadgerStore {
         let cutoff_hour = current_hour - 24;
 
         let prefix = [keys::STATS_PREFIX_NFT_HOURLY];
-        let iter = self.prefix_iterator_cf(self.cf_stats(), &prefix);
+        let iter = self.prefix_iterator_stats(&prefix);
         let mut result: HashMap<Vec<u8>, i64> = HashMap::new();
 
         for item in iter.flatten() {
@@ -774,7 +774,7 @@ impl CkbadgerStore {
         cutoff_hour: i64,
     ) -> anyhow::Result<u64> {
         let prefix = keys::encode_token_hourly_prefix(type_hash);
-        let iter = self.prefix_iterator_cf(self.cf_stats(), &prefix);
+        let iter = self.prefix_iterator_stats(&prefix);
         let mut deleted = 0u64;
 
         for item in iter.flatten() {
@@ -785,7 +785,7 @@ impl CkbadgerStore {
             if key.len() == 41 {
                 let hour = i64::from_be_bytes(key[33..41].try_into().unwrap());
                 if hour < cutoff_hour {
-                    self.delete_cf(self.cf_stats(), &key)?;
+                    self.delete_stats(&key)?;
                     deleted += 1;
                 }
             }
@@ -1056,16 +1056,19 @@ impl CkbadgerStore {
 
         // 4) Clear token stats rollups (TOKEN_TRANSFERS and TOKEN_HOURLY).
         let mut clear_batch = WriteBatch::default();
-        let iter = self.iterator_cf(self.cf_stats(), IteratorMode::Start);
+        let iter = self.iterator_cf(
+            self.stats_cf_for_prefix(keys::STATS_PREFIX_TOKEN_TRANSFERS),
+            IteratorMode::Start,
+        );
         for item in iter.flatten() {
             let (key, _) = item;
             match key.first().copied() {
                 Some(keys::STATS_PREFIX_TOKEN_TRANSFERS) => {
-                    clear_batch.delete_cf(self.cf_stats(), &key);
+                    clear_batch.delete_cf(self.stats_cf_for_key(&key), &key);
                     result.token_transfer_stats_cleared += 1;
                 }
                 Some(keys::STATS_PREFIX_TOKEN_HOURLY) => {
-                    clear_batch.delete_cf(self.cf_stats(), &key);
+                    clear_batch.delete_cf(self.stats_cf_for_key(&key), &key);
                     result.token_hourly_stats_cleared += 1;
                 }
                 _ => continue,
@@ -1167,7 +1170,7 @@ impl CkbadgerStore {
             if transfers_count > 0 {
                 let transfer_stats_key = keys::encode_token_transfers_key(&type_hash);
                 write_batch.put_cf(
-                    self.cf_stats(),
+                    self.stats_cf_for_key(&transfer_stats_key),
                     &transfer_stats_key,
                     transfers_count.to_le_bytes(),
                 );
@@ -1178,7 +1181,11 @@ impl CkbadgerStore {
 
             for (hour_bucket, count) in hourly_counts {
                 let hourly_key = keys::encode_token_hourly_key(&type_hash, hour_bucket);
-                write_batch.put_cf(self.cf_stats(), &hourly_key, count.to_le_bytes());
+                write_batch.put_cf(
+                    self.stats_cf_for_key(&hourly_key),
+                    &hourly_key,
+                    count.to_le_bytes(),
+                );
                 pending_writes += 1;
                 result.token_hourly_stats_written += 1;
                 flush_rebuild_batch(self, &mut write_batch, &mut pending_writes, false)?;

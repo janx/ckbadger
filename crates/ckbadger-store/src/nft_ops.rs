@@ -91,7 +91,7 @@ impl CkbadgerStore {
         type_script_hash: &[u8],
     ) -> anyhow::Result<Option<SporeTypeIndex>> {
         let key = keys::encode_spore_type_index_key(type_script_hash);
-        match self.get_cf(self.cf_stats(), &key)? {
+        match self.get_stats(&key)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
@@ -104,7 +104,7 @@ impl CkbadgerStore {
     ) -> anyhow::Result<()> {
         let key = keys::encode_spore_type_index_key(type_script_hash);
         let value = bincode::serialize(index)?;
-        self.put_cf(self.cf_stats(), &key, &value)
+        self.put_stats(&key, &value)
     }
 
     pub fn get_spore_id_by_outpoint(
@@ -113,7 +113,7 @@ impl CkbadgerStore {
         output_index: i16,
     ) -> anyhow::Result<Option<Vec<u8>>> {
         let key = keys::encode_spore_outpoint_key(tx_hash, output_index);
-        match self.get_cf(self.cf_stats(), &key)? {
+        match self.get_stats(&key)? {
             Some(value) if value.len() >= 32 => Ok(Some(value[..32].to_vec())),
             _ => Ok(None),
         }
@@ -123,7 +123,7 @@ impl CkbadgerStore {
         &self,
         outpoints: &[(&[u8], i16)],
     ) -> Vec<(Vec<u8>, i16, Vec<u8>)> {
-        let cf = self.cf_stats();
+        let cf = self.stats_cf_for_prefix(keys::STATS_PREFIX_SPORE_OUTPOINT);
         let keys: Vec<[u8; keys::SPORE_OUTPOINT_KEY_SIZE]> = outpoints
             .iter()
             .map(|(tx_hash, idx)| keys::encode_spore_outpoint_key(tx_hash, *idx))
@@ -150,7 +150,7 @@ impl CkbadgerStore {
         output_index: i16,
     ) -> anyhow::Result<Option<Vec<u8>>> {
         let key = keys::encode_mnft_class_outpoint_key(tx_hash, output_index);
-        match self.get_cf(self.cf_stats(), &key)? {
+        match self.get_stats(&key)? {
             Some(value) if !value.is_empty() => Ok(Some(value)),
             _ => Ok(None),
         }
@@ -162,7 +162,7 @@ impl CkbadgerStore {
         output_index: i16,
     ) -> anyhow::Result<Option<Vec<u8>>> {
         let key = keys::encode_mnft_token_outpoint_key(tx_hash, output_index);
-        match self.get_cf(self.cf_stats(), &key)? {
+        match self.get_stats(&key)? {
             Some(value) if !value.is_empty() => Ok(Some(value)),
             _ => Ok(None),
         }
@@ -172,7 +172,7 @@ impl CkbadgerStore {
         &self,
         outpoints: &[(&[u8], i16)],
     ) -> Vec<(Vec<u8>, i16, Vec<u8>)> {
-        let cf = self.cf_stats();
+        let cf = self.stats_cf_for_prefix(keys::STATS_PREFIX_MNFT_TOKEN_OUTPOINT);
         let keys: Vec<[u8; keys::MNFT_TOKEN_OUTPOINT_KEY_SIZE]> = outpoints
             .iter()
             .map(|(tx_hash, idx)| keys::encode_mnft_token_outpoint_key(tx_hash, *idx))
@@ -199,7 +199,7 @@ impl CkbadgerStore {
         output_index: i16,
     ) -> anyhow::Result<Option<Vec<u8>>> {
         let key = keys::encode_dotbit_account_outpoint_key(tx_hash, output_index);
-        match self.get_cf(self.cf_stats(), &key)? {
+        match self.get_stats(&key)? {
             Some(value) if !value.is_empty() => Ok(Some(value)),
             _ => Ok(None),
         }
@@ -209,7 +209,7 @@ impl CkbadgerStore {
         &self,
         outpoints: &[(&[u8], i16)],
     ) -> Vec<(Vec<u8>, i16, Vec<u8>)> {
-        let cf = self.cf_stats();
+        let cf = self.stats_cf_for_prefix(keys::STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT);
         let keys: Vec<[u8; keys::DOTBIT_ACCOUNT_OUTPOINT_KEY_SIZE]> = outpoints
             .iter()
             .map(|(tx_hash, idx)| keys::encode_dotbit_account_outpoint_key(tx_hash, *idx))
@@ -245,7 +245,7 @@ impl CkbadgerStore {
         }
 
         let prefix = [keys::STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT];
-        let iter = self.prefix_iterator_cf(self.cf_stats(), &prefix);
+        let iter = self.prefix_iterator_stats(&prefix);
         let mut resolved: DotbitLiveOutpointMap = HashMap::with_capacity(targets.len());
 
         for item in iter.flatten() {
@@ -297,7 +297,7 @@ impl CkbadgerStore {
         type_script_hash: &[u8],
     ) -> anyhow::Result<Option<NftTypeIndex>> {
         let key = keys::encode_nft_type_index_key(type_script_hash);
-        match self.get_cf(self.cf_stats(), &key)? {
+        match self.get_stats(&key)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
@@ -310,7 +310,7 @@ impl CkbadgerStore {
     ) -> anyhow::Result<()> {
         let key = keys::encode_nft_type_index_key(type_script_hash);
         let value = bincode::serialize(index)?;
-        self.put_cf(self.cf_stats(), &key, &value)
+        self.put_stats(&key, &value)
     }
 
     pub fn get_cluster_daily_delta(
@@ -319,7 +319,7 @@ impl CkbadgerStore {
         date_yyyymmdd: u32,
     ) -> anyhow::Result<Option<ClusterDailyDelta>> {
         let key = keys::encode_cluster_daily_key(cluster_id, date_yyyymmdd);
-        match self.get_cf(self.cf_stats(), &key)? {
+        match self.get_stats(&key)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
@@ -333,7 +333,7 @@ impl CkbadgerStore {
     ) -> anyhow::Result<()> {
         let key = keys::encode_cluster_daily_key(cluster_id, date_yyyymmdd);
         let value = bincode::serialize(delta)?;
-        self.put_cf(self.cf_stats(), &key, &value)
+        self.put_stats(&key, &value)
     }
 
     pub fn list_cluster_daily_deltas(
@@ -353,7 +353,7 @@ impl CkbadgerStore {
         let start_key =
             keys::encode_cluster_daily_key(cluster_id, from_date_yyyymmdd.unwrap_or(u32::MIN));
         let iter = self.iterator_cf(
-            self.cf_stats(),
+            self.stats_cf_for_key(&start_key),
             rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
         );
         let mut results = Vec::new();
@@ -386,7 +386,7 @@ impl CkbadgerStore {
         date_yyyymmdd: u32,
     ) -> anyhow::Result<Option<SporeDailyDelta>> {
         let key = keys::encode_spore_daily_key(spore_id, date_yyyymmdd);
-        match self.get_cf(self.cf_stats(), &key)? {
+        match self.get_stats(&key)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
@@ -400,7 +400,7 @@ impl CkbadgerStore {
     ) -> anyhow::Result<()> {
         let key = keys::encode_spore_daily_key(spore_id, date_yyyymmdd);
         let value = bincode::serialize(delta)?;
-        self.put_cf(self.cf_stats(), &key, &value)
+        self.put_stats(&key, &value)
     }
 
     pub fn list_spore_daily_deltas(
@@ -420,7 +420,7 @@ impl CkbadgerStore {
         let start_key =
             keys::encode_spore_daily_key(spore_id, from_date_yyyymmdd.unwrap_or(u32::MIN));
         let iter = self.iterator_cf(
-            self.cf_stats(),
+            self.stats_cf_for_key(&start_key),
             rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
         );
         let mut results = Vec::new();
@@ -453,7 +453,7 @@ impl CkbadgerStore {
         date_yyyymmdd: u32,
     ) -> anyhow::Result<Option<NftDailyDelta>> {
         let key = keys::encode_nft_daily_key(collection_id, date_yyyymmdd);
-        match self.get_cf(self.cf_stats(), &key)? {
+        match self.get_stats(&key)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
@@ -467,7 +467,7 @@ impl CkbadgerStore {
     ) -> anyhow::Result<()> {
         let key = keys::encode_nft_daily_key(collection_id, date_yyyymmdd);
         let value = bincode::serialize(delta)?;
-        self.put_cf(self.cf_stats(), &key, &value)
+        self.put_stats(&key, &value)
     }
 
     pub fn list_nft_daily_deltas(
@@ -487,7 +487,7 @@ impl CkbadgerStore {
         let start_key =
             keys::encode_nft_daily_key(collection_id, from_date_yyyymmdd.unwrap_or(u32::MIN));
         let iter = self.iterator_cf(
-            self.cf_stats(),
+            self.stats_cf_for_key(&start_key),
             rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
         );
         let mut results = Vec::new();
