@@ -1,7 +1,7 @@
 //! API-based checks — validates data via the ckbadger REST API.
 //!
 //! Fast tier (F1-F6): few API calls, seconds.
-//! Sampling tier (S1-S19): N API calls or chart validation, minutes.
+//! Sampling tier (S1-S21): N API calls or chart validation, minutes.
 
 use super::checks::*;
 use super::report::format_number;
@@ -14,6 +14,14 @@ const TOKEN_ACTIVITY_ADDRESS_LIMIT: usize = 20;
 const TOKEN_ACTIVITY_PAGE_LIMIT: usize = 100;
 const TOKEN_ACTIVITY_MAX_PAGES_PER_ADDRESS: usize = 3;
 const TOKEN_TRANSFER_PAGE_LIMIT: usize = 100;
+const SPORE_CLUSTER_LIST_LIMIT: usize = 100;
+const SPORE_CLUSTER_SAMPLE_MAX: usize = 20;
+const SPORE_CLUSTER_SPORE_PAGE_LIMIT: usize = 100;
+const SPORE_PER_CLUSTER_SAMPLE: usize = 2;
+const SPORE_OWNER_PAGE_LIMIT: usize = 100;
+const SPORE_OWNER_MAX_PAGES: usize = 5;
+const NFT_ASSET_LIST_LIMIT: usize = 100;
+const NFT_COLLECTION_SAMPLE_MAX: usize = 20;
 
 // ---------------------------------------------------------------------------
 // Lightweight API response types (deserialized from ckbadger API JSON).
@@ -97,6 +105,13 @@ struct CursorPage<T> {
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct CursorPageWithTotal<T> {
+    data: Vec<T>,
+    total: Option<i64>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct AddressActivityRecord {
     tx_hash: String,
     block_number: i64,
@@ -111,6 +126,38 @@ struct TokenTransferApiRecord {
     from_lock_hash: Option<String>,
     to_lock_hash: String,
     amount: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SporeClusterApiRecord {
+    cluster_id: String,
+}
+
+#[derive(Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SporeApiRecord {
+    spore_id: String,
+    owner_lock_hash: String,
+    cluster_id: Option<String>,
+    is_live: bool,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AssetListApiRecord {
+    id: String,
+    asset_type: String,
+    holders_count: i64,
+    transfers_count: i64,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NftCollectionDetailApiRecord {
+    collection_id: String,
+    total_count: i64,
+    live_count: i64,
 }
 
 /// Simple chart point with a single value (e.g. transaction-count).
@@ -263,6 +310,22 @@ fn apply_transfer_delta_to_lookup(
     }
 
     Ok(())
+}
+
+fn sample_indices_with_cap(seed: u64, total: usize, desired: usize, cap: usize) -> Vec<usize> {
+    if total == 0 || desired == 0 || cap == 0 {
+        return vec![];
+    }
+    let target = desired.min(cap).min(total);
+    if target == total {
+        return (0..total).collect();
+    }
+    let mut sampler = LcgSampler::new(seed);
+    sampler
+        .sample_range(target, total as u64)
+        .into_iter()
+        .map(|v| v as usize)
+        .collect()
 }
 
 // ============================================
@@ -2227,6 +2290,326 @@ impl Check for TokenActivityTransferBidirectional {
     }
 }
 
+fn fetch_owner_spore_map(
+    ctx: &CheckContext,
+    owner_lock_hash: &str,
+) -> anyhow::Result<std::collections::HashMap<String, Option<String>>> {
+    let mut map = std::collections::HashMap::<String, Option<String>>::new();
+    let mut cursor: Option<String> = None;
+    let mut seen_cursors = std::collections::HashSet::<String>::new();
+
+    for _ in 0..SPORE_OWNER_MAX_PAGES {
+        let path = match cursor.as_ref() {
+            Some(c) => format!(
+                "spore/owner/{}?limit={}&cursor={}",
+                owner_lock_hash, SPORE_OWNER_PAGE_LIMIT, c
+            ),
+            None => format!(
+                "spore/owner/{}?limit={}",
+                owner_lock_hash, SPORE_OWNER_PAGE_LIMIT
+            ),
+        };
+        let page: CursorPage<SporeApiRecord> = api_get(ctx, &path)?;
+
+        for spore in &page.data {
+            map.insert(
+                normalize_hex_key(&spore.spore_id),
+                spore.cluster_id.as_ref().map(|v| normalize_hex_key(v)),
+            );
+        }
+
+        let Some(next_cursor) = page.next_cursor else {
+            break;
+        };
+        if !seen_cursors.insert(next_cursor.clone()) {
+            anyhow::bail!(
+                "repeated owner cursor while scanning spore owner {}: {}",
+                owner_lock_hash,
+                next_cursor
+            );
+        }
+        cursor = Some(next_cursor);
+    }
+
+    Ok(map)
+}
+
+/// S20: sampled live spores in clusters must be discoverable via owner endpoint (roundtrip).
+pub struct SporeOwnerRoundtrip;
+
+impl Check for SporeOwnerRoundtrip {
+    fn name(&self) -> &'static str {
+        "spore_owner_roundtrip"
+    }
+    fn description(&self) -> &'static str {
+        "Spore cluster items roundtrip through owner endpoint"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn estimated_total(&self, ctx: &CheckContext) -> Option<u64> {
+        let cap = SPORE_CLUSTER_SAMPLE_MAX.saturating_mul(SPORE_PER_CLUSTER_SAMPLE);
+        Some(ctx.sample_count.min(cap) as u64)
+    }
+    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let clusters: CursorPage<SporeClusterApiRecord> = api_get(
+            ctx,
+            &format!("spore/clusters?limit={}", SPORE_CLUSTER_LIST_LIMIT),
+        )?;
+        if clusters.data.is_empty() || ctx.sample_count == 0 {
+            return Ok(CheckResult::pass_with_detail(
+                0,
+                "no spore clusters available for sampling".to_string(),
+            ));
+        }
+
+        let cluster_indices = sample_indices_with_cap(
+            ctx.seed.wrapping_add(20),
+            clusters.data.len(),
+            ctx.sample_count,
+            SPORE_CLUSTER_SAMPLE_MAX,
+        );
+
+        let mut owner_cache = std::collections::HashMap::<
+            String,
+            std::collections::HashMap<String, Option<String>>,
+        >::new();
+        let mut findings = vec![];
+        let mut checked = 0u64;
+
+        for cluster_idx in cluster_indices {
+            let cluster_id_raw = &clusters.data[cluster_idx].cluster_id;
+            let cluster_id = normalize_hex_key(cluster_id_raw);
+            let spores_path = format!(
+                "spore/clusters/{}/spores?limit={}",
+                cluster_id_raw, SPORE_CLUSTER_SPORE_PAGE_LIMIT
+            );
+            let spores_page: CursorPage<SporeApiRecord> = api_get(ctx, &spores_path)?;
+            if spores_page.data.is_empty() {
+                continue;
+            }
+
+            let spore_indices = sample_indices_with_cap(
+                ctx.seed.wrapping_add(21) ^ (cluster_idx as u64),
+                spores_page.data.len(),
+                SPORE_PER_CLUSTER_SAMPLE,
+                SPORE_PER_CLUSTER_SAMPLE,
+            );
+
+            for spore_idx in spore_indices {
+                let spore = &spores_page.data[spore_idx];
+                let spore_id = normalize_hex_key(&spore.spore_id);
+                if !spore.is_live {
+                    findings.push(Finding {
+                        entity: format!("spore=0x{}", spore_id),
+                        details: vec![
+                            "cluster spores endpoint returned non-live spore entry".to_string()
+                        ],
+                    });
+                    checked += 1;
+                    progress.inc(1);
+                    continue;
+                }
+
+                match spore.cluster_id.as_ref().map(|v| normalize_hex_key(v)) {
+                    Some(ref cid) if cid == &cluster_id => {}
+                    other => {
+                        findings.push(Finding {
+                            entity: format!("spore=0x{}", spore_id),
+                            details: vec![format!(
+                                "cluster mismatch: expected 0x{}, endpoint returned {:?}",
+                                cluster_id, other
+                            )],
+                        });
+                    }
+                }
+
+                let owner_key = normalize_hex_key(&spore.owner_lock_hash);
+                if owner_key.is_empty() {
+                    findings.push(Finding {
+                        entity: format!("spore=0x{}", spore_id),
+                        details: vec!["spore owner lock hash is empty".to_string()],
+                    });
+                    checked += 1;
+                    progress.inc(1);
+                    continue;
+                }
+
+                let owner_spores = if let Some(cached) = owner_cache.get(&owner_key) {
+                    cached
+                } else {
+                    let fetched = fetch_owner_spore_map(ctx, &spore.owner_lock_hash)?;
+                    owner_cache.insert(owner_key.clone(), fetched);
+                    owner_cache
+                        .get(&owner_key)
+                        .ok_or_else(|| anyhow::anyhow!("owner cache insert failed"))?
+                };
+
+                match owner_spores.get(&spore_id) {
+                    None => findings.push(Finding {
+                        entity: format!(
+                            "spore=0x{} owner=0x{} cluster=0x{}",
+                            spore_id, owner_key, cluster_id
+                        ),
+                        details: vec!["owner endpoint missing sampled cluster spore".to_string()],
+                    }),
+                    Some(owner_cluster) => {
+                        if owner_cluster.as_deref() != Some(cluster_id.as_str()) {
+                            findings.push(Finding {
+                                entity: format!(
+                                    "spore=0x{} owner=0x{} cluster=0x{}",
+                                    spore_id, owner_key, cluster_id
+                                ),
+                                details: vec![format!(
+                                    "owner endpoint cluster mismatch: {:?}",
+                                    owner_cluster
+                                )],
+                            });
+                        }
+                    }
+                }
+
+                checked += 1;
+                progress.inc(1);
+            }
+        }
+
+        if checked == 0 {
+            return Ok(CheckResult::pass_with_detail(
+                0,
+                "no live spores sampled from selected clusters".to_string(),
+            ));
+        }
+
+        if findings.is_empty() {
+            Ok(CheckResult::pass_with_detail(
+                checked,
+                format!("{} sampled spores roundtripped", checked),
+            ))
+        } else {
+            Ok(CheckResult::fail(checked, findings))
+        }
+    }
+}
+
+/// S21: NFT asset list/detail/items totals must stay internally consistent.
+pub struct NftAssetCollectionConsistency;
+
+impl Check for NftAssetCollectionConsistency {
+    fn name(&self) -> &'static str {
+        "nft_asset_collection_consistency"
+    }
+    fn description(&self) -> &'static str {
+        "NFT list/detail/items totals are consistent"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn estimated_total(&self, ctx: &CheckContext) -> Option<u64> {
+        Some(ctx.sample_count.min(NFT_COLLECTION_SAMPLE_MAX) as u64)
+    }
+    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let assets: CursorPageWithTotal<AssetListApiRecord> = api_get(
+            ctx,
+            &format!("assets?asset_type=nft&limit={}", NFT_ASSET_LIST_LIMIT),
+        )?;
+        if assets.data.is_empty() || ctx.sample_count == 0 {
+            return Ok(CheckResult::pass_with_detail(
+                0,
+                "no NFT collections available for sampling".to_string(),
+            ));
+        }
+
+        let sample_indices = sample_indices_with_cap(
+            ctx.seed.wrapping_add(30),
+            assets.data.len(),
+            ctx.sample_count,
+            NFT_COLLECTION_SAMPLE_MAX,
+        );
+
+        let mut findings = vec![];
+        let mut checked = 0u64;
+
+        for idx in sample_indices {
+            let asset = &assets.data[idx];
+            if asset.asset_type != "nft" {
+                findings.push(Finding {
+                    entity: format!("asset={}", asset.id),
+                    details: vec![format!(
+                        "unexpected asset type '{}' in nft asset list",
+                        asset.asset_type
+                    )],
+                });
+                checked += 1;
+                progress.inc(1);
+                continue;
+            }
+
+            let collection_detail: NftCollectionDetailApiRecord =
+                api_get(ctx, &format!("assets/nfts/{}", asset.id))?;
+            let detail_id = normalize_hex_key(&collection_detail.collection_id);
+            let asset_id = normalize_hex_key(&asset.id);
+
+            if detail_id != asset_id {
+                findings.push(Finding {
+                    entity: format!("asset={}", asset.id),
+                    details: vec![format!(
+                        "detail collectionId mismatch: detail=0x{}, list=0x{}",
+                        detail_id, asset_id
+                    )],
+                });
+            }
+            if collection_detail.total_count != asset.transfers_count {
+                findings.push(Finding {
+                    entity: format!("asset={}", asset.id),
+                    details: vec![format!(
+                        "detail totalCount={} != list transfersCount={}",
+                        collection_detail.total_count, asset.transfers_count
+                    )],
+                });
+            }
+            if collection_detail.live_count != asset.holders_count {
+                findings.push(Finding {
+                    entity: format!("asset={}", asset.id),
+                    details: vec![format!(
+                        "detail liveCount={} != list holdersCount={}",
+                        collection_detail.live_count, asset.holders_count
+                    )],
+                });
+            }
+
+            let items: CursorPageWithTotal<serde_json::Value> =
+                api_get(ctx, &format!("assets/nfts/{}/items?limit=1", asset.id))?;
+            match items.total {
+                Some(total) if total == collection_detail.total_count => {}
+                Some(total) => findings.push(Finding {
+                    entity: format!("asset={}", asset.id),
+                    details: vec![format!(
+                        "items total={} != detail totalCount={}",
+                        total, collection_detail.total_count
+                    )],
+                }),
+                None => findings.push(Finding {
+                    entity: format!("asset={}", asset.id),
+                    details: vec!["items response missing total".to_string()],
+                }),
+            }
+
+            checked += 1;
+            progress.inc(1);
+        }
+
+        if findings.is_empty() {
+            Ok(CheckResult::pass_with_detail(
+                checked,
+                format!("{} sampled NFT collections", checked),
+            ))
+        } else {
+            Ok(CheckResult::fail(checked, findings))
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // CKB RPC helpers (blocking, used only by S18)
 // ---------------------------------------------------------------------------
@@ -2333,6 +2716,8 @@ pub fn api_checks() -> Vec<Box<dyn Check>> {
         Box::new(BurntSupplyGenesisInvariant),
         Box::new(RpcBlockSpotCheck),
         Box::new(TokenActivityTransferBidirectional),
+        Box::new(SporeOwnerRoundtrip),
+        Box::new(NftAssetCollectionConsistency),
     ]
 }
 
@@ -2356,7 +2741,7 @@ mod tests {
     #[test]
     fn test_api_checks_registered() {
         let checks = api_checks();
-        assert_eq!(checks.len(), 25);
+        assert_eq!(checks.len(), 27);
         // Verify names are unique
         let names: Vec<&str> = checks.iter().map(|c| c.name()).collect();
         let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
@@ -2373,6 +2758,8 @@ mod tests {
         assert!(names.contains(&"secondary_issuance_matches_dao_statistics"));
         assert!(names.contains(&"burnt_supply_genesis_invariant"));
         assert!(names.contains(&"token_activity_transfer_bidirectional"));
+        assert!(names.contains(&"spore_owner_roundtrip"));
+        assert!(names.contains(&"nft_asset_collection_consistency"));
     }
 
     #[test]
@@ -2387,7 +2774,7 @@ mod tests {
             .filter(|c| c.tier() == CheckTier::Sampling)
             .count();
         assert_eq!(fast_count, 6);
-        assert_eq!(sampling_count, 19);
+        assert_eq!(sampling_count, 21);
     }
 
     #[test]
@@ -2596,5 +2983,24 @@ mod tests {
 
         apply_transfer_delta_to_lookup(&mut lookup, "0xTT", &transfer).unwrap();
         assert!(lookup.is_empty());
+    }
+
+    #[test]
+    fn test_sample_indices_with_cap_respects_bounds() {
+        let indices = sample_indices_with_cap(42, 100, 50, 10);
+        assert_eq!(indices.len(), 10);
+        assert!(indices.iter().all(|i| *i < 100));
+    }
+
+    #[test]
+    fn test_sample_indices_with_cap_is_deterministic() {
+        let a = sample_indices_with_cap(7, 20, 8, 8);
+        let b = sample_indices_with_cap(7, 20, 8, 8);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn test_normalize_hex_key_handles_uppercase_prefix() {
+        assert_eq!(normalize_hex_key("0XABcd"), "abcd");
     }
 }
