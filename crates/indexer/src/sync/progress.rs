@@ -19,6 +19,7 @@ const MIN_SPAN_SECS: f64 = 0.5;
 struct BatchEvent {
     completed_at: Instant,
     block_count: u64,
+    tx_count: u64,
 }
 
 pub struct SyncProgress {
@@ -31,6 +32,10 @@ pub struct SyncProgress {
     current_rate: AtomicU64,
     /// EMA (Exponential Moving Average) for smoother speed estimation (stored as bits of f64).
     ema_rate: AtomicU64,
+    /// Current instantaneous tx rate (stored as bits of f64).
+    current_tx_rate: AtomicU64,
+    /// EMA tx rate (stored as bits of f64).
+    ema_tx_rate: AtomicU64,
     /// Guard to ensure the refresher thread is only started once.
     refresher_running: AtomicBool,
 }
@@ -44,13 +49,15 @@ impl SyncProgress {
             window: Mutex::new(VecDeque::new()),
             current_rate: AtomicU64::new(0),
             ema_rate: AtomicU64::new(0),
+            current_tx_rate: AtomicU64::new(0),
+            ema_tx_rate: AtomicU64::new(0),
             refresher_running: AtomicBool::new(false),
         }
     }
 
     /// Record a completed batch. Called by the writer after each batch commit.
     /// Updates the sliding window, recomputes rate, and updates EMA.
-    pub fn record_batch(&self, block: u64, count: u64) {
+    pub fn record_batch(&self, block: u64, count: u64, tx_count: u64) {
         self.current_block.store(block, Ordering::SeqCst);
         self.last_batch_blocks.store(count, Ordering::SeqCst);
         let now = Instant::now();
@@ -58,11 +65,18 @@ impl SyncProgress {
         window.push_back(BatchEvent {
             completed_at: now,
             block_count: count,
+            tx_count,
         });
         Self::evict_old(&mut window, now);
-        let rate = Self::compute_rate(&window, now);
-        self.current_rate.store(rate.to_bits(), Ordering::SeqCst);
-        self.update_ema(rate);
+        let block_rate = Self::compute_rate(&window, now, |event| event.block_count);
+        self.current_rate
+            .store(block_rate.to_bits(), Ordering::SeqCst);
+        Self::update_ema(block_rate, &self.ema_rate);
+
+        let tx_rate = Self::compute_rate(&window, now, |event| event.tx_count);
+        self.current_tx_rate
+            .store(tx_rate.to_bits(), Ordering::SeqCst);
+        Self::update_ema(tx_rate, &self.ema_tx_rate);
     }
 
     /// Recompute the rate using the current time without adding new events.
@@ -72,8 +86,12 @@ impl SyncProgress {
         let now = Instant::now();
         let mut window = self.window.lock().unwrap();
         Self::evict_old(&mut window, now);
-        let rate = Self::compute_rate(&window, now);
-        self.current_rate.store(rate.to_bits(), Ordering::SeqCst);
+        let block_rate = Self::compute_rate(&window, now, |event| event.block_count);
+        self.current_rate
+            .store(block_rate.to_bits(), Ordering::SeqCst);
+        let tx_rate = Self::compute_rate(&window, now, |event| event.tx_count);
+        self.current_tx_rate
+            .store(tx_rate.to_bits(), Ordering::SeqCst);
         // Don't update EMA during refresh — only on actual batch completion.
     }
 
@@ -92,31 +110,34 @@ impl SyncProgress {
     /// Compute rate = total_blocks_in_window / (now - oldest_event_time).
     /// Using `now` as the denominator (instead of latest event) ensures the
     /// rate smoothly decreases when no new batches arrive.
-    fn compute_rate(window: &VecDeque<BatchEvent>, now: Instant) -> f64 {
+    fn compute_rate<F>(window: &VecDeque<BatchEvent>, now: Instant, value_fn: F) -> f64
+    where
+        F: Fn(&BatchEvent) -> u64,
+    {
         if window.is_empty() {
             return 0.0;
         }
-        let total_blocks: u64 = window.iter().map(|e| e.block_count).sum();
+        let total: u64 = window.iter().map(value_fn).sum();
         let oldest = window.front().unwrap().completed_at;
         let span = now.duration_since(oldest).as_secs_f64();
         if span < MIN_SPAN_SECS {
             // Not enough elapsed time for a meaningful rate yet.
             return 0.0;
         }
-        total_blocks as f64 / span
+        total as f64 / span
     }
 
-    fn update_ema(&self, current_rate: f64) {
+    fn update_ema(current_rate: f64, ema_slot: &AtomicU64) {
         if current_rate <= 0.0 {
             return;
         }
-        let old_ema = f64::from_bits(self.ema_rate.load(Ordering::SeqCst));
+        let old_ema = f64::from_bits(ema_slot.load(Ordering::SeqCst));
         let new_ema = if old_ema == 0.0 {
             current_rate
         } else {
             EMA_ALPHA * current_rate + (1.0 - EMA_ALPHA) * old_ema
         };
-        self.ema_rate.store(new_ema.to_bits(), Ordering::SeqCst);
+        ema_slot.store(new_ema.to_bits(), Ordering::SeqCst);
     }
 
     /// Spawn a background thread that recomputes the rate every second.
@@ -164,6 +185,14 @@ impl SyncProgress {
 
     pub fn ema_blocks_per_second(&self) -> f64 {
         f64::from_bits(self.ema_rate.load(Ordering::SeqCst))
+    }
+
+    pub fn txs_per_second(&self) -> f64 {
+        f64::from_bits(self.current_tx_rate.load(Ordering::SeqCst))
+    }
+
+    pub fn ema_txs_per_second(&self) -> f64 {
+        f64::from_bits(self.ema_tx_rate.load(Ordering::SeqCst))
     }
 
     pub fn is_synced(&self) -> bool {
@@ -224,7 +253,7 @@ mod tests {
     #[test]
     fn test_record_batch_updates_block() {
         let progress = SyncProgress::new(0, 100);
-        progress.record_batch(5, 5);
+        progress.record_batch(5, 5, 50);
         assert_eq!(progress.current(), 5);
         assert_eq!(progress.last_batch_blocks(), 5);
     }
@@ -232,16 +261,16 @@ mod tests {
     #[test]
     fn test_record_batch_multiple() {
         let progress = SyncProgress::new(0, 1000);
-        progress.record_batch(100, 100);
+        progress.record_batch(100, 100, 1000);
         assert_eq!(progress.current(), 100);
-        progress.record_batch(200, 100);
+        progress.record_batch(200, 100, 1000);
         assert_eq!(progress.current(), 200);
     }
 
     #[test]
     fn test_progress_percentage() {
         let progress = SyncProgress::new(0, 100);
-        progress.record_batch(50, 50);
+        progress.record_batch(50, 50, 500);
         assert!((progress.progress_percentage() - 50.0).abs() < 0.01);
     }
 
@@ -255,7 +284,7 @@ mod tests {
     fn test_is_synced() {
         let progress = SyncProgress::new(0, 100);
         assert!(!progress.is_synced());
-        progress.record_batch(100, 100);
+        progress.record_batch(100, 100, 1000);
         assert!(progress.is_synced());
     }
 
@@ -271,13 +300,19 @@ mod tests {
         progress.start_refresher();
         // Record a batch, then wait > REFRESH_INTERVAL_MS + MIN_SPAN_SECS
         // so the refresher has time to fire and compute a rate with span > 0.5s
-        progress.record_batch(5000, 5000);
+        progress.record_batch(5000, 5000, 50000);
         thread::sleep(Duration::from_millis(1200));
         let rate = progress.blocks_per_second();
+        let tx_rate = progress.txs_per_second();
         assert!(
             rate > 0.0,
             "rate should be positive after refresher fires: {}",
             rate
+        );
+        assert!(
+            tx_rate > 0.0,
+            "tx rate should be positive after refresher fires: {}",
+            tx_rate
         );
     }
 
@@ -286,9 +321,9 @@ mod tests {
         let progress = Arc::new(SyncProgress::new(0, 100_000));
         progress.start_refresher();
         // Record batches with short delays to build up rate
-        progress.record_batch(5000, 5000);
+        progress.record_batch(5000, 5000, 50000);
         thread::sleep(Duration::from_millis(600));
-        progress.record_batch(10000, 5000);
+        progress.record_batch(10000, 5000, 50000);
         thread::sleep(Duration::from_millis(200));
         let rate1 = progress.blocks_per_second();
         // Now stop producing batches and wait — rate should decrease
@@ -306,10 +341,10 @@ mod tests {
     fn test_ema_updates_on_batch() {
         let progress = SyncProgress::new(0, 100_000);
         // First batch — wait for span > MIN_SPAN_SECS
-        progress.record_batch(1000, 1000);
+        progress.record_batch(1000, 1000, 10_000);
         thread::sleep(Duration::from_millis(600));
         // Second batch — now span > 0.5s so rate is computed and EMA set
-        progress.record_batch(2000, 1000);
+        progress.record_batch(2000, 1000, 10_000);
         let ema1 = progress.ema_blocks_per_second();
         assert!(
             ema1 > 0.0,
@@ -319,11 +354,38 @@ mod tests {
 
         // Record a much larger batch to push rate higher
         thread::sleep(Duration::from_millis(100));
-        progress.record_batch(52000, 50000);
+        progress.record_batch(52000, 50000, 500_000);
         let ema2 = progress.ema_blocks_per_second();
         assert!(
             ema2 > ema1,
             "EMA should increase with higher throughput: ema1={}, ema2={}",
+            ema1,
+            ema2
+        );
+    }
+
+    #[test]
+    fn test_txs_per_second_initial_returns_zero() {
+        let progress = SyncProgress::new(0, 1000);
+        assert_eq!(progress.txs_per_second(), 0.0);
+        assert_eq!(progress.ema_txs_per_second(), 0.0);
+    }
+
+    #[test]
+    fn test_tx_ema_updates_on_batch() {
+        let progress = SyncProgress::new(0, 100_000);
+        progress.record_batch(1000, 1000, 8_000);
+        thread::sleep(Duration::from_millis(600));
+        progress.record_batch(2000, 1000, 8_000);
+        let ema1 = progress.ema_txs_per_second();
+        assert!(ema1 > 0.0, "tx EMA should be positive: {}", ema1);
+
+        thread::sleep(Duration::from_millis(100));
+        progress.record_batch(3000, 1000, 20_000);
+        let ema2 = progress.ema_txs_per_second();
+        assert!(
+            ema2 > ema1,
+            "tx EMA should increase: ema1={}, ema2={}",
             ema1,
             ema2
         );
@@ -419,10 +481,11 @@ mod tests {
             window.push_back(BatchEvent {
                 completed_at: Instant::now() - Duration::from_secs(60),
                 block_count: 1000,
+                tx_count: 10_000,
             });
         }
         // Record a new batch — the old event should be evicted
-        progress.record_batch(2000, 1000);
+        progress.record_batch(2000, 1000, 10_000);
         let window = progress.window.lock().unwrap();
         assert_eq!(window.len(), 1, "old event should have been evicted");
     }
@@ -430,7 +493,7 @@ mod tests {
     #[test]
     fn test_rate_zero_when_window_empty() {
         let window = VecDeque::new();
-        let rate = SyncProgress::compute_rate(&window, Instant::now());
+        let rate = SyncProgress::compute_rate(&window, Instant::now(), |event| event.block_count);
         assert_eq!(rate, 0.0);
     }
 
@@ -441,9 +504,10 @@ mod tests {
         window.push_back(BatchEvent {
             completed_at: now,
             block_count: 10000,
+            tx_count: 100_000,
         });
         // Span ≈ 0, should return 0.0 (below MIN_SPAN_SECS)
-        let rate = SyncProgress::compute_rate(&window, now);
+        let rate = SyncProgress::compute_rate(&window, now, |event| event.block_count);
         assert_eq!(rate, 0.0);
     }
 
@@ -455,8 +519,9 @@ mod tests {
         window.push_back(BatchEvent {
             completed_at: now - Duration::from_secs(2),
             block_count: 10000,
+            tx_count: 100_000,
         });
-        let rate = SyncProgress::compute_rate(&window, now);
+        let rate = SyncProgress::compute_rate(&window, now, |event| event.block_count);
         // rate = 10000 / 2.0 = 5000.0
         assert!(
             (rate - 5000.0).abs() < 100.0,
@@ -472,13 +537,15 @@ mod tests {
         window.push_back(BatchEvent {
             completed_at: now - Duration::from_secs(4),
             block_count: 5000,
+            tx_count: 50_000,
         });
         window.push_back(BatchEvent {
             completed_at: now - Duration::from_secs(2),
             block_count: 5000,
+            tx_count: 50_000,
         });
         // total = 10000, span = 4s → rate ≈ 2500
-        let rate = SyncProgress::compute_rate(&window, now);
+        let rate = SyncProgress::compute_rate(&window, now, |event| event.block_count);
         assert!(
             (rate - 2500.0).abs() < 100.0,
             "rate should be ~2500: {}",

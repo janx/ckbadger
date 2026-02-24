@@ -17,6 +17,7 @@ use crate::db::{
 
 const RATE_HISTORY_SIZE: usize = 3600;
 const LOG_HISTORY_SIZE: usize = 200;
+const RATE_DROP_RATIO_THRESHOLD: f64 = 0.65;
 
 const TERMINAL_GREEN: Color = Color::Rgb(0, 255, 65);
 const TERMINAL_DIM: Color = Color::Rgb(0, 204, 51);
@@ -104,6 +105,7 @@ pub struct App {
     last_sample: Instant,
     status_message: Option<(String, Instant)>,
     rate_history: VecDeque<f64>,
+    tx_rate_history: VecDeque<f64>,
     db_write_history: VecDeque<f64>,
     fetch_stage_history: VecDeque<f64>,
     parse_stage_history: VecDeque<f64>,
@@ -120,6 +122,7 @@ pub struct App {
     prev_bottleneck: Option<SyncBottleneck>,
     prev_adaptive_last_reason: Option<String>,
     last_rate_drop_alert: Option<Instant>,
+    last_tx_rate_drop_alert: Option<Instant>,
     stale_warning_active: bool,
     help_visible: bool,
     force_compact_layout: bool,
@@ -161,6 +164,7 @@ impl App {
             last_sample: Instant::now(),
             status_message: None,
             rate_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
+            tx_rate_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             db_write_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             fetch_stage_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             parse_stage_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
@@ -177,6 +181,7 @@ impl App {
             prev_bottleneck: None,
             prev_adaptive_last_reason: None,
             last_rate_drop_alert: None,
+            last_tx_rate_drop_alert: None,
             stale_warning_active: false,
             help_visible: false,
             force_compact_layout: false,
@@ -309,27 +314,25 @@ impl App {
     }
 
     fn sample_rates(&mut self) {
-        let rate = self
+        let block_rate = self
             .sync_status
             .as_ref()
             .and_then(|s| s.rate_realtime)
             .unwrap_or(0.0);
-
-        if self.rate_history.len() >= RATE_HISTORY_SIZE {
-            self.rate_history.pop_front();
-        }
-        self.rate_history.push_back(rate);
+        push_history_sample(&mut self.rate_history, block_rate);
+        let tx_rate = self
+            .sync_status
+            .as_ref()
+            .and_then(|s| s.tx_rate_realtime)
+            .unwrap_or(0.0);
+        push_history_sample(&mut self.tx_rate_history, tx_rate);
 
         let db_ms = self
             .sync_status
             .as_ref()
             .and_then(|s| s.db_write_ms)
             .unwrap_or(0.0);
-
-        if self.db_write_history.len() >= RATE_HISTORY_SIZE {
-            self.db_write_history.pop_front();
-        }
-        self.db_write_history.push_back(db_ms);
+        push_history_sample(&mut self.db_write_history, db_ms);
 
         let (fetch_ms, parse_ms, write_ms) = self
             .sync_status
@@ -347,19 +350,44 @@ impl App {
         push_history_sample(&mut self.parse_stage_history, parse_ms);
         push_history_sample(&mut self.write_stage_history, write_ms);
 
+        let mut block_rate_alerted = false;
         if self.rate_history.len() >= 2 {
             let prev = self.rate_history[self.rate_history.len() - 2];
-            if prev > 0.0 && rate > 0.0 && rate < prev * 0.65 {
+            if is_rate_drop(prev, block_rate) {
                 let should_alert = self
                     .last_rate_drop_alert
                     .map(|t| t.elapsed().as_secs() >= 30)
                     .unwrap_or(true);
                 if should_alert {
                     self.push_sync_event_and_log(
-                        format!("sync rate drop detected: {:.0} -> {:.0} blk/s", prev, rate),
+                        format!(
+                            "sync rate drop detected: {:.0} -> {:.0} blk/s",
+                            prev, block_rate
+                        ),
                         LogLevel::Warning,
                     );
                     self.last_rate_drop_alert = Some(Instant::now());
+                    block_rate_alerted = true;
+                }
+            }
+        }
+
+        if self.tx_rate_history.len() >= 2 {
+            let prev = self.tx_rate_history[self.tx_rate_history.len() - 2];
+            if !block_rate_alerted && is_rate_drop(prev, tx_rate) {
+                let should_alert = self
+                    .last_tx_rate_drop_alert
+                    .map(|t| t.elapsed().as_secs() >= 30)
+                    .unwrap_or(true);
+                if should_alert {
+                    self.push_sync_event_and_log(
+                        format!(
+                            "sync tx rate drop detected: {:.0} -> {:.0} tx/s",
+                            prev, tx_rate
+                        ),
+                        LogLevel::Warning,
+                    );
+                    self.last_tx_rate_drop_alert = Some(Instant::now());
                 }
             }
         }
@@ -858,8 +886,9 @@ fn draw_sync_realtime_bar(f: &mut Frame, app: &App, area: Rect) {
     };
 
     let behind = sync.chain_tip - sync.tip_block;
-    let now_rate = sync.rate_realtime.unwrap_or(0.0);
     let ema_rate = sync.rate_ema.unwrap_or(0.0);
+    let block_rate_text = format_rate_pair(sync.rate_realtime, sync.rate_ema, "blk/s");
+    let tx_rate_text = format_rate_pair(sync.tx_rate_realtime, sync.tx_rate_ema, "tx/s");
     let jitter = rate_jitter(&app.rate_history, 30).unwrap_or(0.0);
     let eta_conf = eta_confidence_label(ema_rate, jitter);
     let bottleneck = sync_bottleneck(sync.db_write_ms, sync.rpc_fetch_ms);
@@ -889,10 +918,9 @@ fn draw_sync_realtime_bar(f: &mut Frame, app: &App, area: Rect) {
         Span::styled("  Behind ", Style::default().fg(SLATE_500)),
         Span::styled(format_num(behind), Style::default().fg(FOREGROUND)),
         Span::styled("  |  Rate ", Style::default().fg(SLATE_500)),
-        Span::styled(
-            format!("{:.0}/{:.0} blk/s", now_rate, ema_rate),
-            Style::default().fg(TERMINAL_GREEN),
-        ),
+        Span::styled(block_rate_text, Style::default().fg(TERMINAL_GREEN)),
+        Span::styled("  |  Tx ", Style::default().fg(SLATE_500)),
+        Span::styled(tx_rate_text, Style::default().fg(TERMINAL_GREEN)),
         Span::styled("  |  ETA ", Style::default().fg(SLATE_500)),
         Span::styled(
             sync.eta.clone().unwrap_or_else(|| "-".to_string()),
@@ -1243,7 +1271,7 @@ fn draw_sync_progress(f: &mut Frame, app: &App, area: Rect) {
             ),
         ]),
         Line::from(vec![
-            Span::styled("Now:     ", Style::default().fg(SLATE_500)),
+            Span::styled("Blk Now: ", Style::default().fg(SLATE_500)),
             if let Some(rt) = sync.rate_realtime {
                 Span::styled(
                     format!("{rt:.0} blk/s"),
@@ -1256,9 +1284,30 @@ fn draw_sync_progress(f: &mut Frame, app: &App, area: Rect) {
             },
         ]),
         Line::from(vec![
-            Span::styled("EMA:     ", Style::default().fg(SLATE_500)),
+            Span::styled("Blk EMA: ", Style::default().fg(SLATE_500)),
             if let Some(ema) = sync.rate_ema {
                 Span::raw(format!("{ema:.0} blk/s"))
+            } else {
+                Span::styled("-", Style::default().fg(SLATE_500))
+            },
+        ]),
+        Line::from(vec![
+            Span::styled("Tx Now:  ", Style::default().fg(SLATE_500)),
+            if let Some(rt) = sync.tx_rate_realtime {
+                Span::styled(
+                    format!("{rt:.0} tx/s"),
+                    Style::default()
+                        .fg(TERMINAL_GREEN)
+                        .add_modifier(Modifier::BOLD),
+                )
+            } else {
+                Span::styled("-", Style::default().fg(SLATE_500))
+            },
+        ]),
+        Line::from(vec![
+            Span::styled("Tx EMA:  ", Style::default().fg(SLATE_500)),
+            if let Some(ema) = sync.tx_rate_ema {
+                Span::raw(format!("{ema:.0} tx/s"))
             } else {
                 Span::styled("-", Style::default().fg(SLATE_500))
             },
@@ -1276,31 +1325,117 @@ fn draw_sync_progress(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_sync_charts(f: &mut Frame, app: &App, area: Rect) {
     if stack_sync_charts(area) {
+        let specs = sync_chart_specs(true);
         let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(area);
-        draw_chart_panel(f, rows[0], "Sync Rate (blk/s)", "blk/s", &app.rate_history);
+        draw_chart_panel(
+            f,
+            rows[0],
+            specs[0].title,
+            specs[0].unit,
+            sync_chart_data(app, specs[0].kind),
+        );
         draw_chart_panel(
             f,
             rows[1],
-            "Write Latency (ms)",
-            "ms",
-            &app.db_write_history,
+            specs[1].title,
+            specs[1].unit,
+            sync_chart_data(app, specs[1].kind),
         );
     } else {
+        let specs = sync_chart_specs(false);
         let cols = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .constraints([
+                Constraint::Percentage(34),
+                Constraint::Percentage(33),
+                Constraint::Percentage(33),
+            ])
             .split(area);
-        draw_chart_panel(f, cols[0], "Sync Rate (blk/s)", "blk/s", &app.rate_history);
+        draw_chart_panel(
+            f,
+            cols[0],
+            specs[0].title,
+            specs[0].unit,
+            sync_chart_data(app, specs[0].kind),
+        );
         draw_chart_panel(
             f,
             cols[1],
-            "Write Latency (ms)",
-            "ms",
-            &app.db_write_history,
+            specs[1].title,
+            specs[1].unit,
+            sync_chart_data(app, specs[1].kind),
         );
+        draw_chart_panel(
+            f,
+            cols[2],
+            specs[2].title,
+            specs[2].unit,
+            sync_chart_data(app, specs[2].kind),
+        );
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SyncChartKind {
+    BlockRate,
+    TxRate,
+    WriteLatency,
+}
+
+#[derive(Clone, Copy)]
+struct SyncChartSpec {
+    title: &'static str,
+    unit: &'static str,
+    kind: SyncChartKind,
+}
+
+const STACKED_SYNC_CHART_SPECS: [SyncChartSpec; 2] = [
+    SyncChartSpec {
+        title: "Sync Rate (blk/s)",
+        unit: "blk/s",
+        kind: SyncChartKind::BlockRate,
+    },
+    SyncChartSpec {
+        title: "Sync Tx Rate (tx/s)",
+        unit: "tx/s",
+        kind: SyncChartKind::TxRate,
+    },
+];
+
+const WIDE_SYNC_CHART_SPECS: [SyncChartSpec; 3] = [
+    SyncChartSpec {
+        title: "Sync Rate (blk/s)",
+        unit: "blk/s",
+        kind: SyncChartKind::BlockRate,
+    },
+    SyncChartSpec {
+        title: "Sync Tx Rate (tx/s)",
+        unit: "tx/s",
+        kind: SyncChartKind::TxRate,
+    },
+    SyncChartSpec {
+        title: "Write Latency (ms)",
+        unit: "ms",
+        kind: SyncChartKind::WriteLatency,
+    },
+];
+
+fn sync_chart_specs(stacked: bool) -> &'static [SyncChartSpec] {
+    if stacked {
+        &STACKED_SYNC_CHART_SPECS
+    } else {
+        &WIDE_SYNC_CHART_SPECS
+    }
+}
+
+fn sync_chart_data(app: &App, kind: SyncChartKind) -> &VecDeque<f64> {
+    match kind {
+        SyncChartKind::BlockRate => &app.rate_history,
+        SyncChartKind::TxRate => &app.tx_rate_history,
+        SyncChartKind::WriteLatency => &app.db_write_history,
     }
 }
 
@@ -1468,6 +1603,11 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
             pipeline.writer_queue_depth,
             pipeline.writer_queue_capacity,
         ));
+        let adaptive_inflight_batches =
+            match (pipeline.fetch_queue_depth, pipeline.parse_queue_depth) {
+                (Some(fetch_depth), Some(parse_depth)) => Some(fetch_depth + parse_depth),
+                _ => None,
+            };
 
         let spark_width = cols[1].width.saturating_sub(14).clamp(8, 24) as usize;
         let (left, right) = if dense_panel {
@@ -1523,6 +1663,7 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
                     ]),
                     adaptive_control_line(AdaptiveControlSnapshot {
                         last_batch_blocks: sync.last_batch_blocks,
+                        adaptive_inflight_batches,
                         adaptive_target_batch_txs: sync.adaptive_target_batch_txs,
                         adaptive_inflight_limit: sync.adaptive_inflight_limit,
                         adaptive_min_target_batch_txs: sync.adaptive_min_target_batch_txs,
@@ -1626,6 +1767,7 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
                     ]),
                     adaptive_control_line(AdaptiveControlSnapshot {
                         last_batch_blocks: sync.last_batch_blocks,
+                        adaptive_inflight_batches,
                         adaptive_target_batch_txs: sync.adaptive_target_batch_txs,
                         adaptive_inflight_limit: sync.adaptive_inflight_limit,
                         adaptive_min_target_batch_txs: sync.adaptive_min_target_batch_txs,
@@ -1654,9 +1796,9 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
                         Span::styled("Rate ", Style::default().fg(SLATE_500)),
                         Span::styled(
                             format!(
-                                "{:.0}/{:.0} blk/s",
-                                sync.rate_realtime.unwrap_or(0.0),
-                                sync.rate_ema.unwrap_or(0.0)
+                                "{}  {}",
+                                format_rate_pair(sync.rate_realtime, sync.rate_ema, "blk/s"),
+                                format_rate_pair(sync.tx_rate_realtime, sync.tx_rate_ema, "tx/s"),
                             ),
                             Style::default().fg(TERMINAL_GREEN),
                         ),
@@ -1692,6 +1834,7 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
                 ]),
                 adaptive_control_line(AdaptiveControlSnapshot {
                     last_batch_blocks: sync.last_batch_blocks,
+                    adaptive_inflight_batches: None,
                     adaptive_target_batch_txs: sync.adaptive_target_batch_txs,
                     adaptive_inflight_limit: sync.adaptive_inflight_limit,
                     adaptive_min_target_batch_txs: sync.adaptive_min_target_batch_txs,
@@ -1742,9 +1885,20 @@ fn io_fetch_write_jitter_line(
     ])
 }
 
+fn format_rate_pair(now: Option<f64>, ema: Option<f64>, unit: &str) -> String {
+    let now_text = now
+        .map(|v| format!("{v:.0}"))
+        .unwrap_or_else(|| "-".to_string());
+    let ema_text = ema
+        .map(|v| format!("{v:.0}"))
+        .unwrap_or_else(|| "-".to_string());
+    format!("{now_text}/{ema_text} {unit}")
+}
+
 #[derive(Clone, Copy)]
 struct AdaptiveControlSnapshot<'a> {
     last_batch_blocks: Option<u64>,
+    adaptive_inflight_batches: Option<u64>,
     adaptive_target_batch_txs: Option<u64>,
     adaptive_inflight_limit: Option<u64>,
     adaptive_min_target_batch_txs: Option<u64>,
@@ -1769,10 +1923,15 @@ fn adaptive_control_line(snapshot: AdaptiveControlSnapshot<'_>) -> Line<'static>
         .adaptive_min_target_batch_txs
         .map(format_num_u64)
         .unwrap_or_else(|| "-".to_string());
-    let inflight_text = snapshot
-        .adaptive_inflight_limit
-        .map(|v| v.to_string())
-        .unwrap_or_else(|| "-".to_string());
+    let inflight_text = match (
+        snapshot.adaptive_inflight_batches,
+        snapshot.adaptive_inflight_limit,
+    ) {
+        (Some(current), Some(limit)) => format!("{current}/{limit}"),
+        (Some(current), None) => format!("{current}/-"),
+        (None, Some(limit)) => format!("-/{limit}"),
+        (None, None) => "-".to_string(),
+    };
     let cooldown_text = snapshot
         .adaptive_cooldown_steps
         .map(|v| v.to_string())
@@ -1794,11 +1953,11 @@ fn adaptive_control_line(snapshot: AdaptiveControlSnapshot<'_>) -> Line<'static>
         Span::styled("Adaptive ", Style::default().fg(SLATE_500)),
         Span::styled(
             format!(
-                "batch {} blk  tx {}/{}  inflight {}  cd {}  chg #{} {}",
+                "batch {} blk  inflight {}  tx target/min {}/{}  cd {}  chg #{} {}",
                 batch_blocks_text,
+                inflight_text,
                 target_text,
                 min_target_text,
-                inflight_text,
                 cooldown_text,
                 seq_text,
                 age_text
@@ -2895,6 +3054,10 @@ fn push_history_sample(history: &mut VecDeque<f64>, sample: f64) {
     history.push_back(sample);
 }
 
+fn is_rate_drop(previous: f64, current: f64) -> bool {
+    previous > 0.0 && current > 0.0 && current < previous * RATE_DROP_RATIO_THRESHOLD
+}
+
 fn diagnostics_view_mode_label(mode: DiagnosticsViewMode) -> &'static str {
     match mode {
         DiagnosticsViewMode::Auto => "Auto",
@@ -3369,14 +3532,16 @@ mod tests {
         compact_overview_layout, compact_sync_layout, consumed_cells_source_color,
         consumed_cells_source_label, dense_right_lines, detail_right_lines,
         diagnostics_dense_panel, eta_confidence_label, format_age_secs, format_hit_rate,
-        format_num, format_num_commas, format_ratio, format_signed_num_i128, format_ttl,
-        header_right_line, header_title_line, heartbeat_is_on, io_fetch_write_jitter_line,
-        overview_log_min_height, overview_services_min_height, pipeline_bottleneck,
-        pipeline_flow_state, pipeline_reset_line, rate_jitter, redis_health_state, redis_key_line,
-        redis_max_key_age, runtime_health_state, runtime_live_delta, sparkline, stack_sync_charts,
-        startup_phase_label, storage_runtime_columns, sync_bottleneck, sync_timing_lines,
-        trend_delta, trim_for_panel, AdaptiveControlSnapshot, Color, CompactOverviewLayout,
-        CompactSyncLayout, DiagnosticsViewMode, SyncBottleneck, TERMINAL_DIM,
+        format_num, format_num_commas, format_rate_pair, format_ratio, format_signed_num_i128,
+        format_ttl, header_right_line, header_title_line, heartbeat_is_on,
+        io_fetch_write_jitter_line, is_rate_drop, overview_log_min_height,
+        overview_services_min_height, pipeline_bottleneck, pipeline_flow_state,
+        pipeline_reset_line, rate_jitter, redis_health_state, redis_key_line, redis_max_key_age,
+        runtime_health_state, runtime_live_delta, sparkline, stack_sync_charts,
+        startup_phase_label, storage_runtime_columns, sync_bottleneck, sync_chart_specs,
+        sync_timing_lines, trend_delta, trim_for_panel, AdaptiveControlSnapshot, Color,
+        CompactOverviewLayout, CompactSyncLayout, DiagnosticsViewMode, SyncBottleneck,
+        SyncChartKind, TERMINAL_DIM,
     };
     use crate::db::{ApiServiceInfo, RedisServiceInfo, RuntimeDiagData};
     use ckbadger_common::MemoryStatsData;
@@ -3429,6 +3594,15 @@ mod tests {
         history.push_back(80.0);
         let jitter = rate_jitter(&history, 10).unwrap();
         assert!(jitter > 0.0);
+    }
+
+    #[test]
+    fn test_is_rate_drop_threshold() {
+        assert!(is_rate_drop(100.0, 64.0));
+        assert!(!is_rate_drop(100.0, 65.0));
+        assert!(!is_rate_drop(100.0, 70.0));
+        assert!(!is_rate_drop(0.0, 10.0));
+        assert!(!is_rate_drop(100.0, 0.0));
     }
 
     #[test]
@@ -3613,9 +3787,20 @@ mod tests {
     }
 
     #[test]
+    fn test_format_rate_pair() {
+        assert_eq!(
+            format_rate_pair(Some(123.6), Some(100.2), "blk/s"),
+            "124/100 blk/s"
+        );
+        assert_eq!(format_rate_pair(None, Some(5.0), "tx/s"), "-/5 tx/s");
+        assert_eq!(format_rate_pair(Some(5.0), None, "tx/s"), "5/- tx/s");
+    }
+
+    #[test]
     fn test_adaptive_control_line_format() {
         let line = adaptive_control_line(AdaptiveControlSnapshot {
             last_batch_blocks: Some(512),
+            adaptive_inflight_batches: Some(2),
             adaptive_target_batch_txs: Some(40_000),
             adaptive_inflight_limit: Some(3),
             adaptive_min_target_batch_txs: Some(10_000),
@@ -3628,8 +3813,8 @@ mod tests {
         let text = line_text(&line);
         assert!(text.contains("Adaptive"));
         assert!(text.contains("batch 512 blk"));
-        assert!(text.contains("tx 40,000/10,000"));
-        assert!(text.contains("inflight 3"));
+        assert!(text.contains("inflight 2/3"));
+        assert!(text.contains("tx target/min 40,000/10,000"));
         assert!(text.contains("cd 2"));
         assert!(text.contains("chg #12 7s"));
         assert!(text.contains("BACKOFFx3"));
@@ -3715,6 +3900,20 @@ mod tests {
         assert!(stack_sync_charts(Rect::new(0, 0, 100, 12)));
         assert!(!stack_sync_charts(Rect::new(0, 0, 100, 8)));
         assert!(!stack_sync_charts(Rect::new(0, 0, 130, 12)));
+    }
+
+    #[test]
+    fn test_sync_chart_specs_include_tx_rate() {
+        let stacked = sync_chart_specs(true);
+        assert_eq!(stacked.len(), 2);
+        assert_eq!(stacked[0].kind, SyncChartKind::BlockRate);
+        assert_eq!(stacked[1].kind, SyncChartKind::TxRate);
+
+        let wide = sync_chart_specs(false);
+        assert_eq!(wide.len(), 3);
+        assert_eq!(wide[0].kind, SyncChartKind::BlockRate);
+        assert_eq!(wide[1].kind, SyncChartKind::TxRate);
+        assert_eq!(wide[2].kind, SyncChartKind::WriteLatency);
     }
 
     #[test]

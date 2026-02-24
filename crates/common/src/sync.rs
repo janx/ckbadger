@@ -184,6 +184,12 @@ pub struct SyncProgressData {
     pub last_batch_blocks: Option<u64>,
     pub blocks_per_second: f64,
     pub ema_blocks_per_second: f64,
+    /// Current tx throughput in tx/s for committed writer batches.
+    #[serde(default)]
+    pub txs_per_second: Option<f64>,
+    /// EMA tx throughput in tx/s for committed writer batches.
+    #[serde(default)]
+    pub ema_txs_per_second: Option<f64>,
     pub eta_seconds: Option<f64>,
     pub eta_formatted: String,
     pub progress_percentage: f64,
@@ -567,6 +573,8 @@ mod tests {
             last_batch_blocks: Some(512),
             blocks_per_second: 500.0,
             ema_blocks_per_second: 450.0,
+            txs_per_second: Some(12_000.0),
+            ema_txs_per_second: Some(11_100.0),
             eta_seconds: Some(2.0),
             eta_formatted: "2s".to_string(),
             progress_percentage: 50.0,
@@ -616,6 +624,8 @@ mod tests {
             Some("pipeline batch mismatch")
         );
         assert_eq!(parsed.last_batch_blocks, Some(512));
+        assert_eq!(parsed.txs_per_second, Some(12_000.0));
+        assert_eq!(parsed.ema_txs_per_second, Some(11_100.0));
         assert_eq!(parsed.adaptive_target_batch_txs, Some(40_000));
         assert_eq!(parsed.adaptive_inflight_limit, Some(3));
         assert_eq!(parsed.adaptive_min_target_batch_txs, Some(10_000));
@@ -637,6 +647,8 @@ mod tests {
             last_batch_blocks: Some(128),
             blocks_per_second: 500.0,
             ema_blocks_per_second: 450.0,
+            txs_per_second: Some(12_000.0),
+            ema_txs_per_second: Some(11_100.0),
             eta_seconds: Some(2.0),
             eta_formatted: "2s".to_string(),
             progress_percentage: 50.0,
@@ -662,6 +674,8 @@ mod tests {
             obj.remove("pipelineResetEpoch");
             obj.remove("pipelineResetReason");
             obj.remove("lastBatchBlocks");
+            obj.remove("txsPerSecond");
+            obj.remove("emaTxsPerSecond");
             obj.remove("adaptiveTargetBatchTxs");
             obj.remove("adaptiveInflightLimit");
             obj.remove("adaptiveMinTargetBatchTxs");
@@ -676,6 +690,8 @@ mod tests {
         assert_eq!(parsed.pipeline_reset_epoch, None);
         assert_eq!(parsed.pipeline_reset_reason, None);
         assert_eq!(parsed.last_batch_blocks, None);
+        assert_eq!(parsed.txs_per_second, None);
+        assert_eq!(parsed.ema_txs_per_second, None);
         assert_eq!(parsed.adaptive_target_batch_txs, None);
         assert_eq!(parsed.adaptive_inflight_limit, None);
         assert_eq!(parsed.adaptive_min_target_batch_txs, None);

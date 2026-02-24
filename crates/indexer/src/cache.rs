@@ -423,6 +423,8 @@ mod tests {
             last_batch_blocks: Some(64),
             blocks_per_second: 100.0,
             ema_blocks_per_second: 95.0,
+            txs_per_second: Some(2_000.0),
+            ema_txs_per_second: Some(1_900.0),
             eta_seconds: Some(90.0),
             eta_formatted: "1m 30s".to_string(),
             progress_percentage: 10.0,
@@ -528,6 +530,8 @@ mod tests {
                 last_batch_blocks: Some(128),
                 blocks_per_second: 200.0,
                 ema_blocks_per_second: 180.0,
+                txs_per_second: Some(8_000.0),
+                ema_txs_per_second: Some(7_200.0),
                 eta_seconds: Some(27.78),
                 eta_formatted: "27s".to_string(),
                 progress_percentage: 50.0,
@@ -564,6 +568,8 @@ mod tests {
             assert_eq!(stored.target_block, 10000);
             assert!((stored.progress_percentage - 50.0).abs() < 0.01);
             assert_eq!(stored.startup_phase.as_deref(), Some("rollback_cleanup"));
+            assert_eq!(stored.txs_per_second, Some(8_000.0));
+            assert_eq!(stored.ema_txs_per_second, Some(7_200.0));
             assert_eq!(stored.pipeline_reset_epoch, Some(7));
             assert_eq!(
                 stored.pipeline_reset_reason.as_deref(),

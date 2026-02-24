@@ -4112,6 +4112,8 @@ impl Indexer {
 
                     let db_start = Instant::now();
                     let batch_tx_count = all_tx_data.len();
+                    let batch_tx_count_u64 =
+                        u64::try_from(batch_tx_count).expect("batch tx count exceeds u64");
                     if let Err(e) = self
                         .write_parsed_batch(
                             &blocks,
@@ -4217,8 +4219,11 @@ impl Indexer {
                     if let Some(last_block) = all_parsed_blocks.last() {
                         committed_tip_for_cache_for_writer
                             .store(last_block.number, Ordering::SeqCst);
-                        self.progress
-                            .record_batch(last_block.number as u64, all_parsed_blocks.len() as u64);
+                        self.progress.record_batch(
+                            last_block.number as u64,
+                            all_parsed_blocks.len() as u64,
+                            batch_tx_count_u64,
+                        );
 
                         let mode = if self.is_bulk_sync_active() {
                             "[BULK]"
@@ -4628,8 +4633,16 @@ impl Indexer {
 
         if let Some(last_block_response) = blocks.last() {
             let last_block_number = BlockParser::parse_block_number(&last_block_response.block);
+            let batch_block_count = u64::try_from(blocks.len()).expect("batch blocks exceed u64");
+            let batch_tx_count: u64 = blocks
+                .iter()
+                .map(|block_response| {
+                    u64::try_from(block_response.block.transactions.len())
+                        .expect("batch tx count exceeds u64")
+                })
+                .sum();
             self.progress
-                .record_batch(last_block_number, blocks.len() as u64);
+                .record_batch(last_block_number, batch_block_count, batch_tx_count);
 
             let partition_range = format_partition_range(start_block, end_block);
             let boundary_info = if crosses_partition_boundary(start_block, end_block) {

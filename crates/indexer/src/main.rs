@@ -486,8 +486,10 @@ async fn run_sync(args: Cli) -> Result<()> {
 
             let progress = indexer_for_progress.progress();
             let ema_rate = progress.ema_blocks_per_second();
+            let ema_tx_rate = progress.ema_txs_per_second();
             let eta = progress.eta_formatted();
             let bps = progress.blocks_per_second();
+            let txps = progress.txs_per_second();
             let last_batch_blocks = progress.last_batch_blocks();
 
             let (perf_rpc_ms, perf_db_ms) = indexer_for_progress.perf_snapshot_ms();
@@ -513,6 +515,8 @@ async fn run_sync(args: Cli) -> Result<()> {
                 last_batch_blocks: (last_batch_blocks > 0).then_some(last_batch_blocks),
                 blocks_per_second: bps,
                 ema_blocks_per_second: ema_rate,
+                txs_per_second: (txps > 0.0).then_some(txps),
+                ema_txs_per_second: (ema_tx_rate > 0.0).then_some(ema_tx_rate),
                 eta_seconds: progress.eta_seconds(),
                 eta_formatted: eta.clone(),
                 progress_percentage: progress.progress_percentage(),
