@@ -989,7 +989,7 @@ async fn test_most_utilized_assets_chart_ranks_mixed_asset_types() {
     let occupied_share = &json["occupiedShare"];
     let occupied_series = occupied_share["series"].as_array().unwrap();
     assert_eq!(occupied_series[0]["label"], "NFT Collection (nft)");
-    assert_eq!(occupied_series[1]["label"], "DOB Cluster (dob)");
+    assert_eq!(occupied_series[1]["label"], "DOB Cluster (nft)");
     assert_eq!(occupied_series[2]["label"], "A (token)");
     assert_eq!(occupied_series[3]["label"], "B (token)");
     assert_eq!(occupied_series[4]["label"], "Others");
@@ -1006,7 +1006,7 @@ async fn test_most_utilized_assets_chart_ranks_mixed_asset_types() {
     let capacity_series = capacity_share["series"].as_array().unwrap();
     assert_eq!(capacity_series[0]["label"], "B (token)");
     assert_eq!(capacity_series[1]["label"], "NFT Collection (nft)");
-    assert_eq!(capacity_series[2]["label"], "DOB Cluster (dob)");
+    assert_eq!(capacity_series[2]["label"], "DOB Cluster (nft)");
     assert_eq!(capacity_series[3]["label"], "A (token)");
     assert_eq!(capacity_series[4]["label"], "Others");
 
@@ -2484,7 +2484,7 @@ async fn test_spore_decode_endpoint_returns_issues_without_ckb_direct_store() {
 }
 
 #[tokio::test]
-async fn test_assets_dob_uses_cluster_entry_name_when_aggregate_name_missing() {
+async fn test_assets_nft_includes_spore_cluster_name_when_aggregate_name_missing() {
     let store = test_store();
 
     let cluster_id = [0x42u8; 32];
@@ -2518,7 +2518,7 @@ async fn test_assets_dob_uses_cluster_entry_name_when_aggregate_name_missing() {
     let app = create_router(config).await;
 
     let request = Request::builder()
-        .uri("/api/v1/assets?type=dob")
+        .uri("/api/v1/assets?type=nft")
         .body(Body::empty())
         .unwrap();
 
@@ -2528,6 +2528,22 @@ async fn test_assets_dob_uses_cluster_entry_name_when_aggregate_name_missing() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["data"][0]["name"], "Recovered Cluster Name");
+    assert_eq!(json["data"][0]["assetType"], "nft");
+    assert_eq!(json["data"][0]["standard"], "spore");
+}
+
+#[tokio::test]
+async fn test_assets_rejects_legacy_dob_type_filter() {
+    let store = test_store();
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/assets?type=dob")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

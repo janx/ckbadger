@@ -11,7 +11,7 @@ use std::sync::Arc;
 use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
 use crate::utils::{apply_live_capacity_delta, parse_chart_date_range};
-use crate::warmup::{CachedAssetEntry, CACHE_KEY_ASSETS_DOB};
+use crate::warmup::{CachedAssetEntry, CACHE_KEY_ASSETS_NFT};
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -794,7 +794,7 @@ fn latest_capacity_from_chart(
     (Some("0".to_string()), Some("0".to_string()))
 }
 
-/// List clusters — use cached DOB assets list when available.
+/// List clusters — use cached NFT assets (filtered to Spore) when available.
 async fn list_clusters(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListParams>,
@@ -802,12 +802,12 @@ async fn list_clusters(
     let limit = params.limit.clamp(1, 100) as usize;
     let cursor_block = params.cursor.unwrap_or(i64::MAX);
 
-    // Try cached DOB assets first — they already have cluster grouping
-    if let Some(cached_dobs) = state
+    // Try cached NFT assets first (Spore entries carry cluster grouping)
+    if let Some(cached_nfts) = state
         .mem_cache
-        .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_DOB)
+        .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_NFT)
     {
-        return serve_clusters_from_cache(cached_dobs, cursor_block, limit, &state);
+        return serve_clusters_from_cache(cached_nfts, cursor_block, limit, &state);
     }
 
     // Fallback: derive from spores scan
@@ -824,6 +824,9 @@ fn serve_clusters_from_cache(
     let mut clusters: Vec<ClusterResponse> = cached
         .into_iter()
         .filter_map(|entry| {
+            if entry.standard != "spore" {
+                return None;
+            }
             let cluster_id_hex = entry.cluster_id.as_ref().unwrap_or(&entry.id);
             let cluster_id_bytes =
                 hex::decode(cluster_id_hex.strip_prefix("0x").unwrap_or(cluster_id_hex)).ok()?;

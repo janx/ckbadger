@@ -104,10 +104,10 @@ export default function ClusterDetailPage() {
       <main className="container mx-auto px-4 py-8">
         <div className="mb-6">
           <Link
-            href="/assets?type=dob"
+            href="/assets?type=nft"
             className="hover:text-terminal-green text-sm text-slate-500 transition-colors"
           >
-            ← Back to DOBs
+            ← Back to NFTs
           </Link>
         </div>
 

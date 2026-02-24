@@ -63,7 +63,7 @@ const mockClusterAssets = {
   data: [
     {
       id: '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
-      assetType: 'dob' as const,
+      assetType: 'nft' as const,
       standard: 'spore',
       name: 'Test Collection',
       symbol: null,
@@ -75,7 +75,7 @@ const mockClusterAssets = {
       transfersCount: 50,
       transfers24h: 5,
       decimals: null,
-      totalSupply: null,
+      totalSupply: '50',
       contentType: null,
       contentSize: null,
       clusterId: '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
@@ -198,14 +198,13 @@ describe('AssetsPage', () => {
     expect(screen.getByText('Assets')).toBeInTheDocument();
   });
 
-  it('renders three tabs: Tokens, NFTs, DOBs', async () => {
+  it('renders two tabs: Tokens and NFTs', async () => {
     vi.mocked(api.getAssets).mockResolvedValue(mockTokenAssets);
 
     render(<AssetsPage />);
 
     expect(screen.getByRole('button', { name: /Tokens/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /NFTs/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /DOBs/i })).toBeInTheDocument();
   });
 
   it('shows Tokens tab content by default', async () => {
@@ -241,14 +240,26 @@ describe('AssetsPage', () => {
   });
 
   it('uses query type as initial tab', async () => {
+    window.history.replaceState(null, '', '/assets?type=nft');
+    vi.mocked(api.getAssets).mockResolvedValue(mockClusterAssets);
+
+    render(<AssetsPage />);
+
+    await waitFor(() => {
+      expect(api.getAssets).toHaveBeenCalledWith(expect.objectContaining({ type: 'nft' }));
+      expect(screen.getByText('NFT Collections')).toBeInTheDocument();
+    });
+  });
+
+  it('maps legacy dob query type to nft', async () => {
     window.history.replaceState(null, '', '/assets?type=dob');
     vi.mocked(api.getAssets).mockResolvedValue(mockClusterAssets);
 
     render(<AssetsPage />);
 
     await waitFor(() => {
-      expect(api.getAssets).toHaveBeenCalledWith(expect.objectContaining({ type: 'dob' }));
-      expect(screen.getByText('DOB Collections')).toBeInTheDocument();
+      expect(api.getAssets).toHaveBeenCalledWith(expect.objectContaining({ type: 'nft' }));
+      expect(screen.getByText('NFT Collections')).toBeInTheDocument();
     });
   });
 
@@ -266,33 +277,6 @@ describe('AssetsPage', () => {
     });
   });
 
-  it('switches to DOBs tab when clicked', async () => {
-    vi.mocked(api.getAssets).mockResolvedValue(mockClusterAssets);
-
-    render(<AssetsPage />);
-
-    const dobsTab = screen.getByRole('button', { name: /DOBs/i });
-    fireEvent.click(dobsTab);
-
-    await waitFor(() => {
-      expect(api.getAssets).toHaveBeenCalledWith(expect.objectContaining({ type: 'dob' }));
-    });
-  });
-
-  it('shows DOBs info banner when DOBs tab is active', async () => {
-    vi.mocked(api.getAssets).mockResolvedValue(mockClusterAssets);
-
-    render(<AssetsPage />);
-
-    const dobsTab = screen.getByRole('button', { name: /DOBs/i });
-    fireEvent.click(dobsTab);
-
-    await waitFor(() => {
-      expect(screen.getByText('DOB Collections')).toBeInTheDocument();
-    });
-    expect(screen.getByText('DOB Collections')).toHaveClass('text-slate-200');
-  });
-
   it('shows NFTs info banner when NFTs tab is active', async () => {
     vi.mocked(api.getAssets).mockResolvedValue(emptyAssets);
 
@@ -303,6 +287,9 @@ describe('AssetsPage', () => {
 
     await waitFor(() => {
       expect(screen.getByText('NFT Collections')).toBeInTheDocument();
+      expect(
+        screen.getByText(/includes both standard NFT collections and Spore\/DOB collections/i)
+      ).toBeInTheDocument();
     });
     expect(screen.getByText('NFT Collections')).toHaveClass('text-slate-200');
   });
@@ -318,13 +305,13 @@ describe('AssetsPage', () => {
     });
   });
 
-  it('displays cluster data in DOBs tab', async () => {
+  it('displays spore collection data in NFTs tab', async () => {
     vi.mocked(api.getAssets).mockResolvedValue(mockClusterAssets);
 
     render(<AssetsPage />);
 
-    const dobsTab = screen.getByRole('button', { name: /DOBs/i });
-    fireEvent.click(dobsTab);
+    const nftsTab = screen.getByRole('button', { name: /NFTs/i });
+    fireEvent.click(nftsTab);
 
     await waitFor(() => {
       expect(screen.getByText('Test Collection')).toBeInTheDocument();
@@ -388,16 +375,20 @@ describe('AssetsPage', () => {
     });
   });
 
-  it('shows ON-CHAIN badge for DOB assets', async () => {
+  it('routes spore collections to cluster detail page', async () => {
     vi.mocked(api.getAssets).mockResolvedValue(mockClusterAssets);
 
     render(<AssetsPage />);
 
-    const dobsTab = screen.getByRole('button', { name: /DOBs/i });
-    fireEvent.click(dobsTab);
+    const nftsTab = screen.getByRole('button', { name: /NFTs/i });
+    fireEvent.click(nftsTab);
 
     await waitFor(() => {
-      expect(screen.getAllByText('ON-CHAIN').length).toBeGreaterThan(0);
+      const link = screen.getByRole('link', { name: /Test Collection/i });
+      expect(link).toHaveAttribute(
+        'href',
+        '/clusters/0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890'
+      );
     });
   });
 

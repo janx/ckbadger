@@ -22,7 +22,7 @@ import { api, Asset } from '@/lib/api';
 import { toNftDetailSlug } from '@/lib/nft-collections';
 import { formatCkbCompact } from '@/lib/utils';
 
-type AssetTab = 'token' | 'nft' | 'dob';
+type AssetTab = 'token' | 'nft';
 type SortDirection = 'asc' | 'desc';
 type AssetSortKey =
   | 'name'
@@ -35,7 +35,11 @@ type AssetSortKey =
   | 'capacity';
 
 function normalizeAssetTab(value: string | null): AssetTab {
-  if (value === 'nft' || value === 'dob' || value === 'token') {
+  if (value === 'dob') {
+    // Backward compatibility: old assets links used ?type=dob.
+    return 'nft';
+  }
+  if (value === 'nft' || value === 'token') {
     return value;
   }
   return 'token';
@@ -80,7 +84,9 @@ function AssetTable({ assetType, search }: { assetType: AssetTab; search: string
 
   const getAssetLink = (asset: Asset) => {
     if (asset.assetType === 'token') return `/tokens/${asset.id}`;
-    if (asset.assetType === 'dob') return `/clusters/${asset.id}`;
+    if (asset.standard === 'spore') {
+      return `/clusters/${asset.clusterId || asset.id}`;
+    }
     return `/nfts/${toNftDetailSlug(asset.id, asset.standard)}`;
   };
 
@@ -91,11 +97,7 @@ function AssetTable({ assetType, search }: { assetType: AssetTab; search: string
     return asset.name || 'Unnamed Collection';
   };
 
-  const getTypeBadgeLabel = (asset: Asset) => {
-    if (asset.assetType === 'dob') return asset.standard.toUpperCase();
-    if (asset.assetType === 'nft') return asset.standard.toUpperCase();
-    return asset.standard.toUpperCase();
-  };
+  const getTypeBadgeLabel = (asset: Asset) => asset.standard.toUpperCase();
 
   const toggleSort = (nextKey: AssetSortKey) => {
     if (nextKey === sortKey) {
@@ -167,13 +169,9 @@ function AssetTable({ assetType, search }: { assetType: AssetTab; search: string
   return (
     <>
       <div className="flex border-b border-slate-800 bg-slate-900/50 px-4 py-2 font-mono text-xs uppercase tracking-wider text-slate-500">
-        {renderSortHeader(
-          'name',
-          assetType === 'dob' ? 'Collection' : assetType === 'token' ? 'Token' : 'NFT',
-          'flex-1'
-        )}
+        {renderSortHeader('name', assetType === 'token' ? 'Token' : 'Collection', 'flex-1')}
         {renderSortHeader('type', 'Type', 'w-20 shrink-0')}
-        {assetType === 'dob' && renderSortHeader('supply', 'DOBs', 'w-24 shrink-0', 'right')}
+        {assetType !== 'token' && renderSortHeader('supply', 'Items', 'w-24 shrink-0', 'right')}
         {renderSortHeader('transfers24h', '24h Txns', 'w-24 shrink-0', 'right')}
         {renderSortHeader('holders', 'Holders', 'w-28 shrink-0', 'right')}
         {renderSortHeader('transfers', 'Transfers', 'w-28 shrink-0', 'right')}
@@ -199,7 +197,7 @@ function AssetTable({ assetType, search }: { assetType: AssetTab; search: string
                       }}
                     />
                   )}
-                  {asset.assetType === 'dob' && (
+                  {asset.assetType === 'nft' && asset.standard === 'spore' && (
                     <span className="flex h-6 w-6 items-center justify-center text-sm">🗂️</span>
                   )}
                   <div>
@@ -242,7 +240,7 @@ function AssetTable({ assetType, search }: { assetType: AssetTab; search: string
                 <Badge variant="neutral">{getTypeBadgeLabel(asset)}</Badge>
               </div>
             </div>
-            {assetType === 'dob' && (
+            {assetType !== 'token' && (
               <div className="w-24 shrink-0 text-right font-mono text-white">
                 {formatNumber(asset.totalSupply || 0)}
               </div>
@@ -337,7 +335,7 @@ export function AssetsPageClient() {
       <main className="container mx-auto px-4 py-8">
         <PageHeader
           title="Assets"
-          subtitle="Browse tokens, NFTs, and DOBs on the CKB network"
+          subtitle="Browse tokens and NFTs on the CKB network"
           actions={
             <form onSubmit={handleSearch} className="flex gap-2">
               <div className="relative">
@@ -376,12 +374,6 @@ export function AssetsPageClient() {
                 <TabsList>
                   <TabsTrigger value="token">Tokens</TabsTrigger>
                   <TabsTrigger value="nft">NFTs</TabsTrigger>
-                  <TabsTrigger value="dob">
-                    <span className="flex items-center gap-1.5">
-                      DOBs
-                      <Badge variant="neutral">ON-CHAIN</Badge>
-                    </span>
-                  </TabsTrigger>
                 </TabsList>
               }
             >
@@ -402,32 +394,13 @@ export function AssetsPageClient() {
                     <div>
                       <h3 className="font-semibold text-slate-200">NFT Collections</h3>
                       <p className="mt-1 text-sm text-slate-400">
-                        NFTs (Non-Fungible Tokens) are unique digital assets. Unlike DOBs, NFTs
-                        often rely on external services for metadata storage.
+                        NFTs (Non-Fungible Tokens) are unique digital assets. This list includes
+                        both standard NFT collections and Spore/DOB collections.
                       </p>
                     </div>
                   </div>
                 </div>
                 <AssetTable assetType="nft" search={search} />
-              </TabsContent>
-
-              <TabsContent value="dob">
-                <div className="border-b border-slate-800 bg-slate-900/40 p-4">
-                  <div className="flex items-start gap-3">
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-800 text-xl">
-                      🗂️
-                    </div>
-                    <div>
-                      <h3 className="font-semibold text-slate-200">DOB Collections</h3>
-                      <p className="mt-1 text-sm text-slate-400">
-                        DOBs (Digital Objects) are fully on-chain assets with all data stored
-                        directly in CKB cells. They require no external services and can exist
-                        permanently.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-                <AssetTable assetType="dob" search={search} />
               </TabsContent>
             </TerminalPanelContent>
           </Tabs>

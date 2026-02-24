@@ -15,9 +15,7 @@ use crate::utils::{
     accumulate_live_capacity, apply_live_capacity_delta, parse_chart_date_range,
     resolve_dob_collection_name, resolve_nft_collection_name,
 };
-use crate::warmup::{
-    CachedAssetEntry, CACHE_KEY_ASSETS_DOB, CACHE_KEY_ASSETS_NFT, CACHE_KEY_ASSETS_TOKEN,
-};
+use crate::warmup::{CachedAssetEntry, CACHE_KEY_ASSETS_NFT, CACHE_KEY_ASSETS_TOKEN};
 use crate::AppState;
 
 const DOTBIT_SENTINEL_COLLECTION: [u8; 32] = *b"dotbit_collection_______________";
@@ -45,7 +43,7 @@ pub struct ListParams {
     #[serde(default = "default_limit")]
     limit: i64,
     #[serde(rename = "type")]
-    asset_type: Option<String>,
+    asset_type: Option<AssetFilterType>,
     cursor: Option<String>,
     search: Option<String>,
     #[serde(default = "default_asset_sort_key")]
@@ -70,6 +68,13 @@ pub struct NftItemsParams {
 
 fn default_limit() -> i64 {
     20
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum AssetFilterType {
+    Token,
+    Nft,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -158,7 +163,7 @@ async fn list_assets(
     let limit = params.limit.clamp(1, 100);
 
     let search_lower = params.search.as_ref().map(|s| s.to_lowercase());
-    let filter_type = params.asset_type.as_deref();
+    let filter_type = params.asset_type;
 
     let (total, rows) = fetch_assets_cached(
         &state,
@@ -191,7 +196,7 @@ async fn list_assets(
 /// Falls back to direct computation when cache is cold.
 fn fetch_assets_cached(
     state: &Arc<AppState>,
-    filter_type: Option<&str>,
+    filter_type: Option<AssetFilterType>,
     search: Option<&str>,
     limit: i64,
     cursor: Option<&str>,
@@ -201,37 +206,49 @@ fn fetch_assets_cached(
     let mut all_cached: Vec<CachedAssetEntry> = Vec::new();
 
     // Collect from cache based on type filter
-    if !matches!(filter_type, Some("nft") | Some("dob")) {
-        if let Some(tokens) = state
-            .mem_cache
-            .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_TOKEN)
-        {
-            all_cached.extend(tokens);
-        } else {
-            // Cache cold — fall back to direct computation for tokens
-            all_cached.extend(compute_token_assets(state)?);
+    match filter_type {
+        Some(AssetFilterType::Token) => {
+            if let Some(tokens) = state
+                .mem_cache
+                .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_TOKEN)
+            {
+                all_cached.extend(tokens);
+            } else {
+                // Cache cold — fall back to direct computation for tokens
+                all_cached.extend(compute_token_assets(state)?);
+            }
         }
-    }
-
-    if !matches!(filter_type, Some("token") | Some("nft")) {
-        if let Some(dobs) = state
-            .mem_cache
-            .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_DOB)
-        {
-            all_cached.extend(dobs);
-        } else {
-            all_cached.extend(compute_dob_assets(state)?);
+        Some(AssetFilterType::Nft) => {
+            if let Some(nfts) = state
+                .mem_cache
+                .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_NFT)
+            {
+                all_cached.extend(nfts);
+            } else {
+                // Cache cold — fall back to direct computation for NFTs (including Spore/DOB)
+                all_cached.extend(compute_nft_assets(state)?);
+            }
         }
-    }
+        None => {
+            if let Some(tokens) = state
+                .mem_cache
+                .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_TOKEN)
+            {
+                all_cached.extend(tokens);
+            } else {
+                // Cache cold — fall back to direct computation for tokens
+                all_cached.extend(compute_token_assets(state)?);
+            }
 
-    if !matches!(filter_type, Some("token") | Some("dob")) {
-        if let Some(nfts) = state
-            .mem_cache
-            .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_NFT)
-        {
-            all_cached.extend(nfts);
-        } else {
-            all_cached.extend(compute_nft_assets(state)?);
+            if let Some(nfts) = state
+                .mem_cache
+                .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_NFT)
+            {
+                all_cached.extend(nfts);
+            } else {
+                // Cache cold — fall back to direct computation for NFTs (including Spore/DOB)
+                all_cached.extend(compute_nft_assets(state)?);
+            }
         }
     }
 
@@ -283,14 +300,24 @@ fn fetch_assets_cached(
 /// New format: "asset_type:id"
 /// Legacy format: "transfers_24h:holders_count:id:asset_type"
 fn parse_asset_cursor(cursor: &str) -> Option<(String, String)> {
+    let normalize_type = |asset_type: &str| match asset_type {
+        "token" => Some("token"),
+        "nft" | "dob" => Some("nft"),
+        _ => None,
+    };
+
     let parts: Vec<&str> = cursor.splitn(2, ':').collect();
-    if parts.len() == 2 && matches!(parts[0], "token" | "nft" | "dob") {
-        return Some((parts[0].to_string(), parts[1].to_string()));
+    if parts.len() == 2 {
+        if let Some(asset_type) = normalize_type(parts[0]) {
+            return Some((asset_type.to_string(), parts[1].to_string()));
+        }
     }
 
     let legacy_parts: Vec<&str> = cursor.splitn(4, ':').collect();
     if legacy_parts.len() == 4 {
-        return Some((legacy_parts[3].to_string(), legacy_parts[2].to_string()));
+        if let Some(asset_type) = normalize_type(legacy_parts[3]) {
+            return Some((asset_type.to_string(), legacy_parts[2].to_string()));
+        }
     }
 
     None
@@ -983,16 +1010,20 @@ fn compute_token_assets(
     Ok(result)
 }
 
-/// Fallback: compute DOB assets from pre-aggregated cluster_agg CF.
-fn compute_dob_assets(
+/// Fallback: compute NFT assets directly, including Spore/DOB collections.
+fn compute_nft_assets(
     state: &Arc<AppState>,
 ) -> Result<Vec<CachedAssetEntry>, (axum::http::StatusCode, Json<ApiError>)> {
     let cluster_aggs = state
         .store
         .list_cluster_aggregates()
         .map_err(|e| ApiError::internal(e.to_string()))?;
+    let nft_aggs = state
+        .store
+        .list_nft_collection_aggregates()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let mut result = Vec::new();
+    let mut result = Vec::with_capacity(cluster_aggs.len() + nft_aggs.len());
     for (cluster_id_bytes, agg) in &cluster_aggs {
         if agg.total_count == 0 {
             continue;
@@ -1018,7 +1049,7 @@ fn compute_dob_assets(
 
         result.push(CachedAssetEntry {
             id: cluster_hex.clone(),
-            asset_type: "dob".to_string(),
+            asset_type: "nft".to_string(),
             standard: "spore".to_string(),
             name: display_name.clone(),
             symbol: None,
@@ -1042,19 +1073,6 @@ fn compute_dob_assets(
         });
     }
 
-    Ok(result)
-}
-
-/// Fallback: compute NFT assets from pre-aggregated nft_collection_agg CF.
-fn compute_nft_assets(
-    state: &Arc<AppState>,
-) -> Result<Vec<CachedAssetEntry>, (axum::http::StatusCode, Json<ApiError>)> {
-    let nft_aggs = state
-        .store
-        .list_nft_collection_aggregates()
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let mut result = Vec::new();
     for (collection_id_bytes, agg) in &nft_aggs {
         if agg.total_count == 0 {
             continue;

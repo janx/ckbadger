@@ -168,8 +168,7 @@ const CHART_DESCRIPTION_BUILDERS: Record<string, ChartDescriptionBuilder> = {
     ],
   }),
   'chart-most-utilized-assets': () => ({
-    overview:
-      'Ranks token, NFT collection, and DOB collection assets by utilization in live state.',
+    overview: 'Ranks token and NFT collection assets by utilization in live state.',
     legendItems: [
       {
         label: 'Occupied CKB',

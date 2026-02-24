@@ -35,7 +35,7 @@ describe('MostUtilizedAssetsPage', () => {
         title: 'Top Assets Capacity Share',
         data: [{ date: '2024-01-01', values: { top0: '200', others: '30' } }],
         series: [
-          { key: 'top0', label: 'Cluster A (dob)', color: '#00c389' },
+          { key: 'top0', label: 'Cluster A (nft)', color: '#00c389' },
           { key: 'others', label: 'Others', color: '#64748b' },
         ],
       },
@@ -55,9 +55,7 @@ describe('MostUtilizedAssetsPage', () => {
       expect(screen.getByText(/Drag to select range/i)).toHaveClass('text-slate-500');
       expect(screen.getByText('Description')).toBeInTheDocument();
       expect(
-        screen.getByText(
-          'Ranks token, NFT collection, and DOB collection assets by utilization in live state.'
-        )
+        screen.getByText('Ranks token and NFT collection assets by utilization in live state.')
       ).toBeInTheDocument();
     });
   });

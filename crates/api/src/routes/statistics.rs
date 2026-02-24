@@ -941,7 +941,7 @@ async fn get_most_utilized_assets_chart(
             resolve_dob_collection_name(state.store.as_ref(), &cluster_id, agg.name.as_deref())
                 .unwrap_or_else(|| id.clone());
         let entity_key = format!("dob:{id}");
-        labels_by_key.insert(entity_key.clone(), format_asset_label(&name, "dob"));
+        labels_by_key.insert(entity_key.clone(), format_asset_label(&name, "nft"));
         if occupied_capacity > total_cells_capacity {
             return Err(ApiError::internal(format!(
                 "DOB occupied capacity exceeds total for {}: occupied={}, total={}",

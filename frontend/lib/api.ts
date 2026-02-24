@@ -547,7 +547,7 @@ interface TokenQueryParams {
 
 interface Asset {
   id: string;
-  assetType: 'token' | 'nft' | 'dob';
+  assetType: 'token' | 'nft';
   standard: string;
   name: string | null;
   symbol: string | null;
@@ -570,7 +570,7 @@ interface Asset {
 
 interface AssetQueryParams {
   limit?: number;
-  type?: 'token' | 'nft' | 'dob';
+  type?: 'token' | 'nft';
   cursor?: string;
   search?: string;
   sortKey?:

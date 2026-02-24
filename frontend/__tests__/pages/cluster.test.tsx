@@ -198,16 +198,16 @@ describe('ClusterDetailPage', () => {
     });
   });
 
-  it('displays back to DOBs link', async () => {
+  it('displays back to NFTs link', async () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
     render(<ClusterDetailPage />);
 
     await waitFor(() => {
-      const backLink = screen.getByText('← Back to DOBs');
+      const backLink = screen.getByText('← Back to NFTs');
       expect(backLink).toBeInTheDocument();
-      expect(backLink.closest('a')).toHaveAttribute('href', '/assets?type=dob');
+      expect(backLink.closest('a')).toHaveAttribute('href', '/assets?type=nft');
     });
   });
 

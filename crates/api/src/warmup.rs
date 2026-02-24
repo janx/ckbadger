@@ -14,7 +14,6 @@ const CHART_CACHE_TTL: Duration = Duration::from_secs(3600);
 
 // Cache keys for assets
 pub const CACHE_KEY_ASSETS_TOKEN: &str = "assets:token";
-pub const CACHE_KEY_ASSETS_DOB: &str = "assets:dob";
 pub const CACHE_KEY_ASSETS_NFT: &str = "assets:nft";
 
 /// Cached asset entry with pre-computed metrics, ready for API serving.
@@ -38,7 +37,7 @@ pub struct CachedAssetEntry {
     pub cluster_name: Option<String>,
     pub live_capacity: Option<String>,
     pub live_occupied_capacity: Option<String>,
-    // Token-specific fields (None for DOB/NFT entries)
+    // Token-specific fields (None for NFT entries)
     pub type_code_hash: Option<String>,
     pub type_hash_type: Option<String>,
     pub type_args: Option<String>,
@@ -106,7 +105,7 @@ fn hash_type_to_string(hash_type: u8) -> String {
 }
 
 /// Sync function that computes and caches all asset lists.
-/// Uses pre-aggregated CFs for DOBs and NFTs (fast reads instead of full scans).
+/// Uses pre-aggregated CFs for NFTs, including Spore/DOB collections.
 /// Uses a single scan for all token 24h transfers instead of N+1 per-token queries.
 fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
     let ttl = CacheTtl::ASSETS;
@@ -176,10 +175,13 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
         .mem_cache
         .set(CACHE_KEY_ASSETS_TOKEN, &token_assets, ttl);
 
-    // -- DOB (Spore) assets from pre-aggregated cluster_agg CF --
+    // -- NFT assets, including Spore/DOB collections --
+    let mut nft_assets: Vec<CachedAssetEntry> = Vec::new();
+
+    // Spore/DOB collections from pre-aggregated cluster_agg CF
     let cluster_aggs = state.store.list_cluster_aggregates()?;
     let spore_transfers_24h_map = state.store.scan_all_spore_24h_transfers(now_ms)?;
-    let mut dob_assets: Vec<CachedAssetEntry> = Vec::with_capacity(cluster_aggs.len());
+    nft_assets.reserve(cluster_aggs.len());
 
     for (cluster_id_bytes, agg) in &cluster_aggs {
         if agg.total_count == 0 {
@@ -211,9 +213,9 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
                 )
             })?;
 
-        dob_assets.push(CachedAssetEntry {
+        nft_assets.push(CachedAssetEntry {
             id: cluster_hex.clone(),
-            asset_type: "dob".to_string(),
+            asset_type: "nft".to_string(),
             standard: "spore".to_string(),
             name: display_name.clone(),
             symbol: None,
@@ -237,18 +239,10 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
         });
     }
 
-    dob_assets.sort_by(|a, b| {
-        b.transfers_24h
-            .cmp(&a.transfers_24h)
-            .then_with(|| b.holders_count.cmp(&a.holders_count))
-    });
-
-    state.mem_cache.set(CACHE_KEY_ASSETS_DOB, &dob_assets, ttl);
-
-    // -- NFT assets from pre-aggregated nft_collection_agg CF --
+    // NFT collections from pre-aggregated nft_collection_agg CF
     let nft_aggs = state.store.list_nft_collection_aggregates()?;
     let nft_transfers_24h_map = state.store.scan_all_nft_24h_transfers(now_ms)?;
-    let mut nft_assets: Vec<CachedAssetEntry> = Vec::with_capacity(nft_aggs.len());
+    nft_assets.reserve(nft_aggs.len());
 
     for (collection_id_bytes, agg) in &nft_aggs {
         if agg.total_count == 0 {

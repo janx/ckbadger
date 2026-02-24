@@ -31,7 +31,7 @@ pub struct AppState {
     pub cycles_client: Arc<CyclesClient>,
     /// Direct read-only access to CKB node's RocksDB (when configured).
     pub ckb_store: Option<Arc<CkbChainReader>>,
-    /// In-memory cache for assets/tokens/DOB data (refreshed by background loop).
+    /// In-memory cache for assets/tokens/NFT data (refreshed by background loop).
     pub mem_cache: InMemoryCache,
 }
 
