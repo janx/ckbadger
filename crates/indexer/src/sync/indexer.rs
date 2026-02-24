@@ -1580,6 +1580,8 @@ const PARSER_UNRESOLVED_MAX_RETRIES: usize = 240;
 const ADAPTIVE_BATCH_MIN_TXS: u64 = 10_000;
 const ADAPTIVE_BATCH_MAX_TXS: u64 = 400_000;
 const ADAPTIVE_BATCH_INITIAL_TXS: u64 = 40_000;
+const ADAPTIVE_BATCH_EARLY_HEIGHT_CUTOFF: u64 = 4_000_000;
+const ADAPTIVE_BATCH_EARLY_TARGET_TXS: u64 = 200_000;
 const ADAPTIVE_BATCH_MIN_BLOCKS: u64 = 1;
 const ADAPTIVE_BATCH_MAX_BLOCKS: u64 = 5_000;
 const ADAPTIVE_BATCH_TPB_EMA_ALPHA_PCT: u64 = 20; // 0.20
@@ -1626,6 +1628,7 @@ struct AdaptiveBatchController {
     tx_per_block_milli_ema: AtomicU64,
     cooldown_steps: AtomicU64,
     max_inflight_limit: u64,
+    early_height_boost_applied: std::sync::atomic::AtomicBool,
 }
 
 impl AdaptiveBatchController {
@@ -1638,6 +1641,7 @@ impl AdaptiveBatchController {
             tx_per_block_milli_ema: AtomicU64::new(ADAPTIVE_BATCH_INITIAL_TPB_MILLI),
             cooldown_steps: AtomicU64::new(0),
             max_inflight_limit,
+            early_height_boost_applied: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -1646,6 +1650,27 @@ impl AdaptiveBatchController {
             target_batch_txs: self.target_batch_txs.load(Ordering::Relaxed),
             inflight_limit: self.inflight_limit.load(Ordering::Relaxed),
         }
+    }
+
+    fn maybe_apply_early_height_boost(&self, start_block: u64) -> Option<(u64, u64)> {
+        if start_block >= ADAPTIVE_BATCH_EARLY_HEIGHT_CUTOFF {
+            return None;
+        }
+        if self
+            .early_height_boost_applied
+            .swap(true, Ordering::Relaxed)
+        {
+            return None;
+        }
+
+        let previous_target_batch_txs = self.target_batch_txs.load(Ordering::Relaxed);
+        let boosted_target_batch_txs = previous_target_batch_txs
+            .max(ADAPTIVE_BATCH_EARLY_TARGET_TXS)
+            .clamp(ADAPTIVE_BATCH_MIN_TXS, ADAPTIVE_BATCH_MAX_TXS);
+        self.target_batch_txs
+            .store(boosted_target_batch_txs, Ordering::Relaxed);
+
+        Some((previous_target_batch_txs, boosted_target_batch_txs))
     }
 
     fn estimate_block_span(&self, batch_block_cap: u64) -> u64 {
@@ -2712,6 +2737,19 @@ impl Indexer {
                     );
                     sleep(Duration::from_millis(config.poll_interval_ms)).await;
                     continue;
+                }
+
+                if let Some((previous_target_batch_txs, new_target_batch_txs)) =
+                    adaptive_batch_controller_for_fetcher
+                        .maybe_apply_early_height_boost(start_block)
+                {
+                    info!(
+                        start_block,
+                        cutoff_height = ADAPTIVE_BATCH_EARLY_HEIGHT_CUTOFF,
+                        previous_target_batch_txs,
+                        new_target_batch_txs,
+                        "Adaptive batch warmup: boosted target batch txs for early-chain bulk sync"
+                    );
                 }
 
                 let adaptive_snapshot = adaptive_batch_controller_for_fetcher.snapshot();
@@ -10129,6 +10167,34 @@ mod tests {
         assert_eq!(
             snapshot_after_healthy.inflight_limit,
             snapshot_after_pressure.inflight_limit
+        );
+    }
+
+    #[test]
+    fn test_adaptive_batch_early_height_boost_applies_once() {
+        let controller = AdaptiveBatchController::new(8);
+        let first = controller
+            .maybe_apply_early_height_boost(123)
+            .expect("early-chain boost should apply once");
+        assert_eq!(first.0, ADAPTIVE_BATCH_INITIAL_TXS);
+        assert_eq!(first.1, ADAPTIVE_BATCH_EARLY_TARGET_TXS);
+        assert_eq!(
+            controller.snapshot().target_batch_txs,
+            ADAPTIVE_BATCH_EARLY_TARGET_TXS
+        );
+
+        let second = controller.maybe_apply_early_height_boost(456);
+        assert!(second.is_none(), "boost should not reapply");
+    }
+
+    #[test]
+    fn test_adaptive_batch_early_height_boost_skips_after_cutoff() {
+        let controller = AdaptiveBatchController::new(8);
+        let skipped = controller.maybe_apply_early_height_boost(ADAPTIVE_BATCH_EARLY_HEIGHT_CUTOFF);
+        assert!(skipped.is_none());
+        assert_eq!(
+            controller.snapshot().target_batch_txs,
+            ADAPTIVE_BATCH_INITIAL_TXS
         );
     }
 
