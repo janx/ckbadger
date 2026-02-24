@@ -114,10 +114,10 @@ fn decode_pipeline_reset_reason(reason_code: u8) -> &'static str {
 
 /// Build a fetch sub-batch plan based on per-block tx counts.
 /// Returns `(block_count, tx_count)` tuples for each sub-batch.
-fn plan_fetch_sub_batches(tx_counts: &[usize], max_batch_txs: usize) -> Vec<(usize, usize)> {
+fn plan_fetch_sub_batches(tx_counts: &[usize], tx_cap: usize) -> Vec<(usize, usize)> {
     assert!(
-        max_batch_txs > 0,
-        "max_batch_txs must be > 0 to avoid infinite sub-batch splitting"
+        tx_cap > 0,
+        "tx_cap must be > 0 to avoid infinite sub-batch splitting"
     );
 
     if tx_counts.is_empty() {
@@ -132,7 +132,7 @@ fn plan_fetch_sub_batches(tx_counts: &[usize], max_batch_txs: usize) -> Vec<(usi
         sub_blocks += 1;
         sub_txs += txs;
 
-        if sub_txs >= max_batch_txs {
+        if sub_txs >= tx_cap {
             plan.push((sub_blocks, sub_txs));
             sub_blocks = 0;
             sub_txs = 0;
@@ -144,6 +144,14 @@ fn plan_fetch_sub_batches(tx_counts: &[usize], max_batch_txs: usize) -> Vec<(usi
     }
 
     plan
+}
+
+fn adaptive_sub_batch_tx_cap(target_batch_txs: u64, min_target_batch_txs: u64) -> usize {
+    let min_target_batch_txs =
+        min_target_batch_txs.clamp(ADAPTIVE_BATCH_HARD_MIN_TXS, ADAPTIVE_BATCH_MAX_TXS);
+    target_batch_txs
+        .saturating_mul(2)
+        .clamp(min_target_batch_txs, ADAPTIVE_BATCH_MAX_TXS) as usize
 }
 
 #[derive(Debug, Serialize)]
@@ -1577,7 +1585,8 @@ const CELL_CACHE_CAPACITY: usize = 200_000;
 const UDT_CELL_CACHE_CAPACITY: usize = 100_000;
 const PARSER_UNRESOLVED_RETRY_DELAY_MS: u64 = 500;
 const PARSER_UNRESOLVED_MAX_RETRIES: usize = 240;
-const ADAPTIVE_BATCH_MIN_TXS: u64 = 10_000;
+const ADAPTIVE_BATCH_BASE_MIN_TXS: u64 = 10_000;
+const ADAPTIVE_BATCH_HARD_MIN_TXS: u64 = 2_000;
 const ADAPTIVE_BATCH_MAX_TXS: u64 = 400_000;
 const ADAPTIVE_BATCH_INITIAL_TXS: u64 = 40_000;
 const ADAPTIVE_BATCH_EARLY_HEIGHT_CUTOFF: u64 = 4_000_000;
@@ -1591,22 +1600,32 @@ const ADAPTIVE_BATCH_COOLDOWN_STEPS: u64 = 3;
 const ADAPTIVE_BATCH_WRITE_TARGET_MS: f64 = 5_000.0;
 const ADAPTIVE_BATCH_WRITE_LO_MS: f64 = 2_500.0;
 const ADAPTIVE_BATCH_WRITE_HI_MS: f64 = 12_000.0;
+const ADAPTIVE_BATCH_TXPS_EMA_ALPHA_PCT: u64 = 20; // 0.20
+const ADAPTIVE_BATCH_TXPS_STEPUP_MIN_RETAIN_PCT: u64 = 98;
+const ADAPTIVE_BATCH_TXPS_BACKOFF_DROP_PCT: u64 = 93;
 const ADAPTIVE_BATCH_PARSE_PRESSURE_PCT: f64 = 95.0;
 const ADAPTIVE_BATCH_WRITER_PRESSURE_PCT: f64 = 90.0;
 const ADAPTIVE_BATCH_PARSE_HEALTHY_PCT: f64 = 60.0;
 const ADAPTIVE_BATCH_WRITER_HEALTHY_PCT: f64 = 60.0;
 const ADAPTIVE_BATCH_MEMORY_PRESSURE_PCT: f64 = 80.0;
 const ADAPTIVE_BATCH_MEMORY_HEALTHY_PCT: f64 = 70.0;
+const ADAPTIVE_BATCH_FLOOR_INFLIGHT_BACKOFF_PCT: f64 = 75.0;
+const ADAPTIVE_BATCH_FLOOR_INFLIGHT_COOLDOWN_STEPS: u64 = 1;
+const ADAPTIVE_BATCH_MIN_FLOOR_STEP_DOWN_PCT: u64 = 80;
+const ADAPTIVE_BATCH_MIN_FLOOR_STEP_UP_PCT: u64 = 110;
+const ADAPTIVE_BATCH_MIN_FLOOR_RECOVER_WRITE_MS: f64 = 1_500.0;
 
 #[derive(Debug, Clone, Copy)]
 struct AdaptiveBatchSnapshot {
     target_batch_txs: u64,
     inflight_limit: u64,
+    min_target_batch_txs: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct AdaptiveBatchInput {
     write_ms: f64,
+    batch_tx_count: usize,
     parse_queue_fill_pct: Option<f64>,
     writer_queue_fill_pct: Option<f64>,
     memory_ratio_pct: Option<f64>,
@@ -1618,6 +1637,8 @@ struct AdaptiveBatchAdjustment {
     new_target_batch_txs: u64,
     previous_inflight_limit: u64,
     new_inflight_limit: u64,
+    previous_min_target_batch_txs: u64,
+    new_min_target_batch_txs: u64,
     reason: &'static str,
 }
 
@@ -1625,7 +1646,9 @@ struct AdaptiveBatchAdjustment {
 struct AdaptiveBatchController {
     target_batch_txs: AtomicU64,
     inflight_limit: AtomicU64,
+    min_target_batch_txs: AtomicU64,
     tx_per_block_milli_ema: AtomicU64,
+    tx_per_sec_milli_ema: AtomicU64,
     cooldown_steps: AtomicU64,
     max_inflight_limit: u64,
     early_height_boost_applied: std::sync::atomic::AtomicBool,
@@ -1638,7 +1661,9 @@ impl AdaptiveBatchController {
         Self {
             target_batch_txs: AtomicU64::new(ADAPTIVE_BATCH_INITIAL_TXS),
             inflight_limit: AtomicU64::new(initial_inflight),
+            min_target_batch_txs: AtomicU64::new(ADAPTIVE_BATCH_BASE_MIN_TXS),
             tx_per_block_milli_ema: AtomicU64::new(ADAPTIVE_BATCH_INITIAL_TPB_MILLI),
+            tx_per_sec_milli_ema: AtomicU64::new(0),
             cooldown_steps: AtomicU64::new(0),
             max_inflight_limit,
             early_height_boost_applied: std::sync::atomic::AtomicBool::new(false),
@@ -1649,6 +1674,7 @@ impl AdaptiveBatchController {
         AdaptiveBatchSnapshot {
             target_batch_txs: self.target_batch_txs.load(Ordering::Relaxed),
             inflight_limit: self.inflight_limit.load(Ordering::Relaxed),
+            min_target_batch_txs: self.min_target_batch_txs.load(Ordering::Relaxed),
         }
     }
 
@@ -1666,7 +1692,10 @@ impl AdaptiveBatchController {
         let previous_target_batch_txs = self.target_batch_txs.load(Ordering::Relaxed);
         let boosted_target_batch_txs = previous_target_batch_txs
             .max(ADAPTIVE_BATCH_EARLY_TARGET_TXS)
-            .clamp(ADAPTIVE_BATCH_MIN_TXS, ADAPTIVE_BATCH_MAX_TXS);
+            .clamp(
+                self.min_target_batch_txs.load(Ordering::Relaxed),
+                ADAPTIVE_BATCH_MAX_TXS,
+            );
         self.target_batch_txs
             .store(boosted_target_batch_txs, Ordering::Relaxed);
 
@@ -1703,12 +1732,75 @@ impl AdaptiveBatchController {
         }
     }
 
+    fn observe_tx_throughput(&self, tx_count: usize, write_ms: f64) -> Option<(u64, u64)> {
+        if tx_count == 0 || write_ms <= 0.0 {
+            return None;
+        }
+
+        let write_us = (write_ms * 1000.0).round() as u64;
+        if write_us == 0 {
+            return None;
+        }
+
+        let sample = (((tx_count as u128) * 1_000_000u128).saturating_add(write_us as u128 - 1))
+            / write_us as u128;
+        let sample = sample.clamp(1, u64::MAX as u128) as u64;
+        let alpha = ADAPTIVE_BATCH_TXPS_EMA_ALPHA_PCT.min(100);
+
+        loop {
+            let old = self.tx_per_sec_milli_ema.load(Ordering::Relaxed);
+            let blended = if old == 0 {
+                sample
+            } else {
+                ((old.saturating_mul(100 - alpha)).saturating_add(sample * alpha)) / 100
+            };
+            if self
+                .tx_per_sec_milli_ema
+                .compare_exchange(old, blended.max(1), Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                return Some((old, blended.max(1)));
+            }
+        }
+    }
+
+    fn step_down_min_floor(min_floor: u64) -> u64 {
+        let lowered = min_floor.saturating_mul(ADAPTIVE_BATCH_MIN_FLOOR_STEP_DOWN_PCT) / 100;
+        lowered.clamp(ADAPTIVE_BATCH_HARD_MIN_TXS, ADAPTIVE_BATCH_BASE_MIN_TXS)
+    }
+
+    fn step_up_min_floor(min_floor: u64) -> u64 {
+        let raised = min_floor
+            .saturating_mul(ADAPTIVE_BATCH_MIN_FLOOR_STEP_UP_PCT)
+            .saturating_add(99)
+            / 100;
+        raised.clamp(ADAPTIVE_BATCH_HARD_MIN_TXS, ADAPTIVE_BATCH_BASE_MIN_TXS)
+    }
+
     fn update_after_write(&self, input: AdaptiveBatchInput) -> Option<AdaptiveBatchAdjustment> {
         let previous_target_batch_txs = self.target_batch_txs.load(Ordering::Relaxed);
         let previous_inflight_limit = self.inflight_limit.load(Ordering::Relaxed);
+        let previous_min_target_batch_txs = self
+            .min_target_batch_txs
+            .load(Ordering::Relaxed)
+            .clamp(ADAPTIVE_BATCH_HARD_MIN_TXS, ADAPTIVE_BATCH_BASE_MIN_TXS);
         let mut new_target_batch_txs = previous_target_batch_txs;
         let mut new_inflight_limit = previous_inflight_limit;
+        let mut new_min_target_batch_txs = previous_min_target_batch_txs;
         let reason: Option<&'static str>;
+        let txps_ema = self.observe_tx_throughput(input.batch_tx_count, input.write_ms);
+        let throughput_not_worse = txps_ema.is_none_or(|(old, new)| {
+            old == 0
+                || (new.saturating_mul(100))
+                    >= old.saturating_mul(ADAPTIVE_BATCH_TXPS_STEPUP_MIN_RETAIN_PCT)
+        });
+        let throughput_drop_under_load = txps_ema.is_some_and(|(old, new)| {
+            old > 0
+                && (new.saturating_mul(100))
+                    < old.saturating_mul(ADAPTIVE_BATCH_TXPS_BACKOFF_DROP_PCT)
+                && (input.writer_queue_fill_pct.is_some_and(|pct| pct >= 60.0)
+                    || input.parse_queue_fill_pct.is_some_and(|pct| pct >= 60.0))
+        });
 
         let pressure = input.write_ms > ADAPTIVE_BATCH_WRITE_HI_MS
             || input
@@ -1726,7 +1818,19 @@ impl AdaptiveBatchController {
             new_inflight_limit = previous_inflight_limit.saturating_sub(1).max(1);
             self.cooldown_steps
                 .store(ADAPTIVE_BATCH_COOLDOWN_STEPS, Ordering::Relaxed);
-            reason = Some("pressure_backoff");
+            let at_floor = previous_target_batch_txs <= previous_min_target_batch_txs;
+            if at_floor && previous_inflight_limit <= 2 {
+                new_min_target_batch_txs = Self::step_down_min_floor(previous_min_target_batch_txs);
+                reason = Some(
+                    if new_min_target_batch_txs < previous_min_target_batch_txs {
+                        "pressure_backoff_floor_down"
+                    } else {
+                        "pressure_backoff"
+                    },
+                );
+            } else {
+                reason = Some("pressure_backoff");
+            }
         } else {
             let cooldown = self.cooldown_steps.load(Ordering::Relaxed);
             if cooldown > 0 {
@@ -1744,31 +1848,86 @@ impl AdaptiveBatchController {
                         .memory_ratio_pct
                         .is_none_or(|pct| pct < ADAPTIVE_BATCH_MEMORY_HEALTHY_PCT);
 
-                if healthy {
+                if healthy && throughput_not_worse {
                     new_target_batch_txs =
                         ((previous_target_batch_txs as f64) * 1.10).round() as u64;
                     new_inflight_limit = (previous_inflight_limit + 1).min(self.max_inflight_limit);
-                    reason = Some("healthy_step_up");
+                    let should_recover_floor = previous_min_target_batch_txs
+                        < ADAPTIVE_BATCH_BASE_MIN_TXS
+                        && input.write_ms <= ADAPTIVE_BATCH_MIN_FLOOR_RECOVER_WRITE_MS
+                        && input.parse_queue_fill_pct.is_some_and(|pct| pct < 30.0)
+                        && input.writer_queue_fill_pct.is_some_and(|pct| pct < 30.0)
+                        && previous_target_batch_txs > previous_min_target_batch_txs;
+                    if should_recover_floor {
+                        new_min_target_batch_txs =
+                            Self::step_up_min_floor(previous_min_target_batch_txs);
+                        reason = Some(
+                            if new_min_target_batch_txs > previous_min_target_batch_txs {
+                                "healthy_step_up_floor_recover"
+                            } else {
+                                "healthy_step_up"
+                            },
+                        );
+                    } else {
+                        reason = Some("healthy_step_up");
+                    }
                 } else if input.write_ms > ADAPTIVE_BATCH_WRITE_TARGET_MS
                     || input.writer_queue_fill_pct.is_some_and(|pct| pct >= 80.0)
                     || input.parse_queue_fill_pct.is_some_and(|pct| pct >= 85.0)
                     || input.memory_ratio_pct.is_some_and(|pct| pct >= 75.0)
+                    || throughput_drop_under_load
                 {
                     new_target_batch_txs =
                         ((previous_target_batch_txs as f64) * 0.85).round() as u64;
-                    reason = Some("moderate_backoff");
+                    let floor_relief = previous_target_batch_txs <= previous_min_target_batch_txs
+                        && (input.write_ms > ADAPTIVE_BATCH_WRITE_TARGET_MS
+                            || input.writer_queue_fill_pct.is_some_and(|pct| {
+                                pct >= ADAPTIVE_BATCH_FLOOR_INFLIGHT_BACKOFF_PCT
+                            })
+                            || input.parse_queue_fill_pct.is_some_and(|pct| {
+                                pct >= ADAPTIVE_BATCH_FLOOR_INFLIGHT_BACKOFF_PCT
+                            }));
+                    if floor_relief {
+                        new_inflight_limit = previous_inflight_limit.saturating_sub(1).max(1);
+                        self.cooldown_steps.store(
+                            ADAPTIVE_BATCH_FLOOR_INFLIGHT_COOLDOWN_STEPS,
+                            Ordering::Relaxed,
+                        );
+                        if previous_inflight_limit == 1 {
+                            new_min_target_batch_txs =
+                                Self::step_down_min_floor(previous_min_target_batch_txs);
+                            reason = Some(
+                                if new_min_target_batch_txs < previous_min_target_batch_txs {
+                                    "moderate_backoff_floor_down"
+                                } else {
+                                    "moderate_backoff_inflight_relief"
+                                },
+                            );
+                        } else {
+                            reason = Some("moderate_backoff_inflight_relief");
+                        }
+                    } else {
+                        reason = Some(if throughput_drop_under_load {
+                            "throughput_backoff"
+                        } else {
+                            "moderate_backoff"
+                        });
+                    }
                 } else {
                     reason = None;
                 }
             }
         }
 
+        new_min_target_batch_txs = new_min_target_batch_txs
+            .clamp(ADAPTIVE_BATCH_HARD_MIN_TXS, ADAPTIVE_BATCH_BASE_MIN_TXS);
         new_target_batch_txs =
-            new_target_batch_txs.clamp(ADAPTIVE_BATCH_MIN_TXS, ADAPTIVE_BATCH_MAX_TXS);
+            new_target_batch_txs.clamp(new_min_target_batch_txs, ADAPTIVE_BATCH_MAX_TXS);
         new_inflight_limit = new_inflight_limit.clamp(1, self.max_inflight_limit);
 
         if new_target_batch_txs == previous_target_batch_txs
             && new_inflight_limit == previous_inflight_limit
+            && new_min_target_batch_txs == previous_min_target_batch_txs
         {
             return None;
         }
@@ -1777,12 +1936,16 @@ impl AdaptiveBatchController {
             .store(new_target_batch_txs, Ordering::Relaxed);
         self.inflight_limit
             .store(new_inflight_limit, Ordering::Relaxed);
+        self.min_target_batch_txs
+            .store(new_min_target_batch_txs, Ordering::Relaxed);
 
         Some(AdaptiveBatchAdjustment {
             previous_target_batch_txs,
             new_target_batch_txs,
             previous_inflight_limit,
             new_inflight_limit,
+            previous_min_target_batch_txs,
+            new_min_target_batch_txs,
             reason: reason.unwrap_or("adjusted"),
         })
     }
@@ -2766,12 +2929,13 @@ impl Indexer {
                 let end_block = std::cmp::min(start_block + dynamic_span - 1, chain_tip);
 
                 debug!(
-                    "Fetcher: fetching blocks {} to {} (chain_tip={}, next_block={:?}, adaptive_txs={}, inflight_limit={}, inflight_batches={})",
+                    "Fetcher: fetching blocks {} to {} (chain_tip={}, next_block={:?}, adaptive_txs={}, adaptive_min_txs={}, inflight_limit={}, inflight_batches={})",
                     start_block,
                     end_block,
                     chain_tip,
                     next_block,
                     adaptive_snapshot.target_batch_txs,
+                    adaptive_snapshot.min_target_batch_txs,
                     adaptive_snapshot.inflight_limit,
                     inflight_batches
                 );
@@ -2822,7 +2986,10 @@ impl Indexer {
 
                 // Split into sub-batches if too many transactions.
                 // IMPORTANT: move blocks into sub-batches to avoid cloning large vectors.
-                let max_txs = config.max_batch_txs;
+                let max_txs = adaptive_sub_batch_tx_cap(
+                    adaptive_snapshot.target_batch_txs,
+                    adaptive_snapshot.min_target_batch_txs,
+                );
                 let mut send_failed = false;
                 let tx_counts: Vec<usize> = blocks
                     .iter()
@@ -3812,6 +3979,7 @@ impl Indexer {
                     }
 
                     let db_start = Instant::now();
+                    let batch_tx_count = all_tx_data.len();
                     if let Err(e) = self
                         .write_parsed_batch(
                             &blocks,
@@ -3954,6 +4122,7 @@ impl Indexer {
                             self.adaptive_batch_controller
                                 .update_after_write(AdaptiveBatchInput {
                                     write_ms: db_elapsed.as_secs_f64() * 1000.0,
+                                    batch_tx_count,
                                     parse_queue_fill_pct,
                                     writer_queue_fill_pct,
                                     memory_ratio_pct,
@@ -3966,6 +4135,8 @@ impl Indexer {
                                 new_target_batch_txs = adjustment.new_target_batch_txs,
                                 previous_inflight_limit = adjustment.previous_inflight_limit,
                                 new_inflight_limit = adjustment.new_inflight_limit,
+                                previous_min_target_batch_txs = adjustment.previous_min_target_batch_txs,
+                                new_min_target_batch_txs = adjustment.new_min_target_batch_txs,
                                 parse_queue_fill_pct = parse_queue_fill_pct.map(|v| format!("{:.1}", v)),
                                 writer_queue_fill_pct = writer_queue_fill_pct.map(|v| format!("{:.1}", v)),
                                 memory_ratio_pct = memory_ratio_pct.map(|v| format!("{:.1}", v)),
@@ -3975,7 +4146,7 @@ impl Indexer {
                         }
                         let adaptive_snapshot = self.adaptive_batch_controller.snapshot();
                         info!(
-                            "Wrote blocks {} to {} ({} remaining, {:.2}s, q={}, wait={:.0}ms, adaptive_txs={}, inflight_limit={}) {}{} {}",
+                            "Wrote blocks {} to {} ({} remaining, {:.2}s, q={}, wait={:.0}ms, adaptive_txs={}, adaptive_min_txs={}, inflight_limit={}) {}{} {}",
                             start_block,
                             end_block,
                             self.progress.blocks_remaining(),
@@ -3983,6 +4154,7 @@ impl Indexer {
                             writer_queue,
                             recv_wait_ms,
                             adaptive_snapshot.target_batch_txs,
+                            adaptive_snapshot.min_target_batch_txs,
                             adaptive_snapshot.inflight_limit,
                             partition_range,
                             boundary_info,
@@ -10099,6 +10271,7 @@ mod tests {
         let adjustment = controller
             .update_after_write(AdaptiveBatchInput {
                 write_ms: ADAPTIVE_BATCH_WRITE_HI_MS + 1.0,
+                batch_tx_count: 10_000,
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
@@ -10118,6 +10291,14 @@ mod tests {
             adjustment.new_inflight_limit,
             ADAPTIVE_BATCH_INITIAL_INFLIGHT - 1
         );
+        assert_eq!(
+            adjustment.previous_min_target_batch_txs,
+            ADAPTIVE_BATCH_BASE_MIN_TXS
+        );
+        assert_eq!(
+            adjustment.new_min_target_batch_txs,
+            ADAPTIVE_BATCH_BASE_MIN_TXS
+        );
     }
 
     #[test]
@@ -10126,6 +10307,7 @@ mod tests {
         let adjustment = controller
             .update_after_write(AdaptiveBatchInput {
                 write_ms: ADAPTIVE_BATCH_WRITE_LO_MS - 100.0,
+                batch_tx_count: 10_000,
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
@@ -10137,6 +10319,161 @@ mod tests {
             adjustment.new_inflight_limit,
             ADAPTIVE_BATCH_INITIAL_INFLIGHT + 1
         );
+        assert_eq!(
+            adjustment.new_min_target_batch_txs,
+            ADAPTIVE_BATCH_BASE_MIN_TXS
+        );
+    }
+
+    #[test]
+    fn test_adaptive_batch_floor_relief_backoff_reduces_inflight() {
+        let controller = AdaptiveBatchController::new(8);
+        controller
+            .target_batch_txs
+            .store(ADAPTIVE_BATCH_BASE_MIN_TXS, Ordering::Relaxed);
+        controller.inflight_limit.store(6, Ordering::Relaxed);
+
+        let adjustment = controller
+            .update_after_write(AdaptiveBatchInput {
+                write_ms: ADAPTIVE_BATCH_WRITE_TARGET_MS + 10.0,
+                batch_tx_count: 10_000,
+                parse_queue_fill_pct: Some(75.0),
+                writer_queue_fill_pct: Some(87.5),
+                memory_ratio_pct: Some(10.0),
+            })
+            .expect("floor relief should reduce inflight");
+
+        assert_eq!(adjustment.reason, "moderate_backoff_inflight_relief");
+        assert_eq!(
+            adjustment.previous_target_batch_txs,
+            ADAPTIVE_BATCH_BASE_MIN_TXS
+        );
+        assert_eq!(adjustment.new_target_batch_txs, ADAPTIVE_BATCH_BASE_MIN_TXS);
+        assert_eq!(adjustment.previous_inflight_limit, 6);
+        assert_eq!(adjustment.new_inflight_limit, 5);
+        assert_eq!(
+            adjustment.new_min_target_batch_txs,
+            ADAPTIVE_BATCH_BASE_MIN_TXS
+        );
+    }
+
+    #[test]
+    fn test_adaptive_batch_floor_down_when_pressure_at_floor_and_single_inflight() {
+        let controller = AdaptiveBatchController::new(1);
+        controller
+            .target_batch_txs
+            .store(ADAPTIVE_BATCH_BASE_MIN_TXS, Ordering::Relaxed);
+
+        let adjustment = controller
+            .update_after_write(AdaptiveBatchInput {
+                write_ms: ADAPTIVE_BATCH_WRITE_HI_MS + 500.0,
+                batch_tx_count: 10_000,
+                parse_queue_fill_pct: Some(97.0),
+                writer_queue_fill_pct: Some(95.0),
+                memory_ratio_pct: Some(85.0),
+            })
+            .expect("sustained pressure at floor should lower adaptive min floor");
+
+        assert_eq!(adjustment.reason, "pressure_backoff_floor_down");
+        assert_eq!(
+            adjustment.previous_min_target_batch_txs,
+            ADAPTIVE_BATCH_BASE_MIN_TXS
+        );
+        assert!(
+            adjustment.new_min_target_batch_txs < adjustment.previous_min_target_batch_txs,
+            "adaptive min floor should go down under sustained pressure"
+        );
+        assert_eq!(
+            adjustment.new_target_batch_txs,
+            adjustment.new_min_target_batch_txs
+        );
+    }
+
+    #[test]
+    fn test_adaptive_batch_floor_recovers_on_healthy_throughput() {
+        let controller = AdaptiveBatchController::new(8);
+        controller
+            .min_target_batch_txs
+            .store(ADAPTIVE_BATCH_HARD_MIN_TXS, Ordering::Relaxed);
+        controller
+            .target_batch_txs
+            .store(ADAPTIVE_BATCH_HARD_MIN_TXS + 2_000, Ordering::Relaxed);
+
+        let adjustment = controller
+            .update_after_write(AdaptiveBatchInput {
+                write_ms: 1_000.0,
+                batch_tx_count: 10_000,
+                parse_queue_fill_pct: Some(10.0),
+                writer_queue_fill_pct: Some(10.0),
+                memory_ratio_pct: Some(10.0),
+            })
+            .expect("healthy throughput should recover adaptive min floor");
+
+        assert_eq!(adjustment.reason, "healthy_step_up_floor_recover");
+        assert_eq!(
+            adjustment.previous_min_target_batch_txs,
+            ADAPTIVE_BATCH_HARD_MIN_TXS
+        );
+        assert!(
+            adjustment.new_min_target_batch_txs > adjustment.previous_min_target_batch_txs,
+            "adaptive min floor should recover upward"
+        );
+    }
+
+    #[test]
+    fn test_adaptive_batch_throughput_drop_under_load_triggers_backoff() {
+        let controller = AdaptiveBatchController::new(8);
+
+        let first = controller
+            .update_after_write(AdaptiveBatchInput {
+                write_ms: 1_000.0,
+                batch_tx_count: 10_000,
+                parse_queue_fill_pct: Some(10.0),
+                writer_queue_fill_pct: Some(10.0),
+                memory_ratio_pct: Some(10.0),
+            })
+            .expect("first healthy sample should step up");
+        assert_eq!(first.reason, "healthy_step_up");
+
+        let second = controller
+            .update_after_write(AdaptiveBatchInput {
+                write_ms: 2_000.0,
+                batch_tx_count: 5_000,
+                parse_queue_fill_pct: Some(70.0),
+                writer_queue_fill_pct: Some(70.0),
+                memory_ratio_pct: Some(10.0),
+            })
+            .expect("throughput drop under load should back off");
+        assert_eq!(second.reason, "throughput_backoff");
+        assert!(second.new_target_batch_txs < second.previous_target_batch_txs);
+    }
+
+    #[test]
+    fn test_adaptive_batch_step_up_requires_throughput_not_worse() {
+        let controller = AdaptiveBatchController::new(8);
+
+        let first = controller
+            .update_after_write(AdaptiveBatchInput {
+                write_ms: 1_000.0,
+                batch_tx_count: 10_000,
+                parse_queue_fill_pct: Some(10.0),
+                writer_queue_fill_pct: Some(10.0),
+                memory_ratio_pct: Some(10.0),
+            })
+            .expect("first healthy sample should step up");
+        assert_eq!(first.reason, "healthy_step_up");
+
+        let no_adjustment = controller.update_after_write(AdaptiveBatchInput {
+            write_ms: 1_500.0,
+            batch_tx_count: 10_000,
+            parse_queue_fill_pct: Some(10.0),
+            writer_queue_fill_pct: Some(10.0),
+            memory_ratio_pct: Some(10.0),
+        });
+        assert!(
+            no_adjustment.is_none(),
+            "step-up should pause when throughput degrades despite healthy queues"
+        );
     }
 
     #[test]
@@ -10145,6 +10482,7 @@ mod tests {
         let _ = controller
             .update_after_write(AdaptiveBatchInput {
                 write_ms: ADAPTIVE_BATCH_WRITE_HI_MS + 1.0,
+                batch_tx_count: 10_000,
                 parse_queue_fill_pct: Some(95.0),
                 writer_queue_fill_pct: Some(95.0),
                 memory_ratio_pct: Some(85.0),
@@ -10154,6 +10492,7 @@ mod tests {
 
         let no_adjustment = controller.update_after_write(AdaptiveBatchInput {
             write_ms: ADAPTIVE_BATCH_WRITE_LO_MS - 100.0,
+            batch_tx_count: 10_000,
             parse_queue_fill_pct: Some(10.0),
             writer_queue_fill_pct: Some(10.0),
             memory_ratio_pct: Some(10.0),
@@ -10223,7 +10562,45 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "max_batch_txs must be > 0")]
+    fn test_adaptive_sub_batch_tx_cap_scales_with_target() {
+        assert_eq!(
+            adaptive_sub_batch_tx_cap(10_000, ADAPTIVE_BATCH_BASE_MIN_TXS),
+            20_000
+        );
+        assert_eq!(
+            adaptive_sub_batch_tx_cap(40_000, ADAPTIVE_BATCH_BASE_MIN_TXS),
+            80_000
+        );
+    }
+
+    #[test]
+    fn test_adaptive_sub_batch_tx_cap_respects_adaptive_ceiling() {
+        assert_eq!(
+            adaptive_sub_batch_tx_cap(ADAPTIVE_BATCH_MAX_TXS, ADAPTIVE_BATCH_BASE_MIN_TXS),
+            ADAPTIVE_BATCH_MAX_TXS as usize
+        );
+        assert_eq!(
+            adaptive_sub_batch_tx_cap(ADAPTIVE_BATCH_MAX_TXS * 2, ADAPTIVE_BATCH_BASE_MIN_TXS),
+            ADAPTIVE_BATCH_MAX_TXS as usize
+        );
+    }
+
+    #[test]
+    fn test_adaptive_sub_batch_tx_cap_respects_adaptive_floor() {
+        assert_eq!(
+            adaptive_sub_batch_tx_cap(2_500, 8_000),
+            8_000,
+            "sub-batch cap should never drop below adaptive min floor"
+        );
+        assert_eq!(
+            adaptive_sub_batch_tx_cap(500, 500),
+            ADAPTIVE_BATCH_HARD_MIN_TXS as usize,
+            "adaptive min floor should still respect hard safety minimum"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "tx_cap must be > 0")]
     fn test_plan_fetch_sub_batches_panics_on_zero_limit() {
         let _ = plan_fetch_sub_batches(&[1], 0);
     }

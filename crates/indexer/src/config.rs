@@ -33,10 +33,6 @@ pub struct Config {
     /// When set, the indexer reads blocks directly from CKB's RocksDB instead of via JSON-RPC.
     #[serde(default)]
     pub ckb_data_path: Option<String>,
-    /// Maximum transactions per fetcher sub-batch. Mega-blocks (e.g. block 12M
-    /// with ~1.31M txs) are split into sub-batches to prevent memtable flush stalls.
-    #[serde(default = "default_max_batch_txs")]
-    pub max_batch_txs: usize,
     /// Path to token-labels repository for label import.
     #[serde(default = "default_token_labels_path")]
     pub token_labels_path: String,
@@ -76,10 +72,6 @@ fn default_bulk_sync_threshold() -> u64 {
 
 fn default_fast_sync_mode() -> bool {
     true
-}
-
-fn default_max_batch_txs() -> usize {
-    300_000
 }
 
 fn default_token_labels_path() -> String {
