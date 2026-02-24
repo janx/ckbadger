@@ -334,6 +334,16 @@ fn should_log_unresolved_retry(attempt: usize) -> bool {
     attempt == 1 || attempt.is_multiple_of(10) || attempt >= PARSER_UNRESOLVED_MAX_RETRIES
 }
 
+fn next_fetch_start_after_batch(end_block: u64) -> u64 {
+    end_block
+        .checked_add(1)
+        .expect("fetch batch end_block overflow while computing next start")
+}
+
+fn should_abort_unresolved_retry_on_epoch_change(batch_epoch: u64, current_epoch: u64) -> bool {
+    batch_epoch != current_epoch
+}
+
 fn should_skip_address_balances(_bulk_sync_mode: bool) -> bool {
     // Address balances must always be updated inline to keep bulk sync exact.
     false
@@ -3043,6 +3053,7 @@ impl Indexer {
                     inflight_batches
                 );
 
+                let fetch_cycle_epoch = pipeline_epoch_for_fetcher.load(Ordering::SeqCst);
                 let fetch_started = Instant::now();
                 let blocks = if let Some(ref store) = ckb_store {
                     let store = Arc::clone(store);
@@ -3128,7 +3139,7 @@ impl Indexer {
 
                     if fetch_tx
                         .send((
-                            pipeline_epoch_for_fetcher.load(Ordering::SeqCst),
+                            fetch_cycle_epoch,
                             sub_start_block,
                             sub_end_block,
                             chain_tip,
@@ -3160,10 +3171,7 @@ impl Indexer {
                     fetch_tx.max_capacity(),
                 );
 
-                next_block = Some(end_block + 1);
-                if end_block % 1000 == 0 {
-                    next_block = None;
-                }
+                next_block = Some(next_fetch_start_after_batch(end_block));
             }
         });
 
@@ -3176,8 +3184,13 @@ impl Indexer {
 
         let parse_tx_for_writer_depth = parse_tx.clone();
         let parser = tokio::spawn(async move {
-            while let Some((batch_epoch, start_block, end_block, chain_tip, blocks)) =
-                fetch_rx.recv().await
+            'parser_batches: while let Some((
+                batch_epoch,
+                start_block,
+                end_block,
+                chain_tip,
+                blocks,
+            )) = fetch_rx.recv().await
             {
                 if batch_epoch != pipeline_epoch_for_parser.load(Ordering::SeqCst) {
                     debug!(
@@ -3225,11 +3238,24 @@ impl Indexer {
 
                 let t_cell_lookup = Instant::now();
                 let mut unresolved_retry_count: usize = 0;
-                let (input_cell_info, cache_hits, cache_misses): (
+                let resolved_input_cells: Option<(
                     HashMap<(Vec<u8>, i16), LiveCellInfo>,
                     usize,
                     usize,
-                ) = loop {
+                )> = loop {
+                    let current_epoch = pipeline_epoch_for_parser.load(Ordering::SeqCst);
+                    if should_abort_unresolved_retry_on_epoch_change(batch_epoch, current_epoch) {
+                        info!(
+                            start_block,
+                            end_block,
+                            batch_epoch,
+                            current_epoch,
+                            retries = unresolved_retry_count,
+                            "Parser: aborting unresolved input retry because batch became stale after pipeline reset"
+                        );
+                        break None;
+                    }
+
                     let mut attempt_cache_hits: usize = 0;
                     let mut attempt_input_cell_info: HashMap<(Vec<u8>, i16), LiveCellInfo> =
                         HashMap::new();
@@ -3311,7 +3337,7 @@ impl Indexer {
                     );
 
                     if !db_lookup_failed && unresolved_outpoints.is_empty() {
-                        break (attempt_input_cell_info, attempt_cache_hits, db_lookups);
+                        break Some((attempt_input_cell_info, attempt_cache_hits, db_lookups));
                     }
 
                     unresolved_retry_count += 1;
@@ -3341,6 +3367,9 @@ impl Indexer {
                     }
 
                     sleep(Duration::from_millis(PARSER_UNRESOLVED_RETRY_DELAY_MS)).await;
+                };
+                let Some((input_cell_info, cache_hits, cache_misses)) = resolved_input_cells else {
+                    continue 'parser_batches;
                 };
 
                 let cell_lookup_ms = t_cell_lookup.elapsed().as_secs_f64() * 1000.0;
@@ -10277,6 +10306,24 @@ mod tests {
     fn test_parser_unresolved_retry_defaults() {
         assert_eq!(PARSER_UNRESOLVED_RETRY_DELAY_MS, 500);
         assert_eq!(PARSER_UNRESOLVED_MAX_RETRIES, 240);
+    }
+
+    #[test]
+    fn test_next_fetch_start_after_batch_stays_contiguous_across_boundaries() {
+        assert_eq!(next_fetch_start_after_batch(999), 1000);
+        assert_eq!(next_fetch_start_after_batch(1000), 1001);
+    }
+
+    #[test]
+    #[should_panic(expected = "fetch batch end_block overflow while computing next start")]
+    fn test_next_fetch_start_after_batch_panics_on_u64_max() {
+        let _ = next_fetch_start_after_batch(u64::MAX);
+    }
+
+    #[test]
+    fn test_should_abort_unresolved_retry_on_epoch_change() {
+        assert!(!should_abort_unresolved_retry_on_epoch_change(10, 10));
+        assert!(should_abort_unresolved_retry_on_epoch_change(10, 11));
     }
 
     #[test]
