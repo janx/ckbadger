@@ -24,6 +24,7 @@ struct BatchEvent {
 pub struct SyncProgress {
     current_block: AtomicU64,
     target_block: AtomicU64,
+    last_batch_blocks: AtomicU64,
     /// Sliding window of recent batch completions.
     window: Mutex<VecDeque<BatchEvent>>,
     /// Current instantaneous rate (stored as bits of f64).
@@ -39,6 +40,7 @@ impl SyncProgress {
         Self {
             current_block: AtomicU64::new(start_block),
             target_block: AtomicU64::new(target_block),
+            last_batch_blocks: AtomicU64::new(0),
             window: Mutex::new(VecDeque::new()),
             current_rate: AtomicU64::new(0),
             ema_rate: AtomicU64::new(0),
@@ -50,6 +52,7 @@ impl SyncProgress {
     /// Updates the sliding window, recomputes rate, and updates EMA.
     pub fn record_batch(&self, block: u64, count: u64) {
         self.current_block.store(block, Ordering::SeqCst);
+        self.last_batch_blocks.store(count, Ordering::SeqCst);
         let now = Instant::now();
         let mut window = self.window.lock().unwrap();
         window.push_back(BatchEvent {
@@ -145,6 +148,10 @@ impl SyncProgress {
         self.target_block.load(Ordering::SeqCst)
     }
 
+    pub fn last_batch_blocks(&self) -> u64 {
+        self.last_batch_blocks.load(Ordering::SeqCst)
+    }
+
     pub fn blocks_remaining(&self) -> u64 {
         let target = self.target();
         let current = self.current();
@@ -219,6 +226,7 @@ mod tests {
         let progress = SyncProgress::new(0, 100);
         progress.record_batch(5, 5);
         assert_eq!(progress.current(), 5);
+        assert_eq!(progress.last_batch_blocks(), 5);
     }
 
     #[test]

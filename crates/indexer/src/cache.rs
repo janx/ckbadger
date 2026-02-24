@@ -420,6 +420,7 @@ mod tests {
         let data = SyncProgressData {
             current_block: 1000,
             target_block: 10000,
+            last_batch_blocks: Some(64),
             blocks_per_second: 100.0,
             ema_blocks_per_second: 95.0,
             eta_seconds: Some(90.0),
@@ -435,6 +436,12 @@ mod tests {
             pipeline_reset_reason: None,
             adaptive_target_batch_txs: None,
             adaptive_inflight_limit: None,
+            adaptive_min_target_batch_txs: None,
+            adaptive_cooldown_steps: None,
+            adaptive_last_reason: None,
+            adaptive_adjustment_seq: None,
+            adaptive_backoff_streak: None,
+            adaptive_last_adjusted_at: None,
         };
         invalidator.publish_sync_progress(&data).await;
     }
@@ -518,6 +525,7 @@ mod tests {
             let data = SyncProgressData {
                 current_block: 5000,
                 target_block: 10000,
+                last_batch_blocks: Some(128),
                 blocks_per_second: 200.0,
                 ema_blocks_per_second: 180.0,
                 eta_seconds: Some(27.78),
@@ -533,6 +541,12 @@ mod tests {
                 pipeline_reset_reason: Some("pipeline batch mismatch".to_string()),
                 adaptive_target_batch_txs: Some(40_000),
                 adaptive_inflight_limit: Some(3),
+                adaptive_min_target_batch_txs: Some(10_000),
+                adaptive_cooldown_steps: Some(2),
+                adaptive_last_reason: Some("pressure_backoff".to_string()),
+                adaptive_adjustment_seq: Some(9),
+                adaptive_backoff_streak: Some(4),
+                adaptive_last_adjusted_at: Some(1_700_000_456),
             };
             invalidator.publish_sync_progress(&data).await;
 
@@ -555,8 +569,18 @@ mod tests {
                 stored.pipeline_reset_reason.as_deref(),
                 Some("pipeline batch mismatch")
             );
+            assert_eq!(stored.last_batch_blocks, Some(128));
             assert_eq!(stored.adaptive_target_batch_txs, Some(40_000));
             assert_eq!(stored.adaptive_inflight_limit, Some(3));
+            assert_eq!(stored.adaptive_min_target_batch_txs, Some(10_000));
+            assert_eq!(stored.adaptive_cooldown_steps, Some(2));
+            assert_eq!(
+                stored.adaptive_last_reason.as_deref(),
+                Some("pressure_backoff")
+            );
+            assert_eq!(stored.adaptive_adjustment_seq, Some(9));
+            assert_eq!(stored.adaptive_backoff_streak, Some(4));
+            assert_eq!(stored.adaptive_last_adjusted_at, Some(1_700_000_456));
         }
 
         #[tokio::test]

@@ -179,6 +179,9 @@ pub struct IndexRebuildItemData {
 pub struct SyncProgressData {
     pub current_block: u64,
     pub target_block: u64,
+    /// Most recently committed batch size in blocks.
+    #[serde(default)]
+    pub last_batch_blocks: Option<u64>,
     pub blocks_per_second: f64,
     pub ema_blocks_per_second: f64,
     pub eta_seconds: Option<f64>,
@@ -212,6 +215,24 @@ pub struct SyncProgressData {
     /// Adaptive inflight batch limit in bulk sync.
     #[serde(default)]
     pub adaptive_inflight_limit: Option<u64>,
+    /// Adaptive minimum target transactions per batch floor in bulk sync.
+    #[serde(default)]
+    pub adaptive_min_target_batch_txs: Option<u64>,
+    /// Remaining cooldown steps before adaptive step-up is allowed.
+    #[serde(default)]
+    pub adaptive_cooldown_steps: Option<u64>,
+    /// Last adaptive controller reason, when available.
+    #[serde(default)]
+    pub adaptive_last_reason: Option<String>,
+    /// Monotonic adaptive adjustment sequence number.
+    #[serde(default)]
+    pub adaptive_adjustment_seq: Option<u64>,
+    /// Consecutive adaptive backoff count.
+    #[serde(default)]
+    pub adaptive_backoff_streak: Option<u64>,
+    /// Unix timestamp when adaptive controller last adjusted.
+    #[serde(default)]
+    pub adaptive_last_adjusted_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -543,6 +564,7 @@ mod tests {
         let progress = SyncProgressData {
             current_block: 1000,
             target_block: 2000,
+            last_batch_blocks: Some(512),
             blocks_per_second: 500.0,
             ema_blocks_per_second: 450.0,
             eta_seconds: Some(2.0),
@@ -569,6 +591,12 @@ mod tests {
             pipeline_reset_reason: Some("pipeline batch mismatch".to_string()),
             adaptive_target_batch_txs: Some(40_000),
             adaptive_inflight_limit: Some(3),
+            adaptive_min_target_batch_txs: Some(10_000),
+            adaptive_cooldown_steps: Some(2),
+            adaptive_last_reason: Some("pressure_backoff".to_string()),
+            adaptive_adjustment_seq: Some(42),
+            adaptive_backoff_streak: Some(3),
+            adaptive_last_adjusted_at: Some(1_700_000_123),
         };
 
         let json = serde_json::to_string(&progress).unwrap();
@@ -587,8 +615,18 @@ mod tests {
             parsed.pipeline_reset_reason.as_deref(),
             Some("pipeline batch mismatch")
         );
+        assert_eq!(parsed.last_batch_blocks, Some(512));
         assert_eq!(parsed.adaptive_target_batch_txs, Some(40_000));
         assert_eq!(parsed.adaptive_inflight_limit, Some(3));
+        assert_eq!(parsed.adaptive_min_target_batch_txs, Some(10_000));
+        assert_eq!(parsed.adaptive_cooldown_steps, Some(2));
+        assert_eq!(
+            parsed.adaptive_last_reason.as_deref(),
+            Some("pressure_backoff")
+        );
+        assert_eq!(parsed.adaptive_adjustment_seq, Some(42));
+        assert_eq!(parsed.adaptive_backoff_streak, Some(3));
+        assert_eq!(parsed.adaptive_last_adjusted_at, Some(1_700_000_123));
     }
 
     #[test]
@@ -596,6 +634,7 @@ mod tests {
         let mut value = serde_json::to_value(SyncProgressData {
             current_block: 1000,
             target_block: 2000,
+            last_batch_blocks: Some(128),
             blocks_per_second: 500.0,
             ema_blocks_per_second: 450.0,
             eta_seconds: Some(2.0),
@@ -611,19 +650,39 @@ mod tests {
             pipeline_reset_reason: Some("batch write failed".to_string()),
             adaptive_target_batch_txs: Some(1),
             adaptive_inflight_limit: Some(2),
+            adaptive_min_target_batch_txs: Some(1),
+            adaptive_cooldown_steps: Some(1),
+            adaptive_last_reason: Some("healthy_step_up".to_string()),
+            adaptive_adjustment_seq: Some(1),
+            adaptive_backoff_streak: Some(0),
+            adaptive_last_adjusted_at: Some(1),
         })
         .unwrap();
         if let Some(obj) = value.as_object_mut() {
             obj.remove("pipelineResetEpoch");
             obj.remove("pipelineResetReason");
+            obj.remove("lastBatchBlocks");
             obj.remove("adaptiveTargetBatchTxs");
             obj.remove("adaptiveInflightLimit");
+            obj.remove("adaptiveMinTargetBatchTxs");
+            obj.remove("adaptiveCooldownSteps");
+            obj.remove("adaptiveLastReason");
+            obj.remove("adaptiveAdjustmentSeq");
+            obj.remove("adaptiveBackoffStreak");
+            obj.remove("adaptiveLastAdjustedAt");
         }
 
         let parsed: SyncProgressData = serde_json::from_value(value).unwrap();
         assert_eq!(parsed.pipeline_reset_epoch, None);
         assert_eq!(parsed.pipeline_reset_reason, None);
+        assert_eq!(parsed.last_batch_blocks, None);
         assert_eq!(parsed.adaptive_target_batch_txs, None);
         assert_eq!(parsed.adaptive_inflight_limit, None);
+        assert_eq!(parsed.adaptive_min_target_batch_txs, None);
+        assert_eq!(parsed.adaptive_cooldown_steps, None);
+        assert_eq!(parsed.adaptive_last_reason, None);
+        assert_eq!(parsed.adaptive_adjustment_seq, None);
+        assert_eq!(parsed.adaptive_backoff_streak, None);
+        assert_eq!(parsed.adaptive_last_adjusted_at, None);
     }
 }

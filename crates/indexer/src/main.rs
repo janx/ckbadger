@@ -488,6 +488,7 @@ async fn run_sync(args: Cli) -> Result<()> {
             let ema_rate = progress.ema_blocks_per_second();
             let eta = progress.eta_formatted();
             let bps = progress.blocks_per_second();
+            let last_batch_blocks = progress.last_batch_blocks();
 
             let (perf_rpc_ms, perf_db_ms) = indexer_for_progress.perf_snapshot_ms();
             let pipeline = indexer_for_progress.pipeline_progress_snapshot();
@@ -509,6 +510,7 @@ async fn run_sync(args: Cli) -> Result<()> {
             let sync_data = ckbadger_common::SyncProgressData {
                 current_block: progress.current(),
                 target_block: progress.target(),
+                last_batch_blocks: (last_batch_blocks > 0).then_some(last_batch_blocks),
                 blocks_per_second: bps,
                 ema_blocks_per_second: ema_rate,
                 eta_seconds: progress.eta_seconds(),
@@ -530,8 +532,14 @@ async fn run_sync(args: Cli) -> Result<()> {
                 pipeline,
                 pipeline_reset_epoch: pipeline_reset.as_ref().map(|(epoch, _)| *epoch),
                 pipeline_reset_reason: pipeline_reset.as_ref().map(|(_, reason)| reason.clone()),
-                adaptive_target_batch_txs: adaptive.map(|(target, _)| target),
-                adaptive_inflight_limit: adaptive.map(|(_, inflight)| inflight),
+                adaptive_target_batch_txs: adaptive.as_ref().map(|s| s.target_batch_txs),
+                adaptive_inflight_limit: adaptive.as_ref().map(|s| s.inflight_limit),
+                adaptive_min_target_batch_txs: adaptive.as_ref().map(|s| s.min_target_batch_txs),
+                adaptive_cooldown_steps: adaptive.as_ref().map(|s| s.cooldown_steps),
+                adaptive_last_reason: adaptive.as_ref().and_then(|s| s.last_reason.clone()),
+                adaptive_adjustment_seq: adaptive.as_ref().map(|s| s.adjustment_seq),
+                adaptive_backoff_streak: adaptive.as_ref().map(|s| s.backoff_streak),
+                adaptive_last_adjusted_at: adaptive.as_ref().and_then(|s| s.last_adjusted_at),
             };
             indexer_for_progress
                 .cache_invalidator()

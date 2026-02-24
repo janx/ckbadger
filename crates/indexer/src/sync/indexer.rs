@@ -77,6 +77,17 @@ const PIPELINE_RESET_REASON_BATCH_MISMATCH: u8 = 1;
 const PIPELINE_RESET_REASON_REORG_HANDLED: u8 = 2;
 const PIPELINE_RESET_REASON_DEEP_FORK_PAUSED: u8 = 3;
 const PIPELINE_RESET_REASON_BATCH_WRITE_FAILED: u8 = 4;
+const ADAPTIVE_REASON_UNKNOWN: u8 = 0;
+const ADAPTIVE_REASON_PRESSURE_BACKOFF: u8 = 1;
+const ADAPTIVE_REASON_PRESSURE_BACKOFF_FLOOR_DOWN: u8 = 2;
+const ADAPTIVE_REASON_HEALTHY_STEP_UP: u8 = 3;
+const ADAPTIVE_REASON_HEALTHY_STEP_UP_FLOOR_RECOVER: u8 = 4;
+const ADAPTIVE_REASON_MODERATE_BACKOFF: u8 = 5;
+const ADAPTIVE_REASON_MODERATE_BACKOFF_INFLIGHT_RELIEF: u8 = 6;
+const ADAPTIVE_REASON_MODERATE_BACKOFF_FLOOR_DOWN: u8 = 7;
+const ADAPTIVE_REASON_THROUGHPUT_BACKOFF: u8 = 8;
+const ADAPTIVE_REASON_ADJUSTED: u8 = 9;
+const ADAPTIVE_REASON_EARLY_HEIGHT_BOOST: u8 = 10;
 const FLIGHT_RECORDER_CAPACITY: usize = 200;
 static OMNILOCK_CODE_HASHES: OnceLock<Vec<Vec<u8>>> = OnceLock::new();
 
@@ -109,6 +120,40 @@ fn decode_pipeline_reset_reason(reason_code: u8) -> &'static str {
         PIPELINE_RESET_REASON_DEEP_FORK_PAUSED => "deep fork paused",
         PIPELINE_RESET_REASON_BATCH_WRITE_FAILED => "batch write failed",
         _ => "unknown",
+    }
+}
+
+fn encode_adaptive_batch_reason(reason: &'static str) -> u8 {
+    match reason {
+        "pressure_backoff" => ADAPTIVE_REASON_PRESSURE_BACKOFF,
+        "pressure_backoff_floor_down" => ADAPTIVE_REASON_PRESSURE_BACKOFF_FLOOR_DOWN,
+        "healthy_step_up" => ADAPTIVE_REASON_HEALTHY_STEP_UP,
+        "healthy_step_up_floor_recover" => ADAPTIVE_REASON_HEALTHY_STEP_UP_FLOOR_RECOVER,
+        "moderate_backoff" => ADAPTIVE_REASON_MODERATE_BACKOFF,
+        "moderate_backoff_inflight_relief" => ADAPTIVE_REASON_MODERATE_BACKOFF_INFLIGHT_RELIEF,
+        "moderate_backoff_floor_down" => ADAPTIVE_REASON_MODERATE_BACKOFF_FLOOR_DOWN,
+        "throughput_backoff" => ADAPTIVE_REASON_THROUGHPUT_BACKOFF,
+        "adjusted" => ADAPTIVE_REASON_ADJUSTED,
+        "early_height_boost" => ADAPTIVE_REASON_EARLY_HEIGHT_BOOST,
+        _ => ADAPTIVE_REASON_UNKNOWN,
+    }
+}
+
+fn decode_adaptive_batch_reason(reason_code: u8) -> Option<&'static str> {
+    match reason_code {
+        ADAPTIVE_REASON_PRESSURE_BACKOFF => Some("pressure_backoff"),
+        ADAPTIVE_REASON_PRESSURE_BACKOFF_FLOOR_DOWN => Some("pressure_backoff_floor_down"),
+        ADAPTIVE_REASON_HEALTHY_STEP_UP => Some("healthy_step_up"),
+        ADAPTIVE_REASON_HEALTHY_STEP_UP_FLOOR_RECOVER => Some("healthy_step_up_floor_recover"),
+        ADAPTIVE_REASON_MODERATE_BACKOFF => Some("moderate_backoff"),
+        ADAPTIVE_REASON_MODERATE_BACKOFF_INFLIGHT_RELIEF => {
+            Some("moderate_backoff_inflight_relief")
+        }
+        ADAPTIVE_REASON_MODERATE_BACKOFF_FLOOR_DOWN => Some("moderate_backoff_floor_down"),
+        ADAPTIVE_REASON_THROUGHPUT_BACKOFF => Some("throughput_backoff"),
+        ADAPTIVE_REASON_ADJUSTED => Some("adjusted"),
+        ADAPTIVE_REASON_EARLY_HEIGHT_BOOST => Some("early_height_boost"),
+        _ => None,
     }
 }
 
@@ -1620,6 +1665,23 @@ struct AdaptiveBatchSnapshot {
     target_batch_txs: u64,
     inflight_limit: u64,
     min_target_batch_txs: u64,
+    cooldown_steps: u64,
+    last_reason_code: u8,
+    adjustment_seq: u64,
+    backoff_streak: u64,
+    last_adjusted_at: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AdaptiveBatchProgressSnapshot {
+    pub target_batch_txs: u64,
+    pub inflight_limit: u64,
+    pub min_target_batch_txs: u64,
+    pub cooldown_steps: u64,
+    pub last_reason: Option<String>,
+    pub adjustment_seq: u64,
+    pub backoff_streak: u64,
+    pub last_adjusted_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1650,6 +1712,10 @@ struct AdaptiveBatchController {
     tx_per_block_milli_ema: AtomicU64,
     tx_per_sec_milli_ema: AtomicU64,
     cooldown_steps: AtomicU64,
+    last_reason_code: AtomicU8,
+    adjustment_seq: AtomicU64,
+    backoff_streak: AtomicU64,
+    last_adjusted_at: AtomicI64,
     max_inflight_limit: u64,
     early_height_boost_applied: std::sync::atomic::AtomicBool,
 }
@@ -1665,16 +1731,41 @@ impl AdaptiveBatchController {
             tx_per_block_milli_ema: AtomicU64::new(ADAPTIVE_BATCH_INITIAL_TPB_MILLI),
             tx_per_sec_milli_ema: AtomicU64::new(0),
             cooldown_steps: AtomicU64::new(0),
+            last_reason_code: AtomicU8::new(ADAPTIVE_REASON_UNKNOWN),
+            adjustment_seq: AtomicU64::new(0),
+            backoff_streak: AtomicU64::new(0),
+            last_adjusted_at: AtomicI64::new(0),
             max_inflight_limit,
             early_height_boost_applied: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
     fn snapshot(&self) -> AdaptiveBatchSnapshot {
+        let last_adjusted_at_raw = self.last_adjusted_at.load(Ordering::Relaxed);
         AdaptiveBatchSnapshot {
             target_batch_txs: self.target_batch_txs.load(Ordering::Relaxed),
             inflight_limit: self.inflight_limit.load(Ordering::Relaxed),
             min_target_batch_txs: self.min_target_batch_txs.load(Ordering::Relaxed),
+            cooldown_steps: self.cooldown_steps.load(Ordering::Relaxed),
+            last_reason_code: self.last_reason_code.load(Ordering::Relaxed),
+            adjustment_seq: self.adjustment_seq.load(Ordering::Relaxed),
+            backoff_streak: self.backoff_streak.load(Ordering::Relaxed),
+            last_adjusted_at: (last_adjusted_at_raw > 0).then_some(last_adjusted_at_raw),
+        }
+    }
+
+    fn record_adjustment(&self, reason_code: u8) {
+        self.last_reason_code.store(reason_code, Ordering::Relaxed);
+        self.adjustment_seq.fetch_add(1, Ordering::Relaxed);
+        self.last_adjusted_at
+            .store(chrono::Utc::now().timestamp(), Ordering::Relaxed);
+
+        if decode_adaptive_batch_reason(reason_code)
+            .is_some_and(|reason| reason.contains("backoff"))
+        {
+            self.backoff_streak.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.backoff_streak.store(0, Ordering::Relaxed);
         }
     }
 
@@ -1698,6 +1789,7 @@ impl AdaptiveBatchController {
             );
         self.target_batch_txs
             .store(boosted_target_batch_txs, Ordering::Relaxed);
+        self.record_adjustment(ADAPTIVE_REASON_EARLY_HEIGHT_BOOST);
 
         Some((previous_target_batch_txs, boosted_target_batch_txs))
     }
@@ -1938,6 +2030,7 @@ impl AdaptiveBatchController {
             .store(new_inflight_limit, Ordering::Relaxed);
         self.min_target_batch_txs
             .store(new_min_target_batch_txs, Ordering::Relaxed);
+        self.record_adjustment(encode_adaptive_batch_reason(reason.unwrap_or("adjusted")));
 
         Some(AdaptiveBatchAdjustment {
             previous_target_batch_txs,
@@ -2518,12 +2611,22 @@ impl Indexer {
         self.pipeline_perf.snapshot()
     }
 
-    pub fn adaptive_batch_snapshot(&self) -> Option<(u64, u64)> {
+    pub fn adaptive_batch_snapshot(&self) -> Option<AdaptiveBatchProgressSnapshot> {
         if !self.config.pipeline_enabled {
             return None;
         }
         let snapshot = self.adaptive_batch_controller.snapshot();
-        Some((snapshot.target_batch_txs, snapshot.inflight_limit))
+        Some(AdaptiveBatchProgressSnapshot {
+            target_batch_txs: snapshot.target_batch_txs,
+            inflight_limit: snapshot.inflight_limit,
+            min_target_batch_txs: snapshot.min_target_batch_txs,
+            cooldown_steps: snapshot.cooldown_steps,
+            last_reason: decode_adaptive_batch_reason(snapshot.last_reason_code)
+                .map(str::to_string),
+            adjustment_seq: snapshot.adjustment_seq,
+            backoff_streak: snapshot.backoff_streak,
+            last_adjusted_at: snapshot.last_adjusted_at,
+        })
     }
 
     pub fn pipeline_reset_snapshot(&self) -> Option<(u64, String)> {
@@ -11518,6 +11621,35 @@ mod tests {
         assert_eq!(code, PIPELINE_RESET_REASON_UNKNOWN);
         assert_eq!(decode_pipeline_reset_reason(code), "unknown");
         assert_eq!(decode_pipeline_reset_reason(255), "unknown");
+    }
+
+    #[test]
+    fn test_adaptive_reason_roundtrip_known_values() {
+        let reasons = [
+            "pressure_backoff",
+            "pressure_backoff_floor_down",
+            "healthy_step_up",
+            "healthy_step_up_floor_recover",
+            "moderate_backoff",
+            "moderate_backoff_inflight_relief",
+            "moderate_backoff_floor_down",
+            "throughput_backoff",
+            "adjusted",
+            "early_height_boost",
+        ];
+        for reason in reasons {
+            let code = encode_adaptive_batch_reason(reason);
+            assert_ne!(code, ADAPTIVE_REASON_UNKNOWN);
+            assert_eq!(decode_adaptive_batch_reason(code), Some(reason));
+        }
+    }
+
+    #[test]
+    fn test_adaptive_reason_unknown_fallback() {
+        let code = encode_adaptive_batch_reason("unexpected reason");
+        assert_eq!(code, ADAPTIVE_REASON_UNKNOWN);
+        assert_eq!(decode_adaptive_batch_reason(code), None);
+        assert_eq!(decode_adaptive_batch_reason(255), None);
     }
 
     // --- DAO recalculation boundary tests ---

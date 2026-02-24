@@ -118,6 +118,7 @@ pub struct App {
     prev_indexes_deferred: Option<bool>,
     prev_pipeline_reset_epoch: Option<u64>,
     prev_bottleneck: Option<SyncBottleneck>,
+    prev_adaptive_last_reason: Option<String>,
     last_rate_drop_alert: Option<Instant>,
     stale_warning_active: bool,
     help_visible: bool,
@@ -174,6 +175,7 @@ impl App {
             prev_indexes_deferred: None,
             prev_pipeline_reset_epoch: None,
             prev_bottleneck: None,
+            prev_adaptive_last_reason: None,
             last_rate_drop_alert: None,
             stale_warning_active: false,
             help_visible: false,
@@ -377,6 +379,7 @@ impl App {
             .clone()
             .unwrap_or_else(|| "unknown".to_string());
         let bottleneck = sync_bottleneck(sync.db_write_ms, sync.rpc_fetch_ms);
+        let adaptive_last_reason = sync.adaptive_last_reason.clone();
 
         if let Some(prev_bulk) = self.prev_is_bulk_sync {
             if prev_bulk && !is_bulk_sync {
@@ -436,6 +439,16 @@ impl App {
             }
         }
         self.prev_bottleneck = Some(bottleneck);
+
+        if adaptive_last_reason != self.prev_adaptive_last_reason {
+            if let Some(reason) = adaptive_last_reason.as_deref() {
+                self.push_sync_event_and_log(
+                    format!("adaptive state changed: {}", reason),
+                    LogLevel::Info,
+                );
+            }
+        }
+        self.prev_adaptive_last_reason = adaptive_last_reason;
     }
 
     fn detect_stale_state(&mut self) {
@@ -544,28 +557,15 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(title, cols[0]);
 
     let now = Local::now();
-    let elapsed_ms = app.last_refresh.elapsed().as_millis();
     let stale_secs = app
         .memory_stats
         .as_ref()
         .map(|m| (chrono::Utc::now().timestamp() - m.updated_at).max(0))
         .unwrap_or(0);
-    let right = Paragraph::new(Line::from(vec![
-        Span::styled(
-            format!("{}ms ago", elapsed_ms),
-            Style::default().fg(if elapsed_ms > 3000 { AMBER } else { SLATE_500 }),
-        ),
-        Span::styled(" │ ", Style::default().fg(SLATE_700)),
-        Span::styled(
-            format!("stale {}s", stale_secs),
-            Style::default().fg(if stale_secs > 30 { AMBER } else { TERMINAL_DIM }),
-        ),
-        Span::styled(" │ ", Style::default().fg(SLATE_700)),
-        Span::styled(
-            now.format("%H:%M:%S").to_string(),
-            Style::default().fg(FOREGROUND),
-        ),
-    ]))
+    let right = Paragraph::new(header_right_line(
+        stale_secs,
+        &now.format("%H:%M:%S").to_string(),
+    ))
     .alignment(Alignment::Right);
     f.render_widget(right, cols[1]);
 }
@@ -584,6 +584,17 @@ fn header_title_line(mode_text: &str, mode_color: Color) -> Line<'static> {
             format!(" {} ", mode_text),
             Style::default().fg(Color::Black).bg(mode_color),
         ),
+    ])
+}
+
+fn header_right_line(stale_secs: i64, clock_text: &str) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            format!("stale {}s", stale_secs),
+            Style::default().fg(if stale_secs > 30 { AMBER } else { TERMINAL_DIM }),
+        ),
+        Span::styled(" │ ", Style::default().fg(SLATE_700)),
+        Span::styled(clock_text.to_string(), Style::default().fg(FOREGROUND)),
     ])
 }
 
@@ -1510,10 +1521,17 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
                             Style::default().fg(delta_color(bottleneck_delta)),
                         ),
                     ]),
-                    adaptive_control_line(
-                        sync.adaptive_target_batch_txs,
-                        sync.adaptive_inflight_limit,
-                    ),
+                    adaptive_control_line(AdaptiveControlSnapshot {
+                        last_batch_blocks: sync.last_batch_blocks,
+                        adaptive_target_batch_txs: sync.adaptive_target_batch_txs,
+                        adaptive_inflight_limit: sync.adaptive_inflight_limit,
+                        adaptive_min_target_batch_txs: sync.adaptive_min_target_batch_txs,
+                        adaptive_cooldown_steps: sync.adaptive_cooldown_steps,
+                        adaptive_last_reason: sync.adaptive_last_reason.as_deref(),
+                        adaptive_adjustment_seq: sync.adaptive_adjustment_seq,
+                        adaptive_last_adjusted_age_secs: sync.adaptive_last_adjusted_age_secs,
+                        adaptive_backoff_streak: sync.adaptive_backoff_streak,
+                    }),
                     pipeline_reset_line(
                         sync.pipeline_reset_epoch,
                         sync.pipeline_reset_reason.as_deref(),
@@ -1606,10 +1624,17 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
                             }),
                         ),
                     ]),
-                    adaptive_control_line(
-                        sync.adaptive_target_batch_txs,
-                        sync.adaptive_inflight_limit,
-                    ),
+                    adaptive_control_line(AdaptiveControlSnapshot {
+                        last_batch_blocks: sync.last_batch_blocks,
+                        adaptive_target_batch_txs: sync.adaptive_target_batch_txs,
+                        adaptive_inflight_limit: sync.adaptive_inflight_limit,
+                        adaptive_min_target_batch_txs: sync.adaptive_min_target_batch_txs,
+                        adaptive_cooldown_steps: sync.adaptive_cooldown_steps,
+                        adaptive_last_reason: sync.adaptive_last_reason.as_deref(),
+                        adaptive_adjustment_seq: sync.adaptive_adjustment_seq,
+                        adaptive_last_adjusted_age_secs: sync.adaptive_last_adjusted_age_secs,
+                        adaptive_backoff_streak: sync.adaptive_backoff_streak,
+                    }),
                     pipeline_reset_line(
                         sync.pipeline_reset_epoch,
                         sync.pipeline_reset_reason.as_deref(),
@@ -1665,7 +1690,17 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
                         Style::default().fg(FOREGROUND),
                     ),
                 ]),
-                adaptive_control_line(sync.adaptive_target_batch_txs, sync.adaptive_inflight_limit),
+                adaptive_control_line(AdaptiveControlSnapshot {
+                    last_batch_blocks: sync.last_batch_blocks,
+                    adaptive_target_batch_txs: sync.adaptive_target_batch_txs,
+                    adaptive_inflight_limit: sync.adaptive_inflight_limit,
+                    adaptive_min_target_batch_txs: sync.adaptive_min_target_batch_txs,
+                    adaptive_cooldown_steps: sync.adaptive_cooldown_steps,
+                    adaptive_last_reason: sync.adaptive_last_reason.as_deref(),
+                    adaptive_adjustment_seq: sync.adaptive_adjustment_seq,
+                    adaptive_last_adjusted_age_secs: sync.adaptive_last_adjusted_age_secs,
+                    adaptive_backoff_streak: sync.adaptive_backoff_streak,
+                }),
                 pipeline_reset_line(
                     sync.pipeline_reset_epoch,
                     sync.pipeline_reset_reason.as_deref(),
@@ -1707,23 +1742,89 @@ fn io_fetch_write_jitter_line(
     ])
 }
 
-fn adaptive_control_line(
+#[derive(Clone, Copy)]
+struct AdaptiveControlSnapshot<'a> {
+    last_batch_blocks: Option<u64>,
     adaptive_target_batch_txs: Option<u64>,
     adaptive_inflight_limit: Option<u64>,
-) -> Line<'static> {
-    let target_text = adaptive_target_batch_txs
+    adaptive_min_target_batch_txs: Option<u64>,
+    adaptive_cooldown_steps: Option<u64>,
+    adaptive_last_reason: Option<&'a str>,
+    adaptive_adjustment_seq: Option<u64>,
+    adaptive_last_adjusted_age_secs: Option<i64>,
+    adaptive_backoff_streak: Option<u64>,
+}
+
+fn adaptive_control_line(snapshot: AdaptiveControlSnapshot<'_>) -> Line<'static> {
+    let (state, state_color) = adaptive_state_label(snapshot.adaptive_last_reason);
+    let batch_blocks_text = snapshot
+        .last_batch_blocks
         .map(format_num_u64)
         .unwrap_or_else(|| "-".to_string());
-    let inflight_text = adaptive_inflight_limit
+    let target_text = snapshot
+        .adaptive_target_batch_txs
+        .map(format_num_u64)
+        .unwrap_or_else(|| "-".to_string());
+    let min_target_text = snapshot
+        .adaptive_min_target_batch_txs
+        .map(format_num_u64)
+        .unwrap_or_else(|| "-".to_string());
+    let inflight_text = snapshot
+        .adaptive_inflight_limit
         .map(|v| v.to_string())
         .unwrap_or_else(|| "-".to_string());
+    let cooldown_text = snapshot
+        .adaptive_cooldown_steps
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "-".to_string());
+    let seq_text = snapshot
+        .adaptive_adjustment_seq
+        .map(format_num_u64)
+        .unwrap_or_else(|| "-".to_string());
+    let age_text = snapshot
+        .adaptive_last_adjusted_age_secs
+        .map(|v| format!("{v}s"))
+        .unwrap_or_else(|| "-".to_string());
+    let state_text = if let Some(streak) = snapshot.adaptive_backoff_streak.filter(|v| *v > 0) {
+        format!("{state}x{streak}")
+    } else {
+        state.to_string()
+    };
     Line::from(vec![
         Span::styled("Adaptive ", Style::default().fg(SLATE_500)),
         Span::styled(
-            format!("tx {}  inflight {}", target_text, inflight_text),
+            format!(
+                "batch {} blk  tx {}/{}  inflight {}  cd {}  chg #{} {}",
+                batch_blocks_text,
+                target_text,
+                min_target_text,
+                inflight_text,
+                cooldown_text,
+                seq_text,
+                age_text
+            ),
             Style::default().fg(TERMINAL_DIM),
         ),
+        Span::styled("  ", Style::default().fg(SLATE_500)),
+        Span::styled(
+            state_text,
+            Style::default()
+                .fg(state_color)
+                .add_modifier(Modifier::BOLD),
+        ),
     ])
+}
+
+fn adaptive_state_label(adaptive_last_reason: Option<&str>) -> (&'static str, Color) {
+    match adaptive_last_reason {
+        Some("healthy_step_up")
+        | Some("healthy_step_up_floor_recover")
+        | Some("early_height_boost") => ("EXPAND", TERMINAL_GREEN),
+        Some(reason) if reason.contains("backoff") => ("BACKOFF", AMBER),
+        Some("adjusted") => ("TUNE", TERMINAL_DIM),
+        Some(_) => ("TUNE", TERMINAL_DIM),
+        None => ("HOLD", SLATE_500),
+    }
 }
 
 fn pipeline_reset_line(
@@ -3264,18 +3365,18 @@ fn format_bytes(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        adaptive_control_line, api_health_state, chart_height_warning, compact_overview_layout,
-        compact_sync_layout, consumed_cells_source_color, consumed_cells_source_label,
-        dense_right_lines, detail_right_lines, diagnostics_dense_panel, eta_confidence_label,
-        format_age_secs, format_hit_rate, format_num, format_num_commas, format_ratio,
-        format_signed_num_i128, format_ttl, header_title_line, heartbeat_is_on,
-        io_fetch_write_jitter_line, overview_log_min_height, overview_services_min_height,
-        pipeline_bottleneck, pipeline_flow_state, pipeline_reset_line, rate_jitter,
-        redis_health_state, redis_key_line, redis_max_key_age, runtime_health_state,
-        runtime_live_delta, sparkline, stack_sync_charts, startup_phase_label,
-        storage_runtime_columns, sync_bottleneck, sync_timing_lines, trend_delta, trim_for_panel,
-        Color, CompactOverviewLayout, CompactSyncLayout, DiagnosticsViewMode, SyncBottleneck,
-        TERMINAL_DIM,
+        adaptive_control_line, adaptive_state_label, api_health_state, chart_height_warning,
+        compact_overview_layout, compact_sync_layout, consumed_cells_source_color,
+        consumed_cells_source_label, dense_right_lines, detail_right_lines,
+        diagnostics_dense_panel, eta_confidence_label, format_age_secs, format_hit_rate,
+        format_num, format_num_commas, format_ratio, format_signed_num_i128, format_ttl,
+        header_right_line, header_title_line, heartbeat_is_on, io_fetch_write_jitter_line,
+        overview_log_min_height, overview_services_min_height, pipeline_bottleneck,
+        pipeline_flow_state, pipeline_reset_line, rate_jitter, redis_health_state, redis_key_line,
+        redis_max_key_age, runtime_health_state, runtime_live_delta, sparkline, stack_sync_charts,
+        startup_phase_label, storage_runtime_columns, sync_bottleneck, sync_timing_lines,
+        trend_delta, trim_for_panel, AdaptiveControlSnapshot, Color, CompactOverviewLayout,
+        CompactSyncLayout, DiagnosticsViewMode, SyncBottleneck, TERMINAL_DIM,
     };
     use crate::db::{ApiServiceInfo, RedisServiceInfo, RuntimeDiagData};
     use ckbadger_common::MemoryStatsData;
@@ -3297,6 +3398,15 @@ mod tests {
         assert!(text.contains("CKBadger Monitor"));
         assert!(!text.contains("[DB]"));
         assert!(!text.contains("[RPC]"));
+    }
+
+    #[test]
+    fn test_header_right_line_does_not_include_elapsed_ms() {
+        let line = header_right_line(12, "10:23:45");
+        let text = line_text(&line);
+        assert!(text.contains("stale 12s"));
+        assert!(text.contains("10:23:45"));
+        assert!(!text.contains("ago"));
     }
 
     #[test]
@@ -3504,11 +3614,41 @@ mod tests {
 
     #[test]
     fn test_adaptive_control_line_format() {
-        let line = adaptive_control_line(Some(40_000), Some(3));
+        let line = adaptive_control_line(AdaptiveControlSnapshot {
+            last_batch_blocks: Some(512),
+            adaptive_target_batch_txs: Some(40_000),
+            adaptive_inflight_limit: Some(3),
+            adaptive_min_target_batch_txs: Some(10_000),
+            adaptive_cooldown_steps: Some(2),
+            adaptive_last_reason: Some("pressure_backoff"),
+            adaptive_adjustment_seq: Some(12),
+            adaptive_last_adjusted_age_secs: Some(7),
+            adaptive_backoff_streak: Some(3),
+        });
         let text = line_text(&line);
         assert!(text.contains("Adaptive"));
-        assert!(text.contains("tx 40,000"));
+        assert!(text.contains("batch 512 blk"));
+        assert!(text.contains("tx 40,000/10,000"));
         assert!(text.contains("inflight 3"));
+        assert!(text.contains("cd 2"));
+        assert!(text.contains("chg #12 7s"));
+        assert!(text.contains("BACKOFFx3"));
+    }
+
+    #[test]
+    fn test_adaptive_state_label() {
+        assert_eq!(
+            adaptive_state_label(Some("healthy_step_up")),
+            ("EXPAND", Color::Rgb(0, 255, 65))
+        );
+        assert_eq!(
+            adaptive_state_label(Some("pressure_backoff")),
+            ("BACKOFF", Color::Rgb(255, 176, 0))
+        );
+        assert_eq!(
+            adaptive_state_label(None),
+            ("HOLD", Color::Rgb(160, 174, 192))
+        );
     }
 
     #[test]
