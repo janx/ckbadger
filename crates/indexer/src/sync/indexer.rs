@@ -112,6 +112,40 @@ fn decode_pipeline_reset_reason(reason_code: u8) -> &'static str {
     }
 }
 
+/// Build a fetch sub-batch plan based on per-block tx counts.
+/// Returns `(block_count, tx_count)` tuples for each sub-batch.
+fn plan_fetch_sub_batches(tx_counts: &[usize], max_batch_txs: usize) -> Vec<(usize, usize)> {
+    assert!(
+        max_batch_txs > 0,
+        "max_batch_txs must be > 0 to avoid infinite sub-batch splitting"
+    );
+
+    if tx_counts.is_empty() {
+        return Vec::new();
+    }
+
+    let mut plan = Vec::new();
+    let mut sub_blocks = 0usize;
+    let mut sub_txs = 0usize;
+
+    for &txs in tx_counts {
+        sub_blocks += 1;
+        sub_txs += txs;
+
+        if sub_txs >= max_batch_txs {
+            plan.push((sub_blocks, sub_txs));
+            sub_blocks = 0;
+            sub_txs = 0;
+        }
+    }
+
+    if sub_blocks > 0 {
+        plan.push((sub_blocks, sub_txs));
+    }
+
+    plan
+}
+
 #[derive(Debug, Serialize)]
 struct IncidentReport {
     incident_id: String,
@@ -2484,48 +2518,61 @@ impl Indexer {
                 };
                 let fetch_elapsed = fetch_started.elapsed();
 
-                // Split into sub-batches if too many transactions
+                // Split into sub-batches if too many transactions.
+                // IMPORTANT: move blocks into sub-batches to avoid cloning large vectors.
                 let max_txs = config.max_batch_txs;
-                let mut sub_start = 0usize;
-                let mut accum_txs = 0usize;
                 let mut send_failed = false;
+                let tx_counts: Vec<usize> = blocks
+                    .iter()
+                    .map(|block| block.block.transactions.len())
+                    .collect();
+                let sub_batch_plan = plan_fetch_sub_batches(&tx_counts, max_txs);
+                let mut block_iter = blocks.into_iter();
+                let mut sub_start_block = start_block;
 
-                for (i, block) in blocks.iter().enumerate() {
-                    accum_txs += block.block.transactions.len();
-                    let is_last = i == blocks.len() - 1;
-
-                    if accum_txs >= max_txs || is_last {
-                        let sub_blocks = blocks[sub_start..=i].to_vec();
-                        let sub_start_block = start_block + sub_start as u64;
-                        let sub_end_block = start_block + i as u64;
-
-                        if sub_start > 0 {
-                            debug!(
-                                sub_start_block,
-                                sub_end_block,
-                                txs = accum_txs,
-                                "Fetcher: sending sub-batch"
-                            );
-                        }
-
-                        if fetch_tx
-                            .send((
-                                pipeline_epoch_for_fetcher.load(Ordering::SeqCst),
-                                sub_start_block,
-                                sub_end_block,
-                                chain_tip,
-                                Arc::new(sub_blocks),
-                            ))
-                            .await
-                            .is_err()
-                        {
-                            send_failed = true;
-                            break;
-                        }
-
-                        sub_start = i + 1;
-                        accum_txs = 0;
+                for (idx, (sub_block_count, sub_txs)) in sub_batch_plan.into_iter().enumerate() {
+                    let sub_blocks: Vec<_> = block_iter.by_ref().take(sub_block_count).collect();
+                    if sub_blocks.len() != sub_block_count {
+                        error!(
+                            expected = sub_block_count,
+                            actual = sub_blocks.len(),
+                            "Fetcher: planned sub-batch size mismatch"
+                        );
+                        send_failed = true;
+                        break;
                     }
+
+                    let sub_end_block = sub_start_block + sub_blocks.len() as u64 - 1;
+                    if idx > 0 {
+                        debug!(
+                            sub_start_block,
+                            sub_end_block,
+                            txs = sub_txs,
+                            "Fetcher: sending sub-batch"
+                        );
+                    }
+
+                    if fetch_tx
+                        .send((
+                            pipeline_epoch_for_fetcher.load(Ordering::SeqCst),
+                            sub_start_block,
+                            sub_end_block,
+                            chain_tip,
+                            Arc::new(sub_blocks),
+                        ))
+                        .await
+                        .is_err()
+                    {
+                        send_failed = true;
+                        break;
+                    }
+
+                    sub_start_block = sub_end_block + 1;
+                }
+
+                if !send_failed && block_iter.next().is_some() {
+                    error!("Fetcher: leftover blocks after planned sub-batch splitting");
+                    send_failed = true;
                 }
 
                 if send_failed {
@@ -9615,6 +9662,30 @@ mod tests {
     fn test_should_trim_cell_cache_threshold() {
         assert!(!should_trim_cell_cache(CELL_CACHE_CAPACITY * 2));
         assert!(should_trim_cell_cache(CELL_CACHE_CAPACITY * 2 + 1));
+    }
+
+    #[test]
+    fn test_plan_fetch_sub_batches_without_split() {
+        let plan = plan_fetch_sub_batches(&[10, 20, 30], 1000);
+        assert_eq!(plan, vec![(3, 60)]);
+    }
+
+    #[test]
+    fn test_plan_fetch_sub_batches_with_split() {
+        let plan = plan_fetch_sub_batches(&[2, 2, 1, 5], 3);
+        assert_eq!(plan, vec![(2, 4), (2, 6)]);
+    }
+
+    #[test]
+    fn test_plan_fetch_sub_batches_empty() {
+        let plan = plan_fetch_sub_batches(&[], 100);
+        assert!(plan.is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "max_batch_txs must be > 0")]
+    fn test_plan_fetch_sub_batches_panics_on_zero_limit() {
+        let _ = plan_fetch_sub_batches(&[1], 0);
     }
 
     #[test]
