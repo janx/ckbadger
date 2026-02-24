@@ -293,7 +293,10 @@ impl CkbChainReader {
     ///
     /// Uses COLUMN_TRANSACTION_INFO (column "5") to find the block location,
     /// then reads from COLUMN_BLOCK_BODY.
-    pub fn get_transaction(&self, tx_hash: &[u8; 32]) -> Option<ckb_types::core::TransactionView> {
+    pub fn get_transaction_with_block_number(
+        &self,
+        tx_hash: &[u8; 32],
+    ) -> Option<(ckb_types::core::TransactionView, u64)> {
         let cf_info = self.db.cf_handle(COLUMN_TRANSACTION_INFO)?;
         let raw_info = self.db.get_cf(&cf_info, tx_hash).ok()??;
 
@@ -304,6 +307,7 @@ impl CkbChainReader {
         //     key.block_hash: Byte32 (32 bytes) [16..48]
         //     key.index: BeUint32 (4 bytes BE) [48..52]
         let tx_info = packed::TransactionInfoReader::from_slice(&raw_info).ok()?;
+        let block_number: u64 = tx_info.block_number().unpack();
         let key = tx_info.key();
         let block_hash_bytes = key.block_hash().raw_data();
         let index_bytes = key.index().raw_data();
@@ -325,13 +329,19 @@ impl CkbChainReader {
         let entity = packed_tv.to_entity();
         let hash = entity.hash();
         let witness_hash = entity.witness_hash();
-        Some(
+        Some((
             entity
                 .data()
                 .into_view()
                 .fake_hash(hash)
                 .fake_witness_hash(witness_hash),
-        )
+            block_number,
+        ))
+    }
+
+    pub fn get_transaction(&self, tx_hash: &[u8; 32]) -> Option<ckb_types::core::TransactionView> {
+        self.get_transaction_with_block_number(tx_hash)
+            .map(|(tx, _)| tx)
     }
 
     /// Get cell data for a specific output.
