@@ -1,7 +1,7 @@
 //! API-based checks — validates data via the ckbadger REST API.
 //!
 //! Fast tier (F1-F6): few API calls, seconds.
-//! Sampling tier (S1-S18): N API calls or chart validation, minutes.
+//! Sampling tier (S1-S19): N API calls or chart validation, minutes.
 
 use super::checks::*;
 use super::report::format_number;
@@ -10,6 +10,10 @@ use ckbadger_common::dao::GENESIS_BURNT;
 
 const SYNC_COMPLETE_MAX_LAG_BLOCKS: i64 = 100;
 const SHANNONS_PER_CKB: i128 = 100_000_000;
+const TOKEN_ACTIVITY_ADDRESS_LIMIT: usize = 20;
+const TOKEN_ACTIVITY_PAGE_LIMIT: usize = 100;
+const TOKEN_ACTIVITY_MAX_PAGES_PER_ADDRESS: usize = 3;
+const TOKEN_TRANSFER_PAGE_LIMIT: usize = 100;
 
 // ---------------------------------------------------------------------------
 // Lightweight API response types (deserialized from ckbadger API JSON).
@@ -84,6 +88,31 @@ struct CellListResponse {
     next_cursor: Option<String>,
 }
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CursorPage<T> {
+    data: Vec<T>,
+    next_cursor: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AddressActivityRecord {
+    tx_hash: String,
+    block_number: i64,
+    asset_changes: Vec<serde_json::Value>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TokenTransferApiRecord {
+    tx_hash: String,
+    block_number: i64,
+    from_lock_hash: Option<String>,
+    to_lock_hash: String,
+    amount: String,
+}
+
 /// Simple chart point with a single value (e.g. transaction-count).
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -138,6 +167,102 @@ fn api_get<T: serde::de::DeserializeOwned>(ctx: &CheckContext, path: &str) -> an
 /// Fetch network stats (used by multiple fast checks).
 fn fetch_network_stats(ctx: &CheckContext) -> anyhow::Result<NetworkStats> {
     api_get(ctx, "statistics/network")
+}
+
+fn normalize_hex_key(raw: &str) -> String {
+    let trimmed = raw.trim();
+    trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+        .unwrap_or(trimmed)
+        .to_ascii_lowercase()
+}
+
+fn parse_i128_strict(raw: &str, field_name: &str) -> anyhow::Result<i128> {
+    raw.parse::<i128>()
+        .map_err(|e| anyhow::anyhow!("invalid {} '{}': {}", field_name, raw, e))
+}
+
+fn parse_u128_to_i128_strict(raw: &str, field_name: &str) -> anyhow::Result<i128> {
+    let value = raw
+        .parse::<u128>()
+        .map_err(|e| anyhow::anyhow!("invalid {} '{}': {}", field_name, raw, e))?;
+    i128::try_from(value).map_err(|_| anyhow::anyhow!("{} overflows i128: {}", field_name, raw))
+}
+
+fn extract_activity_token_deltas(
+    activity: &AddressActivityRecord,
+) -> anyhow::Result<Vec<(String, i128)>> {
+    let mut deltas = Vec::new();
+
+    for change in &activity.asset_changes {
+        if change.get("type").and_then(|v| v.as_str()) != Some("token") {
+            continue;
+        }
+
+        let type_hash = change
+            .get("typeScriptHash")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "token activity missing typeScriptHash: tx_hash={}",
+                    activity.tx_hash
+                )
+            })?;
+        let delta_raw = change
+            .get("delta")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                anyhow::anyhow!("token activity missing delta: tx_hash={}", activity.tx_hash)
+            })?;
+        let delta = parse_i128_strict(delta_raw, "token activity delta")?;
+
+        deltas.push((normalize_hex_key(type_hash), delta));
+    }
+
+    Ok(deltas)
+}
+
+fn apply_transfer_delta_to_lookup(
+    lookup: &mut std::collections::HashMap<(String, String, String), i128>,
+    token_type_hash: &str,
+    transfer: &TokenTransferApiRecord,
+) -> anyhow::Result<()> {
+    let token_key = normalize_hex_key(token_type_hash);
+    let tx_key = normalize_hex_key(&transfer.tx_hash);
+    let amount = parse_u128_to_i128_strict(&transfer.amount, "token transfer amount")?;
+
+    let to_lock_key = normalize_hex_key(&transfer.to_lock_hash);
+    if !to_lock_key.is_empty() {
+        let key = (token_key.clone(), tx_key.clone(), to_lock_key);
+        let current = lookup.get(&key).copied().unwrap_or(0);
+        let next = current.checked_add(amount).ok_or_else(|| {
+            anyhow::anyhow!(
+                "token transfer lookup overflow: tx_hash={}, token_type_hash={}",
+                transfer.tx_hash,
+                token_type_hash
+            )
+        })?;
+        lookup.insert(key, next);
+    }
+
+    if let Some(from_lock_hash) = transfer.from_lock_hash.as_deref() {
+        let from_lock_key = normalize_hex_key(from_lock_hash);
+        if !from_lock_key.is_empty() {
+            let key = (token_key, tx_key, from_lock_key);
+            let current = lookup.get(&key).copied().unwrap_or(0);
+            let next = current.checked_sub(amount).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "token transfer lookup underflow: tx_hash={}, token_type_hash={}",
+                    transfer.tx_hash,
+                    token_type_hash
+                )
+            })?;
+            lookup.insert(key, next);
+        }
+    }
+
+    Ok(())
 }
 
 // ============================================
@@ -427,7 +552,7 @@ impl Check for DaoStatisticsSane {
 }
 
 // ============================================
-// SAMPLING CHECKS (S1-S18)
+// SAMPLING CHECKS (S1-S19)
 // ============================================
 
 /// S1: N random blocks: GET /blocks/{n} → hash, GET /blocks/{hash} → number matches.
@@ -1913,6 +2038,195 @@ impl Check for RpcBlockSpotCheck {
     }
 }
 
+#[derive(Clone)]
+struct TokenActivitySample {
+    lock_hash: String,
+    tx_hash: String,
+    block_number: i64,
+    token_type_hash: String,
+    delta: i128,
+}
+
+/// S19: sampled token activity entries must match token transfers for tx/token/address net delta.
+pub struct TokenActivityTransferBidirectional;
+
+impl Check for TokenActivityTransferBidirectional {
+    fn name(&self) -> &'static str {
+        "token_activity_transfer_bidirectional"
+    }
+    fn description(&self) -> &'static str {
+        "Token activity net delta matches token transfers (address/tx/token)"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn estimated_total(&self, ctx: &CheckContext) -> Option<u64> {
+        Some(ctx.sample_count as u64)
+    }
+    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let top_addresses: Vec<TopAddressResponse> = api_get(ctx, "addresses/top")?;
+        if top_addresses.is_empty() || ctx.sample_count == 0 {
+            return Ok(CheckResult::pass_with_detail(
+                0,
+                "no addresses available for token activity sampling".to_string(),
+            ));
+        }
+
+        let mut candidates = Vec::<TokenActivitySample>::new();
+        for addr in top_addresses.iter().take(TOKEN_ACTIVITY_ADDRESS_LIMIT) {
+            let mut cursor: Option<String> = None;
+            let lock_key = normalize_hex_key(&addr.lock_script_hash);
+
+            for _ in 0..TOKEN_ACTIVITY_MAX_PAGES_PER_ADDRESS {
+                let path = match cursor.as_ref() {
+                    Some(c) => format!(
+                        "addresses/{}/activities?filter=token&limit={}&cursor={}",
+                        addr.lock_script_hash, TOKEN_ACTIVITY_PAGE_LIMIT, c
+                    ),
+                    None => format!(
+                        "addresses/{}/activities?filter=token&limit={}",
+                        addr.lock_script_hash, TOKEN_ACTIVITY_PAGE_LIMIT
+                    ),
+                };
+                let page: CursorPage<AddressActivityRecord> = api_get(ctx, &path)?;
+
+                for activity in &page.data {
+                    for (token_type_hash, delta) in extract_activity_token_deltas(activity)? {
+                        candidates.push(TokenActivitySample {
+                            lock_hash: lock_key.clone(),
+                            tx_hash: normalize_hex_key(&activity.tx_hash),
+                            block_number: activity.block_number,
+                            token_type_hash,
+                            delta,
+                        });
+                    }
+                }
+
+                cursor = page.next_cursor;
+                if cursor.is_none() {
+                    break;
+                }
+            }
+
+            if candidates.len() >= ctx.sample_count {
+                break;
+            }
+        }
+
+        if candidates.is_empty() {
+            return Ok(CheckResult::pass_with_detail(
+                0,
+                "no token activity entries found in sampled addresses".to_string(),
+            ));
+        }
+
+        let target = ctx.sample_count.min(candidates.len());
+        let samples = if target == candidates.len() {
+            candidates
+        } else {
+            let mut sampler = LcgSampler::new(ctx.seed.wrapping_add(19));
+            let idxs = sampler.sample_range(target, candidates.len() as u64);
+            idxs.into_iter()
+                .map(|i| candidates[i as usize].clone())
+                .collect()
+        };
+
+        let mut min_block_by_token = std::collections::HashMap::<String, i64>::new();
+        for sample in &samples {
+            min_block_by_token
+                .entry(sample.token_type_hash.clone())
+                .and_modify(|current| *current = (*current).min(sample.block_number))
+                .or_insert(sample.block_number);
+        }
+
+        let mut transfer_delta_lookup =
+            std::collections::HashMap::<(String, String, String), i128>::new();
+
+        for (token_type_hash, min_block) in min_block_by_token {
+            let mut cursor: Option<String> = None;
+            let mut seen_cursors = std::collections::HashSet::<String>::new();
+            loop {
+                let path = match cursor.as_ref() {
+                    Some(c) => format!(
+                        "tokens/0x{}/transfers?limit={}&cursor={}",
+                        token_type_hash, TOKEN_TRANSFER_PAGE_LIMIT, c
+                    ),
+                    None => format!(
+                        "tokens/0x{}/transfers?limit={}",
+                        token_type_hash, TOKEN_TRANSFER_PAGE_LIMIT
+                    ),
+                };
+                let page: CursorPage<TokenTransferApiRecord> = api_get(ctx, &path)?;
+
+                let mut reached_min_block = false;
+                for transfer in &page.data {
+                    apply_transfer_delta_to_lookup(
+                        &mut transfer_delta_lookup,
+                        &token_type_hash,
+                        transfer,
+                    )?;
+                    if transfer.block_number < min_block {
+                        reached_min_block = true;
+                    }
+                }
+
+                if reached_min_block {
+                    break;
+                }
+
+                let Some(next_cursor) = page.next_cursor else {
+                    break;
+                };
+                if !seen_cursors.insert(next_cursor.clone()) {
+                    anyhow::bail!(
+                        "repeated transfer cursor while scanning token 0x{}: {}",
+                        token_type_hash,
+                        next_cursor
+                    );
+                }
+                cursor = Some(next_cursor);
+            }
+        }
+
+        let mut findings = vec![];
+        let mut checked = 0u64;
+
+        for sample in &samples {
+            let actual = transfer_delta_lookup
+                .get(&(
+                    sample.token_type_hash.clone(),
+                    sample.tx_hash.clone(),
+                    sample.lock_hash.clone(),
+                ))
+                .copied()
+                .unwrap_or(0);
+            if actual != sample.delta {
+                findings.push(Finding {
+                    entity: format!(
+                        "tx=0x{} lock=0x{} token=0x{}",
+                        sample.tx_hash, sample.lock_hash, sample.token_type_hash
+                    ),
+                    details: vec![format!(
+                        "activity delta={} but transfer delta={}",
+                        sample.delta, actual
+                    )],
+                });
+            }
+            checked += 1;
+            progress.inc(1);
+        }
+
+        if findings.is_empty() {
+            Ok(CheckResult::pass_with_detail(
+                checked,
+                format!("{} sampled token activity entries", checked),
+            ))
+        } else {
+            Ok(CheckResult::fail(checked, findings))
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // CKB RPC helpers (blocking, used only by S18)
 // ---------------------------------------------------------------------------
@@ -2018,6 +2332,7 @@ pub fn api_checks() -> Vec<Box<dyn Check>> {
         Box::new(SecondaryIssuanceMatchesDaoStatistics),
         Box::new(BurntSupplyGenesisInvariant),
         Box::new(RpcBlockSpotCheck),
+        Box::new(TokenActivityTransferBidirectional),
     ]
 }
 
@@ -2041,7 +2356,7 @@ mod tests {
     #[test]
     fn test_api_checks_registered() {
         let checks = api_checks();
-        assert_eq!(checks.len(), 24);
+        assert_eq!(checks.len(), 25);
         // Verify names are unique
         let names: Vec<&str> = checks.iter().map(|c| c.name()).collect();
         let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
@@ -2057,6 +2372,7 @@ mod tests {
         assert!(names.contains(&"chart_knowledge_composition_exact"));
         assert!(names.contains(&"secondary_issuance_matches_dao_statistics"));
         assert!(names.contains(&"burnt_supply_genesis_invariant"));
+        assert!(names.contains(&"token_activity_transfer_bidirectional"));
     }
 
     #[test]
@@ -2071,7 +2387,7 @@ mod tests {
             .filter(|c| c.tier() == CheckTier::Sampling)
             .count();
         assert_eq!(fast_count, 6);
-        assert_eq!(sampling_count, 18);
+        assert_eq!(sampling_count, 19);
     }
 
     #[test]
@@ -2172,5 +2488,113 @@ mod tests {
         assert_eq!(shannons_to_rounded_whole_ckb(150_000_000), Some(2));
         assert_eq!(shannons_to_rounded_whole_ckb(0), Some(0));
         assert_eq!(shannons_to_rounded_whole_ckb(-1), None);
+    }
+
+    #[test]
+    fn test_extract_activity_token_deltas_skips_non_token_changes() {
+        let activity = AddressActivityRecord {
+            tx_hash: "0xabc".to_string(),
+            block_number: 123,
+            asset_changes: vec![
+                serde_json::json!({
+                    "type": "token",
+                    "typeScriptHash": "0xAABB",
+                    "delta": "-10"
+                }),
+                serde_json::json!({
+                    "type": "daoDeposit",
+                    "capacity": "1000"
+                }),
+                serde_json::json!({
+                    "type": "token",
+                    "typeScriptHash": "0xccdd",
+                    "delta": "25"
+                }),
+            ],
+        };
+
+        let parsed = extract_activity_token_deltas(&activity).unwrap();
+        assert_eq!(
+            parsed,
+            vec![("aabb".to_string(), -10), ("ccdd".to_string(), 25),]
+        );
+    }
+
+    #[test]
+    fn test_extract_activity_token_deltas_requires_delta_field() {
+        let activity = AddressActivityRecord {
+            tx_hash: "0xabc".to_string(),
+            block_number: 123,
+            asset_changes: vec![serde_json::json!({
+                "type": "token",
+                "typeScriptHash": "0xAABB"
+            })],
+        };
+
+        let err = extract_activity_token_deltas(&activity)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("missing delta"));
+        assert!(err.contains("0xabc"));
+    }
+
+    #[test]
+    fn test_apply_transfer_delta_to_lookup_handles_transfer_mint_and_burn() {
+        let mut lookup = std::collections::HashMap::<(String, String, String), i128>::new();
+
+        let transfer = TokenTransferApiRecord {
+            tx_hash: "0x01".to_string(),
+            block_number: 10,
+            from_lock_hash: Some("0xaaaa".to_string()),
+            to_lock_hash: "0xbbbb".to_string(),
+            amount: "100".to_string(),
+        };
+        apply_transfer_delta_to_lookup(&mut lookup, "0xTT", &transfer).unwrap();
+
+        let mint = TokenTransferApiRecord {
+            tx_hash: "0x01".to_string(),
+            block_number: 10,
+            from_lock_hash: None,
+            to_lock_hash: "0xbbbb".to_string(),
+            amount: "50".to_string(),
+        };
+        apply_transfer_delta_to_lookup(&mut lookup, "0xTT", &mint).unwrap();
+
+        let burn = TokenTransferApiRecord {
+            tx_hash: "0x01".to_string(),
+            block_number: 10,
+            from_lock_hash: Some("0xbbbb".to_string()),
+            to_lock_hash: "0x".to_string(),
+            amount: "20".to_string(),
+        };
+        apply_transfer_delta_to_lookup(&mut lookup, "0xTT", &burn).unwrap();
+
+        assert_eq!(
+            lookup
+                .get(&("tt".to_string(), "01".to_string(), "aaaa".to_string()))
+                .copied(),
+            Some(-100)
+        );
+        assert_eq!(
+            lookup
+                .get(&("tt".to_string(), "01".to_string(), "bbbb".to_string()))
+                .copied(),
+            Some(130)
+        );
+    }
+
+    #[test]
+    fn test_apply_transfer_delta_to_lookup_ignores_empty_lock_hashes() {
+        let mut lookup = std::collections::HashMap::<(String, String, String), i128>::new();
+        let transfer = TokenTransferApiRecord {
+            tx_hash: "0x01".to_string(),
+            block_number: 10,
+            from_lock_hash: Some("0x".to_string()),
+            to_lock_hash: "0x".to_string(),
+            amount: "100".to_string(),
+        };
+
+        apply_transfer_delta_to_lookup(&mut lookup, "0xTT", &transfer).unwrap();
+        assert!(lookup.is_empty());
     }
 }
