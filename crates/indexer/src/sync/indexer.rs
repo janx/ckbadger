@@ -10,7 +10,9 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, NaiveDate, Timelike, Utc};
 use ckb_hash::new_blake2b;
-use ckbadger_common::{LabelImportConfig, PipelineProgressData};
+use ckbadger_common::{
+    AdaptiveLastAdjustmentData, DbMemoryStatsData, LabelImportConfig, PipelineProgressData,
+};
 use dashmap::DashMap;
 use futures::stream::{FuturesOrdered, StreamExt};
 use rayon::prelude::*;
@@ -219,6 +221,28 @@ fn merge_memory_stats(mut base: MemoryStats, heavy: MemoryStats) -> MemoryStats 
         .sort_by(|(_, left), (_, right)| right.cmp(left));
     base.top_cf_sizes.truncate(5);
     base
+}
+
+fn memory_stats_data_from_store(stats: &MemoryStats) -> DbMemoryStatsData {
+    DbMemoryStatsData {
+        live_cells_count: stats.live_cells_count as u64,
+        consumed_cells_count: stats.consumed_cells_count as u64,
+        consumed_cells_bytes: stats.consumed_cells_bytes as u64,
+        consumed_cells_bytes_source: stats.consumed_cells_bytes_source.to_string(),
+        rocksdb_memtable_bytes: stats.memtable_bytes as u64,
+        rocksdb_block_cache_bytes: stats.block_cache_bytes as u64,
+        rocksdb_table_readers_bytes: stats.table_readers_bytes as u64,
+        rocksdb_total_bytes: stats.memory_bytes as u64,
+        block_headers_count: stats.block_headers_count as u64,
+        compaction_pending_bytes: stats.compaction_pending_bytes,
+        num_running_compactions: stats.num_running_compactions,
+        sst_files_size: stats.sst_files_size,
+        l0_files_count: stats.l0_files_count,
+        l0_files_max: stats.l0_files_max,
+        l0_worst_cf: stats.l0_worst_cf.clone(),
+        immutable_memtables: stats.immutable_memtables,
+        top_cf_sizes: stats.top_cf_sizes.clone(),
+    }
 }
 
 /// Build a fetch sub-batch plan based on per-block tx counts.
@@ -2183,24 +2207,30 @@ const ADAPTIVE_BATCH_MIN_FLOOR_RECOVER_WRITE_MS: f64 = 1_500.0;
 struct AdaptiveBatchSnapshot {
     target_batch_txs: u64,
     inflight_limit: u64,
+    max_inflight_limit: u64,
     min_target_batch_txs: u64,
+    at_floor: bool,
     cooldown_steps: u64,
     last_reason_code: u8,
     adjustment_seq: u64,
     backoff_streak: u64,
     last_adjusted_at: Option<i64>,
+    last_adjustment: Option<AdaptiveBatchAdjustmentRecord>,
 }
 
 #[derive(Debug, Clone)]
 pub struct AdaptiveBatchProgressSnapshot {
     pub target_batch_txs: u64,
     pub inflight_limit: u64,
+    pub max_inflight_limit: u64,
     pub min_target_batch_txs: u64,
+    pub at_floor: bool,
     pub cooldown_steps: u64,
     pub last_reason: Option<String>,
     pub adjustment_seq: u64,
     pub backoff_streak: u64,
     pub last_adjusted_at: Option<i64>,
+    pub last_adjustment: Option<AdaptiveLastAdjustmentData>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2235,6 +2265,35 @@ struct AdaptiveBatchAdjustment {
     reason: &'static str,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct AdaptiveBatchAdjustmentRecord {
+    previous_target_batch_txs: u64,
+    new_target_batch_txs: u64,
+    previous_inflight_limit: u64,
+    new_inflight_limit: u64,
+    previous_min_target_batch_txs: u64,
+    new_min_target_batch_txs: u64,
+    reason_code: u8,
+    adjusted_at: i64,
+}
+
+fn adaptive_adjustment_data_from_record(
+    record: AdaptiveBatchAdjustmentRecord,
+) -> AdaptiveLastAdjustmentData {
+    AdaptiveLastAdjustmentData {
+        previous_target_batch_txs: record.previous_target_batch_txs,
+        new_target_batch_txs: record.new_target_batch_txs,
+        previous_inflight_limit: record.previous_inflight_limit,
+        new_inflight_limit: record.new_inflight_limit,
+        previous_min_target_batch_txs: record.previous_min_target_batch_txs,
+        new_min_target_batch_txs: record.new_min_target_batch_txs,
+        reason: decode_adaptive_batch_reason(record.reason_code)
+            .unwrap_or("unknown")
+            .to_string(),
+        adjusted_at: record.adjusted_at,
+    }
+}
+
 #[derive(Debug)]
 struct AdaptiveBatchController {
     target_batch_txs: AtomicU64,
@@ -2248,6 +2307,7 @@ struct AdaptiveBatchController {
     backoff_streak: AtomicU64,
     last_adjusted_at: AtomicI64,
     max_inflight_limit: u64,
+    last_adjustment: std::sync::Mutex<Option<AdaptiveBatchAdjustmentRecord>>,
     early_height_boost_applied: std::sync::atomic::AtomicBool,
 }
 
@@ -2267,29 +2327,40 @@ impl AdaptiveBatchController {
             backoff_streak: AtomicU64::new(0),
             last_adjusted_at: AtomicI64::new(0),
             max_inflight_limit,
+            last_adjustment: std::sync::Mutex::new(None),
             early_height_boost_applied: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
     fn snapshot(&self) -> AdaptiveBatchSnapshot {
         let last_adjusted_at_raw = self.last_adjusted_at.load(Ordering::Relaxed);
+        let target_batch_txs = self.target_batch_txs.load(Ordering::Relaxed);
+        let min_target_batch_txs = self.min_target_batch_txs.load(Ordering::Relaxed);
         AdaptiveBatchSnapshot {
-            target_batch_txs: self.target_batch_txs.load(Ordering::Relaxed),
+            target_batch_txs,
             inflight_limit: self.inflight_limit.load(Ordering::Relaxed),
-            min_target_batch_txs: self.min_target_batch_txs.load(Ordering::Relaxed),
+            max_inflight_limit: self.max_inflight_limit,
+            min_target_batch_txs,
+            at_floor: target_batch_txs <= min_target_batch_txs,
             cooldown_steps: self.cooldown_steps.load(Ordering::Relaxed),
             last_reason_code: self.last_reason_code.load(Ordering::Relaxed),
             adjustment_seq: self.adjustment_seq.load(Ordering::Relaxed),
             backoff_streak: self.backoff_streak.load(Ordering::Relaxed),
             last_adjusted_at: (last_adjusted_at_raw > 0).then_some(last_adjusted_at_raw),
+            last_adjustment: self
+                .last_adjustment
+                .lock()
+                .expect("adaptive last_adjustment mutex poisoned")
+                .as_ref()
+                .copied(),
         }
     }
 
-    fn record_adjustment(&self, reason_code: u8) {
+    fn record_adjustment(&self, reason_code: u8) -> i64 {
         self.last_reason_code.store(reason_code, Ordering::Relaxed);
         self.adjustment_seq.fetch_add(1, Ordering::Relaxed);
-        self.last_adjusted_at
-            .store(chrono::Utc::now().timestamp(), Ordering::Relaxed);
+        let adjusted_at = chrono::Utc::now().timestamp();
+        self.last_adjusted_at.store(adjusted_at, Ordering::Relaxed);
 
         if decode_adaptive_batch_reason(reason_code)
             .is_some_and(|reason| reason.contains("backoff"))
@@ -2298,6 +2369,14 @@ impl AdaptiveBatchController {
         } else {
             self.backoff_streak.store(0, Ordering::Relaxed);
         }
+        adjusted_at
+    }
+
+    fn set_last_adjustment(&self, record: AdaptiveBatchAdjustmentRecord) {
+        *self
+            .last_adjustment
+            .lock()
+            .expect("adaptive last_adjustment mutex poisoned") = Some(record);
     }
 
     fn maybe_apply_early_height_boost(&self, start_block: u64) -> Option<(u64, u64)> {
@@ -2318,9 +2397,21 @@ impl AdaptiveBatchController {
                 self.min_target_batch_txs.load(Ordering::Relaxed),
                 ADAPTIVE_BATCH_MAX_TXS,
             );
+        let previous_inflight_limit = self.inflight_limit.load(Ordering::Relaxed);
+        let previous_min_target_batch_txs = self.min_target_batch_txs.load(Ordering::Relaxed);
         self.target_batch_txs
             .store(boosted_target_batch_txs, Ordering::Relaxed);
-        self.record_adjustment(ADAPTIVE_REASON_EARLY_HEIGHT_BOOST);
+        let adjusted_at = self.record_adjustment(ADAPTIVE_REASON_EARLY_HEIGHT_BOOST);
+        self.set_last_adjustment(AdaptiveBatchAdjustmentRecord {
+            previous_target_batch_txs,
+            new_target_batch_txs: boosted_target_batch_txs,
+            previous_inflight_limit,
+            new_inflight_limit: previous_inflight_limit,
+            previous_min_target_batch_txs,
+            new_min_target_batch_txs: previous_min_target_batch_txs,
+            reason_code: ADAPTIVE_REASON_EARLY_HEIGHT_BOOST,
+            adjusted_at,
+        });
 
         Some((previous_target_batch_txs, boosted_target_batch_txs))
     }
@@ -2561,7 +2652,18 @@ impl AdaptiveBatchController {
             .store(new_inflight_limit, Ordering::Relaxed);
         self.min_target_batch_txs
             .store(new_min_target_batch_txs, Ordering::Relaxed);
-        self.record_adjustment(encode_adaptive_batch_reason(reason.unwrap_or("adjusted")));
+        let reason_code = encode_adaptive_batch_reason(reason.unwrap_or("adjusted"));
+        let adjusted_at = self.record_adjustment(reason_code);
+        self.set_last_adjustment(AdaptiveBatchAdjustmentRecord {
+            previous_target_batch_txs,
+            new_target_batch_txs,
+            previous_inflight_limit,
+            new_inflight_limit,
+            previous_min_target_batch_txs,
+            new_min_target_batch_txs,
+            reason_code,
+            adjusted_at,
+        });
 
         Some(AdaptiveBatchAdjustment {
             previous_target_batch_txs,
@@ -3298,13 +3400,18 @@ impl Indexer {
         Some(AdaptiveBatchProgressSnapshot {
             target_batch_txs: snapshot.target_batch_txs,
             inflight_limit: snapshot.inflight_limit,
+            max_inflight_limit: snapshot.max_inflight_limit,
             min_target_batch_txs: snapshot.min_target_batch_txs,
+            at_floor: snapshot.at_floor,
             cooldown_steps: snapshot.cooldown_steps,
             last_reason: decode_adaptive_batch_reason(snapshot.last_reason_code)
                 .map(str::to_string),
             adjustment_seq: snapshot.adjustment_seq,
             backoff_streak: snapshot.backoff_streak,
             last_adjusted_at: snapshot.last_adjusted_at,
+            last_adjustment: snapshot
+                .last_adjustment
+                .map(adaptive_adjustment_data_from_record),
         })
     }
 
@@ -3348,8 +3455,11 @@ impl Indexer {
 
     pub fn get_memory_stats(&self) -> ckbadger_common::MemoryStatsData {
         let mut stats = self.writer.store().memory_stats();
+        let core_db = memory_stats_data_from_store(&stats);
+        let mut heavy_db = None;
         if self.using_split_heavy_store() {
             let heavy_stats = self.heavy_writer.store().memory_stats();
+            heavy_db = Some(memory_stats_data_from_store(&heavy_stats));
             stats = merge_memory_stats(stats, heavy_stats);
         }
         let sync_status = self.writer.store().get_sync_status().unwrap_or_default();
@@ -3373,6 +3483,8 @@ impl Indexer {
             l0_worst_cf: stats.l0_worst_cf,
             immutable_memtables: stats.immutable_memtables,
             top_cf_sizes: stats.top_cf_sizes,
+            core_db: Some(core_db),
+            heavy_db,
             total_transactions: sync_status.total_transactions,
             total_cells: sync_status.total_cells_created,
             total_live_cells: sync_status.total_cells_created - sync_status.total_cells_consumed,
@@ -10981,6 +11093,65 @@ mod tests {
         data
     }
 
+    #[test]
+    fn test_memory_stats_data_from_store_maps_fields() {
+        let stats = MemoryStats {
+            live_cells_count: 11,
+            consumed_cells_count: 22,
+            consumed_cells_bytes: 33,
+            consumed_cells_bytes_source: "live",
+            block_headers_count: 44,
+            memory_bytes: 55,
+            memtable_bytes: 66,
+            block_cache_bytes: 77,
+            table_readers_bytes: 88,
+            compaction_pending_bytes: 99,
+            num_running_compactions: 3,
+            sst_files_size: 1_000,
+            l0_files_count: 9,
+            l0_files_max: 4,
+            l0_worst_cf: "live_cells".to_string(),
+            immutable_memtables: 2,
+            top_cf_sizes: vec![("live_cells".to_string(), 123)],
+            ..Default::default()
+        };
+
+        let mapped = memory_stats_data_from_store(&stats);
+        assert_eq!(mapped.live_cells_count, 11);
+        assert_eq!(mapped.consumed_cells_count, 22);
+        assert_eq!(mapped.consumed_cells_bytes_source, "live");
+        assert_eq!(mapped.rocksdb_total_bytes, 55);
+        assert_eq!(mapped.rocksdb_memtable_bytes, 66);
+        assert_eq!(mapped.l0_files_max, 4);
+        assert_eq!(mapped.top_cf_sizes.len(), 1);
+        assert_eq!(mapped.top_cf_sizes[0].0, "live_cells");
+    }
+
+    #[test]
+    fn test_merge_memory_stats_prefixes_heavy_cf_names_and_tracks_worst_lane() {
+        let base = MemoryStats {
+            memory_bytes: 100,
+            l0_files_max: 5,
+            l0_worst_cf: "live_cells".to_string(),
+            top_cf_sizes: vec![("live_cells".to_string(), 400)],
+            ..Default::default()
+        };
+        let heavy = MemoryStats {
+            memory_bytes: 200,
+            l0_files_max: 11,
+            l0_worst_cf: "activities".to_string(),
+            top_cf_sizes: vec![("activities".to_string(), 500)],
+            ..Default::default()
+        };
+
+        let merged = merge_memory_stats(base, heavy);
+        assert_eq!(merged.memory_bytes, 300);
+        assert_eq!(merged.l0_files_max, 11);
+        assert_eq!(merged.l0_worst_cf, "heavy:activities");
+        assert_eq!(merged.top_cf_sizes[0].0, "heavy:activities");
+        assert_eq!(merged.top_cf_sizes[0].1, 500);
+    }
+
     fn dummy_unique_token_info_cell(
         unique_type_args: Vec<u8>,
         total_supply: u128,
@@ -11418,6 +11589,25 @@ mod tests {
             adjustment.new_min_target_batch_txs,
             ADAPTIVE_BATCH_BASE_MIN_TXS
         );
+
+        let snapshot = controller.snapshot();
+        assert_eq!(snapshot.max_inflight_limit, 8);
+        assert!(snapshot.at_floor == (snapshot.target_batch_txs <= snapshot.min_target_batch_txs));
+        let last = snapshot
+            .last_adjustment
+            .expect("last adjustment should be captured");
+        assert_eq!(
+            last.previous_target_batch_txs,
+            adjustment.previous_target_batch_txs
+        );
+        assert_eq!(last.new_target_batch_txs, adjustment.new_target_batch_txs);
+        assert_eq!(
+            last.previous_inflight_limit,
+            adjustment.previous_inflight_limit
+        );
+        assert_eq!(last.new_inflight_limit, adjustment.new_inflight_limit);
+        assert_eq!(last.reason_code, ADAPTIVE_REASON_PRESSURE_BACKOFF);
+        assert!(last.adjusted_at > 0);
     }
 
     #[test]

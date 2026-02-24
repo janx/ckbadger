@@ -221,6 +221,9 @@ pub struct SyncProgressData {
     /// Adaptive inflight batch limit in bulk sync.
     #[serde(default)]
     pub adaptive_inflight_limit: Option<u64>,
+    /// Adaptive inflight batch hard cap derived from pipeline buffer.
+    #[serde(default)]
+    pub adaptive_max_inflight_limit: Option<u64>,
     /// Adaptive minimum target transactions per batch floor in bulk sync.
     #[serde(default)]
     pub adaptive_min_target_batch_txs: Option<u64>,
@@ -236,9 +239,15 @@ pub struct SyncProgressData {
     /// Consecutive adaptive backoff count.
     #[serde(default)]
     pub adaptive_backoff_streak: Option<u64>,
+    /// True when adaptive target is currently at min floor.
+    #[serde(default)]
+    pub adaptive_at_floor: Option<bool>,
     /// Unix timestamp when adaptive controller last adjusted.
     #[serde(default)]
     pub adaptive_last_adjusted_at: Option<i64>,
+    /// Last adaptive adjustment with before/after values.
+    #[serde(default)]
+    pub adaptive_last_adjustment: Option<AdaptiveLastAdjustmentData>,
     /// Whether heavy lane backpressure controls are active in this run.
     #[serde(default)]
     pub heavy_lane_enabled: bool,
@@ -263,6 +272,19 @@ pub struct SyncProgressData {
     /// Configured lag warning interval (seconds).
     #[serde(default)]
     pub heavy_lane_max_lag_seconds: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AdaptiveLastAdjustmentData {
+    pub previous_target_batch_txs: u64,
+    pub new_target_batch_txs: u64,
+    pub previous_inflight_limit: u64,
+    pub new_inflight_limit: u64,
+    pub previous_min_target_batch_txs: u64,
+    pub new_min_target_batch_txs: u64,
+    pub reason: String,
+    pub adjusted_at: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -309,6 +331,59 @@ pub fn format_duration_smart(total_secs: f64) -> String {
     } else {
         format!("{}m {}s", minutes, seconds)
     }
+}
+
+/// Memory statistics for key indexer components.
+/// Published to Redis for monitoring by TUI and other tools.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DbMemoryStatsData {
+    /// Number of live (unspent) cells in RocksDB
+    pub live_cells_count: u64,
+    /// Number of consumed cells retained for reorg support
+    pub consumed_cells_count: u64,
+    /// Estimated storage bytes used by consumed_cells column family
+    pub consumed_cells_bytes: u64,
+    /// Source used to estimate consumed_cells_bytes: live/sst/mem/none
+    #[serde(default)]
+    pub consumed_cells_bytes_source: String,
+
+    /// RocksDB memtable (write buffer) memory usage
+    pub rocksdb_memtable_bytes: u64,
+    /// RocksDB block cache usage
+    pub rocksdb_block_cache_bytes: u64,
+    /// RocksDB table readers memory estimate
+    pub rocksdb_table_readers_bytes: u64,
+    /// Total RocksDB memory usage
+    pub rocksdb_total_bytes: u64,
+
+    /// Number of block headers cached
+    pub block_headers_count: u64,
+
+    /// Estimated bytes pending compaction
+    #[serde(default)]
+    pub compaction_pending_bytes: u64,
+    /// Number of currently running compactions
+    #[serde(default)]
+    pub num_running_compactions: u64,
+    /// Total SST file size on disk (all CFs)
+    #[serde(default)]
+    pub sst_files_size: u64,
+    /// Total L0 files across all CFs (sum)
+    #[serde(default)]
+    pub l0_files_count: u64,
+    /// Max L0 files in any single CF (the actual write stall trigger)
+    #[serde(default)]
+    pub l0_files_max: u64,
+    /// Name of the CF with the most L0 files
+    #[serde(default)]
+    pub l0_worst_cf: String,
+    /// Total immutable memtables across all CFs (waiting for flush)
+    #[serde(default)]
+    pub immutable_memtables: u64,
+    /// Top column families by estimated live data size: (name, bytes)
+    #[serde(default)]
+    pub top_cf_sizes: Vec<(String, u64)>,
 }
 
 /// Memory statistics for key indexer components.
@@ -367,6 +442,13 @@ pub struct MemoryStatsData {
     /// Top column families by estimated live data size: (name, bytes)
     #[serde(default)]
     pub top_cf_sizes: Vec<(String, u64)>,
+
+    /// Per-DB stats for core store (always available when indexer publishes memory stats)
+    #[serde(default)]
+    pub core_db: Option<DbMemoryStatsData>,
+    /// Per-DB stats for heavy store (only available when split heavy store is enabled)
+    #[serde(default)]
+    pub heavy_db: Option<DbMemoryStatsData>,
 
     /// Chain-level statistics (from SyncStatusData)
     #[serde(default)]
@@ -557,6 +639,16 @@ mod tests {
                 ("live_cells".to_string(), 3_000_000_000),
                 ("consumed_cells".to_string(), 2_500_000_000),
             ],
+            core_db: Some(DbMemoryStatsData {
+                rocksdb_total_bytes: 1_200_000_000,
+                l0_files_max: 4,
+                ..Default::default()
+            }),
+            heavy_db: Some(DbMemoryStatsData {
+                rocksdb_total_bytes: 412_000_000,
+                l0_files_max: 2,
+                ..Default::default()
+            }),
             total_transactions: 50_000_000,
             total_cells: 100_000_000,
             total_live_cells: 45_000_000,
@@ -573,6 +665,14 @@ mod tests {
         assert_eq!(parsed.sst_files_size, stats.sst_files_size);
         assert_eq!(parsed.consumed_cells_bytes_source, "live");
         assert_eq!(parsed.top_cf_sizes.len(), 2);
+        assert_eq!(
+            parsed.core_db.as_ref().map(|v| v.rocksdb_total_bytes),
+            Some(1_200_000_000)
+        );
+        assert_eq!(
+            parsed.heavy_db.as_ref().map(|v| v.rocksdb_total_bytes),
+            Some(412_000_000)
+        );
         assert_eq!(parsed.total_transactions, 50_000_000);
     }
 
@@ -587,6 +687,21 @@ mod tests {
         }
         let parsed: MemoryStatsData = serde_json::from_value(value).unwrap();
         assert_eq!(parsed.consumed_cells_bytes_source, "");
+        assert!(parsed.core_db.is_none());
+        assert!(parsed.heavy_db.is_none());
+    }
+
+    #[test]
+    fn test_memory_stats_deserialize_core_db_without_source_field() {
+        let mut value = serde_json::to_value(MemoryStatsData::default()).unwrap();
+        value["coreDb"] = serde_json::json!({
+            "liveCellsCount": 1,
+            "consumedCellsCount": 2,
+            "consumedCellsBytes": 3
+        });
+        let parsed: MemoryStatsData = serde_json::from_value(value).unwrap();
+        let core = parsed.core_db.expect("core db should exist");
+        assert_eq!(core.consumed_cells_bytes_source, "");
     }
 
     #[test]
@@ -623,12 +738,24 @@ mod tests {
             pipeline_reset_reason: Some("pipeline batch mismatch".to_string()),
             adaptive_target_batch_txs: Some(40_000),
             adaptive_inflight_limit: Some(3),
+            adaptive_max_inflight_limit: Some(8),
             adaptive_min_target_batch_txs: Some(10_000),
             adaptive_cooldown_steps: Some(2),
             adaptive_last_reason: Some("pressure_backoff".to_string()),
             adaptive_adjustment_seq: Some(42),
             adaptive_backoff_streak: Some(3),
+            adaptive_at_floor: Some(false),
             adaptive_last_adjusted_at: Some(1_700_000_123),
+            adaptive_last_adjustment: Some(AdaptiveLastAdjustmentData {
+                previous_target_batch_txs: 50_000,
+                new_target_batch_txs: 40_000,
+                previous_inflight_limit: 4,
+                new_inflight_limit: 3,
+                previous_min_target_batch_txs: 12_000,
+                new_min_target_batch_txs: 10_000,
+                reason: "pressure_backoff".to_string(),
+                adjusted_at: 1_700_000_123,
+            }),
             heavy_lane_enabled: true,
             core_lane_tip: Some(1_500),
             heavy_lane_tip: Some(1_440),
@@ -660,6 +787,7 @@ mod tests {
         assert_eq!(parsed.ema_txs_per_second, Some(11_100.0));
         assert_eq!(parsed.adaptive_target_batch_txs, Some(40_000));
         assert_eq!(parsed.adaptive_inflight_limit, Some(3));
+        assert_eq!(parsed.adaptive_max_inflight_limit, Some(8));
         assert_eq!(parsed.adaptive_min_target_batch_txs, Some(10_000));
         assert_eq!(parsed.adaptive_cooldown_steps, Some(2));
         assert_eq!(
@@ -668,7 +796,14 @@ mod tests {
         );
         assert_eq!(parsed.adaptive_adjustment_seq, Some(42));
         assert_eq!(parsed.adaptive_backoff_streak, Some(3));
+        assert_eq!(parsed.adaptive_at_floor, Some(false));
         assert_eq!(parsed.adaptive_last_adjusted_at, Some(1_700_000_123));
+        let adjustment = parsed
+            .adaptive_last_adjustment
+            .expect("adaptive last adjustment should exist");
+        assert_eq!(adjustment.previous_target_batch_txs, 50_000);
+        assert_eq!(adjustment.new_target_batch_txs, 40_000);
+        assert_eq!(adjustment.reason, "pressure_backoff");
         assert!(parsed.heavy_lane_enabled);
         assert_eq!(parsed.core_lane_tip, Some(1_500));
         assert_eq!(parsed.heavy_lane_tip, Some(1_440));
@@ -702,12 +837,24 @@ mod tests {
             pipeline_reset_reason: Some("batch write failed".to_string()),
             adaptive_target_batch_txs: Some(1),
             adaptive_inflight_limit: Some(2),
+            adaptive_max_inflight_limit: Some(3),
             adaptive_min_target_batch_txs: Some(1),
             adaptive_cooldown_steps: Some(1),
             adaptive_last_reason: Some("healthy_step_up".to_string()),
             adaptive_adjustment_seq: Some(1),
             adaptive_backoff_streak: Some(0),
+            adaptive_at_floor: Some(true),
             adaptive_last_adjusted_at: Some(1),
+            adaptive_last_adjustment: Some(AdaptiveLastAdjustmentData {
+                previous_target_batch_txs: 1,
+                new_target_batch_txs: 2,
+                previous_inflight_limit: 1,
+                new_inflight_limit: 2,
+                previous_min_target_batch_txs: 1,
+                new_min_target_batch_txs: 1,
+                reason: "healthy_step_up".to_string(),
+                adjusted_at: 1,
+            }),
             heavy_lane_enabled: true,
             core_lane_tip: Some(1000),
             heavy_lane_tip: Some(990),
@@ -726,12 +873,15 @@ mod tests {
             obj.remove("emaTxsPerSecond");
             obj.remove("adaptiveTargetBatchTxs");
             obj.remove("adaptiveInflightLimit");
+            obj.remove("adaptiveMaxInflightLimit");
             obj.remove("adaptiveMinTargetBatchTxs");
             obj.remove("adaptiveCooldownSteps");
             obj.remove("adaptiveLastReason");
             obj.remove("adaptiveAdjustmentSeq");
             obj.remove("adaptiveBackoffStreak");
+            obj.remove("adaptiveAtFloor");
             obj.remove("adaptiveLastAdjustedAt");
+            obj.remove("adaptiveLastAdjustment");
             obj.remove("heavyLaneEnabled");
             obj.remove("coreLaneTip");
             obj.remove("heavyLaneTip");
@@ -750,12 +900,15 @@ mod tests {
         assert_eq!(parsed.ema_txs_per_second, None);
         assert_eq!(parsed.adaptive_target_batch_txs, None);
         assert_eq!(parsed.adaptive_inflight_limit, None);
+        assert_eq!(parsed.adaptive_max_inflight_limit, None);
         assert_eq!(parsed.adaptive_min_target_batch_txs, None);
         assert_eq!(parsed.adaptive_cooldown_steps, None);
         assert_eq!(parsed.adaptive_last_reason, None);
         assert_eq!(parsed.adaptive_adjustment_seq, None);
         assert_eq!(parsed.adaptive_backoff_streak, None);
+        assert_eq!(parsed.adaptive_at_floor, None);
         assert_eq!(parsed.adaptive_last_adjusted_at, None);
+        assert!(parsed.adaptive_last_adjustment.is_none());
         assert!(!parsed.heavy_lane_enabled);
         assert_eq!(parsed.core_lane_tip, None);
         assert_eq!(parsed.heavy_lane_tip, None);
