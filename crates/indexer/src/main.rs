@@ -559,6 +559,7 @@ async fn run_sync(args: Cli) -> Result<()> {
             let pipeline_log = pipeline.clone();
             let adaptive = indexer_for_progress.adaptive_batch_snapshot();
             let pipeline_reset = indexer_for_progress.pipeline_reset_snapshot();
+            let lane = indexer_for_progress.lane_progress_snapshot();
             let heartbeat_stage = indexer_for_progress.startup_phase().unwrap_or_else(|| {
                 if indexer_for_progress.is_bulk_sync_active() {
                     "bulk_sync".to_string()
@@ -606,6 +607,14 @@ async fn run_sync(args: Cli) -> Result<()> {
                 adaptive_adjustment_seq: adaptive.as_ref().map(|s| s.adjustment_seq),
                 adaptive_backoff_streak: adaptive.as_ref().map(|s| s.backoff_streak),
                 adaptive_last_adjusted_at: adaptive.as_ref().and_then(|s| s.last_adjusted_at),
+                heavy_lane_enabled: lane.enabled,
+                core_lane_tip: lane.enabled.then_some(lane.core_tip),
+                heavy_lane_tip: lane.enabled.then_some(lane.heavy_tip),
+                heavy_lane_lag_blocks: lane.enabled.then_some(lane.lag_blocks),
+                heavy_lane_lag_secs: lane.enabled.then_some(lane.lag_secs),
+                heavy_lane_backpressure: lane.enabled.then_some(lane.backpressure),
+                heavy_lane_max_lag_blocks: lane.enabled.then_some(lane.max_lag_blocks),
+                heavy_lane_max_lag_seconds: lane.enabled.then_some(lane.max_lag_seconds),
             };
             indexer_for_progress
                 .cache_invalidator()

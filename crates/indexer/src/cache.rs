@@ -444,6 +444,14 @@ mod tests {
             adaptive_adjustment_seq: None,
             adaptive_backoff_streak: None,
             adaptive_last_adjusted_at: None,
+            heavy_lane_enabled: false,
+            core_lane_tip: None,
+            heavy_lane_tip: None,
+            heavy_lane_lag_blocks: None,
+            heavy_lane_lag_secs: None,
+            heavy_lane_backpressure: None,
+            heavy_lane_max_lag_blocks: None,
+            heavy_lane_max_lag_seconds: None,
         };
         invalidator.publish_sync_progress(&data).await;
     }
@@ -551,6 +559,14 @@ mod tests {
                 adaptive_adjustment_seq: Some(9),
                 adaptive_backoff_streak: Some(4),
                 adaptive_last_adjusted_at: Some(1_700_000_456),
+                heavy_lane_enabled: true,
+                core_lane_tip: Some(5_000),
+                heavy_lane_tip: Some(4_950),
+                heavy_lane_lag_blocks: Some(50),
+                heavy_lane_lag_secs: Some(7),
+                heavy_lane_backpressure: Some(true),
+                heavy_lane_max_lag_blocks: Some(20_000),
+                heavy_lane_max_lag_seconds: Some(120),
             };
             invalidator.publish_sync_progress(&data).await;
 

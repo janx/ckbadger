@@ -67,6 +67,15 @@ pub struct SyncStatusRow {
     pub adaptive_backoff_streak: Option<u64>,
     pub adaptive_last_adjusted_age_secs: Option<i64>,
     pub startup_phase: Option<String>,
+    pub data_source: Option<String>,
+    pub heavy_lane_enabled: bool,
+    pub core_lane_tip: Option<i64>,
+    pub heavy_lane_tip: Option<i64>,
+    pub heavy_lane_lag_blocks: Option<i64>,
+    pub heavy_lane_lag_secs: Option<i64>,
+    pub heavy_lane_backpressure: Option<bool>,
+    pub heavy_lane_max_lag_blocks: Option<i64>,
+    pub heavy_lane_max_lag_seconds: Option<i64>,
     pub address_balances_deferred: bool,
     pub activities_deferred: bool,
     pub token_deferred: bool,
@@ -369,6 +378,27 @@ impl TuiDb {
                 .adaptive_last_adjusted_at
                 .map(|ts| (chrono::Utc::now().timestamp() - ts).max(0)),
             startup_phase: progress.startup_phase.clone(),
+            data_source: Some(if progress.is_direct_db_read {
+                "DB".to_string()
+            } else {
+                "RPC".to_string()
+            }),
+            heavy_lane_enabled: progress.heavy_lane_enabled,
+            core_lane_tip: progress.core_lane_tip.and_then(|v| i64::try_from(v).ok()),
+            heavy_lane_tip: progress.heavy_lane_tip.and_then(|v| i64::try_from(v).ok()),
+            heavy_lane_lag_blocks: progress
+                .heavy_lane_lag_blocks
+                .and_then(|v| i64::try_from(v).ok()),
+            heavy_lane_lag_secs: progress
+                .heavy_lane_lag_secs
+                .and_then(|v| i64::try_from(v).ok()),
+            heavy_lane_backpressure: progress.heavy_lane_backpressure,
+            heavy_lane_max_lag_blocks: progress
+                .heavy_lane_max_lag_blocks
+                .and_then(|v| i64::try_from(v).ok()),
+            heavy_lane_max_lag_seconds: progress
+                .heavy_lane_max_lag_seconds
+                .and_then(|v| i64::try_from(v).ok()),
             address_balances_deferred: deferred.address_balances,
             activities_deferred: deferred.activities,
             token_deferred: deferred.token,
@@ -441,6 +471,15 @@ impl TuiDb {
             adaptive_backoff_streak: None,
             adaptive_last_adjusted_age_secs: None,
             startup_phase: None,
+            data_source: None,
+            heavy_lane_enabled: false,
+            core_lane_tip: None,
+            heavy_lane_tip: None,
+            heavy_lane_lag_blocks: None,
+            heavy_lane_lag_secs: None,
+            heavy_lane_backpressure: None,
+            heavy_lane_max_lag_blocks: None,
+            heavy_lane_max_lag_seconds: None,
             address_balances_deferred: deferred.address_balances,
             activities_deferred: deferred.activities,
             token_deferred: deferred.token,
@@ -480,6 +519,15 @@ impl TuiDb {
             adaptive_backoff_streak: None,
             adaptive_last_adjusted_age_secs: None,
             startup_phase: None,
+            data_source: None,
+            heavy_lane_enabled: false,
+            core_lane_tip: None,
+            heavy_lane_tip: None,
+            heavy_lane_lag_blocks: None,
+            heavy_lane_lag_secs: None,
+            heavy_lane_backpressure: None,
+            heavy_lane_max_lag_blocks: None,
+            heavy_lane_max_lag_seconds: None,
             address_balances_deferred: deferred.address_balances,
             activities_deferred: deferred.activities,
             token_deferred: deferred.token,

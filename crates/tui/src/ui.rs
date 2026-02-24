@@ -22,6 +22,7 @@ const RATE_DROP_RATIO_THRESHOLD: f64 = 0.65;
 const TERMINAL_GREEN: Color = Color::Rgb(0, 255, 65);
 const TERMINAL_DIM: Color = Color::Rgb(0, 204, 51);
 const AMBER: Color = Color::Rgb(255, 176, 0);
+const CYAN: Color = Color::Rgb(56, 189, 248);
 const SLATE_800: Color = Color::Rgb(58, 71, 89);
 const SLATE_700: Color = Color::Rgb(80, 95, 115);
 const SLATE_500: Color = Color::Rgb(160, 174, 192);
@@ -93,6 +94,29 @@ enum CompactOverviewLayout {
     MemoryAndStorage,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SyncEventFilter {
+    All,
+    WarnOnly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SyncEventKeywordFilter {
+    Any,
+    Backpressure,
+    Reset,
+    Stall,
+    Stale,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LaneLagState {
+    Off,
+    Ok,
+    Warn,
+    Hot,
+}
+
 pub struct App {
     db: TuiDb,
     sync_status: Option<SyncStatusRow>,
@@ -107,6 +131,7 @@ pub struct App {
     rate_history: VecDeque<f64>,
     tx_rate_history: VecDeque<f64>,
     db_write_history: VecDeque<f64>,
+    lane_lag_history: VecDeque<f64>,
     fetch_stage_history: VecDeque<f64>,
     parse_stage_history: VecDeque<f64>,
     write_stage_history: VecDeque<f64>,
@@ -121,12 +146,16 @@ pub struct App {
     prev_pipeline_reset_epoch: Option<u64>,
     prev_bottleneck: Option<SyncBottleneck>,
     prev_adaptive_last_reason: Option<String>,
+    prev_lane_backpressure: Option<bool>,
     last_rate_drop_alert: Option<Instant>,
     last_tx_rate_drop_alert: Option<Instant>,
     stale_warning_active: bool,
     help_visible: bool,
     force_compact_layout: bool,
     diagnostics_view_mode: DiagnosticsViewMode,
+    sync_focus_mode: bool,
+    sync_event_filter: SyncEventFilter,
+    sync_event_keyword_filter: SyncEventKeywordFilter,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,6 +195,7 @@ impl App {
             rate_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             tx_rate_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             db_write_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
+            lane_lag_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             fetch_stage_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             parse_stage_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             write_stage_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
@@ -180,12 +210,16 @@ impl App {
             prev_pipeline_reset_epoch: None,
             prev_bottleneck: None,
             prev_adaptive_last_reason: None,
+            prev_lane_backpressure: None,
             last_rate_drop_alert: None,
             last_tx_rate_drop_alert: None,
             stale_warning_active: false,
             help_visible: false,
             force_compact_layout: false,
             diagnostics_view_mode: DiagnosticsViewMode::Auto,
+            sync_focus_mode: false,
+            sync_event_filter: SyncEventFilter::All,
+            sync_event_keyword_filter: SyncEventKeywordFilter::Any,
         }
     }
 
@@ -241,6 +275,47 @@ impl App {
         ));
     }
 
+    pub fn toggle_sync_focus_mode(&mut self) {
+        self.sync_focus_mode = !self.sync_focus_mode;
+        let msg = if self.sync_focus_mode {
+            "Sync focus mode enabled".to_string()
+        } else {
+            "Sync focus mode disabled".to_string()
+        };
+        self.status_message = Some((msg, Instant::now()));
+    }
+
+    pub fn toggle_sync_event_filter(&mut self) {
+        self.sync_event_filter = match self.sync_event_filter {
+            SyncEventFilter::All => SyncEventFilter::WarnOnly,
+            SyncEventFilter::WarnOnly => SyncEventFilter::All,
+        };
+        self.status_message = Some((
+            format!(
+                "Sync events filter: {}",
+                sync_event_filter_label(self.sync_event_filter)
+            ),
+            Instant::now(),
+        ));
+    }
+
+    pub fn cycle_sync_event_keyword_filter(&mut self) {
+        self.sync_event_keyword_filter = match self.sync_event_keyword_filter {
+            SyncEventKeywordFilter::Any => SyncEventKeywordFilter::Backpressure,
+            SyncEventKeywordFilter::Backpressure => SyncEventKeywordFilter::Reset,
+            SyncEventKeywordFilter::Reset => SyncEventKeywordFilter::Stall,
+            SyncEventKeywordFilter::Stall => SyncEventKeywordFilter::Stale,
+            SyncEventKeywordFilter::Stale => SyncEventKeywordFilter::Any,
+        };
+        self.status_message = Some((
+            format!(
+                "Sync events keyword: {}",
+                sync_event_keyword_filter_label(self.sync_event_keyword_filter)
+            ),
+            Instant::now(),
+        ));
+    }
+
     pub fn scroll_log_up(&mut self) {
         match self.main_tab {
             MainTab::Overview => {
@@ -249,7 +324,7 @@ impl App {
                 }
             }
             MainTab::Sync => {
-                if self.sync_event_scroll < self.sync_event_entries.len().saturating_sub(1) {
+                if self.sync_event_scroll < self.sync_event_len_for_scroll().saturating_sub(1) {
                     self.sync_event_scroll += 1;
                 }
             }
@@ -278,9 +353,22 @@ impl App {
         match self.main_tab {
             MainTab::Overview => self.log_scroll = self.log_entries.len().saturating_sub(1),
             MainTab::Sync => {
-                self.sync_event_scroll = self.sync_event_entries.len().saturating_sub(1)
+                self.sync_event_scroll = self.sync_event_len_for_scroll().saturating_sub(1)
             }
         }
+    }
+
+    fn sync_event_len_for_scroll(&self) -> usize {
+        self.sync_event_entries
+            .iter()
+            .filter(|entry| {
+                sync_event_matches_filter(
+                    entry,
+                    self.sync_event_filter,
+                    self.sync_event_keyword_filter,
+                )
+            })
+            .count()
     }
 
     pub async fn refresh(&mut self) {
@@ -333,6 +421,13 @@ impl App {
             .and_then(|s| s.db_write_ms)
             .unwrap_or(0.0);
         push_history_sample(&mut self.db_write_history, db_ms);
+        let lane_lag = self
+            .sync_status
+            .as_ref()
+            .and_then(|s| s.heavy_lane_lag_blocks)
+            .map(|v| v as f64)
+            .unwrap_or(0.0);
+        push_history_sample(&mut self.lane_lag_history, lane_lag);
 
         let (fetch_ms, parse_ms, write_ms) = self
             .sync_status
@@ -408,6 +503,7 @@ impl App {
             .unwrap_or_else(|| "unknown".to_string());
         let bottleneck = sync_bottleneck(sync.db_write_ms, sync.rpc_fetch_ms);
         let adaptive_last_reason = sync.adaptive_last_reason.clone();
+        let lane_backpressure = sync.heavy_lane_backpressure.unwrap_or(false);
 
         if let Some(prev_bulk) = self.prev_is_bulk_sync {
             if prev_bulk && !is_bulk_sync {
@@ -477,6 +573,21 @@ impl App {
             }
         }
         self.prev_adaptive_last_reason = adaptive_last_reason;
+
+        if let Some(prev_backpressure) = self.prev_lane_backpressure {
+            if !prev_backpressure && lane_backpressure {
+                self.push_sync_event_and_log(
+                    "heavy lane backpressure ON".to_string(),
+                    LogLevel::Warning,
+                );
+            } else if prev_backpressure && !lane_backpressure {
+                self.push_sync_event_and_log(
+                    "heavy lane backpressure cleared".to_string(),
+                    LogLevel::Success,
+                );
+            }
+        }
+        self.prev_lane_backpressure = Some(lane_backpressure);
     }
 
     fn detect_stale_state(&mut self) {
@@ -675,6 +786,45 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
             ),
             Style::default().fg(diagnostics_view_mode_color(app.diagnostics_view_mode)),
         ),
+        Span::styled("  ", Style::default().fg(SLATE_700)),
+        Span::styled(
+            if app.sync_focus_mode {
+                "[Focus]"
+            } else {
+                "[Dense]"
+            },
+            Style::default().fg(if app.sync_focus_mode {
+                AMBER
+            } else {
+                TERMINAL_DIM
+            }),
+        ),
+        Span::styled("  ", Style::default().fg(SLATE_700)),
+        Span::styled(
+            format!(
+                "[Events:{}]",
+                sync_event_filter_label(app.sync_event_filter)
+            ),
+            Style::default().fg(if app.sync_event_filter == SyncEventFilter::WarnOnly {
+                AMBER
+            } else {
+                SLATE_500
+            }),
+        ),
+        Span::styled("  ", Style::default().fg(SLATE_700)),
+        Span::styled(
+            format!(
+                "[Match:{}]",
+                sync_event_keyword_filter_label(app.sync_event_keyword_filter)
+            ),
+            Style::default().fg(
+                if app.sync_event_keyword_filter == SyncEventKeywordFilter::Any {
+                    SLATE_500
+                } else {
+                    CYAN
+                },
+            ),
+        ),
         Span::styled("  [Tab/s]", Style::default().fg(SLATE_500)),
     ]);
     f.render_widget(Paragraph::new(line), inner);
@@ -798,6 +948,11 @@ fn draw_overview_tail(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_sync_content(f: &mut Frame, app: &App, area: Rect) {
+    if app.sync_focus_mode {
+        draw_sync_focus_content(f, app, area);
+        return;
+    }
+
     match detect_layout_density(app, area) {
         LayoutDensity::Compact => match compact_sync_layout(area) {
             CompactSyncLayout::DiagnosticsOnly => {
@@ -841,8 +996,8 @@ fn draw_sync_content(f: &mut Frame, app: &App, area: Rect) {
                 .constraints([
                     Constraint::Length(4),
                     Constraint::Length(7),
-                    Constraint::Length(10),
-                    Constraint::Length(6),
+                    Constraint::Length(8),
+                    Constraint::Length(8),
                     Constraint::Min(3),
                 ])
                 .split(area);
@@ -858,8 +1013,8 @@ fn draw_sync_content(f: &mut Frame, app: &App, area: Rect) {
                 .constraints([
                     Constraint::Length(4),
                     Constraint::Length(7),
-                    Constraint::Length(10),
-                    Constraint::Length(8),
+                    Constraint::Length(9),
+                    Constraint::Length(9),
                     Constraint::Min(3),
                 ])
                 .split(area);
@@ -870,6 +1025,39 @@ fn draw_sync_content(f: &mut Frame, app: &App, area: Rect) {
             draw_sync_events(f, app, chunks[4]);
         }
     }
+}
+
+fn draw_sync_focus_content(f: &mut Frame, app: &App, area: Rect) {
+    if area.height < 20 {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(4),
+                Constraint::Min(7),
+                Constraint::Min(3),
+            ])
+            .split(area);
+        draw_sync_realtime_bar(f, app, chunks[0]);
+        draw_sync_diagnostics(f, app, chunks[1]);
+        draw_sync_events(f, app, chunks[2]);
+        return;
+    }
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(4),
+            Constraint::Length(4),
+            Constraint::Length(9),
+            Constraint::Length(8),
+            Constraint::Min(3),
+        ])
+        .split(area);
+    draw_sync_realtime_bar(f, app, chunks[0]);
+    draw_sync_alert_strip(f, app, chunks[1]);
+    draw_sync_diagnostics(f, app, chunks[2]);
+    draw_sync_charts(f, app, chunks[3]);
+    draw_sync_events(f, app, chunks[4]);
 }
 
 fn draw_sync_realtime_bar(f: &mut Frame, app: &App, area: Rect) {
@@ -893,6 +1081,31 @@ fn draw_sync_realtime_bar(f: &mut Frame, app: &App, area: Rect) {
     let eta_conf = eta_confidence_label(ema_rate, jitter);
     let bottleneck = sync_bottleneck(sync.db_write_ms, sync.rpc_fetch_ms);
     let (phase_label, phase_color) = startup_phase_label(sync.startup_phase.as_deref());
+    let lane_lag_blocks = sync.heavy_lane_lag_blocks.unwrap_or(0);
+    let lane_lag_secs = sync.heavy_lane_lag_secs.unwrap_or(0);
+    let lane_state = lane_lag_state(
+        sync.heavy_lane_enabled,
+        sync.heavy_lane_lag_blocks,
+        sync.heavy_lane_max_lag_blocks,
+        sync.heavy_lane_backpressure,
+    );
+    let lane_bp = sync.heavy_lane_backpressure.unwrap_or(false);
+    let lane_bp_style = if lane_bp {
+        Style::default().fg(Color::Black).bg(AMBER)
+    } else {
+        Style::default().fg(TERMINAL_GREEN)
+    };
+    let lane_text = if sync.heavy_lane_enabled {
+        format!("{}blk {}s", format_num(lane_lag_blocks), lane_lag_secs)
+    } else {
+        "off".to_string()
+    };
+    let (lane_state_label, lane_state_color) = lane_lag_state_badge(lane_state);
+    let source_text = sync
+        .data_source
+        .as_deref()
+        .map(str::to_string)
+        .unwrap_or_else(|| "-".to_string());
 
     let stale_secs = app
         .memory_stats
@@ -915,6 +1128,8 @@ fn draw_sync_realtime_bar(f: &mut Frame, app: &App, area: Rect) {
 
     let line = Line::from(vec![
         Span::styled(heartbeat, Style::default().fg(heartbeat_color)),
+        Span::styled("  src ", Style::default().fg(SLATE_500)),
+        Span::styled(source_text, Style::default().fg(CYAN)),
         Span::styled("  Behind ", Style::default().fg(SLATE_500)),
         Span::styled(format_num(behind), Style::default().fg(FOREGROUND)),
         Span::styled("  |  Rate ", Style::default().fg(SLATE_500)),
@@ -942,6 +1157,28 @@ fn draw_sync_realtime_bar(f: &mut Frame, app: &App, area: Rect) {
                 SyncBottleneck::Mixed => FOREGROUND,
                 SyncBottleneck::Unknown => SLATE_500,
             }),
+        ),
+        Span::styled(" | lane lag ", Style::default().fg(SLATE_500)),
+        Span::styled(lane_text, Style::default().fg(lane_state_color)),
+        Span::styled(" ", Style::default().fg(SLATE_700)),
+        Span::styled(
+            if !sync.heavy_lane_enabled {
+                "OFF"
+            } else if lane_bp {
+                "BP"
+            } else {
+                "FLOW"
+            },
+            if sync.heavy_lane_enabled {
+                lane_bp_style
+            } else {
+                Style::default().fg(SLATE_500)
+            },
+        ),
+        Span::styled(" ", Style::default().fg(SLATE_700)),
+        Span::styled(
+            format!("{} ", lane_state_label),
+            Style::default().fg(Color::Black).bg(lane_state_color),
         ),
         Span::styled(" | stale ", Style::default().fg(SLATE_500)),
         Span::styled(format!("{stale_secs}s"), stale_style),
@@ -1245,6 +1482,17 @@ fn draw_sync_progress(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(left), cols[0]);
 
     let blocks_behind = sync.chain_tip - sync.tip_block;
+    let source_text = sync.data_source.as_deref().unwrap_or("-");
+    let last_batch_text = sync
+        .last_batch_blocks
+        .map(format_num_u64)
+        .unwrap_or_else(|| "-".to_string());
+    let lane_status = lane_status_text(
+        sync.heavy_lane_enabled,
+        sync.heavy_lane_lag_blocks,
+        sync.heavy_lane_max_lag_blocks,
+        sync.heavy_lane_backpressure,
+    );
     let mid = vec![
         Line::from(vec![
             Span::styled("Current: ", Style::default().fg(SLATE_500)),
@@ -1269,12 +1517,14 @@ fn draw_sync_progress(f: &mut Frame, app: &App, area: Rect) {
                     TERMINAL_GREEN
                 }),
             ),
+            Span::styled("  batch ", Style::default().fg(SLATE_500)),
+            Span::styled(last_batch_text, Style::default().fg(FOREGROUND)),
         ]),
         Line::from(vec![
-            Span::styled("Blk Now: ", Style::default().fg(SLATE_500)),
-            if let Some(rt) = sync.rate_realtime {
+            Span::styled("Blk N/E: ", Style::default().fg(SLATE_500)),
+            if let (Some(rt), Some(ema)) = (sync.rate_realtime, sync.rate_ema) {
                 Span::styled(
-                    format!("{rt:.0} blk/s"),
+                    format!("{rt:.0}/{ema:.0}"),
                     Style::default()
                         .fg(TERMINAL_GREEN)
                         .add_modifier(Modifier::BOLD),
@@ -1282,20 +1532,13 @@ fn draw_sync_progress(f: &mut Frame, app: &App, area: Rect) {
             } else {
                 Span::styled("-", Style::default().fg(SLATE_500))
             },
+            Span::styled(" blk/s", Style::default().fg(SLATE_500)),
         ]),
         Line::from(vec![
-            Span::styled("Blk EMA: ", Style::default().fg(SLATE_500)),
-            if let Some(ema) = sync.rate_ema {
-                Span::raw(format!("{ema:.0} blk/s"))
-            } else {
-                Span::styled("-", Style::default().fg(SLATE_500))
-            },
-        ]),
-        Line::from(vec![
-            Span::styled("Tx Now:  ", Style::default().fg(SLATE_500)),
-            if let Some(rt) = sync.tx_rate_realtime {
+            Span::styled("Tx  N/E: ", Style::default().fg(SLATE_500)),
+            if let (Some(rt), Some(ema)) = (sync.tx_rate_realtime, sync.tx_rate_ema) {
                 Span::styled(
-                    format!("{rt:.0} tx/s"),
+                    format!("{rt:.0}/{ema:.0}"),
                     Style::default()
                         .fg(TERMINAL_GREEN)
                         .add_modifier(Modifier::BOLD),
@@ -1303,29 +1546,34 @@ fn draw_sync_progress(f: &mut Frame, app: &App, area: Rect) {
             } else {
                 Span::styled("-", Style::default().fg(SLATE_500))
             },
+            Span::styled(" tx/s", Style::default().fg(SLATE_500)),
         ]),
         Line::from(vec![
-            Span::styled("Tx EMA:  ", Style::default().fg(SLATE_500)),
-            if let Some(ema) = sync.tx_rate_ema {
-                Span::raw(format!("{ema:.0} tx/s"))
-            } else {
-                Span::styled("-", Style::default().fg(SLATE_500))
-            },
+            Span::styled("Lane: ", Style::default().fg(SLATE_500)),
+            Span::styled(lane_status, Style::default().fg(CYAN)),
         ]),
     ];
     f.render_widget(Paragraph::new(mid), cols[1]);
 
-    let right = sync_timing_lines(
+    let mut right = sync_timing_lines(
         sync.eta.as_deref(),
         sync.elapsed_time.as_deref(),
         sync.startup_phase.as_deref(),
     );
+    right.push(Line::from(vec![
+        Span::styled("Source: ", Style::default().fg(SLATE_500)),
+        Span::styled(source_text.to_string(), Style::default().fg(CYAN)),
+    ]));
+    right.push(pipeline_reset_line(
+        sync.pipeline_reset_epoch,
+        sync.pipeline_reset_reason.as_deref(),
+    ));
     f.render_widget(Paragraph::new(right), cols[2]);
 }
 
 fn draw_sync_charts(f: &mut Frame, app: &App, area: Rect) {
     if stack_sync_charts(area) {
-        let specs = sync_chart_specs(true);
+        let specs = sync_chart_specs(true, false);
         let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
@@ -1345,36 +1593,50 @@ fn draw_sync_charts(f: &mut Frame, app: &App, area: Rect) {
             sync_chart_data(app, specs[1].kind),
         );
     } else {
-        let specs = sync_chart_specs(false);
-        let cols = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(34),
-                Constraint::Percentage(33),
-                Constraint::Percentage(33),
-            ])
-            .split(area);
-        draw_chart_panel(
-            f,
-            cols[0],
-            specs[0].title,
-            specs[0].unit,
-            sync_chart_data(app, specs[0].kind),
-        );
-        draw_chart_panel(
-            f,
-            cols[1],
-            specs[1].title,
-            specs[1].unit,
-            sync_chart_data(app, specs[1].kind),
-        );
-        draw_chart_panel(
-            f,
-            cols[2],
-            specs[2].title,
-            specs[2].unit,
-            sync_chart_data(app, specs[2].kind),
-        );
+        let include_lane = area.width >= 160
+            && app
+                .sync_status
+                .as_ref()
+                .is_some_and(|s| s.heavy_lane_enabled);
+        let specs = sync_chart_specs(false, include_lane);
+        if include_lane {
+            let cols = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(25),
+                    Constraint::Percentage(25),
+                    Constraint::Percentage(25),
+                    Constraint::Percentage(25),
+                ])
+                .split(area);
+            for (idx, spec) in specs.iter().enumerate() {
+                draw_chart_panel(
+                    f,
+                    cols[idx],
+                    spec.title,
+                    spec.unit,
+                    sync_chart_data(app, spec.kind),
+                );
+            }
+        } else {
+            let cols = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(34),
+                    Constraint::Percentage(33),
+                    Constraint::Percentage(33),
+                ])
+                .split(area);
+            for (idx, spec) in specs.iter().enumerate() {
+                draw_chart_panel(
+                    f,
+                    cols[idx],
+                    spec.title,
+                    spec.unit,
+                    sync_chart_data(app, spec.kind),
+                );
+            }
+        }
     }
 }
 
@@ -1382,6 +1644,7 @@ fn draw_sync_charts(f: &mut Frame, app: &App, area: Rect) {
 enum SyncChartKind {
     BlockRate,
     TxRate,
+    LaneLag,
     WriteLatency,
 }
 
@@ -1423,9 +1686,34 @@ const WIDE_SYNC_CHART_SPECS: [SyncChartSpec; 3] = [
     },
 ];
 
-fn sync_chart_specs(stacked: bool) -> &'static [SyncChartSpec] {
+const ULTRA_WIDE_SYNC_CHART_SPECS: [SyncChartSpec; 4] = [
+    SyncChartSpec {
+        title: "Sync Rate (blk/s)",
+        unit: "blk/s",
+        kind: SyncChartKind::BlockRate,
+    },
+    SyncChartSpec {
+        title: "Sync Tx Rate (tx/s)",
+        unit: "tx/s",
+        kind: SyncChartKind::TxRate,
+    },
+    SyncChartSpec {
+        title: "Lane Lag (blk)",
+        unit: "blk",
+        kind: SyncChartKind::LaneLag,
+    },
+    SyncChartSpec {
+        title: "Write Latency (ms)",
+        unit: "ms",
+        kind: SyncChartKind::WriteLatency,
+    },
+];
+
+fn sync_chart_specs(stacked: bool, include_lane: bool) -> &'static [SyncChartSpec] {
     if stacked {
         &STACKED_SYNC_CHART_SPECS
+    } else if include_lane {
+        &ULTRA_WIDE_SYNC_CHART_SPECS
     } else {
         &WIDE_SYNC_CHART_SPECS
     }
@@ -1435,6 +1723,7 @@ fn sync_chart_data(app: &App, kind: SyncChartKind) -> &VecDeque<f64> {
     match kind {
         SyncChartKind::BlockRate => &app.rate_history,
         SyncChartKind::TxRate => &app.tx_rate_history,
+        SyncChartKind::LaneLag => &app.lane_lag_history,
         SyncChartKind::WriteLatency => &app.db_write_history,
     }
 }
@@ -1570,6 +1859,7 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
         rate_jitter_value.unwrap_or(0.0),
     );
     let dense_panel = diagnostics_dense_panel(app.diagnostics_view_mode, inner.width, inner.height);
+    let lane_line = lane_density_line(sync);
 
     let (left, right) = if let Some(pipeline) = sync.pipeline.as_ref() {
         let (state, state_color) = pipeline_flow_state(
@@ -1661,6 +1951,7 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
                             Style::default().fg(delta_color(bottleneck_delta)),
                         ),
                     ]),
+                    lane_line.clone(),
                     adaptive_control_line(AdaptiveControlSnapshot {
                         last_batch_blocks: sync.last_batch_blocks,
                         adaptive_inflight_batches,
@@ -1682,6 +1973,7 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
                     stage_trend_line("F", TERMINAL_DIM, &app.fetch_stage_history, spark_width),
                     stage_trend_line("P", AMBER, &app.parse_stage_history, spark_width),
                     stage_trend_line("W", TERMINAL_GREEN, &app.write_stage_history, spark_width),
+                    lag_trend_line(&app.lane_lag_history, spark_width),
                     Line::from(vec![
                         Span::styled("Stability ", Style::default().fg(SLATE_500)),
                         Span::styled(stability, Style::default().fg(stability_color)),
@@ -1765,6 +2057,7 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
                             }),
                         ),
                     ]),
+                    lane_line.clone(),
                     adaptive_control_line(AdaptiveControlSnapshot {
                         last_batch_blocks: sync.last_batch_blocks,
                         adaptive_inflight_batches,
@@ -1786,6 +2079,7 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
                     stage_trend_line("F", TERMINAL_DIM, &app.fetch_stage_history, spark_width),
                     stage_trend_line("P", AMBER, &app.parse_stage_history, spark_width),
                     stage_trend_line("W", TERMINAL_GREEN, &app.write_stage_history, spark_width),
+                    lag_trend_line(&app.lane_lag_history, spark_width),
                     Line::from(vec![
                         Span::styled("Stability ", Style::default().fg(SLATE_500)),
                         Span::styled(stability, Style::default().fg(stability_color)),
@@ -1832,6 +2126,7 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
                         Style::default().fg(FOREGROUND),
                     ),
                 ]),
+                lane_line,
                 adaptive_control_line(AdaptiveControlSnapshot {
                     last_batch_blocks: sync.last_batch_blocks,
                     adaptive_inflight_batches: None,
@@ -1885,6 +2180,62 @@ fn io_fetch_write_jitter_line(
     ])
 }
 
+fn lane_density_line(sync: &SyncStatusRow) -> Line<'static> {
+    let state = lane_lag_state(
+        sync.heavy_lane_enabled,
+        sync.heavy_lane_lag_blocks,
+        sync.heavy_lane_max_lag_blocks,
+        sync.heavy_lane_backpressure,
+    );
+    let (state_label, state_color) = lane_lag_state_badge(state);
+    if !sync.heavy_lane_enabled {
+        return Line::from(vec![
+            Span::styled("Lane ", Style::default().fg(SLATE_500)),
+            Span::styled("off", Style::default().fg(SLATE_500)),
+        ]);
+    }
+    let core_tip = sync
+        .core_lane_tip
+        .map(format_num)
+        .unwrap_or_else(|| "-".to_string());
+    let heavy_tip = sync
+        .heavy_lane_tip
+        .map(format_num)
+        .unwrap_or_else(|| "-".to_string());
+    let lag_secs = sync
+        .heavy_lane_lag_secs
+        .map(|v| format!("{v}s"))
+        .unwrap_or_else(|| "-".to_string());
+    let max_lag_secs = sync
+        .heavy_lane_max_lag_seconds
+        .map(|v| format!("{v}s"))
+        .unwrap_or_else(|| "-".to_string());
+    let lag_text = lane_status_text(
+        sync.heavy_lane_enabled,
+        sync.heavy_lane_lag_blocks,
+        sync.heavy_lane_max_lag_blocks,
+        sync.heavy_lane_backpressure,
+    );
+    Line::from(vec![
+        Span::styled("Lane ", Style::default().fg(SLATE_500)),
+        Span::styled(
+            format!("{core_tip}/{heavy_tip}"),
+            Style::default().fg(state_color),
+        ),
+        Span::styled("  lag ", Style::default().fg(SLATE_500)),
+        Span::styled(lag_text, Style::default().fg(state_color)),
+        Span::styled("  age ", Style::default().fg(SLATE_500)),
+        Span::styled(lag_secs, Style::default().fg(FOREGROUND)),
+        Span::styled("  max-age ", Style::default().fg(SLATE_500)),
+        Span::styled(max_lag_secs, Style::default().fg(TERMINAL_DIM)),
+        Span::styled("  ", Style::default().fg(SLATE_700)),
+        Span::styled(
+            state_label,
+            Style::default().fg(Color::Black).bg(state_color),
+        ),
+    ])
+}
+
 fn format_rate_pair(now: Option<f64>, ema: Option<f64>, unit: &str) -> String {
     let now_text = now
         .map(|v| format!("{v:.0}"))
@@ -1893,6 +2244,67 @@ fn format_rate_pair(now: Option<f64>, ema: Option<f64>, unit: &str) -> String {
         .map(|v| format!("{v:.0}"))
         .unwrap_or_else(|| "-".to_string());
     format!("{now_text}/{ema_text} {unit}")
+}
+
+fn lane_status_text(
+    heavy_lane_enabled: bool,
+    lag_blocks: Option<i64>,
+    max_lag_blocks: Option<i64>,
+    backpressure: Option<bool>,
+) -> String {
+    if !heavy_lane_enabled {
+        return "off".to_string();
+    }
+    let lag = lag_blocks
+        .map(format_num)
+        .unwrap_or_else(|| "-".to_string());
+    let max_lag = max_lag_blocks
+        .map(format_num)
+        .unwrap_or_else(|| "-".to_string());
+    let state = if backpressure.unwrap_or(false) {
+        "BP"
+    } else {
+        "FLOW"
+    };
+    format!("{lag}/{max_lag} {state}")
+}
+
+fn lane_lag_state(
+    heavy_lane_enabled: bool,
+    lag_blocks: Option<i64>,
+    max_lag_blocks: Option<i64>,
+    backpressure: Option<bool>,
+) -> LaneLagState {
+    if !heavy_lane_enabled {
+        return LaneLagState::Off;
+    }
+    if backpressure.unwrap_or(false) {
+        return LaneLagState::Hot;
+    }
+    let lag = lag_blocks.unwrap_or(0).max(0) as i128;
+    if lag == 0 {
+        return LaneLagState::Ok;
+    }
+    let max_lag = max_lag_blocks.unwrap_or(0).max(0) as i128;
+    if max_lag == 0 {
+        return LaneLagState::Warn;
+    }
+    if lag >= max_lag {
+        LaneLagState::Hot
+    } else if lag * 100 >= max_lag * 80 {
+        LaneLagState::Warn
+    } else {
+        LaneLagState::Ok
+    }
+}
+
+fn lane_lag_state_badge(state: LaneLagState) -> (&'static str, Color) {
+    match state {
+        LaneLagState::Off => ("LAG OFF", SLATE_500),
+        LaneLagState::Ok => ("LAG OK", CYAN),
+        LaneLagState::Warn => ("LAG WARN", AMBER),
+        LaneLagState::Hot => ("LAG HOT", ERROR_RED),
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -2012,16 +2424,25 @@ fn dense_right_lines(
     fetch_line: Line<'static>,
     parse_line: Line<'static>,
     write_line: Line<'static>,
+    lag_line: Line<'static>,
     stability_line: Line<'static>,
     io_line: Line<'static>,
 ) -> Vec<Line<'static>> {
-    vec![stability_line, fetch_line, parse_line, write_line, io_line]
+    vec![
+        stability_line,
+        fetch_line,
+        parse_line,
+        write_line,
+        lag_line,
+        io_line,
+    ]
 }
 
 fn detail_right_lines(
     fetch_line: Line<'static>,
     parse_line: Line<'static>,
     write_line: Line<'static>,
+    lag_line: Line<'static>,
     stability_line: Line<'static>,
     rate_line: Line<'static>,
     io_line: Line<'static>,
@@ -2031,6 +2452,7 @@ fn detail_right_lines(
         fetch_line,
         parse_line,
         write_line,
+        lag_line,
         rate_line,
         io_line,
     ]
@@ -2080,11 +2502,99 @@ fn sync_timing_lines(
     lines
 }
 
+fn draw_sync_alert_strip(f: &mut Frame, app: &App, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(SLATE_800))
+        .title(Span::styled("Alert Strip", Style::default().fg(FOREGROUND)));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if inner.height == 0 {
+        return;
+    }
+
+    let counters = sync_warning_counters(&app.sync_event_entries);
+    let latest_warn = app
+        .sync_event_entries
+        .iter()
+        .rev()
+        .find(|entry| entry.level == LogLevel::Warning)
+        .map(|entry| trim_for_panel(&entry.message, inner.width as usize))
+        .unwrap_or_else(|| "none".to_string());
+
+    let lane_state = app
+        .sync_status
+        .as_ref()
+        .map(|sync| {
+            lane_lag_state(
+                sync.heavy_lane_enabled,
+                sync.heavy_lane_lag_blocks,
+                sync.heavy_lane_max_lag_blocks,
+                sync.heavy_lane_backpressure,
+            )
+        })
+        .unwrap_or(LaneLagState::Off);
+    let (lane_label, lane_color) = lane_lag_state_badge(lane_state);
+
+    let lines = vec![
+        Line::from(vec![
+            Span::styled("Lane ", Style::default().fg(SLATE_500)),
+            Span::styled(
+                lane_label.to_string(),
+                Style::default().fg(Color::Black).bg(lane_color),
+            ),
+            Span::styled("  ", Style::default().fg(SLATE_700)),
+            Span::styled("BP ", Style::default().fg(SLATE_500)),
+            Span::styled(
+                counters.backpressure.to_string(),
+                Style::default().fg(AMBER),
+            ),
+            Span::styled("  reset ", Style::default().fg(SLATE_500)),
+            Span::styled(counters.reset.to_string(), Style::default().fg(AMBER)),
+            Span::styled("  stall ", Style::default().fg(SLATE_500)),
+            Span::styled(counters.stall.to_string(), Style::default().fg(AMBER)),
+            Span::styled("  stale ", Style::default().fg(SLATE_500)),
+            Span::styled(counters.stale.to_string(), Style::default().fg(AMBER)),
+            Span::styled("  other ", Style::default().fg(SLATE_500)),
+            Span::styled(counters.other.to_string(), Style::default().fg(FOREGROUND)),
+        ]),
+        Line::from(vec![
+            Span::styled("Latest WARN ", Style::default().fg(SLATE_500)),
+            Span::styled(latest_warn, Style::default().fg(AMBER)),
+        ]),
+    ];
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
 fn draw_sync_events(f: &mut Frame, app: &App, area: Rect) {
+    let filtered_entries = filtered_sync_event_entries(app);
+    let (info_count, ok_count, warn_count) = sync_event_level_counts_slice(&filtered_entries);
+    let filter_label = sync_event_filter_label(app.sync_event_filter);
+    let keyword_label = sync_event_keyword_filter_label(app.sync_event_keyword_filter);
     let title = if app.sync_event_scroll > 0 {
-        format!("Sync Events [j/k g/G] (scroll +{})", app.sync_event_scroll)
+        format!(
+            "Sync Events [{}|{}][j/k g/G] I:{} OK:{} W:{} ({}/{}) (scroll +{})",
+            filter_label,
+            keyword_label,
+            info_count,
+            ok_count,
+            warn_count,
+            filtered_entries.len(),
+            app.sync_event_entries.len(),
+            app.sync_event_scroll
+        )
     } else {
-        "Sync Events [j/k g/G]".to_string()
+        format!(
+            "Sync Events [{}|{}][j/k g/G] I:{} OK:{} W:{} ({}/{})",
+            filter_label,
+            keyword_label,
+            info_count,
+            ok_count,
+            warn_count,
+            filtered_entries.len(),
+            app.sync_event_entries.len()
+        )
     };
 
     let block = Block::default()
@@ -2098,19 +2608,18 @@ fn draw_sync_events(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    if app.sync_event_entries.is_empty() {
+    if filtered_entries.is_empty() {
         f.render_widget(Paragraph::new("No sync events"), inner);
         return;
     }
 
     let visible = inner.height as usize;
-    let total = app.sync_event_entries.len();
+    let total = filtered_entries.len();
     let base_start = total.saturating_sub(visible);
     let start = base_start.saturating_sub(app.sync_event_scroll);
     let end = (start + visible).min(total);
 
-    let lines: Vec<Line> = app
-        .sync_event_entries
+    let lines: Vec<Line> = filtered_entries
         .iter()
         .skip(start)
         .take(end.saturating_sub(start))
@@ -2132,6 +2641,88 @@ fn draw_sync_events(f: &mut Frame, app: &App, area: Rect) {
         .collect();
 
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+fn filtered_sync_event_entries(app: &App) -> Vec<&LogEntry> {
+    app.sync_event_entries
+        .iter()
+        .filter(|entry| {
+            sync_event_matches_filter(entry, app.sync_event_filter, app.sync_event_keyword_filter)
+        })
+        .collect()
+}
+
+fn sync_event_level_counts_slice(entries: &[&LogEntry]) -> (usize, usize, usize) {
+    let mut info = 0;
+    let mut ok = 0;
+    let mut warn = 0;
+    for entry in entries {
+        match entry.level {
+            LogLevel::Info => info += 1,
+            LogLevel::Success => ok += 1,
+            LogLevel::Warning => warn += 1,
+        }
+    }
+    (info, ok, warn)
+}
+
+fn sync_event_matches_filter(
+    entry: &LogEntry,
+    filter: SyncEventFilter,
+    keyword_filter: SyncEventKeywordFilter,
+) -> bool {
+    let level_match = match filter {
+        SyncEventFilter::All => true,
+        SyncEventFilter::WarnOnly => entry.level == LogLevel::Warning,
+    };
+    level_match && sync_event_message_matches_keyword(&entry.message, keyword_filter)
+}
+
+fn sync_event_message_matches_keyword(
+    message: &str,
+    keyword_filter: SyncEventKeywordFilter,
+) -> bool {
+    let m = message.to_ascii_lowercase();
+    match keyword_filter {
+        SyncEventKeywordFilter::Any => true,
+        SyncEventKeywordFilter::Backpressure => {
+            m.contains("backpressure") || m.contains("lag high")
+        }
+        SyncEventKeywordFilter::Reset => m.contains("reset"),
+        SyncEventKeywordFilter::Stall => m.contains("stall"),
+        SyncEventKeywordFilter::Stale => m.contains("stale"),
+    }
+}
+
+#[derive(Default)]
+struct WarningCounters {
+    backpressure: usize,
+    reset: usize,
+    stall: usize,
+    stale: usize,
+    other: usize,
+}
+
+fn sync_warning_counters(entries: &VecDeque<LogEntry>) -> WarningCounters {
+    let mut counters = WarningCounters::default();
+    for entry in entries
+        .iter()
+        .filter(|entry| entry.level == LogLevel::Warning)
+    {
+        let m = entry.message.to_ascii_lowercase();
+        if m.contains("backpressure") || m.contains("lag high") {
+            counters.backpressure += 1;
+        } else if m.contains("reset") {
+            counters.reset += 1;
+        } else if m.contains("stall") {
+            counters.stall += 1;
+        } else if m.contains("stale") {
+            counters.stale += 1;
+        } else {
+            counters.other += 1;
+        }
+    }
+    counters
 }
 
 fn draw_memory_stats(f: &mut Frame, app: &App, area: Rect) {
@@ -3021,6 +3612,12 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         Span::styled(" switch-tab  ", Style::default().fg(SLATE_500)),
         Span::styled("c", Style::default().fg(TERMINAL_GREEN)),
         Span::styled(" compact  ", Style::default().fg(SLATE_500)),
+        Span::styled("f", Style::default().fg(TERMINAL_GREEN)),
+        Span::styled(" focus  ", Style::default().fg(SLATE_500)),
+        Span::styled("e", Style::default().fg(TERMINAL_GREEN)),
+        Span::styled(" event-filter  ", Style::default().fg(SLATE_500)),
+        Span::styled("x", Style::default().fg(TERMINAL_GREEN)),
+        Span::styled(" keyword-match  ", Style::default().fg(SLATE_500)),
         Span::styled("v", Style::default().fg(TERMINAL_GREEN)),
         Span::styled(" diag-view  ", Style::default().fg(SLATE_500)),
         Span::styled("?", Style::default().fg(TERMINAL_GREEN)),
@@ -3063,6 +3660,23 @@ fn diagnostics_view_mode_label(mode: DiagnosticsViewMode) -> &'static str {
         DiagnosticsViewMode::Auto => "Auto",
         DiagnosticsViewMode::Compact => "Compact",
         DiagnosticsViewMode::Detail => "Detail",
+    }
+}
+
+fn sync_event_filter_label(filter: SyncEventFilter) -> &'static str {
+    match filter {
+        SyncEventFilter::All => "All",
+        SyncEventFilter::WarnOnly => "Warn",
+    }
+}
+
+fn sync_event_keyword_filter_label(filter: SyncEventKeywordFilter) -> &'static str {
+    match filter {
+        SyncEventKeywordFilter::Any => "Any",
+        SyncEventKeywordFilter::Backpressure => "Backpressure",
+        SyncEventKeywordFilter::Reset => "Reset",
+        SyncEventKeywordFilter::Stall => "Stall",
+        SyncEventKeywordFilter::Stale => "Stale",
     }
 }
 
@@ -3332,6 +3946,20 @@ fn stage_trend_line(
     ])
 }
 
+fn lag_trend_line(history: &VecDeque<f64>, spark_width: usize) -> Line<'static> {
+    let delta = trend_delta(history, 10);
+    Line::from(vec![
+        Span::styled("L", Style::default().fg(CYAN)),
+        Span::styled(" ", Style::default().fg(SLATE_700)),
+        Span::styled(sparkline(history, spark_width), Style::default().fg(CYAN)),
+        Span::styled(" ", Style::default().fg(SLATE_700)),
+        Span::styled(
+            format_delta(delta, "blk"),
+            Style::default().fg(delta_color(delta)),
+        ),
+    ])
+}
+
 fn pipeline_stability_label(history: &VecDeque<f64>) -> (&'static str, Color) {
     let jitter = rate_jitter(history, 30);
     let mean = history
@@ -3430,6 +4058,9 @@ fn draw_help_popup(f: &mut Frame) {
         Line::from("  Tab/s/l  Next tab"),
         Line::from("  h        Previous tab"),
         Line::from("  c        Toggle compact layout override"),
+        Line::from("  f        Toggle sync focus mode"),
+        Line::from("  e        Toggle sync event filter (All/WarnOnly)"),
+        Line::from("  x        Cycle sync event keyword match"),
         Line::from("  v        Cycle diagnostics view (Auto/Compact/Detail)"),
         Line::from("  R        Force refresh"),
         Line::from(""),
@@ -3534,16 +4165,20 @@ mod tests {
         diagnostics_dense_panel, eta_confidence_label, format_age_secs, format_hit_rate,
         format_num, format_num_commas, format_rate_pair, format_ratio, format_signed_num_i128,
         format_ttl, header_right_line, header_title_line, heartbeat_is_on,
-        io_fetch_write_jitter_line, is_rate_drop, overview_log_min_height,
-        overview_services_min_height, pipeline_bottleneck, pipeline_flow_state,
-        pipeline_reset_line, rate_jitter, redis_health_state, redis_key_line, redis_max_key_age,
-        runtime_health_state, runtime_live_delta, sparkline, stack_sync_charts,
-        startup_phase_label, storage_runtime_columns, sync_bottleneck, sync_chart_specs,
-        sync_timing_lines, trend_delta, trim_for_panel, AdaptiveControlSnapshot, Color,
-        CompactOverviewLayout, CompactSyncLayout, DiagnosticsViewMode, SyncBottleneck,
-        SyncChartKind, TERMINAL_DIM,
+        io_fetch_write_jitter_line, is_rate_drop, lane_lag_state, lane_lag_state_badge,
+        lane_status_text, overview_log_min_height, overview_services_min_height,
+        pipeline_bottleneck, pipeline_flow_state, pipeline_reset_line, rate_jitter,
+        redis_health_state, redis_key_line, redis_max_key_age, runtime_health_state,
+        runtime_live_delta, sparkline, stack_sync_charts, startup_phase_label,
+        storage_runtime_columns, sync_bottleneck, sync_chart_specs, sync_event_filter_label,
+        sync_event_keyword_filter_label, sync_event_level_counts_slice,
+        sync_event_message_matches_keyword, sync_timing_lines, sync_warning_counters, trend_delta,
+        trim_for_panel, AdaptiveControlSnapshot, Color, CompactOverviewLayout, CompactSyncLayout,
+        DiagnosticsViewMode, LaneLagState, LogEntry, LogLevel, SyncBottleneck, SyncChartKind,
+        SyncEventFilter, SyncEventKeywordFilter, TERMINAL_DIM,
     };
     use crate::db::{ApiServiceInfo, RedisServiceInfo, RuntimeDiagData};
+    use chrono::Local;
     use ckbadger_common::MemoryStatsData;
     use ratatui::layout::Rect;
     use ratatui::text::Line;
@@ -3797,6 +4432,153 @@ mod tests {
     }
 
     #[test]
+    fn test_lane_status_text() {
+        assert_eq!(lane_status_text(false, None, None, None), "off");
+        assert_eq!(
+            lane_status_text(true, Some(120), Some(20_000), Some(false)),
+            "120/20,000 FLOW"
+        );
+        assert_eq!(
+            lane_status_text(true, Some(25_000), Some(20_000), Some(true)),
+            "25,000/20,000 BP"
+        );
+    }
+
+    #[test]
+    fn test_lane_lag_state_and_badge() {
+        assert_eq!(lane_lag_state(false, None, None, None), LaneLagState::Off);
+        assert_eq!(
+            lane_lag_state(true, Some(0), Some(20_000), Some(false)),
+            LaneLagState::Ok
+        );
+        assert_eq!(
+            lane_lag_state(true, Some(16_500), Some(20_000), Some(false)),
+            LaneLagState::Warn
+        );
+        assert_eq!(
+            lane_lag_state(true, Some(20_000), Some(20_000), Some(false)),
+            LaneLagState::Hot
+        );
+        assert_eq!(
+            lane_lag_state(true, Some(500), Some(20_000), Some(true)),
+            LaneLagState::Hot
+        );
+        assert_eq!(lane_lag_state_badge(LaneLagState::Off).0, "LAG OFF");
+        assert_eq!(lane_lag_state_badge(LaneLagState::Warn).0, "LAG WARN");
+        assert_eq!(lane_lag_state_badge(LaneLagState::Hot).0, "LAG HOT");
+    }
+
+    #[test]
+    fn test_sync_event_filter_label() {
+        assert_eq!(sync_event_filter_label(SyncEventFilter::All), "All");
+        assert_eq!(sync_event_filter_label(SyncEventFilter::WarnOnly), "Warn");
+    }
+
+    #[test]
+    fn test_sync_event_keyword_filter_label() {
+        assert_eq!(
+            sync_event_keyword_filter_label(SyncEventKeywordFilter::Any),
+            "Any"
+        );
+        assert_eq!(
+            sync_event_keyword_filter_label(SyncEventKeywordFilter::Backpressure),
+            "Backpressure"
+        );
+        assert_eq!(
+            sync_event_keyword_filter_label(SyncEventKeywordFilter::Reset),
+            "Reset"
+        );
+    }
+
+    #[test]
+    fn test_sync_event_message_matches_keyword() {
+        assert!(sync_event_message_matches_keyword(
+            "Heavy lane lag high; pausing core lane for backpressure",
+            SyncEventKeywordFilter::Backpressure
+        ));
+        assert!(sync_event_message_matches_keyword(
+            "pipeline reset #9 (batch mismatch)",
+            SyncEventKeywordFilter::Reset
+        ));
+        assert!(sync_event_message_matches_keyword(
+            "sync progress stalled",
+            SyncEventKeywordFilter::Stall
+        ));
+        assert!(sync_event_message_matches_keyword(
+            "sync data is stale (45s)",
+            SyncEventKeywordFilter::Stale
+        ));
+        assert!(!sync_event_message_matches_keyword(
+            "bulk sync completed",
+            SyncEventKeywordFilter::Stale
+        ));
+    }
+
+    #[test]
+    fn test_sync_event_level_counts() {
+        let mut entries = VecDeque::new();
+        entries.push_back(LogEntry {
+            timestamp: Local::now(),
+            message: "a".to_string(),
+            level: LogLevel::Info,
+        });
+        entries.push_back(LogEntry {
+            timestamp: Local::now(),
+            message: "b".to_string(),
+            level: LogLevel::Warning,
+        });
+        entries.push_back(LogEntry {
+            timestamp: Local::now(),
+            message: "c".to_string(),
+            level: LogLevel::Success,
+        });
+        entries.push_back(LogEntry {
+            timestamp: Local::now(),
+            message: "d".to_string(),
+            level: LogLevel::Warning,
+        });
+        let refs: Vec<&LogEntry> = entries.iter().collect();
+        assert_eq!(sync_event_level_counts_slice(&refs), (1, 1, 2));
+    }
+
+    #[test]
+    fn test_sync_warning_counters() {
+        let mut entries = VecDeque::new();
+        entries.push_back(LogEntry {
+            timestamp: Local::now(),
+            message: "heavy lane lag high; pausing core lane for backpressure".to_string(),
+            level: LogLevel::Warning,
+        });
+        entries.push_back(LogEntry {
+            timestamp: Local::now(),
+            message: "pipeline reset #3 (pipeline batch mismatch)".to_string(),
+            level: LogLevel::Warning,
+        });
+        entries.push_back(LogEntry {
+            timestamp: Local::now(),
+            message: "sync progress stalled".to_string(),
+            level: LogLevel::Warning,
+        });
+        entries.push_back(LogEntry {
+            timestamp: Local::now(),
+            message: "sync data is stale (45s)".to_string(),
+            level: LogLevel::Warning,
+        });
+        entries.push_back(LogEntry {
+            timestamp: Local::now(),
+            message: "some other warning".to_string(),
+            level: LogLevel::Warning,
+        });
+
+        let counters = sync_warning_counters(&entries);
+        assert_eq!(counters.backpressure, 1);
+        assert_eq!(counters.reset, 1);
+        assert_eq!(counters.stall, 1);
+        assert_eq!(counters.stale, 1);
+        assert_eq!(counters.other, 1);
+    }
+
+    #[test]
     fn test_adaptive_control_line_format() {
         let line = adaptive_control_line(AdaptiveControlSnapshot {
             last_batch_blocks: Some(512),
@@ -3851,11 +4633,12 @@ mod tests {
             Line::from("F"),
             Line::from("P"),
             Line::from("W"),
+            Line::from("L"),
             Line::from("Stability"),
             Line::from("I/O"),
         );
         let labels: Vec<String> = lines.iter().map(line_text).collect();
-        assert_eq!(labels, vec!["Stability", "F", "P", "W", "I/O"]);
+        assert_eq!(labels, vec!["Stability", "F", "P", "W", "L", "I/O"]);
     }
 
     #[test]
@@ -3864,12 +4647,13 @@ mod tests {
             Line::from("F"),
             Line::from("P"),
             Line::from("W"),
+            Line::from("L"),
             Line::from("Stability"),
             Line::from("Rate"),
             Line::from("I/O"),
         );
         let labels: Vec<String> = lines.iter().map(line_text).collect();
-        assert_eq!(labels, vec!["Stability", "F", "P", "W", "Rate", "I/O"]);
+        assert_eq!(labels, vec!["Stability", "F", "P", "W", "L", "Rate", "I/O"]);
     }
 
     #[test]
@@ -3904,16 +4688,21 @@ mod tests {
 
     #[test]
     fn test_sync_chart_specs_include_tx_rate() {
-        let stacked = sync_chart_specs(true);
+        let stacked = sync_chart_specs(true, false);
         assert_eq!(stacked.len(), 2);
         assert_eq!(stacked[0].kind, SyncChartKind::BlockRate);
         assert_eq!(stacked[1].kind, SyncChartKind::TxRate);
 
-        let wide = sync_chart_specs(false);
+        let wide = sync_chart_specs(false, false);
         assert_eq!(wide.len(), 3);
         assert_eq!(wide[0].kind, SyncChartKind::BlockRate);
         assert_eq!(wide[1].kind, SyncChartKind::TxRate);
         assert_eq!(wide[2].kind, SyncChartKind::WriteLatency);
+
+        let ultra = sync_chart_specs(false, true);
+        assert_eq!(ultra.len(), 4);
+        assert_eq!(ultra[2].kind, SyncChartKind::LaneLag);
+        assert_eq!(ultra[3].kind, SyncChartKind::WriteLatency);
     }
 
     #[test]

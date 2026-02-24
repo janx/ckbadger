@@ -239,6 +239,30 @@ pub struct SyncProgressData {
     /// Unix timestamp when adaptive controller last adjusted.
     #[serde(default)]
     pub adaptive_last_adjusted_at: Option<i64>,
+    /// Whether heavy lane backpressure controls are active in this run.
+    #[serde(default)]
+    pub heavy_lane_enabled: bool,
+    /// Core lane committed tip block number.
+    #[serde(default)]
+    pub core_lane_tip: Option<u64>,
+    /// Heavy lane committed tip block number.
+    #[serde(default)]
+    pub heavy_lane_tip: Option<u64>,
+    /// Core-heavy lag in blocks.
+    #[serde(default)]
+    pub heavy_lane_lag_blocks: Option<u64>,
+    /// Seconds since heavy lane tip last advanced while lagging.
+    #[serde(default)]
+    pub heavy_lane_lag_secs: Option<u64>,
+    /// Heavy lane backpressure state: true when core lane should pause.
+    #[serde(default)]
+    pub heavy_lane_backpressure: Option<bool>,
+    /// Configured maximum lag threshold (blocks) before backpressure.
+    #[serde(default)]
+    pub heavy_lane_max_lag_blocks: Option<u64>,
+    /// Configured lag warning interval (seconds).
+    #[serde(default)]
+    pub heavy_lane_max_lag_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -605,6 +629,14 @@ mod tests {
             adaptive_adjustment_seq: Some(42),
             adaptive_backoff_streak: Some(3),
             adaptive_last_adjusted_at: Some(1_700_000_123),
+            heavy_lane_enabled: true,
+            core_lane_tip: Some(1_500),
+            heavy_lane_tip: Some(1_440),
+            heavy_lane_lag_blocks: Some(60),
+            heavy_lane_lag_secs: Some(12),
+            heavy_lane_backpressure: Some(true),
+            heavy_lane_max_lag_blocks: Some(50),
+            heavy_lane_max_lag_seconds: Some(120),
         };
 
         let json = serde_json::to_string(&progress).unwrap();
@@ -637,6 +669,14 @@ mod tests {
         assert_eq!(parsed.adaptive_adjustment_seq, Some(42));
         assert_eq!(parsed.adaptive_backoff_streak, Some(3));
         assert_eq!(parsed.adaptive_last_adjusted_at, Some(1_700_000_123));
+        assert!(parsed.heavy_lane_enabled);
+        assert_eq!(parsed.core_lane_tip, Some(1_500));
+        assert_eq!(parsed.heavy_lane_tip, Some(1_440));
+        assert_eq!(parsed.heavy_lane_lag_blocks, Some(60));
+        assert_eq!(parsed.heavy_lane_lag_secs, Some(12));
+        assert_eq!(parsed.heavy_lane_backpressure, Some(true));
+        assert_eq!(parsed.heavy_lane_max_lag_blocks, Some(50));
+        assert_eq!(parsed.heavy_lane_max_lag_seconds, Some(120));
     }
 
     #[test]
@@ -668,6 +708,14 @@ mod tests {
             adaptive_adjustment_seq: Some(1),
             adaptive_backoff_streak: Some(0),
             adaptive_last_adjusted_at: Some(1),
+            heavy_lane_enabled: true,
+            core_lane_tip: Some(1000),
+            heavy_lane_tip: Some(990),
+            heavy_lane_lag_blocks: Some(10),
+            heavy_lane_lag_secs: Some(5),
+            heavy_lane_backpressure: Some(false),
+            heavy_lane_max_lag_blocks: Some(20_000),
+            heavy_lane_max_lag_seconds: Some(120),
         })
         .unwrap();
         if let Some(obj) = value.as_object_mut() {
@@ -684,6 +732,14 @@ mod tests {
             obj.remove("adaptiveAdjustmentSeq");
             obj.remove("adaptiveBackoffStreak");
             obj.remove("adaptiveLastAdjustedAt");
+            obj.remove("heavyLaneEnabled");
+            obj.remove("coreLaneTip");
+            obj.remove("heavyLaneTip");
+            obj.remove("heavyLaneLagBlocks");
+            obj.remove("heavyLaneLagSecs");
+            obj.remove("heavyLaneBackpressure");
+            obj.remove("heavyLaneMaxLagBlocks");
+            obj.remove("heavyLaneMaxLagSeconds");
         }
 
         let parsed: SyncProgressData = serde_json::from_value(value).unwrap();
@@ -700,5 +756,13 @@ mod tests {
         assert_eq!(parsed.adaptive_adjustment_seq, None);
         assert_eq!(parsed.adaptive_backoff_streak, None);
         assert_eq!(parsed.adaptive_last_adjusted_at, None);
+        assert!(!parsed.heavy_lane_enabled);
+        assert_eq!(parsed.core_lane_tip, None);
+        assert_eq!(parsed.heavy_lane_tip, None);
+        assert_eq!(parsed.heavy_lane_lag_blocks, None);
+        assert_eq!(parsed.heavy_lane_lag_secs, None);
+        assert_eq!(parsed.heavy_lane_backpressure, None);
+        assert_eq!(parsed.heavy_lane_max_lag_blocks, None);
+        assert_eq!(parsed.heavy_lane_max_lag_seconds, None);
     }
 }

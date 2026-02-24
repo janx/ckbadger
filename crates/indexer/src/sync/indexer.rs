@@ -271,6 +271,13 @@ fn should_pause_core_lane_for_heavy_lag(
     core_tip.saturating_sub(heavy_tip) > max_lag_blocks
 }
 
+fn heavy_lane_lag_secs(now_ts: i64, heavy_tip_updated_at: i64, lag_blocks: u64) -> u64 {
+    if lag_blocks == 0 {
+        return 0;
+    }
+    u64::try_from(now_ts.saturating_sub(heavy_tip_updated_at)).unwrap_or(0)
+}
+
 #[derive(Debug, Serialize)]
 struct IncidentReport {
     incident_id: String,
@@ -2197,6 +2204,18 @@ pub struct AdaptiveBatchProgressSnapshot {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub struct LaneProgressSnapshot {
+    pub enabled: bool,
+    pub core_tip: u64,
+    pub heavy_tip: u64,
+    pub lag_blocks: u64,
+    pub lag_secs: u64,
+    pub backpressure: bool,
+    pub max_lag_blocks: u64,
+    pub max_lag_seconds: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
 struct AdaptiveBatchInput {
     write_ms: f64,
     batch_tx_count: usize,
@@ -3305,6 +3324,26 @@ impl Indexer {
 
     pub fn startup_phase(&self) -> Option<String> {
         decode_startup_phase(self.startup_phase.load(Ordering::SeqCst)).map(str::to_string)
+    }
+
+    pub fn lane_progress_snapshot(&self) -> LaneProgressSnapshot {
+        let core_tip = self.core_tip.load(Ordering::SeqCst);
+        let heavy_tip = self.heavy_tip.load(Ordering::SeqCst);
+        let lag_blocks = core_tip.saturating_sub(heavy_tip);
+        let now_ts = chrono::Utc::now().timestamp();
+        let heavy_tip_updated_at = self.heavy_tip_updated_at.load(Ordering::SeqCst);
+        let lag_secs = heavy_lane_lag_secs(now_ts, heavy_tip_updated_at, lag_blocks);
+        let max_lag_blocks = self.config.heavy_lane_max_lag_blocks;
+        LaneProgressSnapshot {
+            enabled: self.config.pipeline_enabled,
+            core_tip,
+            heavy_tip,
+            lag_blocks,
+            lag_secs,
+            backpressure: should_pause_core_lane_for_heavy_lag(core_tip, heavy_tip, max_lag_blocks),
+            max_lag_blocks,
+            max_lag_seconds: self.config.heavy_lane_max_lag_seconds,
+        }
     }
 
     pub fn get_memory_stats(&self) -> ckbadger_common::MemoryStatsData {
@@ -11092,6 +11131,13 @@ mod tests {
         assert!(!should_pause_core_lane_for_heavy_lag(10_000, 9_500, 500));
         assert!(!should_pause_core_lane_for_heavy_lag(10_000, 9_501, 500));
         assert!(should_pause_core_lane_for_heavy_lag(10_000, 9_499, 500));
+    }
+
+    #[test]
+    fn test_heavy_lane_lag_secs() {
+        assert_eq!(heavy_lane_lag_secs(200, 150, 0), 0);
+        assert_eq!(heavy_lane_lag_secs(200, 150, 50), 50);
+        assert_eq!(heavy_lane_lag_secs(150, 200, 50), 0);
     }
 
     #[test]
