@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
@@ -243,6 +243,22 @@ fn queue_fill_percentage(depth: Option<u64>, capacity: Option<u64>) -> Option<f6
         (Some(d), Some(c)) if c > 0 => Some((d as f64 / c as f64) * 100.0),
         _ => None,
     }
+}
+
+fn should_trim_cell_cache(cache_len: usize) -> bool {
+    cache_len > CELL_CACHE_CAPACITY * 2
+}
+
+fn evict_committed_cell_cache_entries(
+    cell_cache: &DashMap<([u8; 32], i32), CachedCellInfo>,
+    committed_tip: i64,
+) -> usize {
+    if committed_tip < 0 {
+        return 0;
+    }
+    let before = cell_cache.len();
+    cell_cache.retain(|_, v| v.created_at_block > committed_tip);
+    before.saturating_sub(cell_cache.len())
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2280,6 +2296,7 @@ impl Indexer {
 
         let (fetch_tx, mut fetch_rx) = mpsc::channel::<FetchedBatch>(self.config.pipeline_buffer);
         let (parse_tx, mut parse_rx) = mpsc::channel::<ParsedBatch>(self.config.pipeline_buffer);
+        let committed_tip_for_cache = Arc::new(AtomicI64::new(self.repo.get_sync_tip().await?.0));
         self.pipeline_perf
             .set_queue_capacities(self.config.pipeline_buffer, self.config.pipeline_buffer);
 
@@ -2489,6 +2506,7 @@ impl Indexer {
         // === Parser task ===
         let writer_for_parser = self.writer.clone();
         let cell_cache_for_parser = Arc::clone(&self.cell_cache);
+        let committed_tip_for_cache_for_parser = Arc::clone(&committed_tip_for_cache);
         let pipeline_perf_for_parser = Arc::clone(&self.pipeline_perf);
         let pipeline_epoch_for_parser = Arc::clone(&self.pipeline_reset_epoch);
 
@@ -3128,11 +3146,17 @@ impl Indexer {
                         entry.6 += occupied_change;
                     }
                 }
-                // NOTE: Do NOT clear cell_cache here. In pipeline mode, the
-                // parser runs ahead of the writer. Clearing would wipe entries
-                // from recently-parsed batches not yet committed to DB, causing
-                // the next batch's input lookups to silently miss — leading to
-                // wrong balance decrements. The writer handles safe eviction.
+                // NOTE: Do NOT clear cell_cache here. In pipeline mode, parser
+                // runs ahead of writer. We only evict entries guaranteed to be
+                // committed in DB according to writer-reported committed tip.
+                let committed_tip = committed_tip_for_cache_for_parser.load(Ordering::SeqCst);
+                let mut cache_evicted = 0usize;
+                if should_trim_cell_cache(cell_cache_for_parser.len()) {
+                    cache_evicted = evict_committed_cell_cache_entries(
+                        cell_cache_for_parser.as_ref(),
+                        committed_tip,
+                    );
+                }
 
                 let precompute_parser_ms = t_precompute_parser.elapsed().as_secs_f64() * 1000.0;
                 let total_parser_ms = t_parser.elapsed().as_secs_f64() * 1000.0;
@@ -3166,6 +3190,8 @@ impl Indexer {
                     cache_hits,
                     cache_misses,
                     cache_hit_pct = format!("{:.0}", hit_rate),
+                    committed_tip,
+                    cache_evicted,
                     cache_size = cell_cache_for_parser.len(),
                     queue_depth,
                     "Parser batch {}-{}",
@@ -3213,6 +3239,7 @@ impl Indexer {
         });
 
         // === Writer loop ===
+        let committed_tip_for_cache_for_writer = Arc::clone(&committed_tip_for_cache);
         let mut consecutive_idle_timeouts: u64 = 0;
         loop {
             if self.repo.has_unresolved_deep_fork().unwrap_or(false) {
@@ -3272,6 +3299,7 @@ impl Indexer {
                         continue;
                     }
                     let (db_tip, db_tip_hash) = self.repo.get_sync_tip().await?;
+                    committed_tip_for_cache_for_writer.store(db_tip, Ordering::SeqCst);
                     let expected_start = if db_tip == 0 && db_tip_hash.is_none() {
                         0
                     } else {
@@ -3478,6 +3506,8 @@ impl Indexer {
                     }
 
                     if let Some(last_block) = all_parsed_blocks.last() {
+                        committed_tip_for_cache_for_writer
+                            .store(last_block.number, Ordering::SeqCst);
                         self.progress
                             .record_batch(last_block.number as u64, all_parsed_blocks.len() as u64);
 
@@ -9191,6 +9221,23 @@ mod tests {
         }
     }
 
+    fn dummy_cached_cell_info(created_at_block: i64) -> CachedCellInfo {
+        CachedCellInfo {
+            capacity: 1,
+            created_at_block,
+            lock_script_hash: vec![1u8; 32],
+            lock_code_hash: vec![2u8; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 1,
+            udt_amount: None,
+        }
+    }
+
     fn molecule_u32(value: usize) -> [u8; 4] {
         (value as u32).to_le_bytes()
     }
@@ -9519,6 +9566,29 @@ mod tests {
         assert_eq!(queue_fill_percentage(Some(1), Some(0)), None);
         assert_eq!(queue_fill_percentage(None, Some(10)), None);
         assert_eq!(queue_fill_percentage(Some(1), None), None);
+    }
+
+    #[test]
+    fn test_should_trim_cell_cache_threshold() {
+        assert!(!should_trim_cell_cache(CELL_CACHE_CAPACITY * 2));
+        assert!(should_trim_cell_cache(CELL_CACHE_CAPACITY * 2 + 1));
+    }
+
+    #[test]
+    fn test_evict_committed_cell_cache_entries_only_removes_committed() {
+        let cache = dashmap::DashMap::new();
+        cache.insert(([0x11; 32], 0), dummy_cached_cell_info(100));
+        cache.insert(([0x22; 32], 1), dummy_cached_cell_info(101));
+        cache.insert(([0x33; 32], 2), dummy_cached_cell_info(102));
+
+        let evicted = evict_committed_cell_cache_entries(&cache, 101);
+        assert_eq!(evicted, 2);
+        assert_eq!(cache.len(), 1);
+        assert!(cache.contains_key(&([0x33; 32], 2)));
+
+        let evicted_noop = evict_committed_cell_cache_entries(&cache, -1);
+        assert_eq!(evicted_noop, 0);
+        assert_eq!(cache.len(), 1);
     }
 
     #[test]
