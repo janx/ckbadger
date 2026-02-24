@@ -157,11 +157,14 @@ export function HexDisplay({
     accent: 'text-terminal-dark',
   };
 
+  const allowWrap = !truncate;
+
   if (copied) {
     return (
       <span
         className={cn(
           'inline-flex items-center gap-1',
+          allowWrap && 'max-w-full flex-wrap break-all',
           mono && 'font-mono',
           sizeClasses[size],
           className
@@ -176,6 +179,7 @@ export function HexDisplay({
     <span
       className={cn(
         'inline-flex items-center',
+        allowWrap && 'max-w-full flex-wrap break-all',
         mono && 'font-mono',
         sizeClasses[size],
         copyable && 'cursor-pointer hover:opacity-90',

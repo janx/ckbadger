@@ -26,7 +26,11 @@ export function Address({
   return (
     <Link
       href={`/address/${address}`}
-      className={cn('text-terminal-green font-mono text-sm hover:underline', className)}
+      className={cn(
+        'text-terminal-green font-mono text-sm hover:underline',
+        !truncate && 'inline-block max-w-full break-all',
+        className
+      )}
       title={address}
     >
       {displayAddress}

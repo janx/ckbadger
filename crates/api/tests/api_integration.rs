@@ -2605,6 +2605,122 @@ async fn test_assets_rejects_legacy_dob_type_filter() {
 }
 
 #[tokio::test]
+async fn test_assets_list_supports_standard_filter_for_tokens_and_nfts() {
+    let store = test_store();
+    let token_xudt = [0x61u8; 32];
+    let token_sudt = [0x62u8; 32];
+    let spore_cluster_id = [0x71u8; 32];
+    let dotbit_collection_id = b"dotbit_collection_______________".to_vec();
+
+    for (type_hash, standard, symbol) in
+        [(token_xudt, "xudt", "XUDT"), (token_sudt, "sudt", "SUDT")]
+    {
+        store
+            .put_token_direct(
+                &type_hash,
+                &TokenInfo {
+                    type_code_hash: vec![0xAA; 32],
+                    hash_type: 1,
+                    type_args: vec![0x01; 20],
+                    standard: standard.to_string(),
+                    name: Some(format!("{symbol} Token")),
+                    symbol: Some(symbol.to_string()),
+                    decimals: Some(8),
+                    total_supply: Some(1000),
+                    max_supply: None,
+                    holders_count: 10,
+                    first_seen_block: 1,
+                    icon_url: None,
+                    description: None,
+                    transfers_count: 1,
+                },
+            )
+            .unwrap();
+        store
+            .put_token_daily_delta(
+                &type_hash,
+                20240115,
+                &TokenDailyDelta {
+                    live_capacity_delta: 100,
+                    live_occupied_capacity_delta: 50,
+                },
+            )
+            .unwrap();
+    }
+
+    store
+        .put_spore_direct(
+            &spore_cluster_id,
+            &DobEntry {
+                standard: DobStandard::SporeCluster,
+                collection_id: None,
+                owner_lock_hash: Some(vec![0x11; 32]),
+                name: Some("Spore Filter Cluster".to_string()),
+                description: None,
+                is_live: true,
+                created_at_block: 100,
+                created_at_tx: vec![0x22; 32],
+                extra: DobExtra::SporeCluster,
+            },
+        )
+        .unwrap();
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_cluster_aggregate(
+        &spore_cluster_id,
+        &ClusterAggregate {
+            name: Some("Spore Filter Cluster".to_string()),
+            description: None,
+            total_count: 1,
+            live_count: 1,
+            owner_count: 1,
+        },
+    );
+    batch.put_nft_collection_aggregate(
+        &dotbit_collection_id,
+        &NftCollectionAggregate {
+            name: Some(".bit".to_string()),
+            standard: NftStandard::DotBit,
+            total_count: 1,
+            live_count: 1,
+        },
+    );
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let token_request = Request::builder()
+        .uri("/api/v1/assets?type=token&standard=xudt")
+        .body(Body::empty())
+        .unwrap();
+    let token_response = app.clone().oneshot(token_request).await.unwrap();
+    assert_eq!(token_response.status(), StatusCode::OK);
+    let token_body = token_response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let token_json: serde_json::Value = serde_json::from_slice(&token_body).unwrap();
+    assert_eq!(token_json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(token_json["data"][0]["standard"], "xudt");
+    assert_eq!(token_json["data"][0]["assetType"], "token");
+
+    let nft_request = Request::builder()
+        .uri("/api/v1/assets?type=nft&standard=spore")
+        .body(Body::empty())
+        .unwrap();
+    let nft_response = app.oneshot(nft_request).await.unwrap();
+    assert_eq!(nft_response.status(), StatusCode::OK);
+    let nft_body = nft_response.into_body().collect().await.unwrap().to_bytes();
+    let nft_json: serde_json::Value = serde_json::from_slice(&nft_body).unwrap();
+    assert_eq!(nft_json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(nft_json["data"][0]["standard"], "spore");
+    assert_eq!(nft_json["data"][0]["assetType"], "nft");
+}
+
+#[tokio::test]
 async fn test_assets_list_defaults_to_capacity_sort_and_supports_cursor_pagination() {
     let store = test_store();
     let token_a = [0x11u8; 32];

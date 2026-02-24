@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '../utils/test-utils';
-import { TerminalDivider } from '@/components/ui/terminal-panel';
+import { TerminalDivider, TerminalPanelHeader } from '@/components/ui/terminal-panel';
 import { MiniStat, StatBlock } from '@/components/ui/stat-block';
 import { SparkChart } from '@/components/ui/spark-chart';
 import { PageHeader } from '@/components/ui/page-header';
@@ -57,5 +57,38 @@ describe('UI readability classes', () => {
     expect(helpIconWrapper).toHaveClass('text-slate-500');
     expect(copyIcon).toBeTruthy();
     expect(copyIcon).toHaveClass('text-slate-500');
+  });
+
+  it('uses responsive wrapping layout for page header actions', () => {
+    render(<PageHeader title="Cell" actions={<button type="button">Action</button>} />);
+    const actionButton = screen.getByRole('button', { name: 'Action' });
+    const actionsWrapper = actionButton.parentElement;
+    const topRow = actionsWrapper?.parentElement;
+
+    expect(actionsWrapper).toHaveClass('flex-wrap');
+    expect(topRow).toHaveClass('flex-wrap');
+  });
+
+  it('uses responsive wrapping layout for terminal panel header actions', () => {
+    render(
+      <TerminalPanelHeader actions={<button type="button">Filter</button>}>
+        Panel
+      </TerminalPanelHeader>
+    );
+
+    const actionButton = screen.getByRole('button', { name: 'Filter' });
+    const actionsWrapper = actionButton.parentElement;
+    const headerRow = actionsWrapper?.parentElement;
+
+    expect(actionsWrapper).toHaveClass('flex-wrap');
+    expect(headerRow).toHaveClass('flex-wrap');
+  });
+
+  it('uses responsive stacked layout for horizontal data fields', () => {
+    render(<DataField label="Hash">0x1234</DataField>);
+
+    const row = screen.getByText('Hash').closest('div')?.parentElement;
+    expect(row).toHaveClass('flex-col');
+    expect(row).toHaveClass('sm:flex-row');
   });
 });

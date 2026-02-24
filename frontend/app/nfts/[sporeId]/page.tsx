@@ -305,7 +305,7 @@ export default function SporeDetailPage() {
               <TerminalPanelHeader indicator="active">Collection Details</TerminalPanelHeader>
               <TerminalPanelContent>
                 <DataGrid columns={1}>
-                  <DataField label="Collection ID">
+                  <DataField label="Collection ID" layout="vertical" valueClassName="w-full">
                     <HexDisplay value={collection.collectionId} truncate={false} color="accent" />
                   </DataField>
                   <DataField label="Standard">
@@ -633,7 +633,7 @@ export default function SporeDetailPage() {
     if (previewTextSnippet) {
       return (
         <div className="h-64 overflow-y-auto bg-slate-950/60 p-3">
-          <pre className="whitespace-pre-wrap break-words font-mono text-xs text-slate-200">
+          <pre className="max-w-full whitespace-pre-wrap break-all font-mono text-xs text-slate-200">
             {previewTextSnippet}
           </pre>
         </div>
@@ -718,7 +718,7 @@ export default function SporeDetailPage() {
               <TerminalPanelHeader indicator="active">Spore Details</TerminalPanelHeader>
               <TerminalPanelContent>
                 <DataGrid columns={1}>
-                  <DataField label="Spore ID">
+                  <DataField label="Spore ID" layout="vertical" valueClassName="w-full">
                     <HexDisplay value={spore.sporeId} truncate={false} color="accent" />
                   </DataField>
                   <DataField label="Status">
@@ -751,14 +751,14 @@ export default function SporeDetailPage() {
                                 : 'Binary'}
                     </span>
                   </DataField>
-                  <DataField label="Owner">
+                  <DataField label="Owner" layout="vertical" valueClassName="w-full">
                     {resolvedOwnerAddress ? (
                       <Address address={resolvedOwnerAddress} truncate={false} />
                     ) : (
                       <span className="font-mono text-slate-500">Address unavailable</span>
                     )}
                   </DataField>
-                  <DataField label="Owner Lock Hash">
+                  <DataField label="Owner Lock Hash" layout="vertical" valueClassName="w-full">
                     <Link href={`/address/${spore.ownerLockHash}`} className="hover:underline">
                       <HexDisplay value={spore.ownerLockHash} truncate={false} color="accent" />
                     </Link>
@@ -818,7 +818,7 @@ export default function SporeDetailPage() {
               <TerminalPanel>
                 <TerminalPanelHeader indicator="active">Payload Text View</TerminalPanelHeader>
                 <TerminalPanelContent>
-                  <pre className="max-h-80 overflow-y-auto whitespace-pre-wrap break-words rounded border border-slate-800 bg-slate-950/40 p-3 font-mono text-xs text-slate-200">
+                  <pre className="max-h-80 max-w-full overflow-x-auto overflow-y-auto whitespace-pre-wrap break-all rounded border border-slate-800 bg-slate-950/40 p-3 font-mono text-xs text-slate-200">
                     {previewTextSnippet}
                   </pre>
                   {previewTextTruncated && (
@@ -858,7 +858,7 @@ export default function SporeDetailPage() {
                         <ClusterDescription description={cluster.description} />
                       </DataField>
                     )}
-                    <DataField label="Cluster ID">
+                    <DataField label="Cluster ID" layout="vertical" valueClassName="w-full">
                       <Link href={`/clusters/${cluster.clusterId}`} className="hover:underline">
                         <HexDisplay value={cluster.clusterId} truncate={false} color="accent" />
                       </Link>

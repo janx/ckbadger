@@ -34,6 +34,9 @@ type AssetSortKey =
   | 'occupied'
   | 'capacity';
 
+const TOKEN_STANDARD_OPTIONS = ['xudt', 'sudt'];
+const NFT_STANDARD_OPTIONS = ['spore', 'm-nft', 'dotbit', 'd-id'];
+
 function normalizeAssetTab(value: string | null): AssetTab {
   if (value === 'dob') {
     // Backward compatibility: old assets links used ?type=dob.
@@ -45,7 +48,48 @@ function normalizeAssetTab(value: string | null): AssetTab {
   return 'token';
 }
 
-function AssetTable({ assetType, search }: { assetType: AssetTab; search: string | undefined }) {
+function normalizeStandardFilter(value: string | null): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function formatStandardLabel(standard: string): string {
+  switch (standard) {
+    case 'xudt':
+      return 'xUDT';
+    case 'sudt':
+      return 'sUDT';
+    case 'm-nft':
+      return 'm-NFT';
+    case 'd-id':
+      return 'D-ID';
+    case 'dotbit':
+      return 'DOTBIT';
+    default:
+      return standard.toUpperCase();
+  }
+}
+
+function getStandardOptions(assetType: AssetTab, selectedStandard?: string) {
+  const options = assetType === 'token' ? TOKEN_STANDARD_OPTIONS : NFT_STANDARD_OPTIONS;
+  if (selectedStandard && !options.includes(selectedStandard)) {
+    return [...options, selectedStandard];
+  }
+  return options;
+}
+
+function AssetTable({
+  assetType,
+  search,
+  standard,
+}: {
+  assetType: AssetTab;
+  search: string | undefined;
+  standard: string | undefined;
+}) {
   const pagination = useCursorPagination();
   const { reset } = pagination;
   const [sortKey, setSortKey] = useState<AssetSortKey>('capacity');
@@ -55,16 +99,17 @@ function AssetTable({ assetType, search }: { assetType: AssetTab; search: string
     setSortKey('capacity');
     setSortDirection('desc');
     reset();
-  }, [assetType, reset]);
+  }, [assetType, standard, reset]);
 
   const { data, isLoading } = useQuery({
-    queryKey: ['assets', assetType, pagination.cursor, search, sortKey, sortDirection],
+    queryKey: ['assets', assetType, pagination.cursor, search, standard, sortKey, sortDirection],
     queryFn: () =>
       api.getAssets({
         limit: 20,
         type: assetType,
         cursor: pagination.cursor,
         search,
+        standard,
         sortKey,
         sortDirection,
       }),
@@ -302,10 +347,15 @@ export function AssetsPageClient() {
   );
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState<string | undefined>(undefined);
+  const [standard, setStandard] = useState<string | undefined>(() =>
+    normalizeStandardFilter(searchParams.get('standard'))
+  );
 
   useEffect(() => {
     const tabFromUrl = normalizeAssetTab(searchParams.get('type'));
     setActiveTab((prev) => (prev === tabFromUrl ? prev : tabFromUrl));
+    const standardFromUrl = normalizeStandardFilter(searchParams.get('standard'));
+    setStandard((prev) => (prev === standardFromUrl ? prev : standardFromUrl));
   }, [searchParams]);
 
   const handleSearch = (e: React.FormEvent) => {
@@ -323,11 +373,28 @@ export function AssetsPageClient() {
     setActiveTab(nextTab);
     setSearch(undefined);
     setSearchInput('');
+    setStandard(undefined);
     const params = new URLSearchParams(searchParams.toString());
     params.set('type', nextTab);
+    params.delete('standard');
     const query = params.toString();
     router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
   };
+
+  const handleStandardChange = (value: string) => {
+    const nextStandard = normalizeStandardFilter(value);
+    setStandard(nextStandard);
+    const params = new URLSearchParams(searchParams.toString());
+    if (nextStandard) {
+      params.set('standard', nextStandard);
+    } else {
+      params.delete('standard');
+    }
+    const query = params.toString();
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+  };
+
+  const standardOptions = getStandardOptions(activeTab, standard);
 
   return (
     <div className="min-h-screen bg-slate-950">
@@ -371,10 +438,25 @@ export function AssetsPageClient() {
             <TerminalPanelHeader
               indicator="active"
               actions={
-                <TabsList>
-                  <TabsTrigger value="token">Tokens</TabsTrigger>
-                  <TabsTrigger value="nft">NFTs</TabsTrigger>
-                </TabsList>
+                <div className="flex items-center gap-2">
+                  <select
+                    value={standard ?? ''}
+                    onChange={(event) => handleStandardChange(event.target.value)}
+                    aria-label="Filter by standard"
+                    className="focus:border-terminal-dark focus:ring-terminal-dark rounded border border-slate-700 bg-slate-900 px-3 py-1.5 font-mono text-sm text-white transition-colors focus:outline-none focus:ring-1"
+                  >
+                    <option value="">All standards</option>
+                    {standardOptions.map((item) => (
+                      <option key={item} value={item}>
+                        {formatStandardLabel(item)}
+                      </option>
+                    ))}
+                  </select>
+                  <TabsList>
+                    <TabsTrigger value="token">Tokens</TabsTrigger>
+                    <TabsTrigger value="nft">NFTs</TabsTrigger>
+                  </TabsList>
+                </div>
               }
             >
               Asset List
@@ -382,11 +464,11 @@ export function AssetsPageClient() {
 
             <TerminalPanelContent padding="none">
               <TabsContent value="token">
-                <AssetTable assetType="token" search={search} />
+                <AssetTable assetType="token" search={search} standard={standard} />
               </TabsContent>
 
               <TabsContent value="nft">
-                <AssetTable assetType="nft" search={search} />
+                <AssetTable assetType="nft" search={search} standard={standard} />
               </TabsContent>
             </TerminalPanelContent>
           </Tabs>

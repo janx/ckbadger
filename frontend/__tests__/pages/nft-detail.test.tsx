@@ -205,6 +205,23 @@ describe('SporeDetailPage', () => {
     });
   });
 
+  it('uses vertical layout for long identity fields', async () => {
+    vi.mocked(api.getSporeNft).mockResolvedValue(mockSpore);
+
+    render(<SporeDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Spore Details')).toBeInTheDocument();
+      expect(screen.getByText('Spore ID')).toBeInTheDocument();
+      expect(screen.getByText('Owner Lock Hash')).toBeInTheDocument();
+    });
+
+    const sporeIdField = screen.getByText('Spore ID').closest('div')?.parentElement;
+    const ownerLockHashField = screen.getByText('Owner Lock Hash').closest('div')?.parentElement;
+    expect(sporeIdField).toHaveClass('flex-col');
+    expect(ownerLockHashField).toHaveClass('flex-col');
+  });
+
   it('shows owner address resolved from lock hash', async () => {
     vi.mocked(api.getSporeNft).mockResolvedValue(mockSpore);
 
@@ -276,6 +293,16 @@ describe('SporeDetailPage', () => {
     await waitFor(() => {
       expect(screen.getByText('Payload Text View')).toBeInTheDocument();
       expect(screen.getAllByText('hello from payload text panel').length).toBeGreaterThan(0);
+    });
+
+    const payloadTextNodes = screen.getAllByText('hello from payload text panel');
+    const payloadPreElements = payloadTextNodes
+      .map((node) => node.closest('pre'))
+      .filter((element): element is HTMLPreElement => element !== null);
+    expect(payloadPreElements.length).toBeGreaterThan(0);
+    payloadPreElements.forEach((pre) => {
+      expect(pre).toHaveClass('break-all');
+      expect(pre).toHaveClass('max-w-full');
     });
   });
 

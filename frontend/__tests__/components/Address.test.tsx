@@ -65,5 +65,12 @@ describe('Address', () => {
       expect(link).toHaveClass('my-custom-class');
       expect(link).toHaveClass('text-terminal-green');
     });
+
+    it('enables line wrapping when truncate is false', () => {
+      render(<Address address={testAddress} truncate={false} />);
+      const link = screen.getByRole('link');
+      expect(link).toHaveClass('break-all');
+      expect(link).toHaveClass('max-w-full');
+    });
   });
 });
