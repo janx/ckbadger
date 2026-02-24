@@ -4770,14 +4770,10 @@ impl Indexer {
 
             self.cache_invalidator.invalidate_chart_caches().await;
 
-            // Re-enable auto-compactions and trigger manual compaction in background
+            // Re-enable normal compaction options. We intentionally avoid
+            // post-bulk full-db manual compaction because that is a delayed
+            // heavy task started after sync phase transition.
             self.writer.store().restore_normal_compaction_options();
-            let store_compact = Arc::clone(self.writer.store());
-            tokio::task::spawn_blocking(move || {
-                store_compact.trigger_full_compaction();
-            });
-
-            self.maybe_start_label_import();
         }
 
         if was_secondary_bulk && !currently_secondary_bulk {

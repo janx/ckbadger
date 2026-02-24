@@ -5,7 +5,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::{info, warn};
 
 use rocksdb::{
-    ColumnFamily, ColumnFamilyDescriptor, DBCompressionType, IteratorMode, Options, WriteBatch, DB,
+    ColumnFamily, ColumnFamilyDescriptor, DBCompactionStyle, DBCompressionType, IteratorMode,
+    Options, UniversalCompactOptions, WriteBatch, DB,
 };
 
 use crate::types::MemoryStats;
@@ -108,6 +109,8 @@ pub struct CkbadgerStore {
 }
 
 impl CkbadgerStore {
+    const PIPELINED_WRITE_ENABLED: bool = false;
+
     /// Open as primary (read-write). Creates all column families.
     /// Also opens any legacy CFs that exist on disk but are no longer in ALL_CFS,
     /// so RocksDB doesn't error on "Column families not opened".
@@ -177,7 +180,7 @@ impl CkbadgerStore {
         Ok(())
     }
 
-    /// Mega-write CFs: T1's 8 CFs that receive the most data per batch.
+    /// Mega-write CFs with the heaviest per-batch write volume.
     /// 256MB write buffers prevent memtable flush stalls during mega-blocks
     /// (block 12M has ~1.31M txs → ~162MB per CF).
     const MEGA_WRITE_CFS: &'static [&'static str] = &[
@@ -190,6 +193,7 @@ impl CkbadgerStore {
         CF_TX_INDEX,
         CF_TX_HASH_MAP,
         CF_ADDR_BALANCE,
+        CF_ADDR_TXS,
         CF_ACTIVITIES,
     ];
 
@@ -209,12 +213,22 @@ impl CkbadgerStore {
         CF_ACTIVITIES,
     ];
 
+    /// Historical append-heavy CFs.
+    ///
+    /// These indexes are primarily append writes during sync and large range scans on reads.
+    /// Universal compaction reduces cross-level rewrite amplification for this write pattern.
+    const HISTORICAL_APPEND_CFS: &'static [&'static str] = &[CF_ACTIVITIES, CF_ADDR_TXS];
+
     fn is_mega_write_cf(name: &str) -> bool {
         Self::MEGA_WRITE_CFS.contains(&name)
     }
 
     fn is_high_write_cf(name: &str) -> bool {
         Self::HIGH_WRITE_CFS.contains(&name)
+    }
+
+    fn is_historical_append_cf(name: &str) -> bool {
+        Self::HISTORICAL_APPEND_CFS.contains(&name)
     }
 
     fn default_block_options(block_cache: &rocksdb::Cache) -> rocksdb::BlockBasedOptions {
@@ -295,6 +309,15 @@ impl CkbadgerStore {
         opts.set_level_zero_stop_writes_trigger(24);
         opts.set_max_bytes_for_level_base(512 * 1024 * 1024);
         opts.set_compression_type(DBCompressionType::Lz4);
+        if Self::is_historical_append_cf(name) {
+            // Prioritize write throughput for append-heavy history CFs.
+            opts.set_compression_type(DBCompressionType::None);
+            opts.set_compaction_style(DBCompactionStyle::Universal);
+            let mut uco = UniversalCompactOptions::default();
+            uco.set_size_ratio(10);
+            uco.set_max_size_amplification_percent(100);
+            opts.set_universal_compaction_options(&uco);
+        }
 
         let block_opts = Self::default_block_options(block_cache);
         opts.set_block_based_table_factory(&block_opts);
@@ -483,9 +506,10 @@ impl CkbadgerStore {
             max_subcompactions = 4,
             block_cache_gb = 8,
             direct_io_compaction = true,
-            pipelined_write = true,
+            pipelined_write = Self::PIPELINED_WRITE_ENABLED,
             mega_write_cfs = Self::MEGA_WRITE_CFS.len(),
             high_write_cfs = Self::HIGH_WRITE_CFS.len(),
+            historical_append_cfs = Self::HISTORICAL_APPEND_CFS.len(),
             column_families = ALL_CFS.len(),
             "RocksDB configuration"
         );
@@ -625,7 +649,7 @@ impl CkbadgerStore {
         let mut block_headers_count = 0usize;
         let mut addr_balance_count = 0usize;
         let mut compaction_pending_bytes = 0u64;
-        let mut num_running_compactions = 0u64;
+        let mut num_running_compactions_fallback = 0u64;
         let mut sst_files_size = 0u64;
         let mut l0_files_total = 0u64;
         let mut l0_files_max: u64 = 0;
@@ -672,7 +696,7 @@ impl CkbadgerStore {
                     .db
                     .property_int_value_cf(cf, "rocksdb.num-running-compactions")
                 {
-                    num_running_compactions += v;
+                    num_running_compactions_fallback = num_running_compactions_fallback.max(v);
                 }
                 if let Ok(Some(v)) = self
                     .db
@@ -728,6 +752,12 @@ impl CkbadgerStore {
 
         let block_cache_bytes = self.block_cache.get_usage();
         let memory_bytes = memtable_bytes + block_cache_bytes + table_readers_bytes;
+        let num_running_compactions = self
+            .db
+            .property_int_value("rocksdb.num-running-compactions")
+            .ok()
+            .flatten()
+            .unwrap_or(num_running_compactions_fallback);
 
         MemoryStats {
             live_cells_count,
@@ -888,6 +918,21 @@ mod tests {
     }
 
     #[test]
+    fn test_memory_stats_compaction_count_matches_global_property_when_available() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+
+        let stats = store.memory_stats();
+        let global = store
+            .db
+            .property_int_value("rocksdb.num-running-compactions")
+            .unwrap();
+        if let Some(expected) = global {
+            assert_eq!(stats.num_running_compactions, expected);
+        }
+    }
+
+    #[test]
     fn test_consumed_cf_storage_bytes_prefers_live_data_estimate() {
         assert_eq!(
             consumed_cf_storage_bytes(Some(100), Some(500), Some(20)),
@@ -945,6 +990,7 @@ mod tests {
             CF_TX_INDEX,
             CF_TX_HASH_MAP,
             CF_ADDR_BALANCE,
+            CF_ADDR_TXS,
             CF_ACTIVITIES,
         ];
         for cf in expected {
@@ -957,6 +1003,22 @@ mod tests {
             CkbadgerStore::MEGA_WRITE_CFS.len(),
             expected.len(),
             "MEGA_WRITE_CFS length mismatch"
+        );
+    }
+
+    #[test]
+    fn test_historical_append_cfs_expected_members() {
+        let expected = &[CF_ACTIVITIES, CF_ADDR_TXS];
+        for cf in expected {
+            assert!(
+                CkbadgerStore::is_historical_append_cf(cf),
+                "{cf} should be in HISTORICAL_APPEND_CFS"
+            );
+        }
+        assert_eq!(
+            CkbadgerStore::HISTORICAL_APPEND_CFS.len(),
+            expected.len(),
+            "HISTORICAL_APPEND_CFS length mismatch"
         );
     }
 
