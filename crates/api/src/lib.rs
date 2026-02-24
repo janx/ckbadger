@@ -24,6 +24,7 @@ use ws::WsManager;
 #[derive(Clone)]
 pub struct AppState {
     pub store: Arc<CkbadgerStore>,
+    pub heavy_store: Option<Arc<CkbadgerStore>>,
     pub ws_manager: Arc<WsManager>,
     pub cache: CacheBackend,
     pub ckb_rpc_url: String,
@@ -35,8 +36,15 @@ pub struct AppState {
     pub mem_cache: InMemoryCache,
 }
 
+impl AppState {
+    pub fn heavy_store(&self) -> &Arc<CkbadgerStore> {
+        self.heavy_store.as_ref().unwrap_or(&self.store)
+    }
+}
+
 pub struct AppConfig {
     pub store: Arc<CkbadgerStore>,
+    pub heavy_store: Option<Arc<CkbadgerStore>>,
     pub redis_url: Option<String>,
     pub ckb_rpc_url: String,
     pub ckb_network: String,
@@ -93,6 +101,7 @@ pub async fn create_router(config: AppConfig) -> Router {
 
     let state = Arc::new(AppState {
         store: config.store,
+        heavy_store: config.heavy_store,
         ws_manager,
         cache,
         ckb_rpc_url: config.ckb_rpc_url,
@@ -148,12 +157,18 @@ pub async fn create_router(config: AppConfig) -> Router {
 
     // Spawn periodic store refresh for secondary instances
     let refresh_store = state.store.clone();
+    let refresh_heavy_store = state.heavy_store.clone();
     let refresh_ckb_store = state.ckb_store.clone();
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
             if let Err(e) = refresh_store.refresh() {
                 tracing::warn!("Store refresh failed: {}", e);
+            }
+            if let Some(ref heavy_store) = refresh_heavy_store {
+                if let Err(e) = heavy_store.refresh() {
+                    tracing::warn!("Heavy store refresh failed: {}", e);
+                }
             }
             if let Some(ref ckb_store) = refresh_ckb_store {
                 if let Err(e) = ckb_store.refresh() {
@@ -175,10 +190,32 @@ pub async fn create_router(config: AppConfig) -> Router {
 
 #[cfg(test)]
 mod tests {
+    use super::AppState;
+    use ckbadger_store::CkbadgerStore;
+    use std::sync::Arc;
+
     #[test]
     fn test_app_config_default_values() {
         // AppConfig no longer has Default since it requires a store instance.
         // Basic smoke test: verify the struct can be constructed.
         assert_eq!(1 + 1, 2);
+    }
+
+    #[tokio::test]
+    async fn test_heavy_store_falls_back_to_core_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let state = AppState {
+            store: Arc::clone(&core),
+            heavy_store: None,
+            ws_manager: Arc::new(crate::ws::WsManager::new()),
+            cache: crate::cache::CacheBackend::None,
+            ckb_rpc_url: String::new(),
+            ckb_network: String::new(),
+            cycles_client: crate::cycles::CyclesClient::new(None).await,
+            ckb_store: None,
+            mem_cache: crate::cache::InMemoryCache::new(),
+        };
+        assert!(Arc::ptr_eq(state.heavy_store(), &core));
     }
 }

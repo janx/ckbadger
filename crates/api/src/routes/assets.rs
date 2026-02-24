@@ -665,13 +665,13 @@ async fn get_nft_collection(
     let collection_id_bytes = decode_nft_collection_id(&collection_id)?;
 
     let agg = state
-        .store
+        .heavy_store()
         .get_nft_collection_aggregate(&collection_id_bytes)
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let agg = agg.ok_or_else(|| ApiError::not_found("NFT collection not found"))?;
 
     let daily = state
-        .store
+        .heavy_store()
         .list_nft_daily_deltas(&collection_id_bytes)
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let chart = build_capacity_occupation_chart(
@@ -719,7 +719,7 @@ async fn list_nft_collection_items(
         .transpose()?;
 
     let agg = state
-        .store
+        .heavy_store()
         .get_nft_collection_aggregate(&collection_id_bytes)
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let agg = agg.ok_or_else(|| ApiError::not_found("NFT collection not found"))?;
@@ -733,7 +733,7 @@ async fn list_nft_collection_items(
 
         loop {
             let nft_ids = state
-                .store
+                .heavy_store()
                 .list_nft_ids_by_collection(
                     &collection_id_bytes,
                     scan_cursor.as_deref(),
@@ -747,7 +747,7 @@ async fn list_nft_collection_items(
 
             for nft_id in &nft_ids {
                 let entry = state
-                    .store
+                    .heavy_store()
                     .get_nft(nft_id)
                     .map_err(|e| ApiError::internal(e.to_string()))?
                     .ok_or_else(|| {
@@ -790,7 +790,7 @@ async fn list_nft_collection_items(
         }
     } else {
         let nft_ids = state
-            .store
+            .heavy_store()
             .list_nft_ids_by_collection(
                 &collection_id_bytes,
                 cursor_bytes.as_deref(),
@@ -800,7 +800,7 @@ async fn list_nft_collection_items(
 
         for nft_id in nft_ids {
             let entry = state
-                .store
+                .heavy_store()
                 .get_nft(&nft_id)
                 .map_err(|e| ApiError::internal(e.to_string()))?
                 .ok_or_else(|| {
@@ -841,7 +841,7 @@ async fn list_nft_collection_items(
         })
         .collect();
     let dotbit_live_outpoints = state
-        .store
+        .heavy_store()
         .get_live_dotbit_outpoints_by_account_ids(&dotbit_live_account_ids)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -924,20 +924,20 @@ async fn get_nft_collection_occupation_chart(
     let collection_id_bytes = decode_nft_collection_id(&collection_id)?;
 
     let agg = state
-        .store
+        .heavy_store()
         .get_nft_collection_aggregate(&collection_id_bytes)
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let agg = agg.ok_or_else(|| ApiError::not_found("NFT collection not found"))?;
 
     let daily = state
-        .store
+        .heavy_store()
         .list_nft_daily_deltas_in_range(&collection_id_bytes, from_date, to_date)
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let (initial_capacity, initial_occupied) = if let Some(from) = from_date {
         let mut base_capacity: i128 = 0;
         let mut base_occupied: i128 = 0;
         let baseline = state
-            .store
+            .heavy_store()
             .list_nft_daily_deltas_in_range(
                 &collection_id_bytes,
                 None,
@@ -1058,11 +1058,11 @@ fn compute_nft_assets(
     state: &Arc<AppState>,
 ) -> Result<Vec<CachedAssetEntry>, (axum::http::StatusCode, Json<ApiError>)> {
     let cluster_aggs = state
-        .store
+        .heavy_store()
         .list_cluster_aggregates()
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let nft_aggs = state
-        .store
+        .heavy_store()
         .list_nft_collection_aggregates()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -1073,12 +1073,12 @@ fn compute_nft_assets(
         }
         let cluster_hex = format!("0x{}", hex::encode(cluster_id_bytes));
         let display_name = resolve_dob_collection_name(
-            state.store.as_ref(),
+            state.heavy_store().as_ref(),
             cluster_id_bytes,
             agg.name.as_deref(),
         );
         let cluster_daily = state
-            .store
+            .heavy_store()
             .list_cluster_daily_deltas(cluster_id_bytes)
             .map_err(|e| ApiError::internal(e.to_string()))?;
         let (live_capacity, live_occupied_capacity) =
@@ -1124,7 +1124,7 @@ fn compute_nft_assets(
         let standard = agg.standard.asset_standard().to_string();
         let display_name = resolve_nft_collection_name(&standard, agg.name.as_deref());
         let nft_daily = state
-            .store
+            .heavy_store()
             .list_nft_daily_deltas(collection_id_bytes)
             .map_err(|e| ApiError::internal(e.to_string()))?;
         let (live_capacity, live_occupied_capacity) =

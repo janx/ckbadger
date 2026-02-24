@@ -35,6 +35,10 @@ pub struct Config {
     pub heavy_lane_max_lag_blocks: u64,
     #[serde(default = "default_heavy_lane_max_lag_seconds")]
     pub heavy_lane_max_lag_seconds: u64,
+    /// Optional dedicated RocksDB path for heavy lane data (activities/addr_txs/spore/mnft/dotbit).
+    /// When absent, heavy lane shares `data_path`.
+    #[serde(default)]
+    pub heavy_data_path: Option<String>,
     /// Path to CKB node's RocksDB data directory for direct reads.
     /// When set, the indexer reads blocks directly from CKB's RocksDB instead of via JSON-RPC.
     #[serde(default)]

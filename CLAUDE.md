@@ -171,6 +171,7 @@ make up CKB_NODE_MODE=external           # Force external mode for one run
 `reset CONFIRM=1` removes:
 
 - local `CKBADGER_DATA_PATH` (+ api secondary path)
+- local `CKBADGER_HEAVY_DATA_PATH` when configured (+ heavy api secondary path)
 - Docker volumes `ckbadger-data` and `redis-data`
 - keeps `ckb-data` untouched
 
@@ -285,30 +286,47 @@ docs/INDEXER_PIPELINE.md          # Pipeline architecture documentation
 
 The indexer uses a three-stage pipeline: **Fetcher** (RPC I/O) → **Parser** (CPU + DB prefetch) → **Writer** (DB I/O).
 
-| Parameter             | Default | Description                             |
-| --------------------- | ------- | --------------------------------------- |
-| `pipeline_enabled`    | `true`  | Enable pipeline mode (vs sequential)    |
-| `pipeline_buffer`     | `8`     | Channel capacity between stages         |
-| `batch_size`          | `10000` | Blocks per batch                        |
-| `parallel_fetch_size` | `64`    | Concurrent RPC requests                 |
-| `bulk_sync_threshold` | `1000`  | Blocks behind tip to treat as bulk sync |
+| Parameter                    | Default | Description                                                      |
+| ---------------------------- | ------- | ---------------------------------------------------------------- |
+| `pipeline_enabled`           | `true`  | Enable pipeline mode (vs sequential)                             |
+| `pipeline_buffer`            | `8`     | Channel capacity between stages                                  |
+| `batch_size`                 | `10000` | Blocks per batch                                                 |
+| `parallel_fetch_size`        | `64`    | Concurrent RPC requests                                          |
+| `heavy_lane_queue`           | `12`    | Bounded heavy-lane backlog between parser/core and heavy writer  |
+| `heavy_lane_max_lag_blocks`  | `20000` | Pause core lane when heavy lane falls behind over this block lag |
+| `heavy_lane_max_lag_seconds` | `120`   | Minimum seconds between heavy-lag backpressure warning logs      |
+| `bulk_sync_threshold`        | `1000`  | Blocks behind tip to treat as bulk sync                          |
 
 ```bash
 # CLI arguments
 cargo run -p ckbadger-indexer -- \
   --pipeline-enabled \
   --pipeline-buffer 4 \
+  --heavy-lane-queue 12 \
+  --heavy-lane-max-lag-blocks 20000 \
+  --heavy-lane-max-lag-seconds 120 \
   --batch-size 10000 \
   --bulk-sync-threshold 1000
 
 # Environment variables (common)
 CKBADGER_DATA_PATH=./data/ckbadger-store
+# Optional split heavy store (requires pipeline mode)
+# CKBADGER_HEAVY_DATA_PATH=./data/ckbadger-heavy-store
 CKB_RPC_URL=http://localhost:8114
 REDIS_URL=redis://localhost:6379
 ```
 
-Note: `pipeline_enabled`, `pipeline_buffer`, `batch_size`, `parallel_fetch_size`, and
+Note: `pipeline_enabled`, `pipeline_buffer`, `batch_size`, `parallel_fetch_size`,
+`heavy_lane_queue`, `heavy_lane_max_lag_blocks`, `heavy_lane_max_lag_seconds`, and
 `bulk_sync_threshold` are configured via CLI flags in current builds.
+
+Bulk sync dual-lane behavior:
+
+- Core lane and heavy lane consume the same parsed batch concurrently (heavy lane is not a post-sync task).
+- Completion requires both lane tips: `core_tip` and `heavy_tip` must reach the completion target.
+- Heavy lag uses backpressure: if `core_tip - heavy_tip` exceeds `heavy_lane_max_lag_blocks`,
+  core lane pauses and waits for heavy lane to catch up.
+- Lane errors still fail-fast: heavy/core write or channel failures stop sync immediately.
 
 See `docs/INDEXER_PIPELINE.md` for architecture details.
 
@@ -442,11 +460,14 @@ Optional flags:
 
 ## ckbadger-store (Embedded Storage Engine)
 
-All data is stored in a single RocksDB instance (`ckbadger-store` crate) with multiple column families. The indexer opens it read-write; the API opens a secondary (read-only) instance.
+By default, all data is stored in a single RocksDB instance (`ckbadger-store` crate) with multiple column families.
+Optionally, heavy lane data can be split into a second RocksDB instance via `CKBADGER_HEAVY_DATA_PATH`.
+The indexer opens primary instances read-write; the API opens secondary (read-only) instances.
 
-| Parameter            | Default                 | Description            |
-| -------------------- | ----------------------- | ---------------------- |
-| `CKBADGER_DATA_PATH` | `./data/ckbadger-store` | RocksDB data directory |
+| Parameter                  | Default                 | Description                                             |
+| -------------------------- | ----------------------- | ------------------------------------------------------- |
+| `CKBADGER_DATA_PATH`       | `./data/ckbadger-store` | Core RocksDB data directory                             |
+| `CKBADGER_HEAVY_DATA_PATH` | unset                   | Optional heavy-lane RocksDB path (activities/NFT/spore) |
 
 **Key Column Families:**
 
@@ -466,6 +487,7 @@ All data is stored in a single RocksDB instance (`ckbadger-store` crate) with mu
 
 - `CkbadgerStore::open(path)` — primary read-write mode for indexer and maintenance CLI commands
 - `CkbadgerStore::open_secondary(primary_path, secondary_path)` — read-only mode for API
+- When `CKBADGER_HEAVY_DATA_PATH` is set: configure the same path for both indexer and api
 - All store operations are synchronous (RocksDB reads are fast)
 
 **Memory Considerations:**
@@ -481,6 +503,11 @@ cargo run -p ckbadger-indexer
 
 # Custom path
 CKBADGER_DATA_PATH=/ssd/ckbadger-store cargo run -p ckbadger-indexer
+
+# Optional split heavy store (pipeline mode only)
+CKBADGER_DATA_PATH=/ssd/ckbadger-core-store \
+CKBADGER_HEAVY_DATA_PATH=/ssd/ckbadger-heavy-store \
+cargo run -p ckbadger-indexer -- --pipeline-enabled
 ```
 
 ## Data Integrity Verification (`verify` subcommand)

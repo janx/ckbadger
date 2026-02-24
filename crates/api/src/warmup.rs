@@ -179,8 +179,8 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
     let mut nft_assets: Vec<CachedAssetEntry> = Vec::new();
 
     // Spore/DOB collections from pre-aggregated cluster_agg CF
-    let cluster_aggs = state.store.list_cluster_aggregates()?;
-    let spore_transfers_24h_map = state.store.scan_all_spore_24h_transfers(now_ms)?;
+    let cluster_aggs = state.heavy_store().list_cluster_aggregates()?;
+    let spore_transfers_24h_map = state.heavy_store().scan_all_spore_24h_transfers(now_ms)?;
     nft_assets.reserve(cluster_aggs.len());
 
     for (cluster_id_bytes, agg) in &cluster_aggs {
@@ -189,7 +189,7 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
         }
         let cluster_hex = format!("0x{}", hex::encode(cluster_id_bytes));
         let display_name = resolve_dob_collection_name(
-            state.store.as_ref(),
+            state.heavy_store().as_ref(),
             cluster_id_bytes,
             agg.name.as_deref(),
         );
@@ -197,7 +197,9 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
             .get(cluster_id_bytes.as_slice())
             .copied()
             .unwrap_or(0);
-        let cluster_daily = state.store.list_cluster_daily_deltas(cluster_id_bytes)?;
+        let cluster_daily = state
+            .heavy_store()
+            .list_cluster_daily_deltas(cluster_id_bytes)?;
         let (live_capacity, live_occupied_capacity) =
             accumulate_live_capacity(cluster_daily.into_iter().map(|(_, delta)| {
                 (
@@ -240,8 +242,8 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
     }
 
     // NFT collections from pre-aggregated nft_collection_agg CF
-    let nft_aggs = state.store.list_nft_collection_aggregates()?;
-    let nft_transfers_24h_map = state.store.scan_all_nft_24h_transfers(now_ms)?;
+    let nft_aggs = state.heavy_store().list_nft_collection_aggregates()?;
+    let nft_transfers_24h_map = state.heavy_store().scan_all_nft_24h_transfers(now_ms)?;
     nft_assets.reserve(nft_aggs.len());
 
     for (collection_id_bytes, agg) in &nft_aggs {
@@ -255,7 +257,9 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
             .unwrap_or(0);
         let standard = agg.standard.asset_standard().to_string();
         let display_name = resolve_nft_collection_name(&standard, agg.name.as_deref());
-        let nft_daily = state.store.list_nft_daily_deltas(collection_id_bytes)?;
+        let nft_daily = state
+            .heavy_store()
+            .list_nft_daily_deltas(collection_id_bytes)?;
         let (live_capacity, live_occupied_capacity) =
             accumulate_live_capacity(nft_daily.into_iter().map(|(_, delta)| {
                 (

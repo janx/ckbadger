@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use clap::{Args, Parser, Subcommand};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -61,16 +61,23 @@ struct Cli {
     #[arg(
         long,
         default_value = "20000",
-        help = "Fail-fast when heavy lane falls behind core lane by more than this many blocks"
+        help = "Pause core lane when heavy lane falls behind by more than this many blocks"
     )]
     heavy_lane_max_lag_blocks: u64,
 
     #[arg(
         long,
         default_value = "120",
-        help = "Fail-fast when heavy lane makes no progress for this many seconds while lagging"
+        help = "Minimum seconds between heavy-lag backpressure warning logs"
     )]
     heavy_lane_max_lag_seconds: u64,
+
+    #[arg(
+        long,
+        env = "CKBADGER_HEAVY_DATA_PATH",
+        help = "Optional dedicated RocksDB path for heavy lane CFs"
+    )]
+    heavy_data_path: Option<String>,
 
     #[arg(
         long,
@@ -242,6 +249,20 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
     out
 }
 
+fn validate_heavy_data_path(data_path: &str, heavy_data_path: Option<&str>) -> Result<()> {
+    if heavy_data_path.is_some_and(|path| path == data_path) {
+        bail!("heavy_data_path must differ from data_path when split heavy store is enabled");
+    }
+    Ok(())
+}
+
+fn should_backfill_addr_txs_in_core(
+    heavy_data_path: Option<&str>,
+    addr_txs_populated: bool,
+) -> bool {
+    heavy_data_path.is_none() && !addr_txs_populated
+}
+
 fn reconcile_token_daily_deltas_on_startup(store: &CkbadgerStore) -> Result<()> {
     let Some(invalid) = store.find_first_invalid_token_daily_delta()? else {
         return Ok(());
@@ -323,6 +344,7 @@ async fn run_sync(args: Cli) -> Result<()> {
         heavy_lane_queue: args.heavy_lane_queue,
         heavy_lane_max_lag_blocks: args.heavy_lane_max_lag_blocks,
         heavy_lane_max_lag_seconds: args.heavy_lane_max_lag_seconds,
+        heavy_data_path: args.heavy_data_path,
         ckb_data_path: args.ckb_data_path,
         token_labels_path: args.token_labels_path,
         force_startup_cleanup: false,
@@ -339,8 +361,15 @@ async fn run_sync(args: Cli) -> Result<()> {
         info!("Code hash index backfill complete: {} cells indexed", count);
     }
 
-    // One-time backfill: populate addr_txs index if empty
-    if !store.addr_txs_populated() {
+    // One-time backfill: populate addr_txs index if empty.
+    // With split heavy store enabled, addr_txs belongs to heavy lane DB and must not
+    // be backfilled into core DB, otherwise we reintroduce write contention.
+    if config.heavy_data_path.is_some() {
+        info!("Split heavy store enabled — skipping core addr_txs backfill");
+    } else if should_backfill_addr_txs_in_core(
+        config.heavy_data_path.as_deref(),
+        store.addr_txs_populated(),
+    ) {
         info!("addr_txs index empty — running one-time backfill from cells...");
         let count = store.backfill_addr_txs()?;
         info!("addr_txs backfill complete: {} entries indexed", count);
@@ -482,7 +511,16 @@ async fn run_sync(args: Cli) -> Result<()> {
 
     info!("Connecting to CKB node: {}", config.ckb_rpc_url);
 
-    let indexer = Indexer::new(run_id, config.clone(), store.clone()).await?;
+    validate_heavy_data_path(&config.data_path, config.heavy_data_path.as_deref())?;
+    let heavy_store = match config.heavy_data_path.as_deref() {
+        Some(path) => {
+            info!("Opening heavy-lane ckbadger-store at: {}", path);
+            Some(Arc::new(CkbadgerStore::open(path)?))
+        }
+        None => None,
+    };
+
+    let indexer = Indexer::new(run_id, config.clone(), store.clone(), heavy_store).await?;
     let indexer = Arc::new(indexer);
 
     spawn_cycles_task_worker(
@@ -824,8 +862,9 @@ async fn run_label_import_command(
 mod tests {
     use super::{
         classify_unclean_shutdown_hint, monotonic_counter_delta, queue_fill_pct,
-        reconcile_token_daily_deltas_on_startup, should_emit_rate_limited,
-        should_force_startup_cleanup, should_warn_progress_stall,
+        reconcile_token_daily_deltas_on_startup, should_backfill_addr_txs_in_core,
+        should_emit_rate_limited, should_force_startup_cleanup, should_warn_progress_stall,
+        validate_heavy_data_path,
     };
     use ckbadger_store::{
         types::{CachedBlockHeader, LiveCellInfo, TokenDailyDelta},
@@ -854,6 +893,30 @@ mod tests {
             Some(now),
             now + Duration::from_secs(60),
             Duration::from_secs(60)
+        ));
+    }
+
+    #[test]
+    fn test_validate_heavy_data_path_accepts_none_or_different_path() {
+        assert!(validate_heavy_data_path("/data/core", None).is_ok());
+        assert!(validate_heavy_data_path("/data/core", Some("/data/heavy")).is_ok());
+    }
+
+    #[test]
+    fn test_validate_heavy_data_path_rejects_same_path() {
+        let err = validate_heavy_data_path("/data/core", Some("/data/core")).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("heavy_data_path must differ from data_path"));
+    }
+
+    #[test]
+    fn test_should_backfill_addr_txs_in_core() {
+        assert!(should_backfill_addr_txs_in_core(None, false));
+        assert!(!should_backfill_addr_txs_in_core(None, true));
+        assert!(!should_backfill_addr_txs_in_core(
+            Some("/data/heavy"),
+            false
         ));
     }
 

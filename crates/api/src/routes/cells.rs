@@ -2520,7 +2520,7 @@ async fn get_address_transactions(
 
     // Fetch recent transactions for this address (newest first)
     let addr_txs = state
-        .store
+        .heavy_store()
         .list_addr_txs_recent(&lock_hash, limit + 1, cursor)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -2826,7 +2826,7 @@ async fn get_address_stats_history(
         .unwrap_or(0);
 
     let daily_stats = state
-        .store
+        .heavy_store()
         .list_addr_daily_stats(&lock_hash, one_year_ago, today)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 

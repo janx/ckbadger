@@ -914,7 +914,7 @@ async fn get_most_utilized_assets_chart(
     }
 
     let clusters = state
-        .store
+        .heavy_store()
         .list_cluster_aggregates()
         .map_err(|e| ApiError::internal(e.to_string()))?;
     for (cluster_id, agg) in clusters {
@@ -922,7 +922,7 @@ async fn get_most_utilized_assets_chart(
             continue;
         }
         let deltas = state
-            .store
+            .heavy_store()
             .list_cluster_daily_deltas(&cluster_id)
             .map_err(|e| ApiError::internal(e.to_string()))?;
         let (total_cells_capacity, occupied_capacity) =
@@ -937,9 +937,12 @@ async fn get_most_utilized_assets_chart(
         }
 
         let id = format!("0x{}", hex::encode(&cluster_id));
-        let name =
-            resolve_dob_collection_name(state.store.as_ref(), &cluster_id, agg.name.as_deref())
-                .unwrap_or_else(|| id.clone());
+        let name = resolve_dob_collection_name(
+            state.heavy_store().as_ref(),
+            &cluster_id,
+            agg.name.as_deref(),
+        )
+        .unwrap_or_else(|| id.clone());
         let entity_key = format!("dob:{id}");
         labels_by_key.insert(entity_key.clone(), format_asset_label(&name, "nft"));
         if occupied_capacity > total_cells_capacity {
@@ -963,7 +966,7 @@ async fn get_most_utilized_assets_chart(
     }
 
     let nft_collections = state
-        .store
+        .heavy_store()
         .list_nft_collection_aggregates()
         .map_err(|e| ApiError::internal(e.to_string()))?;
     for (collection_id, agg) in nft_collections {
@@ -971,7 +974,7 @@ async fn get_most_utilized_assets_chart(
             continue;
         }
         let deltas = state
-            .store
+            .heavy_store()
             .list_nft_daily_deltas(&collection_id)
             .map_err(|e| ApiError::internal(e.to_string()))?;
         let (total_cells_capacity, occupied_capacity) =

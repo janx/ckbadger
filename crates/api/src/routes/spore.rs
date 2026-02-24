@@ -871,7 +871,11 @@ fn serve_clusters_from_cache(
             let cluster_id_bytes =
                 hex::decode(cluster_id_hex.strip_prefix("0x").unwrap_or(cluster_id_hex)).ok()?;
 
-            let cluster_entry = state.store.get_spore(&cluster_id_bytes).ok().flatten();
+            let cluster_entry = state
+                .heavy_store()
+                .get_spore(&cluster_id_bytes)
+                .ok()
+                .flatten();
             let created_at_block = cluster_entry
                 .as_ref()
                 .map(|e| e.created_at_block)
@@ -929,7 +933,7 @@ fn serve_clusters_from_store(
     limit: usize,
 ) -> ApiResult<CursorPaginatedResponse<ClusterResponse>> {
     let all_spores = state
-        .store
+        .heavy_store()
         .list_spores(100_000)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -973,7 +977,7 @@ fn serve_clusters_from_store(
     let result: Vec<ClusterResponse> = page
         .into_iter()
         .map(|(cluster_id, (owner, spores_count, created_at_block))| {
-            let cluster_entry = state.store.get_spore(cluster_id).ok().flatten();
+            let cluster_entry = state.heavy_store().get_spore(cluster_id).ok().flatten();
             let name = cluster_entry.as_ref().and_then(|e| e.name.clone());
             let description = cluster_entry.as_ref().and_then(|e| e.description.clone());
             ClusterResponse {
@@ -1014,7 +1018,7 @@ async fn get_spores_by_cluster(
 
     // Use secondary index for efficient lookup
     let cluster_spores = state
-        .store
+        .heavy_store()
         .list_spores_by_cluster(&id, 10_000)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -1058,13 +1062,13 @@ async fn get_cluster(
 
     // Look up the cluster entry directly
     let cluster_entry = state
-        .store
+        .heavy_store()
         .get_spore(&id)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     // Count spores in cluster using secondary index
     let spores_count = state
-        .store
+        .heavy_store()
         .count_spores_in_cluster(&id)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -1082,7 +1086,7 @@ async fn get_cluster(
         .as_ref()
         .and_then(|e| e.owner_lock_hash.clone());
     let daily = state
-        .store
+        .heavy_store()
         .list_cluster_daily_deltas(&id)
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let chart = build_capacity_occupation_chart(
@@ -1128,7 +1132,7 @@ async fn list_spores(
     let cursor_block = params.cursor.unwrap_or(i64::MAX);
 
     let all_spores = state
-        .store
+        .heavy_store()
         .list_spores(100_000)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -1170,14 +1174,14 @@ async fn get_spore(
         .map_err(|_| ApiError::bad_request("Invalid spore ID"))?;
 
     let entry = state
-        .store
+        .heavy_store()
         .get_spore(&id)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     match entry {
         Some(entry) => {
             let daily = state
-                .store
+                .heavy_store()
                 .list_spore_daily_deltas(&id)
                 .map_err(|e| ApiError::internal(e.to_string()))?;
             let chart = build_capacity_occupation_chart(
@@ -1211,7 +1215,7 @@ async fn decode_spore(
         .map_err(|_| ApiError::bad_request("Invalid spore ID"))?;
 
     let entry = state
-        .store
+        .heavy_store()
         .get_spore(&id)
         .map_err(|e| ApiError::internal(e.to_string()))?
         .ok_or_else(|| ApiError::not_found("Spore not found"))?;
@@ -1223,7 +1227,7 @@ async fn decode_spore(
 
     let cluster_description = if let Some(cluster_id) = entry.collection_id.as_ref() {
         state
-            .store
+            .heavy_store()
             .get_spore(cluster_id)
             .map_err(|e| ApiError::internal(e.to_string()))?
             .and_then(|cluster| cluster.description)
@@ -1281,11 +1285,11 @@ async fn get_cluster_occupation_chart(
         .map_err(|_| ApiError::bad_request("Invalid cluster ID"))?;
 
     let cluster_entry = state
-        .store
+        .heavy_store()
         .get_spore(&id)
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let spores_count = state
-        .store
+        .heavy_store()
         .count_spores_in_cluster(&id)
         .map_err(|e| ApiError::internal(e.to_string()))?;
     if spores_count == 0 && cluster_entry.is_none() {
@@ -1297,14 +1301,14 @@ async fn get_cluster_occupation_chart(
         .and_then(|e| e.name.clone())
         .unwrap_or_else(|| "Spore Cluster".to_string());
     let daily = state
-        .store
+        .heavy_store()
         .list_cluster_daily_deltas_in_range(&id, from_date, to_date)
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let (initial_capacity, initial_occupied) = if let Some(from) = from_date {
         let mut base_capacity: i128 = 0;
         let mut base_occupied: i128 = 0;
         let baseline = state
-            .store
+            .heavy_store()
             .list_cluster_daily_deltas_in_range(&id, None, Some(from.saturating_sub(1)))
             .map_err(|e| ApiError::internal(e.to_string()))?;
         for (_, delta) in baseline {
@@ -1354,7 +1358,7 @@ async fn get_spore_occupation_chart(
         .map_err(|_| ApiError::bad_request("Invalid spore ID"))?;
 
     let entry = state
-        .store
+        .heavy_store()
         .get_spore(&id)
         .map_err(|e| ApiError::internal(e.to_string()))?;
     if entry.is_none() {
@@ -1362,14 +1366,14 @@ async fn get_spore_occupation_chart(
     }
 
     let daily = state
-        .store
+        .heavy_store()
         .list_spore_daily_deltas_in_range(&id, from_date, to_date)
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let (initial_capacity, initial_occupied) = if let Some(from) = from_date {
         let mut base_capacity: i128 = 0;
         let mut base_occupied: i128 = 0;
         let baseline = state
-            .store
+            .heavy_store()
             .list_spore_daily_deltas_in_range(&id, None, Some(from.saturating_sub(1)))
             .map_err(|e| ApiError::internal(e.to_string()))?;
         for (_, delta) in baseline {
@@ -1419,7 +1423,7 @@ async fn get_spores_by_owner(
     let cursor_block = params.cursor.unwrap_or(i64::MAX);
 
     let all_spores = state
-        .store
+        .heavy_store()
         .list_spores(100_000)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 

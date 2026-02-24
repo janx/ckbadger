@@ -20,7 +20,8 @@ use tracing::{debug, error, info, warn};
 
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
-    AddressBalance, CachedBlockHeader, HodlTrackerState, LiveCellInfo, NftTypeIndex, SporeTypeIndex,
+    AddressBalance, CachedBlockHeader, HodlTrackerState, LiveCellInfo, MemoryStats, NftTypeIndex,
+    SporeTypeIndex,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -158,6 +159,68 @@ fn decode_adaptive_batch_reason(reason_code: u8) -> Option<&'static str> {
     }
 }
 
+fn add_usize_checked(lhs: usize, rhs: usize, field: &str) -> usize {
+    lhs.checked_add(rhs)
+        .unwrap_or_else(|| panic!("memory stats overflow for {}: {} + {}", field, lhs, rhs))
+}
+
+fn add_u64_checked(lhs: u64, rhs: u64, field: &str) -> u64 {
+    lhs.checked_add(rhs)
+        .unwrap_or_else(|| panic!("memory stats overflow for {}: {} + {}", field, lhs, rhs))
+}
+
+fn merge_memory_stats(mut base: MemoryStats, heavy: MemoryStats) -> MemoryStats {
+    base.cells_count = add_usize_checked(base.cells_count, heavy.cells_count, "cells_count");
+    base.memory_bytes = add_usize_checked(base.memory_bytes, heavy.memory_bytes, "memory_bytes");
+    base.memtable_bytes =
+        add_usize_checked(base.memtable_bytes, heavy.memtable_bytes, "memtable_bytes");
+    base.block_cache_bytes = add_usize_checked(
+        base.block_cache_bytes,
+        heavy.block_cache_bytes,
+        "block_cache_bytes",
+    );
+    base.table_readers_bytes = add_usize_checked(
+        base.table_readers_bytes,
+        heavy.table_readers_bytes,
+        "table_readers_bytes",
+    );
+    base.compaction_pending_bytes = add_u64_checked(
+        base.compaction_pending_bytes,
+        heavy.compaction_pending_bytes,
+        "compaction_pending_bytes",
+    );
+    base.num_running_compactions = add_u64_checked(
+        base.num_running_compactions,
+        heavy.num_running_compactions,
+        "num_running_compactions",
+    );
+    base.sst_files_size =
+        add_u64_checked(base.sst_files_size, heavy.sst_files_size, "sst_files_size");
+    base.l0_files_count =
+        add_u64_checked(base.l0_files_count, heavy.l0_files_count, "l0_files_count");
+    base.immutable_memtables = add_u64_checked(
+        base.immutable_memtables,
+        heavy.immutable_memtables,
+        "immutable_memtables",
+    );
+
+    if heavy.l0_files_max > base.l0_files_max {
+        base.l0_files_max = heavy.l0_files_max;
+        base.l0_worst_cf = format!("heavy:{}", heavy.l0_worst_cf);
+    }
+
+    base.top_cf_sizes.extend(
+        heavy
+            .top_cf_sizes
+            .into_iter()
+            .map(|(name, size)| (format!("heavy:{name}"), size)),
+    );
+    base.top_cf_sizes
+        .sort_by(|(_, left), (_, right)| right.cmp(left));
+    base.top_cf_sizes.truncate(5);
+    base
+}
+
 /// Build a fetch sub-batch plan based on per-block tx counts.
 /// Returns `(block_count, tx_count)` tuples for each sub-batch.
 fn plan_fetch_sub_batches(tx_counts: &[usize], tx_cap: usize) -> Vec<(usize, usize)> {
@@ -198,6 +261,14 @@ fn adaptive_sub_batch_tx_cap(target_batch_txs: u64, min_target_batch_txs: u64) -
     target_batch_txs
         .saturating_mul(2)
         .clamp(min_target_batch_txs, ADAPTIVE_BATCH_MAX_TXS) as usize
+}
+
+fn should_pause_core_lane_for_heavy_lag(
+    core_tip: u64,
+    heavy_tip: u64,
+    max_lag_blocks: u64,
+) -> bool {
+    core_tip.saturating_sub(heavy_tip) > max_lag_blocks
 }
 
 #[derive(Debug, Serialize)]
@@ -312,6 +383,7 @@ fn collect_addr_tx_entries(
 
 fn write_heavy_lane_batch(
     writer: &BatchWriter,
+    token_info_store: &CkbadgerStore,
     batch: HeavyLaneBatch,
     bulk_sync_threshold: u64,
 ) -> Result<()> {
@@ -571,8 +643,12 @@ fn write_heavy_lane_batch(
         }
     }
 
-    let token_info_cache =
-        load_activity_token_info_cache(store, all_tx_data, input_cell_info, batch_cell_infos)?;
+    let token_info_cache = load_activity_token_info_cache(
+        token_info_store,
+        all_tx_data,
+        input_cell_info,
+        batch_cell_infos,
+    )?;
     let mut block_tx_idx = 0usize;
     for parsed in all_parsed_blocks {
         let tx_count = parsed.transactions_count as usize;
@@ -2703,6 +2779,7 @@ pub struct Indexer {
     rpc: CkbRpcClient,
     repo: Repository,
     writer: BatchWriter,
+    heavy_writer: BatchWriter,
     progress: Arc<SyncProgress>,
     cell_cache: Arc<DashMap<([u8; 32], i32), CachedCellInfo>>,
     udt_cell_cache: Arc<DashMap<([u8; 32], i16), CachedUdtCellInfo>>,
@@ -2732,7 +2809,12 @@ pub struct Indexer {
 }
 
 impl Indexer {
-    pub async fn new(run_id: String, config: Config, store: Arc<CkbadgerStore>) -> Result<Self> {
+    pub async fn new(
+        run_id: String,
+        config: Config,
+        store: Arc<CkbadgerStore>,
+        heavy_store: Option<Arc<CkbadgerStore>>,
+    ) -> Result<Self> {
         let rpc = CkbRpcClient::new(&config.ckb_rpc_url);
         let cache_invalidator = CacheInvalidator::new(config.redis_url.as_deref()).await;
 
@@ -2749,6 +2831,10 @@ impl Indexer {
             store.clone(),
             config.fast_sync_mode,
             cache_invalidator.clone(),
+        );
+        let heavy_writer = BatchWriter::with_fast_sync_mode(
+            heavy_store.unwrap_or_else(|| store.clone()),
+            config.fast_sync_mode,
         );
 
         let (tip_number, _) = repo.get_sync_tip().await?;
@@ -2800,6 +2886,7 @@ impl Indexer {
             rpc,
             repo,
             writer,
+            heavy_writer,
             progress,
             cell_cache,
             udt_cell_cache,
@@ -2843,6 +2930,24 @@ impl Indexer {
         &self.writer
     }
 
+    fn heavy_writer(&self) -> &BatchWriter {
+        &self.heavy_writer
+    }
+
+    fn using_split_heavy_store(&self) -> bool {
+        !Arc::ptr_eq(self.writer.store(), self.heavy_writer.store())
+    }
+
+    fn for_each_store<F>(&self, mut f: F)
+    where
+        F: FnMut(&Arc<CkbadgerStore>),
+    {
+        f(self.writer.store());
+        if self.using_split_heavy_store() {
+            f(self.heavy_writer.store());
+        }
+    }
+
     /// Parse UDT outputs from a transaction, with a fallback for label-known
     /// token standards such as `xudt_compatible`.
     fn parse_udt_cells_with_store_fallback(
@@ -2877,32 +2982,79 @@ impl Indexer {
             .store(chrono::Utc::now().timestamp(), Ordering::SeqCst);
     }
 
-    fn ensure_heavy_lane_not_stalled(&self, context: &str) -> Result<()> {
-        let core_tip = self.core_tip.load(Ordering::SeqCst);
-        let heavy_tip = self.heavy_tip.load(Ordering::SeqCst);
-        let lag_blocks = core_tip.saturating_sub(heavy_tip);
+    async fn pause_core_lane_until_heavy_lag_within_limit(
+        &self,
+        context: &str,
+        heavy_done_rx: &mut tokio::sync::mpsc::UnboundedReceiver<u64>,
+        heavy_error_rx: &tokio::sync::watch::Receiver<Option<String>>,
+    ) -> Result<()> {
+        let mut last_log_at: Option<Instant> = None;
+        let log_interval = Duration::from_secs(self.config.heavy_lane_max_lag_seconds.max(1));
 
-        if lag_blocks <= self.config.heavy_lane_max_lag_blocks {
-            return Ok(());
+        loop {
+            let mut heavy_progress_advanced = false;
+            loop {
+                match heavy_done_rx.try_recv() {
+                    Ok(done_tip) => {
+                        heavy_progress_advanced = true;
+                        self.record_heavy_lane_tip(done_tip);
+                    }
+                    Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+                    Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                        let core_tip = self.core_tip.load(Ordering::SeqCst);
+                        let heavy_tip = self.heavy_tip.load(Ordering::SeqCst);
+                        if core_tip > heavy_tip {
+                            bail!(
+                                "heavy lane progress channel disconnected while lagging: context={} core_tip={} heavy_tip={} lag_blocks={}",
+                                context,
+                                core_tip,
+                                heavy_tip,
+                                core_tip.saturating_sub(heavy_tip)
+                            );
+                        }
+                        break;
+                    }
+                }
+            }
+            if heavy_progress_advanced {
+                self.check_bulk_sync_completion().await;
+            }
+            if let Some(err) = heavy_error_rx.borrow().clone() {
+                return Err(anyhow!(err));
+            }
+
+            let core_tip = self.core_tip.load(Ordering::SeqCst);
+            let heavy_tip = self.heavy_tip.load(Ordering::SeqCst);
+            if !should_pause_core_lane_for_heavy_lag(
+                core_tip,
+                heavy_tip,
+                self.config.heavy_lane_max_lag_blocks,
+            ) {
+                return Ok(());
+            }
+
+            let lag_blocks = core_tip.saturating_sub(heavy_tip);
+            let lag_secs = chrono::Utc::now()
+                .timestamp()
+                .saturating_sub(self.heavy_tip_updated_at.load(Ordering::SeqCst));
+            let should_log = last_log_at
+                .map(|ts| ts.elapsed() >= log_interval)
+                .unwrap_or(true);
+            if should_log {
+                warn!(
+                    context,
+                    core_tip,
+                    heavy_tip,
+                    lag_blocks,
+                    lag_secs,
+                    max_lag_blocks = self.config.heavy_lane_max_lag_blocks,
+                    "Heavy lane lag high; pausing core lane for backpressure"
+                );
+                last_log_at = Some(Instant::now());
+            }
+
+            sleep(Duration::from_millis(20)).await;
         }
-
-        let now = chrono::Utc::now().timestamp();
-        let last_advanced_at = self.heavy_tip_updated_at.load(Ordering::SeqCst);
-        let lag_secs = now.saturating_sub(last_advanced_at);
-        if lag_secs < self.config.heavy_lane_max_lag_seconds as i64 {
-            return Ok(());
-        }
-
-        bail!(
-            "heavy lane lag exceeded threshold: context={} core_tip={} heavy_tip={} lag_blocks={} lag_secs={} max_lag_blocks={} max_lag_seconds={}",
-            context,
-            core_tip,
-            heavy_tip,
-            lag_blocks,
-            lag_secs,
-            self.config.heavy_lane_max_lag_blocks,
-            self.config.heavy_lane_max_lag_seconds
-        );
     }
 
     pub fn is_direct_db_read(&self) -> bool {
@@ -3156,7 +3308,11 @@ impl Indexer {
     }
 
     pub fn get_memory_stats(&self) -> ckbadger_common::MemoryStatsData {
-        let stats = self.writer.store().memory_stats();
+        let mut stats = self.writer.store().memory_stats();
+        if self.using_split_heavy_store() {
+            let heavy_stats = self.heavy_writer.store().memory_stats();
+            stats = merge_memory_stats(stats, heavy_stats);
+        }
         let sync_status = self.writer.store().get_sync_status().unwrap_or_default();
         ckbadger_common::MemoryStatsData {
             live_cells_count: stats.live_cells_count as u64,
@@ -3198,6 +3354,12 @@ impl Indexer {
     // === run / run_sequential / run_pipeline ===
 
     pub async fn run(&self) -> Result<()> {
+        if self.using_split_heavy_store() && !self.config.pipeline_enabled {
+            bail!(
+                "heavy_data_path requires pipeline mode: set --pipeline-enabled=true when using split heavy store"
+            );
+        }
+
         let blocks_behind = self.progress.blocks_remaining();
         let bulk_sync_mode =
             is_bulk_sync_active_by_lag(blocks_behind, self.config.bulk_sync_threshold);
@@ -3220,7 +3382,16 @@ impl Indexer {
                 "Bulk sync auto-enabled: {} blocks behind > {} threshold",
                 blocks_behind, self.config.bulk_sync_threshold,
             );
-            self.writer.store().set_bulk_sync_compaction_options();
+            self.for_each_store(|store| store.set_bulk_sync_compaction_options());
+        }
+
+        if self.using_split_heavy_store() {
+            info!(
+                run_id = %self.run_id,
+                core_data_path = %self.config.data_path,
+                heavy_data_path = ?self.config.heavy_data_path,
+                "Heavy lane writes are isolated to dedicated RocksDB instance"
+            );
         }
 
         let (start_block, _) = self.repo.get_sync_tip().await?;
@@ -3432,7 +3603,8 @@ impl Indexer {
         let pipeline_perf_for_fetcher = Arc::clone(&self.pipeline_perf);
         let adaptive_batch_controller_for_fetcher = Arc::clone(&self.adaptive_batch_controller);
         let parse_tx_for_fetcher_depth = parse_tx.clone();
-        let heavy_writer = self.writer.clone();
+        let heavy_writer = self.heavy_writer().clone();
+        let heavy_token_info_store = Arc::clone(self.writer.store());
         let heavy_run_id = self.run_id.clone();
         let heavy_bulk_sync_threshold = self.config.bulk_sync_threshold;
 
@@ -3443,9 +3615,15 @@ impl Indexer {
                 let end_block = batch.end_block;
                 let chain_tip = batch.chain_tip;
                 let heavy_writer = heavy_writer.clone();
+                let heavy_token_info_store = Arc::clone(&heavy_token_info_store);
                 let write_started = Instant::now();
                 let write_result = tokio::task::spawn_blocking(move || {
-                    write_heavy_lane_batch(&heavy_writer, batch, heavy_bulk_sync_threshold)
+                    write_heavy_lane_batch(
+                        &heavy_writer,
+                        heavy_token_info_store.as_ref(),
+                        batch,
+                        heavy_bulk_sync_threshold,
+                    )
                 })
                 .await;
 
@@ -4726,9 +4904,6 @@ impl Indexer {
                                 if let Some(err) = heavy_error_rx_for_writer.borrow().clone() {
                                     return Err(anyhow!(err));
                                 }
-                                self.ensure_heavy_lane_not_stalled(
-                                    "waiting_heavy_before_live_batch",
-                                )?;
                                 sleep(Duration::from_millis(20)).await;
                             }
                         }
@@ -4755,7 +4930,12 @@ impl Indexer {
                                     end_block
                                 ));
                             }
-                            self.ensure_heavy_lane_not_stalled("after_heavy_enqueue")?;
+                            self.pause_core_lane_until_heavy_lag_within_limit(
+                                "after_heavy_enqueue",
+                                &mut heavy_done_rx,
+                                &heavy_error_rx_for_writer,
+                            )
+                            .await?;
                         }
 
                         let db_start = Instant::now();
@@ -4835,7 +5015,12 @@ impl Indexer {
                             if !bulk_sync_mode {
                                 self.record_heavy_lane_tip(last_block_u64);
                             }
-                            self.ensure_heavy_lane_not_stalled("after_core_commit")?;
+                            self.pause_core_lane_until_heavy_lag_within_limit(
+                                "after_core_commit",
+                                &mut heavy_done_rx,
+                                &heavy_error_rx_for_writer,
+                            )
+                            .await?;
                             committed_tip_for_cache_for_writer
                                 .store(last_block.number, Ordering::SeqCst);
                             self.progress.record_batch(
@@ -4975,7 +5160,12 @@ impl Indexer {
                     }
                     Err(_timeout) => {
                         consecutive_idle_timeouts = consecutive_idle_timeouts.saturating_add(1);
-                        self.ensure_heavy_lane_not_stalled("pipeline_idle_timeout")?;
+                        self.pause_core_lane_until_heavy_lag_within_limit(
+                            "pipeline_idle_timeout",
+                            &mut heavy_done_rx,
+                            &heavy_error_rx_for_writer,
+                        )
+                        .await?;
                         let parser_finished = parser.is_finished();
                         let fetcher_finished = fetcher.is_finished();
                         let writer_queue_depth = parse_tx_for_writer_depth.max_capacity()
@@ -5445,7 +5635,7 @@ impl Indexer {
             // Re-enable normal compaction options. We intentionally avoid
             // post-bulk full-db manual compaction because that is a delayed
             // heavy task started after sync phase transition.
-            self.writer.store().restore_normal_compaction_options();
+            self.for_each_store(|store| store.restore_normal_compaction_options());
             self.bulk_completion_target.store(0, Ordering::SeqCst);
         } else {
             self.bulk_completion_target
@@ -10895,6 +11085,13 @@ mod tests {
         assert!(!is_bulk_sync_batch(10_000, 9_000, 1000));
         assert!(is_bulk_sync_batch(10_001, 9_000, 1000));
         assert!(!is_bulk_sync_batch(100, 150, 1000));
+    }
+
+    #[test]
+    fn test_should_pause_core_lane_for_heavy_lag() {
+        assert!(!should_pause_core_lane_for_heavy_lag(10_000, 9_500, 500));
+        assert!(!should_pause_core_lane_for_heavy_lag(10_000, 9_501, 500));
+        assert!(should_pause_core_lane_for_heavy_lag(10_000, 9_499, 500));
     }
 
     #[test]

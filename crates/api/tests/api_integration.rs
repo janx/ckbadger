@@ -8,9 +8,10 @@ use ckbadger_api::utils::address::compute_script_hash;
 use ckbadger_api::{create_router, AppConfig};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
-    CachedBlockHeader, ClusterAggregate, ClusterDailyDelta, DobEntry, DobExtra, DobStandard,
-    EpochStats, LiveCellInfo, NftCollectionAggregate, NftDailyDelta, NftEntry, NftExtra,
-    NftStandard, ScriptDailyDelta, ScriptInfo, SporeDailyDelta, TokenDailyDelta, TokenInfo,
+    ActivityEntry, CachedBlockHeader, ClusterAggregate, ClusterDailyDelta, DobEntry, DobExtra,
+    DobStandard, EpochStats, LiveCellInfo, NftCollectionAggregate, NftDailyDelta, NftEntry,
+    NftExtra, NftStandard, ScriptDailyDelta, ScriptInfo, SporeDailyDelta, TokenDailyDelta,
+    TokenInfo,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -22,6 +23,7 @@ fn test_store() -> Arc<CkbadgerStore> {
 fn test_config(store: Arc<CkbadgerStore>) -> AppConfig {
     AppConfig {
         store,
+        heavy_store: None,
         redis_url: None,
         ckb_rpc_url: "http://localhost:8114".to_string(),
         ckb_network: "mainnet".to_string(),
@@ -46,6 +48,52 @@ async fn test_network_stats_returns_ok() {
 
     let response = app.clone().oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn test_activities_endpoint_uses_heavy_store_when_configured() {
+    let core_store = test_store();
+    let heavy_store = test_store();
+    let lock_hash = vec![0x11; 32];
+
+    let mut batch = StoreBatch::new(heavy_store.as_ref());
+    batch.put_activity(
+        &lock_hash,
+        100,
+        1,
+        &ActivityEntry {
+            tx_hash: vec![0xaa; 32],
+            block_number: 100,
+            tx_index: 1,
+            timestamp: 1_700_000_000_000,
+            ckb_delta: 42,
+            occupied_delta: 10,
+            is_cellbase: false,
+            asset_changes: Vec::new(),
+            peers: Vec::new(),
+        },
+    );
+    batch.commit().unwrap();
+
+    let mut config = test_config(core_store);
+    config.heavy_store = Some(heavy_store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/addresses/0x{}/activities?limit=10",
+            hex::encode(&lock_hash)
+        ))
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(json["data"][0]["txHash"], format!("0x{}", "aa".repeat(32)));
 }
 
 #[tokio::test]

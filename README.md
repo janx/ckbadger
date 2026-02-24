@@ -221,6 +221,7 @@ make verify VERIFY_DEPTH=sampling VERIFY_RPC_URL=http://localhost:8114
 `make reset CONFIRM=1` cleanup scope:
 
 - Deletes local RocksDB path (`CKBADGER_DATA_PATH`) and api secondary path
+- Also deletes `CKBADGER_HEAVY_DATA_PATH` when configured (+ heavy api secondary path)
 - Deletes compose volumes `ckbadger-data` and `redis-data` (if present)
 - Keeps `ckb-data` volume (CKB chain data is not removed)
 
@@ -244,6 +245,10 @@ CKB_NETWORK=mainnet  # mainnet | testnet | devnet
 
 # ckbadger-store RocksDB data path
 CKBADGER_DATA_PATH=./data/ckbadger-store
+
+# Optional: split heavy lane writes (activities/addr_txs/spore/mnft/dotbit)
+# into a dedicated RocksDB instance. Use the same path for indexer and api.
+# CKBADGER_HEAVY_DATA_PATH=./data/ckbadger-heavy-store
 
 # Redis (optional)
 REDIS_URL=redis://localhost:6379
@@ -272,14 +277,27 @@ cargo run -p ckbadger-indexer -- \
   --parallel-fetch-size 64 \
   --pipeline-enabled \
   --pipeline-buffer 8 \
+  --heavy-lane-queue 12 \
+  --heavy-lane-max-lag-blocks 20000 \
+  --heavy-lane-max-lag-seconds 120 \
   --bulk-sync-threshold 1000
 
 # Environment variables
 CKBADGER_DATA_PATH=./data/ckbadger-store
+# Optional split heavy store (requires pipeline mode)
+# CKBADGER_HEAVY_DATA_PATH=./data/ckbadger-heavy-store
 CKB_RPC_URL=http://localhost:8114
 REDIS_URL=redis://localhost:6379
 TOKEN_LABELS_PATH=docs/token-labels
 ```
+
+Bulk sync dual-lane behavior:
+
+- Core lane and heavy lane consume the same parsed batch concurrently (not post-sync tasks).
+- `--heavy-lane-queue` bounds heavy backlog between parser/core and heavy writers.
+- If `core_tip - heavy_tip` exceeds `--heavy-lane-max-lag-blocks`, core lane pauses for backpressure and waits heavy lane to catch up.
+- Bulk sync is marked completed only when both lane tips reach the completion target.
+- Lane write/channel errors still fail-fast and stop sync.
 
 ## API Reference
 
