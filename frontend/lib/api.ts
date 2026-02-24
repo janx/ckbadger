@@ -571,6 +571,7 @@ interface Asset {
 interface AssetQueryParams {
   limit?: number;
   type?: 'token' | 'nft';
+  standard?: string;
   cursor?: string;
   search?: string;
   sortKey?:
@@ -1282,6 +1283,7 @@ export const api = {
     const query = new URLSearchParams();
     if (params.limit) query.set('limit', String(params.limit));
     if (params.type) query.set('type', params.type);
+    if (params.standard) query.set('standard', params.standard);
     if (params.cursor) query.set('cursor', params.cursor);
     if (params.search) query.set('search', params.search);
     if (params.sortKey) {

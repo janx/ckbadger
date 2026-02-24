@@ -196,6 +196,25 @@ describe('api', () => {
       await api.getAssets({ type: 'token', sortKey: 'transfers24h', sortDirection: 'asc' });
     });
 
+    it('builds query params for getAssets with standard filter', async () => {
+      server.use(
+        http.get('*/api/v1/assets', ({ request }) => {
+          const url = new URL(request.url);
+          expect(url.searchParams.get('type')).toBe('nft');
+          expect(url.searchParams.get('standard')).toBe('spore');
+          return HttpResponse.json({
+            data: [],
+            total: 0,
+            limit: 20,
+            hasMore: false,
+            nextCursor: null,
+          });
+        })
+      );
+
+      await api.getAssets({ type: 'nft', standard: 'spore' });
+    });
+
     it('fetches script occupation chart by script name', async () => {
       server.use(
         http.get('*/api/v1/scripts/:name/charts/occupation', ({ params }) => {

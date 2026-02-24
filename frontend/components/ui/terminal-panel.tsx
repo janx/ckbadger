@@ -71,18 +71,22 @@ export function TerminalPanelHeader({
   return (
     <div
       className={cn(
-        'flex items-center justify-between gap-3 px-4 py-3',
+        'flex flex-wrap items-start justify-between gap-3 px-4 py-3 sm:items-center',
         'border-b border-slate-800',
         'from-slate-850/50 bg-gradient-to-r to-transparent',
         className
       )}
     >
-      <div className="flex items-center gap-3">
+      <div className="flex min-w-0 items-center gap-3">
         <div className={indicatorClasses[indicator]} />
-        <div className="font-mono text-sm uppercase tracking-wider text-slate-400">{children}</div>
+        <div className="min-w-0 break-words font-mono text-sm uppercase tracking-wider text-slate-400">
+          {children}
+        </div>
       </div>
 
-      {actions && <div className="flex items-center gap-2">{actions}</div>}
+      {actions && (
+        <div className="flex max-w-full flex-wrap items-center justify-end gap-2">{actions}</div>
+      )}
     </div>
   );
 }

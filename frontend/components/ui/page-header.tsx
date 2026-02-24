@@ -37,8 +37,8 @@ export function PageHeader({
 
   return (
     <div className={cn('mb-8', className)}>
-      <div className="flex items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-start justify-between gap-4 sm:items-center">
+        <div className="flex min-w-0 items-center gap-3">
           {navigation?.prev && (
             <Link
               href={navigation.prev.href}
@@ -50,11 +50,11 @@ export function PageHeader({
           )}
 
           <div>
-            <div className="flex items-center gap-3">
-              <h1 className="font-mono text-2xl font-bold text-white">{title}</h1>
+            <div className="flex min-w-0 flex-wrap items-center gap-3">
+              <h1 className="break-words font-mono text-2xl font-bold text-white">{title}</h1>
               {badge}
             </div>
-            {subtitle && <div className="mt-1 text-sm text-slate-500">{subtitle}</div>}
+            {subtitle && <div className="mt-1 break-words text-sm text-slate-500">{subtitle}</div>}
           </div>
 
           {navigation?.next && (
@@ -68,7 +68,9 @@ export function PageHeader({
           )}
         </div>
 
-        {actions && <div className="flex items-center gap-2">{actions}</div>}
+        {actions && (
+          <div className="flex max-w-full flex-wrap items-center justify-end gap-2">{actions}</div>
+        )}
       </div>
 
       {hash && (

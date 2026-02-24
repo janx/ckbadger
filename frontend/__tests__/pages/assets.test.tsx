@@ -315,7 +315,7 @@ describe('AssetsPage', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Test Collection')).toBeInTheDocument();
-      expect(screen.getByText('SPORE')).toBeInTheDocument();
+      expect(screen.getAllByText('SPORE').length).toBeGreaterThan(0);
     });
   });
 
@@ -354,6 +354,29 @@ describe('AssetsPage', () => {
     });
   });
 
+  it('filters assets by selected standard', async () => {
+    vi.mocked(api.getAssets).mockResolvedValue(mockTokenAssets);
+
+    render(<AssetsPage />);
+
+    await waitFor(() => {
+      expect(api.getAssets).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'token', standard: undefined })
+      );
+    });
+
+    fireEvent.change(screen.getByLabelText('Filter by standard'), {
+      target: { value: 'xudt' },
+    });
+
+    await waitFor(() => {
+      expect(api.getAssets).toHaveBeenLastCalledWith(
+        expect.objectContaining({ type: 'token', standard: 'xudt' })
+      );
+      expect(window.location.search).toBe('?standard=xudt');
+    });
+  });
+
   it('clears search when switching tabs', async () => {
     vi.mocked(api.getAssets).mockResolvedValue(mockTokenAssets);
 
@@ -371,6 +394,31 @@ describe('AssetsPage', () => {
     await waitFor(() => {
       expect(api.getAssets).toHaveBeenLastCalledWith(
         expect.objectContaining({ search: undefined })
+      );
+    });
+  });
+
+  it('clears standard filter when switching tabs', async () => {
+    vi.mocked(api.getAssets).mockResolvedValue(mockTokenAssets);
+
+    render(<AssetsPage />);
+
+    fireEvent.change(screen.getByLabelText('Filter by standard'), {
+      target: { value: 'xudt' },
+    });
+
+    await waitFor(() => {
+      expect(api.getAssets).toHaveBeenLastCalledWith(
+        expect.objectContaining({ type: 'token', standard: 'xudt' })
+      );
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /NFTs/i }));
+
+    await waitFor(() => {
+      expect(window.location.search).toBe('?type=nft');
+      expect(api.getAssets).toHaveBeenLastCalledWith(
+        expect.objectContaining({ type: 'nft', standard: undefined })
       );
     });
   });
@@ -401,7 +449,7 @@ describe('AssetsPage', () => {
     await waitFor(() => {
       const link = screen.getByRole('link', { name: /\.bit/i });
       expect(link).toHaveAttribute('href', '/nfts/dotbit');
-      expect(screen.getByText('DOTBIT')).toBeInTheDocument();
+      expect(screen.getAllByText('DOTBIT').length).toBeGreaterThan(0);
     });
   });
 

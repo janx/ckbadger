@@ -44,6 +44,7 @@ pub struct ListParams {
     limit: i64,
     #[serde(rename = "type")]
     asset_type: Option<AssetFilterType>,
+    standard: Option<String>,
     cursor: Option<String>,
     search: Option<String>,
     #[serde(default = "default_asset_sort_key")]
@@ -164,16 +165,18 @@ async fn list_assets(
 
     let search_lower = params.search.as_ref().map(|s| s.to_lowercase());
     let filter_type = params.asset_type;
+    let filter_standard = normalize_assets_standard(params.standard.as_deref());
 
-    let (total, rows) = fetch_assets_cached(
-        &state,
-        filter_type,
-        search_lower.as_deref(),
+    let request = CachedAssetsRequest {
+        standard: filter_standard.as_deref(),
+        search: search_lower.as_deref(),
         limit,
-        params.cursor.as_deref(),
-        params.sort_key,
-        params.sort_direction,
-    )?;
+        cursor: params.cursor.as_deref(),
+        sort_key: params.sort_key,
+        sort_direction: params.sort_direction,
+    };
+
+    let (total, rows) = fetch_assets_cached(&state, filter_type, request)?;
 
     let has_more = rows.len() as i64 > limit;
     let rows: Vec<_> = rows.into_iter().take(limit as usize).collect();
@@ -194,14 +197,19 @@ async fn list_assets(
 
 /// Read from in-memory cache, apply search filter + cursor-based pagination.
 /// Falls back to direct computation when cache is cold.
+struct CachedAssetsRequest<'a> {
+    standard: Option<&'a str>,
+    search: Option<&'a str>,
+    limit: i64,
+    cursor: Option<&'a str>,
+    sort_key: AssetSortKey,
+    sort_direction: SortDirection,
+}
+
 fn fetch_assets_cached(
     state: &Arc<AppState>,
     filter_type: Option<AssetFilterType>,
-    search: Option<&str>,
-    limit: i64,
-    cursor: Option<&str>,
-    sort_key: AssetSortKey,
-    sort_direction: SortDirection,
+    request: CachedAssetsRequest<'_>,
 ) -> Result<(i64, Vec<AssetResponse>), (axum::http::StatusCode, Json<ApiError>)> {
     let mut all_cached: Vec<CachedAssetEntry> = Vec::new();
 
@@ -252,8 +260,12 @@ fn fetch_assets_cached(
         }
     }
 
+    if let Some(standard_filter) = request.standard {
+        all_cached.retain(|entry| entry.standard.eq_ignore_ascii_case(standard_filter));
+    }
+
     // Apply search filter
-    if let Some(s) = search {
+    if let Some(s) = request.search {
         all_cached.retain(|entry| {
             let name_match = entry
                 .name
@@ -271,10 +283,11 @@ fn fetch_assets_cached(
 
     let total = all_cached.len() as i64;
 
-    all_cached.sort_by(|a, b| compare_asset_entries(a, b, sort_key, sort_direction));
+    all_cached
+        .sort_by(|a, b| compare_asset_entries(a, b, request.sort_key, request.sort_direction));
 
     // Apply cursor-based pagination: skip items up to and including the cursor item
-    if let Some(cursor_str) = cursor {
+    if let Some(cursor_str) = request.cursor {
         if let Some((c_type, c_id)) = parse_asset_cursor(cursor_str) {
             // Find the cursor item by its unique (id, asset_type) and skip past it
             if let Some(pos) = all_cached
@@ -286,7 +299,7 @@ fn fetch_assets_cached(
         }
     }
 
-    all_cached.truncate((limit + 1) as usize);
+    all_cached.truncate((request.limit + 1) as usize);
 
     let assets: Vec<AssetResponse> = all_cached
         .into_iter()
@@ -294,6 +307,17 @@ fn fetch_assets_cached(
         .collect();
 
     Ok((total, assets))
+}
+
+fn normalize_assets_standard(value: Option<&str>) -> Option<String> {
+    value.and_then(|raw| {
+        let trimmed = raw.trim().to_ascii_lowercase();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    })
 }
 
 /// Parse cursor string.

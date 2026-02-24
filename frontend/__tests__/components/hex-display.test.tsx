@@ -19,4 +19,22 @@ describe('HexDisplay accent color', () => {
     expect(container.querySelector('.text-terminal-green')).toBeTruthy();
     expect(container.querySelector('.text-terminal-dark')).toBeTruthy();
   });
+
+  it('allows wrapping when full hex is shown', () => {
+    const { container } = render(
+      <HexDisplay value="0xabcdef1234567890abcdef1234567890" truncate={false} copyable={false} />
+    );
+
+    expect(container.firstChild).toHaveClass('flex-wrap');
+    expect(container.firstChild).toHaveClass('break-all');
+  });
+
+  it('keeps truncated hex on a single line by default', () => {
+    const { container } = render(
+      <HexDisplay value="0xabcdef1234567890abcdef1234567890" truncate copyable={false} />
+    );
+
+    expect(container.firstChild).not.toHaveClass('flex-wrap');
+    expect(container.firstChild).not.toHaveClass('break-all');
+  });
 });

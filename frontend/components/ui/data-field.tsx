@@ -46,7 +46,7 @@ export function DataField({
         </div>
         <div
           className={cn(
-            'font-mono text-sm text-white',
+            'min-w-0 break-words font-mono text-sm text-white',
             copyValue && 'hover:text-terminal-green cursor-pointer transition-colors',
             valueClassName
           )}
@@ -61,11 +61,11 @@ export function DataField({
   return (
     <div
       className={cn(
-        'flex items-center justify-between border-b border-slate-800/50 py-3 last:border-b-0',
+        'flex flex-col gap-2 border-b border-slate-800/50 py-3 last:border-b-0 sm:flex-row sm:items-center sm:justify-between',
         className
       )}
     >
-      <div className={cn('flex items-center gap-2', labelClassName)}>
+      <div className={cn('flex shrink-0 items-center gap-2', labelClassName)}>
         <span className="text-sm text-slate-500">{label}</span>
         {helpText && (
           <span className="cursor-help text-slate-500 hover:text-slate-400" title={helpText}>
@@ -75,7 +75,7 @@ export function DataField({
       </div>
       <div
         className={cn(
-          'flex items-center gap-2 text-right font-mono text-sm text-white',
+          'flex w-full min-w-0 items-center gap-2 break-words text-left font-mono text-sm text-white sm:w-auto sm:justify-end sm:text-right',
           copyValue && 'hover:text-terminal-green group cursor-pointer transition-colors',
           valueClassName
         )}

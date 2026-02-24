@@ -401,7 +401,7 @@ export default function ClusterDetailPage() {
               <TerminalPanelHeader indicator="active">Cluster Info</TerminalPanelHeader>
               <TerminalPanelContent>
                 <DataGrid columns={1}>
-                  <DataField label="Cluster ID">
+                  <DataField label="Cluster ID" layout="vertical" valueClassName="w-full">
                     <HexDisplay
                       value={cluster.clusterId}
                       truncate={false}
@@ -419,7 +419,7 @@ export default function ClusterDetailPage() {
                       {formatNumber(cluster.sporesCount)}
                     </span>
                   </DataField>
-                  <DataField label="Creator">
+                  <DataField label="Creator" layout="vertical" valueClassName="w-full">
                     {creatorAddress ? (
                       <Address address={creatorAddress} truncate={false} />
                     ) : (
@@ -493,7 +493,7 @@ export default function ClusterDetailPage() {
               <TerminalPanelHeader
                 indicator="active"
                 actions={
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <label className="sr-only" htmlFor="spore-list-query">
                       Search spores
                     </label>
@@ -504,7 +504,7 @@ export default function ClusterDetailPage() {
                       value={listQuery}
                       onChange={(event) => setListQuery(event.target.value)}
                       placeholder="Search hash / owner / type"
-                      className="w-48 rounded border border-slate-700 bg-slate-900 px-2 py-1 font-mono text-xs text-slate-200 placeholder:text-slate-500"
+                      className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 font-mono text-xs text-slate-200 placeholder:text-slate-500 sm:w-48"
                     />
 
                     <label className="sr-only" htmlFor="spore-content-filter">

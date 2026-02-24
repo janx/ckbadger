@@ -240,6 +240,11 @@ describe('ClusterDetailPage', () => {
       expect(screen.getByText('Creator')).toBeInTheDocument();
       expect(screen.queryByText('Created at Block')).not.toBeInTheDocument();
     });
+
+    const clusterIdField = screen.getByText('Cluster ID').closest('div')?.parentElement;
+    const creatorField = screen.getByText('Creator').closest('div')?.parentElement;
+    expect(clusterIdField).toHaveClass('flex-col');
+    expect(creatorField).toHaveClass('flex-col');
   });
 
   it('renders overview and snapshot sections', async () => {
@@ -276,6 +281,21 @@ describe('ClusterDetailPage', () => {
       expect(screen.getByText('1 shown / 2 total')).toBeInTheDocument();
       expect(screen.queryByText('No spores match current filters')).not.toBeInTheDocument();
     });
+  });
+
+  it('uses wrapped control layout for narrow screens in spores panel', async () => {
+    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
+    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
+
+    render(<ClusterDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Search spores')).toBeInTheDocument();
+    });
+
+    const searchInput = screen.getByLabelText('Search spores');
+    expect(searchInput.className).toContain('w-full');
+    expect(searchInput.className).toContain('sm:w-48');
   });
 
   it('shows empty filtered state when no spores match selected type', async () => {
