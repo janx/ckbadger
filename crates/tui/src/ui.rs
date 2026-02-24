@@ -11,7 +11,9 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use crate::chart::{render_bar_chart, ChartStats};
-use crate::db::{ApiServiceInfo, ChainInfoData, RedisServiceInfo, SyncStatusRow, TuiDb};
+use crate::db::{
+    ApiServiceInfo, ChainInfoData, RedisServiceInfo, RuntimeDiagData, SyncStatusRow, TuiDb,
+};
 
 const RATE_HISTORY_SIZE: usize = 3600;
 const LOG_HISTORY_SIZE: usize = 200;
@@ -97,6 +99,7 @@ pub struct App {
     chain_info: Option<ChainInfoData>,
     redis_service: RedisServiceInfo,
     api_service: ApiServiceInfo,
+    runtime_diag: Option<RuntimeDiagData>,
     last_refresh: Instant,
     last_sample: Instant,
     status_message: Option<(String, Instant)>,
@@ -113,6 +116,7 @@ pub struct App {
     prev_is_bulk_sync: Option<bool>,
     prev_is_syncing: Option<bool>,
     prev_indexes_deferred: Option<bool>,
+    prev_pipeline_reset_epoch: Option<u64>,
     prev_bottleneck: Option<SyncBottleneck>,
     last_rate_drop_alert: Option<Instant>,
     stale_warning_active: bool,
@@ -151,6 +155,7 @@ impl App {
             chain_info: None,
             redis_service: RedisServiceInfo::default(),
             api_service: ApiServiceInfo::default(),
+            runtime_diag: None,
             last_refresh: Instant::now(),
             last_sample: Instant::now(),
             status_message: None,
@@ -167,6 +172,7 @@ impl App {
             prev_is_bulk_sync: None,
             prev_is_syncing: None,
             prev_indexes_deferred: None,
+            prev_pipeline_reset_epoch: None,
             prev_bottleneck: None,
             last_rate_drop_alert: None,
             stale_warning_active: false,
@@ -284,6 +290,7 @@ impl App {
         self.chain_info = chain_info;
         self.redis_service = self.db.get_redis_service_info().await;
         self.api_service = api_service;
+        self.runtime_diag = self.db.get_runtime_diag();
         self.last_refresh = Instant::now();
 
         self.detect_events();
@@ -364,6 +371,11 @@ impl App {
         let is_bulk_sync = sync.is_bulk_sync;
         let is_syncing = sync.is_syncing;
         let indexes_deferred = sync.indexes_deferred;
+        let pipeline_reset_epoch = sync.pipeline_reset_epoch;
+        let pipeline_reset_reason = sync
+            .pipeline_reset_reason
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
         let bottleneck = sync_bottleneck(sync.db_write_ms, sync.rpc_fetch_ms);
 
         if let Some(prev_bulk) = self.prev_is_bulk_sync {
@@ -401,6 +413,19 @@ impl App {
             }
         }
         self.prev_indexes_deferred = Some(indexes_deferred);
+
+        if pipeline_reset_epoch.is_some() && pipeline_reset_epoch != self.prev_pipeline_reset_epoch
+        {
+            self.push_sync_event_and_log(
+                format!(
+                    "pipeline reset #{} ({})",
+                    pipeline_reset_epoch.unwrap_or(0),
+                    pipeline_reset_reason
+                ),
+                LogLevel::Warning,
+            );
+        }
+        self.prev_pipeline_reset_epoch = pipeline_reset_epoch;
 
         if let Some(prev) = self.prev_bottleneck {
             if prev != bottleneck && bottleneck != SyncBottleneck::Unknown {
@@ -827,6 +852,7 @@ fn draw_sync_realtime_bar(f: &mut Frame, app: &App, area: Rect) {
     let jitter = rate_jitter(&app.rate_history, 30).unwrap_or(0.0);
     let eta_conf = eta_confidence_label(ema_rate, jitter);
     let bottleneck = sync_bottleneck(sync.db_write_ms, sync.rpc_fetch_ms);
+    let (phase_label, phase_color) = startup_phase_label(sync.startup_phase.as_deref());
 
     let stale_secs = app
         .memory_stats
@@ -866,6 +892,8 @@ fn draw_sync_realtime_bar(f: &mut Frame, app: &App, area: Rect) {
             format!("{} ", eta_conf.0),
             Style::default().fg(Color::Black).bg(eta_conf.1),
         ),
+        Span::styled(" | phase ", Style::default().fg(SLATE_500)),
+        Span::styled(phase_label, Style::default().fg(phase_color)),
         Span::styled(" | Bottleneck ", Style::default().fg(SLATE_500)),
         Span::styled(
             bottleneck_label(bottleneck),
@@ -1227,7 +1255,11 @@ fn draw_sync_progress(f: &mut Frame, app: &App, area: Rect) {
     ];
     f.render_widget(Paragraph::new(mid), cols[1]);
 
-    let right = sync_timing_lines(sync.eta.as_deref(), sync.elapsed_time.as_deref());
+    let right = sync_timing_lines(
+        sync.eta.as_deref(),
+        sync.elapsed_time.as_deref(),
+        sync.startup_phase.as_deref(),
+    );
     f.render_widget(Paragraph::new(right), cols[2]);
 }
 
@@ -1336,7 +1368,7 @@ fn stack_sync_charts(area: Rect) -> bool {
 
 fn chart_height_warning(inner_height: u16) -> Option<&'static str> {
     if inner_height < 3 {
-        Some("高度不足无法显示")
+        Some("Insufficient height for chart")
     } else {
         None
     }
@@ -1478,6 +1510,14 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
                             Style::default().fg(delta_color(bottleneck_delta)),
                         ),
                     ]),
+                    adaptive_control_line(
+                        sync.adaptive_target_batch_txs,
+                        sync.adaptive_inflight_limit,
+                    ),
+                    pipeline_reset_line(
+                        sync.pipeline_reset_epoch,
+                        sync.pipeline_reset_reason.as_deref(),
+                    ),
                 ],
                 dense_right_lines(
                     stage_trend_line("F", TERMINAL_DIM, &app.fetch_stage_history, spark_width),
@@ -1566,6 +1606,14 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
                             }),
                         ),
                     ]),
+                    adaptive_control_line(
+                        sync.adaptive_target_batch_txs,
+                        sync.adaptive_inflight_limit,
+                    ),
+                    pipeline_reset_line(
+                        sync.pipeline_reset_epoch,
+                        sync.pipeline_reset_reason.as_deref(),
+                    ),
                 ],
                 detail_right_lines(
                     stage_trend_line("F", TERMINAL_DIM, &app.fetch_stage_history, spark_width),
@@ -1617,6 +1665,11 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
                         Style::default().fg(FOREGROUND),
                     ),
                 ]),
+                adaptive_control_line(sync.adaptive_target_batch_txs, sync.adaptive_inflight_limit),
+                pipeline_reset_line(
+                    sync.pipeline_reset_epoch,
+                    sync.pipeline_reset_reason.as_deref(),
+                ),
             ],
             vec![
                 Line::from(vec![
@@ -1654,6 +1707,47 @@ fn io_fetch_write_jitter_line(
     ])
 }
 
+fn adaptive_control_line(
+    adaptive_target_batch_txs: Option<u64>,
+    adaptive_inflight_limit: Option<u64>,
+) -> Line<'static> {
+    let target_text = adaptive_target_batch_txs
+        .map(format_num_u64)
+        .unwrap_or_else(|| "-".to_string());
+    let inflight_text = adaptive_inflight_limit
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "-".to_string());
+    Line::from(vec![
+        Span::styled("Adaptive ", Style::default().fg(SLATE_500)),
+        Span::styled(
+            format!("tx {}  inflight {}", target_text, inflight_text),
+            Style::default().fg(TERMINAL_DIM),
+        ),
+    ])
+}
+
+fn pipeline_reset_line(
+    pipeline_reset_epoch: Option<u64>,
+    pipeline_reset_reason: Option<&str>,
+) -> Line<'static> {
+    let epoch_text = pipeline_reset_epoch
+        .map(format_num_u64)
+        .unwrap_or_else(|| "-".to_string());
+    let reason_text = pipeline_reset_reason.unwrap_or("-");
+    let reason_color = if pipeline_reset_epoch.is_some() {
+        AMBER
+    } else {
+        SLATE_500
+    };
+    Line::from(vec![
+        Span::styled("Reset ", Style::default().fg(SLATE_500)),
+        Span::styled(
+            format!("#{} {}", epoch_text, reason_text),
+            Style::default().fg(reason_color),
+        ),
+    ])
+}
+
 fn dense_right_lines(
     fetch_line: Line<'static>,
     parse_line: Line<'static>,
@@ -1682,7 +1776,11 @@ fn detail_right_lines(
     ]
 }
 
-fn sync_timing_lines(eta: Option<&str>, elapsed: Option<&str>) -> Vec<Line<'static>> {
+fn sync_timing_lines(
+    eta: Option<&str>,
+    elapsed: Option<&str>,
+    startup_phase: Option<&str>,
+) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
     if let Some(eta) = eta {
@@ -1701,6 +1799,14 @@ fn sync_timing_lines(eta: Option<&str>, elapsed: Option<&str>) -> Vec<Line<'stat
         lines.push(Line::from(vec![
             Span::styled("Elapsed: ", Style::default().fg(SLATE_500)),
             Span::styled(elapsed.to_string(), Style::default().fg(FOREGROUND)),
+        ]));
+    }
+
+    if let Some(startup_phase) = startup_phase {
+        let (label, color) = startup_phase_label(Some(startup_phase));
+        lines.push(Line::from(vec![
+            Span::styled("Phase: ", Style::default().fg(SLATE_500)),
+            Span::styled(label, Style::default().fg(color)),
         ]));
     }
 
@@ -1817,11 +1923,20 @@ fn storage_runtime_columns(
             format_num_u64(mem.consumed_cells_count),
             FOREGROUND,
         ),
-        metric_line(
-            "Consumed Sz",
-            format_bytes(mem.consumed_cells_bytes),
-            FOREGROUND,
-        ),
+        Line::from(vec![
+            metric_label_span("Consumed Sz"),
+            Span::styled(
+                format_bytes(mem.consumed_cells_bytes),
+                Style::default().fg(FOREGROUND),
+            ),
+            Span::styled("  src ", Style::default().fg(SLATE_500)),
+            Span::styled(
+                consumed_cells_source_label(&mem.consumed_cells_bytes_source),
+                Style::default().fg(consumed_cells_source_color(
+                    &mem.consumed_cells_bytes_source,
+                )),
+            ),
+        ]),
         metric_line(
             "Block Hdrs",
             format_num_u64(mem.block_headers_count),
@@ -1871,10 +1986,57 @@ fn storage_runtime_columns(
                 Style::default().fg(live_delta_color(live_delta)),
             ),
         ]),
-        metric_line("Chain Addrs", format_num(mem.total_addresses), TERMINAL_DIM),
+        Line::from(vec![
+            metric_label_span("Chain Addrs"),
+            Span::styled(
+                format_num(mem.total_addresses),
+                Style::default().fg(TERMINAL_DIM),
+            ),
+            Span::styled("  mode ", Style::default().fg(SLATE_500)),
+            Span::styled(
+                if mem.bulk_sync_mode { "bulk" } else { "tip" },
+                Style::default().fg(if mem.bulk_sync_mode {
+                    AMBER
+                } else {
+                    TERMINAL_GREEN
+                }),
+            ),
+            Span::styled("  cache ", Style::default().fg(SLATE_500)),
+            Span::styled(
+                if mem.bulk_sync_cell_cache_enabled {
+                    "on"
+                } else {
+                    "off"
+                },
+                Style::default().fg(if mem.bulk_sync_cell_cache_enabled {
+                    TERMINAL_GREEN
+                } else {
+                    AMBER
+                }),
+            ),
+        ]),
     ];
 
     (left, mid, right)
+}
+
+fn consumed_cells_source_label(source: &str) -> &'static str {
+    match source {
+        "live" => "live",
+        "sst" => "sst",
+        "mem" => "mem",
+        "none" => "none",
+        _ => "unknown",
+    }
+}
+
+fn consumed_cells_source_color(source: &str) -> Color {
+    match source {
+        "live" => TERMINAL_GREEN,
+        "sst" | "mem" => AMBER,
+        "none" => SLATE_500,
+        _ => AMBER,
+    }
 }
 
 fn metric_label_span(label: &str) -> Span<'static> {
@@ -2070,10 +2232,15 @@ fn draw_storage_health(f: &mut Frame, app: &App, area: Rect) {
 fn draw_service_windows(f: &mut Frame, app: &App, area: Rect) {
     let cols = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .constraints([
+            Constraint::Percentage(34),
+            Constraint::Percentage(33),
+            Constraint::Percentage(33),
+        ])
         .split(area);
     draw_redis_health(f, app, cols[0]);
     draw_api_health(f, app, cols[1]);
+    draw_runtime_health(f, app, cols[2]);
 }
 
 fn draw_redis_health(f: &mut Frame, app: &App, area: Rect) {
@@ -2273,6 +2440,118 @@ fn draw_api_health(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
+fn draw_runtime_health(f: &mut Frame, app: &App, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(SLATE_800))
+        .title(Span::styled("Run Health", Style::default().fg(FOREGROUND)));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if inner.height == 0 {
+        return;
+    }
+
+    let (state, state_color) = runtime_health_state(app.runtime_diag.as_ref());
+    let Some(diag) = app.runtime_diag.as_ref() else {
+        f.render_widget(Paragraph::new("No runtime diagnostics"), inner);
+        return;
+    };
+
+    let run_label = if diag.active_run_id.is_some() {
+        "active"
+    } else {
+        "last"
+    };
+    let run_id = diag
+        .active_run_id
+        .as_ref()
+        .or(diag.last_run_id.as_ref())
+        .map(|s| trim_for_panel(s, inner.width as usize))
+        .unwrap_or_else(|| "-".to_string());
+    let stage = diag
+        .heartbeat_stage
+        .as_deref()
+        .unwrap_or("unknown")
+        .to_string();
+    let age_text = format_age_secs(diag.heartbeat_age_secs);
+    let incident = diag
+        .last_incident_summary
+        .as_ref()
+        .map(|s| trim_for_panel(s, inner.width as usize))
+        .unwrap_or_else(|| "-".to_string());
+    let shutdown_reason = diag
+        .last_shutdown_reason
+        .as_ref()
+        .map(|s| trim_for_panel(s, inner.width as usize))
+        .unwrap_or_else(|| "-".to_string());
+
+    let lines = vec![
+        Line::from(vec![
+            Span::styled("State ", Style::default().fg(SLATE_500)),
+            Span::styled(
+                format!("[{}]", state),
+                Style::default()
+                    .fg(state_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  age ", Style::default().fg(SLATE_500)),
+            Span::styled(age_text, Style::default().fg(TERMINAL_DIM)),
+        ]),
+        Line::from(vec![
+            Span::styled("Stage ", Style::default().fg(SLATE_500)),
+            Span::styled(stage, Style::default().fg(FOREGROUND)),
+            Span::styled("  block ", Style::default().fg(SLATE_500)),
+            Span::styled(
+                format!(
+                    "{}/{}",
+                    format_num(diag.heartbeat_block),
+                    format_num(diag.heartbeat_target_block)
+                ),
+                Style::default().fg(TERMINAL_GREEN),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("OOM ", Style::default().fg(SLATE_500)),
+            Span::styled(
+                format!(
+                    "{}/{}",
+                    format_num_u64(diag.heartbeat_oom_events.unwrap_or(0)),
+                    format_num_u64(diag.heartbeat_oom_kill_events.unwrap_or(0))
+                ),
+                Style::default().fg(AMBER),
+            ),
+            Span::styled("  (events/kill)", Style::default().fg(SLATE_500)),
+        ]),
+        Line::from(vec![
+            Span::styled(
+                format!("Run {} ", run_label),
+                Style::default().fg(SLATE_500),
+            ),
+            Span::styled(run_id, Style::default().fg(TERMINAL_DIM)),
+        ]),
+        Line::from(vec![
+            Span::styled("Incident ", Style::default().fg(SLATE_500)),
+            Span::styled(incident, Style::default().fg(AMBER)),
+        ]),
+        Line::from(vec![
+            Span::styled("Shutdown ", Style::default().fg(SLATE_500)),
+            Span::styled(
+                format!(
+                    "{}{}",
+                    shutdown_reason,
+                    diag.last_exit_code
+                        .map(|code| format!(" (code {code})"))
+                        .unwrap_or_default()
+                ),
+                Style::default().fg(FOREGROUND),
+            ),
+        ]),
+    ];
+
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
 fn redis_max_key_age(info: &RedisServiceInfo) -> Option<i64> {
     [
         info.sync_status_age_secs,
@@ -2306,6 +2585,30 @@ fn api_health_state(info: &ApiServiceInfo) -> (&'static str, Color) {
         || info.latency_ms.is_some_and(|latency| latency >= 1500.0)
     {
         ("WARN", AMBER)
+    } else {
+        ("OK", TERMINAL_GREEN)
+    }
+}
+
+fn runtime_health_state(info: Option<&RuntimeDiagData>) -> (&'static str, Color) {
+    let Some(info) = info else {
+        return ("N/A", SLATE_500);
+    };
+    if info
+        .heartbeat_age_secs
+        .is_some_and(|age| age > 60 && info.active_run_id.is_some())
+    {
+        return ("STALE", AMBER);
+    }
+    if info
+        .heartbeat_oom_kill_events
+        .is_some_and(|kills| kills > 0)
+        || info.last_incident_summary.is_some()
+    {
+        return ("WARN", AMBER);
+    }
+    if info.active_run_id.is_none() {
+        ("IDLE", SLATE_500)
     } else {
         ("OK", TERMINAL_GREEN)
     }
@@ -2807,6 +3110,17 @@ fn eta_confidence_label(ema_rate: f64, jitter: f64) -> (&'static str, Color) {
     }
 }
 
+fn startup_phase_label(startup_phase: Option<&str>) -> (String, Color) {
+    match startup_phase {
+        Some("rollback_cleanup") => ("rollback_cleanup".to_string(), AMBER),
+        Some("run_start") => ("run_start".to_string(), AMBER),
+        Some("bulk_sync") => ("bulk_sync".to_string(), TERMINAL_DIM),
+        Some("tip_sync") => ("tip_sync".to_string(), TERMINAL_GREEN),
+        Some(custom) => (custom.to_string(), SLATE_500),
+        None => ("steady".to_string(), TERMINAL_GREEN),
+    }
+}
+
 fn detect_layout_density(app: &App, area: Rect) -> LayoutDensity {
     if app.force_compact_layout {
         return LayoutDensity::Compact;
@@ -2950,18 +3264,20 @@ fn format_bytes(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        api_health_state, chart_height_warning, compact_overview_layout, compact_sync_layout,
+        adaptive_control_line, api_health_state, chart_height_warning, compact_overview_layout,
+        compact_sync_layout, consumed_cells_source_color, consumed_cells_source_label,
         dense_right_lines, detail_right_lines, diagnostics_dense_panel, eta_confidence_label,
         format_age_secs, format_hit_rate, format_num, format_num_commas, format_ratio,
         format_signed_num_i128, format_ttl, header_title_line, heartbeat_is_on,
         io_fetch_write_jitter_line, overview_log_min_height, overview_services_min_height,
-        pipeline_bottleneck, pipeline_flow_state, rate_jitter, redis_health_state, redis_key_line,
-        redis_max_key_age, runtime_live_delta, sparkline, stack_sync_charts,
+        pipeline_bottleneck, pipeline_flow_state, pipeline_reset_line, rate_jitter,
+        redis_health_state, redis_key_line, redis_max_key_age, runtime_health_state,
+        runtime_live_delta, sparkline, stack_sync_charts, startup_phase_label,
         storage_runtime_columns, sync_bottleneck, sync_timing_lines, trend_delta, trim_for_panel,
         Color, CompactOverviewLayout, CompactSyncLayout, DiagnosticsViewMode, SyncBottleneck,
         TERMINAL_DIM,
     };
-    use crate::db::{ApiServiceInfo, RedisServiceInfo};
+    use crate::db::{ApiServiceInfo, RedisServiceInfo, RuntimeDiagData};
     use ckbadger_common::MemoryStatsData;
     use ratatui::layout::Rect;
     use ratatui::text::Line;
@@ -3187,6 +3503,24 @@ mod tests {
     }
 
     #[test]
+    fn test_adaptive_control_line_format() {
+        let line = adaptive_control_line(Some(40_000), Some(3));
+        let text = line_text(&line);
+        assert!(text.contains("Adaptive"));
+        assert!(text.contains("tx 40,000"));
+        assert!(text.contains("inflight 3"));
+    }
+
+    #[test]
+    fn test_pipeline_reset_line_format() {
+        let line = pipeline_reset_line(Some(7), Some("pipeline batch mismatch"));
+        let text = line_text(&line);
+        assert!(text.contains("Reset"));
+        assert!(text.contains("#7"));
+        assert!(text.contains("pipeline batch mismatch"));
+    }
+
+    #[test]
     fn test_dense_right_lines_order() {
         let lines = dense_right_lines(
             Line::from("F"),
@@ -3215,7 +3549,7 @@ mod tests {
 
     #[test]
     fn test_sync_timing_lines_do_not_show_data_source() {
-        let lines = sync_timing_lines(Some("2m 03s"), Some("17m 12s"));
+        let lines = sync_timing_lines(Some("2m 03s"), Some("17m 12s"), Some("bulk_sync"));
         let text = lines
             .iter()
             .map(line_text)
@@ -3223,6 +3557,7 @@ mod tests {
             .join(" ");
         assert!(text.contains("ETA: 2m 03s"));
         assert!(text.contains("Elapsed: 17m 12s"));
+        assert!(text.contains("Phase: bulk_sync"));
         assert!(!text.contains("Source"));
         assert!(!text.contains("DB"));
         assert!(!text.contains("RPC"));
@@ -3230,7 +3565,7 @@ mod tests {
 
     #[test]
     fn test_sync_timing_lines_empty_shows_fallback() {
-        let lines = sync_timing_lines(None, None);
+        let lines = sync_timing_lines(None, None, None);
         assert_eq!(lines.len(), 1);
         assert_eq!(line_text(&lines[0]), "No timing data");
     }
@@ -3244,9 +3579,92 @@ mod tests {
 
     #[test]
     fn test_chart_height_warning() {
-        assert_eq!(chart_height_warning(0), Some("高度不足无法显示"));
-        assert_eq!(chart_height_warning(2), Some("高度不足无法显示"));
+        assert_eq!(
+            chart_height_warning(0),
+            Some("Insufficient height for chart")
+        );
+        assert_eq!(
+            chart_height_warning(2),
+            Some("Insufficient height for chart")
+        );
         assert_eq!(chart_height_warning(3), None);
+    }
+
+    #[test]
+    fn test_startup_phase_label() {
+        assert_eq!(
+            startup_phase_label(Some("rollback_cleanup")),
+            ("rollback_cleanup".to_string(), Color::Rgb(255, 176, 0))
+        );
+        assert_eq!(
+            startup_phase_label(Some("tip_sync")),
+            ("tip_sync".to_string(), Color::Rgb(0, 255, 65))
+        );
+        assert_eq!(
+            startup_phase_label(Some("custom-phase")),
+            ("custom-phase".to_string(), Color::Rgb(160, 174, 192))
+        );
+        assert_eq!(
+            startup_phase_label(None),
+            ("steady".to_string(), Color::Rgb(0, 255, 65))
+        );
+    }
+
+    #[test]
+    fn test_runtime_health_state() {
+        assert_eq!(
+            runtime_health_state(None),
+            ("N/A", Color::Rgb(160, 174, 192))
+        );
+
+        let idle = RuntimeDiagData::default();
+        assert_eq!(
+            runtime_health_state(Some(&idle)),
+            ("IDLE", Color::Rgb(160, 174, 192))
+        );
+
+        let ok = RuntimeDiagData {
+            active_run_id: Some("run-1".to_string()),
+            heartbeat_age_secs: Some(10),
+            ..Default::default()
+        };
+        assert_eq!(
+            runtime_health_state(Some(&ok)),
+            ("OK", Color::Rgb(0, 255, 65))
+        );
+
+        let stale = RuntimeDiagData {
+            active_run_id: Some("run-1".to_string()),
+            heartbeat_age_secs: Some(61),
+            ..Default::default()
+        };
+        assert_eq!(
+            runtime_health_state(Some(&stale)),
+            ("STALE", Color::Rgb(255, 176, 0))
+        );
+
+        let warn = RuntimeDiagData {
+            active_run_id: Some("run-1".to_string()),
+            heartbeat_age_secs: Some(10),
+            heartbeat_oom_kill_events: Some(1),
+            ..Default::default()
+        };
+        assert_eq!(
+            runtime_health_state(Some(&warn)),
+            ("WARN", Color::Rgb(255, 176, 0))
+        );
+    }
+
+    #[test]
+    fn test_consumed_cells_source_helpers() {
+        assert_eq!(consumed_cells_source_label("live"), "live");
+        assert_eq!(consumed_cells_source_label("sst"), "sst");
+        assert_eq!(consumed_cells_source_label("foo"), "unknown");
+        assert_eq!(consumed_cells_source_color("live"), Color::Rgb(0, 255, 65));
+        assert_eq!(
+            consumed_cells_source_color("none"),
+            Color::Rgb(160, 174, 192)
+        );
     }
 
     #[test]
@@ -3408,5 +3826,22 @@ mod tests {
         assert!(live_line.contains("Live (sync)"));
         assert!(live_line.contains("1,428,846"));
         assert!(live_line.contains("Δcache -11"));
+    }
+
+    #[test]
+    fn test_storage_runtime_columns_mode_and_consumed_source() {
+        let mem = MemoryStatsData {
+            consumed_cells_bytes: 1_024,
+            consumed_cells_bytes_source: "sst".to_string(),
+            bulk_sync_mode: true,
+            bulk_sync_cell_cache_enabled: false,
+            total_addresses: 123,
+            ..Default::default()
+        };
+
+        let (left, _, right) = storage_runtime_columns(&mem);
+        assert!(line_text(&left[2]).contains("src sst"));
+        assert!(line_text(&right[3]).contains("mode bulk"));
+        assert!(line_text(&right[3]).contains("cache off"));
     }
 }

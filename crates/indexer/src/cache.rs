@@ -431,6 +431,10 @@ mod tests {
             db_write_ms: None,
             rpc_fetch_ms: None,
             pipeline: None,
+            pipeline_reset_epoch: None,
+            pipeline_reset_reason: None,
+            adaptive_target_batch_txs: None,
+            adaptive_inflight_limit: None,
         };
         invalidator.publish_sync_progress(&data).await;
     }
@@ -525,6 +529,10 @@ mod tests {
                 db_write_ms: None,
                 rpc_fetch_ms: None,
                 pipeline: None,
+                pipeline_reset_epoch: Some(7),
+                pipeline_reset_reason: Some("pipeline batch mismatch".to_string()),
+                adaptive_target_batch_txs: Some(40_000),
+                adaptive_inflight_limit: Some(3),
             };
             invalidator.publish_sync_progress(&data).await;
 
@@ -542,6 +550,13 @@ mod tests {
             assert_eq!(stored.target_block, 10000);
             assert!((stored.progress_percentage - 50.0).abs() < 0.01);
             assert_eq!(stored.startup_phase.as_deref(), Some("rollback_cleanup"));
+            assert_eq!(stored.pipeline_reset_epoch, Some(7));
+            assert_eq!(
+                stored.pipeline_reset_reason.as_deref(),
+                Some("pipeline batch mismatch")
+            );
+            assert_eq!(stored.adaptive_target_batch_txs, Some(40_000));
+            assert_eq!(stored.adaptive_inflight_limit, Some(3));
         }
 
         #[tokio::test]

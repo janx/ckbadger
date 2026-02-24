@@ -311,6 +311,10 @@ fn cgroup_memory_ratio_pct(snapshot: &CgroupMemorySnapshot) -> Option<f64> {
     }
 }
 
+fn sender_queue_depth<T>(sender: &tokio::sync::mpsc::Sender<T>) -> u64 {
+    (sender.max_capacity() - sender.capacity()) as u64
+}
+
 fn should_trim_cell_cache(cache_len: usize) -> bool {
     cache_len > CELL_CACHE_CAPACITY * 2
 }
@@ -2321,6 +2325,28 @@ impl Indexer {
         self.pipeline_perf.snapshot()
     }
 
+    pub fn adaptive_batch_snapshot(&self) -> Option<(u64, u64)> {
+        if !self.config.pipeline_enabled {
+            return None;
+        }
+        let snapshot = self.adaptive_batch_controller.snapshot();
+        Some((snapshot.target_batch_txs, snapshot.inflight_limit))
+    }
+
+    pub fn pipeline_reset_snapshot(&self) -> Option<(u64, String)> {
+        if !self.config.pipeline_enabled {
+            return None;
+        }
+        let epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst);
+        if epoch == 0 {
+            return None;
+        }
+        let reason =
+            decode_pipeline_reset_reason(self.pipeline_reset_reason_code.load(Ordering::SeqCst))
+                .to_string();
+        Some((epoch, reason))
+    }
+
     pub fn startup_phase(&self) -> Option<String> {
         decode_startup_phase(self.startup_phase.load(Ordering::SeqCst)).map(str::to_string)
     }
@@ -2574,6 +2600,7 @@ impl Indexer {
         let ckb_store = self.ckb_store.clone();
         let pipeline_perf_for_fetcher = Arc::clone(&self.pipeline_perf);
         let adaptive_batch_controller_for_fetcher = Arc::clone(&self.adaptive_batch_controller);
+        let parse_tx_for_fetcher_depth = parse_tx.clone();
 
         // === Fetcher task ===
         let fetcher = tokio::spawn(async move {
@@ -2664,12 +2691,8 @@ impl Indexer {
                 }
 
                 let adaptive_snapshot = adaptive_batch_controller_for_fetcher.snapshot();
-                let fetch_queue_depth_now = (fetch_tx.max_capacity() - fetch_tx.capacity()) as u64;
-                let pipeline_snapshot = pipeline_perf_for_fetcher.snapshot();
-                let parse_queue_depth_now = pipeline_snapshot
-                    .as_ref()
-                    .and_then(|p| p.parse_queue_depth)
-                    .unwrap_or(0);
+                let fetch_queue_depth_now = sender_queue_depth(&fetch_tx);
+                let parse_queue_depth_now = sender_queue_depth(&parse_tx_for_fetcher_depth);
                 let inflight_batches = fetch_queue_depth_now.saturating_add(parse_queue_depth_now);
                 if inflight_batches >= adaptive_snapshot.inflight_limit {
                     sleep(Duration::from_millis(50)).await;
@@ -9912,6 +9935,17 @@ mod tests {
         assert_eq!(queue_fill_percentage(Some(1), Some(0)), None);
         assert_eq!(queue_fill_percentage(None, Some(10)), None);
         assert_eq!(queue_fill_percentage(Some(1), None), None);
+    }
+
+    #[tokio::test]
+    async fn test_sender_queue_depth_tracks_runtime_channel_state() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<u8>(4);
+        assert_eq!(sender_queue_depth(&tx), 0);
+        tx.send(1).await.unwrap();
+        tx.send(2).await.unwrap();
+        assert_eq!(sender_queue_depth(&tx), 2);
+        assert_eq!(rx.recv().await, Some(1));
+        assert_eq!(sender_queue_depth(&tx), 1);
     }
 
     #[test]

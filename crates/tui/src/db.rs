@@ -3,7 +3,7 @@ use ckbadger_common::{
     format_duration_smart, MemoryStatsData, PipelineProgressData, SyncProgressData, SyncStatusData,
     MEMORY_STATS_REDIS_KEY, SYNC_PROGRESS_REDIS_KEY, SYNC_STATUS_REDIS_KEY,
 };
-use ckbadger_store::CkbadgerStore;
+use ckbadger_store::{CkbadgerStore, RuntimeStatus};
 use redis::AsyncCommands;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -53,11 +53,31 @@ pub struct SyncStatusRow {
     pub db_write_ms: Option<f64>,
     pub rpc_fetch_ms: Option<f64>,
     pub pipeline: Option<PipelineProgressData>,
+    pub pipeline_reset_epoch: Option<u64>,
+    pub pipeline_reset_reason: Option<String>,
+    pub adaptive_target_batch_txs: Option<u64>,
+    pub adaptive_inflight_limit: Option<u64>,
+    pub startup_phase: Option<String>,
     pub address_balances_deferred: bool,
     pub activities_deferred: bool,
     pub token_deferred: bool,
     pub spore_deferred: bool,
     pub tx_block_map_deferred: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RuntimeDiagData {
+    pub active_run_id: Option<String>,
+    pub last_run_id: Option<String>,
+    pub heartbeat_block: i64,
+    pub heartbeat_target_block: i64,
+    pub heartbeat_stage: Option<String>,
+    pub heartbeat_age_secs: Option<i64>,
+    pub heartbeat_oom_events: Option<u64>,
+    pub heartbeat_oom_kill_events: Option<u64>,
+    pub last_incident_summary: Option<String>,
+    pub last_shutdown_reason: Option<String>,
+    pub last_exit_code: Option<i32>,
 }
 
 #[derive(Debug, Clone)]
@@ -134,6 +154,22 @@ fn age_since(unix_ts: i64, now: i64) -> Option<i64> {
         None
     } else {
         Some((now - unix_ts).max(0))
+    }
+}
+
+fn runtime_diag_from_status(status: RuntimeStatus, now: i64) -> RuntimeDiagData {
+    RuntimeDiagData {
+        active_run_id: status.active_run_id,
+        last_run_id: status.last_run_id,
+        heartbeat_block: status.last_heartbeat_block,
+        heartbeat_target_block: status.last_heartbeat_target_block,
+        heartbeat_stage: status.last_heartbeat_stage,
+        heartbeat_age_secs: age_since(status.last_heartbeat_at, now),
+        heartbeat_oom_events: status.last_heartbeat_oom_events,
+        heartbeat_oom_kill_events: status.last_heartbeat_oom_kill_events,
+        last_incident_summary: status.last_incident_summary,
+        last_shutdown_reason: status.last_shutdown_reason,
+        last_exit_code: status.last_exit_code,
     }
 }
 
@@ -308,6 +344,11 @@ impl TuiDb {
             db_write_ms: progress.db_write_ms,
             rpc_fetch_ms: progress.rpc_fetch_ms,
             pipeline: progress.pipeline.clone(),
+            pipeline_reset_epoch: progress.pipeline_reset_epoch,
+            pipeline_reset_reason: progress.pipeline_reset_reason.clone(),
+            adaptive_target_batch_txs: progress.adaptive_target_batch_txs,
+            adaptive_inflight_limit: progress.adaptive_inflight_limit,
+            startup_phase: progress.startup_phase.clone(),
             address_balances_deferred: deferred.address_balances,
             activities_deferred: deferred.activities,
             token_deferred: deferred.token,
@@ -366,6 +407,11 @@ impl TuiDb {
             db_write_ms: None,
             rpc_fetch_ms: None,
             pipeline: None,
+            pipeline_reset_epoch: None,
+            pipeline_reset_reason: None,
+            adaptive_target_batch_txs: None,
+            adaptive_inflight_limit: None,
+            startup_phase: None,
             address_balances_deferred: deferred.address_balances,
             activities_deferred: deferred.activities,
             token_deferred: deferred.token,
@@ -391,12 +437,23 @@ impl TuiDb {
             db_write_ms: None,
             rpc_fetch_ms: None,
             pipeline: None,
+            pipeline_reset_epoch: None,
+            pipeline_reset_reason: None,
+            adaptive_target_batch_txs: None,
+            adaptive_inflight_limit: None,
+            startup_phase: None,
             address_balances_deferred: deferred.address_balances,
             activities_deferred: deferred.activities,
             token_deferred: deferred.token,
             spore_deferred: deferred.spore,
             tx_block_map_deferred: deferred.tx_block_map,
         })
+    }
+
+    pub fn get_runtime_diag(&self) -> Option<RuntimeDiagData> {
+        let now = chrono::Utc::now().timestamp();
+        let status = self.store.get_runtime_status().ok()?;
+        Some(runtime_diag_from_status(status, now))
     }
 
     pub async fn get_memory_stats(&self) -> Option<MemoryStatsData> {
@@ -592,7 +649,11 @@ impl TuiDb {
 
 #[cfg(test)]
 mod tests {
-    use super::{age_since, parse_epoch_string, parse_info_map, parse_keyspace_db0, ttl_or_none};
+    use super::{
+        age_since, parse_epoch_string, parse_info_map, parse_keyspace_db0,
+        runtime_diag_from_status, ttl_or_none,
+    };
+    use ckbadger_store::RuntimeStatus;
 
     #[test]
     fn parse_epoch_full() {
@@ -641,5 +702,39 @@ mod tests {
         assert_eq!(ttl_or_none(-1), Some(-1));
         assert_eq!(ttl_or_none(0), Some(0));
         assert_eq!(ttl_or_none(15), Some(15));
+    }
+
+    #[test]
+    fn runtime_diag_from_status_maps_fields() {
+        let status = RuntimeStatus {
+            active_run_id: Some("run-1".to_string()),
+            last_run_id: Some("run-0".to_string()),
+            last_heartbeat_at: 100,
+            last_heartbeat_block: 120,
+            last_heartbeat_target_block: 180,
+            last_heartbeat_stage: Some("bulk_sync".to_string()),
+            last_heartbeat_oom_events: Some(11),
+            last_heartbeat_oom_kill_events: Some(2),
+            last_incident_summary: Some("pipeline batch mismatch".to_string()),
+            last_shutdown_reason: Some("run_error".to_string()),
+            last_exit_code: Some(1),
+            ..Default::default()
+        };
+
+        let diag = runtime_diag_from_status(status, 130);
+        assert_eq!(diag.active_run_id.as_deref(), Some("run-1"));
+        assert_eq!(diag.last_run_id.as_deref(), Some("run-0"));
+        assert_eq!(diag.heartbeat_block, 120);
+        assert_eq!(diag.heartbeat_target_block, 180);
+        assert_eq!(diag.heartbeat_stage.as_deref(), Some("bulk_sync"));
+        assert_eq!(diag.heartbeat_age_secs, Some(30));
+        assert_eq!(diag.heartbeat_oom_events, Some(11));
+        assert_eq!(diag.heartbeat_oom_kill_events, Some(2));
+        assert_eq!(
+            diag.last_incident_summary.as_deref(),
+            Some("pipeline batch mismatch")
+        );
+        assert_eq!(diag.last_shutdown_reason.as_deref(), Some("run_error"));
+        assert_eq!(diag.last_exit_code, Some(1));
     }
 }

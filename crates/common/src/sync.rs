@@ -200,6 +200,18 @@ pub struct SyncProgressData {
     /// Detailed pipeline stage timings and queue depth, when pipeline mode is enabled.
     #[serde(default)]
     pub pipeline: Option<PipelineProgressData>,
+    /// Current pipeline reset epoch (increments on each reset).
+    #[serde(default)]
+    pub pipeline_reset_epoch: Option<u64>,
+    /// Last known pipeline reset reason.
+    #[serde(default)]
+    pub pipeline_reset_reason: Option<String>,
+    /// Adaptive target transactions per batch in bulk sync.
+    #[serde(default)]
+    pub adaptive_target_batch_txs: Option<u64>,
+    /// Adaptive inflight batch limit in bulk sync.
+    #[serde(default)]
+    pub adaptive_inflight_limit: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -553,6 +565,10 @@ mod tests {
                 writer_queue_depth: Some(4),
                 writer_queue_capacity: Some(16),
             }),
+            pipeline_reset_epoch: Some(3),
+            pipeline_reset_reason: Some("pipeline batch mismatch".to_string()),
+            adaptive_target_batch_txs: Some(40_000),
+            adaptive_inflight_limit: Some(3),
         };
 
         let json = serde_json::to_string(&progress).unwrap();
@@ -566,5 +582,48 @@ mod tests {
         assert_eq!(pipeline.parse_queue_capacity, Some(16));
         assert_eq!(pipeline.writer_queue_depth, Some(4));
         assert_eq!(parsed.startup_phase.as_deref(), Some("rollback_cleanup"));
+        assert_eq!(parsed.pipeline_reset_epoch, Some(3));
+        assert_eq!(
+            parsed.pipeline_reset_reason.as_deref(),
+            Some("pipeline batch mismatch")
+        );
+        assert_eq!(parsed.adaptive_target_batch_txs, Some(40_000));
+        assert_eq!(parsed.adaptive_inflight_limit, Some(3));
+    }
+
+    #[test]
+    fn test_sync_progress_deserialize_without_adaptive_fields() {
+        let mut value = serde_json::to_value(SyncProgressData {
+            current_block: 1000,
+            target_block: 2000,
+            blocks_per_second: 500.0,
+            ema_blocks_per_second: 450.0,
+            eta_seconds: Some(2.0),
+            eta_formatted: "2s".to_string(),
+            progress_percentage: 50.0,
+            updated_at: 1700000000,
+            startup_phase: None,
+            is_direct_db_read: false,
+            db_write_ms: None,
+            rpc_fetch_ms: None,
+            pipeline: None,
+            pipeline_reset_epoch: Some(1),
+            pipeline_reset_reason: Some("batch write failed".to_string()),
+            adaptive_target_batch_txs: Some(1),
+            adaptive_inflight_limit: Some(2),
+        })
+        .unwrap();
+        if let Some(obj) = value.as_object_mut() {
+            obj.remove("pipelineResetEpoch");
+            obj.remove("pipelineResetReason");
+            obj.remove("adaptiveTargetBatchTxs");
+            obj.remove("adaptiveInflightLimit");
+        }
+
+        let parsed: SyncProgressData = serde_json::from_value(value).unwrap();
+        assert_eq!(parsed.pipeline_reset_epoch, None);
+        assert_eq!(parsed.pipeline_reset_reason, None);
+        assert_eq!(parsed.adaptive_target_batch_txs, None);
+        assert_eq!(parsed.adaptive_inflight_limit, None);
     }
 }

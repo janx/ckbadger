@@ -500,6 +500,8 @@ async fn run_sync(args: Cli) -> Result<()> {
             let (perf_rpc_ms, perf_db_ms) = indexer_for_progress.perf_snapshot_ms();
             let pipeline = indexer_for_progress.pipeline_progress_snapshot();
             let pipeline_log = pipeline.clone();
+            let adaptive = indexer_for_progress.adaptive_batch_snapshot();
+            let pipeline_reset = indexer_for_progress.pipeline_reset_snapshot();
             let heartbeat_stage = indexer_for_progress.startup_phase().unwrap_or_else(|| {
                 if indexer_for_progress.is_bulk_sync_active() {
                     "bulk_sync".to_string()
@@ -534,6 +536,10 @@ async fn run_sync(args: Cli) -> Result<()> {
                     None
                 },
                 pipeline,
+                pipeline_reset_epoch: pipeline_reset.as_ref().map(|(epoch, _)| *epoch),
+                pipeline_reset_reason: pipeline_reset.as_ref().map(|(_, reason)| reason.clone()),
+                adaptive_target_batch_txs: adaptive.map(|(target, _)| target),
+                adaptive_inflight_limit: adaptive.map(|(_, inflight)| inflight),
             };
             indexer_for_progress
                 .cache_invalidator()
