@@ -84,6 +84,13 @@ When solving problems or designing features:
 - For any sync/data inconsistency bug: fix indexer logic first, then instruct users to delete RocksDB and re-sync from genesis
 - If existing data is wrong, prefer dropping and rebuilding DB over adding complex compatibility/backfill paths
 
+**Bulk Sync Failure Policy (MANDATORY):**
+
+- Bulk sync is single-shot: either finish successfully, or fail fast and stop
+- During bulk sync, do not auto-cleanup partial state and continue in-place
+- If bulk sync fails: fix the bug, delete RocksDB, and restart sync from genesis
+- Keep bulk sync implementation simple; avoid introducing mid-run recovery branches
+
 ```bash
 # Typical workflow after storage changes:
 # 1. Update types/ops in crates/ckbadger-store/src/

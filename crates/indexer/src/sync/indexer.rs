@@ -227,10 +227,7 @@ fn format_outpoint_sample(outpoints: &[(Vec<u8>, i16)], max_items: usize) -> Str
     outpoints
         .iter()
         .take(max_items)
-        .map(|(tx_hash, output_index)| {
-            let prefix_len = tx_hash.len().min(8);
-            format!("0x{}:{}", hex::encode(&tx_hash[..prefix_len]), output_index)
-        })
+        .map(|(tx_hash, output_index)| format!("0x{}:{}", hex::encode(tx_hash), output_index))
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -287,6 +284,14 @@ fn should_log_unresolved_retry(attempt: usize) -> bool {
 fn should_skip_address_balances(_bulk_sync_mode: bool) -> bool {
     // Address balances must always be updated inline to keep bulk sync exact.
     false
+}
+
+fn is_bulk_sync_active_by_lag(blocks_behind: u64, bulk_sync_threshold: u64) -> bool {
+    blocks_behind > bulk_sync_threshold
+}
+
+fn is_bulk_sync_batch(chain_tip: u64, batch_end: u64, bulk_sync_threshold: u64) -> bool {
+    chain_tip.saturating_sub(batch_end) > bulk_sync_threshold
 }
 
 fn should_abort_pipeline_on_idle_timeout(parser_finished: bool, fetcher_finished: bool) -> bool {
@@ -2395,6 +2400,8 @@ impl Indexer {
 
     pub async fn run(&self) -> Result<()> {
         let blocks_behind = self.progress.blocks_remaining();
+        let bulk_sync_mode =
+            is_bulk_sync_active_by_lag(blocks_behind, self.config.bulk_sync_threshold);
         info!(
             run_id = %self.run_id,
             "Starting indexer (pipeline={}, {} blocks behind, threshold={})",
@@ -2408,7 +2415,7 @@ impl Indexer {
             ),
         );
 
-        if blocks_behind > self.config.bulk_sync_threshold {
+        if bulk_sync_mode {
             info!(
                 run_id = %self.run_id,
                 "Bulk sync auto-enabled: {} blocks behind > {} threshold",
@@ -2430,9 +2437,26 @@ impl Indexer {
             _ => start_block,
         };
 
+        if bulk_sync_mode && actual_start < start_block {
+            bail!(
+                "bulk sync fail-fast: inconsistent local DB state detected at startup (sync_tip={}, consistent_block={}). \
+                 bulk sync does not auto-rollback; delete RocksDB and restart from genesis",
+                start_block,
+                actual_start
+            );
+        }
+
         let cleanup_needed = self
             .writer
             .needs_startup_cleanup_with_force(actual_start, self.config.force_startup_cleanup)?;
+
+        if bulk_sync_mode && cleanup_needed {
+            bail!(
+                "bulk sync fail-fast: startup rollback cleanup required from block {}. \
+                 bulk sync does not auto-cleanup; delete RocksDB and restart from genesis",
+                actual_start + 1
+            );
+        }
         if cleanup_needed {
             self.startup_phase
                 .store(STARTUP_PHASE_ROLLBACK_CLEANUP, Ordering::SeqCst);
@@ -2449,7 +2473,7 @@ impl Indexer {
 
         let init_result = self.writer.init_sync_start_with_options(
             actual_start,
-            blocks_behind > self.config.bulk_sync_threshold,
+            bulk_sync_mode,
             self.config.force_startup_cleanup,
         );
 
@@ -2977,6 +3001,7 @@ impl Indexer {
                         &attempt_input_cell_info,
                         &batch_cells,
                     );
+
                     if !db_lookup_failed && unresolved_outpoints.is_empty() {
                         break (attempt_input_cell_info, attempt_cache_hits, db_lookups);
                     }
@@ -3785,6 +3810,20 @@ impl Indexer {
                             error = ?e,
                             "Sync error while writing parsed batch"
                         );
+                        let bulk_sync_mode = is_bulk_sync_batch(
+                            chain_tip,
+                            end_block,
+                            self.config.bulk_sync_threshold,
+                        );
+                        if bulk_sync_mode {
+                            return Err(e).with_context(|| {
+                                format!(
+                                    "bulk sync fail-fast for range {}-{} (chain_tip={}): \
+                                     no rollback cleanup/retry in bulk mode; delete RocksDB and restart from genesis",
+                                    start_block, end_block, chain_tip
+                                )
+                            });
+                        }
                         if let Err(cleanup_err) = self.writer.cleanup_batch_range(
                             i64::try_from(start_block).map_err(|_| {
                                 anyhow!("batch cleanup start_block exceeds i64: {}", start_block)
@@ -4188,6 +4227,17 @@ impl Indexer {
 
         let db_start = Instant::now();
         if let Err(e) = self.sync_blocks_batch(&blocks, chain_tip).await {
+            let bulk_sync_mode =
+                is_bulk_sync_batch(chain_tip, end_block, self.config.bulk_sync_threshold);
+            if bulk_sync_mode {
+                return Err(e).with_context(|| {
+                    format!(
+                        "bulk sync fail-fast for range {}-{} (chain_tip={}): \
+                         no rollback cleanup/retry in bulk mode; delete RocksDB and restart from genesis",
+                        start_block, end_block, chain_tip
+                    )
+                });
+            }
             if let Err(cleanup_err) = self.writer.cleanup_batch_range(
                 i64::try_from(start_block).map_err(|_| {
                     anyhow!("batch cleanup start_block exceeds i64: {}", start_block)
@@ -9816,9 +9866,23 @@ mod tests {
         ];
 
         let sample = format_outpoint_sample(&outpoints, 2);
-        assert!(sample.contains("0x1111111111111111:0"));
-        assert!(sample.contains("0x2222222222222222:1"));
-        assert!(!sample.contains("0x3333333333333333:2"));
+        assert!(sample.contains(&format!("0x{}:0", "11".repeat(32))));
+        assert!(sample.contains(&format!("0x{}:1", "22".repeat(32))));
+        assert!(!sample.contains(&format!("0x{}:2", "33".repeat(32))));
+    }
+
+    #[test]
+    fn test_is_bulk_sync_active_by_lag_threshold() {
+        assert!(!is_bulk_sync_active_by_lag(1000, 1000));
+        assert!(is_bulk_sync_active_by_lag(1001, 1000));
+        assert!(!is_bulk_sync_active_by_lag(0, 1000));
+    }
+
+    #[test]
+    fn test_is_bulk_sync_batch_uses_tip_distance() {
+        assert!(!is_bulk_sync_batch(10_000, 9_000, 1000));
+        assert!(is_bulk_sync_batch(10_001, 9_000, 1000));
+        assert!(!is_bulk_sync_batch(100, 150, 1000));
     }
 
     #[test]

@@ -22,6 +22,13 @@ Correctness issues must be fixed at the source path. Do not add silent guards (f
 `max(0)`, `saturating_sub`, or `unwrap_or(0)` on invariant-critical paths) to mask inconsistent
 state transitions.
 
+## Bulk Sync Model
+
+- Bulk sync is a single-shot rebuild path: it should either complete end-to-end or fail fast.
+- During bulk sync, correctness/write errors are treated as fatal. The indexer should not auto-cleanup partial state and continue.
+- Recovery workflow is: fix the bug, delete RocksDB data, and re-run sync from genesis.
+- This keeps bulk sync logic simple and predictable, and avoids complex mid-run recovery branches.
+
 ## Responsibility Boundary
 
 - **Indexer owns all RocksDB writes**: any task that persists or mutates database state must be executed by `ckbadger-indexer`.
