@@ -1124,18 +1124,23 @@ fn parse_parsed_cell_udt_amount(
     cell: &crate::parser::cell::ParsedCell,
     tx_hash: &[u8],
     output_index: i16,
+    standard_hint: Option<&str>,
 ) -> Result<Option<u128>> {
-    let Some(type_code_hash) = cell.type_code_hash.as_deref() else {
-        return Ok(None);
-    };
-    let Some(hash_type) = cell.type_hash_type else {
-        return Ok(None);
-    };
-    let Some(standard) =
+    let standard = if let (Some(type_code_hash), Some(hash_type)) =
+        (cell.type_code_hash.as_deref(), cell.type_hash_type)
+    {
         crate::parser::UdtParser::is_udt_code_hash_bytes(type_code_hash, hash_type)
-    else {
-        return Ok(None);
+    } else {
+        None
     };
+    let standard = match standard {
+        Some(standard) => standard,
+        None => match standard_hint.and_then(crate::parser::UdtStandard::from_standard_hint) {
+            Some(crate::parser::UdtStandard::Xudt) => crate::parser::UdtStandard::Xudt,
+            _ => return Ok(None),
+        },
+    };
+    let type_code_hash = cell.type_code_hash.as_deref().unwrap_or(&[]);
 
     let Some(amount) = crate::parser::UdtParser::parse_amount(&cell.data) else {
         // xUDT-compatible cells can carry non-amount payloads (for example owner-mode cells).
@@ -3377,15 +3382,30 @@ impl Indexer {
                 // Pre-compute batch_cell_infos, fees, cell_cache, balance/script changes
                 // (moved from writer to overlap with pipeline buffering)
                 let t_precompute_parser = Instant::now();
+                let mut udt_standard_hint_cache: HashMap<Vec<u8>, Option<String>> = HashMap::new();
 
                 // Pass 1: Build batch_cell_infos
                 let mut batch_cell_infos: HashMap<(Vec<u8>, i16), LiveCellInfo> = HashMap::new();
                 for tx_data in &all_tx_data {
                     for (output_index, cell) in tx_data.cells.iter().enumerate() {
+                        let standard_hint = cell.type_script_hash.as_ref().and_then(|type_hash| {
+                            if let Some(cached) = udt_standard_hint_cache.get(type_hash) {
+                                return cached.clone();
+                            }
+                            let looked_up = writer_for_parser
+                                .store()
+                                .get_token(type_hash)
+                                .ok()
+                                .flatten()
+                                .map(|info| info.standard);
+                            udt_standard_hint_cache.insert(type_hash.clone(), looked_up.clone());
+                            looked_up
+                        });
                         let udt_amount = match parse_parsed_cell_udt_amount(
                             cell,
                             &tx_data.hash,
                             output_index as i16,
+                            standard_hint.as_deref(),
                         ) {
                             Ok(v) => v,
                             Err(e) => {
@@ -3502,10 +3522,24 @@ impl Indexer {
                     );
                     // cell_cache update
                     for (output_index, cell) in tx_data.cells.iter().enumerate() {
+                        let standard_hint = cell.type_script_hash.as_ref().and_then(|type_hash| {
+                            if let Some(cached) = udt_standard_hint_cache.get(type_hash) {
+                                return cached.clone();
+                            }
+                            let looked_up = writer_for_parser
+                                .store()
+                                .get_token(type_hash)
+                                .ok()
+                                .flatten()
+                                .map(|info| info.standard);
+                            udt_standard_hint_cache.insert(type_hash.clone(), looked_up.clone());
+                            looked_up
+                        });
                         let udt_amount = match parse_parsed_cell_udt_amount(
                             cell,
                             &tx_data.hash,
                             output_index as i16,
+                            standard_hint.as_deref(),
                         ) {
                             Ok(v) => v,
                             Err(e) => {
@@ -4868,12 +4902,31 @@ impl Indexer {
             .map(|b| b.number as u64)
             .unwrap_or(0);
         let bulk_sync_mode = chain_tip.saturating_sub(end_block) > 1000;
+        let mut udt_standard_hint_cache: HashMap<Vec<u8>, Option<String>> = HashMap::new();
 
         let mut batch_cell_infos: HashMap<(Vec<u8>, i16), LiveCellInfo> = HashMap::new();
         for tx_data in &all_tx_data {
             for (output_index, cell) in tx_data.cells.iter().enumerate() {
-                let udt_amount =
-                    parse_parsed_cell_udt_amount(cell, &tx_data.hash, output_index as i16)?;
+                let standard_hint = cell.type_script_hash.as_ref().and_then(|type_hash| {
+                    if let Some(cached) = udt_standard_hint_cache.get(type_hash) {
+                        return cached.clone();
+                    }
+                    let looked_up = self
+                        .writer
+                        .store()
+                        .get_token(type_hash)
+                        .ok()
+                        .flatten()
+                        .map(|info| info.standard);
+                    udt_standard_hint_cache.insert(type_hash.clone(), looked_up.clone());
+                    looked_up
+                });
+                let udt_amount = parse_parsed_cell_udt_amount(
+                    cell,
+                    &tx_data.hash,
+                    output_index as i16,
+                    standard_hint.as_deref(),
+                )?;
                 let lock_script_size = 32 + 1 + cell.lock_args.len() as i64;
                 let type_script_size = cell
                     .type_args
@@ -4995,8 +5048,26 @@ impl Indexer {
 
         for tx_data in &all_tx_data {
             for (output_index, cell) in tx_data.cells.iter().enumerate() {
-                let udt_amount =
-                    parse_parsed_cell_udt_amount(cell, &tx_data.hash, output_index as i16)?;
+                let standard_hint = cell.type_script_hash.as_ref().and_then(|type_hash| {
+                    if let Some(cached) = udt_standard_hint_cache.get(type_hash) {
+                        return cached.clone();
+                    }
+                    let looked_up = self
+                        .writer
+                        .store()
+                        .get_token(type_hash)
+                        .ok()
+                        .flatten()
+                        .map(|info| info.standard);
+                    udt_standard_hint_cache.insert(type_hash.clone(), looked_up.clone());
+                    looked_up
+                });
+                let udt_amount = parse_parsed_cell_udt_amount(
+                    cell,
+                    &tx_data.hash,
+                    output_index as i16,
+                    standard_hint.as_deref(),
+                )?;
                 let lock_script_size = 32 + 1 + cell.lock_args.len() as i64;
                 let type_script_size = cell
                     .type_args
@@ -10141,7 +10212,7 @@ mod tests {
         cell.data_size = 0;
 
         let tx_hash = [0x81; 32];
-        let amount = parse_parsed_cell_udt_amount(&cell, &tx_hash, 3).unwrap();
+        let amount = parse_parsed_cell_udt_amount(&cell, &tx_hash, 3, None).unwrap();
         assert_eq!(amount, None);
     }
 
@@ -10164,9 +10235,38 @@ mod tests {
         };
 
         let tx_hash = [0x82; 32];
-        let err = parse_parsed_cell_udt_amount(&cell, &tx_hash, 7).unwrap_err();
+        let err = parse_parsed_cell_udt_amount(&cell, &tx_hash, 7, None).unwrap_err();
         assert!(err.to_string().contains("failed to parse UDT amount"));
         assert!(err.to_string().contains("0x8282828282828282"));
+    }
+
+    #[test]
+    fn test_parse_parsed_cell_udt_amount_supports_xudt_compatible_hint() {
+        let amount = 15_778_600u128;
+        let mut data = vec![0u8; 16];
+        data.copy_from_slice(&amount.to_le_bytes());
+        let cell = crate::parser::cell::ParsedCell {
+            capacity: 100_00000000,
+            lock_code_hash: vec![0x11; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x22; 20],
+            lock_script_hash: vec![0x33; 32],
+            type_code_hash: Some(vec![0x42; 32]), // non-standard xUDT code hash
+            type_hash_type: Some(1),
+            type_args: Some(vec![0x44; 32]),
+            type_script_hash: Some(vec![0x55; 32]),
+            data_hash: vec![0x66; 32],
+            data_size: 16,
+            data,
+        };
+
+        let tx_hash = [0x83; 32];
+        let parsed =
+            parse_parsed_cell_udt_amount(&cell, &tx_hash, 0, Some("xudt_compatible")).unwrap();
+        assert_eq!(parsed, Some(amount));
+
+        let no_hint = parse_parsed_cell_udt_amount(&cell, &tx_hash, 0, None).unwrap();
+        assert_eq!(no_hint, None);
     }
 
     fn build_xudt_type_args_with_extension_in_args(
