@@ -7,6 +7,8 @@ vi.mock('@/lib/api', () => ({
   api: {
     getBlocks: vi.fn(),
     getMinerAddressDistributionChart: vi.fn(),
+    getMnftItemDetail: vi.fn(),
+    getMnftItemActivities: vi.fn(),
   },
 }));
 
@@ -104,5 +106,82 @@ describe('renderMarkdownPage', () => {
         origin: 'http://localhost:3000',
       })
     ).rejects.toEqual(expect.objectContaining<Partial<MarkdownRenderError>>({ status: 404 }));
+  });
+
+  it('renders mnft item detail markdown', async () => {
+    vi.mocked(api.getMnftItemDetail).mockResolvedValue({
+      nftId: '0xmnft',
+      standard: 'm-nft',
+      isLive: true,
+      ownerLockHash: '0xowner',
+      createdAtBlock: 123,
+      tokenIndex: 9,
+      characteristicHex: '0x0102',
+      configure: 1,
+      state: 0,
+      txHash: '0xtx',
+      outputIndex: 3,
+      class: {
+        classId: '0xclass',
+        issuerId: '0xissuer',
+        name: 'Class A',
+        description: 'desc',
+        renderer: 'renderer:v1',
+        total: 100,
+        issued: 9,
+        configure: 1,
+      },
+      issuer: {
+        issuerId: '0xissuer',
+        name: 'Issuer A',
+        classCount: 2,
+        setCount: 3,
+        infoHex: '0x7b7d',
+      },
+      lifecycle: [],
+    } as any);
+    vi.mocked(api.getMnftItemActivities).mockResolvedValue({
+      data: [
+        {
+          txHash: '0xtx',
+          blockNumber: 123,
+          txIndex: 0,
+          timestamp: '1700000000',
+          actions: ['transfer'],
+        },
+      ],
+      limit: 20,
+      hasMore: false,
+      nextCursor: null,
+    } as any);
+
+    const result = await renderMarkdownPage({
+      page: parseMarkdownSourcePath('/nfts/mnft/0xmnft'),
+      searchParams: new URLSearchParams(),
+      origin: 'http://localhost:3000',
+    });
+
+    expect(result.status).toBe(200);
+    expect(result.body).toContain('# mNFT 0xmnft');
+    expect(result.body).toContain('## Token');
+    expect(result.body).toContain('Class A');
+    expect(result.body).toContain('Issuer A');
+    expect(result.body).toContain('## Activities');
+    expect(result.body).toContain('transfer');
+    expect(api.getMnftItemActivities).toHaveBeenCalledWith('0xmnft', {
+      limit: 20,
+      cursor: undefined,
+      action: undefined,
+    });
+  });
+
+  it('fails fast on invalid mnft activity action query param', async () => {
+    await expect(
+      renderMarkdownPage({
+        page: parseMarkdownSourcePath('/nfts/mnft/0xmnft'),
+        searchParams: new URLSearchParams('action=invalid'),
+        origin: 'http://localhost:3000',
+      })
+    ).rejects.toEqual(expect.objectContaining<Partial<MarkdownRenderError>>({ status: 400 }));
   });
 });

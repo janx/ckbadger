@@ -474,16 +474,31 @@ export default function SporeDetailPage() {
                         className="flex flex-col gap-2 rounded border border-slate-800 bg-slate-900/40 p-3"
                       >
                         <div className="flex items-center justify-between gap-3">
-                          <div className="font-mono text-sm text-white">
-                            {item.name || item.nftId}
-                          </div>
+                          {item.standard.toLowerCase() === 'm-nft' ? (
+                            <Link
+                              href={`/nfts/mnft/${item.nftId}`}
+                              className="hover:text-terminal-green font-mono text-sm text-white hover:underline"
+                            >
+                              {item.name || item.nftId}
+                            </Link>
+                          ) : (
+                            <div className="font-mono text-sm text-white">
+                              {item.name || item.nftId}
+                            </div>
+                          )}
                           {item.isLive ? (
                             <Badge variant="green">Live</Badge>
                           ) : (
                             <Badge variant="red">Burned</Badge>
                           )}
                         </div>
-                        <HexDisplay value={item.nftId} color="accent" size="sm" />
+                        {item.standard.toLowerCase() === 'm-nft' ? (
+                          <Link href={`/nfts/mnft/${item.nftId}`} className="hover:underline">
+                            <HexDisplay value={item.nftId} color="accent" size="sm" />
+                          </Link>
+                        ) : (
+                          <HexDisplay value={item.nftId} color="accent" size="sm" />
+                        )}
                         <div className="font-mono text-xs text-slate-400">
                           Created at block #{formatNumber(item.createdAtBlock)}
                         </div>

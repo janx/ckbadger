@@ -141,6 +141,17 @@ function parseScriptHashType(raw: string | null): ScriptRefHashType {
   );
 }
 
+function parseMnftActivityAction(raw: string | null): 'mint' | 'transfer' | 'burn' | undefined {
+  if (raw === null) return undefined;
+  if (raw === 'mint' || raw === 'transfer' || raw === 'burn') {
+    return raw;
+  }
+  throw new MarkdownRenderError(
+    400,
+    `Invalid query param "action": ${raw}. Expected one of mint,transfer,burn`
+  );
+}
+
 function renderCursorMeta(searchParams: URLSearchParams) {
   return markdownTable(
     ['param', 'value'],
@@ -936,6 +947,93 @@ export async function renderMarkdownPage(
             ['liveCapacity', nft.liveCapacity ?? '-'],
             ['liveOccupiedCapacity', nft.liveOccupiedCapacity ?? '-'],
           ]
+        ),
+      ]);
+      return { status: 200, body };
+    }
+    case 'mnft_item_detail': {
+      const limit = parseLimit(searchParams);
+      const cursor = searchParams.get('cursor') ?? undefined;
+      const action = parseMnftActivityAction(searchParams.get('action'));
+      const [item, activities] = await Promise.all([
+        api.getMnftItemDetail(page.nftId),
+        api.getMnftItemActivities(page.nftId, { limit, cursor, action }),
+      ]);
+      const body = buildMarkdownDocument(buildMeta(page.pathname, page.kind, origin), [
+        `# mNFT ${hashShort(item.nftId, 14, 12)}`,
+        '',
+        '## Token',
+        '',
+        markdownTable(
+          ['field', 'value'],
+          [
+            ['nftId', item.nftId],
+            ['standard', item.standard],
+            ['isLive', item.isLive],
+            ['ownerLockHash', item.ownerLockHash ?? '-'],
+            ['createdAtBlock', item.createdAtBlock],
+            ['tokenIndex', item.tokenIndex],
+            ['characteristicHex', item.characteristicHex],
+            ['configure', item.configure],
+            ['state', item.state],
+            ['txHash', item.txHash ?? '-'],
+            ['outputIndex', item.outputIndex ?? '-'],
+          ]
+        ),
+        '',
+        '## Class',
+        '',
+        markdownTable(
+          ['field', 'value'],
+          [
+            ['classId', item.class.classId],
+            ['issuerId', item.class.issuerId],
+            ['name', item.class.name ?? '-'],
+            ['description', item.class.description ?? '-'],
+            ['renderer', item.class.renderer ?? '-'],
+            ['total', item.class.total],
+            ['issued', item.class.issued],
+            ['configure', item.class.configure],
+          ]
+        ),
+        '',
+        '## Issuer',
+        '',
+        markdownTable(
+          ['field', 'value'],
+          [
+            ['issuerId', item.issuer.issuerId],
+            ['name', item.issuer.name ?? '-'],
+            ['classCount', item.issuer.classCount],
+            ['setCount', item.issuer.setCount],
+            ['infoHex', item.issuer.infoHex ?? '-'],
+          ]
+        ),
+        '',
+        '## Lifecycle',
+        '',
+        markdownTable(
+          ['event', 'blockNumber', 'txHash', 'outputIndex', 'note'],
+          item.lifecycle.map((event) => [
+            event.event,
+            event.blockNumber ?? '-',
+            event.txHash ?? '-',
+            event.outputIndex ?? '-',
+            event.note ?? '-',
+          ])
+        ),
+        '',
+        '## Activities',
+        '',
+        markdownTable(
+          ['txHash', 'blockNumber', 'txIndex', 'timestamp', 'actions'],
+          activities.data.map((activity) => [
+            hashShort(activity.txHash),
+            activity.blockNumber,
+            activity.txIndex,
+            activity.timestamp,
+            activity.actions.join(','),
+          ])
         ),
       ]);
       return { status: 200, body };

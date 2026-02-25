@@ -27,6 +27,11 @@ type DotbitLiveOutpoint = Option<(String, i16)>;
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/assets", get(list_assets))
+        .route("/assets/nfts/items/{nft_id}", get(get_nft_item_detail))
+        .route(
+            "/assets/nfts/items/{nft_id}/activities",
+            get(list_mnft_item_activities),
+        )
         .route("/assets/nfts/{collection_id}", get(get_nft_collection))
         .route(
             "/assets/nfts/{collection_id}/items",
@@ -65,6 +70,14 @@ pub struct NftItemsParams {
     limit: i64,
     cursor: Option<String>,
     search: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MnftItemActivitiesParams {
+    #[serde(default = "default_limit")]
+    limit: i64,
+    cursor: Option<String>,
+    action: Option<String>,
 }
 
 fn default_limit() -> i64 {
@@ -155,6 +168,68 @@ pub struct NftCollectionItemResponse {
     pub expired_at: Option<u64>,
     pub tx_hash: Option<String>,
     pub output_index: Option<i16>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MnftClassSummaryResponse {
+    pub class_id: String,
+    pub issuer_id: String,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub renderer: Option<String>,
+    pub total: u32,
+    pub issued: u32,
+    pub configure: u8,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MnftIssuerSummaryResponse {
+    pub issuer_id: String,
+    pub name: Option<String>,
+    pub class_count: u32,
+    pub set_count: u32,
+    pub info_hex: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MnftLifecycleEventResponse {
+    pub event: String,
+    pub block_number: Option<i64>,
+    pub tx_hash: Option<String>,
+    pub output_index: Option<i16>,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MnftItemDetailResponse {
+    pub nft_id: String,
+    pub standard: String,
+    pub is_live: bool,
+    pub owner_lock_hash: Option<String>,
+    pub created_at_block: i64,
+    pub token_index: u32,
+    pub characteristic_hex: String,
+    pub configure: u8,
+    pub state: u8,
+    pub tx_hash: Option<String>,
+    pub output_index: Option<i16>,
+    pub class: MnftClassSummaryResponse,
+    pub issuer: MnftIssuerSummaryResponse,
+    pub lifecycle: Vec<MnftLifecycleEventResponse>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MnftItemActivityResponse {
+    pub tx_hash: String,
+    pub block_number: i64,
+    pub tx_index: i32,
+    pub timestamp: String,
+    pub actions: Vec<String>,
 }
 
 async fn list_assets(
@@ -455,6 +530,57 @@ fn decode_nft_item_cursor(raw: &str) -> Result<Vec<u8>, (axum::http::StatusCode,
         .map_err(|_| ApiError::bad_request("Invalid NFT items cursor"))
 }
 
+fn decode_nft_item_id(raw: &str) -> Result<Vec<u8>, (axum::http::StatusCode, Json<ApiError>)> {
+    hex::decode(raw.strip_prefix("0x").unwrap_or(raw))
+        .map_err(|_| ApiError::bad_request("Invalid NFT item ID"))
+}
+
+fn decode_activity_cursor(
+    raw: &str,
+) -> Result<(i64, i32), (axum::http::StatusCode, Json<ApiError>)> {
+    let mut parts = raw.split(':');
+    let block = parts
+        .next()
+        .ok_or_else(|| ApiError::bad_request("Invalid activity cursor"))?
+        .parse::<i64>()
+        .map_err(|_| ApiError::bad_request("Invalid activity cursor"))?;
+    let tx_index = parts
+        .next()
+        .ok_or_else(|| ApiError::bad_request("Invalid activity cursor"))?
+        .parse::<i32>()
+        .map_err(|_| ApiError::bad_request("Invalid activity cursor"))?;
+    if parts.next().is_some() {
+        return Err(ApiError::bad_request("Invalid activity cursor"));
+    }
+    Ok((block, tx_index))
+}
+
+fn asset_action_to_string(action: &ckbadger_store::types::AssetAction) -> String {
+    match action {
+        ckbadger_store::types::AssetAction::Mint => "mint".to_string(),
+        ckbadger_store::types::AssetAction::Transfer => "transfer".to_string(),
+        ckbadger_store::types::AssetAction::Burn => "burn".to_string(),
+    }
+}
+
+fn normalize_mnft_activity_action_filter(
+    raw: Option<&str>,
+) -> Result<Option<String>, (axum::http::StatusCode, Json<ApiError>)> {
+    let Some(raw_value) = raw else {
+        return Ok(None);
+    };
+    let normalized = raw_value.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return Ok(None);
+    }
+    match normalized.as_str() {
+        "mint" | "transfer" | "burn" => Ok(Some(normalized)),
+        _ => Err(ApiError::bad_request(
+            "Invalid mnft activity action filter. Expected one of: mint, transfer, burn",
+        )),
+    }
+}
+
 fn normalize_nft_items_search(search: Option<&str>) -> Option<String> {
     search.and_then(|value| {
         let trimmed = value.trim().to_ascii_lowercase();
@@ -682,6 +808,316 @@ fn latest_capacity_from_chart(chart: &StackedAreaChartResponse) -> (String, Stri
     ("0".to_string(), "0".to_string())
 }
 
+async fn get_nft_item_detail(
+    State(state): State<Arc<AppState>>,
+    Path(nft_id): Path<String>,
+) -> ApiResult<MnftItemDetailResponse> {
+    let nft_id_bytes = decode_nft_item_id(&nft_id)?;
+    let entry = state
+        .store
+        .get_nft(&nft_id_bytes)
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found("NFT item not found"))?;
+
+    if !matches!(
+        entry.standard,
+        ckbadger_store::types::NftStandard::MnftToken
+    ) {
+        return Err(ApiError::bad_request(
+            "NFT item detail currently supports mNFT token only",
+        ));
+    }
+
+    let (token_index, characteristic, token_configure, token_state) = match &entry.extra {
+        ckbadger_store::types::NftExtra::MnftToken {
+            token_index,
+            characteristic,
+            configure,
+            state,
+        } => (*token_index, characteristic.clone(), *configure, *state),
+        _ => {
+            return Err(ApiError::internal(format!(
+                "invalid NFT entry extra type for mNFT token: nft_id=0x{}",
+                hex::encode(&nft_id_bytes)
+            )))
+        }
+    };
+
+    let class_id = entry.collection_id.clone().ok_or_else(|| {
+        ApiError::internal(format!(
+            "mNFT token missing class_id: nft_id=0x{}",
+            hex::encode(&nft_id_bytes)
+        ))
+    })?;
+    let class_entry = state
+        .store
+        .get_nft(&class_id)
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "mNFT class entry missing: class_id=0x{}, nft_id=0x{}",
+                hex::encode(&class_id),
+                hex::encode(&nft_id_bytes)
+            ))
+        })?;
+    let (class_description, class_renderer, class_total, class_issued, class_configure) =
+        match &class_entry.extra {
+            ckbadger_store::types::NftExtra::MnftClass {
+                description,
+                renderer,
+                total,
+                issued,
+                configure,
+            } => (
+                description.clone(),
+                renderer.clone(),
+                *total,
+                *issued,
+                *configure,
+            ),
+            _ => {
+                return Err(ApiError::internal(format!(
+                    "invalid class extra type for mNFT token: class_id=0x{}, nft_id=0x{}",
+                    hex::encode(&class_id),
+                    hex::encode(&nft_id_bytes)
+                )))
+            }
+        };
+
+    let issuer_id = class_entry.collection_id.clone().ok_or_else(|| {
+        ApiError::internal(format!(
+            "mNFT class missing issuer_id: class_id=0x{}, nft_id=0x{}",
+            hex::encode(&class_id),
+            hex::encode(&nft_id_bytes)
+        ))
+    })?;
+    let issuer_entry = state
+        .store
+        .get_nft(&issuer_id)
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "mNFT issuer entry missing: issuer_id=0x{}, class_id=0x{}, nft_id=0x{}",
+                hex::encode(&issuer_id),
+                hex::encode(&class_id),
+                hex::encode(&nft_id_bytes)
+            ))
+        })?;
+    let (issuer_class_count, issuer_set_count, issuer_info) = match &issuer_entry.extra {
+        ckbadger_store::types::NftExtra::MnftIssuer {
+            class_count,
+            set_count,
+            info,
+        } => (*class_count, *set_count, info.clone()),
+        _ => {
+            return Err(ApiError::internal(format!(
+            "invalid issuer extra type for mNFT token: issuer_id=0x{}, class_id=0x{}, nft_id=0x{}",
+            hex::encode(&issuer_id),
+            hex::encode(&class_id),
+            hex::encode(&nft_id_bytes)
+        )))
+        }
+    };
+
+    let live_outpoint = if entry.is_live {
+        let map = state
+            .store
+            .get_live_mnft_token_outpoints_by_token_ids(std::slice::from_ref(&nft_id_bytes))
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        let (tx_hash, output_index) = map.get(&nft_id_bytes).ok_or_else(|| {
+            ApiError::internal(format!(
+                "live mNFT token missing outpoint index: nft_id=0x{}",
+                hex::encode(&nft_id_bytes)
+            ))
+        })?;
+        Some((format!("0x{}", hex::encode(tx_hash)), *output_index))
+    } else {
+        None
+    };
+
+    let mut lifecycle = vec![MnftLifecycleEventResponse {
+        event: "mint".to_string(),
+        block_number: Some(entry.created_at_block),
+        tx_hash: None,
+        output_index: None,
+        note: Some("Minted at the first observed block for this token.".to_string()),
+    }];
+    if let Some((tx_hash, output_index)) = &live_outpoint {
+        lifecycle.push(MnftLifecycleEventResponse {
+            event: "live".to_string(),
+            block_number: None,
+            tx_hash: Some(tx_hash.clone()),
+            output_index: Some(*output_index),
+            note: Some("Current live outpoint resolved from mNFT outpoint index.".to_string()),
+        });
+    } else {
+        lifecycle.push(MnftLifecycleEventResponse {
+            event: "burned".to_string(),
+            block_number: None,
+            tx_hash: None,
+            output_index: None,
+            note: Some("Token is currently not live.".to_string()),
+        });
+    }
+
+    ok(MnftItemDetailResponse {
+        nft_id: format!("0x{}", hex::encode(&nft_id_bytes)),
+        standard: "m-nft".to_string(),
+        is_live: entry.is_live,
+        owner_lock_hash: entry
+            .owner_lock_hash
+            .as_ref()
+            .map(|h| format!("0x{}", hex::encode(h))),
+        created_at_block: entry.created_at_block,
+        token_index,
+        characteristic_hex: format!("0x{}", hex::encode(characteristic)),
+        configure: token_configure,
+        state: token_state,
+        tx_hash: live_outpoint.as_ref().map(|(tx_hash, _)| tx_hash.clone()),
+        output_index: live_outpoint
+            .as_ref()
+            .map(|(_, output_index)| *output_index),
+        class: MnftClassSummaryResponse {
+            class_id: format!("0x{}", hex::encode(&class_id)),
+            issuer_id: format!("0x{}", hex::encode(&issuer_id)),
+            name: class_entry.name,
+            description: class_description,
+            renderer: class_renderer,
+            total: class_total,
+            issued: class_issued,
+            configure: class_configure,
+        },
+        issuer: MnftIssuerSummaryResponse {
+            issuer_id: format!("0x{}", hex::encode(&issuer_id)),
+            name: issuer_entry.name,
+            class_count: issuer_class_count,
+            set_count: issuer_set_count,
+            info_hex: issuer_info.map(|v| format!("0x{}", hex::encode(v))),
+        },
+        lifecycle,
+    })
+}
+
+async fn list_mnft_item_activities(
+    State(state): State<Arc<AppState>>,
+    Path(nft_id): Path<String>,
+    Query(params): Query<MnftItemActivitiesParams>,
+) -> ApiResult<CursorPaginatedResponse<MnftItemActivityResponse>> {
+    let limit = params.limit.clamp(1, 100);
+    let action_filter = normalize_mnft_activity_action_filter(params.action.as_deref())?;
+    let nft_id_bytes = decode_nft_item_id(&nft_id)?;
+    let entry = state
+        .store
+        .get_nft(&nft_id_bytes)
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found("NFT item not found"))?;
+    if !matches!(
+        entry.standard,
+        ckbadger_store::types::NftStandard::MnftToken
+    ) {
+        return Err(ApiError::bad_request(
+            "NFT item activities currently support mNFT token only",
+        ));
+    }
+
+    let Some(owner_lock_hash) = entry.owner_lock_hash else {
+        return ok(CursorPaginatedResponse::without_total(
+            Vec::new(),
+            limit,
+            None,
+        ));
+    };
+
+    let mut scan_cursor = params
+        .cursor
+        .as_deref()
+        .map(decode_activity_cursor)
+        .transpose()?;
+    let scan_batch_size = ((limit as usize) * 4).clamp(64, 400);
+    let mut matched: Vec<(i64, i32, ckbadger_store::types::ActivityEntry, Vec<String>)> =
+        Vec::with_capacity(limit as usize + 1);
+
+    loop {
+        let batch = state
+            .store
+            .list_activities(&owner_lock_hash, scan_batch_size, scan_cursor, Some("nft"))
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        if batch.is_empty() {
+            break;
+        }
+
+        for (block_number, tx_index, activity) in &batch {
+            let actions: Vec<String> = activity
+                .asset_changes
+                .iter()
+                .filter_map(|change| match change {
+                    ckbadger_store::types::AssetChange::Nft {
+                        nft_id,
+                        standard,
+                        action,
+                    } if nft_id == &nft_id_bytes && standard.eq_ignore_ascii_case("m-nft") => {
+                        let action_name = asset_action_to_string(action);
+                        if action_filter
+                            .as_ref()
+                            .map(|filter| filter != &action_name)
+                            .unwrap_or(false)
+                        {
+                            None
+                        } else {
+                            Some(action_name)
+                        }
+                    }
+                    _ => None,
+                })
+                .collect();
+            if actions.is_empty() {
+                continue;
+            }
+
+            matched.push((*block_number, *tx_index, activity.clone(), actions));
+            if matched.len() > limit as usize {
+                break;
+            }
+        }
+
+        if matched.len() > limit as usize || batch.len() < scan_batch_size {
+            break;
+        }
+        let Some((last_block, last_tx_index, _)) = batch.last() else {
+            break;
+        };
+        scan_cursor = Some((*last_block, *last_tx_index));
+    }
+
+    let has_more = matched.len() as i64 > limit;
+    let page: Vec<_> = matched.into_iter().take(limit as usize).collect();
+    let next_cursor = if has_more {
+        page.last()
+            .map(|(block_number, tx_index, _, _)| format!("{}:{}", block_number, tx_index))
+    } else {
+        None
+    };
+
+    let rows = page
+        .into_iter()
+        .map(
+            |(block_number, tx_index, activity, actions)| MnftItemActivityResponse {
+                tx_hash: format!("0x{}", hex::encode(&activity.tx_hash)),
+                block_number,
+                tx_index,
+                timestamp: activity.timestamp.to_string(),
+                actions,
+            },
+        )
+        .collect();
+
+    ok(CursorPaginatedResponse::without_total(
+        rows,
+        limit,
+        next_cursor,
+    ))
+}
+
 async fn get_nft_collection(
     State(state): State<Arc<AppState>>,
     Path(collection_id): Path<String>,
@@ -864,9 +1300,23 @@ async fn list_nft_collection_items(
                 .then_some(nft_id.clone())
         })
         .collect();
+    let mnft_live_token_ids: Vec<Vec<u8>> = page_items
+        .iter()
+        .filter_map(|(nft_id, entry)| {
+            (matches!(
+                entry.standard,
+                ckbadger_store::types::NftStandard::MnftToken
+            ) && entry.is_live)
+                .then_some(nft_id.clone())
+        })
+        .collect();
     let dotbit_live_outpoints = state
         .store
         .get_live_dotbit_outpoints_by_account_ids(&dotbit_live_account_ids)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let mnft_live_outpoints = state
+        .store
+        .get_live_mnft_token_outpoints_by_token_ids(&mnft_live_token_ids)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let mut rows = Vec::with_capacity(page_items.len());
@@ -876,8 +1326,8 @@ async fn list_nft_collection_items(
             _ => None,
         };
 
-        let (tx_hash, output_index) =
-            if matches!(entry.standard, ckbadger_store::types::NftStandard::DotBit) {
+        let (tx_hash, output_index) = match entry.standard {
+            ckbadger_store::types::NftStandard::DotBit => {
                 if entry.is_live {
                     if let Some((tx_hash, output_index)) = dotbit_live_outpoints.get(nft_id) {
                         (
@@ -893,9 +1343,26 @@ async fn list_nft_collection_items(
                 } else {
                     (None, None)
                 }
-            } else {
-                (None, None)
-            };
+            }
+            ckbadger_store::types::NftStandard::MnftToken => {
+                if entry.is_live {
+                    let (tx_hash, output_index) = mnft_live_outpoints.get(nft_id).ok_or_else(|| {
+                        ApiError::internal(format!(
+                            "live mNFT token missing outpoint index: collection_id=0x{}, nft_id=0x{}",
+                            hex::encode(&collection_id_bytes),
+                            hex::encode(nft_id)
+                        ))
+                    })?;
+                    (
+                        Some(format!("0x{}", hex::encode(tx_hash))),
+                        Some(*output_index),
+                    )
+                } else {
+                    (None, None)
+                }
+            }
+            _ => (None, None),
+        };
 
         rows.push(NftCollectionItemResponse {
             nft_id: format!("0x{}", hex::encode(nft_id)),

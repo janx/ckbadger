@@ -459,6 +459,83 @@ describe('api', () => {
       expect(result.hasMore).toBe(false);
     });
 
+    it('fetches mnft item detail', async () => {
+      server.use(
+        http.get('*/api/v1/assets/nfts/items/:nftId', ({ params }) => {
+          expect(params.nftId).toBe('0xmnfttoken');
+          return HttpResponse.json({
+            nftId: '0xmnfttoken',
+            standard: 'm-nft',
+            isLive: true,
+            ownerLockHash: '0xowner',
+            createdAtBlock: 123,
+            tokenIndex: 99,
+            characteristicHex: '0x0102030405060708',
+            configure: 3,
+            state: 1,
+            txHash: '0xtx',
+            outputIndex: 7,
+            class: {
+              classId: '0xclass',
+              issuerId: '0xissuer',
+              name: 'Class A',
+              description: 'desc',
+              renderer: 'renderer:v1',
+              total: 100,
+              issued: 99,
+              configure: 1,
+            },
+            issuer: {
+              issuerId: '0xissuer',
+              name: 'Issuer A',
+              classCount: 2,
+              setCount: 3,
+              infoHex: '0x7b7d',
+            },
+            lifecycle: [],
+          });
+        })
+      );
+
+      const detail = await api.getMnftItemDetail('0xmnfttoken');
+      expect(detail.nftId).toBe('0xmnfttoken');
+      expect(detail.class.classId).toBe('0xclass');
+      expect(detail.tokenIndex).toBe(99);
+    });
+
+    it('fetches mnft item activities with query params', async () => {
+      server.use(
+        http.get('*/api/v1/assets/nfts/items/:nftId/activities', ({ request, params }) => {
+          const url = new URL(request.url);
+          expect(params.nftId).toBe('0xmnfttoken');
+          expect(url.searchParams.get('limit')).toBe('20');
+          expect(url.searchParams.get('cursor')).toBe('300:0');
+          expect(url.searchParams.get('action')).toBe('transfer');
+          return HttpResponse.json({
+            data: [
+              {
+                txHash: '0xtx',
+                blockNumber: 300,
+                txIndex: 0,
+                timestamp: '1700000300',
+                actions: ['transfer'],
+              },
+            ],
+            limit: 20,
+            hasMore: false,
+            nextCursor: null,
+          });
+        })
+      );
+
+      const activities = await api.getMnftItemActivities('0xmnfttoken', {
+        limit: 20,
+        cursor: '300:0',
+        action: 'transfer',
+      });
+      expect(activities.data[0].actions[0]).toBe('transfer');
+    });
+
     it('builds query params for getAddressTokens', async () => {
       server.use(
         http.get('*/api/v1/addresses/:addr/tokens', ({ request }) => {

@@ -431,4 +431,33 @@ describe('SporeDetailPage', () => {
     });
     expect(api.getSporeNft).not.toHaveBeenCalled();
   });
+
+  it('links mnft collection item to mnft asset detail page', async () => {
+    vi.mocked(api.getSporeNft).mockRejectedValue(new Error('API error: 404'));
+    vi.mocked(api.getNftCollection).mockResolvedValue(mockCollection);
+    vi.mocked(api.getNftCollectionItems).mockResolvedValue({
+      data: [
+        {
+          nftId: '0x1111',
+          name: null,
+          standard: 'm-nft',
+          ownerLockHash: '0x2222',
+          isLive: true,
+          createdAtBlock: 100,
+        },
+      ],
+      total: 1,
+      limit: 20,
+      hasMore: false,
+      nextCursor: null,
+    });
+
+    render(<SporeDetailPage />);
+
+    await waitFor(() => {
+      const link = screen.getByRole('link', { name: '0x1111' });
+      expect(link).toBeInTheDocument();
+      expect(link).toHaveAttribute('href', '/nfts/mnft/0x1111');
+    });
+  });
 });

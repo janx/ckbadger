@@ -8,9 +8,10 @@ use ckbadger_api::utils::address::compute_script_hash;
 use ckbadger_api::{create_router, AppConfig};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
-    CachedBlockHeader, ClusterAggregate, ClusterDailyDelta, DobEntry, DobExtra, DobStandard,
-    EpochStats, LiveCellInfo, NftCollectionAggregate, NftDailyDelta, NftEntry, NftExtra,
-    NftStandard, ScriptDailyDelta, ScriptInfo, SporeDailyDelta, TokenDailyDelta, TokenInfo,
+    ActivityEntry, AssetAction, AssetChange, CachedBlockHeader, ClusterAggregate,
+    ClusterDailyDelta, DobEntry, DobExtra, DobStandard, EpochStats, LiveCellInfo,
+    NftCollectionAggregate, NftDailyDelta, NftEntry, NftExtra, NftStandard, ScriptDailyDelta,
+    ScriptInfo, SporeDailyDelta, TokenDailyDelta, TokenInfo,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -114,7 +115,7 @@ async fn test_hardforks_endpoint_marks_activated_and_fills_activation_block() {
         .body(Body::empty())
         .unwrap();
 
-    let response = app.oneshot(request).await.unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
     let body = response.into_body().collect().await.unwrap().to_bytes();
@@ -140,7 +141,7 @@ async fn test_hardforks_endpoint_rejects_unknown_network() {
         .body(Body::empty())
         .unwrap();
 
-    let response = app.oneshot(request).await.unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
@@ -156,7 +157,7 @@ async fn test_recent_blocks_endpoint_empty_db() {
         .body(Body::empty())
         .unwrap();
 
-    let response = app.oneshot(request).await.unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
     let body = response.into_body().collect().await.unwrap().to_bytes();
@@ -176,7 +177,7 @@ async fn test_blocks_list_empty_db() {
         .body(Body::empty())
         .unwrap();
 
-    let response = app.oneshot(request).await.unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 }
 
@@ -221,7 +222,7 @@ async fn test_get_block_includes_hardfork_activation() {
         .body(Body::empty())
         .unwrap();
 
-    let response = app.oneshot(request).await.unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
     let body = response.into_body().collect().await.unwrap().to_bytes();
@@ -3266,6 +3267,387 @@ async fn test_assets_nft_collection_items_dotbit_outpoint_fallback_without_index
         format!("0x{}", hex::encode(&tx_hash))
     );
     assert_eq!(json["data"][0]["outputIndex"], output_index);
+}
+
+#[tokio::test]
+async fn test_assets_nft_collection_items_mnft_live_outpoint() {
+    let store = test_store();
+    let class_id = [0x24u8; 24];
+    let issuer_id = [0x13u8; 20];
+    let token_id = [0x42u8; 28];
+    let tx_hash = vec![0x55u8; 32];
+    let output_index = 6i16;
+    let collection_id_hex = format!("0x{}", hex::encode(class_id));
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_nft_collection_aggregate(
+        &class_id,
+        &NftCollectionAggregate {
+            name: Some("Genesis Class".to_string()),
+            standard: NftStandard::MnftClass,
+            total_count: 1,
+            live_count: 1,
+        },
+    );
+    batch.put_nft(
+        &class_id,
+        &NftEntry {
+            standard: NftStandard::MnftClass,
+            collection_id: Some(issuer_id.to_vec()),
+            token_id: None,
+            owner_lock_hash: Some(vec![0x11; 32]),
+            name: Some("Genesis Class".to_string()),
+            is_live: true,
+            created_at_block: 100,
+            extra: NftExtra::MnftClass {
+                description: Some("Class description".to_string()),
+                renderer: Some("renderer:v1".to_string()),
+                total: 1000,
+                issued: 1,
+                configure: 7,
+            },
+        },
+    );
+    batch.put_nft(
+        &token_id,
+        &NftEntry {
+            standard: NftStandard::MnftToken,
+            collection_id: Some(class_id.to_vec()),
+            token_id: Some(token_id.to_vec()),
+            owner_lock_hash: Some(vec![0x22; 32]),
+            name: None,
+            is_live: true,
+            created_at_block: 101,
+            extra: NftExtra::MnftToken {
+                token_index: 1,
+                characteristic: vec![1, 2, 3, 4, 5, 6, 7, 8],
+                configure: 3,
+                state: 1,
+            },
+        },
+    );
+    batch.put_nft_by_collection(&class_id, &token_id);
+    batch.put_mnft_token_outpoint(&tx_hash, output_index, &token_id);
+    batch.put_cell(
+        &tx_hash,
+        output_index,
+        &LiveCellInfo {
+            capacity: 200_00000000,
+            created_at_block: 101,
+            lock_script_hash: vec![0x41; 32],
+            lock_code_hash: vec![0x51; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: Some(vec![0x61; 32]),
+            type_code_hash: Some(vec![0x62; 32]),
+            type_args: Some(token_id.to_vec()),
+            data_size: 64,
+            occupied_capacity: 62_00000000,
+            udt_amount: None,
+        },
+    );
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/assets/nfts/{}/items?limit=20",
+            collection_id_hex
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        json["data"][0]["txHash"],
+        format!("0x{}", hex::encode(&tx_hash))
+    );
+    assert_eq!(json["data"][0]["outputIndex"], output_index);
+}
+
+#[tokio::test]
+async fn test_assets_nft_item_detail_mnft() {
+    let store = test_store();
+    let issuer_id = [0x21u8; 20];
+    let class_id = [0x31u8; 24];
+    let token_id = [0x41u8; 28];
+    let tx_hash = vec![0x91u8; 32];
+    let output_index = 4i16;
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_nft(
+        &issuer_id,
+        &NftEntry {
+            standard: NftStandard::MnftIssuer,
+            collection_id: None,
+            token_id: None,
+            owner_lock_hash: Some(vec![0x01; 32]),
+            name: Some("Issuer-A".to_string()),
+            is_live: true,
+            created_at_block: 90,
+            extra: NftExtra::MnftIssuer {
+                class_count: 2,
+                set_count: 3,
+                info: Some(br#"{"name":"Issuer-A"}"#.to_vec()),
+            },
+        },
+    );
+    batch.put_nft(
+        &class_id,
+        &NftEntry {
+            standard: NftStandard::MnftClass,
+            collection_id: Some(issuer_id.to_vec()),
+            token_id: None,
+            owner_lock_hash: Some(vec![0x02; 32]),
+            name: Some("Class-A".to_string()),
+            is_live: true,
+            created_at_block: 95,
+            extra: NftExtra::MnftClass {
+                description: Some("Class description".to_string()),
+                renderer: Some("renderer:v1".to_string()),
+                total: 500,
+                issued: 128,
+                configure: 9,
+            },
+        },
+    );
+    batch.put_nft(
+        &token_id,
+        &NftEntry {
+            standard: NftStandard::MnftToken,
+            collection_id: Some(class_id.to_vec()),
+            token_id: Some(token_id.to_vec()),
+            owner_lock_hash: Some(vec![0x03; 32]),
+            name: None,
+            is_live: true,
+            created_at_block: 120,
+            extra: NftExtra::MnftToken {
+                token_index: 128,
+                characteristic: vec![0xaa; 8],
+                configure: 5,
+                state: 2,
+            },
+        },
+    );
+    batch.put_mnft_token_outpoint(&tx_hash, output_index, &token_id);
+    batch.put_cell(
+        &tx_hash,
+        output_index,
+        &LiveCellInfo {
+            capacity: 300_00000000,
+            created_at_block: 120,
+            lock_script_hash: vec![0x31; 32],
+            lock_code_hash: vec![0x32; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: Some(vec![0x33; 32]),
+            type_code_hash: Some(vec![0x34; 32]),
+            type_args: Some(token_id.to_vec()),
+            data_size: 64,
+            occupied_capacity: 62_00000000,
+            udt_amount: None,
+        },
+    );
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/assets/nfts/items/0x{}",
+            hex::encode(token_id)
+        ))
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["nftId"], format!("0x{}", hex::encode(token_id)));
+    assert_eq!(json["standard"], "m-nft");
+    assert_eq!(json["tokenIndex"], 128);
+    assert_eq!(json["state"], 2);
+    assert_eq!(json["class"]["name"], "Class-A");
+    assert_eq!(json["issuer"]["name"], "Issuer-A");
+    assert_eq!(json["txHash"], format!("0x{}", hex::encode(&tx_hash)));
+    assert_eq!(json["outputIndex"], output_index);
+    assert_eq!(json["lifecycle"][0]["event"], "mint");
+    assert_eq!(json["lifecycle"][1]["event"], "live");
+}
+
+#[tokio::test]
+async fn test_assets_nft_item_activities_mnft() {
+    let store = test_store();
+    let class_id = [0x31u8; 24];
+    let token_id = [0x41u8; 28];
+    let owner_lock_hash = vec![0x77u8; 32];
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_nft(
+        &token_id,
+        &NftEntry {
+            standard: NftStandard::MnftToken,
+            collection_id: Some(class_id.to_vec()),
+            token_id: Some(token_id.to_vec()),
+            owner_lock_hash: Some(owner_lock_hash.clone()),
+            name: None,
+            is_live: true,
+            created_at_block: 120,
+            extra: NftExtra::MnftToken {
+                token_index: 128,
+                characteristic: vec![0xaa; 8],
+                configure: 5,
+                state: 2,
+            },
+        },
+    );
+    batch.put_activity(
+        &owner_lock_hash,
+        300,
+        0,
+        &ActivityEntry {
+            tx_hash: vec![0x91; 32],
+            block_number: 300,
+            tx_index: 0,
+            timestamp: 1_700_000_300,
+            ckb_delta: 0,
+            occupied_delta: 0,
+            is_cellbase: false,
+            asset_changes: vec![AssetChange::Nft {
+                nft_id: token_id.to_vec(),
+                standard: "m-nft".to_string(),
+                action: AssetAction::Transfer,
+            }],
+            peers: vec![],
+        },
+    );
+    batch.put_activity(
+        &owner_lock_hash,
+        200,
+        0,
+        &ActivityEntry {
+            tx_hash: vec![0x92; 32],
+            block_number: 200,
+            tx_index: 0,
+            timestamp: 1_700_000_200,
+            ckb_delta: 0,
+            occupied_delta: 0,
+            is_cellbase: false,
+            asset_changes: vec![AssetChange::Nft {
+                nft_id: vec![0x55; 28],
+                standard: "m-nft".to_string(),
+                action: AssetAction::Transfer,
+            }],
+            peers: vec![],
+        },
+    );
+    batch.put_activity(
+        &owner_lock_hash,
+        100,
+        0,
+        &ActivityEntry {
+            tx_hash: vec![0x93; 32],
+            block_number: 100,
+            tx_index: 0,
+            timestamp: 1_700_000_100,
+            ckb_delta: 0,
+            occupied_delta: 0,
+            is_cellbase: false,
+            asset_changes: vec![AssetChange::Nft {
+                nft_id: token_id.to_vec(),
+                standard: "m-nft".to_string(),
+                action: AssetAction::Mint,
+            }],
+            peers: vec![],
+        },
+    );
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/assets/nfts/items/0x{}/activities?limit=20",
+            hex::encode(token_id)
+        ))
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["data"].as_array().unwrap().len(), 2);
+    assert_eq!(json["data"][0]["blockNumber"], 300);
+    assert_eq!(json["data"][0]["actions"][0], "transfer");
+    assert_eq!(json["data"][1]["blockNumber"], 100);
+    assert_eq!(json["data"][1]["actions"][0], "mint");
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/assets/nfts/items/0x{}/activities?limit=1",
+            hex::encode(token_id)
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(json["data"][0]["blockNumber"], 300);
+    assert_eq!(json["hasMore"], true);
+    let next_cursor = json["nextCursor"]
+        .as_str()
+        .expect("next cursor for mnft activities");
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/assets/nfts/items/0x{}/activities?limit=1&cursor={}",
+            hex::encode(token_id),
+            next_cursor
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(json["data"][0]["blockNumber"], 100);
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/assets/nfts/items/0x{}/activities?limit=20&action=transfer",
+            hex::encode(token_id)
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(json["data"][0]["actions"][0], "transfer");
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/assets/nfts/items/0x{}/activities?action=invalid",
+            hex::encode(token_id)
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

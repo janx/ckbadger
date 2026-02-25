@@ -12,6 +12,8 @@ use crate::types::{
 
 type DotbitLiveOutpoint = (Vec<u8>, i16);
 type DotbitLiveOutpointMap = HashMap<Vec<u8>, DotbitLiveOutpoint>;
+type MnftLiveOutpoint = (Vec<u8>, i16);
+type MnftLiveOutpointMap = HashMap<Vec<u8>, MnftLiveOutpoint>;
 
 impl CkbadgerStore {
     pub fn get_spore(&self, id: &[u8]) -> anyhow::Result<Option<SporeEntry>> {
@@ -191,6 +193,68 @@ impl CkbadgerStore {
             }
         }
         results
+    }
+
+    /// Resolve live mNFT token outpoints by token IDs.
+    ///
+    /// Scans mNFT token outpoint index in `stats` and validates liveness via `live_cells`.
+    /// Returns token_id -> (tx_hash, output_index) for tokens that currently have
+    /// a live outpoint.
+    pub fn get_live_mnft_token_outpoints_by_token_ids(
+        &self,
+        token_ids: &[Vec<u8>],
+    ) -> anyhow::Result<MnftLiveOutpointMap> {
+        let targets: HashSet<Vec<u8>> = token_ids.iter().cloned().collect();
+        if targets.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let prefix = [keys::STATS_PREFIX_MNFT_TOKEN_OUTPOINT];
+        let iter = self.prefix_iterator_cf(self.cf_stats(), &prefix);
+        let mut resolved: MnftLiveOutpointMap = HashMap::with_capacity(targets.len());
+
+        for item in iter.flatten() {
+            let (key, value) = item;
+            if key.first() != Some(&keys::STATS_PREFIX_MNFT_TOKEN_OUTPOINT) {
+                break;
+            }
+            if key.len() != keys::MNFT_TOKEN_OUTPOINT_KEY_SIZE {
+                anyhow::bail!(
+                    "invalid mnft token outpoint key length: expected {}, got {}",
+                    keys::MNFT_TOKEN_OUTPOINT_KEY_SIZE,
+                    key.len()
+                );
+            }
+            if !targets.contains(value.as_ref()) {
+                continue;
+            }
+
+            let (tx_hash, output_index) = keys::decode_outpoint(&key[1..35]);
+            if self.get_cell(&tx_hash, output_index)?.is_none() {
+                continue;
+            }
+
+            if let Some((existing_tx_hash, existing_output_index)) = resolved.get(value.as_ref()) {
+                if existing_tx_hash != &tx_hash || *existing_output_index != output_index {
+                    anyhow::bail!(
+                        "multiple live mnft outpoints for token_id=0x{:x?}: first=0x{:x?}-{}, second=0x{:x?}-{}",
+                        value.as_ref(),
+                        existing_tx_hash,
+                        existing_output_index,
+                        tx_hash,
+                        output_index
+                    );
+                }
+            } else {
+                resolved.insert(value.to_vec(), (tx_hash, output_index));
+            }
+
+            if resolved.len() == targets.len() {
+                break;
+            }
+        }
+
+        Ok(resolved)
     }
 
     pub fn get_dotbit_account_id_by_outpoint(
@@ -877,6 +941,46 @@ mod tests {
             .get_live_dotbit_outpoints_by_account_ids(std::slice::from_ref(&account_id))
             .unwrap();
         let (tx_hash, output_index) = outpoints.get(&account_id).unwrap();
+        assert_eq!(tx_hash, &live_tx);
+        assert_eq!(*output_index, live_idx);
+    }
+
+    #[test]
+    fn test_get_live_mnft_token_outpoints_by_token_ids_prefers_live_cells() {
+        let (_dir, store) = test_store();
+        let token_id = vec![0x71u8; 28];
+        let old_tx = vec![0x81u8; 32];
+        let live_tx = vec![0x82u8; 32];
+        let old_idx = 1i16;
+        let live_idx = 2i16;
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_mnft_token_outpoint(&old_tx, old_idx, &token_id);
+        batch.put_mnft_token_outpoint(&live_tx, live_idx, &token_id);
+        batch.put_cell(
+            &live_tx,
+            live_idx,
+            &crate::types::LiveCellInfo {
+                capacity: 100_00000000,
+                created_at_block: 10,
+                lock_script_hash: vec![0x01; 32],
+                lock_code_hash: vec![0x02; 32],
+                lock_hash_type: 1,
+                lock_args: vec![],
+                type_script_hash: Some(vec![0x03; 32]),
+                type_code_hash: Some(vec![0x04; 32]),
+                type_args: Some(token_id.clone()),
+                data_size: 0,
+                occupied_capacity: 61_00000000,
+                udt_amount: None,
+            },
+        );
+        batch.commit().unwrap();
+
+        let outpoints = store
+            .get_live_mnft_token_outpoints_by_token_ids(std::slice::from_ref(&token_id))
+            .unwrap();
+        let (tx_hash, output_index) = outpoints.get(&token_id).unwrap();
         assert_eq!(tx_hash, &live_tx);
         assert_eq!(*output_index, live_idx);
     }

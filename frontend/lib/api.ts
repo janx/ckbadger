@@ -187,6 +187,10 @@ interface NftCollectionItemsParams extends CursorQueryParams {
   search?: string;
 }
 
+interface MnftItemActivitiesParams extends CursorQueryParams {
+  action?: 'mint' | 'transfer' | 'burn';
+}
+
 interface Script {
   codeHash: string;
   hashType: string;
@@ -731,6 +735,58 @@ interface NftCollectionItem {
   outputIndex?: number | null;
 }
 
+interface MnftClassSummary {
+  classId: string;
+  issuerId: string;
+  name: string | null;
+  description: string | null;
+  renderer: string | null;
+  total: number;
+  issued: number;
+  configure: number;
+}
+
+interface MnftIssuerSummary {
+  issuerId: string;
+  name: string | null;
+  classCount: number;
+  setCount: number;
+  infoHex: string | null;
+}
+
+interface MnftLifecycleEvent {
+  event: string;
+  blockNumber: number | null;
+  txHash: string | null;
+  outputIndex: number | null;
+  note: string | null;
+}
+
+interface MnftItemDetail {
+  nftId: string;
+  standard: string;
+  isLive: boolean;
+  ownerLockHash: string | null;
+  createdAtBlock: number;
+  tokenIndex: number;
+  characteristicHex: string;
+  configure: number;
+  state: number;
+  txHash: string | null;
+  outputIndex: number | null;
+  class: MnftClassSummary;
+  issuer: MnftIssuerSummary;
+  lifecycle: MnftLifecycleEvent[];
+}
+
+interface MnftItemActivity {
+  txHash: string;
+  blockNumber: number;
+  txIndex: number;
+  timestamp: string;
+  actions: string[];
+}
+
 interface ChartDataPoint {
   date: string;
   value: string;
@@ -1041,6 +1097,11 @@ export type {
   SporeNft,
   NftCollection,
   NftCollectionItem,
+  MnftClassSummary,
+  MnftIssuerSummary,
+  MnftLifecycleEvent,
+  MnftItemDetail,
+  MnftItemActivity,
   ChartDataPoint,
   ChartResponse,
   TxStatsDataPoint,
@@ -1453,6 +1514,24 @@ export const api = {
     const suffix = query.toString();
     return fetchApi(
       `/assets/nfts/${normalizeNftAssetId(collectionId)}/items${suffix ? `?${suffix}` : ''}`
+    );
+  },
+
+  getMnftItemDetail: (nftId: string): Promise<MnftItemDetail> => {
+    return fetchApi(`/assets/nfts/items/${encodeURIComponent(nftId)}`);
+  },
+
+  getMnftItemActivities: (
+    nftId: string,
+    params: MnftItemActivitiesParams = {}
+  ): Promise<CursorPaginatedResponse<MnftItemActivity>> => {
+    const query = new URLSearchParams();
+    if (params.limit) query.set('limit', String(params.limit));
+    if (params.cursor) query.set('cursor', params.cursor);
+    if (params.action) query.set('action', params.action);
+    const suffix = query.toString();
+    return fetchApi(
+      `/assets/nfts/items/${encodeURIComponent(nftId)}/activities${suffix ? `?${suffix}` : ''}`
     );
   },
 

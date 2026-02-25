@@ -22,7 +22,7 @@ Core page groups:
 - `/transactions`, `/tx/{hash}`
 - `/address/{addr}`, `/cell/{txHash-outputIndex}`
 - `/tokens`, `/tokens/{typeHash}`
-- `/assets`, `/nfts`, `/nfts/{sporeId}`
+- `/assets`, `/nfts`, `/nfts/{sporeId}`, `/nfts/mnft/{nftId}`
 - `/scripts`, `/scripts/{name}`, `/script/{codeHash}`
 - `/dao`, `/dao/charts`
 - `/charts`, `/charts/{slug}`
