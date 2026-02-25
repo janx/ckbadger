@@ -6744,6 +6744,7 @@ impl Indexer {
         {
             let mut nft_batch = StoreBatch::new(self.writer.store());
             let mut spore_state = self.writer.new_spore_batch_state();
+            let mut dotbit_state = self.writer.new_dotbit_batch_state();
             let mut block_tx_idx = 0usize;
             for (block_idx, block_response) in blocks.iter().enumerate() {
                 let parsed = &all_parsed_blocks[block_idx];
@@ -6828,12 +6829,13 @@ impl Indexer {
                         )?;
                     }
                     for account in DotbitParser::parse_accounts(tx)? {
-                        self.writer.insert_dotbit_account(
+                        self.writer.insert_dotbit_account_with_state(
                             &account,
                             &tx_data.hash,
                             parsed.number,
                             parsed.timestamp.timestamp_millis(),
                             &mut nft_batch,
+                            &mut dotbit_state,
                         )?;
                         batch_dotbit_outpoints.insert(
                             (tx_data.hash.to_vec(), account.output_index),
@@ -6859,6 +6861,7 @@ impl Indexer {
         let bulk_sync_active = self.is_bulk_sync_active();
         let mut consume_batch = StoreBatch::new(self.writer.store());
         let mut spore_state = self.writer.new_spore_batch_state();
+        let mut dotbit_state = self.writer.new_dotbit_batch_state();
         let mut block_tx_idx = 0usize;
         for (block_idx, block_response) in blocks.iter().enumerate() {
             let parsed = &all_parsed_blocks[block_idx];
@@ -6917,11 +6920,12 @@ impl Indexer {
                             batch_dotbit_latest_create_order.get(&account_id).copied();
                         if should_consume_dotbit_account(latest_create_order, dotbit_consume_order)
                         {
-                            self.writer.consume_dotbit_account(
+                            self.writer.consume_dotbit_account_with_state(
                                 &account_id,
                                 parsed.number,
                                 &tx_data.hash,
                                 &mut consume_batch,
+                                &mut dotbit_state,
                             )?;
                         }
                     }
@@ -7845,6 +7849,7 @@ impl Indexer {
                     let t = Instant::now();
                     let mut batch = StoreBatch::new(store);
                     let mut spore_state = writer.new_spore_batch_state();
+                    let mut dotbit_state = writer.new_dotbit_batch_state();
                     let mut batch_dotbit_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>> =
                         HashMap::new();
                     let mut batch_dotbit_latest_create_order: HashMap<Vec<u8>, u64> = HashMap::new();
@@ -7933,12 +7938,13 @@ impl Indexer {
                                 )?;
                             }
                             for account in DotbitParser::parse_accounts(tx)? {
-                                writer.insert_dotbit_account(
+                                writer.insert_dotbit_account_with_state(
                                     &account,
                                     &tx_data.hash,
                                     parsed.number,
                                     ts_ms,
                                     &mut batch,
+                                    &mut dotbit_state,
                                 )?;
                                 batch_dotbit_outpoints.insert(
                                     (tx_data.hash.to_vec(), account.output_index),
@@ -8002,11 +8008,12 @@ impl Indexer {
                                         latest_create_order,
                                         dotbit_consume_order,
                                     ) {
-                                        writer.consume_dotbit_account(
+                                        writer.consume_dotbit_account_with_state(
                                             &account_id,
                                             parsed.number,
                                             &tx_data.hash,
                                             &mut batch,
+                                            &mut dotbit_state,
                                         )?;
                                     }
                                 }
@@ -8951,6 +8958,7 @@ impl Indexer {
                 let mut batch_dotbit_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>> = HashMap::new();
                 let mut batch_dotbit_latest_create_order: HashMap<Vec<u8>, u64> = HashMap::new();
                 let mut spore_state = self.writer.new_spore_batch_state();
+                let mut dotbit_state = self.writer.new_dotbit_batch_state();
                 let mut block_tx_idx = 0usize;
                 for (block_idx, block_response) in blocks.iter().enumerate() {
                     let parsed = &all_parsed_blocks[block_idx];
@@ -9041,12 +9049,13 @@ impl Indexer {
                             );
                         }
                         for account in DotbitParser::parse_accounts(tx)? {
-                            self.writer.insert_dotbit_account(
+                            self.writer.insert_dotbit_account_with_state(
                                 &account,
                                 &tx_data.hash,
                                 parsed.number,
                                 ts_ms,
                                 &mut data_batch,
+                                &mut dotbit_state,
                             )?;
                             batch_dotbit_outpoints.insert(
                                 (tx_data.hash.to_vec(), account.output_index),
@@ -9206,11 +9215,12 @@ impl Indexer {
                                 latest_create_order,
                                 *dotbit_consume_order,
                             ) {
-                                self.writer.consume_dotbit_account(
+                                self.writer.consume_dotbit_account_with_state(
                                     account_id,
                                     *block_number,
                                     consuming_tx_hash,
                                     &mut data_batch,
+                                    &mut dotbit_state,
                                 )?;
                             }
                         }
