@@ -496,6 +496,195 @@ async fn test_search_empty_db() {
 }
 
 #[tokio::test]
+async fn test_search_hash_without_0x_returns_ambiguous_block_and_transaction() {
+    let store = test_store();
+    let hash = vec![0xaa; 32];
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(
+        123,
+        &CachedBlockHeader {
+            hash: hash.clone(),
+            timestamp: 1_700_000_000_000,
+            epoch_number: 1,
+            epoch_index: 0,
+            epoch_length: 1000,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        },
+    );
+    batch.put_tx_hash_map(&hash, 123, 0);
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri(format!("/api/v1/search?q={}", hex::encode(&hash)))
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        json["normalizedQuery"],
+        serde_json::Value::from(format!("0x{}", hex::encode(&hash)))
+    );
+    assert_eq!(json["ambiguous"], serde_json::Value::from(true));
+    let result_types: Vec<_> = json["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|row| row["resultType"].as_str())
+        .collect();
+    assert!(result_types.contains(&"block"));
+    assert!(result_types.contains(&"transaction"));
+}
+
+#[tokio::test]
+async fn test_search_name_matches_script_token_and_cluster_assets() {
+    let store = test_store();
+
+    let script_hash = vec![0x31; 32];
+    let token_hash = vec![0x32; 32];
+    let cluster_id = vec![0x33; 32];
+
+    store
+        .put_script_info_direct(
+            &script_hash,
+            &ScriptInfo {
+                code_hash: script_hash.clone(),
+                hash_type: 1,
+                name: Some("Alpha Lock".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    store
+        .put_token_direct(
+            &token_hash,
+            &TokenInfo {
+                type_code_hash: vec![0x44; 32],
+                hash_type: 1,
+                type_args: vec![0x55; 32],
+                standard: "xudt".to_string(),
+                name: Some("Alpha Token".to_string()),
+                symbol: Some("ALPHA".to_string()),
+                decimals: Some(8),
+                total_supply: Some(1_000_000),
+                max_supply: None,
+                holders_count: 10,
+                first_seen_block: 0,
+                icon_url: None,
+                description: None,
+                transfers_count: 0,
+            },
+        )
+        .unwrap();
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_cluster_aggregate(
+        &cluster_id,
+        &ClusterAggregate {
+            name: Some("Alpha Cluster".to_string()),
+            description: None,
+            total_count: 10,
+            live_count: 8,
+            owner_count: 2,
+        },
+    );
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/search?q=alpha")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let rows = json["results"].as_array().unwrap();
+    let expected_script_url = format!("/script/0x{}", hex::encode(&script_hash));
+    let expected_token_url = format!("/tokens/0x{}", hex::encode(&token_hash));
+    let expected_cluster_url = format!("/clusters/0x{}", hex::encode(&cluster_id));
+
+    assert!(rows.iter().any(|row| {
+        row["resultType"].as_str() == Some("script")
+            && row["url"].as_str() == Some(expected_script_url.as_str())
+    }));
+    assert!(rows.iter().any(|row| {
+        row["resultType"].as_str() == Some("token")
+            && row["url"].as_str() == Some(expected_token_url.as_str())
+    }));
+    assert!(rows.iter().any(|row| {
+        row["resultType"].as_str() == Some("cluster")
+            && row["url"].as_str() == Some(expected_cluster_url.as_str())
+    }));
+}
+
+#[tokio::test]
+async fn test_search_cell_prefix_supports_colon_and_hex_output_index() {
+    let store = test_store();
+    let tx_hash = vec![0xab; 32];
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_cell(
+        &tx_hash,
+        1,
+        &LiveCellInfo {
+            capacity: 100_00000000,
+            created_at_block: 123,
+            lock_script_hash: vec![0x11; 32],
+            lock_code_hash: vec![0x22; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x33; 20],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+        },
+    );
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/search?q=cell:{}:0x1",
+            hex::encode(&tx_hash)
+        ))
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        json["normalizedQuery"],
+        serde_json::Value::from(format!("0x{}-1", hex::encode(&tx_hash)))
+    );
+    assert_eq!(json["results"][0]["resultType"], "cell");
+    assert_eq!(
+        json["results"][0]["id"],
+        serde_json::Value::from(format!("0x{}-1", hex::encode(&tx_hash)))
+    );
+}
+
+#[tokio::test]
 async fn test_dao_stats_empty_db() {
     let store = test_store();
     let config = test_config(store);

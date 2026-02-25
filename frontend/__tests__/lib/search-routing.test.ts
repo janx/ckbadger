@@ -6,9 +6,9 @@ describe('resolveSearchRoute', () => {
     expect(resolveSearchRoute('12345')).toBe('/blocks/12345');
   });
 
-  it('routes 0x64-byte hash to transaction detail', () => {
+  it('does not force ambiguous 32-byte hash to transaction detail', () => {
     const hash = `0x${'a'.repeat(64)}`;
-    expect(resolveSearchRoute(hash)).toBe(`/tx/${hash}`);
+    expect(resolveSearchRoute(hash)).toBeNull();
   });
 
   it('routes ckb addresses to address detail', () => {
@@ -17,11 +17,18 @@ describe('resolveSearchRoute', () => {
     );
   });
 
-  it('routes outpoint-like values to cell detail', () => {
-    expect(resolveSearchRoute('0xabc-0x1')).toBe('/cell/0xabc-0x1');
+  it('normalizes outpoint with alternate delimiters and hex output index', () => {
+    const hash = `0x${'b'.repeat(64)}`;
+    expect(resolveSearchRoute(`${hash}:0x1`)).toBe(`/cell/${hash}-1`);
+    expect(resolveSearchRoute(`${hash}#1`)).toBe(`/cell/${hash}-1`);
   });
 
-  it('falls back to search page for unknown query', () => {
-    expect(resolveSearchRoute('hello world')).toBe('/search?q=hello%20world');
+  it('supports explicit tx prefix to disambiguate hash', () => {
+    const hash = `0x${'c'.repeat(64)}`;
+    expect(resolveSearchRoute(`tx:${hash}`)).toBe(`/tx/${hash}`);
+  });
+
+  it('returns null for unknown query', () => {
+    expect(resolveSearchRoute('hello world')).toBeNull();
   });
 });

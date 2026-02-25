@@ -17,6 +17,7 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [isInputFocused, setIsInputFocused] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(-1);
+  const [submitFeedback, setSubmitFeedback] = useState<string | null>(null);
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -33,6 +34,10 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
   useEffect(() => {
     setSelectedIndex(-1);
   }, [results]);
+
+  useEffect(() => {
+    setSubmitFeedback(null);
+  }, [query]);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -52,21 +57,49 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!query.trim()) return;
+    const trimmed = query.trim();
+    if (!trimmed) return;
 
     if (selectedIndex >= 0 && results[selectedIndex]) {
       router.push(results[selectedIndex].url);
       setIsOpen(false);
       setIsInputFocused(false);
       setQuery('');
+      setSubmitFeedback(null);
       return;
     }
 
-    router.push(resolveSearchRoute(query));
+    if (isLoading) {
+      setSubmitFeedback('Searching...');
+      return;
+    }
 
-    setIsOpen(false);
-    setIsInputFocused(false);
-    setQuery('');
+    if (results.length === 1) {
+      router.push(results[0].url);
+      setIsOpen(false);
+      setIsInputFocused(false);
+      setQuery('');
+      setSubmitFeedback(null);
+      return;
+    }
+
+    if (results.length > 1) {
+      setIsOpen(true);
+      setSubmitFeedback('Multiple matches found. Please choose one result.');
+      return;
+    }
+
+    const route = resolveSearchRoute(trimmed);
+    if (trimmed.length < 2 && route) {
+      router.push(route);
+      setIsOpen(false);
+      setIsInputFocused(false);
+      setQuery('');
+      setSubmitFeedback(null);
+      return;
+    }
+
+    setSubmitFeedback('No matches found.');
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -87,6 +120,7 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
     setIsOpen(false);
     setIsInputFocused(false);
     setQuery('');
+    setSubmitFeedback(null);
   };
 
   const isCompact = variant === 'compact';
@@ -154,7 +188,13 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
         </div>
       </form>
 
-      {isOpen && query.length >= 2 && (
+      {submitFeedback && (
+        <div className="mt-1 px-1 text-xs text-slate-400" role="status" aria-live="polite">
+          {submitFeedback}
+        </div>
+      )}
+
+      {isOpen && query.trim().length >= 2 && (
         <div
           ref={dropdownRef}
           className="absolute z-50 mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 shadow-lg"
@@ -202,6 +242,11 @@ function SearchResultIcon({ type }: { type: string }) {
     transaction: 'text-amber',
     address: 'text-slate-300',
     cell: 'text-cyan-300',
+    script: 'text-indigo-300',
+    token: 'text-emerald-300',
+    spore: 'text-fuchsia-300',
+    cluster: 'text-orange-300',
+    nft: 'text-orange-300',
     default: 'text-slate-400',
   };
 
@@ -236,6 +281,32 @@ function SearchResultIcon({ type }: { type: string }) {
         return (
           <path
             d="M5 9 12 5l7 4-7 4-7-4Zm0 0v6l7 4 7-4V9"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        );
+      case 'script':
+        return (
+          <path
+            d="M6 5h12v12H6zM9 9h6M9 12h6M9 15h4"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        );
+      case 'token':
+        return (
+          <path
+            d="M12 6a6 6 0 1 0 0 12 6 6 0 0 0 0-12Zm0 0v12M6 12h12"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        );
+      case 'spore':
+      case 'cluster':
+      case 'nft':
+        return (
+          <path
+            d="M12 5 7 8v5l5 3 5-3V8l-5-3Zm0 0v11"
             strokeLinecap="round"
             strokeLinejoin="round"
           />

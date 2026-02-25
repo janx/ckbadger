@@ -55,7 +55,7 @@ describe('CommandPalette', () => {
 
     const input = screen.getByLabelText('Command palette input');
     const txHash = `0x${'a'.repeat(64)}`;
-    fireEvent.change(input, { target: { value: txHash } });
+    fireEvent.change(input, { target: { value: `tx:${txHash}` } });
     fireEvent.keyDown(input, { key: 'Enter' });
 
     expect(pushMock).toHaveBeenCalledWith(`/tx/${txHash}`);

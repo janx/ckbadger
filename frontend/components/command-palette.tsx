@@ -230,7 +230,11 @@ export function CommandPalette() {
     if (command) {
       router.push(command.href);
     } else if (normalizedQuery) {
-      router.push(resolveSearchRoute(query));
+      const route = resolveSearchRoute(query);
+      if (!route) {
+        return;
+      }
+      router.push(route);
     } else {
       return;
     }

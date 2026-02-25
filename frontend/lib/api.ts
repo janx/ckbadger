@@ -487,11 +487,14 @@ interface SearchResult {
   id: string;
   label: string;
   url: string;
+  matchKind?: string;
 }
 
 interface SearchResponse {
   results: SearchResult[];
   query: string;
+  normalizedQuery?: string;
+  ambiguous?: boolean;
 }
 
 interface Token {
