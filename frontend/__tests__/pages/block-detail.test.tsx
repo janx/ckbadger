@@ -5,7 +5,9 @@ import BlockDetailPage from '@/app/blocks/[id]/page';
 import { api } from '@/lib/api';
 
 const BLOCK_ID = '8775638';
+const BLOCK_HASH = `0x${'aa'.repeat(32)}`;
 const pushMock = vi.hoisted(() => vi.fn());
+const paramsIdRef = vi.hoisted(() => ({ current: '8775638' }));
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -22,7 +24,7 @@ vi.mock('@/components/layout/header', () => ({
 }));
 
 vi.mock('next/navigation', () => ({
-  useParams: () => ({ id: BLOCK_ID }),
+  useParams: () => ({ id: paramsIdRef.current }),
   useRouter: () => ({
     push: pushMock,
     replace: vi.fn(),
@@ -35,7 +37,7 @@ vi.mock('next/navigation', () => ({
 
 const mockBlock = {
   number: 8_775_638,
-  hash: `0x${'aa'.repeat(32)}`,
+  hash: BLOCK_HASH,
   parentHash: `0x${'bb'.repeat(32)}`,
   timestamp: '2026-02-22T00:00:00Z',
   transactionsCount: 1,
@@ -61,6 +63,7 @@ describe('BlockDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     pushMock.mockReset();
+    paramsIdRef.current = BLOCK_ID;
     vi.mocked(api.getBlock).mockResolvedValue(mockBlock);
     vi.mocked(api.getTransactions).mockResolvedValue({
       data: [
@@ -229,6 +232,23 @@ describe('BlockDetailPage', () => {
         'href',
         'https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0051-ckb2023/0051-ckb2023.md'
       );
+    });
+  });
+
+  it('loads block transactions by resolved block number when route id is hash', async () => {
+    paramsIdRef.current = BLOCK_HASH;
+
+    render(<BlockDetailPage />);
+
+    await waitFor(() => {
+      expect(api.getBlock).toHaveBeenCalledWith(BLOCK_HASH);
+    });
+
+    await waitFor(() => {
+      expect(api.getTransactions).toHaveBeenCalledWith({
+        blockNumber: mockBlock.number,
+        limit: 100,
+      });
     });
   });
 });

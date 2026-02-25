@@ -150,4 +150,49 @@ describe('SearchBar', () => {
     expect(pushMock).not.toHaveBeenCalled();
     expect(screen.getByText('No matches found.')).toBeInTheDocument();
   });
+
+  it('prefers exact block hash result on submit when hash query has mixed results', async () => {
+    const hash = `0x${'a'.repeat(64)}`;
+    vi.mocked(api.search).mockImplementation(async (query: string) => {
+      if (query !== hash) {
+        return { query, results: [] };
+      }
+
+      return {
+        query: hash,
+        results: [
+          {
+            resultType: 'transaction',
+            id: hash,
+            label: `Transaction ${hash}`,
+            url: `/tx/${hash}`,
+            matchKind: 'exact_hash',
+          },
+          {
+            resultType: 'block',
+            id: '123',
+            label: 'Block #123',
+            url: `/blocks/${hash}`,
+            matchKind: 'exact_hash',
+          },
+        ],
+      };
+    });
+
+    render(<SearchBar />);
+
+    const input = screen.getByPlaceholderText('Block, tx hash, address...');
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: hash } });
+
+    await waitFor(() => {
+      expect(api.search).toHaveBeenCalledWith(hash);
+    });
+    await waitFor(() => {
+      expect(screen.getByText('Block #123')).toBeInTheDocument();
+    });
+
+    fireEvent.submit(input.closest('form')!);
+    expect(pushMock).toHaveBeenCalledWith(`/blocks/${hash}`);
+  });
 });

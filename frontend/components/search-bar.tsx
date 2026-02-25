@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { api, type SearchResult } from '@/lib/api';
+import { normalizeHash32 } from '@/lib/search-intent';
 import { resolveSearchRoute } from '@/lib/search-routing';
 import { cn } from '@/lib/utils';
 
@@ -74,6 +75,21 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
       return;
     }
 
+    const normalizedHash = normalizeHash32(trimmed);
+    if (normalizedHash) {
+      const blockExactHash = results.find(
+        (result) => result.resultType === 'block' && result.matchKind === 'exact_hash'
+      );
+      if (blockExactHash) {
+        router.push(blockExactHash.url);
+        setIsOpen(false);
+        setIsInputFocused(false);
+        setQuery('');
+        setSubmitFeedback(null);
+        return;
+      }
+    }
+
     if (results.length === 1) {
       router.push(results[0].url);
       setIsOpen(false);
@@ -137,6 +153,7 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
             value={query}
             onChange={(e) => {
               setQuery(e.target.value);
+              setSelectedIndex(-1);
               setIsOpen(true);
             }}
             onFocus={() => {

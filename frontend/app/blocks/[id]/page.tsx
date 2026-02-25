@@ -62,8 +62,8 @@ export default function BlockDetailPage() {
   });
 
   const { data: txs } = useQuery({
-    queryKey: ['block-transactions', id],
-    queryFn: () => api.getTransactions({ blockNumber: Number(id), limit: 100 }),
+    queryKey: ['block-transactions', id, block?.number],
+    queryFn: () => api.getTransactions({ blockNumber: block!.number, limit: 100 }),
     enabled: !!block,
   });
 
