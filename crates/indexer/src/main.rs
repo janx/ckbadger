@@ -163,18 +163,38 @@ fn is_clean_shutdown_reason(reason: &str) -> bool {
     )
 }
 
-fn should_force_startup_cleanup(
-    previous_runtime: &ckbadger_store::RuntimeStatus,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StartupCleanupDecision {
+    force_cleanup: bool,
+    reason: &'static str,
+}
+
+fn startup_cleanup_decision(
+    previous_runtime: &RuntimeStatus,
     rollback_cleanup_in_progress: bool,
-) -> bool {
+) -> StartupCleanupDecision {
     if rollback_cleanup_in_progress {
-        return true;
+        return StartupCleanupDecision {
+            force_cleanup: true,
+            reason: "rollback_cleanup_in_progress",
+        };
     }
 
     let Some(active_run_id) = previous_runtime.active_run_id.as_deref() else {
-        return previous_runtime.last_incident_summary.as_deref()
+        let incident_requires_cleanup = previous_runtime.last_incident_summary.as_deref()
             == Some("pipeline_batch_write_failed")
             && previous_runtime.last_incident_at >= previous_runtime.run_started_at;
+        return if incident_requires_cleanup {
+            StartupCleanupDecision {
+                force_cleanup: true,
+                reason: "last_incident_pipeline_batch_write_failed",
+            }
+        } else {
+            StartupCleanupDecision {
+                force_cleanup: false,
+                reason: "no_force_cleanup_signal",
+            }
+        };
     };
     let clean_shutdown_marker_for_same_run = previous_runtime.last_run_id.as_deref()
         == Some(active_run_id)
@@ -184,7 +204,24 @@ fn should_force_startup_cleanup(
             .as_deref()
             .is_some_and(is_clean_shutdown_reason)
         && previous_runtime.last_shutdown_at >= previous_runtime.run_started_at;
-    !clean_shutdown_marker_for_same_run
+    if clean_shutdown_marker_for_same_run {
+        StartupCleanupDecision {
+            force_cleanup: false,
+            reason: "active_run_has_clean_shutdown_marker",
+        }
+    } else {
+        StartupCleanupDecision {
+            force_cleanup: true,
+            reason: "active_run_missing_clean_shutdown_marker",
+        }
+    }
+}
+
+fn should_force_startup_cleanup(
+    previous_runtime: &ckbadger_store::RuntimeStatus,
+    rollback_cleanup_in_progress: bool,
+) -> bool {
+    startup_cleanup_decision(previous_runtime, rollback_cleanup_in_progress).force_cleanup
 }
 
 fn monotonic_counter_delta(current: Option<u64>, previous: Option<u64>) -> Option<u64> {
@@ -312,12 +349,29 @@ async fn run_sync(args: Cli) -> Result<()> {
     let mut sync_status = store.get_sync_status()?;
     let previous_runtime = store.get_runtime_status()?;
     let rollback_cleanup_in_progress = store.is_rollback_cleanup_in_progress()?;
+    let startup_cleanup = startup_cleanup_decision(&previous_runtime, rollback_cleanup_in_progress);
     let previous_run_unclean =
         should_force_startup_cleanup(&previous_runtime, rollback_cleanup_in_progress);
+    debug_assert_eq!(previous_run_unclean, startup_cleanup.force_cleanup);
     config.force_startup_cleanup = previous_run_unclean;
+    info!(
+        force_startup_cleanup = startup_cleanup.force_cleanup,
+        startup_cleanup_reason = startup_cleanup.reason,
+        rollback_cleanup_in_progress,
+        previous_active_run_id = ?previous_runtime.active_run_id,
+        previous_last_run_id = ?previous_runtime.last_run_id,
+        previous_last_shutdown_reason = ?previous_runtime.last_shutdown_reason,
+        previous_last_exit_code = ?previous_runtime.last_exit_code,
+        previous_run_started_at = previous_runtime.run_started_at,
+        previous_last_shutdown_at = previous_runtime.last_shutdown_at,
+        previous_last_incident_summary = ?previous_runtime.last_incident_summary,
+        previous_last_incident_at = previous_runtime.last_incident_at,
+        "Startup cleanup decision evaluated"
+    );
     if previous_run_unclean {
         info!(
             rollback_cleanup_in_progress,
+            startup_cleanup_reason = startup_cleanup.reason,
             "Forcing startup rollback cleanup to reconcile derived state"
         );
     }
@@ -787,7 +841,7 @@ mod tests {
     use super::{
         classify_unclean_shutdown_hint, monotonic_counter_delta, queue_fill_pct,
         reconcile_token_daily_deltas_on_startup, should_emit_rate_limited,
-        should_force_startup_cleanup, should_warn_progress_stall,
+        should_force_startup_cleanup, should_warn_progress_stall, startup_cleanup_decision,
     };
     use ckbadger_store::{
         types::{CachedBlockHeader, LiveCellInfo, TokenDailyDelta},
@@ -931,6 +985,43 @@ mod tests {
     fn test_should_force_startup_cleanup_when_rollback_marker_set() {
         let runtime = RuntimeStatus::default();
         assert!(should_force_startup_cleanup(&runtime, true));
+    }
+
+    #[test]
+    fn test_startup_cleanup_decision_reason_for_rollback_marker() {
+        let runtime = RuntimeStatus::default();
+        let decision = startup_cleanup_decision(&runtime, true);
+        assert!(decision.force_cleanup);
+        assert_eq!(decision.reason, "rollback_cleanup_in_progress");
+    }
+
+    #[test]
+    fn test_startup_cleanup_decision_reason_for_clean_active_run_marker() {
+        let runtime = RuntimeStatus {
+            active_run_id: Some("run-xyz".to_string()),
+            last_run_id: Some("run-xyz".to_string()),
+            run_started_at: 100,
+            last_shutdown_at: 101,
+            last_shutdown_reason: Some("sigterm_shutdown".to_string()),
+            last_exit_code: Some(0),
+            ..Default::default()
+        };
+        let decision = startup_cleanup_decision(&runtime, false);
+        assert!(!decision.force_cleanup);
+        assert_eq!(decision.reason, "active_run_has_clean_shutdown_marker");
+    }
+
+    #[test]
+    fn test_startup_cleanup_decision_reason_for_batch_write_incident() {
+        let runtime = RuntimeStatus {
+            run_started_at: 100,
+            last_incident_at: 101,
+            last_incident_summary: Some("pipeline_batch_write_failed".to_string()),
+            ..Default::default()
+        };
+        let decision = startup_cleanup_decision(&runtime, false);
+        assert!(decision.force_cleanup);
+        assert_eq!(decision.reason, "last_incident_pipeline_batch_write_failed");
     }
 
     #[test]

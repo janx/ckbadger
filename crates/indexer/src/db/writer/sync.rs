@@ -5,6 +5,35 @@ use ckbadger_store::keys;
 
 use super::BatchWriter;
 
+const STARTUP_CONTINUITY_SAMPLE_LIMIT: usize = 5;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartupContinuityProbe {
+    pub startup_tip: i64,
+    pub header_tip: Option<i64>,
+    pub tx_floor: Option<i64>,
+    pub tx_tip: Option<i64>,
+    pub first_header_gap: Option<i64>,
+    pub recent_window_start: i64,
+    pub recent_window_end: i64,
+    pub missing_header_sample: Vec<i64>,
+    pub missing_tx_block0_sample: Vec<i64>,
+    pub full_header_gap_scan: bool,
+}
+
+impl StartupContinuityProbe {
+    pub fn has_inconsistency(&self) -> bool {
+        self.first_header_gap.is_some()
+            || self
+                .header_tip
+                .zip(self.tx_tip)
+                .is_some_and(|(header_tip, tx_tip)| header_tip != tx_tip)
+            || self.tx_floor.is_some_and(|tx_floor| tx_floor > 0)
+            || !self.missing_header_sample.is_empty()
+            || !self.missing_tx_block0_sample.is_empty()
+    }
+}
+
 impl BatchWriter {
     pub async fn update_sync_status(
         &self,
@@ -50,16 +79,7 @@ impl BatchWriter {
         let max_block = self.store.get_sync_tip_block()?.map(|(num, _)| num);
 
         // Get max block from tx_index CF
-        let iter = self
-            .store
-            .iterator_cf(self.store.cf_tx_index(), rocksdb::IteratorMode::End);
-        let mut max_tx_block: Option<i64> = None;
-        for item in iter.flatten().take(1) {
-            let (key, _) = item;
-            if key.len() >= 8 {
-                max_tx_block = Some(keys::decode_block_num(&key[..8]));
-            }
-        }
+        let max_tx_block = self.tx_index_boundary_block(rocksdb::IteratorMode::End);
 
         match (max_block, max_tx_block) {
             (Some(mb), Some(mtb)) => {
@@ -84,6 +104,73 @@ impl BatchWriter {
         }
     }
 
+    pub fn probe_startup_continuity(
+        &self,
+        startup_tip: i64,
+        window_size: i64,
+        include_full_header_gap_scan: bool,
+    ) -> Result<StartupContinuityProbe> {
+        if startup_tip < -1 {
+            bail!(
+                "invalid startup tip for continuity probe: startup_tip={} (expected >= -1)",
+                startup_tip
+            );
+        }
+        if window_size <= 0 {
+            bail!(
+                "invalid continuity probe window_size={} (expected > 0)",
+                window_size
+            );
+        }
+
+        let header_tip = self.store.get_sync_tip_block()?.map(|(num, _)| num);
+        let tx_floor = self.tx_index_boundary_block(rocksdb::IteratorMode::Start);
+        let tx_tip = self.tx_index_boundary_block(rocksdb::IteratorMode::End);
+
+        let mut missing_header_sample = Vec::new();
+        let mut missing_tx_block0_sample = Vec::new();
+        let (recent_window_start, recent_window_end) = match header_tip {
+            Some(header_tip) if header_tip >= 0 => {
+                let window_end = std::cmp::min(startup_tip.max(0), header_tip);
+                let window_start = (window_end - window_size + 1).max(0);
+                for block_num in window_start..=window_end {
+                    if self.store.get_block_header(block_num)?.is_none() {
+                        if missing_header_sample.len() < STARTUP_CONTINUITY_SAMPLE_LIMIT {
+                            missing_header_sample.push(block_num);
+                        }
+                        continue;
+                    }
+                    if self.store.get_tx_index(block_num, 0)?.is_none()
+                        && missing_tx_block0_sample.len() < STARTUP_CONTINUITY_SAMPLE_LIMIT
+                    {
+                        missing_tx_block0_sample.push(block_num);
+                    }
+                }
+                (window_start, window_end)
+            }
+            _ => (0, -1),
+        };
+
+        let first_header_gap = if include_full_header_gap_scan {
+            self.store.find_first_block_header_gap()?
+        } else {
+            None
+        };
+
+        Ok(StartupContinuityProbe {
+            startup_tip,
+            header_tip,
+            tx_floor,
+            tx_tip,
+            first_header_gap,
+            recent_window_start,
+            recent_window_end,
+            missing_header_sample,
+            missing_tx_block0_sample,
+            full_header_gap_scan: include_full_header_gap_scan,
+        })
+    }
+
     pub fn init_sync_start(&self, start_block: i64, is_bulk_sync: bool) -> Result<()> {
         self.init_sync_start_with_options(start_block, is_bulk_sync, false)
     }
@@ -102,28 +189,39 @@ impl BatchWriter {
         }
         let next_block = start_block + 1;
         let has_partial_data = self.has_partial_data_after_block(start_block)?;
+        let cleanup_reason = if force_cleanup && has_partial_data {
+            "forced_and_partial_data_detected"
+        } else if force_cleanup {
+            "forced_after_unclean_shutdown"
+        } else if has_partial_data {
+            "partial_data_detected"
+        } else {
+            "no_cleanup_needed"
+        };
+        info!(
+            start_block,
+            next_block, force_cleanup, has_partial_data, cleanup_reason, "Startup cleanup decision"
+        );
         if force_cleanup || has_partial_data {
-            if force_cleanup && !has_partial_data {
-                info!(
-                    "Forcing startup rollback cleanup at block {} due to unclean previous shutdown",
-                    start_block
-                );
-            }
             info!(
-                "Cleaning up any partial data from block {} onwards before sync start",
-                next_block
+                start_block,
+                next_block,
+                force_cleanup,
+                has_partial_data,
+                cleanup_reason,
+                "Cleaning up partial data before sync start"
             );
 
             // Use the store's rollback mechanism to clean up everything
             self.store.rollback_to_block(start_block)?;
             info!(
-                "Partial data cleanup complete, starting sync from block {}",
-                next_block
+                start_block,
+                next_block, cleanup_reason, "Startup cleanup complete"
             );
         } else {
             info!(
-                "No partial data detected after block {}, skipping startup rollback",
-                start_block
+                start_block,
+                next_block, cleanup_reason, "Skipping startup rollback cleanup"
             );
         }
 
@@ -222,13 +320,26 @@ impl BatchWriter {
 
         Ok(false)
     }
+
+    fn tx_index_boundary_block(&self, mode: rocksdb::IteratorMode) -> Option<i64> {
+        let iter = self.store.iterator_cf(self.store.cf_tx_index(), mode);
+        for item in iter.flatten().take(1) {
+            let (key, _) = item;
+            if key.len() >= 8 {
+                return Some(keys::decode_block_num(&key[..8]));
+            }
+        }
+        None
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
-    use ckbadger_store::{AddressBalance, CachedBlockHeader, CkbadgerStore, StoreBatch};
+    use ckbadger_store::{
+        AddressBalance, CachedBlockHeader, CkbadgerStore, StoreBatch, TxIndexEntry,
+    };
     use tempfile::TempDir;
 
     use super::BatchWriter;
@@ -286,6 +397,18 @@ mod tests {
         }
     }
 
+    fn make_tx_index_entry() -> TxIndexEntry {
+        TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_000_000,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 1,
+            tx_size: 1,
+            cycles: None,
+        }
+    }
+
     #[test]
     fn test_init_sync_start_skips_cleanup_when_no_partial_data() {
         let (_dir, store, writer) = setup();
@@ -340,6 +463,47 @@ mod tests {
         batch.commit().unwrap();
 
         assert!(writer.needs_startup_cleanup(0).unwrap());
+    }
+
+    #[test]
+    fn test_probe_startup_continuity_reports_clean_state() {
+        let (_dir, store, writer) = setup();
+
+        let mut batch = StoreBatch::new(&store);
+        for block in 0..=2 {
+            batch.put_block_header(block, &make_header(0x40 + block as u8, 1_700_000_000_000));
+            batch.put_tx_index(block, 0, &make_tx_index_entry());
+        }
+        batch.commit().unwrap();
+
+        let probe = writer.probe_startup_continuity(2, 32, true).unwrap();
+        assert_eq!(probe.header_tip, Some(2));
+        assert_eq!(probe.tx_floor, Some(0));
+        assert_eq!(probe.tx_tip, Some(2));
+        assert_eq!(probe.first_header_gap, None);
+        assert!(probe.missing_header_sample.is_empty());
+        assert!(probe.missing_tx_block0_sample.is_empty());
+        assert!(!probe.has_inconsistency());
+    }
+
+    #[test]
+    fn test_probe_startup_continuity_detects_missing_header_and_tx() {
+        let (_dir, store, writer) = setup();
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(0, &make_header(0x50, 1_700_000_000_000));
+        batch.put_block_header(2, &make_header(0x52, 1_700_000_020_000));
+        batch.put_tx_index(0, 0, &make_tx_index_entry());
+        batch.commit().unwrap();
+
+        let probe = writer.probe_startup_continuity(2, 32, true).unwrap();
+        assert_eq!(probe.header_tip, Some(2));
+        assert_eq!(probe.tx_floor, Some(0));
+        assert_eq!(probe.tx_tip, Some(0));
+        assert_eq!(probe.first_header_gap, Some(1));
+        assert_eq!(probe.missing_header_sample, vec![1]);
+        assert_eq!(probe.missing_tx_block0_sample, vec![2]);
+        assert!(probe.has_inconsistency());
     }
 
     #[test]

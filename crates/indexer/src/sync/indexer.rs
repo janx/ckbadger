@@ -395,6 +395,239 @@ fn should_log_unresolved_retry(attempt: usize) -> bool {
     attempt == 1 || attempt.is_multiple_of(10) || attempt >= PARSER_UNRESOLVED_MAX_RETRIES
 }
 
+fn short_tx_hash(tx_hash: &[u8]) -> String {
+    let encoded = hex::encode(tx_hash);
+    if encoded.len() <= 16 {
+        return encoded;
+    }
+    format!("{}..{}", &encoded[..10], &encoded[encoded.len() - 6..])
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct UnresolvedLocalProbeSummary {
+    sampled: usize,
+    live_hits: usize,
+    consumed_hits: usize,
+    tx_location_hits: usize,
+    missing_everywhere: usize,
+    store_errors: usize,
+    sample_details: Vec<String>,
+}
+
+impl UnresolvedLocalProbeSummary {
+    fn format_for_log(&self) -> String {
+        format!(
+            "sampled={} live_hits={} consumed_hits={} tx_location_hits={} missing_everywhere={} store_errors={} sample=[{}]",
+            self.sampled,
+            self.live_hits,
+            self.consumed_hits,
+            self.tx_location_hits,
+            self.missing_everywhere,
+            self.store_errors,
+            self.sample_details.join(", ")
+        )
+    }
+}
+
+fn classify_unresolved_local_probe(
+    writer: &BatchWriter,
+    unresolved_outpoints: &[(Vec<u8>, i16)],
+    sample_limit: usize,
+) -> UnresolvedLocalProbeSummary {
+    let mut summary = UnresolvedLocalProbeSummary::default();
+    let sampled = unresolved_outpoints.iter().take(sample_limit);
+    let store = writer.store();
+
+    for (tx_hash, output_index) in sampled {
+        summary.sampled += 1;
+        let outpoint_label = format!("0x{}:{}", short_tx_hash(tx_hash), output_index);
+
+        let live_exists = match store.get_cell(tx_hash, *output_index) {
+            Ok(Some(_)) => true,
+            Ok(None) => false,
+            Err(_) => {
+                summary.store_errors += 1;
+                summary
+                    .sample_details
+                    .push(format!("{}=live_read_error", outpoint_label));
+                continue;
+            }
+        };
+        if live_exists {
+            summary.live_hits += 1;
+            summary
+                .sample_details
+                .push(format!("{}=live_cell_exists", outpoint_label));
+            continue;
+        }
+
+        let consumed_exists = match store.get_consumed_cell(tx_hash, *output_index) {
+            Ok(Some(_)) => true,
+            Ok(None) => false,
+            Err(_) => {
+                summary.store_errors += 1;
+                summary
+                    .sample_details
+                    .push(format!("{}=consumed_read_error", outpoint_label));
+                continue;
+            }
+        };
+        if consumed_exists {
+            summary.consumed_hits += 1;
+            summary
+                .sample_details
+                .push(format!("{}=consumed_cell_exists", outpoint_label));
+            continue;
+        }
+
+        match store.get_tx_location(tx_hash) {
+            Ok(Some((block_num, tx_idx))) => {
+                summary.tx_location_hits += 1;
+                summary.sample_details.push(format!(
+                    "{}=tx_location_exists({}:{})",
+                    outpoint_label, block_num, tx_idx
+                ));
+            }
+            Ok(None) => {
+                summary.missing_everywhere += 1;
+                summary
+                    .sample_details
+                    .push(format!("{}=tx_location_missing", outpoint_label));
+            }
+            Err(_) => {
+                summary.store_errors += 1;
+                summary
+                    .sample_details
+                    .push(format!("{}=tx_location_read_error", outpoint_label));
+            }
+        }
+    }
+
+    summary
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct UnresolvedRpcProbeSummary {
+    sampled_tx_hashes: usize,
+    committed: usize,
+    pending: usize,
+    proposed: usize,
+    rejected: usize,
+    unknown_status: usize,
+    rpc_null: usize,
+    rpc_errors: usize,
+    sample_details: Vec<String>,
+}
+
+impl UnresolvedRpcProbeSummary {
+    fn format_for_log(&self) -> String {
+        format!(
+            "sampled_tx_hashes={} committed={} pending={} proposed={} rejected={} unknown_status={} rpc_null={} rpc_errors={} sample=[{}]",
+            self.sampled_tx_hashes,
+            self.committed,
+            self.pending,
+            self.proposed,
+            self.rejected,
+            self.unknown_status,
+            self.rpc_null,
+            self.rpc_errors,
+            self.sample_details.join(", ")
+        )
+    }
+}
+
+async fn collect_unresolved_rpc_probe(
+    rpc: &CkbRpcClient,
+    unresolved_outpoints: &[(Vec<u8>, i16)],
+    sample_limit: usize,
+) -> UnresolvedRpcProbeSummary {
+    let mut summary = UnresolvedRpcProbeSummary::default();
+    let mut seen = HashSet::new();
+    let mut sampled_hashes: Vec<Vec<u8>> = Vec::new();
+    for (tx_hash, _) in unresolved_outpoints {
+        if seen.insert(tx_hash.clone()) {
+            sampled_hashes.push(tx_hash.clone());
+        }
+        if sampled_hashes.len() >= sample_limit {
+            break;
+        }
+    }
+
+    for tx_hash in sampled_hashes {
+        summary.sampled_tx_hashes += 1;
+        let tx_hash_hex = format!("0x{}", hex::encode(&tx_hash));
+        let tx_hash_short = short_tx_hash(&tx_hash);
+        match rpc.get_transaction(&tx_hash_hex).await {
+            Ok(Some(tx_with_status)) => {
+                let status = tx_with_status.tx_status.status.to_lowercase();
+                let block_number = tx_with_status
+                    .tx_status
+                    .block_number
+                    .unwrap_or_else(|| "none".to_string());
+                match status.as_str() {
+                    "committed" => summary.committed += 1,
+                    "pending" => summary.pending += 1,
+                    "proposed" => summary.proposed += 1,
+                    "rejected" => summary.rejected += 1,
+                    _ => summary.unknown_status += 1,
+                }
+                summary
+                    .sample_details
+                    .push(format!("0x{}={}#{}", tx_hash_short, status, block_number));
+            }
+            Ok(None) => {
+                summary.rpc_null += 1;
+                summary
+                    .sample_details
+                    .push(format!("0x{}=rpc_null", tx_hash_short));
+            }
+            Err(_) => {
+                summary.rpc_errors += 1;
+                summary
+                    .sample_details
+                    .push(format!("0x{}=rpc_error", tx_hash_short));
+            }
+        }
+    }
+
+    summary
+}
+
+fn commit_phase_no_wal(
+    phase: &'static str,
+    batch_start: i64,
+    batch_end: i64,
+    batch: StoreBatch<'_>,
+) -> Result<f64> {
+    debug!(phase, batch_start, batch_end, "Bulk phase commit start");
+    let commit_started = Instant::now();
+    batch.commit_no_wal().with_context(|| {
+        format!(
+            "bulk phase commit failed: phase={} blocks {}-{}",
+            phase, batch_start, batch_end
+        )
+    })?;
+    let commit_ms = commit_started.elapsed().as_secs_f64() * 1000.0;
+    if commit_ms >= BULK_PHASE_COMMIT_SLOW_WARN_MS {
+        warn!(
+            phase,
+            batch_start,
+            batch_end,
+            commit_ms = format!("{:.1}", commit_ms),
+            "Bulk phase commit slow"
+        );
+    } else {
+        debug!(
+            phase,
+            batch_start,
+            batch_end,
+            commit_ms = format!("{:.1}", commit_ms),
+            "Bulk phase commit done"
+        );
+    }
+    Ok(commit_ms)
+}
+
 fn next_fetch_start_after_batch(end_block: u64) -> u64 {
     end_block
         .checked_add(1)
@@ -1721,8 +1954,12 @@ impl PipelinePerfStats {
 
 const CELL_CACHE_CAPACITY: usize = 200_000;
 const UDT_CELL_CACHE_CAPACITY: usize = 100_000;
+const STARTUP_CONTINUITY_WINDOW_BLOCKS: i64 = 512;
 const PARSER_UNRESOLVED_RETRY_DELAY_MS: u64 = 500;
 const PARSER_UNRESOLVED_MAX_RETRIES: usize = 240;
+const PARSER_UNRESOLVED_PROBE_SAMPLE_SIZE: usize = 5;
+const PARSER_UNRESOLVED_RPC_PROBE_TIMEOUT_SECS: u64 = 8;
+const BULK_PHASE_COMMIT_SLOW_WARN_MS: f64 = 2_000.0;
 const ADAPTIVE_BATCH_BASE_MIN_TXS: u64 = 10_000;
 const ADAPTIVE_BATCH_HARD_MIN_TXS: u64 = 2_000;
 const ADAPTIVE_BATCH_MAX_TXS: u64 = 400_000;
@@ -2848,6 +3085,39 @@ impl Indexer {
             }
             _ => start_block,
         };
+        let continuity_probe = self.writer.probe_startup_continuity(
+            actual_start,
+            STARTUP_CONTINUITY_WINDOW_BLOCKS,
+            self.config.force_startup_cleanup || actual_start < start_block,
+        )?;
+        if continuity_probe.has_inconsistency() {
+            warn!(
+                run_id = %self.run_id,
+                startup_tip = continuity_probe.startup_tip,
+                header_tip = ?continuity_probe.header_tip,
+                tx_floor = ?continuity_probe.tx_floor,
+                tx_tip = ?continuity_probe.tx_tip,
+                first_header_gap = ?continuity_probe.first_header_gap,
+                window_start = continuity_probe.recent_window_start,
+                window_end = continuity_probe.recent_window_end,
+                missing_header_sample = ?continuity_probe.missing_header_sample,
+                missing_tx_block0_sample = ?continuity_probe.missing_tx_block0_sample,
+                full_header_gap_scan = continuity_probe.full_header_gap_scan,
+                "Startup continuity probe detected inconsistencies"
+            );
+        } else {
+            info!(
+                run_id = %self.run_id,
+                startup_tip = continuity_probe.startup_tip,
+                header_tip = ?continuity_probe.header_tip,
+                tx_floor = ?continuity_probe.tx_floor,
+                tx_tip = ?continuity_probe.tx_tip,
+                window_start = continuity_probe.recent_window_start,
+                window_end = continuity_probe.recent_window_end,
+                full_header_gap_scan = continuity_probe.full_header_gap_scan,
+                "Startup continuity probe passed"
+            );
+        }
 
         if bulk_sync_mode && actual_start < start_block {
             bail!(
@@ -3292,6 +3562,7 @@ impl Indexer {
 
         // === Parser task ===
         let writer_for_parser = self.writer.clone();
+        let rpc_for_parser = self.rpc.clone();
         let cell_cache_for_parser = Arc::clone(&self.cell_cache);
         let committed_tip_for_cache_for_parser = Arc::clone(&committed_tip_for_cache);
         let pipeline_perf_for_parser = Arc::clone(&self.pipeline_perf);
@@ -3457,6 +3728,28 @@ impl Indexer {
 
                     unresolved_retry_count += 1;
                     if should_log_unresolved_retry(unresolved_retry_count) {
+                        let unresolved_local_probe = classify_unresolved_local_probe(
+                            &writer_for_parser,
+                            &unresolved_outpoints,
+                            PARSER_UNRESOLVED_PROBE_SAMPLE_SIZE,
+                        )
+                        .format_for_log();
+                        let unresolved_rpc_probe = match tokio::time::timeout(
+                            Duration::from_secs(PARSER_UNRESOLVED_RPC_PROBE_TIMEOUT_SECS),
+                            collect_unresolved_rpc_probe(
+                                &rpc_for_parser,
+                                &unresolved_outpoints,
+                                PARSER_UNRESOLVED_PROBE_SAMPLE_SIZE,
+                            ),
+                        )
+                        .await
+                        {
+                            Ok(summary) => summary.format_for_log(),
+                            Err(_) => format!(
+                                "timeout_after={}s",
+                                PARSER_UNRESOLVED_RPC_PROBE_TIMEOUT_SECS
+                            ),
+                        };
                         warn!(
                             start_block,
                             end_block,
@@ -3464,11 +3757,35 @@ impl Indexer {
                             unresolved_count = unresolved_outpoints.len(),
                             unresolved_sample = %format_outpoint_sample(&unresolved_outpoints, 5),
                             db_lookup_failed,
+                            unresolved_local_probe = %unresolved_local_probe,
+                            unresolved_rpc_probe = %unresolved_rpc_probe,
                             "Parser: unresolved input cells detected; waiting for writer progress and retrying same batch"
                         );
                     }
 
                     if unresolved_retry_count >= PARSER_UNRESOLVED_MAX_RETRIES {
+                        let unresolved_local_probe = classify_unresolved_local_probe(
+                            &writer_for_parser,
+                            &unresolved_outpoints,
+                            PARSER_UNRESOLVED_PROBE_SAMPLE_SIZE,
+                        )
+                        .format_for_log();
+                        let unresolved_rpc_probe = match tokio::time::timeout(
+                            Duration::from_secs(PARSER_UNRESOLVED_RPC_PROBE_TIMEOUT_SECS),
+                            collect_unresolved_rpc_probe(
+                                &rpc_for_parser,
+                                &unresolved_outpoints,
+                                PARSER_UNRESOLVED_PROBE_SAMPLE_SIZE,
+                            ),
+                        )
+                        .await
+                        {
+                            Ok(summary) => summary.format_for_log(),
+                            Err(_) => format!(
+                                "timeout_after={}s",
+                                PARSER_UNRESOLVED_RPC_PROBE_TIMEOUT_SECS
+                            ),
+                        };
                         error!(
                             start_block,
                             end_block,
@@ -3476,6 +3793,8 @@ impl Indexer {
                             unresolved_count = unresolved_outpoints.len(),
                             unresolved_sample = %format_outpoint_sample(&unresolved_outpoints, 5),
                             db_lookup_failed,
+                            unresolved_local_probe = %unresolved_local_probe,
+                            unresolved_rpc_probe = %unresolved_rpc_probe,
                             "Parser: unresolved input cells persisted after max retries; stopping parser task"
                         );
                         return;
@@ -6665,10 +6984,9 @@ impl Indexer {
             return Ok(());
         }
 
-        let end_block = all_parsed_blocks
-            .last()
-            .map(|b| b.number as u64)
-            .unwrap_or(0);
+        let first_block = all_parsed_blocks.first().map(|b| b.number).unwrap_or(0);
+        let last_block = all_parsed_blocks.last().map(|b| b.number).unwrap_or(0);
+        let end_block = last_block as u64;
         let bulk_sync_mode = chain_tip.saturating_sub(end_block) > 1000;
 
         let all_input_outpoints: Vec<(Vec<u8>, i16)> = all_tx_data
@@ -6689,8 +7007,6 @@ impl Indexer {
             &batch_cell_infos,
         );
         if !unresolved_outpoints.is_empty() {
-            let first_block = all_parsed_blocks.first().map(|b| b.number).unwrap_or(0);
-            let last_block = all_parsed_blocks.last().map(|b| b.number).unwrap_or(0);
             return Err(anyhow::anyhow!(
                 "pipeline batch {}-{} has {} unresolved input cells (sample: {})",
                 first_block,
@@ -7103,7 +7419,7 @@ impl Indexer {
                             false,
                         )?;
                     }
-                    batch.commit_no_wal()?;
+                    let _ = commit_phase_no_wal("T1_cells", first_block, last_block, batch)?;
                     Ok(t.elapsed().as_secs_f64() * 1000.0)
                 });
 
@@ -7158,7 +7474,8 @@ impl Indexer {
                     for (lock_hash, block_num, tx_idx, tx_hash) in &addr_tx_entries {
                         batch.put_addr_tx(lock_hash, *block_num, *tx_idx, tx_hash);
                     }
-                    batch.commit_no_wal()?;
+                    let _ =
+                        commit_phase_no_wal("T2_txs_addr_script", first_block, last_block, batch)?;
                     Ok(t.elapsed().as_secs_f64() * 1000.0)
                 });
 
@@ -7420,7 +7737,7 @@ impl Indexer {
                         }
                     }
 
-                    batch.commit_no_wal()?;
+                    let _ = commit_phase_no_wal("T4_dao", first_block, last_block, batch)?;
                     Ok(t.elapsed().as_secs_f64() * 1000.0)
                 });
 
@@ -7490,7 +7807,7 @@ impl Indexer {
                         }
                     }
 
-                    batch.commit_no_wal()?;
+                    let _ = commit_phase_no_wal("T5_udt", first_block, last_block, batch)?;
                     Ok(t.elapsed().as_secs_f64() * 1000.0)
                 });
 
@@ -7578,7 +7895,7 @@ impl Indexer {
                             }
                         }
                     }
-                    batch.commit_no_wal()?;
+                    let _ = commit_phase_no_wal("T6_spore_nft", first_block, last_block, batch)?;
                     Ok(t.elapsed().as_secs_f64() * 1000.0)
                 });
 
@@ -7936,7 +8253,12 @@ impl Indexer {
                                 );
                             }
                         }
-                        batch.commit_no_wal()?;
+                        let _ = commit_phase_no_wal(
+                            "T_ACT_activities",
+                            first_block,
+                            last_block,
+                            batch,
+                        )?;
                         Ok(t.elapsed().as_secs_f64() * 1000.0)
                     }))
                 } else {
@@ -9144,10 +9466,48 @@ impl Indexer {
             let mut batch = StoreBatch::new(self.writer.store());
             self.writer.insert_blocks_batch(&block_refs, &mut batch)?;
             self.write_batch_stats_to_batch(&batch_stats, &mut batch)?;
+            debug!(
+                phase = "finalize_headers_stats",
+                batch_start = first_block,
+                batch_end = last_block,
+                bulk_sync_mode,
+                "Batch finalize commit start"
+            );
+            let finalize_commit_started = Instant::now();
             if bulk_sync_mode {
-                batch.commit_no_wal()?;
+                batch.commit_no_wal().with_context(|| {
+                    format!(
+                        "batch finalize commit_no_wal failed for blocks {}-{}",
+                        first_block, last_block
+                    )
+                })?;
             } else {
-                batch.commit()?;
+                batch.commit().with_context(|| {
+                    format!(
+                        "batch finalize commit failed for blocks {}-{}",
+                        first_block, last_block
+                    )
+                })?;
+            }
+            let finalize_commit_ms = finalize_commit_started.elapsed().as_secs_f64() * 1000.0;
+            if finalize_commit_ms >= BULK_PHASE_COMMIT_SLOW_WARN_MS {
+                warn!(
+                    phase = "finalize_headers_stats",
+                    batch_start = first_block,
+                    batch_end = last_block,
+                    commit_ms = format!("{:.1}", finalize_commit_ms),
+                    bulk_sync_mode,
+                    "Batch finalize commit slow"
+                );
+            } else {
+                debug!(
+                    phase = "finalize_headers_stats",
+                    batch_start = first_block,
+                    batch_end = last_block,
+                    commit_ms = format!("{:.1}", finalize_commit_ms),
+                    bulk_sync_mode,
+                    "Batch finalize commit done"
+                );
             }
         }
 
@@ -10054,6 +10414,18 @@ mod tests {
         }
     }
 
+    fn dummy_tx_index_entry() -> ckbadger_store::types::TxIndexEntry {
+        ckbadger_store::types::TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_000_000,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 1,
+            tx_size: 1,
+            cycles: None,
+        }
+    }
+
     fn molecule_u32(value: usize) -> [u8; 4] {
         (value as u32).to_le_bytes()
     }
@@ -10481,6 +10853,46 @@ mod tests {
         assert!(!should_log_unresolved_retry(2));
         assert!(should_log_unresolved_retry(10));
         assert!(should_log_unresolved_retry(PARSER_UNRESOLVED_MAX_RETRIES));
+    }
+
+    #[test]
+    fn test_classify_unresolved_local_probe_marks_missing_everywhere() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store);
+
+        let unresolved = vec![(vec![0x12; 32], 0i16)];
+        let summary = classify_unresolved_local_probe(&writer, &unresolved, 5);
+
+        assert_eq!(summary.sampled, 1);
+        assert_eq!(summary.missing_everywhere, 1);
+        assert_eq!(summary.tx_location_hits, 0);
+        assert_eq!(summary.live_hits, 0);
+        assert_eq!(summary.consumed_hits, 0);
+        assert_eq!(summary.store_errors, 0);
+    }
+
+    #[test]
+    fn test_classify_unresolved_local_probe_marks_tx_location_exists_without_cell() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+        let tx_hash = vec![0x34; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_tx_hash_map(&tx_hash, 42, 0);
+        batch.put_tx_index(42, 0, &dummy_tx_index_entry());
+        batch.commit().unwrap();
+
+        let unresolved = vec![(tx_hash, 1i16)];
+        let summary = classify_unresolved_local_probe(&writer, &unresolved, 5);
+
+        assert_eq!(summary.sampled, 1);
+        assert_eq!(summary.tx_location_hits, 1);
+        assert_eq!(summary.missing_everywhere, 0);
+        assert_eq!(summary.live_hits, 0);
+        assert_eq!(summary.consumed_hits, 0);
+        assert_eq!(summary.store_errors, 0);
     }
 
     #[test]
