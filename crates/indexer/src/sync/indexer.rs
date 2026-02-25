@@ -6779,20 +6779,36 @@ impl Indexer {
                             &mut nft_batch,
                         )?;
                     }
-                    for (output_index, class) in MnftParser::parse_classes(tx).iter().enumerate() {
+                    for (output_index, class) in MnftParser::parse_classes_with_output_indices(tx) {
+                        let output_index = i16::try_from(output_index).map_err(|_| {
+                            anyhow!(
+                                "mNFT class output index exceeds i16 range: block={}, tx_hash=0x{}, output_index={}",
+                                parsed.number,
+                                hex::encode(tx_data.hash),
+                                output_index
+                            )
+                        })?;
                         self.writer.insert_mnft_class(
-                            class,
+                            &class,
                             &tx_data.hash,
-                            output_index as i16,
+                            output_index,
                             parsed.number,
                             &mut nft_batch,
                         )?;
                     }
-                    for (output_index, token) in MnftParser::parse_tokens(tx).iter().enumerate() {
+                    for (output_index, token) in MnftParser::parse_tokens_with_output_indices(tx) {
+                        let output_index = i16::try_from(output_index).map_err(|_| {
+                            anyhow!(
+                                "mNFT token output index exceeds i16 range: block={}, tx_hash=0x{}, output_index={}",
+                                parsed.number,
+                                hex::encode(tx_data.hash),
+                                output_index
+                            )
+                        })?;
                         self.writer.insert_mnft_token(
-                            token,
+                            &token,
                             &tx_data.hash,
-                            output_index as i16,
+                            output_index,
                             parsed.number,
                             parsed.timestamp.timestamp_millis(),
                             &mut nft_batch,
@@ -7862,23 +7878,39 @@ impl Indexer {
                                 )?;
                             }
                             for (output_index, class) in
-                                MnftParser::parse_classes(tx).iter().enumerate()
+                                MnftParser::parse_classes_with_output_indices(tx)
                             {
+                                let output_index = i16::try_from(output_index).map_err(|_| {
+                                    anyhow!(
+                                        "mNFT class output index exceeds i16 range: block={}, tx_hash=0x{}, output_index={}",
+                                        parsed.number,
+                                        hex::encode(tx_data.hash),
+                                        output_index
+                                    )
+                                })?;
                                 writer.insert_mnft_class(
-                                    class,
+                                    &class,
                                     &tx_data.hash,
-                                    output_index as i16,
+                                    output_index,
                                     parsed.number,
                                     &mut batch,
                                 )?;
                             }
                             for (output_index, token) in
-                                MnftParser::parse_tokens(tx).iter().enumerate()
+                                MnftParser::parse_tokens_with_output_indices(tx)
                             {
+                                let output_index = i16::try_from(output_index).map_err(|_| {
+                                    anyhow!(
+                                        "mNFT token output index exceeds i16 range: block={}, tx_hash=0x{}, output_index={}",
+                                        parsed.number,
+                                        hex::encode(tx_data.hash),
+                                        output_index
+                                    )
+                                })?;
                                 writer.insert_mnft_token(
-                                    token,
+                                    &token,
                                     &tx_data.hash,
-                                    output_index as i16,
+                                    output_index,
                                     parsed.number,
                                     ts_ms,
                                     &mut batch,
@@ -8879,28 +8911,45 @@ impl Indexer {
                             )?;
                         }
                         for (output_index, class) in
-                            MnftParser::parse_classes(tx).iter().enumerate()
+                            MnftParser::parse_classes_with_output_indices(tx)
                         {
+                            let output_index = i16::try_from(output_index).map_err(|_| {
+                                anyhow!(
+                                    "mNFT class output index exceeds i16 range: block={}, tx_hash=0x{}, output_index={}",
+                                    parsed.number,
+                                    hex::encode(tx_data.hash),
+                                    output_index
+                                )
+                            })?;
                             self.writer.insert_mnft_class(
-                                class,
+                                &class,
                                 &tx_data.hash,
-                                output_index as i16,
+                                output_index,
                                 parsed.number,
                                 &mut data_batch,
                             )?;
                         }
-                        for (output_index, token) in MnftParser::parse_tokens(tx).iter().enumerate()
+                        for (output_index, token) in
+                            MnftParser::parse_tokens_with_output_indices(tx)
                         {
+                            let output_index = i16::try_from(output_index).map_err(|_| {
+                                anyhow!(
+                                    "mNFT token output index exceeds i16 range: block={}, tx_hash=0x{}, output_index={}",
+                                    parsed.number,
+                                    hex::encode(tx_data.hash),
+                                    output_index
+                                )
+                            })?;
                             self.writer.insert_mnft_token(
-                                token,
+                                &token,
                                 &tx_data.hash,
-                                output_index as i16,
+                                output_index,
                                 parsed.number,
                                 ts_ms,
                                 &mut data_batch,
                             )?;
                             batch_mnft_token_outpoints.insert(
-                                (tx_data.hash.to_vec(), output_index as i16),
+                                (tx_data.hash.to_vec(), output_index),
                                 token.token_id.clone(),
                             );
                         }

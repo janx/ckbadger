@@ -181,11 +181,35 @@ impl MnftParser {
             .collect()
     }
 
+    pub fn parse_classes_with_output_indices(
+        tx: &TransactionView,
+    ) -> Vec<(usize, ParsedMnftClass)> {
+        tx.outputs
+            .iter()
+            .zip(tx.outputs_data.iter())
+            .enumerate()
+            .filter_map(|(output_index, (output, data_hex))| {
+                Self::parse_class_cell(output, data_hex).map(|class| (output_index, class))
+            })
+            .collect()
+    }
+
     pub fn parse_tokens(tx: &TransactionView) -> Vec<ParsedMnftToken> {
         tx.outputs
             .iter()
             .zip(tx.outputs_data.iter())
             .filter_map(|(output, data_hex)| Self::parse_token_cell(output, data_hex))
+            .collect()
+    }
+
+    pub fn parse_tokens_with_output_indices(tx: &TransactionView) -> Vec<(usize, ParsedMnftToken)> {
+        tx.outputs
+            .iter()
+            .zip(tx.outputs_data.iter())
+            .enumerate()
+            .filter_map(|(output_index, (output, data_hex))| {
+                Self::parse_token_cell(output, data_hex).map(|token| (output_index, token))
+            })
             .collect()
     }
 
@@ -321,7 +345,7 @@ struct TokenData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rpc::{CellOutput, Script};
+    use crate::rpc::{CellDep, CellInput, CellOutput, Script, TransactionView};
 
     fn create_lock_script() -> Script {
         Script {
@@ -406,6 +430,19 @@ mod tests {
         data.push(configure);
         data.push(state);
         data
+    }
+
+    fn create_dummy_tx(outputs: Vec<CellOutput>, outputs_data: Vec<String>) -> TransactionView {
+        TransactionView {
+            hash: "0x00".to_string(),
+            version: "0x0".to_string(),
+            cell_deps: Vec::<CellDep>::new(),
+            header_deps: Vec::<String>::new(),
+            inputs: Vec::<CellInput>::new(),
+            outputs,
+            outputs_data,
+            witnesses: Vec::<String>::new(),
+        }
     }
 
     #[test]
@@ -627,5 +664,73 @@ mod tests {
         assert_eq!(parsed.configure, 0xc0);
         assert_eq!(parsed.name.as_deref(), Some("Class-BE"));
         assert_eq!(parsed.description.as_deref(), Some("desc"));
+    }
+
+    #[test]
+    fn test_parse_tokens_with_output_indices_preserves_real_output_index() {
+        let issuer_id = [0xab; 20];
+        let mut class_id = issuer_id.to_vec();
+        class_id.extend_from_slice(&3u32.to_le_bytes());
+
+        let non_mnft_output = CellOutput {
+            capacity: "0x174876e800".to_string(),
+            lock: create_lock_script(),
+            type_: None,
+        };
+        let mnft_output = CellOutput {
+            capacity: "0x174876e800".to_string(),
+            lock: create_lock_script(),
+            type_: Some(create_token_type_script(&class_id, 7)),
+        };
+
+        let non_mnft_data = "0x".to_string();
+        let token_data = create_token_data(&[1, 2, 3, 4, 5, 6, 7, 8], 0, 0);
+        let token_data_hex = format!("0x{}", hex::encode(token_data));
+
+        let tx = create_dummy_tx(
+            vec![
+                non_mnft_output,
+                mnft_output,
+                CellOutput {
+                    capacity: "0x174876e800".to_string(),
+                    lock: create_lock_script(),
+                    type_: None,
+                },
+            ],
+            vec![non_mnft_data, token_data_hex, "0x".to_string()],
+        );
+
+        let parsed = MnftParser::parse_tokens_with_output_indices(&tx);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].0, 1);
+        assert_eq!(parsed[0].1.token_index, 7);
+    }
+
+    #[test]
+    fn test_parse_classes_with_output_indices_preserves_real_output_index() {
+        let issuer_id = [0xcd; 20];
+        let non_mnft_output = CellOutput {
+            capacity: "0x174876e800".to_string(),
+            lock: create_lock_script(),
+            type_: None,
+        };
+        let class_output = CellOutput {
+            capacity: "0x174876e800".to_string(),
+            lock: create_lock_script(),
+            type_: Some(create_class_type_script(&issuer_id, 9)),
+        };
+
+        let class_data = create_class_data(10, 1, 0, "Class-Idx", "desc");
+        let class_data_hex = format!("0x{}", hex::encode(class_data));
+
+        let tx = create_dummy_tx(
+            vec![non_mnft_output.clone(), non_mnft_output, class_output],
+            vec!["0x".to_string(), "0x".to_string(), class_data_hex],
+        );
+
+        let parsed = MnftParser::parse_classes_with_output_indices(&tx);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].0, 2);
+        assert_eq!(parsed[0].1.total, 10);
     }
 }

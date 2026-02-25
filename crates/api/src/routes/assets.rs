@@ -1336,9 +1336,15 @@ async fn list_nft_collection_items(
                         )
                     } else {
                         // Fallback path for old DBs where dotbit outpoint index entries are missing.
-                        resolve_dotbit_live_outpoint_by_type_hash(&state, nft_id)?
-                            .map(|(tx_hash, output_index)| (Some(tx_hash), Some(output_index)))
-                            .unwrap_or((None, None))
+                        let fallback = resolve_dotbit_live_outpoint_by_type_hash(&state, nft_id)?;
+                        let Some((tx_hash, output_index)) = fallback else {
+                            return Err(ApiError::internal(format!(
+                                "live dotbit account missing outpoint index: collection_id=0x{}, nft_id=0x{}",
+                                hex::encode(&collection_id_bytes),
+                                hex::encode(nft_id)
+                            )));
+                        };
+                        (Some(tx_hash), Some(output_index))
                     }
                 } else {
                     (None, None)

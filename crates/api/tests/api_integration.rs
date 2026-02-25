@@ -3270,6 +3270,59 @@ async fn test_assets_nft_collection_items_dotbit_outpoint_fallback_without_index
 }
 
 #[tokio::test]
+async fn test_assets_nft_collection_items_dotbit_live_missing_outpoint_fails_fast() {
+    let store = test_store();
+    let collection_id = b"dotbit_collection_______________".to_vec();
+    let nft_id = [0x67u8; 20];
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_nft_collection_aggregate(
+        &collection_id,
+        &NftCollectionAggregate {
+            name: Some(".bit".to_string()),
+            standard: NftStandard::DotBit,
+            total_count: 1,
+            live_count: 1,
+        },
+    );
+    batch.put_nft(
+        &nft_id,
+        &NftEntry {
+            standard: NftStandard::DotBit,
+            collection_id: None,
+            token_id: Some(nft_id.to_vec()),
+            owner_lock_hash: Some(vec![0x31; 32]),
+            name: Some("broken.bit".to_string()),
+            is_live: true,
+            created_at_block: 100,
+            extra: NftExtra::DotBit {
+                expired_at: Some(1_800_000_000),
+            },
+        },
+    );
+    batch.put_nft_by_collection(&collection_id, &nft_id);
+    // Intentionally no outpoint index and no fallback-resolvable live cell.
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/assets/nfts/dotbit/items?limit=20")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"], "internal_error");
+    assert!(json["message"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("live dotbit account missing outpoint index"));
+}
+
+#[tokio::test]
 async fn test_assets_nft_collection_items_mnft_live_outpoint() {
     let store = test_store();
     let class_id = [0x24u8; 24];
