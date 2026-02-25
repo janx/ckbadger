@@ -9,9 +9,9 @@ fn setup_store() -> Arc<CkbadgerStore> {
     store
 }
 
-/// Set address_balances_deferred flag and verify.
+/// Persist sync status and verify round-trip.
 #[test]
-fn test_sync_status_address_balances_deferred() {
+fn test_sync_status_round_trip() {
     let store = setup_store();
 
     let status = SyncStatus {
@@ -21,8 +21,6 @@ fn test_sync_status_address_balances_deferred() {
         total_cells_created: 15_000,
         total_cells_consumed: 6000,
         last_synced_at: 1700001000,
-        address_balances_deferred: true,
-        activities_deferred: false,
         deep_fork_detected: false,
         deep_fork_info: None,
 
@@ -34,12 +32,12 @@ fn test_sync_status_address_balances_deferred() {
     store.set_sync_status(&status).unwrap();
 
     let retrieved = store.get_sync_status().unwrap();
-    assert!(retrieved.address_balances_deferred);
     assert_eq!(retrieved.tip_block_number, 2000);
     assert_eq!(retrieved.total_cells_created, 15_000);
+    assert!(!retrieved.deep_fork_detected);
 }
 
-/// Use update_sync_status closure to toggle a flag.
+/// Use update_sync_status closure to update selected fields.
 #[test]
 fn test_update_sync_status_closure() {
     let store = setup_store();
@@ -52,8 +50,6 @@ fn test_update_sync_status_closure() {
         total_cells_created: 30_000,
         total_cells_consumed: 12_000,
         last_synced_at: 1700002000,
-        address_balances_deferred: false,
-        activities_deferred: false,
         deep_fork_detected: false,
         deep_fork_info: None,
 
@@ -63,30 +59,20 @@ fn test_update_sync_status_closure() {
     };
     store.set_sync_status(&initial).unwrap();
 
-    // Toggle address_balances_deferred via closure
+    // Update fields via closure
     store
         .update_sync_status(|s| {
-            s.address_balances_deferred = true;
             s.tip_block_number = 3500;
+            s.total_transactions += 123;
+            s.last_synced_at = 1700002500;
         })
         .unwrap();
 
     let updated = store.get_sync_status().unwrap();
-    assert!(updated.address_balances_deferred);
     assert_eq!(updated.tip_block_number, 3500);
-    // Other fields should remain unchanged
-    assert_eq!(updated.total_transactions, 20_000);
-
-    // Toggle it back
-    store
-        .update_sync_status(|s| {
-            s.address_balances_deferred = false;
-        })
-        .unwrap();
-
-    let final_status = store.get_sync_status().unwrap();
-    assert!(!final_status.address_balances_deferred);
-    assert_eq!(final_status.tip_block_number, 3500);
+    assert_eq!(updated.total_transactions, 20_123);
+    assert_eq!(updated.last_synced_at, 1700002500);
+    assert_eq!(updated.total_cells_created, 30_000);
 }
 
 /// Toggle bulk sync mode on and off.

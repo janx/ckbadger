@@ -21,16 +21,6 @@ pub struct SyncStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct IndexRebuildStatus {
-    pub is_rebuilding: bool,
-    pub total: i32,
-    pub completed: i32,
-    pub current_index: Option<String>,
-    pub progress: f64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum BroadcastMessage {
     #[serde(rename = "new_block", rename_all = "camelCase")]
@@ -45,7 +35,6 @@ pub enum BroadcastMessage {
         avg_block_time: String,
         estimated_epoch_time: String,
         sync_status: Box<SyncStatus>,
-        index_rebuild_status: Option<IndexRebuildStatus>,
     },
     #[serde(rename = "new_transaction", rename_all = "camelCase")]
     NewTransaction {

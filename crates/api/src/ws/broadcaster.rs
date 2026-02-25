@@ -7,7 +7,7 @@ use std::sync::Arc;
 use tokio::time::{interval, Duration};
 use tracing::{debug, error, info};
 
-use super::manager::{BroadcastMessage, IndexRebuildStatus, SyncStatus, WsManager};
+use super::manager::{BroadcastMessage, SyncStatus, WsManager};
 use crate::cache::CacheBackend;
 use crate::utils::format_duration;
 
@@ -105,7 +105,6 @@ pub async fn start_block_broadcaster(
 
         if sync_mode == SyncMode::FastSync {
             let sync_status = build_sync_status(&store, &cache, tip_block).await;
-            let index_rebuild_status = build_index_rebuild_status(&store, &cache).await;
             let (avg_block_time, estimated_epoch_time) =
                 calculate_epoch_stats(&store, number, epoch_index, epoch_length);
 
@@ -125,7 +124,6 @@ pub async fn start_block_broadcaster(
                 avg_block_time,
                 estimated_epoch_time,
                 sync_status: Box::new(sync_status),
-                index_rebuild_status,
             };
             debug!(
                 "Fast-sync: broadcasting latest block {} ({} behind)",
@@ -148,7 +146,6 @@ pub async fn start_block_broadcaster(
 
             for (num, hdr) in new_blocks {
                 let sync_status = build_sync_status(&store, &cache, tip_block).await;
-                let index_rebuild_status = build_index_rebuild_status(&store, &cache).await;
                 let (avg_block_time, estimated_epoch_time) =
                     calculate_epoch_stats(&store, num, hdr.epoch_index, hdr.epoch_length);
 
@@ -167,7 +164,6 @@ pub async fn start_block_broadcaster(
                     avg_block_time,
                     estimated_epoch_time,
                     sync_status: Box::new(sync_status),
-                    index_rebuild_status,
                 };
                 info!("Broadcasting new block: {}", num);
                 ws_manager.broadcast_block(msg);
@@ -356,50 +352,6 @@ async fn build_sync_status(
         elapsed_time,
         total_time,
     }
-}
-
-async fn build_index_rebuild_status(
-    _store: &CkbadgerStore,
-    cache: &CacheBackend,
-) -> Option<IndexRebuildStatus> {
-    let sync_status: Option<SyncStatusData> = cache.get(SYNC_STATUS_REDIS_KEY).await;
-
-    let indexes_deferred = match sync_status.as_ref() {
-        Some(s) => s.indexes_deferred,
-        None => false, // RocksDB doesn't have deferred indexes
-    };
-
-    if !indexes_deferred {
-        return None;
-    }
-
-    let progress_data = sync_status
-        .as_ref()
-        .and_then(|s| s.indexes_rebuild_progress.as_ref());
-
-    let (total, completed, current_index) = match progress_data {
-        Some(p) => (p.total, p.completed, p.current_index.clone()),
-        None => (0, 0, None),
-    };
-
-    let is_rebuilding = completed < total && total > 0;
-    if !is_rebuilding && total == 0 {
-        return None;
-    }
-
-    let progress = if total > 0 {
-        (completed as f64 / total as f64 * 100.0).min(100.0)
-    } else {
-        0.0
-    };
-
-    Some(IndexRebuildStatus {
-        is_rebuilding,
-        total,
-        completed,
-        current_index,
-        progress,
-    })
 }
 
 async fn fetch_tip_block(ckb_rpc_url: &str) -> Result<u64, String> {

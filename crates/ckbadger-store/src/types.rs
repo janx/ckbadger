@@ -675,10 +675,6 @@ pub struct SyncStatus {
     pub total_cells_created: i64,
     pub total_cells_consumed: i64,
     pub last_synced_at: i64,
-    pub address_balances_deferred: bool,
-    /// Deprecated: activities are now written inline. Kept for bincode compat.
-    #[serde(default)]
-    pub activities_deferred: bool,
     pub deep_fork_detected: bool,
     pub deep_fork_info: Option<DeepForkInfo>,
     #[serde(default)]

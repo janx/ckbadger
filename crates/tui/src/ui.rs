@@ -117,7 +117,6 @@ pub struct App {
     main_tab: MainTab,
     prev_is_bulk_sync: Option<bool>,
     prev_is_syncing: Option<bool>,
-    prev_indexes_deferred: Option<bool>,
     prev_pipeline_reset_epoch: Option<u64>,
     prev_bottleneck: Option<SyncBottleneck>,
     prev_adaptive_last_reason: Option<String>,
@@ -176,7 +175,6 @@ impl App {
             main_tab: MainTab::default(),
             prev_is_bulk_sync: None,
             prev_is_syncing: None,
-            prev_indexes_deferred: None,
             prev_pipeline_reset_epoch: None,
             prev_bottleneck: None,
             prev_adaptive_last_reason: None,
@@ -400,7 +398,6 @@ impl App {
 
         let is_bulk_sync = sync.is_bulk_sync;
         let is_syncing = sync.is_syncing;
-        let indexes_deferred = sync.indexes_deferred;
         let pipeline_reset_epoch = sync.pipeline_reset_epoch;
         let pipeline_reset_reason = sync
             .pipeline_reset_reason
@@ -429,21 +426,6 @@ impl App {
             }
         }
         self.prev_is_syncing = Some(is_syncing);
-
-        if let Some(prev_deferred) = self.prev_indexes_deferred {
-            if prev_deferred && !indexes_deferred {
-                self.push_sync_event_and_log(
-                    "deferred indexes rebuilt".to_string(),
-                    LogLevel::Success,
-                );
-            } else if !prev_deferred && indexes_deferred {
-                self.push_sync_event_and_log(
-                    "indexes deferred during bulk sync".to_string(),
-                    LogLevel::Warning,
-                );
-            }
-        }
-        self.prev_indexes_deferred = Some(indexes_deferred);
 
         if pipeline_reset_epoch.is_some() && pipeline_reset_epoch != self.prev_pipeline_reset_epoch
         {
@@ -986,21 +968,6 @@ fn draw_overview_kpis(f: &mut Frame, app: &App, area: Rect) {
     } else {
         "SYNCING".to_string()
     };
-    let deferred_count = [
-        sync.address_balances_deferred,
-        sync.activities_deferred,
-        sync.token_deferred,
-        sync.spore_deferred,
-        sync.tx_block_map_deferred,
-    ]
-    .into_iter()
-    .filter(|v| *v)
-    .count();
-    let mode_with_deferred = if deferred_count > 0 {
-        format!("{mode} ({deferred_count}D)")
-    } else {
-        mode
-    };
 
     let rows = Layout::default()
         .direction(Direction::Vertical)
@@ -1034,7 +1001,7 @@ fn draw_overview_kpis(f: &mut Frame, app: &App, area: Rect) {
         TERMINAL_DIM,
     );
     draw_kpi_cell(f, cols[3], "ETA", &eta, FOREGROUND);
-    draw_kpi_cell(f, cols[4], "Mode", &mode_with_deferred, TERMINAL_GREEN);
+    draw_kpi_cell(f, cols[4], "Mode", &mode, TERMINAL_GREEN);
 
     let progress_ratio = if sync.chain_tip > 0 {
         (sync.tip_block as f64 / sync.chain_tip as f64).clamp(0.0, 1.0)
@@ -1198,31 +1165,10 @@ fn draw_sync_progress(f: &mut Frame, app: &App, area: Rect) {
         ("SYNCING", TERMINAL_GREEN)
     };
 
-    let mut tags: Vec<Span> = Vec::new();
-    if sync.address_balances_deferred {
-        tags.push(Span::styled("[BAL]", Style::default().fg(AMBER)));
-    }
-    if sync.activities_deferred {
-        tags.push(Span::styled(" [ACT]", Style::default().fg(AMBER)));
-    }
-    if sync.token_deferred {
-        tags.push(Span::styled(" [TOK]", Style::default().fg(AMBER)));
-    }
-    if sync.spore_deferred {
-        tags.push(Span::styled(" [SPR]", Style::default().fg(AMBER)));
-    }
-    if sync.tx_block_map_deferred {
-        tags.push(Span::styled(" [TXM]", Style::default().fg(AMBER)));
-    }
-
     let mut left = vec![Line::from(vec![Span::styled(
         format!(" {} ", mode),
         Style::default().fg(Color::Black).bg(mode_color),
     )])];
-
-    if !tags.is_empty() {
-        left.push(Line::from(tags));
-    }
 
     left.push(Line::from(vec![
         Span::styled("Progress: ", Style::default().fg(SLATE_500)),
@@ -1542,17 +1488,6 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
         .constraints([Constraint::Percentage(52), Constraint::Percentage(48)])
         .split(inner);
 
-    let deferred_count = [
-        sync.address_balances_deferred,
-        sync.activities_deferred,
-        sync.token_deferred,
-        sync.spore_deferred,
-        sync.tx_block_map_deferred,
-    ]
-    .into_iter()
-    .filter(|v| *v)
-    .count();
-
     let write_ms_text = sync
         .db_write_ms
         .map(|v| format!("{v:.1}ms"))
@@ -1685,15 +1620,6 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
                     Line::from(vec![
                         Span::styled("Stability ", Style::default().fg(SLATE_500)),
                         Span::styled(stability, Style::default().fg(stability_color)),
-                        Span::styled("  Deferred ", Style::default().fg(SLATE_500)),
-                        Span::styled(
-                            format!("{deferred_count}"),
-                            Style::default().fg(if deferred_count > 0 {
-                                AMBER
-                            } else {
-                                TERMINAL_GREEN
-                            }),
-                        ),
                     ]),
                     io_fetch_write_jitter_line(&fetch_ms_text, &write_ms_text, &rate_jitter_text),
                 ),
@@ -1752,17 +1678,6 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
                                 .map(|v| format!("{v:.1}ms"))
                                 .unwrap_or_else(|| "-".to_string()),
                             Style::default().fg(AMBER),
-                        ),
-                    ]),
-                    Line::from(vec![
-                        Span::styled("Deferred ", Style::default().fg(SLATE_500)),
-                        Span::styled(
-                            format!("{deferred_count}"),
-                            Style::default().fg(if deferred_count > 0 {
-                                AMBER
-                            } else {
-                                TERMINAL_GREEN
-                            }),
                         ),
                     ]),
                     adaptive_control_line(AdaptiveControlSnapshot {

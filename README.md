@@ -26,6 +26,7 @@ state transitions.
 
 - Bulk sync is a single-shot rebuild path: it should either complete end-to-end or fail fast.
 - During bulk sync, correctness/write errors are treated as fatal. The indexer should not auto-cleanup partial state and continue.
+- During bulk sync, do not use defer + refill/rebuild patterns for derived data. Required data must be written inline on the canonical path.
 - Recovery workflow is: fix the bug, delete RocksDB data, and re-run sync from genesis.
 - This keeps bulk sync logic simple and predictable, and avoids complex mid-run recovery branches.
 
@@ -71,7 +72,7 @@ on localhost deployments:
 - **Historical Charts** - Block time, transaction volume, active addresses
 - **Real-time Updates** - WebSocket subscriptions for new blocks and transactions
 - **AI-Friendly Multi-Format Pages** - Use `.md` for summaries, `.raw` for tool-oriented payloads, plus `/capabilities` for machine discovery
-- **System Status Page** - Monitor sync progress, index rebuild status, and integrity checks
+- **System Status Page** - Monitor sync progress, pipeline health, and integrity checks
 - **Data Integrity Verification** - 28 built-in checks for acceptance testing via API
 - **Developer API** - REST endpoints with rate limiting
 
@@ -384,8 +385,7 @@ ws.onmessage = (event) => {
 //     epochLength: 1800,
 //     avgBlockTime: "10.50s",
 //     estimatedEpochTime: "3h 45m",
-//     syncStatus: { isSyncing, syncedBlock, tipBlock, progress, estimatedTime },
-//     indexRebuildStatus: { isRebuilding, total, completed, currentIndex, progress } // optional
+//     syncStatus: { isSyncing, syncedBlock, tipBlock, progress, estimatedTime }
 //   }
 // }
 ```

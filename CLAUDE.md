@@ -88,6 +88,7 @@ When solving problems or designing features:
 
 - Bulk sync is single-shot: either finish successfully, or fail fast and stop
 - During bulk sync, do not auto-cleanup partial state and continue in-place
+- During bulk sync, do not use defer + refill/rebuild design patterns; write required derived data inline on the canonical sync path
 - If bulk sync fails: fix the bug, delete RocksDB, and restart sync from genesis
 - Keep bulk sync implementation simple; avoid introducing mid-run recovery branches
 
@@ -348,8 +349,8 @@ pub struct SyncStatusData {
     pub total_addresses: i64,
     pub last_synced_at: i64,
     pub sync_ema_rate: Option<f64>,
-    pub indexes_deferred: bool,
-    pub indexes_rebuild_progress: Option<IndexRebuildProgressData>,
+    pub sync_started_at: Option<i64>,
+    pub bulk_sync_completed_at: Option<i64>,
     // ... other fields
 }
 ```
@@ -408,11 +409,9 @@ pub struct MemoryStatsData {
 
 **Requires**: `redis-cache` feature enabled on both indexer and API, plus `REDIS_URL` environment variable.
 
-## Deferred Write Optimization
+## Bulk Sync Write Policy
 
-For fresh syncs, the indexer defers certain non-critical writes to RocksDB during bulk sync to maximize throughput. Deferred data is maintained inline by the indexer (no separate rebuild needed) since RocksDB writes are fast enough.
-
-**Note:** Deferred states are stored in `sync_status` within the RocksDB store. The indexer reads these flags on startup.
+Bulk sync must not rely on deferred writes plus later refill/rebuild. Required user-facing derived data must be written inline with block processing, and any correctness bug should be fixed in the write/read logic with a full DB rebuild + re-sync from genesis.
 
 **Label Import (No Task System):**
 
@@ -795,7 +794,7 @@ knowledge_size = dao.U - (BURN_QUOTA * 0.6)
 
 1. Prefer exact incremental calculation during bulk sync (no post-bulk rebuild dependency for core aggregates)
 2. Use cumulative on-chain values (e.g., DAO field differences) instead of sampling
-3. Only defer non-critical indexes, and complete exact backfill before exposing them as final
+3. Do not defer data and refill/rebuild later in bulk sync paths; keep aggregates exact on first write
 4. Do **NOT** write approximate values into persistent user-facing aggregates (`daily_stats`, DAO snapshots, supply/issuance charts)
 
 ### Script Identification

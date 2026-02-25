@@ -45,7 +45,6 @@ pub struct SyncStatusRow {
     pub is_syncing: bool,
     pub is_bulk_sync: bool,
     pub progress: f64,
-    pub indexes_deferred: bool,
     pub elapsed_time: Option<String>,
     pub eta: Option<String>,
     pub rate_realtime: Option<f64>,
@@ -67,11 +66,6 @@ pub struct SyncStatusRow {
     pub adaptive_backoff_streak: Option<u64>,
     pub adaptive_last_adjusted_age_secs: Option<i64>,
     pub startup_phase: Option<String>,
-    pub address_balances_deferred: bool,
-    pub activities_deferred: bool,
-    pub token_deferred: bool,
-    pub spore_deferred: bool,
-    pub tx_block_map_deferred: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -87,21 +81,6 @@ pub struct RuntimeDiagData {
     pub last_incident_summary: Option<String>,
     pub last_shutdown_reason: Option<String>,
     pub last_exit_code: Option<i32>,
-}
-
-#[derive(Debug, Clone)]
-struct DeferredFlags {
-    address_balances: bool,
-    activities: bool,
-    token: bool,
-    spore: bool,
-    tx_block_map: bool,
-}
-
-impl DeferredFlags {
-    fn any(&self) -> bool {
-        self.address_balances || self.activities || self.token || self.spore || self.tx_block_map
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -288,26 +267,15 @@ impl TuiDb {
             self.get_redis_key(SYNC_PROGRESS_REDIS_KEY).await;
         let status_data: Option<SyncStatusData> = self.get_redis_key(SYNC_STATUS_REDIS_KEY).await;
 
-        let store_status = self.store.get_sync_status()?;
-        let deferred = DeferredFlags {
-            address_balances: store_status.address_balances_deferred,
-            activities: store_status.activities_deferred,
-            token: status_data.as_ref().is_some_and(|s| s.token_deferred),
-            spore: status_data.as_ref().is_some_and(|s| s.spore_deferred),
-            tx_block_map: status_data
-                .as_ref()
-                .is_some_and(|s| s.tx_block_map_deferred),
-        };
-
         if let Some(ref progress) = progress_data {
-            return Ok(self.build_from_progress(progress, &status_data, &deferred));
+            return Ok(self.build_from_progress(progress, &status_data));
         }
 
         if let Some(ref status) = status_data {
-            return self.build_from_status(status, &deferred);
+            return self.build_from_status(status);
         }
 
-        self.build_fallback(&deferred)
+        self.build_fallback()
     }
 
     async fn get_redis_key<T: serde::de::DeserializeOwned>(&self, key: &str) -> Option<T> {
@@ -324,7 +292,6 @@ impl TuiDb {
         &self,
         progress: &SyncProgressData,
         status_data: &Option<SyncStatusData>,
-        deferred: &DeferredFlags,
     ) -> SyncStatusRow {
         let tip_block = progress.current_block as i64;
         let chain_tip = progress.target_block as i64;
@@ -345,7 +312,6 @@ impl TuiDb {
             is_syncing: blocks_behind > 100,
             is_bulk_sync: blocks_behind > 1000,
             progress: progress.progress_percentage,
-            indexes_deferred: deferred.any(),
             elapsed_time,
             eta: Some(progress.eta_formatted.clone()),
             rate_realtime: Some(progress.blocks_per_second),
@@ -369,19 +335,10 @@ impl TuiDb {
                 .adaptive_last_adjusted_at
                 .map(|ts| (chrono::Utc::now().timestamp() - ts).max(0)),
             startup_phase: progress.startup_phase.clone(),
-            address_balances_deferred: deferred.address_balances,
-            activities_deferred: deferred.activities,
-            token_deferred: deferred.token,
-            spore_deferred: deferred.spore,
-            tx_block_map_deferred: deferred.tx_block_map,
         }
     }
 
-    fn build_from_status(
-        &self,
-        status: &SyncStatusData,
-        deferred: &DeferredFlags,
-    ) -> Result<SyncStatusRow> {
+    fn build_from_status(&self, status: &SyncStatusData) -> Result<SyncStatusRow> {
         let tip_block = status.tip_block_number;
         let (chain_tip, _) = self.store.get_sync_tip()?;
 
@@ -419,7 +376,6 @@ impl TuiDb {
             is_syncing,
             is_bulk_sync: blocks_behind > 1000,
             progress,
-            indexes_deferred: deferred.any(),
             elapsed_time,
             eta,
             rate_realtime: None,
@@ -441,15 +397,10 @@ impl TuiDb {
             adaptive_backoff_streak: None,
             adaptive_last_adjusted_age_secs: None,
             startup_phase: None,
-            address_balances_deferred: deferred.address_balances,
-            activities_deferred: deferred.activities,
-            token_deferred: deferred.token,
-            spore_deferred: deferred.spore,
-            tx_block_map_deferred: deferred.tx_block_map,
         })
     }
 
-    fn build_fallback(&self, deferred: &DeferredFlags) -> Result<SyncStatusRow> {
+    fn build_fallback(&self) -> Result<SyncStatusRow> {
         let (tip, _) = self.store.get_sync_tip()?;
 
         Ok(SyncStatusRow {
@@ -458,7 +409,6 @@ impl TuiDb {
             is_syncing: false,
             is_bulk_sync: false,
             progress: 100.0,
-            indexes_deferred: deferred.any(),
             elapsed_time: None,
             eta: None,
             rate_realtime: None,
@@ -480,11 +430,6 @@ impl TuiDb {
             adaptive_backoff_streak: None,
             adaptive_last_adjusted_age_secs: None,
             startup_phase: None,
-            address_balances_deferred: deferred.address_balances,
-            activities_deferred: deferred.activities,
-            token_deferred: deferred.token,
-            spore_deferred: deferred.spore,
-            tx_block_map_deferred: deferred.tx_block_map,
         })
     }
 

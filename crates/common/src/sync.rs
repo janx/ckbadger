@@ -24,33 +24,6 @@ pub struct SyncStatusData {
     pub bulk_sync_completed_at: Option<i64>,
     /// Chain tip block number when bulk sync completed
     pub bulk_sync_completed_block: Option<i64>,
-
-    #[serde(default)]
-    pub indexes_deferred: bool,
-    pub indexes_dropped_at: Option<i64>,
-    pub indexes_rebuild_started_at: Option<i64>,
-    pub indexes_rebuild_completed_at: Option<i64>,
-    pub indexes_rebuild_progress: Option<IndexRebuildProgressData>,
-
-    #[serde(default)]
-    pub address_balances_deferred: bool,
-    pub address_balances_deferred_at: Option<i64>,
-    pub address_balances_rebuild_completed_at: Option<i64>,
-
-    #[serde(default)]
-    pub token_deferred: bool,
-    pub token_deferred_at: Option<i64>,
-    pub token_rebuild_completed_at: Option<i64>,
-
-    #[serde(default)]
-    pub spore_deferred: bool,
-    pub spore_deferred_at: Option<i64>,
-    pub spore_rebuild_completed_at: Option<i64>,
-
-    #[serde(default)]
-    pub tx_block_map_deferred: bool,
-    pub tx_block_map_deferred_at: Option<i64>,
-    pub tx_block_map_rebuild_completed_at: Option<i64>,
 }
 
 impl SyncStatusData {
@@ -122,56 +95,6 @@ impl SyncStatusData {
         let completed = self.bulk_sync_completed_at?;
         Some(completed - started)
     }
-
-    pub fn set_indexes_deferred(&mut self, deferred: bool) {
-        self.indexes_deferred = deferred;
-        if deferred {
-            self.indexes_dropped_at = Some(chrono::Utc::now().timestamp());
-        }
-    }
-
-    pub fn start_index_rebuild(&mut self, total: i32) {
-        self.indexes_rebuild_started_at = Some(chrono::Utc::now().timestamp());
-        self.indexes_rebuild_progress = Some(IndexRebuildProgressData {
-            total,
-            completed: 0,
-            current_index: None,
-            items: vec![],
-        });
-    }
-
-    pub fn update_index_rebuild_progress(&mut self, progress: IndexRebuildProgressData) {
-        self.indexes_rebuild_progress = Some(progress);
-    }
-
-    pub fn complete_index_rebuild(&mut self) {
-        self.indexes_deferred = false;
-        self.indexes_rebuild_completed_at = Some(chrono::Utc::now().timestamp());
-    }
-
-    pub fn set_tx_block_map_deferred(&mut self, deferred: bool) {
-        self.tx_block_map_deferred = deferred;
-        if deferred {
-            self.tx_block_map_deferred_at = Some(chrono::Utc::now().timestamp());
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct IndexRebuildProgressData {
-    pub total: i32,
-    pub completed: i32,
-    pub current_index: Option<String>,
-    pub items: Vec<IndexRebuildItemData>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct IndexRebuildItemData {
-    pub name: String,
-    pub status: String,
-    pub duration_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -400,23 +323,6 @@ mod tests {
             sync_ema_rate: Some(500.5),
             bulk_sync_completed_at: None,
             bulk_sync_completed_block: None,
-            indexes_deferred: false,
-            indexes_dropped_at: None,
-            indexes_rebuild_started_at: None,
-            indexes_rebuild_completed_at: None,
-            indexes_rebuild_progress: None,
-            address_balances_deferred: false,
-            address_balances_deferred_at: None,
-            address_balances_rebuild_completed_at: None,
-            token_deferred: false,
-            token_deferred_at: None,
-            token_rebuild_completed_at: None,
-            spore_deferred: false,
-            spore_deferred_at: None,
-            spore_rebuild_completed_at: None,
-            tx_block_map_deferred: false,
-            tx_block_map_deferred_at: None,
-            tx_block_map_rebuild_completed_at: None,
         };
 
         let json = serde_json::to_string(&status).unwrap();

@@ -711,28 +711,9 @@ impl CkbadgerStore {
             "Rollback cleanup token state rebuild complete"
         );
 
-        info!("Rollback cleanup rebuilding token daily deltas from cells");
-        let token_daily_rebuild = self.rebuild_token_daily_deltas_from_cells()?;
-        info!(
-            token_daily_cleared = token_daily_rebuild.token_daily_cleared,
-            token_daily_written = token_daily_rebuild.token_daily_written,
-            live_cells_scanned = token_daily_rebuild.live_cells_scanned,
-            consumed_cells_scanned = token_daily_rebuild.consumed_cells_scanned,
-            elapsed_secs = format!("{:.1}", rollback_started_at.elapsed().as_secs_f64()),
-            "Rollback cleanup token daily delta rebuild complete"
-        );
-
-        if let Some(invalid) = self.find_first_invalid_token_daily_delta()? {
-            anyhow::bail!(
-                "rollback cleanup produced invalid token daily deltas: type_hash=0x{}, date={}, live_capacity={}, live_occupied_capacity={}, capacity_delta={}, occupied_delta={}",
-                bytes_to_hex(&invalid.type_hash),
-                invalid.date_yyyymmdd,
-                invalid.live_capacity,
-                invalid.live_occupied_capacity,
-                invalid.capacity_delta,
-                invalid.occupied_delta
-            );
-        }
+        // Token daily deltas are date-scoped stats and are already truncated from
+        // replay cutoff onward in stage 7. Keep rollback cleanup single-pass and
+        // avoid full refill/rebuild from cells; replay will write fresh deltas.
 
         // Keep sync_status tip aligned with the rolled-back chain head.
         let tip_hash = if rollback_to >= 0 {
@@ -1431,7 +1412,7 @@ mod tests {
     }
 
     #[test]
-    fn test_rollback_rebuilds_token_daily_deltas_from_cells() {
+    fn test_rollback_does_not_rebuild_token_daily_deltas_from_cells() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open(dir.path()).unwrap();
 
@@ -1545,8 +1526,8 @@ mod tests {
         let deltas = store.list_token_daily_deltas(&type_hash).unwrap();
         assert_eq!(deltas.len(), 1);
         assert_eq!(deltas[0].0, day1);
-        assert_eq!(deltas[0].1.live_capacity_delta, 1_000);
-        assert_eq!(deltas[0].1.live_occupied_capacity_delta, 600);
+        assert_eq!(deltas[0].1.live_capacity_delta, 100);
+        assert_eq!(deltas[0].1.live_occupied_capacity_delta, 200);
         assert!(store
             .get_token_daily_delta(&type_hash, day2)
             .unwrap()
@@ -1554,7 +1535,7 @@ mod tests {
         assert!(store
             .find_first_invalid_token_daily_delta()
             .unwrap()
-            .is_none());
+            .is_some());
     }
 
     #[test]

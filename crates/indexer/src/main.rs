@@ -234,32 +234,18 @@ fn reconcile_token_daily_deltas_on_startup(store: &CkbadgerStore) -> Result<()> 
         live_occupied_capacity = invalid.live_occupied_capacity,
         capacity_delta = invalid.capacity_delta,
         occupied_delta = invalid.occupied_delta,
-        "Detected invalid token daily deltas; rebuilding from cells"
+        "Detected invalid token daily deltas at startup; fail-fast without automatic rebuild"
     );
 
-    let rebuilt = store.rebuild_token_daily_deltas_from_cells()?;
-    info!(
-        token_daily_cleared = rebuilt.token_daily_cleared,
-        token_daily_written = rebuilt.token_daily_written,
-        live_cells_scanned = rebuilt.live_cells_scanned,
-        consumed_cells_scanned = rebuilt.consumed_cells_scanned,
-        "Startup token daily delta rebuild complete"
+    anyhow::bail!(
+        "invalid token daily deltas detected at startup: type_hash=0x{}, date={}, live_capacity={}, live_occupied_capacity={}, capacity_delta={}, occupied_delta={}; automatic rebuild is disabled, delete RocksDB and re-sync from genesis",
+        type_hash_hex,
+        invalid.date_yyyymmdd,
+        invalid.live_capacity,
+        invalid.live_occupied_capacity,
+        invalid.capacity_delta,
+        invalid.occupied_delta
     );
-
-    if let Some(still_invalid) = store.find_first_invalid_token_daily_delta()? {
-        anyhow::bail!(
-            "token daily delta rebuild failed validation: type_hash=0x{}, date={}, live_capacity={}, live_occupied_capacity={}, capacity_delta={}, occupied_delta={}",
-            bytes_to_hex(&still_invalid.type_hash),
-            still_invalid.date_yyyymmdd,
-            still_invalid.live_capacity,
-            still_invalid.live_occupied_capacity,
-            still_invalid.capacity_delta,
-            still_invalid.occupied_delta
-        );
-    }
-
-    info!("Startup token daily deltas validation passed after rebuild");
-    Ok(())
 }
 
 #[cfg(unix)]
@@ -970,7 +956,7 @@ mod tests {
     }
 
     #[test]
-    fn test_reconcile_token_daily_deltas_on_startup_rebuilds_invalid_rows() {
+    fn test_reconcile_token_daily_deltas_on_startup_fails_on_invalid_rows() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open(dir.path()).unwrap();
         let type_hash = vec![0xAB; 32];
@@ -1058,7 +1044,10 @@ mod tests {
             .unwrap()
             .is_some());
 
-        reconcile_token_daily_deltas_on_startup(&store).unwrap();
+        let err = reconcile_token_daily_deltas_on_startup(&store).unwrap_err();
+        let err_msg = err.to_string();
+        assert!(err_msg.contains("invalid token daily deltas detected at startup"));
+        assert!(err_msg.contains("delete RocksDB and re-sync from genesis"));
 
         let day1_delta = store
             .get_token_daily_delta(&type_hash, day1)
@@ -1068,13 +1057,13 @@ mod tests {
             .get_token_daily_delta(&type_hash, day2)
             .unwrap()
             .expect("missing day2 delta");
-        assert_eq!(day1_delta.live_capacity_delta, 1_400);
-        assert_eq!(day1_delta.live_occupied_capacity_delta, 900);
-        assert_eq!(day2_delta.live_capacity_delta, -400);
-        assert_eq!(day2_delta.live_occupied_capacity_delta, -300);
+        assert_eq!(day1_delta.live_capacity_delta, 100);
+        assert_eq!(day1_delta.live_occupied_capacity_delta, 200);
+        assert_eq!(day2_delta.live_capacity_delta, 50);
+        assert_eq!(day2_delta.live_occupied_capacity_delta, 50);
         assert!(store
             .find_first_invalid_token_daily_delta()
             .unwrap()
-            .is_none());
+            .is_some());
     }
 }

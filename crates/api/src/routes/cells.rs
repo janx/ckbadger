@@ -2418,15 +2418,6 @@ async fn get_top_addresses(
     State(state): State<Arc<AppState>>,
     Query(params): Query<TopAddressesParams>,
 ) -> ApiResult<Vec<TopAddressResponse>> {
-    let sync_status = state
-        .store
-        .get_sync_status()
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    if sync_status.address_balances_deferred {
-        return ok(Vec::new());
-    }
-
     let limit = params.limit.clamp(1, 500) as usize;
 
     let rows = state
@@ -2456,10 +2447,6 @@ async fn get_active_addresses(
         .store
         .get_sync_status()
         .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    if sync_status.address_balances_deferred {
-        return ok(Vec::new());
-    }
 
     let limit = params.limit.clamp(1, 500) as usize;
     let days = params.days.clamp(1, 365);

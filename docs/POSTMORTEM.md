@@ -988,20 +988,27 @@ if has_udt_outputs || has_udt_inputs {
 
 ---
 
-## Category: Task Runner
+## Category: Task Runner (Legacy)
 
-### TR-001: Circular dependency in bulk sync detection deadlocks all rebuild tasks
+> Historical context: this category describes a legacy task-runner + deferred-flag
+> architecture that has been removed. Current bulk sync design is single-shot and
+> fail-fast, with required derived data written inline on the canonical sync path
+> (no defer + refill/rebuild workflow).
+
+### TR-001 (Legacy): Circular dependency in bulk sync detection deadlocks all rebuild tasks
 
 **Symptom**: After bulk sync completed, `index_rebuild`, `cells_status_rebuild`, and all other rebuild tasks remained in `pending` state indefinitely. Task-runner repeatedly claimed and deferred `index_rebuild` in a hot loop (~1000 times/second).
 
-**Root Cause**: `is_bulk_sync_active()` checked `indexes_deferred || address_balances_deferred || token_deferred` flags in `sync_status`. But these flags are cleared BY the rebuild tasks themselves, creating a circular dependency:
+**Root Cause (legacy design)**: `is_bulk_sync_active()` checked `indexes_deferred || address_balances_deferred || token_deferred` flags in `sync_status`. But these flags are cleared BY the rebuild tasks themselves, creating a circular dependency:
 
 1. `index_rebuild` requires `is_bulk_sync_active() = false` to run
 2. `is_bulk_sync_active()` returns `true` because `indexes_deferred = true`
 3. Only `index_rebuild` completion sets `indexes_deferred = false`
 4. Deadlock: task can never start
 
-**Fix**: Changed `is_bulk_sync_active()` to check actual block sync progress via `MAX(timestamp)` from the `blocks` table. If the latest block is within 1 hour of current time, bulk sync is considered complete. This is independent of any deferred flags.
+**Fix (at that time)**: Changed `is_bulk_sync_active()` to check actual block sync progress via `MAX(timestamp)` from the `blocks` table. If the latest block is within 1 hour of current time, bulk sync is considered complete. This is independent of any deferred flags.
+
+**Current Status**: The deferred flags and task-runner rebuild flow referenced here are removed from current code.
 
 **Lesson**: Never use the output of a task as a precondition for that same task to start. Bulk sync detection should use an orthogonal signal (block recency) rather than rebuild state flags.
 
@@ -1011,11 +1018,11 @@ if has_udt_outputs || has_udt_inputs {
 
 ---
 
-### TR-002: Task-runner hot loop when deferring tasks (no backoff)
+### TR-002 (Legacy): Task-runner hot loop when deferring tasks (no backoff)
 
 **Symptom**: Task-runner consumed 100% CPU and generated millions of log lines per minute, all showing the same task being claimed and deferred.
 
-**Root Cause**: `run_once()` returned `Ok(true)` after deferring a task. The `run_continuous()` loop only sleeps when `Ok(false)` (no task found) or `Err`. So the loop immediately re-claimed the same task with zero delay.
+**Root Cause (legacy design)**: `run_once()` returned `Ok(true)` after deferring a task. The `run_continuous()` loop only sleeps when `Ok(false)` (no task found) or `Err`. So the loop immediately re-claimed the same task with zero delay.
 
 ```rust
 // Before: claimed + deferred → Ok(true) → no sleep → instant re-claim
@@ -1023,7 +1030,7 @@ self.db.defer_task(task.id, &reason).await?;
 return Ok(true);  // BUG: triggers immediate retry
 ```
 
-**Fix**: Changed defer path to return `Ok(false)`, triggering the 5-second poll interval sleep before retrying.
+**Fix (at that time)**: Changed defer path to return `Ok(false)`, triggering the 5-second poll interval sleep before retrying.
 
 **Lesson**: In poll loops, any path that doesn't make progress must trigger backoff. "Claimed but deferred" is not progress.
 

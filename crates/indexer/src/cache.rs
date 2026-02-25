@@ -611,11 +611,6 @@ mod tests {
                 sync_ema_rate: Some(500.0),
                 bulk_sync_completed_at: None,
                 bulk_sync_completed_block: None,
-                indexes_deferred: false,
-                indexes_dropped_at: None,
-                indexes_rebuild_started_at: None,
-                indexes_rebuild_completed_at: None,
-                indexes_rebuild_progress: None,
                 ..Default::default()
             };
 

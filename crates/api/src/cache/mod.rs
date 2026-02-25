@@ -88,23 +88,6 @@ impl CacheBackend {
             sync_ema_rate: None,
             bulk_sync_completed_at: None,
             bulk_sync_completed_block: None,
-            indexes_deferred: false,
-            indexes_dropped_at: None,
-            indexes_rebuild_started_at: None,
-            indexes_rebuild_completed_at: None,
-            indexes_rebuild_progress: None,
-            address_balances_deferred: sync.address_balances_deferred,
-            address_balances_deferred_at: None,
-            address_balances_rebuild_completed_at: None,
-            token_deferred: false,
-            token_deferred_at: None,
-            token_rebuild_completed_at: None,
-            spore_deferred: false,
-            spore_deferred_at: None,
-            spore_rebuild_completed_at: None,
-            tx_block_map_deferred: false,
-            tx_block_map_deferred_at: None,
-            tx_block_map_rebuild_completed_at: None,
         }
     }
 
