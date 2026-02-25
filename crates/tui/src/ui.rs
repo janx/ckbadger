@@ -22,6 +22,7 @@ const RATE_DROP_RATIO_THRESHOLD: f64 = 0.65;
 const TERMINAL_GREEN: Color = Color::Rgb(0, 255, 65);
 const TERMINAL_DIM: Color = Color::Rgb(0, 204, 51);
 const AMBER: Color = Color::Rgb(255, 176, 0);
+const CYAN: Color = Color::Rgb(56, 189, 248);
 const SLATE_800: Color = Color::Rgb(58, 71, 89);
 const SLATE_700: Color = Color::Rgb(80, 95, 115);
 const SLATE_500: Color = Color::Rgb(160, 174, 192);
@@ -107,6 +108,7 @@ pub struct App {
     rate_history: VecDeque<f64>,
     tx_rate_history: VecDeque<f64>,
     db_write_history: VecDeque<f64>,
+    db_commit_history: VecDeque<f64>,
     fetch_stage_history: VecDeque<f64>,
     parse_stage_history: VecDeque<f64>,
     write_stage_history: VecDeque<f64>,
@@ -165,6 +167,7 @@ impl App {
             rate_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             tx_rate_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             db_write_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
+            db_commit_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             fetch_stage_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             parse_stage_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             write_stage_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
@@ -331,6 +334,17 @@ impl App {
             .and_then(|s| s.db_write_ms)
             .unwrap_or(0.0);
         push_history_sample(&mut self.db_write_history, db_ms);
+        let db_commit_ms = self
+            .sync_status
+            .as_ref()
+            .and_then(|s| {
+                s.pipeline
+                    .as_ref()
+                    .and_then(|p| p.commit_ms)
+                    .or(s.db_commit_ms)
+            })
+            .unwrap_or(0.0);
+        push_history_sample(&mut self.db_commit_history, db_commit_ms);
 
         let (fetch_ms, parse_ms, write_ms) = self
             .sync_status
@@ -1363,7 +1377,7 @@ const WIDE_SYNC_CHART_SPECS: [SyncChartSpec; 3] = [
         kind: SyncChartKind::TxRate,
     },
     SyncChartSpec {
-        title: "Write Latency (ms)",
+        title: "Write Stage Latency (ms)",
         unit: "ms",
         kind: SyncChartKind::WriteLatency,
     },
@@ -1488,10 +1502,6 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
         .constraints([Constraint::Percentage(52), Constraint::Percentage(48)])
         .split(inner);
 
-    let write_ms_text = sync
-        .db_write_ms
-        .map(|v| format!("{v:.1}ms"))
-        .unwrap_or_else(|| "-".to_string());
     let fetch_ms_text = sync
         .rpc_fetch_ms
         .map(|v| format!("{v:.1}ms"))
@@ -1507,6 +1517,16 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
     let dense_panel = diagnostics_dense_panel(app.diagnostics_view_mode, inner.width, inner.height);
 
     let (left, right) = if let Some(pipeline) = sync.pipeline.as_ref() {
+        let pipeline_write_stage_ms = pipeline.write_ms.or(sync.db_write_ms);
+        let pipeline_write_stage_ms_text = pipeline_write_stage_ms
+            .map(|v| format!("{v:.1}ms"))
+            .unwrap_or_else(|| "-".to_string());
+        let pipeline_commit_ms = pipeline.commit_ms.or(sync.db_commit_ms);
+        let pipeline_commit_ms_text = pipeline_commit_ms
+            .map(|v| format!("{v:.1}ms"))
+            .unwrap_or_else(|| "-".to_string());
+        let pipeline_gap_ms_text =
+            format_stage_commit_gap_ms(pipeline_write_stage_ms, pipeline_commit_ms);
         let (state, state_color) = pipeline_flow_state(
             sync.is_syncing,
             pipeline.fetch_queue_depth,
@@ -1582,6 +1602,12 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
                         TERMINAL_GREEN,
                     ),
                     Line::from(vec![
+                        Span::styled("Commit ", Style::default().fg(SLATE_500)),
+                        Span::styled(
+                            pipeline_commit_ms_text.clone(),
+                            Style::default().fg(FOREGROUND),
+                        ),
+                        Span::styled("  ", Style::default().fg(SLATE_700)),
                         Span::styled("Wait ", Style::default().fg(SLATE_500)),
                         Span::styled(
                             pipeline
@@ -1617,11 +1643,18 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
                     stage_trend_line("F", TERMINAL_DIM, &app.fetch_stage_history, spark_width),
                     stage_trend_line("P", AMBER, &app.parse_stage_history, spark_width),
                     stage_trend_line("W", TERMINAL_GREEN, &app.write_stage_history, spark_width),
+                    stage_trend_line("C", CYAN, &app.db_commit_history, spark_width),
                     Line::from(vec![
                         Span::styled("Stability ", Style::default().fg(SLATE_500)),
                         Span::styled(stability, Style::default().fg(stability_color)),
                     ]),
-                    io_fetch_write_jitter_line(&fetch_ms_text, &write_ms_text, &rate_jitter_text),
+                    io_fetch_write_jitter_line(
+                        &fetch_ms_text,
+                        &pipeline_write_stage_ms_text,
+                        &pipeline_commit_ms_text,
+                        &pipeline_gap_ms_text,
+                        &rate_jitter_text,
+                    ),
                 ),
             )
         } else {
@@ -1671,6 +1704,11 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
                             format!("{}/{}/{}", fetch_util, parse_util, write_util),
                             Style::default().fg(FOREGROUND),
                         ),
+                        Span::styled("  Commit ", Style::default().fg(SLATE_500)),
+                        Span::styled(
+                            pipeline_commit_ms_text.clone(),
+                            Style::default().fg(FOREGROUND),
+                        ),
                         Span::styled("  Wait ", Style::default().fg(SLATE_500)),
                         Span::styled(
                             pipeline
@@ -1701,6 +1739,7 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
                     stage_trend_line("F", TERMINAL_DIM, &app.fetch_stage_history, spark_width),
                     stage_trend_line("P", AMBER, &app.parse_stage_history, spark_width),
                     stage_trend_line("W", TERMINAL_GREEN, &app.write_stage_history, spark_width),
+                    stage_trend_line("C", CYAN, &app.db_commit_history, spark_width),
                     Line::from(vec![
                         Span::styled("Stability ", Style::default().fg(SLATE_500)),
                         Span::styled(stability, Style::default().fg(stability_color)),
@@ -1723,7 +1762,13 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
                             Style::default().fg(FOREGROUND),
                         ),
                     ]),
-                    io_fetch_write_jitter_line(&fetch_ms_text, &write_ms_text, &rate_jitter_text),
+                    io_fetch_write_jitter_line(
+                        &fetch_ms_text,
+                        &pipeline_write_stage_ms_text,
+                        &pipeline_commit_ms_text,
+                        &pipeline_gap_ms_text,
+                        &rate_jitter_text,
+                    ),
                 ),
             )
         };
@@ -1765,13 +1810,31 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
                 ),
             ],
             vec![
-                Line::from(vec![
-                    Span::styled("I/O ", Style::default().fg(SLATE_500)),
-                    Span::styled(
-                        format!("Fetch {} Write {}", fetch_ms_text, write_ms_text),
-                        Style::default().fg(FOREGROUND),
-                    ),
-                ]),
+                {
+                    let write_stage_ms_text = sync
+                        .db_write_ms
+                        .map(|v| format!("{v:.1}ms"))
+                        .unwrap_or_else(|| "-".to_string());
+                    let write_commit_ms_text = sync
+                        .db_commit_ms
+                        .map(|v| format!("{v:.1}ms"))
+                        .unwrap_or_else(|| "-".to_string());
+                    let write_gap_ms_text =
+                        format_stage_commit_gap_ms(sync.db_write_ms, sync.db_commit_ms);
+                    Line::from(vec![
+                        Span::styled("I/O ", Style::default().fg(SLATE_500)),
+                        Span::styled(
+                            format!(
+                                "Fetch {} Write(stage) {} Commit {} Gap {}",
+                                fetch_ms_text,
+                                write_stage_ms_text,
+                                write_commit_ms_text,
+                                write_gap_ms_text
+                            ),
+                            Style::default().fg(FOREGROUND),
+                        ),
+                    ])
+                },
                 Line::from(vec![
                     Span::styled("Rate jitter ", Style::default().fg(SLATE_500)),
                     Span::styled(rate_jitter_text, Style::default().fg(AMBER)),
@@ -1786,18 +1849,30 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
 
 fn io_fetch_write_jitter_line(
     fetch_ms_text: &str,
-    write_ms_text: &str,
+    write_stage_ms_text: &str,
+    write_commit_ms_text: &str,
+    write_gap_ms_text: &str,
     rate_jitter_text: &str,
 ) -> Line<'static> {
     Line::from(vec![
         Span::styled("I/O ", Style::default().fg(SLATE_500)),
         Span::styled(
-            format!("Fetch {} Write {}", fetch_ms_text, write_ms_text),
+            format!(
+                "Fetch {} Write(stage) {} Commit {} Gap {}",
+                fetch_ms_text, write_stage_ms_text, write_commit_ms_text, write_gap_ms_text
+            ),
             Style::default().fg(FOREGROUND),
         ),
         Span::styled("  jitter ", Style::default().fg(SLATE_500)),
         Span::styled(rate_jitter_text.to_string(), Style::default().fg(AMBER)),
     ])
+}
+
+fn format_stage_commit_gap_ms(stage_ms: Option<f64>, commit_ms: Option<f64>) -> String {
+    match (stage_ms, commit_ms) {
+        (Some(stage), Some(commit)) => format!("{:+.1}ms", stage - commit),
+        _ => "-".to_string(),
+    }
 }
 
 fn format_rate_pair(now: Option<f64>, ema: Option<f64>, unit: &str) -> String {
@@ -1927,16 +2002,25 @@ fn dense_right_lines(
     fetch_line: Line<'static>,
     parse_line: Line<'static>,
     write_line: Line<'static>,
+    commit_line: Line<'static>,
     stability_line: Line<'static>,
     io_line: Line<'static>,
 ) -> Vec<Line<'static>> {
-    vec![stability_line, fetch_line, parse_line, write_line, io_line]
+    vec![
+        stability_line,
+        fetch_line,
+        parse_line,
+        write_line,
+        commit_line,
+        io_line,
+    ]
 }
 
 fn detail_right_lines(
     fetch_line: Line<'static>,
     parse_line: Line<'static>,
     write_line: Line<'static>,
+    commit_line: Line<'static>,
     stability_line: Line<'static>,
     rate_line: Line<'static>,
     io_line: Line<'static>,
@@ -1946,6 +2030,7 @@ fn detail_right_lines(
         fetch_line,
         parse_line,
         write_line,
+        commit_line,
         rate_line,
         io_line,
     ]
@@ -3047,7 +3132,7 @@ fn sync_bottleneck(write_ms: Option<f64>, fetch_ms: Option<f64>) -> SyncBottlene
 
 fn bottleneck_label(bottleneck: SyncBottleneck) -> &'static str {
     match bottleneck {
-        SyncBottleneck::WriteBound => "write-bound",
+        SyncBottleneck::WriteBound => "write-stage-bound",
         SyncBottleneck::FetchBound => "fetch-bound",
         SyncBottleneck::Mixed => "mixed",
         SyncBottleneck::Unknown => "unknown",
@@ -3448,8 +3533,8 @@ mod tests {
         consumed_cells_source_label, dense_right_lines, detail_right_lines,
         diagnostics_dense_panel, eta_confidence_label, format_age_secs, format_hit_rate,
         format_num, format_num_commas, format_rate_pair, format_ratio, format_signed_num_i128,
-        format_ttl, header_right_line, header_title_line, heartbeat_is_on,
-        io_fetch_write_jitter_line, is_rate_drop, overview_log_min_height,
+        format_stage_commit_gap_ms, format_ttl, header_right_line, header_title_line,
+        heartbeat_is_on, io_fetch_write_jitter_line, is_rate_drop, overview_log_min_height,
         overview_services_min_height, pipeline_bottleneck, pipeline_flow_state,
         pipeline_reset_line, rate_jitter, redis_health_state, redis_key_line, redis_max_key_age,
         runtime_health_state, runtime_live_delta, sparkline, stack_sync_charts,
@@ -3695,10 +3780,26 @@ mod tests {
 
     #[test]
     fn test_io_fetch_write_jitter_line_format() {
-        let line = io_fetch_write_jitter_line("123.4ms", "567.8ms", "9.0 blk/s");
+        let line =
+            io_fetch_write_jitter_line("123.4ms", "567.8ms", "34.5ms", "+533.3ms", "9.0 blk/s");
         let text = line_text(&line);
-        assert!(text.starts_with("I/O Fetch 123.4ms Write 567.8ms"));
+        assert!(
+            text.starts_with("I/O Fetch 123.4ms Write(stage) 567.8ms Commit 34.5ms Gap +533.3ms")
+        );
         assert!(text.contains("jitter 9.0 blk/s"));
+    }
+
+    #[test]
+    fn test_format_stage_commit_gap_ms() {
+        assert_eq!(
+            format_stage_commit_gap_ms(Some(120.0), Some(45.0)),
+            "+75.0ms"
+        );
+        assert_eq!(
+            format_stage_commit_gap_ms(Some(45.0), Some(120.0)),
+            "-75.0ms"
+        );
+        assert_eq!(format_stage_commit_gap_ms(None, Some(120.0)), "-");
     }
 
     #[test]
@@ -3766,11 +3867,12 @@ mod tests {
             Line::from("F"),
             Line::from("P"),
             Line::from("W"),
+            Line::from("C"),
             Line::from("Stability"),
             Line::from("I/O"),
         );
         let labels: Vec<String> = lines.iter().map(line_text).collect();
-        assert_eq!(labels, vec!["Stability", "F", "P", "W", "I/O"]);
+        assert_eq!(labels, vec!["Stability", "F", "P", "W", "C", "I/O"]);
     }
 
     #[test]
@@ -3779,12 +3881,13 @@ mod tests {
             Line::from("F"),
             Line::from("P"),
             Line::from("W"),
+            Line::from("C"),
             Line::from("Stability"),
             Line::from("Rate"),
             Line::from("I/O"),
         );
         let labels: Vec<String> = lines.iter().map(line_text).collect();
-        assert_eq!(labels, vec!["Stability", "F", "P", "W", "Rate", "I/O"]);
+        assert_eq!(labels, vec!["Stability", "F", "P", "W", "C", "Rate", "I/O"]);
     }
 
     #[test]

@@ -532,7 +532,8 @@ async fn run_sync(args: Cli) -> Result<()> {
             let txps = progress.txs_per_second();
             let last_batch_blocks = progress.last_batch_blocks();
 
-            let (perf_rpc_ms, perf_db_ms) = indexer_for_progress.perf_snapshot_ms();
+            let (perf_rpc_ms, perf_db_stage_ms, perf_db_commit_ms) =
+                indexer_for_progress.perf_snapshot_ms();
             let pipeline = indexer_for_progress.pipeline_progress_snapshot();
             let pipeline_log = pipeline.clone();
             let adaptive = indexer_for_progress.adaptive_batch_snapshot();
@@ -563,8 +564,13 @@ async fn run_sync(args: Cli) -> Result<()> {
                 updated_at: chrono::Utc::now().timestamp(),
                 startup_phase: indexer_for_progress.startup_phase(),
                 is_direct_db_read: data_source == "DB",
-                db_write_ms: if perf_db_ms > 0.0 {
-                    Some(perf_db_ms)
+                db_write_ms: if perf_db_stage_ms > 0.0 {
+                    Some(perf_db_stage_ms)
+                } else {
+                    None
+                },
+                db_commit_ms: if perf_db_commit_ms > 0.0 {
+                    Some(perf_db_commit_ms)
                 } else {
                     None
                 },
@@ -670,9 +676,12 @@ async fn run_sync(args: Cli) -> Result<()> {
                                 stalled_seconds = stalled_for.as_secs(),
                                 bps = format!("{:.1}", bps),
                                 ema_bps = format!("{:.1}", ema_rate),
+                                db_stage_write_ms = ?(perf_db_stage_ms > 0.0).then_some(format!("{:.1}", perf_db_stage_ms)),
+                                db_commit_ms = ?(perf_db_commit_ms > 0.0).then_some(format!("{:.1}", perf_db_commit_ms)),
                                 pipeline_fetch_ms = ?pipeline_log.as_ref().and_then(|p| p.fetch_ms).map(|v| format!("{:.1}", v)),
                                 pipeline_parse_ms = ?pipeline_log.as_ref().and_then(|p| p.parse_ms).map(|v| format!("{:.1}", v)),
-                                pipeline_write_ms = ?pipeline_log.as_ref().and_then(|p| p.write_ms).map(|v| format!("{:.1}", v)),
+                                pipeline_write_stage_ms = ?pipeline_log.as_ref().and_then(|p| p.write_ms).map(|v| format!("{:.1}", v)),
+                                pipeline_write_commit_ms = ?pipeline_log.as_ref().and_then(|p| p.commit_ms).map(|v| format!("{:.1}", v)),
                                 pipeline_writer_wait_ms = ?pipeline_log.as_ref().and_then(|p| p.writer_wait_ms).map(|v| format!("{:.1}", v)),
                                 fetch_queue_fill_pct = ?fetch_fill_pct.map(|v| format!("{:.1}", v)),
                                 parse_queue_fill_pct = ?parse_fill_pct.map(|v| format!("{:.1}", v)),
@@ -700,9 +709,12 @@ async fn run_sync(args: Cli) -> Result<()> {
                     bps = format!("{:.1}", bps),
                     ema_bps = format!("{:.1}", ema_rate),
                     eta = %eta,
+                    db_stage_write_ms = ?(perf_db_stage_ms > 0.0).then_some(format!("{:.1}", perf_db_stage_ms)),
+                    db_commit_ms = ?(perf_db_commit_ms > 0.0).then_some(format!("{:.1}", perf_db_commit_ms)),
                     pipeline_fetch_ms = ?pipeline_log.as_ref().and_then(|p| p.fetch_ms).map(|v| format!("{:.1}", v)),
                     pipeline_parse_ms = ?pipeline_log.as_ref().and_then(|p| p.parse_ms).map(|v| format!("{:.1}", v)),
-                    pipeline_write_ms = ?pipeline_log.as_ref().and_then(|p| p.write_ms).map(|v| format!("{:.1}", v)),
+                    pipeline_write_stage_ms = ?pipeline_log.as_ref().and_then(|p| p.write_ms).map(|v| format!("{:.1}", v)),
+                    pipeline_write_commit_ms = ?pipeline_log.as_ref().and_then(|p| p.commit_ms).map(|v| format!("{:.1}", v)),
                     pipeline_writer_wait_ms = ?pipeline_log.as_ref().and_then(|p| p.writer_wait_ms).map(|v| format!("{:.1}", v)),
                     fetch_queue_fill_pct = ?fetch_fill_pct.map(|v| format!("{:.1}", v)),
                     parse_queue_fill_pct = ?parse_fill_pct.map(|v| format!("{:.1}", v)),
@@ -747,6 +759,8 @@ async fn run_sync(args: Cli) -> Result<()> {
                     bps = format!("{:.1}", bps),
                     ema_bps = format!("{:.1}", ema_rate),
                     eta = %eta,
+                    db_stage_write_ms = ?(perf_db_stage_ms > 0.0).then_some(format!("{:.1}", perf_db_stage_ms)),
+                    db_commit_ms = ?(perf_db_commit_ms > 0.0).then_some(format!("{:.1}", perf_db_commit_ms)),
                     pipeline_writer_wait_ms = ?pipeline_log.as_ref().and_then(|p| p.writer_wait_ms).map(|v| format!("{:.1}", v)),
                     parse_queue_fill_pct = ?parse_fill_pct.map(|v| format!("{:.1}", v)),
                     "[{}] Synced to block {} (tip: {}, {} behind)",

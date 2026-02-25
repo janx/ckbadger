@@ -123,9 +123,12 @@ pub struct SyncProgressData {
     /// True when reading blocks directly from CKB's RocksDB instead of JSON-RPC.
     #[serde(default)]
     pub is_direct_db_read: bool,
-    /// DB write time in ms for the last batch (from PerfStats).
+    /// DB write stage total time in ms for the last batch (from PerfStats).
     #[serde(default)]
     pub db_write_ms: Option<f64>,
+    /// Pure RocksDB commit time in ms for the last batch (from PerfStats).
+    #[serde(default)]
+    pub db_commit_ms: Option<f64>,
     /// RPC fetch time in ms for the last batch (from PerfStats).
     #[serde(default)]
     pub rpc_fetch_ms: Option<f64>,
@@ -173,6 +176,9 @@ pub struct PipelineProgressData {
     pub parse_ms: Option<f64>,
     /// Writer stage duration in ms for the most recent batch.
     pub write_ms: Option<f64>,
+    /// Writer stage pure RocksDB commit time in ms for the most recent batch.
+    #[serde(default)]
+    pub commit_ms: Option<f64>,
     /// Time writer spent waiting for parsed data in ms.
     pub writer_wait_ms: Option<f64>,
     /// Current queue depth between fetcher -> parser.
@@ -488,11 +494,13 @@ mod tests {
             startup_phase: Some("rollback_cleanup".to_string()),
             is_direct_db_read: false,
             db_write_ms: Some(120.0),
+            db_commit_ms: Some(50.0),
             rpc_fetch_ms: Some(45.0),
             pipeline: Some(PipelineProgressData {
                 fetch_ms: Some(45.0),
                 parse_ms: Some(80.0),
                 write_ms: Some(120.0),
+                commit_ms: Some(50.0),
                 writer_wait_ms: Some(15.0),
                 fetch_queue_depth: Some(2),
                 fetch_queue_capacity: Some(16),
@@ -520,6 +528,7 @@ mod tests {
         assert_eq!(pipeline.fetch_ms, Some(45.0));
         assert_eq!(pipeline.parse_ms, Some(80.0));
         assert_eq!(pipeline.write_ms, Some(120.0));
+        assert_eq!(pipeline.commit_ms, Some(50.0));
         assert_eq!(pipeline.fetch_queue_depth, Some(2));
         assert_eq!(pipeline.parse_queue_capacity, Some(16));
         assert_eq!(pipeline.writer_queue_depth, Some(4));
@@ -562,6 +571,7 @@ mod tests {
             startup_phase: None,
             is_direct_db_read: false,
             db_write_ms: None,
+            db_commit_ms: None,
             rpc_fetch_ms: None,
             pipeline: None,
             pipeline_reset_epoch: Some(1),
