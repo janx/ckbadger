@@ -97,14 +97,14 @@ describe('DotbitItemDetailPage', () => {
 
     expect(screen.getByText('Identity & Ownership')).toBeInTheDocument();
     expect(screen.getByText('Cell Status')).toBeInTheDocument();
-    expect(screen.getByText('Activities')).toBeInTheDocument();
-    expect(screen.getByText('Related Transactions')).toBeInTheDocument();
+    expect(screen.getAllByText('Activities').length).toBeGreaterThan(0);
+    expect(screen.queryByRole('button', { name: 'Transactions' })).not.toBeInTheDocument();
     expect(screen.getAllByText('alice.bit').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Recycled').length).toBeGreaterThan(0);
     expect(screen.getByText('Recycled .bit account has no live cell.')).toBeInTheDocument();
   });
 
-  it('renders related activity and transaction rows', async () => {
+  it('renders activities with correct timestamp parsing', async () => {
     vi.mocked(api.getDotbitItemDetail).mockResolvedValue({
       nftId: '0xabc',
       name: 'alice.bit',
@@ -122,7 +122,7 @@ describe('DotbitItemDetailPage', () => {
           txHash: '0xacttx',
           blockNumber: 456,
           txIndex: 0,
-          timestamp: '1700000300',
+          timestamp: '1700000300000',
           actions: ['burn', 'transfer'],
         },
       ],
@@ -140,6 +140,7 @@ describe('DotbitItemDetailPage', () => {
     await waitFor(() => {
       expect(screen.getAllByText('recycled, transfer').length).toBeGreaterThan(0);
     });
+    expect(screen.getByText(/2023/)).toBeInTheDocument();
 
     const txLinks = document.querySelectorAll('a[href*="/tx/"]');
     expect(txLinks.length).toBeGreaterThan(0);

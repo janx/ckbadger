@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { Header } from '@/components/layout/header';
 import { Address } from '@/components/ui/address';
@@ -34,9 +34,14 @@ function formatExpiry(expiredAt: number | null | undefined): string {
 }
 
 function formatActivityTimestamp(timestamp: string): string {
-  const seconds = Number(timestamp);
-  if (Number.isFinite(seconds) && seconds > 0) {
-    return new Date(seconds * 1000).toLocaleString();
+  const numeric = Number(timestamp);
+  if (Number.isFinite(numeric) && numeric > 0) {
+    const milliseconds = numeric >= 1_000_000_000_000 ? numeric : numeric * 1000;
+    return new Date(milliseconds).toLocaleString();
+  }
+  const parsed = Date.parse(timestamp);
+  if (Number.isFinite(parsed)) {
+    return new Date(parsed).toLocaleString();
   }
   return timestamp;
 }
@@ -179,17 +184,6 @@ export default function DotbitItemDetailPage() {
     }
     router.replace(next ? `${pathname}?${next}` : pathname, { scroll: false });
   }, [activityCursor, activityFilter, pathname, router, searchParams]);
-
-  const relatedTransactions = useMemo(() => {
-    if (!itemActivities?.data?.length) {
-      return [] as Array<{ txHash: string; blockNumber: number; actions: string[] }>;
-    }
-    return itemActivities.data.map((activity) => ({
-      txHash: activity.txHash,
-      blockNumber: activity.blockNumber,
-      actions: activity.actions.map(normalizeActivityAction),
-    }));
-  }, [itemActivities?.data]);
 
   if (detailQuery.isLoading) {
     return (
@@ -360,42 +354,49 @@ export default function DotbitItemDetailPage() {
             >
               Activities
             </TerminalPanelHeader>
-            <TerminalPanelContent>
-              {isActivitiesLoading ? (
-                <div className="py-6 text-sm text-slate-500">Loading activities...</div>
-              ) : !itemActivities?.data?.length ? (
-                <div className="py-6 text-sm text-slate-500">No related activities found.</div>
-              ) : (
-                <div className="space-y-2">
-                  {itemActivities.data.map((activity) => (
-                    <div
-                      key={`${activity.blockNumber}-${activity.txIndex}-${activity.txHash}`}
-                      className="rounded border border-slate-800 bg-slate-900/40 p-3"
-                    >
-                      <div className="mb-1 flex items-center justify-between gap-3">
+            <TerminalPanelContent padding="none">
+              <div className="flex items-center gap-1.5 border-b border-slate-800 px-4 py-2">
+                <span className="bg-terminal-green/15 text-terminal-green rounded px-2.5 py-1 font-mono text-xs">
+                  Activities
+                </span>
+              </div>
+              <div className="p-4">
+                {isActivitiesLoading ? (
+                  <div className="py-2 text-sm text-slate-500">Loading activities...</div>
+                ) : !itemActivities?.data?.length ? (
+                  <div className="py-2 text-sm text-slate-500">No related activities found.</div>
+                ) : (
+                  <div className="space-y-2">
+                    {itemActivities.data.map((activity) => (
+                      <div
+                        key={`${activity.blockNumber}-${activity.txIndex}-${activity.txHash}`}
+                        className="rounded border border-slate-800 bg-slate-900/40 p-3"
+                      >
+                        <div className="mb-1 flex items-center justify-between gap-3">
+                          <Link
+                            href={`/blocks/${activity.blockNumber}`}
+                            className="text-terminal-green font-mono text-xs hover:underline"
+                          >
+                            #{formatNumber(activity.blockNumber)}
+                          </Link>
+                          <span className="font-mono text-xs text-slate-500">
+                            {formatActivityTimestamp(activity.timestamp)}
+                          </span>
+                        </div>
                         <Link
-                          href={`/blocks/${activity.blockNumber}`}
+                          href={`/tx/${activity.txHash}`}
                           className="text-terminal-green font-mono text-xs hover:underline"
                         >
-                          #{formatNumber(activity.blockNumber)}
+                          <HexDisplay value={activity.txHash} color="accent" size="sm" />
                         </Link>
-                        <span className="font-mono text-xs text-slate-500">
-                          {formatActivityTimestamp(activity.timestamp)}
-                        </span>
+                        <div className="mt-1 font-mono text-xs text-slate-300">
+                          {activity.actions.map(normalizeActivityAction).join(', ')}
+                        </div>
                       </div>
-                      <Link
-                        href={`/tx/${activity.txHash}`}
-                        className="text-terminal-green font-mono text-xs hover:underline"
-                      >
-                        <HexDisplay value={activity.txHash} color="accent" size="sm" />
-                      </Link>
-                      <div className="mt-1 font-mono text-xs text-slate-300">
-                        {activity.actions.map(normalizeActivityAction).join(', ')}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
+                    ))}
+                  </div>
+                )}
+              </div>
             </TerminalPanelContent>
             <TerminalPanelFooter>
               <CursorPagination
@@ -409,42 +410,6 @@ export default function DotbitItemDetailPage() {
                 onPrevious={goToPreviousActivityPage}
               />
             </TerminalPanelFooter>
-          </TerminalPanel>
-
-          <TerminalPanel>
-            <TerminalPanelHeader indicator="active">Related Transactions</TerminalPanelHeader>
-            <TerminalPanelContent>
-              {isActivitiesLoading ? (
-                <div className="py-6 text-sm text-slate-500">Loading transactions...</div>
-              ) : !relatedTransactions.length ? (
-                <div className="py-6 text-sm text-slate-500">No related transactions found.</div>
-              ) : (
-                <div className="space-y-2">
-                  {relatedTransactions.map((tx) => (
-                    <div
-                      key={`${tx.blockNumber}-${tx.txHash}`}
-                      className="rounded border border-cyan-900/40 bg-cyan-950/10 p-3"
-                    >
-                      <div className="mb-1 flex items-center justify-between gap-3">
-                        <Link
-                          href={`/tx/${tx.txHash}`}
-                          className="text-terminal-green font-mono text-xs hover:underline"
-                        >
-                          <HexDisplay value={tx.txHash} color="accent" size="sm" />
-                        </Link>
-                        <Link
-                          href={`/blocks/${tx.blockNumber}`}
-                          className="text-terminal-green font-mono text-xs hover:underline"
-                        >
-                          #{formatNumber(tx.blockNumber)}
-                        </Link>
-                      </div>
-                      <div className="font-mono text-xs text-cyan-100">{tx.actions.join(', ')}</div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </TerminalPanelContent>
           </TerminalPanel>
         </div>
       </main>
