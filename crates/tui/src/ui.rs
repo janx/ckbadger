@@ -1,5 +1,5 @@
 use chrono::{DateTime, Local};
-use ckbadger_common::MemoryStatsData;
+use ckbadger_common::{BulkCheckpointProgressData, MemoryStatsData};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -109,6 +109,8 @@ pub struct App {
     tx_rate_history: VecDeque<f64>,
     db_write_history: VecDeque<f64>,
     db_commit_history: VecDeque<f64>,
+    bulk_pending_blocks_history: VecDeque<f64>,
+    bulk_memory_ratio_history: VecDeque<f64>,
     fetch_stage_history: VecDeque<f64>,
     parse_stage_history: VecDeque<f64>,
     write_stage_history: VecDeque<f64>,
@@ -122,6 +124,8 @@ pub struct App {
     prev_pipeline_reset_epoch: Option<u64>,
     prev_bottleneck: Option<SyncBottleneck>,
     prev_adaptive_last_reason: Option<String>,
+    prev_bulk_flush_count: Option<u64>,
+    prev_bulk_memory_zone: Option<BulkMemoryPressureZone>,
     last_rate_drop_alert: Option<Instant>,
     last_tx_rate_drop_alert: Option<Instant>,
     stale_warning_active: bool,
@@ -136,6 +140,14 @@ enum SyncBottleneck {
     FetchBound,
     Mixed,
     Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BulkMemoryPressureZone {
+    Unknown,
+    Normal,
+    Soft,
+    Hard,
 }
 
 impl App {
@@ -168,6 +180,8 @@ impl App {
             tx_rate_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             db_write_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             db_commit_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
+            bulk_pending_blocks_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
+            bulk_memory_ratio_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             fetch_stage_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             parse_stage_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             write_stage_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
@@ -181,6 +195,8 @@ impl App {
             prev_pipeline_reset_epoch: None,
             prev_bottleneck: None,
             prev_adaptive_last_reason: None,
+            prev_bulk_flush_count: None,
+            prev_bulk_memory_zone: None,
             last_rate_drop_alert: None,
             last_tx_rate_drop_alert: None,
             stale_warning_active: false,
@@ -345,6 +361,21 @@ impl App {
             })
             .unwrap_or(0.0);
         push_history_sample(&mut self.db_commit_history, db_commit_ms);
+        let bulk_pending_blocks = self
+            .sync_status
+            .as_ref()
+            .and_then(|s| s.bulk_checkpoint.as_ref())
+            .map(|b| b.pending_blocks as f64)
+            .unwrap_or(0.0);
+        push_history_sample(&mut self.bulk_pending_blocks_history, bulk_pending_blocks);
+        let bulk_memory_ratio_pct = self
+            .sync_status
+            .as_ref()
+            .and_then(|s| s.bulk_checkpoint.as_ref())
+            .and_then(|b| b.memory_ratio)
+            .map(|ratio| ratio * 100.0)
+            .unwrap_or(0.0);
+        push_history_sample(&mut self.bulk_memory_ratio_history, bulk_memory_ratio_pct);
 
         let (fetch_ms, parse_ms, write_ms) = self
             .sync_status
@@ -406,7 +437,7 @@ impl App {
     }
 
     fn detect_events(&mut self) {
-        let Some(sync) = self.sync_status.as_ref() else {
+        let Some(sync) = self.sync_status.clone() else {
             return;
         };
 
@@ -419,6 +450,30 @@ impl App {
             .unwrap_or_else(|| "unknown".to_string());
         let bottleneck = sync_bottleneck(sync.db_write_ms, sync.rpc_fetch_ms);
         let adaptive_last_reason = sync.adaptive_last_reason.clone();
+        let bulk_flush_count = sync.bulk_checkpoint.as_ref().map(|b| b.flush_count);
+        let bulk_last_flush_reason = sync
+            .bulk_checkpoint
+            .as_ref()
+            .and_then(|b| b.last_flush_reason.clone());
+        let bulk_last_flush_blocks = sync
+            .bulk_checkpoint
+            .as_ref()
+            .and_then(|b| b.last_flush_blocks);
+        let bulk_since_last_flush_secs = sync
+            .bulk_checkpoint
+            .as_ref()
+            .and_then(|b| b.since_last_flush_secs);
+        let bulk_memory_ratio = sync.bulk_checkpoint.as_ref().and_then(|b| b.memory_ratio);
+        let bulk_soft_ratio = sync
+            .bulk_checkpoint
+            .as_ref()
+            .and_then(|b| b.soft_memory_ratio);
+        let bulk_hard_ratio = sync
+            .bulk_checkpoint
+            .as_ref()
+            .and_then(|b| b.hard_memory_ratio);
+        let bulk_memory_zone =
+            bulk_memory_pressure_zone(bulk_memory_ratio, bulk_soft_ratio, bulk_hard_ratio);
 
         if let Some(prev_bulk) = self.prev_is_bulk_sync {
             if prev_bulk && !is_bulk_sync {
@@ -473,6 +528,51 @@ impl App {
             }
         }
         self.prev_adaptive_last_reason = adaptive_last_reason;
+
+        if let (Some(prev_count), Some(curr_count)) = (self.prev_bulk_flush_count, bulk_flush_count)
+        {
+            if curr_count > prev_count {
+                let reason = bulk_last_flush_reason.as_deref().unwrap_or("unknown");
+                let flushed_blocks = bulk_last_flush_blocks.unwrap_or(0);
+                let since = bulk_since_last_flush_secs.unwrap_or(0);
+                self.push_sync_event_and_log(
+                    format!(
+                        "bulk checkpoint flush #{}: reason={} blocks={} ({}s ago)",
+                        curr_count,
+                        reason,
+                        format_num_u64(flushed_blocks),
+                        since
+                    ),
+                    LogLevel::Info,
+                );
+            }
+        }
+        self.prev_bulk_flush_count = bulk_flush_count;
+
+        if is_bulk_sync {
+            if let Some(prev_zone) = self.prev_bulk_memory_zone {
+                if prev_zone != bulk_memory_zone
+                    && bulk_memory_zone != BulkMemoryPressureZone::Unknown
+                {
+                    let ratio_text = bulk_memory_ratio
+                        .map(|v| format!("{:.1}%", v * 100.0))
+                        .unwrap_or_else(|| "-".to_string());
+                    let (label, _) = bulk_memory_zone_label(bulk_memory_zone);
+                    let level = if bulk_memory_zone == BulkMemoryPressureZone::Hard {
+                        LogLevel::Warning
+                    } else {
+                        LogLevel::Info
+                    };
+                    self.push_sync_event_and_log(
+                        format!("bulk memory pressure -> {} ({})", label, ratio_text),
+                        level,
+                    );
+                }
+            }
+            self.prev_bulk_memory_zone = Some(bulk_memory_zone);
+        } else {
+            self.prev_bulk_memory_zone = None;
+        }
     }
 
     fn detect_stale_state(&mut self) {
@@ -1284,13 +1384,20 @@ fn draw_sync_progress(f: &mut Frame, app: &App, area: Rect) {
         sync.eta.as_deref(),
         sync.elapsed_time.as_deref(),
         sync.startup_phase.as_deref(),
+        sync.bulk_checkpoint.as_ref(),
+        sync.is_bulk_sync,
     );
     f.render_widget(Paragraph::new(right), cols[2]);
 }
 
 fn draw_sync_charts(f: &mut Frame, app: &App, area: Rect) {
+    let bulk_mode = app
+        .sync_status
+        .as_ref()
+        .map(|s| s.is_bulk_sync)
+        .unwrap_or(false);
     if stack_sync_charts(area) {
-        let specs = sync_chart_specs(true);
+        let specs = sync_chart_specs(true, bulk_mode);
         let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
@@ -1310,7 +1417,7 @@ fn draw_sync_charts(f: &mut Frame, app: &App, area: Rect) {
             sync_chart_data(app, specs[1].kind),
         );
     } else {
-        let specs = sync_chart_specs(false);
+        let specs = sync_chart_specs(false, bulk_mode);
         let cols = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -1348,6 +1455,8 @@ enum SyncChartKind {
     BlockRate,
     TxRate,
     WriteLatency,
+    BulkPendingBlocks,
+    BulkMemoryRatio,
 }
 
 #[derive(Clone, Copy)]
@@ -1370,6 +1479,19 @@ const STACKED_SYNC_CHART_SPECS: [SyncChartSpec; 2] = [
     },
 ];
 
+const STACKED_BULK_SYNC_CHART_SPECS: [SyncChartSpec; 2] = [
+    SyncChartSpec {
+        title: "Sync Rate (blk/s)",
+        unit: "blk/s",
+        kind: SyncChartKind::BlockRate,
+    },
+    SyncChartSpec {
+        title: "Checkpoint Buffer (blk)",
+        unit: "blk",
+        kind: SyncChartKind::BulkPendingBlocks,
+    },
+];
+
 const WIDE_SYNC_CHART_SPECS: [SyncChartSpec; 3] = [
     SyncChartSpec {
         title: "Sync Rate (blk/s)",
@@ -1388,9 +1510,31 @@ const WIDE_SYNC_CHART_SPECS: [SyncChartSpec; 3] = [
     },
 ];
 
-fn sync_chart_specs(stacked: bool) -> &'static [SyncChartSpec] {
-    if stacked {
+const WIDE_BULK_SYNC_CHART_SPECS: [SyncChartSpec; 3] = [
+    SyncChartSpec {
+        title: "Sync Rate (blk/s)",
+        unit: "blk/s",
+        kind: SyncChartKind::BlockRate,
+    },
+    SyncChartSpec {
+        title: "Checkpoint Buffer (blk)",
+        unit: "blk",
+        kind: SyncChartKind::BulkPendingBlocks,
+    },
+    SyncChartSpec {
+        title: "Bulk Memory Ratio (%)",
+        unit: "%",
+        kind: SyncChartKind::BulkMemoryRatio,
+    },
+];
+
+fn sync_chart_specs(stacked: bool, bulk_mode: bool) -> &'static [SyncChartSpec] {
+    if stacked && bulk_mode {
+        &STACKED_BULK_SYNC_CHART_SPECS
+    } else if stacked {
         &STACKED_SYNC_CHART_SPECS
+    } else if bulk_mode {
+        &WIDE_BULK_SYNC_CHART_SPECS
     } else {
         &WIDE_SYNC_CHART_SPECS
     }
@@ -1401,6 +1545,8 @@ fn sync_chart_data(app: &App, kind: SyncChartKind) -> &VecDeque<f64> {
         SyncChartKind::BlockRate => &app.rate_history,
         SyncChartKind::TxRate => &app.tx_rate_history,
         SyncChartKind::WriteLatency => &app.db_write_history,
+        SyncChartKind::BulkPendingBlocks => &app.bulk_pending_blocks_history,
+        SyncChartKind::BulkMemoryRatio => &app.bulk_memory_ratio_history,
     }
 }
 
@@ -2045,6 +2191,8 @@ fn sync_timing_lines(
     eta: Option<&str>,
     elapsed: Option<&str>,
     startup_phase: Option<&str>,
+    bulk_checkpoint: Option<&BulkCheckpointProgressData>,
+    is_bulk_sync: bool,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
@@ -2073,6 +2221,101 @@ fn sync_timing_lines(
             Span::styled("Phase: ", Style::default().fg(SLATE_500)),
             Span::styled(label, Style::default().fg(color)),
         ]));
+    }
+
+    if is_bulk_sync {
+        if let Some(bulk) = bulk_checkpoint {
+            let pending_blocks = format_num_u64(bulk.pending_blocks);
+            let dynamic_max = bulk
+                .dynamic_max_blocks
+                .map(format_num_u64)
+                .unwrap_or_else(|| "-".to_string());
+            let dynamic_min = bulk
+                .dynamic_min_blocks
+                .map(format_num_u64)
+                .unwrap_or_else(|| "-".to_string());
+            lines.push(Line::from(vec![
+                Span::styled("Buf: ", Style::default().fg(SLATE_500)),
+                Span::styled(
+                    format!("{pending_blocks}/{dynamic_max} blk"),
+                    Style::default().fg(AMBER),
+                ),
+                Span::styled("  min ", Style::default().fg(SLATE_500)),
+                Span::styled(dynamic_min, Style::default().fg(FOREGROUND)),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("Buf Sz: ", Style::default().fg(SLATE_500)),
+                Span::styled(
+                    format_bytes(bulk.pending_estimated_bytes),
+                    Style::default().fg(FOREGROUND),
+                ),
+                Span::styled("  ovly ", Style::default().fg(SLATE_500)),
+                Span::styled(
+                    format_num_u64(bulk.overlay_cells),
+                    Style::default().fg(TERMINAL_DIM),
+                ),
+            ]));
+            let memory_ratio = bulk.memory_ratio.unwrap_or(0.0);
+            let memory_ratio_text = if bulk.memory_ratio.is_some() {
+                format!("{:.1}%", memory_ratio * 100.0)
+            } else {
+                "-".to_string()
+            };
+            let soft_ratio_text = bulk
+                .soft_memory_ratio
+                .map(|ratio| format!("{:.1}%", ratio * 100.0))
+                .unwrap_or_else(|| "-".to_string());
+            let hard_ratio_text = bulk
+                .hard_memory_ratio
+                .map(|ratio| format!("{:.1}%", ratio * 100.0))
+                .unwrap_or_else(|| "-".to_string());
+            let memory_zone = bulk_memory_pressure_zone(
+                bulk.memory_ratio,
+                bulk.soft_memory_ratio,
+                bulk.hard_memory_ratio,
+            );
+            let (zone_label, zone_color) = bulk_memory_zone_label(memory_zone);
+            lines.push(Line::from(vec![
+                Span::styled("Mem: ", Style::default().fg(SLATE_500)),
+                Span::styled(memory_ratio_text, Style::default().fg(zone_color)),
+                Span::styled(" [", Style::default().fg(SLATE_500)),
+                Span::styled(zone_label.to_string(), Style::default().fg(zone_color)),
+                Span::styled("] ", Style::default().fg(SLATE_500)),
+                Span::styled(draw_bar(memory_ratio, 10), Style::default().fg(zone_color)),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("Thr: ", Style::default().fg(SLATE_500)),
+                Span::styled("  soft ", Style::default().fg(SLATE_500)),
+                Span::styled(soft_ratio_text, Style::default().fg(FOREGROUND)),
+                Span::styled(" hard ", Style::default().fg(SLATE_500)),
+                Span::styled(hard_ratio_text, Style::default().fg(ERROR_RED)),
+            ]));
+            let last_reason = bulk.last_flush_reason.as_deref().unwrap_or("-");
+            let last_blocks = bulk
+                .last_flush_blocks
+                .map(format_num_u64)
+                .unwrap_or_else(|| "-".to_string());
+            let since_last_flush = bulk
+                .since_last_flush_secs
+                .map(|secs| format!("{secs}s"))
+                .unwrap_or_else(|| "-".to_string());
+            let flush_count = format_num_u64(bulk.flush_count);
+            lines.push(Line::from(vec![
+                Span::styled("Flush: ", Style::default().fg(SLATE_500)),
+                Span::styled(last_reason.to_string(), Style::default().fg(TERMINAL_GREEN)),
+                Span::styled("  blk ", Style::default().fg(SLATE_500)),
+                Span::styled(last_blocks, Style::default().fg(FOREGROUND)),
+                Span::styled("  ago ", Style::default().fg(SLATE_500)),
+                Span::styled(since_last_flush, Style::default().fg(FOREGROUND)),
+                Span::styled("  #", Style::default().fg(SLATE_500)),
+                Span::styled(flush_count, Style::default().fg(TERMINAL_DIM)),
+            ]));
+        } else {
+            lines.push(Line::from(vec![
+                Span::styled("Bulk CP: ", Style::default().fg(SLATE_500)),
+                Span::styled("N/A", Style::default().fg(SLATE_500)),
+            ]));
+        }
     }
 
     if lines.is_empty() {
@@ -3180,6 +3423,32 @@ fn bottleneck_label(bottleneck: SyncBottleneck) -> &'static str {
     }
 }
 
+fn bulk_memory_pressure_zone(
+    memory_ratio: Option<f64>,
+    soft_ratio: Option<f64>,
+    hard_ratio: Option<f64>,
+) -> BulkMemoryPressureZone {
+    let (Some(ratio), Some(soft), Some(hard)) = (memory_ratio, soft_ratio, hard_ratio) else {
+        return BulkMemoryPressureZone::Unknown;
+    };
+    if ratio >= hard {
+        BulkMemoryPressureZone::Hard
+    } else if ratio >= soft {
+        BulkMemoryPressureZone::Soft
+    } else {
+        BulkMemoryPressureZone::Normal
+    }
+}
+
+fn bulk_memory_zone_label(zone: BulkMemoryPressureZone) -> (&'static str, Color) {
+    match zone {
+        BulkMemoryPressureZone::Unknown => ("N/A", SLATE_500),
+        BulkMemoryPressureZone::Normal => ("NORMAL", TERMINAL_GREEN),
+        BulkMemoryPressureZone::Soft => ("SOFT", AMBER),
+        BulkMemoryPressureZone::Hard => ("HARD", ERROR_RED),
+    }
+}
+
 fn pipeline_stage_line(
     stage: &'static str,
     stage_ms: Option<f64>,
@@ -3569,23 +3838,23 @@ fn format_bytes(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        adaptive_control_line, adaptive_state_label, api_health_state, chart_height_warning,
-        compact_overview_layout, compact_sync_layout, consumed_cells_source_color,
-        consumed_cells_source_label, dense_right_lines, derived_status_line, detail_right_lines,
-        diagnostics_dense_panel, eta_confidence_label, format_age_secs, format_hit_rate,
-        format_num, format_num_commas, format_rate_pair, format_ratio, format_signed_num_i128,
-        format_stage_commit_gap_ms, format_ttl, header_right_line, header_title_line,
-        heartbeat_is_on, io_fetch_write_jitter_line, is_rate_drop, overview_log_min_height,
-        overview_services_min_height, pipeline_bottleneck, pipeline_flow_state,
-        pipeline_reset_line, rate_jitter, redis_health_state, redis_key_line, redis_max_key_age,
-        runtime_health_state, runtime_live_delta, sparkline, stack_sync_charts,
+        adaptive_control_line, adaptive_state_label, api_health_state, bulk_memory_pressure_zone,
+        chart_height_warning, compact_overview_layout, compact_sync_layout,
+        consumed_cells_source_color, consumed_cells_source_label, dense_right_lines,
+        derived_status_line, detail_right_lines, diagnostics_dense_panel, eta_confidence_label,
+        format_age_secs, format_hit_rate, format_num, format_num_commas, format_rate_pair,
+        format_ratio, format_signed_num_i128, format_stage_commit_gap_ms, format_ttl,
+        header_right_line, header_title_line, heartbeat_is_on, io_fetch_write_jitter_line,
+        is_rate_drop, overview_log_min_height, overview_services_min_height, pipeline_bottleneck,
+        pipeline_flow_state, pipeline_reset_line, rate_jitter, redis_health_state, redis_key_line,
+        redis_max_key_age, runtime_health_state, runtime_live_delta, sparkline, stack_sync_charts,
         startup_phase_label, storage_runtime_columns, sync_bottleneck, sync_chart_specs,
-        sync_timing_lines, trend_delta, trim_for_panel, AdaptiveControlSnapshot, Color,
-        CompactOverviewLayout, CompactSyncLayout, DiagnosticsViewMode, SyncBottleneck,
-        SyncChartKind, TERMINAL_DIM,
+        sync_timing_lines, trend_delta, trim_for_panel, AdaptiveControlSnapshot,
+        BulkMemoryPressureZone, Color, CompactOverviewLayout, CompactSyncLayout,
+        DiagnosticsViewMode, SyncBottleneck, SyncChartKind, TERMINAL_DIM,
     };
     use crate::db::{ApiServiceInfo, RedisServiceInfo, RuntimeDiagData};
-    use ckbadger_common::MemoryStatsData;
+    use ckbadger_common::{BulkCheckpointProgressData, MemoryStatsData};
     use ratatui::layout::Rect;
     use ratatui::text::Line;
     use std::collections::VecDeque;
@@ -3894,6 +4163,26 @@ mod tests {
     }
 
     #[test]
+    fn test_bulk_memory_pressure_zone() {
+        assert_eq!(
+            bulk_memory_pressure_zone(Some(0.65), Some(0.70), Some(0.82)),
+            BulkMemoryPressureZone::Normal
+        );
+        assert_eq!(
+            bulk_memory_pressure_zone(Some(0.75), Some(0.70), Some(0.82)),
+            BulkMemoryPressureZone::Soft
+        );
+        assert_eq!(
+            bulk_memory_pressure_zone(Some(0.90), Some(0.70), Some(0.82)),
+            BulkMemoryPressureZone::Hard
+        );
+        assert_eq!(
+            bulk_memory_pressure_zone(None, Some(0.70), Some(0.82)),
+            BulkMemoryPressureZone::Unknown
+        );
+    }
+
+    #[test]
     fn test_pipeline_reset_line_format() {
         let line = pipeline_reset_line(Some(7), Some("pipeline batch mismatch"));
         let text = line_text(&line);
@@ -3933,7 +4222,13 @@ mod tests {
 
     #[test]
     fn test_sync_timing_lines_do_not_show_data_source() {
-        let lines = sync_timing_lines(Some("2m 03s"), Some("17m 12s"), Some("bulk_sync"));
+        let lines = sync_timing_lines(
+            Some("2m 03s"),
+            Some("17m 12s"),
+            Some("bulk_sync"),
+            None,
+            true,
+        );
         let text = lines
             .iter()
             .map(line_text)
@@ -3949,9 +4244,44 @@ mod tests {
 
     #[test]
     fn test_sync_timing_lines_empty_shows_fallback() {
-        let lines = sync_timing_lines(None, None, None);
+        let lines = sync_timing_lines(None, None, None, None, false);
         assert_eq!(lines.len(), 1);
         assert_eq!(line_text(&lines[0]), "No timing data");
+    }
+
+    #[test]
+    fn test_sync_timing_lines_bulk_checkpoint_details() {
+        let lines = sync_timing_lines(
+            Some("1m 00s"),
+            Some("10m 00s"),
+            Some("bulk_sync"),
+            Some(&BulkCheckpointProgressData {
+                pending_blocks: 120_000,
+                pending_estimated_bytes: 4_096_000_000,
+                overlay_cells: 55_000,
+                memory_ratio: Some(0.71),
+                soft_memory_ratio: Some(0.70),
+                hard_memory_ratio: Some(0.82),
+                dynamic_min_blocks: Some(20_000),
+                dynamic_max_blocks: Some(200_000),
+                since_last_flush_secs: Some(9),
+                last_flush_reason: Some("soft_limit".to_string()),
+                last_flush_blocks: Some(64_000),
+                last_flush_at: Some(1_700_000_123),
+                flush_count: 5,
+            }),
+            true,
+        );
+        let text = lines
+            .iter()
+            .map(line_text)
+            .collect::<Vec<String>>()
+            .join(" ");
+        assert!(text.contains("Buf:"));
+        assert!(text.contains("120,000/200,000 blk"));
+        assert!(text.contains("Mem:"));
+        assert!(text.contains("Flush:"));
+        assert!(text.contains("soft_limit"));
     }
 
     #[test]
@@ -3981,16 +4311,30 @@ mod tests {
 
     #[test]
     fn test_sync_chart_specs_include_tx_rate() {
-        let stacked = sync_chart_specs(true);
+        let stacked = sync_chart_specs(true, false);
         assert_eq!(stacked.len(), 2);
         assert_eq!(stacked[0].kind, SyncChartKind::BlockRate);
         assert_eq!(stacked[1].kind, SyncChartKind::TxRate);
 
-        let wide = sync_chart_specs(false);
+        let wide = sync_chart_specs(false, false);
         assert_eq!(wide.len(), 3);
         assert_eq!(wide[0].kind, SyncChartKind::BlockRate);
         assert_eq!(wide[1].kind, SyncChartKind::TxRate);
         assert_eq!(wide[2].kind, SyncChartKind::WriteLatency);
+    }
+
+    #[test]
+    fn test_sync_chart_specs_bulk_mode_prefers_checkpoint_buffer() {
+        let stacked_bulk = sync_chart_specs(true, true);
+        assert_eq!(stacked_bulk.len(), 2);
+        assert_eq!(stacked_bulk[0].kind, SyncChartKind::BlockRate);
+        assert_eq!(stacked_bulk[1].kind, SyncChartKind::BulkPendingBlocks);
+
+        let wide_bulk = sync_chart_specs(false, true);
+        assert_eq!(wide_bulk.len(), 3);
+        assert_eq!(wide_bulk[0].kind, SyncChartKind::BlockRate);
+        assert_eq!(wide_bulk[1].kind, SyncChartKind::BulkPendingBlocks);
+        assert_eq!(wide_bulk[2].kind, SyncChartKind::BulkMemoryRatio);
     }
 
     #[test]

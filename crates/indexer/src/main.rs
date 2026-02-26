@@ -590,6 +590,7 @@ async fn run_sync(args: Cli) -> Result<()> {
             let pipeline = indexer_for_progress.pipeline_progress_snapshot();
             let pipeline_log = pipeline.clone();
             let adaptive = indexer_for_progress.adaptive_batch_snapshot();
+            let bulk_checkpoint = indexer_for_progress.bulk_checkpoint_progress_snapshot();
             let pipeline_reset = indexer_for_progress.pipeline_reset_snapshot();
             let heartbeat_stage = indexer_for_progress.startup_phase().unwrap_or_else(|| {
                 if indexer_for_progress.is_bulk_sync_active() {
@@ -643,6 +644,7 @@ async fn run_sync(args: Cli) -> Result<()> {
                 adaptive_adjustment_seq: adaptive.as_ref().map(|s| s.adjustment_seq),
                 adaptive_backoff_streak: adaptive.as_ref().map(|s| s.backoff_streak),
                 adaptive_last_adjusted_at: adaptive.as_ref().and_then(|s| s.last_adjusted_at),
+                bulk_checkpoint,
             };
             indexer_for_progress
                 .cache_invalidator()

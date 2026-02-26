@@ -445,6 +445,7 @@ mod tests {
             adaptive_adjustment_seq: None,
             adaptive_backoff_streak: None,
             adaptive_last_adjusted_at: None,
+            bulk_checkpoint: None,
         };
         invalidator.publish_sync_progress(&data).await;
     }
@@ -553,6 +554,7 @@ mod tests {
                 adaptive_adjustment_seq: Some(9),
                 adaptive_backoff_streak: Some(4),
                 adaptive_last_adjusted_at: Some(1_700_000_456),
+                bulk_checkpoint: None,
             };
             invalidator.publish_sync_progress(&data).await;
 

@@ -1,7 +1,8 @@
 use anyhow::Result;
 use ckbadger_common::{
-    format_duration_smart, MemoryStatsData, PipelineProgressData, SyncProgressData, SyncStatusData,
-    MEMORY_STATS_REDIS_KEY, SYNC_PROGRESS_REDIS_KEY, SYNC_STATUS_REDIS_KEY,
+    format_duration_smart, BulkCheckpointProgressData, MemoryStatsData, PipelineProgressData,
+    SyncProgressData, SyncStatusData, MEMORY_STATS_REDIS_KEY, SYNC_PROGRESS_REDIS_KEY,
+    SYNC_STATUS_REDIS_KEY,
 };
 use ckbadger_store::{CkbadgerStore, RuntimeStatus};
 use redis::AsyncCommands;
@@ -70,6 +71,7 @@ pub struct SyncStatusRow {
     pub adaptive_backoff_streak: Option<u64>,
     pub adaptive_last_adjusted_age_secs: Option<i64>,
     pub startup_phase: Option<String>,
+    pub bulk_checkpoint: Option<BulkCheckpointProgressData>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -380,6 +382,7 @@ impl TuiDb {
                 .adaptive_last_adjusted_at
                 .map(|ts| (chrono::Utc::now().timestamp() - ts).max(0)),
             startup_phase: progress.startup_phase.clone(),
+            bulk_checkpoint: progress.bulk_checkpoint.clone(),
         }
     }
 
@@ -448,6 +451,7 @@ impl TuiDb {
             adaptive_backoff_streak: None,
             adaptive_last_adjusted_age_secs: None,
             startup_phase: None,
+            bulk_checkpoint: None,
         })
     }
 
@@ -485,6 +489,7 @@ impl TuiDb {
             adaptive_backoff_streak: None,
             adaptive_last_adjusted_age_secs: None,
             startup_phase: None,
+            bulk_checkpoint: None,
         })
     }
 

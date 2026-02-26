@@ -176,6 +176,9 @@ pub struct SyncProgressData {
     /// Unix timestamp when adaptive controller last adjusted.
     #[serde(default)]
     pub adaptive_last_adjusted_at: Option<i64>,
+    /// Bulk checkpoint buffering and flush telemetry, when available.
+    #[serde(default)]
+    pub bulk_checkpoint: Option<BulkCheckpointProgressData>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -204,6 +207,50 @@ pub struct PipelineProgressData {
     pub writer_queue_depth: Option<u64>,
     /// Queue capacity observed by writer (parser -> writer channel).
     pub writer_queue_capacity: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkCheckpointProgressData {
+    /// Currently buffered block count waiting for checkpoint flush.
+    #[serde(default)]
+    pub pending_blocks: u64,
+    /// Heuristic estimated bytes for currently buffered checkpoint.
+    #[serde(default)]
+    pub pending_estimated_bytes: u64,
+    /// Overlay live cell entries tracked for uncommitted parser outputs.
+    #[serde(default)]
+    pub overlay_cells: u64,
+    /// Current cgroup memory ratio [0,1], when available.
+    #[serde(default)]
+    pub memory_ratio: Option<f64>,
+    /// Soft memory ratio threshold [0,1].
+    #[serde(default)]
+    pub soft_memory_ratio: Option<f64>,
+    /// Hard memory ratio threshold [0,1].
+    #[serde(default)]
+    pub hard_memory_ratio: Option<f64>,
+    /// Dynamic minimum buffered blocks for soft-threshold flush.
+    #[serde(default)]
+    pub dynamic_min_blocks: Option<u64>,
+    /// Dynamic maximum buffered blocks for forced flush.
+    #[serde(default)]
+    pub dynamic_max_blocks: Option<u64>,
+    /// Seconds since last checkpoint flush.
+    #[serde(default)]
+    pub since_last_flush_secs: Option<u64>,
+    /// Last flush trigger reason (e.g. soft_limit, hard_limit, max_blocks).
+    #[serde(default)]
+    pub last_flush_reason: Option<String>,
+    /// Buffered blocks flushed in last checkpoint flush.
+    #[serde(default)]
+    pub last_flush_blocks: Option<u64>,
+    /// Unix timestamp of last checkpoint flush.
+    #[serde(default)]
+    pub last_flush_at: Option<i64>,
+    /// Total checkpoint flush count for current process run.
+    #[serde(default)]
+    pub flush_count: u64,
 }
 
 pub fn format_duration_smart(total_secs: f64) -> String {
@@ -533,6 +580,21 @@ mod tests {
             adaptive_adjustment_seq: Some(42),
             adaptive_backoff_streak: Some(3),
             adaptive_last_adjusted_at: Some(1_700_000_123),
+            bulk_checkpoint: Some(BulkCheckpointProgressData {
+                pending_blocks: 12_345,
+                pending_estimated_bytes: 987_654_321,
+                overlay_cells: 22_222,
+                memory_ratio: Some(0.61),
+                soft_memory_ratio: Some(0.70),
+                hard_memory_ratio: Some(0.82),
+                dynamic_min_blocks: Some(20_000),
+                dynamic_max_blocks: Some(200_000),
+                since_last_flush_secs: Some(17),
+                last_flush_reason: Some("soft_limit".to_string()),
+                last_flush_blocks: Some(64_000),
+                last_flush_at: Some(1_700_000_120),
+                flush_count: 9,
+            }),
         };
 
         let json = serde_json::to_string(&progress).unwrap();
@@ -566,6 +628,13 @@ mod tests {
         assert_eq!(parsed.adaptive_adjustment_seq, Some(42));
         assert_eq!(parsed.adaptive_backoff_streak, Some(3));
         assert_eq!(parsed.adaptive_last_adjusted_at, Some(1_700_000_123));
+        let bulk = parsed
+            .bulk_checkpoint
+            .expect("bulk checkpoint telemetry should be present");
+        assert_eq!(bulk.pending_blocks, 12_345);
+        assert_eq!(bulk.pending_estimated_bytes, 987_654_321);
+        assert_eq!(bulk.flush_count, 9);
+        assert_eq!(bulk.last_flush_reason.as_deref(), Some("soft_limit"));
     }
 
     #[test]
@@ -598,6 +667,21 @@ mod tests {
             adaptive_adjustment_seq: Some(1),
             adaptive_backoff_streak: Some(0),
             adaptive_last_adjusted_at: Some(1),
+            bulk_checkpoint: Some(BulkCheckpointProgressData {
+                pending_blocks: 1,
+                pending_estimated_bytes: 2,
+                overlay_cells: 3,
+                memory_ratio: Some(0.5),
+                soft_memory_ratio: Some(0.7),
+                hard_memory_ratio: Some(0.82),
+                dynamic_min_blocks: Some(10),
+                dynamic_max_blocks: Some(100),
+                since_last_flush_secs: Some(5),
+                last_flush_reason: Some("soft_limit".to_string()),
+                last_flush_blocks: Some(20),
+                last_flush_at: Some(1),
+                flush_count: 1,
+            }),
         })
         .unwrap();
         if let Some(obj) = value.as_object_mut() {
@@ -614,6 +698,7 @@ mod tests {
             obj.remove("adaptiveAdjustmentSeq");
             obj.remove("adaptiveBackoffStreak");
             obj.remove("adaptiveLastAdjustedAt");
+            obj.remove("bulkCheckpoint");
         }
 
         let parsed: SyncProgressData = serde_json::from_value(value).unwrap();
@@ -630,5 +715,6 @@ mod tests {
         assert_eq!(parsed.adaptive_adjustment_seq, None);
         assert_eq!(parsed.adaptive_backoff_streak, None);
         assert_eq!(parsed.adaptive_last_adjusted_at, None);
+        assert!(parsed.bulk_checkpoint.is_none());
     }
 }

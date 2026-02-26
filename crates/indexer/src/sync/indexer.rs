@@ -4,13 +4,16 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicI64, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, NaiveDate, Timelike, Utc};
 use ckb_hash::new_blake2b;
-use ckbadger_common::{LabelImportConfig, LabelImportResult, PipelineProgressData};
+use ckbadger_common::{
+    BulkCheckpointProgressData, LabelImportConfig, LabelImportResult, PipelineProgressData,
+};
 use dashmap::DashMap;
 use futures::stream::{FuturesOrdered, StreamExt};
 use rayon::prelude::*;
@@ -2077,6 +2080,85 @@ pub struct AdaptiveBatchProgressSnapshot {
     pub last_adjusted_at: Option<i64>,
 }
 
+#[derive(Debug, Clone, Default)]
+struct BulkCheckpointRuntimeState {
+    pending_blocks: u64,
+    pending_estimated_bytes: u64,
+    overlay_cells: u64,
+    memory_ratio: Option<f64>,
+    soft_memory_ratio: Option<f64>,
+    hard_memory_ratio: Option<f64>,
+    dynamic_min_blocks: Option<u64>,
+    dynamic_max_blocks: Option<u64>,
+    last_flush_reason: Option<String>,
+    last_flush_blocks: Option<u64>,
+    last_flush_at: Option<i64>,
+    flush_count: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct BulkCheckpointFlushMeta {
+    flushed_blocks: u64,
+    flushed_at: i64,
+    overlay_cells: u64,
+    memory_ratio: Option<f64>,
+    dynamic_min_blocks: u64,
+    dynamic_max_blocks: u64,
+}
+
+impl BulkCheckpointRuntimeState {
+    fn set_runtime_targets(
+        &mut self,
+        soft_memory_ratio: f64,
+        hard_memory_ratio: f64,
+        dynamic_min_blocks: u64,
+        dynamic_max_blocks: u64,
+        memory_ratio: Option<f64>,
+    ) {
+        self.soft_memory_ratio = Some(soft_memory_ratio);
+        self.hard_memory_ratio = Some(hard_memory_ratio);
+        self.dynamic_min_blocks = Some(dynamic_min_blocks);
+        self.dynamic_max_blocks = Some(dynamic_max_blocks);
+        self.memory_ratio = memory_ratio;
+    }
+
+    fn set_buffer(
+        &mut self,
+        pending_blocks: u64,
+        pending_estimated_bytes: u64,
+        overlay_cells: u64,
+        memory_ratio: Option<f64>,
+        dynamic_min_blocks: u64,
+        dynamic_max_blocks: u64,
+    ) {
+        self.pending_blocks = pending_blocks;
+        self.pending_estimated_bytes = pending_estimated_bytes;
+        self.overlay_cells = overlay_cells;
+        self.memory_ratio = memory_ratio;
+        self.dynamic_min_blocks = Some(dynamic_min_blocks);
+        self.dynamic_max_blocks = Some(dynamic_max_blocks);
+    }
+
+    fn clear_buffer(&mut self, overlay_cells: u64) {
+        self.pending_blocks = 0;
+        self.pending_estimated_bytes = 0;
+        self.overlay_cells = overlay_cells;
+    }
+
+    fn mark_flushed(&mut self, reason: &str, meta: BulkCheckpointFlushMeta) {
+        self.flush_count = self.flush_count.saturating_add(1);
+        self.last_flush_reason = Some(reason.to_string());
+        self.last_flush_blocks = Some(meta.flushed_blocks);
+        self.last_flush_at = Some(meta.flushed_at);
+        self.pending_blocks = 0;
+        self.pending_estimated_bytes = 0;
+        self.overlay_cells = meta.overlay_cells;
+        self.memory_ratio = meta.memory_ratio;
+        self.dynamic_min_blocks = Some(meta.dynamic_min_blocks);
+        self.dynamic_max_blocks = Some(meta.dynamic_max_blocks);
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct AdaptiveBatchInput {
     write_ms: f64,
@@ -3027,6 +3109,7 @@ pub struct Indexer {
     pipeline_reset_reason_code: Arc<AtomicU8>,
     startup_phase: AtomicU8,
     pipeline_reset_epoch: Arc<AtomicU64>,
+    bulk_checkpoint_state: Arc<Mutex<BulkCheckpointRuntimeState>>,
     incident_seq: AtomicU64,
     flight_recorder: FlightRecorder,
     repeated_warning_tracker: RepeatedWarningTracker,
@@ -3124,6 +3207,7 @@ impl Indexer {
             pipeline_reset_reason_code: Arc::new(AtomicU8::new(PIPELINE_RESET_REASON_UNKNOWN)),
             startup_phase: AtomicU8::new(STARTUP_PHASE_NONE),
             pipeline_reset_epoch: Arc::new(AtomicU64::new(0)),
+            bulk_checkpoint_state: Arc::new(Mutex::new(BulkCheckpointRuntimeState::default())),
             incident_seq: AtomicU64::new(0),
             flight_recorder: FlightRecorder::new(FLIGHT_RECORDER_CAPACITY),
             repeated_warning_tracker: RepeatedWarningTracker::default(),
@@ -3399,6 +3483,44 @@ impl Indexer {
             adjustment_seq: snapshot.adjustment_seq,
             backoff_streak: snapshot.backoff_streak,
             last_adjusted_at: snapshot.last_adjusted_at,
+        })
+    }
+
+    fn update_bulk_checkpoint_state(&self, update: impl FnOnce(&mut BulkCheckpointRuntimeState)) {
+        let mut state = self
+            .bulk_checkpoint_state
+            .lock()
+            .expect("bulk checkpoint runtime state lock poisoned");
+        update(&mut state);
+    }
+
+    pub fn bulk_checkpoint_progress_snapshot(&self) -> Option<BulkCheckpointProgressData> {
+        if !self.config.pipeline_enabled {
+            return None;
+        }
+        let now = chrono::Utc::now().timestamp();
+        let state = self
+            .bulk_checkpoint_state
+            .lock()
+            .expect("bulk checkpoint runtime state lock poisoned")
+            .clone();
+        let since_last_flush_secs = state
+            .last_flush_at
+            .map(|ts| u64::try_from((now - ts).max(0)).unwrap_or(0));
+        Some(BulkCheckpointProgressData {
+            pending_blocks: state.pending_blocks,
+            pending_estimated_bytes: state.pending_estimated_bytes,
+            overlay_cells: state.overlay_cells,
+            memory_ratio: state.memory_ratio,
+            soft_memory_ratio: state.soft_memory_ratio,
+            hard_memory_ratio: state.hard_memory_ratio,
+            dynamic_min_blocks: state.dynamic_min_blocks,
+            dynamic_max_blocks: state.dynamic_max_blocks,
+            since_last_flush_secs,
+            last_flush_reason: state.last_flush_reason,
+            last_flush_blocks: state.last_flush_blocks,
+            last_flush_at: state.last_flush_at,
+            flush_count: state.flush_count,
         })
     }
 
@@ -4852,12 +4974,25 @@ impl Indexer {
             cgroup_memory_max_bytes = startup_cgroup.memory_max_bytes,
             "Bulk checkpoint runtime configured"
         );
+        self.update_bulk_checkpoint_state(|state| {
+            state.set_runtime_targets(
+                soft_memory_ratio,
+                hard_memory_ratio,
+                startup_min_blocks,
+                startup_auto_max_blocks,
+                cgroup_memory_ratio_pct(&startup_cgroup).map(|v| v / 100.0),
+            );
+            state.clear_buffer(
+                u64::try_from(pending_overlay_cells.len()).expect("overlay cells len exceeds u64"),
+            );
+        });
         loop {
             if self.repo.has_unresolved_deep_fork().unwrap_or(false) {
                 let drained = Self::drain_channel(&mut parse_rx).await;
                 parse_tx_pending_txs_for_writer.store(0, Ordering::Relaxed);
                 pending_checkpoint = None;
                 pending_overlay_cells.clear();
+                self.update_bulk_checkpoint_state(|state| state.clear_buffer(0));
                 if let Some(repeat) = self.repeated_warning_snapshot(
                     "pipeline_deep_fork_unresolved",
                     Duration::from_secs(120),
@@ -4946,6 +5081,7 @@ impl Indexer {
                         parse_tx_pending_txs_for_writer.store(0, Ordering::Relaxed);
                         pending_checkpoint = None;
                         pending_overlay_cells.clear();
+                        self.update_bulk_checkpoint_state(|state| state.clear_buffer(0));
                         info!(
                             run_id = %self.run_id,
                             pipeline_epoch = current_epoch,
@@ -4987,6 +5123,9 @@ impl Indexer {
                                         parse_tx_pending_txs_for_writer.store(0, Ordering::Relaxed);
                                         pending_checkpoint = None;
                                         pending_overlay_cells.clear();
+                                        self.update_bulk_checkpoint_state(|state| {
+                                            state.clear_buffer(0)
+                                        });
                                         info!(
                                             run_id = %self.run_id,
                                             pipeline_epoch = current_epoch,
@@ -5015,6 +5154,9 @@ impl Indexer {
                                         parse_tx_pending_txs_for_writer.store(0, Ordering::Relaxed);
                                         pending_checkpoint = None;
                                         pending_overlay_cells.clear();
+                                        self.update_bulk_checkpoint_state(|state| {
+                                            state.clear_buffer(0)
+                                        });
                                         info!(
                                             run_id = %self.run_id,
                                             pipeline_epoch = current_epoch,
@@ -5067,6 +5209,7 @@ impl Indexer {
                             let pending_batch = pending_checkpoint.take().ok_or_else(|| {
                                 anyhow!("missing pending batch before bulk flush")
                             })?;
+                            let flushed_blocks = pending_batch.blocks_count();
                             self.write_pipeline_batch(
                                 pending_batch,
                                 recv_wait_ms,
@@ -5083,13 +5226,40 @@ impl Indexer {
                             )
                             .await?;
                             last_bulk_checkpoint_flush_at = Instant::now();
+                            self.update_bulk_checkpoint_state(|state| {
+                                state.mark_flushed(
+                                    reason,
+                                    BulkCheckpointFlushMeta {
+                                        flushed_blocks,
+                                        flushed_at: chrono::Utc::now().timestamp(),
+                                        overlay_cells: u64::try_from(pending_overlay_cells.len())
+                                            .expect("overlay cells len exceeds u64"),
+                                        memory_ratio,
+                                        dynamic_min_blocks,
+                                        dynamic_max_blocks,
+                                    },
+                                );
+                            });
                         } else {
+                            let pending_estimated_bytes = pending_checkpoint
+                                .as_ref()
+                                .map(|p| p.estimated_bytes)
+                                .unwrap_or(0);
+                            self.update_bulk_checkpoint_state(|state| {
+                                state.set_buffer(
+                                    pending_blocks,
+                                    u64::try_from(pending_estimated_bytes)
+                                        .expect("pending estimated bytes exceeds u64"),
+                                    u64::try_from(pending_overlay_cells.len())
+                                        .expect("overlay cells len exceeds u64"),
+                                    memory_ratio,
+                                    dynamic_min_blocks,
+                                    dynamic_max_blocks,
+                                );
+                            });
                             debug!(
                                 pending_blocks,
-                                pending_batches_est_bytes = pending_checkpoint
-                                    .as_ref()
-                                    .map(|p| p.estimated_bytes)
-                                    .unwrap_or(0),
+                                pending_batches_est_bytes = pending_estimated_bytes,
                                 memory_ratio = memory_ratio.map(|v| format!("{:.3}", v)),
                                 dynamic_min_blocks,
                                 dynamic_max_blocks,
@@ -5100,6 +5270,12 @@ impl Indexer {
                     }
 
                     if let Some(pending_batch) = pending_checkpoint.take() {
+                        let exit_cgroup = read_cgroup_memory_snapshot();
+                        let dynamic_max_blocks =
+                            auto_bulk_checkpoint_max_blocks(startup_auto_max_blocks, &exit_cgroup);
+                        let dynamic_min_blocks = startup_min_blocks.min(dynamic_max_blocks).max(1);
+                        let memory_ratio = cgroup_memory_ratio_pct(&exit_cgroup).map(|v| v / 100.0);
+                        let flushed_blocks = pending_batch.blocks_count();
                         self.write_pipeline_batch(
                             pending_batch,
                             recv_wait_ms,
@@ -5115,6 +5291,20 @@ impl Indexer {
                         )
                         .await?;
                         last_bulk_checkpoint_flush_at = Instant::now();
+                        self.update_bulk_checkpoint_state(|state| {
+                            state.mark_flushed(
+                                "bulk_exit",
+                                BulkCheckpointFlushMeta {
+                                    flushed_blocks,
+                                    flushed_at: chrono::Utc::now().timestamp(),
+                                    overlay_cells: u64::try_from(pending_overlay_cells.len())
+                                        .expect("overlay cells len exceeds u64"),
+                                    memory_ratio,
+                                    dynamic_min_blocks,
+                                    dynamic_max_blocks,
+                                },
+                            );
+                        });
                     }
 
                     self.write_pipeline_batch(
@@ -5130,11 +5320,18 @@ impl Indexer {
                         },
                     )
                     .await?;
+                    self.update_bulk_checkpoint_state(|state| {
+                        state.clear_buffer(
+                            u64::try_from(pending_overlay_cells.len())
+                                .expect("overlay cells len exceeds u64"),
+                        );
+                    });
                 }
                 Ok(None) => {
                     fetcher.abort();
                     parser.abort();
                     pending_overlay_cells.clear();
+                    self.update_bulk_checkpoint_state(|state| state.clear_buffer(0));
                     return Err(anyhow::anyhow!("Pipeline channel closed"));
                 }
                 Err(_timeout) => {
@@ -5144,6 +5341,16 @@ impl Indexer {
                             && last_bulk_checkpoint_flush_at.elapsed()
                                 >= bulk_checkpoint_min_interval;
                         if should_flush_idle {
+                            let idle_cgroup = read_cgroup_memory_snapshot();
+                            let dynamic_max_blocks = auto_bulk_checkpoint_max_blocks(
+                                startup_auto_max_blocks,
+                                &idle_cgroup,
+                            );
+                            let dynamic_min_blocks =
+                                startup_min_blocks.min(dynamic_max_blocks).max(1);
+                            let memory_ratio =
+                                cgroup_memory_ratio_pct(&idle_cgroup).map(|v| v / 100.0);
+                            let flushed_blocks = pending.blocks_count();
                             self.write_pipeline_batch(
                                 pending,
                                 0.0,
@@ -5160,8 +5367,40 @@ impl Indexer {
                             )
                             .await?;
                             last_bulk_checkpoint_flush_at = Instant::now();
+                            self.update_bulk_checkpoint_state(|state| {
+                                state.mark_flushed(
+                                    "idle_finalize",
+                                    BulkCheckpointFlushMeta {
+                                        flushed_blocks,
+                                        flushed_at: chrono::Utc::now().timestamp(),
+                                        overlay_cells: u64::try_from(pending_overlay_cells.len())
+                                            .expect("overlay cells len exceeds u64"),
+                                        memory_ratio,
+                                        dynamic_min_blocks,
+                                        dynamic_max_blocks,
+                                    },
+                                );
+                            });
                             continue;
                         }
+                        let pending_estimated_bytes = pending.estimated_bytes;
+                        let idle_cgroup = read_cgroup_memory_snapshot();
+                        let dynamic_max_blocks =
+                            auto_bulk_checkpoint_max_blocks(startup_auto_max_blocks, &idle_cgroup);
+                        let dynamic_min_blocks = startup_min_blocks.min(dynamic_max_blocks).max(1);
+                        let memory_ratio = cgroup_memory_ratio_pct(&idle_cgroup).map(|v| v / 100.0);
+                        self.update_bulk_checkpoint_state(|state| {
+                            state.set_buffer(
+                                pending_blocks,
+                                u64::try_from(pending_estimated_bytes)
+                                    .expect("pending estimated bytes exceeds u64"),
+                                u64::try_from(pending_overlay_cells.len())
+                                    .expect("overlay cells len exceeds u64"),
+                                memory_ratio,
+                                dynamic_min_blocks,
+                                dynamic_max_blocks,
+                            );
+                        });
                         pending_checkpoint = Some(pending);
                     }
                     // Idle timeout - no pending batches. If any worker exited, fail fast
@@ -5225,6 +5464,7 @@ impl Indexer {
                         fetcher.abort();
                         parser.abort();
                         pending_overlay_cells.clear();
+                        self.update_bulk_checkpoint_state(|state| state.clear_buffer(0));
                         error!(
                             run_id = %self.run_id,
                             incident_id = %incident_id,
@@ -5355,6 +5595,7 @@ impl Indexer {
                     .parse_tx_pending_txs_for_writer
                     .store(0, Ordering::Relaxed);
                 context.pending_overlay_cells.clear();
+                self.update_bulk_checkpoint_state(|state| state.clear_buffer(0));
                 info!(
                     run_id = %self.run_id,
                     pipeline_epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst),
@@ -13508,6 +13749,50 @@ mod tests {
             }),
             None
         );
+    }
+
+    #[test]
+    fn test_bulk_checkpoint_runtime_state_mark_flushed() {
+        let mut state = BulkCheckpointRuntimeState {
+            pending_blocks: 50_000,
+            pending_estimated_bytes: 8_000_000,
+            ..Default::default()
+        };
+        state.mark_flushed(
+            "soft_limit",
+            BulkCheckpointFlushMeta {
+                flushed_blocks: 50_000,
+                flushed_at: 1_700_000_200,
+                overlay_cells: 123,
+                memory_ratio: Some(0.71),
+                dynamic_min_blocks: 20_000,
+                dynamic_max_blocks: 200_000,
+            },
+        );
+        assert_eq!(state.flush_count, 1);
+        assert_eq!(state.last_flush_reason.as_deref(), Some("soft_limit"));
+        assert_eq!(state.last_flush_blocks, Some(50_000));
+        assert_eq!(state.last_flush_at, Some(1_700_000_200));
+        assert_eq!(state.pending_blocks, 0);
+        assert_eq!(state.pending_estimated_bytes, 0);
+        assert_eq!(state.overlay_cells, 123);
+        assert_eq!(state.memory_ratio, Some(0.71));
+        assert_eq!(state.dynamic_min_blocks, Some(20_000));
+        assert_eq!(state.dynamic_max_blocks, Some(200_000));
+    }
+
+    #[test]
+    fn test_bulk_checkpoint_runtime_state_clear_buffer() {
+        let mut state = BulkCheckpointRuntimeState {
+            pending_blocks: 12_000,
+            pending_estimated_bytes: 1_234_567,
+            overlay_cells: 9,
+            ..Default::default()
+        };
+        state.clear_buffer(0);
+        assert_eq!(state.pending_blocks, 0);
+        assert_eq!(state.pending_estimated_bytes, 0);
+        assert_eq!(state.overlay_cells, 0);
     }
 
     #[test]
