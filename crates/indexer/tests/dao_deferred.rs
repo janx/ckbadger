@@ -17,10 +17,13 @@ fn test_sync_status_round_trip() {
     let status = SyncStatus {
         tip_block_number: 2000,
         tip_block_hash: vec![0xbb; 32],
+        derived_tip_block_number: 2000,
         total_transactions: 10_000,
         total_cells_created: 15_000,
         total_cells_consumed: 6000,
         last_synced_at: 1700001000,
+        derived_last_synced_at: 1700001000,
+        derived_sync_in_progress: false,
         deep_fork_detected: false,
         deep_fork_info: None,
 
@@ -46,10 +49,13 @@ fn test_update_sync_status_closure() {
     let initial = SyncStatus {
         tip_block_number: 3000,
         tip_block_hash: vec![0xcc; 32],
+        derived_tip_block_number: 3000,
         total_transactions: 20_000,
         total_cells_created: 30_000,
         total_cells_consumed: 12_000,
         last_synced_at: 1700002000,
+        derived_last_synced_at: 1700002000,
+        derived_sync_in_progress: false,
         deep_fork_detected: false,
         deep_fork_info: None,
 

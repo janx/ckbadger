@@ -49,10 +49,14 @@ impl BatchWriter {
         self.store.update_sync_status(|status| {
             status.tip_block_number = block_number;
             status.tip_block_hash = block_hash.to_vec();
+            status.derived_tip_block_number = block_number;
             status.total_transactions += tx_count;
             status.total_cells_created += cells_created;
             status.total_cells_consumed += cells_consumed;
-            status.last_synced_at = chrono::Utc::now().timestamp();
+            let now = chrono::Utc::now().timestamp();
+            status.last_synced_at = now;
+            status.derived_last_synced_at = now;
+            status.derived_sync_in_progress = false;
         })?;
 
         if let Some(cache) = &self.cache_invalidator {
@@ -239,6 +243,7 @@ impl BatchWriter {
                 None if tip_number == 0 => status.tip_block_hash.clear(),
                 None => {}
             }
+            status.derived_sync_in_progress = is_bulk_sync;
         })?;
 
         if let Some(cache) = &self.cache_invalidator {

@@ -20,8 +20,12 @@ fn test_store() -> Arc<CkbadgerStore> {
     Arc::new(CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap())
 }
 
-fn test_config(store: Arc<CkbadgerStore>) -> AppConfig {
+fn test_config_with_derived(
+    store: Arc<CkbadgerStore>,
+    derived_store: Arc<CkbadgerStore>,
+) -> AppConfig {
     AppConfig {
+        derived_store,
         store,
         redis_url: None,
         ckb_rpc_url: "http://localhost:8114".to_string(),
@@ -31,6 +35,10 @@ fn test_config(store: Arc<CkbadgerStore>) -> AppConfig {
         start_background_tasks: false,
         ckb_data_path: None,
     }
+}
+
+fn test_config(store: Arc<CkbadgerStore>) -> AppConfig {
+    test_config_with_derived(store.clone(), store)
 }
 
 #[tokio::test]
@@ -4158,4 +4166,91 @@ async fn test_hodl_wave_chart_with_data() {
     assert!(v24h > 0.0 && v24h < 100.0);
     // Series should have 8 entries
     assert_eq!(json["series"].as_array().unwrap().len(), 8);
+}
+
+#[tokio::test]
+async fn test_address_activities_returns_503_when_derived_store_lags() {
+    let core_store = test_store();
+    let derived_store = test_store();
+    core_store
+        .update_sync_status(|s| {
+            s.tip_block_number = 100;
+            s.derived_tip_block_number = 80;
+        })
+        .unwrap();
+
+    let config = test_config_with_derived(core_store, derived_store);
+    let app = create_router(config).await;
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/addresses/0x{}/activities",
+            "11".repeat(32)
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"], "derived_syncing");
+}
+
+#[tokio::test]
+async fn test_address_activities_reads_from_derived_store() {
+    let core_store = test_store();
+    let derived_store = test_store();
+    let lock_hash = vec![0x22; 32];
+    let activity = ActivityEntry {
+        tx_hash: vec![0xaa; 32],
+        block_number: 10,
+        tx_index: 0,
+        timestamp: 1_700_000_000_000,
+        ckb_delta: 100,
+        occupied_delta: 50,
+        is_cellbase: false,
+        asset_changes: vec![],
+        peers: vec![],
+    };
+
+    let mut core_batch = StoreBatch::new(core_store.as_ref());
+    core_batch.put_activity(&lock_hash, 10, 0, &activity);
+    core_batch.commit().unwrap();
+    core_store
+        .update_sync_status(|s| {
+            s.tip_block_number = 10;
+            s.derived_tip_block_number = 10;
+        })
+        .unwrap();
+
+    let config = test_config_with_derived(core_store.clone(), derived_store.clone());
+    let app = create_router(config).await;
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/addresses/0x{}/activities",
+            hex::encode(&lock_hash)
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"].as_array().unwrap().len(), 0);
+
+    let mut derived_batch = StoreBatch::new(derived_store.as_ref());
+    derived_batch.put_activity(&lock_hash, 10, 0, &activity);
+    derived_batch.commit().unwrap();
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/addresses/0x{}/activities",
+            hex::encode(&lock_hash)
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"].as_array().unwrap().len(), 1);
 }

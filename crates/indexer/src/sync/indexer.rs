@@ -2666,6 +2666,7 @@ pub struct Indexer {
     rpc: CkbRpcClient,
     repo: Repository,
     writer: BatchWriter,
+    derived_store: Arc<CkbadgerStore>,
     progress: Arc<SyncProgress>,
     cell_cache: Arc<DashMap<([u8; 32], i32), CachedCellInfo>>,
     udt_cell_cache: Arc<DashMap<([u8; 32], i16), CachedUdtCellInfo>>,
@@ -2691,7 +2692,12 @@ pub struct Indexer {
 }
 
 impl Indexer {
-    pub async fn new(run_id: String, config: Config, store: Arc<CkbadgerStore>) -> Result<Self> {
+    pub async fn new(
+        run_id: String,
+        config: Config,
+        store: Arc<CkbadgerStore>,
+        derived_store: Arc<CkbadgerStore>,
+    ) -> Result<Self> {
         let rpc = CkbRpcClient::new(&config.ckb_rpc_url);
         let cache_invalidator = CacheInvalidator::new(config.redis_url.as_deref()).await;
 
@@ -2752,6 +2758,7 @@ impl Indexer {
             rpc,
             repo,
             writer,
+            derived_store,
             progress,
             cell_cache,
             udt_cell_cache,
@@ -7518,6 +7525,7 @@ impl Indexer {
             // Independent batches let all threads run fully in parallel; the RocksDB write
             // group overhead (~2ms) is negligible.
             let store = self.writer.store();
+            let derived_store = &self.derived_store;
             let writer = &self.writer;
 
             let tt;
@@ -8403,7 +8411,7 @@ impl Indexer {
                     let h_act = if !skip_activities {
                         Some(s.spawn(|| -> Result<(f64, f64)> {
                         let t = Instant::now();
-                        let mut batch = StoreBatch::new(store);
+                        let mut batch = StoreBatch::new(derived_store);
                         let token_info_cache = load_activity_token_info_cache(
                             store,
                             &all_tx_data,
@@ -9352,6 +9360,7 @@ impl Indexer {
             }
 
             // Activity writes (live sync)
+            let mut activity_batch = StoreBatch::new(&self.derived_store);
             {
                 let token_info_cache = load_activity_token_info_cache(
                     self.writer.store(),
@@ -9428,7 +9437,7 @@ impl Indexer {
                         &token_info_cache,
                     );
                     for (lock_hash, entry) in activities {
-                        data_batch.put_activity(
+                        activity_batch.put_activity(
                             &lock_hash,
                             entry.block_number,
                             entry.tx_index,
@@ -9442,6 +9451,11 @@ impl Indexer {
             let data_commit_started = Instant::now();
             data_batch.commit()?;
             write_commit_ms += data_commit_started.elapsed().as_secs_f64() * 1000.0;
+            if !activity_batch.is_empty() {
+                let activity_commit_started = Instant::now();
+                activity_batch.commit()?;
+                write_commit_ms += activity_commit_started.elapsed().as_secs_f64() * 1000.0;
+            }
 
             // Stats accumulation for live sync (serial — before finalize)
             batch_stats = BatchStats::default();
@@ -10454,6 +10468,9 @@ impl Indexer {
                 &chain_tip_hash_bytes,
             )
             .await?;
+        let fork_point_i64 = i64::try_from(fork_point)
+            .map_err(|_| anyhow!("fork point exceeds i64 range: {}", fork_point))?;
+        self.derived_store.rollback_to_block(fork_point_i64)?;
 
         Ok(Some(ReorgAction::Handled(result)))
     }

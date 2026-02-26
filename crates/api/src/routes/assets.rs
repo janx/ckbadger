@@ -24,6 +24,26 @@ const DOTBIT_ACCOUNT_CELL_TYPE_ID: &str =
 type ApiRouteError = (axum::http::StatusCode, Json<ApiError>);
 type DotbitLiveOutpoint = Option<(String, i16)>;
 
+fn ensure_derived_ready(state: &AppState) -> Result<(), ApiRouteError> {
+    let sync = state
+        .store
+        .get_sync_status()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    if sync.derived_tip_block_number < sync.tip_block_number {
+        return Err((
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiError::new(
+                "derived_syncing",
+                format!(
+                    "derived store syncing: core_tip={}, derived_tip={}",
+                    sync.tip_block_number, sync.derived_tip_block_number
+                ),
+            )),
+        ));
+    }
+    Ok(())
+}
+
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/assets", get(list_assets))
@@ -1054,6 +1074,7 @@ fn build_nft_item_activities_response(
     cursor: Option<(i64, i32)>,
     action_filter: Option<&str>,
 ) -> Result<CursorPaginatedResponse<MnftItemActivityResponse>, ApiRouteError> {
+    ensure_derived_ready(state.as_ref())?;
     let mut scan_cursor = cursor;
     let scan_batch_size = ((limit as usize) * 4).clamp(64, 400);
     let mut matched: Vec<(i64, i32, ckbadger_store::types::ActivityEntry, Vec<String>)> =
@@ -1061,7 +1082,7 @@ fn build_nft_item_activities_response(
 
     loop {
         let batch = state
-            .store
+            .derived_store
             .list_activities(owner_lock_hash, scan_batch_size, scan_cursor, Some("nft"))
             .map_err(|e| ApiError::internal(e.to_string()))?;
         if batch.is_empty() {

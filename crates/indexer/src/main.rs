@@ -30,6 +30,9 @@ struct Cli {
     )]
     data_path: String,
 
+    #[arg(long, env = "CKBADGER_DERIVED_DATA_PATH", global = true)]
+    derived_data_path: Option<String>,
+
     #[arg(long, env = "CKB_RPC_URL", global = true)]
     ckb_rpc_url: Option<String>,
 
@@ -306,8 +309,13 @@ async fn wait_for_shutdown_signal() -> std::io::Result<&'static str> {
 }
 
 async fn run_sync(args: Cli) -> Result<()> {
+    let derived_data_path = args
+        .derived_data_path
+        .clone()
+        .unwrap_or_else(|| format!("{}-derived", args.data_path));
     let mut config = Config {
         data_path: args.data_path.clone(),
+        derived_data_path: derived_data_path.clone(),
         ckb_rpc_url: args
             .ckb_rpc_url
             .or_else(|| std::env::var("CKB_RPC_URL").ok())
@@ -329,6 +337,11 @@ async fn run_sync(args: Cli) -> Result<()> {
 
     info!("Opening ckbadger-store at: {}", config.data_path);
     let store = Arc::new(CkbadgerStore::open(&config.data_path)?);
+    info!(
+        "Opening ckbadger-derived-store at: {}",
+        config.derived_data_path
+    );
+    let derived_store = Arc::new(CkbadgerStore::open(&config.derived_data_path)?);
     CkbadgerStore::log_config();
 
     // One-time backfill: populate code_hash indexes if they are empty
@@ -498,7 +511,8 @@ async fn run_sync(args: Cli) -> Result<()> {
 
     info!("Connecting to CKB node: {}", config.ckb_rpc_url);
 
-    let indexer = Indexer::new(run_id, config.clone(), store.clone()).await?;
+    let indexer =
+        Indexer::new(run_id, config.clone(), store.clone(), derived_store.clone()).await?;
     let indexer = Arc::new(indexer);
 
     spawn_cycles_task_worker(

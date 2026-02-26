@@ -1,7 +1,8 @@
 use axum::{
     extract::{Path, Query, State},
+    http::StatusCode,
     routing::get,
-    Router,
+    Json, Router,
 };
 use ckbadger_store::types::{AssetAction, AssetChange};
 use serde::{Deserialize, Serialize};
@@ -13,6 +14,26 @@ use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new().route("/addresses/{addr}/activities", get(get_address_activities))
+}
+
+fn ensure_derived_ready(state: &AppState) -> Result<(), (StatusCode, Json<ApiError>)> {
+    let sync = state
+        .store
+        .get_sync_status()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    if sync.derived_tip_block_number < sync.tip_block_number {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiError::new(
+                "derived_syncing",
+                format!(
+                    "derived store syncing: core_tip={}, derived_tip={}",
+                    sync.tip_block_number, sync.derived_tip_block_number
+                ),
+            )),
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -141,6 +162,7 @@ async fn get_address_activities(
     Path(addr): Path<String>,
     Query(params): Query<ActivityParams>,
 ) -> ApiResult<CursorPaginatedResponse<ActivityResponse>> {
+    ensure_derived_ready(&state)?;
     let lock_hash = if addr.starts_with("ckb1") || addr.starts_with("ckt1") {
         address_to_lock_script_hash(&addr)
             .map_err(|e| ApiError::bad_request(format!("Invalid address: {}", e)))?
@@ -164,7 +186,7 @@ async fn get_address_activities(
     });
 
     let results = state
-        .store
+        .derived_store
         .list_activities(&lock_hash, limit + 1, cursor, params.filter.as_deref())
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
