@@ -495,6 +495,104 @@ describe('api', () => {
       expect(result.hasMore).toBe(false);
     });
 
+    it('builds query params for nft collection holders', async () => {
+      server.use(
+        http.get('*/api/v1/assets/nfts/:collectionId/holders', ({ request, params }) => {
+          const url = new URL(request.url);
+          expect(params.collectionId).toBe(DOTBIT_COLLECTION_ID);
+          expect(url.searchParams.get('limit')).toBe('20');
+          expect(url.searchParams.get('cursor')).toBe('2:abcd');
+          return HttpResponse.json({
+            data: [],
+            total: 0,
+            limit: 20,
+            hasMore: false,
+            nextCursor: null,
+          });
+        })
+      );
+
+      const result = await api.getNftCollectionHolders('.bit', {
+        limit: 20,
+        cursor: '2:abcd',
+      });
+      expect(result.total).toBe(0);
+    });
+
+    it('builds query params for nft collection activities', async () => {
+      server.use(
+        http.get('*/api/v1/assets/nfts/:collectionId/activities', ({ request, params }) => {
+          const url = new URL(request.url);
+          expect(params.collectionId).toBe(DOTBIT_COLLECTION_ID);
+          expect(url.searchParams.get('limit')).toBe('20');
+          expect(url.searchParams.get('cursor')).toBe('300:1');
+          expect(url.searchParams.get('action')).toBe('transfer');
+          return HttpResponse.json({
+            data: [],
+            limit: 20,
+            hasMore: false,
+            nextCursor: null,
+          });
+        })
+      );
+
+      const result = await api.getNftCollectionActivities('dotbit', {
+        limit: 20,
+        cursor: '300:1',
+        action: 'transfer',
+      });
+      expect(result.hasMore).toBe(false);
+    });
+
+    it('builds query params for spore cluster holders', async () => {
+      server.use(
+        http.get('*/api/v1/spore/clusters/:clusterId/holders', ({ request, params }) => {
+          const url = new URL(request.url);
+          expect(params.clusterId).toBe('0xcluster');
+          expect(url.searchParams.get('limit')).toBe('20');
+          expect(url.searchParams.get('cursor')).toBe('4:ffff');
+          return HttpResponse.json({
+            data: [],
+            total: 0,
+            limit: 20,
+            hasMore: false,
+            nextCursor: null,
+          });
+        })
+      );
+
+      const result = await api.getSporeClusterHolders('0xcluster', {
+        limit: 20,
+        cursor: '4:ffff',
+      });
+      expect(result.total).toBe(0);
+    });
+
+    it('builds query params for spore cluster activities', async () => {
+      server.use(
+        http.get('*/api/v1/spore/clusters/:clusterId/activities', ({ request, params }) => {
+          const url = new URL(request.url);
+          expect(params.clusterId).toBe('0xcluster');
+          expect(url.searchParams.get('limit')).toBe('20');
+          expect(url.searchParams.get('cursor')).toBe('300:0');
+          expect(url.searchParams.get('action')).toBe('burn');
+          return HttpResponse.json({
+            data: [],
+            limit: 20,
+            hasMore: false,
+            nextCursor: null,
+          });
+        })
+      );
+
+      const result = await api.getSporeClusterActivities('0xcluster', {
+        limit: 20,
+        cursor: '300:0',
+        action: 'burn',
+      });
+      expect(result.hasMore).toBe(false);
+    });
+
     it('fetches dotbit item detail', async () => {
       server.use(
         http.get('*/api/v1/assets/nfts/dotbit/items/:nftId', ({ params }) => {

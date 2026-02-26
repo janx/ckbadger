@@ -215,6 +215,12 @@ interface NftCollectionItemsParams extends CursorQueryParams {
   status?: NftItemStatusFilter;
 }
 
+type NftCollectionHoldersParams = CursorQueryParams;
+
+interface NftCollectionActivitiesParams extends CursorQueryParams {
+  action?: 'mint' | 'transfer' | 'burn';
+}
+
 interface MnftItemActivitiesParams extends CursorQueryParams {
   action?: 'mint' | 'transfer' | 'burn';
 }
@@ -814,6 +820,20 @@ interface NftCollectionItem {
   outputIndex?: number | null;
 }
 
+interface NftCollectionHolder {
+  lockScriptHash: string;
+  address: string | null;
+  itemCount: number;
+}
+
+interface NftCollectionActivity {
+  txHash: string;
+  blockNumber: number;
+  txIndex: number;
+  timestamp: string;
+  actions: string[];
+}
+
 interface MnftClassSummary {
   classId: string;
   issuerId: string;
@@ -1176,6 +1196,8 @@ export type {
   SporeNft,
   NftCollection,
   NftCollectionItem,
+  NftCollectionHolder,
+  NftCollectionActivity,
   NftItemStatusFilter,
   MnftClassSummary,
   MnftIssuerSummary,
@@ -1536,6 +1558,29 @@ export const api = {
     return fetchApi(`/spore/clusters/${clusterId}`);
   },
 
+  getSporeClusterHolders: (
+    clusterId: string,
+    params: NftCollectionHoldersParams = {}
+  ): Promise<CursorPaginatedResponse<NftCollectionHolder>> => {
+    const query = new URLSearchParams();
+    if (params.limit) query.set('limit', String(params.limit));
+    if (params.cursor) query.set('cursor', params.cursor);
+    const suffix = query.toString();
+    return fetchApi(`/spore/clusters/${clusterId}/holders${suffix ? `?${suffix}` : ''}`);
+  },
+
+  getSporeClusterActivities: (
+    clusterId: string,
+    params: NftCollectionActivitiesParams = {}
+  ): Promise<CursorPaginatedResponse<NftCollectionActivity>> => {
+    const query = new URLSearchParams();
+    if (params.limit) query.set('limit', String(params.limit));
+    if (params.cursor) query.set('cursor', params.cursor);
+    if (params.action) query.set('action', params.action);
+    const suffix = query.toString();
+    return fetchApi(`/spore/clusters/${clusterId}/activities${suffix ? `?${suffix}` : ''}`);
+  },
+
   getSporeClusterOccupationChart: (
     clusterId: string,
     range: OccupationChartRangeParams = {}
@@ -1602,6 +1647,33 @@ export const api = {
     const suffix = query.toString();
     return fetchApi(
       `/assets/nfts/${normalizeNftAssetId(collectionId)}/items${suffix ? `?${suffix}` : ''}`
+    );
+  },
+
+  getNftCollectionHolders: (
+    collectionId: string,
+    params: NftCollectionHoldersParams = {}
+  ): Promise<CursorPaginatedResponse<NftCollectionHolder>> => {
+    const query = new URLSearchParams();
+    if (params.limit) query.set('limit', String(params.limit));
+    if (params.cursor) query.set('cursor', params.cursor);
+    const suffix = query.toString();
+    return fetchApi(
+      `/assets/nfts/${normalizeNftAssetId(collectionId)}/holders${suffix ? `?${suffix}` : ''}`
+    );
+  },
+
+  getNftCollectionActivities: (
+    collectionId: string,
+    params: NftCollectionActivitiesParams = {}
+  ): Promise<CursorPaginatedResponse<NftCollectionActivity>> => {
+    const query = new URLSearchParams();
+    if (params.limit) query.set('limit', String(params.limit));
+    if (params.cursor) query.set('cursor', params.cursor);
+    if (params.action) query.set('action', params.action);
+    const suffix = query.toString();
+    return fetchApi(
+      `/assets/nfts/${normalizeNftAssetId(collectionId)}/activities${suffix ? `?${suffix}` : ''}`
     );
   },
 

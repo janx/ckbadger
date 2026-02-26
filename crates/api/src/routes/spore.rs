@@ -5,7 +5,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
@@ -16,6 +16,8 @@ use crate::utils::{
 use crate::warmup::{CachedAssetEntry, CACHE_KEY_ASSETS_NFT};
 use crate::AppState;
 
+type ApiRouteError = (axum::http::StatusCode, axum::Json<ApiError>);
+
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/spore/clusters", get(list_clusters))
@@ -23,6 +25,14 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route(
             "/spore/clusters/{cluster_id}/charts/occupation",
             get(get_cluster_occupation_chart),
+        )
+        .route(
+            "/spore/clusters/{cluster_id}/holders",
+            get(get_cluster_holders),
+        )
+        .route(
+            "/spore/clusters/{cluster_id}/activities",
+            get(get_cluster_activities),
         )
         .route(
             "/spore/clusters/{cluster_id}/spores",
@@ -51,8 +61,93 @@ pub struct ChartRangeParams {
     to: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ClusterHoldersParams {
+    #[serde(default = "default_limit")]
+    limit: i64,
+    cursor: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ClusterActivitiesParams {
+    #[serde(default = "default_limit")]
+    limit: i64,
+    cursor: Option<String>,
+    action: Option<String>,
+}
+
 fn default_limit() -> i64 {
     20
+}
+
+fn decode_cluster_holders_cursor(
+    raw: &str,
+) -> Result<(i64, Vec<u8>), (axum::http::StatusCode, axum::Json<ApiError>)> {
+    let mut parts = raw.split(':');
+    let count = parts
+        .next()
+        .ok_or_else(|| ApiError::bad_request("Invalid cluster holders cursor"))?
+        .parse::<i64>()
+        .map_err(|_| ApiError::bad_request("Invalid cluster holders cursor"))?;
+    let lock_hash_hex = parts
+        .next()
+        .ok_or_else(|| ApiError::bad_request("Invalid cluster holders cursor"))?;
+    if parts.next().is_some() {
+        return Err(ApiError::bad_request("Invalid cluster holders cursor"));
+    }
+    let lock_hash = hex::decode(lock_hash_hex.strip_prefix("0x").unwrap_or(lock_hash_hex))
+        .map_err(|_| ApiError::bad_request("Invalid cluster holders cursor"))?;
+    if lock_hash.len() != 32 {
+        return Err(ApiError::bad_request("Invalid cluster holders cursor"));
+    }
+    Ok((count, lock_hash))
+}
+
+fn decode_cluster_activity_cursor(
+    raw: &str,
+) -> Result<(i64, i32), (axum::http::StatusCode, axum::Json<ApiError>)> {
+    let mut parts = raw.split(':');
+    let block = parts
+        .next()
+        .ok_or_else(|| ApiError::bad_request("Invalid cluster activities cursor"))?
+        .parse::<i64>()
+        .map_err(|_| ApiError::bad_request("Invalid cluster activities cursor"))?;
+    let tx_index = parts
+        .next()
+        .ok_or_else(|| ApiError::bad_request("Invalid cluster activities cursor"))?
+        .parse::<i32>()
+        .map_err(|_| ApiError::bad_request("Invalid cluster activities cursor"))?;
+    if parts.next().is_some() {
+        return Err(ApiError::bad_request("Invalid cluster activities cursor"));
+    }
+    Ok((block, tx_index))
+}
+
+fn normalize_cluster_activity_action_filter(
+    raw: Option<&str>,
+) -> Result<Option<String>, (axum::http::StatusCode, axum::Json<ApiError>)> {
+    let Some(raw_value) = raw else {
+        return Ok(None);
+    };
+    let normalized = raw_value.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return Ok(None);
+    }
+    match normalized.as_str() {
+        "mint" | "transfer" | "burn" => Ok(Some(normalized)),
+        _ => Err(ApiError::bad_request(
+            "Invalid cluster activity action filter. Expected one of: mint, transfer, burn",
+        )),
+    }
+}
+
+fn cluster_activity_action_order(action: &str) -> i32 {
+    match action {
+        "mint" => 0,
+        "transfer" => 1,
+        "burn" => 2,
+        _ => 3,
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -115,6 +210,24 @@ pub struct SporeResponse {
     pub live_capacity: Option<String>,
     pub live_occupied_capacity: Option<String>,
     pub media_profile: Option<SporeMediaProfileResponse>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClusterHolderResponse {
+    pub lock_script_hash: String,
+    pub address: Option<String>,
+    pub item_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClusterActivityResponse {
+    pub tx_hash: String,
+    pub block_number: i64,
+    pub tx_index: i32,
+    pub timestamp: String,
+    pub actions: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1123,6 +1236,233 @@ fn serve_clusters_from_store(
     ok(CursorPaginatedResponse::without_total(
         result,
         limit as i64,
+        next_cursor,
+    ))
+}
+
+fn collect_spore_lifecycle_actions(
+    state: &Arc<AppState>,
+    spore_id: &[u8],
+) -> Result<Vec<(Vec<u8>, String)>, ApiRouteError> {
+    let outpoints = state
+        .store
+        .list_spore_outpoints_by_spore_id(spore_id)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let mut created_txs: HashSet<Vec<u8>> = HashSet::new();
+    let mut consumed_txs: HashSet<Vec<u8>> = HashSet::new();
+
+    for (tx_hash, output_index) in outpoints {
+        created_txs.insert(tx_hash.clone());
+
+        if let Some(consumed) = state
+            .store
+            .get_consumed_cell_info(&tx_hash, output_index)
+            .map_err(|e| ApiError::internal(e.to_string()))?
+        {
+            let consumed_by_tx = consumed.consumed_by_tx.ok_or_else(|| {
+                ApiError::internal(format!(
+                    "consumed spore outpoint missing consumer tx: spore_id=0x{}, tx_hash=0x{}, output_index={}",
+                    hex::encode(spore_id),
+                    hex::encode(&tx_hash),
+                    output_index
+                ))
+            })?;
+            consumed_txs.insert(consumed_by_tx);
+        }
+    }
+
+    let mut lifecycle_txs = created_txs.clone();
+    lifecycle_txs.extend(consumed_txs.iter().cloned());
+    let mut rows = Vec::with_capacity(lifecycle_txs.len());
+    for tx_hash in lifecycle_txs {
+        let action = match (
+            created_txs.contains(&tx_hash),
+            consumed_txs.contains(&tx_hash),
+        ) {
+            (true, true) => "transfer",
+            (true, false) => "mint",
+            (false, true) => "burn",
+            (false, false) => {
+                return Err(ApiError::internal(format!(
+                    "invalid spore lifecycle action state: spore_id=0x{}, tx_hash=0x{}",
+                    hex::encode(spore_id),
+                    hex::encode(&tx_hash)
+                )))
+            }
+        };
+        rows.push((tx_hash, action.to_string()));
+    }
+    Ok(rows)
+}
+
+async fn get_cluster_holders(
+    State(state): State<Arc<AppState>>,
+    Path(cluster_id): Path<String>,
+    Query(params): Query<ClusterHoldersParams>,
+) -> ApiResult<CursorPaginatedResponse<ClusterHolderResponse>> {
+    ensure_derived_ready(state.as_ref())?;
+
+    let id = hex::decode(cluster_id.strip_prefix("0x").unwrap_or(&cluster_id))
+        .map_err(|_| ApiError::bad_request("Invalid cluster ID"))?;
+    let limit = params.limit.clamp(1, 100) as usize;
+    let cursor = params
+        .cursor
+        .as_deref()
+        .map(decode_cluster_holders_cursor)
+        .transpose()?;
+
+    let owners = state
+        .store
+        .list_cluster_owner_counts(&id)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    if owners.is_empty() {
+        let cluster_exists = state
+            .store
+            .get_spore(&id)
+            .map_err(|e| ApiError::internal(e.to_string()))?
+            .is_some();
+        if !cluster_exists {
+            return Err(ApiError::not_found("Cluster not found"));
+        }
+    }
+
+    let mut rows = owners;
+    rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let total = rows.len() as i64;
+    let start_idx = if let Some((cursor_count, cursor_lock_hash)) = cursor {
+        rows.iter()
+            .position(|(lock_hash, count)| *count == cursor_count && *lock_hash == cursor_lock_hash)
+            .map(|idx| idx + 1)
+            .ok_or_else(|| ApiError::bad_request("Invalid cluster holders cursor"))?
+    } else {
+        0
+    };
+
+    let page: Vec<_> = rows.iter().skip(start_idx).take(limit + 1).collect();
+    let has_more = page.len() > limit;
+    let page: Vec<_> = page.into_iter().take(limit).collect();
+    let next_cursor = if has_more {
+        page.last()
+            .map(|(lock_hash, count)| format!("{}:{}", count, hex::encode(lock_hash)))
+    } else {
+        None
+    };
+
+    let response_rows: Vec<ClusterHolderResponse> = page
+        .into_iter()
+        .map(|(lock_hash, count)| ClusterHolderResponse {
+            lock_script_hash: format!("0x{}", hex::encode(lock_hash)),
+            address: None,
+            item_count: *count,
+        })
+        .collect();
+
+    ok(CursorPaginatedResponse::new(
+        response_rows,
+        total,
+        limit as i64,
+        next_cursor,
+    ))
+}
+
+async fn get_cluster_activities(
+    State(state): State<Arc<AppState>>,
+    Path(cluster_id): Path<String>,
+    Query(params): Query<ClusterActivitiesParams>,
+) -> ApiResult<CursorPaginatedResponse<ClusterActivityResponse>> {
+    ensure_derived_ready(state.as_ref())?;
+
+    let id = hex::decode(cluster_id.strip_prefix("0x").unwrap_or(&cluster_id))
+        .map_err(|_| ApiError::bad_request("Invalid cluster ID"))?;
+    let limit = params.limit.clamp(1, 100);
+    let cursor = params
+        .cursor
+        .as_deref()
+        .map(decode_cluster_activity_cursor)
+        .transpose()?;
+    let action_filter = normalize_cluster_activity_action_filter(params.action.as_deref())?;
+
+    let cluster_spores = state
+        .store
+        .list_spores_by_cluster(&id, 100_000)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    if cluster_spores.is_empty() {
+        let cluster_exists = state
+            .store
+            .get_spore(&id)
+            .map_err(|e| ApiError::internal(e.to_string()))?
+            .is_some();
+        if !cluster_exists {
+            return Err(ApiError::not_found("Cluster not found"));
+        }
+    }
+
+    let mut tx_actions: HashMap<Vec<u8>, HashSet<String>> = HashMap::new();
+    for (spore_id, _) in cluster_spores {
+        let lifecycle_rows = collect_spore_lifecycle_actions(&state, &spore_id)?;
+        for (tx_hash, action) in lifecycle_rows {
+            tx_actions.entry(tx_hash).or_default().insert(action);
+        }
+    }
+
+    let mut rows = Vec::with_capacity(tx_actions.len());
+    for (tx_hash, actions_set) in tx_actions {
+        let (block_number, tx_index, tx_entry) = state
+            .store
+            .get_tx_by_hash(&tx_hash)
+            .map_err(|e| ApiError::internal(e.to_string()))?
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "cluster lifecycle tx not found in tx index: cluster_id=0x{}, tx_hash=0x{}",
+                    hex::encode(&id),
+                    hex::encode(&tx_hash)
+                ))
+            })?;
+
+        let mut actions: Vec<String> = actions_set.into_iter().collect();
+        actions.sort_by_key(|action| cluster_activity_action_order(action));
+        if action_filter
+            .as_deref()
+            .map(|filter| !actions.iter().any(|action| action == filter))
+            .unwrap_or(false)
+        {
+            continue;
+        }
+
+        rows.push(ClusterActivityResponse {
+            tx_hash: format!("0x{}", hex::encode(&tx_hash)),
+            block_number,
+            tx_index,
+            timestamp: tx_entry.timestamp.to_string(),
+            actions,
+        });
+    }
+
+    rows.sort_by(|a, b| {
+        b.block_number
+            .cmp(&a.block_number)
+            .then_with(|| b.tx_index.cmp(&a.tx_index))
+            .then_with(|| b.tx_hash.cmp(&a.tx_hash))
+    });
+    if let Some((cursor_block, cursor_tx_index)) = cursor {
+        rows.retain(|row| {
+            row.block_number < cursor_block
+                || (row.block_number == cursor_block && row.tx_index < cursor_tx_index)
+        });
+    }
+
+    let has_more = rows.len() as i64 > limit;
+    let page: Vec<_> = rows.into_iter().take(limit as usize).collect();
+    let next_cursor = if has_more {
+        page.last()
+            .map(|row| format!("{}:{}", row.block_number, row.tx_index))
+    } else {
+        None
+    };
+
+    ok(CursorPaginatedResponse::without_total(
+        page,
+        limit,
         next_cursor,
     ))
 }

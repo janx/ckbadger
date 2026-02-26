@@ -146,6 +146,43 @@ impl CkbadgerStore {
         results
     }
 
+    /// List all historical spore outpoints recorded for a spore ID.
+    pub fn list_spore_outpoints_by_spore_id(
+        &self,
+        spore_id: &[u8],
+    ) -> anyhow::Result<Vec<(Vec<u8>, i16)>> {
+        let prefix = [keys::STATS_PREFIX_SPORE_OUTPOINT];
+        let iter = self.prefix_iterator_cf(self.cf_stats(), &prefix);
+        let mut outpoints = Vec::new();
+
+        for item in iter.flatten() {
+            let (key, value) = item;
+            if key.first() != Some(&keys::STATS_PREFIX_SPORE_OUTPOINT) {
+                break;
+            }
+            if key.len() != keys::SPORE_OUTPOINT_KEY_SIZE {
+                anyhow::bail!(
+                    "invalid spore outpoint key length: expected {}, got {}",
+                    keys::SPORE_OUTPOINT_KEY_SIZE,
+                    key.len()
+                );
+            }
+            if value.len() < 32 {
+                anyhow::bail!(
+                    "invalid spore outpoint value length: expected >= 32, got {}",
+                    value.len()
+                );
+            }
+            if &value[..32] != spore_id {
+                continue;
+            }
+
+            outpoints.push(keys::decode_spore_outpoint_key(&key));
+        }
+
+        Ok(outpoints)
+    }
+
     pub fn get_mnft_class_id_by_outpoint(
         &self,
         tx_hash: &[u8],
@@ -917,6 +954,11 @@ mod tests {
         assert!(results
             .iter()
             .any(|(tx, idx, id)| tx == tx_b.as_slice() && *idx == 2 && id == spore_b.as_slice()));
+
+        let mut spore_outpoints = store.list_spore_outpoints_by_spore_id(&spore_a).unwrap();
+        spore_outpoints.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+        assert_eq!(spore_outpoints.len(), 1);
+        assert_eq!(spore_outpoints[0], (tx_a.to_vec(), 1));
     }
 
     #[test]

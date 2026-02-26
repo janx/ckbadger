@@ -17,6 +17,8 @@ vi.mock('@/lib/api', () => ({
     getNftCollection: vi.fn(),
     getNftCollectionOccupationChart: vi.fn(),
     getNftCollectionItems: vi.fn(),
+    getNftCollectionHolders: vi.fn(),
+    getNftCollectionActivities: vi.fn(),
   },
 }));
 
@@ -27,9 +29,14 @@ vi.mock('@/components/layout/header', () => ({
 let mockParams = {
   sporeId: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
 };
+let mockSearchParamsString = '';
+const mockReplace = vi.fn();
 
 vi.mock('next/navigation', () => ({
   useParams: () => mockParams,
+  usePathname: () => `/nfts/${mockParams.sporeId}`,
+  useSearchParams: () => new URLSearchParams(mockSearchParamsString),
+  useRouter: () => ({ replace: mockReplace, push: vi.fn() }),
 }));
 
 const mockSpore = {
@@ -101,6 +108,7 @@ describe('SporeDetailPage', () => {
     mockParams = {
       sporeId: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
     };
+    mockSearchParamsString = '';
     vi.mocked(api.getSporeNftOccupationChart).mockResolvedValue({
       title: 'Spore Capacity Occupation',
       data: [],
@@ -167,6 +175,19 @@ describe('SporeDetailPage', () => {
       hasMore: false,
       nextCursor: null,
     });
+    vi.mocked(api.getNftCollectionHolders).mockResolvedValue({
+      data: [],
+      total: 0,
+      limit: 20,
+      hasMore: false,
+      nextCursor: null,
+    });
+    vi.mocked(api.getNftCollectionActivities).mockResolvedValue({
+      data: [],
+      limit: 20,
+      hasMore: false,
+      nextCursor: null,
+    } as any);
   });
 
   it('links back to NFT tab on assets page', async () => {
@@ -403,7 +424,9 @@ describe('SporeDetailPage', () => {
     expect(screen.queryByText('Capacity Utilization')).not.toBeInTheDocument();
     expect(screen.getByText(/^Occupied:/)).toBeInTheDocument();
     expect(screen.getByText('Capacity & Occupation')).toBeInTheDocument();
-    expect(screen.getByText('Collection NFTs')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Activities$/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^NFTs \(500\)$/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Holders$/ })).toBeInTheDocument();
     await waitFor(() => {
       expect(screen.getByText('alice.bit')).toBeInTheDocument();
     });
@@ -413,6 +436,90 @@ describe('SporeDetailPage', () => {
       mockCollection.collectionId,
       expect.objectContaining({ limit: 20 })
     );
+  });
+
+  it('hydrates collection tab from query params', async () => {
+    mockSearchParamsString = 'tab=holders';
+    vi.mocked(api.getSporeNft).mockRejectedValue(new Error('API error: 404'));
+    vi.mocked(api.getNftCollection).mockResolvedValue(mockCollection);
+
+    render(<SporeDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('No holders in this collection')).toBeInTheDocument();
+    });
+    expect(api.getNftCollectionHolders).toHaveBeenCalledWith(
+      mockCollection.collectionId,
+      expect.objectContaining({ limit: 20 })
+    );
+  });
+
+  it('falls back to NFTs tab when tab query is invalid', async () => {
+    mockSearchParamsString = 'tab=invalid';
+    vi.mocked(api.getSporeNft).mockRejectedValue(new Error('API error: 404'));
+    vi.mocked(api.getNftCollection).mockResolvedValue(mockCollection);
+    vi.mocked(api.getNftCollectionItems).mockResolvedValue({
+      data: [
+        {
+          nftId: '0x1111',
+          name: 'alice.bit',
+          standard: 'dotbit',
+          ownerLockHash: '0x2222',
+          isLive: true,
+          createdAtBlock: 100,
+          expiredAt: 1800000000,
+          txHash: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          outputIndex: 7,
+        },
+      ],
+      total: 1,
+      limit: 20,
+      hasMore: false,
+      nextCursor: null,
+    });
+
+    render(<SporeDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('alice.bit')).toBeInTheDocument();
+      expect(screen.queryByText('No activities in this collection')).not.toBeInTheDocument();
+      expect(screen.queryByText('No holders in this collection')).not.toBeInTheDocument();
+    });
+  });
+
+  it('updates tab query param when switching collection tabs', async () => {
+    vi.mocked(api.getSporeNft).mockRejectedValue(new Error('API error: 404'));
+    vi.mocked(api.getNftCollection).mockResolvedValue(mockCollection);
+
+    render(<SporeDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^Activities$/ })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Activities$/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText('No activities in this collection')).toBeInTheDocument();
+      expect(
+        mockReplace.mock.calls.some(
+          ([href]) =>
+            String(href).includes(`/nfts/${mockParams.sporeId}`) &&
+            String(href).includes('tab=activities')
+        )
+      ).toBe(true);
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^NFTs \(500\)$/ }));
+
+    await waitFor(() => {
+      expect(
+        mockReplace.mock.calls.some(
+          ([href]) =>
+            String(href).includes(`/nfts/${mockParams.sporeId}`) && !String(href).includes('tab=')
+        )
+      ).toBe(true);
+    });
   });
 
   it('searches nft collection items by keyword', async () => {

@@ -3336,6 +3336,259 @@ async fn test_cluster_occupation_chart_and_cluster_capacity_fields() {
 }
 
 #[tokio::test]
+async fn test_spore_cluster_holders_supports_pagination() {
+    let store = test_store();
+    let cluster_id = [0x52u8; 32];
+    let owner_a = [0x11u8; 32];
+    let owner_b = [0x22u8; 32];
+
+    store
+        .put_spore_direct(
+            &cluster_id,
+            &DobEntry {
+                standard: DobStandard::SporeCluster,
+                collection_id: None,
+                owner_lock_hash: Some(owner_a.to_vec()),
+                name: Some("Holders Cluster".to_string()),
+                description: None,
+                is_live: true,
+                created_at_block: 88,
+                created_at_tx: vec![0x33; 32],
+                extra: DobExtra::SporeCluster,
+            },
+        )
+        .unwrap();
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_cluster_owner_count(&cluster_id, &owner_a, 3);
+    batch.put_cluster_owner_count(&cluster_id, &owner_b, 1);
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/spore/clusters/0x{}/holders?limit=1",
+            hex::encode(cluster_id)
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["total"], 2);
+    assert_eq!(json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        json["data"][0]["lockScriptHash"],
+        format!("0x{}", hex::encode(owner_a))
+    );
+    assert_eq!(json["data"][0]["itemCount"], 3);
+    let next_cursor = json["nextCursor"].as_str().expect("next cursor");
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/spore/clusters/0x{}/holders?limit=1&cursor={}",
+            hex::encode(cluster_id),
+            next_cursor
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        json["data"][0]["lockScriptHash"],
+        format!("0x{}", hex::encode(owner_b))
+    );
+    assert_eq!(json["data"][0]["itemCount"], 1);
+}
+
+#[tokio::test]
+async fn test_spore_cluster_activities_supports_action_filter() {
+    let store = test_store();
+    let cluster_id = [0x62u8; 32];
+    let spore_id = [0x72u8; 32];
+    let mint_tx = vec![0x91; 32];
+    let transfer_tx = vec![0x92; 32];
+    let burn_tx = vec![0x93; 32];
+
+    store
+        .put_spore_direct(
+            &cluster_id,
+            &DobEntry {
+                standard: DobStandard::SporeCluster,
+                collection_id: None,
+                owner_lock_hash: Some(vec![0x21; 32]),
+                name: Some("Activities Cluster".to_string()),
+                description: None,
+                is_live: true,
+                created_at_block: 80,
+                created_at_tx: vec![0x31; 32],
+                extra: DobExtra::SporeCluster,
+            },
+        )
+        .unwrap();
+
+    store
+        .put_spore_direct(
+            &spore_id,
+            &DobEntry {
+                standard: DobStandard::Spore,
+                collection_id: Some(cluster_id.to_vec()),
+                owner_lock_hash: Some(vec![0x41; 32]),
+                name: Some("SPORE-1".to_string()),
+                description: None,
+                is_live: false,
+                created_at_block: 100,
+                created_at_tx: mint_tx.clone(),
+                extra: DobExtra::Spore {
+                    content_type: "image/png".to_string(),
+                    content_length: 128,
+                    media_profile: SporeMediaProfile::default(),
+                },
+            },
+        )
+        .unwrap();
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_spore_by_cluster(&cluster_id, &spore_id);
+    batch.put_spore_outpoint(&mint_tx, 0, &spore_id);
+    batch.put_spore_outpoint(&transfer_tx, 0, &spore_id);
+    batch.put_consumed_cell_with_consumer(
+        &mint_tx,
+        0,
+        &LiveCellInfo {
+            capacity: 100_00000000,
+            created_at_block: 100,
+            lock_script_hash: vec![0x51; 32],
+            lock_code_hash: vec![0x61; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x62; 20],
+            type_script_hash: Some(vec![0x63; 32]),
+            type_code_hash: Some(vec![0x64; 32]),
+            type_args: Some(spore_id.to_vec()),
+            data_size: 0,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+        },
+        200,
+        Some(&transfer_tx),
+    );
+    batch.put_consumed_cell_with_consumer(
+        &transfer_tx,
+        0,
+        &LiveCellInfo {
+            capacity: 100_00000000,
+            created_at_block: 200,
+            lock_script_hash: vec![0x71; 32],
+            lock_code_hash: vec![0x72; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x73; 20],
+            type_script_hash: Some(vec![0x74; 32]),
+            type_code_hash: Some(vec![0x75; 32]),
+            type_args: Some(spore_id.to_vec()),
+            data_size: 0,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+        },
+        300,
+        Some(&burn_tx),
+    );
+    batch.put_tx_hash_map(&mint_tx, 100, 0);
+    batch.put_tx_index(
+        100,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_100,
+            inputs_count: 0,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 180,
+            cycles: None,
+        },
+    );
+    batch.put_tx_hash_map(&transfer_tx, 200, 0);
+    batch.put_tx_index(
+        200,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_200,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 220,
+            cycles: None,
+        },
+    );
+    batch.put_tx_hash_map(&burn_tx, 300, 0);
+    batch.put_tx_index(
+        300,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_300,
+            inputs_count: 1,
+            outputs_count: 0,
+            fee: 0,
+            tx_size: 160,
+            cycles: None,
+        },
+    );
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/spore/clusters/0x{}/activities?limit=20",
+            hex::encode(cluster_id)
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"].as_array().unwrap().len(), 3);
+    assert_eq!(json["data"][0]["blockNumber"], 300);
+    assert_eq!(json["data"][0]["actions"][0], "burn");
+    assert_eq!(json["data"][1]["blockNumber"], 200);
+    assert_eq!(json["data"][1]["actions"][0], "transfer");
+    assert_eq!(json["data"][2]["blockNumber"], 100);
+    assert_eq!(json["data"][2]["actions"][0], "mint");
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/spore/clusters/0x{}/activities?limit=20&action=transfer",
+            hex::encode(cluster_id)
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(json["data"][0]["actions"][0], "transfer");
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/spore/clusters/0x{}/activities?action=invalid",
+            hex::encode(cluster_id)
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn test_spore_cluster_returns_503_when_derived_store_lags() {
     let core_store = test_store();
     let derived_store = test_store();
@@ -4775,6 +5028,290 @@ async fn test_assets_nft_collection_items_mnft_live_outpoint() {
         format!("0x{}", hex::encode(&tx_hash))
     );
     assert_eq!(json["data"][0]["outputIndex"], output_index);
+}
+
+#[tokio::test]
+async fn test_assets_nft_collection_holders_supports_pagination() {
+    let store = test_store();
+    let collection_id = b"dotbit_collection_______________".to_vec();
+    let nft_a = [0x81u8; 20];
+    let nft_b = [0x82u8; 20];
+    let nft_c = [0x83u8; 20];
+    let nft_d = [0x84u8; 20];
+    let owner_a = vec![0x11u8; 32];
+    let owner_b = vec![0x22u8; 32];
+    let owner_c = vec![0x33u8; 32];
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_nft_collection_aggregate(
+        &collection_id,
+        &NftCollectionAggregate {
+            name: Some(".bit".to_string()),
+            standard: NftStandard::DotBit,
+            total_count: 4,
+            live_count: 3,
+        },
+    );
+    batch.put_nft(
+        &nft_a,
+        &NftEntry {
+            standard: NftStandard::DotBit,
+            collection_id: None,
+            token_id: Some(nft_a.to_vec()),
+            owner_lock_hash: Some(owner_a.clone()),
+            name: Some("alpha.bit".to_string()),
+            is_live: true,
+            created_at_block: 100,
+            extra: NftExtra::DotBit {
+                expired_at: Some(1_800_000_000),
+            },
+        },
+    );
+    batch.put_nft(
+        &nft_b,
+        &NftEntry {
+            standard: NftStandard::DotBit,
+            collection_id: None,
+            token_id: Some(nft_b.to_vec()),
+            owner_lock_hash: Some(owner_a.clone()),
+            name: Some("beta.bit".to_string()),
+            is_live: true,
+            created_at_block: 101,
+            extra: NftExtra::DotBit {
+                expired_at: Some(1_800_000_001),
+            },
+        },
+    );
+    batch.put_nft(
+        &nft_c,
+        &NftEntry {
+            standard: NftStandard::DotBit,
+            collection_id: None,
+            token_id: Some(nft_c.to_vec()),
+            owner_lock_hash: Some(owner_b.clone()),
+            name: Some("gamma.bit".to_string()),
+            is_live: true,
+            created_at_block: 102,
+            extra: NftExtra::DotBit {
+                expired_at: Some(1_800_000_002),
+            },
+        },
+    );
+    batch.put_nft(
+        &nft_d,
+        &NftEntry {
+            standard: NftStandard::DotBit,
+            collection_id: None,
+            token_id: Some(nft_d.to_vec()),
+            owner_lock_hash: Some(owner_c),
+            name: Some("dead.bit".to_string()),
+            is_live: false,
+            created_at_block: 103,
+            extra: NftExtra::DotBit {
+                expired_at: Some(1_800_000_003),
+            },
+        },
+    );
+    batch.put_nft_by_collection(&collection_id, &nft_a);
+    batch.put_nft_by_collection(&collection_id, &nft_b);
+    batch.put_nft_by_collection(&collection_id, &nft_c);
+    batch.put_nft_by_collection(&collection_id, &nft_d);
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let request = Request::builder()
+        .uri("/api/v1/assets/nfts/dotbit/holders?limit=1")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["total"], 2);
+    assert_eq!(json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        json["data"][0]["lockScriptHash"],
+        format!("0x{}", hex::encode(owner_a))
+    );
+    assert_eq!(json["data"][0]["itemCount"], 2);
+    let next_cursor = json["nextCursor"].as_str().expect("next cursor");
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/assets/nfts/dotbit/holders?limit=1&cursor={next_cursor}"
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        json["data"][0]["lockScriptHash"],
+        format!("0x{}", hex::encode(owner_b))
+    );
+    assert_eq!(json["data"][0]["itemCount"], 1);
+}
+
+#[tokio::test]
+async fn test_assets_nft_collection_activities_supports_action_filter() {
+    let store = test_store();
+    let collection_id = b"dotbit_collection_______________".to_vec();
+    let account_id = [0x91u8; 20];
+    let mint_tx = vec![0xa1; 32];
+    let transfer_tx = vec![0xa2; 32];
+    let burn_tx = vec![0xa3; 32];
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_nft_collection_aggregate(
+        &collection_id,
+        &NftCollectionAggregate {
+            name: Some(".bit".to_string()),
+            standard: NftStandard::DotBit,
+            total_count: 1,
+            live_count: 0,
+        },
+    );
+    batch.put_nft(
+        &account_id,
+        &NftEntry {
+            standard: NftStandard::DotBit,
+            collection_id: None,
+            token_id: Some(account_id.to_vec()),
+            owner_lock_hash: None,
+            name: Some("burned.bit".to_string()),
+            is_live: false,
+            created_at_block: 100,
+            extra: NftExtra::DotBit {
+                expired_at: Some(1_800_000_000),
+            },
+        },
+    );
+    batch.put_nft_by_collection(&collection_id, &account_id);
+    batch.put_dotbit_account_outpoint(&mint_tx, 0, &account_id);
+    batch.put_dotbit_account_outpoint(&transfer_tx, 0, &account_id);
+    batch.put_consumed_cell_with_consumer(
+        &mint_tx,
+        0,
+        &LiveCellInfo {
+            capacity: 100_00000000,
+            created_at_block: 100,
+            lock_script_hash: vec![0x31; 32],
+            lock_code_hash: vec![0x41; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x51; 20],
+            type_script_hash: Some(vec![0x61; 32]),
+            type_code_hash: Some(vec![0x62; 32]),
+            type_args: Some(account_id.to_vec()),
+            data_size: 0,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+        },
+        200,
+        Some(&transfer_tx),
+    );
+    batch.put_consumed_cell_with_consumer(
+        &transfer_tx,
+        0,
+        &LiveCellInfo {
+            capacity: 100_00000000,
+            created_at_block: 200,
+            lock_script_hash: vec![0x32; 32],
+            lock_code_hash: vec![0x42; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x52; 20],
+            type_script_hash: Some(vec![0x63; 32]),
+            type_code_hash: Some(vec![0x64; 32]),
+            type_args: Some(account_id.to_vec()),
+            data_size: 0,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+        },
+        300,
+        Some(&burn_tx),
+    );
+    batch.put_tx_hash_map(&mint_tx, 100, 0);
+    batch.put_tx_index(
+        100,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_100,
+            inputs_count: 0,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 180,
+            cycles: None,
+        },
+    );
+    batch.put_tx_hash_map(&transfer_tx, 200, 0);
+    batch.put_tx_index(
+        200,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_200,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 220,
+            cycles: None,
+        },
+    );
+    batch.put_tx_hash_map(&burn_tx, 300, 0);
+    batch.put_tx_index(
+        300,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_300,
+            inputs_count: 1,
+            outputs_count: 0,
+            fee: 0,
+            tx_size: 160,
+            cycles: None,
+        },
+    );
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let request = Request::builder()
+        .uri("/api/v1/assets/nfts/dotbit/activities?limit=20")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"].as_array().unwrap().len(), 3);
+    assert_eq!(json["data"][0]["blockNumber"], 300);
+    assert_eq!(json["data"][0]["actions"][0], "burn");
+    assert_eq!(json["data"][1]["blockNumber"], 200);
+    assert_eq!(json["data"][1]["actions"][0], "transfer");
+    assert_eq!(json["data"][2]["blockNumber"], 100);
+    assert_eq!(json["data"][2]["actions"][0], "mint");
+
+    let request = Request::builder()
+        .uri("/api/v1/assets/nfts/dotbit/activities?limit=20&action=burn")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(json["data"][0]["actions"][0], "burn");
+
+    let request = Request::builder()
+        .uri("/api/v1/assets/nfts/dotbit/activities?action=invalid")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

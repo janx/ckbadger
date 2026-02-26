@@ -9,6 +9,8 @@ vi.mock('@/lib/api', () => ({
     getSporeCluster: vi.fn(),
     getSporesByCluster: vi.fn(),
     getSporeClusterOccupationChart: vi.fn(),
+    getSporeClusterHolders: vi.fn(),
+    getSporeClusterActivities: vi.fn(),
     getAddress: vi.fn(),
   },
 }));
@@ -98,6 +100,19 @@ describe('ClusterDetailPage', () => {
       liveCellsCount: 0,
       transactionsCount: 0,
     } as any);
+    vi.mocked(api.getSporeClusterHolders).mockResolvedValue({
+      data: [],
+      total: 0,
+      limit: 20,
+      hasMore: false,
+      nextCursor: null,
+    });
+    vi.mocked(api.getSporeClusterActivities).mockResolvedValue({
+      data: [],
+      limit: 20,
+      hasMore: false,
+      nextCursor: null,
+    } as any);
   });
 
   it('renders the page with header', async () => {
@@ -176,6 +191,51 @@ describe('ClusterDetailPage', () => {
       expect(screen.getByText('Spores in this collection (5)')).toBeInTheDocument();
       expect(screen.getAllByText('image/png').length).toBeGreaterThan(0);
       expect(screen.getAllByText('text/plain').length).toBeGreaterThan(0);
+    });
+  });
+
+  it('renders collection tabs with NFTs active by default', async () => {
+    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
+    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
+
+    render(<ClusterDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^Activities$/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^NFTs$/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^Holders$/ })).toBeInTheDocument();
+      expect(screen.getByText('Spores in this collection (5)')).toBeInTheDocument();
+    });
+  });
+
+  it('hydrates collection tab from query params', async () => {
+    mockSearchParamsString = 'tab=activities';
+    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
+    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
+
+    render(<ClusterDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('No activities in this collection')).toBeInTheDocument();
+      expect(screen.queryByLabelText('Search spores')).not.toBeInTheDocument();
+    });
+    expect(api.getSporeClusterActivities).toHaveBeenCalledWith(
+      mockClusterId,
+      expect.objectContaining({ limit: 20 })
+    );
+  });
+
+  it('falls back to NFTs tab when tab query is invalid', async () => {
+    mockSearchParamsString = 'tab=invalid';
+    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
+    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
+
+    render(<ClusterDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Spores in this collection (5)')).toBeInTheDocument();
+      expect(screen.queryByText('No activities in this collection')).not.toBeInTheDocument();
+      expect(screen.queryByText('No holders in this collection')).not.toBeInTheDocument();
     });
   });
 
@@ -383,6 +443,36 @@ describe('ClusterDetailPage', () => {
             String(href).includes('q=0x2222')
         )
       ).toBe(true);
+    });
+  });
+
+  it('updates tab query param when switching collection tabs', async () => {
+    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
+    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
+
+    render(<ClusterDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^Holders$/ })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Holders$/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText('No holders in this collection')).toBeInTheDocument();
+      expect(mockReplace.mock.calls.some(([href]) => String(href).includes('tab=holders'))).toBe(
+        true
+      );
+    });
+    expect(api.getSporeClusterHolders).toHaveBeenCalledWith(
+      mockClusterId,
+      expect.objectContaining({ limit: 20 })
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /^NFTs$/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Spores in this collection (5)')).toBeInTheDocument();
     });
   });
 

@@ -44,6 +44,44 @@ impl CkbadgerStore {
             _ => Ok(0),
         }
     }
+
+    /// List all owners and live spore counts for a cluster.
+    pub fn list_cluster_owner_counts(
+        &self,
+        cluster_id: &[u8],
+    ) -> anyhow::Result<Vec<(Vec<u8>, i64)>> {
+        let prefix = keys::encode_cluster_owner_prefix(cluster_id);
+        let iter = self.prefix_iterator_cf(self.cf_stats(), &prefix);
+        let mut results = Vec::new();
+
+        for item in iter.flatten() {
+            let (key, value) = item;
+            if !key.starts_with(&prefix) {
+                break;
+            }
+            if key.len() != keys::CLUSTER_OWNER_KEY_SIZE {
+                anyhow::bail!(
+                    "invalid cluster owner key length: expected {}, got {}",
+                    keys::CLUSTER_OWNER_KEY_SIZE,
+                    key.len()
+                );
+            }
+            if value.len() != 8 {
+                anyhow::bail!(
+                    "invalid cluster owner value length: expected 8, got {}",
+                    value.len()
+                );
+            }
+
+            let count = i64::from_le_bytes(value[..8].try_into().unwrap());
+            if count <= 0 {
+                continue;
+            }
+            results.push((key[33..65].to_vec(), count));
+        }
+
+        Ok(results)
+    }
 }
 
 #[cfg(test)]
@@ -175,6 +213,25 @@ mod tests {
                 .unwrap(),
             0
         );
+    }
+
+    #[test]
+    fn test_list_cluster_owner_counts() {
+        let (_dir, store) = test_store();
+        let cluster_id = [0x01u8; 32];
+        let lock_hash_a = [0xAAu8; 32];
+        let lock_hash_b = [0xBBu8; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_cluster_owner_count(&cluster_id, &lock_hash_a, 3);
+        batch.put_cluster_owner_count(&cluster_id, &lock_hash_b, 1);
+        batch.commit().unwrap();
+
+        let mut rows = store.list_cluster_owner_counts(&cluster_id).unwrap();
+        rows.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0], (lock_hash_a.to_vec(), 3));
+        assert_eq!(rows[1], (lock_hash_b.to_vec(), 1));
     }
 
     #[test]
