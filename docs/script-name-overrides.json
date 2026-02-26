@@ -1,5 +1,5 @@
 {
-  "_comment": "Override script names (by name) and mark deprecated scripts (by code_hash). Applied during label import.",
+  "_comment": "Override script names (by name), mark deprecated scripts (by code_hash), and define NFT storage-tier overrides by standard. Applied during label import and API asset rendering.",
   "overrides": {
     "DAS Lock": ".bit Lock",
     "DID Account": ".bit Account",
@@ -7,6 +7,12 @@
     "Web5 DID": "did:ckb",
     "SECP256K1/blake160": "Default Lock",
     "SECP256k1/Multisig": "Default Multisig"
+  },
+  "nft_storage_tier_overrides": {
+    ".bit": "fully_onchain",
+    "dotbit": "fully_onchain",
+    "did:ckb": "fully_onchain",
+    "did_ckb": "fully_onchain"
   },
   "deprecated": [
     "0x24b04faf80ded836efc05247778eec4ec02548dab6e2012c0107374aa3f68b81",

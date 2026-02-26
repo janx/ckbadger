@@ -3,6 +3,7 @@ use crate::routes::assets::AssetResponse;
 use crate::routes::statistics::build_block_time_distribution_response;
 use crate::utils::{
     accumulate_live_capacity, resolve_dob_collection_name, resolve_nft_collection_name,
+    resolve_nft_collection_storage_tier_override,
 };
 use crate::AppState;
 use serde::{Deserialize, Serialize};
@@ -310,6 +311,15 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
             .unwrap_or(0);
         let standard = agg.standard.asset_standard().to_string();
         let display_name = resolve_nft_collection_name(&standard, agg.name.as_deref());
+        let storage_tier = resolve_nft_collection_storage_tier_override(&standard)
+            .unwrap_or("unknown")
+            .to_string();
+        let fully_onchain_count = if storage_tier == "fully_onchain" {
+            agg.live_count
+        } else {
+            0
+        };
+        let fully_onchain_ratio = format_ratio_4(fully_onchain_count, agg.live_count);
         let nft_daily = state
             .derived_store
             .list_nft_daily_deltas(collection_id_bytes)?;
@@ -347,9 +357,9 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
             cluster_name: display_name,
             live_capacity: Some(live_capacity.to_string()),
             live_occupied_capacity: Some(live_occupied_capacity.to_string()),
-            storage_tier: Some("unknown".to_string()),
-            fully_onchain_ratio: Some("0.0000".to_string()),
-            fully_onchain_count: Some(0),
+            storage_tier: Some(storage_tier),
+            fully_onchain_ratio: Some(fully_onchain_ratio),
+            fully_onchain_count: Some(fully_onchain_count),
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,

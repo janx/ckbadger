@@ -14,6 +14,7 @@ use crate::utils::address::compute_script_hash;
 use crate::utils::{
     accumulate_live_capacity, apply_live_capacity_delta, date_keys_inclusive, ensure_derived_ready,
     parse_chart_date_range, resolve_dob_collection_name, resolve_nft_collection_name,
+    resolve_nft_collection_storage_tier_override,
 };
 use crate::warmup::{CachedAssetEntry, CACHE_KEY_ASSETS_NFT, CACHE_KEY_ASSETS_TOKEN};
 use crate::AppState;
@@ -378,11 +379,19 @@ fn fetch_assets_cached(
     }
     if let Some(storage_tier_filter) = request.storage_tier {
         all_cached.retain(|entry| {
-            entry.asset_type == "nft"
-                && entry
-                    .storage_tier
-                    .as_deref()
-                    .is_some_and(|tier| tier == storage_tier_filter)
+            if entry.asset_type != "nft" {
+                return false;
+            }
+            let Some(tier) = entry.storage_tier.as_deref() else {
+                return false;
+            };
+            if storage_tier_filter == "offchain_dependent" {
+                return matches!(
+                    tier,
+                    "offchain_dependent" | "decentralized_external" | "centralized_dependent"
+                );
+            }
+            tier == storage_tier_filter
         });
     }
 
@@ -436,6 +445,8 @@ fn normalize_assets_standard(value: Option<&str>) -> Option<String> {
         let trimmed = raw.trim().to_ascii_lowercase();
         if trimmed.is_empty() {
             None
+        } else if trimmed == "did:ckb" {
+            Some("did_ckb".to_string())
         } else {
             Some(trimmed)
         }
@@ -453,11 +464,13 @@ fn normalize_assets_storage_tier(
         return Ok(None);
     }
     match normalized.as_str() {
-        "fully_onchain" | "decentralized_external" | "centralized_dependent" | "unknown" => {
-            Ok(Some(normalized))
-        }
+        "fully_onchain"
+        | "offchain_dependent"
+        | "decentralized_external"
+        | "centralized_dependent"
+        | "unknown" => Ok(Some(normalized)),
         _ => Err(ApiError::bad_request(
-            "Invalid storage_tier. Expected one of: fully_onchain, decentralized_external, centralized_dependent, unknown",
+            "Invalid storage_tier. Expected one of: fully_onchain, offchain_dependent, decentralized_external, centralized_dependent, unknown",
         )),
     }
 }
@@ -1975,6 +1988,15 @@ fn compute_nft_assets(
         let collection_hex = format!("0x{}", hex::encode(collection_id_bytes));
         let standard = agg.standard.asset_standard().to_string();
         let display_name = resolve_nft_collection_name(&standard, agg.name.as_deref());
+        let storage_tier = resolve_nft_collection_storage_tier_override(&standard)
+            .unwrap_or("unknown")
+            .to_string();
+        let fully_onchain_count = if storage_tier == "fully_onchain" {
+            agg.live_count
+        } else {
+            0
+        };
+        let fully_onchain_ratio = format_ratio_4(fully_onchain_count, agg.live_count);
         let nft_daily = state
             .derived_store
             .list_nft_daily_deltas(collection_id_bytes)
@@ -2007,9 +2029,9 @@ fn compute_nft_assets(
             cluster_name: display_name,
             live_capacity: Some(live_capacity.to_string()),
             live_occupied_capacity: Some(live_occupied_capacity.to_string()),
-            storage_tier: Some("unknown".to_string()),
-            fully_onchain_ratio: Some("0.0000".to_string()),
-            fully_onchain_count: Some(0),
+            storage_tier: Some(storage_tier),
+            fully_onchain_ratio: Some(fully_onchain_ratio),
+            fully_onchain_count: Some(fully_onchain_count),
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,

@@ -3811,6 +3811,19 @@ async fn test_assets_list_supports_storage_tier_filter_and_onchain_ratio_sort() 
     assert_eq!(rows[0]["storageTier"], "fully_onchain");
 
     let request = Request::builder()
+        .uri("/api/v1/assets?type=nft&storage_tier=offchain_dependent")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let rows = json["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["name"], "Centralized Cluster");
+    assert_eq!(rows[0]["storageTier"], "centralized_dependent");
+
+    let request = Request::builder()
         .uri("/api/v1/assets?type=nft&sort_key=onchain_ratio&sort_direction=desc")
         .body(Body::empty())
         .unwrap();

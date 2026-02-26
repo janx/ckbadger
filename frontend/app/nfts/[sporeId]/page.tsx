@@ -1050,7 +1050,7 @@ export default function SporeDetailPage() {
                 <TerminalPanelHeader indicator="active">Cluster Context</TerminalPanelHeader>
                 <TerminalPanelContent>
                   <DataGrid columns={1}>
-                    <DataField label="Name">
+                    <DataField label="Name" layout="vertical" valueClassName="w-full">
                       <Link
                         href={`/clusters/${cluster.clusterId}`}
                         className="text-terminal-green hover:underline"
@@ -1059,7 +1059,7 @@ export default function SporeDetailPage() {
                       </Link>
                     </DataField>
                     {cluster.description && (
-                      <DataField label="Description">
+                      <DataField label="Description" layout="vertical" valueClassName="w-full">
                         <ClusterDescription description={cluster.description} />
                       </DataField>
                     )}

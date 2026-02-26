@@ -363,6 +363,11 @@ describe('SporeDetailPage', () => {
       expect(versionLabel.parentElement?.textContent).toContain('3');
       expect(screen.getByText('View Raw Cluster Metadata JSON')).toBeInTheDocument();
     });
+
+    const nameField = screen.getByText('Name').closest('div')?.parentElement;
+    const descriptionField = screen.getByText('Description').closest('div')?.parentElement;
+    expect(nameField).not.toHaveClass('sm:flex-row');
+    expect(descriptionField).not.toHaveClass('sm:flex-row');
   });
 
   it('falls back to NFT collection detail when spore lookup returns 404', async () => {

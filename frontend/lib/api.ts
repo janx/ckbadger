@@ -603,7 +603,12 @@ interface Asset {
   clusterName: string | null;
   liveCapacity: string | null;
   liveOccupiedCapacity: string | null;
-  storageTier?: 'fully_onchain' | 'decentralized_external' | 'centralized_dependent' | 'unknown';
+  storageTier?:
+    | 'fully_onchain'
+    | 'offchain_dependent'
+    | 'decentralized_external'
+    | 'centralized_dependent'
+    | 'unknown';
   fullyOnchainRatio?: string | null;
   fullyOnchainCount?: number | null;
 }
@@ -625,7 +630,12 @@ interface AssetQueryParams {
     | 'capacity'
     | 'onchainRatio';
   sortDirection?: 'asc' | 'desc';
-  storageTier?: 'fully_onchain' | 'decentralized_external' | 'centralized_dependent' | 'unknown';
+  storageTier?:
+    | 'fully_onchain'
+    | 'offchain_dependent'
+    | 'decentralized_external'
+    | 'centralized_dependent'
+    | 'unknown';
 }
 
 interface TokenHolderParams {

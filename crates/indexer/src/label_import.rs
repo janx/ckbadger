@@ -71,6 +71,10 @@ struct ScriptDeployment {
 struct ScriptNameOverrides {
     #[serde(default)]
     pub overrides: std::collections::HashMap<String, String>,
+    // Parsed for shared docs compatibility; currently consumed by API-side NFT metadata logic.
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub nft_storage_tier_overrides: std::collections::HashMap<String, String>,
     #[serde(default)]
     pub deprecated: Vec<String>,
 }

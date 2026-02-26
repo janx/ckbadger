@@ -363,7 +363,7 @@ describe('AssetsPage', () => {
 
     await waitFor(() => {
       expect(screen.getByText('TEST')).toBeInTheDocument();
-      expect(screen.getByText('XUDT')).toBeInTheDocument();
+      expect(screen.getAllByText('xUDT').length).toBeGreaterThan(0);
     });
   });
 
@@ -436,6 +436,29 @@ describe('AssetsPage', () => {
         expect.objectContaining({ type: 'token', standard: 'xudt' })
       );
       expect(window.location.search).toBe('?standard=xudt');
+    });
+  });
+
+  it('shows did:ckb in NFT standards and removes D-ID option', async () => {
+    vi.mocked(api.getAssets).mockResolvedValue(mockClusterAssets);
+
+    render(<AssetsPage />);
+    fireEvent.click(screen.getByRole('button', { name: /NFTs/i }));
+
+    await waitFor(() => {
+      expect(api.getAssets).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'nft' }));
+    });
+
+    const standardFilter = screen.getByLabelText('Filter by standard');
+    expect(screen.getByRole('option', { name: 'did:ckb' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'D-ID' })).not.toBeInTheDocument();
+
+    fireEvent.change(standardFilter, { target: { value: 'did:ckb' } });
+    await waitFor(() => {
+      expect(api.getAssets).toHaveBeenLastCalledWith(
+        expect.objectContaining({ type: 'nft', standard: 'did:ckb' })
+      );
+      expect(window.location.search).toContain('standard=did%3Ackb');
     });
   });
 
@@ -637,6 +660,30 @@ describe('AssetsPage', () => {
     });
   });
 
+  it('maps merged Offchain Dependent storage filter to API query', async () => {
+    vi.mocked(api.getAssets).mockResolvedValue(mockClusterAssets);
+
+    render(<AssetsPage />);
+    fireEvent.click(screen.getByRole('button', { name: /NFTs/i }));
+
+    await waitFor(() => {
+      expect(api.getAssets).toHaveBeenLastCalledWith(
+        expect.objectContaining({ type: 'nft', storageTier: undefined })
+      );
+    });
+
+    fireEvent.change(screen.getByLabelText('Filter by storage tier'), {
+      target: { value: 'offchain_dependent' },
+    });
+
+    await waitFor(() => {
+      expect(api.getAssets).toHaveBeenLastCalledWith(
+        expect.objectContaining({ type: 'nft', storageTier: 'offchain_dependent' })
+      );
+      expect(window.location.search).toContain('storageTier=offchain_dependent');
+    });
+  });
+
   it('shows on-chain ratio and storage badge for nft assets', async () => {
     vi.mocked(api.getAssets).mockResolvedValue(mockClusterAssets);
 
@@ -647,5 +694,36 @@ describe('AssetsPage', () => {
       expect(screen.getByText('100.00%')).toBeInTheDocument();
       expect(screen.getByText('FULLY ON-CHAIN')).toBeInTheDocument();
     });
+  });
+
+  it('renders merged offchain storage badge for decentralized/centralized tiers', async () => {
+    vi.mocked(api.getAssets).mockImplementation((params) => {
+      const assetType = params?.type;
+      return Promise.resolve(assetType === 'nft' ? mockMixedNftAssets : emptyAssets);
+    });
+
+    render(<AssetsPage />);
+    fireEvent.click(screen.getByRole('button', { name: /NFTs/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('MNFT Without Icon')).toBeInTheDocument();
+      expect(screen.getByText('OFFCHAIN DEPENDENT')).toBeInTheDocument();
+    });
+  });
+
+  it('renders nft table in a horizontal scroll container to prevent column clipping', async () => {
+    vi.mocked(api.getAssets).mockResolvedValue(mockClusterAssets);
+
+    render(<AssetsPage />);
+    fireEvent.click(screen.getByRole('button', { name: /NFTs/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Test Collection')).toBeInTheDocument();
+    });
+
+    const scrollContainer = screen.getByTestId('asset-table-scroll');
+    const tableInner = screen.getByTestId('asset-table-inner');
+    expect(scrollContainer).toHaveClass('overflow-x-auto');
+    expect(tableInner).toHaveClass('min-w-[1120px]');
   });
 });
