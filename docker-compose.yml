@@ -87,7 +87,7 @@ services:
         hard: 65536
     volumes:
       - ${CKB_HOST_DATA_DIR:-ckb-data}:/var/lib/ckb:ro
-      - ckbadger-data:/data:ro
+      - ckbadger-data:/data
     ports:
       - '3001:3001'
     restart: unless-stopped
